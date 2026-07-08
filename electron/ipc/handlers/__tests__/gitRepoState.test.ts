@@ -15,15 +15,6 @@ vi.mock("../../../services/SoundService.js", () => ({
   soundService: { play: vi.fn() },
 }));
 
-vi.mock("../../../services/PreAgentSnapshotService.js", () => ({
-  preAgentSnapshotService: {
-    getSnapshot: vi.fn(),
-    listSnapshots: vi.fn(),
-    revertToSnapshot: vi.fn(),
-    deleteSnapshot: vi.fn(),
-  },
-}));
-
 import { parsePorcelainV2Conflicts } from "../../../services/git/porcelainConflicts.js";
 
 describe("parsePorcelainV2Conflicts", () => {

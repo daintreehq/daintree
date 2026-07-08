@@ -209,7 +209,7 @@ export function EmptyState(props: EmptyStateProps) {
             // `aria-hidden` alone leaves it focusable via keyboard.
             inert
             className={cn(
-              "[grid-area:1/1] flex flex-col items-center pointer-events-none motion-safe:animate-out motion-safe:fade-out motion-safe:duration-[100ms]",
+              "[grid-area:1/1] flex flex-col items-center pointer-events-none motion-safe:animate-out motion-safe:fade-out motion-safe:duration-100",
               outgoing.scale === "canvas" ? "gap-3 @max-[280px]/empty-state:gap-2" : "gap-2"
             )}
             onAnimationEnd={handleExitEnd}

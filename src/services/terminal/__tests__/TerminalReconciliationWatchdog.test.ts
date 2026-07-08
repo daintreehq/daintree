@@ -51,7 +51,6 @@ function makeManaged(overrides: ManagedOverrides = {}): ManagedTerminal {
     isOpened: true,
     isVisible: true,
     isFocused: false,
-    isHibernated: false,
     isAttaching: false,
     isDetached: false,
     isResizeSuppressed: false,
@@ -715,6 +714,87 @@ describe("TerminalReconciliationWatchdog", () => {
       expect(deferred?.geometryRepairAttempts).toBe(0);
     });
 
+    it("does not count a streaming-deferred tick as a repair attempt (#10863)", () => {
+      // Main-buffer: the quiescence gate exists for main-buffer CLIs whose
+      // committed scrollback a reconcile would re-wrap mid-paint.
+      const managed = makeManaged({ isAltBuffer: false });
+      setRenderPaused(managed, false);
+      setGrid(managed, { cols: 137, rows: 40 }, { cols: 100, rows: 40 });
+      instances.set("t1", managed);
+      const deps = makeDeps(instances);
+      watchdog = new TerminalReconciliationWatchdog(deps);
+
+      // The pane writes continuously: keep lastWriteAt inside the quiescence
+      // window at every tick. reconcileGeometryFresh would defer these, so the
+      // watchdog must neither issue the repair nor spend a breaker attempt.
+      for (let i = 0; i < 12; i++) {
+        managed.lastWriteAt = Date.now() + WATCHDOG_INTERVAL_MS;
+        vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      }
+      expect(deps.reconcileRevealGeometry).not.toHaveBeenCalled();
+      expect(managed.geometryRepairAttempts ?? 0).toBe(0);
+      expect(managed.geometryRepairGaveUp).toBeFalsy();
+
+      // The stream pauses — the very next tick repairs normally.
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.reconcileRevealGeometry).toHaveBeenCalledTimes(1);
+      expect(managed.geometryRepairAttempts).toBe(1);
+    });
+
+    it("does not count a still-parsing tick (pendingWrites) as a repair attempt", () => {
+      // Same deferral as the lastWriteAt case, via the other streaming signal:
+      // a queued-but-unparsed batch means reconcileGeometryFresh would defer,
+      // so the watchdog must not issue the repair or spend a breaker attempt.
+      const managed = makeManaged({ isAltBuffer: false });
+      setRenderPaused(managed, false);
+      setGrid(managed, { cols: 137, rows: 40 }, { cols: 100, rows: 40 });
+      managed.pendingWrites = 1;
+      instances.set("t1", managed);
+      const deps = makeDeps(instances);
+      watchdog = new TerminalReconciliationWatchdog(deps);
+
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.reconcileRevealGeometry).not.toHaveBeenCalled();
+      expect(managed.geometryRepairAttempts ?? 0).toBe(0);
+
+      // The batch lands (and its lastWriteAt stamp ages out) — next tick repairs.
+      managed.pendingWrites = 0;
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.reconcileRevealGeometry).toHaveBeenCalledTimes(1);
+      expect(managed.geometryRepairAttempts).toBe(1);
+    });
+
+    it("falls through to the paused-render recovery on a streaming-deferred tick", () => {
+      // Deferring the geometry repair must not starve the cheaper layers: a
+      // streaming pane whose renderer is paused still needs the unpause reflow.
+      const managed = makeManaged({ isAltBuffer: false });
+      setRenderPaused(managed, true);
+      setGrid(managed, { cols: 137, rows: 40 }, { cols: 100, rows: 40 });
+      instances.set("t1", managed);
+      const deps = makeDeps(instances);
+      watchdog = new TerminalReconciliationWatchdog(deps);
+
+      managed.lastWriteAt = Date.now() + WATCHDOG_INTERVAL_MS;
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.reconcileRevealGeometry).not.toHaveBeenCalled();
+      expect(deps.forceReflow).toHaveBeenCalledWith(managed.terminal.element);
+    });
+
+    it("still repairs a streaming ALT-buffer pane (quiescence gate is main-buffer only)", () => {
+      // reconcileGeometryFresh never re-wraps an alt-buffer pane (its guard
+      // returns before the quiescence gate), so deferring alt-buffer repairs
+      // for writes would only starve the reveal repair with no safety gain.
+      const managed = makeDivergedTerminal();
+      instances.set("t1", managed);
+      const deps = makeDeps(instances);
+      watchdog = new TerminalReconciliationWatchdog(deps);
+
+      managed.lastWriteAt = Date.now() + WATCHDOG_INTERVAL_MS;
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.reconcileRevealGeometry).toHaveBeenCalledTimes(1);
+      expect(managed.geometryRepairAttempts).toBe(1);
+    });
+
     it("neither advances nor resets the breaker while a synchronized-output block stays open", () => {
       const managed = makeManaged({ isAltBuffer: true });
       (
@@ -766,6 +846,37 @@ describe("TerminalReconciliationWatchdog", () => {
       vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
       expect(deps.reconcileRevealGeometry).toHaveBeenCalledWith("t1");
       expect(managed.revealPendingRepair).toBe(true);
+    });
+
+    it("defers the reveal-pending redraw for a streaming main-buffer pane without stamping the cooldown", () => {
+      // Issuing the reveal repair on a streaming pane is a guaranteed no-op
+      // (reconcileGeometryFresh's quiescence gate defers it), so it must not
+      // stamp the 6s cooldown or spend heavy budget — the obligation stays
+      // armed and the very next quiet tick repairs.
+      const managed = makeManaged({ isAltBuffer: false });
+      managed.revealPendingRepair = true;
+      managed.revealPendingGeneration = managed.attachGeneration;
+      // Diverged grid: the exact case where reconcileGeometryFresh's streaming
+      // gate WOULD defer the re-wrap, making the issued repair a no-op.
+      setGrid(managed, { cols: 137, rows: 40 }, { cols: 100, rows: 40 });
+      managed.pendingWrites = 1;
+      instances.set("t1", managed);
+      const deps = makeDeps(instances);
+      watchdog = new TerminalReconciliationWatchdog(deps);
+
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.reconcileRevealGeometry).not.toHaveBeenCalled();
+      expect(managed.revealPendingRepair).toBe(true);
+      expect(managed.lastWatchdogRepairAt).toBeUndefined();
+      // The fall-through geometry-convergence branch must defer too — no
+      // breaker attempt spent on the same streaming tick.
+      expect(managed.geometryRepairAttempts ?? 0).toBe(0);
+
+      // The stream drains — the next tick issues the repair and clears the flag.
+      managed.pendingWrites = 0;
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.reconcileRevealGeometry).toHaveBeenCalledWith("t1");
+      expect(managed.revealPendingRepair).toBe(false);
     });
 
     it("defers the reveal-pending redraw while a synchronized-output block is open", () => {

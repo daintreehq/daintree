@@ -7,6 +7,7 @@ import unicode11 from "@xterm/addon-unicode11";
 const { Unicode11Addon } = unicode11;
 
 import { getEffectiveAgentConfig } from "../../../../shared/config/agentRegistry.js";
+import { applyXtermReflowFastpath } from "../../../../shared/utils/xtermReflowFastpath.js";
 import type { AgentState } from "../../../../shared/types/agent.js";
 import { ActivityMonitor, type ProcessStateValidator } from "../../ActivityMonitor.js";
 import { buildActivityMonitorOptions, buildPatternConfig } from "../terminalActivityPatterns.js";
@@ -25,8 +26,8 @@ import {
 import {
   readCursorLine,
   readVisibleActivityLines,
-  readVisibleActivitySnapshot,
   readViewportNonEmptyLines,
+  ViewportSnapshotCache,
 } from "./headlessViewport.js";
 import type {
   AnalysisCreateSpec,
@@ -72,6 +73,10 @@ export class AnalysisSession {
 
   private monitor: ActivityMonitor | null = null;
   private readonly osc94Parser: Osc94Parser;
+  // Shared by the monitor's polling cycle and noteAgentOutputActivity so the
+  // full-viewport extract+hash runs once per parse, not once per consumer per
+  // tick (PERF-035).
+  private readonly viewportSnapshotCache = new ViewportSnapshotCache();
 
   // Host-pushed mirrors (refreshed per data chunk + on out-of-band pushes).
   private agentLive = false;
@@ -102,12 +107,14 @@ export class AnalysisSession {
       scrollback: spec.scrollback,
       allowProposedApi: true,
     });
+    applyXtermReflowFastpath(terminal);
     terminal.loadAddon(new Unicode11Addon());
     terminal.unicode.activeVersion = "11";
     const serializeAddon = new SerializeAddon();
     terminal.loadAddon(serializeAddon);
     this.headlessTerminal = terminal;
     this.serializeAddon = serializeAddon;
+    this.viewportSnapshotCache.attach(terminal);
 
     this.frameDetector = new SynchronizedFrameDetector(terminal, (snapshot) => {
       this.monitor?.onSynchronizedFrame(snapshot);
@@ -149,6 +156,10 @@ export class AnalysisSession {
     }
 
     this.headlessTerminal.write(data, () => {
+      // Invalidate before noteAgentOutputActivity reads the viewport: xterm
+      // fires per-write callbacks before the onWriteParsed event the cache
+      // subscribes to, and a stale hit here would diff a pre-parse snapshot.
+      this.viewportSnapshotCache.invalidate();
       this.noteProcessed(data.length);
       this.noteAgentOutputActivity();
       this.scheduleDigest();
@@ -226,7 +237,7 @@ export class AnalysisSession {
         ...buildActivityMonitorOptions(spec.agentId, {
           getVisibleLines: (n) => readVisibleActivityLines(this.headlessTerminal ?? undefined, n),
           getVisibleContentSnapshot: (n) =>
-            readVisibleActivitySnapshot(this.headlessTerminal ?? undefined, n),
+            this.viewportSnapshotCache.read(this.headlessTerminal ?? undefined, n),
           getCursorLine: () => readCursorLine(this.headlessTerminal ?? undefined),
         }),
         processStateValidator: validator,
@@ -281,6 +292,22 @@ export class AnalysisSession {
   setScrollback(lines: number): void {
     if (this.disposed || !this.headlessTerminal) return;
     this.headlessTerminal.options.scrollback = lines;
+    // A scrollback shrink can trim the buffer; viewport-relative reads should
+    // not trust a snapshot taken before the trim.
+    this.viewportSnapshotCache.invalidate();
+  }
+
+  /**
+   * Actual buffer occupancy — lines the mirror really holds (scrollback used +
+   * viewport rows), not the configured cap. Feeds the worker memory sample so
+   * the governor's targeted trim ranks by real usage. Null once freed.
+   */
+  bufferStats(): { bufferLines: number; cols: number } | null {
+    if (this.disposed || !this.headlessTerminal) return null;
+    return {
+      bufferLines: this.headlessTerminal.buffer.active.length,
+      cols: this.headlessTerminal.cols,
+    };
   }
 
   serialize(): Promise<string | null> {
@@ -330,6 +357,7 @@ export class AnalysisSession {
       }
       this.frameDetector = null;
     }
+    this.viewportSnapshotCache.detach();
     if (this.headlessTerminal) {
       try {
         this.headlessTerminal.dispose();
@@ -434,7 +462,7 @@ export class AnalysisSession {
 
   private getAgentOutputContentSnapshot(): VisibleContentSnapshot | undefined {
     if (!this.headlessTerminal) return undefined;
-    return readVisibleActivitySnapshot(this.headlessTerminal, AGENT_OUTPUT_ACTIVITY_LINE_COUNT);
+    return this.viewportSnapshotCache.read(this.headlessTerminal, AGENT_OUTPUT_ACTIVITY_LINE_COUNT);
   }
 
   // Mirrors TerminalProcess.noteAgentOutputActivity: temperature-based

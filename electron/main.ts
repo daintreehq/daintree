@@ -76,7 +76,6 @@ import {
 } from "./window/powerMonitor.js";
 import { getProjectStatsService } from "./ipc/handlers/projectCrud/index.js";
 import { getIdleTerminalNotificationService } from "./services/IdleTerminalNotificationService.js";
-import { preAgentSnapshotService } from "./services/PreAgentSnapshotService.js";
 import { isDemoMode, isSmokeTest, kickOffEarlyPathRefresh } from "./setup/environment.js";
 import { store } from "./store.js";
 import { initializeLogger, registerLoggerTransport, setLogLevelOverrides } from "./utils/logger.js";
@@ -145,10 +144,15 @@ protocol.registerSchemesAsPrivileged([
   },
 ]);
 
-// V8 tuning for renderer processes: heap limits and GC exposure
+// V8 tuning for renderer processes: heap limits and GC exposure.
+// Semi-space 16 MB: the young generation commits up to ~2× the semi-space per
+// renderer, and with one renderer per project view the slack multiplies. 64 MB
+// (up to ~128 MB committed nursery per view under terminal streaming) bought
+// scavenge frequency we don't need — terminal churn is short-lived garbage
+// with a tiny live set, so scavenges stay sub-millisecond at 16 MB.
 app.commandLine.appendSwitch(
   "js-flags",
-  "--max-old-space-size=768 --max-semi-space-size=64 --expose-gc"
+  "--max-old-space-size=768 --max-semi-space-size=16 --expose-gc"
 );
 
 // Allow autoplay without user gesture (voice input, media panels).
@@ -261,6 +265,10 @@ if (!gotTheLock) {
     setMainWindow(win);
     const ctx = windowRegistry.register(win, { projectPath: initialProjectPath ?? undefined });
     windowRegistry.registerAppViewWebContents(ctx.windowId, appView.webContents.id);
+    // Paint-fabric surface views load the same preload as project views; the
+    // paintSurface IPC namespace builds its per-window manager lazily and
+    // reads the path from here.
+    ctx.services.preloadDirname = __dirname;
 
     const pvm = new ProjectViewManager(win, {
       dirname: __dirname,
@@ -481,7 +489,6 @@ if (!gotTheLock) {
         getWorkspaceClient: getWorkspaceClientRef,
         getProjectStatsService,
         getIdleTerminalNotificationService: () => getIdleTerminalNotificationService(),
-        getPreAgentSnapshotService: () => preAgentSnapshotService,
       });
     }
 

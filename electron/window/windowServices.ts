@@ -39,6 +39,8 @@ import {
   installDntrPath,
 } from "../lifecycle/appLifecycle.js";
 import type { WindowContext, WindowRegistry } from "./WindowRegistry.js";
+import { getWindowRegistry } from "./windowRef.js";
+import { installOpenDirConsumer, drainPendingOpenDirs } from "./openDirHandler.js";
 import { resetDeferredQueue } from "./deferredInitQueue.js";
 import { initGlobalServices } from "./globalServicesInit.js";
 import { initPerWindowServices, wireWatchdogDisabledBroadcast } from "./perWindowInit.js";
@@ -88,6 +90,15 @@ export {
 } from "./serviceRefs.js";
 
 const DEFAULT_TERMINAL_ID = "default";
+
+// Folder-drop open dependencies for macOS `open-file` directories (#10976).
+// Stable singletons, so the deps object is module-level; the install-once guard
+// lives in openDirHandler.ts.
+const openDirDeps = {
+  openDirectory: (dirPath: string, win: BrowserWindow) =>
+    handleDirectoryOpen(dirPath, win, getCliAvailabilityServiceRef() ?? undefined),
+  resolvePrimaryWindow: () => getWindowRegistry()?.getPrimary()?.browserWindow,
+};
 
 function createAndDistributePorts(win: BrowserWindow, ctx: WindowContext): void {
   const wc = getAppWebContents(win);
@@ -693,6 +704,15 @@ export async function setupWindowServices(
       (err) => console.error("[MAIN] Failed to open initial project path:", err)
     );
   }
+
+  // Folder drops on the Dock icon / "Open With" arrive via macOS `open-file`
+  // (#10976). Cold-launch / zero-window drops queue in `environment.ts` before
+  // any window exists; the first window drains them here (mirroring the CLI-
+  // path drain above), and a one-shot consumer routes subsequent warm drops to
+  // the primary window. The queue/consumer lifecycle lives in openDirHandler.ts
+  // so it is unit-testable independent of this module's heavy setup.
+  installOpenDirConsumer(openDirDeps);
+  drainPendingOpenDirs(win, openDirDeps);
 
   // `.dntr` plugin-archive handling — independent of project/CLI-path routing.
   // First-launch (cold double-click) archives arrive in process.argv; second

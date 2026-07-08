@@ -36,11 +36,7 @@ type GitStub = {
     | "getFileDiff"
     | "listCommits"
     | "getStagingStatus"
-    | "getProjectPulse"
-    | "snapshotGet"
-    | "snapshotList"
-    | "snapshotRevert"
-    | "snapshotDelete"]: ReturnType<typeof vi.fn>;
+    | "getProjectPulse"]: ReturnType<typeof vi.fn>;
 };
 
 function makeGitStub(): GitStub {
@@ -56,10 +52,6 @@ function makeGitStub(): GitStub {
     listCommits: vi.fn().mockResolvedValue([]),
     getStagingStatus: vi.fn().mockResolvedValue({}),
     getProjectPulse: vi.fn().mockResolvedValue({}),
-    snapshotGet: vi.fn().mockResolvedValue(null),
-    snapshotList: vi.fn().mockResolvedValue([]),
-    snapshotRevert: vi.fn().mockResolvedValue(undefined),
-    snapshotDelete: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -192,13 +184,6 @@ describe("gitActions adversarial", () => {
     );
   });
 
-  it("git.snapshotRevert is worktree-based — never touches cwd", async () => {
-    const { run, git } = setupActions();
-    await run("git.snapshotRevert", { worktreeId: "wt-1" });
-    expect(git.snapshotRevert).toHaveBeenCalledWith("wt-1");
-    expect(git.snapshotRevert).toHaveBeenCalledTimes(1);
-  });
-
   it("git.stageFile rejects when filePath is empty — schema guard", async () => {
     const { run, git } = setupActions();
     // Schema allows empty string; this documents current behavior.
@@ -290,16 +275,5 @@ describe("gitActions adversarial", () => {
     expect(git.getProjectPulse).toHaveBeenCalledWith(
       expect.objectContaining({ worktreeId: "wt-ctx", rangeDays: 120 })
     );
-  });
-
-  it("git.snapshotGet falls back to ctx.activeWorktreeId", async () => {
-    const { run, git } = setupActions();
-    await run("git.snapshotGet", undefined, { activeWorktreeId: "wt-1" });
-    expect(git.snapshotGet).toHaveBeenCalledWith("wt-1");
-  });
-
-  it("git.snapshotGet throws when no worktreeId and no ctx", async () => {
-    const { run } = setupActions();
-    await expect(run("git.snapshotGet")).rejects.toThrow("No active worktree");
   });
 });

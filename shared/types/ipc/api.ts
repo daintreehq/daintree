@@ -1,6 +1,5 @@
 import type { PushProgressEvent } from "./gitPush.js";
 import type { GitStatus, StagingStatus } from "../git.js";
-import type { SnapshotInfo, SnapshotRevertResult } from "./git.js";
 import type { AgentId } from "../agent.js";
 import type { TabGroup } from "../panel.js";
 import type { WorktreeState } from "../worktree.js";
@@ -203,6 +202,13 @@ export interface NotificationSettings {
  * positional-arg `demo` namespace, etc.).
  */
 export interface ElectronAPI extends GeneratedElectronAPI {
+  // Invoke methods are generated; onWebglThresholds is the hand-wired push
+  // listener for the webglBudget apply step (surface-view side).
+  paintSurface: GeneratedElectronAPI["paintSurface"] & {
+    onWebglThresholds(
+      callback: (payload: import("../paintFabricSurface.js").SurfaceWebglThresholds) => void
+    ): () => void;
+  };
   worktree: {
     getAll(): Promise<WorktreeState[]>;
     refresh(worktreeId?: string): Promise<void>;
@@ -276,6 +282,13 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onTrashed(callback: (data: { id: string; expiresAt: number }) => void): () => void;
     onRestored(callback: (data: { id: string }) => void): () => void;
     forceResume(id: string): Promise<void>;
+    /**
+     * Mint a dedicated worker-ingest MessagePort for this terminal (issue
+     * #10960). Resolves with the handshake token; the port itself arrives via
+     * a `terminal-worker-port` window message carrying the same token.
+     */
+    requestWorkerIngestPort(id: string): Promise<{ token: string } | null>;
+    releaseWorkerIngestPort(id: string): Promise<void>;
     onStatus(callback: (data: TerminalStatusPayload) => void): () => void;
     onReliabilityMetric(callback: (data: TerminalReliabilityMetricPayload) => void): () => void;
     onResourceMetrics(
@@ -363,6 +376,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     openExternal(url: string): Promise<void>;
     openPath(path: string): Promise<void>;
     showItemInFolder(path: string): Promise<void>;
+    showItemInFolderUnconfined(path: string): Promise<void>;
     openInEditor(payload: SystemOpenInEditorPayload & { projectId?: string }): Promise<void>;
     checkCommand(command: string): Promise<boolean>;
     checkDirectory(path: string): Promise<boolean>;
@@ -440,6 +454,17 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * visibilitychange/resume ran while the view was still occluded.
      */
     onViewRevealed(callback: () => void): () => void;
+    /**
+     * Subscribe to the warm-activation wake signal. Main fires this the moment
+     * it re-attaches a cached view behind the anti-flash bridge (or reveals it
+     * directly when there is no bridge). A detached `setVisible(false)` view
+     * never receives `visibilitychange`/`resume` on reattach, so without this
+     * explicit trigger the wake fan-out — and the `notifyWarmViewPainted` gate
+     * release it ends with — only ran when Chromium happened to emit a
+     * lifecycle event (the Efficiency-profile freeze path), and every other
+     * warm swap stalled until the warm paint gate's hard timeout.
+     */
+    onViewWarmActivated(callback: () => void): () => void;
     onViewCached(callback: () => void): () => void;
   };
   // menu is generated — see GeneratedElectronAPI.
@@ -817,10 +842,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     ): Promise<import("./git.js").CrossWorktreeDiffResult | string>;
     getUsername(cwd: string): Promise<string | null>;
     getWorkingDiff(cwd: string, type: "unstaged" | "staged" | "head"): Promise<string>;
-    snapshotGet(worktreeId: string): Promise<SnapshotInfo | null>;
-    snapshotList(): Promise<SnapshotInfo[]>;
-    snapshotRevert(worktreeId: string): Promise<SnapshotRevertResult>;
-    snapshotDelete(worktreeId: string): Promise<void>;
     markSafeDirectory(path: string): Promise<void>;
   };
   terminalConfig: {
@@ -2048,7 +2069,7 @@ export interface SuggestedDictionaryEntry {
 
 export type HelpAssistantAuditRetention = 7 | 30 | 0;
 
-export type HelpAssistantIdleHibernateMinutes = 0 | 15 | 30 | 60 | 120;
+export type HelpAssistantIdleHibernateMinutes = 0 | 5 | 15 | 30 | 60 | 120;
 
 export interface HelpAssistantSettings {
   /** Allow the help assistant to search Daintree documentation. Defaults to true. */
@@ -2081,7 +2102,11 @@ export interface HelpAssistantSettings {
   /**
    * Minutes the assistant panel must be continuously hidden before its PTY is
    * gracefully shut down to capture the Claude resume session ID. 0 disables
-   * idle hibernation. Defaults to 30.
+   * idle hibernation. Defaults to 5 — hiding is a layout gesture, so an idle
+   * hidden assistant releases its memory quickly and reopening resumes the
+   * same conversation transparently (return-to-panel rates fall off within a
+   * few minutes; a hidden-idle reclaim in this range matches Chrome's
+   * Memory Saver tiers).
    */
   idleHibernateMinutes: HelpAssistantIdleHibernateMinutes;
   /**

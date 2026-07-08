@@ -1,7 +1,38 @@
 import { setPluginAgentRegistry } from "../../../../shared/config/pluginAgentRegistry.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { AnalysisSession } from "./AnalysisSession.js";
-import type { HostToWorkerMessage, WorkerToHostMessage } from "../analysisWorkerProtocol.js";
+import type { IdleHeapCompactor } from "./idleHeapCompactor.js";
+import type {
+  AnalysisWorkerMemorySample,
+  HostToWorkerMessage,
+  WorkerToHostMessage,
+} from "../analysisWorkerProtocol.js";
+
+/**
+ * Cadence of the worker's isolate-memory self-report. Matches the
+ * ResourceGovernor's 2s check interval so the governor never acts on a signal
+ * more than one tick old. The payload is a handful of numbers plus one small
+ * entry per session — noise next to the data-path traffic.
+ */
+export const MEMORY_SAMPLE_INTERVAL_MS = 2000;
+
+/**
+ * Message types that count as heap activity for idle compaction — the ops
+ * that feed the mirror buffers or (de)allocate sessions. Metadata ticks
+ * (process-state, agent-context, polling config, focus/input notifies) are
+ * excluded deliberately: a monitored-but-quiet agent terminal receives them
+ * on a timer forever, and counting those would keep its worker from ever
+ * compacting.
+ */
+const HEAP_ACTIVITY_MESSAGE_TYPES: ReadonlySet<HostToWorkerMessage["type"]> = new Set([
+  "create",
+  "data",
+  "prelude",
+  "resize",
+  "request",
+  "free",
+  "set-scrollback",
+]);
 
 /**
  * Worker-side message dispatcher. Holds the terminal-slot map and routes
@@ -22,10 +53,79 @@ export class AnalysisWorkerRuntime {
   // ALL subsequent messages for that terminal chain behind it, preserving
   // total per-terminal message order.
   private readonly barriers = new Map<string, Promise<void>>();
+  private memorySampleTimer: NodeJS.Timeout | null = null;
 
-  constructor(private readonly emit: (msg: WorkerToHostMessage) => void) {}
+  constructor(
+    private readonly emit: (msg: WorkerToHostMessage) => void,
+    /**
+     * Injectable isolate-memory reader for tests; production uses the worker's
+     * own `process.memoryUsage()`, which is isolate-scoped — the whole point
+     * of sampling here rather than on the pty-host main thread.
+     */
+    private readonly readMemory: () => { heapUsed: number; external: number } = () =>
+      process.memoryUsage(),
+    /**
+     * Optional idle heap compaction for this worker isolate. Fed by
+     * heap-affecting messages and checked on the memory-sample tick, so a
+     * worker whose terminals have gone quiet returns its parse-churn heap
+     * slack to the OS instead of holding it for minutes.
+     */
+    private readonly idleHeapCompactor: IdleHeapCompactor | null = null
+  ) {}
+
+  /**
+   * Isolate memory + per-session buffer occupancy at this instant. The
+   * governor on the pty-host main thread cannot observe worker-isolate memory
+   * (separate V8 isolates), so this self-report is its only visibility into
+   * the headless mirror buffers that dominate the process footprint.
+   */
+  collectMemorySample(): AnalysisWorkerMemorySample {
+    const memory = this.readMemory();
+    const sessions: AnalysisWorkerMemorySample["sessions"] = [];
+    for (const [terminalId, session] of this.sessions) {
+      const stats = session.bufferStats();
+      if (stats) {
+        sessions.push({ terminalId, bufferLines: stats.bufferLines, cols: stats.cols });
+      }
+    }
+    return {
+      heapUsedBytes: memory.heapUsed,
+      externalBytes: memory.external,
+      sessionCount: this.sessions.size,
+      sessions,
+      sampledAt: Date.now(),
+    };
+  }
+
+  /**
+   * Begin periodic memory self-reporting. The timer is unref'd so an idle
+   * worker never keeps the process alive; a saturated worker event loop delays
+   * the sample, which the host treats as staleness (stale contributes 0).
+   */
+  startMemorySampling(intervalMs: number = MEMORY_SAMPLE_INTERVAL_MS): void {
+    if (this.memorySampleTimer) return;
+    this.memorySampleTimer = setInterval(() => {
+      try {
+        this.emit({ type: "memory-sample", ...this.collectMemorySample() });
+      } catch (error) {
+        console.error("[AnalysisWorker] memory sample failed:", error);
+      }
+      this.idleHeapCompactor?.maybeCompact();
+    }, intervalMs);
+    this.memorySampleTimer.unref?.();
+  }
+
+  stopMemorySampling(): void {
+    if (this.memorySampleTimer) {
+      clearInterval(this.memorySampleTimer);
+      this.memorySampleTimer = null;
+    }
+  }
 
   handleMessage(msg: HostToWorkerMessage): void {
+    if (this.idleHeapCompactor && HEAP_ACTIVITY_MESSAGE_TYPES.has(msg.type)) {
+      this.idleHeapCompactor.noteActivity();
+    }
     const terminalId = "terminalId" in msg ? msg.terminalId : undefined;
     if (terminalId === undefined) {
       void this.runSafe(msg);
@@ -141,6 +241,7 @@ export class AnalysisWorkerRuntime {
             terminalId: msg.terminalId,
             result: msg.op === "final-snapshot" ? { snapshot: null, persistence: null } : null,
             error: "no-session",
+            generation: msg.generation,
           });
           return;
         }
@@ -159,6 +260,7 @@ export class AnalysisWorkerRuntime {
               requestId: msg.requestId,
               terminalId: msg.terminalId,
               result,
+              generation: msg.generation,
             });
           },
           (error: unknown) => {
@@ -168,6 +270,7 @@ export class AnalysisWorkerRuntime {
               terminalId: msg.terminalId,
               result: msg.op === "final-snapshot" ? { snapshot: null, persistence: null } : null,
               error: formatErrorMessage(error, "analysis request failed"),
+              generation: msg.generation,
             });
           }
         );

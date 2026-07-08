@@ -2,6 +2,14 @@
 
 This document describes the runtime lifecycle state for terminals across renderer, main, and PTY host.
 
+## Lifecycle ledger (generation safety)
+
+`AgentTerminalLifecycleLedger` (`shared/utils/agentLifecycleLedger.ts`) is a bounded, in-memory audit ledger instantiated once per process: main (`electron/services/pty/lifecycleLedger.ts`, the authority), the pty-host (a `PtyManager` member), and the renderer (`src/services/terminal/lifecycleLedger.ts`). Main mints a monotonic `launchGeneration` per terminal id in `PtyClient.spawn` — every spawn path (fresh, restart, resume, respawn-after-host-crash) funnels through it — and stamps it on the spawn options; the pty-host adopts it and echoes it on `exit` and `agent-session-captured` events so cross-process completions key to the same incarnation.
+
+The ledger records immutable launch facts per generation (launch/detected agent ids, cwd/project/worktree attribution with explicit-vs-inferred provenance, model/preset/flags, env provenance as sorted key names + content hash — never values — and initial/first-attach geometry) and validates lifecycle operations in two regimes: live-state ops (resize, restore, attach, detection) apply only to the CURRENT generation, while terminal-final ops (close, journal) are exactly-once PER generation and tolerate past generations, so a kill's journal write landing after a same-id respawn is neither dropped nor attributed to the successor.
+
+Load-bearing gates wired on it: `journalAgentSession` (`electron/services/pty/agentSessionJournal.ts`) is the single funnel for all four session-journal close paths (trash expiry, kill, gracefulKill, shutdown) and drops duplicate records per (terminalId, generation); `PtyManager` stamps buffered pre-spawn resizes with the generation current at buffering time and drops stale ones at the next spawn instead of booting the successor at dead geometry; the renderer's `addPanel` rejects spawn resolutions and hydration/reconnect merges that no longer belong to the live incarnation (stale persisted snapshots must not overwrite fresh launch metadata); and inferred (cwd-derived) worktree attribution never overwrites a differing explicit one. Rejections land in a bounded anomaly ring surfaced as the `lifecycleLedger` section of the diagnostics bundle (`DiagnosticsCollector`). The ledger is diagnostic-grade and never persisted — it is not a user-facing history.
+
 ## Runtime status model
 
 `TerminalRuntimeStatus` is a lightweight, runtime-only view used by the renderer store:

@@ -217,6 +217,8 @@ export interface PanelRegistrySlice {
     id: string,
     position: { url: string; scrollY: number } | undefined
   ) => void;
+  setFilePanelPath: (id: string, filePath: string) => void;
+  setFileViewMode: (id: string, viewMode: import("@shared/types/panel.js").FileViewMode) => void;
   setDevServerState: (
     id: string,
     status: "stopped" | "starting" | "installing" | "running" | "error",

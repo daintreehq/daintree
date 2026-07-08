@@ -310,8 +310,6 @@ describe("duplicate registrations", () => {
 const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "git.push",
   "git.pullRebase",
-  "git.snapshotRevert",
-  "git.snapshotDelete",
   "terminal.kill",
   "terminal.killAll",
   "terminal.restart",
@@ -388,10 +386,6 @@ const CONFIRMED_WIRED: ReadonlyArray<ActionId> = [
  * See docs/architecture/destructive-action-safeguards.md Known Bypasses.
  */
 const BYPASS_WIRED: ReadonlyArray<ActionId> = [
-  // IPC bypass in useWorktreeActions.ts; ConfirmDialog in WorktreeDialogs.tsx
-  // (action ID not co-located with the dialog component).
-  "git.snapshotRevert",
-  "git.snapshotDelete",
   // Deferred-promise via gitPushConfirmStore; action run() awaits confirmation
   // before calling IPC; GitPushConfirmDialog resolves the Promise.
   "git.push",
@@ -521,6 +515,7 @@ describe("destructive-action danger metadata", () => {
       worktrees: new Map<string, WorktreeSnapshot>([
         ["wt-placeholder", { id: "wt-placeholder", hasTeardownCommand: true } as WorktreeSnapshot],
       ]),
+      statusCheckedAt: new Map(),
       manualAssociations: new Map(),
       version: { epoch: "test", seq: 1 },
       tombstones: new Map(),

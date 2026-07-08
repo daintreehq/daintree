@@ -670,6 +670,31 @@ function loadHostImportMapHashes(distPath: string | null): string[] {
   }
 }
 
+/**
+ * Apply the strict Daintree app CSP to a dynamically-created trusted session
+ * (paint-fabric surface views). Their `paint-surface:*` partitions are
+ * deliberately NOT reclassified in classifyPartition: the "unknown" class is
+ * what routes them through the session-created permission lockdown in
+ * security.ts, and this helper restores the CSP half of the project-view
+ * hardening that classification skips.
+ */
+export function applyDaintreeAppCspToSession(ses: Electron.Session): void {
+  const scriptSrcHashes = loadHostImportMapHashes(cachedDistPath);
+  const isDev = process.env.NODE_ENV === "development";
+  const cspPolicy =
+    scriptSrcHashes.length > 0
+      ? getDaintreeAppCSP(isDev, { scriptSrcHashes })
+      : getDaintreeAppCSP(isDev);
+  ses.webRequest.onHeadersReceived(
+    { urls: ["<all_urls>"], types: ["mainFrame", "subFrame", "script"] },
+    (details, callback) => {
+      callback({
+        responseHeaders: mergeCspHeaders(details, cspPolicy),
+      });
+    }
+  );
+}
+
 export function setupWebviewCSP(): void {
   const configuredPartitions = new Set<string>();
   const scriptSrcHashes = loadHostImportMapHashes(cachedDistPath);

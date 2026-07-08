@@ -6,7 +6,7 @@ import crypto from "crypto";
 import os from "os";
 import { z } from "zod";
 import { CHANNELS } from "../../channels.js";
-import { waitForRateLimitSlot, consumeRestoreQuota } from "../../utils.js";
+import { waitForBurstRateLimitSlot, consumeRestoreQuota } from "../../utils.js";
 import { defineIpcNamespace, op, opValidated } from "../../define.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import type * as McpServerServiceModule from "../../../services/McpServerService.js";
@@ -30,7 +30,6 @@ import {
   SettingTemplateError,
   substituteSettingsTemplates,
 } from "../../../services/settingsTemplateResolver.js";
-import { events } from "../../../services/events.js";
 import type * as PluginServiceModule from "../../../services/PluginService.js";
 
 type ValidatedTerminalSpawnOptions = z.output<typeof TerminalSpawnOptionsSchema>;
@@ -83,10 +82,11 @@ async function getPluginService(): Promise<PluginServiceSingleton> {
 import {
   listAgentSessions,
   clearAgentSessions,
-  persistAgentSession,
   pruneAgentSessions,
 } from "../../../services/pty/agentSessionHistory.js";
 import { getAgentSessionRetentionDays } from "../../../services/pty/agentSessionRetention.js";
+import { journalAgentSession } from "../../../services/pty/agentSessionJournal.js";
+import { getLifecycleLedger } from "../../../services/pty/lifecycleLedger.js";
 import type { WorkspaceClient } from "../../../services/WorkspaceClient.js";
 import { getDefaultShell } from "../../../services/pty/terminalShell.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
@@ -111,7 +111,12 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
 
     const bypassedRateLimit = validatedOptions.restore === true && consumeRestoreQuota();
     if (!bypassedRateLimit) {
-      await waitForRateLimitSlot("terminalSpawn", 1_000);
+      // Burst-tolerant token bucket: a user launching several agents
+      // back-to-back (fleet launch, "up to 4 in parallel" MCP guidance) gets
+      // up to 6 instant spawns, then the schedule falls back to the smooth
+      // 1/sec leaky-bucket cadence that #5352 chose for batch spawns — the
+      // sliding-window overload and its every-N-terminals stall stay out.
+      await waitForBurstRateLimitSlot("terminalSpawn", 1_000, 6);
     }
 
     const cols = Math.max(1, Math.min(500, Math.floor(validatedOptions.cols) || 80));
@@ -619,13 +624,17 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
   // expiry capture, the fourth close path that already journals.
   const persistCloseRecord = async (
     info: Awaited<ReturnType<typeof ptyClient.getTerminalAsync>>,
-    sessionId: string | null
+    sessionId: string | null,
+    generation?: number
   ): Promise<void> => {
     if (!sessionId || !info?.launchAgentId) return;
     try {
       const branch = await resolveBranchForMain(info.worktreeId, deps.worktreeService);
-      const { app } = await import("electron");
-      await persistAgentSession(
+      // journalAgentSession is the exactly-once funnel: it gates on the
+      // lifecycle ledger's (terminalId, generation) key — dropping a record a
+      // concurrent close path already journaled — persists with the real
+      // retention setting, and emits agent-session:recorded after the write.
+      await journalAgentSession(
         {
           sessionId,
           agentId: info.launchAgentId,
@@ -644,17 +653,8 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           cwd: info.cwd ?? undefined,
           branch,
         },
-        app.getPath("userData"),
-        getAgentSessionRetentionDays()
+        { terminalId: info.id, generation }
       );
-      // Signal AFTER the write lands so a refetch it triggers sees the record.
-      // Bridged to every renderer for live resume-list refresh.
-      events.emit("agent-session:recorded", {
-        sessionId,
-        worktreeId: info.worktreeId ?? null,
-        projectId: info.projectId ?? null,
-        timestamp: Date.now(),
-      });
     } catch (err) {
       console.warn("[TerminalLifecycle] Failed to persist agent session on close:", err);
     }
@@ -671,8 +671,12 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // terminals through it. Plain terminals keep the original hard kill.
       const info = await ptyClient.getTerminalAsync(id).catch(() => null);
       if (info?.launchAgentId) {
+        // Freeze the generation BEFORE the kill: a restart can respawn this id
+        // while gracefulKill is in flight, and the record must stay attributed
+        // to the incarnation that produced it, not the successor.
+        const generation = getLifecycleLedger().currentGeneration(id);
         const sessionId = await ptyClient.gracefulKill(id);
-        await persistCloseRecord(info, sessionId);
+        await persistCloseRecord(info, sessionId, generation);
       } else {
         ptyClient.kill(id);
       }
@@ -687,8 +691,9 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       throw new Error("Invalid terminal ID: must be a string");
     }
     const info = await ptyClient.getTerminalAsync(id).catch(() => null);
+    const generation = getLifecycleLedger().currentGeneration(id);
     const sessionId = await ptyClient.gracefulKill(id);
-    await persistCloseRecord(info, sessionId);
+    await persistCloseRecord(info, sessionId, generation);
     return sessionId;
   };
 

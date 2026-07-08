@@ -28,6 +28,7 @@ export interface CodeViewerProps {
   content: string;
   filePath: string;
   initialLine?: number;
+  wrapLines?: boolean;
   className?: string;
 }
 
@@ -188,7 +189,7 @@ const SCOPE_NODE_TYPES_BY_LANGUAGE: Record<string, Set<string>> = {
 };
 
 export const CodeViewer = forwardRef<CodeViewerHandle, CodeViewerProps>(function CodeViewer(
-  { content, filePath, initialLine, className },
+  { content, filePath, initialLine, wrapLines = false, className },
   ref
 ) {
   const [langExtension, setLangExtension] = useState<Extension | null>(null);
@@ -252,10 +253,11 @@ export const CodeViewer = forwardRef<CodeViewerHandle, CodeViewerProps>(function
     };
   }, [filePath]);
 
-  const extensions = useMemo<Extension[]>(
-    () => (langExtension ? [...BASE_EXTENSIONS, langExtension] : BASE_EXTENSIONS),
-    [langExtension]
-  );
+  const extensions = useMemo<Extension[]>(() => {
+    const list = langExtension ? [...BASE_EXTENSIONS, langExtension] : [...BASE_EXTENSIONS];
+    if (wrapLines) list.push(EditorView.lineWrapping);
+    return list;
+  }, [langExtension, wrapLines]);
 
   const handleScroll = useCallback(() => {
     if (rafRef.current !== null) return;

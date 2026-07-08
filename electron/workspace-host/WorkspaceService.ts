@@ -2,8 +2,8 @@ import os from "os";
 import { randomUUID } from "node:crypto";
 import PQueue from "p-queue";
 import { existsSync } from "fs";
-import { stat, readFile, access, mkdir } from "fs/promises";
-import { resolve as pathResolve, isAbsolute, dirname, basename } from "path";
+import { stat, readFile, access, mkdir, realpath } from "fs/promises";
+import { resolve as pathResolve, isAbsolute, dirname } from "path";
 import { validateBranchName } from "../../shared/utils/pathPattern.js";
 import { generateProjectId, settingsFilePath } from "../services/projectStorePaths.js";
 import { SimpleGit, BranchSummary } from "simple-git";
@@ -41,10 +41,12 @@ import { WorktreeListService } from "./WorktreeListService.js";
 import { PRIntegrationService, type PRIntegrationCallbacks } from "./PRIntegrationService.js";
 import { RepoFetchCoordinator } from "./RepoFetchCoordinator.js";
 import { waitForPathExists } from "../utils/fs.js";
+import { markHostPerformance } from "../utils/hostPerformance.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import {
   parseCheckedOutBranches,
   nextAvailableBranchName,
+  isBranchAlreadyExistsError,
   ensureNoteFile,
   assertWorktreePathContained,
 } from "./worktreeUtils.js";
@@ -54,8 +56,7 @@ import {
 } from "../../shared/utils/forgeHostnames.js";
 import { applyResourceConfigToMonitor } from "./resourceConfigHelpers.js";
 import { ResourceActionExecutor } from "./ResourceActionExecutor.js";
-import parcelWatcher from "@parcel/watcher";
-import { MutableDisposable } from "../utils/lifecycle.js";
+import { TopologyWatcher, type TopologyWatcherHost } from "./TopologyWatcher.js";
 
 function normalizePathKeyForPrefix(value: string): string {
   const normalized = value.replace(/\\/g, "/").replace(/\/+$/, "");
@@ -97,12 +98,6 @@ const DEFAULT_BACKGROUND_WORKTREE_INTERVAL_MS = 10000;
 // hardcoded defaults. Overridden per-profile via `updateMonitorConfig`.
 const DEFAULT_BACKGROUND_GIT_WATCHER_CAP = 12;
 const WORKTREE_REMOVE_LOCK_RETRY_DELAYS_MS = [250, 500, 1000, 2000, 3000, 5000, 8000];
-// Periodic safety-net reconcile cadence. On macOS the FSEvents-backed topology
-// watcher goes silent when `.git/worktrees/` is deleted (last worktree removed)
-// and `startTopologyWatcher()` no-ops when that dir is absent — so a phantom row
-// can persist until the 300s background poll happens to hit the fs.access check.
-// This interval bounds that staleness independent of watcher liveness (#8510).
-const TOPOLOGY_SAFETY_INTERVAL_MS = 90_000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -127,11 +122,6 @@ function isTransientWorktreeRemoveLockError(error: unknown): boolean {
 // allSettled, forceRefreshAfterGap catches). The underlying work isn't
 // cancelled, but the individual fs/git awaits are independently bounded.
 const POLL_QUEUE_TASK_TIMEOUT_MS = 60_000;
-
-// Ceiling for a single topology reconcile holding the concurrency-1 queue. A
-// stuck `git worktree prune`/`list` would otherwise pin the only slot and the
-// pending flag forever, freezing all worktree add/remove detection.
-const TOPOLOGY_RECONCILE_TIMEOUT_MS = 60_000;
 
 // Overall ceiling for a user-initiated full refresh. Guarantees the port
 // request always replies so the sidebar's Refresh button can never hang or be
@@ -178,6 +168,14 @@ export class WorkspaceService {
   // worktree is never present here. Mutated via lruTouch/lruRemove; budget
   // enforced by applyWatcherBudget().
   private readonly backgroundGitWatcherLru = new Map<string, true>();
+  // Worktree IDs the renderer reports as having an actively working agent
+  // (via the `set-agent-activity` port action). Agent-active monitors are
+  // elevated to the recursive watcher tier and exempted from the background
+  // watcher budget, exactly like the focused worktree — the ENOSPC/EMFILE
+  // degradation path bounds the worst case on constrained kernels. Kept as a
+  // set (not per-monitor only) so worktrees discovered *after* the broadcast
+  // (e.g. an agent's own `git worktree add`) inherit the flag on creation.
+  private agentActiveWorktreeIds = new Set<string>();
   // Provider hostname-matcher table relayed from main's forge registry.
   // Empty until the first relay lands (after plugin load), so monitors start
   // unmatched and re-resolve when the table arrives or changes.
@@ -225,47 +223,17 @@ export class WorkspaceService {
   /** How often to re-check the WSL default distro (Windows only). */
   private static readonly WSL_DISTRO_POLL_INTERVAL_MS = 60_000;
 
-  // Topology watcher — watches `.git/worktrees/` for external worktree
-  // create/delete and triggers serialized reconciliation.
-  private topologyWatcherSubscription = new MutableDisposable();
-  // No constructor `timeout` here: this queue's task wraps runTopologyReconcile
-  // in withTimeout itself (and always resolves via its own try/catch/finally),
-  // so it can never pin the single slot. A p-queue constructor timeout would
-  // instead *reject* the add() promise (p-queue passes no fallback to
-  // pTimeout), and this add() call is fire-and-forget — that would surface as
-  // an unhandled rejection.
-  private topologyReconcileQueue = new PQueue({ concurrency: 1 });
-  private topologyReconcilePending = false;
-  // App-owned worktree create/delete register the metadata-subdir basename
-  // here so the watcher event their own `git worktree add/remove` produces is
-  // recognized and dropped — instead of blanket-suppressing *all* watcher
-  // events for a fixed window, which silently swallowed concurrent external
-  // `git worktree remove` calls (#8412). External events whose basename isn't
-  // pending still flow through to reconciliation.
-  private topologyPendingCreate = new Set<string>();
-  private topologyPendingDelete = new Set<string>();
-  private topologyPendingSafetyTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  // Events accumulate here across the 300ms debounce window and are filtered
-  // against the pending sets at drain time, preserving burst coalescing.
-  private topologyEventBuffer: Array<{ path: string; type?: string }> = [];
-  private topologyWatchCooldownUntil = 0;
-  private topologyWatchCooldownDirty = false;
-  private topologyDebounceTimer: ReturnType<typeof setTimeout> | null = null;
-  private topologyWatcherEnabled = true;
-  private topologyWatcherGeneration = 0;
-  // One-shot guard for the topology-watcher-dark signal (#9908). Set when the
-  // subscribe() rejects at cold start or a 5s pending-event safety valve
-  // expires — both mean the watcher is silently unreliable and the worktree
-  // list may drift. Cleared only by a *successful* `runTopologyReconcile()`
-  // (not by the watcher re-arming), because subscription success doesn't prove
-  // the topology was re-verified (#8516/#8558).
-  private topologyWatcherDarkNotified = false;
-  // Watcher-independent safety net (#8510): the topology watcher can go
-  // permanently silent (macOS FSEvents root deletion) or never start (metadata
-  // dir absent), so a periodic reconcile bounds phantom-row staleness. Calls
-  // are no-ops while paused/disabled via scheduleTopologyReconcile's guards.
-  private periodicSafetyTimer: ReturnType<typeof setInterval> | null = null;
+  // Watches `.git/worktrees/` for external worktree create/delete and drives
+  // serialized reconciliation, the dark/recovered signal, and the
+  // watcher-independent periodic safety net. See TopologyWatcher.ts.
+  private readonly topologyWatcher: TopologyWatcher;
   private readonly inFlightWorktreeCreates = new Map<string, Promise<string>>();
+  // Per-repo create chain: distinct creates on the same root run strictly
+  // one-at-a-time, back to back. This enforces the no-concurrent-`git worktree
+  // add` property (#5098 git lock contention) at the actual git boundary, so
+  // the IPC layer's rate limit can grant a burst allowance without wall-clock
+  // pacing every create 1s apart.
+  private readonly createWorktreeQueues = new Map<string, Promise<unknown>>();
 
   /**
    * Host-run identity, minted once per WorkspaceService instance — i.e. once
@@ -556,6 +524,29 @@ export class WorkspaceService {
       sendEvent: (event) => this.sendEvent(event),
       lifecycleService: this.lifecycleService,
     });
+
+    // The host is a thin live-getter view onto WorkspaceService state.
+    // Aliasing `this` keeps the getter syntax compact (object-literal
+    // getters can't be arrow functions, and we need a fresh read on each
+    // access).
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const self = this;
+    const topologyHost: TopologyWatcherHost = {
+      get pollingEnabled() {
+        return self.pollingEnabled;
+      },
+      get projectRootPath() {
+        return self.projectRootPath;
+      },
+      get activeWorktreeId() {
+        return self.activeWorktreeId;
+      },
+      monitors: this.monitors,
+      discoverAndSyncWorktrees: () => this.discoverAndSyncWorktrees(),
+      setActiveWorktree: (requestId, worktreeId) => this.setActiveWorktree(requestId, worktreeId),
+      sendEvent: (event) => this.sendEvent(event),
+    };
+    this.topologyWatcher = new TopologyWatcher(topologyHost);
   }
 
   async loadProject(
@@ -613,12 +604,12 @@ export class WorkspaceService {
 
       await this.syncMonitors(worktrees, this.activeWorktreeId, this.mainBranch, undefined, true);
 
-      await this.startTopologyWatcher();
-      // Started independently of startTopologyWatcher() — that method no-ops
-      // when `.git/worktrees/` is absent (the exact "all worktrees removed"
-      // case), so gating the safety net on it would defeat its purpose (#8510).
+      await this.topologyWatcher.startWatcher();
+      // Started independently of startWatcher() — that method no-ops when
+      // `.git/worktrees/` is absent (the exact "all worktrees removed" case),
+      // so gating the safety net on it would defeat its purpose (#8510).
       if (this.pollingEnabled) {
-        this.startPeriodicSafetyTimer();
+        this.topologyWatcher.startSafetyTimer();
       }
 
       // Bulk self-heal of `wslGitByWorktree` (#9926, review #1). Main ships
@@ -975,9 +966,9 @@ export class WorkspaceService {
    * (`git worktree remove` + recreate at the same UNC path).
    *
    * Caller is responsible for any monitor-specific cleanup (cache
-   * invalidation, `applyWatcherBudget`, `topologyClearPending`) that runs
-   * before/after this — see the three call sites for the exact ordering they
-   * preserve.
+   * invalidation, `applyWatcherBudget`, `topologyWatcher.clearPending`) that
+   * runs before/after this — see the three call sites for the exact ordering
+   * they preserve.
    */
   private removeMonitor(id: string): void {
     const monitor = this.monitors.get(id);
@@ -995,6 +986,10 @@ export class WorkspaceService {
     monitor.stop();
     this.monitors.delete(id);
     this.lruRemove(id);
+    // Drop the agent-active flag with the monitor — a same-path worktree
+    // recreated later must not inherit a stale elevation. The renderer's
+    // next broadcast re-adds it if an agent really is working there.
+    this.agentActiveWorktreeIds.delete(id);
     this.recoverWatcherIfNoMonitorsRemain();
 
     clearGitDirCache(monitor.path);
@@ -1093,15 +1088,24 @@ export class WorkspaceService {
    * run AFTER any sync/focus mutation that could re-arm watchers.
    */
   private applyWatcherBudget(): void {
-    // Reconcile LRU membership against live monitors: the active worktree must
-    // never be in the pool; every other running monitor must be present.
+    // Reconcile LRU membership against live monitors: the active worktree and
+    // agent-active worktrees must never be in the pool; every other running
+    // monitor must be present.
     for (const id of [...this.backgroundGitWatcherLru.keys()]) {
-      if (!this.monitors.has(id) || id === this.activeWorktreeId) {
+      if (
+        !this.monitors.has(id) ||
+        id === this.activeWorktreeId ||
+        this.agentActiveWorktreeIds.has(id)
+      ) {
         this.backgroundGitWatcherLru.delete(id);
       }
     }
     for (const id of this.monitors.keys()) {
-      if (id !== this.activeWorktreeId && !this.backgroundGitWatcherLru.has(id)) {
+      if (
+        id !== this.activeWorktreeId &&
+        !this.agentActiveWorktreeIds.has(id) &&
+        !this.backgroundGitWatcherLru.has(id)
+      ) {
         this.backgroundGitWatcherLru.set(id, true);
       }
     }
@@ -1118,9 +1122,48 @@ export class WorkspaceService {
     if (this.activeWorktreeId) {
       this.monitors.get(this.activeWorktreeId)?.setGitWatchBudgetAllowed(true);
     }
+    // Worktrees with an actively working agent always keep theirs too —
+    // streaming those changes is the product's core loop; the watcher-failure
+    // degradation path (ENOSPC/EMFILE → git-only) bounds the worst case.
+    for (const id of this.agentActiveWorktreeIds) {
+      this.monitors.get(id)?.setGitWatchBudgetAllowed(true);
+    }
     // Grant the surviving MRU tail.
     for (let i = cutoff; i < ids.length; i++) {
       this.monitors.get(ids[i])?.setGitWatchBudgetAllowed(true);
+    }
+  }
+
+  /**
+   * Applies the renderer's agent-activity broadcast: the set of worktree IDs
+   * that currently have an agent producing work (working/directing). Elevates
+   * matching monitors to the recursive watcher tier (see
+   * `WorktreeMonitor.agentActive`) and re-runs the watcher budget so they are
+   * exempted from background eviction. The set is retained so monitors
+   * created later — including worktrees the agent itself just created —
+   * inherit the flag before their watcher first arms.
+   */
+  setAgentActivity(worktreeIds: string[]): void {
+    // Port payloads are typed but not runtime-validated; a malformed request
+    // must not silently clear every elevation (`new Set(undefined)` is empty).
+    if (!Array.isArray(worktreeIds)) return;
+    const next = new Set(worktreeIds.filter((id): id is string => typeof id === "string"));
+    const previous = this.agentActiveWorktreeIds;
+    this.agentActiveWorktreeIds = next;
+
+    let membershipChanged = false;
+    for (const [id, monitor] of this.monitors) {
+      const active = next.has(id);
+      if (monitor.agentActive !== active) {
+        monitor.agentActive = active;
+        membershipChanged = true;
+      }
+    }
+    // A worktree that left the set re-enters the LRU pool at the MRU tail
+    // (freshest) via applyWatcherBudget's membership reconcile, and newly
+    // active ones leave it — either way the budget must be re-enforced.
+    if (membershipChanged || previous.size !== next.size) {
+      this.applyWatcherBudget();
     }
   }
 
@@ -1224,9 +1267,18 @@ export class WorkspaceService {
       monitor.setGitWatchBudgetAllowed(false);
     }
 
+    // Inherit the agent-activity flag before start so a worktree the agent
+    // just created (its monitor arriving via topology reconcile after the
+    // renderer's broadcast) arms the recursive watcher and runs its initial
+    // status immediately, instead of starting as a cold background monitor.
+    if (this.agentActiveWorktreeIds.has(wt.id)) {
+      monitor.agentActive = true;
+      monitor.setGitWatchBudgetAllowed(true);
+    }
+
     this.monitors.set(wt.id, monitor);
 
-    if (isActive) {
+    if (isActive || this.agentActiveWorktreeIds.has(wt.id)) {
       this.lruRemove(wt.id);
     } else {
       this.lruTouch(wt.id);
@@ -1543,37 +1595,25 @@ export class WorkspaceService {
   }
 
   /**
-   * The topology watcher went dark: its subscribe() failed at cold start, or a
-   * pending-event safety valve expired without the matching watcher event
-   * arriving. Either way the worktree list may silently drift out of date.
-   * One-shot — a second dark trigger while already dark is a no-op so the
-   * renderer indicator isn't re-asserted on every stale tick.
-   */
-  private handleTopologyWatcherDark(): void {
-    if (this.topologyWatcherDarkNotified) return;
-    this.topologyWatcherDarkNotified = true;
-    this.sendEvent({ type: "topology-watcher-dark" });
-  }
-
-  /**
-   * A topology reconcile completed successfully after a dark period, so the
-   * worktree list is current again. Clears the one-shot guard and emits
-   * `topology-watcher-recovered` so the renderer hides the indicator. No-op
-   * when not dark, so calling it after every reconcile is harmless.
-   */
-  private handleTopologyWatcherRecovered(): void {
-    if (!this.topologyWatcherDarkNotified) return;
-    this.topologyWatcherDarkNotified = false;
-    this.sendEvent({ type: "topology-watcher-recovered" });
-  }
-
-  /**
    * Whether the topology watcher is currently dark. Bundled into the
    * `get-all-states` handshake so a late-mounting view hydrates the indicator
    * without waiting for a live event (mirrors `isWatcherDegraded`).
    */
   isTopologyWatcherDark(): boolean {
-    return this.topologyWatcherDarkNotified;
+    return this.topologyWatcher.isDark();
+  }
+
+  /**
+   * Schedules a serialized topology reconcile (full worktree re-discovery).
+   * Public so the `reconcile-topology` port action (the "Reconcile now"
+   * recovery for the dark state, #9908) can drive it.
+   *
+   * `force` is for user-initiated recovery (the Refresh / "Reconcile now"
+   * buttons): it bypasses the `pollingEnabled` gate and the post-reconcile
+   * cooldown so an explicit user action is never silently swallowed.
+   */
+  scheduleTopologyReconcile(force = false): void {
+    this.topologyWatcher.scheduleReconcile(force);
   }
 
   /**
@@ -1587,291 +1627,6 @@ export class WorkspaceService {
   private recoverWatcherIfNoMonitorsRemain(): void {
     if (this.monitors.size === 0 && this.isWatcherDegraded()) {
       this.handleWatcherRecovered();
-    }
-  }
-
-  private async worktreeMetadataDirPath(): Promise<string | null> {
-    if (!this.projectRootPath) return null;
-    const commonDir = await getGitCommonDir(this.projectRootPath);
-    if (!commonDir) return null;
-    return `${commonDir}/worktrees`;
-  }
-
-  // Idempotent: a second call while the timer is live is a no-op, so the two
-  // call sites (load-project path + setPollingEnabled resume) can both invoke
-  // it unconditionally. Cleared in stopTopologyWatcher() (which dispose() and
-  // the pause path both call), so the timer never outlives the service.
-  private startPeriodicSafetyTimer(): void {
-    if (this.periodicSafetyTimer !== null) return;
-    const timer = setInterval(() => {
-      this.scheduleTopologyReconcile();
-    }, TOPOLOGY_SAFETY_INTERVAL_MS);
-    timer.unref?.();
-    this.periodicSafetyTimer = timer;
-  }
-
-  private async startTopologyWatcher(): Promise<void> {
-    if (!this.topologyWatcherEnabled) return;
-    if (this.topologyWatcherSubscription.value) return;
-
-    const generationAtStart = this.topologyWatcherGeneration;
-    const metadataDir = await this.worktreeMetadataDirPath();
-    if (!metadataDir) return;
-    if (!existsSync(metadataDir)) return;
-    // Re-validate after the async commondir resolution: a stop (pause,
-    // project switch, dispose) bumps the generation, and a concurrent start
-    // that won the race either holds the subscription already or bumped the
-    // generation itself below.
-    if (
-      generationAtStart !== this.topologyWatcherGeneration ||
-      !this.topologyWatcherEnabled ||
-      this.topologyWatcherSubscription.value
-    ) {
-      return;
-    }
-
-    const generation = ++this.topologyWatcherGeneration;
-    const drain = () => this.drainTopologyEventBuffer();
-
-    parcelWatcher
-      .subscribe(metadataDir, (err, events) => {
-        if (err) {
-          // A runtime error on an established subscription means the watcher is
-          // no longer reliably reporting changes — same consequence as a
-          // subscribe-reject. Go dark; the periodic safety net reconciles.
-          if (generation === this.topologyWatcherGeneration) {
-            this.handleTopologyWatcherDark();
-          }
-        }
-        if (Array.isArray(events)) {
-          for (const ev of events) {
-            const e = ev as { path?: unknown; type?: unknown } | null;
-            if (typeof e?.path === "string") {
-              this.topologyEventBuffer.push({
-                path: e.path,
-                type: typeof e.type === "string" ? e.type : undefined,
-              });
-            }
-          }
-        }
-        if (this.topologyDebounceTimer) {
-          clearTimeout(this.topologyDebounceTimer);
-        }
-        this.topologyDebounceTimer = setTimeout(drain, 300);
-      })
-      .then((subscription) => {
-        if (generation !== this.topologyWatcherGeneration) {
-          // stopTopologyWatcher incremented the generation — discard.
-          subscription.unsubscribe();
-          return;
-        }
-        if (this.topologyWatcherSubscription.value) {
-          subscription.unsubscribe();
-          return;
-        }
-        this.topologyWatcherSubscription.value = {
-          dispose: () => subscription.unsubscribe(),
-        };
-      })
-      .catch((err) => {
-        if (generation !== this.topologyWatcherGeneration) {
-          // A stop/restart superseded this attempt — the failure is moot.
-          return;
-        }
-        console.warn(
-          `[WorkspaceHost] topology watcher subscribe failed for ${metadataDir}: ${(err as Error).message}`
-        );
-        // No watcher events will ever arrive for this dir. Surface the dark
-        // state so the renderer can offer a manual reconcile; the periodic
-        // safety net (#8510) is the automatic recovery path.
-        this.handleTopologyWatcherDark();
-      });
-  }
-
-  private stopTopologyWatcher(): void {
-    // Tearing the watcher down clears the dark state — there's no longer a
-    // watcher whose silence matters. Emit recovery (only if dark) so a
-    // pause/resume or project switch after a dark event doesn't pin the
-    // renderer indicator on with nothing left to clear it (mirrors
-    // recoverWatcherIfNoMonitorsRemain for the recursive watcher).
-    this.handleTopologyWatcherRecovered();
-    this.topologyWatcherGeneration++;
-    this.topologyWatcherSubscription.value = undefined;
-    if (this.topologyDebounceTimer) {
-      clearTimeout(this.topologyDebounceTimer);
-      this.topologyDebounceTimer = null;
-    }
-    this.topologyEventBuffer = [];
-    // Drop pending entries: with no watcher running nothing will drain them,
-    // and a stale entry surviving a pause/resume could suppress a real
-    // external change for up to 5s after the watcher restarts.
-    for (const timer of this.topologyPendingSafetyTimers.values()) {
-      clearTimeout(timer);
-    }
-    this.topologyPendingSafetyTimers.clear();
-    this.topologyPendingCreate.clear();
-    this.topologyPendingDelete.clear();
-    this.topologyReconcilePending = false;
-    this.topologyWatchCooldownDirty = false;
-    if (this.periodicSafetyTimer !== null) {
-      clearInterval(this.periodicSafetyTimer);
-      this.periodicSafetyTimer = null;
-    }
-  }
-
-  // The basename of `.git/worktrees/<name>` is exactly what @parcel/watcher
-  // reports for the create/delete of the metadata subdir, so it's the key we
-  // match watcher events against. Resolve first so a trailing slash or a
-  // relative path normalizes to the same leaf as the event path.
-  private topologyMetadataKey(worktreePath: string): string {
-    return basename(pathResolve(worktreePath));
-  }
-
-  private topologyMarkPending(key: string, set: Set<string>): void {
-    set.add(key);
-    const existing = this.topologyPendingSafetyTimers.get(key);
-    if (existing) clearTimeout(existing);
-    // Safety valve: if the watcher event never arrives (slow FS, missed
-    // event), the entry must not suppress a later real external change
-    // indefinitely. Clear-only — the cooldown/dirty path already reschedules
-    // any reconcile genuinely needed.
-    const timer = setTimeout(() => {
-      this.topologyPendingCreate.delete(key);
-      this.topologyPendingDelete.delete(key);
-      this.topologyPendingSafetyTimers.delete(key);
-      // The watcher never delivered the event our own op produced — it's
-      // missing events, so it can't be trusted to catch external changes
-      // either. Surface the dark state; the periodic safety net reconciles.
-      this.handleTopologyWatcherDark();
-    }, 5000);
-    timer.unref?.();
-    this.topologyPendingSafetyTimers.set(key, timer);
-  }
-
-  private topologyClearPending(key: string): void {
-    this.topologyPendingCreate.delete(key);
-    this.topologyPendingDelete.delete(key);
-    const timer = this.topologyPendingSafetyTimers.get(key);
-    if (timer) {
-      clearTimeout(timer);
-      this.topologyPendingSafetyTimers.delete(key);
-    }
-  }
-
-  private drainTopologyEventBuffer(): void {
-    const events = this.topologyEventBuffer;
-    this.topologyEventBuffer = [];
-
-    let hasUnmatched = false;
-    for (const ev of events) {
-      const key = basename(ev.path);
-      // Gate on event type so a pending *create* can't swallow an external
-      // *delete* of a same-named worktree (and vice versa). An absent/unknown
-      // type falls back to either set — better an idempotent reconcile than a
-      // dropped external change.
-      const matched =
-        ev.type === "create"
-          ? this.topologyPendingCreate.has(key)
-          : ev.type === "delete"
-            ? this.topologyPendingDelete.has(key)
-            : this.topologyPendingCreate.has(key) || this.topologyPendingDelete.has(key);
-      if (matched) {
-        // App-owned op produced this event — drain the pending entry (and
-        // cancel its safety valve) so a *subsequent* external change to the
-        // same name is no longer treated as ours.
-        this.topologyClearPending(key);
-      } else {
-        hasUnmatched = true;
-      }
-    }
-
-    // Empty payloads can't be classified, so fall back to the pre-fix
-    // behavior of always reconciling rather than risk dropping a real change.
-    if (events.length === 0 || hasUnmatched) {
-      this.scheduleTopologyReconcile();
-    }
-  }
-
-  /**
-   * Schedules a serialized topology reconcile (full worktree re-discovery).
-   * Public so the `reconcile-topology` port action (the "Reconcile now"
-   * recovery for the dark state, #9908) can drive it. Internal guards
-   * (`topologyWatcherEnabled`, `pollingEnabled`, cooldown, in-flight) make it
-   * safe to call from anywhere — concurrent requests coalesce.
-   *
-   * `force` is for user-initiated recovery (the Refresh / "Reconcile now"
-   * buttons): it bypasses the `pollingEnabled` gate and the post-reconcile
-   * cooldown so an explicit user action is never silently swallowed. It still
-   * respects the in-flight guard — concurrency is 1 — but coalesces into a
-   * follow-up so the user's request always results in a fresh pass.
-   */
-  scheduleTopologyReconcile(force = false): void {
-    if (!this.topologyWatcherEnabled) return;
-    if (!force && !this.pollingEnabled) return;
-    if (!force && Date.now() < this.topologyWatchCooldownUntil) {
-      this.topologyWatchCooldownDirty = true;
-      return;
-    }
-    if (this.topologyReconcilePending) {
-      // A pass is already running. Mark dirty so a follow-up fires once it
-      // settles — for both coalesced watcher events and forced user requests.
-      this.topologyWatchCooldownDirty = true;
-      return;
-    }
-
-    this.topologyReconcilePending = true;
-    this.topologyReconcileQueue.add(async () => {
-      try {
-        // Watchdog the reconcile so a stuck `git worktree prune`/`list` can't
-        // pin the only slot — and the pending flag — forever. The finally below
-        // always runs because withTimeout guarantees the await settles.
-        await withTimeout(
-          this.runTopologyReconcile(),
-          TOPOLOGY_RECONCILE_TIMEOUT_MS,
-          "topology reconcile watchdog"
-        );
-      } catch (err) {
-        console.warn(`[WorkspaceHost] topology reconciliation failed: ${(err as Error).message}`);
-      } finally {
-        this.topologyReconcilePending = false;
-        this.topologyWatchCooldownUntil = Date.now() + 2000;
-        if (this.topologyWatchCooldownDirty) {
-          this.topologyWatchCooldownDirty = false;
-          const remaining = this.topologyWatchCooldownUntil - Date.now();
-          setTimeout(() => this.scheduleTopologyReconcile(), Math.max(remaining, 0));
-        }
-      }
-    });
-  }
-
-  private async runTopologyReconcile(): Promise<void> {
-    const previousActiveId = this.activeWorktreeId;
-    await this.discoverAndSyncWorktrees();
-
-    // A successful reconcile re-verifies the worktree list, so any prior dark
-    // state is resolved — recover here rather than on watcher re-arm, since
-    // re-subscribing doesn't prove the topology is current (#8516/#8558).
-    this.handleTopologyWatcherRecovered();
-
-    // Auto-switch to main if the previously-active worktree was removed.
-    // syncMonitors nulls activeWorktreeId when pruning the active monitor,
-    // so we check: was there a previous active, is it gone from monitors,
-    // and has the user NOT already switched to a *different* worktree.
-    if (
-      previousActiveId &&
-      !this.monitors.has(previousActiveId) &&
-      (this.activeWorktreeId === null || this.activeWorktreeId === previousActiveId)
-    ) {
-      let mainId: string | null = null;
-      for (const [id, m] of this.monitors) {
-        if (m.isMainWorktree) {
-          mainId = id;
-          break;
-        }
-      }
-      if (mainId) {
-        this.setActiveWorktree("topology-reconcile-auto-switch", mainId);
-      }
     }
   }
 
@@ -2011,7 +1766,7 @@ export class WorkspaceService {
     this.applyWatcherBudget();
 
     // Host-originated activation. Fires on every `setActiveWorktree` call
-    // (auto-switch in `runTopologyReconcile` and `deleteWorktree` AND
+    // (auto-switch in `TopologyWatcher`'s reconcile and `deleteWorktree` AND
     // Main-originated IPC round-trips). Main-originated activations are
     // idempotent on the renderer side — the listener at
     // `WorktreeStoreContext.tsx` calls `selectWorktree` which is a no-op
@@ -2220,7 +1975,7 @@ export class WorkspaceService {
       return;
     }
 
-    const createPromise = this.performCreateWorktree(rootPath, options);
+    const createPromise = this.enqueueCreateWorktree(rootPath, options);
     this.inFlightWorktreeCreates.set(createKey, createPromise);
 
     try {
@@ -2243,6 +1998,21 @@ export class WorkspaceService {
         this.inFlightWorktreeCreates.delete(createKey);
       }
     }
+  }
+
+  private enqueueCreateWorktree(rootPath: string, options: CreateWorktreeOptions): Promise<string> {
+    const queueKey = this.normalizeCreateWorktreeKeyPath(pathResolve(rootPath));
+    const prev = this.createWorktreeQueues.get(queueKey) ?? Promise.resolve();
+    const run = prev.then(() => this.performCreateWorktree(rootPath, options));
+    // A failed create must not poison the chain for the next caller.
+    const tail = run.catch(() => {});
+    this.createWorktreeQueues.set(queueKey, tail);
+    void tail.then(() => {
+      if (this.createWorktreeQueues.get(queueKey) === tail) {
+        this.createWorktreeQueues.delete(queueKey);
+      }
+    });
+    return run;
   }
 
   private getCreateWorktreeInFlightKey(rootPath: string, options: CreateWorktreeOptions): string {
@@ -2270,6 +2040,7 @@ export class WorkspaceService {
     // absoluteCreatePath is block-scoped to the try.
     let pendingCreateKey: string | null = null;
     try {
+      markHostPerformance("wtcreate.host-start", { branch: options.newBranch });
       const git = await createHardenedGit(rootPath);
       const { baseBranch, path } = options;
       let { newBranch } = options;
@@ -2309,27 +2080,69 @@ export class WorkspaceService {
         await mkdir(parentDir, { recursive: true });
       }
 
-      // #6463: when not explicitly reusing a branch, guard against a stale
-      // local branch with the same name. Without this, `git worktree add -b`
-      // hits "fatal: a branch named '...' already exists" whenever a previous
-      // worktree was deleted but its branch was kept. Two recoveries:
-      // (a) branch exists but is not checked out anywhere → reuse it (drop
-      //     -b, switch to the useExistingBranch arg form);
-      // (b) branch is live in another worktree → suffix -2/-3/... and create
-      //     a fresh branch.
-      // Inlined (not behind a helper) so the happy-path microtask timing
-      // matches the pre-fix behavior — the next await is still the worktree
-      // add, not a wrapper-promise resolution.
-      if (!useExistingBranch) {
-        let localBranches: string[] = [];
-        try {
-          localBranches = (await git.branchLocal()).all;
-        } catch {
-          // Best-effort: if branch listing fails, fall through and let the
-          // actual worktree command surface its own error.
-        }
+      // Mark the metadata-subdir basename pending so the watcher event our own
+      // `git worktree add` produces is recognized and dropped — without
+      // blanket-suppressing concurrent external `git worktree remove` events.
+      pendingCreateKey = this.topologyWatcher.metadataKey(absoluteCreatePath);
+      this.topologyWatcher.markPendingCreate(pendingCreateKey);
 
-        if (localBranches.includes(newBranch)) {
+      // `--end-of-options` after the subcommand flags so any leading-dash ref
+      // or path that slipped past validation is treated as positional.
+      const addReusingBranch = () =>
+        git.raw(["worktree", "add", "--end-of-options", path, newBranch]);
+      // --no-track: local-base branches shouldn't auto-track a local ref even
+      // when the user has branch.autoSetupMerge=always. Skipping tracking also
+      // avoids a .git/config.lock acquisition, cutting contention under bulk
+      // creation. PR-mode (fromRemote) keeps --track — ahead/behind badges
+      // at WorktreeMonitor.ts:1092 depend on @{u} resolving.
+      const addNewBranch = () =>
+        git.raw([
+          "worktree",
+          "add",
+          "-b",
+          newBranch,
+          fromRemote ? "--track" : "--no-track",
+          "--end-of-options",
+          path,
+          baseBranch,
+        ]);
+
+      markHostPerformance("wtcreate.git-add:start", { branch: newBranch });
+      if (useExistingBranch) {
+        await addReusingBranch();
+      } else {
+        try {
+          await addNewBranch();
+        } catch (addError) {
+          // #6463: a stale local branch with the same name makes `worktree add
+          // -b` fail with "a branch named '...' already exists" whenever a
+          // previous worktree was deleted but its branch was kept. That add
+          // failure is atomic — git refuses before creating the directory or
+          // registering any worktree metadata — so collision detection rides
+          // the add itself instead of charging every create a pre-flight
+          // `git branchLocal` spawn. Recovery outcomes are unchanged:
+          // (a) branch exists but is not checked out anywhere → reuse it (drop
+          //     -b, switch to the useExistingBranch arg form);
+          // (b) branch is live in another worktree → suffix -2/-3/... and
+          //     create a fresh branch.
+          if (!isBranchAlreadyExistsError(addError)) throw addError;
+
+          // The failed add produced no watcher event to suppress; release the
+          // pending mark while the recovery probes run so an external create
+          // of the same basename in this window isn't silently dropped, then
+          // re-mark just before the retry add below.
+          this.topologyWatcher.clearPending(pendingCreateKey);
+
+          let localBranches: string[];
+          try {
+            localBranches = (await git.branchLocal()).all;
+          } catch {
+            // Can't inspect branches to recover; surface the original git
+            // failure (same outcome as the old pre-flight, whose listing
+            // failure fell through to this add error).
+            throw addError;
+          }
+
           let checkedOut = new Set<string>();
           let listFailed = false;
           try {
@@ -2347,57 +2160,21 @@ export class WorkspaceService {
           // a fresh tracking branch is created.
           const canReuse = !listFailed && !fromRemote && !checkedOut.has(newBranch);
 
+          this.topologyWatcher.markPendingCreate(pendingCreateKey);
           if (canReuse) {
             useExistingBranch = true;
             // The -b path tracks baseBranch; reuse drops that. Stale local
             // branches typically retain their original config, so this is
             // the right tradeoff vs. failing the user-visible create.
             fromRemote = false;
+            await addReusingBranch();
           } else {
             newBranch = nextAvailableBranchName(newBranch, new Set(localBranches));
+            await addNewBranch();
           }
         }
       }
-
-      // `--end-of-options` after the subcommand flags so any leading-dash ref
-      // or path that slipped past validation is treated as positional.
-
-      // Mark the metadata-subdir basename pending so the watcher event our own
-      // `git worktree add` produces is recognized and dropped — without
-      // blanket-suppressing concurrent external `git worktree remove` events.
-      pendingCreateKey = this.topologyMetadataKey(absoluteCreatePath);
-      this.topologyMarkPending(pendingCreateKey, this.topologyPendingCreate);
-
-      if (useExistingBranch) {
-        await git.raw(["worktree", "add", "--end-of-options", path, newBranch]);
-      } else if (fromRemote) {
-        await git.raw([
-          "worktree",
-          "add",
-          "-b",
-          newBranch,
-          "--track",
-          "--end-of-options",
-          path,
-          baseBranch,
-        ]);
-      } else {
-        // --no-track: local-base branches shouldn't auto-track a local ref even
-        // when the user has branch.autoSetupMerge=always. Skipping tracking also
-        // avoids a .git/config.lock acquisition, cutting contention under bulk
-        // creation. PR-mode (fromRemote) keeps --track — ahead/behind badges
-        // at WorktreeMonitor.ts:1092 depend on @{u} resolving.
-        await git.raw([
-          "worktree",
-          "add",
-          "-b",
-          newBranch,
-          "--no-track",
-          "--end-of-options",
-          path,
-          baseBranch,
-        ]);
-      }
+      markHostPerformance("wtcreate.git-add:end", { branch: newBranch });
 
       const absolutePath = isAbsolute(path) ? pathResolve(path) : pathResolve(rootPath, path);
       // 500ms is ample: git returns after the directory exists; the polling
@@ -2409,21 +2186,23 @@ export class WorkspaceService {
         initialRetryDelayMs: 50,
         maxRetryDelayMs: 800,
       });
+      markHostPerformance("wtcreate.path-verified", { branch: newBranch });
+      const canonicalPath = await realpath(absolutePath).catch(() => absolutePath);
 
       // Build the Worktree object directly from known inputs instead of
       // shelling out to `git worktree list --porcelain` — the per-create list
       // was O(N²) across batches. Fields match WorktreeListService.mapToWorktrees
       // output for a freshly-created, attached, non-main worktree.
       const createdWorktree: Worktree = {
-        id: absolutePath,
-        path: absolutePath,
+        id: canonicalPath,
+        path: canonicalPath,
         name: newBranch,
         branch: newBranch,
         head: undefined,
         isDetached: false,
         isCurrent: false,
         isMainWorktree: false,
-        gitDir: (await getGitDir(absolutePath)) || undefined,
+        gitDir: (await getGitDir(canonicalPath)) || undefined,
       };
       const canonicalWorktreeId = createdWorktree.id;
       const isActive = canonicalWorktreeId === this.activeWorktreeId;
@@ -2440,12 +2219,13 @@ export class WorkspaceService {
       // We bypass syncMonitors here because syncMonitors treats its array as
       // authoritative and would remove every other non-main monitor.
       await this.addNewWorktreeMonitor(createdWorktree, isActive, true);
+      markHostPerformance("wtcreate.monitor-registered", { branch: newBranch });
 
       // Monitor is registered. Drop the pending entry now: any still-buffered
       // create event for this name will be matched by the next drain (the
       // safety valve is cancelled here so the happy path can't spuriously
       // reconcile 5s later).
-      this.topologyClearPending(pendingCreateKey);
+      this.topologyWatcher.clearPending(pendingCreateKey);
 
       if (options.worktreeMode && options.worktreeMode !== "local") {
         const m = this.monitors.get(canonicalWorktreeId);
@@ -2523,11 +2303,11 @@ export class WorkspaceService {
         // doesn't return a stale cached snapshot that excludes the new worktree.
         this.listService.invalidateCache(pathResolve(rootPath));
 
-        await this.lifecycleService.copyDaintreeDir(rootPath, absolutePath);
+        await this.lifecycleService.copyDaintreeDir(rootPath, canonicalPath);
 
         void this.runLifecycleSetup(
           canonicalWorktreeId,
-          absolutePath,
+          canonicalPath,
           rootPath,
           options.provisionResource ?? options.worktreeMode === "remote-worker"
         );
@@ -2542,11 +2322,12 @@ export class WorkspaceService {
           details: stack,
         });
       });
+      markHostPerformance("wtcreate.host-end", { branch: newBranch });
       return canonicalWorktreeId;
     } catch (error) {
       // Create failed — drop any pending entry so a real external change to
       // that name isn't masked, and cancel its safety valve.
-      if (pendingCreateKey) this.topologyClearPending(pendingCreateKey);
+      if (pendingCreateKey) this.topologyWatcher.clearPending(pendingCreateKey);
       throw error;
     }
   }
@@ -2663,6 +2444,7 @@ export class WorkspaceService {
     // is block-scoped to the try.
     let pendingDeleteKey: string | null = null;
     try {
+      markHostPerformance("wtdelete.host-start", { worktreeId });
       const monitor = this.monitors.get(worktreeId);
       if (!monitor) {
         // Replay path: the monitor was cleaned up by the original successful
@@ -2723,8 +2505,8 @@ export class WorkspaceService {
       // Mark the metadata-subdir basename pending so the watcher event our own
       // `git worktree remove` produces is recognized and dropped — without
       // blanket-suppressing concurrent external worktree changes.
-      pendingDeleteKey = this.topologyMetadataKey(monitor.path);
-      this.topologyMarkPending(pendingDeleteKey, this.topologyPendingDelete);
+      pendingDeleteKey = this.topologyWatcher.metadataKey(monitor.path);
+      this.topologyWatcher.markPendingDelete(pendingDeleteKey);
 
       if (this.git) {
         // #6669: if the directory is already gone (deleted externally), skip
@@ -2761,7 +2543,9 @@ export class WorkspaceService {
           // `--end-of-options` so a leading-dash worktree path is treated as
           // positional rather than parsed as a flag.
           args.push("--end-of-options", monitor.path);
+          markHostPerformance("wtdelete.git-remove:start", { worktreeId });
           const removeResult = await this.removeGitWorktreeWithRetry(this.git, args, monitor.path);
+          markHostPerformance("wtdelete.git-remove:end", { worktreeId });
           if (removeResult === "stale") {
             try {
               await this.git.raw(["worktree", "prune"]);
@@ -2797,7 +2581,7 @@ export class WorkspaceService {
       // Monitor is cleaned up. Drop the pending entry now (cancelling its
       // safety valve): any still-buffered delete event for this name is
       // matched by the next drain.
-      this.topologyClearPending(pendingDeleteKey);
+      this.topologyWatcher.clearPending(pendingDeleteKey);
 
       if (branchToDelete && this.git) {
         try {
@@ -2836,11 +2620,12 @@ export class WorkspaceService {
       // a second delete — the operation completed once, the renderer just
       // missed the live ack.
       if (mutationId) this.recordAcknowledgedMutation(mutationId);
+      markHostPerformance("wtdelete.host-end", { worktreeId });
       this.sendEvent({ type: "delete-worktree-result", requestId, success: true });
     } catch (error) {
       // Delete failed — drop any pending entry so a real external change to
       // that name isn't masked, and cancel its safety valve.
-      if (pendingDeleteKey) this.topologyClearPending(pendingDeleteKey);
+      if (pendingDeleteKey) this.topologyWatcher.clearPending(pendingDeleteKey);
       // sendEvent for the legacy `WorkspaceClient.sendWithResponse` path, which
       // resolves its requestId-keyed promise from `delete-worktree-result`.
       this.sendEvent({
@@ -3190,7 +2975,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     this.pollingEnabled = enabled;
 
     if (!enabled) {
-      this.stopTopologyWatcher();
+      this.topologyWatcher.stop();
       for (const monitor of this.monitors.values()) {
         monitor.pausePolling();
       }
@@ -3198,11 +2983,11 @@ ${lines.map((l) => "+" + l).join("\n")}`;
       for (const monitor of this.monitors.values()) {
         monitor.resumePolling();
       }
-      void this.startTopologyWatcher();
-      // stopTopologyWatcher() (run on the !enabled branch) cleared the safety
-      // timer, so resume must restart it symmetrically (#8510).
-      this.startPeriodicSafetyTimer();
-      this.scheduleTopologyReconcile();
+      void this.topologyWatcher.startWatcher();
+      // stop() (run on the !enabled branch) cleared the safety timer, so
+      // resume must restart it symmetrically (#8510).
+      this.topologyWatcher.startSafetyTimer();
+      this.topologyWatcher.scheduleReconcile();
     }
   }
 
@@ -3325,11 +3110,11 @@ ${lines.map((l) => "+" + l).join("\n")}`;
   }
 
   async onProjectSwitch(requestId: string): Promise<void> {
-    this.stopTopologyWatcher();
+    this.topologyWatcher.stop();
     // Stop the WSL distro poller before clearing monitors so a poll tick can't
     // fire setWslEligible against a half-torn-down or next-project monitor map.
     this.stopWslDistroPoller();
-    this.topologyReconcileQueue.clear();
+    this.topologyWatcher.clearQueue();
     this.prService.cleanup();
 
     for (const id of this.monitors.keys()) {
@@ -3340,6 +3125,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     }
     this.monitors.clear();
     this.backgroundGitWatcherLru.clear();
+    this.agentActiveWorktreeIds.clear();
     // Drop in-flight fetch chains and per-repo failure state — the next
     // project's monitors get a clean coordinator and stale completions are
     // discarded by the generation guard.
@@ -3462,10 +3248,10 @@ ${lines.map((l) => "+" + l).join("\n")}`;
 
   dispose(): void {
     this._shutdownController.abort();
-    // stopTopologyWatcher clears the pending sets and their safety timers.
-    this.stopTopologyWatcher();
+    // stop() clears the pending sets and their safety timers.
+    this.topologyWatcher.stop();
     this.stopWslDistroPoller();
-    this.topologyReconcileQueue.clear();
+    this.topologyWatcher.clearQueue();
     this.prService.cleanup();
     this.resourceActionExecutor.dispose();
     for (const monitor of this.monitors.values()) {
@@ -3473,6 +3259,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     }
     this.monitors.clear();
     this.backgroundGitWatcherLru.clear();
+    this.agentActiveWorktreeIds.clear();
     this.fetchCoordinator.destroy();
     this.authFailureConfirmedNotified.clear();
     this.pollQueue.clear();

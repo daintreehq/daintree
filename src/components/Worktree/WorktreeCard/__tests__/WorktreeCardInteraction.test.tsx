@@ -100,7 +100,7 @@ describe("WorktreeCard row affordances polish (issue #8099)", () => {
   });
 
   it("toolbar hover reveal is delayed 75ms but keyboard focus bypasses the delay", () => {
-    expect(toolbarSource).toContain("group-hover/card:delay-[75ms]");
+    expect(toolbarSource).toContain("group-hover/card:delay-75");
     expect(toolbarSource).toContain("group-has-[:focus-visible]/card:delay-0");
     expect(toolbarSource).toContain("group-has-[[data-state=open]]/card:delay-0");
   });
@@ -120,7 +120,7 @@ describe("WorktreeCard row affordances polish (issue #8099)", () => {
 
   it("Review & Commit button uses inset outline (-2px offset) for its flush rounded-r edge", () => {
     expect(detailsSource).toMatch(
-      /rounded-r-\[var\(--radius-lg\)\][\s\S]{0,200}focus-visible:outline-offset-\[-2px\][\s\S]{0,400}aria-label="Open Review & Commit"/
+      /rounded-r-\[var\(--radius-lg\)\][\s\S]{0,200}focus-visible:outline-offset-\[-2px\][\s\S]{0,400}aria-label=\{`Open \$\{reviewHubButtonLabel\}`\}/
     );
   });
 

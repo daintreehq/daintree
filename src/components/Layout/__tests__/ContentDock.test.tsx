@@ -156,7 +156,7 @@ describe("ContentDock regression test", () => {
       const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
 
       expect(content).toContain('role="toolbar"');
-      expect(content).toContain('aria-label="Docked terminals"');
+      expect(content).toContain('aria-label="Docked panels"');
       expect(content).toContain('aria-orientation="horizontal"');
     });
 

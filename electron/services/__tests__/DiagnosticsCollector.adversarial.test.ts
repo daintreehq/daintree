@@ -729,6 +729,75 @@ describe("DiagnosticsCollector adversarial", () => {
     expect(snap.focusThrottle).toEqual({ throttled: false, pollMultiplier: 1 });
   });
 
+  it("WHY_SLOW_MEMORY_ATTRIBUTION_LEAKS_NO_COMMAND_LINES_OR_PATHS", async () => {
+    // Terminal workload memory must reach both the whySlow snapshot and the
+    // memoryAttribution export as process BASENAMES only — a command line or
+    // cwd here would leak paths, tokens, and branch names into support bundles.
+    const deps = {
+      ptyClient: {
+        getAllTerminalsAsync: async () => [],
+        getMemoryRollup: async () => ({
+          byProject: [
+            {
+              projectId: "proj-1",
+              terminalCount: 2,
+              processCount: 3,
+              memoryKb: 2_048_000,
+              topProcesses: [
+                { pid: 101, comm: "node", cpuPercent: 12, memoryKb: 1_024_000 },
+                { pid: 102, comm: "vite", cpuPercent: 3, memoryKb: 512_000 },
+              ],
+            },
+          ],
+          totalMemoryKb: 2_048_000,
+          totalProcessCount: 3,
+          terminalCount: 2,
+          available: true,
+          sampledAt: Date.now() - 4_000,
+        }),
+      },
+    } as unknown as import("../../ipc/types.js").HandlerDependencies;
+
+    const payload = (await diagnostics.collectDiagnostics(deps)) as {
+      whySlow: {
+        memory: {
+          terminalWorkloads: {
+            available: boolean;
+            stale: boolean;
+            totalMemoryMb: number;
+            topProjects: Array<Record<string, unknown>>;
+          };
+        } | null;
+      };
+      memoryAttribution: {
+        terminalWorkloads: {
+          byProject: Array<{ topProcesses: Array<Record<string, unknown>> }>;
+        };
+      };
+    };
+
+    const workloads = payload.whySlow.memory!.terminalWorkloads;
+    expect(workloads.available).toBe(true);
+    expect(workloads.stale).toBe(false);
+    expect(workloads.totalMemoryMb).toBe(2000);
+    expect(workloads.topProjects[0].topProcessNames).toEqual(["node", "vite"]);
+    // Structural no-leak contract: exactly these keys, nothing carrying a
+    // command line or path can ride along unnoticed.
+    expect(Object.keys(workloads.topProjects[0]).sort()).toEqual([
+      "memoryMb",
+      "processCount",
+      "projectId",
+      "terminalCount",
+      "topProcessNames",
+    ]);
+    const topProcess = payload.memoryAttribution.terminalWorkloads.byProject[0].topProcesses[0];
+    expect(Object.keys(topProcess).sort()).toEqual(["comm", "cpuPercent", "memoryKb", "pid"]);
+    const serialized =
+      JSON.stringify(payload.memoryAttribution) + JSON.stringify(payload.whySlow.memory);
+    expect(serialized).not.toContain("command");
+    expect(serialized).not.toContain("cwd");
+  });
+
   it("PROJECT_VIEWS_ISOLATE_PER_WINDOW_FAILURE (#10500)", async () => {
     const goodPvm = {
       getViewInventory: () => [

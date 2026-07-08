@@ -1,0 +1,81 @@
+{
+  "entryName": "index",
+  "eagerChunkCount": 21,
+  "eagerChunks": [
+    "boot",
+    "index",
+    "rolldown-runtime",
+    "vendor-icons",
+    "vendor-motion~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~BaseBranchDif~nt4djhlp",
+    "vendor-radix-utils",
+    "vendor-react",
+    "vendor-xterm",
+    "vendor-zod",
+    "vendor~index",
+    "vendor~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~BaseBranchDiffModal~~d1a6vjgq",
+    "vendor~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~BaseBranchDiffModal~~fo7mm5v4",
+    "vendor~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~BaseBranchDiffModal~~ge3ti116",
+    "vendor~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~BaseBranchDiffModal~~l52dwlil",
+    "vendor~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~BaseBranchDiffModal~~mia6dplo",
+    "vendor~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~FileDiffModal~BaseBr~dg18eav4",
+    "vendor~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~FileDiffModal~BaseBr~fq8188ci",
+    "vendor~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~FileDiffModal~BaseBr~gc6c3scc",
+    "vendor~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~FileDiffModal~BaseBr~jnsqmdg8",
+    "vendor~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~FileDiffModal~BaseBr~mzspqnt4",
+    "vendor~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~FileDiffModal~BaseBr~nmj75boy"
+  ],
+  "eagerRaw": 2510711,
+  "eagerGzip": 739054,
+  "chunkGzip": {
+    "vendor-radix-utils": 3891,
+    "vendor-react": 58856,
+    "vendor-xterm": 118800
+  },
+  "chunkModules": {
+    "vendor-radix-utils": [
+      "node_modules/@radix-ui/primitive/dist/index.mjs",
+      "node_modules/@radix-ui/react-collection/node_modules/@radix-ui/react-slot/dist/index.mjs",
+      "node_modules/@radix-ui/react-compose-refs/dist/index.mjs",
+      "node_modules/@radix-ui/react-context/dist/index.mjs",
+      "node_modules/@radix-ui/react-id/dist/index.mjs",
+      "node_modules/@radix-ui/react-menu/node_modules/@radix-ui/react-slot/dist/index.mjs",
+      "node_modules/@radix-ui/react-popover/node_modules/@radix-ui/react-slot/dist/index.mjs",
+      "node_modules/@radix-ui/react-presence/dist/index.mjs",
+      "node_modules/@radix-ui/react-primitive/dist/index.mjs",
+      "node_modules/@radix-ui/react-primitive/node_modules/@radix-ui/react-slot/dist/index.mjs",
+      "node_modules/@radix-ui/react-select/node_modules/@radix-ui/react-slot/dist/index.mjs",
+      "node_modules/@radix-ui/react-slot/dist/index.mjs",
+      "node_modules/@radix-ui/react-tooltip/node_modules/@radix-ui/react-slot/dist/index.mjs",
+      "node_modules/@radix-ui/react-use-callback-ref/dist/index.mjs",
+      "node_modules/@radix-ui/react-use-controllable-state/dist/index.mjs",
+      "node_modules/@radix-ui/react-use-escape-keydown/dist/index.mjs",
+      "node_modules/@radix-ui/react-use-layout-effect/dist/index.mjs",
+      "node_modules/@radix-ui/react-use-previous/dist/index.mjs",
+      "node_modules/@radix-ui/react-use-size/dist/index.mjs"
+    ],
+    "vendor-react": [
+      "node_modules/react-dom/cjs/react-dom-client.production.js",
+      "node_modules/react-dom/cjs/react-dom.production.js",
+      "node_modules/react-dom/client.js",
+      "node_modules/react-dom/index.js",
+      "node_modules/react/cjs/react-compiler-runtime.production.js",
+      "node_modules/react/cjs/react-jsx-runtime.production.js",
+      "node_modules/react/cjs/react.production.js",
+      "node_modules/react/compiler-runtime.js",
+      "node_modules/react/index.js",
+      "node_modules/react/jsx-runtime.js",
+      "node_modules/scheduler/cjs/scheduler.production.js",
+      "node_modules/scheduler/index.js"
+    ],
+    "vendor-xterm": [
+      "node_modules/@xterm/addon-fit/lib/addon-fit.mjs",
+      "node_modules/@xterm/addon-image/lib/addon-image.mjs",
+      "node_modules/@xterm/addon-search/lib/addon-search.mjs",
+      "node_modules/@xterm/addon-serialize/lib/addon-serialize.mjs",
+      "node_modules/@xterm/addon-unicode11/lib/addon-unicode11.mjs",
+      "node_modules/@xterm/addon-web-links/lib/addon-web-links.mjs",
+      "node_modules/@xterm/xterm/css/xterm.css",
+      "node_modules/@xterm/xterm/lib/xterm.mjs"
+    ]
+  }
+}

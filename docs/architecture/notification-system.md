@@ -143,12 +143,14 @@ safe-mode           safeMode && !dismissed                (panels not restored a
   ↓
 restore-confirmation restoreVisible                       (session-recovered, auto-dismiss timer)
   ↓
-github-token        tokenUnhealthy                        (expired creds; GitHub data broken now)
+forge-token         tokenUnhealthy                        (expired creds; forge data broken now)
   ↓
 cloud-sync          cloudSyncService !== null             (environmental warning)
+  ↓
+rosetta             rosettaVisible                        (x64 build translated on Apple Silicon)
 ```
 
-Rationale for the order lives inline in `useGlobalBannerPriority.ts`: watchdog sits below host-crash (a live host failure outranks a downed monitor) and above safe-mode (the watchdog protects against the _next_ crash; safe-mode is a consequence of the _previous_ one); `restore-confirmation` stays above `github-token` because its auto-dismiss timer only runs while mounted, so it must keep that window; `github-token` outranks `cloud-sync` because an expired token is an active failure while cloud-sync is a persistent environmental condition.
+Rationale for the order lives inline in `useGlobalBannerPriority.ts`: watchdog sits below host-crash (a live host failure outranks a downed monitor) and above safe-mode (the watchdog protects against the _next_ crash; safe-mode is a consequence of the _previous_ one); `restore-confirmation` stays above `forge-token` because its auto-dismiss timer only runs while mounted, so it must keep that window; `forge-token` outranks `cloud-sync` because an expired token is an active failure while cloud-sync is a persistent environmental condition; `rosetta` sits last because nothing in the app can change it — any more actionable banner deserves the slot first.
 
 **Suppressed banners unmount — they are not CSS-hidden.** The coordinator returns exactly one component; the losers are removed from the tree. This is deliberate: mount-driven effects (most notably `RestoreConfirmationBanner`'s auto-dismiss timer) must not run while the banner is invisible. A CSS-hide would leave those timers ticking behind a higher-priority banner.
 

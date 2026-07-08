@@ -338,6 +338,9 @@ describe("DaintreeAssistantSettingsTab", () => {
     await waitForContent(container, "Search documentation");
 
     const toggle = screen.getByLabelText("Enable Daintree Assistant debug logging");
+    await waitFor(() => {
+      expect(toggle.hasAttribute("disabled")).toBe(false);
+    });
     fireEvent.click(toggle);
 
     await waitFor(() => {

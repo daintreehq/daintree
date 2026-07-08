@@ -822,6 +822,24 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
     }
     cleanups.push(clearRevealBackstops);
 
+    // Deterministic warm-activation wake (#9679 hardening): main fires this the
+    // moment it re-attaches this cached view behind the anti-flash bridge. The
+    // visibilitychange/resume listeners above never fire for a plain
+    // detach/reattach (no lifecycle event is emitted for a `setVisible(false)`
+    // WebContentsView, and `resume` needs an actual freeze), so on most warm
+    // switches the wake fan-out — whose completion releases main's warm paint
+    // gate via notifyWarmViewPainted — had no trigger and the gate always ran
+    // to its hard timeout. Routed through scheduleWake so it coalesces with any
+    // visibility/resume-triggered wake and inherits the same double-rAF settle.
+    // Deliberately NO entry-time visibility guard: this is the one trigger main
+    // asserts is valid, and dropping it here would re-open the hard-timeout
+    // stall; scheduleWake re-checks visibility at execution and APP_VIEW_CACHED
+    // cancels a pending wake if the view is switched away mid-schedule.
+    const offViewWarmActivated = window.electron?.app?.onViewWarmActivated?.(() => {
+      scheduleWake();
+    });
+    if (offViewWarmActivated) cleanups.push(offViewWarmActivated);
+
     const offViewRevealed = window.electron?.app?.onViewRevealed?.(() => {
       if (document.visibilityState !== "visible") return;
       scheduleRepaint();

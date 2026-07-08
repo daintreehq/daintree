@@ -11,6 +11,7 @@ import {
 } from "path";
 import { getGitDir } from "../utils/gitUtils.js";
 import { getGitLocaleEnv } from "../utils/hardenedGit.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { NOTE_PATH } from "./types.js";
 
 // Hard ceiling on the `git lfs version` probe. `git` is already on PATH, so a
@@ -87,6 +88,18 @@ export function parseCheckedOutBranches(porcelainOutput: string): Set<string> {
     }
   }
   return branches;
+}
+
+/**
+ * Matches git's refusal when `worktree add -b` names a branch that already
+ * exists ("fatal: a branch named 'x' already exists"). Deliberately anchored
+ * on "branch named" — `worktree add` reports an existing target *path* with a
+ * similar "already exists" phrase, and that failure must not trigger branch
+ * collision recovery. Git output is locale-pinned to C/English by the
+ * hardened factory's env, so message matching is stable.
+ */
+export function isBranchAlreadyExistsError(error: unknown): boolean {
+  return /branch named .* already exists/i.test(formatErrorMessage(error, ""));
 }
 
 export function nextAvailableBranchName(baseName: string, existing: Set<string>): string {

@@ -42,7 +42,6 @@ function makeManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTerminal 
     isOpened: true,
     isVisible: true,
     isFocused: false,
-    isHibernated: false,
     isAttaching: false,
     isUserScrolledBack: false,
     isAltBuffer: false,
@@ -148,12 +147,6 @@ describe("TerminalReflowController.maybeReflow", () => {
 
     expect(paddingHistory(managed)).toContain("0.01px");
     expect(managed.lastReflowAt).toBeGreaterThan(0);
-  });
-
-  it("skips hibernated terminals", () => {
-    const managed = makeManaged({ isHibernated: true });
-    controller.maybeReflow(managed);
-    expect(paddingHistory(managed).length).toBe(0);
   });
 
   it("skips invisible terminals", () => {

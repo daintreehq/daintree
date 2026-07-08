@@ -805,4 +805,17 @@ wraps to the next line where the escape hint appears: esc to interrupt)`;
       expect(detector.detectFromLines(rows).isWorking).toBe(true);
     });
   });
+
+  describe("raw-window edge cases", () => {
+    it("detects a working indicator followed by an OSC payload with embedded newlines", () => {
+      // detect() windows the RAW buffer to the last N lines before stripping.
+      // Newlines inside an OSC payload inflate the raw line count, so a naive
+      // window could start inside the payload and miss the indicator that
+      // precedes it — the widen-and-rewindow fallback must recover it.
+      const detector = buildTestDetector("claude");
+      const oscWithNewlines = `\x1b]0;${"\n".repeat(20)}\x07`;
+      const output = "line above\n✽ Running tests… (esc to interrupt · 32s)" + oscWithNewlines;
+      expect(detector.detect(output).isWorking).toBe(true);
+    });
+  });
 });

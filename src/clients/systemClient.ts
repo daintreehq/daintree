@@ -26,6 +26,10 @@ export const systemClient = {
     return window.electron.system.showItemInFolder(path);
   },
 
+  showItemInFolderUnconfined: (path: string): Promise<void> => {
+    return window.electron.system.showItemInFolderUnconfined(path);
+  },
+
   openInEditor: (payload: {
     path: string;
     line?: number;
@@ -55,6 +59,10 @@ export const systemClient = {
 
   getWhySlowSnapshot: (): ReturnType<typeof window.electron.system.getWhySlowSnapshot> => {
     return window.electron.system.getWhySlowSnapshot();
+  },
+
+  getMemorySnapshot: (): ReturnType<typeof window.electron.system.getMemorySnapshot> => {
+    return window.electron.system.getMemorySnapshot();
   },
 
   getTmpDir: (): Promise<string> => {

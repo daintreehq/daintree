@@ -738,6 +738,7 @@ describe("preferences action hardening", () => {
       "help.shortcuts",
       "help.shortcutsAlt",
       "help.displayImage",
+      "help.openCommandsFolder",
       "help.gettingStarted.show",
       "help.launchAgent",
       "help.togglePanel",

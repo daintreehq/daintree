@@ -45,11 +45,34 @@ const { repaintForRevealMock, helpPanelState, panelStoreState } = vi.hoisted(() 
 
 const snapshot = {
   showResumeBanner: false,
-  preflightSnapshot: null,
   tierMismatch: null,
   isApprovingTier: false,
   assistantVersionTooOld: null,
 };
+
+// Pass-through dropdown mock (same shape as PanelHeader.test.tsx) — keeps the
+// header's lazily-loaded Radix overflow menu (and its actionService import
+// chain) out of this suite's module graph.
+vi.mock("@/components/ui/dropdown-menu", () => ({
+  DropdownMenu: ({ children }: { children?: unknown }) => <div>{children as never}</div>,
+  DropdownMenuTrigger: ({ children }: { children?: unknown }) => <>{children as never}</>,
+  DropdownMenuContent: ({ children }: { children?: unknown }) => (
+    <div data-testid="overflow-menu">{children as never}</div>
+  ),
+  DropdownMenuItem: ({
+    children,
+    onSelect,
+  }: {
+    children?: unknown;
+    onSelect?: (e: Event) => void;
+    destructive?: boolean;
+  }) => (
+    <button type="button" onClick={() => onSelect?.(new Event("select"))}>
+      {children as never}
+    </button>
+  ),
+  DropdownMenuSeparator: () => <hr />,
+}));
 
 vi.mock("@/controllers/HelpSessionController", () => ({
   HelpSessionController: class {
@@ -59,13 +82,12 @@ vi.mock("@/controllers/HelpSessionController", () => ({
     getSnapshot = () => snapshot;
     syncInputs = vi.fn();
     handleTerminalPanelMissing = vi.fn();
+    handleAgentExited = vi.fn();
     handleViewRevealed = vi.fn();
-    maybeRunPreflightSnapshot = vi.fn(() => undefined);
     selectAgent = vi.fn();
     newSession = vi.fn();
     runAnyway = vi.fn();
     dismissResumeBanner = vi.fn();
-    dismissPreflightSnapshot = vi.fn();
     dismissTierMismatch = vi.fn();
     approveTierOnce = vi.fn();
     alwaysAllowTier = vi.fn();

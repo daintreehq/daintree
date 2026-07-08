@@ -162,6 +162,10 @@ const devWorkerMock = vi.hoisted(() => {
   class MockPluginDevWorkerMainBridge {
     deps: MockBridgeDeps;
     private cleanup: (() => void) | null = null;
+    // Mirror the real bridge's getters; tests set these to simulate in-flight
+    // main→worker invokes and worker→main host calls (e.g. an open prompt).
+    pendingInvokeCount = 0;
+    pendingHostCallCount = 0;
     waitForActivation = vi.fn(async () => {
       const bundlePath = this.deps.workerHost?.opts?.bundlePath;
       const onResult = this.deps.onActivationResult;
@@ -9753,5 +9757,204 @@ describe("PluginService blocklist / kill-switch (#10891)", () => {
 
     // A single fetch backs the whole multi-plugin scan.
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Worker governance (idle dispose + snapshots)", () => {
+  const FUTURE = () => Date.now() + 31 * 60_000;
+
+  async function writeWorkerPlugin(
+    dirName: string,
+    name: string,
+    manifestExtras: Record<string, unknown> = {}
+  ): Promise<void> {
+    const dir = path.join(tmpDir, dirName);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "plugin.json"),
+      JSON.stringify({ name, version: "1.0.0", main: "main.mjs", ...manifestExtras })
+    );
+    await fs.writeFile(path.join(dir, "main.mjs"), "export function activate() {}\n");
+  }
+
+  // The mock worker/bridge capture arrays are module-scoped and accumulate
+  // across every describe in this file — index relative to a per-test baseline.
+  function baseline() {
+    return { hosts: devWorkerMock.instances.length, bridges: devWorkerMock.bridges.length };
+  }
+
+  it("disposes an idle prod user plugin worker and re-forks it on next use", async () => {
+    const base = baseline();
+    await writeWorkerPlugin("sleepy", "acme.sleepy");
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    await service.activatePlugin("acme.sleepy");
+    expect(devWorkerMock.instances).toHaveLength(base.hosts + 1);
+    const host = devWorkerMock.instances[base.hosts];
+    const bridge = devWorkerMock.bridges[base.bridges];
+
+    const result = service.disposeIdlePluginWorkers({ now: FUTURE() });
+    expect(result.disposed).toEqual(["acme.sleepy"]);
+    expect(host.dispose).toHaveBeenCalledTimes(1);
+    expect(bridge.dispose).toHaveBeenCalledTimes(1);
+
+    // The plugin survives its worker: still loaded, still listed.
+    expect(service.hasPlugin("acme.sleepy")).toBe(true);
+    const snapshot = service.getWorkerGovernanceSnapshots().find((s) => s.id === "acme.sleepy");
+    expect(snapshot).toMatchObject({ alive: false, state: "no-worker" });
+
+    // Next use lazily re-forks a fresh worker — the reload cycle, on demand.
+    await service.activatePlugin("acme.sleepy");
+    expect(devWorkerMock.instances).toHaveLength(base.hosts + 2);
+    const revived = service.getWorkerGovernanceSnapshots().find((s) => s.id === "acme.sleepy");
+    expect(revived).toMatchObject({ alive: true, state: "running" });
+  });
+
+  it("never disposes a recently-used worker", async () => {
+    const base = baseline();
+    await writeWorkerPlugin("busy", "acme.busy");
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    await service.activatePlugin("acme.busy");
+
+    // Default `now`: activation just stamped the activity clock.
+    const result = service.disposeIdlePluginWorkers();
+    expect(result).toEqual({ disposed: [], skipped: 1 });
+    expect(devWorkerMock.instances[base.hosts].dispose).not.toHaveBeenCalled();
+  });
+
+  it("protects panel-contributing plugins — open panel state is invisible to main", async () => {
+    const base = baseline();
+    await writeWorkerPlugin("panelly", "acme.panelly", {
+      contributes: { panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#000" }] },
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    await service.activatePlugin("acme.panelly");
+
+    const result = service.disposeIdlePluginWorkers({ now: FUTURE() });
+    expect(result).toEqual({ disposed: [], skipped: 1 });
+    expect(devWorkerMock.instances[base.hosts].dispose).not.toHaveBeenCalled();
+    const snapshot = service.getWorkerGovernanceSnapshots().find((s) => s.id === "acme.panelly");
+    expect(snapshot?.eligibility.dispose).toBe(false);
+  });
+
+  it("protects a worker with invokes in flight", async () => {
+    const base = baseline();
+    await writeWorkerPlugin("invoked", "acme.invoked");
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    await service.activatePlugin("acme.invoked");
+
+    const bridge = devWorkerMock.bridges[base.bridges];
+    bridge.pendingInvokeCount = 2;
+    const blocked = service.disposeIdlePluginWorkers({ now: FUTURE() });
+    expect(blocked).toEqual({ disposed: [], skipped: 1 });
+
+    bridge.pendingInvokeCount = 0;
+    const released = service.disposeIdlePluginWorkers({ now: FUTURE() });
+    expect(released.disposed).toEqual(["acme.invoked"]);
+  });
+
+  it("protects a worker awaiting a host call (e.g. an open prompt)", async () => {
+    const base = baseline();
+    await writeWorkerPlugin("prompting", "acme.prompting");
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    await service.activatePlugin("acme.prompting");
+
+    // A plugin blocked on host.showQuickPick can sit "idle" indefinitely —
+    // disposing would dismiss the visible prompt out from under the user.
+    const bridge = devWorkerMock.bridges[base.bridges];
+    bridge.pendingHostCallCount = 1;
+    const blocked = service.disposeIdlePluginWorkers({ now: FUTURE() });
+    expect(blocked).toEqual({ disposed: [], skipped: 1 });
+    expect(devWorkerMock.instances[base.hosts].dispose).not.toHaveBeenCalled();
+
+    bridge.pendingHostCallCount = 0;
+    const released = service.disposeIdlePluginWorkers({ now: FUTURE() });
+    expect(released.disposed).toEqual(["acme.prompting"]);
+  });
+
+  it("protects a plugin whose palette entries were registered imperatively", async () => {
+    const base = baseline();
+    const dir = path.join(tmpDir, "imperative");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "plugin.json"),
+      JSON.stringify({ name: "acme.imperative", version: "1.0.0", main: "main.mjs" })
+    );
+    // The documented command-plugin shape: no manifest command, actions
+    // registered in activate(). They die with the worker and nothing would
+    // lazily re-fork for them — governance must leave this worker alone.
+    await fs.writeFile(
+      path.join(dir, "main.mjs"),
+      `export function activate(host) {
+        host.registerAction(
+          { id: "run", title: "Run", description: "", category: "Test", kind: "command", danger: "safe" },
+          () => "ran"
+        );
+      }
+`
+    );
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    await service.activatePlugin("acme.imperative");
+
+    const result = service.disposeIdlePluginWorkers({ now: FUTURE() });
+    expect(result).toEqual({ disposed: [], skipped: 1 });
+    expect(devWorkerMock.instances[base.hosts].dispose).not.toHaveBeenCalled();
+    // The imperative palette entry survives.
+    expect(service.listPluginActions().map((a) => a.id)).toContain("acme.imperative.run");
+  });
+
+  it("protects startup-activated background plugins", async () => {
+    const base = baseline();
+    await writeWorkerPlugin("bg", "acme.bg", { activationEvents: ["onStartupFinished"] });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    await service.activatePlugin("acme.bg");
+
+    const result = service.disposeIdlePluginWorkers({ now: FUTURE() });
+    expect(result).toEqual({ disposed: [], skipped: 1 });
+    expect(devWorkerMock.instances[base.hosts].dispose).not.toHaveBeenCalled();
+  });
+
+  it("disabling a plugin clears its worker state and reports it as disabled", async () => {
+    const base = baseline();
+    await writeWorkerPlugin("toggled", "acme.toggled");
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    await service.activatePlugin("acme.toggled");
+    expect(devWorkerMock.instances).toHaveLength(base.hosts + 1);
+
+    await service.setEnabled("acme.toggled", false);
+    expect(devWorkerMock.instances[base.hosts].dispose).toHaveBeenCalled();
+    const snapshot = service.getWorkerGovernanceSnapshots().find((s) => s.id === "acme.toggled");
+    expect(snapshot).toMatchObject({ alive: false, state: "disabled", queueDepth: 0 });
+  });
+
+  it("reports a blocklisted plugin with no worker and no eligibility", async () => {
+    await writePlugin("bad", { name: "acme.bad", version: "1.0.0" });
+    const blocklist = new PluginBlocklistService({
+      fetchImpl: vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          entries: [{ name: "acme.bad", ranges: ["<2.0.0"], reason: "malware" }],
+        }),
+      })),
+      cachePath: path.join(tmpDir, "blocklist-cache.json"),
+    });
+    const service = new PluginService(tmpDir, undefined, { blocklistService: blocklist });
+    await service.initialize();
+
+    const snapshot = service.getWorkerGovernanceSnapshots().find((s) => s.id === "acme.bad");
+    expect(snapshot).toMatchObject({
+      alive: false,
+      state: "blocked",
+      eligibility: { trim: false, dispose: false, restart: false },
+    });
+    expect(snapshot?.detail?.reason).toBe("malware");
   });
 });

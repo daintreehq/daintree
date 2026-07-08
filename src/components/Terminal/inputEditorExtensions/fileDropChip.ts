@@ -48,6 +48,7 @@ class FileDropChipWidget extends WidgetType {
     span.appendChild(icon);
 
     const label = document.createElement("span");
+    label.className = "cm-chip-label";
     label.setAttribute("aria-hidden", "true");
     label.textContent = this.fileName;
     span.appendChild(label);
@@ -59,9 +60,20 @@ class FileDropChipWidget extends WidgetType {
     removeBtn.addEventListener("mousedown", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      const entry = view.state
-        .field(fileDropChipField, false)
-        ?.find((en) => en.filePath === this.filePath);
+      // Resolve the entry by the widget's document position, not by path \u2014
+      // with duplicate chips for the same file, a path lookup removes the
+      // first occurrence rather than the chip that was clicked. Half-open
+      // containment so an adjacent chip's end boundary can't match first.
+      const entries = view.state.field(fileDropChipField, false);
+      if (!entries) return;
+      let pos = -1;
+      try {
+        pos = view.posAtDOM(span);
+      } catch {
+        // Widget DOM already detached \u2014 fall through to the path match.
+      }
+      const byPos = pos >= 0 ? entries.find((en) => pos >= en.from && pos < en.to) : undefined;
+      const entry = byPos ?? entries.find((en) => en.filePath === this.filePath);
       if (entry) removeChipRange(view, entry.from, entry.to);
     });
     span.appendChild(removeBtn);

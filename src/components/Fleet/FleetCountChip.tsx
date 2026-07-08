@@ -6,6 +6,7 @@ import { useEscapeStack } from "@/hooks";
 import { useFleetPicker } from "@/hooks/useFleetPicker";
 import { FleetPickerContent } from "@/components/Fleet/FleetPickerContent";
 import type { AgentState } from "@/types";
+import type { WaitingReason } from "@shared/types/agent";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetRunStore } from "@/store/fleetRunStore";
 import { usePanelStore } from "@/store/panelStore";
@@ -93,6 +94,16 @@ export function FleetCountChip({
       for (const id of armOrder) {
         const p = state.panelsById[id];
         out[id] = p && isPtyPanel(p) ? p.agentState : undefined;
+      }
+      return out;
+    })
+  );
+  const waitingReasonsByPane = usePanelStore(
+    useShallow((state) => {
+      const out: Record<string, WaitingReason | undefined> = {};
+      for (const id of armOrder) {
+        const p = state.panelsById[id];
+        out[id] = p && isPtyPanel(p) ? p.waitingReason : undefined;
       }
       return out;
     })
@@ -220,7 +231,7 @@ export function FleetCountChip({
                           Send failed
                         </span>
                       )}
-                      {renderPaneStateBadge(id, agentStatesByPane[id])}
+                      {renderPaneStateBadge(id, agentStatesByPane[id], waitingReasonsByPane[id])}
                       <button
                         type="button"
                         onClick={() => disarmId(id)}

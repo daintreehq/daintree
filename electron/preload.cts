@@ -72,6 +72,7 @@ import { buildMenuPreloadBindings } from "./ipc/handlers/menu.preload.js";
 import { buildCliPreloadBindings } from "./ipc/handlers/cli.preload.js";
 import { buildGlobalRecipesPreloadBindings } from "./ipc/handlers/globalRecipes.preload.js";
 import { buildEditorConfigPreloadBindings } from "./ipc/handlers/editorConfig.preload.js";
+import { buildPaintFabricSurfacePreloadBindings } from "./ipc/handlers/paintFabricSurface.preload.js";
 import { buildWebviewNavigationPreloadBindings } from "./ipc/handlers/webviewNavigation.preload.js";
 import { buildWebviewCapturePreloadBindings } from "./ipc/handlers/webviewCapture.preload.js";
 import { buildWorktreeConfigPreloadBindings } from "./ipc/handlers/worktreeConfig.preload.js";
@@ -224,6 +225,13 @@ const rawInstanceRole =
   process.env.DAINTREE_INSTANCE_ROLE;
 const instanceRole: "attended" | "worker" = rawInstanceRole === "worker" ? "worker" : "attended";
 
+// Paint-fabric surface-host role (Phase 1V): a non-null value is the surface
+// id and makes src/main.tsx mount the minimal surface-host root instead of
+// the full app shell. Threaded via additionalArguments like the instance role.
+const SURFACE_HOST_ARG = "--daintree-surface-host=";
+const surfaceHostId: string | null =
+  process.argv.find((a) => a.startsWith(SURFACE_HOST_ARG))?.slice(SURFACE_HOST_ARG.length) ?? null;
+
 const E2E_MODE_ARG = "--daintree-e2e-mode";
 const E2E_SKIP_FIRST_RUN_DIALOGS_ARG = "--daintree-e2e-skip-first-run-dialogs";
 const E2E_FAULT_MODE_ARG = "--daintree-e2e-fault-mode";
@@ -355,6 +363,45 @@ ipcRenderer.on("terminal-port", (event, payload: { token: string }) => {
     pendingTerminalPortToken = token;
     flushPendingTerminalPort();
   }
+});
+
+// Dedicated worker-ingest ports (issue #10960). No pending/ready dance: the
+// main world requested this port via IPC invoke and holds the matching token,
+// so its listener is guaranteed live — forward straight through. The main
+// thread never reads the port; it re-transfers it into the parse worker.
+ipcRenderer.on("terminal-worker-port", (event, payload: { token: string; terminalId: string }) => {
+  if (window.top !== window) return;
+
+  const port = event.ports?.[0];
+  if (!port) return;
+
+  if (!isAllowedTerminalPortTarget()) {
+    console.error(
+      "[Preload] Refusing to forward worker-ingest MessagePort to untrusted origin:",
+      window.location.href
+    );
+    try {
+      port.close();
+    } catch {
+      // Port may already be closed.
+    }
+    return;
+  }
+
+  if (!payload?.token || !payload?.terminalId) {
+    try {
+      port.close();
+    } catch {
+      // Port may already be closed.
+    }
+    return;
+  }
+
+  window.postMessage(
+    { type: "terminal-worker-port", token: payload.token, terminalId: payload.terminalId },
+    window.location.origin,
+    [port]
+  );
 });
 
 // ── Worktree Port Client (Phase 1) ──────────────────────────────────────────
@@ -1146,6 +1193,12 @@ function buildElectronApi(): ElectronAPI {
       forceResume: (id: string): Promise<void> =>
         _unwrappingInvoke(CHANNELS.TERMINAL_FORCE_RESUME, id),
 
+      requestWorkerIngestPort: (id: string): Promise<{ token: string } | null> =>
+        _unwrappingInvoke(CHANNELS.TERMINAL_REQUEST_WORKER_INGEST_PORT, id),
+
+      releaseWorkerIngestPort: (id: string): Promise<void> =>
+        _unwrappingInvoke(CHANNELS.TERMINAL_RELEASE_WORKER_INGEST_PORT, id),
+
       onStatus: (callback: (data: TerminalStatusPayload) => void) =>
         _typedOn(CHANNELS.TERMINAL_STATUS, callback),
 
@@ -1297,6 +1350,18 @@ function buildElectronApi(): ElectronAPI {
     // Editor API
     editor: buildEditorConfigPreloadBindings(_unwrappingInvoke),
 
+    // Paint-fabric surface views (Phase 1V substrate)
+    paintSurface: {
+      ...buildPaintFabricSurfacePreloadBindings(_unwrappingInvoke),
+      // Surface-view side of the webglBudget apply step: the surface renderer
+      // subscribes and applies granted thresholds to its TerminalWebGLManager.
+      onWebglThresholds: (
+        callback: (
+          payload: import("../shared/types/paintFabricSurface.js").SurfaceWebglThresholds
+        ) => void
+      ) => _typedOn(CHANNELS.PAINT_SURFACE_WEBGL_THRESHOLDS, callback),
+    },
+
     // System API
     system: {
       openExternal: (url: string) => _unwrappingInvoke(CHANNELS.SYSTEM_OPEN_EXTERNAL, { url }),
@@ -1305,6 +1370,9 @@ function buildElectronApi(): ElectronAPI {
 
       showItemInFolder: (path: string) =>
         _unwrappingInvoke(CHANNELS.SYSTEM_SHOW_ITEM_IN_FOLDER, { path }),
+
+      showItemInFolderUnconfined: (path: string) =>
+        _unwrappingInvoke(CHANNELS.SYSTEM_SHOW_ITEM_IN_FOLDER_UNCONFINED, { path }),
 
       openInEditor: (payload: { path: string; line?: number; col?: number; projectId?: string }) =>
         _unwrappingInvoke(CHANNELS.SYSTEM_OPEN_IN_EDITOR, payload),
@@ -1444,6 +1512,8 @@ function buildElectronApi(): ElectronAPI {
       onConfigReloaded: (callback: () => void) => _typedOn(CHANNELS.APP_CONFIG_RELOADED, callback),
 
       onViewRevealed: (callback: () => void) => _typedOn(CHANNELS.APP_VIEW_REVEALED, callback),
+      onViewWarmActivated: (callback: () => void) =>
+        _typedOn(CHANNELS.APP_VIEW_WARM_ACTIVATED, callback),
       onViewCached: (callback: () => void) => _typedOn(CHANNELS.APP_VIEW_CACHED, callback),
     },
 
@@ -1894,16 +1964,6 @@ function buildElectronApi(): ElectronAPI {
 
       getWorkingDiff: (cwd: string, type: "unstaged" | "staged" | "head") =>
         _unwrappingInvoke(CHANNELS.GIT_GET_WORKING_DIFF, { cwd, type }),
-
-      snapshotGet: (worktreeId: string) => _unwrappingInvoke(CHANNELS.GIT_SNAPSHOT_GET, worktreeId),
-
-      snapshotList: () => _unwrappingInvoke(CHANNELS.GIT_SNAPSHOT_LIST),
-
-      snapshotRevert: (worktreeId: string) =>
-        _unwrappingInvoke(CHANNELS.GIT_SNAPSHOT_REVERT, worktreeId),
-
-      snapshotDelete: (worktreeId: string) =>
-        _unwrappingInvoke(CHANNELS.GIT_SNAPSHOT_DELETE, worktreeId),
 
       markSafeDirectory: (path: string) =>
         _unwrappingInvoke(CHANNELS.GIT_MARK_SAFE_DIRECTORY, path),
@@ -3234,6 +3294,13 @@ if (initialProjectId) {
 // never need to null-guard the global.
 contextBridge.exposeInMainWorld("__DAINTREE_INSTANCE_ROLE__", {
   role: instanceRole,
+});
+
+// Surface-host role for paint-fabric surface views (Phase 1V). Exposed
+// unconditionally with null for ordinary views so consumers never null-guard
+// the global itself.
+contextBridge.exposeInMainWorld("__DAINTREE_SURFACE_HOST__", {
+  surfaceId: surfaceHostId,
 });
 
 // Flush the per-view preload evaluation cost (#9770). Runs at preload bottom —

@@ -38,7 +38,7 @@ const HELP_ASSISTANT_DEFAULTS: HelpAssistantSettings = {
   auditRetention: 7,
   modelId: "",
   customArgs: "",
-  idleHibernateMinutes: 30,
+  idleHibernateMinutes: 5,
   debugLogging: false,
 };
 
@@ -61,7 +61,9 @@ function isValidAuditRetention(value: unknown): value is HelpAssistantAuditReten
 }
 
 function isValidIdleHibernateMinutes(value: unknown): value is HelpAssistantIdleHibernateMinutes {
-  return value === 0 || value === 15 || value === 30 || value === 60 || value === 120;
+  return (
+    value === 0 || value === 5 || value === 15 || value === 30 || value === 60 || value === 120
+  );
 }
 
 function isValidHelpAssistantTier(value: unknown): value is HelpAssistantTier {

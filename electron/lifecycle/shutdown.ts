@@ -3,8 +3,8 @@ import { app, dialog } from "electron";
 import type { PtyClient } from "../services/PtyClient.js";
 import type { WorkspaceClient } from "../services/WorkspaceClient.js";
 import { projectStore } from "../services/ProjectStore.js";
-import { persistAgentSession } from "../services/pty/agentSessionHistory.js";
-import { getAgentSessionRetentionDays } from "../services/pty/agentSessionRetention.js";
+import { journalAgentSession } from "../services/pty/agentSessionJournal.js";
+import { getLifecycleLedger } from "../services/pty/lifecycleLedger.js";
 import { getActiveAgentCount, showQuitWarning } from "../utils/quitWarning.js";
 import {
   disposeAgentAvailabilityStore,
@@ -31,7 +31,6 @@ import {
   getServiceConnectivityRegistry,
 } from "../services/connectivity/index.js";
 import { notificationService } from "../services/NotificationService.js";
-import { preAgentSnapshotService } from "../services/PreAgentSnapshotService.js";
 import {
   getCcrConfigService,
   setCcrConfigService,
@@ -176,6 +175,13 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
         } catch {
           // Snapshot is best-effort; journaling below skips when info is absent.
         }
+        // Freeze each terminal's launch generation alongside the info snapshot,
+        // before any kill — the journal write below must stay attributed to the
+        // incarnation being shut down.
+        const ledger = getLifecycleLedger();
+        const generationById = new Map<string, number | undefined>(
+          [...terminalInfoById.keys()].map((id) => [id, ledger.currentGeneration(id)])
+        );
 
         const allProjects = projectStore.getAllProjects();
         const projectIds = allProjects.map((p) => p.id);
@@ -257,10 +263,12 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
             })
           );
 
-          const userData = app.getPath("userData");
           for (const { result, info } of capturedAgents) {
             try {
-              await persistAgentSession(
+              // Exactly-once funnel: the ledger key (terminalId, generation)
+              // drops a record another close path (e.g. a user kill landing
+              // mid-shutdown) already journaled for this incarnation.
+              await journalAgentSession(
                 {
                   sessionId: result.agentSessionId as string,
                   agentId: info.launchAgentId as string,
@@ -278,8 +286,7 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
                   cwd: info.cwd ?? undefined,
                   branch: info.worktreeId ? branchByWorktree.get(info.worktreeId) : undefined,
                 },
-                userData,
-                getAgentSessionRetentionDays()
+                { terminalId: result.id, generation: generationById.get(result.id) }
               );
             } catch (err) {
               console.warn("[MAIN] Failed to journal agent session on shutdown:", err);
@@ -446,11 +453,6 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
               console.warn("[MAIN] AgentNotificationService.dispose failed:", err);
             }
             setAgentNotificationServiceRef(null);
-            try {
-              preAgentSnapshotService.dispose();
-            } catch (err) {
-              console.warn("[MAIN] preAgentSnapshotService.dispose failed:", err);
-            }
             try {
               getAutoUpdaterServiceRef()?.dispose();
             } catch (err) {

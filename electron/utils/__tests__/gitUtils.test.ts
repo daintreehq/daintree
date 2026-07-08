@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
 import { join as pathJoin } from "path";
 
 const execFileMock = vi.hoisted(() => vi.fn());
@@ -88,7 +90,9 @@ describe("getGitDir caching", () => {
 
     const first = getGitDir("/repo");
     const second = getGitDir("/repo");
-    expect(execFileMock).toHaveBeenCalledTimes(1);
+    // The fs fast path probes .git asynchronously before falling back to the
+    // subprocess, so wait for the (single, deduped) spawn to be issued.
+    await vi.waitFor(() => expect(execFileMock).toHaveBeenCalledTimes(1));
 
     callbacks[0](null, ".git\n", "");
     await expect(first).resolves.toBe(pathJoin("/repo", ".git"));
@@ -138,5 +142,92 @@ describe("getGitDir caching", () => {
     expect(execFileMock).toHaveBeenCalledTimes(2);
     expect(execFileMock.mock.calls[0][1]).toEqual(["rev-parse", "--git-dir"]);
     expect(execFileMock.mock.calls[1][1]).toEqual(["rev-parse", "--git-common-dir"]);
+  });
+});
+
+describe("filesystem fast path (no subprocess)", () => {
+  let root: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(pathJoin(tmpdir(), "daintree-gitdir-fastpath-"));
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function makeGitDir(base: string): string {
+    const gitDir = pathJoin(base, ".git");
+    mkdirSync(gitDir, { recursive: true });
+    writeFileSync(pathJoin(gitDir, "HEAD"), "ref: refs/heads/main\n");
+    return gitDir;
+  }
+
+  it("resolves a regular repo's .git directory without spawning git", async () => {
+    const gitDir = makeGitDir(root);
+    await expect(getGitDir(root)).resolves.toBe(gitDir);
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it("resolves a linked worktree's gitdir pointer file without spawning git", async () => {
+    const mainRoot = pathJoin(root, "main");
+    mkdirSync(mainRoot, { recursive: true });
+    const mainGitDir = makeGitDir(mainRoot);
+    const wtGitDir = pathJoin(mainGitDir, "worktrees", "wt1");
+    mkdirSync(wtGitDir, { recursive: true });
+    writeFileSync(pathJoin(wtGitDir, "HEAD"), "ref: refs/heads/feature\n");
+    const wtRoot = pathJoin(root, "wt1");
+    mkdirSync(wtRoot, { recursive: true });
+    writeFileSync(pathJoin(wtRoot, ".git"), `gitdir: ${wtGitDir}\n`);
+
+    await expect(getGitDir(wtRoot)).resolves.toBe(wtGitDir);
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it("resolves a relative gitdir pointer against the worktree path", async () => {
+    const target = pathJoin(root, "meta");
+    mkdirSync(target, { recursive: true });
+    writeFileSync(pathJoin(target, "HEAD"), "ref: refs/heads/main\n");
+    const wtRoot = pathJoin(root, "wt");
+    mkdirSync(wtRoot, { recursive: true });
+    writeFileSync(pathJoin(wtRoot, ".git"), "gitdir: ../meta\n");
+
+    await expect(getGitDir(wtRoot)).resolves.toBe(target);
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the subprocess when .git exists but has no HEAD", async () => {
+    mkdirSync(pathJoin(root, ".git"), { recursive: true });
+    mockGitFailure("not a git repository");
+    await expect(getGitDir(root)).resolves.toBeNull();
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to the subprocess when no .git entry exists", async () => {
+    mockGitFailure("not a git repository");
+    await expect(getGitDir(root)).resolves.toBeNull();
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves the common dir through the commondir pointer without spawning git", async () => {
+    const mainRoot = pathJoin(root, "main");
+    mkdirSync(mainRoot, { recursive: true });
+    const mainGitDir = makeGitDir(mainRoot);
+    const wtGitDir = pathJoin(mainGitDir, "worktrees", "wt1");
+    mkdirSync(wtGitDir, { recursive: true });
+    writeFileSync(pathJoin(wtGitDir, "HEAD"), "ref: refs/heads/feature\n");
+    writeFileSync(pathJoin(wtGitDir, "commondir"), "../..\n");
+    const wtRoot = pathJoin(root, "wt1");
+    mkdirSync(wtRoot, { recursive: true });
+    writeFileSync(pathJoin(wtRoot, ".git"), `gitdir: ${wtGitDir}\n`);
+
+    await expect(getGitCommonDir(wtRoot)).resolves.toBe(mainGitDir);
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it("returns the git dir itself as common dir for a main worktree", async () => {
+    const gitDir = makeGitDir(root);
+    await expect(getGitCommonDir(root)).resolves.toBe(gitDir);
+    expect(execFileMock).not.toHaveBeenCalled();
   });
 });

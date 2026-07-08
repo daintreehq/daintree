@@ -9,6 +9,9 @@ let ctx: AppContext;
 let repoPath: string;
 let fixtureCleanup: (() => void) | undefined;
 
+const TERMINAL_SPAWN_BURST = 6;
+const MAX_QUEUE_DEPTH = 50;
+
 async function resetRateLimits(app: AppContext["app"]): Promise<void> {
   await app.evaluate(() => {
     const fn = (globalThis as any).__daintreeResetRateLimits;
@@ -60,15 +63,15 @@ test.describe.serial("Core: Rate Limiting", () => {
   test("spawn queue overflow returns 'Spawn queue full' error", async () => {
     test.slow();
 
-    // Fire 52 concurrent terminal spawn calls from the renderer against the
-    // leaky-bucket rate limiter (1 call per intervalMs).
-    // - Request 1: consumes the slot immediately (succeeds)
-    // - Requests 2–51: queue up as pending (MAX_QUEUE_DEPTH = 50)
-    // - Request 52: overflows the queue → immediate "Spawn queue full" rejection
+    // Fire enough concurrent terminal spawn calls from the renderer to exceed
+    // the burst-token-bucket limit:
+    // - Requests 1–6: consume the interactive burst immediately
+    // - Requests 7–56: queue up as pending (MAX_QUEUE_DEPTH = 50)
+    // - Request 57: overflows the queue -> immediate "Spawn queue full" rejection
     //
     // resetRateLimits below drains the 50 pending so Promise.all can settle.
     await ctx.window.evaluate((cwd) => {
-      const calls = Array.from({ length: 52 }, () =>
+      const calls = Array.from({ length: 57 }, () =>
         (window as any).electron.terminal
           .spawn({ cols: 80, rows: 24, cwd })
           .then((id: string) => ({ status: "fulfilled" as const, id }))
@@ -91,8 +94,8 @@ test.describe.serial("Core: Rate Limiting", () => {
     const fulfilled = results.filter((r) => r.status === "fulfilled");
     const rejected = results.filter((r) => r.status === "rejected");
 
-    // At least the first call should succeed (slot consumed immediately).
-    expect(fulfilled.length).toBeGreaterThanOrEqual(1);
+    // At least the burst calls should succeed immediately.
+    expect(fulfilled.length).toBeGreaterThanOrEqual(TERMINAL_SPAWN_BURST);
 
     // At least 1 rejection should be "Spawn queue full" (the overflow).
     const queueFullErrors = rejected.filter((r) => r.message.includes("Spawn queue full"));
@@ -110,24 +113,24 @@ test.describe.serial("Core: Rate Limiting", () => {
   test("operations recover after rate limit state is reset", async () => {
     test.slow();
 
-    // Start two spawns concurrently. The first consumes the immediate
-    // leaky-bucket slot; the second must queue behind the strict 1s interval.
-    // Do not await the first spawn before starting the second: on slow Linux
-    // runners a real PTY can take long enough to open the next bucket slot.
+    // Start seven spawns concurrently. The first six consume the interactive
+    // burst; the seventh must queue behind the strict 1s interval.
     const queuedResult = await ctx.window.evaluate(
       async ({ cwd, raceMs }) => {
-        const firstSpawn = (window as any).electron.terminal.spawn({
-          cols: 80,
-          rows: 24,
-          cwd,
-        });
+        const burstSpawns = Array.from({ length: 6 }, () =>
+          (window as any).electron.terminal.spawn({
+            cols: 80,
+            rows: 24,
+            cwd,
+          })
+        );
         const queuedSpawn = (window as any).electron.terminal
           .spawn({ cols: 80, rows: 24, cwd })
           .then((id: string) => ({ resolved: true as const, id }));
         // Prevent unhandled rejection when resetRateLimits drains this promise
         queuedSpawn.catch(() => {});
         (window as any).__rateLimitRecoveryInitialSpawns = Promise.allSettled([
-          firstSpawn,
+          ...burstSpawns,
           queuedSpawn,
         ]);
         const raceResult = await Promise.race([
@@ -171,25 +174,28 @@ test.describe.serial("Core: Rate Limiting", () => {
   test("drainRateLimitQueues rejects pending requests with shutdown message", async () => {
     test.slow();
 
-    // Fill 10 rate limit slots
+    // Consume the six-call burst.
     const slotIds: string[] = await ctx.window.evaluate(async (cwd) => {
-      const ids: string[] = [];
-      for (let i = 0; i < 10; i++) {
-        const id = await (window as any).electron.terminal.spawn({
-          cols: 80,
-          rows: 24,
-          cwd,
-        });
-        ids.push(id);
-      }
-      return ids;
+      return await Promise.all(
+        Array.from({ length: 6 }, () =>
+          (window as any).electron.terminal.spawn({
+            cols: 80,
+            rows: 24,
+            cwd,
+          })
+        )
+      );
     }, repoPath);
 
     // Start 5 additional spawns that will queue (won't resolve until slots open)
     await ctx.window.evaluate((cwd) => {
       const calls = Array.from({ length: 5 }, () =>
         (window as any).electron.terminal
-          .spawn({ cols: 80, rows: 24, cwd })
+          .spawn({
+            cols: 80,
+            rows: 24,
+            cwd,
+          })
           .then((id: string) => ({ status: "fulfilled" as const, id }))
           .catch((err: Error) => ({ status: "rejected" as const, message: err.message }))
       );
@@ -214,7 +220,7 @@ test.describe.serial("Core: Rate Limiting", () => {
       expect(r.message).toContain("App is shutting down");
     }
 
-    // Clean up the 10 successfully spawned terminals
+    // Clean up the successfully spawned burst terminals
     await killTerminals(ctx.window, slotIds);
   });
 });

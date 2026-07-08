@@ -5,43 +5,27 @@
 // and delegates store writes back through the existing `helpPanelStore`
 // actions — this controller never shadows persisted state.
 
-import * as semver from "semver";
-
 import { getAgentConfig } from "@/config/agents";
 import { actionService } from "@/services/ActionService";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { usePanelStore, useProjectStore } from "@/store";
-import { isPtyPanel } from "@shared/types/panel";
-import { projectClient } from "@/clients/projectClient";
-import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { ActionContext } from "@shared/types/actions";
-import { ACTIVE_AGENT_STATES } from "@shared/types/agent";
 import { buildResumeCommand, buildResumeLatestCommand } from "@shared/types/agentSettings";
-import { resolveDaintreeMcpTier } from "@shared/types/project";
-import type { SnapshotInfo } from "@shared/types/ipc/git";
 import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
-
-const HIBERNATE_VALID_MINUTES: readonly number[] = [0, 15, 30, 60, 120];
-const DEFAULT_HIBERNATE_MINUTES = 30;
-
-// Re-checks every 2 minutes while the agent is busy so hibernation defers
-// cleanly until the conversation is idle without restarting the full
-// countdown each time.
-const HIBERNATE_BUSY_RECHECK_MS = 2 * 60 * 1000;
-
-const RESUME_BANNER_AUTO_DISMISS_MS = 4_000;
-const SNAPSHOT_BANNER_AUTO_DISMISS_MS = 12_000;
-// The "approval ended" notice (#10042) lingers a touch longer than the
-// snapshot banner — it tells the user their per-tool grant lapsed and the
-// next call will prompt again, which is worth a beat to read.
-const GRANT_ENDED_BANNER_AUTO_DISMISS_MS = 15_000;
-
-// Minimum disabled period after a manual "Check again" click — keeps the
-// button from being hammered while a fresh (cache-bypassing) probe runs.
-const CHECK_AGAIN_COOLDOWN_MS = 5_000;
+import {
+  type HelpSessionRef,
+  provisionHelpSession,
+  provisionFailureKind,
+  buildHelpEnv,
+  revokeHelpSession,
+  asStringRecord,
+} from "./HelpSessionProvisioner";
+import { HelpVersionGate, checkAssistantVersion } from "./HelpVersionGate";
+import { LaunchNotifications, notifyLaunchFailed } from "./LaunchNotifications";
+import { McpActivityTracker } from "./McpActivityTracker";
+import { HibernationManager } from "./HibernationManager";
 
 export type HelpSessionPhase =
   | "idle"
@@ -191,7 +175,6 @@ export interface HelpSessionSnapshot {
   showResumeBanner: boolean;
   assistantVersionTooOld: VersionTooOld | null;
   tierMismatch: TierMismatchState | null;
-  preflightSnapshot: SnapshotInfo | null;
   isApprovingTier: boolean;
   /**
    * True while a manual "Check again" version re-probe is in flight or its
@@ -281,153 +264,6 @@ export interface HelpLaunchOptions {
   resumeOnly?: boolean;
 }
 
-interface HelpSessionRef {
-  sessionId: string;
-  sessionPath: string;
-  token: string;
-  mcpUrl: string | null;
-  windowId: number;
-}
-
-/**
- * Per-agent env injection for help-session launches. Today this is a
- * placeholder shape — no agent currently requires renderer-side env beyond
- * the universal `DAINTREE_MCP_TOKEN` / `DAINTREE_WINDOW_ID` set in
- * `buildHelpEnv`. The hook stays so future per-agent env additions have a
- * single place to land.
- */
-function agentSpawnEnv(_agentId: string, _sessionPath: string): Record<string, string> {
-  return {};
-}
-
-type ProvisionFailureCode =
-  | "MCP_NOT_READY"
-  | "MCP_SERVER_NOT_STARTED"
-  | "MCP_PROBE_FAILED"
-  | "UNKNOWN";
-
-type ProvisionOutcome =
-  | { ok: true; session: HelpSessionRef }
-  | { ok: false; code: ProvisionFailureCode; message: string };
-
-async function provisionHelpSession(
-  project: HelpProjectRef,
-  agentId: string,
-  context?: ActionContext
-): Promise<ProvisionOutcome> {
-  try {
-    const result = await window.electron.help.provisionSession({
-      projectId: project.id,
-      projectPath: project.path,
-      agentId,
-      ...(context && { context }),
-    });
-    if (!result) {
-      return {
-        ok: false,
-        code: "UNKNOWN",
-        message: "Couldn't provision help session.",
-      };
-    }
-    return { ok: true, session: result };
-  } catch (err) {
-    logError("Failed to provision help session", err);
-    const code =
-      err && typeof err === "object" && "code" in err
-        ? (err as Record<string, unknown>).code
-        : undefined;
-    const message = formatErrorMessage(err, "Couldn't provision help session");
-    if (
-      code === "MCP_SERVER_NOT_STARTED" ||
-      code === "MCP_PROBE_FAILED" ||
-      code === "MCP_NOT_READY"
-    ) {
-      return { ok: false, code, message };
-    }
-    return { ok: false, code: "UNKNOWN", message };
-  }
-}
-
-/**
- * Three-state version probe.
- * - `ok`: version meets the minimum (or no minimum is configured).
- * - `indeterminate`: the probe couldn't get a definitive answer (IPC threw,
- *   no installed version reported, or semver comparison failed).
- * - `too-old`: a definitive too-old result, carrying the gate payload.
- *
- * The launch paths collapse `ok`/`indeterminate` into "proceed" (transient
- * failure is permissive — see `checkAssistantVersion`). The manual
- * "Check again" path keeps them distinct so a transient failure doesn't
- * silently dismiss the gate and auto-launch an outdated CLI.
- */
-type VersionProbeResult =
-  | { status: "ok" }
-  | { status: "indeterminate" }
-  | { status: "too-old"; block: VersionTooOld };
-
-function provisionFailureKind(code: ProvisionFailureCode): LaunchErrorKind {
-  switch (code) {
-    case "MCP_SERVER_NOT_STARTED":
-      return "mcp-server-not-started";
-    // Legacy `MCP_NOT_READY` errors fall through to the probe-failed shape —
-    // the "server responded badly" copy is the closer fit.
-    case "MCP_PROBE_FAILED":
-    case "MCP_NOT_READY":
-      return "mcp-probe-failed";
-    default:
-      return "spawn-failed";
-  }
-}
-
-// `refresh=true` bypasses the 12h AgentVersionService cache — pass on retry
-// so a user who manually updates the CLI outside Daintree's update flow can
-// recover within one panel reopen instead of waiting for cache expiry.
-async function probeAssistantVersion(
-  agentId: string,
-  agentName: string,
-  refresh = false
-): Promise<VersionProbeResult> {
-  const config = getAgentConfig(agentId);
-  const required = config?.assistantMinVersion;
-  if (!required) return { status: "ok" };
-
-  let info;
-  try {
-    info = await window.electron.system.getAgentVersion(agentId, refresh);
-  } catch (err) {
-    logError("Failed to probe assistant CLI version", err);
-    return { status: "indeterminate" };
-  }
-
-  const installed = info?.installedVersion;
-  if (!installed) return { status: "indeterminate" };
-
-  try {
-    if (semver.lt(installed, required)) {
-      return {
-        status: "too-old",
-        block: { agentId, agentName, installedVersion: installed, requiredVersion: required },
-      };
-    }
-  } catch (err) {
-    logError("Failed to compare assistant CLI version", err);
-    return { status: "indeterminate" };
-  }
-  return { status: "ok" };
-}
-
-// Launch-path wrapper preserving the original permissive contract: any
-// non-definitive result (ok or indeterminate) returns null so the launch
-// proceeds; only a definitive too-old result blocks.
-async function checkAssistantVersion(
-  agentId: string,
-  agentName: string,
-  refresh = false
-): Promise<VersionTooOld | null> {
-  const result = await probeAssistantVersion(agentId, agentName, refresh);
-  return result.status === "too-old" ? result.block : null;
-}
-
 // Exported for unit coverage of the model/customArgs flag composition.
 export async function loadCustomLaunchFlags(): Promise<string[]> {
   try {
@@ -447,106 +283,11 @@ export async function loadCustomLaunchFlags(): Promise<string[]> {
   }
 }
 
-function buildHelpEnv(
-  session: HelpSessionRef | null,
-  projectId: string | null,
-  agentId: string
-): Record<string, string> | undefined {
-  if (!session) return undefined;
-  const env: Record<string, string> = {
-    DAINTREE_MCP_TOKEN: session.token,
-    DAINTREE_WINDOW_ID: String(session.windowId),
-    ...agentSpawnEnv(agentId, session.sessionPath),
-  };
-  if (session.mcpUrl) env.DAINTREE_MCP_URL = session.mcpUrl;
-  if (projectId) env.DAINTREE_PROJECT_ID = projectId;
-  return env;
-}
-
-function revokeHelpSession(sessionId: string | null): void {
-  if (!sessionId) return;
-  window.electron.help.revokeSession(sessionId).catch((err) => {
-    logError("Failed to revoke help session", err);
-  });
-}
-
-function asStringRecord(value: unknown): Record<string, string> | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(value)) {
-    if (typeof v !== "string") return undefined;
-    out[k] = v;
-  }
-  return out;
-}
-
-function notifyLaunchFailed(agentId: string, reason: string): void {
-  const cfg = getAgentConfig(agentId);
-  const name = cfg?.name ?? agentId;
-  // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-  notify({
-    type: "error",
-    title: "Assistant launch failed",
-    message: `Couldn't start ${name}. ${reason}`,
-  });
-}
-
-function notifyAssistantServicesUnavailable(
-  kind: "mcp-server-not-started" | "mcp-probe-failed"
-): void {
-  notify({
-    type: "error",
-    title: "Assistant couldn't start",
-    // Mirror the inline banner's per-kind discrimination on the closed-panel
-    // fallback so the two failure modes read differently here too.
-    message:
-      kind === "mcp-probe-failed"
-        ? "Daintree's assistant services didn't respond in time. Check assistant settings, then try again."
-        : "Daintree's assistant services didn't start. Check assistant settings, then try again.",
-    action: {
-      label: "Open settings",
-      actionId: "app.settings.openTab",
-      actionArgs: { tab: "assistant" },
-      onClick: () => {
-        void actionService.dispatch("app.settings.openTab", { tab: "assistant" });
-      },
-    },
-  });
-}
-
-// Mirrors the `folder-unavailable` banner's primary recovery affordance on
-// the closed-panel toast. Single action keeps parity with the established
-// `notifyAssistantServicesUnavailable` shape; the secondary "Open logs" CTA
-// on the banner is reachable by reopening the panel.
-function notifyInstallCorrupted(agentId: string): void {
-  const cfg = getAgentConfig(agentId);
-  const name = cfg?.name ?? agentId;
-  // eslint-disable-next-line no-restricted-syntax -- notify-event-kind: ok
-  notify({
-    type: "error",
-    title: "Assistant files missing",
-    message: `Couldn't start ${name}. Daintree's bundled assistant files are missing — reinstall or check the logs.`,
-    action: {
-      label: "Open installer page",
-      actionId: "system.openExternal",
-      actionArgs: { url: "https://daintree.org/download" },
-      onClick: () => {
-        void actionService.dispatch(
-          "system.openExternal",
-          { url: "https://daintree.org/download" },
-          { source: "user" }
-        );
-      },
-    },
-  });
-}
-
 const INITIAL_SNAPSHOT: HelpSessionSnapshot = Object.freeze({
   phase: "idle",
   showResumeBanner: false,
   assistantVersionTooOld: null,
   tierMismatch: null,
-  preflightSnapshot: null,
   isApprovingTier: false,
   isCheckingVersion: false,
   launchError: null,
@@ -590,23 +331,6 @@ export class HelpSessionController {
   private _pendingSessionId: string | null = null;
   private _pendingNewTerminalId: string | null = null;
   /**
-   * Tracks whether the version gate has blocked at any point in this panel
-   * instance. When true, the next `checkAssistantVersion` call passes
-   * `refresh=true` so an externally-updated CLI is detected without waiting
-   * for the 12h AgentVersionService cache TTL. Cleared once a probe passes.
-   */
-  private _hasBlockedThisSession = false;
-  /**
-   * Backs the manual "Check again" cooldown. `isCheckingVersion` only clears
-   * once BOTH the probe has settled (`_checkAgainProbeSettled`) and the 5s
-   * minimum-disabled floor has elapsed (`_checkAgainCooldownFired`), so a
-   * fast probe can't re-enable the button before the cooldown is up and a
-   * slow probe can't be re-enabled by the timer while still in flight.
-   */
-  private _checkAgainCooldownTimer: ReturnType<typeof setTimeout> | null = null;
-  private _checkAgainCooldownFired = false;
-  private _checkAgainProbeSettled = false;
-  /**
    * Dead-man timer for an in-flight launch. The launch FSM resets its loading
    * phase in a `finally` that only runs once the awaited IPCs settle — so a
    * never-settling bridge call (e.g. a hung CLI version probe) would otherwise
@@ -618,32 +342,34 @@ export class HelpSessionController {
    */
   private _launchWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly LAUNCH_WATCHDOG_MS = 90_000;
-  /**
-   * Once-per-terminal-id guard for the auto-snapshot pre-flight. Stores the
-   * terminal id we last took a snapshot for so React 19 StrictMode's
-   * double-invoke can't fire two parallel pre-flights.
-   */
-  private _preflightSnapshotTerminalId: string | null = null;
-  private _isSystemSuspended = false;
-  private _hibernateMinutes = DEFAULT_HIBERNATE_MINUTES;
-  private _hibernateTimer: ReturnType<typeof setTimeout> | null = null;
-  private _resumeBannerTimer: ReturnType<typeof setTimeout> | null = null;
-  private _snapshotBannerTimer: ReturnType<typeof setTimeout> | null = null;
-  private _grantEndedBannerTimer: ReturnType<typeof setTimeout> | null = null;
-  private _disposers: Array<() => void> = [];
-  /**
-   * Turn id the pending outcome alert (#10018) was recorded for, or null when
-   * the alert carried none (`agent-stuck`, whose turn id is already cleared by
-   * the time the watchdog fires). Used to auto-clear the pip when a tool call
-   * from a different turn arrives — i.e. the agent has resumed work.
-   */
-  private _outcomeAlertTurnId: string | null = null;
   private _lastInputs: HelpSessionInputs | null = null;
-  private _hibernateArmedFor: {
-    terminalId: string;
-    agentId: string | null;
-    projectId: string | null;
-  } | null = null;
+
+  private readonly _versionGate = new HelpVersionGate({
+    getSnapshot: () => this._snapshot,
+    patch: (partial) => this._patch(partial),
+    getLastInputs: () => this._lastInputs,
+    setHasAutoLaunched: (value) => {
+      this._hasAutoLaunched = value;
+    },
+    maybeAutoLaunch: (inputs) => this._maybeAutoLaunch(inputs),
+  });
+
+  private readonly _launchNotifications = new LaunchNotifications({
+    patch: (partial) => this._patch(partial),
+    isPanelOpen: () => this._lastInputs?.isOpen === true,
+  });
+
+  private readonly _mcpTracker = new McpActivityTracker({
+    getSnapshot: () => this._snapshot,
+    patch: (partial) => this._patch(partial),
+  });
+
+  private readonly _hibernationManager = new HibernationManager({
+    getSnapshot: () => this._snapshot,
+    patch: (partial) => this._patch(partial),
+    resetPhase: () => this._resetPhase(),
+    isLaunchCurrent: (gen) => gen === this._launchGen,
+  });
 
   // Bound for stable references across StrictMode re-subscribe.
   subscribe = (listener: () => void): (() => void) => {
@@ -664,96 +390,17 @@ export class HelpSessionController {
     if (this._started) return;
     this._started = true;
 
-    const disposeTier = window.electron.mcpServer.onTierNotPermitted((payload) => {
-      const projectId = useProjectStore.getState().currentProject?.id ?? null;
-      // A fresh denial supersedes any lingering "approval ended" notice — the
-      // banner the user is about to re-approve from carries the same signal.
-      this._clearGrantEndedTimer();
-      this._patch({
-        tierMismatch: {
-          sessionId: payload.sessionId,
-          toolId: payload.toolId,
-          tier: payload.tier,
-          targetTier: payload.targetTier,
-          projectId,
-        },
-        grantEnded: null,
-      });
-    });
-    this._disposers.push(disposeTier);
-
-    const disposeRevoked = window.electron.mcpServer.onSessionRevoked((payload) => {
-      // Only surface a revoke that matches the session this panel currently
-      // holds. A live session always has its id committed to the store before
-      // any tool call (and thus before any denial/revoke), so a null or
-      // mismatched `sessionId` here means the revoke is for a torn-down or
-      // mid-relaunch session — painting its banner would stomp the fresh
-      // launch the user just started to escape it (#10017).
-      const currentSessionId = useHelpPanelStore.getState().sessionId;
-      if (currentSessionId === null || payload.sessionId !== currentSessionId) return;
-      this._patch({
-        sessionRevoked: { sessionId: payload.sessionId, denialKind: payload.denialKind },
-      });
-    });
-    this._disposers.push(disposeRevoked);
-
-    const disposeGrant = window.electron.mcpServer.onGrantLifecycle((payload) => {
-      this._onGrantLifecycle(payload);
-    });
-    this._disposers.push(disposeGrant);
-
-    const disposeToolStarted = window.electron.mcpServer.onToolCallStarted((payload) => {
-      this._onToolCallStarted(payload);
-    });
-    const disposeToolSettled = window.electron.mcpServer.onToolCallSettled((payload) => {
-      this._onToolCallSettled(payload);
-    });
-    this._disposers.push(disposeToolStarted, disposeToolSettled);
-
-    const disposeOutcomeAlert = window.electron.mcpServer.onTurnOutcomeAlert((payload) => {
-      this._onTurnOutcomeAlert(payload);
-    });
-    this._disposers.push(disposeOutcomeAlert);
-
-    const disposeDisplayImage = window.electron.mcpServer.onDisplayImage((payload) => {
-      // The main process already validated the URL and assigned the figure
-      // number (#9828); the renderer just records the figure for inline display.
-      useHelpPanelStore.getState().addFigure({
-        imageId: payload.imageId,
-        figureNumber: payload.figureNumber,
-        figureLabel: payload.figureLabel,
-        url: payload.url,
-        ...(payload.caption !== undefined ? { caption: payload.caption } : {}),
-        ...(payload.altText !== undefined ? { altText: payload.altText } : {}),
-      });
-    });
-    this._disposers.push(disposeDisplayImage);
-
-    const offSuspend = window.electron.systemSleep.onSuspend(() => {
-      this._isSystemSuspended = true;
-    });
-    const offWake = window.electron.systemSleep.onWake(() => {
-      this._isSystemSuspended = false;
-    });
-    this._disposers.push(offSuspend, offWake);
+    this._mcpTracker.start();
+    this._hibernationManager.start();
   }
 
   stop(): void {
     if (!this._started) return;
     this._started = false;
-    for (const dispose of this._disposers) {
-      try {
-        dispose();
-      } catch (err) {
-        logError("HelpSessionController: disposer threw", err);
-      }
-    }
-    this._disposers = [];
-    this._clearHibernateTimer();
-    this._clearResumeBannerTimer();
-    this._clearSnapshotBannerTimer();
-    this._clearGrantEndedTimer();
-    this._clearCheckAgainCooldownTimer();
+    this._mcpTracker.dispose();
+    this._hibernationManager.dispose();
+    this._launchNotifications.dispose();
+    this._versionGate.clearCooldownTimer();
     this._clearLaunchWatchdog();
     // Release the re-entrancy guard on teardown so a same-instance start() after
     // a never-settled launch (StrictMode remount) isn't permanently blocked.
@@ -764,7 +411,6 @@ export class HelpSessionController {
     // teardown happens through user-driven paths (`newSession`,
     // `replaceExisting`) or main-side eviction.
     this._launchGen++;
-    this._hibernateArmedFor = null;
     this._lastInputs = null;
   }
 
@@ -789,7 +435,7 @@ export class HelpSessionController {
       // Drop any in-flight "Check again" cooldown too — it belongs to the
       // previous agent's gate; leaving it would disable the new gate's
       // button until the stale probe settles.
-      this._clearCheckAgainCooldownTimer();
+      this._versionGate.clearCooldownTimer();
       this._patch({
         assistantVersionTooOld: null,
         isCheckingVersion: false,
@@ -803,7 +449,7 @@ export class HelpSessionController {
       this._hasAutoLaunched = false;
     }
 
-    this._maybeArmHibernate(inputs);
+    this._hibernationManager.maybeArm(inputs);
     this._maybeAutoLaunch(inputs);
   }
 
@@ -821,17 +467,37 @@ export class HelpSessionController {
     if (terminalId === this._pendingNewTerminalId) return;
     const store = useHelpPanelStore.getState();
     if (store.terminalId !== terminalId) return;
+
+    // A controlled hibernate (`_fireHibernate`) can tear this same terminal
+    // down while its `gracefulKill` is in flight — the PTY `onExit` removes the
+    // `removeOnExit` panel out from under it. That flow owns the hibernate slot
+    // and phase reset, so keep the legacy minimal cleanup and let it finish:
+    // never clear hibernate, close the panel, or suppress relaunch here.
+    const hibernating = this._snapshot.phase === "hibernating";
+
     revokeHelpSession(store.sessionId);
-    this._hasAutoLaunched = false;
     store.clearTerminal();
     // The bound session is gone — drop any lingering activity row so the strip
     // doesn't show stale tool calls for a dead session (#9759), clear the
     // grant countdown/notice so they don't outlive the session (#10042), and
     // clear any pending outcome pip (#10018) so it can't bleed into the next
     // session.
-    this.clearMcpActivity();
-    this._clearGrantState();
-    this._clearOutcomeAlert();
+    this._mcpTracker.clearActivity();
+    this._mcpTracker.clearGrantState();
+    this._mcpTracker.clearOutcomeAlert();
+
+    if (hibernating) {
+      this._hasAutoLaunched = false;
+      return;
+    }
+
+    // The bound assistant PTY exited on its own — the user typed `/exit`, the
+    // agent quit, or it crashed. Treat that as a real stop (like the Stop
+    // button): make it stick so a consented auto-launch can't respawn it, then
+    // slide the sidebar out. The user ended the session from inside the
+    // terminal, so hide the panel rather than lingering on the empty state.
+    this._applyStopSuppression();
+    store.setOpen(false);
   }
 
   /**
@@ -888,50 +554,6 @@ export class HelpSessionController {
   }
 
   /**
-   * Auto-snapshot pre-flight: when the project's MCP tier is `system`, take
-   * a pre-flight snapshot once per session and surface a Tier-1 ambient
-   * banner. The guard is set synchronously to survive React 19 StrictMode
-   * double-invocation; callers should pass `cancelled` to skip the surface
-   * on unmount.
-   */
-  maybeRunPreflightSnapshot(args: {
-    terminalId: string | null;
-    terminalExists: boolean;
-    projectId: string | null;
-    worktreeId: string | null;
-  }): (() => void) | void {
-    const { terminalId, terminalExists, projectId, worktreeId } = args;
-    if (!terminalId || !terminalExists) return;
-    if (this._preflightSnapshotTerminalId === terminalId) return;
-    if (!projectId) return;
-    if (!worktreeId) return;
-
-    let cancelled = false;
-    this._preflightSnapshotTerminalId = terminalId;
-    safeFireAndForget(
-      (async () => {
-        const settings = await projectClient.getSettings(projectId);
-        const tier = resolveDaintreeMcpTier(settings);
-        if (tier !== "system") return;
-        const snapshot = await window.electron.git.snapshotGet(worktreeId);
-        // PreAgentSnapshotService records a sentinel (`stashRef: ""`)
-        // before the actual stash completes to coordinate concurrent
-        // creation. A sentinel means the snapshot is still in-flight (or
-        // failed early) — surfacing the banner would lie about safety.
-        if (cancelled || !snapshot || !snapshot.stashRef) return;
-        this._patch({ preflightSnapshot: snapshot });
-        this._armSnapshotBannerAutoDismiss();
-      })().catch((err) => {
-        logError("HelpPanel: snapshot pre-flight failed", err);
-      }),
-      { context: "HelpPanel:snapshot pre-flight" }
-    );
-    return () => {
-      cancelled = true;
-    };
-  }
-
-  /**
    * User-initiated launch from the empty-state agent picker or other
    * caller. Mirrors the original `handleSelectAgent` semantics: removes the
    * existing terminal if present, runs the version gate, provisions, then
@@ -962,6 +584,98 @@ export class HelpSessionController {
   }
 
   /**
+   * User-facing "Stop assistant" — actually end the running assistant terminal
+   * rather than merely hiding the panel (`handleClose` only flips `isOpen`,
+   * leaving the agent running). Unlike `newSession()` this does NOT relaunch:
+   * it tears the bound session down and leaves the panel open on its empty /
+   * start state so restarting is one click away (D0 inverse). Idempotent — a
+   * no-op when nothing is running and no launch is in flight.
+   */
+  endSession(): void {
+    this._stopBoundSession({ close: false });
+  }
+
+  /**
+   * The bound assistant's agent CLI exited from inside its own terminal — the
+   * user typed `/exit`, or the agent quit — surfaced as `agentState: "exited"`.
+   * Most assistant agents run inside a shell, so the agent exiting does NOT
+   * exit the PTY (`handleTerminalPanelMissing` never fires and the sidebar
+   * would otherwise linger on a dead shell). Treat it like the Stop button but
+   * also slide the sidebar out: the user ended the session from the terminal,
+   * so hide the panel rather than leave it open on the empty state. No
+   * confirmation — the exit already happened.
+   *
+   * Guards keep a stale or racing signal from tearing down the wrong session:
+   * skip while a hibernate owns the teardown, and only act when `terminalId`
+   * is still the currently-bound one (a `+New session`/replace may have already
+   * moved on). The caller debounces on a settled "exited" so a transient
+   * mis-detection flap (#10911) that bounces back via `respawn` can't kill a
+   * live session.
+   */
+  handleAgentExited(terminalId: string): void {
+    if (this._snapshot.phase === "hibernating") return;
+    if (useHelpPanelStore.getState().terminalId !== terminalId) return;
+    this._stopBoundSession({ close: true });
+  }
+
+  /**
+   * Shared stop core for the Stop button (`endSession`, keeps the panel open)
+   * and the terminal self-exit (`handleAgentExited`, slides the sidebar out).
+   * Aborts any in-flight launch first (mirrors `cancelLaunch`) so a
+   * late-settling provision can't bind a fresh terminal after the stop, tears
+   * the bound session down (revoke-before-kill), then makes the stop stick.
+   */
+  private _stopBoundSession(opts: { close: boolean }): void {
+    this._launchGen++;
+    this._isLaunching = false;
+    this._clearLaunchWatchdog();
+
+    const help = useHelpPanelStore.getState();
+    const existingTerminalId = help.terminalId;
+    const previousSessionId = help.sessionId;
+    if (existingTerminalId) {
+      this._teardownBoundSession(existingTerminalId, previousSessionId, {
+        revokePending: true,
+      });
+    } else {
+      // No committed terminal, but a reserved-but-uncommitted session may still
+      // hold a live bearer — drop it so it can't outlive the stop.
+      this._revokePendingSession();
+    }
+
+    this._applyStopSuppression();
+
+    if (opts.close) {
+      useHelpPanelStore.getState().setOpen(false);
+    }
+  }
+
+  /**
+   * Shared "make the stop stick" tail, run once the bound session's PTY +
+   * bearer are already gone. Stop is destructive (not pause): drop the
+   * persisted hibernate entry for this project so the just-ended conversation
+   * can't resume on next open, disarm any pending hibernate timer, consume this
+   * open cycle's auto-launch budget so a consented auto-launch
+   * (`_maybeAutoLaunch`) can't immediately respawn the assistant that was just
+   * stopped (reopening the panel resets this in `_syncInputs`, so the next open
+   * still auto-launches as before), then clear session-scoped banners and drop
+   * the phase to idle so the panel lands on a clean empty / start state. Shared
+   * by `_stopBoundSession` (Stop button + agent self-exit) and the PTY-exit
+   * path (`handleTerminalPanelMissing`).
+   */
+  private _applyStopSuppression(): void {
+    const projectId = useProjectStore.getState().currentProject?.id ?? null;
+    this._hibernationManager.clearAndSuppress(projectId);
+    this._hasAutoLaunched = true;
+    this._patch({
+      phase: "idle",
+      showResumeBanner: false,
+      tierMismatch: null,
+      sessionRevoked: null,
+    });
+  }
+
+  /**
    * "Run anyway" from the missing-CLI gate — same as `newSession` plus
    * `force: true` so the dispatcher bypasses the missing-CLI guard.
    */
@@ -986,7 +700,7 @@ export class HelpSessionController {
    *
    * Synchronous write order before the first `await` (preserving #6951):
    *   1. Capture live state + bump _launchGen.
-   *   2. If `replaceExisting`, remove existing panel and revoke prior sessions.
+   *   2. If `replaceExisting`, revoke prior sessions then remove the panel.
    *   3. If `requestedId`, set `_pendingNewTerminalId` synchronously, then
    *      write the reservation via `setTerminal(reservedId, agentId, null)`.
    *   4. Only then enter the async provision/dispatch sequence.
@@ -1040,17 +754,9 @@ export class HelpSessionController {
       if (existingTerminalId) {
         const panel = usePanelStore.getState().panelsById[existingTerminalId];
         presetEnv = asStringRecord(panel?.extensionState?.presetEnv);
-        usePanelStore.getState().removePanel(existingTerminalId);
-        revokeHelpSession(previousSessionId);
-        if (reservedId) this._revokePendingSession();
-        useHelpPanelStore.getState().clearTerminal();
-        // Replacing the session — clear the prior session's activity row (#9759)
-        // and its figures, since the new help session restarts the figure
-        // counter at 1 in the main process (#9828).
-        useHelpPanelStore.getState().clearFigures();
-        this.clearMcpActivity();
-        this._clearGrantState();
-        this._clearOutcomeAlert();
+        this._teardownBoundSession(existingTerminalId, previousSessionId, {
+          revokePending: reservedId != null,
+        });
       }
       // Discarding the current conversation invalidates any persisted
       // hibernate entry for this project — leaving it would resume the
@@ -1082,31 +788,11 @@ export class HelpSessionController {
   }
 
   dismissResumeBanner(): void {
-    this._clearResumeBannerTimer();
-    this._patch({ showResumeBanner: false });
-  }
-
-  dismissPreflightSnapshot(): void {
-    this._clearSnapshotBannerTimer();
-    this._patch({ preflightSnapshot: null });
+    this._launchNotifications.dismissResumeBanner();
   }
 
   dismissTierMismatch(): void {
-    // Capture the session before clearing the banner — `_patch` runs
-    // synchronously, so reading after would see a null `tierMismatch`.
-    const sessionId = this._snapshot.tierMismatch?.sessionId ?? null;
-    this._patch({ tierMismatch: null });
-    if (!sessionId) return;
-    // Dismissing the banner without approving must re-arm it: reset the
-    // denial counters so the next out-of-tier call shows the banner again
-    // instead of being silently suppressed once the abuse policy threshold is
-    // crossed (#10017). This clears the counters for ALL tools in the session,
-    // not just the dismissed one — Cancel means "show me again for anything in
-    // this session"; the threshold re-accrues from zero per tool. Grants
-    // (the per-tool approval lifecycle) are left untouched.
-    safeFireAndForget(window.electron.mcpServer.resetDenialCounts({ sessionId }), {
-      context: "Help: reset denial counts on tier-mismatch dismiss",
-    });
+    this._mcpTracker.dismissTierMismatch();
   }
 
   dismissLaunchError(): void {
@@ -1114,129 +800,23 @@ export class HelpSessionController {
   }
 
   dismissSessionRevoked(): void {
-    this._patch({ sessionRevoked: null });
+    this._mcpTracker.dismissSessionRevoked();
   }
 
   dismissGrantEnded(): void {
-    this._clearGrantEndedTimer();
-    this._patch({ grantEnded: null });
+    this._mcpTracker.dismissGrantEnded();
   }
 
-  /**
-   * End the live "Approve once" grant early (#10042). Revokes every grant on
-   * the session — the help session only ever holds one per-tool grant at a
-   * time, so this maps to the single banner the user sees. Normally the
-   * `grant.revoked` lifecycle event (reason `user`) clears the banner first;
-   * the `.then` clears `activeGrant` as a renderer-authoritative fallback so a
-   * dropped event (WebContents torn down before it fired) can't leave a zombie
-   * countdown. The fallback runs only on success and is scoped to the exact
-   * `(session, toolId)` we revoked, so a failed revoke leaves the banner up as
-   * its own retry surface and a newer grant that arrived meanwhile survives.
-   * No `ConfirmDialog` — this is a D1 action whose inverse (re-approve) is one
-   * tool call away.
-   */
   revokeGrant(): void {
-    const active = this._snapshot.activeGrant;
-    if (!active || this._snapshot.isRevokingGrant) return;
-    const { sessionId, toolId } = active;
-    this._patch({ isRevokingGrant: true });
-    safeFireAndForget(
-      window.electron.mcpServer
-        .revokeSessionGrants({ sessionId })
-        .then(() => {
-          // Renderer-authoritative clear on success: normally the
-          // `grant.revoked` (reason `user`) lifecycle event already cleared the
-          // banner; this covers a dropped event (WebContents torn down before
-          // it fired). Scoped to the exact `(session, toolId)` we revoked so a
-          // newer grant that arrived in the meantime survives.
-          const current = this._snapshot.activeGrant;
-          if (current?.sessionId === sessionId && current?.toolId === toolId) {
-            this._patch({ activeGrant: null });
-          }
-        })
-        .catch((err) => {
-          // The grant is still live and its countdown banner stays put, so the
-          // banner itself is the retry surface — diagnostic only, no toast.
-          logError("HelpPanel: revokeSessionGrants failed", err);
-        })
-        .finally(() => {
-          this._patch({ isRevokingGrant: false });
-        }),
-      { context: "HelpPanel:revokeGrant" }
-    );
+    this._mcpTracker.revokeGrant();
   }
 
   approveTierOnce(): void {
-    const current = this._snapshot.tierMismatch;
-    if (!current?.targetTier || this._snapshot.isApprovingTier) return;
-    const { sessionId, toolId } = current;
-    this._patch({ isApprovingTier: true });
-    safeFireAndForget(
-      window.electron.mcpServer
-        // "Approve once" mints a per-tool, time-bounded grant for this
-        // session — it does NOT elevate the session tier. The "Always
-        // allow" path is the only remaining caller of `setSessionTier`
-        // (#8442).
-        .issueGrant({ sessionId, toolId })
-        .then(() => {
-          this._clearTierMismatchIfStillCurrent(sessionId, toolId);
-        })
-        .catch((err) => {
-          logError("HelpPanel: issueGrant failed", err);
-          // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-          notify({
-            type: "error",
-            title: "Couldn't approve tool",
-            message: formatErrorMessage(err, "Couldn't grant access to this tool."),
-          });
-        })
-        .finally(() => {
-          this._patch({ isApprovingTier: false });
-        }),
-      { context: "HelpPanel:issueGrant" }
-    );
+    this._mcpTracker.approveTierOnce();
   }
 
   alwaysAllowTier(): void {
-    const current = this._snapshot.tierMismatch;
-    if (!current?.targetTier || this._snapshot.isApprovingTier) return;
-    // Use the project captured at event time — `current.projectId` is
-    // immutable for this banner, so a project switch after the banner
-    // appears doesn't redirect the save to the wrong project.
-    const projectId = current.projectId ?? useProjectStore.getState().currentProject?.id ?? null;
-    if (!projectId) {
-      this.dismissTierMismatch();
-      return;
-    }
-    const { targetTier, sessionId, toolId } = current;
-    this._patch({ isApprovingTier: true });
-    safeFireAndForget(
-      (async () => {
-        // projectClient.saveSettings goes directly to the IPC handler —
-        // the `project.saveSettings` action sanitizes `daintreeMcpTier`
-        // out to keep agents from self-elevating.
-        const settings = await projectClient.getSettings(projectId);
-        await projectClient.saveSettings(projectId, {
-          ...settings,
-          daintreeMcpTier: targetTier,
-        });
-        await window.electron.mcpServer.setSessionTier({ sessionId, tier: targetTier });
-        this._clearTierMismatchIfStillCurrent(sessionId, toolId);
-      })()
-        .catch((err) => {
-          logError("HelpPanel: always-allow tier write failed", err);
-          // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-          notify({
-            type: "error",
-            title: "Couldn't save permission",
-            message: formatErrorMessage(err, "Couldn't update project tier setting."),
-          });
-        })
-        .finally(() => {
-          this._patch({ isApprovingTier: false });
-        }),
-      { context: "HelpPanel:alwaysAllowTier" }
-    );
+    this._mcpTracker.alwaysAllowTier();
   }
 
   /**
@@ -1264,59 +844,41 @@ export class HelpSessionController {
    * button disabled to prevent probe hammering.
    */
   checkVersionAgain(): void {
-    if (this._snapshot.isCheckingVersion) return;
-    const block = this._snapshot.assistantVersionTooOld;
-    if (!block) return;
-
-    const { agentId, agentName } = block;
-    this._checkAgainCooldownFired = false;
-    this._checkAgainProbeSettled = false;
-    this._patch({ isCheckingVersion: true });
-    this._armCheckAgainCooldownTimer();
-
-    safeFireAndForget(
-      probeAssistantVersion(agentId, agentName, true)
-        .then((result) => {
-          // Stale-agent guard: the user may have switched preferred agents
-          // while the probe was in flight — don't act on a result that no
-          // longer matches what's blocking.
-          if (this._snapshot.assistantVersionTooOld?.agentId !== agentId) return;
-          if (result.status === "too-old") {
-            this._patch({ assistantVersionTooOld: result.block });
-            return;
-          }
-          if (result.status === "indeterminate") {
-            // Couldn't get a definitive answer (transient probe failure).
-            // Keep the gate visible rather than dismissing it and
-            // auto-launching a CLI that may still be outdated.
-            return;
-          }
-          // status === "ok" — version is now current. Clear the gate and
-          // let the normal idle→launch path re-evaluate. Resetting
-          // `_hasAutoLaunched` is required or `_maybeAutoLaunch` bails.
-          this._hasBlockedThisSession = false;
-          this._hasAutoLaunched = false;
-          this._patch({ assistantVersionTooOld: null });
-          if (this._lastInputs) this._maybeAutoLaunch(this._lastInputs);
-        })
-        .catch((err) => {
-          // probeAssistantVersion already swallows probe failures; this
-          // guards against unexpected throws. The gate stays visible as its
-          // own retry surface, so no toast.
-          logError("HelpPanel: check-again version probe threw", err);
-        })
-        .finally(() => {
-          this._checkAgainProbeSettled = true;
-          this._maybeClearCheckingVersion();
-        }),
-      { context: "HelpPanel:checkVersionAgain" }
-    );
+    this._versionGate.checkAgain();
   }
 
   // --- internal ---
 
   private _resetPhase(): void {
     this._patch({ phase: "idle" });
+  }
+
+  /**
+   * Tear down the currently-bound help session's renderer state in the order
+   * the auth race requires: revoke the session bearer BEFORE removing the PTY
+   * so any in-flight MCP call 401s before teardown reaches the host (#7522);
+   * drop the reserved-but-uncommitted bearer when asked; then clear the
+   * store-side session UI (terminal slot, figures #9828, MCP activity #9759,
+   * grant state #10042, outcome pip #10018). Shared by `launch({
+   * replaceExisting })` and the user-facing `endSession()`. Callers own
+   * presetEnv capture and hibernate cleanup.
+   */
+  private _teardownBoundSession(
+    existingTerminalId: string,
+    previousSessionId: string | null,
+    options: { revokePending: boolean }
+  ): void {
+    // Revoke the bearer(s) BEFORE removing the panel: removePanel fires the PTY
+    // kill IPC, so revoking first ensures any in-flight MCP call 401s before the
+    // teardown reaches the host (#7522), rather than racing the kill.
+    revokeHelpSession(previousSessionId);
+    if (options.revokePending) this._revokePendingSession();
+    usePanelStore.getState().removePanel(existingTerminalId);
+    useHelpPanelStore.getState().clearTerminal();
+    useHelpPanelStore.getState().clearFigures();
+    this._mcpTracker.clearActivity();
+    this._mcpTracker.clearGrantState();
+    this._mcpTracker.clearOutcomeAlert();
   }
 
   /**
@@ -1354,30 +916,6 @@ export class HelpSessionController {
     }
   }
 
-  private _armCheckAgainCooldownTimer(): void {
-    this._clearCheckAgainCooldownTimer();
-    this._checkAgainCooldownTimer = setTimeout(() => {
-      this._checkAgainCooldownTimer = null;
-      this._checkAgainCooldownFired = true;
-      this._maybeClearCheckingVersion();
-    }, CHECK_AGAIN_COOLDOWN_MS);
-  }
-
-  private _clearCheckAgainCooldownTimer(): void {
-    if (this._checkAgainCooldownTimer) {
-      clearTimeout(this._checkAgainCooldownTimer);
-      this._checkAgainCooldownTimer = null;
-    }
-  }
-
-  // Re-enables the "Check again" button only once both the probe has settled
-  // and the 5s cooldown floor has elapsed.
-  private _maybeClearCheckingVersion(): void {
-    if (this._checkAgainProbeSettled && this._checkAgainCooldownFired) {
-      this._patch({ isCheckingVersion: false });
-    }
-  }
-
   /**
    * Route a launch failure to the least-restricted surface that conveys it.
    * When the panel is open, the failure becomes an inline banner the user can
@@ -1387,148 +925,17 @@ export class HelpSessionController {
    * toast.
    */
   private _surfaceLaunchError(agentId: string, kind: LaunchErrorKind): void {
-    if (this._lastInputs?.isOpen) {
-      this._patch({ launchError: Object.freeze({ agentId, kind }) });
-      return;
-    }
-    if (kind === "mcp-server-not-started" || kind === "mcp-probe-failed") {
-      notifyAssistantServicesUnavailable(kind);
-    } else if (kind === "folder-unavailable") {
-      notifyInstallCorrupted(agentId);
-    } else {
-      notifyLaunchFailed(agentId, "The agent didn't start. Try again.");
-    }
-  }
-
-  /**
-   * Handle a live `tool-call-started` push (#9759). Coalesces bursts within
-   * the same turn into a single row ("N calls · latest tool") and clears any
-   * lingering errored row — a new call always supersedes the previous result.
-   */
-  private _onToolCallStarted(
-    payload: import("@shared/types/ipc/mcpServer").McpToolCallStartedPayload
-  ): void {
-    const prev = this._snapshot.mcpActivity;
-    // Coalesce only within the same turn: a burst of calls the model fires in
-    // one turn collapses to a count, but a new turn starts a fresh row. Calls
-    // outside a turn boundary (`turnId` absent) never coalesce — last wins.
-    const sameTurn =
-      prev !== null &&
-      payload.turnId !== undefined &&
-      prev.turnId !== undefined &&
-      prev.turnId === payload.turnId;
-    const callCount = sameTurn && prev ? prev.callCount + 1 : 1;
-    // Outstanding-call tracking: a same-turn start joins the burst's pending
-    // pool (settled rows have drained to 0). A new turn starts a fresh pool.
-    const pendingCalls = sameTurn && prev ? prev.pendingCalls + 1 : 1;
-    this._patch({
-      mcpActivity: {
-        status: "in-flight",
-        toolId: payload.toolId,
-        argsSummary: payload.argsSummary,
-        startedAt: payload.startedAt,
-        danger: payload.danger,
-        callCount,
-        pendingCalls,
-        ...(payload.turnId !== undefined ? { turnId: payload.turnId } : {}),
-        isError: false,
-      },
-    });
-    // Auto-clear the outcome pip (#10018) once the agent resumes work in a
-    // fresh turn — a tool call whose turn differs from the alert's turn means
-    // the stuck/looping turn is behind us. `agent-stuck` alerts carry no turn
-    // id (`_outcomeAlertTurnId` is null), so any turn-stamped call clears them.
-    if (
-      this._snapshot.outcomeAlert !== null &&
-      payload.turnId !== undefined &&
-      payload.turnId !== this._outcomeAlertTurnId
-    ) {
-      this._patch({ outcomeAlert: null });
-    }
-  }
-
-  /**
-   * Handle a live `tool-call-settled` push (#9759). Transitions the current
-   * in-flight row to its settled (dimmed glyph + duration) appearance. A push
-   * with no current row is ignored — there's nothing on screen to settle.
-   */
-  private _onToolCallSettled(
-    payload: import("@shared/types/ipc/mcpServer").McpToolCallSettledPayload
-  ): void {
-    const prev = this._snapshot.mcpActivity;
-    if (prev === null) return;
-    // A settle from a different turn must not regress the current row — a
-    // slow call from the previous turn can land after the next turn's call
-    // already started. Settles with no turnId (turn boundary already passed,
-    // or no turn was active) still apply: they belong to the row last shown.
-    if (
-      prev.turnId !== undefined &&
-      payload.turnId !== undefined &&
-      payload.turnId !== prev.turnId
-    ) {
-      return;
-    }
-    // Drain one call from the burst's pending pool. While calls remain
-    // outstanding the row stays in-flight — an early settle from call A must
-    // not flip a coalesced row to "settled" while call B is still running.
-    const pendingCalls = Math.max(0, prev.pendingCalls - 1);
-    if (prev.status === "in-flight" && pendingCalls > 0) {
-      this._patch({ mcpActivity: { ...prev, pendingCalls } });
-      return;
-    }
-    const isError = payload.severity === "error" || payload.severity === "critical";
-    this._patch({
-      mcpActivity: {
-        ...prev,
-        status: "settled",
-        // Reflect the settled call's tool so the glyph labels the right call
-        // even when a burst's latest started differs from what just settled.
-        toolId: payload.toolId,
-        danger: false,
-        durationMs: payload.durationMs,
-        result: payload.result,
-        severity: payload.severity,
-        isError,
-        pendingCalls,
-      },
-    });
-  }
-
-  /**
-   * Handle a live turn-outcome alert push (#10018). Surfaces the `agent-stuck`
-   * / `reasoning-loop` outcome as the footer's ambient pip. The targeted send
-   * already routes only to this session's pinned WebContents, so no session
-   * filtering is needed here (matches `_onToolCallStarted`). The carried turn
-   * id (absent for `agent-stuck`) is retained so the pip auto-clears once the
-   * agent starts a fresh turn.
-   */
-  private _onTurnOutcomeAlert(
-    payload: import("@shared/types/ipc/mcpServer").McpTurnOutcomeAlertPayload
-  ): void {
-    this._outcomeAlertTurnId = payload.turnId ?? null;
-    this._patch({ outcomeAlert: payload.outcome });
+    this._launchNotifications.surfaceLaunchError(agentId, kind);
   }
 
   /** Dismiss the ambient outcome pip (#10018). User-driven click-to-clear. */
   dismissOutcomeAlert(): void {
-    this._clearOutcomeAlert();
-  }
-
-  /**
-   * Drop any pending outcome pip and its retained turn id (#10018). Shared by
-   * the user dismiss path and session teardown/replacement — a pip for a
-   * session that's gone must never linger into its successor.
-   */
-  private _clearOutcomeAlert(): void {
-    this._outcomeAlertTurnId = null;
-    if (this._snapshot.outcomeAlert === null) return;
-    this._patch({ outcomeAlert: null });
+    this._mcpTracker.dismissOutcomeAlert();
   }
 
   /** Clear the live activity strip (e.g. on session teardown). */
   clearMcpActivity(): void {
-    if (this._snapshot.mcpActivity === null) return;
-    this._patch({ mcpActivity: null });
+    this._mcpTracker.clearActivity();
   }
 
   private _patch(partial: Partial<HelpSessionSnapshot>): void {
@@ -1541,7 +948,6 @@ export class HelpSessionController {
       next.showResumeBanner === this._snapshot.showResumeBanner &&
       next.assistantVersionTooOld === this._snapshot.assistantVersionTooOld &&
       next.tierMismatch === this._snapshot.tierMismatch &&
-      next.preflightSnapshot === this._snapshot.preflightSnapshot &&
       next.isApprovingTier === this._snapshot.isApprovingTier &&
       next.isCheckingVersion === this._snapshot.isCheckingVersion &&
       next.launchError === this._snapshot.launchError &&
@@ -1562,125 +968,6 @@ export class HelpSessionController {
         logError("HelpSessionController: listener threw", err);
       }
     }
-  }
-
-  private _clearHibernateTimer(): void {
-    if (this._hibernateTimer) {
-      clearTimeout(this._hibernateTimer);
-      this._hibernateTimer = null;
-    }
-  }
-
-  private _clearResumeBannerTimer(): void {
-    if (this._resumeBannerTimer) {
-      clearTimeout(this._resumeBannerTimer);
-      this._resumeBannerTimer = null;
-    }
-  }
-
-  private _clearSnapshotBannerTimer(): void {
-    if (this._snapshotBannerTimer) {
-      clearTimeout(this._snapshotBannerTimer);
-      this._snapshotBannerTimer = null;
-    }
-  }
-
-  private _armResumeBannerAutoDismiss(): void {
-    this._clearResumeBannerTimer();
-    this._resumeBannerTimer = setTimeout(() => {
-      this._resumeBannerTimer = null;
-      this._patch({ showResumeBanner: false });
-    }, RESUME_BANNER_AUTO_DISMISS_MS);
-  }
-
-  private _armSnapshotBannerAutoDismiss(): void {
-    this._clearSnapshotBannerTimer();
-    this._snapshotBannerTimer = setTimeout(() => {
-      this._snapshotBannerTimer = null;
-      this._patch({ preflightSnapshot: null });
-    }, SNAPSHOT_BANNER_AUTO_DISMISS_MS);
-  }
-
-  /**
-   * Consume a live grant lifecycle push (#10042). `grant.issued` arms the
-   * countdown banner and dismisses the mismatch that prompted it;
-   * `grant.expired`/`grant.revoked` retire the banner and, for the two
-   * user-actionable reasons, surface a brief "approval ended" notice. The
-   * `expired`/`revoked` cases are scoped to the grant currently on screen so a
-   * stale lapse for a different tool can't wipe the active countdown.
-   * `tier.elevated`/`tier.decayed` are session-tier transitions, not per-tool
-   * grants — they leave the countdown untouched (the audit viewer records
-   * them).
-   */
-  private _onGrantLifecycle(
-    payload: import("@shared/types/ipc/mcpServer").McpGrantLifecyclePayload
-  ): void {
-    if (payload.type === "grant.issued") {
-      // `expiresAt` is always set on `grant.issued`; bail defensively if a
-      // malformed payload omits it rather than seed a NaN countdown.
-      if (payload.expiresAt === undefined) return;
-      this._clearGrantEndedTimer();
-      this._patch({
-        activeGrant: {
-          sessionId: payload.sessionId,
-          toolId: payload.toolId,
-          expiresAt: payload.expiresAt,
-          ttlMs: payload.ttlMs,
-        },
-        grantEnded: null,
-      });
-      // The mint resolves the mismatch that triggered it. Idempotent with the
-      // fallback clear in `approveTierOnce`'s `.then` — whichever runs first.
-      this._clearTierMismatchIfStillCurrent(payload.sessionId, payload.toolId);
-      return;
-    }
-    if (payload.type === "grant.expired" || payload.type === "grant.revoked") {
-      const active = this._snapshot.activeGrant;
-      if (!active || active.sessionId !== payload.sessionId || active.toolId !== payload.toolId) {
-        return;
-      }
-      const reason = this._grantEndReason(payload);
-      this._clearGrantEndedTimer();
-      this._patch({
-        activeGrant: null,
-        grantEnded: reason ? { toolId: payload.toolId, reason } : null,
-      });
-      if (reason) this._armGrantEndedAutoDismiss();
-    }
-  }
-
-  /**
-   * The user-actionable subset of how a grant ended. Passive expiry and the
-   * 30-minute ceiling are worth a notice; a user-initiated revoke and session
-   * teardown/idle are not (the user did it, or the session is already gone).
-   */
-  private _grantEndReason(
-    payload: import("@shared/types/ipc/mcpServer").McpGrantLifecyclePayload
-  ): GrantEndReason | null {
-    if (payload.type === "grant.expired") return "expired";
-    return payload.revokedReason === "grant-ceiling" ? "grant-ceiling" : null;
-  }
-
-  private _clearGrantState(): void {
-    this._clearGrantEndedTimer();
-    // Clear `isRevokingGrant` too: a teardown mid-revoke would otherwise leak
-    // a stuck-disabled "Revoke access" button into the next session's grant.
-    this._patch({ activeGrant: null, grantEnded: null, isRevokingGrant: false });
-  }
-
-  private _clearGrantEndedTimer(): void {
-    if (this._grantEndedBannerTimer) {
-      clearTimeout(this._grantEndedBannerTimer);
-      this._grantEndedBannerTimer = null;
-    }
-  }
-
-  private _armGrantEndedAutoDismiss(): void {
-    this._clearGrantEndedTimer();
-    this._grantEndedBannerTimer = setTimeout(() => {
-      this._grantEndedBannerTimer = null;
-      this._patch({ grantEnded: null });
-    }, GRANT_ENDED_BANNER_AUTO_DISMISS_MS);
   }
 
   private _revokePendingSession(): void {
@@ -1725,243 +1012,6 @@ export class HelpSessionController {
     if (options.resetAutoLaunch) {
       this._hasAutoLaunched = false;
     }
-  }
-
-  private _clearTierMismatchIfStillCurrent(sessionId: string, toolId: string): void {
-    const current = this._snapshot.tierMismatch;
-    if (current && current.sessionId === sessionId && current.toolId === toolId) {
-      this._patch({ tierMismatch: null });
-    }
-  }
-
-  /**
-   * Pulls any main-captured pending hibernation entry for the project and
-   * folds it into `helpPanelStore.hibernateSessions` so the existing resume
-   * lookup picks it up. Main captures these on LRU eviction / window close
-   * when the renderer-side hibernate timer couldn't run because the view was
-   * being torn down. Best-effort: failures are logged and swallowed — a
-   * missing pending entry just means we'll cold-start the agent like before.
-   *
-   * The IPC takes-and-clears atomically on main: a one-shot read so a stale
-   * entry from many launches ago can't keep resurrecting an old conversation
-   * after the user has explicitly started a new session somewhere along the
-   * way.
-   *
-   * Stale-gen guard: the caller passes the launch generation it started in.
-   * If anything bumps `_launchGen` during the IPC await (user hits "+ New
-   * session" which clears the project's hibernate slot, panel close, etc.),
-   * we DROP the pulled entry on the floor instead of writing it back. Main
-   * has already cleared the entry on its side (atomic take), so the cost is
-   * losing one resume opportunity — much cheaper than resurrecting a
-   * conversation the user just explicitly discarded.
-   */
-  private async _seedHibernateFromMain(projectId: string, gen: number): Promise<void> {
-    try {
-      const pending = await window.electron.help.takePendingHibernation(projectId);
-      if (!pending) return;
-      if (gen !== this._launchGen) return;
-      // `pending.agentSessionId` can be the empty-string sentinel when main's
-      // `revokeSession({ captureHibernation: true })` placeholder write raced
-      // the agent's real session-id echo (LRU eviction of the per-project
-      // WebContentsView, #10057). The empty sentinel flows through to
-      // `_spawnResumed`, which classifies the resume as `"latest"` and the
-      // arm sites skip the "Resumed your previous session." banner on that
-      // branch — see the comment in `_spawnResumed` and `ResumeSpawnResult`.
-      // The root-cause capture race is in main; the fix here is the
-      // renderer-side truth-in-trigger only.
-      useHelpPanelStore.getState().setHibernateSession(projectId, {
-        sessionId: pending.agentSessionId,
-        cwd: pending.cwd,
-        agentId: pending.agentId,
-      });
-    } catch (err) {
-      logError("HelpPanel: failed to pull pending hibernation from main", err);
-    }
-  }
-
-  private _maybeArmHibernate(inputs: HelpSessionInputs): void {
-    const { isOpen, terminalId, preferredAgentId } = inputs;
-    if (isOpen || !terminalId) {
-      this._clearHibernateTimer();
-      this._hibernateArmedFor = null;
-      return;
-    }
-    // Already armed for this exact terminal+agent — leave the timer.
-    if (
-      this._hibernateArmedFor &&
-      this._hibernateArmedFor.terminalId === terminalId &&
-      this._hibernateArmedFor.agentId === preferredAgentId
-    ) {
-      return;
-    }
-    this._clearHibernateTimer();
-    // Capture the project at arm time so a project switch between panel
-    // close and hibernate fire doesn't write project A's session into
-    // project B's slot. The fire path reads this captured value, never
-    // the live currentProject.
-    this._hibernateArmedFor = {
-      terminalId,
-      agentId: useHelpPanelStore.getState().agentId,
-      projectId: useProjectStore.getState().currentProject?.id ?? null,
-    };
-    const initialTerminalId = terminalId;
-    const initialAgentId = this._hibernateArmedFor.agentId;
-    const initialProjectId = this._hibernateArmedFor.projectId;
-
-    safeFireAndForget(
-      window.electron.helpAssistant
-        .getSettings()
-        .then((settings) => {
-          if (!this._isStillArmedFor(initialTerminalId)) return;
-          const minutes = settings.idleHibernateMinutes;
-          if (!HIBERNATE_VALID_MINUTES.includes(minutes)) {
-            this._hibernateMinutes = DEFAULT_HIBERNATE_MINUTES;
-          } else {
-            this._hibernateMinutes = minutes;
-          }
-          if (this._hibernateMinutes <= 0) return;
-          this._clearHibernateTimer();
-          this._hibernateTimer = setTimeout(
-            () => this._fireHibernate(initialTerminalId, initialAgentId, initialProjectId),
-            this._hibernateMinutes * 60 * 1000
-          );
-        })
-        .catch((err) => {
-          if (!this._isStillArmedFor(initialTerminalId)) return;
-          logError("HelpPanel: failed to load idleHibernateMinutes", err);
-          this._hibernateMinutes = DEFAULT_HIBERNATE_MINUTES;
-          this._clearHibernateTimer();
-          this._hibernateTimer = setTimeout(
-            () => this._fireHibernate(initialTerminalId, initialAgentId, initialProjectId),
-            DEFAULT_HIBERNATE_MINUTES * 60 * 1000
-          );
-        }),
-      { context: "HelpPanel:hibernate getSettings" }
-    );
-  }
-
-  private _isStillArmedFor(terminalId: string): boolean {
-    return this._hibernateArmedFor?.terminalId === terminalId;
-  }
-
-  private _fireHibernate(
-    initialTerminalId: string,
-    initialAgentId: string | null,
-    initialProjectId: string | null
-  ): void {
-    this._hibernateTimer = null;
-    if (!this._isStillArmedFor(initialTerminalId)) return;
-
-    const helpState = useHelpPanelStore.getState();
-    if (helpState.terminalId !== initialTerminalId) return;
-    if (helpState.isOpen) return;
-    if (this._isSystemSuspended) return;
-
-    const panelState = usePanelStore.getState();
-    const livePanel = panelState.panelsById[initialTerminalId];
-    if (!livePanel || !isPtyPanel(livePanel)) return;
-    const agentState = livePanel.agentState;
-    if (agentState && ACTIVE_AGENT_STATES.has(agentState)) {
-      // Re-check shortly without restarting the full hibernate countdown —
-      // the user is presumably about to come back.
-      this._hibernateTimer = setTimeout(
-        () => this._fireHibernate(initialTerminalId, initialAgentId, initialProjectId),
-        HIBERNATE_BUSY_RECHECK_MS
-      );
-      return;
-    }
-
-    // Past the active-agent recheck — hibernation will actually run now, so
-    // surface it. The panel is closed during the gracefulKill window, so this
-    // is only visible if the user reopens mid-teardown (handled below); the
-    // teardown completion resets the phase so a later reopen lands on a clean
-    // empty state rather than a stuck "Saving session…".
-    this._patch({ phase: "hibernating" });
-
-    // Use the projectId captured at arm time, not the live currentProject.
-    // The user may have switched projects between panel close and timer
-    // fire — writing project A's session into project B's hibernate slot
-    // would resume the wrong conversation on next open.
-    const projectId = initialProjectId;
-    const cwd = livePanel.cwd;
-    const sessionToRevoke = helpState.sessionId;
-    const liveAgentId = helpState.agentId ?? initialAgentId;
-
-    safeFireAndForget(
-      window.electron.terminal
-        .gracefulKill(initialTerminalId)
-        .then((capturedSessionId) => {
-          const after = useHelpPanelStore.getState();
-          if (after.terminalId !== initialTerminalId) {
-            // Another flow took over the slot, or the panel was torn down
-            // (e.g. `handleTerminalPanelMissing` cleared the terminal) while
-            // the kill was in flight. If a new launch took over it already
-            // wrote its own phase; only when the phase is still "hibernating"
-            // is this hibernate the last writer, so drop back to idle and
-            // don't strand the "Saving session…" skeleton.
-            if (this._snapshot.phase === "hibernating") this._resetPhase();
-            return;
-          }
-          // Critical race: user reopened the panel while gracefulKill was
-          // in flight. Terminal is still live — don't tear it down out
-          // from under them. The captured session ID is also discarded;
-          // the next hibernation cycle will capture a fresh one.
-          if (after.isOpen) {
-            this._patch({ phase: "live" });
-            return;
-          }
-          if (capturedSessionId && projectId && liveAgentId && cwd) {
-            after.setHibernateSession(projectId, {
-              sessionId: capturedSessionId,
-              cwd,
-              agentId: liveAgentId,
-            });
-          } else if (
-            projectId &&
-            liveAgentId &&
-            cwd &&
-            buildResumeLatestCommand(liveAgentId) !== undefined
-          ) {
-            // Capture missed but the agent has a resume-latest flag — persist
-            // a sentinel hibernate entry (empty sessionId) so the next panel
-            // open hits the `--continue`-style fallback in `_spawnResumed`
-            // instead of starting a fresh session (#8787).
-            after.setHibernateSession(projectId, {
-              sessionId: "",
-              cwd,
-              agentId: liveAgentId,
-            });
-          } else if (projectId) {
-            after.clearHibernateSession(projectId);
-          }
-          usePanelStore.getState().removePanel(initialTerminalId);
-          revokeHelpSession(sessionToRevoke);
-          useHelpPanelStore.getState().clearTerminal();
-          this._resetPhase();
-        })
-        .catch((err) => {
-          const after = useHelpPanelStore.getState();
-          if (after.terminalId !== initialTerminalId) {
-            // See the `.then()` guard: only reset when this hibernate is still
-            // the phase's last writer.
-            if (this._snapshot.phase === "hibernating") this._resetPhase();
-            return;
-          }
-          if (after.isOpen) {
-            this._patch({ phase: "live" });
-            return;
-          }
-          logError("HelpPanel: gracefulKill during hibernate failed", err);
-          if (projectId) {
-            useHelpPanelStore.getState().clearHibernateSession(projectId);
-          }
-          usePanelStore.getState().removePanel(initialTerminalId);
-          revokeHelpSession(sessionToRevoke);
-          useHelpPanelStore.getState().clearTerminal();
-          this._resetPhase();
-        }),
-      { context: "HelpPanel:hibernate gracefulKill" }
-    );
   }
 
   private _maybeAutoLaunch(inputs: HelpSessionInputs): void {
@@ -2109,7 +1159,7 @@ export class HelpSessionController {
         const versionBlock = await checkAssistantVersion(
           launchAgentId,
           launchAgentName,
-          this._hasBlockedThisSession
+          this._versionGate.hasBlockedThisSession
         );
         if (gen !== this._launchGen) {
           this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch });
@@ -2128,11 +1178,11 @@ export class HelpSessionController {
             return;
           }
           this._hasAutoLaunched = false;
-          this._hasBlockedThisSession = true;
+          this._versionGate.setHasBlockedThisSession(true);
           this._patch({ assistantVersionTooOld: versionBlock });
           return;
         }
-        this._hasBlockedThisSession = false;
+        this._versionGate.setHasBlockedThisSession(false);
         this._patch({ assistantVersionTooOld: null, phase: "provisioning" });
       }
 
@@ -2215,7 +1265,7 @@ export class HelpSessionController {
         // return null (the entry is consumed) and clear nothing, but running it
         // is wasteful and misleading.
         if (!options.resumeOnly) {
-          await this._seedHibernateFromMain(launchProject.id, gen);
+          await this._hibernationManager.seedFromMain(launchProject.id, gen);
           if (gen !== this._launchGen) {
             this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch });
             return;
@@ -2257,7 +1307,7 @@ export class HelpSessionController {
             // prior session, and the renderer cannot tell from outside.
             if (resumed.resumeKind === "specific") {
               this._patch({ showResumeBanner: true });
-              this._armResumeBannerAutoDismiss();
+              this._launchNotifications.armResumeBannerAutoDismiss();
             }
             return;
           }

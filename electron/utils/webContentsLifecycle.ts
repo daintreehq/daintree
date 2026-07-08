@@ -91,3 +91,35 @@ export function throttleCpuWebContents(wc: Electron.WebContents): Promise<void> 
 export function unthrottleCpuWebContents(wc: Electron.WebContents): Promise<void> {
   return setCpuThrottlingRate(wc, ACTIVE_VIEW_CPU_THROTTLE_RATE);
 }
+
+/**
+ * Purge a cached renderer's reclaimable memory, main-side over CDP (works
+ * even when the renderer is CPU-throttled — the renderer-side `window.gc()`
+ * idle callback cannot make that guarantee). The critical pressure
+ * notification is the same `NotifyMemoryPressure(CRITICAL)` Blink's own
+ * MemoryPurgeManager fires after backgrounding/freeze: it drops Blink
+ * discardable caches (fonts, decoded images, backing stores) and triggers a
+ * V8 memory-pressure GC. `HeapProfiler.collectGarbage` (the DevTools
+ * "collect garbage" button) then compacts and returns the freed pages.
+ * Do NOT add `Memory.forciblyPurgeJavaScriptMemory`: it reproducibly
+ * SIGSEGVs a CPU-throttled hidden WebContentsView on Electron 42/Chromium
+ * 148 (exit code 11 ~instantly; isolated in an A/B probe — the pressure
+ * notification alone is stable). Per-target, so the active view is
+ * untouched. Shares the Windows-CI e2e opt-out with the CPU throttle: both
+ * ride the same debugger session Playwright owns there.
+ */
+export async function purgeMemoryWebContents(wc: Electron.WebContents): Promise<void> {
+  if (getIsE2EDisableCachedViewCpuThrottle()) return;
+  if (wc.isDestroyed()) return;
+  try {
+    ensureAttached(wc);
+    await wc.debugger.sendCommand("Memory.simulatePressureNotification", { level: "critical" });
+    await wc.debugger.sendCommand("HeapProfiler.enable");
+    await wc.debugger.sendCommand("HeapProfiler.collectGarbage");
+    await wc.debugger.sendCommand("HeapProfiler.disable");
+  } catch (err) {
+    const message = formatErrorMessage(err, "CDP memory purge failed");
+    if (EXPECTED_CDP_ERRORS.some((s) => message.includes(s))) return;
+    console.warn("[webContentsLifecycle] purgeMemoryWebContents failed:", message);
+  }
+}

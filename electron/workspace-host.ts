@@ -36,6 +36,11 @@ import { initForgeBridge } from "./workspace-host/forgeBridge.js";
 import { fanoutEventToWorktreePorts } from "./workspace-host/worktreePortFanout.js";
 import { PERF_MARKS } from "../shared/perf/marks.js";
 import { markHostPerformance } from "./utils/hostPerformance.js";
+import {
+  IdleHeapCompactor,
+  resolveExposedGc,
+  IDLE_HEAP_COMPACT_CHECK_INTERVAL_MS,
+} from "./services/pty/analysis/idleHeapCompactor.js";
 
 // First user-code statement after all imports settle. ESM hoists native
 // module dlopen (better-sqlite3 via WorkspaceService, @parcel/watcher) ahead
@@ -64,7 +69,7 @@ const DIRECT_RENDERER_EVENTS = new Set([
   // Host-originated active-worktree changes — fan out direct so the
   // per-view `WorktreeStoreContext` listener (`worktree-activated`) fires in
   // the same tick as any accompanying `worktree-removed` (the host-originated
-  // auto-switch in `runTopologyReconcile` and `deleteWorktree`). The legacy
+  // auto-switch in `TopologyWatcher`'s reconcile and `deleteWorktree`). The legacy
   // `CHANNELS.WORKTREE_ACTIVATED` echo path is still gated by PR #3603's
   // `silent` flag and is unaffected by this allowlist.
   "worktree-activated",
@@ -124,6 +129,12 @@ async function handleWorktreePortRequest(
       case "set-active": {
         const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         workspaceService.setActiveWorktree(requestId, msg.payload.worktreeId);
+        result = { ok: true };
+        break;
+      }
+
+      case "set-agent-activity": {
+        workspaceService.setAgentActivity(msg.payload.worktreeIds);
         result = { ok: true };
         break;
       }
@@ -305,8 +316,21 @@ process.on("unhandledRejection", (reason) => {
   setImmediate(() => process.exit(1));
 });
 
+// Idle heap compaction for this isolate: git polling churns transient strings
+// and diff/status structures every cycle, and a utility process has nothing
+// driving V8's idle memory reducer, so committed-but-free heap pages linger
+// for minutes after a burst (same problem the pty-host compactor fixes).
+// Activity = any inbound request or outbound event; the latch inside the
+// compactor means at most one compacting GC per quiet period.
+const idleHeapCompactor = new IdleHeapCompactor(resolveExposedGc());
+const idleHeapCompactTimer = setInterval(() => {
+  idleHeapCompactor.maybeCompact();
+}, IDLE_HEAP_COMPACT_CHECK_INTERVAL_MS);
+idleHeapCompactTimer.unref?.();
+
 // Helper to send events to Main process (and directly to renderers for spontaneous events)
 function sendEvent(event: WorkspaceHostEvent): void {
+  idleHeapCompactor.noteActivity();
   try {
     port.postMessage(event);
   } catch (error) {
@@ -356,6 +380,7 @@ const forgeBridge = initForgeBridge(sendEvent);
 
 // Handle requests from Main
 port.on("message", async (rawMsg: any) => {
+  idleHeapCompactor.noteActivity();
   const msg =
     rawMsg && typeof rawMsg === "object" && "data" in rawMsg
       ? (rawMsg as { data: unknown }).data
@@ -618,6 +643,27 @@ port.on("message", async (rawMsg: any) => {
       case "copytree:cancel":
         copytreeWorkerClient.cancel(request.operationId);
         break;
+
+      // Worker-governance pull: copytree worker state + this host's memory.
+      // The copytree worker is a worker_thread inside this utility process,
+      // so host-level memoryUsage() is the pool's memory attribution.
+      case "governance:snapshot": {
+        const memory = process.memoryUsage();
+        sendEvent({
+          type: "governance:snapshot-result",
+          requestId: request.requestId,
+          snapshot: {
+            timestamp: Date.now(),
+            workers: [copytreeWorkerClient.getGovernanceSnapshot()],
+            hostMemory: {
+              rssBytes: memory.rss,
+              heapUsedBytes: memory.heapUsed,
+              externalBytes: memory.external ?? 0,
+            },
+          },
+        });
+        break;
+      }
 
       case "copytree:test-config": {
         const { requestId, operationId, rootPath, options } = request;

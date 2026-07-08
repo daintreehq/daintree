@@ -119,7 +119,10 @@ describe("getWorktreeChangesWithStats", () => {
     const enoentError = Object.assign(new Error("ENOENT: no such file or directory"), {
       code: "ENOENT",
     });
-    (fs.access as ReturnType<typeof vi.fn>).mockRejectedValue(enoentError);
+    // The existence preflight stats the cwd (the stat doubles as the
+    // static-info cache validity check), so the removal signal is a stat
+    // rejection.
+    (fs.stat as ReturnType<typeof vi.fn>).mockRejectedValueOnce(enoentError);
 
     await expect(getWorktreeChangesWithStats("/deleted/worktree", true)).rejects.toThrow(
       WorktreeRemovedError

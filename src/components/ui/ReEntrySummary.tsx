@@ -80,7 +80,10 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
           "text-sm text-daintree-text",
           "shadow-[var(--theme-shadow-floating)]",
           "ring-1 ring-inset ring-tint/[0.05]",
-          "transition-[transform,opacity] duration-300 ease-out",
+          // Tailwind v4 translate-* emits the individual `translate` property,
+          // which `transform` in a transition list does NOT cover — list it
+          // explicitly or the slide-in snaps and only the fade animates.
+          "transition-[translate,opacity] duration-300 ease-out",
           "motion-reduce:transition-none motion-reduce:duration-0",
           isVisible ? "translate-x-0 opacity-100" : "translate-x-8 opacity-0",
           accentClass

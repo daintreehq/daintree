@@ -22,6 +22,21 @@ export interface RendererConnection {
   batcher: PortBatcher;
 }
 
+/**
+ * A dedicated worker-ingest port for one (window, terminal) pair (issue
+ * #10960): bytes flow pty-host → renderer parse worker directly, and the
+ * worker acks on the same port. `engaged` gates output routing — the window
+ * port stays the route until the renderer's `worker-ingest-engage` flips it,
+ * and a `worker-ingest-release` flips it back.
+ */
+export interface TerminalWorkerConnection {
+  port: MessagePort;
+  handler: (e: MessageEvent) => void;
+  portQueueManager: PortQueueManager;
+  batcher: PortBatcher;
+  engaged: boolean;
+}
+
 export interface HostContext {
   // Stable references — never reassigned
   ptyManager: PtyManager;
@@ -35,6 +50,8 @@ export interface HostContext {
   // Stable Map/Set references — mutated in place
   pauseCoordinators: Map<string, PtyPauseCoordinator>;
   rendererConnections: Map<number, RendererConnection>;
+  /** Dedicated worker-ingest ports, keyed windowId → terminalId. */
+  terminalWorkerConnections: Map<number, Map<string, TerminalWorkerConnection>>;
   windowProjectMap: Map<number, string | null>;
   /**
    * Per-window UI-focused terminal id, pushed from the renderer's
@@ -65,10 +82,12 @@ export interface HostContext {
   getPauseCoordinator: (id: string) => PtyPauseCoordinator | undefined;
   getOrCreatePauseCoordinator: (id: string) => PtyPauseCoordinator | undefined;
   disconnectWindow: (windowId: number, reason: string) => void;
+  disconnectTerminalWorkerPort: (windowId: number, terminalId: string, reason: string) => void;
   recomputeActivityTiers: (nextProjectId: string | null) => void;
   tryReplayAndResume: (id: string) => void;
   resumePausedTerminal: (id: string) => void;
   createPortQueueManager: (windowId: number) => PortQueueManager;
+  createTerminalWorkerPortQueueManager: (windowId: number, terminalId: string) => PortQueueManager;
   /**
    * Per-paused-terminal held duration aggregated across SAB, IPC, and
    * per-window MessagePort pause sources (oldest still-held start wins).

@@ -12,6 +12,7 @@
 
 import { EventEmitter } from "events";
 import { CHANNELS } from "../ipc/channels.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { sendToEntryWindows } from "./workspace-client/types.js";
 import {
   WorkspaceHostPool,
@@ -26,6 +27,7 @@ import type {
   MonitorConfig,
   CreateWorktreeOptions,
   BranchInfo,
+  WorkspaceHostGovernanceSnapshot,
 } from "../../shared/types/workspace-host.js";
 import type {
   CopyTreeOptions,
@@ -38,6 +40,17 @@ import type { ProjectPulse, PulseRangeDays } from "../../shared/types/pulse.js";
 const STATES_INFLIGHT_COALESCE_WINDOW_MS = 150;
 
 export type CopyTreeProgressCallback = (progress: CopyTreeProgress) => void;
+
+function dedupeSnapshotsById(states: WorktreeSnapshot[]): WorktreeSnapshot[] {
+  const seen = new Set<string>();
+  const deduped: WorktreeSnapshot[] = [];
+  for (const state of states) {
+    if (seen.has(state.id)) continue;
+    seen.add(state.id);
+    deduped.push(state);
+  }
+  return deduped;
+}
 
 export class WorkspaceClient extends EventEmitter {
   private isDisposed = false;
@@ -361,6 +374,41 @@ export class WorkspaceClient extends EventEmitter {
     this.pool.relayForgeProviderMatchers(matchers);
   }
 
+  // ── Worker governance ──
+
+  /**
+   * Pull the worker-governance snapshot from every live workspace host
+   * (copytree worker state + host memory), tagged with the owning project
+   * path. Per-host failures degrade to an entry in `errors` — one crashed or
+   * slow host must not blank the report for the others.
+   */
+  async getWorkerGovernanceSnapshotsAsync(): Promise<{
+    hosts: Array<{ projectPath: string; snapshot: WorkspaceHostGovernanceSnapshot }>;
+    errors: Array<{ projectPath: string; error: string }>;
+  }> {
+    if (this.isDisposed) return { hosts: [], errors: [] };
+    const entries = [...this.pool.entries.values()];
+    const hosts: Array<{ projectPath: string; snapshot: WorkspaceHostGovernanceSnapshot }> = [];
+    const errors: Array<{ projectPath: string; error: string }> = [];
+    await Promise.all(
+      entries.map(async (entry) => {
+        try {
+          const requestId = entry.host.generateRequestId();
+          const result = await entry.host.sendWithResponse<{
+            snapshot: WorkspaceHostGovernanceSnapshot;
+          }>({ type: "governance:snapshot", requestId });
+          hosts.push({ projectPath: entry.projectPath, snapshot: result.snapshot });
+        } catch (error) {
+          errors.push({
+            projectPath: entry.projectPath,
+            error: formatErrorMessage(error, "governance snapshot failed"),
+          });
+        }
+      })
+    );
+    return { hosts, errors };
+  }
+
   // ── State queries ──
 
   getAllStatesAsync(windowId?: number): Promise<WorktreeSnapshot[]> {
@@ -408,15 +456,17 @@ export class WorkspaceClient extends EventEmitter {
         });
       })
     );
-    return results
-      .filter(
-        (
-          r
-        ): r is PromiseFulfilledResult<{
-          states: WorktreeSnapshot[];
-        }> => r.status === "fulfilled"
-      )
-      .flatMap((r) => r.value.states);
+    return dedupeSnapshotsById(
+      results
+        .filter(
+          (
+            r
+          ): r is PromiseFulfilledResult<{
+            states: WorktreeSnapshot[];
+          }> => r.status === "fulfilled"
+        )
+        .flatMap((r) => r.value.states)
+    );
   }
 
   async getMonitorAsync(worktreeId: string): Promise<WorktreeSnapshot | null> {

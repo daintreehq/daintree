@@ -7,10 +7,16 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { usePanelStore, useProjectStore, useWorktreeSelectionStore } from "@/store";
-import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
+import {
+  isDockPanel,
+  isPtyPanel,
+  type DockPanelData,
+  type PanelInstance,
+} from "@shared/types/panel";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import type { TrashedTerminal } from "@/store/slices";
 import { DockedTerminalItem } from "./DockedTerminalItem";
+import { DockedFilePanelItem } from "./DockedFilePanelItem";
 import { DockedTabGroup } from "./DockedTabGroup";
 import { TrashContainer } from "./TrashContainer";
 import { WaitingContainer } from "./WaitingContainer";
@@ -75,7 +81,7 @@ export type { DockDensity } from "@/store/preferencesStore";
 // Stable empty refs so the narrowed dock subscriptions below can bail under
 // `useShallow` when the dock is empty instead of yielding a fresh `[]`.
 const EMPTY_DOCK_SIGNATURE: readonly string[] = [];
-const EMPTY_DOCK_TERMINALS: readonly PtyPanelData[] = [];
+const EMPTY_DOCK_TERMINALS: readonly DockPanelData[] = [];
 
 interface ContentDockProps {
   density?: DockDensity;
@@ -100,10 +106,10 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   // Narrow dock subscriptions (#10908). Subscribing to the whole `panelsById`
   // re-rendered the dock on every panel's rAF status-buffer flush — including
   // grid agents that never appear here. Both selectors below react only to dock
-  // panels. The dock is intentionally PTY-only: its chrome (output preview,
-  // restart, agent state) is built on terminal affordances, so `getNarrowPanel`
-  // + `isPtyPanel` is the correct gate (NOT the #10512 grid render-eligibility
-  // predicate, which deliberately does not apply to the dock).
+  // panels. Membership is `isDockPanel` (PTY panels plus the dockable file
+  // kind — #10985); each member kind has its own chip below. This is NOT the
+  // #10512 grid render-eligibility predicate, which deliberately does not
+  // apply to the dock.
   //
   // `dockPanelSignature` is a structural `${id}:${worktreeId}` list that stays
   // referentially stable across status-buffer flushes, so the (activity-agnostic)
@@ -119,7 +125,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
         const terminal = getNarrowPanel(state.panelsById, id);
         if (
           terminal &&
-          isPtyPanel(terminal) &&
+          isDockPanel(terminal) &&
           terminal.location === "dock" &&
           !state.trashedTerminals.has(terminal.id)
         ) {
@@ -135,12 +141,12 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   // fires when a *dock* panel's reference changes, not on grid-agent churn.
   const dockTerminalsRaw = usePanelStore(
     useShallow((state) => {
-      const result: PtyPanelData[] = [];
+      const result: DockPanelData[] = [];
       for (const id of state.panelIds) {
         const terminal = getNarrowPanel(state.panelsById, id);
         if (
           terminal &&
-          isPtyPanel(terminal) &&
+          isDockPanel(terminal) &&
           terminal.location === "dock" &&
           !state.trashedTerminals.has(terminal.id)
         ) {
@@ -168,11 +174,11 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
     helpTerminalId,
   ]);
 
-  const dockTerminals = useMemo<PtyPanelData[]>(() => {
-    // `dockTerminalsRaw` already narrows to dock/pty/non-trashed panels; apply
-    // the help-panel and active-worktree filters here (external stores the
-    // store selector can't read).
-    const result: PtyPanelData[] = [];
+  const dockTerminals = useMemo<DockPanelData[]>(() => {
+    // `dockTerminalsRaw` already narrows to dock/dockable/non-trashed panels;
+    // apply the help-panel and active-worktree filters here (external stores
+    // the store selector can't read).
+    const result: DockPanelData[] = [];
     for (const terminal of dockTerminalsRaw) {
       if (
         terminal.id !== helpTerminalId &&
@@ -471,7 +477,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
             <div
               ref={combinedRef}
               role="toolbar"
-              aria-label="Docked terminals"
+              aria-label="Docked panels"
               aria-orientation="horizontal"
               aria-busy={isDndActive || undefined}
               onKeyDown={handleDockKeyDown}
@@ -494,17 +500,23 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
                     <SortableDockPlaceholder />
                   ) : (
                     dockItems.map(({ group, panels }, index) => {
-                      // Single-panel group: render DockedTerminalItem directly
+                      // Single-panel group: render the kind's chip directly
                       if (panels.length === 1) {
                         const terminal = panels[0]!;
                         return (
                           <SortableDockItem key={group.id} terminal={terminal} sourceIndex={index}>
-                            <DockedTerminalItem terminal={terminal} />
+                            {isPtyPanel(terminal) ? (
+                              <DockedTerminalItem terminal={terminal} />
+                            ) : (
+                              <DockedFilePanelItem panel={terminal} />
+                            )}
                           </SortableDockItem>
                         );
                       }
 
-                      // Multi-panel group: pass group context for group-aware DnD
+                      // Multi-panel group: pass group context for group-aware DnD.
+                      // Groups resolve through the isPtyPanel filter above, so
+                      // the runtime narrow below never drops a panel.
                       const firstPanel = panels[0]!;
                       return (
                         <SortableDockItem
@@ -514,7 +526,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
                           groupId={group.id}
                           groupPanelIds={group.panelIds}
                         >
-                          <DockedTabGroup group={group} panels={panels} />
+                          <DockedTabGroup group={group} panels={panels.filter(isPtyPanel)} />
                         </SortableDockItem>
                       );
                     })

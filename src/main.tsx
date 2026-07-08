@@ -55,6 +55,26 @@ async function bootstrap() {
 
   applyDefaultAppTheme(document.documentElement);
 
+  // Paint-fabric surface view (Phase 1V): the preload seeds the surface-host
+  // role from additionalArguments. A surface view hosts terminals only —
+  // mount the minimal surface root and skip the app shell, store
+  // orchestrator, and panel registries entirely.
+  const surfaceHostId = window.__DAINTREE_SURFACE_HOST__?.surfaceId ?? null;
+  if (surfaceHostId !== null) {
+    const { SurfaceHostRoot } = await import("./surfaceHost/SurfaceHostRoot");
+    document.getElementById("startup-skeleton")?.remove();
+    createRoot(document.getElementById("root")!, {
+      onCaughtError,
+      onUncaughtError,
+      onRecoverableError,
+    }).render(
+      <StrictMode>
+        <SurfaceHostRoot surfaceId={surfaceHostId} />
+      </StrictMode>
+    );
+    return;
+  }
+
   try {
     localStorage.removeItem("project-groups-storage");
   } catch {

@@ -4,6 +4,10 @@ interface BrowserPaneSkeletonProps {
   label?: string;
 }
 
+// Bones are immediate, not delayed: this renders as a Suspense fallback, which
+// React already throttles ~300ms before commit (FALLBACK_THROTTLE_MS), so the
+// anti-flicker gate is spent by the time it paints — see the #9040 note in
+// useDeferredLoading.ts.
 export function BrowserPaneSkeleton({ label = "Loading browser panel" }: BrowserPaneSkeletonProps) {
   return (
     <div className="relative flex flex-col h-full w-full">
@@ -21,12 +25,12 @@ export function BrowserPaneSkeleton({ label = "Loading browser panel" }: Browser
           aria-hidden="true"
         >
           <div className="flex items-center gap-2">
-            <div className="animate-pulse-delayed h-3.5 w-3.5 bg-muted rounded" />
-            <div className="animate-pulse-delayed h-3 w-24 bg-muted rounded" />
+            <div className="animate-pulse-immediate h-3.5 w-3.5 bg-muted rounded" />
+            <div className="animate-pulse-immediate h-3 w-24 bg-muted rounded" />
           </div>
           <div className="flex items-center gap-1">
-            <div className="animate-pulse-delayed h-4 w-4 bg-muted rounded" />
-            <div className="animate-pulse-delayed h-4 w-4 bg-muted rounded" />
+            <div className="animate-pulse-immediate h-4 w-4 bg-muted rounded" />
+            <div className="animate-pulse-immediate h-4 w-4 bg-muted rounded" />
           </div>
         </div>
 
@@ -36,16 +40,16 @@ export function BrowserPaneSkeleton({ label = "Loading browser panel" }: Browser
           aria-hidden="true"
         >
           {/* Nav button placeholders */}
-          <div className="animate-pulse-delayed h-7 w-7 bg-muted rounded" />
-          <div className="animate-pulse-delayed h-7 w-7 bg-muted rounded" />
-          <div className="animate-pulse-delayed h-7 w-7 bg-muted rounded" />
+          <div className="animate-pulse-immediate h-7 w-7 bg-muted rounded" />
+          <div className="animate-pulse-immediate h-7 w-7 bg-muted rounded" />
+          <div className="animate-pulse-immediate h-7 w-7 bg-muted rounded" />
 
           {/* URL bar placeholder */}
-          <div className="animate-pulse-delayed flex-1 h-7 bg-muted rounded" />
+          <div className="animate-pulse-immediate flex-1 h-7 bg-muted rounded" />
 
           {/* Action button placeholders */}
-          <div className="animate-pulse-delayed h-7 w-7 bg-muted rounded" />
-          <div className="animate-pulse-delayed h-7 w-7 bg-muted rounded" />
+          <div className="animate-pulse-immediate h-7 w-7 bg-muted rounded" />
+          <div className="animate-pulse-immediate h-7 w-7 bg-muted rounded" />
         </div>
 
         {/* Content area — empty, no animation */}

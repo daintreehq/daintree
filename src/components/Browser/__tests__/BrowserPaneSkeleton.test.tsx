@@ -24,11 +24,12 @@ describe("BrowserPaneSkeleton", () => {
     expect(screen.getByText("Loading dev preview panel")).toBeTruthy();
   });
 
-  it("uses animate-pulse-delayed on all placeholder shapes", () => {
+  it("pulses all placeholder shapes immediately — never the delayed gate (Suspense fallback)", () => {
     const { container } = render(<BrowserPaneSkeleton />);
-    const pulsing = container.querySelectorAll(".animate-pulse-delayed");
+    const pulsing = container.querySelectorAll(".animate-pulse-immediate");
     // header: icon + title + menu + close = 4, toolbar: 3 nav + url bar + 2 action = 6, total = 10
     expect(pulsing.length).toBe(10);
+    expect(container.querySelectorAll(".animate-pulse-delayed").length).toBe(0);
   });
 
   it("does not animate the content area", () => {

@@ -120,6 +120,14 @@ export interface PtyHostLifecycleConfig {
   memoryLimitMb: number;
   electronDir: string;
   /**
+   * UtilityProcess serviceName for this host run. Defaults to the legacy
+   * "daintree-pty-host". PTY fabric shards pass a per-project name so crash
+   * attribution (`child-process-gone` details.name) and process listings
+   * identify the owning project; the gone-listener filter matches this exact
+   * name, so a shard never consumes a sibling shard's crash reason.
+   */
+  serviceName?: string;
+  /**
    * Read at each fork. When true the host defers its boot-time homedir pool
    * warm — used on project-restoring boots where the set-active-project that
    * follows ready immediately drains the pool to the project path, so the
@@ -127,6 +135,8 @@ export interface PtyHostLifecycleConfig {
    */
   deferInitialPoolWarm?: () => boolean;
 }
+
+const DEFAULT_SERVICE_NAME = "daintree-pty-host";
 
 export interface PtyHostLifecycleCallbacks {
   /** Forward each message from the child. PtyClient routes these via {@link routeHostEvent}. */
@@ -210,11 +220,23 @@ export class PtyHostLifecycle {
     private readonly config: PtyHostLifecycleConfig,
     private readonly callbacks: PtyHostLifecycleCallbacks
   ) {
-    this.readyPromise = new Promise((resolve, reject) => {
+    this.readyPromise = this.createReadyPromise();
+    this.registerChildProcessGoneListener();
+  }
+
+  /**
+   * Mint a fresh readyPromise for the next fork. The no-op catch marks the
+   * promise handled without consuming the rejection for real awaiters —
+   * fork/pre-ready-crash rejections on a run nobody awaits (restart cycles,
+   * fabric project shards) must not surface as unhandled rejections.
+   */
+  private createReadyPromise(): Promise<void> {
+    const promise = new Promise<void>((resolve, reject) => {
       this.readyResolve = resolve;
       this.readyReject = reject;
     });
-    this.registerChildProcessGoneListener();
+    promise.catch(() => {});
+    return promise;
   }
 
   /** Wait for the host to emit `ready`. Re-creates per fork; safe across restarts. */
@@ -292,10 +314,7 @@ export class PtyHostLifecycle {
     this.pendingChildProcessGoneReason = null;
 
     this.isInitialized = false;
-    this.readyPromise = new Promise((resolve, reject) => {
-      this.readyResolve = resolve;
-      this.readyReject = reject;
-    });
+    this.readyPromise = this.createReadyPromise();
 
     const hostPath = path.join(this.config.electronDir, "pty-host-bootstrap.js");
 
@@ -307,7 +326,7 @@ export class PtyHostLifecycle {
 
     try {
       this.child = utilityProcess.fork(hostPath, [], {
-        serviceName: "daintree-pty-host",
+        serviceName: this.config.serviceName ?? DEFAULT_SERVICE_NAME,
         stdio: "pipe",
         cwd: os.homedir(),
         // `--diagnostic-dir` redirects v8.setHeapSnapshotNearHeapLimit dumps
@@ -315,12 +334,24 @@ export class PtyHostLifecycle {
         // utility process CWD (homedir).
         execArgv: [
           `--max-old-space-size=${this.config.memoryLimitMb}`,
+          // Cap the young generation: PTY relay churns short-lived strings with
+          // a tiny live set, so an uncapped nursery (V8 scales it with machine
+          // RAM) just commits slack pages per shard. 8 MB keeps scavenges
+          // sub-millisecond at this allocation profile.
+          "--max-semi-space-size=8",
           `--diagnostic-dir=${app.getPath("logs")}`,
           "--report-exclude-env",
         ],
         env: {
           ...(process.env as Record<string, string>),
           DAINTREE_USER_DATA: app.getPath("userData"),
+          // Keep the host's ResourceGovernor budget in lockstep with the V8
+          // cap above — the fabric RAM-scales the cap per shard, and a
+          // governor still assuming 512 would throttle a 2 GB shard at 25%.
+          DAINTREE_PTY_HEAP_BUDGET_MB: String(this.config.memoryLimitMb),
+          // Shard identity for per-process file scoping (emergency log) —
+          // Electron does not expose serviceName to the child itself.
+          DAINTREE_PTY_SHARD_SERVICE: this.config.serviceName ?? DEFAULT_SERVICE_NAME,
           // Forward packaged-build state to the pty host so dev-only diagnostics
           // (e.g. agent CLI CPU profiling via `DAINTREE_PROFILE_AGENT_STARTUP`)
           // can gate themselves on `!== "0"` without touching `app.isPackaged`.
@@ -425,9 +456,11 @@ export class PtyHostLifecycle {
       if (details.type !== "Utility") return;
       // Electron 41 populates `name` from `serviceName` at runtime, but both
       // fields are typed as optional. Accept either to stay resilient to
-      // future runtime changes or edge cases where only one is set.
-      const matchesHost =
-        details.name === "daintree-pty-host" || details.serviceName === "daintree-pty-host";
+      // future runtime changes or edge cases where only one is set. Matches
+      // this lifecycle's own serviceName exactly so fabric shards never
+      // consume a sibling shard's crash reason.
+      const expectedName = this.config.serviceName ?? DEFAULT_SERVICE_NAME;
+      const matchesHost = details.name === expectedName || details.serviceName === expectedName;
       if (!matchesHost) return;
       this.pendingChildProcessGoneReason = {
         reason: details.reason,

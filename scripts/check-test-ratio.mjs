@@ -27,7 +27,7 @@ import {
 
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), "..");
-const BASELINE_FILE = path.join(ROOT, "test-ratio-baseline.json");
+const BASELINE_FILE = path.join(ROOT, "scripts", "baselines", "test-ratio-baseline.json");
 const SUMMARY_FILE = path.join(ROOT, "dist", "test-ratio-summary.md");
 const ROLLING_WINDOW_SIZE = 100;
 // GraphQL `search` caps `first` at 100 per page. We paginate until we've

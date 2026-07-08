@@ -4,9 +4,10 @@ import type {
   PanelExitBehavior,
   PanelTitleMode,
   ViewportPresetId,
+  FileViewMode,
 } from "./panel.js";
 import type { BrowserHistory } from "./browser.js";
-import type { AgentState, AgentId } from "./agent.js";
+import type { AgentState, AgentId, WaitingReason } from "./agent.js";
 import type { TerminalSpawnSource, AddPanelFocusPolicy } from "./panel.js";
 import type { BuiltInAgentId } from "../config/agentIds.js";
 import type { ActionContext } from "./actions.js";
@@ -18,6 +19,14 @@ export interface AddPanelOptionsBase {
   /** How the title is owned. Absent defaults to "default". */
   titleMode?: PanelTitleMode;
   worktreeId?: string;
+  /**
+   * How `worktreeId` was determined: `"explicit"` (caller/user chose it, the
+   * default when omitted) or `"inferred"` (derived from cwd prefix matching —
+   * orphan reconnects, journal resume). Recorded in the lifecycle ledger,
+   * whose invariant is that inferred attribution never overwrites a differing
+   * explicit one.
+   */
+  worktreeIdSource?: "explicit" | "inferred";
   cwd?: string;
   location?: PanelLocation;
   /** If provided, request a stable ID when spawning a new backend process */
@@ -81,6 +90,8 @@ export interface AddPanelOptionsBase {
    */
   launchAgentId?: AgentId;
   agentState?: AgentState;
+  /** Why the agent is waiting, restored from the backend snapshot on reconnect. Only meaningful when `agentState` is "waiting". */
+  waitingReason?: WaitingReason;
   lastStateChange?: number;
   /** Store command on instance but don't execute it on spawn */
   skipCommandExecution?: boolean;
@@ -209,6 +220,15 @@ export interface ReviewPanelOptions extends AddPanelOptionsBase {
   kind: "review";
 }
 
+/** Options for creating a file viewer panel */
+export interface FilePanelOptions extends AddPanelOptionsBase {
+  kind: "file";
+  /** Absolute path of the file to view */
+  filePath?: string;
+  /** Initial view mode; defaults to "source" (rendered applies to markdown only) */
+  fileViewMode?: FileViewMode;
+}
+
 /**
  * Options for extension-provided panel kinds.
  *
@@ -228,4 +248,5 @@ export type AddPanelOptions =
   | TerminalPanelOptions
   | BrowserPanelOptions
   | DevPreviewPanelOptions
-  | ReviewPanelOptions;
+  | ReviewPanelOptions
+  | FilePanelOptions;

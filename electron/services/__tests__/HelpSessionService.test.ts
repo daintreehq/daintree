@@ -12,6 +12,7 @@ const {
   mockStoreGet,
   mockProbeMcpServer,
   mockProbeMcpSseServer,
+  mockSyncAssistantContent,
 } = vi.hoisted(() => ({
   mockUserDataDir: vi.fn<() => string>(),
   mockHelpFolderPath: vi.fn<() => string | null>(),
@@ -44,6 +45,11 @@ const {
   mockStoreGet: vi.fn<(key: string) => unknown>(),
   mockProbeMcpServer: vi.fn<(port: number, apiKey: string) => Promise<void>>(),
   mockProbeMcpSseServer: vi.fn<(port: number, token: string) => Promise<void>>(),
+  // Mocked so provision tests never read the developer's real
+  // ~/.daintree/assistant folder; mirroring behavior has its own suite in
+  // AssistantContentMirror.test.ts.
+  mockSyncAssistantContent:
+    vi.fn<(input: unknown) => Promise<{ copied: number; removed: number } | null>>(),
 }));
 
 vi.mock("electron", () => ({
@@ -72,6 +78,10 @@ vi.mock("../../store.js", () => ({
   store: {
     get: (key: string) => mockStoreGet(key),
   },
+}));
+
+vi.mock("../AssistantContentMirror.js", () => ({
+  syncAssistantContent: (input: unknown) => mockSyncAssistantContent(input),
 }));
 
 import { HelpSessionService } from "../HelpSessionService.js";
@@ -173,6 +183,8 @@ describe("HelpSessionService", () => {
     mockProbeMcpServer.mockResolvedValue(undefined);
     mockProbeMcpSseServer.mockReset();
     mockProbeMcpSseServer.mockResolvedValue(undefined);
+    mockSyncAssistantContent.mockReset();
+    mockSyncAssistantContent.mockResolvedValue({ copied: 0, removed: 0 });
 
     service = new HelpSessionService();
     // The new `ensureMcpServerReady` path throws if no registry is wired —
@@ -221,6 +233,26 @@ describe("HelpSessionService", () => {
 
     expect(result.mcpUrl).toBeNull();
     expect(result.windowId).toBe(7);
+  });
+
+  it("mirrors user assistant content into the session dir at provision", async () => {
+    const result = await service.provisionSession(provisionInput());
+    if (!result) throw new Error("expected result");
+
+    expect(mockSyncAssistantContent).toHaveBeenCalledTimes(1);
+    expect(mockSyncAssistantContent).toHaveBeenCalledWith({
+      sessionPath: result.sessionPath,
+      projectPath: "/tmp/project",
+      agentId: "claude",
+    });
+  });
+
+  it("still provisions when the user content sync fails", async () => {
+    mockSyncAssistantContent.mockRejectedValue(new Error("bad user file"));
+
+    const result = await service.provisionSession(provisionInput());
+
+    expect(result).not.toBeNull();
   });
 
   it("creates a session dir with a .mcp.json that bakes the literal session token into the Authorization header", async () => {
@@ -1256,6 +1288,39 @@ describe("HelpSessionService", () => {
         "proj-1",
         expect.objectContaining({ agentSessionId: "win-close-resume-id" })
       );
+    });
+
+    it("captures on revokeByProjectId and touches only the matching project (auto-close reclaim, #10989)", async () => {
+      mockPtyGracefulKill.mockResolvedValueOnce("auto-close-resume-id");
+
+      const target = await service.provisionSession({
+        ...provisionInput(),
+        projectId: "proj-reclaimed",
+      });
+      if (!target) throw new Error("expected provision");
+      expect(service.markTerminalForToken(target.token, "term-reclaimed")).toBe(true);
+
+      const other = await service.provisionSession({
+        ...provisionInput(),
+        projectId: "proj-untouched",
+      });
+      if (!other) throw new Error("expected provision");
+      expect(service.markTerminalForToken(other.token, "term-untouched")).toBe(true);
+
+      await service.revokeByProjectId("proj-reclaimed");
+      await Promise.resolve();
+
+      // Capture path ran for the reclaimed project's PTY only…
+      expect(mockPtyGracefulKill).toHaveBeenCalledWith("term-reclaimed");
+      expect(mockPtyGracefulKill).not.toHaveBeenCalledWith("term-untouched");
+      expect(hibernationStore.set).toHaveBeenCalledWith(
+        "proj-reclaimed",
+        expect.objectContaining({ agentSessionId: "auto-close-resume-id" })
+      );
+      // …and the other project's session survives with a live bearer
+      // (validateToken returns the session tier when the token is live).
+      expect(service.validateToken(target.token)).toBe(false);
+      expect(service.validateToken(other.token)).toBeTruthy();
     });
 
     it("revokeAll (app shutdown) skips capture to avoid blocking on gracefulKill round-trips", async () => {

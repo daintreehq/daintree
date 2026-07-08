@@ -569,7 +569,9 @@ describe("eager-import-baseline.json hygiene (live canary)", () => {
   // `// eager-import-allow:` header (rename, file move, accidental deletion,
   // or a fresh `--update` that adds an unmarked entry) fails here.
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-  const baseline = JSON.parse(readFileSync(path.join(root, "eager-import-baseline.json"), "utf8"));
+  const baseline = JSON.parse(
+    readFileSync(path.join(root, "scripts", "baselines", "eager-import-baseline.json"), "utf8")
+  );
 
   it("every allowlisted file carries the eager-import-allow header", () => {
     const marked = scanAllowlistMarkers(baseline.allowlist, root);

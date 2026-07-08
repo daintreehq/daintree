@@ -576,6 +576,10 @@ export interface GeneratedIpcInvokeMap {
     args: [terminalId: string];
     result: void;
   };
+  "help:open-assistant-content-folder": {
+    args: [];
+    result: { path: string; opened: boolean } | null;
+  };
   "help:peek-pending-hibernation": {
     args: [projectId: string];
     result: { agentId: string; agentSessionId: string; cwd: string; panelWasOpen: boolean } | null;
@@ -842,6 +846,27 @@ export interface GeneratedIpcInvokeMap {
   "os-dnd:get-state": {
     args: [];
     result: boolean | undefined;
+  };
+  "paint-surface:apply-webgl-thresholds": {
+    args: [payload: { surfaceId: string; upperThreshold: number; lowerThreshold: number }];
+    result: void;
+  };
+  "paint-surface:create": {
+    args: [payload: { surfaceId: string }];
+    result: import("../paintFabricSurface.js").CreateSurfaceViewResult;
+  };
+  "paint-surface:destroy": {
+    args: [payload: { surfaceId: string }];
+    result: void;
+  };
+  "paint-surface:set-bounds": {
+    args: [
+      payload: {
+        surfaceId: string;
+        bounds: { x: number; y: number; width: number; height: number };
+      },
+    ];
+    result: void;
   };
   "plugin-capability:resolve-consent": {
     args: [input: import("../pluginCapabilityConsent.js").PluginCapabilityResolveConsentInput];
@@ -1269,6 +1294,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: void;
   };
+  "system:get-memory-snapshot": {
+    args: [];
+    result: import("../memoryAccounting.js").CompositeMemorySnapshot;
+  };
   "system:get-resource-profile": {
     args: [];
     result: import("../resourceProfile.js").ResourceProfilePayload;
@@ -1297,6 +1326,10 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "system:show-item-in-folder": {
+    args: [payload: { path: string }];
+    result: void;
+  };
+  "system:show-item-in-folder-unconfined": {
     args: [payload: { path: string }];
     result: void;
   };
@@ -1440,9 +1473,17 @@ export interface GeneratedIpcInvokeMap {
     args: [terminalIds: string[]];
     result: Record<string, import("./terminal.js").TerminalReconnectResult>;
   };
+  "terminal:release-worker-ingest-port": {
+    args: [id: string];
+    result: void;
+  };
   "terminal:replay-history": {
     args: [__0: { terminalId: string; maxLines: number }];
     result: { replayed: number };
+  };
+  "terminal:request-worker-ingest-port": {
+    args: [id: string];
+    result: { token: string } | null;
   };
   "terminal:restart-service": {
     args: [];

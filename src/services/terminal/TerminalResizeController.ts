@@ -2,7 +2,7 @@ import { Terminal } from "@xterm/xterm";
 import { terminalClient } from "@/clients";
 import { TerminalRefreshTier } from "@/types";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
-import { logError } from "@/utils/logger";
+import { logError, logWarn } from "@/utils/logger";
 import type { ManagedTerminal } from "./types";
 import type { TerminalOutputIngestService } from "./TerminalOutputIngestService";
 
@@ -10,6 +10,10 @@ const START_DEBOUNCING_THRESHOLD = 200;
 const RESIZE_DEBOUNCE_MS = 100;
 const RESIZE_LOCK_TTL_MS = 5000;
 const SETTLED_RESIZE_DELAY_MS = 500;
+
+import { exceedsResizeFlushSyncBudget, RESIZE_FLUSH_SYNC_BUDGET_BYTES } from "./resizeFlushBudget";
+
+export { RESIZE_FLUSH_SYNC_BUDGET_BYTES };
 
 /** Narrow structural type for the private xterm.js internals we access. */
 interface XtermCoreRenderDimensions {
@@ -63,6 +67,32 @@ export function getXtermCellDimensions(
 export interface ResizeControllerDeps {
   getInstance: (id: string) => ManagedTerminal | undefined;
   dataBuffer: TerminalOutputIngestService;
+}
+
+/**
+ * How long a main-buffer pane must be write-quiescent before the reveal-path
+ * reconcile ({@link TerminalResizeController.reconcileGeometryFresh}) may apply
+ * a grid-changing resize. A resize that lands while a main-buffer CLI is still
+ * streaming re-wraps its committed scrollback under the app's cursor-relative
+ * sticky-region repaint and duplicates/garbles the block (#10863).
+ */
+export const REVEAL_REWRAP_QUIESCENT_MS = 300;
+
+/**
+ * True while the pane is still streaming for re-wrap purposes (#10863). Either
+ * signal means streaming: `lastWriteAt` is stamped only when a batch finishes
+ * PARSING (the write-buffer callback), so recency alone misses a queued batch
+ * that is still parsing — including a pane's very FIRST batch, where
+ * `lastWriteAt` is unset entirely; `pendingWrites` covers exactly that
+ * in-flight window. The reveal-path quiescence gate and the watchdog's
+ * deferred-tick accounting must agree on this predicate, or a deferred
+ * reconcile burns geometry-breaker attempts — share it, never inline it.
+ */
+export function hasStreamingWrites(managed: ManagedTerminal, now: number): boolean {
+  return (
+    (managed.pendingWrites ?? 0) > 0 ||
+    now - (managed.lastWriteAt ?? 0) < REVEAL_REWRAP_QUIESCENT_MS
+  );
 }
 
 export class TerminalResizeController {
@@ -335,6 +365,22 @@ export class TerminalResizeController {
       return;
     }
 
+    // #10863 backstop at the choke point: every OUT-OF-BAND deferred resync
+    // funnels through here — setVisible, the renderer-policy foreground
+    // promotion, and the wake paths — and a grid-changing resize under a
+    // still-streaming main-buffer pane re-wraps committed scrollback beneath
+    // the CLI's cursor-relative repaint (the assistant boot corruption).
+    // Callers can't all be trusted to gate individually, so gate here: arm the
+    // reveal-pending obligation and let the reconciliation watchdog run the
+    // fresh atomic reconcile once the stream quiesces. The ResizeObserver-
+    // driven resize/applyResize flow does not pass through this method and is
+    // deliberately untouched (user-visible layout changes must keep flowing).
+    if (!managed.isAltBuffer && hasStreamingWrites(managed, Date.now())) {
+      managed.revealPendingRepair = true;
+      managed.revealPendingGeneration = managed.attachGeneration;
+      return;
+    }
+
     // Wake-time atomic resync: bypass the settled-strategy 500ms debounce so
     // xterm and the PTY agree on geometry before the next refresh paints. The
     // settled debounce coalesces rapid drag-resize bursts — wake is a single
@@ -404,6 +450,23 @@ export class TerminalResizeController {
       rows = Math.max(1, Math.floor(rect.height / cellDims.height));
     }
 
+    // Never re-wrap a main-buffer pane out from under a CLI that is still
+    // streaming (#10863). xterm's resize() reflows committed scrollback while
+    // an Ink-style CLI repaints its sticky region with cursor-relative erase
+    // math sized for the old grid — a reveal that lands mid-paint duplicates
+    // or garbles the block it is painting. Report "not paintable yet" (before
+    // touching the dim caches, so applyDeferredResize's cache==current check
+    // stays truthful) and let the reveal sweep retry; the reconciliation
+    // watchdog picks up a pane that outlasts the sweep at its first quiet
+    // tick. A no-drift pass falls through: the PTY re-assert below is
+    // dedupe-safe and never re-wraps.
+    if (
+      (managed.terminal.cols !== cols || managed.terminal.rows !== rows) &&
+      hasStreamingWrites(managed, Date.now())
+    ) {
+      return false;
+    }
+
     managed.lastWidth = rect.width;
     managed.lastHeight = rect.height;
     managed.latestCols = cols;
@@ -428,8 +491,7 @@ export class TerminalResizeController {
       return;
     }
 
-    this.deps.dataBuffer.flushForTerminal(id);
-    this.deps.dataBuffer.resetForTerminal(id);
+    const flushedHeldBytes = this.flushHeldBytesBeforeResize(id);
 
     if (this.getResizeStrategy(managed) === "settled") {
       // For settled agents, defer xterm.js resize to fire atomically
@@ -444,9 +506,35 @@ export class TerminalResizeController {
       this.sendPtyResize(id, cols, rows);
     }
 
+    if (!flushedHeldBytes) {
+      this.deps.dataBuffer.resumeFlush(id);
+    }
+
     if (managed.latestWasAtBottom && !managed.isUserScrolledBack) {
       managed.terminal.scrollToBottom();
     }
+  }
+
+  /**
+   * Bounded pre-resize flush. Returns true when held ingest bytes were
+   * flushed into xterm (they parse at the outgoing grid inside `resize()`'s
+   * flushSync); false when the backlog exceeded
+   * {@link RESIZE_FLUSH_SYNC_BUDGET_BYTES} and was left queued — the caller
+   * must `resumeFlush` after the resize so the backlog drains watermarked at
+   * the new grid. The reset only runs on the flush path: `resetForTerminal`
+   * deletes the queue, so resetting a held backlog would drop output.
+   */
+  private flushHeldBytesBeforeResize(id: string): boolean {
+    const queuedBytes = this.deps.dataBuffer.getQueuedBytes(id);
+    if (exceedsResizeFlushSyncBudget(queuedBytes)) {
+      logWarn(
+        `[TerminalResizeController] ${id}: ${queuedBytes} held ingest bytes exceed the pre-resize flush budget — draining watermarked at the new grid instead`
+      );
+      return false;
+    }
+    this.deps.dataBuffer.flushForTerminal(id);
+    this.deps.dataBuffer.resetForTerminal(id);
+    return true;
   }
 
   clearResizeJob(managed: ManagedTerminal): void {
@@ -532,10 +620,12 @@ export class TerminalResizeController {
             const current = this.deps.getInstance(id);
             if (current) {
               current.resizeJob = undefined;
-              this.deps.dataBuffer.flushForTerminal(id);
-              this.deps.dataBuffer.resetForTerminal(id);
+              const flushedHeldBytes = this.flushHeldBytesBeforeResize(id);
               this.resizeTerminal(current, current.latestCols, current.latestRows);
               this.sendPtyResize(id, current.latestCols, current.latestRows);
+              if (!flushedHeldBytes) {
+                this.deps.dataBuffer.resumeFlush(id);
+              }
             }
           },
           { priority: "background", signal: controller.signal }
@@ -549,10 +639,12 @@ export class TerminalResizeController {
         const current = this.deps.getInstance(id);
         if (current) {
           current.resizeDebounceTimer = undefined;
-          this.deps.dataBuffer.flushForTerminal(id);
-          this.deps.dataBuffer.resetForTerminal(id);
+          const flushedHeldBytes = this.flushHeldBytesBeforeResize(id);
           this.resizeTerminal(current, current.latestCols, current.latestRows);
           this.sendPtyResize(id, current.latestCols, current.latestRows);
+          if (!flushedHeldBytes) {
+            this.deps.dataBuffer.resumeFlush(id);
+          }
         }
       }, 0) as unknown as number;
       managed.resizeDebounceTimer = timerId;
@@ -571,10 +663,12 @@ export class TerminalResizeController {
         // and we must not write mid-transition. The lock release path will
         // requeue via batchResize when it ends.
         if (this.isResizeLocked(id)) return;
-        this.deps.dataBuffer.flushForTerminal(id);
-        this.deps.dataBuffer.resetForTerminal(id);
+        const flushedHeldBytes = this.flushHeldBytesBeforeResize(id);
         this.resizeTerminal(current, cols, rows);
         this.sendPtyResize(id, cols, rows);
+        if (!flushedHeldBytes) {
+          this.deps.dataBuffer.resumeFlush(id);
+        }
       }
     }, RESIZE_DEBOUNCE_MS) as unknown as number;
     managed.resizeDebounceTimer = timeoutId;

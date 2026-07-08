@@ -6,6 +6,7 @@ import { useWorktrees } from "./useWorktrees";
 import { useWorktreeSelectionStore } from "@/store";
 import { isPtyPanel, type PanelKind } from "@shared/types/panel";
 import { useSearchablePalette } from "./useSearchablePalette";
+import { usePaletteStore } from "@/store/paletteStore";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 
 export type QuickSwitcherItemType = "terminal" | "worktree";
@@ -51,11 +52,23 @@ const FUSE_OPTIONS: IFuseOptions<QuickSwitcherItem> = {
 const MAX_RESULTS = 20;
 const MRU_BOOST_FACTOR = 0.05;
 
+const EMPTY_PANEL_IDS: string[] = [];
+const EMPTY_PANELS_BY_ID: ReturnType<typeof usePanelStore.getState>["panelsById"] = {};
+const EMPTY_MRU: string[] = [];
+
 export function useQuickSwitcher(): UseQuickSwitcherReturn {
-  const panelIds = usePanelStore((state) => state.panelIds);
-  const panelsById = usePanelStore((state) => state.panelsById);
+  // Always mounted in App: subscribe to the panel/worktree data only while the
+  // palette is open, else every agent-state flip and status flush re-rendered
+  // the whole App through this hook. Stable empty sentinels keep the memos
+  // below inert while closed; opening flips the selectors live in the same
+  // render, so the palette never shows stale items.
+  const paletteIsOpen = usePaletteStore((state) => state.activePaletteId === "quick-switcher");
+  const panelIds = usePanelStore((state) => (paletteIsOpen ? state.panelIds : EMPTY_PANEL_IDS));
+  const panelsById = usePanelStore((state) =>
+    paletteIsOpen ? state.panelsById : EMPTY_PANELS_BY_ID
+  );
   const setFocused = usePanelStore((state) => state.setFocused);
-  const mruList = usePanelStore((state) => state.mruList);
+  const mruList = usePanelStore((state) => (paletteIsOpen ? state.mruList : EMPTY_MRU));
   const pruneMru = usePanelStore((state) => state.pruneMru);
 
   const {
@@ -63,7 +76,7 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
     worktreeMap,
     isInitialized: worktreesInitialized,
     error: worktreeError,
-  } = useWorktrees();
+  } = useWorktrees({ enabled: paletteIsOpen });
   const { selectWorktree } = useWorktreeSelectionStore(
     useShallow((state) => ({
       selectWorktree: state.selectWorktree,

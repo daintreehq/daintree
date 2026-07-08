@@ -59,6 +59,9 @@ function makeCtx(stateRef: {
     tryReplayAndResume: vi.fn(),
     resumePausedTerminal: vi.fn(),
     createPortQueueManager: vi.fn(),
+    createTerminalWorkerPortQueueManager: vi.fn(),
+    terminalWorkerConnections: new Map(),
+    disconnectTerminalWorkerPort: vi.fn(),
     getPausedDurationsSnapshot: vi.fn(() => []),
     getDropTallySnapshot: vi.fn(() => []),
   };
@@ -524,5 +527,155 @@ describe("set-active-project non-empty envHash warming (#9810)", () => {
     expect(pool.warmForKey).toHaveBeenCalledTimes(1);
     expect(pool.warmForKey.mock.calls[0]?.[1]).toBeUndefined();
     expect(pool.warmForKey.mock.calls[0]?.[2]).toBe("env-empty");
+  });
+});
+
+describe("worker-ingest dedicated ports (#10960)", () => {
+  function makeStateRef() {
+    return {
+      visualBuffers: [] as SharedRingBuffer[],
+      visualSignalView: null as Int32Array | null,
+      analysisBuffer: null as SharedRingBuffer | null,
+    };
+  }
+
+  function makeQueueManagerMock() {
+    return {
+      removeBytes: vi.fn(),
+      tryResume: vi.fn(),
+      isAtCapacity: vi.fn(() => false),
+      addBytes: vi.fn(),
+      applyBackpressure: vi.fn(),
+      getUtilization: vi.fn(() => 0),
+      getPausedTerminalIds: vi.fn(() => []),
+      resumeAll: vi.fn(),
+      dispose: vi.fn(),
+    };
+  }
+
+  function makeNodePort() {
+    const listeners = new Map<string, Set<(arg?: unknown) => void>>();
+    return {
+      started: false,
+      closed: false,
+      posted: [] as Array<Record<string, unknown>>,
+      start() {
+        this.started = true;
+      },
+      close() {
+        this.closed = true;
+      },
+      postMessage(msg: Record<string, unknown>) {
+        this.posted.push(msg);
+      },
+      on(event: string, handler: (arg?: unknown) => void) {
+        let set = listeners.get(event);
+        if (!set) {
+          set = new Set();
+          listeners.set(event, set);
+        }
+        set.add(handler);
+      },
+      removeListener(event: string, handler: (arg?: unknown) => void) {
+        listeners.get(event)?.delete(handler);
+      },
+      emit(event: string, arg?: unknown) {
+        listeners.get(event)?.forEach((handler) => handler(arg));
+      },
+    };
+  }
+
+  function makeWorkerIngestHarness() {
+    const ctx = makeCtx(makeStateRef());
+    const workerQm = makeQueueManagerMock();
+    const windowQm = makeQueueManagerMock();
+    vi.mocked(ctx.createTerminalWorkerPortQueueManager).mockReturnValue(
+      workerQm as unknown as ReturnType<HostContext["createTerminalWorkerPortQueueManager"]>
+    );
+    vi.mocked(ctx.createPortQueueManager).mockReturnValue(
+      windowQm as unknown as ReturnType<HostContext["createPortQueueManager"]>
+    );
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const handlers = createConnectionHandlers(ctx);
+    const dedicatedPort = makeNodePort();
+    const windowPort = makeNodePort();
+    return { ctx, handlers, dedicatedPort, windowPort, workerQm, windowQm };
+  }
+
+  it("connect-terminal-port stores a disengaged per-terminal connection and starts the port", () => {
+    const h = makeWorkerIngestHarness();
+    h.handlers["connect-terminal-port"]({ windowId: 1, id: "term-1" }, [h.dedicatedPort] as never);
+
+    const conn = h.ctx.terminalWorkerConnections.get(1)?.get("term-1");
+    expect(conn).toBeDefined();
+    expect(conn!.engaged).toBe(false);
+    expect(h.dedicatedPort.started).toBe(true);
+  });
+
+  it("acks arriving on the dedicated port debit the per-terminal queue ledger", () => {
+    const h = makeWorkerIngestHarness();
+    h.handlers["connect-terminal-port"]({ windowId: 1, id: "term-1" }, [h.dedicatedPort] as never);
+
+    h.dedicatedPort.emit("message", { data: { type: "ack", id: "term-1", bytes: 64 } });
+
+    expect(h.workerQm.removeBytes).toHaveBeenCalledWith("term-1", 64);
+    expect(h.workerQm.tryResume).toHaveBeenCalledWith("term-1");
+  });
+
+  it("engage flips routing and answers with the marker on the WINDOW port; release posts the sentinel on the dedicated port", () => {
+    const h = makeWorkerIngestHarness();
+    h.handlers["connect-terminal-port"]({ windowId: 1, id: "term-1" }, [h.dedicatedPort] as never);
+    h.handlers["connect-port"]({ windowId: 1 }, [h.windowPort] as never);
+
+    h.windowPort.emit("message", { data: { type: "worker-ingest-engage", id: "term-1" } });
+
+    const conn = h.ctx.terminalWorkerConnections.get(1)!.get("term-1")!;
+    expect(conn.engaged).toBe(true);
+    expect(h.windowPort.posted).toContainEqual({ type: "worker-ingest-engaged", id: "term-1" });
+
+    h.windowPort.emit("message", {
+      data: { type: "worker-ingest-release", id: "term-1", drainId: 3 },
+    });
+    expect(conn.engaged).toBe(false);
+    expect(h.dedicatedPort.posted).toContainEqual({ type: "ingest-detached", drainId: 3 });
+  });
+
+  it("engage without a dedicated connection never posts the marker", () => {
+    const h = makeWorkerIngestHarness();
+    h.handlers["connect-port"]({ windowId: 1 }, [h.windowPort] as never);
+
+    h.windowPort.emit("message", { data: { type: "worker-ingest-engage", id: "ghost" } });
+
+    expect(h.windowPort.posted.some((msg) => msg.type === "worker-ingest-engaged")).toBe(false);
+  });
+
+  it("the dedicated port's close event tears down only that (window, terminal) pair", () => {
+    const h = makeWorkerIngestHarness();
+    h.handlers["connect-terminal-port"]({ windowId: 1, id: "term-1" }, [h.dedicatedPort] as never);
+
+    h.dedicatedPort.emit("close");
+
+    expect(h.ctx.disconnectTerminalWorkerPort).toHaveBeenCalledWith(1, "term-1", "port-close");
+  });
+
+  it("a replacement port for the same terminal disconnects the previous one first", () => {
+    const h = makeWorkerIngestHarness();
+    h.handlers["connect-terminal-port"]({ windowId: 1, id: "term-1" }, [h.dedicatedPort] as never);
+    const replacement = makeNodePort();
+    h.handlers["connect-terminal-port"]({ windowId: 1, id: "term-1" }, [replacement] as never);
+
+    expect(h.ctx.disconnectTerminalWorkerPort).toHaveBeenCalledWith(1, "term-1", "port-replace");
+    expect(h.ctx.terminalWorkerConnections.get(1)!.get("term-1")!.port).toBe(replacement);
+  });
+
+  it("disconnect-terminal-port routes to the ctx teardown with explicit-disconnect", () => {
+    const h = makeWorkerIngestHarness();
+    h.handlers["disconnect-terminal-port"]({ windowId: 2, id: "term-9" });
+    expect(h.ctx.disconnectTerminalWorkerPort).toHaveBeenCalledWith(
+      2,
+      "term-9",
+      "explicit-disconnect"
+    );
   });
 });

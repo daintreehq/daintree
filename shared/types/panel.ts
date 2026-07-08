@@ -477,6 +477,15 @@ export interface PtyPanelData extends BasePanelData {
    */
   spawnStatus?: "spawning" | "ready" | "missing-cli" | "failed";
   /**
+   * Live-only render hint: mount the visible xterm immediately instead of
+   * waiting for spawnStatus to flip "ready". Stamped at creation for a
+   * single active-grid launch (startup queue idle), where realizing the
+   * xterm concurrently with the spawn IPC shaves the round-trip off the
+   * time-to-visible path. Burst spawns (queue non-idle) stay gated so many
+   * panels never realize in the same frame. Never serialized.
+   */
+  eagerAttach?: boolean;
+  /**
    * Original user-selected preset ID. Set on first spawn, never overwritten
    * when a fallback activates. Used to display "was {original} → {active}".
    */
@@ -560,7 +569,33 @@ export interface ReviewPanelData extends BasePanelData {
   kind: "review";
 }
 
-export type PanelInstance = PtyPanelData | BrowserPanelData | DevPreviewPanelData | ReviewPanelData;
+/**
+ * View mode shared by the file viewer surfaces (panel + dialog). "rendered"
+ * only applies to markdown files; every other file renders as source.
+ */
+export type FileViewMode = "rendered" | "source";
+
+/**
+ * File panel — read-only viewer for a repo file in a grid cell. Markdown
+ * files additionally get a rendered-document mode. `filePath` is absolute;
+ * the effective read root is resolved at render time (the panel's worktree
+ * when the file is inside one, else the file's parent directory) so worktree
+ * renames don't strand the panel.
+ */
+export interface FilePanelData extends BasePanelData {
+  kind: "file";
+  /** Absolute path of the file being viewed; absent = picker empty state */
+  filePath?: string;
+  /** Active view mode. Absent defaults to "source". */
+  fileViewMode?: FileViewMode;
+}
+
+export type PanelInstance =
+  | PtyPanelData
+  | BrowserPanelData
+  | DevPreviewPanelData
+  | ReviewPanelData
+  | FilePanelData;
 
 export function isPtyPanel(panel: PanelInstance | TerminalInstance): panel is PtyPanelData {
   const kind = panel.kind ?? "terminal";
@@ -586,6 +621,23 @@ export function isReviewPanel(panel: PanelInstance | TerminalInstance): panel is
   const kind = panel.kind ?? "terminal";
 
   return kind === "review";
+}
+
+export function isFilePanel(panel: PanelInstance | TerminalInstance): panel is FilePanelData {
+  const kind = panel.kind ?? "terminal";
+
+  return kind === "file";
+}
+
+/**
+ * Panels that can live in the dock. Type-level twin of the registry's
+ * `dockable` capability (`panelKindIsDockable`) — extend both together when a
+ * new kind gains dock support, along with a chip branch in `ContentDock`.
+ */
+export type DockPanelData = PtyPanelData | FilePanelData;
+
+export function isDockPanel(panel: PanelInstance | TerminalInstance): panel is DockPanelData {
+  return isPtyPanel(panel) || isFilePanel(panel);
 }
 
 /**

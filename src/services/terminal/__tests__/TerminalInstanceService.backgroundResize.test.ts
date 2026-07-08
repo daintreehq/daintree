@@ -65,7 +65,6 @@ type BackgroundResizeTestService = {
 function makeManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTerminal {
   return {
     isOpened: true,
-    isHibernated: false,
     lastWidth: 800,
     lastHeight: 600,
     ...overrides,
@@ -168,8 +167,7 @@ describe("TerminalInstanceService applyBackgroundWindowResize", () => {
     expect(resizePtyOnlySpy).toHaveBeenLastCalledWith("a", 800 * 1.3, 600 * 1.1);
   });
 
-  it("skips hibernated, unopened, and never-measured terminals", () => {
-    service.instances.set("hibernated", makeManaged({ isHibernated: true }));
+  it("skips unopened and never-measured terminals", () => {
     service.instances.set("unopened", makeManaged({ isOpened: false }));
     service.instances.set("unmeasured", makeManaged({ lastWidth: 0, lastHeight: 0 }));
     service.instances.set("eligible", makeManaged());

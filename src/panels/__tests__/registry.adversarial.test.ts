@@ -29,6 +29,9 @@ function mockRegistryImports(options?: { throwBrowserDefaults?: boolean }): void
   vi.doMock("@/components/Browser/BrowserPaneSkeleton", () => ({
     BrowserPaneSkeleton: (() => null) as MinimalComponent,
   }));
+  vi.doMock("../review/ReviewPaneSkeleton", () => ({
+    ReviewPaneSkeleton: (() => null) as MinimalComponent,
+  }));
   vi.doMock("../terminal/serializer", () => ({ serializePtyPanel: vi.fn(() => ({ id: "term" })) }));
   vi.doMock("../terminal/defaults", () => ({ createTerminalDefaults: vi.fn(() => ({})) }));
   vi.doMock("../browser/serializer", () => ({

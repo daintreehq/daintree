@@ -54,6 +54,9 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     setInputLocked: vi.fn(),
     sendPtyResize: vi.fn(),
     waitForAttachSettled: vi.fn().mockResolvedValue(undefined),
+    // No attached renderer xterm in these tests — spawn falls back to the
+    // default/estimated dims path.
+    get: vi.fn(() => null),
   },
 }));
 
@@ -133,6 +136,8 @@ describe("optimistic panel spawn (#5789)", () => {
     const panel = getPtyPanel("opt-1");
     expect(panel).toBeDefined();
     expect(panel?.spawnStatus).toBe("spawning");
+    // A single active-grid launch mounts its xterm eagerly (startup queue idle).
+    expect(panel?.eagerAttach).toBe(true);
     expect(panel?.runtimeIdentity).toMatchObject({
       kind: "agent",
       agentId: "claude",
@@ -205,6 +210,14 @@ describe("optimistic panel spawn (#5789)", () => {
       expect(state.panelIds).toContain(id);
     }
 
+    // Only the first launch of the burst gets the eager xterm mount; the
+    // reservation taken at its eager decision hides the still-empty queue
+    // from the rest, so they keep the one-per-frame realization gate.
+    expect((state.panelsById["concurrent-0"] as PtyPanelData | undefined)?.eagerAttach).toBe(true);
+    for (const id of ids.slice(1)) {
+      expect((state.panelsById[id] as PtyPanelData | undefined)?.eagerAttach).toBeUndefined();
+    }
+
     // Only the first PTY spawn is allowed to start while the startup job is blocked.
     expect(terminalClient.spawn).toHaveBeenCalledTimes(1);
     expect(terminalClient.spawn.mock.calls[0]?.[0]).toMatchObject({ id: "concurrent-0" });
@@ -224,6 +237,23 @@ describe("optimistic panel spawn (#5789)", () => {
     for (const id of ids) {
       expect((after.panelsById[id] as PtyPanelData | undefined)?.spawnStatus).toBe("ready");
     }
+  });
+
+  it("does not stamp eagerAttach on dock launches", async () => {
+    const { addPanel } = usePanelStore.getState();
+    const id = await addPanel({
+      kind: "terminal",
+      launchAgentId: "claude",
+      command: "claude",
+      requestedId: "dock-eager",
+      cwd: "/",
+      location: "dock",
+      bypassLimits: true,
+    });
+
+    expect(id).toBe("dock-eager");
+    expect(getPtyPanel("dock-eager")?.eagerAttach).toBeUndefined();
+    await drainMicrotasks();
   });
 
   it("keeps the panel with spawnStatus 'failed' when the background spawn rejects", async () => {

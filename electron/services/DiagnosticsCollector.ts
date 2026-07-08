@@ -14,9 +14,11 @@ import { getRendererTerminalDiagnosticsSamples } from "./RendererTerminalDiagnos
 import type { HandlerDependencies } from "../ipc/types.js";
 import type {
   WhySlowFocusThrottleSnapshot,
+  WhySlowMemorySnapshot,
   WhySlowPtySummary,
   WhySlowResourceSnapshot,
   WhySlowSnapshot,
+  WhySlowWorkerSummary,
   WhySlowWorktreeSummary,
 } from "../../shared/types/whySlow.js";
 
@@ -451,6 +453,31 @@ async function collectFlowControl(ptyClient?: PtyClient) {
   }
 }
 
+/**
+ * Agent-terminal lifecycle ledger snapshot: per-terminal launch facts
+ * (identity, provenance, generations) plus the anomaly ring buffer — the
+ * rejected stale/duplicate lifecycle operations. Secret-free by construction
+ * (env is key names + hash only) and cwd is sanitized like `collectTerminals`.
+ */
+async function collectLifecycleLedger() {
+  try {
+    const { getLifecycleLedger } = await import("./pty/lifecycleLedger.js");
+    const diagnostics = getLifecycleLedger().getDiagnostics();
+    return {
+      anomalies: diagnostics.anomalies,
+      terminals: diagnostics.terminals.map((t) => ({
+        ...t,
+        facts: {
+          ...t.facts,
+          cwd: t.facts.cwd ? sanitizePath(t.facts.cwd) : undefined,
+        },
+      })),
+    };
+  } catch {
+    return { error: "Failed to get lifecycle ledger snapshot" };
+  }
+}
+
 async function collectLogs() {
   try {
     const entries = logBuffer.getAll();
@@ -569,6 +596,19 @@ async function collectMemoryTrends() {
     return { processes: getTrendSnapshot() };
   } catch {
     return { error: "Failed to collect memory trends" };
+  }
+}
+
+// Composite memory attribution for support exports: Electron working-set +
+// terminal descendant RSS grouped by project, each with freshness metadata.
+// The rollup exposes only process basenames (`comm`), never command lines or
+// paths; the final redactDeep pass covers the rest.
+async function collectMemoryAttribution(deps: HandlerDependencies) {
+  try {
+    const { getCompositeMemorySnapshot } = await import("./memoryAccounting.js");
+    return await getCompositeMemorySnapshot(deps.ptyClient ?? null);
+  } catch {
+    return { error: "Failed to collect memory attribution" };
   }
 }
 
@@ -707,6 +747,67 @@ async function collectWhySlowPty(ptyClient?: PtyClient): Promise<WhySlowPtySumma
   }
 }
 
+// Bounded persistent-worker resource report: analysis pool slots, DB worker,
+// copytree workers, plugin workers, and the utility hosts themselves. Provider
+// isolation and time-boxing live inside the service; this wrapper only guards
+// the import/singleton path.
+async function collectWorkerGovernance() {
+  try {
+    const { getWorkerGovernanceService } = await import("./WorkerGovernanceService.js");
+    return await getWorkerGovernanceService().collectReport();
+  } catch {
+    return { error: "Failed to collect worker governance report" };
+  }
+}
+
+async function collectWhySlowWorkers(): Promise<WhySlowWorkerSummary | null> {
+  try {
+    const { getWorkerGovernanceService } = await import("./WorkerGovernanceService.js");
+    const service = getWorkerGovernanceService();
+    return service.summarize(await service.collectReport());
+  } catch {
+    return null;
+  }
+}
+
+// Cap the per-project attribution: the top handful answers "which project is
+// heavy?" without turning the snapshot into a full process inventory.
+const WHY_SLOW_TOP_PROJECTS = 5;
+
+async function collectWhySlowMemory(ptyClient?: PtyClient): Promise<WhySlowMemorySnapshot | null> {
+  try {
+    const { getCompositeMemorySnapshot } = await import("./memoryAccounting.js");
+    const snapshot = await getCompositeMemorySnapshot(ptyClient ?? null);
+    const workloads = snapshot.terminalWorkloads;
+    const topProjects = [...workloads.byProject]
+      .sort((a, b) => b.memoryMb - a.memoryMb)
+      .slice(0, WHY_SLOW_TOP_PROJECTS)
+      .map((p) => ({
+        projectId: p.projectId,
+        memoryMb: p.memoryMb,
+        terminalCount: p.terminalCount,
+        processCount: p.processCount,
+        // Basenames only — the rollup never carries command lines, but keep
+        // the export contract explicit at the boundary too.
+        topProcessNames: p.topProcesses.map((proc) => proc.comm),
+      }));
+    return {
+      appMemoryMb: snapshot.electron.available ? snapshot.electron.totalWorkingSetMb : null,
+      terminalWorkloads: {
+        available: workloads.available,
+        stale: workloads.stale,
+        ageMs: workloads.ageMs,
+        totalMemoryMb: workloads.totalMemoryMb,
+        processCount: workloads.processCount,
+        terminalCount: workloads.terminalCount,
+        topProjects,
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function collectWhySlowWorktrees(): Promise<WhySlowWorktreeSummary | null> {
   try {
     const { getWorkspaceClientRef } = await import("../window/serviceRefs.js");
@@ -736,10 +837,12 @@ export async function collectWhySlowSnapshot(deps: HandlerDependencies): Promise
   // section in withTimeout, but the live dock pull calls this directly. A hung
   // pty-host or workspace-host must not wedge the very snapshot meant to explain
   // a slowdown — degrade the stuck section to null instead.
-  const [resource, pty, worktrees] = await Promise.all([
+  const [resource, pty, worktrees, workers, memory] = await Promise.all([
     withTimeout(collectWhySlowResource(), WHY_SLOW_ASYNC_TIMEOUT_MS, null),
     withTimeout(collectWhySlowPty(deps.ptyClient), WHY_SLOW_ASYNC_TIMEOUT_MS, null),
     withTimeout(collectWhySlowWorktrees(), WHY_SLOW_ASYNC_TIMEOUT_MS, null),
+    withTimeout(collectWhySlowWorkers(), WHY_SLOW_ASYNC_TIMEOUT_MS, null),
+    withTimeout(collectWhySlowMemory(deps.ptyClient), WHY_SLOW_ASYNC_TIMEOUT_MS, null),
   ]);
   return {
     timestamp: Date.now(),
@@ -748,6 +851,8 @@ export async function collectWhySlowSnapshot(deps: HandlerDependencies): Promise
     rendererTerminals: collectWhySlowRendererTerminals(),
     pty,
     worktrees,
+    workers,
+    memory,
   };
 }
 
@@ -771,10 +876,13 @@ export async function collectDiagnosticsWithKeys(
     { key: "config", fn: collectStoreConfig },
     { key: "terminals", fn: () => collectTerminals(deps.ptyClient) },
     { key: "flowControl", fn: () => collectFlowControl(deps.ptyClient) },
+    { key: "lifecycleLedger", fn: collectLifecycleLedger },
     { key: "projectViews", fn: () => collectProjectViews(deps) },
     { key: "rendererMemory", fn: collectRendererMemory },
     { key: "memoryTrends", fn: collectMemoryTrends },
+    { key: "memoryAttribution", fn: () => collectMemoryAttribution(deps) },
     { key: "resourceState", fn: collectResourceState },
+    { key: "workerGovernance", fn: collectWorkerGovernance },
     { key: "whySlow", fn: () => collectWhySlowSnapshot(deps) },
     { key: "counts", fn: () => collectCounts(deps) },
     { key: "logs", fn: collectLogs },

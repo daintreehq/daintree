@@ -1,7 +1,7 @@
 import dns from "node:dns/promises";
 import type { net as ElectronNet } from "electron";
 import { MAX_DNTR_BYTES } from "./pluginArchiveConstants.js";
-import { isPrivateOrLoopbackHostname } from "../schemas/plugin.js";
+import { isPrivateOrLoopbackHostname } from "../schemas/pluginIdentifiers.js";
 
 export { MAX_DNTR_BYTES };
 

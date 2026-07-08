@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { systemClient } from "@/clients";
+import { filesClient } from "@/clients/filesClient";
 import { useProjectStore } from "@/store";
+import { usePanelStore } from "@/store/panelStore";
+import { isFilePanel } from "@shared/types/panel";
+import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
+import { isAbsolute, isPathInside, join, normalize } from "@shared/utils/path";
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 
 const viewArgsSchema = z.object({
@@ -38,6 +43,32 @@ const openDiffArgsSchema = z.object({
     .describe("Git status of the path; defaults to `modified` when omitted."),
 });
 
+const readArgsSchema = z.object({
+  path: z.string().min(1).describe("Absolute or repo-relative file path to read."),
+  rootPath: z
+    .string()
+    .optional()
+    .describe(
+      "Repository root used to resolve a relative `path` (a worktree `path` from `worktree.list`). Defaults to the current project root."
+    ),
+});
+
+const openPanelArgsSchema = z.object({
+  path: z.string().min(1).describe("Absolute or repo-relative path of the file to display."),
+  rootPath: z
+    .string()
+    .optional()
+    .describe(
+      "Root used to resolve a relative `path` (a worktree `path` from `worktree.list`). Defaults to the current project root."
+    ),
+  viewMode: z
+    .enum(["rendered", "source"])
+    .optional()
+    .describe(
+      'Initial view mode. Defaults to "source". "rendered" only applies to markdown files.'
+    ),
+});
+
 const openInEditorArgsSchema = z.object({
   path: z.string(),
   line: z.number().int().positive().optional(),
@@ -52,7 +83,16 @@ const showItemInFolderArgsSchema = z.object({
   path: z.string().min(1),
 });
 
-export function registerFileActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
+function resolveFilePanelPath(path: string, rootPath: string | undefined): string {
+  if (isAbsolute(path)) return normalize(path);
+  const root = rootPath ?? useProjectStore.getState().currentProject?.path;
+  if (!root) {
+    throw new Error("No project open — pass an absolute `path` or a `rootPath`");
+  }
+  return normalize(join(root, path));
+}
+
+export function registerFileActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   actions.set("file.view", () => ({
     id: "file.view",
     title: "View File",
@@ -80,6 +120,118 @@ export function registerFileActions(actions: ActionRegistry, _callbacks: ActionC
           detail: { path, rootPath, line, col },
         })
       );
+    },
+  }));
+
+  actions.set("file.read", () => ({
+    id: "file.read",
+    title: "Read File",
+    description:
+      "Read a text file's contents (UTF-8, 500 KB limit). Args: `path` (required) — absolute or repo-relative file path; `rootPath` (optional) — root used to resolve a relative `path` (defaults to the current project root). Only files inside the current project or one of its worktrees are readable — anything else errors. Returns { content }. Errors: BINARY_FILE, FILE_TOO_LARGE (> 500 KB), LFS_POINTER, NOT_FOUND, PERMISSION, outside-project paths. Use `file.openPanel` to display a file to the user instead of reading it.",
+    category: "files",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: readArgsSchema,
+    resultSchema: z.object({ content: z.string() }),
+    mcpOutputSchema: true,
+    examples: [
+      {
+        args: { path: "docs/spec.md" },
+        description: "Read a repo-relative file's contents",
+      },
+    ],
+    run: async (args: unknown) => {
+      const { path, rootPath } = readArgsSchema.parse(args);
+      const projectPath = useProjectStore.getState().currentProject?.path;
+      const resolutionRoot = rootPath ?? projectPath;
+      if (!isAbsolute(path) && !resolutionRoot) {
+        throw new Error("No project open — pass an absolute `path` or a `rootPath`");
+      }
+      const absolutePath = isAbsolute(path)
+        ? normalize(path)
+        : normalize(join(resolutionRoot!, path));
+      // Hard containment: this action is on the MCP/assistant surface, so it
+      // must never become an arbitrary-file read. Reads are only allowed
+      // inside the current project or one of its worktrees — the containment
+      // root is a known root, never derived from the target path.
+      const knownRoots = [
+        ...(projectPath ? [projectPath] : []),
+        ...callbacks.getWorktrees().flatMap((worktree) => (worktree.path ? [worktree.path] : [])),
+      ];
+      const containingRoot = knownRoots.find((root) => isPathInside(absolutePath, root));
+      if (!containingRoot) {
+        throw new Error("Path is outside the current project and its worktrees");
+      }
+      const { content } = await filesClient.read({
+        path: absolutePath,
+        rootPath: containingRoot,
+      });
+      return { content };
+    },
+  }));
+
+  actions.set("file.openPanel", () => ({
+    id: "file.openPanel",
+    title: "Open File Panel",
+    description:
+      "Open a file in a read-only file viewer panel in the grid. Markdown files get a Source/Rendered toggle (source is the default view). Args: `path` (required) — absolute or repo-relative file path; `rootPath` (optional) — root used to resolve a relative `path` (defaults to the current project root); `viewMode` (optional) — 'source' (default) or 'rendered' (markdown only). Reuses a panel already showing the same file instead of opening a duplicate. Returns { panelId }. Use `file.read` to read a file's content without displaying it.",
+    category: "files",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    keywords: ["file", "viewer", "panel", "markdown", "preview", "md", "readme", "spec"],
+    argsSchema: openPanelArgsSchema,
+    examples: [
+      {
+        args: { path: "docs/spec.md", viewMode: "rendered" },
+        description: "Open a repo-relative markdown file as a rendered document panel",
+      },
+      {
+        args: { path: "src/index.css" },
+        description: "Pin any repo file into the grid as a source view",
+      },
+    ],
+    run: async (args: unknown) => {
+      const { path, rootPath, viewMode } = openPanelArgsSchema.parse(args);
+      const absolutePath = resolveFilePanelPath(path, rootPath);
+      // "rendered" is a markdown-only mode — clamp so a stray request can't
+      // persist a mode the panel can never display.
+      const effectiveViewMode =
+        viewMode === "rendered" && !isMarkdownFilePath(absolutePath) ? "source" : viewMode;
+
+      const store = usePanelStore.getState();
+      const existing = store.panelIds
+        .map((id) => store.panelsById[id])
+        .find(
+          (panel) =>
+            panel !== undefined &&
+            isFilePanel(panel) &&
+            // Trashed panels are pending cleanup and background panels are
+            // hibernated mirrors — activating either surfaces nothing.
+            panel.location !== "trash" &&
+            panel.location !== "background" &&
+            panel.filePath === absolutePath
+        );
+      if (existing) {
+        if (effectiveViewMode) store.setFileViewMode(existing.id, effectiveViewMode);
+        store.activateTerminal(existing.id);
+        return { panelId: existing.id };
+      }
+
+      // Omit focusPolicy so the store resolves "auto" vs "preserve" via its
+      // MCP focus-suppression guard — never steal focus from a typing user.
+      const panelId = await store.addPanel({
+        kind: "file",
+        filePath: absolutePath,
+        fileViewMode: effectiveViewMode,
+        worktreeId: callbacks.getActiveWorktreeId(),
+        location: "grid",
+      });
+      if (!panelId) {
+        throw new Error("Could not open file panel: panel limit reached");
+      }
+      return { panelId };
     },
   }));
 

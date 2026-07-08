@@ -232,6 +232,13 @@ vi.mock("../services/PtyManager.js", () => {
     });
     getTerminal = vi.fn((id: string) => hostState.terminals.get(id));
     getAll = vi.fn(() => Array.from(hostState.terminals.values()));
+    getActivitySignal = vi.fn(() => {
+      let latestActivityAt = 0;
+      for (const terminal of hostState.terminals.values()) {
+        latestActivityAt = Math.max(latestActivityAt, terminal.spawnedAt);
+      }
+      return { latestActivityAt, terminalCount: hostState.terminals.size };
+    });
     write = vi.fn();
     resize = vi.fn();
     kill = vi.fn();

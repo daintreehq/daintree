@@ -27,7 +27,12 @@ import {
   isAgentReady,
 } from "./slices";
 import type { TerminalRefreshTier, AddPanelFocusPolicy } from "@shared/types";
-import { isGridPanelLocation, isPtyPanel, type PtyPanelData } from "@shared/types/panel";
+import {
+  isGridPanelLocation,
+  isDockPanel,
+  isPtyPanel,
+  type PtyPanelData,
+} from "@shared/types/panel";
 import { TerminalRefreshTier as TerminalRefreshTierEnum } from "@/types";
 import { terminalRegistryController } from "@/controllers";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
@@ -761,7 +766,7 @@ export const usePanelStore = create<PanelGridState>()(
         const restoredPanel = get().panelsById[id];
         if (!restoredPanel) return;
         const previousFocusedId = get().focusedId;
-        const landsInDock = restoredPanel.location === "dock" && isPtyPanel(restoredPanel);
+        const landsInDock = restoredPanel.location === "dock" && isDockPanel(restoredPanel);
         set({
           focusedId: id,
           // Open the dock popover when the panel landed back in the dock so
@@ -809,7 +814,7 @@ export const usePanelStore = create<PanelGridState>()(
         if (!focusId) return;
         const restoredPanel = get().panelsById[focusId]!;
         const previousFocusedId = get().focusedId;
-        const landsInDock = restoredPanel.location === "dock" && isPtyPanel(restoredPanel);
+        const landsInDock = restoredPanel.location === "dock" && isDockPanel(restoredPanel);
         set({
           focusedId: focusId,
           // Match the restored panel's location so a docked group reopens the

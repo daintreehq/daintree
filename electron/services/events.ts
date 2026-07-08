@@ -540,7 +540,7 @@ export type DaintreeEventMap = {
     previousState: AgentState;
     trigger: AgentStateChangeTrigger;
     confidence: number;
-    /** Terminal working directory (used by PreAgentSnapshotService as the git target). */
+    /** Terminal working directory (the worktree root in the typical case). */
     cwd?: string;
     waitingReason?: import("../../shared/types/agent.js").WaitingReason;
     sessionCost?: number;
@@ -757,6 +757,10 @@ export type DaintreeEventMap = {
    * `agent-session:recorded`.
    */
   "agent-session:captured": {
+    /** Terminal whose close produced the record — keys ledger dedupe. */
+    terminalId: string;
+    /** Launch generation of that terminal incarnation, when known. */
+    launchGeneration?: number;
     record: Omit<
       import("../../shared/types/ipc/agentSessionHistory.js").AgentSessionRecord,
       "savedAt"

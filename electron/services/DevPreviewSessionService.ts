@@ -1,31 +1,46 @@
-import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { stripVTControlCharacters } from "node:util";
+import { getInvalidCommandMessage } from "./DevPreviewCommandNormalizer.js";
+import { resetCrashLoopGuard } from "./DevPreviewCrashLoopGuard.js";
+import { processDevPreviewOutput } from "./DevPreviewOutputProcessor.js";
 import {
-  getInvalidCommandMessage,
-  normalizeNextjsDevCommand,
-  normalizeViteDevCommand,
-} from "./DevPreviewCommandNormalizer.js";
+  CACHE_DIRS,
+  clearCacheDirs,
+  computeDirSize,
+  detectPackageManagerInfo,
+  statDirMeta,
+} from "./DevPreviewDiskUsage.js";
 import {
-  allocatePort,
-  releasePort,
-  waitForPortFree,
-  PORT_FREE_TIMEOUT_MS,
-} from "./DevPreviewPortAllocator.js";
+  capDiagnosticText,
+  recordDevPreviewDiagnostic,
+  type DevPreviewDiagnosticInput,
+  type DevPreviewDiagnosticsRingMap,
+} from "./DevPreviewDiagnosticsRing.js";
+import { releasePort, waitForPortFree, PORT_FREE_TIMEOUT_MS } from "./DevPreviewPortAllocator.js";
 import { waitForServerReady, READINESS_TIMEOUT_MS } from "./DevPreviewReadinessProbe.js";
 import {
   createSessionKey,
-  sanitizeToken,
   cloneEnv,
   envEquals,
   validateEnsureRequest,
   validateSessionRequest,
   validateStopByPanelRequest,
 } from "./DevPreviewRequestValidators.js";
+import {
+  ensureSessionTerminal,
+  spawnSessionTerminal,
+  stopSessionTerminal,
+  waitForRegisteredPortFree,
+  runInstall,
+  handleDevPreviewTerminalExit,
+  clearStartupReplay,
+  isBenignMissingTerminalError,
+  type TerminalControllerDeps,
+} from "./DevPreviewTerminalController.js";
 
 export { normalizeNextjsDevCommand } from "./DevPreviewCommandNormalizer.js";
+export { DIAGNOSTIC_RING_MAX } from "./DevPreviewDiagnosticsRing.js";
 import { buildDevPreviewSubdomain } from "../../shared/utils/devPreviewProxy.js";
 import type { DevPreviewManifestEntry } from "./DevPreviewManifestService.js";
 import type { PtyClient } from "./PtyClient.js";
@@ -40,15 +55,10 @@ import type {
   DevPreviewDiagnosticsSnapshot,
   DevPreviewProxyFailureCause,
   DevPreviewUpstreamResolution,
-  DevPreviewDirMeta,
   DevPreviewDestructivePreviewMeta,
   DevPreviewDestructivePreviewSizes,
   DevPreviewDestructivePreviewSizesRequest,
-  DevPreviewPackageManager,
 } from "../../shared/types/ipc/devPreview.js";
-import type { DevServerError } from "../../shared/utils/devServerErrors.js";
-import { detectDevServerError } from "../../shared/utils/devServerErrors.js";
-import { CRASH_SIGNALS, EXPECTED_TERMINATION_SIGNALS } from "./pty/terminalForensics.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { markPerformance } from "../utils/performance.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
@@ -91,74 +101,12 @@ const RUNNING_STATES: ReadonlySet<DevPreviewSessionStatus> = new Set([
   "running",
 ]);
 
-// Framework build/dep caches wiped by restartAndClearCache, relative to the
-// session cwd. Covers Next, Vite, Turbo, SvelteKit, Astro, and Nuxt root caches
-// plus Vite's node_modules/.vite dep-optimization cache (distinct from a
-// root-level .vite directory). Missing dirs are tolerated by removal callers.
-const CACHE_DIRS: readonly string[] = [
-  ".next",
-  ".vite",
-  ".turbo",
-  ".svelte-kit",
-  ".astro",
-  ".nuxt",
-  path.join("node_modules", ".vite"),
-];
-
-const DEFAULT_TIMEOUT_MS = 8000;
 const DEV_PREVIEW_STOP_ESCALATION_MS = 5000;
-const STALE_START_RECOVERY_MS = 10000;
-const STARTUP_REPLAY_DELAY_MS = 1500;
-const REPLAY_HISTORY_MAX_LINES = 300;
-const PTY_SUBMIT_AFTER_SPAWN_MS = 100;
-const COMPILE_ARM_MS = 1000;
-const COMPILE_CLEAR_MS = 1500;
-
 // Bounds for the `lastOutput` activity hint surfaced in the cross-worktree
 // dashboard. Only the buffer tail is scanned (the last line is all we need) and
 // the result is capped so a single pathological line can't bloat the snapshot.
 const LAST_OUTPUT_SCAN_BYTES = 2000;
 const LAST_OUTPUT_MAX_CHARS = 120;
-
-// Per-session crash-loop guard. A broken config (missing deps that an install
-// can't fix) otherwise drives an unbounded install→crash→reinstall cycle that
-// burns CPU and battery. The guard counts consecutive fast cycles, backs off
-// geometrically between re-install attempts, and after CRASH_LOOP_MAX_ATTEMPTS
-// halts auto-respawn into a recoverable "stopped" state. A dev server that
-// survives CRASH_LOOP_MIN_UPTIME_MS graduates and resets the counter. Values
-// are tuned for a dev workflow (sub-3s cap) — not Kubernetes-style multi-minute
-// waits — so a developer who just fixed the bug isn't punished. The first
-// re-install in a fresh window runs immediately; backoff applies only to
-// repeats.
-const CRASH_LOOP_MIN_UPTIME_MS = 5000;
-const CRASH_LOOP_INITIAL_DELAY_MS = 500;
-const CRASH_LOOP_BACKOFF_MULTIPLIER = 1.5;
-const CRASH_LOOP_MAX_DELAY_MS = 3000;
-const CRASH_LOOP_MAX_ATTEMPTS = 5;
-
-// Bounds for the per-session diagnostics timeline. The ring keeps the last
-// DIAGNOSTIC_RING_MAX events per session key; the map keeps rings for the last
-// DIAGNOSTIC_SESSIONS_MAX keys touched so a timeline survives hibernation /
-// panel-close (the session object is deleted but its ring stays inspectable)
-// without growing unbounded across a long app session. Free-text fields are
-// capped so one pathological error line can't bloat a snapshot.
-export const DIAGNOSTIC_RING_MAX = 100;
-const DIAGNOSTIC_SESSIONS_MAX = 50;
-const DIAGNOSTIC_TEXT_MAX = 200;
-// Consecutive identical proxy failures coalesce into one event with a count —
-// a webview retry storm must not evict the lifecycle history it explains.
-const PROXY_EVENT_COALESCE_MS = 10_000;
-
-// A diagnostic event as recorded at a call site: the ring assigns at/seq/
-// generation/count. Distributes over the union so each variant keeps its
-// typed details.
-type DiagnosticInput<T = DevPreviewDiagnosticEvent> = T extends DevPreviewDiagnosticEvent
-  ? Omit<T, "at" | "seq" | "generation" | "count">
-  : never;
-
-function capDiagnosticText(text: string): string {
-  return text.length > DIAGNOSTIC_TEXT_MAX ? text.slice(0, DIAGNOSTIC_TEXT_MAX) : text;
-}
 
 /**
  * Parse both the port AND the transport scheme out of a detected dev-server URL (#9974).
@@ -202,10 +150,7 @@ export class DevPreviewSessionService {
   // separate map (not on the session object) so the timeline outlives session
   // deletion — a "why did my server stop?" after hibernation or panel-close is
   // exactly what this exists to answer. LRU-bounded via re-insertion on write.
-  private readonly diagnostics = new Map<
-    string,
-    { events: DevPreviewDiagnosticEvent[]; seq: number }
-  >();
+  private readonly diagnostics: DevPreviewDiagnosticsRingMap = new Map();
   // In-flight waitForPortFree aborts, so dispose() doesn't leave locked tasks
   // polling a busy port for up to PORT_FREE_TIMEOUT_MS after app quit began.
   private readonly portWaitAborts = new Set<AbortController>();
@@ -410,7 +355,7 @@ export class DevPreviewSessionService {
     }
     this.portWaitAborts.clear();
     for (const session of this.sessions.values()) {
-      this.clearStartupReplay(session);
+      clearStartupReplay(session);
       session.readinessAbort?.abort();
       session.backoffAbort?.abort();
       this.clearCompiling(session);
@@ -421,7 +366,7 @@ export class DevPreviewSessionService {
         this.ptyClient.kill(terminalId, "dev-preview:dispose");
       } catch (err) {
         const message = formatErrorMessage(err, "Failed to kill dev preview terminal");
-        if (!this.isBenignMissingTerminalError(message)) {
+        if (!isBenignMissingTerminalError(message)) {
           console.warn("[DevPreviewSessionService] Failed to kill terminal during dispose:", err);
         }
       }
@@ -475,7 +420,7 @@ export class DevPreviewSessionService {
       // tripped crash-loop guard so the fresh config gets its full attempt
       // budget instead of inheriting a stopped state from the old config.
       if (configChanged) {
-        this.resetCrashLoopGuard(session);
+        resetCrashLoopGuard(session);
       }
 
       if (prevWorktreeId && prevWorktreeId !== session.worktreeId) {
@@ -532,7 +477,7 @@ export class DevPreviewSessionService {
 
         // User-initiated restart cancels any pending crash-loop backoff and
         // clears the guard so this attempt starts from a clean slate.
-        this.resetCrashLoopGuard(session);
+        resetCrashLoopGuard(session);
 
         const commandError = getInvalidCommandMessage(session.devCommand);
         if (commandError) {
@@ -585,7 +530,7 @@ export class DevPreviewSessionService {
       const session = this.sessions.get(key);
       if (!session) return;
 
-      this.resetCrashLoopGuard(session);
+      resetCrashLoopGuard(session);
 
       const commandError = getInvalidCommandMessage(session.devCommand);
       if (commandError) {
@@ -620,7 +565,7 @@ export class DevPreviewSessionService {
         return;
       }
 
-      const deletionError = await this.clearCacheDirs(session.cwd);
+      const deletionError = await clearCacheDirs(session.cwd);
       if (deletionError) {
         this.updateSession(session, {
           status: "error",
@@ -648,7 +593,7 @@ export class DevPreviewSessionService {
       const session = this.sessions.get(key);
       if (!session) return;
 
-      this.resetCrashLoopGuard(session);
+      resetCrashLoopGuard(session);
 
       const commandError = getInvalidCommandMessage(session.devCommand);
       if (commandError) {
@@ -709,23 +654,6 @@ export class DevPreviewSessionService {
     return this.getSessionState(request.projectId, request.panelId);
   }
 
-  /**
-   * Deletes the framework cache directories under cwd. Returns an error
-   * message string if any deletion failed, or null on success. `force: true`
-   * makes missing directories a no-op.
-   */
-  private async clearCacheDirs(cwd: string): Promise<string | null> {
-    const failures: string[] = [];
-    for (const dir of CACHE_DIRS) {
-      try {
-        await fsPromises.rm(path.join(cwd, dir), { recursive: true, force: true });
-      } catch (err) {
-        failures.push(`${dir} (${formatErrorMessage(err, "deletion failed")})`);
-      }
-    }
-    return failures.length > 0 ? failures.join(", ") : null;
-  }
-
   async stop(request: DevPreviewSessionRequest): Promise<DevPreviewSessionState> {
     validateSessionRequest(request);
     const key = createSessionKey(request.projectId, request.panelId);
@@ -737,7 +665,7 @@ export class DevPreviewSessionService {
       // backoff) so it can't auto-respawn behind the user's back. The terminal
       // branch routes through stopSessionTerminal, but a stop arriving mid
       // backoff has no live terminal and would otherwise skip the abort.
-      this.resetCrashLoopGuard(session);
+      resetCrashLoopGuard(session);
 
       this.recordSessionDiagnostic(session, { type: "stop-requested", context: "stop" });
 
@@ -805,6 +733,33 @@ export class DevPreviewSessionService {
     return this.getSessionState(request.projectId, request.panelId);
   }
 
+  /**
+   * Shared happy-path for stopByPanel/stopByProject/stopByWorktree: record the
+   * stop, kill the terminal, mark the session stopped, and remove it from the
+   * live maps. Callers differ only in error handling (whether to also surface
+   * an error state, what log fields to include, and whether to collect/rethrow
+   * failures), so that stays at each call site.
+   */
+  private async stopAndRemoveSession(
+    session: DevPreviewSession,
+    context: "panel-closed" | "project-hibernated" | "worktree-delete"
+  ): Promise<void> {
+    const key = createSessionKey(session.projectId, session.panelId);
+    this.recordSessionDiagnostic(session, { type: "stop-requested", context });
+    await this.stopSessionTerminal(session, context);
+    this.updateSession(session, {
+      status: "stopped",
+      url: null,
+      predictedUrl: null,
+      error: null,
+      terminalId: null,
+      isRestarting: false,
+    });
+    this.sessions.delete(key);
+    releasePort(this.portRegistry, key);
+    this.restoreWorktreeMapping(session.worktreeId, key);
+  }
+
   async stopByPanel(request: DevPreviewStopByPanelRequest): Promise<void> {
     validateStopByPanelRequest(request);
     const targets = [...this.sessions.values()].filter(
@@ -816,22 +771,7 @@ export class DevPreviewSessionService {
         const key = createSessionKey(session.projectId, session.panelId);
         await this.runLocked(key, async () => {
           try {
-            this.recordSessionDiagnostic(session, {
-              type: "stop-requested",
-              context: "panel-closed",
-            });
-            await this.stopSessionTerminal(session, "panel-closed");
-            this.updateSession(session, {
-              status: "stopped",
-              url: null,
-              predictedUrl: null,
-              error: null,
-              terminalId: null,
-              isRestarting: false,
-            });
-            this.sessions.delete(key);
-            releasePort(this.portRegistry, key);
-            this.restoreWorktreeMapping(session.worktreeId, key);
+            await this.stopAndRemoveSession(session, "panel-closed");
           } catch (err) {
             const message = formatErrorMessage(err, "Failed to stop dev preview");
             this.updateSession(session, {
@@ -863,22 +803,7 @@ export class DevPreviewSessionService {
       targets.map(async ([key, session]) => {
         await this.runLocked(key, async () => {
           try {
-            this.recordSessionDiagnostic(session, {
-              type: "stop-requested",
-              context: "project-hibernated",
-            });
-            await this.stopSessionTerminal(session, "project-hibernated");
-            this.updateSession(session, {
-              status: "stopped",
-              url: null,
-              predictedUrl: null,
-              error: null,
-              terminalId: null,
-              isRestarting: false,
-            });
-            this.sessions.delete(key);
-            releasePort(this.portRegistry, key);
-            this.restoreWorktreeMapping(session.worktreeId, key);
+            await this.stopAndRemoveSession(session, "project-hibernated");
           } catch (err) {
             const message = formatErrorMessage(err, "Failed to stop dev preview");
             console.warn("[DevPreviewSessionService] stopByProject failed for session", {
@@ -992,22 +917,7 @@ export class DevPreviewSessionService {
       targets.map(async ([key, session]) => {
         await this.runLocked(key, async () => {
           try {
-            this.recordSessionDiagnostic(session, {
-              type: "stop-requested",
-              context: "worktree-delete",
-            });
-            await this.stopSessionTerminal(session, "worktree-delete");
-            this.updateSession(session, {
-              status: "stopped",
-              url: null,
-              predictedUrl: null,
-              error: null,
-              terminalId: null,
-              isRestarting: false,
-            });
-            this.sessions.delete(key);
-            releasePort(this.portRegistry, key);
-            this.restoreWorktreeMapping(session.worktreeId, key);
+            await this.stopAndRemoveSession(session, "worktree-delete");
           } catch (err) {
             const message = formatErrorMessage(err, "Failed to stop dev preview");
             console.warn("[DevPreviewSessionService] stopByWorktree failed for session", {
@@ -1048,55 +958,22 @@ export class DevPreviewSessionService {
   }
 
   /**
-   * Append a diagnostic event to a session key's bounded ring. Consecutive
-   * identical proxy failures coalesce into one event with a count so a webview
-   * retry storm can't evict the lifecycle history. Writing touches the key's
-   * LRU position; the oldest untouched key is dropped past DIAGNOSTIC_SESSIONS_MAX.
+   * Append a diagnostic event to a session key's bounded ring. See
+   * `recordDevPreviewDiagnostic` for coalescing/eviction behavior.
    */
-  private recordDiagnostic(key: string, generation: number, input: DiagnosticInput): void {
+  private recordDiagnostic(
+    key: string,
+    generation: number,
+    input: DevPreviewDiagnosticInput
+  ): void {
     if (this.disposed) return;
-    let ring = this.diagnostics.get(key);
-    if (ring) {
-      this.diagnostics.delete(key);
-    } else {
-      ring = { events: [], seq: 0 };
-    }
-    this.diagnostics.set(key, ring);
-    while (this.diagnostics.size > DIAGNOSTIC_SESSIONS_MAX) {
-      const oldest = this.diagnostics.keys().next().value;
-      if (oldest === undefined) break;
-      this.diagnostics.delete(oldest);
-    }
-
-    // Coalesce only true repeats: same failure, same errno, same generation —
-    // a post-restart failure or a different errno must stay its own event.
-    const last = ring.events[ring.events.length - 1];
-    if (
-      (input.type === "proxy-502" || input.type === "proxy-ws-failed") &&
-      last !== undefined &&
-      last.type === input.type &&
-      last.cause === input.cause &&
-      last.code === input.code &&
-      last.generation === generation &&
-      Date.now() - last.at <= PROXY_EVENT_COALESCE_MS
-    ) {
-      last.count = (last.count ?? 1) + 1;
-      last.at = Date.now();
-      return;
-    }
-
-    ring.events.push({
-      ...input,
-      at: Date.now(),
-      seq: ring.seq++,
-      generation,
-    } as DevPreviewDiagnosticEvent);
-    if (ring.events.length > DIAGNOSTIC_RING_MAX) {
-      ring.events.splice(0, ring.events.length - DIAGNOSTIC_RING_MAX);
-    }
+    recordDevPreviewDiagnostic(this.diagnostics, key, generation, input);
   }
 
-  private recordSessionDiagnostic(session: DevPreviewSession, input: DiagnosticInput): void {
+  private recordSessionDiagnostic(
+    session: DevPreviewSession,
+    input: DevPreviewDiagnosticInput
+  ): void {
     this.recordDiagnostic(
       createSessionKey(session.projectId, session.panelId),
       session.generation,
@@ -1376,329 +1253,28 @@ export class DevPreviewSessionService {
     return next;
   }
 
+  private get terminalControllerDeps(): TerminalControllerDeps<DevPreviewSession> {
+    return {
+      ptyClient: this.ptyClient,
+      portRegistry: this.portRegistry,
+      terminalToSession: this.terminalToSession,
+      portWaitAborts: this.portWaitAborts,
+      isDisposed: () => this.disposed,
+      recordDiagnostic: (key, generation, input) => this.recordDiagnostic(key, generation, input),
+      recordSessionDiagnostic: (session, input) => this.recordSessionDiagnostic(session, input),
+      updateSession: (session, updates) => this.updateSession(session, updates),
+      clearCompiling: (session) => this.clearCompiling(session),
+      pollServerReadiness: (session, url, signal, generation) =>
+        this.pollServerReadiness(session, url, signal, generation),
+    };
+  }
+
   private async ensureSessionTerminal(session: DevPreviewSession): Promise<void> {
-    if (session.terminalId) {
-      const alive = await this.isTerminalAlive(session.terminalId, session.projectId);
-      if (alive) {
-        const terminalId = session.terminalId;
-        this.attachTerminal(session, terminalId);
-        if (!RUNNING_STATES.has(session.status)) {
-          this.updateSession(session, {
-            status: "starting",
-            error: null,
-            url: null,
-            forceKilled: undefined,
-          });
-        }
-
-        if ((session.status === "starting" || session.status === "installing") && !session.url) {
-          await this.replayRecentOutput(terminalId);
-        }
-
-        if (
-          session.status === "starting" &&
-          !session.url &&
-          !session.pendingUrl &&
-          performance.now() - session.updatedAtPerformanceMs >= STALE_START_RECOVERY_MS
-        ) {
-          await this.stopSessionTerminal(session, "stale-start-recovery");
-          await this.spawnSessionTerminal(session);
-        }
-        return;
-      }
-      this.detachTerminal(session);
-      session.readinessAbort?.abort();
-      session.readinessAbort = null;
-      session.pendingUrl = null;
-      session.markerSeen = false;
-      session.needsInstall = false;
-      session.isRunningInstall = false;
-      this.updateSession(session, { terminalId: null, url: null, predictedUrl: null });
-    }
-
-    // A tripped crash-loop guard halts auto-respawn until the user restarts
-    // explicitly. ensure() runs on every remount (dock↔grid, eviction
-    // rehydration) with unchanged config, so without this the pane would
-    // silently respawn a known-broken server on each transition. A config
-    // change clears the guard upstream (resetCrashLoopGuard in ensure()), and
-    // restart() clears it before spawning, so only the automatic path is held.
-    if (session.crashLoopStopped) return;
-
-    await this.spawnSessionTerminal(session);
-  }
-
-  private async replayRecentOutput(terminalId: string): Promise<void> {
-    try {
-      await this.ptyClient.replayHistoryAsync(terminalId, REPLAY_HISTORY_MAX_LINES);
-    } catch (err) {
-      console.warn("[DevPreviewSessionService] replayRecentOutput failed for terminal:", {
-        terminalId,
-        error: formatErrorMessage(err, "Failed to replay terminal history"),
-      });
-    }
-  }
-
-  /**
-   * Clear the crash-loop guard for an explicit user- or config-driven restart:
-   * cancel any pending backoff, zero the counter, and lift the stopped flag.
-   * Callers must run this before spawning/installing so the broadcast that
-   * follows reports a fresh (non-crash-looped) state.
-   */
-  private resetCrashLoopGuard(session: DevPreviewSession): void {
-    session.backoffAbort?.abort();
-    session.backoffAbort = null;
-    session.crashCount = 0;
-    session.crashLoopStopped = false;
-  }
-
-  /**
-   * Decide whether to auto-respawn after a dev-server exit that wants a
-   * (re)install, applying the crash-loop guard. A server that survived
-   * CRASH_LOOP_MIN_UPTIME_MS graduates and resets the counter. Once
-   * CRASH_LOOP_MAX_ATTEMPTS consecutive fast cycles accumulate, auto-respawn
-   * halts and the session lands in a recoverable "stopped" state. Otherwise
-   * the install is scheduled — immediately for the first attempt in a window,
-   * with geometric backoff for repeats. Returns nothing; the caller must
-   * `return` after invoking it (it owns the respawn decision).
-   */
-  private guardedReinstall(session: DevPreviewSession): void {
-    const uptime =
-      session.devSpawnedAt !== null ? performance.now() - session.devSpawnedAt : Infinity;
-    if (uptime >= CRASH_LOOP_MIN_UPTIME_MS) {
-      session.crashCount = 0;
-    }
-    session.crashCount += 1;
-
-    if (session.crashCount > CRASH_LOOP_MAX_ATTEMPTS) {
-      this.recordSessionDiagnostic(session, { type: "crash-loop-stopped" });
-      this.updateSession(session, {
-        status: "stopped",
-        url: null,
-        predictedUrl: null,
-        error: null,
-        terminalId: null,
-        isRestarting: false,
-        crashLoopStopped: true,
-        phaseLabel: undefined,
-      });
-      return;
-    }
-
-    const delayMs =
-      session.crashCount <= 1
-        ? 0
-        : Math.min(
-            CRASH_LOOP_INITIAL_DELAY_MS * CRASH_LOOP_BACKOFF_MULTIPLIER ** (session.crashCount - 2),
-            CRASH_LOOP_MAX_DELAY_MS
-          );
-
-    if (delayMs === 0) {
-      void this.runInstall(session);
-      return;
-    }
-    this.recordSessionDiagnostic(session, {
-      type: "crash-loop-backoff",
-      attempt: session.crashCount,
-      delayMs,
-    });
-    this.scheduleBackoffRespawn(session, delayMs, () => {
-      void this.runInstall(session);
-    });
-  }
-
-  /**
-   * Run `action` after `delayMs`, guarded so a user restart or dispose during
-   * the wait cancels it. The pending AbortController is parked on the session;
-   * resetCrashLoopGuard()/dispose() abort it to clear the timer, and the
-   * generation check rejects a respawn whose session moved on while waiting.
-   */
-  private scheduleBackoffRespawn(
-    session: DevPreviewSession,
-    delayMs: number,
-    action: () => void
-  ): void {
-    session.backoffAbort?.abort();
-    const abort = new AbortController();
-    session.backoffAbort = abort;
-    const generation = session.generation;
-    const timer = setTimeout(() => {
-      if (session.backoffAbort === abort) session.backoffAbort = null;
-      if (this.disposed || abort.signal.aborted || session.generation !== generation) return;
-      action();
-    }, delayMs);
-    abort.signal.addEventListener("abort", () => clearTimeout(timer), { once: true });
+    return ensureSessionTerminal(session, this.terminalControllerDeps);
   }
 
   private async spawnSessionTerminal(session: DevPreviewSession): Promise<void> {
-    const terminalId = this.createTerminalId(session);
-    const nextGeneration = session.generation + 1;
-
-    const sessionKey = createSessionKey(session.projectId, session.panelId);
-    const port = await allocatePort(this.portRegistry, sessionKey);
-    // dispose() can fire while allocatePort awaits its net probe. Guard here
-    // so we don't spawn a terminal on a disposed service; roll back the
-    // reservation to avoid a stale portRegistry entry after disposal cleared it.
-    if (this.disposed) {
-      releasePort(this.portRegistry, sessionKey);
-      return;
-    }
-    // Recorded with the generation this spawn is about to become, so the whole
-    // spawn lifecycle (port-allocated → spawned → …) shares one generation.
-    this.recordDiagnostic(sessionKey, nextGeneration, { type: "port-allocated", port });
-    const predictedUrl = `http://localhost:${port}`;
-
-    const spawnEnv: Record<string, string> = { ...session.env, PORT: String(port) };
-
-    // Mark the dev-server spawn time for the crash-loop graduation check. Set
-    // only here (the dev server), never in runInstall — an install is part of
-    // recovery, not a crash, and must not count toward the survival window.
-    session.devSpawnedAt = performance.now();
-
-    session.buffer = "";
-    session.lastErrorKey = null;
-    session.markerSeen = false;
-    session.predictedUrl = predictedUrl;
-    this.clearCompiling(session);
-    this.attachTerminal(session, terminalId);
-    this.updateSession(session, {
-      terminalId,
-      status: "starting",
-      url: null,
-      predictedUrl,
-      error: null,
-      generation: nextGeneration,
-      forceKilled: undefined,
-    });
-
-    try {
-      this.ptyClient.spawn(terminalId, {
-        projectId: session.projectId,
-        kind: "dev-preview",
-        cwd: session.cwd,
-        cols: 80,
-        rows: 30,
-        restore: false,
-        env: spawnEnv,
-        isEphemeral: true,
-      });
-      markPerformance(PERF_MARKS.DEVPREVIEW_TERMINAL_SPAWNED, {
-        panelId: session.panelId,
-        projectId: session.projectId,
-        terminalId,
-      });
-      this.recordSessionDiagnostic(session, { type: "spawned", terminalId, port });
-
-      // predictedUrl is the allocator-derived starting point for the readiness
-      // poller — it's accurate for frameworks that honor env.PORT or the
-      // injected --port flag, but not authoritative. UrlDetector overwrites
-      // state.url when real output reveals a different bind address (e.g. next
-      // dev auto-incrementing past EADDRINUSE on configs without --strictPort).
-      setTimeout(() => {
-        if (this.disposed) return;
-        if (session.generation !== nextGeneration || session.terminalId !== terminalId) return;
-        if (session.status !== "starting" || session.url || session.readinessAbort) return;
-
-        const abort = new AbortController();
-        session.readinessAbort = abort;
-        this.pollServerReadiness(session, predictedUrl, abort.signal, nextGeneration);
-      }, 0);
-    } catch (error) {
-      const message = formatErrorMessage(error, "Failed to start dev server");
-      this.recordSessionDiagnostic(session, {
-        type: "spawn-failed",
-        message: capDiagnosticText(message),
-      });
-      this.detachTerminal(session);
-      this.updateSession(session, {
-        status: "error",
-        url: null,
-        predictedUrl: null,
-        error: { type: "unknown", message: `Failed to start dev server: ${message}` },
-        terminalId: null,
-        isRestarting: false,
-      });
-      return;
-    }
-
-    const trimmedCommand = session.devCommand.trim();
-
-    const submitCommand = (cmd: string) => {
-      setTimeout(() => {
-        try {
-          if (this.ptyClient.hasTerminal(terminalId)) {
-            this.ptyClient.submit(terminalId, cmd);
-          }
-        } catch (err) {
-          console.warn("[DevPreviewSessionService] Failed to submit dev command:", err);
-        }
-      }, PTY_SUBMIT_AFTER_SPAWN_MS);
-    };
-
-    void normalizeNextjsDevCommand(trimmedCommand, session.cwd, session.turbopackEnabled)
-      .then((nextNormalized) => normalizeViteDevCommand(nextNormalized, session.cwd, port))
-      .then((normalizedCommand) => {
-        submitCommand(normalizedCommand);
-      })
-      .catch(() => {
-        submitCommand(trimmedCommand);
-      });
-
-    this.scheduleStartupReplay(session);
-  }
-
-  private clearStartupReplay(session: DevPreviewSession): void {
-    if (session.startupReplayTimer !== null) {
-      clearTimeout(session.startupReplayTimer);
-      session.startupReplayTimer = null;
-    }
-  }
-
-  private scheduleStartupReplay(session: DevPreviewSession): void {
-    this.clearStartupReplay(session);
-    const generation = session.generation;
-    const terminalId = session.terminalId;
-    if (!terminalId) return;
-
-    session.startupReplayTimer = setTimeout(() => {
-      session.startupReplayTimer = null;
-      if (
-        session.generation !== generation ||
-        session.terminalId !== terminalId ||
-        session.status !== "starting" ||
-        session.url ||
-        session.pendingUrl
-      ) {
-        return;
-      }
-      void this.replayRecentOutput(terminalId);
-    }, STARTUP_REPLAY_DELAY_MS);
-  }
-
-  private createTerminalId(session: DevPreviewSession): string {
-    const projectToken = sanitizeToken(session.projectId);
-    const panelToken = sanitizeToken(session.panelId);
-    const timestampToken = Date.now().toString(36);
-    const randomToken = Math.random().toString(36).slice(2, 8);
-    return `dev-preview-${projectToken}-${panelToken}-${timestampToken}-${randomToken}`;
-  }
-
-  private attachTerminal(session: DevPreviewSession, terminalId: string): void {
-    const key = createSessionKey(session.projectId, session.panelId);
-    if (session.terminalId && session.terminalId !== terminalId) {
-      this.clearStartupReplay(session);
-      this.terminalToSession.delete(session.terminalId);
-      this.ptyClient.setIpcDataMirror(session.terminalId, false);
-    }
-    this.terminalToSession.set(terminalId, key);
-    this.ptyClient.setIpcDataMirror(terminalId, true);
-    session.terminalId = terminalId;
-  }
-
-  private detachTerminal(session: DevPreviewSession): void {
-    if (!session.terminalId) return;
-    this.terminalToSession.delete(session.terminalId);
-    this.ptyClient.setIpcDataMirror(session.terminalId, false);
-    session.terminalId = null;
+    return spawnSessionTerminal(session, this.terminalControllerDeps);
   }
 
   private async stopSessionTerminal(
@@ -1706,118 +1282,14 @@ export class DevPreviewSessionService {
     context: string,
     escalationDelayMs?: number
   ): Promise<void> {
-    this.clearStartupReplay(session);
-    session.readinessAbort?.abort();
-    session.readinessAbort = null;
-    // Cancel a pending crash-loop backoff: otherwise the deferred re-install
-    // fires after the terminal is gone (and, on the delete paths, after the
-    // session is removed), spawning an orphan PTY on a stopped session.
-    session.backoffAbort?.abort();
-    session.backoffAbort = null;
-    session.pendingUrl = null;
-    session.markerSeen = false;
-    this.clearCompiling(session);
-    session.needsInstall = false;
-    session.isRunningInstall = false;
-
-    const terminalId = session.terminalId;
-    if (!terminalId) return;
-
-    this.detachTerminal(session);
-    session.buffer = "";
-    session.lastErrorKey = null;
-
-    try {
-      if (escalationDelayMs !== undefined) {
-        this.ptyClient.kill(terminalId, `dev-preview:${context}`, { escalationDelayMs });
-      } else {
-        this.ptyClient.kill(terminalId, `dev-preview:${context}`);
-      }
-    } catch (err) {
-      const message = formatErrorMessage(err, "Failed to kill dev preview terminal");
-      if (!this.isBenignMissingTerminalError(message)) {
-        throw new Error(`Failed to kill terminal (${context}): ${message}`, { cause: err });
-      }
-    }
-
-    const stopped = await this.waitForTerminalGone(terminalId, session.projectId);
-    if (!stopped) {
-      throw new Error(`Timed out waiting for terminal ${terminalId} to stop (${context})`);
-    }
+    return stopSessionTerminal(session, context, this.terminalControllerDeps, escalationDelayMs);
   }
 
-  private isBenignMissingTerminalError(message: string): boolean {
-    const normalized = message.toLowerCase();
-    return (
-      normalized.includes("not found") ||
-      normalized.includes("does not exist") ||
-      normalized.includes("terminal not found") ||
-      normalized.includes("unknown terminal")
-    );
-  }
-
-  /**
-   * Wait for the session's registered port to release before respawning. On
-   * Windows a force-killed dev server can hold the socket in TIME_WAIT, which
-   * would otherwise cause the next spawn to fail with EADDRINUSE on the same
-   * port (allocatePort returns the registered port without re-probing).
-   * Returns true if free (or no port registered); on timeout, releases the
-   * port from the registry so a subsequent allocate picks a fresh candidate
-   * and surfaces an error state.
-   */
   private async waitForRegisteredPortFree(
     session: DevPreviewSession,
     key: string
   ): Promise<boolean> {
-    const port = this.portRegistry.get(key);
-    if (port === undefined) return true;
-    const abort = new AbortController();
-    this.portWaitAborts.add(abort);
-    const free = await waitForPortFree(port, abort.signal).finally(() => {
-      this.portWaitAborts.delete(abort);
-    });
-    if (free) return true;
-    releasePort(this.portRegistry, key);
-    this.recordSessionDiagnostic(session, { type: "port-conflict", port });
-    this.updateSession(session, {
-      status: "error",
-      url: null,
-      predictedUrl: null,
-      error: {
-        type: "port-conflict",
-        message: `Port ${port} did not release within ${PORT_FREE_TIMEOUT_MS / 1000}s. Retry to start again.`,
-        port: String(port),
-      },
-      terminalId: null,
-      isRestarting: false,
-      phaseLabel: undefined,
-    });
-    return false;
-  }
-
-  private async waitForTerminalGone(
-    terminalId: string,
-    projectId: string,
-    timeoutMs = DEFAULT_TIMEOUT_MS
-  ): Promise<boolean> {
-    const deadline = performance.now() + timeoutMs;
-    while (performance.now() < deadline) {
-      const alive = await this.isTerminalAlive(terminalId, projectId);
-      if (!alive) return true;
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-    return false;
-  }
-
-  private async isTerminalAlive(terminalId: string, projectId: string): Promise<boolean> {
-    try {
-      const terminal = await this.ptyClient.getTerminalAsync(terminalId);
-      if (!terminal || !terminal.hasPty) return false;
-      if (terminal.projectId && terminal.projectId !== projectId) return false;
-      return true;
-    } catch {
-      return false;
-    }
+    return waitForRegisteredPortFree(session, key, this.terminalControllerDeps);
   }
 
   private clearCompiling(session: DevPreviewSession): void {
@@ -1842,193 +1314,16 @@ export class DevPreviewSessionService {
     const session = this.sessions.get(sessionKey);
     if (!session || session.terminalId !== id) return;
 
-    if (session.isRunningInstall) return;
-
-    const dataString = typeof data === "string" ? data : this.textDecoder.decode(data);
-    const result = this.detector.scanOutput(dataString, session.buffer);
-    session.buffer = result.buffer;
-
-    let urlJustStarted = false;
-    if (result.url && result.url !== session.url && result.url !== session.pendingUrl) {
-      markPerformance(PERF_MARKS.DEVPREVIEW_URL_DETECTED, {
-        panelId: session.panelId,
-        projectId: session.projectId,
-        terminalId: id,
-        url: result.url,
-      });
-      this.recordSessionDiagnostic(session, {
-        type: "url-detected",
-        url: capDiagnosticText(result.url),
-      });
-
-      session.readinessAbort?.abort();
-      const abort = new AbortController();
-      session.readinessAbort = abort;
-      session.pendingUrl = result.url;
-      // A new URL (e.g. a port change) starts a fresh poll; allow its own
-      // readiness marker to accelerate it again.
-      session.markerSeen = false;
-
-      this.pollServerReadiness(session, result.url, abort.signal, session.generation);
-      urlJustStarted = true;
-    }
-
-    // A framework readiness line ("ready in N ms", "✓ Ready in", "compiled
-    // successfully") confirms the HTTP server is bound. When a poll is already
-    // mid-cycle (sleeping between HEAD attempts), abort it and re-probe now to
-    // skip the remaining poll interval. The poll itself stays the fallback for
-    // unrecognized frameworks, so no marker means no behavior change.
-    if (result.readyMarker && !session.markerSeen && !urlJustStarted && session.pendingUrl) {
-      session.markerSeen = true;
-      session.readinessAbort?.abort();
-      const abort = new AbortController();
-      session.readinessAbort = abort;
-      this.pollServerReadiness(session, session.pendingUrl, abort.signal, session.generation);
-    }
-
-    // Compile marker detection fires whenever the framework emits a
-    // compile-start line (HMR rebuild, initial compilation burst). Uses a
-    // two-stage timer: arm debounce prevents flicker from rapid marker
-    // bursts, auto-clear removes the signal when markers go quiet.
-    if (
-      result.compileMarker &&
-      session.status !== "stopped" &&
-      session.status !== "error" &&
-      !session.isRunningInstall
-    ) {
-      if (session.compiling) {
-        // Already visible — reset the auto-clear timer so the signal
-        // persists through a burst (HMR chains, multi-file saves).
-        if (session.compilingClearTimer !== null) {
-          clearTimeout(session.compilingClearTimer);
-          session.compilingClearTimer = setTimeout(() => {
-            session.compilingClearTimer = null;
-            this.recordSessionDiagnostic(session, { type: "compile-cleared" });
-            this.clearCompiling(session);
-            this.emitStateChanged(session);
-          }, COMPILE_CLEAR_MS);
-        }
-      } else if (session.compilingTimer === null) {
-        // Start the arm debounce — if no additional markers arrive before
-        // COMPILE_ARM_MS, publish the Compiling label.
-        session.compilingTimer = setTimeout(() => {
-          session.compilingTimer = null;
-          if (
-            session.status === "stopped" ||
-            session.status === "error" ||
-            session.isRunningInstall
-          ) {
-            return;
-          }
-          session.compiling = true;
-          this.recordSessionDiagnostic(session, { type: "compile-started" });
-          this.updateSession(session, { phaseLabel: "Compiling" });
-          session.compilingClearTimer = setTimeout(() => {
-            session.compilingClearTimer = null;
-            this.recordSessionDiagnostic(session, { type: "compile-cleared" });
-            this.clearCompiling(session);
-            this.emitStateChanged(session);
-          }, COMPILE_CLEAR_MS);
-        }, COMPILE_ARM_MS);
-      }
-    }
-
-    // A readyMarker during an active compile phase cancels both timers
-    // and clears the label early — the framework signaled completion.
-    if (result.readyMarker && (session.compiling || session.compilingTimer !== null)) {
-      if (session.compilingTimer !== null) {
-        clearTimeout(session.compilingTimer);
-        session.compilingTimer = null;
-      }
-      if (session.compiling) {
-        this.recordSessionDiagnostic(session, { type: "compile-cleared" });
-      }
-      this.clearCompiling(session);
-      this.emitStateChanged(session);
-    }
-
-    if (!result.error) return;
-    const errorKey = `${result.error.type}:${result.error.message}`;
-    if (errorKey === session.lastErrorKey) return;
-    session.lastErrorKey = errorKey;
-    this.recordSessionDiagnostic(session, {
-      type: "output-error",
-      errorType: result.error.type,
-      message: capDiagnosticText(result.error.message),
+    processDevPreviewOutput(session, id, data, {
+      detector: this.detector,
+      textDecoder: this.textDecoder,
+      recordSessionDiagnostic: (target, input) => this.recordSessionDiagnostic(target, input),
+      updateSession: (target, updates) => this.updateSession(target, updates),
+      emitStateChanged: (target) => this.emitStateChanged(target),
+      clearCompiling: (target) => this.clearCompiling(target),
+      pollServerReadiness: (target, url, signal, generation) =>
+        this.pollServerReadiness(target, url, signal, generation),
     });
-
-    // Cancel any in-flight readiness poll: a server that still answers HEAD on
-    // a half-started port would otherwise resolve to "running" and clobber the
-    // error/installing status we are about to set.
-    session.readinessAbort?.abort();
-    session.readinessAbort = null;
-    session.pendingUrl = null;
-    session.markerSeen = false;
-    this.clearCompiling(session);
-
-    if (result.error.type === "missing-dependencies") {
-      session.needsInstall = true;
-      this.updateSession(session, {
-        status: "installing",
-        error: result.error,
-        isRestarting: false,
-      });
-      return;
-    }
-
-    this.updateSession(session, {
-      status: "error",
-      error: result.error,
-      url: null,
-      predictedUrl: null,
-      isRestarting: false,
-      phaseLabel: undefined,
-    });
-  }
-
-  private classifyExit(
-    exitCode: number,
-    signal: number | undefined,
-    recentOutput: string
-  ): DevServerError | null {
-    // Signal-based tier first
-    if (signal !== undefined) {
-      // Check OOM output across all crash signals — Node.js heap OOM sends
-      // SIGABRT (6), not SIGKILL (9). Kernel OOM killer uses SIGKILL.
-      if (
-        CRASH_SIGNALS.has(signal) &&
-        /\b(FATAL ERROR|out of memory|heap out of memory|Cannot allocate memory)\b/i.test(
-          recentOutput
-        )
-      ) {
-        return {
-          type: "oom",
-          message: "Dev server was killed — out of memory.",
-        };
-      }
-      if (signal === 9) {
-        // SIGKILL without OOM output: fall through to output/exit-code tiers
-      } else if (CRASH_SIGNALS.has(signal)) {
-        return {
-          type: "process-crash",
-          message: `Dev server crashed (signal ${signal}).`,
-        };
-      }
-      if (EXPECTED_TERMINATION_SIGNALS.has(signal)) {
-        return null;
-      }
-    }
-
-    // Output-based tier
-    const outputError = detectDevServerError(recentOutput);
-    if (outputError) return outputError;
-
-    // Exit-code fallback
-    if (exitCode === 0) return null;
-    return {
-      type: "unknown",
-      message: `Dev server exited with code ${exitCode}`,
-    };
   }
 
   private handleExit(id: string, exitCode: number, signal?: number): void {
@@ -2038,200 +1333,11 @@ export class DevPreviewSessionService {
     const session = this.sessions.get(sessionKey);
     if (!session || session.terminalId !== id) return;
 
-    this.clearStartupReplay(session);
-    session.readinessAbort?.abort();
-    session.readinessAbort = null;
-    session.pendingUrl = null;
-    session.markerSeen = false;
-    this.clearCompiling(session);
-
-    this.detachTerminal(session);
-    const recentOutput = session.buffer;
-    session.buffer = "";
-    session.lastErrorKey = null;
-
-    if (session.isRunningInstall) {
-      session.isRunningInstall = false;
-      if (exitCode === 0) {
-        this.recordSessionDiagnostic(session, { type: "install-completed" });
-        void this.spawnSessionTerminal(session);
-        return;
-      }
-      this.recordSessionDiagnostic(session, {
-        type: "install-failed",
-        message: `Dependency installation failed (exit code ${exitCode})`,
-      });
-      this.updateSession(session, {
-        status: "error",
-        url: null,
-        predictedUrl: null,
-        error: {
-          type: "missing-dependencies",
-          message: `Dependency installation failed (exit code ${exitCode})`,
-        },
-        terminalId: null,
-        isRestarting: false,
-        phaseLabel: undefined,
-      });
-      return;
-    }
-
-    this.recordSessionDiagnostic(session, {
-      type: "terminal-exited",
-      exitCode,
-      ...(signal !== undefined ? { signal } : {}),
-    });
-
-    if (session.needsInstall && session.installAttemptedGeneration !== session.generation) {
-      session.needsInstall = false;
-      this.guardedReinstall(session);
-      return;
-    }
-    session.needsInstall = false;
-
-    if (
-      session.status === "starting" ||
-      session.status === "installing" ||
-      session.status === "error"
-    ) {
-      // Expected termination signals during startup/error = clean stop (user interrupted it)
-      if (signal !== undefined && EXPECTED_TERMINATION_SIGNALS.has(signal)) {
-        this.updateSession(session, {
-          status: "stopped",
-          url: null,
-          predictedUrl: null,
-          error: null,
-          terminalId: null,
-          isRestarting: false,
-          phaseLabel: undefined,
-        });
-        return;
-      }
-      const error = this.classifyExit(exitCode, signal, recentOutput) ?? {
-        type: "unknown",
-        message: `Dev server exited with code ${exitCode}`,
-      };
-      this.updateSession(session, {
-        status: "error",
-        url: null,
-        predictedUrl: null,
-        error,
-        terminalId: null,
-        isRestarting: false,
-        phaseLabel: undefined,
-      });
-      return;
-    }
-
-    const crashError =
-      signal !== undefined && CRASH_SIGNALS.has(signal)
-        ? this.classifyExit(exitCode, signal, recentOutput)
-        : null;
-
-    this.updateSession(session, {
-      status: "stopped",
-      url: null,
-      predictedUrl: null,
-      error: crashError,
-      terminalId: null,
-      isRestarting: false,
-      phaseLabel: undefined,
-    });
+    handleDevPreviewTerminalExit(session, exitCode, signal, this.terminalControllerDeps);
   }
 
   private async runInstall(session: DevPreviewSession): Promise<void> {
-    session.installAttemptedGeneration = session.generation;
-    session.isRunningInstall = true;
-
-    const installCommand = this.detectInstallCommand(session.cwd);
-    this.recordSessionDiagnostic(session, {
-      type: "install-started",
-      command: capDiagnosticText(installCommand),
-    });
-
-    const terminalId = this.createTerminalId(session);
-    session.buffer = "";
-    session.lastErrorKey = null;
-    this.attachTerminal(session, terminalId);
-    this.updateSession(session, {
-      terminalId,
-      status: "installing",
-      error: {
-        type: "missing-dependencies",
-        message: `Running ${installCommand}...`,
-      },
-    });
-
-    try {
-      this.ptyClient.spawn(terminalId, {
-        projectId: session.projectId,
-        kind: "dev-preview",
-        cwd: session.cwd,
-        cols: 80,
-        rows: 30,
-        restore: false,
-        env: session.env,
-        isEphemeral: true,
-      });
-    } catch (error) {
-      session.isRunningInstall = false;
-      const message = formatErrorMessage(error, "Failed to start dependency install");
-      this.recordSessionDiagnostic(session, {
-        type: "install-failed",
-        message: capDiagnosticText(message),
-      });
-      this.detachTerminal(session);
-      this.updateSession(session, {
-        status: "error",
-        url: null,
-        predictedUrl: null,
-        error: { type: "unknown", message: `Failed to start dependency install: ${message}` },
-        terminalId: null,
-        isRestarting: false,
-      });
-      return;
-    }
-
-    setTimeout(() => {
-      try {
-        if (this.ptyClient.hasTerminal(terminalId)) {
-          this.ptyClient.submit(terminalId, installCommand);
-        }
-      } catch (err) {
-        console.warn("[DevPreviewSessionService] Failed to submit install command:", err);
-      }
-    }, PTY_SUBMIT_AFTER_SPAWN_MS);
-  }
-
-  private detectInstallCommand(cwd: string): string {
-    const info = this.detectPackageManagerInfo(cwd);
-    return `${info.packageManager} install`;
-  }
-
-  // Lockfile precedence mirrors detectInstallCommand: bun > pnpm > yarn > npm.
-  // package-lock.json is only used to report the lockfile name when no other
-  // lockfile is present; it does not change the install command (npm is the
-  // default fallback regardless).
-  private detectPackageManagerInfo(cwd: string): {
-    packageManager: DevPreviewPackageManager;
-    lockfileName: string | null;
-  } {
-    if (existsSync(path.join(cwd, "bun.lock"))) {
-      return { packageManager: "bun", lockfileName: "bun.lock" };
-    }
-    if (existsSync(path.join(cwd, "bun.lockb"))) {
-      return { packageManager: "bun", lockfileName: "bun.lockb" };
-    }
-    if (existsSync(path.join(cwd, "pnpm-lock.yaml"))) {
-      return { packageManager: "pnpm", lockfileName: "pnpm-lock.yaml" };
-    }
-    if (existsSync(path.join(cwd, "yarn.lock"))) {
-      return { packageManager: "yarn", lockfileName: "yarn.lock" };
-    }
-    if (existsSync(path.join(cwd, "package-lock.json"))) {
-      return { packageManager: "npm", lockfileName: "package-lock.json" };
-    }
-    return { packageManager: "npm", lockfileName: null };
+    return runInstall(session, this.terminalControllerDeps);
   }
 
   async getDestructivePreviewMeta(
@@ -2240,10 +1346,10 @@ export class DevPreviewSessionService {
     validateSessionRequest(request);
     const cwd = this.resolveSessionCwd(request);
     const [cacheDirs, nodeModules] = await Promise.all([
-      Promise.all(CACHE_DIRS.map((relPath) => this.statDirMeta(cwd, relPath))),
-      this.statDirMeta(cwd, "node_modules"),
+      Promise.all(CACHE_DIRS.map((relPath) => statDirMeta(cwd, relPath))),
+      statDirMeta(cwd, "node_modules"),
     ]);
-    const pmInfo = this.detectPackageManagerInfo(cwd);
+    const pmInfo = detectPackageManagerInfo(cwd);
     return {
       cwd,
       cacheDirs,
@@ -2262,11 +1368,11 @@ export class DevPreviewSessionService {
     const [cacheDirEntries, nodeModulesSizeBytes] = await Promise.all([
       Promise.all(
         CACHE_DIRS.map(async (relPath) => {
-          const size = await this.computeDirSize(path.join(cwd, relPath));
+          const size = await computeDirSize(path.join(cwd, relPath));
           return [relPath, size] as const;
         })
       ),
-      skipNodeModules ? Promise.resolve(null) : this.computeDirSize(path.join(cwd, "node_modules")),
+      skipNodeModules ? Promise.resolve(null) : computeDirSize(path.join(cwd, "node_modules")),
     ]);
     return {
       cacheDirSizes: Object.fromEntries(cacheDirEntries),
@@ -2283,95 +1389,6 @@ export class DevPreviewSessionService {
       );
     }
     return session.cwd;
-  }
-
-  private async statDirMeta(cwd: string, relPath: string): Promise<DevPreviewDirMeta> {
-    const fullPath = path.join(cwd, relPath);
-    try {
-      const stat = await fsPromises.stat(fullPath);
-      if (!stat.isDirectory()) {
-        return { relPath, exists: false, mtimeMs: null };
-      }
-      return { relPath, exists: true, mtimeMs: stat.mtimeMs };
-    } catch {
-      return { relPath, exists: false, mtimeMs: null };
-    }
-  }
-
-  private async computeDirSize(dirPath: string): Promise<number | null> {
-    try {
-      const stat = await fsPromises.stat(dirPath);
-      if (!stat.isDirectory()) return null;
-    } catch {
-      return null;
-    }
-    if (process.platform === "win32") {
-      return this.computeDirSizeWalk(dirPath);
-    }
-    return this.computeDirSizeDu(dirPath);
-  }
-
-  // POSIX path: shell out to `du -sk` (kilobytes). execFile avoids shell
-  // interpretation entirely — dirPath cannot inject. `du` deduplicates
-  // hardlinks by inode within the traversal, so pnpm-linked files inside
-  // node_modules count once per inode (still reports apparent content size,
-  // not the disk that would actually be reclaimed by deletion).
-  private async computeDirSizeDu(dirPath: string): Promise<number | null> {
-    return new Promise((resolve) => {
-      execFile(
-        "du",
-        ["-sk", dirPath],
-        { maxBuffer: 1024 * 1024, timeout: 30_000 },
-        (err, stdout) => {
-          if (err) return resolve(null);
-          const firstField = stdout.trim().split(/\s+/, 1)[0];
-          const kilobytes = Number.parseInt(firstField, 10);
-          if (!Number.isFinite(kilobytes)) return resolve(null);
-          resolve(kilobytes * 1024);
-        }
-      );
-    });
-  }
-
-  // Windows fallback: no `du` available. Walks the tree with opendir,
-  // accumulating file sizes via lstat. Tracks an inode set to dedupe
-  // hardlinks where the FS reports a stable inode (NTFS returns 0/unstable
-  // values in some cases — those entries simply count each time, accepting a
-  // small over-report on edge filesystems).
-  private async computeDirSizeWalk(dirPath: string): Promise<number | null> {
-    try {
-      let total = 0;
-      const seenInos = new Set<string>();
-      const stack: string[] = [dirPath];
-      while (stack.length > 0) {
-        const cur = stack.pop()!;
-        let handle: Awaited<ReturnType<typeof fsPromises.opendir>>;
-        try {
-          handle = await fsPromises.opendir(cur);
-        } catch {
-          continue;
-        }
-        for await (const ent of handle) {
-          const full = path.join(cur, ent.name);
-          if (ent.isDirectory()) {
-            stack.push(full);
-          } else if (ent.isFile() || ent.isSymbolicLink()) {
-            try {
-              const st = await fsPromises.lstat(full);
-              const inoKey = st.ino ? `${st.dev}:${st.ino}` : null;
-              if (inoKey && seenInos.has(inoKey)) continue;
-              if (inoKey) seenInos.add(inoKey);
-              total += st.size;
-            } catch {
-              // skip unreadable
-            }
-          }
-        }
-      }
-      return total;
-    } catch {
-      return null;
-    }
   }
 
   private pollServerReadiness(

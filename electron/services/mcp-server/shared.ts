@@ -352,10 +352,6 @@ const MCP_TOOL_ALLOWLIST_ENTRIES = [
   "git.unstageAll",
   "git.commit",
   "git.push",
-  "git.snapshotGet",
-  "git.snapshotList",
-  "git.snapshotRevert",
-  "git.snapshotDelete",
 
   "forge.getRepoStats",
   "forge.listIssues",
@@ -416,7 +412,9 @@ const MCP_TOOL_ALLOWLIST_ENTRIES = [
 
   "files.search",
   "file.view",
+  "file.read",
   "file.openInEditor",
+  "file.openPanel",
 
   "copyTree.generate",
   "copyTree.generateAndCopyFile",
@@ -503,9 +501,8 @@ export const TIER_NOT_PERMITTED_CODE = "TIER_NOT_PERMITTED";
  * to the git/forge mutations (`git.commit`, `git.push`, `forge.openIssue`,
  * `forge.openPR`) now that the args-hash collision guard (#8429) is in
  * place to make the widening safe. Widened further (#9156) to the remaining
- * destructive mutations — `worktree.delete`, `git.snapshotRevert`,
- * `git.snapshotDelete`, `forge.assignIssue` — so every side-effecting tool
- * that an LLM might retry is covered.
+ * destructive mutations — `worktree.delete`, `forge.assignIssue` — so every
+ * side-effecting tool that an LLM might retry is covered.
  *
  * Deliberately bounded: blanket-applying dedup to all mutations would mask
  * legitimate "do it again" cases (re-running the same git command, etc.).
@@ -524,8 +521,6 @@ export const MCP_DEDUP_ALLOWLIST: ReadonlySet<string> = new Set([
   // transient failure could spawn a second one. Pause/resume/teardown are
   // idempotent enough (or intentionally re-runnable) to stay out.
   "worktree.resource.provision",
-  "git.snapshotRevert",
-  "git.snapshotDelete",
   "forge.assignIssue",
   // PR writes where an LLM retry within the dispatch window leaves a visible
   // duplicate: a second open PR, a re-merge attempt, or a duplicate comment

@@ -3,6 +3,8 @@ import type { EventBuffer } from "../services/EventBuffer.js";
 import type { PortalManager } from "../services/PortalManager.js";
 import type { ProjectSwitchService } from "../services/ProjectSwitchService.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
+import type { SurfaceViewManager } from "./SurfaceViewManager.js";
+import type { SurfacePortBroker } from "./SurfacePortBroker.js";
 import { DisposableStore } from "../utils/lifecycle.js";
 
 /**
@@ -24,6 +26,22 @@ export interface WindowServices {
   projectViewManager?: ProjectViewManager;
   activeRendererPort?: MessagePortMain;
   activePtyHostPort?: MessagePortMain;
+  // Paint-fabric surface views (Phase 1V substrate). Created lazily by the
+  // paintSurface IPC namespace on first use; preloadDirname is stamped at
+  // window creation so the lazily-built manager loads the same preload.cjs
+  // the project views use.
+  preloadDirname?: string;
+  surfaceViewManager?: SurfaceViewManager;
+  surfacePortBroker?: SurfacePortBroker;
+  /**
+   * Dedicated worker-ingest port pairs keyed by terminal id (issue #10960).
+   * The pty-host end is neutered once transferred; both refs are kept so an
+   * untransferred pair (host down) can still be closed deterministically.
+   */
+  terminalWorkerPorts?: Map<
+    string,
+    { rendererPort: MessagePortMain; ptyHostPort: MessagePortMain }
+  >;
 }
 
 export interface WindowContext {

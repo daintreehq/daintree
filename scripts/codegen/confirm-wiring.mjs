@@ -28,8 +28,6 @@ const TSCONFIG_PATH = path.join(REPO_ROOT, "tsconfig.json");
 const EXPECTED_CONFIRM_DANGER = new Set([
   "git.push",
   "git.pullRebase",
-  "git.snapshotRevert",
-  "git.snapshotDelete",
   "terminal.kill",
   "terminal.killAll",
   "terminal.restart",
@@ -95,8 +93,6 @@ const CONFIRMED_WIRED = [
 // and are excluded from the co-location scan.
 // Mirror of BYPASS_WIRED in actionDefinitions.quality.test.ts.
 const BYPASS_WIRED = new Set([
-  "git.snapshotRevert", // IPC bypass; ConfirmDialog in WorktreeDialogs.tsx (ID not co-located)
-  "git.snapshotDelete", // IPC bypass; ConfirmDialog in WorktreeDialogs.tsx (ID not co-located)
   "git.push", // deferred-promise via gitPushConfirmStore; GitPushConfirmDialog resolves it
   "git.pullRebase", // IPC bypass in ReviewHubContent.tsx; ConfirmDialog wired but ID not co-located
   "project.remove", // confirm in ProjectSwitcherPalette.tsx; action ID not co-located

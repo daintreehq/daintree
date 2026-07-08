@@ -45,7 +45,7 @@ function FilterSection({
           onClick={() => setIsOpen(!isOpen)}
           aria-expanded={isOpen}
           aria-controls={contentId}
-          className="flex flex-1 items-center justify-between px-3 py-2 text-xs font-medium text-daintree-text/70 hover:bg-overlay-soft"
+          className="flex flex-1 items-center justify-between px-3 py-2 text-xs font-medium text-daintree-text/70 transition-colors hover:bg-overlay-soft"
         >
           <span className="flex items-center gap-1.5">
             {title}
@@ -77,11 +77,24 @@ function FilterSection({
           </button>
         )}
       </div>
-      {isOpen && (
-        <div id={contentId} className="px-3 pb-3 pt-1">
-          {children}
+      {/* Animated reveal so the body honors what the rotating chevron
+       * promises — same grid-rows idiom as LocalCommitsDropdown. Content
+       * stays mounted; `inert` keeps collapsed chips out of tab order. */}
+      <div
+        aria-hidden={!isOpen}
+        inert={!isOpen}
+        data-animated-reveal
+        className={cn(
+          "grid transition-[grid-template-rows] duration-150 ease-out motion-reduce:transition-none",
+          isOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
+        )}
+      >
+        <div className="overflow-hidden">
+          <div id={contentId} className="px-3 pb-3 pt-1">
+            {children}
+          </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }

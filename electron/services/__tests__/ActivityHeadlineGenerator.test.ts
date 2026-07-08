@@ -69,14 +69,34 @@ describe("ActivityHeadlineGenerator", () => {
       expect(result.headline).toBe("Waiting for input");
     });
 
-    it('returns "Waiting for input" for question waitingReason', () => {
+    it('returns "Asked a question" for question waitingReason', () => {
       const result = generator.generate({
         terminalId: "term-8",
         agentId: "claude",
         agentState: "waiting",
         waitingReason: "question",
       });
-      expect(result.headline).toBe("Waiting for input");
+      expect(result.headline).toBe("Asked a question");
+    });
+
+    it('returns "Waiting for approval" for approval waitingReason', () => {
+      const result = generator.generate({
+        terminalId: "term-10",
+        agentId: "claude",
+        agentState: "waiting",
+        waitingReason: "approval",
+      });
+      expect(result.headline).toBe("Waiting for approval");
+    });
+
+    it('returns "Blocked by an error" for error waitingReason', () => {
+      const result = generator.generate({
+        terminalId: "term-11",
+        agentId: "claude",
+        agentState: "waiting",
+        waitingReason: "error",
+      });
+      expect(result.headline).toBe("Blocked by an error");
     });
 
     it('returns "Waiting for input" when waitingReason is undefined', () => {

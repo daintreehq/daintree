@@ -59,8 +59,16 @@ function getNormalized(worktreeMap: Map<string, WorktreeSnapshot>): {
   return cached;
 }
 
-export function useWorktrees(): UseWorktreesReturn {
-  const worktreeMap = useWorktreeStore((state) => state.worktrees);
+// Stable sentinel for gated consumers — getNormalized caches per Map identity,
+// so a disabled subscription yields the same empty outputs every render.
+const EMPTY_WORKTREES = new Map<string, WorktreeSnapshot>();
+
+export function useWorktrees(options?: { enabled?: boolean }): UseWorktreesReturn {
+  // `enabled: false` swaps the Map subscription for a stable empty sentinel so
+  // always-mounted consumers that only need the data while visible (e.g. the
+  // quick switcher while open) stop re-rendering on every worktree-map change.
+  const enabled = options?.enabled ?? true;
+  const worktreeMap = useWorktreeStore((state) => (enabled ? state.worktrees : EMPTY_WORKTREES));
   const isLoading = useWorktreeStore((state) => state.isLoading);
   const isInitialized = useWorktreeStore((state) => state.isInitialized);
   const isReconnecting = useWorktreeStore((state) => state.isReconnecting);

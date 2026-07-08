@@ -155,7 +155,10 @@ describe("identity listener — completed-with-changes notification", () => {
         type: "info",
         priority: "low",
         title: "Agent finished with changes",
-        context: { worktreeId: "wt-1", eventKind: "completed" },
+        // panelId drives the notification center's "Go to source" affordance;
+        // the supersede key retires the prior completion row per worktree.
+        context: { worktreeId: "wt-1", panelId: "term-1", eventKind: "completed" },
+        supersedeKey: "agent-completed:wt-1",
         action: expect.objectContaining({
           label: "Open review hub",
           actionId: "worktree.openReviewHub",

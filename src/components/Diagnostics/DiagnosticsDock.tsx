@@ -29,7 +29,9 @@ import type { RetryAction } from "@/store";
 import { appClient } from "@/clients";
 import { logError } from "@/utils/logger";
 
-export const DIAGNOSTICS_DOCK_REGION_ID = "diagnostics-dock-region";
+import { DIAGNOSTICS_DOCK_REGION_ID } from "./regionIds";
+
+export { DIAGNOSTICS_DOCK_REGION_ID };
 
 interface TabButtonProps {
   tab: DiagnosticsTab;

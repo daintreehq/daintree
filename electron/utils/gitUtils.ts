@@ -1,4 +1,5 @@
 import { execFile } from "child_process";
+import { promises as fsPromises } from "fs";
 import { isAbsolute, join as pathJoin } from "path";
 import { logWarn } from "./logger.js";
 import { Cache } from "./cache.js";
@@ -39,6 +40,56 @@ function execGit(args: string[], cwd: string, timeout: number): Promise<string> 
   });
 }
 
+/**
+ * Resolve the git dir for `worktreePath` from the `.git` entry alone — a
+ * directory (regular repo) or a `gitdir: <path>` pointer file (linked
+ * worktree / submodule) — without a subprocess. Both shapes are sanity-checked
+ * by requiring `HEAD` inside the resolved dir, mirroring git's own repository
+ * discovery, so a stray/corrupt `.git` falls back to the subprocess (which
+ * then fails exactly as before). Returns `null` for every shape this helper
+ * can't prove (no `.git` entry, subdirectory of a repo, bare repo) — the
+ * caller MUST fall back to `git rev-parse`, never treat null as "not a repo".
+ */
+async function resolveGitDirFromFs(worktreePath: string): Promise<string | null> {
+  const dotGit = pathJoin(worktreePath, ".git");
+  try {
+    const stat = await fsPromises.stat(dotGit);
+    if (stat.isDirectory()) {
+      await fsPromises.access(pathJoin(dotGit, "HEAD"));
+      return dotGit;
+    }
+    if (!stat.isFile()) return null;
+    const content = (await fsPromises.readFile(dotGit, "utf-8")).trim();
+    if (!content.startsWith("gitdir:")) return null;
+    const target = content.slice("gitdir:".length).trim();
+    if (!target) return null;
+    const resolved = isAbsolute(target) ? target : pathJoin(worktreePath, target);
+    await fsPromises.access(pathJoin(resolved, "HEAD"));
+    return resolved;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Common-dir variant: resolve the git dir from the filesystem, then follow
+ * the `commondir` pointer (absent for the main worktree, where the git dir is
+ * the common dir). Only trusts the unambiguous shapes; anything else returns
+ * `null` so the caller falls back to `git rev-parse --git-common-dir`.
+ */
+async function resolveCommonDirFromFs(worktreePath: string): Promise<string | null> {
+  const gitDir = await resolveGitDirFromFs(worktreePath);
+  if (!gitDir) return null;
+  try {
+    const content = (await fsPromises.readFile(pathJoin(gitDir, "commondir"), "utf-8")).trim();
+    if (!content) return gitDir;
+    return isAbsolute(content) ? content : pathJoin(gitDir, content);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return gitDir;
+    return null;
+  }
+}
+
 async function resolveGitPath(
   revParseFlag: string,
   worktreePath: string,
@@ -46,6 +97,19 @@ async function resolveGitPath(
   logErrors: boolean,
   warnMessage: string
 ): Promise<string | null> {
+  // Filesystem fast path: covers the regular-repo and linked-worktree shapes
+  // without forking git. A null here is "can't prove it cheaply", not "not a
+  // repo" — the subprocess below stays the source of truth for those.
+  const fastResolver =
+    revParseFlag === "--git-dir"
+      ? resolveGitDirFromFs
+      : revParseFlag === "--git-common-dir"
+        ? resolveCommonDirFromFs
+        : null;
+  if (fastResolver) {
+    const fast = await fastResolver(worktreePath);
+    if (fast !== null) return fast;
+  }
   try {
     const result = (await execGit(["rev-parse", revParseFlag], worktreePath, timeout)).trim();
     return isAbsolute(result) ? result : pathJoin(worktreePath, result);

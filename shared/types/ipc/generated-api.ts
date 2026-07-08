@@ -195,6 +195,9 @@ export interface GeneratedElectronAPI {
     markTerminal(
       ...args: IpcInvokeMap["help:mark-terminal"]["args"]
     ): Promise<IpcInvokeMap["help:mark-terminal"]["result"]>;
+    openAssistantContentFolder(
+      ...args: IpcInvokeMap["help:open-assistant-content-folder"]["args"]
+    ): Promise<IpcInvokeMap["help:open-assistant-content-folder"]["result"]>;
     peekPendingHibernation(
       ...args: IpcInvokeMap["help:peek-pending-hibernation"]["args"]
     ): Promise<IpcInvokeMap["help:peek-pending-hibernation"]["result"]>;
@@ -374,6 +377,20 @@ export interface GeneratedElectronAPI {
     getState(
       ...args: IpcInvokeMap["os-dnd:get-state"]["args"]
     ): Promise<IpcInvokeMap["os-dnd:get-state"]["result"]>;
+  };
+  paintSurface: {
+    applyWebglThresholds(
+      ...args: IpcInvokeMap["paint-surface:apply-webgl-thresholds"]["args"]
+    ): Promise<IpcInvokeMap["paint-surface:apply-webgl-thresholds"]["result"]>;
+    createSurface(
+      ...args: IpcInvokeMap["paint-surface:create"]["args"]
+    ): Promise<IpcInvokeMap["paint-surface:create"]["result"]>;
+    destroySurface(
+      ...args: IpcInvokeMap["paint-surface:destroy"]["args"]
+    ): Promise<IpcInvokeMap["paint-surface:destroy"]["result"]>;
+    setSurfaceBounds(
+      ...args: IpcInvokeMap["paint-surface:set-bounds"]["args"]
+    ): Promise<IpcInvokeMap["paint-surface:set-bounds"]["result"]>;
   };
   plugin: {
     activateForView(
@@ -618,6 +635,9 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["slash-commands:list"]["result"]>;
   };
   system: {
+    getMemorySnapshot(
+      ...args: IpcInvokeMap["system:get-memory-snapshot"]["args"]
+    ): Promise<IpcInvokeMap["system:get-memory-snapshot"]["result"]>;
     getResourceProfile(
       ...args: IpcInvokeMap["system:get-resource-profile"]["args"]
     ): Promise<IpcInvokeMap["system:get-resource-profile"]["result"]>;

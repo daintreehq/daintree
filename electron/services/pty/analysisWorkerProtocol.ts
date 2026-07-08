@@ -59,7 +59,19 @@ export type HostToWorkerMessage =
   | { type: "set-scrollback"; terminalId: string; lines: number }
   | { type: "free"; terminalId: string }
   | { type: "plugin-agent-registry"; registry: Record<string, AgentConfig> }
-  | { type: "request"; requestId: number; terminalId: string; op: AnalysisRequestOp };
+  | {
+      /**
+       * `generation` is the pool slot's worker generation at post time (bumped
+       * on every respawn). The worker echoes it on the response so the host
+       * can discard a reply produced by a superseded worker instance — the
+       * request/response counterpart of the data-path `epoch` fence.
+       */
+      type: "request";
+      requestId: number;
+      terminalId: string;
+      op: AnalysisRequestOp;
+      generation: number;
+    };
 
 export interface AnalysisFinalSnapshot {
   /** Full-buffer serialize (banner included) for the preserved snapshot. */
@@ -68,10 +80,39 @@ export interface AnalysisFinalSnapshot {
   persistence: string | null;
 }
 
+/**
+ * Isolate-scoped memory self-report, posted by each analysis worker on an
+ * interval. Worker threads are separate V8 isolates, so the pty-host main
+ * thread's `process.memoryUsage()` cannot see their heap or ArrayBuffer
+ * backing stores — the headless mirror buffers (the host's dominant memory
+ * consumer, ~12 bytes/cell) are invisible to it. This sample is the only
+ * signal that lets ResourceGovernor account for that memory.
+ */
+export interface AnalysisWorkerMemorySample {
+  /** `process.memoryUsage().heapUsed` inside the worker isolate, bytes. */
+  heapUsedBytes: number;
+  /**
+   * `process.memoryUsage().external` inside the worker isolate, bytes.
+   * Includes the xterm buffer typed-array backing stores.
+   */
+  externalBytes: number;
+  /** Live AnalysisSessions on this worker at sample time. */
+  sessionCount: number;
+  /**
+   * Actual per-session buffer occupancy (lines really held, not the
+   * configured scrollback cap) so the governor's targeted trim can rank by
+   * real usage instead of assuming every buffer is full.
+   */
+  sessions: Array<{ terminalId: string; bufferLines: number; cols: number }>;
+  /** Worker-side epoch ms when the sample was taken. */
+  sampledAt: number;
+}
+
 export type AnalysisRequestResult = string | null | AnalysisFinalSnapshot;
 
 export type WorkerToHostMessage =
   | { type: "ready" }
+  | ({ type: "memory-sample" } & AnalysisWorkerMemorySample)
   | {
       /**
        * Batched flow-control ack: `bytes` of data-message payload (string
@@ -104,4 +145,6 @@ export type WorkerToHostMessage =
       terminalId: string;
       result: AnalysisRequestResult;
       error?: string;
+      /** Echo of the request's worker generation; absent from legacy workers. */
+      generation?: number;
     };

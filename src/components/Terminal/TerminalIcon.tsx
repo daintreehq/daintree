@@ -1,4 +1,4 @@
-import { SquareTerminal, Globe, MonitorPlay, GitPullRequest } from "lucide-react";
+import { SquareTerminal, Globe, MonitorPlay, GitPullRequest, FileText } from "lucide-react";
 import { useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { BrandMark } from "@/components/icons";
@@ -85,6 +85,13 @@ export function TerminalIcon({
         {...finalProps}
         className={cn(finalProps.className, "text-category-violet")}
       />
+    );
+  }
+
+  // File panes get a file-text icon
+  if (kind === "file" || resolvedChrome.iconId === "file-text") {
+    return withIconMarker(
+      <FileText {...finalProps} className={cn(finalProps.className, "text-category-amber")} />
     );
   }
 

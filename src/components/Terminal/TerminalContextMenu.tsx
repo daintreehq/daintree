@@ -9,8 +9,14 @@ import { useWorktrees } from "@/hooks/useWorktrees";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { isValidBrowserUrl } from "@/components/Browser/browserUtils";
 import { actionService } from "@/services/ActionService";
-import { panelKindHasPty } from "@shared/config/panelKindRegistry";
-import { isBrowserPanel, isDevPreviewPanel, isPtyPanel, isReviewPanel } from "@shared/types/panel";
+import { panelKindHasPty, panelKindIsDockable } from "@shared/config/panelKindRegistry";
+import {
+  isBrowserPanel,
+  isDevPreviewPanel,
+  isFilePanel,
+  isPtyPanel,
+  isReviewPanel,
+} from "@shared/types/panel";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { reportFileLinkFailure } from "@/services/terminal/FileLinksAddon";
 import { useIsHibernated } from "@/hooks/useIsHibernated";
@@ -492,6 +498,7 @@ export function TerminalContextMenu({
   const isBrowser = isBrowserPanel(terminal);
   const isDevPreview = isDevPreviewPanel(terminal);
   const isReview = isReviewPanel(terminal);
+  const isFile = isFilePanel(terminal);
   const hasPty = terminal.kind ? panelKindHasPty(terminal.kind) : true;
 
   const layoutSection = (
@@ -536,6 +543,9 @@ export function TerminalContextMenu({
         </ContextMenuItem>
       )}
       <ContextMenuItem
+        // Move-to-grid is always safe; move-to-dock only for kinds the dock
+        // renders (PTY + dockable non-PTY like file panels).
+        disabled={currentLocation === "grid" && !panelKindIsDockable(terminal.kind ?? "terminal")}
         onSelect={() => handleAction(currentLocation === "grid" ? "move-to-dock" : "move-to-grid")}
       >
         {currentLocation === "grid" ? (
@@ -710,6 +720,45 @@ export function TerminalContextMenu({
           <ContextMenuItem destructive onSelect={() => handleAction("kill")}>
             <OctagonX className={ICON_CLASS} aria-hidden="true" />
             Remove review
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+    );
+  }
+
+  if (isFile) {
+    return (
+      <ContextMenu>
+        <MenuActionSourceContext.Consumer>
+          {(value) => {
+            sourceRef.current = value ?? "user";
+            return null;
+          }}
+        </MenuActionSourceContext.Consumer>
+        <ContextMenuTrigger asChild>
+          <div className="contents" data-context-trigger={terminalId}>
+            {children}
+          </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
+          {layoutSection}
+          <ContextMenuSeparator />
+          <ContextMenuItem onSelect={() => handleAction("rename")}>
+            <Pencil className={ICON_CLASS} aria-hidden="true" />
+            Rename panel
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem onSelect={() => handleAction("background")}>
+            <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
+            Send to background
+          </ContextMenuItem>
+          <ContextMenuItem onSelect={() => handleAction("trash")}>
+            <Trash2 className={ICON_CLASS} aria-hidden="true" />
+            Trash panel
+          </ContextMenuItem>
+          <ContextMenuItem destructive onSelect={() => handleAction("kill")}>
+            <OctagonX className={ICON_CLASS} aria-hidden="true" />
+            Remove panel
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>

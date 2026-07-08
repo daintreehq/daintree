@@ -10,8 +10,8 @@ This doc is the map for that machinery: the signals, the profile state machine a
 
 Two loops, different time constants:
 
-- **Slow loop — `ResourceProfileService`** (`electron/services/ResourceProfileService.ts`, ~818 LOC). Runs in the main process on a 30 s aligned interval. Aggregates memory, thermal, battery, CPU-speed-limit, fleet-size, and system-available-memory signals into a `pressureScore`, maps the score to a profile, applies asymmetric hysteresis, and pushes the resulting `ResourceProfileConfig` to every consumer. This is **policy** — it changes cadences and budgets, never pauses anyone.
-- **Fast loop — `ResourceGovernor`** (`electron/pty-host/ResourceGovernor.ts`, ~525 LOC). Runs in the **PTY host process** on a 2 s interval, watching its own V8 heap. When the heap approaches its limit it pauses terminal output (the `paused-resource-governor` flow state) and resumes when pressure clears. The profile service feeds it one input — `setResourceProfile(profile)` — which lowers the governor's thresholds under `efficiency`; otherwise the governor is autonomous.
+- **Slow loop — `ResourceProfileService`** (`electron/services/ResourceProfileService.ts`, ~818 LOC). Runs in the main process on a 30 s aligned interval. Aggregates memory, thermal, battery, CPU-speed-limit, fleet-size, system-available-memory, and terminal-workload-memory signals into a `pressureScore`, maps the score to a profile, applies asymmetric hysteresis, and pushes the resulting `ResourceProfileConfig` to every consumer. This is **policy** — it changes cadences and budgets, never pauses anyone.
+- **Fast loop — `ResourceGovernor`** (`electron/pty-host/ResourceGovernor.ts`, ~525 LOC). Runs in the **PTY host process** on a 2 s interval, watching V8 heap + external memory across **every isolate in the process** — its own, plus the analysis workers' self-reported samples (see [Cross-isolate accounting](#cross-isolate-accounting-analysis-workers)). When memory approaches its budget it pauses terminal output (the `paused-resource-governor` flow state) and resumes when pressure clears. The profile service feeds it one input — `setResourceProfile(profile)` — which lowers the governor's thresholds under `efficiency`; otherwise the governor is autonomous.
 
 Bridging the two: a third fast path lives **inside** `ResourceProfileService` — an event-loop-lag monitor (5 s interval) that can force the whole app into `efficiency` immediately, bypassing the slow loop's hysteresis, when the JS thread is genuinely saturated.
 
@@ -44,6 +44,7 @@ The profile is intentionally **coarse**. There are only three states, so every c
 | CPU speed limit (macOS & Windows) | `powerMonitor` `speed-limit-change` | `+2` below 50, `+1` below 100 |
 | Active-agent fleet size | cached count from `PtyClient.getAllTerminalsAsync()`, filtered | `+3` ≥ 24, `+2` ≥ 16, `+1` ≥ 8 |
 | System-available memory | `process.getSystemMemoryInfo()` (free + purgeable on macOS, free elsewhere) | `+2` below 0.1 × RAM, `+1` below 0.2 × RAM |
+| Terminal-workload memory | cached `PtyClient.getMemoryRollup()` (descendant RSS from the pty-host `ProcessTreeCache`, PID-deduplicated, via `electron/services/memoryAccounting.ts`) | `+2` above 0.4 × RAM, `+1` above 0.25 × RAM — only from a fresh (≤ 60 s), successful process-table sweep; stale/unavailable data contributes 0. Per-tier 10% exit band. Bounded at +2 so terminal workloads alone can never latch `efficiency`. |
 
 Mapping (`ResourceProfileService.ts:669`): `score >= 3 → efficiency`, `score === 0 → performance`, otherwise `balanced`.
 
@@ -129,6 +130,12 @@ Every per-profile knob lives in `RESOURCE_PROFILE_CONFIGS` (`shared/types/resour
 
 `PtyClient.setResourceProfile(profile)` forwards the profile to the PTY host, where `ResourceGovernor.setResourceProfile()` (`ResourceGovernor.ts:103`) swaps its threshold set. The governor watches V8 heap utilization (`heapUsed / heap_size_limit`) every 2 s, smoothed with an EMA (`α = 2/11`, ~20 s window, `:59`) to reject single-tick GC sawtooth:
 
+#### Cross-isolate accounting (analysis workers)
+
+`process.memoryUsage()` is **isolate-scoped**: it reports the calling thread's V8 heap and external memory only. When #10920 moved the per-terminal `@xterm/headless` mirrors into the analysis `worker_threads`, the process's dominant memory consumer (~12 bytes/cell; a filled 10 000-line × 120-col mirror measures ≈18 MB) moved into isolates the governor's own reading cannot see — a 24-terminal fleet can hold ~440 MB that reads as ~0 % utilization. The governor was blind to exactly this class once before (#9905, heap-only vs `external`); the worker migration recreated it one level up.
+
+The accounting loop closes it: each worker's `AnalysisWorkerRuntime` self-samples `process.memoryUsage()` (isolate-scoped **inside** the worker, so it sees the mirrors) plus per-session actual buffer occupancy every 2 s on an unref'd timer, and posts a `memory-sample` message. `AnalysisWorkerPool` caches the latest sample per slot — fenced by worker instance identity, cleared on exit/respawn so a fresh worker never inherits its predecessor's numbers — and exposes `getMemoryAccounting()`. The governor folds fresh samples (≤10 s old; stale or dead-slot samples contribute 0, same discipline as the profile service's terminal-workload signal) into its utilization max: combined host + worker memory against the total process budget, plus the heaviest single worker's heap against the per-isolate `--max-old-space-size` cap that workers inherit via `execArgv`. The same samples upgrade the targeted pre-pause trim and the `buffer-memory-gauge` from configured-cap estimates to actual occupancy — a capped-at-10 000 terminal holding 40 real lines contributes nothing and keeps its history. In in-thread analysis mode there are no samples and the base signal is already correct (the mirrors live in the host isolate). The samples also populate the `memory` field of the pool's `WorkerResourceSnapshot`s, so diagnostics bundles carry per-worker isolate memory.
+
 | Threshold       | default   | efficiency |
 | --------------- | --------- | ---------- |
 | Engage (pause)  | 85%       | 70%        |
@@ -136,6 +143,19 @@ Every per-profile knob lives in `RESOURCE_PROFILE_CONFIGS` (`shared/types/resour
 | Warning / clear | 70% / 65% | 55% / 45%  |
 
 Engage is gated by warm-up (5 ticks) and a 30 s re-engage cooldown after any force-resume (prevents the pause/resume flap of #8616). **Critical pressure (≥95% raw) bypasses both** — the next allocation could OOM the host. Before pausing in the non-critical path, the governor runs a one-shot targeted reclaim: it ranks terminals by an `scrollbackLines × cols × 12`-byte estimate of their headless buffer and trims only the heaviest contributors (those above `SCROLLBACK_MIN`) to the minimum, leaving quiet terminals' history intact (`trimBuffersTargeted`); if buffer-size attribution isn't wired it falls back to the uniform `trimBuffers()` flatten. The same per-terminal estimate is emitted every warning-band tick as the advisory `buffer-memory-gauge` reliability metric. If pressure persists a tick later it pauses. Pause/resume order is triaged idle-first / active-agent-last (resume reverses it), but the pause loop runs synchronously within one tick — the ordering affects only intra-tick sequencing, not observable runway, so a working agent is not spared a pause that fires this tick. At critical pressure the triage is skipped and every terminal is paused immediately. Paused terminals emit the `paused-resource-governor` flow status; on resume they revert to `running` (or restore `paused-backpressure` if the backpressure token is still held). See [terminal-lifecycle.md](./terminal-lifecycle.md) for the full flow-status state set and pause-token coordination.
+
+### WorkerGovernanceService — persistent workers and utility hosts
+
+`WorkerGovernanceService` (`electron/services/WorkerGovernanceService.ts`) is the bounded resource story for every persistent worker introduced by #10920: the analysis worker pool (pty-host `worker_threads`), the DB maintenance worker, the copytree worker (workspace-host `worker_thread`), per-plugin utility-process workers, and the utility hosts themselves. Each subsystem registers a provider that reports the shared `WorkerResourceSnapshot` shape (`shared/types/workerGovernance.ts`): identity, alive/queue/session counts, last-activity, memory where attributable, and — critically — an eligibility declaration (`trim`/`dispose`/`restart`) that the pure policy layer (`shared/utils/workerGovernancePolicy.ts`) never overrides upward.
+
+Two consumers: `DiagnosticsCollector`'s `workerGovernance` section (support bundles) plus a compact `workers` summary in the why-slow snapshot, and the efficiency-entry trim fan-out. On each entry into `efficiency`, `applyProfile` fires `requestWorkerTrim` (same per-consumer try/catch isolation as every other fan-out target); the service applies a 5-minute cooldown so profile flapping can never become its own churn source, then asks each provider to trim within its own safety gates:
+
+- **Analysis pool** — rides the existing `set-resource-profile` push instead of the main-side fan-out: on efficiency entry the pty-host runs a one-shot `PtyManager.trimIdleAnalysisSessions()` pass that shrinks the headless scrollback of terminals idle past 10 minutes with no agent in `ACTIVE_AGENT_STATES` (the same protection set as eviction/hibernation). The heap-driven `ResourceGovernor` trims remain the in-host backstop. Request/response traffic to the pool carries a per-slot worker **generation** echoed on every reply, so a reply from a superseded worker instance resolves empty instead of delivering stale content — the request-path counterpart of the data-path feed epoch.
+- **Plugin workers** — `PluginService.disposeIdlePluginWorkers()` disposes workers of plugins idle ≥30 minutes through a narrow deactivation path (worker + imperative registrations torn down; the plugin and its manifest contributions stay loaded, so the next dispatch/panel-open/forge pull lazily re-forks, mirroring the dev-reload cycle). The gate is deliberately conservative: builtins, dev workers, panel or MCP contributions, startup activation, live event subscriptions, pending invokes, managed processes, and fs watchers all disqualify.
+- **DB worker** — report-only, permanently. Its FIFO queue carries write ordering, the `user_version` fence assumes only crash/shutdown teardown, and shutdown draining (cleanup → DB maintenance → close) already owns its lifecycle.
+- **Copytree worker** — report-only for trims; result buffers already release at transfer (pending-map entries are the only retention and are deleted on resolve), and a worker-generation fence at the message listener drops stale results from a dead worker instance.
+
+**Restarts never happen.** No subsystem declares restart eligibility because persistent `worker_threads` must not be terminate/recreate cycled (Electron 37+ `!flush_tasks_` crash), and the policy additionally requires zero in-flight work, a long idle window, a per-worker cooldown, and no crash-loop before it would ever say "restart" — the guardrail is structural, not advisory.
 
 ### ProjectViewManager — freeze + LRU eviction + paint gate
 
@@ -181,7 +201,12 @@ Resource governance is deliberately **quiet**. Per `CLAUDE.md`'s runtime-signal 
 | --- | --- |
 | Profile state machine, signals, lag monitor, fan-out | `electron/services/ResourceProfileService.ts` |
 | Profile config table + types | `shared/types/resourceProfile.ts` |
+| Composite memory snapshot (Electron + terminal-workload slices, freshness) | `electron/services/memoryAccounting.ts`, `shared/types/memoryAccounting.ts` |
 | PTY-host heap governor (cross-process) | `electron/pty-host/ResourceGovernor.ts` |
+| Worker-governance aggregation + trim fan-out | `electron/services/WorkerGovernanceService.ts` |
+| Worker snapshot shape + pure policy | `shared/types/workerGovernance.ts`, `shared/utils/workerGovernancePolicy.ts` |
+| Idle analysis-session trim (pty-host) | `electron/services/PtyManager.ts`, `electron/pty-host/handlers/resourceConfig.ts` |
+| Idle plugin-worker dispose | `electron/services/PluginService.ts` (`disposeIdlePluginWorkers`) |
 | View freeze / LRU eviction / paint gate | `electron/window/ProjectViewManager.ts` |
 | CDP freeze + CPU-throttle helpers | `electron/utils/webContentsLifecycle.ts` |
 | Memory-pressure hibernation | `electron/services/HibernationService.ts` |

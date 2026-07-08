@@ -9,7 +9,13 @@ import { PANEL_KIND_BRAND_COLORS } from "../theme/index.js";
  * built-in kind is a one-line change here — every guard and registry helper
  * derives from this array.
  */
-export const BUILT_IN_PANEL_KINDS = ["terminal", "browser", "dev-preview", "review"] as const;
+export const BUILT_IN_PANEL_KINDS = [
+  "terminal",
+  "browser",
+  "dev-preview",
+  "review",
+  "file",
+] as const;
 
 /** Built-in panel kinds — derived from `BUILT_IN_PANEL_KINDS` */
 export type BuiltInPanelKind = (typeof BUILT_IN_PANEL_KINDS)[number];
@@ -96,6 +102,14 @@ export interface PanelKindConfig {
   canRestart: boolean;
   /** Whether this panel kind can convert to/from other types */
   canConvert: boolean;
+  /**
+   * Whether a non-PTY kind can live in the dock. PTY kinds are always
+   * dockable; setting this opts a non-PTY kind into dock membership. The
+   * dock render path must have a chip for the kind (see `ContentDock`) —
+   * `DockPanelData` in shared/types/panel.ts is the type-level twin of this
+   * flag and the two must stay in sync.
+   */
+  dockable?: boolean;
   /** Whether this panel kind uses the standard terminal UI */
   usesTerminalUi?: boolean;
   /** Whether this panel kind should keep its runtime alive across project switches */
@@ -215,6 +229,25 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     // Review is a reading surface: when the user moves it to the dock or
     // trashes it, send focus back to whatever they were last reading rather
     // than handing focus to the first grid terminal in the worktree.
+    policy: { dockFallbackTarget: "previous-focused" },
+  },
+  file: {
+    id: "file",
+    name: "File Viewer",
+    iconId: "file-text",
+    color: PANEL_KIND_BRAND_COLORS.file,
+    hasPty: false,
+    canRestart: false,
+    canConvert: false,
+    dockable: true,
+    usesTerminalUi: false,
+    keepAliveOnProjectSwitch: true,
+    showInPalette: true,
+    searchAliases: ["file", "md", "markdown", "readme", "docs", "spec", "document", "viewer"],
+    firstRenderRestore: true,
+    lazyImportPath: "src/panels/file/FilePane.tsx",
+    // Reading surface like review: focus returns to what the user was last
+    // reading when the panel leaves the grid.
     policy: { dockFallbackTarget: "previous-focused" },
   },
 };
@@ -465,6 +498,20 @@ export function getPanelKindColor(kind: PanelKind, agentId?: string): string {
 export function panelKindHasPty(kind: PanelKind): boolean {
   const config = getPanelKindConfig(kind);
   return config?.hasPty ?? false;
+}
+
+/**
+ * Check if a panel kind can live in the dock. PTY kinds always can; non-PTY
+ * kinds opt in via `dockable` (the dock chip row and offscreen host render
+ * them through `isDockPanel`).
+ *
+ * @param kind - The panel kind to check
+ * @returns True if panels of this kind can be moved to the dock
+ */
+export function panelKindIsDockable(kind: PanelKind): boolean {
+  const config = getPanelKindConfig(kind);
+  if (!config) return false;
+  return config.hasPty || config.dockable === true;
 }
 
 /**

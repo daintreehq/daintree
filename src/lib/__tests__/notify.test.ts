@@ -3216,6 +3216,63 @@ describe("notify() — thread re-promotion (#9008)", () => {
       expect(useNotificationHistoryStore.getState().snoozedThreads["build"]).toBeDefined();
     });
 
+    it("clears the snooze when a snoozed thread escalates while blurred (no toast)", () => {
+      // The toast stays focus-gated (#10056), but the escalation must still
+      // un-snooze the thread: otherwise an error lands hidden behind a snooze
+      // the user set on a milder thread and never reaches the unread badge.
+      vi.spyOn(document, "hasFocus").mockReturnValue(false);
+      seedThread([seedEntry({ type: "info", correlationId: "build" })]);
+      useNotificationHistoryStore.setState({
+        snoozedThreads: { build: Date.now() + 60_000 },
+      });
+      notify({
+        type: "error",
+        correlationId: "build",
+        message: "Build failed",
+        priority: "low",
+      });
+      expect(useNotificationStore.getState().notifications).toHaveLength(0);
+      expect(useNotificationHistoryStore.getState().snoozedThreads["build"]).toBeUndefined();
+      const escalation = useNotificationHistoryStore
+        .getState()
+        .entries.find((e) => e.message === "Build failed");
+      expect(escalation?.seenAsToast).toBe(false);
+      expect(useNotificationHistoryStore.getState().unreadCount).toBe(1);
+    });
+
+    it("keeps the snooze on a routine same-severity update while blurred", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(false);
+      seedThread([seedEntry({ type: "info", correlationId: "build" })]);
+      const until = Date.now() + 60_000;
+      useNotificationHistoryStore.setState({ snoozedThreads: { build: until } });
+      notify({
+        type: "info",
+        correlationId: "build",
+        message: "Still building",
+        priority: "low",
+      });
+      expect(useNotificationHistoryStore.getState().snoozedThreads["build"]).toBe(until);
+    });
+
+    it("watch-priority update on a snoozed thread clears the snooze even while blurred", () => {
+      // `watch` bypasses the focus gate entirely, so the thread is actively
+      // toasting — keeping its inbox rows hidden behind the snooze would
+      // contradict the visible toast.
+      vi.spyOn(document, "hasFocus").mockReturnValue(false);
+      seedThread([seedEntry({ type: "info", correlationId: "build" })]);
+      useNotificationHistoryStore.setState({
+        snoozedThreads: { build: Date.now() + 60_000 },
+      });
+      notify({
+        type: "info",
+        correlationId: "build",
+        message: "Watch update",
+        priority: "watch",
+      });
+      expect(useNotificationStore.getState().notifications).toHaveLength(1);
+      expect(useNotificationHistoryStore.getState().snoozedThreads["build"]).toBeUndefined();
+    });
+
     it("grid-bar path clears the snooze when the same predicate would re-promote", () => {
       seedThread([seedEntry({ type: "info", correlationId: "build" })]);
       useNotificationHistoryStore.setState({

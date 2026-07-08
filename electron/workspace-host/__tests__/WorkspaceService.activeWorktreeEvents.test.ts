@@ -34,6 +34,9 @@ vi.mock("../../utils/git.js", () => ({
 
 vi.mock("../../utils/gitUtils.js", () => ({
   getGitDir: vi.fn().mockReturnValue("/test/worktree/.git"),
+  // null → the post-reconcile watcher self-heal (TopologyWatcher's
+  // ensureAlive) no-ops, keeping these tests focused on event ordering.
+  getGitCommonDir: vi.fn().mockResolvedValue(null),
   clearGitDirCache: vi.fn(),
   clearGitCommonDirCache: vi.fn(),
 }));
@@ -277,7 +280,7 @@ describe("WorkspaceService active-worktree event emission (#9945)", () => {
     expect(service["activeWorktreeId"]).toBeNull();
   });
 
-  it("auto-switch in runTopologyReconcile emits worktree-removed then worktree-activated, in that order (#9945)", async () => {
+  it("auto-switch in the topology reconcile emits worktree-removed then worktree-activated, in that order (#9945)", async () => {
     // Register main + active worktrees.
     const mainPath = pathResolve("/test/main");
     const activePath = pathResolve("/test/active");
@@ -304,7 +307,7 @@ describe("WorkspaceService active-worktree event emission (#9945)", () => {
       }
     });
 
-    await service["runTopologyReconcile"]();
+    await service["topologyWatcher"]["runReconcile"]();
 
     const removedIdx = indexOfEvent("worktree-removed");
     const activatedIdx = indexOfEvent("worktree-activated");
@@ -336,7 +339,7 @@ describe("WorkspaceService active-worktree event emission (#9945)", () => {
 
     vi.spyOn(service as any, "discoverAndSyncWorktrees").mockResolvedValue(undefined);
 
-    await service["runTopologyReconcile"]();
+    await service["topologyWatcher"]["runReconcile"]();
 
     expect(eventOfType("worktree-activated")).toBeUndefined();
     expect(eventOfType("worktree-removed")).toBeUndefined();

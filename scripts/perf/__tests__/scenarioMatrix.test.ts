@@ -1,10 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { allScenarios, assertMatrixCoverage, getScenariosForMode } from "../scenarios";
+import { getConstructedReflowTerminalCount } from "../lib/reflowFixture";
 
 describe("perf scenario matrix", () => {
   it("covers full PERF matrix", () => {
     expect(() => assertMatrixCoverage()).not.toThrow();
-    expect(allScenarios).toHaveLength(34);
+    expect(allScenarios).toHaveLength(44);
+  });
+
+  it("importing the resize/reflow scenario module constructs no terminals", () => {
+    // Lazy-fixture rule: fixture setup happens on first run()/warmup, never
+    // at import. This must run before the PERF-112 execution test below.
+    expect(getConstructedReflowTerminalCount()).toBe(0);
   });
 
   it("returns mode-specific scenario sets", () => {
@@ -53,5 +60,80 @@ describe("perf scenario matrix", () => {
     // Length of "log entry 99 from agent terminal" = 32. The last write
     // is the log stream, so the last line must be the final log entry.
     expect(sample.metrics!.lastLineLength).toBeGreaterThanOrEqual(32);
+  });
+
+  it("PERF-035 agent-analysis sim measures CPU and deterministic flip latencies", async () => {
+    const { runAgentAnalysisSim } = await import("../lib/agentAnalysisSim");
+
+    // Scaled-down phases: virtual time is simulated, so the 10s settle (which
+    // must exceed the monitor's 8s idle debounce for the waiting flip to
+    // fire) costs milliseconds of wall clock.
+    const result = await runAgentAnalysisSim({
+      agents: 1,
+      phases: { workingMs: 2000, heavyMs: 500, settleMs: 10_000, resumeMs: 2000, tailMs: 500 },
+    });
+
+    expect(result.fedBytes).toBeGreaterThan(0);
+    expect(result.cpuMs).toBeGreaterThan(0);
+    expect(Number.isFinite(result.cpuMsPerMb)).toBe(true);
+    // Virtual-time latencies: the working→waiting flip lands just past the 8s
+    // idle debounce; waiting→working recovery lands past the 600-1500ms
+    // working-signal debounce. Wide brackets — the exact values are the perf
+    // budget's job; this guards that the sim's clock and FSM wiring work.
+    expect(result.waitFlipLatencyMs).toBeGreaterThan(7000);
+    expect(result.waitFlipLatencyMs).toBeLessThan(9500);
+    expect(result.resumeFlipLatencyMs).toBeGreaterThan(300);
+    expect(result.resumeFlipLatencyMs).toBeLessThan(2500);
+    // The virtual clock must be fully uninstalled afterward: its epoch sits
+    // in the future (1.8e12 ≈ 2027), so a restored real clock reads below it.
+    expect(Date.now()).toBeLessThan(1_800_000_000_000);
+  });
+
+  it("PERF-034 parse-isolation scenario produces solo and flood echo brackets", async () => {
+    const scenario = allScenarios.find((s) => s.id === "PERF-034");
+    expect(scenario).toBeDefined();
+
+    const context = { mode: "smoke" as const, now: () => performance.now() };
+    const sample = await scenario!.run(context);
+
+    expect(sample.metrics).toBeDefined();
+    // Both brackets must have measured real write-to-parse latencies.
+    expect(sample.metrics!.soloEchoP99Ms).toBeGreaterThan(0);
+    expect(sample.metrics!.floodEchoP99Ms).toBeGreaterThan(0);
+    expect(sample.metrics!.echoDegradationX).toBeGreaterThan(0);
+    expect(Number.isFinite(sample.metrics!.echoDegradationX)).toBe(true);
+    // 12 background terminals × 30 rounds × ~1.8 KB chunks — if this shrinks,
+    // the flood stopped flooding and the degradation signal is meaningless.
+    expect(sample.metrics!.floodBytes).toBeGreaterThan(500_000);
+  });
+
+  it("PERF-112 keeps the over-budget reveal flat with respect to backlog size", async () => {
+    const scenario = allScenarios.find((s) => s.id === "PERF-112");
+    expect(scenario).toBeDefined();
+
+    const context = { mode: "ci" as const, now: () => performance.now() };
+    let sample = await scenario!.run(context);
+
+    expect(sample.metrics).toBeDefined();
+    let metrics = sample.metrics!;
+    // Bounded arm parses ~768 KiB inside resize()'s flushSync — must be a real bracket.
+    expect(metrics.revealBlockingMsSmallBacklog).toBeGreaterThan(0);
+    // Over-budget arm resizes on an empty write buffer, then drains ~4 MiB.
+    expect(metrics.drainMsLargeBacklog).toBeGreaterThan(0);
+    // The drained backlog actually parsed at the new grid (scrollback-capped).
+    expect(metrics.parsedLinesLargeBacklog).toBeGreaterThan(4_000);
+    // Golden value pins the seeded generator's byte output — content drift
+    // must be a conscious edit (and a new constant), never an accident.
+    expect(metrics.backlogChecksum).toBe(835_845_091);
+
+    // The incident invariant: a 4 MiB backlog must NOT block the reveal like
+    // a flushed one — a bypassed budget gate lands at ~5x deterministically.
+    // One retry absorbs a scheduler/GC spike in the single-sample bracket;
+    // the perf harness gates the iteration-averaged metric separately.
+    if ((metrics.largeToSmallBlockingRatio ?? Infinity) >= 3) {
+      sample = await scenario!.run(context);
+      metrics = sample.metrics!;
+    }
+    expect(metrics.largeToSmallBlockingRatio).toBeLessThan(3);
   });
 });

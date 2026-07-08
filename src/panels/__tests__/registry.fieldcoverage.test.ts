@@ -1,6 +1,11 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { getPanelKindConfig } from "@shared/config/panelKindRegistry";
-import type { BrowserPanelData, BuiltInPanelKind, PanelExitBehavior } from "@shared/types/panel";
+import type {
+  BrowserPanelData,
+  BuiltInPanelKind,
+  FilePanelData,
+  PanelExitBehavior,
+} from "@shared/types/panel";
 import type { BrowserHistory } from "@shared/types/browser";
 import { getDeserializer } from "@/config/panelKindSerialisers";
 import type { SavedTerminalData } from "@/utils/stateHydration/statePatcher";
@@ -73,6 +78,8 @@ const PTY_FIELD_CLASSIFICATION = {
   sessionTokens: false,
   spawnError: false,
   spawnStatus: false,
+  // Live-only render hint for single-launch eager xterm mount; never persisted.
+  eagerAttach: false,
   activityHeadline: false,
   activityStatus: false,
   activityType: false,
@@ -186,6 +193,28 @@ const DEV_PREVIEW_FIELD_CLASSIFICATION = {
   lastActiveAt: false,
 } as const satisfies Record<keyof DevPreviewSerializeInput, boolean>;
 
+// ── File field classification ────────────────────────────────────────
+
+const FILE_FIELD_CLASSIFICATION = {
+  // BasePanelData — persisted by the base serialization layer
+  id: false,
+  kind: false,
+  title: false,
+  titleMode: false,
+  location: false,
+  worktreeId: false,
+  isVisible: false,
+  extensionState: false,
+  pluginId: false,
+  // FilePanelData persisted fields
+  filePath: true,
+  fileViewMode: true,
+  // BasePanelData carrier-bookkeeping timestamps — written by the base
+  // serialization layer in panelToSnapshot, not per-kind serializers.
+  createdAt: false,
+  lastActiveAt: false,
+} as const satisfies Record<keyof FilePanelData, boolean>;
+
 // ── Built-in kind exhaustiveness ─────────────────────────────────────
 
 const BUILT_IN_KINDS = [
@@ -193,6 +222,7 @@ const BUILT_IN_KINDS = [
   "browser",
   "dev-preview",
   "review",
+  "file",
 ] as const satisfies readonly BuiltInPanelKind[];
 
 // Compile-time exhaustiveness pin: if a new BuiltInPanelKind is added and not
@@ -324,6 +354,22 @@ const savedBrowser: SavedTerminalData = {
   browserConsoleOpen: false,
 };
 
+const fileFixture: FilePanelData = {
+  id: "panel-file",
+  title: "Panel",
+  location: "grid",
+  kind: "file",
+  filePath: "/home/project/docs/spec.md",
+  fileViewMode: "source",
+};
+
+const savedFile: SavedTerminalData = {
+  id: "panel-file",
+  kind: "file",
+  filePath: "/home/project/docs/spec.md",
+  fileViewMode: "source",
+};
+
 const savedDevPreview: SavedTerminalData = {
   id: "panel-dev-preview",
   kind: "dev-preview",
@@ -388,6 +434,11 @@ describe("panel serializer field coverage", () => {
       }
     );
   });
+
+  it("file serializer covers every persisted file field", () => {
+    const output = getPanelKindConfig("file")!.serialize!(fileFixture) as Record<string, unknown>;
+    assertCovers("file serializer", output, persistedKeys(FILE_FIELD_CLASSIFICATION));
+  });
 });
 
 // ── Deserializer coverage ────────────────────────────────────────────
@@ -429,5 +480,36 @@ describe("panel deserializer field coverage", () => {
     // from BasePanelData is the sole binding, and the worktree path is
     // resolved fresh from the worktree store at render time.
     expect(getDeserializer("review")).toBeUndefined();
+  });
+
+  it("file deserializer covers every persisted file field", () => {
+    const deserializer = getDeserializer("file");
+    expect(deserializer, "file deserializer must be registered").toBeDefined();
+    const output = deserializer!(savedFile) as Record<string, unknown>;
+    assertCovers("file deserializer", output, persistedKeys(FILE_FIELD_CLASSIFICATION));
+  });
+
+  it("file deserializer drops unknown persisted view modes", () => {
+    const deserializer = getDeserializer("file")!;
+    const output = deserializer({
+      id: "panel-file",
+      kind: "file",
+      filePath: "/home/project/docs/spec.md",
+      fileViewMode: "sideways",
+    });
+    expect(output.fileViewMode).toBeUndefined();
+    expect(output.filePath).toBe("/home/project/docs/spec.md");
+  });
+
+  it("file deserializer reads legacy markdown panel fields", () => {
+    const deserializer = getDeserializer("file")!;
+    const output = deserializer({
+      id: "panel-file",
+      kind: "file",
+      markdownFilePath: "/home/project/docs/spec.md",
+      markdownViewMode: "rendered",
+    });
+    expect(output.filePath).toBe("/home/project/docs/spec.md");
+    expect(output.fileViewMode).toBe("rendered");
   });
 });

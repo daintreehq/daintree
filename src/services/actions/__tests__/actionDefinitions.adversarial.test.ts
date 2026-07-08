@@ -1227,6 +1227,7 @@ describe("worktree cycling respects sidebar order", () => {
         }),
       },
       panelIds: ["term-working"],
+      panelIdsByWorktreeId: { "wt-working": ["term-working"] },
     });
     useWorktreeFilterStore.setState({
       orderBy: "alpha",
@@ -1264,6 +1265,7 @@ describe("worktree cycling respects sidebar order", () => {
         }),
       },
       panelIds: ["term-working"],
+      panelIdsByWorktreeId: { "wt-working": ["term-working"] },
     });
     useWorktreeFilterStore.setState({
       orderBy: "alpha",
@@ -1303,6 +1305,7 @@ describe("worktree cycling respects sidebar order", () => {
         }),
       },
       panelIds: ["term-working"],
+      panelIdsByWorktreeId: { "wt-working": ["term-working"] },
     });
 
     useWorktreeFilterStore.setState({

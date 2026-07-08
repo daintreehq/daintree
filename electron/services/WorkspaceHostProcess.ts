@@ -638,6 +638,10 @@ export class WorkspaceHostProcess extends EventEmitter {
           // host OOM-loop (#10729). 512 MB raises the headroom while the slow-OOM
           // detector above surfaces any genuine leak instead of looping silently.
           "--max-old-space-size=512",
+          // Cap the young generation: git-status polling churns short-lived
+          // strings per poll; an uncapped nursery (RAM-scaled by V8) commits
+          // slack per project's host. One host per project multiplies it.
+          "--max-semi-space-size=8",
           `--diagnostic-dir=${app.getPath("logs")}`,
           "--report-exclude-env",
         ],
@@ -995,6 +999,10 @@ export class WorkspaceHostProcess extends EventEmitter {
 
       case "copytree:complete":
       case "copytree:test-config-result":
+        this.handleRequestResult(this.toResult(event, true));
+        break;
+
+      case "governance:snapshot-result":
         this.handleRequestResult(this.toResult(event, true));
         break;
 

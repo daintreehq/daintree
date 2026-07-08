@@ -2,6 +2,7 @@ import type {
   FlowControlQueueEntry,
   FlowControlSnapshot,
   FlowControlTerminalSnapshot,
+  PtyHostWorkerGovernanceSnapshot,
 } from "../../../shared/types/pty-host.js";
 import { getEventLoopStats } from "../eventLoopMonitor.js";
 import type { HandlerMap, HostContext } from "./types.js";
@@ -115,6 +116,25 @@ export function createDiagnosticsHandlers(ctx: HostContext): HandlerMap {
       };
 
       sendEvent({ type: "flow-control-snapshot", requestId: msg.requestId, snapshot });
+    },
+
+    // Per-slot analysis worker pool state plus this host process's memory —
+    // worker_threads share the host process, so the host-level usage IS the
+    // pool's memory story. Consumed by main's WorkerGovernanceService for the
+    // diagnostics export; like the flow-control pull, never gated on the
+    // streaming-metrics flag.
+    "get-worker-governance-snapshot": (msg) => {
+      const memory = process.memoryUsage();
+      const snapshot: PtyHostWorkerGovernanceSnapshot = {
+        timestamp: Date.now(),
+        workers: ctx.analysisWorkerPool?.getGovernanceSnapshots() ?? [],
+        hostMemory: {
+          rssBytes: memory.rss,
+          heapUsedBytes: memory.heapUsed,
+          externalBytes: memory.external ?? 0,
+        },
+      };
+      sendEvent({ type: "worker-governance-snapshot", requestId: msg.requestId, snapshot });
     },
   };
 }

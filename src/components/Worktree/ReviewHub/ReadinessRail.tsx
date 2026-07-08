@@ -57,16 +57,19 @@ export function ReadinessRail({ summary, onCta }: ReadinessRailProps) {
   const level = LEVEL_CONFIG[summary.level];
   const ordered = [...summary.blockers, ...summary.warnings, ...summary.infos];
   const visible = ordered.slice(0, MAX_VISIBLE_ITEMS);
-  const hiddenCount = ordered.length - visible.length;
+  const hidden = ordered.slice(MAX_VISIBLE_ITEMS);
 
   return (
     <div
       data-testid="review-readiness-rail"
+      role="group"
+      aria-label="Review readiness"
       className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-1.5 border-b border-divider bg-overlay-subtle text-[11px]"
     >
       <span
         data-testid="review-readiness-level"
         data-level={summary.level}
+        role="status"
         className={cn(
           "inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded border font-medium shrink-0",
           level.chipClass
@@ -78,9 +81,14 @@ export function ReadinessRail({ summary, onCta }: ReadinessRailProps) {
       {visible.map((item) => (
         <RailItem key={item.id} item={item} onCta={onCta} />
       ))}
-      {hiddenCount > 0 && (
-        <span data-testid="review-readiness-overflow" className="text-daintree-text/40 shrink-0">
-          +{hiddenCount} more
+      {hidden.length > 0 && (
+        <span
+          data-testid="review-readiness-overflow"
+          className="text-daintree-text/40 shrink-0 cursor-help"
+          title={hidden.map((item) => item.label).join("\n")}
+          aria-label={`${hidden.length} more: ${hidden.map((item) => item.label).join(", ")}`}
+        >
+          +{hidden.length} more
         </span>
       )}
     </div>

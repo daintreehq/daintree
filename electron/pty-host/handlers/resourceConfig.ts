@@ -9,6 +9,7 @@ import type { HandlerMap, HostContext } from "./types.js";
 
 export function createResourceConfigHandlers(ctx: HostContext): HandlerMap {
   const { processTreeCache, terminalResourceMonitor } = ctx;
+  let lastProfile: ResourceProfile | null = null;
 
   return {
     "set-resource-monitoring": (msg) => {
@@ -26,6 +27,26 @@ export function createResourceConfigHandlers(ctx: HostContext): HandlerMap {
         );
       }
       ctx.resourceGovernor.setResourceProfile(profile);
+
+      // One-shot analysis-session trim on ENTRY into efficiency (not on every
+      // profile push — main replays the profile on host-ready and transitions
+      // can flap). The per-session policy protects active agents and recently
+      // used terminals; the resource governor's own heap-driven trims remain
+      // the backstop for genuine in-host pressure regardless of profile.
+      const entering = profile === "efficiency" && lastProfile !== "efficiency";
+      lastProfile = profile;
+      if (entering) {
+        try {
+          const { trimmed, skipped } = ctx.ptyManager.trimIdleAnalysisSessions();
+          if (trimmed > 0) {
+            console.log(
+              `[PtyHost] Efficiency entry trimmed ${trimmed} idle analysis session(s) (${skipped} protected)`
+            );
+          }
+        } catch (err) {
+          console.warn("[PtyHost] Idle analysis-session trim failed:", err);
+        }
+      }
     },
 
     "set-process-tree-poll-interval": (msg) => {

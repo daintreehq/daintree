@@ -5,7 +5,7 @@ import babel from "@rolldown/plugin-babel";
 import tailwindcss from "@tailwindcss/vite";
 import { visualizer } from "rollup-plugin-visualizer";
 import path from "path";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
 import { getDevServerConfig } from "./shared/config/devServer";
@@ -239,10 +239,17 @@ function reactCompilerReportPlugin(command: "build" | "serve"): {
 // watch-mode rebuild can't reuse stale state from the previous build.
 interface ImportMapBuildState {
   scriptSrcHash: string | null;
+  /**
+   * SHA-256 hashes for the boot-skeleton scripts inlined into index.html by
+   * inlineSkeletonScriptsPlugin. Written by that plugin, read by
+   * cspTransformPlugin (meta CSP) and hostImportMapPlugin's closeBundle
+   * (HTTP-header CSP sidecar) so all three layers stay aligned.
+   */
+  skeletonScriptHashes: string[];
 }
 
 function createImportMapState(): ImportMapBuildState {
-  return { scriptSrcHash: null };
+  return { scriptSrcHash: null, skeletonScriptHashes: [] };
 }
 
 // Plugin to transform CSP meta tag based on build mode. In production it pulls
@@ -252,11 +259,13 @@ function cspTransformPlugin(state: ImportMapBuildState): Plugin {
   return {
     name: "csp-transform",
     transformIndexHtml(html, ctx) {
+      const allHashes = [
+        ...(state.scriptSrcHash ? [state.scriptSrcHash] : []),
+        ...state.skeletonScriptHashes,
+      ];
       const csp = ctx.server
         ? DEV_CSP
-        : getDaintreeAppProdCSP(
-            state.scriptSrcHash ? { scriptSrcHashes: [state.scriptSrcHash] } : undefined
-          );
+        : getDaintreeAppProdCSP(allHashes.length > 0 ? { scriptSrcHashes: allHashes } : undefined);
       const cspRegex = /<meta\s+[^>]*http-equiv=["']Content-Security-Policy["'][^>]*>/i;
 
       if (!cspRegex.test(html)) {
@@ -269,6 +278,108 @@ function cspTransformPlugin(state: ImportMapBuildState): Plugin {
         cspRegex,
         `<meta http-equiv="Content-Security-Policy" content="${csp}" />`
       );
+    },
+  };
+}
+
+// Inlines the two tiny boot-skeleton scripts into production index.html and
+// defers the cosmetic logo animation. skeleton-ready.js fires the
+// APP_SKELETON_PARSED IPC that gates win.show(); as an external classic
+// script it blocks on an app:// fetch that competes with the modulepreload
+// storm for the main process's protocol handler during the busiest phase of
+// boot. Inlining removes that fetch from the reveal path entirely.
+// skeleton-logo.js (~25KB of cosmetic stroke animation) keeps its external
+// fetch but gains `defer` so it no longer blocks HTML parsing. Inline script
+// hashes are recorded in the shared state so the CSP meta tag and the
+// HTTP-header sidecar both allow them without `'unsafe-inline'`.
+// Build-only: the dev CSP already carries `'unsafe-inline'` and dev boot
+// latency isn't measured.
+function inlineSkeletonScriptsPlugin(state: ImportMapBuildState): Plugin {
+  const INLINE_TARGETS = ["skeleton-ready.js", "skeleton-stuck.js"] as const;
+  return {
+    name: "inline-skeleton-scripts",
+    apply: "build",
+    buildStart() {
+      state.skeletonScriptHashes = [];
+    },
+    transformIndexHtml(html) {
+      // Vite rewrites public-asset URLs against `base: "./"` before this hook
+      // runs, so match any of /file, ./file, or bare file in the src.
+      const tagRegexFor = (file: string): RegExp =>
+        new RegExp(`<script\\s+src="\\.?/?${file.replace(".", "\\.")}"[^>]*></script>`);
+
+      for (const file of INLINE_TARGETS) {
+        const tagRegex = tagRegexFor(file);
+        if (!tagRegex.test(html)) {
+          throw new Error(
+            `[inline-skeleton-scripts] Expected <script src="${file}"> tag in index.html`
+          );
+        }
+        const source = readFileSync(path.join(process.cwd(), "public", file), "utf8");
+        if (source.includes("</script>")) {
+          throw new Error(
+            `[inline-skeleton-scripts] public/${file} contains "</script>" and cannot be inlined`
+          );
+        }
+        state.skeletonScriptHashes.push(
+          `'sha256-${createHash("sha256").update(source, "utf8").digest("base64")}'`
+        );
+        html = html.replace(tagRegex, () => `<script>${source}</script>`);
+      }
+
+      const logoRegex = /<script\s+(src="\.?\/?skeleton-logo\.js")([^>]*)><\/script>/;
+      if (!logoRegex.test(html)) {
+        throw new Error(
+          '[inline-skeleton-scripts] Expected <script src="skeleton-logo.js"> tag in index.html'
+        );
+      }
+      return html.replace(logoRegex, (_m, src: string, rest: string) => {
+        return /\bdefer\b/.test(rest) ? _m : `<script ${src}${rest} defer></script>`;
+      });
+    },
+  };
+}
+
+// Bench builds only (DAINTREE_RENDER_PROBE=1, `npm run build:e2e:bench`):
+// inlines scripts/perf/render-fanout-probe.js as a classic <head> script so
+// the React DevTools hook it installs exists before any deferred module
+// script evaluates react-dom. Classic-inline is the only placement that
+// guarantees that ordering regardless of chunking; a src/ module import would
+// also be vulnerable to sideEffects-based tree-shaking. The script hash rides
+// state.skeletonScriptHashes so the meta CSP and the HTTP-header sidecar both
+// allow it. Never active for shipped builds — the env var is only set by the
+// bench build script.
+function renderFanoutProbePlugin(state: ImportMapBuildState): Plugin {
+  return {
+    name: "render-fanout-probe",
+    apply: "build",
+    transformIndexHtml() {
+      if (process.env.DAINTREE_RENDER_PROBE !== "1") return;
+      // Loud on purpose: a globally exported DAINTREE_RENDER_PROBE=1 would
+      // otherwise silently turn a packaging build into a bench build
+      // (inline probe + profiling react-dom + no minification).
+      console.warn(
+        "[render-fanout-probe] BENCH BUILD: inlining render probe, profiling react-dom, minify off — never ship this build"
+      );
+      const source = readFileSync(
+        path.join(process.cwd(), "scripts", "perf", "render-fanout-probe.js"),
+        "utf8"
+      );
+      if (source.includes("</script>")) {
+        throw new Error(
+          '[render-fanout-probe] scripts/perf/render-fanout-probe.js contains "</script>" and cannot be inlined'
+        );
+      }
+      state.skeletonScriptHashes.push(
+        `'sha256-${createHash("sha256").update(source, "utf8").digest("base64")}'`
+      );
+      return [
+        {
+          tag: "script",
+          injectTo: "head-prepend" as const,
+          children: source,
+        },
+      ];
     },
   };
 }
@@ -370,12 +481,13 @@ function hostImportMapPlugin(state: ImportMapBuildState): Plugin {
       ];
     },
     closeBundle() {
-      if (!state.scriptSrcHash) return;
+      const allHashes = [
+        ...(state.scriptSrcHash ? [state.scriptSrcHash] : []),
+        ...state.skeletonScriptHashes,
+      ];
+      if (allHashes.length === 0) return;
       mkdirSync(path.dirname(sidecarPath), { recursive: true });
-      writeFileSync(
-        sidecarPath,
-        JSON.stringify({ scriptSrcHashes: [state.scriptSrcHash] }, null, 2) + "\n"
-      );
+      writeFileSync(sidecarPath, JSON.stringify({ scriptSrcHashes: allHashes }, null, 2) + "\n");
     },
   };
 }
@@ -626,6 +738,10 @@ function compileHintsPlugin(): Plugin {
     "TerminalInstanceService",
     "appThemeStore",
   ]);
+  // The `boot` codeSplitting group holds the entry's static closure (the
+  // modules that previously lived inline in the hinted entry chunk); maxSize
+  // may split it into boot, boot2, ... — hint every split.
+  const isBootGroupChunk = (name: string): boolean => /^boot\d*$/.test(name);
   // Fallback for chunks whose name could drift: match the facade module.
   const hintedFacadeSuffixes = [
     "src/App.tsx",
@@ -642,6 +758,7 @@ function compileHintsPlugin(): Plugin {
     return (
       chunk.isEntry ||
       hintedChunkNames.has(chunk.name) ||
+      isBootGroupChunk(chunk.name) ||
       (facade != null && hintedFacadeSuffixes.some((suffix) => facade.endsWith(suffix)))
     );
   };
@@ -839,6 +956,15 @@ export default defineConfig(({ command, mode }) => {
       tailwindcss(),
       hostImportMapPlugin(importMapState),
       hostImportMapDevPlugin(),
+      // Must precede cspTransformPlugin: both use default-order
+      // transformIndexHtml hooks (registration order), and the CSP transform
+      // reads the skeleton hashes this plugin stores in shared state.
+      inlineSkeletonScriptsPlugin(importMapState),
+      // Bench-only (no-op unless DAINTREE_RENDER_PROBE=1). Must sit between
+      // inlineSkeletonScriptsPlugin (buildStart resets the hash list) and
+      // cspTransformPlugin (reads it) — all three use default-order
+      // transformIndexHtml hooks, so registration order is execution order.
+      renderFanoutProbePlugin(importMapState),
       cspTransformPlugin(importMapState),
       compilerReportPlugin,
       rendererBundleSizePlugin(),
@@ -855,6 +981,10 @@ export default defineConfig(({ command, mode }) => {
     base: "./",
     build: {
       target: "chrome148",
+      // Bench builds skip minification so the render-fanout probe reports
+      // readable component names (only explicit displayNames survive the
+      // minifier). Never set for shipped builds.
+      ...(process.env.DAINTREE_RENDER_PROBE === "1" ? { minify: false } : {}),
       modulePreload: { polyfill: false },
       outDir: "dist",
       emptyOutDir: true,
@@ -878,6 +1008,12 @@ export default defineConfig(({ command, mode }) => {
           lazyBarrel: true,
         },
         output: {
+          // The `boot` codeSplitting group merges cross-chunk module sets,
+          // which can reorder module evaluation relative to the automatic
+          // chunking the app's latent import cycles happened to tolerate.
+          // strictExecutionOrder makes rolldown preserve the exact
+          // topological evaluation order across chunk boundaries.
+          strictExecutionOrder: true,
           codeSplitting: {
             groups: [
               {
@@ -996,6 +1132,39 @@ export default defineConfig(({ command, mode }) => {
                 entriesAwareMergeThreshold: 0,
                 priority: 10,
               },
+              {
+                // Collapse the automatic-chunking tail of the entry's static
+                // closure. Modules shared between the entry and dynamic
+                // imports otherwise split into per-share-set chunks, leaving
+                // the boot-critical closure scattered across dozens of tiny
+                // files — each an extra app:// request through the main
+                // process's protocol handler during the busiest phase of
+                // boot. `$initial` captures only modules statically reachable
+                // from an entry (never lazy-only code). The merge trades
+                // bytes for requests: strictExecutionOrder wrappers and
+                // coarser chunk boundaries grow the eager closure several
+                // percent gzip, but the request-count cut wins by a wide
+                // margin in perf:launch-ab A/B runs (cold first-interactive
+                // ~-25%, warm ~-8%). Lowest priority: every vendor group must
+                // claim its node_modules first, leaving app-source modules
+                // here. maxSize keeps merged chunks near the size of the
+                // existing large chunks so background compile parallelism is
+                // preserved.
+                name: "boot",
+                tags: ["$initial"],
+                // Never capture the entry facade or Vite's virtual modules:
+                // swallowing src/main.tsx or the index.html proxy demotes the
+                // entry chunk (the manifest loses isEntry), which breaks the
+                // first-render budget scripts and the modulepreload seed
+                // derivation. Virtual modules (\0-prefixed helpers, html
+                // proxies) stay wherever automatic chunking puts them.
+                test: (id: string) => {
+                  if (id.includes("\0") || id.includes(".html")) return false;
+                  return !id.split(path.sep).join("/").endsWith("src/main.tsx");
+                },
+                priority: 1,
+                maxSize: 400_000,
+              },
             ],
           },
         },
@@ -1003,6 +1172,14 @@ export default defineConfig(({ command, mode }) => {
     },
     resolve: {
       alias: {
+        // Bench builds (DAINTREE_RENDER_PROBE=1, see build:bench) swap in the
+        // profiling react-dom bundle so the render-fanout probe
+        // (src/utils/renderFanoutProbe.ts) gets per-fiber actualDuration.
+        // Production semantics are otherwise identical (no StrictMode
+        // double-render); never set for shipped builds.
+        ...(process.env.DAINTREE_RENDER_PROBE === "1"
+          ? { "react-dom/client": "react-dom/profiling" }
+          : {}),
         "@": path.resolve(__dirname, "./src"),
         "@shared": path.resolve(__dirname, "./shared"),
         // refractor/core eagerly imports parse-entities, whose browser-condition

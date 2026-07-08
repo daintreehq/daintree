@@ -1,5 +1,10 @@
 export { useAppBoot } from "./useAppBoot";
 export type { SafeBootResult } from "./useAppBoot";
+export { useE2EBridges } from "./useE2EBridges";
+export { useModalResetKeys } from "./useModalResetKeys";
+export type { ModalResetKeys } from "./useModalResetKeys";
+export { useAppBootstrap } from "./useAppBootstrap";
+export { usePaletteWiring } from "./usePaletteWiring";
 export { useAppHydration } from "./useAppHydration";
 export { useShortcutHints } from "./useShortcutHints";
 export { usePanelStoreBootstrap } from "./usePanelStoreBootstrap";
@@ -17,6 +22,7 @@ export { useAppEventListeners } from "./useAppEventListeners";
 export { useThemeBrowserSettingsBridge } from "./useThemeBrowserSettingsBridge";
 export { useErrorRetry } from "./useErrorRetry";
 export { useActiveWorktreeSync } from "./useActiveWorktreeSync";
+export { useAgentActivityBroadcast } from "./useAgentActivityBroadcast";
 export { useOrchestrationMilestones } from "./useOrchestrationMilestones";
 export { useAgentWaitingNudge } from "./useAgentWaitingNudge";
 export { useForgeEnableRecommendation } from "./useForgeEnableRecommendation";

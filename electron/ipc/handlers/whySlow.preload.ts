@@ -2,6 +2,7 @@ import type { IpcInvokeMap } from "../../types/index.js";
 
 export const WHY_SLOW_METHOD_CHANNELS = {
   getWhySlowSnapshot: "system:get-why-slow-snapshot",
+  getMemorySnapshot: "system:get-memory-snapshot",
   reportTerminalRendererDiagnostics: "system:report-terminal-renderer-diagnostics",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 

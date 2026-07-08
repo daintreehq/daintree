@@ -18,6 +18,7 @@ import type {
 import { PERF_MARKS } from "@shared/perf/marks";
 import { logDebug, logWarn } from "@/utils/logger";
 import { isRendererPerfCaptureEnabled, markRendererPerformance } from "@/utils/performance";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
 let messagePort: MessagePort | null = null;
 let expectedToken: string | null = null;
@@ -47,6 +48,50 @@ function earlyChunkSize(data: string | Uint8Array): number {
 // routes by id internally. No per-terminal map and no ACK accounting: these
 // control messages carry no byte count and must never enter pendingPortAckBytes.
 const tierChangedCallbacks = new Set<(id: string, tier: "active" | "background") => void>();
+
+// Engage-barrier markers from the host (issue #10960): the routing switch to a
+// terminal's dedicated worker-ingest port completed, FIFO behind the final
+// window-routed chunk. Control pulses — no ACK accounting. The lone consumer
+// (the live worker-ingest controller) routes by id internally.
+const workerIngestEngagedCallbacks = new Set<(id: string) => void>();
+
+// Pending dedicated worker-port requests (issue #10960). The IPC invoke
+// returns a handshake token; the port itself arrives via a
+// `terminal-worker-port` window message carrying the same token — either can
+// land first, so both halves park here until they pair (or the timeout fires).
+interface PendingWorkerPortRequest {
+  token: string | null;
+  port: MessagePort | null;
+  portToken: string | null;
+  resolve: (port: MessagePort | null) => void;
+  timeout: ReturnType<typeof setTimeout>;
+}
+const pendingWorkerPortRequests = new Map<string, PendingWorkerPortRequest>();
+const WORKER_PORT_REQUEST_TIMEOUT_MS = 5000;
+
+function settleWorkerPortRequest(id: string, port: MessagePort | null): void {
+  const pending = pendingWorkerPortRequests.get(id);
+  if (!pending) {
+    if (port) {
+      try {
+        port.close();
+      } catch {
+        // already closed
+      }
+    }
+    return;
+  }
+  pendingWorkerPortRequests.delete(id);
+  clearTimeout(pending.timeout);
+  if (port === null && pending.port) {
+    try {
+      pending.port.close();
+    } catch {
+      // already closed
+    }
+  }
+  pending.resolve(port);
+}
 
 // Per-window terminal-status pulses delivered on the MessagePort (currently the
 // `data-loss` signal for a saturated window in the multi-window fan-out case,
@@ -91,6 +136,13 @@ function installPortDataHandler(port: MessagePort): void {
       // Host-pushed tier reconciliation — no ACK, no byte accounting.
       for (const cb of tierChangedCallbacks) {
         cb(msg.id, msg.tier);
+      }
+      return;
+    }
+    if (msg?.type === "worker-ingest-engaged" && typeof msg.id === "string") {
+      // Engage-barrier marker — no ACK, no byte accounting.
+      for (const cb of workerIngestEngagedCallbacks) {
+        cb(msg.id);
       }
       return;
     }
@@ -232,6 +284,35 @@ if (typeof window !== "undefined") {
       activatePort(event.ports[0]);
       expectedToken = null;
       logDebug("[TerminalClient] MessagePort acquired via postMessage");
+      return;
+    }
+
+    if (event.data?.type === "terminal-worker-port" && event.ports?.[0]) {
+      const port = event.ports[0];
+      const terminalId = event.data?.terminalId;
+      const receivedToken = event.data?.token;
+      if (typeof terminalId !== "string" || typeof receivedToken !== "string") {
+        port.close();
+        return;
+      }
+      const pending = pendingWorkerPortRequests.get(terminalId);
+      if (!pending) {
+        // Unsolicited (request already timed out or released) — never adopt.
+        port.close();
+        return;
+      }
+      if (pending.token === null) {
+        // Port beat the invoke result; park it until the token arrives.
+        if (pending.port) pending.port.close();
+        pending.port = port;
+        pending.portToken = receivedToken;
+        return;
+      }
+      if (pending.token !== receivedToken) {
+        port.close();
+        return;
+      }
+      settleWorkerPortRequest(terminalId, port);
     }
   });
 
@@ -331,6 +412,7 @@ export const terminalClient = {
     earlyDataBufferBytes.delete(id);
     pendingPortAckBytes.delete(id);
     pendingEchoProbes.delete(id);
+    settleWorkerPortRequest(id, null);
     return window.electron.terminal.kill(id);
   },
 
@@ -339,6 +421,7 @@ export const terminalClient = {
     earlyDataBufferBytes.delete(id);
     pendingPortAckBytes.delete(id);
     pendingEchoProbes.delete(id);
+    settleWorkerPortRequest(id, null);
     return window.electron.terminal.gracefulKill(id);
   },
 
@@ -347,6 +430,7 @@ export const terminalClient = {
     earlyDataBufferBytes.delete(id);
     pendingPortAckBytes.delete(id);
     pendingEchoProbes.delete(id);
+    settleWorkerPortRequest(id, null);
     return window.electron.terminal.trash(id);
   },
 
@@ -405,6 +489,108 @@ export const terminalClient = {
     tierChangedCallbacks.add(callback);
     return () => {
       tierChangedCallbacks.delete(callback);
+    };
+  },
+
+  /**
+   * Request a dedicated worker-ingest MessagePort for one terminal (issue
+   * #10960). Resolves with the port — which the caller must transfer into the
+   * parse worker WITHOUT reading — or null (no pty client, window teardown,
+   * timeout). One request in flight per terminal.
+   */
+  requestWorkerIngestPort: (id: string): Promise<MessagePort | null> => {
+    if (pendingWorkerPortRequests.has(id)) {
+      return Promise.resolve(null);
+    }
+    return new Promise((resolve) => {
+      const pending: PendingWorkerPortRequest = {
+        token: null,
+        port: null,
+        portToken: null,
+        resolve,
+        timeout: setTimeout(
+          () => settleWorkerPortRequest(id, null),
+          WORKER_PORT_REQUEST_TIMEOUT_MS
+        ),
+      };
+      pendingWorkerPortRequests.set(id, pending);
+      window.electron.terminal
+        .requestWorkerIngestPort(id)
+        .then((result) => {
+          if (pendingWorkerPortRequests.get(id) !== pending) return;
+          if (!result?.token) {
+            settleWorkerPortRequest(id, null);
+            return;
+          }
+          pending.token = result.token;
+          if (!pending.port) return;
+          if (pending.portToken === result.token) {
+            settleWorkerPortRequest(id, pending.port);
+          } else {
+            // Token mismatch — spoofed or stale delivery. Drop the port and
+            // let the timeout settle the request.
+            try {
+              pending.port.close();
+            } catch {
+              // already closed
+            }
+            pending.port = null;
+            pending.portToken = null;
+          }
+        })
+        .catch(() => {
+          if (pendingWorkerPortRequests.get(id) === pending) {
+            settleWorkerPortRequest(id, null);
+          }
+        });
+    });
+  },
+
+  /**
+   * Release a terminal's dedicated worker-ingest port: settles any pending
+   * request as null and tells Main to close the pair (the pty-host tears its
+   * side down via the port-close event).
+   */
+  releaseWorkerIngestPort: (id: string): void => {
+    settleWorkerPortRequest(id, null);
+    // Main-side cleanup is best-effort; the host's port-close handler is the
+    // backstop.
+    safeFireAndForget(window.electron.terminal.releaseWorkerIngestPort(id), {
+      context: "release worker ingest port",
+    });
+  },
+
+  /** Ask the host to route this terminal's bytes to its dedicated port. */
+  sendWorkerIngestEngage: (id: string): boolean => {
+    if (!messagePort) return false;
+    try {
+      messagePort.postMessage({ type: "worker-ingest-engage", id });
+      return true;
+    } catch {
+      return false;
+    }
+  },
+
+  /**
+   * Ask the host to route this terminal's bytes back to the window port. The
+   * host answers with an `ingest-detached` sentinel (carrying `drainId`) on
+   * the dedicated port, which the worker converts to a `port-drained` response.
+   */
+  sendWorkerIngestRelease: (id: string, drainId: number): boolean => {
+    if (!messagePort) return false;
+    try {
+      messagePort.postMessage({ type: "worker-ingest-release", id, drainId });
+      return true;
+    } catch {
+      return false;
+    }
+  },
+
+  /** Subscribe to engage-barrier markers (see sendWorkerIngestEngage). */
+  onWorkerIngestEngaged: (callback: (id: string) => void): (() => void) => {
+    workerIngestEngagedCallbacks.add(callback);
+    return () => {
+      workerIngestEngagedCallbacks.delete(callback);
     };
   },
 

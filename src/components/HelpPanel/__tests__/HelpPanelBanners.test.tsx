@@ -10,7 +10,6 @@ import type { LaunchErrorKind } from "@/controllers/HelpSessionController";
 function baseProps() {
   return {
     showResumeBanner: false,
-    preflightSnapshot: null,
     tierMismatch: null,
     launchError: null,
     sessionRevoked: null,
@@ -19,7 +18,6 @@ function baseProps() {
     grantEnded: null,
     isRevokingGrant: false,
     onDismissResume: vi.fn(),
-    onDismissSnapshot: vi.fn(),
     onDismissTierMismatch: vi.fn(),
     onApproveOnce: vi.fn(),
     onAlwaysAllow: vi.fn(),

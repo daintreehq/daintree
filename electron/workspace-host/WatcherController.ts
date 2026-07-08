@@ -11,13 +11,19 @@ const MAX_RESETS_PER_SESSION = 3;
 const WATCHER_WORKTREE_MIN_DEBOUNCE_MS = 250;
 const WATCHER_WORKTREE_MAX_DEBOUNCE_MS = 800;
 const WATCHER_WORKTREE_MAX_WAIT_MS = 1500;
-const WATCHER_FOCUS_DOWNGRADE_DELAY_MS = 3_000;
+const WATCHER_ELEVATION_DOWNGRADE_DELAY_MS = 3_000;
 
 export type WatcherMode = "none" | "git-only" | "recursive";
 
 export interface WatcherControllerHost {
   readonly isRunning: boolean;
-  readonly isCurrent: boolean;
+  /**
+   * Whether this worktree deserves the recursive (working-tree) watcher:
+   * true when it's the focused worktree or an agent is actively working in
+   * it. The controller only cares about the tier, not which signal produced
+   * it.
+   */
+  readonly isElevated: boolean;
   readonly gitWatchEnabled: boolean;
   readonly gitWatchDebounceMs: number;
   readonly worktreeId: string;
@@ -44,11 +50,12 @@ export interface WatcherControllerHost {
 
 /**
  * Manages the git file watcher lifecycle for a single worktree. Tiers
- * granularity by focus state: focused worktrees get the recursive watcher;
- * background worktrees stay on the cheap `.git/`-only watch. Recovers from
- * runtime failures by reconstructing in `git-only` mode and retrying the
- * recursive arm on a backoff. Coordinates self-triggered refreshes via a
- * pending-flag protocol so concurrent updates don't pile up.
+ * granularity by elevation: elevated worktrees (focused, or with an agent
+ * actively working) get the recursive watcher; the rest stay on the cheap
+ * `.git/`-only watch. Recovers from runtime failures by reconstructing in
+ * `git-only` mode and retrying the recursive arm on a backoff. Coordinates
+ * self-triggered refreshes via a pending-flag protocol so concurrent updates
+ * don't pile up.
  */
 export class WatcherController {
   private gitWatcher = new MutableDisposable<IDisposable>();
@@ -89,15 +96,15 @@ export class WatcherController {
   }
 
   desiredMode(): "git-only" | "recursive" {
-    return this.host.isCurrent ? "recursive" : "git-only";
+    return this.host.isElevated ? "recursive" : "git-only";
   }
 
   /**
    * Poll cadence is mode-aware. Recursive coverage drops the heartbeat to
    * 5min — the watcher catches every working-tree edit, so the timer is
    * just a safety net for OS suspend/wake and rare watcher-ghost cases.
-   * Git-only on the active worktree tightens to 60s so mid-edit changes
-   * that bypass .git/ are still picked up reasonably; background git-only
+   * Git-only on an elevated worktree tightens to 60s so mid-edit changes
+   * that bypass .git/ are still picked up reasonably; non-elevated git-only
    * shares the 5min fallback. No watcher falls back to the supplied
    * adaptive interval.
    */
@@ -106,7 +113,7 @@ export class WatcherController {
       case "recursive":
         return WATCHER_FALLBACK_POLL_INTERVAL_MS;
       case "git-only":
-        return this.host.isCurrent
+        return this.host.isElevated
           ? WATCHER_GIT_ONLY_ACTIVE_POLL_INTERVAL_MS
           : WATCHER_FALLBACK_POLL_INTERVAL_MS;
       case "none":
@@ -116,11 +123,11 @@ export class WatcherController {
   }
 
   /**
-   * Start the git file watcher. The mode is tiered by `host.isCurrent`:
-   * focused worktrees get the recursive watcher; background worktrees get
-   * only the cheap .git/ watchers. On recursive failure (e.g. ENOSPC at
-   * startup), the per-file .git/ watchers are preserved by immediately
-   * reconstructing in "git-only" mode.
+   * Start the git file watcher. The mode is tiered by `host.isElevated`:
+   * elevated worktrees get the recursive watcher; the rest get only the
+   * cheap .git/ watchers. On recursive failure (e.g. ENOSPC at startup),
+   * the per-file .git/ watchers are preserved by immediately reconstructing
+   * in "git-only" mode.
    */
   start(mode: "git-only" | "recursive" = this.desiredMode()): void {
     if (this.disposed) return;
@@ -186,9 +193,9 @@ export class WatcherController {
           if (!this.hasWatcher) {
             this.start("git-only");
           }
-          // Background worktrees don't want recursive at all, so don't keep
-          // poking at it; the next focus flip re-arms via the focus change.
-          if (this.host.isCurrent) {
+          // Non-elevated worktrees don't want recursive at all, so don't keep
+          // poking at it; the next elevation flip re-arms via the change.
+          if (this.host.isElevated) {
             this.scheduleRetry();
           }
         }
@@ -259,10 +266,11 @@ export class WatcherController {
 
   /**
    * Reconcile watcher state. Stop if disabled while running; start if
-   * enabled and not yet armed; rotate if granularity disagrees with focus.
-   * Skips the granularity rotation when a focus-driven downgrade timer is
-   * pending — otherwise periodic reconciliation (e.g. updateWorktrees) would
-   * defeat the hysteresis the moment a focused worktree turns background.
+   * enabled and not yet armed; rotate if granularity disagrees with
+   * elevation. Skips the granularity rotation when an elevation-driven
+   * downgrade timer is pending — otherwise periodic reconciliation (e.g.
+   * updateWorktrees) would defeat the hysteresis the moment a worktree
+   * loses elevation.
    */
   ensureState(): void {
     if (!this.host.gitWatchEnabled && this.hasWatcher) {
@@ -276,9 +284,9 @@ export class WatcherController {
       this.gitWatcherMode !== this.desiredMode() &&
       this.downgradeTimer === null
     ) {
-      // Existing watcher granularity disagrees with focus state — re-arm
-      // so the active worktree gets the recursive watcher and background
-      // worktrees stay on the cheap .git/-only watch.
+      // Existing watcher granularity disagrees with elevation — re-arm so
+      // elevated worktrees get the recursive watcher and the rest stay on
+      // the cheap .git/-only watch.
       this.update();
     }
   }
@@ -290,23 +298,24 @@ export class WatcherController {
   }
 
   /**
-   * React to a focus-tier change. Upgrades (background → focused) re-arm the
-   * recursive watcher immediately so the user sees fresh state right after
-   * switching to a worktree. Downgrades (focused → background) settle for
-   * `WATCHER_FOCUS_DOWNGRADE_DELAY_MS` to absorb rapid focus toggles before
-   * tearing down the recursive arm — this avoids inotify churn on quick
-   * back-and-forth and keeps the watcher alive through transient passes.
+   * React to an elevation-tier change (focus flip or agent activity flip).
+   * Upgrades re-arm the recursive watcher immediately so fresh state streams
+   * right after switching to a worktree or an agent starting work.
+   * Downgrades settle for `WATCHER_ELEVATION_DOWNGRADE_DELAY_MS` to absorb
+   * rapid toggles before tearing down the recursive arm — this avoids
+   * inotify churn on quick back-and-forth and keeps the watcher alive
+   * through transient passes.
    *
    * Returns `true` when an immediate rotation occurred (caller should
    * re-derive poll cadence); `false` when the change was deferred or had no
    * effect on the current granularity.
    */
-  handleFocusChange(isCurrent: boolean): boolean {
+  handleElevationChange(elevated: boolean): boolean {
     if (this.disposed || !this.host.isRunning || !this.host.gitWatchEnabled) {
       return false;
     }
 
-    if (isCurrent) {
+    if (elevated) {
       if (this.downgradeTimer) {
         clearTimeout(this.downgradeTimer);
         this.downgradeTimer = null;
@@ -336,13 +345,13 @@ export class WatcherController {
         this.disposed ||
         !this.host.isRunning ||
         !this.host.gitWatchEnabled ||
-        this.host.isCurrent ||
+        this.host.isElevated ||
         this.gitWatcherMode !== "recursive"
       ) {
         return;
       }
       this.update();
-    }, WATCHER_FOCUS_DOWNGRADE_DELAY_MS).unref();
+    }, WATCHER_ELEVATION_DOWNGRADE_DELAY_MS).unref();
     return false;
   }
 
@@ -446,7 +455,7 @@ export class WatcherController {
   /**
    * Recursive watcher reported a runtime failure. Preserve the cheap .git/
    * watchers by reconstructing in "git-only" mode, then schedule a retry of
-   * the recursive arm on the active worktree only.
+   * the recursive arm on elevated worktrees only.
    */
   private handleWatcherFailed(): void {
     if (this.disposed) return;
@@ -459,7 +468,7 @@ export class WatcherController {
     this.gitWatcher.clear();
     this.gitWatcherMode = "none";
     this.start("git-only");
-    if (this.host.isCurrent) {
+    if (this.host.isElevated) {
       this.scheduleRetry();
     }
   }
@@ -470,7 +479,7 @@ export class WatcherController {
       !this.host.isRunning ||
       !this.host.gitWatchEnabled ||
       this.watcherRetryTimer ||
-      !this.host.isCurrent
+      !this.host.isElevated
     ) {
       return;
     }
@@ -486,7 +495,7 @@ export class WatcherController {
         !this.disposed &&
         this.host.isRunning &&
         this.host.gitWatchEnabled &&
-        this.host.isCurrent &&
+        this.host.isElevated &&
         this.gitWatcherMode !== "recursive"
       ) {
         // Drop any current git-only instance so start()'s idempotent

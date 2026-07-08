@@ -7,6 +7,7 @@ import { logWarn } from "../utils/logger.js";
 import type { CopyTreeOptions, CopyTreeResult } from "../types/index.js";
 import type { CopyTreeTestConfigResult } from "../../shared/types/index.js";
 import type { CopytreeWorkerRequest, CopytreeWorkerResponse } from "./copytreeWorkerProtocol.js";
+import type { WorkerResourceSnapshot } from "../../shared/types/workerGovernance.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -65,6 +66,13 @@ export class CopytreeWorkerClient {
   private workerFailed = false;
   private readonly pendingGenerate = new Map<string, PendingGenerate>();
   private readonly pendingTestConfig = new Map<string, PendingTestConfig>();
+  // Bumped on every worker (re)creation AND on worker death. Messages from a
+  // superseded worker instance are dropped at the listener boundary so a
+  // late result can never resurrect a settled operation or hand a stale
+  // generation's (potentially multi-MB) content to a new caller.
+  private workerGeneration = 0;
+  private lastActivityAt: number | null = null;
+  private lastCompletedAt: number | null = null;
 
   constructor(
     private readonly createWorker: () => Worker = () => new Worker(resolveCopytreeWorkerPath())
@@ -77,6 +85,7 @@ export class CopytreeWorkerClient {
     operationId?: string
   ): Promise<CopyTreeResult> {
     const id = operationId || crypto.randomUUID();
+    this.lastActivityAt = Date.now();
     const worker = this.getWorker();
     if (!worker) {
       return copyTreeService.generate(rootPath, options, onProgress, id);
@@ -112,6 +121,7 @@ export class CopytreeWorkerClient {
     operationId?: string
   ): Promise<CopyTreeTestConfigResult> {
     const id = operationId || crypto.randomUUID();
+    this.lastActivityAt = Date.now();
     const worker = this.getWorker();
     if (!worker) {
       return copyTreeService.testConfig(rootPath, options, id);
@@ -156,9 +166,22 @@ export class CopytreeWorkerClient {
     if (this.worker) return this.worker;
     try {
       const worker = this.createWorker();
-      worker.on("message", (message: CopytreeWorkerResponse) => this.handleMessage(message));
-      worker.on("error", (error) => this.handleWorkerDown(error));
+      // Generation fence: bind this worker instance's listeners to the
+      // generation current at spawn. A message or exit surfacing after the
+      // client moved on (worker replaced or already failed) is dropped —
+      // stale results and their payloads are unreachable the moment the
+      // generation advances.
+      const generation = ++this.workerGeneration;
+      worker.on("message", (message: CopytreeWorkerResponse) => {
+        if (generation !== this.workerGeneration) return;
+        this.handleMessage(message);
+      });
+      worker.on("error", (error) => {
+        if (generation !== this.workerGeneration) return;
+        this.handleWorkerDown(error);
+      });
       worker.on("exit", (code) => {
+        if (generation !== this.workerGeneration) return;
         this.handleWorkerDown(new Error(`copytree worker exited with code ${code}`));
       });
       // The worker must never keep the host alive on its own; the host's
@@ -219,7 +242,9 @@ export class CopytreeWorkerClient {
   private handleWorkerDown(error: unknown): void {
     // Persistent-worker policy: no respawn. A crashing worker would otherwise
     // enter the Electron spawn/terminate crash path, so all future requests
-    // take the in-thread fallback instead.
+    // take the in-thread fallback instead. Advancing the generation makes any
+    // message still in flight from the dead worker unroutable.
+    this.workerGeneration++;
     this.workerFailed = true;
     this.worker = null;
     const failure = new Error(formatErrorMessage(error, "copytree worker failed"));
@@ -243,19 +268,50 @@ export class CopytreeWorkerClient {
       case "progress":
         this.pendingGenerate.get(message.id)?.onProgress?.(message.progress);
         break;
+      // Result payloads (potentially multi-MB XML) are released the moment
+      // they transfer: takePending* deletes the map entry before resolve, so
+      // the client retains no reference once the caller has the result.
       case "generate-result":
+        this.lastCompletedAt = Date.now();
         this.takePendingGenerate(message.id)?.resolve(message.result);
         break;
       case "generate-error":
         this.takePendingGenerate(message.id)?.reject(new Error(message.error));
         break;
       case "test-config-result":
+        this.lastCompletedAt = Date.now();
         this.takePendingTestConfig(message.id)?.resolve(message.result);
         break;
       case "test-config-error":
         this.takePendingTestConfig(message.id)?.reject(new Error(message.error));
         break;
     }
+  }
+
+  /**
+   * Governance snapshot. The copytree worker holds no caches — result buffers
+   * live only in the pending maps until transfer — so nothing is
+   * trim-eligible, and the persistent-worker policy (no terminate, no respawn)
+   * rules out dispose/restart.
+   */
+  getGovernanceSnapshot(): WorkerResourceSnapshot {
+    return {
+      kind: "copytree-worker",
+      id: "copytree-worker",
+      pid: null,
+      threadId: this.worker?.threadId ?? null,
+      alive: this.worker !== null,
+      activeSessionCount: 0,
+      queueDepth: this.pendingGenerate.size + this.pendingTestConfig.size,
+      lastActivityAt: this.lastActivityAt,
+      memory: null,
+      eligibility: { trim: false, dispose: false, restart: false },
+      state: this.workerFailed ? "fallback-pinned" : this.worker ? "running" : "not-spawned",
+      detail: {
+        lastCompletedAt: this.lastCompletedAt,
+        workerGeneration: this.workerGeneration,
+      },
+    };
   }
 }
 

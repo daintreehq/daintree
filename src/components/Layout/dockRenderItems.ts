@@ -1,19 +1,20 @@
-import type { PtyPanelData } from "@shared/types/panel";
+import type { DockPanelData, PtyPanelData } from "@shared/types/panel";
 import type { TabGroup } from "@/types";
 
 export interface DockRenderItem {
   group: TabGroup;
-  panels: PtyPanelData[];
+  panels: DockPanelData[];
 }
 
 export function buildDockRenderItems(
   tabGroups: TabGroup[],
+  // Tab groups stay PTY-only — file panels dock as standalone chips.
   resolvePanels: (groupId: string) => PtyPanelData[],
   excludedPanelId?: string | null,
-  dockTerminals: PtyPanelData[] = []
+  dockTerminals: DockPanelData[] = []
 ): DockRenderItem[] {
   const renderedPanelIds = new Set<string>();
-  const items = tabGroups.flatMap((group) => {
+  const items: DockRenderItem[] = tabGroups.flatMap((group) => {
     const panels = resolvePanels(group.id).filter((panel) => panel.id !== excludedPanelId);
     if (panels.length === 0) return [];
 

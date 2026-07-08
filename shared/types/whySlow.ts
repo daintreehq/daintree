@@ -9,6 +9,9 @@
 // renderer pushes, so it may be empty (no active views have reported yet).
 
 import type { ResourceProfile, ResourceThermalState } from "./resourceProfile.js";
+import type { WhySlowWorkerSummary } from "./workerGovernance.js";
+
+export type { WhySlowWorkerSummary };
 
 /** A single pressure signal that contributed to the current resource-profile decision. */
 export interface WhySlowResourceReason {
@@ -20,7 +23,8 @@ export interface WhySlowResourceReason {
     | "cpuSpeedLimit"
     | "fleetSize"
     | "rendererSaturation"
-    | "systemMemory";
+    | "systemMemory"
+    | "terminalWorkloads";
   /** Additive pressure-score contribution (efficiency latches at total ≥ 3). */
   contribution: number;
   /** Human-readable detail, e.g. "12 active agents" or "thermal serious". */
@@ -110,6 +114,40 @@ export interface WhySlowWorktreeSummary {
   fetchInFlightCount: number;
 }
 
+/** A high-memory project in the terminal-workload attribution (basenames only). */
+export interface WhySlowTerminalWorkloadProject {
+  /** Resolved project id, or null for terminals not attributable to a project. */
+  projectId: string | null;
+  memoryMb: number;
+  terminalCount: number;
+  processCount: number;
+  /** Process basenames of the project's heaviest processes — never command lines or paths. */
+  topProcessNames: string[];
+}
+
+/**
+ * Memory split for "is Daintree large, or are my terminal workloads large?" —
+ * Electron working-set vs terminal descendant RSS, with the freshness metadata
+ * needed to tell a genuine 0 from an unreadable process table.
+ */
+export interface WhySlowMemorySnapshot {
+  /** Summed Electron working-set (MB), or null when the metrics sweep failed. */
+  appMemoryMb: number | null;
+  terminalWorkloads: {
+    /** False when the OS process table couldn't be read. */
+    available: boolean;
+    /** True when the last successful sweep is older than the staleness bound. */
+    stale: boolean;
+    /** Age of the last successful sweep, or null when never sampled. */
+    ageMs: number | null;
+    totalMemoryMb: number;
+    processCount: number;
+    terminalCount: number;
+    /** Highest-memory projects, descending. */
+    topProjects: WhySlowTerminalWorkloadProject[];
+  };
+}
+
 /** The full "why am I slow?" snapshot. */
 export interface WhySlowSnapshot {
   timestamp: number;
@@ -118,6 +156,10 @@ export interface WhySlowSnapshot {
   rendererTerminals: WhySlowRendererTerminalSample[];
   pty: WhySlowPtySummary | null;
   worktrees: WhySlowWorktreeSummary | null;
+  /** Persistent-worker pressure summary (queue depth, degraded subsystems), or null. */
+  workers: WhySlowWorkerSummary | null;
+  /** App vs terminal-workload memory split; null when collection failed. */
+  memory: WhySlowMemorySnapshot | null;
 }
 
 /** Renderer-pushed payload for {@link WhySlowRendererTerminalSample} (id + freshness added main-side). */

@@ -68,6 +68,13 @@ const RESIZE_PAGE_STEP = 50;
 const ASSISTANT_DOCS_URL = "https://daintree.org/assistant";
 const ASSISTANT_INSTALLER_URL = "https://daintree.org/download";
 
+// How long `agentState` must stay "exited" before the assistant self-stops and
+// slides the sidebar out. The FSM's "exited" is sticky (only a `respawn` leaves
+// it), so a real `/exit` easily clears this, while a transient mis-detection
+// flap (#10911) bounces back to a live state well within the window — keeping a
+// spurious tick from tearing down a running conversation.
+const ASSISTANT_AGENT_EXIT_SETTLE_MS = 750;
+
 // First-run starter prompts. Clicking one starts the assistant AND seeds the
 // agent with the question, so the very first session is an explicit, useful
 // action rather than a bare empty terminal. Shown only before the user has
@@ -143,13 +150,13 @@ export function HelpPanel({
     if (!isVisible) setHasDomFocus(false);
   }, [isVisible]);
   const [showNewSessionConfirm, setShowNewSessionConfirm] = useState(false);
+  const [showEndSessionConfirm, setShowEndSessionConfirm] = useState(false);
   const [showAgentSwitchConfirm, setShowAgentSwitchConfirm] = useState(false);
   // Tracks the last preferredAgentId the switch effect acted on so a single
   // preference change drives at most one switch attempt (the effect re-runs
   // on unrelated dep changes while the async launch settles).
   const prevPreferredAgentIdRef = useRef<string | null>(null);
   const [visibilityEpoch, setVisibilityEpoch] = useState(0);
-  const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
 
   // useState lazy initializer guarantees a single instantiation across
   // renders and StrictMode double-mount, and unlike a ref it doesn't trip
@@ -547,6 +554,21 @@ export function HelpPanel({
     }
   }, [terminalId, terminalPty?.agentState, markConversationStarted]);
 
+  // When the agent CLI exits from inside its own terminal (`/exit`, or the
+  // agent quits), the FSM lands on "exited" while the wrapping shell PTY stays
+  // alive — so `handleTerminalPanelMissing` never fires and the sidebar would
+  // otherwise linger on a dead shell. Fully stop the session and slide the
+  // panel out, debounced past a mis-detection flap (see the constant). Directly
+  // launched agents that exit their PTY are covered by the removeOnExit →
+  // `handleTerminalPanelMissing` path instead.
+  useEffect(() => {
+    if (!terminalId || terminalPty?.agentState !== "exited") return;
+    const timer = setTimeout(() => {
+      controller.handleAgentExited(terminalId);
+    }, ASSISTANT_AGENT_EXIT_SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [controller, terminalId, terminalPty?.agentState]);
+
   // React to a Settings agent change while a session is already bound.
   // `setTerminal` no longer overwrites `preferredAgentId`, so a user choice
   // made in the Daintree Assistant settings tab reaches here as a genuine
@@ -593,19 +615,6 @@ export function HelpPanel({
     conversationTouched,
     showAgentSwitchConfirm,
   ]);
-
-  // Auto-snapshot pre-flight: when the project's MCP tier is `system`, take
-  // a pre-flight snapshot once per session and surface a Tier-1 banner.
-  useEffect(() => {
-    if (!terminalId || !terminal) return;
-    const worktreeId = terminal.worktreeId ?? activeWorktreeId;
-    return controller.maybeRunPreflightSnapshot({
-      terminalId,
-      terminalExists: true,
-      projectId: currentProject?.id ?? null,
-      worktreeId,
-    });
-  }, [controller, terminalId, terminal, currentProject?.id, activeWorktreeId]);
 
   // Register the panel root with the macro-focus store so the assistant
   // participates in cross-region cycling.
@@ -837,6 +846,26 @@ export function HelpPanel({
     setShowNewSessionConfirm(false);
   }, []);
 
+  // Stop reuses the same "something to lose" gate as +New session — confirm
+  // only when a working agent or an engaged conversation would be discarded.
+  const handleEndSession = useCallback(() => {
+    if (!terminalId || !agentId) return;
+    if (shouldConfirmNewSession) {
+      setShowEndSessionConfirm(true);
+      return;
+    }
+    controller.endSession();
+  }, [controller, terminalId, agentId, shouldConfirmNewSession]);
+
+  const handleConfirmEndSession = useCallback(() => {
+    setShowEndSessionConfirm(false);
+    controller.endSession();
+  }, [controller]);
+
+  const handleCancelEndSession = useCallback(() => {
+    setShowEndSessionConfirm(false);
+  }, []);
+
   const handleConfirmAgentSwitch = useCallback(() => {
     setShowAgentSwitchConfirm(false);
     // Guard against the preference having moved back to the running agent (or
@@ -923,7 +952,6 @@ export function HelpPanel({
   }, [controller, resumableAgentId]);
 
   const dismissResume = useCallback(() => controller.dismissResumeBanner(), [controller]);
-  const dismissSnapshot = useCallback(() => controller.dismissPreflightSnapshot(), [controller]);
   const dismissTierMismatch = useCallback(() => controller.dismissTierMismatch(), [controller]);
   const approveTierOnce = useCallback(() => controller.approveTierOnce(), [controller]);
   const alwaysAllowTier = useCallback(() => controller.alwaysAllowTier(), [controller]);
@@ -1032,7 +1060,9 @@ export function HelpPanel({
       <HelpPanelHeader
         agentState={terminalPty?.agentState}
         canStartNewSession={Boolean(terminalId && agentId)}
+        canEndSession={Boolean(terminalId && agentId)}
         onNewSession={handleNewSession}
+        onEndSession={handleEndSession}
         onOpenDocs={handleOpenAssistantDocs}
         onClose={handleClose}
         isFocused={isHighlighted}
@@ -1046,7 +1076,6 @@ export function HelpPanel({
             position is behaviorally identical for them. */}
         <HelpPanelBanners
           showResumeBanner={session.showResumeBanner}
-          preflightSnapshot={session.preflightSnapshot}
           tierMismatch={session.tierMismatch}
           launchError={session.launchError}
           sessionRevoked={session.sessionRevoked}
@@ -1055,7 +1084,6 @@ export function HelpPanel({
           grantEnded={session.grantEnded}
           isRevokingGrant={session.isRevokingGrant}
           onDismissResume={dismissResume}
-          onDismissSnapshot={dismissSnapshot}
           onDismissTierMismatch={dismissTierMismatch}
           onApproveOnce={approveTierOnce}
           onAlwaysAllow={alwaysAllowTier}
@@ -1362,6 +1390,15 @@ export function HelpPanel({
         confirmLabel="Start new session"
         onConfirm={handleConfirmNewSession}
         onClose={handleCancelNewSession}
+        variant="destructive"
+      />
+      <ConfirmDialog
+        isOpen={showEndSessionConfirm}
+        title="Stop assistant?"
+        description="The assistant will stop and the conversation will be discarded"
+        confirmLabel="Stop assistant"
+        onConfirm={handleConfirmEndSession}
+        onClose={handleCancelEndSession}
         variant="destructive"
       />
       <ConfirmDialog

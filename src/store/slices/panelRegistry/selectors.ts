@@ -4,6 +4,7 @@ import {
   isDevPreviewPanel,
   isPtyPanel,
   isReviewPanel,
+  isFilePanel,
   type PanelInstance,
   type PanelKind,
 } from "@shared/types/panel";
@@ -45,6 +46,7 @@ export function getNarrowPanel(
   if (isBrowserPanel(panel)) return panel;
   if (isDevPreviewPanel(panel)) return panel;
   if (isReviewPanel(panel)) return panel;
+  if (isFilePanel(panel)) return panel;
   if (isPtyPanel(panel)) return panel;
   return undefined;
 }

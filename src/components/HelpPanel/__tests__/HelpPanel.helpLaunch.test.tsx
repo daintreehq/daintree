@@ -137,6 +137,34 @@ vi.mock("@/components/ui/button", () => ({
   ),
 }));
 
+// Pass-through dropdown mock (same shape as PanelHeader.test.tsx) — the header
+// hosts Stop/Docs in a lazily-loaded Radix overflow menu; render its items as
+// plain buttons so tests can click them without driving Radix.
+vi.mock("@/components/ui/dropdown-menu", () => ({
+  DropdownMenu: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  DropdownMenuContent: ({ children }: { children: React.ReactNode; className?: string }) => (
+    <div data-testid="overflow-menu">{children}</div>
+  ),
+  DropdownMenuItem: ({
+    children,
+    onSelect,
+    destructive,
+  }: {
+    children: React.ReactNode;
+    onSelect?: (e: Event) => void;
+    destructive?: boolean;
+  }) => (
+    <button
+      data-destructive={destructive || undefined}
+      onClick={() => onSelect?.(new Event("select"))}
+    >
+      {children}
+    </button>
+  ),
+  DropdownMenuSeparator: () => <hr />,
+}));
+
 vi.mock("@/components/icons/DaintreeIcon", () => ({
   DaintreeIcon: () => null,
 }));
@@ -544,9 +572,6 @@ beforeEach(() => {
             ttlMs: 900_000,
             expiresAt: Date.now() + 900_000,
           }),
-        },
-        git: {
-          snapshotGet: vi.fn().mockResolvedValue(null),
         },
         project: {
           getSettings: vi.fn().mockResolvedValue({}),
@@ -1619,15 +1644,25 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
     );
   });
 
-  it("renders the title-bar help button that dispatches system.openExternal with the assistant docs URL", async () => {
+  // Docs moved from a dedicated title-bar icon into the header overflow menu
+  // (3-icon header budget); the pass-through dropdown mock renders the item as
+  // a plain button labeled "Open docs".
+  function queryDocsItem(container: HTMLElement): HTMLButtonElement | null {
+    return (
+      [
+        ...container.querySelectorAll<HTMLButtonElement>("[data-testid='overflow-menu'] button"),
+      ].find((b) => b.textContent?.includes("Open docs")) ?? null
+    );
+  }
+
+  it("dispatches system.openExternal with the assistant docs URL from the overflow docs item", () => {
     helpPanelState.preferredAgentId = null;
     cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
     mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
 
-    const { findByRole } = render(<HelpPanel width={380} />);
+    const { container } = render(<HelpPanel width={380} />);
 
-    const help = await findByRole("button", { name: "Open assistant docs" });
-    fireEvent.click(help);
+    fireEvent.click(queryDocsItem(container)!);
 
     expect(mockDispatch).toHaveBeenCalledWith(
       "system.openExternal",
@@ -1636,16 +1671,16 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
     );
   });
 
-  it("renders the title-bar help button even when a terminal session is active", () => {
+  it("keeps the overflow docs item available while a terminal session is active", () => {
     helpPanelState.terminalId = "term-1";
     helpPanelState.agentId = "claude";
     panelStoreState.panelsById = {
       "term-1": { id: "term-1", kind: "terminal", spawnStatus: "ready", cwd: "/help" },
     };
 
-    const { queryByRole } = render(<HelpPanel width={380} />);
+    const { container } = render(<HelpPanel width={380} />);
 
-    expect(queryByRole("button", { name: "Open assistant docs" })).not.toBeNull();
+    expect(queryDocsItem(container)).not.toBeNull();
   });
 
   it("does not render a duplicate 'Assistant settings' footer link (empty state)", () => {
@@ -2241,6 +2276,189 @@ describe("HelpPanel — + New session destructive reset", () => {
       }),
       { source: "user" }
     );
+  });
+});
+
+describe("HelpPanel — Stop assistant (end session, #10989)", () => {
+  function setupBoundTerminal(opts: {
+    agentState?: string;
+    conversationTouched?: boolean;
+    sessionId?: string | null;
+  }) {
+    projectStoreState.currentProject = { id: "proj-1", path: "/repo" };
+    helpPanelState.terminalId = "term-1";
+    helpPanelState.agentId = "claude";
+    helpPanelState.sessionId = opts.sessionId ?? "sess-bound";
+    helpPanelState.conversationTouched = opts.conversationTouched ?? false;
+    panelStoreState.panelsById = {
+      "term-1": {
+        id: "term-1",
+        kind: "terminal",
+        spawnStatus: "ready",
+        cwd: "/help",
+        title: "Claude",
+        command: "claude",
+        location: "dock",
+        agentState: opts.agentState ?? "idle",
+      },
+    };
+  }
+
+  // The stop control lives in the header's overflow menu (rendered flat by the
+  // dropdown pass-through mock above). Scoped to the overflow container so the
+  // confirm dialog's identically-worded "Stop assistant" button never matches.
+  function queryStopItem(container: HTMLElement): HTMLButtonElement | null {
+    return (
+      [
+        ...container.querySelectorAll<HTMLButtonElement>("[data-testid='overflow-menu'] button"),
+      ].find((b) => b.textContent?.includes("Stop assistant")) ?? null
+    );
+  }
+
+  it("hides the Stop assistant menu item when there is no live terminal", () => {
+    helpPanelState.terminalId = null;
+    helpPanelState.agentId = null;
+    const { container } = render(<HelpPanel width={380} />);
+    expect(queryStopItem(container)).toBeNull();
+  });
+
+  it("keeps the stop item out of the primary row, distinct from the hide button", () => {
+    setupBoundTerminal({ agentState: "idle" });
+    const { container } = render(<HelpPanel width={380} />);
+    expect(queryStopItem(container)).toBeTruthy();
+    expect(container.querySelector('button[aria-label="Hide Daintree Assistant"]')).toBeTruthy();
+    // No dedicated header stop icon — only the overflow item.
+    expect(container.querySelector('button[aria-label="Stop Daintree Assistant"]')).toBeNull();
+  });
+
+  it("ends immediately without a confirm and does NOT relaunch when idle and untouched", () => {
+    setupBoundTerminal({ agentState: "idle", conversationTouched: false });
+
+    const { container, queryByTestId } = render(<HelpPanel width={380} />);
+    fireEvent.click(queryStopItem(container)!);
+
+    expect(queryByTestId("confirm-dialog")).toBeNull();
+    // Teardown ran…
+    expect(panelStoreState.removePanel).toHaveBeenCalledWith("term-1");
+    expect(mockRevokeSession).toHaveBeenCalledWith("sess-bound");
+    expect(helpPanelState.clearTerminal).toHaveBeenCalled();
+    expect(helpPanelState.clearFigures).toHaveBeenCalled();
+    // …the persisted hibernate entry is dropped so a stop can't be resumed…
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1");
+    // …and, unlike + New session, no fresh agent is launched.
+    expect(mockDispatch).not.toHaveBeenCalledWith(
+      "agent.launch",
+      expect.anything(),
+      expect.anything()
+    );
+    expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
+    // Stop ends the session but keeps the panel open (it is not "hide").
+    expect(helpPanelState.setOpen).not.toHaveBeenCalledWith(false);
+  });
+
+  it("shows the Stop assistant confirm when the agent is working (no teardown yet)", () => {
+    setupBoundTerminal({ agentState: "working", conversationTouched: false });
+
+    const { container, getByTestId } = render(<HelpPanel width={380} />);
+    fireEvent.click(queryStopItem(container)!);
+
+    expect(panelStoreState.removePanel).not.toHaveBeenCalled();
+    expect(helpPanelState.clearTerminal).not.toHaveBeenCalled();
+    expect(getByTestId("dialog-title").textContent).toBe("Stop assistant?");
+    expect(getByTestId("dialog-confirm").textContent).toBe("Stop assistant");
+    expect(getByTestId("dialog-description").textContent).toContain(
+      "the conversation will be discarded"
+    );
+  });
+
+  it("shows the confirm when the conversation has been touched even while idle", () => {
+    setupBoundTerminal({ agentState: "idle", conversationTouched: true });
+
+    const { container, getByTestId } = render(<HelpPanel width={380} />);
+    fireEvent.click(queryStopItem(container)!);
+
+    expect(panelStoreState.removePanel).not.toHaveBeenCalled();
+    expect(getByTestId("dialog-title").textContent).toBe("Stop assistant?");
+  });
+
+  it("keeps the session intact when the user cancels the confirm", () => {
+    setupBoundTerminal({ agentState: "working" });
+
+    const { container, getByTestId, queryByTestId } = render(<HelpPanel width={380} />);
+    fireEvent.click(queryStopItem(container)!);
+    fireEvent.click(getByTestId("dialog-cancel"));
+
+    expect(queryByTestId("confirm-dialog")).toBeNull();
+    expect(panelStoreState.removePanel).not.toHaveBeenCalled();
+    expect(mockRevokeSession).not.toHaveBeenCalled();
+    expect(helpPanelState.clearTerminal).not.toHaveBeenCalled();
+  });
+
+  it("tears down and does not relaunch when the user confirms the stop", () => {
+    setupBoundTerminal({ agentState: "working", conversationTouched: true });
+
+    const { container, getByTestId } = render(<HelpPanel width={380} />);
+    fireEvent.click(queryStopItem(container)!);
+    fireEvent.click(getByTestId("dialog-confirm"));
+
+    expect(panelStoreState.removePanel).toHaveBeenCalledWith("term-1");
+    expect(mockRevokeSession).toHaveBeenCalledWith("sess-bound");
+    expect(helpPanelState.clearTerminal).toHaveBeenCalled();
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1");
+    expect(mockDispatch).not.toHaveBeenCalledWith(
+      "agent.launch",
+      expect.anything(),
+      expect.anything()
+    );
+    // Confirmed stop keeps the panel open — restart is one click away.
+    expect(helpPanelState.setOpen).not.toHaveBeenCalledWith(false);
+  });
+
+  it("aborts a relaunch in flight so a late-settling dispatch never binds a fresh session", async () => {
+    // Regression: user hits Stop while a + New session relaunch is mid-flight.
+    // endSession() bumps the launch generation so the superseded _executeLaunch
+    // bails at its post-dispatch gen-check instead of binding the fresh session.
+    setupBoundTerminal({ agentState: "idle", conversationTouched: false });
+    mockProvisionSession.mockResolvedValue({
+      sessionId: "sess-fresh",
+      sessionPath: "/sessions/fresh",
+      token: "tok-fresh",
+      tier: "action",
+      mcpUrl: null,
+      windowId: 1,
+    });
+    let resolveDispatch: (value: unknown) => void = () => {};
+    mockDispatch.mockImplementation(
+      () =>
+        new Promise((r) => {
+          resolveDispatch = r;
+        })
+    );
+
+    const { container } = render(<HelpPanel width={380} />);
+    // Start the relaunch (idle + untouched → immediate, no confirm); dispatch hangs.
+    await act(async () => {
+      fireEvent.click(container.querySelector('button[aria-label="Start new session"]')!);
+    });
+    const reservedId = (mockDispatch.mock.calls[0]?.[1] as { requestedId?: string } | undefined)
+      ?.requestedId;
+    expect(reservedId).toMatch(/^terminal-/);
+    (helpPanelState.setTerminal as ReturnType<typeof vi.fn>).mockClear();
+
+    // Stop the assistant while the relaunch is still provisioning.
+    await act(async () => {
+      fireEvent.click(queryStopItem(container)!);
+    });
+
+    // The hung dispatch finally resolves with the reserved terminal.
+    await act(async () => {
+      resolveDispatch({ ok: true, result: { terminalId: reservedId } });
+    });
+
+    // The superseded launch bailed: it never bound the fresh session and cleaned
+    // up the orphaned terminal instead.
+    expect(helpPanelState.setTerminal).not.toHaveBeenCalledWith(reservedId, "claude", "sess-fresh");
+    expect(panelStoreState.removePanel).toHaveBeenCalledWith(reservedId);
   });
 });
 

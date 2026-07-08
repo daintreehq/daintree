@@ -8,6 +8,7 @@ import type {
   DbWorkerRequest,
   DbWorkerResponse,
 } from "./dbWorkerProtocol.js";
+import type { WorkerResourceSnapshot } from "../../../shared/types/workerGovernance.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -74,6 +75,7 @@ export class DbWorkerClient {
   private degraded = false;
   private shuttingDown = false;
   private fenceEpoch: number | null = null;
+  private lastRequestAt: number | null = null;
 
   constructor(deps: Partial<DbWorkerClientDeps> = {}) {
     this.deps = { ...defaultDeps, ...deps };
@@ -163,9 +165,41 @@ export class DbWorkerClient {
     return worker;
   }
 
+  /**
+   * Governance snapshot — strictly observational. The DB worker is never
+   * trim/dispose/restart-eligible: its FIFO queue carries write ordering, the
+   * user_version fence assumes the worker dies only via crash or the shutdown
+   * `close` drain, and a governance-initiated teardown would add a third
+   * lifecycle path for zero memory win (the worker holds one SQLite
+   * connection, not data).
+   */
+  getGovernanceSnapshot(): WorkerResourceSnapshot {
+    return {
+      kind: "db-worker",
+      id: "db-maintenance-worker",
+      pid: null,
+      threadId: this.worker?.threadId ?? null,
+      alive: this.worker !== null,
+      activeSessionCount: 0,
+      queueDepth: this.pending.size,
+      lastActivityAt: this.lastRequestAt,
+      memory: null,
+      eligibility: { trim: false, dispose: false, restart: false },
+      state: this.degraded
+        ? "degraded"
+        : this.shuttingDown
+          ? "shutting-down"
+          : this.worker
+            ? "running"
+            : "not-spawned",
+      detail: { spawnAttempts: this.spawnAttempts, fenceEpoch: this.fenceEpoch },
+    };
+  }
+
   private request(op: DbWorkerOp): Promise<unknown> {
     const worker = this.ensureWorker();
     const id = this.nextRequestId++;
+    this.lastRequestAt = Date.now();
     return new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => {
         // A wedged worker could apply a stale queued write AFTER a main-thread
@@ -274,4 +308,12 @@ export async function shutdownDbWorker(): Promise<void> {
   if (instance) {
     await instance.shutdown();
   }
+}
+
+/**
+ * Governance snapshot for the singleton, or null when no client was ever
+ * created (reporting must not instantiate the worker machinery).
+ */
+export function getDbWorkerGovernanceSnapshot(): WorkerResourceSnapshot | null {
+  return instance ? instance.getGovernanceSnapshot() : null;
 }

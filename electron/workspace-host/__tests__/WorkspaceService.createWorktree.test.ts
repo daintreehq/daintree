@@ -132,6 +132,36 @@ function flushAsyncTail(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
+/**
+ * Collision plumbing for the optimistic-add order: the first `worktree add -b
+ * <branch>` rejects with git's stale-branch error (what a real repo produces),
+ * `worktree list --porcelain` returns the given output (or rejects), and every
+ * other git call resolves. Recovery behavior itself is asserted per test.
+ */
+function mockCollidingAdd(
+  raw: ReturnType<typeof vi.fn>,
+  branch: string,
+  porcelain: string[] | Error
+): void {
+  raw.mockImplementation((args: string[]) => {
+    if (args[0] === "worktree" && args[1] === "add" && args[2] === "-b" && args[3] === branch) {
+      return Promise.reject(new Error(`fatal: a branch named '${branch}' already exists`));
+    }
+    if (args[0] === "worktree" && args[1] === "list") {
+      return porcelain instanceof Error
+        ? Promise.reject(porcelain)
+        : Promise.resolve(porcelain.join("\n"));
+    }
+    return Promise.resolve(undefined);
+  });
+}
+
+/** The last `worktree add` argv issued — recovery retries follow the failed optimistic add. */
+function lastWorktreeAddCall(raw: ReturnType<typeof vi.fn>): string[] | undefined {
+  const calls = raw.mock.calls.filter((call) => call[0][0] === "worktree" && call[0][1] === "add");
+  return calls.at(-1)?.[0];
+}
+
 describe("WorkspaceService.createWorktree", () => {
   let service: WorkspaceService;
   let waitForPathExists: any;
@@ -218,6 +248,35 @@ describe("WorkspaceService.createWorktree", () => {
     // path is gone — the Worktree object is built directly from inputs.
     await flushAsyncTail();
     expect(listSpy).not.toHaveBeenCalled();
+  });
+
+  it("uses the real path as the created worktree id", async () => {
+    const fsPromisesModule = await import("fs/promises");
+    const requestId = "test-request-realpath";
+    const rootPath = path.resolve("/test/repo");
+    const requestedPath = path.resolve("/test/worktree");
+    const expectedRealPath = path.resolve("/test/canonical-worktree");
+
+    vi.mocked(fsPromisesModule.realpath).mockImplementation((p: any) =>
+      Promise.resolve(String(p) === requestedPath ? expectedRealPath : String(p))
+    );
+
+    await service.createWorktree(requestId, rootPath, {
+      baseBranch: "main",
+      newBranch: "feature/realpath",
+      path: requestedPath,
+    });
+
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "create-worktree-result",
+        requestId,
+        success: true,
+        worktreeId: expectedRealPath,
+      })
+    );
+    expect(service["monitors"].has(expectedRealPath)).toBe(true);
+    expect(service["monitors"].has(requestedPath)).toBe(false);
   });
 
   it("coalesces concurrent duplicate create requests while the first git add is in flight", async () => {
@@ -539,16 +598,15 @@ describe("WorkspaceService.createWorktree", () => {
       branches: {},
       detached: false,
     });
-    // git worktree list --porcelain — only main is checked out, the stale
+    // The optimistic `-b` add fails with git's stale-branch error; the
+    // worktree list shows only main checked out, so the stale
     // bugfix/issue-6463 branch has no live worktree.
-    mockSimpleGit.raw.mockImplementationOnce((args: string[]) => {
-      if (args[0] === "worktree" && args[1] === "list") {
-        return Promise.resolve(
-          ["worktree /test/root", "HEAD abc123", "branch refs/heads/main", ""].join("\n")
-        );
-      }
-      return Promise.resolve(undefined);
-    });
+    mockCollidingAdd(mockSimpleGit.raw, "bugfix/issue-6463", [
+      "worktree /test/root",
+      "HEAD abc123",
+      "branch refs/heads/main",
+      "",
+    ]);
 
     await service.createWorktree("req-stale-reuse", "/test/root", {
       baseBranch: "main",
@@ -556,12 +614,23 @@ describe("WorkspaceService.createWorktree", () => {
       path: "/test/worktree-reuse",
     });
 
-    const worktreeAddCall = mockSimpleGit.raw.mock.calls.find(
+    // Recovery is failure-driven: the FIRST add must be the optimistic -b
+    // attempt (a reintroduced pre-flight would issue the reuse form first).
+    const addCalls = mockSimpleGit.raw.mock.calls.filter(
       (call) => call[0][0] === "worktree" && call[0][1] === "add"
     );
-    expect(worktreeAddCall).toBeDefined();
+    expect(addCalls[0]![0]).toEqual([
+      "worktree",
+      "add",
+      "-b",
+      "bugfix/issue-6463",
+      "--no-track",
+      "--end-of-options",
+      "/test/worktree-reuse",
+      "main",
+    ]);
     // No -b — reuse path, like the explicit useExistingBranch caller.
-    expect(worktreeAddCall![0]).toEqual([
+    expect(lastWorktreeAddCall(mockSimpleGit.raw)).toEqual([
       "worktree",
       "add",
       "--end-of-options",
@@ -587,23 +656,16 @@ describe("WorkspaceService.createWorktree", () => {
       branches: {},
       detached: false,
     });
-    mockSimpleGit.raw.mockImplementationOnce((args: string[]) => {
-      if (args[0] === "worktree" && args[1] === "list") {
-        return Promise.resolve(
-          [
-            "worktree /test/root",
-            "HEAD abc123",
-            "branch refs/heads/main",
-            "",
-            "worktree /test/foo-existing",
-            "HEAD def456",
-            "branch refs/heads/feature/foo",
-            "",
-          ].join("\n")
-        );
-      }
-      return Promise.resolve(undefined);
-    });
+    mockCollidingAdd(mockSimpleGit.raw, "feature/foo", [
+      "worktree /test/root",
+      "HEAD abc123",
+      "branch refs/heads/main",
+      "",
+      "worktree /test/foo-existing",
+      "HEAD def456",
+      "branch refs/heads/feature/foo",
+      "",
+    ]);
 
     await service.createWorktree("req-checked-out", "/test/root", {
       baseBranch: "main",
@@ -611,11 +673,7 @@ describe("WorkspaceService.createWorktree", () => {
       path: "/test/worktree-foo",
     });
 
-    const worktreeAddCall = mockSimpleGit.raw.mock.calls.find(
-      (call) => call[0][0] === "worktree" && call[0][1] === "add"
-    );
-    expect(worktreeAddCall).toBeDefined();
-    expect(worktreeAddCall![0]).toEqual([
+    expect(lastWorktreeAddCall(mockSimpleGit.raw)).toEqual([
       "worktree",
       "add",
       "-b",
@@ -642,26 +700,19 @@ describe("WorkspaceService.createWorktree", () => {
       branches: {},
       detached: false,
     });
-    mockSimpleGit.raw.mockImplementationOnce((args: string[]) => {
-      if (args[0] === "worktree" && args[1] === "list") {
-        // feature/foo is live; feature/foo-2 and feature/foo-3 are stale
-        // local branches but the requested name is feature/foo (live), so
-        // we must suffix past every existing local name.
-        return Promise.resolve(
-          [
-            "worktree /test/root",
-            "HEAD abc",
-            "branch refs/heads/main",
-            "",
-            "worktree /test/foo-live",
-            "HEAD def",
-            "branch refs/heads/feature/foo",
-            "",
-          ].join("\n")
-        );
-      }
-      return Promise.resolve(undefined);
-    });
+    // feature/foo is live; feature/foo-2 and feature/foo-3 are stale local
+    // branches but the requested name is feature/foo (live), so we must
+    // suffix past every existing local name.
+    mockCollidingAdd(mockSimpleGit.raw, "feature/foo", [
+      "worktree /test/root",
+      "HEAD abc",
+      "branch refs/heads/main",
+      "",
+      "worktree /test/foo-live",
+      "HEAD def",
+      "branch refs/heads/feature/foo",
+      "",
+    ]);
 
     await service.createWorktree("req-suffix-skip", "/test/root", {
       baseBranch: "main",
@@ -669,10 +720,7 @@ describe("WorkspaceService.createWorktree", () => {
       path: "/test/worktree-foo-new",
     });
 
-    const worktreeAddCall = mockSimpleGit.raw.mock.calls.find(
-      (call) => call[0][0] === "worktree" && call[0][1] === "add"
-    );
-    expect(worktreeAddCall![0]).toEqual([
+    expect(lastWorktreeAddCall(mockSimpleGit.raw)).toEqual([
       "worktree",
       "add",
       "-b",
@@ -695,12 +743,11 @@ describe("WorkspaceService.createWorktree", () => {
       branches: {},
       detached: false,
     });
-    mockSimpleGit.raw.mockImplementationOnce((args: string[]) => {
-      if (args[0] === "worktree" && args[1] === "list") {
-        return Promise.reject(new Error("fatal: unable to read .git/index"));
-      }
-      return Promise.resolve(undefined);
-    });
+    mockCollidingAdd(
+      mockSimpleGit.raw,
+      "feature/foo",
+      new Error("fatal: unable to read .git/index")
+    );
 
     await service.createWorktree("req-list-failed", "/test/root", {
       baseBranch: "main",
@@ -708,10 +755,7 @@ describe("WorkspaceService.createWorktree", () => {
       path: "/test/worktree-foo-fail",
     });
 
-    const worktreeAddCall = mockSimpleGit.raw.mock.calls.find(
-      (call) => call[0][0] === "worktree" && call[0][1] === "add"
-    );
-    expect(worktreeAddCall![0]).toEqual([
+    expect(lastWorktreeAddCall(mockSimpleGit.raw)).toEqual([
       "worktree",
       "add",
       "-b",
@@ -734,16 +778,14 @@ describe("WorkspaceService.createWorktree", () => {
       branches: {},
       detached: false,
     });
-    mockSimpleGit.raw.mockImplementationOnce((args: string[]) => {
-      if (args[0] === "worktree" && args[1] === "list") {
-        // pr-9999-feature is NOT checked out — would normally trigger reuse,
-        // but fromRemote suppresses that.
-        return Promise.resolve(
-          ["worktree /test/root", "HEAD abc", "branch refs/heads/main", ""].join("\n")
-        );
-      }
-      return Promise.resolve(undefined);
-    });
+    // pr-9999-feature is NOT checked out — would normally trigger reuse,
+    // but fromRemote suppresses that.
+    mockCollidingAdd(mockSimpleGit.raw, "pr-9999-feature", [
+      "worktree /test/root",
+      "HEAD abc",
+      "branch refs/heads/main",
+      "",
+    ]);
 
     await service.createWorktree("req-fromremote-stale", "/test/root", {
       baseBranch: "origin/pr-9999-feature",
@@ -752,10 +794,13 @@ describe("WorkspaceService.createWorktree", () => {
       fromRemote: true,
     });
 
-    const worktreeAddCall = mockSimpleGit.raw.mock.calls.find(
+    // Failure-driven: the optimistic --track add for the original name runs
+    // first; the suffixed retry keeps --track.
+    const addCalls = mockSimpleGit.raw.mock.calls.filter(
       (call) => call[0][0] === "worktree" && call[0][1] === "add"
     );
-    expect(worktreeAddCall![0]).toEqual([
+    expect(addCalls[0]![0][3]).toBe("pr-9999-feature");
+    expect(lastWorktreeAddCall(mockSimpleGit.raw)).toEqual([
       "worktree",
       "add",
       "-b",
@@ -776,23 +821,16 @@ describe("WorkspaceService.createWorktree", () => {
       branches: {},
       detached: false,
     });
-    mockSimpleGit.raw.mockImplementationOnce((args: string[]) => {
-      if (args[0] === "worktree" && args[1] === "list") {
-        return Promise.resolve(
-          [
-            "worktree /test/root",
-            "HEAD abc",
-            "branch refs/heads/main",
-            "",
-            "worktree /test/foo-live",
-            "HEAD def",
-            "branch refs/heads/feature/foo",
-            "",
-          ].join("\n")
-        );
-      }
-      return Promise.resolve(undefined);
-    });
+    mockCollidingAdd(mockSimpleGit.raw, "feature/foo", [
+      "worktree /test/root",
+      "HEAD abc",
+      "branch refs/heads/main",
+      "",
+      "worktree /test/foo-live",
+      "HEAD def",
+      "branch refs/heads/feature/foo",
+      "",
+    ]);
 
     await service.createWorktree("req-suffix-gap", "/test/root", {
       baseBranch: "main",
@@ -800,10 +838,7 @@ describe("WorkspaceService.createWorktree", () => {
       path: "/test/worktree-foo-gap",
     });
 
-    const worktreeAddCall = mockSimpleGit.raw.mock.calls.find(
-      (call) => call[0][0] === "worktree" && call[0][1] === "add"
-    );
-    expect(worktreeAddCall![0][3]).toBe("feature/foo-11");
+    expect(lastWorktreeAddCall(mockSimpleGit.raw)![3]).toBe("feature/foo-11");
   });
 
   it("escapes regex metacharacters in branch names when computing suffixes", async () => {
@@ -817,23 +852,16 @@ describe("WorkspaceService.createWorktree", () => {
       branches: {},
       detached: false,
     });
-    mockSimpleGit.raw.mockImplementationOnce((args: string[]) => {
-      if (args[0] === "worktree" && args[1] === "list") {
-        return Promise.resolve(
-          [
-            "worktree /test/root",
-            "HEAD abc",
-            "branch refs/heads/main",
-            "",
-            "worktree /test/live",
-            "HEAD def",
-            "branch refs/heads/bugfix/foo(6463)",
-            "",
-          ].join("\n")
-        );
-      }
-      return Promise.resolve(undefined);
-    });
+    mockCollidingAdd(mockSimpleGit.raw, "bugfix/foo(6463)", [
+      "worktree /test/root",
+      "HEAD abc",
+      "branch refs/heads/main",
+      "",
+      "worktree /test/live",
+      "HEAD def",
+      "branch refs/heads/bugfix/foo(6463)",
+      "",
+    ]);
 
     await service.createWorktree("req-regex-escape", "/test/root", {
       baseBranch: "main",
@@ -841,23 +869,13 @@ describe("WorkspaceService.createWorktree", () => {
       path: "/test/worktree-regex",
     });
 
-    const worktreeAddCall = mockSimpleGit.raw.mock.calls.find(
-      (call) => call[0][0] === "worktree" && call[0][1] === "add"
-    );
-    expect(worktreeAddCall![0][3]).toBe("bugfix/foo(6463)-3");
+    expect(lastWorktreeAddCall(mockSimpleGit.raw)![3]).toBe("bugfix/foo(6463)-3");
   });
 
-  it("proceeds with the original -b path when the branch does not exist locally", async () => {
-    // Baseline: the guard is a no-op when there's no collision. Argv must
-    // match the pre-fix shape exactly so the issue-mode --no-track contract
-    // is preserved.
-    mockSimpleGit.branchLocal.mockResolvedValueOnce({
-      all: ["main", "develop"],
-      current: "main",
-      branches: {},
-      detached: false,
-    });
-
+  it("proceeds with the original -b path and zero probe spawns when the branch does not exist locally", async () => {
+    // Baseline: recovery is failure-driven, so a collision-free create issues
+    // exactly one git call — the add itself. Argv must match the issue-mode
+    // --no-track contract exactly.
     await service.createWorktree("req-no-collision", "/test/root", {
       baseBranch: "main",
       newBranch: "feature/brand-new",
@@ -874,11 +892,161 @@ describe("WorkspaceService.createWorktree", () => {
       "/test/worktree-new",
       "main",
     ]);
-    // Never queried the worktree list — short-circuit when branch is free.
+    // No pre-flight branch listing and no worktree-list probe on the happy
+    // path — the old order charged every create a branchLocal spawn.
+    expect(mockSimpleGit.branchLocal).not.toHaveBeenCalled();
     const listCall = mockSimpleGit.raw.mock.calls.find(
       (call) => call[0][0] === "worktree" && call[0][1] === "list"
     );
     expect(listCall).toBeUndefined();
+  });
+
+  it("surfaces the original add error when branch listing fails during recovery", async () => {
+    mockSimpleGit.raw.mockImplementation((args: string[]) => {
+      if (args[0] === "worktree" && args[1] === "add") {
+        return Promise.reject(new Error("fatal: a branch named 'feature/foo' already exists"));
+      }
+      return Promise.resolve(undefined);
+    });
+    mockSimpleGit.branchLocal.mockRejectedValueOnce(new Error("fatal: bad repo"));
+
+    await service.createWorktree("req-recovery-blind", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/foo",
+      path: "/test/worktree-foo-blind",
+    });
+
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "create-worktree-result",
+        requestId: "req-recovery-blind",
+        success: false,
+        error: "fatal: a branch named 'feature/foo' already exists",
+      })
+    );
+    // Only the single failed add — no reuse/suffix retries were attempted.
+    const addCalls = mockSimpleGit.raw.mock.calls.filter(
+      (call) => call[0][0] === "worktree" && call[0][1] === "add"
+    );
+    expect(addCalls).toHaveLength(1);
+  });
+
+  it("does not run branch-collision recovery for non-collision add failures", async () => {
+    // `worktree add` reports an existing target *path* with a similar
+    // "already exists" phrase; that must surface as-is, not trigger the
+    // stale-branch recovery.
+    mockSimpleGit.raw.mockImplementation((args: string[]) => {
+      if (args[0] === "worktree" && args[1] === "add") {
+        return Promise.reject(new Error("fatal: '/test/worktree-dup' already exists"));
+      }
+      return Promise.resolve(undefined);
+    });
+
+    await service.createWorktree("req-path-exists", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/foo",
+      path: "/test/worktree-dup",
+    });
+
+    expect(mockSimpleGit.branchLocal).not.toHaveBeenCalled();
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "create-worktree-result",
+        requestId: "req-path-exists",
+        success: false,
+        error: "fatal: '/test/worktree-dup' already exists",
+      })
+    );
+  });
+
+  it("runs concurrent distinct creates on the same root strictly one at a time", async () => {
+    // The per-root create queue is what lets the IPC rate limit grant a burst
+    // allowance: git adds must never overlap on one repo (#5098), enforced
+    // structurally here rather than by wall-clock pacing.
+    const order: string[] = [];
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    mockSimpleGit.raw.mockImplementation(async (args: string[]) => {
+      if (args[0] === "worktree" && args[1] === "add") {
+        order.push(`add:${args[3]}`);
+        if (args[3] === "serial-a") await firstGate;
+      }
+      return undefined;
+    });
+
+    const first = service.createWorktree("req-serial-1", "/test/root", {
+      baseBranch: "main",
+      newBranch: "serial-a",
+      path: "/test/worktree-serial-a",
+    });
+    const second = service.createWorktree("req-serial-2", "/test/root", {
+      baseBranch: "main",
+      newBranch: "serial-b",
+      path: "/test/worktree-serial-b",
+    });
+
+    for (let i = 0; i < 25 && order.length === 0; i++) {
+      await flushAsyncTail();
+    }
+    // First add is in flight (gated); the second create must not have
+    // started its git work.
+    expect(order).toEqual(["add:serial-a"]);
+
+    releaseFirst();
+    await Promise.all([first, second]);
+    expect(order).toEqual(["add:serial-a", "add:serial-b"]);
+
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "create-worktree-result",
+        requestId: "req-serial-1",
+        success: true,
+      })
+    );
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "create-worktree-result",
+        requestId: "req-serial-2",
+        success: true,
+      })
+    );
+  });
+
+  it("keeps serving creates after a failed create earlier in the queue", async () => {
+    mockSimpleGit.raw.mockImplementation((args: string[]) => {
+      if (args[0] === "worktree" && args[1] === "add" && args[3] === "fail-first") {
+        return Promise.reject(new Error("fatal: could not create work tree dir"));
+      }
+      return Promise.resolve(undefined);
+    });
+
+    await service.createWorktree("req-fail-first", "/test/root", {
+      baseBranch: "main",
+      newBranch: "fail-first",
+      path: "/test/worktree-fail-first",
+    });
+    await service.createWorktree("req-after-fail", "/test/root", {
+      baseBranch: "main",
+      newBranch: "after-fail",
+      path: "/test/worktree-after-fail",
+    });
+
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "create-worktree-result",
+        requestId: "req-fail-first",
+        success: false,
+      })
+    );
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "create-worktree-result",
+        requestId: "req-after-fail",
+        success: true,
+      })
+    );
   });
 
   it("skips the pre-flight guard entirely when useExistingBranch is true", async () => {

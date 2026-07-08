@@ -2927,16 +2927,6 @@ describe("McpServerService", () => {
         description: "Unstage all files",
       }),
       createManifestEntry({
-        id: "git.snapshotRevert" as ActionId,
-        title: "Revert Snapshot",
-        description: "Revert to a git snapshot",
-      }),
-      createManifestEntry({
-        id: "git.snapshotDelete" as ActionId,
-        title: "Delete Snapshot",
-        description: "Delete a git snapshot",
-      }),
-      createManifestEntry({
         id: "forge.openIssue" as ActionId,
         title: "Open Issue (Forge)",
         description: "Open an issue via the forge provider",

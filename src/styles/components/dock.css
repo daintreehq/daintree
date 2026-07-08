@@ -1,0 +1,48 @@
+/* Dock status pills (Background / Waiting / Errors in ContentDock).
+ *
+ * ── Pill entrance / exit ──
+ * The pills exist only while agents occupy those states. Without an
+ * animation the first waiting/errored agent makes the pill pop in and the
+ * last one clearing makes it vanish, unlike every toolbar badge. Same
+ * technique as [data-toolbar-overflow-trigger] in toolbar.css: opacity-only
+ * (these are full-size buttons — scale would read as a glitch) with
+ * @starting-style + allow-discrete driving entry and exit in pure CSS. The
+ * wrapper stays mounted and toggles data-visible, going display:none when
+ * empty so it reclaims its layout slot and drops out of the a11y tree.
+ * Tier 2 timing from animationUtils.ts: 200ms enter (UI_ENTER_DURATION),
+ * 120ms exit (UI_EXIT_DURATION). The Button inside owns its own hover/press
+ * transitions; this wrapper only carries presence.
+ */
+.dock-status-pill {
+  display: none;
+  opacity: 0;
+  transition:
+    display 120ms allow-discrete,
+    opacity 120ms ease;
+}
+
+.dock-status-pill[data-visible="true"] {
+  display: inline-flex;
+  opacity: 1;
+  transition:
+    display 200ms allow-discrete,
+    opacity 200ms ease;
+
+  @starting-style {
+    opacity: 0;
+  }
+}
+
+/* ── Reduced motion ──
+ * The fade is already opacity-only (WCAG 2.3.3-safe). Keep a timed (not
+ * `none`) display swap so the discrete show/hide still completes
+ * (lesson #6182); mirror the [data-toolbar-overflow-trigger] treatment.
+ */
+@variant reduce-motion {
+  .dock-status-pill,
+  .dock-status-pill[data-visible="true"] {
+    transition:
+      display 0s,
+      opacity 200ms ease;
+  }
+}

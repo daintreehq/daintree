@@ -9,6 +9,7 @@ import {
   onPanelKindRegistered,
   onPanelKindUnregistered,
   panelKindUsesTerminalUi,
+  panelKindIsDockable,
   registerPanelKind,
   unregisterPluginPanelKinds,
   clearPanelKindRegistry,
@@ -461,6 +462,7 @@ describe("getFirstRenderSeeds", () => {
     expect([...getFirstRenderSeeds()].sort()).toEqual([
       "src/components/Browser/BrowserPane.tsx",
       "src/components/DevPreview/DevPreviewPane.tsx",
+      "src/panels/file/FilePane.tsx",
       "src/panels/review/ReviewPane.tsx",
     ]);
   });
@@ -526,5 +528,25 @@ describe("getFirstRenderPreloadSeeds", () => {
     // getFirstRenderSeeds stays panel-only; the app root lives solely in the
     // combined accessor so the registry contract test above keeps its exact shape.
     expect(getFirstRenderSeeds()).not.toContain(FIRST_RENDER_ROOT_SEED);
+  });
+});
+
+describe("panelKindIsDockable", () => {
+  it("PTY kinds are always dockable", () => {
+    expect(panelKindIsDockable("terminal")).toBe(true);
+  });
+
+  it("file panels opt in via the dockable capability", () => {
+    expect(panelKindIsDockable("file")).toBe(true);
+  });
+
+  it("non-PTY kinds without the capability are not dockable", () => {
+    expect(panelKindIsDockable("browser")).toBe(false);
+    expect(panelKindIsDockable("dev-preview")).toBe(false);
+    expect(panelKindIsDockable("review")).toBe(false);
+  });
+
+  it("unknown kinds are not dockable", () => {
+    expect(panelKindIsDockable("no-such-kind")).toBe(false);
   });
 });

@@ -89,7 +89,13 @@ describe("AppLayout assistant push sidebar — issue #6619", () => {
   it("lazily defines and eagerly preloads HelpPanel (issue #10389)", () => {
     // HelpPanel (~175KB source subtree) must not be in the eager entry chunk.
     expect(source).not.toMatch(/import \{ HelpPanel \} from/);
-    expect(source).toContain('function preloadHelpPanel() {\n  return import("../HelpPanel");');
+    // The panel chunk must GATE on the HybridInputBar chunk (Promise.all, not
+    // a fire-and-forget fetch): a bar that resolves after the panel commits
+    // pops in below the terminal and shifts its rows mid-boot — the assistant
+    // boot-corruption window. A failed bar chunk must degrade, not block.
+    expect(source).toMatch(
+      /function preloadHelpPanel\(\) \{[\s\S]*?import\("@\/components\/Terminal\/HybridInputBar"\)\.catch\([\s\S]*?Promise\.all\(\[import\("\.\.\/HelpPanel"\)/
+    );
     // Named `HelpPanel` (not Lazy*) so the JSX assertions above keep matching.
     expect(source).toContain("const HelpPanel = lazy(");
     // The render is unconditional, so the chunk is always needed — it must be

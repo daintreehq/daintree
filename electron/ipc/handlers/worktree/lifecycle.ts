@@ -1,5 +1,5 @@
 // eager-import-allow: reads worktree settings via store.get synchronously in the IPC handler
-import { isAbsolute } from "path";
+import { isAbsolute, resolve as resolvePath } from "path";
 import type { z } from "zod";
 import { CHANNELS } from "../../channels.js";
 import { store } from "../../../store.js";
@@ -17,16 +17,39 @@ import {
   WorktreeCreatePayloadSchema,
   WorktreeSetActivePayloadSchema,
 } from "../../../schemas/ipc.js";
-import { checkRateLimit, waitForRateLimitSlot } from "../../utils.js";
+import { checkRateLimit, waitForBurstRateLimitSlot } from "../../utils.js";
 import { validateBranchName } from "../../../../shared/utils/pathPattern.js";
-import { WORKTREE_RATE_LIMIT_KEY, WORKTREE_RATE_LIMIT_INTERVAL_MS } from "./constants.js";
+import {
+  WORKTREE_RATE_LIMIT_KEY,
+  WORKTREE_RATE_LIMIT_INTERVAL_MS,
+  WORKTREE_RATE_LIMIT_BURST,
+} from "./constants.js";
 
 type SoundId = keyof typeof SoundServiceModule.SOUND_FILES;
+
+const inFlightWorktreeCreateRequests = new Map<string, Promise<string>>();
 
 function playSoundFireAndForget(id: SoundId): void {
   void getSoundService()
     .then((svc) => svc.play(id))
     .catch((err) => console.error("[worktree.lifecycle] sound play failed:", err));
+}
+
+function getWorktreeCreateRequestKey(
+  payload: z.output<typeof WorktreeCreatePayloadSchema>
+): string {
+  const absoluteRootPath = resolvePath(payload.rootPath);
+  const absoluteCreatePath = isAbsolute(payload.options.path)
+    ? resolvePath(payload.options.path)
+    : resolvePath(payload.rootPath, payload.options.path);
+  return JSON.stringify({
+    rootPath: absoluteRootPath,
+    path: absoluteCreatePath,
+    baseBranch: payload.options.baseBranch,
+    newBranch: payload.options.newBranch.trim(),
+    fromRemote: payload.options.fromRemote ?? false,
+    useExistingBranch: payload.options.useExistingBranch ?? false,
+  });
 }
 
 export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): () => void {
@@ -73,25 +96,50 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
     if (!branchValidation.valid) {
       throw new Error(branchValidation.error ?? "Invalid branch name");
     }
-    await waitForRateLimitSlot(WORKTREE_RATE_LIMIT_KEY, WORKTREE_RATE_LIMIT_INTERVAL_MS);
-    if (!deps.worktreeService) {
-      throw new Error("Workspace client not initialized");
+    const createKey = getWorktreeCreateRequestKey(payload);
+    const existingCreate = inFlightWorktreeCreateRequests.get(createKey);
+    if (existingCreate) {
+      return existingCreate;
     }
-    const worktreeId = await deps.worktreeService.createWorktree(payload.rootPath, payload.options);
-    try {
-      fileSearchService.invalidate(payload.options.path);
-    } catch (error) {
-      console.warn("[worktree.create] Failed to invalidate file search cache:", error);
-    }
-    try {
-      deps.worktreeService?.invalidatePulseCache(worktreeId);
-    } catch (error) {
-      console.warn("[worktree.create] Failed to invalidate pulse cache:", error);
-    }
-    if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
-      playSoundFireAndForget("worktree-create");
-    }
-    return worktreeId;
+
+    const createPromise = (async (): Promise<string> => {
+      await waitForBurstRateLimitSlot(
+        WORKTREE_RATE_LIMIT_KEY,
+        WORKTREE_RATE_LIMIT_INTERVAL_MS,
+        WORKTREE_RATE_LIMIT_BURST
+      );
+      if (!deps.worktreeService) {
+        throw new Error("Workspace client not initialized");
+      }
+      const worktreeId = await deps.worktreeService.createWorktree(
+        payload.rootPath,
+        payload.options
+      );
+      try {
+        fileSearchService.invalidate(payload.options.path);
+      } catch (error) {
+        console.warn("[worktree.create] Failed to invalidate file search cache:", error);
+      }
+      try {
+        deps.worktreeService?.invalidatePulseCache(worktreeId);
+      } catch (error) {
+        console.warn("[worktree.create] Failed to invalidate pulse cache:", error);
+      }
+      if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
+        playSoundFireAndForget("worktree-create");
+      }
+      return worktreeId;
+    })();
+
+    inFlightWorktreeCreateRequests.set(createKey, createPromise);
+    void createPromise
+      .finally(() => {
+        if (inFlightWorktreeCreateRequests.get(createKey) === createPromise) {
+          inFlightWorktreeCreateRequests.delete(createKey);
+        }
+      })
+      .catch(() => {});
+    return createPromise;
   };
 
   const handleWorktreeRestartService = async (ctx: IpcContext): Promise<void> => {

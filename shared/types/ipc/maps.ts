@@ -81,8 +81,6 @@ import type {
   GitGetFileDiffPayload,
   GitCompareWorktreesPayload,
   CrossWorktreeDiffResult,
-  SnapshotInfo,
-  SnapshotRevertResult,
 } from "./git.js";
 import type {
   FileSearchPayload,
@@ -885,22 +883,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [payload: { cwd: string; type: "unstaged" | "staged" | "head" }];
     result: string;
   };
-  "git:snapshot-get": {
-    args: [worktreeId: string];
-    result: SnapshotInfo | null;
-  };
-  "git:snapshot-list": {
-    args: [];
-    result: SnapshotInfo[];
-  };
-  "git:snapshot-revert": {
-    args: [worktreeId: string];
-    result: SnapshotRevertResult;
-  };
-  "git:snapshot-delete": {
-    args: [worktreeId: string];
-    result: void;
-  };
   "git:mark-safe-directory": {
     args: [path: string];
     result: void;
@@ -1379,6 +1361,10 @@ export interface IpcEventMap {
   "worktree:remove": { worktreeId: string };
   "worktree:activated": { worktreeId: string };
 
+  // Paint-fabric surface views (Phase 1V): main → surface-view push carrying
+  // the webglBudget waterfill grant for that surface.
+  "paint-surface:webgl-thresholds": import("../paintFabricSurface.js").SurfaceWebglThresholds;
+
   // Terminal events
   "terminal:data": [id: string, data: string | Uint8Array];
   "terminal:exit": [id: string, exitCode: number];
@@ -1824,6 +1810,11 @@ export interface IpcEventMap {
   // visibilitychange/resume ran while the view was still occluded, where
   // Chromium culls the paint, so it can fail to stick until the user clicks.
   "app:view-revealed": void;
+  // Fired by ProjectViewManager the moment it re-attaches a cached view (warm
+  // switch). A detached setVisible(false) view receives no visibilitychange or
+  // resume event on reattach, so this is the renderer's deterministic trigger
+  // to run the wake fan-out whose completion releases the warm paint gate.
+  "app:view-warm-activated": void;
   "app:view-cached": void;
 
   // Privacy events

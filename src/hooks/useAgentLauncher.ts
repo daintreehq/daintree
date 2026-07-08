@@ -12,9 +12,11 @@ import { isElectronAvailable } from "./useElectron";
 import { systemClient } from "@/clients";
 import { useHomeDir } from "@/hooks/app/useHomeDir";
 import { logError, logWarn } from "@/utils/logger";
+import { markRendererPerformance } from "@/utils/performance";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { addToWorktreeIndex } from "@/store/slices/panelRegistry/worktreeIndex";
 import type {
   AgentSettings,
   CliAvailability,
@@ -301,6 +303,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
       // useRef avoids the react batching window that useState would have.
       if (launchingAgentsRef.current.has(agentId)) return null;
       launchingAgentsRef.current.add(agentId);
+      markRendererPerformance("agentlaunch.begin", { agentId });
 
       try {
         const targetWorktreeId = launchOptions?.worktreeId ?? activeWorktreeId;
@@ -641,6 +644,14 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               const next: Partial<typeof state> = {
                 panelsById: { ...state.panelsById, [gateId]: gatePanel },
                 panelIds: [...state.panelIds, gateId],
+                // The gate panel bypasses `addPanel`, so it must join the
+                // per-worktree index here — sidebar summaries and worktree
+                // cycling derive terminal counts from it.
+                panelIdsByWorktreeId: addToWorktreeIndex(
+                  state.panelIdsByWorktreeId,
+                  gatePanel.worktreeId,
+                  gateId
+                ),
               };
               // Atomic dock activation — same race fix as `addPanel`. The gate
               // panel bypasses `addPanel`, so the activation must be folded
@@ -668,6 +679,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
         }
 
         try {
+          markRendererPerformance("agentlaunch.addpanel", { agentId });
           const terminalId = await addPanel(options);
           if (!terminalId) return null;
           const rawLocation = usePanelStore.getState().panelsById[terminalId]?.location ?? "grid";

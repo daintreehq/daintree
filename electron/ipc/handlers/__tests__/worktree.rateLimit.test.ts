@@ -6,6 +6,7 @@ const ipcMainMock = vi.hoisted(() => ({
 }));
 
 const waitForRateLimitSlotMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const waitForBurstRateLimitSlotMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const checkRateLimitMock = vi.hoisted(() => vi.fn());
 
 vi.mock("electron", () => ({
@@ -53,6 +54,7 @@ vi.mock("../../utils.js", () => {
   return {
     checkRateLimit: checkRateLimitMock,
     waitForRateLimitSlot: waitForRateLimitSlotMock,
+    waitForBurstRateLimitSlot: waitForBurstRateLimitSlotMock,
     typedHandle,
     typedHandleWithContext,
     typedHandleValidated: (
@@ -159,19 +161,19 @@ describe("worktree rate limiting", () => {
   });
 
   describe("worktree:create", () => {
-    it("calls waitForRateLimitSlot with dedicated key and parameters", async () => {
+    it("calls waitForBurstRateLimitSlot with dedicated key, interval, and burst allowance", async () => {
       const handler = getInvokeHandler(CHANNELS.WORKTREE_CREATE);
       await handler({} as never, {
         rootPath: "/test/project",
         options: { baseBranch: "main", newBranch: "feat-1", path: "/test/worktrees/feat-1" },
       });
 
-      expect(waitForRateLimitSlotMock).toHaveBeenCalledWith("worktreeCreate", 1_000);
+      expect(waitForBurstRateLimitSlotMock).toHaveBeenCalledWith("worktreeCreate", 1_000, 30);
       expect(mockWorktreeService.createWorktree).toHaveBeenCalled();
     });
 
     it("rejects without calling createWorktree when rate limit slot rejects", async () => {
-      waitForRateLimitSlotMock.mockRejectedValueOnce(new Error("Spawn queue full"));
+      waitForBurstRateLimitSlotMock.mockRejectedValueOnce(new Error("Spawn queue full"));
       const handler = getInvokeHandler(CHANNELS.WORKTREE_CREATE);
 
       await expect(
@@ -182,6 +184,30 @@ describe("worktree rate limiting", () => {
       ).rejects.toThrow("Spawn queue full");
 
       expect(mockWorktreeService.createWorktree).not.toHaveBeenCalled();
+    });
+
+    it("coalesces identical concurrent create requests before consuming a second rate-limit slot", async () => {
+      let resolveCreate!: (worktreeId: string) => void;
+      mockWorktreeService.createWorktree.mockReturnValueOnce(
+        new Promise<string>((resolve) => {
+          resolveCreate = resolve;
+        })
+      );
+      const handler = getInvokeHandler(CHANNELS.WORKTREE_CREATE);
+      const payload = {
+        rootPath: "/test/project",
+        options: { baseBranch: "main", newBranch: "feat-1", path: "/test/worktrees/feat-1" },
+      };
+
+      const first = handler({} as never, payload);
+      const second = handler({} as never, payload);
+      await Promise.resolve();
+
+      expect(waitForBurstRateLimitSlotMock).toHaveBeenCalledTimes(1);
+      expect(mockWorktreeService.createWorktree).toHaveBeenCalledTimes(1);
+
+      resolveCreate("wt-1");
+      await expect(Promise.all([first, second])).resolves.toEqual(["wt-1", "wt-1"]);
     });
   });
 

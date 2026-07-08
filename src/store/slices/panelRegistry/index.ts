@@ -9,6 +9,7 @@ import { createBackgroundActions } from "./background";
 import { createOrderingActions } from "./ordering";
 import { createRestartActions } from "./restart";
 import { createBrowserActions } from "./browser";
+import { createFilePanelActions } from "./file";
 import { createTabGroupActions } from "./tabGroups";
 
 // Re-exports for backward compatibility
@@ -48,6 +49,7 @@ export const createPanelRegistrySlice =
       ...createOrderingActions(set, get),
       ...createRestartActions(set, get),
       ...createBrowserActions(set),
+      ...createFilePanelActions(set),
       ...createTabGroupActions(set, get),
     };
   };

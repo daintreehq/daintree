@@ -1025,3 +1025,53 @@ export const MARK_PR_READY_FOR_REVIEW_MUTATION = `
     }
   }
 `;
+
+export const REPO_METADATA_QUERY = `
+  query GetRepoMetadata($owner: String!, $repo: String!) {
+    repository(owner: $owner, name: $repo) {
+      defaultBranchRef { name }
+      isPrivate
+      isFork
+      isArchived
+      description
+      licenseInfo { name }
+      repositoryTopics(first: 20) { nodes { topic { name } } }
+    }
+    rateLimit { cost remaining resetAt limit }
+  }
+`;
+
+export const PR_CI_STATUS_QUERY = `
+  query GetPRCIStatus($owner: String!, $repo: String!, $number: Int!) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $number) {
+        commits(last: 1) {
+          nodes {
+            commit {
+              statusCheckRollup {
+                state
+                contexts(first: 100) {
+                  nodes {
+                    __typename
+                    ... on CheckRun {
+                      name
+                      conclusion
+                      status
+                      isRequired(pullRequestNumber: $number)
+                    }
+                    ... on StatusContext {
+                      context
+                      state
+                      isRequired(pullRequestNumber: $number)
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    rateLimit { cost remaining resetAt limit }
+  }
+`;

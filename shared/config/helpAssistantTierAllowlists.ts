@@ -27,6 +27,10 @@ export const WORKBENCH_TIER_TOOLS = [
 
   "files.search",
   "file.view",
+  // Read is contained to the project + its worktrees inside the action itself
+  // (fileActions.ts) — never an arbitrary-path read.
+  "file.read",
+  "file.openPanel",
 
   "copyTree.generate",
 
@@ -57,8 +61,6 @@ export const WORKBENCH_TIER_TOOLS = [
   "git.getFileDiff",
   "git.listCommits",
   "git.getStagingStatus",
-  "git.snapshotGet",
-  "git.snapshotList",
 
   "forge.getRepoStats",
   "forge.listIssues",
@@ -162,8 +164,6 @@ export const SYSTEM_TIER_ADDONS = [
   "git.unstageAll",
   "git.commit",
   "git.push",
-  "git.snapshotRevert",
-  "git.snapshotDelete",
 
   "forge.openIssues",
   "forge.openPRs",

@@ -6,6 +6,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { usePaletteStore, type PaletteId } from "@/store/paletteStore";
 import { useAgentSessionRecords } from "@/hooks/useAgentSessionRecords";
 import { buildResumeSessionItems, type ResumeSessionItem } from "@/services/resumeSessionItems";
+import type { WorktreeSnapshot } from "@shared/types";
 
 const RESUME_PALETTE_ID: PaletteId = "resume-sessions";
 
@@ -37,14 +38,18 @@ const RESUME_FUSE_OPTIONS: IFuseOptions<ResumeSessionItem> = {
  * Browsing is a flat, newest-first list paged by {@link RESUME_PAGE_SIZE};
  * searching is flat and relevance-ordered over the full journal.
  */
-export function useResumeSessionsPalette() {
-  const worktrees = useWorktreeStore((state) => state.worktrees);
-  const currentProjectId = useProjectStore((state) => state.currentProject?.id ?? null);
+const EMPTY_WORKTREES: Map<string, WorktreeSnapshot> = new Map();
 
+export function useResumeSessionsPalette() {
   // Open state read straight from the shared palette store — the same source
-  // useSearchablePalette derives its isOpen from — so the journal fetch can be
-  // gated on it without a circular items → palette → isOpen dependency.
+  // useSearchablePalette derives its isOpen from — so the journal fetch (and
+  // the worktree-map subscription below) can be gated on it without a
+  // circular items → palette → isOpen dependency. The map subscription is
+  // open-gated because this hook is always mounted in App: a live selector
+  // re-rendered the whole App on every worktree-map identity change.
   const isOpen = usePaletteStore((state) => state.activePaletteId === RESUME_PALETTE_ID);
+  const worktrees = useWorktreeStore((state) => (isOpen ? state.worktrees : EMPTY_WORKTREES));
+  const currentProjectId = useProjectStore((state) => state.currentProject?.id ?? null);
   const { sessions, isLoading } = useAgentSessionRecords(isOpen);
 
   const items = useMemo(

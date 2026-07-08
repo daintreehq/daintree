@@ -89,7 +89,7 @@ describe("routeHostEvent", () => {
     expect(dataListener).not.toHaveBeenCalled();
   });
 
-  it("forwards heapMb and externalMb on host-memory-warning", () => {
+  it("forwards heap, external, and worker-isolate memory on host-memory-warning", () => {
     const { deps, emitter } = makeDeps();
     const warningListener = vi.fn();
     emitter.on("host-memory-warning", warningListener);
@@ -101,6 +101,8 @@ describe("routeHostEvent", () => {
         utilizationPercent: 75,
         heapMb: 300,
         externalMb: 276,
+        workerHeapMb: 120,
+        workerExternalMb: 90,
         timestamp: 1000,
       } as PtyHostEvent,
       deps
@@ -112,6 +114,8 @@ describe("routeHostEvent", () => {
       utilizationPercent: 75,
       heapMb: 300,
       externalMb: 276,
+      workerHeapMb: 120,
+      workerExternalMb: 90,
       timestamp: 1000,
     });
   });

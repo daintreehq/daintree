@@ -3,24 +3,30 @@ import { startupScenarios } from "./startup";
 import { hydrationSwitchScenarios } from "./hydrationSwitch";
 import { devPreviewScenarios } from "./devPreview";
 import { terminalScenarios } from "./terminal";
+import { agentAnalysisScenarios } from "./agentAnalysis";
 import { ipcScenarios } from "./ipc";
 import { persistenceScenarios } from "./persistence";
 import { soakScenarios } from "./soak";
 import { projectSwitchScenarios } from "./projectSwitch";
 import { migrationScenarios } from "./migrations";
 import { idleWindowScenarios } from "./idleWindow";
+import { gitPipelineScenarios } from "./gitPipeline";
+import { resizeReflowScenarios } from "./resizeReflow";
 
 export const allScenarios: PerfScenario[] = [
   ...startupScenarios,
   ...hydrationSwitchScenarios,
   ...devPreviewScenarios,
   ...terminalScenarios,
+  ...agentAnalysisScenarios,
   ...ipcScenarios,
   ...persistenceScenarios,
   ...soakScenarios,
   ...projectSwitchScenarios,
   ...migrationScenarios,
   ...idleWindowScenarios,
+  ...gitPipelineScenarios,
+  ...resizeReflowScenarios,
 ];
 
 export function getScenariosForMode(mode: PerfMode): PerfScenario[] {
@@ -46,6 +52,8 @@ export function assertMatrixCoverage(): void {
     "PERF-031",
     "PERF-032",
     "PERF-033",
+    "PERF-034",
+    "PERF-035",
     "PERF-040",
     "PERF-041",
     "PERF-042",
@@ -63,6 +71,14 @@ export function assertMatrixCoverage(): void {
     "PERF-080",
     "PERF-090",
     "PERF-091",
+    "PERF-100",
+    "PERF-101",
+    "PERF-102",
+    "PERF-103",
+    "PERF-104",
+    "PERF-110",
+    "PERF-111",
+    "PERF-112",
   ]);
 
   const actualIds = new Set(allScenarios.map((scenario) => scenario.id));

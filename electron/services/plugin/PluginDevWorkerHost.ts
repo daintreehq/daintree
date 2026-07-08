@@ -161,6 +161,14 @@ export class PluginDevWorkerHost extends EventEmitter {
     return this.child !== null;
   }
 
+  /**
+   * UtilityProcess pid of the live worker, or null when not running. Lets the
+   * governance snapshot join this worker to `app.getAppMetrics()` memory rows.
+   */
+  get pid(): number | null {
+    return this.child?.pid ?? null;
+  }
+
   /** Send a message to the worker. Returns false if no live worker. */
   send(message: PluginHostToWorkerMessage): boolean {
     if (!this.child || this.isDisposed) return false;

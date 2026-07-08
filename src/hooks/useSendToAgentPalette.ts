@@ -99,10 +99,16 @@ function sendSelectionToTarget(targetId: string): void {
 
 const MAX_RESULTS = 20;
 
+const EMPTY_PANEL_IDS: string[] = [];
+const EMPTY_PANELS_BY_ID: ReturnType<typeof usePanelStore.getState>["panelsById"] = {};
+
 export function useSendToAgentPalette() {
-  const panelIds = usePanelStore((state) => state.panelIds);
-  const panelsById = usePanelStore((state) => state.panelsById);
+  // Always mounted in App: subscribe to the panel map only while open — a
+  // live selector here re-rendered the whole App on every agent-state flip
+  // and status flush. The open() helpers above already read via getState().
   const isOpen = usePaletteStore((state) => state.activePaletteId === "send-to-agent");
+  const panelIds = usePanelStore((state) => (isOpen ? state.panelIds : EMPTY_PANEL_IDS));
+  const panelsById = usePanelStore((state) => (isOpen ? state.panelsById : EMPTY_PANELS_BY_ID));
   const showAgentTaskTitles = usePreferencesStore((s) => s.showAgentTaskTitles);
 
   const items = useMemo<SendToAgentItem[]>(() => {

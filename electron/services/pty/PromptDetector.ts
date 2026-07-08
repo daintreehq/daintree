@@ -55,8 +55,12 @@ export function detectPrompt(
 
   const scanCount = Math.min(promptScanLineCount, lines.length);
   const scanLines = lines.slice(-scanCount);
+  // Strip each scan line once and reuse in the history loop below — this
+  // runs on the 50ms polling tick, and both loops scan the same lines.
+  const cleanScanLines: string[] = [];
   for (const line of scanLines) {
     const cleanLine = stripAnsi(line);
+    cleanScanLines.push(cleanLine);
     for (const pattern of promptHintPatterns) {
       const match = cleanLine.match(pattern);
       if (match) {
@@ -73,8 +77,7 @@ export function detectPrompt(
     return { isPrompt: false, confidence: 0 };
   }
 
-  for (const line of scanLines) {
-    const cleanLine = stripAnsi(line);
+  for (const cleanLine of cleanScanLines) {
     for (const pattern of promptPatterns) {
       const match = cleanLine.match(pattern);
       if (match) {

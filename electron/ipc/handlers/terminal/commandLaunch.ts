@@ -30,8 +30,6 @@
 import { getDefaultShell } from "../../../services/pty/terminalShell.js";
 import { isCmdShell, isPowerShellShell } from "../../../../shared/utils/shellEscape.js";
 
-const MACOS_COMMAND_LAUNCH_STARTUP_DELAY_SECONDS = "0.05";
-
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
@@ -114,22 +112,14 @@ export function buildCommandLaunchShell(
   // Use a no-op trap rather than SIG_IGN so child CLIs don't inherit ignored
   // SIGINT.
   const script = `trap : INT\n${command}\ntrap - INT\n${execInteractiveShell}`;
-  const interactiveArgs =
-    name.includes("zsh") || name.includes("bash")
-      ? `-lic ${shellQuote(script)}`
-      : `-i -c ${shellQuote(script)}`;
-  // macOS CI can emit the first shell/agent bytes before node-pty returns
-  // from spawn. Defer the interactive shell by one tick so the PTY data
-  // handoff listener is installed before startup output begins.
+  // The historical macOS `sleep 0.05` deferral wrapper (added when early
+  // shell/agent bytes could race the PTY data listeners) is gone: fresh
+  // spawns attach a BufferedPtyDataHandoff synchronously with pty.spawn and
+  // the renderer registers its data callback at prewarm, before the spawn
+  // IPC is even sent — no consumer attaches late any more, and the wrapper
+  // taxed every agent launch 50ms plus an extra shell exec.
   const args =
-    process.platform === "darwin"
-      ? [
-          "-c",
-          `sleep ${MACOS_COMMAND_LAUNCH_STARTUP_DELAY_SECONDS}\nexec ${shellQuote(shell)} ${interactiveArgs}`,
-        ]
-      : name.includes("zsh") || name.includes("bash")
-        ? ["-lic", script]
-        : ["-i", "-c", script];
+    name.includes("zsh") || name.includes("bash") ? ["-lic", script] : ["-i", "-c", script];
 
   return { shell, args };
 }

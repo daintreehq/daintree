@@ -25,6 +25,9 @@ vi.mock("electron", () => ({
 const fsMock = vi.hoisted(() => ({
   promises: {
     realpath: vi.fn<(p: string) => Promise<string>>((p: string) => Promise.resolve(p)),
+    stat: vi.fn<(p: string) => Promise<{ isFile: () => boolean; isDirectory: () => boolean }>>(() =>
+      Promise.resolve({ isFile: () => true, isDirectory: () => false })
+    ),
   },
 }));
 
@@ -77,6 +80,7 @@ vi.mock("../../utils.js", () => ({
 
 import { CHANNELS } from "../../channels.js";
 import { registerSystemShellHandlers } from "../systemShell.js";
+import { SystemShowItemInFolderUnconfinedPayloadSchema } from "../../../schemas/ipc.js";
 import type { HandlerDependencies } from "../../types.js";
 
 type Handler = (event: unknown, ...args: unknown[]) => Promise<unknown>;
@@ -396,5 +400,133 @@ describe("system path-allowlist: worktree parent dirs", () => {
       handler(fakeEvent, { path: `${WORKTREE_PARENT}-evil${path.sep}secret.txt` })
     ).rejects.toMatchObject({ code: "OUTSIDE_ROOT" });
     expect(shellMock.openPath).not.toHaveBeenCalled();
+  });
+});
+
+describe("system:show-item-in-folder-unconfined (out-of-root reveal recovery)", () => {
+  let cleanup: () => void;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    fsMock.promises.realpath.mockImplementation(realpathEcho);
+    fsMock.promises.stat.mockResolvedValue({ isFile: () => true, isDirectory: () => false });
+    projectStoreMock.getAllProjects.mockReturnValue([{ path: PROJECT_ROOT }]);
+    appMock.getPath.mockImplementation((name: string) => path.join(USERDATA_PARENT, name));
+    storeMock.get.mockReturnValue(undefined);
+    cleanup = registerSystemShellHandlers({} as HandlerDependencies);
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  // The whole point of this op: an out-of-root path is revealed (no
+  // OUTSIDE_ROOT), because it's the user-initiated recovery for a file link
+  // that resolved outside roots. Roots containment is intentionally skipped.
+  it("reveals an absolute path outside all roots (bypasses containment)", async () => {
+    const handler = getHandler(CHANNELS.SYSTEM_SHOW_ITEM_IN_FOLDER_UNCONFINED);
+    const outside = path.join(TEST_ROOT, "etc", "passwd");
+    await handler(fakeEvent, { path: outside });
+    expect(shellMock.showItemInFolder).toHaveBeenCalledWith(outside);
+  });
+
+  it("rejects a non-absolute path with INVALID_PATH", async () => {
+    const handler = getHandler(CHANNELS.SYSTEM_SHOW_ITEM_IN_FOLDER_UNCONFINED);
+    await expect(handler(fakeEvent, { path: "relative/file.txt" })).rejects.toMatchObject({
+      code: "INVALID_PATH",
+    });
+    expect(shellMock.showItemInFolder).not.toHaveBeenCalled();
+  });
+
+  // Key security distinction from the confined system:show-item-in-folder op
+  // (which relaxes the deny-list for reveal): an out-of-root path is untrusted
+  // terminal output, and historical Windows ShellExecute("open") / Linux
+  // xdg-open fallbacks make reveal a launch surface on some platforms — so the
+  // deny-list stays in force.
+  it("rejects an executable extension even out-of-root (deny-list enforced)", async () => {
+    const handler = getHandler(CHANNELS.SYSTEM_SHOW_ITEM_IN_FOLDER_UNCONFINED);
+    await expect(
+      handler(fakeEvent, { path: path.join(TEST_ROOT, "dropped", deniedLauncherName) })
+    ).rejects.toMatchObject({ code: "INVALID_PATH" });
+    expect(shellMock.showItemInFolder).not.toHaveBeenCalled();
+  });
+
+  it("rejects a safe-named symlink whose realpath has a denied extension", async () => {
+    const link = path.join(TEST_ROOT, "etc", "notes.txt");
+    const target = path.join(TEST_ROOT, "dropped", deniedLauncherName);
+    fsMock.promises.realpath.mockImplementation((p: string) =>
+      Promise.resolve(path.normalize(p) === path.normalize(link) ? target : path.normalize(p))
+    );
+    const handler = getHandler(CHANNELS.SYSTEM_SHOW_ITEM_IN_FOLDER_UNCONFINED);
+    await expect(handler(fakeEvent, { path: link })).rejects.toMatchObject({
+      code: "INVALID_PATH",
+    });
+    expect(shellMock.showItemInFolder).not.toHaveBeenCalled();
+  });
+
+  it("rejects a since-deleted path (realpath ENOENT) without revealing", async () => {
+    const missing = path.join(TEST_ROOT, "etc", "gone.txt");
+    fsMock.promises.realpath.mockImplementation((p: string) =>
+      path.normalize(p) === path.normalize(missing)
+        ? Promise.reject(Object.assign(new Error("ENOENT"), { code: "ENOENT" }))
+        : realpathEcho(p)
+    );
+    const handler = getHandler(CHANNELS.SYSTEM_SHOW_ITEM_IN_FOLDER_UNCONFINED);
+    await expect(handler(fakeEvent, { path: missing })).rejects.toMatchObject({
+      code: "INVALID_PATH",
+    });
+    expect(shellMock.showItemInFolder).not.toHaveBeenCalled();
+  });
+
+  it("rejects when stat fails after realpath (INVALID_PATH, no reveal)", async () => {
+    const target = path.join(TEST_ROOT, "etc", "vanished.txt");
+    fsMock.promises.stat.mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+    const handler = getHandler(CHANNELS.SYSTEM_SHOW_ITEM_IN_FOLDER_UNCONFINED);
+    await expect(handler(fakeEvent, { path: target })).rejects.toMatchObject({
+      code: "INVALID_PATH",
+    });
+    expect(shellMock.showItemInFolder).not.toHaveBeenCalled();
+  });
+
+  it("rejects a non-file/non-directory node (e.g. socket/device) without revealing", async () => {
+    const target = path.join(TEST_ROOT, "etc", "socket");
+    fsMock.promises.stat.mockResolvedValue({ isFile: () => false, isDirectory: () => false });
+    const handler = getHandler(CHANNELS.SYSTEM_SHOW_ITEM_IN_FOLDER_UNCONFINED);
+    await expect(handler(fakeEvent, { path: target })).rejects.toMatchObject({
+      code: "INVALID_PATH",
+    });
+    expect(shellMock.showItemInFolder).not.toHaveBeenCalled();
+  });
+
+  it("reveals the realpath-resolved target, not the original path", async () => {
+    const link = path.join(TEST_ROOT, "etc", "link.txt");
+    const resolved = path.join(TEST_ROOT, "elsewhere", "real.txt");
+    fsMock.promises.realpath.mockImplementation((p: string) =>
+      Promise.resolve(path.normalize(p) === path.normalize(link) ? resolved : path.normalize(p))
+    );
+    const handler = getHandler(CHANNELS.SYSTEM_SHOW_ITEM_IN_FOLDER_UNCONFINED);
+    await handler(fakeEvent, { path: link });
+    expect(shellMock.showItemInFolder).toHaveBeenCalledWith(resolved);
+  });
+});
+
+describe("SystemShowItemInFolderUnconfinedPayloadSchema (null-byte guard, lesson #6263)", () => {
+  it("rejects a null byte in the path at the schema boundary", () => {
+    const result = SystemShowItemInFolderUnconfinedPayloadSchema.safeParse({
+      path: "/etc/passwd\x00",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts a well-formed absolute path", () => {
+    const result = SystemShowItemInFolderUnconfinedPayloadSchema.safeParse({
+      path: "/etc/passwd",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects an empty path (.min(1))", () => {
+    const result = SystemShowItemInFolderUnconfinedPayloadSchema.safeParse({ path: "" });
+    expect(result.success).toBe(false);
   });
 });

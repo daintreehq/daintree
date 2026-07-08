@@ -252,6 +252,40 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
     },
   }));
 
+  actions.set("help.openCommandsFolder", () => ({
+    id: "help.openCommandsFolder",
+    title: "Open Assistant Commands Folder",
+    description:
+      "Open the folder where custom assistant commands and skills live (~/.daintree/assistant)",
+    category: "help",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    // Opening an OS file-manager window is a human affordance — never
+    // something an MCP agent should discover or trigger.
+    mcpVisibility: "hidden",
+    keywords: ["custom", "skills", "slash", "prompts", "assistant", "commands"],
+    run: async () => {
+      const result = await window.electron.help.openAssistantContentFolder();
+      if (!result) {
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+        notify({
+          type: "error",
+          title: "Couldn't open commands folder",
+          message:
+            "Daintree couldn't create ~/.daintree/assistant. Check that your home folder is writable, then try again.",
+        });
+      } else if (!result.opened) {
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+        notify({
+          type: "error",
+          title: "Couldn't open commands folder",
+          message: `The folder is ready at ${result.path} — open it manually in your file manager.`,
+        });
+      }
+    },
+  }));
+
   actions.set("help.gettingStarted.show", () => ({
     id: "help.gettingStarted.show",
     title: "Getting Started",

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isAbsolute, normalize, basename, dirname, resolve, join } from "../path.js";
+import { isAbsolute, isPathInside, normalize, basename, dirname, resolve, join } from "../path.js";
 
 describe("isAbsolute", () => {
   it("recognizes POSIX absolute paths", () => {
@@ -224,5 +224,37 @@ describe("cross-platform output stability", () => {
     expect(resolve("foo\\bar", "baz")).toBe("foo/bar/baz");
     expect(dirname("foo\\bar\\baz")).toBe("foo/bar");
     expect(basename("foo\\bar\\baz")).toBe("baz");
+  });
+});
+
+describe("isPathInside", () => {
+  it("accepts the parent itself and nested children", () => {
+    expect(isPathInside("/repo", "/repo")).toBe(true);
+    expect(isPathInside("/repo/docs/spec.md", "/repo")).toBe(true);
+    expect(isPathInside("/repo/docs/spec.md", "/repo/")).toBe(true);
+  });
+
+  it("rejects prefix-sibling directories", () => {
+    expect(isPathInside("/repo-evil/secret.md", "/repo")).toBe(false);
+    expect(isPathInside("/repository/file.md", "/repo")).toBe(false);
+  });
+
+  it("rejects traversal that escapes the parent", () => {
+    expect(isPathInside("/repo/docs/../../etc/passwd", "/repo")).toBe(false);
+    expect(isPathInside("/repo/../repo/file.md", "/repo")).toBe(true);
+  });
+
+  it("normalizes separators before comparing", () => {
+    expect(isPathInside("C:\\repo\\docs\\spec.md", "C:/repo")).toBe(true);
+    expect(isPathInside("C:\\other\\spec.md", "C:/repo")).toBe(false);
+  });
+
+  it("treats everything as inside the filesystem root", () => {
+    expect(isPathInside("/etc/passwd", "/")).toBe(true);
+  });
+
+  it("rejects relative '.' inputs outright", () => {
+    expect(isPathInside(".", "/repo")).toBe(false);
+    expect(isPathInside("/repo/file.md", ".")).toBe(false);
   });
 });

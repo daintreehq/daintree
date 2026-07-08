@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { usePanelStore } from "./panelStore";
 import type { TabGroup } from "@shared/types";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
+import { buildWorktreeIndex } from "@/store/slices/panelRegistry/worktreeIndex";
 
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 
@@ -98,6 +99,10 @@ function applySnapshot(snapshot: LayoutSnapshot): boolean {
   usePanelStore.setState({
     panelsById: newTerminalsById,
     panelIds: newTerminalIds,
+    // Bulk restore can change panels' worktreeId, so rebuild the per-worktree
+    // index — sidebar summaries and worktree cycling read it and would
+    // otherwise see stale buckets after an undo of a cross-worktree move.
+    panelIdsByWorktreeId: buildWorktreeIndex(newTerminalIds, newTerminalsById),
     tabGroups: structuredClone(snapshot.tabGroups),
     focusedId: snapshot.focusedId,
     maximizedId: snapshot.maximizedId,

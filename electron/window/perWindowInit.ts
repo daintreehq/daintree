@@ -2,7 +2,7 @@ import { session, type BrowserWindow } from "electron";
 import type { HandlerDependencies } from "../ipc/types.js";
 import { sendToRenderer } from "../ipc/handlers.js";
 import { getAppWebContents } from "./webContentsRegistry.js";
-import { distributePortsToView } from "./portDistribution.js";
+import { distributePortsToView, releaseAllTerminalWorkerPorts } from "./portDistribution.js";
 import { resolveInitialColorSchemeId } from "./skeletonCss.js";
 import { resolveAppTheme } from "../../shared/theme/index.js";
 import { PtyClient } from "../services/PtyClient.js";
@@ -230,12 +230,16 @@ export async function initPerWindowServices(
           utilizationPercent: payload.utilizationPercent,
           heapMb: payload.heapMb,
           externalMb: payload.externalMb,
+          workerHeapMb: payload.workerHeapMb,
+          workerExternalMb: payload.workerExternalMb,
         });
       } else {
         logInfo("pty-host-memory-warning-cleared", {
           utilizationPercent: payload.utilizationPercent,
           heapMb: payload.heapMb,
           externalMb: payload.externalMb,
+          workerHeapMb: payload.workerHeapMb,
+          workerExternalMb: payload.workerExternalMb,
         });
       }
       // Broadcast to all windows so renderer can surface the warning
@@ -293,24 +297,40 @@ export async function initPerWindowServices(
         /* non-critical */
       }
     });
-    ptyClient.setPortRefreshCallback(() => {
-      console.log("[MAIN] Pty Host restarted, refreshing ports...");
-      // Refresh ports for ALL registered windows — target the active view
+    ptyClient.setPortRefreshCallback((windowId) => {
+      // Called with no windowId on a full host restart (refresh every window)
+      // and with one when the PTY fabric restarts or reroutes a single
+      // window's shard — refreshing only that window keeps a shard-local
+      // recovery from re-handshaking every healthy window's terminal stream.
+      console.log(
+        windowId === undefined
+          ? "[MAIN] Pty Host restarted, refreshing ports..."
+          : `[MAIN] Pty Host shard changed for window ${windowId}, refreshing its port...`
+      );
+      // Refresh ports for the targeted windows — target the active view
       if (windowRegistry) {
         for (const wCtx of windowRegistry.all()) {
-          if (!wCtx.browserWindow.isDestroyed()) {
-            const wc = getAppWebContents(wCtx.browserWindow);
-            if (!wc.isDestroyed()) {
-              distributePortsToView(wCtx.browserWindow, wCtx, wc, ptyClient);
-              try {
-                wc.send(CHANNELS.EVENTS_PUSH, {
-                  name: "terminal:backend-ready",
-                  payload: undefined,
-                });
-              } catch {
-                // Silently ignore send failures during window disposal.
+          if (windowId !== undefined && wCtx.windowId !== windowId) continue;
+          // One window's failure must not abort the refresh for the rest —
+          // the caller (respawnPendingForShard) still has respawn replay,
+          // data-mirror re-enable, and global config replay to run.
+          try {
+            if (!wCtx.browserWindow.isDestroyed()) {
+              const wc = getAppWebContents(wCtx.browserWindow);
+              if (!wc.isDestroyed()) {
+                distributePortsToView(wCtx.browserWindow, wCtx, wc, ptyClient);
+                try {
+                  wc.send(CHANNELS.EVENTS_PUSH, {
+                    name: "terminal:backend-ready",
+                    payload: undefined,
+                  });
+                } catch {
+                  // Silently ignore send failures during window disposal.
+                }
               }
             }
+          } catch (error) {
+            console.error(`[MAIN] Failed to refresh PTY port for window ${wCtx.windowId}:`, error);
           }
         }
       }
@@ -347,11 +367,29 @@ export async function initPerWindowServices(
   // Per-window cleanup: ports, portalManager, eventBuffer
   ctx.cleanup.add(
     toDisposable(() => {
+      // Paint-fabric surface views: release their pty-host connections first
+      // (the broker disconnects each synthetic connection id), then tear down
+      // the sibling WebContentsViews.
+      if (ctx.services.surfacePortBroker) {
+        try {
+          ctx.services.surfacePortBroker.dispose();
+        } catch (error) {
+          console.error("[perWindowInit] SurfacePortBroker dispose failed:", error);
+        }
+        ctx.services.surfacePortBroker = undefined;
+      }
+      if (ctx.services.surfaceViewManager) {
+        ctx.services.surfaceViewManager.dispose().catch((error) => {
+          console.error("[perWindowInit] SurfaceViewManager dispose failed:", error);
+        });
+        ctx.services.surfaceViewManager = undefined;
+      }
       // Notify PTY host to disconnect this window's port before closing it
       const pty = getPtyClient();
       if (pty) {
         pty.disconnectMessagePort(ctx.windowId);
       }
+      releaseAllTerminalWorkerPorts(ctx, pty);
       if (ctx.services.activeRendererPort) {
         try {
           ctx.services.activeRendererPort.close();

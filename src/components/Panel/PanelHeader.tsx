@@ -77,7 +77,11 @@ import {
 import { TabButton, type TabInfo } from "./TabButton";
 import { SortableTabButton } from "./SortableTabButton";
 
-import { panelKindCanRestart, panelKindHasPty } from "@shared/config/panelKindRegistry";
+import {
+  panelKindCanRestart,
+  panelKindHasPty,
+  panelKindIsDockable,
+} from "@shared/config/panelKindRegistry";
 import { isPtyPanel } from "@shared/types/panel";
 import { actionService } from "@/services/ActionService";
 import { fireWatchNotification } from "@/lib/watchNotification";
@@ -307,10 +311,11 @@ function PanelHeaderComponent({
   const isHibernated = useIsHibernated(id);
 
   // Whether the overflow "..." menu has any items to show.
-  // Dock rendering is PTY-only (`ContentDock` / `DockPanelOffscreenContainer`
-  // filter via `isPtyPanel`); offering the move-to-dock affordance for
-  // browser/dev-preview/review panels would silently strand them.
-  const showMoveToDock = !!onMinimize && !isMaximized && location !== "dock" && hasPty;
+  // Dock membership is capability-gated: PTY kinds plus non-PTY kinds that
+  // opt in via the registry's `dockable` flag (file panels — #10985).
+  // Offering the affordance for any other kind would silently strand it.
+  const showMoveToDock =
+    !!onMinimize && !isMaximized && location !== "dock" && panelKindIsDockable(kind);
   const hasOverflowItems = true;
 
   // Restart handler for Radix DropdownMenu onSelect
@@ -869,7 +874,7 @@ function PanelHeaderComponent({
                     onAddTab();
                   }}
                   onPointerDown={(e) => e.stopPropagation()}
-                  className="shrink-0 p-1.5 opacity-0 group-hover:opacity-100 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-daintree-text transition focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
+                  className="shrink-0 p-1.5 opacity-0 group-hover:opacity-100 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-daintree-text transition-[opacity,color,background-color] focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
                   aria-label="Duplicate panel as new tab"
                   aria-keyshortcuts={duplicateAriaShortcut}
                   type="button"

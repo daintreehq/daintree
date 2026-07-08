@@ -377,8 +377,11 @@ export function AppDialog({
             maxHeight,
             sizeClasses[size],
             "w-full",
-            "transition-[opacity,transform]",
-            "motion-reduce:transition-none motion-reduce:duration-0 motion-reduce:transform-none",
+            // Tailwind v4 translate-*/scale-* emit the individual `translate`
+            // and `scale` properties, which `transform` in a transition list
+            // does NOT cover — list them explicitly or the rise/zoom snaps.
+            "transition-[opacity,translate,scale]",
+            "motion-reduce:transition-none motion-reduce:duration-0 motion-reduce:translate-none motion-reduce:scale-none",
             isVisible
               ? "opacity-100 translate-y-0 scale-100"
               : "opacity-0 translate-y-1 scale-[0.98]",

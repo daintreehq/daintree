@@ -172,7 +172,7 @@ Gate order is load-bearing: rate-limit is charged **after** the tier/grant check
 
 ### Rate limits and dedup
 
-- **Rate limits** (`RATE_LIMIT_TIERS`, `RATE_LIMIT_TOOL_MAP`): per-`(session, toolId)` token bucket. `highFreqRead` (60/min) for cheap polling, `standard` (30/min) default, `mutation` (10/min) for side-effecting tools (commit, push, issue/PR, worktree.delete, snapshot revert/delete).
+- **Rate limits** (`RATE_LIMIT_TIERS`, `RATE_LIMIT_TOOL_MAP`): per-`(session, toolId)` token bucket. `highFreqRead` (60/min) for cheap polling, `standard` (30/min) default, `mutation` (10/min) for side-effecting tools (commit, push, issue/PR, worktree.delete).
 - **Dedup** (`MCP_DEDUP_ALLOWLIST`): only creation/destructive tools where an LLM retry would produce a visible duplicate (orphan terminal, duplicate commit, duplicate PR). Keyed by a caller-supplied `requestKey` (prefixed with `actionId`, capped at `MAX_REQUEST_KEY_LENGTH`) or an auto canonical args hash, with an args-hash collision guard (#8429). TTL `MCP_DEDUP_TTL_MS` (120s), FIFO-capped at `MCP_DEDUP_MAX_ENTRIES_PER_SESSION` (256).
 
 ## Forge action surface (`forgeActions.ts`)

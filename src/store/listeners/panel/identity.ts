@@ -11,6 +11,7 @@ import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
 import { reduceAgentDetected, reduceAgentExited } from "./identityReducer";
 import { logIdentityDebugDev, recordIdentityEventDev } from "./identityDiagnostics";
+import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
 
 // Per-terminal baseline of `changedFileCount` captured the first time an
 // agent enters "working" in a session. Compared against the count at
@@ -159,7 +160,12 @@ export function setupIdentityListeners(): DisposableStore {
                 priority: "low",
                 title: "Agent finished with changes",
                 message: "Open the review hub to see what changed.",
-                context: { worktreeId, eventKind: "completed" },
+                // panelId enables the notification center's "Go to source"
+                // affordance; the supersede key retires the previous
+                // completion row for this worktree so repeated runs don't
+                // stack stale "finished" entries in the inbox.
+                context: { worktreeId, panelId: terminalId, eventKind: "completed" },
+                supersedeKey: `agent-completed:${worktreeId}`,
                 action: {
                   label: "Open review hub",
                   actionId: "worktree.openReviewHub",
@@ -238,6 +244,21 @@ export function setupIdentityListeners(): DisposableStore {
             `[IdentityDebug] detected IGNORED term=${terminalId.slice(-8)} reason=no-icon-and-no-agent`
           );
           return;
+        }
+
+        // Audit the detected-agent evolution for this launch generation
+        // (bounded per generation; duplicate consecutive detections no-op).
+        // Gated on a live panel so a late detection for a removed terminal
+        // doesn't keep writing into its retired ledger entry.
+        if (nextDetectedAgentId && usePanelStore.getState().panelsById[terminalId]) {
+          const ledgerGeneration = agentLifecycleLedger.currentGeneration(terminalId);
+          if (ledgerGeneration !== undefined) {
+            agentLifecycleLedger.recordDetectedAgent(
+              terminalId,
+              ledgerGeneration,
+              nextDetectedAgentId
+            );
+          }
         }
 
         usePanelStore.setState((state) => {

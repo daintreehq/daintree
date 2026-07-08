@@ -148,7 +148,7 @@ export interface ManagedTerminal {
   // Retained as a permanently-false field: the wake/resync machinery was removed
   // (terminals stay fully live in the background), so nothing arms this anymore.
   // The reveal guard (wakeForFocus) and the reconciliation watchdog still read
-  // it; kept false to avoid churning that read surface (mirrors `isHibernated`).
+  // it; kept false to avoid churning that read surface.
   needsWake?: boolean;
 
   // First-paint perf instrumentation (#9809). terminalOpenStartedAt is stamped
@@ -234,10 +234,6 @@ export interface ManagedTerminal {
   attachRevealTimer?: ReturnType<typeof setTimeout>;
   attachRevealDisposable?: { dispose: () => void };
 
-  // Retained as a permanently-false field: terminals are never hibernated
-  // anymore (they stay fully live in the background), but reveal/restore/UI
-  // guards and `useIsHibernated` still read it. No code path sets it true.
-  isHibernated?: boolean;
   ipcListenerCount: number;
 
   // Visibility-driven WebGL restore debounce. Show path waits ~100ms before
@@ -292,6 +288,14 @@ export const INCREMENTAL_RESTORE_CONFIG = {
   timeBudgetMs: 10,
   indicatorThresholdBytes: 262144,
 } as const;
+
+// Trailing-edge window for `scheduleBatchResize`. A burst of grid open/close
+// resizes within this gap collapses into one pass — long enough to coalesce a
+// rapid close stream, short enough that survivors settle promptly after it.
+// Lives here (not in TerminalInstanceService) so the paint-fabric compositor
+// can coalesce its cross-surface pass on identical timing without importing
+// the service module it is imported by.
+export const GRID_RESIZE_COALESCE_MS = 120;
 
 /**
  * Tiers eligible for a live WebGL context: the user is actively looking at

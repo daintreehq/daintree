@@ -360,6 +360,100 @@ describe("AnalysisWorkerPool", () => {
     e2ePool.dispose();
   });
 
+  it("discards a worker reply stamped with a superseded generation", async () => {
+    const backend = pool.createBackend(makeSpec("t1"), makeDelegate())!;
+    const worker = workers[0];
+
+    const promise = backend.serialize();
+    const request = worker.messagesOfType("request")[0];
+    expect(request.generation).toBe(1);
+
+    // A reply echoing an older worker generation must never settle the
+    // request with its payload — it resolves empty instead.
+    worker.emit("message", {
+      type: "response",
+      requestId: request.requestId,
+      terminalId: "t1",
+      result: "STALE-CONTENT",
+      generation: 0,
+    });
+    await expect(promise).resolves.toBeNull();
+  });
+
+  it("stamps requests with the respawned worker's generation and accepts matching replies", async () => {
+    vi.useFakeTimers();
+    const backend = pool.createBackend(makeSpec("t1"), makeDelegate())!;
+    workers[0].emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(600);
+    const replacement = workers[1];
+
+    // Persistence is suppressed after a rebuild; dirty the buffer first.
+    backend.feedChunk("output", { agentLive: false });
+    const promise = backend.serialize();
+    const request = replacement.messagesOfType("request")[0];
+    expect(request.generation).toBe(2);
+
+    replacement.emit("message", {
+      type: "response",
+      requestId: request.requestId,
+      terminalId: "t1",
+      result: "FRESH",
+      generation: 2,
+    });
+    await expect(promise).resolves.toBe("FRESH");
+    vi.useRealTimers();
+  });
+
+  it("reports per-slot governance snapshots with sessions, queue depth, and hard-capped eligibility", async () => {
+    const b1 = pool.createBackend(makeSpec("t1"), makeDelegate())!;
+    pool.createBackend(makeSpec("t2"), makeDelegate());
+    pool.createBackend(makeSpec("t3"), makeDelegate());
+
+    const pending = b1.serialize();
+    const snapshots = pool.getGovernanceSnapshots();
+    expect(snapshots).toHaveLength(2);
+    expect(snapshots.every((s) => s.kind === "analysis-pool")).toBe(true);
+    expect(snapshots.every((s) => s.alive)).toBe(true);
+    // Persistent worker_threads: trim only — never dispose/restart (Electron
+    // worker-churn crash makes terminate/recreate cycles off-limits).
+    expect(
+      snapshots.every((s) => s.eligibility.trim && !s.eligibility.dispose && !s.eligibility.restart)
+    ).toBe(true);
+    expect(snapshots.reduce((sum, s) => sum + s.activeSessionCount, 0)).toBe(3);
+    expect(snapshots.reduce((sum, s) => sum + s.queueDepth, 0)).toBe(1);
+
+    const request = workers.flatMap((w) => w.messagesOfType("request"))[0];
+    workers.forEach((w) =>
+      w.emit("message", {
+        type: "response",
+        requestId: request.requestId,
+        terminalId: "t1",
+        result: null,
+        generation: request.generation,
+      })
+    );
+    await pending;
+    expect(pool.getGovernanceSnapshots().reduce((sum, s) => sum + s.queueDepth, 0)).toBe(0);
+  });
+
+  it("marks a slot dead in governance snapshots once its respawn budget is spent", async () => {
+    vi.useFakeTimers();
+    pool.createBackend(makeSpec("t1"), makeDelegate());
+    pool.createBackend(makeSpec("t2"), makeDelegate());
+
+    workers[0].emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(600);
+    workers[2].emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(2000);
+
+    const snapshots = pool.getGovernanceSnapshots();
+    const dead = snapshots.filter((s) => !s.alive);
+    expect(dead).toHaveLength(1);
+    expect(dead[0].state).toBe("dead");
+    expect(dead[0].activeSessionCount).toBe(0);
+    vi.useRealTimers();
+  });
+
   it("ignores a data-ack from a superseded generation after a fresh-slot rebuild", async () => {
     vi.useFakeTimers();
     const backend = pool.createBackend(
@@ -392,6 +486,96 @@ describe("AnalysisWorkerPool", () => {
     expect(dataMsgs).toHaveLength(dataBefore + 1);
     expect(dataMsgs[dataMsgs.length - 1].data).toBe("HELD");
     vi.useRealTimers();
+  });
+
+  describe("worker memory accounting", () => {
+    const sample = (heapUsedBytes: number) => ({
+      type: "memory-sample" as const,
+      heapUsedBytes,
+      externalBytes: 5_000_000,
+      sessionCount: 1,
+      sessions: [{ terminalId: "t1", bufferLines: 480, cols: 120 }],
+      sampledAt: 111,
+    });
+
+    it("caches the latest sample per slot and exposes it with a receipt age", () => {
+      pool.createBackend(makeSpec("t1"), makeDelegate());
+      workers[0].emit("message", sample(10_000_000));
+      workers[0].emit("message", sample(20_000_000));
+
+      const accounting = pool.getMemoryAccounting();
+      expect(accounting).toHaveLength(1);
+      expect(accounting[0].alive).toBe(true);
+      expect(accounting[0].heapUsedBytes).toBe(20_000_000);
+      expect(accounting[0].externalBytes).toBe(5_000_000);
+      expect(accounting[0].sessions).toEqual([{ terminalId: "t1", bufferLines: 480, cols: 120 }]);
+      expect(Number.isFinite(accounting[0].ageMs)).toBe(true);
+    });
+
+    it("clears the sample on worker exit and fences samples from a superseded instance", async () => {
+      vi.useFakeTimers();
+      pool.createBackend(makeSpec("t1"), makeDelegate());
+      const original = workers[0];
+      original.emit("message", sample(10_000_000));
+      expect(pool.getMemoryAccounting()[0].heapUsedBytes).toBe(10_000_000);
+
+      // Exit: the isolate is gone — its memory must stop counting immediately.
+      original.emit("exit", 1);
+      expect(pool.getMemoryAccounting()[0].alive).toBe(false);
+      expect(pool.getMemoryAccounting()[0].heapUsedBytes).toBe(0);
+      expect(pool.getMemoryAccounting()[0].ageMs).toBe(Infinity);
+
+      // Respawn, then a late sample from the SUPERSEDED instance arrives — it
+      // must not be attributed to the fresh worker.
+      await vi.advanceTimersByTimeAsync(600);
+      original.emit("message", sample(99_000_000));
+      expect(pool.getMemoryAccounting()[0].heapUsedBytes).toBe(0);
+
+      // The fresh instance's own sample is accepted.
+      workers[1].emit("message", sample(30_000_000));
+      expect(pool.getMemoryAccounting()[0].heapUsedBytes).toBe(30_000_000);
+      vi.useRealTimers();
+    });
+
+    it("fills the governance snapshot memory field from the cached sample", () => {
+      pool.createBackend(makeSpec("t1"), makeDelegate());
+      const before = pool.getGovernanceSnapshots()[0];
+      expect(before.memory).toBeNull();
+      expect(before.detail?.memorySampleAgeMs).toBeNull();
+
+      workers[0].emit("message", sample(10_000_000));
+      const after = pool.getGovernanceSnapshots()[0];
+      expect(after.memory).toEqual({
+        rssBytes: null,
+        heapUsedBytes: 10_000_000,
+        externalBytes: 5_000_000,
+      });
+      expect(typeof after.detail?.memorySampleAgeMs).toBe("number");
+    });
+
+    it("computes sample age from host receipt time, not the worker's sampledAt", () => {
+      vi.useFakeTimers();
+      pool.createBackend(makeSpec("t1"), makeDelegate());
+      // A wildly wrong worker-side clock must not affect the age: receipt
+      // time is the host's own clock.
+      workers[0].emit("message", { ...sample(10_000_000), sampledAt: 0 });
+
+      vi.advanceTimersByTime(3000);
+      expect(pool.getMemoryAccounting()[0].ageMs).toBe(3000);
+      vi.useRealTimers();
+    });
+
+    it("stops caching samples after pool disposal", () => {
+      pool.createBackend(makeSpec("t1"), makeDelegate());
+      workers[0].emit("message", sample(10_000_000));
+      expect(pool.getMemoryAccounting()[0].heapUsedBytes).toBe(10_000_000);
+
+      pool.dispose();
+      // A late sample from the (still-running, never-terminated) worker must
+      // not keep mutating disposed-pool state.
+      workers[0].emit("message", sample(99_000_000));
+      expect(pool.getMemoryAccounting()[0].heapUsedBytes).toBe(10_000_000);
+    });
   });
 });
 

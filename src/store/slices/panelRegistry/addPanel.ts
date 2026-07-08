@@ -18,6 +18,7 @@ import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrol
 import { getXtermOptions, calculateTerminalDimensions } from "@/config/xtermConfig";
 import { deriveTerminalRuntimeIdentity } from "@/utils/terminalChrome";
 import { getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
+import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { usePanelLimitStore, evaluatePanelLimit } from "@/store/panelLimitStore";
 import { notify } from "@/lib/notify";
 import { saveNormalized } from "./persistence";
@@ -29,9 +30,12 @@ import {
   DOCK_PREWARM_HEIGHT_PX,
 } from "./helpers";
 import { logDebug, logWarn, logError } from "@/utils/logger";
+import { markRendererPerformance } from "@/utils/performance";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { collectPanelIdForBatch, isHydrationBatchActive } from "./hydrationBatch";
 import { addToWorktreeIndex, transferBetweenWorktreeIndex } from "./worktreeIndex";
+import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
+import { computeEnvProvenance } from "@shared/utils/agentLifecycleLedger";
 
 // Lazy accessor to break circular dependency: addPanel -> projectStore -> panelPersistence -> addPanel.
 // Resolved on first call (after app init), then cached.
@@ -57,11 +61,77 @@ function countNonTrashTerminals(state: PanelRegistrySlice): number {
 
 const TERMINAL_STARTUP_ATTACH_TIMEOUT_MS = 2500;
 
+// Chrome allowance for the overlay (help panel) grid estimate: horizontal =
+// panel border + terminal-host inset; vertical = header + banners + hybrid
+// input bar + footer. Rough is fine — the estimate only has to be close
+// enough that a CLI painting before the first real fit lands near the final
+// wrap width instead of the legacy 80×24 spawn default.
+const OVERLAY_CHROME_X_PX = 16;
+const OVERLAY_CHROME_Y_PX = 240;
+
+/**
+ * Live grid of an ATTACHED renderer xterm. Returns null until the instance is
+ * mounted in the real DOM — a prewarmed (never-attached) instance still holds
+ * its construction-default grid, which must not be mistaken for a fitted
+ * measurement.
+ */
+function getAttachedGridDims(id: string): { cols: number; rows: number } | null {
+  const managed = terminalInstanceService.get(id);
+  if (!managed?.terminal.element?.isConnected) return null;
+  return { cols: managed.terminal.cols, rows: managed.terminal.rows };
+}
+
+/**
+ * Estimated grid for an overlay (help panel) terminal, derived from the
+ * persisted panel width and the current viewport. The overlay's XtermAdapter
+ * mounts without waiting for spawnStatus, but historically both the prewarmed
+ * xterm and the PTY booted at the 80×24 spawn default, so the assistant CLI
+ * painted its banner at 80 cols and the first real fit re-wrapped (or, when
+ * the fit's PTY resize raced the spawn and was dropped, permanently desynced)
+ * the committed output — the duplicated/garbled assistant startup (#10863).
+ */
+function estimateOverlayGridDims(fontSize: number): { cols: number; rows: number } | null {
+  const panelWidth = useHelpPanelStore.getState().width;
+  const viewportHeight = window.innerHeight;
+  // NaN/∞ would flow into the panel record, the xterm constructor, and the
+  // spawn payload — fall back to the legacy defaults instead of estimating.
+  if (
+    !Number.isFinite(panelWidth) ||
+    !Number.isFinite(viewportHeight) ||
+    !Number.isFinite(fontSize)
+  ) {
+    return null;
+  }
+  return calculateTerminalDimensions(
+    Math.max(200, panelWidth - OVERLAY_CHROME_X_PX),
+    Math.max(240, viewportHeight - OVERLAY_CHROME_Y_PX),
+    fontSize
+  );
+}
+
 class TerminalStartupQueue {
   private readonly tasks: Array<() => Promise<void>> = [];
   private isDraining = false;
+  private reservations = 0;
+
+  /** True when an enqueued task would start immediately (single-launch fast path). */
+  get isIdle(): boolean {
+    return this.tasks.length === 0 && !this.isDraining && this.reservations === 0;
+  }
+
+  /**
+   * Claim a pending slot between the synchronous eager-attach decision and
+   * the (post-await) enqueue. Concurrent addPanel calls — a recipe's
+   * Promise.allSettled burst — would otherwise all observe an idle queue and
+   * every panel would stamp eagerAttach, realizing many xterms in the same
+   * frame (the exact burst #5789 gates against). Released on enqueue.
+   */
+  reserve(): void {
+    this.reservations++;
+  }
 
   enqueue(task: () => Promise<void>): void {
+    if (this.reservations > 0) this.reservations--;
     this.tasks.push(task);
     void this.drain();
   }
@@ -305,9 +375,37 @@ export const createAddPanelActions = (
     const agentState = isReconnect
       ? options.agentState
       : (options.agentState ?? (isAgent ? "working" : undefined));
+    // Reason restored from the backend snapshot survives only while the
+    // resolved state is still "waiting" — mirrors the main-process rule that
+    // clears it on any other state.
+    const waitingReason = agentState === "waiting" ? options.waitingReason : undefined;
     const lastStateChange = isReconnect
       ? options.lastStateChange
       : (options.lastStateChange ?? (agentState !== undefined ? Date.now() : undefined));
+
+    // Stale-restore guard: a reconnect/hydration replay must never overwrite a
+    // LIVE fresh launch that already owns this id. The ledger distinguishes the
+    // two owners of an existing panel: an earlier restore pass stamped
+    // `restoredAt` (double hydration — merging the same snapshot again is
+    // idempotent and allowed), while a fresh launch did not (its metadata —
+    // launchAgentId, model, preset, env — is newer than the snapshot and the
+    // merge below would clobber it). Generation 0 = "persisted snapshot,
+    // predates every launch this session", so the rejection lands in the
+    // anomaly ring for diagnostics.
+    if (isReconnect) {
+      const preexisting = get().panelsById[id];
+      const ledgerEntry = preexisting ? agentLifecycleLedger.getEntry(id) : undefined;
+      if (
+        preexisting &&
+        ledgerEntry &&
+        ledgerEntry.closedAt === undefined &&
+        ledgerEntry.restoredAt === undefined
+      ) {
+        agentLifecycleLedger.recordRestoreApplied(id, 0);
+        logWarn("[TerminalStore] Rejected stale restore over a live launch", { id });
+        return id;
+      }
+    }
 
     // PTY-backed plugin-contributed kinds are rare today, but stamp pluginId
     // if the registry has an entry so the panel survives plugin removal.
@@ -315,6 +413,28 @@ export const createAddPanelActions = (
     const ptyPluginId = ptyKindConfig?.extensionId ?? options.pluginId;
     // Reconnects don't go through a fresh spawn — mark them "ready" directly.
     const spawnStatus: "spawning" | "ready" | "failed" = isReconnect ? "ready" : "spawning";
+
+    // Overlay terminals boot at ~their real grid instead of the 80×24 spawn
+    // default so the assistant CLI never paints its startup banner at a width
+    // the first fit then re-wraps (#10863). Grid/dock keep the legacy default:
+    // their XtermAdapter attaches only after spawnStatus flips "ready", so the
+    // fit's PTY resize always lands on a live PTY.
+    const overlayDims =
+      location === "overlay" && !isReconnect
+        ? estimateOverlayGridDims(getTerminalAppearanceSnapshot().fontSize)
+        : null;
+
+    // Single active-grid launches mount their visible xterm immediately
+    // (TerminalPane skips the spawnStatus gate), overlapping xterm.open()
+    // and the first fit with the env fetch + spawn IPC below. Decided at
+    // commit time — the flag must be in the first committed panel record
+    // because TerminalPane reads it on first render. Burst spawns (queue
+    // busy) keep the gate so panels realize one at a time (#5789).
+    const eagerAttach =
+      !isReconnect && location === "grid" && isInActiveWorktree && terminalStartupQueue.isIdle;
+    // Every non-reconnect PTY panel reaches the enqueue below (prewarm and
+    // dock-wake failures are caught), so each reserve pairs with one enqueue.
+    if (!isReconnect) terminalStartupQueue.reserve();
 
     const terminal = {
       id,
@@ -328,9 +448,10 @@ export const createAddPanelActions = (
       ...(options.titleMode && { titleMode: options.titleMode }),
       worktreeId: options.worktreeId,
       cwd: options.cwd ?? "",
-      cols: 80,
-      rows: 24,
+      cols: overlayDims?.cols ?? 80,
+      rows: overlayDims?.rows ?? 24,
       agentState,
+      waitingReason,
       lastStateChange,
       location,
       command: options.command,
@@ -363,8 +484,9 @@ export const createAddPanelActions = (
       // Caller-resolved launch env captured so a restored session replays the
       // SAME provider environment it launched with (#10922). This is the
       // launcher's merged env (agent global + preset/recipe + caller layers); the
-      // ambient global/project env is still re-fetched fresh at spawn time below
-      // and layered UNDER this, so only the launch-resolved layer is frozen here.
+      // ambient global/project env is fetched when the panel is added (the
+      // prefetch below, overlapping prewarm and any queue wait) and layered
+      // UNDER this, so only the launch-resolved layer is frozen here.
       ...(options.env && { env: options.env }),
       isUsingFallback: options.isUsingFallback,
       fallbackChainIndex: options.fallbackChainIndex,
@@ -377,6 +499,7 @@ export const createAddPanelActions = (
       removeOnExit: options.removeOnExit,
       startedAt: Date.now(),
       spawnStatus,
+      ...(eagerAttach && { eagerAttach: true }),
       // Preserve the saved `lastActiveAt` from the snapshot so the
       // post-hydration focus picker in `useAppHydration` can pick
       // the active worktree's most-recently-focused panel (#9933).
@@ -405,6 +528,13 @@ export const createAddPanelActions = (
             ? {
                 ...ptyTerminal,
                 agentState: ptyTerminal.agentState ?? existingPty?.agentState,
+                // Reason follows the effective state: keep the freshest known
+                // reason while waiting (a live event may have landed before the
+                // reconnect flush), clear it otherwise.
+                waitingReason:
+                  (ptyTerminal.agentState ?? existingPty?.agentState) === "waiting"
+                    ? (ptyTerminal.waitingReason ?? existingPty?.waitingReason)
+                    : undefined,
                 lastStateChange: ptyTerminal.lastStateChange ?? existingPty?.lastStateChange,
                 exitBehavior: ptyTerminal.exitBehavior ?? existingPty?.exitBehavior,
                 extensionState: ptyTerminal.extensionState ?? existing.extensionState,
@@ -454,6 +584,12 @@ export const createAddPanelActions = (
             ? {
                 ...ptyTerminal,
                 agentState: ptyTerminal.agentState ?? existingPty2?.agentState,
+                // Reason follows the effective state — same rule as the
+                // batched path above.
+                waitingReason:
+                  (ptyTerminal.agentState ?? existingPty2?.agentState) === "waiting"
+                    ? (ptyTerminal.waitingReason ?? existingPty2?.waitingReason)
+                    : undefined,
                 lastStateChange: ptyTerminal.lastStateChange ?? existingPty2?.lastStateChange,
                 exitBehavior: ptyTerminal.exitBehavior ?? existingPty2?.exitBehavior,
                 extensionState: ptyTerminal.extensionState ?? existing.extensionState,
@@ -517,6 +653,81 @@ export const createAddPanelActions = (
       });
     }
 
+    markRendererPerformance("agentlaunch.committed", { id });
+
+    // Mint the panel's launch generation atomically with the commit above (no
+    // await between id reservation and here). Every async completion below —
+    // env fetch, spawn IPC, attach settle — re-validates against it so a
+    // completion that outlives this incarnation (panel closed, id reused by a
+    // restart or a stale hydration replay) can never write into a successor.
+    const launchGeneration = agentLifecycleLedger.recordLaunch(id, {
+      launchAgentId,
+      cwd: options.cwd,
+      projectId: capturedProjectId,
+      worktreeId: options.worktreeId,
+      worktreeSource:
+        options.worktreeId !== undefined ? (options.worktreeIdSource ?? "explicit") : undefined,
+      agentModelId: options.agentModelId,
+      agentPresetId: options.agentPresetId,
+      originalPresetId: options.originalPresetId ?? options.agentPresetId,
+      agentLaunchFlags: options.agentLaunchFlags,
+      env: computeEnvProvenance(options.env),
+      initialCols: 80,
+      initialRows: 24,
+      spawnedBy: options.spawnedBy,
+      resumedFromSessionId: options.agentSessionId,
+    });
+    if (isReconnect) {
+      // Mark this generation as restore-born so the stale-restore guard above
+      // can tell an idempotent re-merge from a clobbering one.
+      agentLifecycleLedger.recordRestoreApplied(id, launchGeneration);
+    }
+
+    // Start the ambient env fetch now so its IPC round-trips overlap the
+    // prewarm below and any queue wait, instead of serializing ahead of the
+    // spawn IPC inside the startup task. Same merge semantics as before —
+    // global env under project env under the caller's launch env. The
+    // promise never rejects (every branch resolves a fallback), so an
+    // early-returning startup task cannot leave an unhandled rejection.
+    const spawnEnvPromise: Promise<Record<string, string> | undefined> = (() => {
+      if (isReconnect) return Promise.resolve(options.env);
+      try {
+        return Promise.all([
+          globalEnvClient.get().catch((error: unknown) => {
+            logWarn("[TerminalStore] Failed to fetch global environment variables", { error });
+            return {} as Record<string, string>;
+          }),
+          capturedProjectId
+            ? projectClient.getSettings(capturedProjectId).then(
+                (s) => s?.environmentVariables ?? ({} as Record<string, string>),
+                (error: unknown) => {
+                  logWarn("[TerminalStore] Failed to fetch project environment variables", {
+                    error,
+                  });
+                  return {} as Record<string, string>;
+                }
+              )
+            : Promise.resolve({} as Record<string, string>),
+        ]).then(
+          ([globalEnvVars, projectEnvVars]) => {
+            const hasGlobal = Object.keys(globalEnvVars).length > 0;
+            const hasProject = Object.keys(projectEnvVars).length > 0;
+            if (hasGlobal || hasProject) {
+              return { ...globalEnvVars, ...projectEnvVars, ...options.env };
+            }
+            return options.env;
+          },
+          (error: unknown) => {
+            logWarn("[TerminalStore] Failed to fetch environment variables", { error });
+            return options.env;
+          }
+        );
+      } catch (error) {
+        logWarn("[TerminalStore] Failed to fetch environment variables", { error });
+        return Promise.resolve(options.env);
+      }
+    })();
+
     // Prewarm renderer-side xterm immediately so we never drop startup output/ANSI while hidden.
     // earlyDataBuffer in terminalClient buffers any data that arrives before the
     // xterm data callback is registered, so prewarming with the pre-assigned id
@@ -540,6 +751,13 @@ export const createAddPanelActions = (
         theme: appearance.effectiveTheme,
         screenReaderMode: appearance.screenReaderMode,
       });
+      // Overlay panes are BORN at their estimated grid (xterm constructor
+      // cols/rows) so pre-attach CLI output wraps near the final width — a
+      // prewarmed-but-unattached xterm otherwise sits at the 80×24 default
+      // until the help panel's XtermAdapter mounts (#10863).
+      const prewarmOptions = overlayDims
+        ? { ...terminalOptions, cols: overlayDims.cols, rows: overlayDims.rows }
+        : terminalOptions;
 
       // Prewarm ALL terminal types to ensure the managed instance and data
       // listeners exist before the backend PTY can emit output. Do not attach
@@ -556,7 +774,7 @@ export const createAddPanelActions = (
         // Awaited so the managed instance and its PTY data listener exist before
         // the queued spawn runs — prewarmTerminal is async now that the lazy
         // Unicode11 addon is loaded during terminal construction (#10840).
-        await terminalInstanceService.prewarmTerminal(id, launchAgentId, terminalOptions, {
+        await terminalInstanceService.prewarmTerminal(id, launchAgentId, prewarmOptions, {
           offscreen: false,
           widthPx: location === "dock" ? DOCK_PREWARM_WIDTH_PX : DOCK_TERM_WIDTH,
           heightPx: location === "dock" ? DOCK_PREWARM_HEIGHT_PX : DOCK_TERM_HEIGHT,
@@ -570,7 +788,7 @@ export const createAddPanelActions = (
         // Awaited so the instance exists before the sendPtyResize below targets
         // it — prewarmTerminal is async now that the lazy Unicode11 addon is
         // loaded during terminal construction (#10840).
-        await terminalInstanceService.prewarmTerminal(id, launchAgentId, terminalOptions, {
+        await terminalInstanceService.prewarmTerminal(id, launchAgentId, prewarmOptions, {
           offscreen: false,
           widthPx,
           heightPx,
@@ -579,15 +797,23 @@ export const createAddPanelActions = (
         // Only send explicit resize for active grid spawns. Background/dock
         // terminals can boot at the spawn default and will be resized on reveal.
         // Cell metrics come from calculateTerminalDimensions so the lineHeight
-        // assumption stays in sync with xtermConfig.
-        if (!isDockOrInactive) {
-          const { cols, rows } = calculateTerminalDimensions(widthPx, heightPx, fontSize);
+        // assumption stays in sync with xtermConfig. An overlay panel that
+        // reaches this branch (no active worktree) must use its own estimate —
+        // the DOCK_TERM-derived dims would re-poison the grid the overlay
+        // spawn path just fixed (#10863), and for a settled-strategy agent
+        // this call arms a 500ms timer that can land AFTER the spawn. When the
+        // estimate is unavailable (non-finite inputs), skip entirely and let
+        // the spawn-time dims own overlay geometry.
+        if (!isDockOrInactive && (location !== "overlay" || overlayDims)) {
+          const { cols, rows } =
+            overlayDims ?? calculateTerminalDimensions(widthPx, heightPx, fontSize);
           terminalInstanceService.sendPtyResize(id, cols, rows);
         }
       }
     } catch (error) {
       logWarn("[TerminalStore] Failed to prewarm terminal", { id, error });
     }
+    markRendererPerformance("agentlaunch.prewarmed", { id });
 
     // Determine if terminal should start backgrounded:
     // 1. Dock terminals are always backgrounded (offscreen)
@@ -646,48 +872,32 @@ export const createAddPanelActions = (
     terminalStartupQueue.enqueue(async () => {
       const _p0 = get().panelsById[id];
       if (!_p0 || !isPtyPanel(_p0) || _p0.spawnStatus !== "spawning") return;
+      markRendererPerformance("agentlaunch.task-start", { id });
 
       try {
-        let mergedEnv: Record<string, string> | undefined = options.env;
-        try {
-          const [globalEnvVars, projectEnvVars] = await Promise.all([
-            globalEnvClient.get().catch((error: unknown) => {
-              logWarn("[TerminalStore] Failed to fetch global environment variables", { error });
-              return {} as Record<string, string>;
-            }),
-            capturedProjectId
-              ? projectClient.getSettings(capturedProjectId).then(
-                  (s) => s?.environmentVariables ?? ({} as Record<string, string>),
-                  (error: unknown) => {
-                    logWarn("[TerminalStore] Failed to fetch project environment variables", {
-                      error,
-                    });
-                    return {} as Record<string, string>;
-                  }
-                )
-              : Promise.resolve({} as Record<string, string>),
-          ]);
+        const mergedEnv = await spawnEnvPromise;
 
-          const hasGlobal = Object.keys(globalEnvVars).length > 0;
-          const hasProject = Object.keys(projectEnvVars).length > 0;
-          if (hasGlobal || hasProject) {
-            mergedEnv = { ...globalEnvVars, ...projectEnvVars, ...options.env };
-          }
-        } catch (error) {
-          logWarn("[TerminalStore] Failed to fetch environment variables", { error });
-        }
-
+        markRendererPerformance("agentlaunch.env-ready", { id });
         const _p1 = get().panelsById[id];
         if (!_p1 || !isPtyPanel(_p1) || _p1.spawnStatus !== "spawning") return;
 
         const commandToExecute = options.skipCommandExecution ? undefined : options.command;
+        // Spawn the PTY at the grid the renderer is actually showing. The
+        // overlay XtermAdapter mounts without waiting for spawnStatus, so by
+        // now the xterm may already be attached and fitted — a PTY resize it
+        // sent before this spawn resolved was silently dropped by the
+        // pty-host (no terminal yet), and booting at 80×24 anyway left the
+        // CLI painting a width the renderer wasn't wrapping at (#10863).
+        const attachedDims = getAttachedGridDims(id);
+        const spawnCols = attachedDims?.cols ?? overlayDims?.cols ?? 80;
+        const spawnRows = attachedDims?.rows ?? overlayDims?.rows ?? 24;
         await terminalClient.spawn({
           id,
           projectId: capturedProjectId,
           cwd: options.cwd,
           shell: options.shell,
-          cols: 80,
-          rows: 24,
+          cols: spawnCols,
+          rows: spawnRows,
           command: commandToExecute,
           kind,
           launchAgentId,
@@ -706,6 +916,28 @@ export const createAddPanelActions = (
           // consumes it for that agent and ignores it otherwise.
           actionContext: options.actionContext,
         });
+
+        markRendererPerformance("agentlaunch.spawn-ipc-resolved", { id });
+
+        // Reject a spawn resolution that no longer belongs to this incarnation:
+        // if a restart or hydration replay re-launched the id while our IPC was
+        // in flight, the successor owns spawnStatus now and its own resolution
+        // manages it. The ledger records the rejection as an anomaly. One
+        // carve-out: when the successor's panel is ALSO gone, the backend PTY
+        // this resolution just created has no owner at all — kill it, exactly
+        // like the orphan path below (killing the shared id is safe only when
+        // no live panel claims it).
+        if (!agentLifecycleLedger.recordSpawnResolved(id, launchGeneration, true).accepted) {
+          if (!get().panelsById[id]) {
+            terminalClient.kill(id).catch((killError) => {
+              logWarn("[TerminalStore] Compensating kill after stale spawn resolution failed", {
+                id,
+                error: killError,
+              });
+            });
+          }
+          return;
+        }
 
         // Promote spawnStatus to "ready" once the PTY is live. If the panel was
         // removed during the spawn window, issue a compensating kill to avoid
@@ -732,6 +964,21 @@ export const createAddPanelActions = (
               error: killError,
             });
           });
+        } else {
+          if (mountedPanel) markRendererPerformance("agentlaunch.ready", { id });
+          // Recover the attach-during-spawn race: a fit that ran while the
+          // spawn IPC was in flight had its PTY resize dropped (no terminal
+          // existed yet), which would strand the CLI at the spawn dims while
+          // xterm renders the fitted grid — the assistant's progressively
+          // garbled prompt (#10863). Re-assert the live grid now that the PTY
+          // exists. PTY-only and direct: xterm already shows these dims, and
+          // sendPtyResize would defer 500ms for a settled-strategy agent —
+          // exactly the window in which the CLI paints its banner at the
+          // stale spawn width. The backend dedupes when nothing drifted.
+          const settledDims = getAttachedGridDims(id);
+          if (settledDims && (settledDims.cols !== spawnCols || settledDims.rows !== spawnRows)) {
+            terminalClient.resize(id, settledDims.cols, settledDims.rows);
+          }
         }
 
         if (mountedPanel && shouldWaitForVisibleAttach) {
@@ -748,6 +995,11 @@ export const createAddPanelActions = (
         }
       } catch (error) {
         logError("[TerminalStore] Failed to spawn terminal", error);
+        // Same staleness gate as the success path: never stamp a failure onto
+        // a successor incarnation that re-launched this id mid-flight.
+        if (!agentLifecycleLedger.recordSpawnResolved(id, launchGeneration, false).accepted) {
+          return;
+        }
         const current = get().panelsById[id];
         if (!current || !isPtyPanel(current) || current.spawnStatus !== "spawning") return;
 

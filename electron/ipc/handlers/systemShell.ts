@@ -2,6 +2,7 @@
 import { app, shell } from "electron";
 import os from "os";
 import * as nodePath from "path";
+import * as nodeFs from "fs";
 import { CHANNELS } from "../channels.js";
 import { openExternalUrl } from "../../utils/openExternal.js";
 import { projectStore } from "../../services/ProjectStore.js";
@@ -17,6 +18,7 @@ import {
 import {
   SystemOpenExternalPayloadSchema,
   SystemOpenPathPayloadSchema,
+  SystemShowItemInFolderUnconfinedPayloadSchema,
   SystemOpenInEditorPayloadSchema,
 } from "../../schemas/index.js";
 import type { HandlerDependencies } from "../types.js";
@@ -25,6 +27,7 @@ import { defineIpcNamespace, opValidated } from "../define.js";
 import type {
   SystemOpenExternalPayload,
   SystemOpenPathPayload,
+  SystemShowItemInFolderUnconfinedPayload,
   SystemOpenInEditorPayload,
 } from "../../schemas/ipc.js";
 
@@ -156,6 +159,68 @@ async function assertPathAllowed(
   return realTarget;
 }
 
+/**
+ * Resolve a renderer-supplied path for the UNCONFINED reveal op — the
+ * user-initiated recovery path for a file link that resolved outside project
+ * roots. Unlike {@link assertPathAllowed}, this deliberately skips roots
+ * containment (that's the rejection the user is asking to bypass), but keeps
+ * every other guard: absolute-only, executable deny-list on both the raw
+ * input and the realpath target (defeats a safe-named symlink → Evil.app),
+ * realpath canonicalization (collapses intermediate-component TOCTOU — lesson
+ * #6442), and a stat gate so a since-deleted path surfaces as INVALID_PATH
+ * instead of `shell.showItemInFolder`'s silent no-op. The deny-list is
+ * unconditional here — unlike the confined "editor" flavor, which relaxes it —
+ * because an out-of-root path is untrusted terminal output and the historical
+ * Windows ShellExecute("open") / Linux xdg-open fallbacks make reveal a launch
+ * surface on some platforms.
+ */
+async function resolveRevealTargetUnconfined(targetPath: string): Promise<string> {
+  if (!nodePath.isAbsolute(targetPath)) {
+    throw new AppError({
+      code: "INVALID_PATH",
+      message: "Only absolute paths are allowed",
+      context: { targetPath },
+    });
+  }
+
+  assertExtensionAllowed(targetPath);
+
+  let realTarget: string;
+  try {
+    realTarget = await nodeFs.promises.realpath(targetPath);
+  } catch (error) {
+    throw new AppError({
+      code: "INVALID_PATH",
+      message: "Could not resolve path",
+      context: { targetPath },
+      cause: error instanceof Error ? error : undefined,
+    });
+  }
+
+  assertExtensionAllowed(realTarget);
+
+  try {
+    const stats = await nodeFs.promises.stat(realTarget);
+    if (!stats.isFile() && !stats.isDirectory()) {
+      throw new AppError({
+        code: "INVALID_PATH",
+        message: "Path is not a file or directory",
+        context: { targetPath, realTarget },
+      });
+    }
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    throw new AppError({
+      code: "INVALID_PATH",
+      message: "Could not stat path",
+      context: { targetPath, realTarget },
+      cause: error instanceof Error ? error : undefined,
+    });
+  }
+
+  return realTarget;
+}
+
 export function registerSystemShellHandlers(_deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
@@ -217,6 +282,23 @@ export function registerSystemShellHandlers(_deps: HandlerDependencies): () => v
             shell.showItemInFolder(realTarget);
           } catch (error) {
             console.error("Failed to reveal item in folder:", error);
+            throw error;
+          }
+        }
+      ),
+      // User-initiated reveal of an OUTSIDE_ROOT path (the recovery action on
+      // a file-link toast). Bypasses roots containment but keeps the deny-list,
+      // realpath canonicalization, and a stat gate — see
+      // resolveRevealTargetUnconfined.
+      showItemInFolderUnconfined: opValidated(
+        CHANNELS.SYSTEM_SHOW_ITEM_IN_FOLDER_UNCONFINED,
+        SystemShowItemInFolderUnconfinedPayloadSchema,
+        async (payload: SystemShowItemInFolderUnconfinedPayload): Promise<void> => {
+          try {
+            const realTarget = await resolveRevealTargetUnconfined(payload.path);
+            shell.showItemInFolder(realTarget);
+          } catch (error) {
+            console.error("Failed to reveal unconfined item in folder:", error);
             throw error;
           }
         }

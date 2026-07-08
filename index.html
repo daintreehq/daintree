@@ -392,10 +392,19 @@
         shape-rendering: geometricPrecision;
       }
       .skeleton-title {
+        /* Single source of truth for the title's font metrics. The shimmer
+           placeholder's height is derived from the SAME font-size × line-height
+           the injected real text uses, so swapping shimmer → text is a pure
+           opacity swap with zero vertical shift (the reveal the hero depends
+           on). The title is always one line — nowrap + ellipsis below. */
+        --skeleton-title-fs: 22px;
+        --skeleton-title-lh: 1.4;
         position: relative;
         overflow: hidden;
         width: 150px;
-        height: 28px;
+        font-size: var(--skeleton-title-fs);
+        line-height: var(--skeleton-title-lh);
+        height: calc(var(--skeleton-title-fs) * var(--skeleton-title-lh));
         border-radius: 6px;
         background: color-mix(
           in oklab,
@@ -426,12 +435,16 @@
       /* ── Project identity (painted on cold-start switch — #9162) ──
          When the main process resolves the destination project it sets the
          title's text content and adds these classes, collapsing the shimmer
-         placeholder into real "emoji  name" text and tinting the logo with the
-         project's accent color. */
+         placeholder into real "emoji  name" text and lifting the logo a touch
+         (0.08 → 0.16). The color stays on the neutral `text-primary` token —
+         NOT the brand accent — so it matches the React empty-state mark
+         (`text-daintree-text/65`) that crossfades in on top of it and never
+         pops a hue on themed / colored-accent projects. */
       .skeleton-title.skeleton-title--identified {
         width: auto;
-        height: auto;
-        min-height: 24px;
+        /* Same computed single-line box as the shimmer placeholder above — the
+           reveal must not resize the hero. */
+        height: calc(var(--skeleton-title-fs) * var(--skeleton-title-lh));
         background: none;
         display: block;
         /* Long injected names ellipsize instead of stretching the hero — the
@@ -440,9 +453,9 @@
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
-        font-size: 22px;
+        font-size: var(--skeleton-title-fs);
         font-weight: 600;
-        line-height: 1.4;
+        line-height: var(--skeleton-title-lh);
         color: var(--theme-text-primary, #e4e4e7);
         opacity: 0;
         animation: skeleton-reveal 400ms ease-out forwards;
@@ -452,7 +465,7 @@
         animation: none;
       }
       .skeleton-logo-section--identified .skeleton-logo {
-        color: var(--theme-accent-primary, #e4e4e7);
+        color: var(--theme-text-primary, #e4e4e7);
         opacity: 0.16;
       }
 

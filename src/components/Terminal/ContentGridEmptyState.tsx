@@ -88,11 +88,17 @@ export function ContentGridEmptyState({
   // watermark both read as misplaced against a centered page). ~10% smaller
   // than the pre-redesign hero. Decorative; the project's own icon wins over
   // the Daintree mark when one is set.
+  //
+  // The fallback mark rides the neutral `daintree-text` (text-primary) token,
+  // NOT the hue-carrying `tint` — so it reads as the same grey the startup
+  // skeleton's `.skeleton-logo` paints and crossfades in without a hue pop on
+  // themed setups (where `tint` carries a brand hue). Theme-aware by
+  // construction: text-primary flips with light/dark.
   const sanitizedIcon = projectIconSvg ? sanitizeSvg(projectIconSvg) : null;
   const identityMark = sanitizedIcon?.ok ? (
     <img src={svgToDataUrl(sanitizedIcon.svg)} alt="" className="h-25 w-25 object-contain" />
   ) : (
-    <DaintreeIcon className="h-25 w-25 text-tint/65" aria-hidden="true" />
+    <DaintreeIcon className="h-25 w-25 text-daintree-text/65" aria-hidden="true" />
   );
 
   return (
@@ -108,7 +114,10 @@ export function ContentGridEmptyState({
                 <div className="mb-4">{identityMark}</div>
                 {hasProjectIdentity ? (
                   <div className="flex flex-col items-center gap-1.5 min-w-0 max-w-full">
-                    <div className="group flex items-center gap-1.5 min-w-0 max-w-full">
+                    {/* The name stays centered under the mark; the gear is
+                        pulled out of flow (absolute, just past the name) so its
+                        hidden footprint never shifts the lockup off-axis. */}
+                    <div className="group relative flex items-center min-w-0 max-w-full">
                       <h3 className="text-2xl font-semibold text-daintree-text tracking-tight truncate max-w-full">
                         {projectEmoji ? (
                           // The name outweighs the emoji — the text is the
@@ -122,7 +131,7 @@ export function ContentGridEmptyState({
                       <button
                         type="button"
                         onClick={handleOpenProjectSettings}
-                        className="shrink-0 rounded-full p-1 text-daintree-text/50 opacity-0 transition-opacity hover:bg-overlay-subtle hover:text-daintree-text group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
+                        className="absolute left-full top-1/2 ml-1.5 -translate-y-1/2 shrink-0 rounded-full p-1 text-daintree-text/50 opacity-0 transition-opacity hover:bg-overlay-subtle hover:text-daintree-text group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
                         aria-label="Project settings"
                       >
                         <Settings className="h-3.5 w-3.5" />

@@ -647,6 +647,24 @@ describe("useWorktreeStatus — computedSubtitle", () => {
       { text: "No recent activity", tone: "muted" }
     );
   });
+
+  it('shows "Checking status…" instead of a false all-clear while git status is unresolved', () => {
+    expect(getSubtitle({ worktreeChanges: null })).toEqual({
+      text: "Checking status…",
+      tone: "muted",
+    });
+  });
+
+  it("still prefers an open PR title while git status is unresolved", () => {
+    expect(
+      getSubtitle({
+        worktreeChanges: null,
+        prTitle: "feat: dark mode",
+        prState: "open",
+        ...prLinked({ prState: "open", prTitle: "feat: dark mode" }),
+      })
+    ).toEqual({ text: "feat: dark mode", tone: "muted" });
+  });
 });
 
 describe("useWorktreeStatus — reviewState", () => {

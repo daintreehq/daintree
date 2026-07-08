@@ -36,7 +36,7 @@ const MANIFEST_FILE = path.join(DIST, ".vite", "manifest.json");
 // repo-relative module IDs. Absent on check-only runs that don't rebuild — the
 // module-set gate stays inactive in that case (see compareReport).
 const CHUNK_MODULES_FILE = path.join(DIST, "chunk-modules.json");
-const BASELINE_FILE = path.join(ROOT, "renderer-import-baseline.json");
+const BASELINE_FILE = path.join(ROOT, "scripts", "baselines", "renderer-import-baseline.json");
 const SUMMARY_FILE = path.join(DIST, "renderer-import-budget-summary.md");
 
 // Refuse to overwrite the baseline in --update mode if the eager chunk count

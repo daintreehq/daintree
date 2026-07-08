@@ -28,7 +28,7 @@ import { writeSummary } from "./budget-summary-lib.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), "..");
 const REPORT_FILE = path.join(ROOT, "dist", "renderer-bundle-size-report.json");
-const BASELINE_FILE = path.join(ROOT, "renderer-bundle-size-baseline.json");
+const BASELINE_FILE = path.join(ROOT, "scripts", "baselines", "renderer-bundle-size-baseline.json");
 const SUMMARY_FILE = path.join(ROOT, "dist", "renderer-bundle-size-summary.md");
 const DEFAULT_THRESHOLD = 0.05;
 const UPDATE_SHRINKAGE_THRESHOLD = 0.1;

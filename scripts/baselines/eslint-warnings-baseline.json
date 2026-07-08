@@ -1,0 +1,15 @@
+{
+  "count": 1120,
+  "byRule": {
+    "@typescript-eslint/no-explicit-any": 52,
+    "@typescript-eslint/no-floating-promises": 86,
+    "@typescript-eslint/no-unsafe-type-assertion": 492,
+    "no-restricted-imports": 5,
+    "no-restricted-syntax": 371,
+    "no-useless-assignment": 19,
+    "preserve-caught-error": 42,
+    "react-compiler/react-compiler": 15,
+    "react-hooks/exhaustive-deps": 38
+  },
+  "updatedAt": "2026-07-08T08:48:07.495Z"
+}

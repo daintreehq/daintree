@@ -316,11 +316,13 @@ describe("WorktreeDetailsSection — reviewState surfaces", () => {
     expect(onOpenReviewHub).toHaveBeenCalledTimes(1);
   });
 
-  it('renders no commit-side button when reviewState is "unpushed-clean"', () => {
+  it('renders a Review & Push button when reviewState is "unpushed-clean"', () => {
+    const onOpenReviewHub = vi.fn();
     renderSection({
       reviewState: "unpushed-clean",
       hasChanges: false,
       computedSubtitle: { text: "fix: stuff", tone: "muted" },
+      onOpenReviewHub,
       worktree: {
         ...baseWorktree,
         worktreeChanges: {
@@ -333,6 +335,27 @@ describe("WorktreeDetailsSection — reviewState surfaces", () => {
     expect(screen.queryByLabelText("Open Review & Commit")).toBeNull();
     expect(screen.queryByText("Conflicts need review")).toBeNull();
     expect(screen.getByText("fix: stuff")).toBeDefined();
+    const button = screen.getByLabelText("Open Review & Push");
+    fireEvent.click(button);
+    expect(onOpenReviewHub).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders no review-hub button when the tree is clean with nothing to push", () => {
+    renderSection({
+      reviewState: null,
+      hasChanges: false,
+      computedSubtitle: { text: "fix: stuff", tone: "muted" },
+      onOpenReviewHub: vi.fn(),
+      worktree: {
+        ...baseWorktree,
+        worktreeChanges: {
+          ...baseWorktree.worktreeChanges,
+          changedFileCount: 0,
+        } as WorktreeChanges,
+      },
+    });
+    expect(screen.queryByLabelText("Open Review & Commit")).toBeNull();
+    expect(screen.queryByLabelText("Open Review & Push")).toBeNull();
   });
 });
 

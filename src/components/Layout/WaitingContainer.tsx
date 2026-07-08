@@ -1,8 +1,10 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { ChevronDown, ChevronRight, Layers, OctagonX } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
+import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
+import { useExitLaggedCount } from "@/hooks/useExitLaggedCount";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { cn } from "@/lib/utils";
@@ -11,6 +13,12 @@ import type { PtyPanelData } from "@shared/types/panel";
 import { closeAndAnnounce } from "@/lib/accessibility";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWaitingTerminals } from "@/hooks/useTerminalSelectors";
+import {
+  actionableWaitingReason,
+  compareWaitingAttention,
+  WAITING_REASON_BADGE_LABEL,
+  waitingHeadline,
+} from "@shared/utils/waitingReasonDisplay";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
@@ -64,12 +72,16 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
   const { worktreeMap } = useWorktrees();
 
   const displayItems = useMemo((): WaitingDisplayItem[] => {
+    // Triage order, not insertion order: approvals first, then error-blocked,
+    // then questions, then plain prompts; longest-waiting first within each.
+    // Deterministic tie-breaks keep rows from reshuffling between renders.
+    const sortedTerminals = [...terminals].sort(compareWaitingAttention);
     // Build panelId -> group, applying the same location guard as
     // getPanelGroup so a stale group whose location no longer matches the
     // panel falls through to a single row instead of mis-routing setActiveTab.
     const panelToGroup = new Map<string, TabGroup>();
     const waitingByPanelId = new Map<string, PtyPanelData>();
-    for (const terminal of terminals) waitingByPanelId.set(terminal.id, terminal);
+    for (const terminal of sortedTerminals) waitingByPanelId.set(terminal.id, terminal);
     for (const group of tabGroups.values()) {
       for (const panelId of group.panelIds) {
         const panel = waitingByPanelId.get(panelId);
@@ -83,7 +95,7 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
     const groupBuckets = new Map<string, { group: TabGroup; waitingMembers: PtyPanelData[] }>();
     const singles: WaitingDisplaySingle[] = [];
 
-    for (const terminal of terminals) {
+    for (const terminal of sortedTerminals) {
       const group = panelToGroup.get(terminal.id);
       if (group) {
         const bucket = groupBuckets.get(group.id);
@@ -112,6 +124,16 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
     for (const single of singles) {
       items.push(single);
     }
+
+    // Interleave groups and singles by their most urgent member so a lone
+    // approval never sits below a tab group of plain prompts. Members are
+    // already sorted, so a group's first member is its representative.
+    items.sort((a, b) =>
+      compareWaitingAttention(
+        a.type === "group" ? a.waitingTerminals[0]! : a.terminal,
+        b.type === "group" ? b.waitingTerminals[0]! : b.terminal
+      )
+    );
 
     return items;
   }, [terminals, tabGroups]);
@@ -158,113 +180,124 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
     setKillConfirmId(null);
   }, [killConfirmId, removePanel, terminals]);
 
-  if (terminals.length === 0) return null;
-
   const count = terminals.length;
+  // Lagged count keeps the label stable while the pill fades out via the
+  // .dock-status-pill exit transition instead of flashing "(0)".
+  const displayCount = useExitLaggedCount(count);
   const WaitingIcon = STATE_ICONS.waiting;
 
+  useEffect(() => {
+    if (count === 0) {
+      setIsOpen(false);
+      setKillConfirmId(null);
+    }
+  }, [count]);
+
   return (
-    <Popover open={isOpen} onOpenChange={setIsOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          type="button"
-          variant="pill"
-          size="sm"
-          className={cn(
-            compact ? "px-1.5 min-w-0" : "px-3",
-            isOpen && "bg-overlay-emphasis border-border-default"
-          )}
-          aria-haspopup="dialog"
-          aria-expanded={isOpen}
-          aria-controls="waiting-container-popover"
-          aria-label={`Waiting (${count})`}
-        >
-          <span className="relative">
-            <WaitingIcon className="w-3.5 h-3.5 text-state-waiting" aria-hidden="true" />
-            {compact && count > 0 && (
-              <span className="absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full text-[10px] font-bold tabular-nums shadow-sm bg-state-waiting text-daintree-bg">
-                {count > 9 ? "9+" : count}
+    <span className="dock-status-pill" data-visible={count > 0 ? "true" : "false"}>
+      <Popover open={isOpen} onOpenChange={setIsOpen}>
+        <PopoverTrigger asChild>
+          <Button
+            type="button"
+            variant="pill"
+            size="sm"
+            className={cn(
+              compact ? "px-1.5 min-w-0" : "px-3",
+              isOpen && "bg-overlay-emphasis border-border-default"
+            )}
+            aria-haspopup="dialog"
+            aria-expanded={isOpen}
+            aria-controls="waiting-container-popover"
+            aria-label={`Waiting (${displayCount})`}
+          >
+            <span className="relative">
+              <WaitingIcon className="w-3.5 h-3.5 text-state-waiting" aria-hidden="true" />
+              {compact && displayCount > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full text-[10px] font-bold tabular-nums shadow-sm bg-state-waiting text-daintree-bg">
+                  <AnimatedLabel label={displayCount > 9 ? "9+" : String(displayCount)} />
+                </span>
+              )}
+            </span>
+            {!compact && (
+              <span className="font-medium tabular-nums">
+                Waiting (
+                <AnimatedLabel label={String(displayCount)} textClassName="text-state-waiting" />)
               </span>
             )}
-          </span>
-          {!compact && (
-            <span className="font-medium tabular-nums">
-              Waiting (<span className="text-state-waiting">{count}</span>)
-            </span>
-          )}
-        </Button>
-      </PopoverTrigger>
+          </Button>
+        </PopoverTrigger>
 
-      <PopoverContent
-        id="waiting-container-popover"
-        role="dialog"
-        aria-label="Waiting panels"
-        className="w-96 p-0"
-        side="top"
-        align="end"
-        sideOffset={8}
-        onOpenAutoFocus={(e) => e.preventDefault()}
-        onCloseAutoFocus={(e) => e.preventDefault()}
-        onPointerDownOutside={(e) => {
-          if (killConfirmId !== null) e.preventDefault();
-        }}
-        onInteractOutside={(e) => {
-          if (killConfirmId !== null) e.preventDefault();
-        }}
-        onEscapeKeyDown={(e) => {
-          if (killConfirmId !== null) e.preventDefault();
-        }}
-      >
-        <div className="flex flex-col">
-          <div className="px-3 py-2 border-b border-divider bg-daintree-bg/50 flex justify-between items-center">
-            <span className="text-xs font-medium text-daintree-text/70">Waiting for input</span>
-            <span className="text-[10px] font-medium text-state-waiting tabular-nums">
-              {count} {count === 1 ? "agent" : "agents"}
-            </span>
-          </div>
+        <PopoverContent
+          id="waiting-container-popover"
+          role="dialog"
+          aria-label="Waiting panels"
+          className="w-96 p-0"
+          side="top"
+          align="end"
+          sideOffset={8}
+          onOpenAutoFocus={(e) => e.preventDefault()}
+          onCloseAutoFocus={(e) => e.preventDefault()}
+          onPointerDownOutside={(e) => {
+            if (killConfirmId !== null) e.preventDefault();
+          }}
+          onInteractOutside={(e) => {
+            if (killConfirmId !== null) e.preventDefault();
+          }}
+          onEscapeKeyDown={(e) => {
+            if (killConfirmId !== null) e.preventDefault();
+          }}
+        >
+          <div className="flex flex-col">
+            <div className="px-3 py-2 border-b border-divider bg-daintree-bg/50 flex justify-between items-center">
+              <span className="text-xs font-medium text-daintree-text/70">Waiting for input</span>
+              <span className="text-[10px] font-medium text-state-waiting tabular-nums">
+                {count} {count === 1 ? "agent" : "agents"}
+              </span>
+            </div>
 
-          <div className="flex flex-col max-h-[360px] overflow-y-auto">
-            {displayItems.map((item) => {
-              if (item.type === "group") {
+            <div className="flex flex-col max-h-[360px] overflow-y-auto">
+              {displayItems.map((item) => {
+                if (item.type === "group") {
+                  return (
+                    <WaitingGroupItem
+                      key={item.group.id}
+                      group={item.group}
+                      waitingTerminals={item.waitingTerminals}
+                      worktreeMap={worktreeMap}
+                      onActivate={handleActivate}
+                      onKill={(id) => setKillConfirmId(id)}
+                    />
+                  );
+                }
+                const worktreeName = item.terminal.worktreeId
+                  ? worktreeMap.get(item.terminal.worktreeId)?.name
+                  : undefined;
                 return (
-                  <WaitingGroupItem
-                    key={item.group.id}
-                    group={item.group}
-                    waitingTerminals={item.waitingTerminals}
-                    worktreeMap={worktreeMap}
+                  <WaitingSingleItem
+                    key={item.terminal.id}
+                    terminal={item.terminal}
+                    groupId={item.groupId}
+                    worktreeName={worktreeName}
                     onActivate={handleActivate}
                     onKill={(id) => setKillConfirmId(id)}
                   />
                 );
-              }
-              const worktreeName = item.terminal.worktreeId
-                ? worktreeMap.get(item.terminal.worktreeId)?.name
-                : undefined;
-              return (
-                <WaitingSingleItem
-                  key={item.terminal.id}
-                  terminal={item.terminal}
-                  groupId={item.groupId}
-                  worktreeName={worktreeName}
-                  onActivate={handleActivate}
-                  onKill={(id) => setKillConfirmId(id)}
-                />
-              );
-            })}
+              })}
+            </div>
           </div>
-        </div>
-      </PopoverContent>
+        </PopoverContent>
 
-      <ConfirmDialog
-        isOpen={killConfirmId !== null}
-        onClose={() => setKillConfirmId(null)}
-        title={KILL_TERMINAL_TITLE}
-        description={killTerminalDescription(killTarget?.title || undefined)}
-        variant="destructive"
-        confirmLabel={KILL_TERMINAL_CONFIRM_LABEL}
-        onConfirm={handleKillConfirm}
-      />
-    </Popover>
+        <ConfirmDialog
+          isOpen={killConfirmId !== null}
+          onClose={() => setKillConfirmId(null)}
+          title={KILL_TERMINAL_TITLE}
+          description={killTerminalDescription(killTarget?.title || undefined)}
+          variant="destructive"
+          confirmLabel={KILL_TERMINAL_CONFIRM_LABEL}
+          onConfirm={handleKillConfirm}
+        />
+      </Popover>
+    </span>
   );
 }
 
@@ -287,6 +320,9 @@ function WaitingSingleItem({
 }: WaitingSingleItemProps) {
   const agentState = terminal.agentState;
   const title = terminal.title || "Terminal";
+  // Only classifier-backed reasons earn a chip — the `prompt` fallback stays
+  // an unlabeled row so the list doesn't overclaim.
+  const reason = actionableWaitingReason(terminal.waitingReason);
 
   return (
     // The row is a div + role="button" rather than a native <button>
@@ -296,6 +332,7 @@ function WaitingSingleItem({
     <div
       data-testid="waiting-single-item"
       data-agent-state={agentState ?? "unknown"}
+      data-waiting-reason={terminal.waitingReason ?? "unknown"}
       role="button"
       tabIndex={0}
       onClick={() => onActivate(terminal, groupId)}
@@ -311,7 +348,9 @@ function WaitingSingleItem({
         "flex items-center gap-2 px-3 py-2.5 hover:bg-muted/50 focus:bg-muted/50 focus-visible:outline-2 focus-visible:outline-daintree-accent outline-hidden transition-colors group/row cursor-pointer w-full select-none",
         compact && "py-1.5 pl-1.5"
       )}
-      aria-label={`Focus ${title}`}
+      aria-label={
+        reason ? `Focus ${title} — ${waitingHeadline(reason).toLowerCase()}` : `Focus ${title}`
+      }
     >
       <div className="shrink-0 opacity-70 group-hover/row:opacity-100 transition-opacity">
         <TerminalIcon
@@ -344,6 +383,20 @@ function WaitingSingleItem({
           </span>
         )}
       </div>
+
+      {reason && (
+        <span
+          className={cn(
+            "shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium",
+            reason === "error"
+              ? "bg-status-error/10 text-status-error"
+              : "bg-state-waiting/15 text-state-waiting"
+          )}
+          data-testid={`waiting-reason-badge-${terminal.id}`}
+        >
+          {WAITING_REASON_BADGE_LABEL[reason]}
+        </span>
+      )}
 
       {terminal.lastStateChange != null && (
         <LiveTimeAgo
@@ -432,29 +485,25 @@ function WaitingGroupItem({
           aria-label="Group panels"
           className="pl-5 pb-1"
         >
-          {[...waitingTerminals]
-            .sort((a, b) => {
-              const aIndex = group.panelIds.indexOf(a.id);
-              const bIndex = group.panelIds.indexOf(b.id);
-              if (aIndex !== -1 && bIndex !== -1) return aIndex - bIndex;
-              return 0;
-            })
-            .map((terminal) => {
-              const worktreeName = terminal.worktreeId
-                ? worktreeMap.get(terminal.worktreeId)?.name
-                : undefined;
-              return (
-                <WaitingSingleItem
-                  key={terminal.id}
-                  terminal={terminal}
-                  groupId={group.id}
-                  worktreeName={worktreeName}
-                  onActivate={onActivate}
-                  onKill={onKill}
-                  compact
-                />
-              );
-            })}
+          {/* Members arrive attention-sorted from displayItems — rendering
+              them as-is keeps the expanded group consistent with the triage
+              order that promoted the group in the first place. */}
+          {waitingTerminals.map((terminal) => {
+            const worktreeName = terminal.worktreeId
+              ? worktreeMap.get(terminal.worktreeId)?.name
+              : undefined;
+            return (
+              <WaitingSingleItem
+                key={terminal.id}
+                terminal={terminal}
+                groupId={group.id}
+                worktreeName={worktreeName}
+                onActivate={onActivate}
+                onKill={onKill}
+                compact
+              />
+            );
+          })}
         </div>
       )}
     </div>

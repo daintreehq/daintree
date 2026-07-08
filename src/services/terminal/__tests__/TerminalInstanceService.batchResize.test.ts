@@ -51,7 +51,7 @@ vi.mock("../TerminalAddonManager", () => ({
 
 type BatchTestService = {
   instances: Map<string, ManagedTerminal>;
-  batchResize: (ids: string[]) => void;
+  resizePassScheduler: { batchResize: (ids: string[]) => void };
   suppressResizesDuringLayoutTransition: (ids: string[], durationMs: number) => void;
   resizeController: {
     resize: (id: string, width: number, height: number) => { cols: number; rows: number } | null;
@@ -106,7 +106,6 @@ function makeManaged(fixture: ManagedFixture): ManagedTerminal {
     isOpened: true,
     isVisible: true,
     isFocused: false,
-    isHibernated: false,
     isAttaching: false,
     isUserScrolledBack: false,
     isAltBuffer: false,
@@ -165,7 +164,7 @@ describe("TerminalInstanceService batchResize", () => {
 
   it("no-ops on an empty id list", () => {
     const spy = vi.spyOn(service.resizeController, "resize").mockReturnValue(null);
-    service.batchResize([]);
+    service.resizePassScheduler.batchResize([]);
     expect(spy).not.toHaveBeenCalled();
   });
 
@@ -177,7 +176,7 @@ describe("TerminalInstanceService batchResize", () => {
 
     const spy = vi.spyOn(service.resizeController, "resize").mockReturnValue(null);
 
-    service.batchResize(["a", "b"]);
+    service.resizePassScheduler.batchResize(["a", "b"]);
 
     expect(spy).toHaveBeenCalledTimes(2);
     expect(spy).toHaveBeenNthCalledWith(1, "a", 800, 600);
@@ -189,7 +188,7 @@ describe("TerminalInstanceService batchResize", () => {
     service.instances.set("a", a);
     const spy = vi.spyOn(service.resizeController, "resize").mockReturnValue(null);
 
-    service.batchResize(["a", "a", "a"]);
+    service.resizePassScheduler.batchResize(["a", "a", "a"]);
 
     expect(spy).toHaveBeenCalledTimes(1);
   });
@@ -199,7 +198,7 @@ describe("TerminalInstanceService batchResize", () => {
     service.instances.set("a", a);
     const spy = vi.spyOn(service.resizeController, "resize").mockReturnValue(null);
 
-    service.batchResize(["a", "missing"]);
+    service.resizePassScheduler.batchResize(["a", "missing"]);
 
     expect(spy).toHaveBeenCalledTimes(1);
     expect(spy).toHaveBeenCalledWith("a", expect.any(Number), expect.any(Number));
@@ -210,7 +209,7 @@ describe("TerminalInstanceService batchResize", () => {
     service.instances.set("a", a);
     const spy = vi.spyOn(service.resizeController, "resize").mockReturnValue(null);
 
-    service.batchResize(["a"]);
+    service.resizePassScheduler.batchResize(["a"]);
 
     expect(spy).not.toHaveBeenCalled();
   });
@@ -220,7 +219,7 @@ describe("TerminalInstanceService batchResize", () => {
     service.instances.set("a", a);
     const spy = vi.spyOn(service.resizeController, "resize").mockReturnValue(null);
 
-    service.batchResize(["a"]);
+    service.resizePassScheduler.batchResize(["a"]);
 
     expect(spy).not.toHaveBeenCalled();
   });
@@ -231,7 +230,7 @@ describe("TerminalInstanceService batchResize", () => {
     service.resizeController.lockResize("a", true);
     const spy = vi.spyOn(service.resizeController, "resize").mockReturnValue(null);
 
-    service.batchResize(["a"]);
+    service.resizePassScheduler.batchResize(["a"]);
 
     expect(spy).not.toHaveBeenCalled();
   });
@@ -243,7 +242,7 @@ describe("TerminalInstanceService batchResize", () => {
     service.instances.set("b", b);
     const spy = vi.spyOn(service.resizeController, "resize").mockReturnValue(null);
 
-    service.batchResize(["a", "b"]);
+    service.resizePassScheduler.batchResize(["a", "b"]);
 
     expect(spy).not.toHaveBeenCalled();
   });
@@ -271,7 +270,7 @@ describe("TerminalInstanceService batchResize", () => {
       return null;
     });
 
-    service.batchResize(["a", "b"]);
+    service.resizePassScheduler.batchResize(["a", "b"]);
 
     expect(sequence).toEqual(["read:a", "read:b", "write:a", "write:b"]);
   });
@@ -282,7 +281,7 @@ describe("TerminalInstanceService batchResize", () => {
     const fitSpy = vi.spyOn(service.resizeController, "fit").mockReturnValue(null);
     vi.spyOn(service.resizeController, "resize").mockReturnValue(null);
 
-    service.batchResize(["a"]);
+    service.resizePassScheduler.batchResize(["a"]);
 
     expect(fitSpy).not.toHaveBeenCalled();
   });

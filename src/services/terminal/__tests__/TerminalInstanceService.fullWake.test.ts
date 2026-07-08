@@ -66,7 +66,6 @@ vi.mock("../TerminalReflowController", async () => {
 type ManagedTerminalMock = {
   isOpened: boolean;
   isAttaching: boolean;
-  isHibernated: boolean;
   isFocused: boolean;
   isVisible: boolean;
   isResizeSuppressed: boolean;
@@ -98,6 +97,8 @@ type FullWakeTestService = {
     applyDeferredResize: (id: string) => void;
     lockResize: (id: string, locked: boolean, ms?: number) => void;
     reconcileGeometryFresh: (id: string) => boolean;
+    fit: (id: string) => { cols: number; rows: number } | null;
+    forceImmediateResize: (id: string) => void;
   };
   dataBuffer: { resumeFlush: (id: string) => void; resetForTerminal: (id: string) => void };
   webGLManager: {
@@ -111,18 +112,23 @@ type FullWakeTestService = {
   rendererPolicy: { applyRendererPolicy: (id: string, tier: number) => void };
   ensureOpened: (id: string, managed: ManagedTerminalMock) => void;
   ensureDeferredAddons: (id: string, managed: ManagedTerminalMock) => void;
-  wantsWebGLAtTier: (managed: ManagedTerminalMock, tier: number | undefined) => boolean;
+  webGLPolicy: {
+    wantsWebGLAtTier: (managed: ManagedTerminalMock, tier: number | undefined) => boolean;
+  };
   fullWakeForVisibilityRestore: (id: string) => Promise<void>;
   repaintForReveal: (id: string, opts?: { trustDomVisibility?: boolean }) => boolean;
   revealTerminal: (id: string) => Promise<boolean>;
-  notifyAttachSettledWaiters: (id: string) => void;
+  revealController: {
+    fullWakeForVisibilityRestore: (id: string) => Promise<void>;
+    repaintForReveal: (id: string, opts?: { trustDomVisibility?: boolean }) => boolean;
+  };
+  settleWaiters: { notifyAttachSettledWaiters: (id: string) => void };
 };
 
 function makeInstance(overrides: Partial<ManagedTerminalMock> = {}): ManagedTerminalMock {
   return {
     isOpened: true,
     isAttaching: false,
-    isHibernated: false,
     isFocused: false,
     isVisible: true,
     isResizeSuppressed: false,
@@ -555,7 +561,7 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
     vi.spyOn(service.dataBuffer, "resumeFlush").mockImplementation(() => {});
 
-    service.notifyAttachSettledWaiters(id);
+    service.settleWaiters.notifyAttachSettledWaiters(id);
     // The deferred repaint is dispatched as a floating promise; flush microtasks.
     await Promise.resolve();
     await Promise.resolve();
@@ -577,7 +583,7 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
       .spyOn(service.resizeController, "applyDeferredResize")
       .mockImplementation(() => {});
 
-    service.notifyAttachSettledWaiters(id);
+    service.settleWaiters.notifyAttachSettledWaiters(id);
     await Promise.resolve();
     await Promise.resolve();
 
@@ -662,7 +668,7 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     service.instances.set(id, instance);
 
     vi.spyOn(service, "ensureDeferredAddons").mockImplementation(() => {});
-    vi.spyOn(service, "wantsWebGLAtTier").mockReturnValue(false);
+    vi.spyOn(service.webGLPolicy, "wantsWebGLAtTier").mockReturnValue(false);
 
     service.ensureOpened(id, instance);
 
@@ -690,10 +696,14 @@ describe("TerminalInstanceService.revealTerminal (foreground reveal routing)", (
 
   it("takes the cheap repaint path for an opened, live terminal", async () => {
     const id = "rev-1";
-    service.instances.set(id, makeInstance({ isOpened: true, isHibernated: false }));
+    service.instances.set(id, makeInstance({ isOpened: true }));
 
-    const fullWake = vi.spyOn(service, "fullWakeForVisibilityRestore").mockResolvedValue(undefined);
-    const repaint = vi.spyOn(service, "repaintForReveal").mockImplementation(() => true);
+    const fullWake = vi
+      .spyOn(service.revealController, "fullWakeForVisibilityRestore")
+      .mockResolvedValue(undefined);
+    const repaint = vi
+      .spyOn(service.revealController, "repaintForReveal")
+      .mockImplementation(() => true);
 
     await expect(service.revealTerminal(id)).resolves.toBe(true);
 
@@ -701,33 +711,16 @@ describe("TerminalInstanceService.revealTerminal (foreground reveal routing)", (
     expect(fullWake).not.toHaveBeenCalled();
   });
 
-  it("takes the full rehydration path for a hibernated terminal", async () => {
-    const id = "rev-2";
-    // Hibernated panes route through the full open+wake, but only once the host
-    // is measurable — give it a renderable box so the reveal gate proceeds.
-    service.instances.set(
-      id,
-      makeInstance({ isOpened: false, isHibernated: true, hostElement: renderableHost() })
-    );
-
-    const fullWake = vi.spyOn(service, "fullWakeForVisibilityRestore").mockResolvedValue(undefined);
-    const repaint = vi.spyOn(service, "repaintForReveal").mockImplementation(() => true);
-
-    await service.revealTerminal(id);
-
-    expect(fullWake).toHaveBeenCalledWith(id);
-    expect(repaint).not.toHaveBeenCalled();
-  });
-
   it("takes the full rehydration path for an un-opened terminal", async () => {
     const id = "rev-3";
-    service.instances.set(
-      id,
-      makeInstance({ isOpened: false, isHibernated: false, hostElement: renderableHost() })
-    );
+    service.instances.set(id, makeInstance({ isOpened: false, hostElement: renderableHost() }));
 
-    const fullWake = vi.spyOn(service, "fullWakeForVisibilityRestore").mockResolvedValue(undefined);
-    const repaint = vi.spyOn(service, "repaintForReveal").mockImplementation(() => true);
+    const fullWake = vi
+      .spyOn(service.revealController, "fullWakeForVisibilityRestore")
+      .mockResolvedValue(undefined);
+    const repaint = vi
+      .spyOn(service.revealController, "repaintForReveal")
+      .mockImplementation(() => true);
 
     await service.revealTerminal(id);
 
@@ -739,7 +732,6 @@ describe("TerminalInstanceService.revealTerminal (foreground reveal routing)", (
     const id = "rev-attach";
     const inst = makeInstance({
       isOpened: false,
-      isHibernated: false,
       hostElement: renderableHost(),
     });
     service.instances.set(id, inst);
@@ -749,11 +741,13 @@ describe("TerminalInstanceService.revealTerminal (foreground reveal routing)", (
     // pendingVisibilityWake and leaves isAttaching true. The reveal must report
     // "retry" so the sweep doesn't spend its confirm paints before the deferred
     // wake re-runs on attach-settle.
-    vi.spyOn(service, "fullWakeForVisibilityRestore").mockImplementation(async () => {
-      inst.isOpened = true;
-      inst.isAttaching = true;
-      inst.pendingVisibilityWake = true;
-    });
+    vi.spyOn(service.revealController, "fullWakeForVisibilityRestore").mockImplementation(
+      async () => {
+        inst.isOpened = true;
+        inst.isAttaching = true;
+        inst.pendingVisibilityWake = true;
+      }
+    );
 
     await expect(service.revealTerminal(id)).resolves.toBe(false);
   });
@@ -762,9 +756,11 @@ describe("TerminalInstanceService.revealTerminal (foreground reveal routing)", (
     const id = "rev-4";
     // Bare, unconnected host → zero box → not paintable yet. The sweep should
     // retry on a later frame instead of opening against an unmeasurable host.
-    service.instances.set(id, makeInstance({ isOpened: false, isHibernated: false }));
+    service.instances.set(id, makeInstance({ isOpened: false }));
 
-    const fullWake = vi.spyOn(service, "fullWakeForVisibilityRestore").mockResolvedValue(undefined);
+    const fullWake = vi
+      .spyOn(service.revealController, "fullWakeForVisibilityRestore")
+      .mockResolvedValue(undefined);
 
     await expect(service.revealTerminal(id)).resolves.toBe(false);
 
@@ -772,8 +768,12 @@ describe("TerminalInstanceService.revealTerminal (foreground reveal routing)", (
   });
 
   it("reports settled (true) when the terminal does not exist", async () => {
-    const fullWake = vi.spyOn(service, "fullWakeForVisibilityRestore").mockResolvedValue(undefined);
-    const repaint = vi.spyOn(service, "repaintForReveal").mockImplementation(() => true);
+    const fullWake = vi
+      .spyOn(service.revealController, "fullWakeForVisibilityRestore")
+      .mockResolvedValue(undefined);
+    const repaint = vi
+      .spyOn(service.revealController, "repaintForReveal")
+      .mockImplementation(() => true);
 
     // Gone → nothing to repaint and nothing to retry.
     await expect(service.revealTerminal("missing")).resolves.toBe(true);
@@ -809,7 +809,6 @@ describe("TerminalInstanceService.repaintForReveal grid reconcile", () => {
     document.body.appendChild(element);
     return makeInstance({
       isOpened: true,
-      isHibernated: false,
       isVisible: true,
       hostElement: renderableHost(),
       terminal: { cols: 80, rows: 24, element, refresh: vi.fn() },
@@ -838,7 +837,6 @@ describe("TerminalInstanceService.repaintForReveal grid reconcile", () => {
     document.body.appendChild(element);
     return makeInstance({
       isOpened: true,
-      isHibernated: false,
       isVisible: false, // stale on a warm WebContentsView resume (#10632 item 4)
       lastAppliedTier: TerminalRefreshTier.FOCUSED,
       hostElement: renderableHost(), // DOM truth: the pane IS on-screen
@@ -969,5 +967,166 @@ describe("TerminalInstanceService.repaintForReveal grid reconcile", () => {
     expect(reconcile).not.toHaveBeenCalled();
     expect(repairAtlas).not.toHaveBeenCalled();
     expect(forceXtermReflowMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("fullWakeForVisibilityRestore streaming-quiescence gate (#10863 wake-path half)", () => {
+  let service: FullWakeTestService;
+
+  beforeEach(async () => {
+    // The service is a module singleton — spies installed by a previous test
+    // (stubPostWake) survive clearAllMocks (it clears history, not
+    // implementations). Restore first so each test starts from the real
+    // methods and installs only its own stubs.
+    vi.restoreAllMocks();
+    vi.clearAllMocks();
+    forceXtermReflowMock.mockReset();
+    const imported = await import("../TerminalInstanceService");
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    service = imported.terminalInstanceService as unknown as FullWakeTestService;
+    service.instances.clear();
+  });
+
+  afterEach(() => {
+    if (service) service.instances.clear();
+  });
+
+  // The applyDeferredResize-gate tests stub the post-wake tail so jsdom's
+  // missing layout APIs (checkVisibility in fit()) can't fail them; the
+  // handlePostWake gate has its own un-stubbed test below.
+  function stubPostWake() {
+    vi.spyOn(
+      service as unknown as { handlePostWake: (id: string) => void },
+      "handlePostWake"
+    ).mockImplementation(() => {});
+  }
+
+  type StreamingFields = {
+    pendingWrites?: number;
+    lastWriteAt?: number;
+    isAltBuffer?: boolean;
+    fitAddon?: { fit: () => void; proposeDimensions?: () => { cols: number; rows: number } };
+    lastReflowAt?: number;
+  };
+
+  function streamingInstance(overrides: Partial<ManagedTerminalMock> & StreamingFields = {}) {
+    return makeInstance({
+      attachGeneration: 3,
+      ...overrides,
+    }) as ManagedTerminalMock & StreamingFields;
+  }
+
+  it("defers the geometry sync to the watchdog for a streaming main-buffer pane whose grid would change", async () => {
+    stubPostWake();
+    const id = "wake-streaming-delta";
+    const instance = streamingInstance({
+      // Grid delta: cached target disagrees with the live xterm grid.
+      latestCols: 92,
+      latestRows: 30,
+      pendingWrites: 2, // a queued batch is still parsing — mid-stream
+    });
+    service.instances.set(id, instance);
+
+    const applyDeferredResize = vi
+      .spyOn(service.resizeController, "applyDeferredResize")
+      .mockImplementation(() => {});
+
+    await service.fullWakeForVisibilityRestore(id);
+
+    expect(applyDeferredResize).not.toHaveBeenCalled();
+    expect(instance.revealPendingRepair).toBe(true);
+    expect(instance.revealPendingGeneration).toBe(instance.attachGeneration);
+  });
+
+  it("still applies the geometry sync for a streaming pane with NO grid delta (free no-op keeps #10070 correction)", async () => {
+    stubPostWake();
+    const id = "wake-streaming-nodelta";
+    const instance = streamingInstance({ pendingWrites: 2 }); // latest == terminal grid
+    service.instances.set(id, instance);
+
+    const applyDeferredResize = vi
+      .spyOn(service.resizeController, "applyDeferredResize")
+      .mockImplementation(() => {});
+
+    await service.fullWakeForVisibilityRestore(id);
+
+    expect(applyDeferredResize).toHaveBeenCalledWith(id);
+    expect(instance.revealPendingRepair).toBeUndefined();
+  });
+
+  it("does not defer an alt-screen pane — the alt buffer is exempt from the re-wrap hazard", async () => {
+    stubPostWake();
+    const id = "wake-streaming-alt";
+    const instance = streamingInstance({
+      latestCols: 92,
+      latestRows: 30,
+      pendingWrites: 2,
+      isAltBuffer: true,
+    });
+    service.instances.set(id, instance);
+
+    const applyDeferredResize = vi
+      .spyOn(service.resizeController, "applyDeferredResize")
+      .mockImplementation(() => {});
+
+    await service.fullWakeForVisibilityRestore(id);
+
+    expect(applyDeferredResize).toHaveBeenCalledWith(id);
+    expect(instance.revealPendingRepair).toBeUndefined();
+  });
+
+  it("applies the geometry sync once the stream quiesces (stale lastWriteAt, no pending writes)", async () => {
+    stubPostWake();
+    const id = "wake-quiescent-delta";
+    const instance = streamingInstance({
+      latestCols: 92,
+      latestRows: 30,
+      lastWriteAt: Date.now() - 10_000, // long past REVEAL_REWRAP_QUIESCENT_MS
+    });
+    service.instances.set(id, instance);
+
+    const applyDeferredResize = vi
+      .spyOn(service.resizeController, "applyDeferredResize")
+      .mockImplementation(() => {});
+
+    await service.fullWakeForVisibilityRestore(id);
+
+    expect(applyDeferredResize).toHaveBeenCalledWith(id);
+    expect(instance.revealPendingRepair).toBeUndefined();
+  });
+
+  it("handlePostWake itself never re-fits a streaming pane whose grid would change (the full no-geometry contract)", async () => {
+    // NO handlePostWake stub — this pins the production tail: fit() and
+    // forceImmediateResize() must not run for a streaming main-buffer pane
+    // with a real grid delta; the obligation goes to the watchdog instead.
+    const id = "wake-postwake-streaming";
+    const instance = streamingInstance({
+      pendingWrites: 2, // streaming — but latest == grid, so the fullWake gate passes through
+      fitAddon: {
+        fit: vi.fn(),
+        // The container proposes a grid different from the live one: the fit
+        // WOULD re-wrap. This is the divergence handlePostWake must defer on.
+        proposeDimensions: () => ({ cols: 92, rows: 30 }),
+      },
+    });
+    service.instances.set(id, instance);
+
+    const fit = vi.spyOn(service.resizeController, "fit").mockReturnValue(null);
+    const forceImmediateResize = vi
+      .spyOn(service.resizeController, "forceImmediateResize")
+      .mockImplementation(() => {});
+    // Paint-only tail — not part of the geometry contract under test, and its
+    // internals need real xterm/DOM plumbing jsdom mocks don't have.
+    vi.spyOn(
+      service as unknown as { maybeReflowTerminal: (managed: unknown) => void },
+      "maybeReflowTerminal"
+    ).mockImplementation(() => {});
+
+    await service.fullWakeForVisibilityRestore(id);
+
+    expect(fit).not.toHaveBeenCalled();
+    expect(forceImmediateResize).not.toHaveBeenCalled();
+    expect(instance.revealPendingRepair).toBe(true);
+    expect(instance.revealPendingGeneration).toBe(instance.attachGeneration);
   });
 });

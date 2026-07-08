@@ -648,7 +648,7 @@ const MAX_REDACT_STRING_CHARS = 2000;
 const MAX_REDACT_ARRAY_ITEMS = 20;
 
 // Scrub content-based secrets BEFORE clamping. The downstream `scrubSecrets`
-// in `writeToLogFile` runs on the already-clamped value, so a secret straddling
+// in `emit`/`emitError` runs on the already-clamped value, so a secret straddling
 // the `MAX_REDACT_STRING_CHARS` boundary would have its high-entropy tail sliced
 // off here first, leaving a surviving prefix too short for the scrubber to match
 // — leaking the leading bytes to disk. Scrubbing first is exactly the upstream
@@ -828,14 +828,17 @@ export async function flushLogFileWritesForTesting(): Promise<void> {
   }
 }
 
+/**
+ * `message` and `contextStr` must already be scrubbed — `emit`/`emitError`
+ * scrub each field once and share the result between the file and console
+ * transports. The composed prefix (timestamp, level) carries no user content.
+ */
 function writeToLogFile(level: string, message: string, contextStr: string): void {
   if (!ENABLE_FILE_LOGGING) return;
   if (getWritesSuppressed()) return;
 
   const timestamp = new Date().toISOString();
-  const logLine = scrubSecrets(
-    `[${timestamp}] [${level}] ${message}${contextStr ? ` ${contextStr}` : ""}\n`
-  );
+  const logLine = `[${timestamp}] [${level}] ${message}${contextStr ? ` ${contextStr}` : ""}\n`;
   const bytes = Buffer.byteLength(logLine, "utf8");
 
   if (level === "ERROR") {
@@ -950,15 +953,18 @@ function emit(source: string, level: LogLevel, message: string, context?: LogCon
   });
 
   sendLogToRenderer(entry);
-  // Stringify once and share between the file and console transports.
+  // Stringify and scrub once, sharing both between the file and console
+  // transports — previously each transport re-scrubbed the same content.
   const contextStr = safeContext ? safeStringify(safeContext) : "";
-  writeToLogFile(level.toUpperCase(), message, contextStr);
+  const scrubbedMessage = scrubSecrets(message);
+  const scrubbedContext = contextStr ? scrubSecrets(contextStr) : "";
+  writeToLogFile(level.toUpperCase(), scrubbedMessage, scrubbedContext);
 
   if (!IS_TEST) {
     const prefix = `[${level.toUpperCase()}] [${source}]`;
     const consoleFn =
       level === "error" ? console.error : level === "warn" ? console.warn : console.log;
-    consoleFn(`${prefix} ${scrubSecrets(message)}`, contextStr ? scrubSecrets(contextStr) : "");
+    consoleFn(`${prefix} ${scrubbedMessage}`, scrubbedContext);
   }
 }
 
@@ -977,15 +983,18 @@ function emitError(source: string, message: string, error?: unknown, context?: L
   });
 
   sendLogToRenderer(entry);
-  // Stringify the merged, redacted context once and share it between the file
-  // and console transports — `safeContext` already folds in `errorDetails`, so
-  // the console path no longer re-serializes/re-scrubs the error and context
-  // separately (and now inherits key-redaction it previously skipped).
+  // Stringify the merged, redacted context once and scrub each field once,
+  // sharing both between the file and console transports — `safeContext`
+  // already folds in `errorDetails`, so the console path no longer
+  // re-serializes/re-scrubs the error and context separately (and inherits
+  // key-redaction it previously skipped).
   const contextStr = safeStringify(safeContext);
-  writeToLogFile("ERROR", message, contextStr);
+  const scrubbedMessage = scrubSecrets(message);
+  const scrubbedContext = scrubSecrets(contextStr);
+  writeToLogFile("ERROR", scrubbedMessage, scrubbedContext);
 
   if (!IS_TEST) {
-    console.error(`[ERROR] [${source}] ${scrubSecrets(message)}`, scrubSecrets(contextStr));
+    console.error(`[ERROR] [${source}] ${scrubbedMessage}`, scrubbedContext);
   }
 }
 

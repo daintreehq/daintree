@@ -113,6 +113,7 @@ export const ForgeStatsToolbarButton = memo(
       stats,
       loading: statsLoading,
       error: statsError,
+      errorSeverity,
       isTokenError,
       refresh: refreshStats,
       lastUpdated,
@@ -774,10 +775,16 @@ export const ForgeStatsToolbarButton = memo(
 
     const getForgeIndicatorStatus = useCallback((): ForgeStatusIndicatorStatus => {
       if (statsLoading) return "loading";
-      if (statsError && !isTokenError) return "error";
+      // The error stripe is reserved for failure runs the quick retries didn't
+      // heal (`persistent`). A transient blip keeps the preserved counts and
+      // stays quiet — the freshness suffix in the segment tooltips already
+      // reports degraded data. An active rate-limit block has its own clock
+      // indicator + countdown tooltip, so the stripe stays off until the block
+      // lifts and the resume refresh also keeps failing.
+      if (errorSeverity === "persistent" && !isTokenError && !rateLimitActive) return "error";
       if (statsJustUpdated) return "success";
       return "idle";
-    }, [statsLoading, statsError, isTokenError, statsJustUpdated]);
+    }, [statsLoading, errorSeverity, isTokenError, rateLimitActive, statsJustUpdated]);
 
     const handleForgeStatusTransitionEnd = useCallback(() => {
       setStatsJustUpdated(false);

@@ -155,7 +155,6 @@ function makeMockManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTermi
     scrollbackRestoreState: "none",
     attachGeneration: 0,
     attachRevealToken: 0,
-    isHibernated: false,
     ipcListenerCount: 0,
     ...overrides,
   } as ManagedTerminal;

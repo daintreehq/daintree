@@ -29,6 +29,21 @@
     "PERF-031": { "p95Ms": 2400, "maxRegressionPct": 50 },
     "PERF-032": { "p95Ms": 2600, "maxRegressionPct": 15 },
     "PERF-033": { "p95Ms": 100, "maxRegressionPct": 25 },
+    "PERF-034": {
+      "p95Ms": 900,
+      "maxRegressionPct": 40,
+      "maxMetricValues": { "echoDegradationX": 30 }
+    },
+    "PERF-035": {
+      "p95Ms": 15000,
+      "maxRegressionPct": 60,
+      "maxMetricValues": {
+        "cpuMsPerMb30": 2500,
+        "cpuMsPerAgentSec30": 5,
+        "waitFlipLatencyMs": 8500,
+        "resumeFlipLatencyMs": 2000
+      }
+    },
 
     "PERF-040": { "p95Ms": 1400, "maxRegressionPct": 15 },
     "PERF-041": { "p95Ms": 2200, "maxRegressionPct": 15 },
@@ -83,6 +98,48 @@
       "p95Ms": 500,
       "maxRegressionPct": 15,
       "maxMetricValues": { "bytes": 10000000 }
+    },
+
+    "PERF-100": {
+      "p95Ms": 100,
+      "maxRegressionPct": 50,
+      "maxMetricValues": { "gitSpawns": 1.5 }
+    },
+    "PERF-101": {
+      "p95Ms": 1500,
+      "maxRegressionPct": 50,
+      "maxMetricValues": { "spawnsPerWorktreeN50": 1.5 }
+    },
+    "PERF-102": {
+      "p95Ms": 60,
+      "maxRegressionPct": 50,
+      "maxMetricValues": { "gitSpawns": 1 }
+    },
+    "PERF-103": {
+      "p95Ms": 100,
+      "maxRegressionPct": 50,
+      "maxMetricValues": { "gitSpawns": 1.5 }
+    },
+    "PERF-104": {
+      "p95Ms": 4000,
+      "maxRegressionPct": 75,
+      "maxMetricValues": { "statusPasses": 3, "gitSpawns": 10 }
+    },
+
+    "PERF-110": { "p95Ms": 80, "maxRegressionPct": 50 },
+    "PERF-111": {
+      "p95Ms": 3500,
+      "maxRegressionPct": 50,
+      "maxMetricValues": { "maxStepMs": 150, "settleResizeMs": 5 }
+    },
+    "PERF-112": {
+      "p95Ms": 25,
+      "maxRegressionPct": 50,
+      "maxMetricValues": {
+        "largeToSmallBlockingRatio": 3,
+        "revealBlockingMsLargeBacklog": 30,
+        "drainMsLargeBacklog": 500
+      }
     },
 
     "PERF-090": {

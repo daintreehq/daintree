@@ -104,7 +104,6 @@ function makeMockManaged(overrides: Record<string, unknown> = {}) {
     isAttaching: false,
     isUserScrolledBack: false,
     isAltBuffer: false,
-    isHibernated: false,
     runtimeAgentId: "claude" as string | undefined,
     launchAgentId: "claude",
     lastActiveTime: Date.now(),
@@ -347,17 +346,6 @@ describe("TerminalInstanceService - visibility-driven WebGL lease", () => {
 
     // Timer cleared (won't fire and won't crash)
     vi.advanceTimersByTime(200);
-    expect(service.webGLManager.isActive("t1")).toBe(false);
-  });
-
-  it("hibernated terminal short-circuits — no WebGL changes", () => {
-    const managed = makeMockManaged({ isHibernated: true });
-    service.instances.set("t1", managed as unknown as Record<string, unknown>);
-
-    service.setVisible("t1", false);
-    service.setVisible("t1", true);
-    vi.advanceTimersByTime(100);
-
     expect(service.webGLManager.isActive("t1")).toBe(false);
   });
 
@@ -651,13 +639,15 @@ describe("TerminalInstanceService - visibility-driven WebGL lease", () => {
   describe("WebGL DOM-mode fallback eligibility (W3)", () => {
     function callShouldRestore(managed: unknown): boolean {
       return (
-        service as unknown as { shouldRestoreWebGL: (m: unknown) => boolean }
-      ).shouldRestoreWebGL(managed);
+        service as unknown as { webGLPolicy: { shouldRestoreWebGL: (m: unknown) => boolean } }
+      ).webGLPolicy.shouldRestoreWebGL(managed);
     }
     function callShouldHaveActive(managed: unknown): boolean {
       return (
-        service as unknown as { shouldHaveActiveWebGL: (m: unknown) => boolean }
-      ).shouldHaveActiveWebGL(managed);
+        service as unknown as {
+          webGLPolicy: { shouldHaveActiveWebGL: (m: unknown) => boolean };
+        }
+      ).webGLPolicy.shouldHaveActiveWebGL(managed);
     }
 
     it("keeps a non-pinned DOM pane RESTORE-eligible so it stays in the manager's wants set", () => {
@@ -746,9 +736,11 @@ describe("TerminalInstanceService - visibility-driven WebGL lease", () => {
     function callShouldRestore(managed: unknown, opts?: { trustDomVisibility?: boolean }): boolean {
       return (
         service as unknown as {
-          shouldRestoreWebGL: (m: unknown, o?: { trustDomVisibility?: boolean }) => boolean;
+          webGLPolicy: {
+            shouldRestoreWebGL: (m: unknown, o?: { trustDomVisibility?: boolean }) => boolean;
+          };
         }
-      ).shouldRestoreWebGL(managed, opts);
+      ).webGLPolicy.shouldRestoreWebGL(managed, opts);
     }
 
     it("withholds restore for a stale isVisible=false pane by default", () => {

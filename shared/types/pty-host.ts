@@ -14,6 +14,7 @@ import type { BuiltInAgentId } from "../config/agentIds.js";
 import type { AgentConfig } from "../config/agentRegistry.js";
 import type { AgentSessionRecord } from "./ipc/agentSessionHistory.js";
 import type { SemanticSearchMatch, TerminalInfoPayload } from "./ipc/terminal.js";
+import type { WorkerResourceSnapshot } from "./workerGovernance.js";
 
 export type { TerminalFlowStatus };
 
@@ -76,6 +77,14 @@ export interface PtyHostSpawnOptions {
   agentPresetColor?: string;
   /** Original user-selected preset ID; unchanged across fallback hops for revert UX. */
   originalAgentPresetId?: string;
+  /**
+   * Launch generation minted by Main's lifecycle ledger (see
+   * `shared/utils/agentLifecycleLedger.ts`). Monotonic per terminal id;
+   * a respawn after a pty-host crash mints a fresh generation. The pty-host
+   * adopts it and echoes it on `agent-session-captured` so Main can dedupe
+   * session journaling exactly-once per terminal incarnation.
+   */
+  launchGeneration?: number;
 }
 
 /** Per-project terminal-workload memory, deduplicated by PID. */
@@ -199,6 +208,10 @@ export type PtyHostRequest =
       visualSignalBuffer: SharedArrayBuffer;
     }
   | { type: "connect-port"; windowId: number }
+  // Dedicated per-terminal worker-ingest ports (issue #10960): the port rides
+  // the postMessage transfer list, exactly like connect-port.
+  | { type: "connect-terminal-port"; windowId: number; id: string }
+  | { type: "disconnect-terminal-port"; windowId: number; id: string }
   | { type: "get-terminal-info"; id: string; requestId: string }
   | { type: "force-resume"; id: string }
   | { type: "acknowledge-data"; id: string; byteCount: number }
@@ -235,7 +248,8 @@ export type PtyHostRequest =
    * restarted host re-syncs before any spawn replay.
    */
   | { type: "set-plugin-agent-registry"; registry: Record<string, AgentConfig> }
-  | { type: "get-flow-control-snapshot"; requestId: string };
+  | { type: "get-flow-control-snapshot"; requestId: string }
+  | { type: "get-worker-governance-snapshot"; requestId: string };
 
 /** Per-terminal flow-control state in a {@link FlowControlSnapshot}. */
 export interface FlowControlTerminalSnapshot {
@@ -317,6 +331,40 @@ export interface FlowControlSnapshot {
   resourceGovernor: ResourceGovernorSnapshot;
   /** Pty-host loop health since the previous pull; null if unmonitored. */
   eventLoop: PtyHostEventLoopStats | null;
+  /**
+   * Per-shard breakdown when the PTY fabric is running more than one host
+   * shard. In that mode the top-level `resourceGovernor`/`eventLoop` fields
+   * carry the worst-shard view (so "PTY host lag p99" stays meaningful as a
+   * single number) and this array carries the per-shard detail. Absent on the
+   * single-host path.
+   */
+  shards?: FlowControlShardSnapshot[];
+}
+
+/** One PTY fabric shard's slice of a merged {@link FlowControlSnapshot}. */
+export interface FlowControlShardSnapshot {
+  /** Shard key: "main" for the default shard, the owning projectId otherwise. */
+  shardKey: string;
+  terminalCount: number;
+  totalPendingBytes: number;
+  resourceGovernor: ResourceGovernorSnapshot;
+  eventLoop: PtyHostEventLoopStats | null;
+}
+
+/**
+ * On-demand worker-governance snapshot from the pty-host: per-slot analysis
+ * worker pool state plus the host process's own memory usage (worker_threads
+ * share the host process, so per-thread RSS does not exist — the host-level
+ * numbers are the memory story for the whole pool).
+ */
+export interface PtyHostWorkerGovernanceSnapshot {
+  timestamp: number;
+  workers: WorkerResourceSnapshot[];
+  hostMemory: {
+    rssBytes: number;
+    heapUsedBytes: number;
+    externalBytes: number;
+  };
 }
 
 /**
@@ -361,7 +409,9 @@ export type PtyHostEvent =
   // same xterm (terminalClient.onData subscribes to both the port and IPC
   // paths on the strength of the one-visual-path invariant).
   | { type: "data-mirror"; id: string; data: string }
-  | { type: "exit"; id: string; exitCode: number; signal?: number }
+  // `launchGeneration` attributes the exit to one terminal incarnation so a
+  // stale exit arriving after a same-id respawn can't close the successor.
+  | { type: "exit"; id: string; exitCode: number; signal?: number; launchGeneration?: number }
   | { type: "error"; id: string; error: string }
   | { type: "spawn-result"; id: string; result: SpawnResult }
   | { type: "kill-by-project-result"; requestId: string; killed: number }
@@ -384,7 +434,7 @@ export type PtyHostEvent =
       traceId?: string;
       trigger: string;
       confidence: number;
-      /** Terminal cwd (used by PreAgentSnapshotService as the git target). */
+      /** Terminal cwd (the worktree root in the typical case). */
       cwd?: string;
       waitingReason?: WaitingReason;
       sessionCost?: number;
@@ -456,9 +506,13 @@ export type PtyHostEvent =
        * Trash expiry captured a resumable session in the pty-host. The record
        * is shipped to Main for persistence — Main is the journal's single
        * writer, so cross-process read-modify-write races on the file can't
-       * drop records, and the real retention setting applies.
+       * drop records, and the real retention setting applies. `terminalId` +
+       * `launchGeneration` key the capture to one terminal incarnation so
+       * Main's lifecycle ledger can journal it exactly once.
        */
       type: "agent-session-captured";
+      terminalId: string;
+      launchGeneration?: number;
       record: Omit<AgentSessionRecord, "savedAt">;
     }
   | { type: "terminal-pid"; id: string; pid: number }
@@ -498,14 +552,20 @@ export type PtyHostEvent =
       isWarning: boolean;
       /**
        * Utilization of the binding memory budget — the max of V8 heap against
-       * its --max-old-space-size cap and combined heap + external against the
-       * total pty-host process budget.
+       * its --max-old-space-size cap, combined heap + external (host isolate
+       * plus fresh analysis-worker isolate samples) against the total pty-host
+       * process budget, and the heaviest worker isolate's heap against the
+       * per-isolate cap.
        */
       utilizationPercent: number;
-      /** V8 heap used, MB. */
+      /** Host-isolate V8 heap used, MB. */
       heapMb?: number;
-      /** Off-heap external memory (includes all ArrayBuffer backing stores), MB. */
+      /** Host-isolate off-heap external memory (all ArrayBuffer backing stores), MB. */
       externalMb?: number;
+      /** Σ analysis-worker-isolate V8 heap (fresh samples only), MB. */
+      workerHeapMb?: number;
+      /** Σ analysis-worker-isolate external memory (fresh samples only), MB. */
+      workerExternalMb?: number;
       timestamp: number;
     }
   | {
@@ -553,6 +613,11 @@ export type PtyHostEvent =
       type: "flow-control-snapshot";
       requestId: string;
       snapshot: FlowControlSnapshot;
+    }
+  | {
+      type: "worker-governance-snapshot";
+      requestId: string;
+      snapshot: PtyHostWorkerGovernanceSnapshot;
     };
 
 export interface FdLeakWarningPayload {
@@ -698,6 +763,12 @@ export type SpawnErrorCode =
 export interface SpawnResult {
   success: boolean;
   id: string;
+  /**
+   * Launch generation echoed from the spawn options so a stale result
+   * arriving after a same-id respawn can't clear the successor's pending
+   * spawn entry or mis-record its ledger resolution.
+   */
+  launchGeneration?: number;
   error?: SpawnError;
 }
 
@@ -846,6 +917,13 @@ export interface TerminalReliabilityMetricPayload {
     terminalId: string;
     scrollbackEstimateBytes: number;
     scrollbackLines: number;
+    /**
+     * Lines the mirror buffer actually holds (from the analysis worker's
+     * isolate self-report), when a fresh sample exists — the estimate is then
+     * `actualBufferLines × cols × 12` instead of assuming a full cap. Null
+     * when unreported (in-thread mode, worker just respawned).
+     */
+    actualBufferLines?: number | null;
     cols: number;
   }>;
 }
@@ -857,7 +935,15 @@ export interface TerminalReliabilityMetricPayload {
 export type RendererToPtyHostMessage =
   | { type: "write"; id: string; data: string; traceId?: string }
   | { type: "resize"; id: string; cols: number; rows: number }
-  | { type: "ack"; id: string; bytes: number };
+  | { type: "ack"; id: string; bytes: number }
+  // Worker-ingest routing control (issue #10960). `engage` flips the host's
+  // routing for this terminal from the window port to its dedicated worker
+  // port; the host answers with `worker-ingest-engaged` on the window port,
+  // FIFO behind the final window-routed chunk. `release` flips routing back
+  // and posts the `ingest-detached` sentinel (carrying `drainId`) on the
+  // dedicated port, FIFO behind the final worker-routed chunk.
+  | { type: "worker-ingest-engage"; id: string }
+  | { type: "worker-ingest-release"; id: string; drainId: number };
 
 /**
  * Messages sent from Pty Host → Renderer via MessagePort (direct channel).
@@ -889,6 +975,15 @@ export type PtyHostToRendererMessage =
       type: "tier-changed";
       id: string;
       tier: "active" | "background";
+    }
+  // Engage-barrier marker (issue #10960): the host switched this terminal's
+  // routing to its dedicated worker port. Rides the window port FIFO behind
+  // the final window-routed chunk (window batcher flushed first), so on
+  // receipt the renderer knows every pre-switch byte has been relayed to the
+  // worker and can activate direct port ingest.
+  | {
+      type: "worker-ingest-engaged";
+      id: string;
     }
   | {
       type: "terminal-status";

@@ -201,9 +201,19 @@ beforeEach(() => {
 });
 
 describe("WaitingContainer", () => {
-  it("renders nothing when there are no waiting terminals", () => {
+  it("stays mounted but hidden when there are no waiting terminals", () => {
+    // The pill keeps its DOM node so the .dock-status-pill CSS can run the
+    // display/opacity exit transition; visibility is gated by data-visible.
     const { container } = render(<WaitingContainer />);
-    expect(container.textContent).toBe("");
+    const pill = container.querySelector(".dock-status-pill");
+    expect(pill).not.toBeNull();
+    expect(pill?.getAttribute("data-visible")).toBe("false");
+  });
+
+  it("marks the pill visible once a terminal is waiting", () => {
+    mockTerminals = [makeTerminal({ id: "t1" })];
+    const { container } = render(<WaitingContainer />);
+    expect(container.querySelector(".dock-status-pill")?.getAttribute("data-visible")).toBe("true");
   });
 
   describe("trigger", () => {
@@ -303,6 +313,102 @@ describe("WaitingContainer", () => {
       expect(row.tagName).toBe("DIV");
       expect(row.getAttribute("role")).toBe("button");
       expect(row.getAttribute("tabindex")).toBe("0");
+    });
+  });
+
+  describe("attention ordering", () => {
+    it("orders rows by reason urgency (approval > error > question > prompt), not list order", () => {
+      mockTerminals = [
+        makeTerminal({ id: "t-prompt", title: "Prompt", waitingReason: "prompt" }),
+        makeTerminal({ id: "t-question", title: "Question", waitingReason: "question" }),
+        makeTerminal({ id: "t-approval", title: "Approval", waitingReason: "approval" }),
+        makeTerminal({ id: "t-error", title: "Error", waitingReason: "error" }),
+      ];
+      render(<WaitingContainer />);
+      const rows = screen.getAllByTestId("waiting-single-item");
+      expect(rows.map((r) => r.getAttribute("data-waiting-reason"))).toEqual([
+        "approval",
+        "error",
+        "question",
+        "prompt",
+      ]);
+    });
+
+    it("orders same-reason rows longest-waiting first", () => {
+      mockTerminals = [
+        makeTerminal({ id: "t-new", waitingReason: "approval", lastStateChange: 2000 }),
+        makeTerminal({ id: "t-old", waitingReason: "approval", lastStateChange: 1000 }),
+      ];
+      render(<WaitingContainer />);
+      const rows = screen.getAllByTestId("waiting-single-item");
+      expect(within(rows[0]!).getByTestId("live-time-ago").textContent).toBe("@1000");
+      expect(within(rows[1]!).getByTestId("live-time-ago").textContent).toBe("@2000");
+    });
+
+    it("renders group members in attention order, not tab order", () => {
+      // Tab order is inverted relative to urgency: the prompt tab comes first
+      // in panelIds, but the error member must render first.
+      mockTabGroups = new Map([
+        ["g1", makeGroup({ id: "g1", panelIds: ["t-prompt", "t-error"], activeTabId: "t-prompt" })],
+      ]);
+      mockTerminals = [
+        makeTerminal({ id: "t-prompt", waitingReason: "prompt" }),
+        makeTerminal({ id: "t-error", waitingReason: "error" }),
+      ];
+      render(<WaitingContainer />);
+      const rows = screen.getAllByTestId("waiting-single-item");
+      expect(rows.map((r) => r.getAttribute("data-waiting-reason"))).toEqual(["error", "prompt"]);
+    });
+
+    it("ranks a lone approval above a tab group of plain prompts", () => {
+      mockTabGroups = new Map([
+        ["g1", makeGroup({ id: "g1", panelIds: ["t-g1", "t-g2"], activeTabId: "t-g1" })],
+      ]);
+      mockTerminals = [
+        makeTerminal({ id: "t-g1", waitingReason: "prompt" }),
+        makeTerminal({ id: "t-g2", waitingReason: "prompt" }),
+        makeTerminal({ id: "t-solo", title: "Solo approval", waitingReason: "approval" }),
+      ];
+      render(<WaitingContainer />);
+      const soloRow = screen
+        .getAllByTestId("waiting-single-item")
+        .find((r) => r.getAttribute("data-waiting-reason") === "approval")!;
+      const groupHeader = screen.getByText(/Tab group \(2 waiting\)/);
+      // The solo approval row must precede the group in document order.
+      expect(
+        soloRow.compareDocumentPosition(groupHeader) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
+    });
+  });
+
+  describe("reason chips", () => {
+    it("shows a compact reason chip for classifier-backed reasons", () => {
+      mockTerminals = [
+        makeTerminal({ id: "t1", waitingReason: "approval" }),
+        makeTerminal({ id: "t2", waitingReason: "error" }),
+      ];
+      render(<WaitingContainer />);
+      expect(screen.getByTestId("waiting-reason-badge-t1").textContent).toBe("Approval");
+      expect(screen.getByTestId("waiting-reason-badge-t2").textContent).toBe("Error");
+    });
+
+    it("renders no chip for the prompt fallback or a missing reason", () => {
+      mockTerminals = [
+        makeTerminal({ id: "t1", waitingReason: "prompt" }),
+        makeTerminal({ id: "t2", waitingReason: undefined }),
+      ];
+      render(<WaitingContainer />);
+      expect(screen.queryByTestId("waiting-reason-badge-t1")).toBeNull();
+      expect(screen.queryByTestId("waiting-reason-badge-t2")).toBeNull();
+    });
+
+    it("names the reason in the row's accessible label", () => {
+      mockTerminals = [
+        makeTerminal({ id: "t1", title: "Fix auth bug", waitingReason: "approval" }),
+      ];
+      render(<WaitingContainer />);
+      const row = screen.getByTestId("waiting-single-item");
+      expect(row.getAttribute("aria-label")).toBe("Focus Fix auth bug — waiting for approval");
     });
   });
 
