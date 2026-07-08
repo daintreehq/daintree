@@ -22,44 +22,27 @@ import {
   type TerminalInfo,
   type TerminalPublicState,
   type TerminalSnapshot,
-  OUTPUT_BUFFER_SIZE,
   DEFAULT_SCROLLBACK,
 } from "./types.js";
 import { WriteQueue } from "./WriteQueue.js";
+import { AgentOutputForwarder } from "./AgentOutputForwarder.js";
+import { TerminalInputController } from "./TerminalInputController.js";
+import { PtyDataPipeline } from "./PtyDataPipeline.js";
+import { PreservedSnapshotCapture } from "./PreservedSnapshotCapture.js";
 import { events } from "../events.js";
 import { AgentSpawnedSchema } from "../../schemas/agent.js";
 import { destroyPty, type PooledPtyDataHandoff, type PtyPool } from "../PtyPool.js";
 import { installHeadlessResponder } from "./headlessResponder.js";
 import { headlessMirrorScheduler } from "./HeadlessMirrorScheduler.js";
-import { handleOscColorQueries } from "./OscResponder.js";
 import { Osc94Parser } from "./Osc94Parser.js";
 import { SynchronizedFrameDetector } from "./SynchronizedFrameDetector.js";
 
-// Extracted modules
-import {
-  normalizeSubmitText,
-  splitTrailingNewlines,
-  supportsBracketedPaste,
-  getSoftNewlineSequence,
-  getSubmitEnterDelay,
-  isBracketedPaste,
-  isFocusReport,
-  delay,
-  BRACKETED_PASTE_START,
-  BRACKETED_PASTE_END,
-  PASTE_THRESHOLD_CHARS,
-  OUTPUT_SETTLE_DEBOUNCE_MS,
-  OUTPUT_SETTLE_MAX_WAIT_MS,
-  OUTPUT_SETTLE_POLL_INTERVAL_MS,
-} from "./terminalInput.js";
 import type { IMarker } from "@xterm/headless";
 import {
   TERMINAL_SESSION_PERSISTENCE_ENABLED,
-  isSessionPersistSuppressed,
-  persistSessionSnapshotSync,
   restoreSessionFromFile,
 } from "./terminalSessionPersistence.js";
-import { SessionSnapshotter, type SessionSnapshotterHost } from "./SessionSnapshotter.js";
+import { SessionSnapshotter, createTerminalSessionSnapshotter } from "./SessionSnapshotter.js";
 import {
   createProcessStateValidator,
   buildActivityMonitorOptions,
@@ -67,14 +50,9 @@ import {
 import { TerminalForensicsBuffer } from "./TerminalForensicsBuffer.js";
 import { SemanticBufferManager } from "./SemanticBufferManager.js";
 import { ProcessTreeKiller } from "./ProcessTreeKiller.js";
-import {
-  IdentityWatcher,
-  normalizeShellCommandText,
-  type IdentityWatcherDelegate,
-} from "./IdentityWatcher.js";
+import { IdentityWatcher, type IdentityWatcherDelegate } from "./IdentityWatcher.js";
 import type { SpawnContext } from "./terminalSpawn.js";
-import { logIdentityDebug } from "./identityDebug.js";
-import { computeDefaultTitle, getLiveAgentId } from "./terminalTitle.js";
+import { getLiveAgentId } from "./terminalTitle.js";
 import {
   serializeTerminal,
   serializeTerminalAsync,
@@ -96,6 +74,7 @@ import {
 } from "./analysis/headlessViewport.js";
 import type { AnalysisFinalSnapshot } from "./analysisWorkerProtocol.js";
 import { TerminalExitObservers, type TerminalExitArgs } from "./TerminalExitObservers.js";
+import { TerminalExitHandler } from "./TerminalExitHandler.js";
 import { gracefulShutdown as runGracefulShutdown } from "./TerminalGracefulShutdown.js";
 import { handleAgentDetection as runHandleAgentDetection } from "./TerminalAgentDetection.js";
 import { TerminalProcessLifecycle } from "./TerminalProcessLifecycle.js";
@@ -107,11 +86,6 @@ import {
   AGENT_OUTPUT_ACTIVITY_LINE_COUNT,
   AgentActivityTemperature,
 } from "./AgentActivityTemperature.js";
-
-// Coalescing window for host→main agent:output forwarding. Pending output is
-// flushed synchronously before any agent state transition (and on exit) so
-// turn-outcome classification still sees the tail in order.
-const AGENT_OUTPUT_FLUSH_INTERVAL_MS = 50;
 
 // Floor between agent-output content comparisons (noteAgentOutputActivity).
 // Each comparison costs two full viewport extractions from the headless mirror
@@ -179,11 +153,15 @@ export class TerminalProcess {
   private identityWatcher!: IdentityWatcher;
 
   private writeQueue!: WriteQueue;
+  private inputController!: TerminalInputController;
+  private ptyDataPipeline!: PtyDataPipeline;
+  private preservedSnapshotCapture!: PreservedSnapshotCapture;
   private readonly processTreeKiller: ProcessTreeKiller;
   private readonly lifecycle = new TerminalProcessLifecycle();
 
   private readonly foregroundProbe: ForegroundProcessGroupProbe;
   private exitObservers!: TerminalExitObservers;
+  private exitHandler!: TerminalExitHandler;
 
   private _scrollback: number;
   private ptyDataDisposable: { dispose: () => void } | null = null;
@@ -202,9 +180,7 @@ export class TerminalProcess {
   private lastAgentOutputNoteAt = Number.NEGATIVE_INFINITY;
   private agentOutputNoteTimer: NodeJS.Timeout | null = null;
 
-  private pendingAgentOutput = "";
-  private pendingAgentOutputAgentId: string | null = null;
-  private agentOutputFlushTimer: NodeJS.Timeout | null = null;
+  private agentOutputForwarder!: AgentOutputForwarder;
 
   private readonly terminalInfo: TerminalInfo;
 
@@ -253,70 +229,32 @@ export class TerminalProcess {
   }
 
   private createSessionSnapshotter(): SessionSnapshotter {
-    if (this.analysis.kind === "worker") {
-      // eslint-disable-next-line @typescript-eslint/no-this-alias
-      const parent = this;
-      const host: SessionSnapshotterHost = {
-        get id() {
-          return parent.id;
-        },
-        get wasKilled() {
-          return parent.terminalInfo.wasKilled === true;
-        },
-        get launchAgentId() {
-          return parent.terminalInfo.launchAgentId;
-        },
-        get contentEpoch() {
-          return parent.terminalInfo.contentEpoch;
-        },
-        // Route every persistence serialize through the worker's banner-aware
-        // op (it falls back to a plain serialize when no banner markers exist),
-        // so the host never needs to know whether a restore banner is present.
-        hasBannerMarkers: () => true,
-        getSerializedState: () => null,
-        getSerializedStateAsync: () => parent.getSerializedStateAsync(),
-        serializeForPersistence: () => parent.analysis.serializeForPersistence(),
-      };
-      return new SessionSnapshotter(host);
-    }
-
-    class Host implements SessionSnapshotterHost {
-      constructor(private parent: TerminalProcess) {}
-
-      get id(): string {
-        return this.parent.id;
-      }
-
-      get wasKilled(): boolean {
-        return this.parent.terminalInfo.wasKilled === true;
-      }
-
-      get launchAgentId(): string | undefined {
-        return this.parent.terminalInfo.launchAgentId;
-      }
-
-      get contentEpoch(): number {
-        return this.parent.terminalInfo.contentEpoch;
-      }
-
-      hasBannerMarkers(): boolean {
-        return !!(this.parent._restoreBannerStart || this.parent._restoreBannerEnd);
-      }
-
-      getSerializedState(): string | null {
-        return this.parent.getSerializedState();
-      }
-
-      getSerializedStateAsync(): Promise<string | null> {
-        return this.parent.getSerializedStateAsync();
-      }
-
-      serializeForPersistence(): string | null {
-        return this.parent.serializeForPersistence();
-      }
-    }
-
-    return new SessionSnapshotter(new Host(this));
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const parent = this;
+    return createTerminalSessionSnapshotter({
+      get id() {
+        return parent.id;
+      },
+      get isWorkerAnalysis() {
+        return parent.analysis.kind === "worker";
+      },
+      get wasKilled() {
+        return parent.terminalInfo.wasKilled === true;
+      },
+      get launchAgentId() {
+        return parent.terminalInfo.launchAgentId;
+      },
+      get contentEpoch() {
+        return parent.terminalInfo.contentEpoch;
+      },
+      get hasRestoreBannerMarkers() {
+        return !!(parent._restoreBannerStart || parent._restoreBannerEnd);
+      },
+      getSerializedState: () => parent.getSerializedState(),
+      getSerializedStateAsync: () => parent.getSerializedStateAsync(),
+      serializeForPersistence: () => parent.serializeForPersistence(),
+      serializeForPersistenceViaAnalysis: () => parent.analysis.serializeForPersistence(),
+    });
   }
 
   private logWriteError(error: unknown, context: { operation: string; traceId?: string }): void {
@@ -476,6 +414,14 @@ export class TerminalProcess {
         return self.lifecycle.isDisposed;
       },
     });
+    this.agentOutputForwarder = new AgentOutputForwarder({
+      get terminalId() {
+        return self.id;
+      },
+      get traceId() {
+        return self.terminalInfo.traceId;
+      },
+    });
     this.writeQueue = new WriteQueue({
       writeToPty: (data) => {
         this.terminalInfo.ptyProcess.write(data);
@@ -487,11 +433,109 @@ export class TerminalProcess {
     });
     this.sessionSnapshotter = this.createSessionSnapshotter();
     this.identityWatcher = new IdentityWatcher(this.createIdentityWatcherDelegate());
+    this.inputController = new TerminalInputController({
+      get id() {
+        return self.id;
+      },
+      get terminalInfo() {
+        return self.terminalInfo;
+      },
+      get analysis() {
+        return self.analysis;
+      },
+      get identityWatcher() {
+        return self.identityWatcher;
+      },
+      get writeQueue() {
+        return self.writeQueue;
+      },
+      logWriteError: (error, context) => self.logWriteError(error, context),
+    });
+    this.ptyDataPipeline = new PtyDataPipeline({
+      get terminalInfo() {
+        return self.terminalInfo;
+      },
+      get analysis() {
+        return self.analysis;
+      },
+      get sessionSnapshotter() {
+        return self.sessionSnapshotter;
+      },
+      get forensicsBuffer() {
+        return self.forensicsBuffer;
+      },
+      get identityWatcher() {
+        return self.identityWatcher;
+      },
+      get semanticBufferManager() {
+        return self.semanticBufferManager;
+      },
+      get isAgentLive() {
+        return self.isAgentLive;
+      },
+      get shouldHandleOscColorQueries() {
+        return self.shouldHandleOscColorQueries;
+      },
+      emitData: (data) => self.emitData(data),
+      queueAgentOutput: (agentId, data) => self.queueAgentOutput(agentId, data),
+    });
+    this.preservedSnapshotCapture = new PreservedSnapshotCapture({
+      get id() {
+        return self.id;
+      },
+      get terminalInfo() {
+        return self.terminalInfo;
+      },
+      get analysis() {
+        return self.analysis;
+      },
+      get isDisposed() {
+        return self.lifecycle.isDisposed;
+      },
+      serializeForPersistence: () => self.serializeForPersistence(),
+      disposeHeadless: () => self.disposeHeadless(),
+      onPreserved: () => self.callbacks.onPreserved?.(self.id),
+    });
     this.exitObservers = new TerminalExitObservers({
       id: this.id,
       terminalInfo: this.terminalInfo,
       forensicsBuffer: this.forensicsBuffer,
       agentStateService: this.deps.agentStateService,
+    });
+    this.exitHandler = new TerminalExitHandler({
+      get id() {
+        return self.id;
+      },
+      get terminalInfo() {
+        return self.terminalInfo;
+      },
+      get exitObservers() {
+        return self.exitObservers;
+      },
+      get identityWatcher() {
+        return self.identityWatcher;
+      },
+      get forensicsBuffer() {
+        return self.forensicsBuffer;
+      },
+      get lifecycle() {
+        return self.lifecycle;
+      },
+      get sessionSnapshotter() {
+        return self.sessionSnapshotter;
+      },
+      get lastDetectedProcessIconId() {
+        return self.lastDetectedProcessIconId;
+      },
+      set lastDetectedProcessIconId(v) {
+        self.lastDetectedProcessIconId = v;
+      },
+      teardown: (reason) => self.teardown(reason),
+      emitTerminalExited: (args) => self.emitTerminalExited(args),
+      shouldPreserveOnExit: (exitCode) => self.shouldPreserveOnExit(exitCode),
+      snapshotAndDisposePreserved: () => self.snapshotAndDisposePreserved(),
+      disposeHeadless: () => self.disposeHeadless(),
+      onExit: (id, exitCode, signal) => self.callbacks.onExit(id, exitCode, signal),
     });
 
     // Replay any output the pooled shell printed before we took ownership
@@ -824,115 +868,8 @@ export class TerminalProcess {
     terminal.serializeAddon = undefined;
   }
 
-  /**
-   * Preserved exited terminals don't need a live headless xterm — the buffer
-   * is final. Serialize it once, cache the string on `terminalInfo`, and
-   * dispose the headless instance (Unicode11 + SerializeAddon + scrollback
-   * CircularList, ~15-30 MB per exited terminal). Serialization runs inside a
-   * sentinel `write("")` callback so xterm's async parser queue is fully
-   * drained first — the tail of the output must land in the buffer, and
-   * disposing with queued writes throws against the torn-down core.
-   *
-   * On serialize failure the live headless instance is kept: serving the
-   * existing buffer beats serving nothing, at the cost of the memory.
-   */
   private snapshotAndDisposePreserved(): void {
-    if (this.analysis.kind === "worker") {
-      this.snapshotAndDisposePreservedViaWorker();
-      return;
-    }
-    const terminal = this.terminalInfo;
-    const headless = terminal.headlessTerminal;
-    if (!headless || !terminal.serializeAddon) {
-      return;
-    }
-    // Route the drain-sentinel through the scheduler: it fires only after all
-    // feeds held for this terminal have been released AND parsed, preserving
-    // the "tail of the output must land in the buffer" contract now that
-    // chunks can be held outside xterm's own write queue.
-    headlessMirrorScheduler.flush(this.id, headless, () => {
-      if (terminal.headlessTerminal !== headless || !terminal.serializeAddon) {
-        return;
-      }
-      let snapshot: string;
-      try {
-        snapshot = terminal.serializeAddon.serialize();
-      } catch (error) {
-        console.error(`[TerminalProcess] Failed to snapshot preserved terminal ${this.id}:`, error);
-        return;
-      }
-      // sessionSnapshotter.dispose() already ran in the onExit handler,
-      // cancelling any debounced write — flush the final state to disk
-      // directly so crash recovery sees the post-exit buffer (#3177).
-      // Banner-aware like flushSyncOnKill; same gates (agent sessions are
-      // never replayed by crash recovery).
-      if (
-        TERMINAL_SESSION_PERSISTENCE_ENABLED &&
-        !isSessionPersistSuppressed() &&
-        !terminal.launchAgentId
-      ) {
-        try {
-          persistSessionSnapshotSync(this.id, this.serializeForPersistence() ?? snapshot);
-        } catch {
-          // best-effort only
-        }
-      }
-      terminal.preservedSnapshot = snapshot;
-      // Stamp capture time so eviction (issue #10839) sorts oldest-first. Do
-      // NOT seed preservedSnapshotLastAccessedAt here: a freshly-captured
-      // snapshot has not been viewed, and treating it as recently-accessed
-      // would shield a burst of just-exited terminals from the cap. The access
-      // stamp is set only on a real serialize request.
-      terminal.preservedAt = Date.now();
-      // The buffer is final from here on: bump the epoch so the next wake
-      // serves the preserved snapshot, and zero the parse counter (disposed
-      // headless write callbacks never fire) so that serve can serve-mark.
-      terminal.contentEpoch++;
-      terminal.pendingHeadlessWrites = 0;
-      this.disposeHeadless();
-      // Bound the in-memory preserved-snapshot count now that this terminal's
-      // snapshot is actually present — counting it (unlike an onExit-time sweep)
-      // keeps the cap accurate under bursts of simultaneous exits.
-      this.callbacks.onPreserved?.(this.id);
-    });
-  }
-
-  // Worker-mode counterpart of the in-thread capture above: the drain +
-  // serialize happens in the worker slot; on failure the slot is kept alive
-  // (serving the live buffer beats serving nothing), matching the in-thread
-  // keep-on-serialize-failure semantics.
-  private snapshotAndDisposePreservedViaWorker(): void {
-    const terminal = this.terminalInfo;
-    void this.analysis.captureFinalSnapshot().then(({ snapshot, persistence }) => {
-      // dispose() may have run while the capture was in flight (LRU eviction,
-      // app shutdown) — the slot is already released and the registry entry
-      // may be gone; a late snapshot must not resurrect preserved state or
-      // fire onPreserved. Mirrors the in-thread capture's same-headless-
-      // instance guard.
-      if (this.lifecycle.isDisposed) {
-        return;
-      }
-      if (snapshot === null) {
-        return;
-      }
-      if (
-        TERMINAL_SESSION_PERSISTENCE_ENABLED &&
-        !isSessionPersistSuppressed() &&
-        !terminal.launchAgentId
-      ) {
-        try {
-          persistSessionSnapshotSync(this.id, persistence ?? snapshot);
-        } catch {
-          // best-effort only
-        }
-      }
-      terminal.preservedSnapshot = snapshot;
-      terminal.preservedAt = Date.now();
-      terminal.contentEpoch++;
-      terminal.pendingHeadlessWrites = 0;
-      this.analysis.release();
-      this.callbacks.onPreserved?.(this.id);
-    });
+    this.preservedSnapshotCapture.snapshotAndDispose();
   }
 
   /**
@@ -1129,151 +1066,15 @@ export class TerminalProcess {
    * but broadcast keystrokes are always single chunks so this is fine.
    */
   tryWrite(data: string, traceId?: string): { ok: boolean; error?: NodeJS.ErrnoException } {
-    const terminal = this.terminalInfo;
-    if (terminal.isExited) {
-      return {
-        ok: false,
-        error: Object.assign(new Error("terminal exited"), { code: "EBADF" }),
-      };
-    }
-    if (!terminal.ptyProcess) {
-      return {
-        ok: false,
-        error: Object.assign(new Error("terminal has no pty process"), { code: "EBADF" }),
-      };
-    }
-
-    if (data.length > 512) {
-      // Long payloads queue through chunkInput in write(); we lose precise
-      // per-call failure visibility but that path isn't used by broadcast.
-      this.write(data, traceId);
-      return { ok: true };
-    }
-
-    terminal.lastInputTime = Date.now();
-    if (traceId !== undefined) {
-      terminal.traceId = traceId || undefined;
-    }
-    if (this.analysis.hasMonitor()) {
-      if (isFocusReport(data)) {
-        this.handleFocusInput();
-      } else {
-        this.analysis.notifyInput(data);
-      }
-    }
-
-    try {
-      terminal.ptyProcess.write(data);
-      return { ok: true };
-    } catch (error) {
-      this.logWriteError(error, { operation: "tryWrite", traceId });
-      return { ok: false, error: error as NodeJS.ErrnoException };
-    }
+    return this.inputController.tryWrite(data, traceId);
   }
 
   write(data: string, traceId?: string): void {
-    const terminal = this.terminalInfo;
-    terminal.lastInputTime = Date.now();
-
-    if (terminal.isExited) {
-      return;
-    }
-
-    if (!terminal.ptyProcess) {
-      return;
-    }
-
-    if (traceId !== undefined) {
-      terminal.traceId = traceId || undefined;
-    }
-
-    if (this.analysis.hasMonitor()) {
-      if (isFocusReport(data)) {
-        this.handleFocusInput();
-      } else {
-        this.analysis.notifyInput(data);
-      }
-    }
-
-    const bracketedPaste = isBracketedPaste(data);
-    const seededCommandText = this.identityWatcher.seededCommandText;
-    const isSeededLaunchCommandSubmit =
-      !bracketedPaste &&
-      seededCommandText !== undefined &&
-      /[\r\n]/.test(data) &&
-      normalizeShellCommandText(data) === seededCommandText;
-    // Shell input capture is only meaningless when a live AGENT owns the PTY
-    // (agents have their own input semantics). A plain process badge (npm,
-    // pnpm, docker, etc.) does not change the shell semantics — the shell
-    // is still the direct recipient of typed commands, and the next command
-    // must still be visible to the fallback detector so a follow-up
-    // `pnpm build` can re-identify the badge. #5813
-    const canCaptureShellInput =
-      !bracketedPaste &&
-      (this.terminalInfo.detectedAgentId === undefined || isSeededLaunchCommandSubmit);
-    const submittedCommandText = canCaptureShellInput
-      ? this.identityWatcher.captureInput(data)
-      : undefined;
-    const pendingFallbackIdentity = this.identityWatcher.pendingFallbackIdentity;
-    const isAgentUiPromptResponse =
-      !bracketedPaste &&
-      submittedCommandText === undefined &&
-      pendingFallbackIdentity?.agentType !== undefined &&
-      (!this.identityWatcher.isFallbackCommitted ||
-        this.identityWatcher.hasAgentUiPromptFalsePositive());
-
-    if (!bracketedPaste && /[\r\n]/.test(data)) {
-      if (this.identityWatcher.consumeSuppressSignal()) {
-        // Suppression consumed — performSubmit() armed it for its body+enter sequence.
-      } else if (isAgentUiPromptResponse) {
-        logIdentityDebug(
-          `[IdentityDebug] shell-submit-skip term=${this.id.slice(-8)} reason=agent-ui-prompt`
-        );
-      } else {
-        this.identityWatcher.onShellSubmit(submittedCommandText, {
-          allowWhenAgentDetected: isSeededLaunchCommandSubmit,
-        });
-      }
-      if (isSeededLaunchCommandSubmit) {
-        this.identityWatcher.clearSeededCommandText();
-      }
-    }
-
-    if (bracketedPaste) {
-      try {
-        terminal.ptyProcess.write(data);
-      } catch (error) {
-        this.logWriteError(error, { operation: "write(bracketed-paste)", traceId });
-      }
-      return;
-    }
-
-    if (data.length <= 512) {
-      try {
-        terminal.ptyProcess.write(data);
-      } catch (error) {
-        this.logWriteError(error, { operation: "write(fast-path)", traceId });
-      }
-      return;
-    }
-
-    this.writeQueue.enqueueChunked(data);
+    this.inputController.write(data, traceId);
   }
 
   submit(text: string): void {
-    if (this.terminalInfo.isExited) {
-      return;
-    }
-
-    // Immediately notify activity monitor of the submission so the working
-    // state transitions before the async write sequence in performSubmit().
-    // Without this, the split between body write and Enter write causes the
-    // character-by-character detection in onInput() to miss the submission.
-    if (this.analysis.hasMonitor() && text.trim().length > 0) {
-      this.analysis.notifySubmission();
-    }
-
-    this.writeQueue.submit(text);
+    this.inputController.submit(text);
   }
 
   /**
@@ -1287,91 +1088,11 @@ export class TerminalProcess {
    * by `host.sendToActiveAgent(text, { submit: false })` (#10558).
    */
   stage(text: string): void {
-    const terminal = this.terminalInfo;
-    if (terminal.isExited || !terminal.ptyProcess) {
-      return;
-    }
-    const normalized = normalizeSubmitText(text);
-    const { body } = splitTrailingNewlines(normalized);
-    if (body.length === 0) {
-      return;
-    }
-    terminal.lastInputTime = Date.now();
-    const useBracketedPaste = body.includes("\n") || body.length > PASTE_THRESHOLD_CHARS;
-    if (useBracketedPaste && supportsBracketedPaste(terminal)) {
-      const pasteBody = body.replace(/\n/g, "\r");
-      this.write(`${BRACKETED_PASTE_START}${pasteBody}${BRACKETED_PASTE_END}`);
-    } else if (body.includes("\n")) {
-      this.write(body.replace(/\n/g, getSoftNewlineSequence(terminal)));
-    } else {
-      this.write(body);
-    }
+    this.inputController.stage(text);
   }
 
   private async performSubmit(text: string): Promise<void> {
-    const terminal = this.terminalInfo;
-    terminal.lastInputTime = Date.now();
-
-    if (terminal.isExited) {
-      return;
-    }
-
-    if (!terminal.ptyProcess) {
-      return;
-    }
-
-    // Notify activity monitor at execution time (not just enqueue time) to ensure
-    // the working state transition happens even for queued submissions that execute
-    // after a potential idle transition. Issue #2185.
-    if (this.analysis.hasMonitor() && text.trim().length > 0) {
-      this.analysis.notifySubmission();
-    }
-
-    const normalized = normalizeSubmitText(text);
-    const { body, enterCount } = splitTrailingNewlines(normalized);
-    const enterSuffix = "\r".repeat(enterCount);
-
-    if (body.length === 0) {
-      this.identityWatcher.armSuppressSignal();
-      this.write(enterSuffix);
-      return;
-    }
-
-    const useBracketedPaste = body.includes("\n") || body.length > PASTE_THRESHOLD_CHARS;
-    const useOutputSettle = !supportsBracketedPaste(terminal);
-
-    if (useBracketedPaste && supportsBracketedPaste(terminal)) {
-      const pasteBody = body.replace(/\n/g, "\r");
-      const payload = `${BRACKETED_PASTE_START}${pasteBody}${BRACKETED_PASTE_END}`;
-      this.write(payload);
-    } else {
-      if (body.includes("\n") && !supportsBracketedPaste(terminal)) {
-        const softNewline = getSoftNewlineSequence(terminal);
-        this.write(body.replace(/\n/g, softNewline));
-      } else {
-        this.write(body);
-      }
-    }
-
-    await this.writeQueue.waitForInputWriteDrain();
-
-    if (useOutputSettle) {
-      await this.writeQueue.waitForOutputSettle({
-        debounceMs: OUTPUT_SETTLE_DEBOUNCE_MS,
-        maxWaitMs: OUTPUT_SETTLE_MAX_WAIT_MS,
-        pollMs: OUTPUT_SETTLE_POLL_INTERVAL_MS,
-      });
-    } else {
-      await delay(getSubmitEnterDelay(terminal));
-    }
-
-    if (!this.terminalInfo.ptyProcess) {
-      return;
-    }
-
-    this.identityWatcher.armSuppressSignal();
-    this.identityWatcher.onShellSubmit(body);
-    this.write(enterSuffix);
+    await this.inputController.performSubmit(text);
   }
 
   resize(cols: number, rows: number): void {
@@ -1688,7 +1409,7 @@ export class TerminalProcess {
   setActivityMonitorTier(tier: "active" | "background", pollingIntervalMs: number): void {
     // The tier is authoritative; the polling interval is only a cadence hint
     // (issue #8596 — VISIBLE-unfocused panes are "active" at 200ms). Output is
-    // never coalesced anymore (it streams live through _runPtyPipeline), so this
+    // never coalesced anymore (it streams live through PtyDataPipeline), so this
     // only adjusts the headless agent-state poll cadence.
     this._activityTier = tier;
 
@@ -1833,15 +1554,6 @@ export class TerminalProcess {
     }
   }
 
-  // Side-effects shared by both PTY write paths when xterm forwards a CSI I/O
-  // focus report. Mirrors the resize handler's pattern (notifyResize +
-  // agentOutputTemperature.noteResize): open the ActivityMonitor suppression
-  // window AND invalidate the agentOutputTemperature baseline so the redraw
-  // that follows the focus event is treated as a fresh comparison point.
-  private handleFocusInput(): void {
-    this.analysis.notifyFocus();
-  }
-
   /**
    * Wired into `ActivityMonitor` via `onBootComplete`. Captures
    * `bootCompleteAt` on the terminal once per boot cycle and emits a
@@ -1921,82 +1633,7 @@ export class TerminalProcess {
   }
 
   private handlePtyData(ptyProcess: pty.IPty, data: string): void {
-    const terminal = this.terminalInfo;
-    if (terminal.ptyProcess !== ptyProcess) {
-      return;
-    }
-
-    const now = Date.now();
-    // One-shot startup metric: wall-clock time of the first PTY data byte.
-    // Surfaces in `getPublicState()` and the `[AgentStartup]` structured log.
-    if (terminal.firstByteAt === undefined) {
-      terminal.firstByteAt = now;
-    }
-    terminal.lastOutputTime = now;
-
-    // Hibernation removed: PTY output ALWAYS flows through the live parse
-    // pipeline regardless of activity tier, so a backgrounded pane's renderer
-    // buffer stays current instead of being held in a coalesce queue until
-    // reveal. The agent-state poll cadence (50ms active / 500ms background, set
-    // in setActivityMonitorTier) still throttles the headless poll loop.
-    this._runPtyPipeline(data);
-  }
-
-  /**
-   * The per-chunk parse pipeline downstream of the OSC 9;4 tap and timestamp
-   * bookkeeping. Runs immediately for every chunk regardless of activity tier.
-   * `data` is the raw PTY string; the renderer-bound copy is derived here after
-   * OSC color queries are answered.
-   */
-  private _runPtyPipeline(data: string): void {
-    const terminal = this.terminalInfo;
-
-    // OSC 10/11 color queries are answered whenever the terminal is agent-owned
-    // (spawn-time agent panel OR runtime-promoted plain terminal). The
-    // call-site gate and quick-test heuristic stay here; the responder logic
-    // lives in OscResponder. See OscResponder.ts for the strip-on-success
-    // contract that keeps the renderer's xterm.js from double-responding.
-    // This is the ONLY stage that must precede the forward — it derives the
-    // renderer-bound copy.
-    let rendererData = data;
-    if (this.shouldHandleOscColorQueries && data.includes("\x1b]1")) {
-      rendererData = handleOscColorQueries(data, (response) => {
-        terminal.ptyProcess.write(response);
-      });
-    }
-
-    // Forward to the renderer before the analysis stages below: they are
-    // bookkeeping the user never sees, and on the batcher's synchronous
-    // threshold-flush path every pre-forward millisecond is a millisecond
-    // added to the visible frame's latency.
-    this.emitData(rendererData);
-
-    // Analysis stack: OSC 9;4 tap, ActivityMonitor onData, headless mirror
-    // write, agent-output temperature. In worker mode this is one postMessage.
-    this.analysis.feedChunk(data, {
-      agentLive: this.isAgentLive,
-      agentState: terminal.agentState,
-    });
-    this.sessionSnapshotter.schedule();
-
-    this.forensicsBuffer.capture(data);
-    this.identityWatcher.observeOutput(data);
-    this.semanticBufferManager.onData(data);
-
-    // Output mirror for agent consumers: keep a rolling recent-output
-    // buffer and emit agent:output whenever an agent is live (launched
-    // hint or detection). Plain terminals skip both to save work.
-    if (this.isAgentLive) {
-      terminal.outputBuffer += data;
-      if (terminal.outputBuffer.length > OUTPUT_BUFFER_SIZE) {
-        terminal.outputBuffer = terminal.outputBuffer.slice(-OUTPUT_BUFFER_SIZE);
-      }
-
-      const liveId = getLiveAgentId(terminal);
-      if (liveId) {
-        this.queueAgentOutput(liveId, data);
-      }
-    }
+    this.ptyDataPipeline.handlePtyData(ptyProcess, data);
   }
 
   private feedChunkInThread(data: string): void {
@@ -2043,138 +1680,19 @@ export class TerminalProcess {
   }
 
   private queueAgentOutput(agentId: string, data: string): void {
-    if (this.pendingAgentOutputAgentId !== null && this.pendingAgentOutputAgentId !== agentId) {
-      this.flushAgentOutput();
-    }
-    this.pendingAgentOutputAgentId = agentId;
-    this.pendingAgentOutput += data;
-
-    if (this.pendingAgentOutput.length >= OUTPUT_BUFFER_SIZE) {
-      this.flushAgentOutput();
-      return;
-    }
-    if (this.agentOutputFlushTimer) {
-      return;
-    }
-    this.agentOutputFlushTimer = setTimeout(() => {
-      this.agentOutputFlushTimer = null;
-      this.flushAgentOutput();
-    }, AGENT_OUTPUT_FLUSH_INTERVAL_MS);
+    this.agentOutputForwarder.queue(agentId, data);
   }
 
   private flushAgentOutput(): void {
-    if (this.agentOutputFlushTimer) {
-      clearTimeout(this.agentOutputFlushTimer);
-      this.agentOutputFlushTimer = null;
-    }
-    if (!this.pendingAgentOutput || this.pendingAgentOutputAgentId === null) {
-      return;
-    }
-    const agentId = this.pendingAgentOutputAgentId;
-    const data = this.pendingAgentOutput;
-    this.pendingAgentOutput = "";
-    this.pendingAgentOutputAgentId = null;
-    events.emit("agent:output", {
-      agentId,
-      data,
-      timestamp: Date.now(),
-      traceId: this.terminalInfo.traceId,
-      terminalId: this.id,
-    });
+    this.agentOutputForwarder.flush();
   }
 
   private setupPtyHandlers(ptyProcess: pty.IPty, dataHandoff?: PooledPtyDataHandoff): void {
-    const terminal = this.terminalInfo;
     const onData = (data: string) => this.handlePtyData(ptyProcess, data);
     this.ptyDataDisposable = dataHandoff ? dataHandoff.takeOver(onData) : ptyProcess.onData(onData);
 
     ptyProcess.onExit(({ exitCode, signal }) => {
-      if (terminal.ptyProcess !== ptyProcess) {
-        return;
-      }
-
-      // dispose() may have already emitted terminal:exited and notified
-      // the registry via callbacks.onExit. A late OS-delivered exit must
-      // not double-fire either path — both downstream subscribers and
-      // PtyManager are not idempotent.
-      if (this.exitObservers.hasEmitted) {
-        return;
-      }
-
-      this.identityWatcher.stop();
-
-      // Capture forensic tail before disposeHeadless() clears the buffer.
-      // The terminal:exited subscriber reads this via the payload — once
-      // `disposeHeadless` runs, `forensicsBuffer.getRecentOutput()` is gone.
-      const recentOutput = this.forensicsBuffer.getRecentOutput();
-
-      // teardown() returns false when kill() / dispose() got here first,
-      // in which case the prior reason is preserved in lifecycle state. The
-      // event payload still carries the actual exit code from the PTY,
-      // so subscribers see e.g. `reason: "kill"` with `code: 0`.
-      const teardownReason = this.lifecycle.getExitReason() ?? "natural";
-      this.teardown("natural");
-      this.sessionSnapshotter.dispose();
-
-      const reasonForEvent = this.lifecycle.getExitReason() ?? teardownReason;
-
-      const previousAgent = terminal.detectedAgentId;
-      const hadDetectedIdentity =
-        previousAgent !== undefined ||
-        terminal.detectedProcessIconId !== undefined ||
-        this.lastDetectedProcessIconId !== undefined;
-      if (hadDetectedIdentity && !terminal.wasKilled) {
-        terminal.detectedAgentId = undefined;
-        terminal.detectedProcessIconId = undefined;
-        this.lastDetectedProcessIconId = undefined;
-        if (previousAgent) {
-          terminal.analysisEnabled = false;
-        }
-        const nextTitle = computeDefaultTitle(terminal);
-        if (previousAgent && (terminal.titleMode ?? "default") === "default") {
-          terminal.title = nextTitle;
-        }
-        events.emit("agent:exited", {
-          terminalId: this.id,
-          agentType: previousAgent,
-          defaultTitle: previousAgent ? nextTitle : undefined,
-          timestamp: Date.now(),
-          ...(previousAgent ? { exitKind: "terminal" as const } : {}),
-        });
-      }
-
-      this.callbacks.onExit(this.id, exitCode ?? 0, signal ?? undefined);
-
-      this.emitTerminalExited({
-        code: exitCode ?? 0,
-        signal,
-        reason: reasonForEvent,
-        recentOutput,
-      });
-
-      // Persist exit metadata on every natural exit — not just the preserve
-      // path. The exit code is the authoritative pass/fail signal an MCP
-      // supervisor reads, and gating it on preserve-on-exit left ephemeral
-      // terminals with no recorded outcome (#10638). A user kill is not an
-      // outcome, so it is still excluded — that path emits agent:killed, not a
-      // completion. The write sits inside the ptyProcess identity guard and
-      // hasEmitted dedup above, so a stale exit from a respawned PTY cannot
-      // overwrite the live session (lesson #5948).
-      if (!terminal.wasKilled) {
-        terminal.exitCode = exitCode ?? 0;
-        terminal.exitSignal = signal;
-        terminal.isExited = true;
-      }
-
-      const preserve = this.shouldPreserveOnExit(exitCode ?? 0);
-      if (preserve) {
-        this.lifecycle.setExited({ code: exitCode ?? 0, signal, reason: reasonForEvent });
-        this.snapshotAndDisposePreserved();
-        return;
-      }
-
-      this.disposeHeadless();
-      this.lifecycle.setDisposed(reasonForEvent);
+      this.exitHandler.handleExit(ptyProcess, exitCode, signal);
     });
   }
 
