@@ -13,7 +13,7 @@ function makeShard(overrides: { registerResult?: unknown; registerError?: Error 
         calls.push("generateId");
         return suffix ? `req-1-${suffix}` : "req-1";
       }),
-      register: vi.fn((requestId: string, options?: unknown) => {
+      register: vi.fn((_requestId: string, options?: unknown) => {
         calls.push("register");
         registerArgs.push(options);
         if (overrides.registerError) {

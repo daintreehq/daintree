@@ -684,16 +684,6 @@ export class PtyClient extends EventEmitter {
     return this.placementRouter.peekPlacementKey(projectId);
   }
 
-  /**
-   * Placement with admission: existing shard or override wins; a brand-new
-   * project beyond the shard cap is pinned to the default shard for the rest
-   * of the session (stable placement — a project never flip-flops between
-   * shards while it has live terminals).
-   */
-  private resolvePlacementKey(projectId: string | null | undefined): string {
-    return this.placementRouter.resolvePlacementKey(projectId);
-  }
-
   private ensureShardForProject(projectId: string | null | undefined): PtyShard {
     return this.placementRouter.ensureShardForProject(projectId);
   }

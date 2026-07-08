@@ -186,13 +186,13 @@ describe("mergeFlowControlSnapshots", () => {
       {
         shardKey: "main",
         snapshot: makeFlowControlSnapshot({
-          eventLoop: { p50Ms: 1, p95Ms: 2, p99Ms: 5, maxMs: 10, sampleCount: 100 },
+          eventLoop: { p99Ms: 5, maxMs: 10, utilization: 0.1 },
         }),
       },
       {
         shardKey: "proj-a",
         snapshot: makeFlowControlSnapshot({
-          eventLoop: { p50Ms: 1, p95Ms: 2, p99Ms: 40, maxMs: 50, sampleCount: 100 },
+          eventLoop: { p99Ms: 40, maxMs: 50, utilization: 0.4 },
         }),
       },
     ]);
