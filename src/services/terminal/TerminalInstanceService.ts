@@ -61,7 +61,6 @@ import {
 import { TerminalWorkerIngestController } from "./TerminalWorkerIngestController";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
-import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { stripAnsiAndOscCodes } from "@shared/utils/urlUtils";
 
 export { isNonKeyboardInput } from "./inputUtils";
