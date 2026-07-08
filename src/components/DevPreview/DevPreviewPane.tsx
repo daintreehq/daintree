@@ -435,7 +435,7 @@ export function DevPreviewPane({
     setWebviewLoadError(null);
     clearRetryState();
     setCommandInput("");
-  }, [isUnconfigured, id, setBrowserUrl, setWebviewLoadError, clearRetryState]);
+  }, [isUnconfigured, id, setBrowserUrl, setWebviewLoadError, clearRetryState, setCommandInput]);
 
   const setWebviewNode = useCallback(
     (node: Electron.WebviewTag | null) => {

@@ -147,7 +147,7 @@ export function useDevPreviewViewport({
     } catch {
       // WebContents not available (webview detached)
     }
-  }, [viewportPreset, viewportRotated, viewportDpr, isWebviewReady, webviewElement]);
+  }, [viewportPreset, viewportRotated, viewportDpr, isWebviewReady, webviewElement, originalUaRef]);
 
   return {
     effectiveViewport,
