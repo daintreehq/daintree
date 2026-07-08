@@ -11,10 +11,8 @@ import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { usePanelStore, useProjectStore } from "@/store";
 import { isPtyPanel } from "@shared/types/panel";
 import { projectClient } from "@/clients/projectClient";
-import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { ActionContext } from "@shared/types/actions";
 import { ACTIVE_AGENT_STATES } from "@shared/types/agent";
 import { buildResumeCommand, buildResumeLatestCommand } from "@shared/types/agentSettings";
@@ -31,6 +29,7 @@ import {
 } from "./HelpSessionProvisioner";
 import { HelpVersionGate, checkAssistantVersion } from "./HelpVersionGate";
 import { LaunchNotifications, notifyLaunchFailed } from "./LaunchNotifications";
+import { McpActivityTracker } from "./McpActivityTracker";
 
 const HIBERNATE_VALID_MINUTES: readonly number[] = [0, 5, 15, 30, 60, 120];
 const DEFAULT_HIBERNATE_MINUTES = 5;
@@ -39,11 +38,6 @@ const DEFAULT_HIBERNATE_MINUTES = 5;
 // cleanly until the conversation is idle without restarting the full
 // countdown each time.
 const HIBERNATE_BUSY_RECHECK_MS = 2 * 60 * 1000;
-
-// The "approval ended" notice (#10042) lingers a touch longer than the
-// snapshot banner — it tells the user their per-tool grant lapsed and the
-// next call will prompt again, which is worth a beat to read.
-const GRANT_ENDED_BANNER_AUTO_DISMISS_MS = 15_000;
 
 export type HelpSessionPhase =
   | "idle"
@@ -371,15 +365,7 @@ export class HelpSessionController {
   private _isSystemSuspended = false;
   private _hibernateMinutes = DEFAULT_HIBERNATE_MINUTES;
   private _hibernateTimer: ReturnType<typeof setTimeout> | null = null;
-  private _grantEndedBannerTimer: ReturnType<typeof setTimeout> | null = null;
   private _disposers: Array<() => void> = [];
-  /**
-   * Turn id the pending outcome alert (#10018) was recorded for, or null when
-   * the alert carried none (`agent-stuck`, whose turn id is already cleared by
-   * the time the watchdog fires). Used to auto-clear the pip when a tool call
-   * from a different turn arrives — i.e. the agent has resumed work.
-   */
-  private _outcomeAlertTurnId: string | null = null;
   private _lastInputs: HelpSessionInputs | null = null;
   private _hibernateArmedFor: {
     terminalId: string;
@@ -402,6 +388,11 @@ export class HelpSessionController {
     isPanelOpen: () => this._lastInputs?.isOpen === true,
   });
 
+  private readonly _mcpTracker = new McpActivityTracker({
+    getSnapshot: () => this._snapshot,
+    patch: (partial) => this._patch(partial),
+  });
+
   // Bound for stable references across StrictMode re-subscribe.
   subscribe = (listener: () => void): (() => void) => {
     this._listeners.add(listener);
@@ -421,70 +412,7 @@ export class HelpSessionController {
     if (this._started) return;
     this._started = true;
 
-    const disposeTier = window.electron.mcpServer.onTierNotPermitted((payload) => {
-      const projectId = useProjectStore.getState().currentProject?.id ?? null;
-      // A fresh denial supersedes any lingering "approval ended" notice — the
-      // banner the user is about to re-approve from carries the same signal.
-      this._clearGrantEndedTimer();
-      this._patch({
-        tierMismatch: {
-          sessionId: payload.sessionId,
-          toolId: payload.toolId,
-          tier: payload.tier,
-          targetTier: payload.targetTier,
-          projectId,
-        },
-        grantEnded: null,
-      });
-    });
-    this._disposers.push(disposeTier);
-
-    const disposeRevoked = window.electron.mcpServer.onSessionRevoked((payload) => {
-      // Only surface a revoke that matches the session this panel currently
-      // holds. A live session always has its id committed to the store before
-      // any tool call (and thus before any denial/revoke), so a null or
-      // mismatched `sessionId` here means the revoke is for a torn-down or
-      // mid-relaunch session — painting its banner would stomp the fresh
-      // launch the user just started to escape it (#10017).
-      const currentSessionId = useHelpPanelStore.getState().sessionId;
-      if (currentSessionId === null || payload.sessionId !== currentSessionId) return;
-      this._patch({
-        sessionRevoked: { sessionId: payload.sessionId, denialKind: payload.denialKind },
-      });
-    });
-    this._disposers.push(disposeRevoked);
-
-    const disposeGrant = window.electron.mcpServer.onGrantLifecycle((payload) => {
-      this._onGrantLifecycle(payload);
-    });
-    this._disposers.push(disposeGrant);
-
-    const disposeToolStarted = window.electron.mcpServer.onToolCallStarted((payload) => {
-      this._onToolCallStarted(payload);
-    });
-    const disposeToolSettled = window.electron.mcpServer.onToolCallSettled((payload) => {
-      this._onToolCallSettled(payload);
-    });
-    this._disposers.push(disposeToolStarted, disposeToolSettled);
-
-    const disposeOutcomeAlert = window.electron.mcpServer.onTurnOutcomeAlert((payload) => {
-      this._onTurnOutcomeAlert(payload);
-    });
-    this._disposers.push(disposeOutcomeAlert);
-
-    const disposeDisplayImage = window.electron.mcpServer.onDisplayImage((payload) => {
-      // The main process already validated the URL and assigned the figure
-      // number (#9828); the renderer just records the figure for inline display.
-      useHelpPanelStore.getState().addFigure({
-        imageId: payload.imageId,
-        figureNumber: payload.figureNumber,
-        figureLabel: payload.figureLabel,
-        url: payload.url,
-        ...(payload.caption !== undefined ? { caption: payload.caption } : {}),
-        ...(payload.altText !== undefined ? { altText: payload.altText } : {}),
-      });
-    });
-    this._disposers.push(disposeDisplayImage);
+    this._mcpTracker.start();
 
     const offSuspend = window.electron.systemSleep.onSuspend(() => {
       this._isSystemSuspended = true;
@@ -506,9 +434,9 @@ export class HelpSessionController {
       }
     }
     this._disposers = [];
+    this._mcpTracker.dispose();
     this._clearHibernateTimer();
     this._launchNotifications.dispose();
-    this._clearGrantEndedTimer();
     this._versionGate.clearCooldownTimer();
     this._clearLaunchWatchdog();
     // Release the re-entrancy guard on teardown so a same-instance start() after
@@ -592,9 +520,9 @@ export class HelpSessionController {
     // grant countdown/notice so they don't outlive the session (#10042), and
     // clear any pending outcome pip (#10018) so it can't bleed into the next
     // session.
-    this.clearMcpActivity();
-    this._clearGrantState();
-    this._clearOutcomeAlert();
+    this._mcpTracker.clearActivity();
+    this._mcpTracker.clearGrantState();
+    this._mcpTracker.clearOutcomeAlert();
 
     if (hibernating) {
       this._hasAutoLaunched = false;
@@ -955,21 +883,7 @@ export class HelpSessionController {
   }
 
   dismissTierMismatch(): void {
-    // Capture the session before clearing the banner — `_patch` runs
-    // synchronously, so reading after would see a null `tierMismatch`.
-    const sessionId = this._snapshot.tierMismatch?.sessionId ?? null;
-    this._patch({ tierMismatch: null });
-    if (!sessionId) return;
-    // Dismissing the banner without approving must re-arm it: reset the
-    // denial counters so the next out-of-tier call shows the banner again
-    // instead of being silently suppressed once the abuse policy threshold is
-    // crossed (#10017). This clears the counters for ALL tools in the session,
-    // not just the dismissed one — Cancel means "show me again for anything in
-    // this session"; the threshold re-accrues from zero per tool. Grants
-    // (the per-tool approval lifecycle) are left untouched.
-    safeFireAndForget(window.electron.mcpServer.resetDenialCounts({ sessionId }), {
-      context: "Help: reset denial counts on tier-mismatch dismiss",
-    });
+    this._mcpTracker.dismissTierMismatch();
   }
 
   dismissLaunchError(): void {
@@ -977,129 +891,23 @@ export class HelpSessionController {
   }
 
   dismissSessionRevoked(): void {
-    this._patch({ sessionRevoked: null });
+    this._mcpTracker.dismissSessionRevoked();
   }
 
   dismissGrantEnded(): void {
-    this._clearGrantEndedTimer();
-    this._patch({ grantEnded: null });
+    this._mcpTracker.dismissGrantEnded();
   }
 
-  /**
-   * End the live "Approve once" grant early (#10042). Revokes every grant on
-   * the session — the help session only ever holds one per-tool grant at a
-   * time, so this maps to the single banner the user sees. Normally the
-   * `grant.revoked` lifecycle event (reason `user`) clears the banner first;
-   * the `.then` clears `activeGrant` as a renderer-authoritative fallback so a
-   * dropped event (WebContents torn down before it fired) can't leave a zombie
-   * countdown. The fallback runs only on success and is scoped to the exact
-   * `(session, toolId)` we revoked, so a failed revoke leaves the banner up as
-   * its own retry surface and a newer grant that arrived meanwhile survives.
-   * No `ConfirmDialog` — this is a D1 action whose inverse (re-approve) is one
-   * tool call away.
-   */
   revokeGrant(): void {
-    const active = this._snapshot.activeGrant;
-    if (!active || this._snapshot.isRevokingGrant) return;
-    const { sessionId, toolId } = active;
-    this._patch({ isRevokingGrant: true });
-    safeFireAndForget(
-      window.electron.mcpServer
-        .revokeSessionGrants({ sessionId })
-        .then(() => {
-          // Renderer-authoritative clear on success: normally the
-          // `grant.revoked` (reason `user`) lifecycle event already cleared the
-          // banner; this covers a dropped event (WebContents torn down before
-          // it fired). Scoped to the exact `(session, toolId)` we revoked so a
-          // newer grant that arrived in the meantime survives.
-          const current = this._snapshot.activeGrant;
-          if (current?.sessionId === sessionId && current?.toolId === toolId) {
-            this._patch({ activeGrant: null });
-          }
-        })
-        .catch((err) => {
-          // The grant is still live and its countdown banner stays put, so the
-          // banner itself is the retry surface — diagnostic only, no toast.
-          logError("HelpPanel: revokeSessionGrants failed", err);
-        })
-        .finally(() => {
-          this._patch({ isRevokingGrant: false });
-        }),
-      { context: "HelpPanel:revokeGrant" }
-    );
+    this._mcpTracker.revokeGrant();
   }
 
   approveTierOnce(): void {
-    const current = this._snapshot.tierMismatch;
-    if (!current?.targetTier || this._snapshot.isApprovingTier) return;
-    const { sessionId, toolId } = current;
-    this._patch({ isApprovingTier: true });
-    safeFireAndForget(
-      window.electron.mcpServer
-        // "Approve once" mints a per-tool, time-bounded grant for this
-        // session — it does NOT elevate the session tier. The "Always
-        // allow" path is the only remaining caller of `setSessionTier`
-        // (#8442).
-        .issueGrant({ sessionId, toolId })
-        .then(() => {
-          this._clearTierMismatchIfStillCurrent(sessionId, toolId);
-        })
-        .catch((err) => {
-          logError("HelpPanel: issueGrant failed", err);
-          // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-          notify({
-            type: "error",
-            title: "Couldn't approve tool",
-            message: formatErrorMessage(err, "Couldn't grant access to this tool."),
-          });
-        })
-        .finally(() => {
-          this._patch({ isApprovingTier: false });
-        }),
-      { context: "HelpPanel:issueGrant" }
-    );
+    this._mcpTracker.approveTierOnce();
   }
 
   alwaysAllowTier(): void {
-    const current = this._snapshot.tierMismatch;
-    if (!current?.targetTier || this._snapshot.isApprovingTier) return;
-    // Use the project captured at event time — `current.projectId` is
-    // immutable for this banner, so a project switch after the banner
-    // appears doesn't redirect the save to the wrong project.
-    const projectId = current.projectId ?? useProjectStore.getState().currentProject?.id ?? null;
-    if (!projectId) {
-      this.dismissTierMismatch();
-      return;
-    }
-    const { targetTier, sessionId, toolId } = current;
-    this._patch({ isApprovingTier: true });
-    safeFireAndForget(
-      (async () => {
-        // projectClient.saveSettings goes directly to the IPC handler —
-        // the `project.saveSettings` action sanitizes `daintreeMcpTier`
-        // out to keep agents from self-elevating.
-        const settings = await projectClient.getSettings(projectId);
-        await projectClient.saveSettings(projectId, {
-          ...settings,
-          daintreeMcpTier: targetTier,
-        });
-        await window.electron.mcpServer.setSessionTier({ sessionId, tier: targetTier });
-        this._clearTierMismatchIfStillCurrent(sessionId, toolId);
-      })()
-        .catch((err) => {
-          logError("HelpPanel: always-allow tier write failed", err);
-          // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-          notify({
-            type: "error",
-            title: "Couldn't save permission",
-            message: formatErrorMessage(err, "Couldn't update project tier setting."),
-          });
-        })
-        .finally(() => {
-          this._patch({ isApprovingTier: false });
-        }),
-      { context: "HelpPanel:alwaysAllowTier" }
-    );
+    this._mcpTracker.alwaysAllowTier();
   }
 
   /**
@@ -1159,9 +967,9 @@ export class HelpSessionController {
     usePanelStore.getState().removePanel(existingTerminalId);
     useHelpPanelStore.getState().clearTerminal();
     useHelpPanelStore.getState().clearFigures();
-    this.clearMcpActivity();
-    this._clearGrantState();
-    this._clearOutcomeAlert();
+    this._mcpTracker.clearActivity();
+    this._mcpTracker.clearGrantState();
+    this._mcpTracker.clearOutcomeAlert();
   }
 
   /**
@@ -1211,135 +1019,14 @@ export class HelpSessionController {
     this._launchNotifications.surfaceLaunchError(agentId, kind);
   }
 
-  /**
-   * Handle a live `tool-call-started` push (#9759). Coalesces bursts within
-   * the same turn into a single row ("N calls · latest tool") and clears any
-   * lingering errored row — a new call always supersedes the previous result.
-   */
-  private _onToolCallStarted(
-    payload: import("@shared/types/ipc/mcpServer").McpToolCallStartedPayload
-  ): void {
-    const prev = this._snapshot.mcpActivity;
-    // Coalesce only within the same turn: a burst of calls the model fires in
-    // one turn collapses to a count, but a new turn starts a fresh row. Calls
-    // outside a turn boundary (`turnId` absent) never coalesce — last wins.
-    const sameTurn =
-      prev !== null &&
-      payload.turnId !== undefined &&
-      prev.turnId !== undefined &&
-      prev.turnId === payload.turnId;
-    const callCount = sameTurn && prev ? prev.callCount + 1 : 1;
-    // Outstanding-call tracking: a same-turn start joins the burst's pending
-    // pool (settled rows have drained to 0). A new turn starts a fresh pool.
-    const pendingCalls = sameTurn && prev ? prev.pendingCalls + 1 : 1;
-    this._patch({
-      mcpActivity: {
-        status: "in-flight",
-        toolId: payload.toolId,
-        argsSummary: payload.argsSummary,
-        startedAt: payload.startedAt,
-        danger: payload.danger,
-        callCount,
-        pendingCalls,
-        ...(payload.turnId !== undefined ? { turnId: payload.turnId } : {}),
-        isError: false,
-      },
-    });
-    // Auto-clear the outcome pip (#10018) once the agent resumes work in a
-    // fresh turn — a tool call whose turn differs from the alert's turn means
-    // the stuck/looping turn is behind us. `agent-stuck` alerts carry no turn
-    // id (`_outcomeAlertTurnId` is null), so any turn-stamped call clears them.
-    if (
-      this._snapshot.outcomeAlert !== null &&
-      payload.turnId !== undefined &&
-      payload.turnId !== this._outcomeAlertTurnId
-    ) {
-      this._patch({ outcomeAlert: null });
-    }
-  }
-
-  /**
-   * Handle a live `tool-call-settled` push (#9759). Transitions the current
-   * in-flight row to its settled (dimmed glyph + duration) appearance. A push
-   * with no current row is ignored — there's nothing on screen to settle.
-   */
-  private _onToolCallSettled(
-    payload: import("@shared/types/ipc/mcpServer").McpToolCallSettledPayload
-  ): void {
-    const prev = this._snapshot.mcpActivity;
-    if (prev === null) return;
-    // A settle from a different turn must not regress the current row — a
-    // slow call from the previous turn can land after the next turn's call
-    // already started. Settles with no turnId (turn boundary already passed,
-    // or no turn was active) still apply: they belong to the row last shown.
-    if (
-      prev.turnId !== undefined &&
-      payload.turnId !== undefined &&
-      payload.turnId !== prev.turnId
-    ) {
-      return;
-    }
-    // Drain one call from the burst's pending pool. While calls remain
-    // outstanding the row stays in-flight — an early settle from call A must
-    // not flip a coalesced row to "settled" while call B is still running.
-    const pendingCalls = Math.max(0, prev.pendingCalls - 1);
-    if (prev.status === "in-flight" && pendingCalls > 0) {
-      this._patch({ mcpActivity: { ...prev, pendingCalls } });
-      return;
-    }
-    const isError = payload.severity === "error" || payload.severity === "critical";
-    this._patch({
-      mcpActivity: {
-        ...prev,
-        status: "settled",
-        // Reflect the settled call's tool so the glyph labels the right call
-        // even when a burst's latest started differs from what just settled.
-        toolId: payload.toolId,
-        danger: false,
-        durationMs: payload.durationMs,
-        result: payload.result,
-        severity: payload.severity,
-        isError,
-        pendingCalls,
-      },
-    });
-  }
-
-  /**
-   * Handle a live turn-outcome alert push (#10018). Surfaces the `agent-stuck`
-   * / `reasoning-loop` outcome as the footer's ambient pip. The targeted send
-   * already routes only to this session's pinned WebContents, so no session
-   * filtering is needed here (matches `_onToolCallStarted`). The carried turn
-   * id (absent for `agent-stuck`) is retained so the pip auto-clears once the
-   * agent starts a fresh turn.
-   */
-  private _onTurnOutcomeAlert(
-    payload: import("@shared/types/ipc/mcpServer").McpTurnOutcomeAlertPayload
-  ): void {
-    this._outcomeAlertTurnId = payload.turnId ?? null;
-    this._patch({ outcomeAlert: payload.outcome });
-  }
-
   /** Dismiss the ambient outcome pip (#10018). User-driven click-to-clear. */
   dismissOutcomeAlert(): void {
-    this._clearOutcomeAlert();
-  }
-
-  /**
-   * Drop any pending outcome pip and its retained turn id (#10018). Shared by
-   * the user dismiss path and session teardown/replacement — a pip for a
-   * session that's gone must never linger into its successor.
-   */
-  private _clearOutcomeAlert(): void {
-    this._outcomeAlertTurnId = null;
-    if (this._snapshot.outcomeAlert === null) return;
-    this._patch({ outcomeAlert: null });
+    this._mcpTracker.dismissOutcomeAlert();
   }
 
   /** Clear the live activity strip (e.g. on session teardown). */
   clearMcpActivity(): void {
-    if (this._snapshot.mcpActivity === null) return;
-    this._patch({ mcpActivity: null });
+    this._mcpTracker.clearActivity();
   }
 
   private _patch(partial: Partial<HelpSessionSnapshot>): void {
@@ -1380,88 +1067,6 @@ export class HelpSessionController {
       clearTimeout(this._hibernateTimer);
       this._hibernateTimer = null;
     }
-  }
-
-  /**
-   * Consume a live grant lifecycle push (#10042). `grant.issued` arms the
-   * countdown banner and dismisses the mismatch that prompted it;
-   * `grant.expired`/`grant.revoked` retire the banner and, for the two
-   * user-actionable reasons, surface a brief "approval ended" notice. The
-   * `expired`/`revoked` cases are scoped to the grant currently on screen so a
-   * stale lapse for a different tool can't wipe the active countdown.
-   * `tier.elevated`/`tier.decayed` are session-tier transitions, not per-tool
-   * grants — they leave the countdown untouched (the audit viewer records
-   * them).
-   */
-  private _onGrantLifecycle(
-    payload: import("@shared/types/ipc/mcpServer").McpGrantLifecyclePayload
-  ): void {
-    if (payload.type === "grant.issued") {
-      // `expiresAt` is always set on `grant.issued`; bail defensively if a
-      // malformed payload omits it rather than seed a NaN countdown.
-      if (payload.expiresAt === undefined) return;
-      this._clearGrantEndedTimer();
-      this._patch({
-        activeGrant: {
-          sessionId: payload.sessionId,
-          toolId: payload.toolId,
-          expiresAt: payload.expiresAt,
-          ttlMs: payload.ttlMs,
-        },
-        grantEnded: null,
-      });
-      // The mint resolves the mismatch that triggered it. Idempotent with the
-      // fallback clear in `approveTierOnce`'s `.then` — whichever runs first.
-      this._clearTierMismatchIfStillCurrent(payload.sessionId, payload.toolId);
-      return;
-    }
-    if (payload.type === "grant.expired" || payload.type === "grant.revoked") {
-      const active = this._snapshot.activeGrant;
-      if (!active || active.sessionId !== payload.sessionId || active.toolId !== payload.toolId) {
-        return;
-      }
-      const reason = this._grantEndReason(payload);
-      this._clearGrantEndedTimer();
-      this._patch({
-        activeGrant: null,
-        grantEnded: reason ? { toolId: payload.toolId, reason } : null,
-      });
-      if (reason) this._armGrantEndedAutoDismiss();
-    }
-  }
-
-  /**
-   * The user-actionable subset of how a grant ended. Passive expiry and the
-   * 30-minute ceiling are worth a notice; a user-initiated revoke and session
-   * teardown/idle are not (the user did it, or the session is already gone).
-   */
-  private _grantEndReason(
-    payload: import("@shared/types/ipc/mcpServer").McpGrantLifecyclePayload
-  ): GrantEndReason | null {
-    if (payload.type === "grant.expired") return "expired";
-    return payload.revokedReason === "grant-ceiling" ? "grant-ceiling" : null;
-  }
-
-  private _clearGrantState(): void {
-    this._clearGrantEndedTimer();
-    // Clear `isRevokingGrant` too: a teardown mid-revoke would otherwise leak
-    // a stuck-disabled "Revoke access" button into the next session's grant.
-    this._patch({ activeGrant: null, grantEnded: null, isRevokingGrant: false });
-  }
-
-  private _clearGrantEndedTimer(): void {
-    if (this._grantEndedBannerTimer) {
-      clearTimeout(this._grantEndedBannerTimer);
-      this._grantEndedBannerTimer = null;
-    }
-  }
-
-  private _armGrantEndedAutoDismiss(): void {
-    this._clearGrantEndedTimer();
-    this._grantEndedBannerTimer = setTimeout(() => {
-      this._grantEndedBannerTimer = null;
-      this._patch({ grantEnded: null });
-    }, GRANT_ENDED_BANNER_AUTO_DISMISS_MS);
   }
 
   private _revokePendingSession(): void {
@@ -1505,13 +1110,6 @@ export class HelpSessionController {
     }
     if (options.resetAutoLaunch) {
       this._hasAutoLaunched = false;
-    }
-  }
-
-  private _clearTierMismatchIfStillCurrent(sessionId: string, toolId: string): void {
-    const current = this._snapshot.tierMismatch;
-    if (current && current.sessionId === sessionId && current.toolId === toolId) {
-      this._patch({ tierMismatch: null });
     }
   }
 
