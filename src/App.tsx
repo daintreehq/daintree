@@ -51,69 +51,27 @@ import {
 } from "./hooks/app";
 import { useResourceProfile } from "./hooks/useResourceProfile";
 import { AppLayout } from "./components/Layout";
-import { PostHydrationListeners } from "./components/PostHydrationListeners";
 import { ContentGrid } from "./components/Terminal";
-import { PanelTransitionOverlay } from "./components/Panel";
 
-import { TerminalInfoDialogHost } from "./components/Terminal/TerminalInfoDialogHost";
-import { MORE_AGENTS_PANEL_ID } from "./hooks/usePanelPalette";
 import { useResumeAgentSession } from "./hooks/useResumeAgentSession";
 import { VoiceRecordingAnnouncer } from "./components/Terminal/VoiceRecordingAnnouncer";
 import { AccessibilityAnnouncer } from "./components/Accessibility/AccessibilityAnnouncer";
-import { ConfirmDialog } from "./components/ui/ConfirmDialog";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { UI_TOOLTIP_DELAY_DURATION, UI_TOOLTIP_SKIP_DELAY_DURATION } from "./lib/animationUtils";
 import { useE2EBridges } from "./hooks/app/useE2EBridges";
 import { useModalResetKeys } from "./hooks/app/useModalResetKeys";
 import { useAppBootstrap } from "./hooks/app/useAppBootstrap";
 import { usePaletteWiring } from "./hooks/app/usePaletteWiring";
+import { ModalHostLayer } from "./ModalHostLayer";
 
 import {
   LazyWelcomeScreen,
   preloadSettingsDialog,
-  LazySettingsDialog,
-  LazyWorktreePalette,
-  LazyWorktreeOverviewModal,
-  LazyQuickCreatePalette,
-  LazyCrossWorktreeDiff,
-  LazyNewTerminalPalette,
-  LazySendToAgentPalette,
-  LazyPanelPalette,
-  LazyActionPalette,
-  LazyQuickSwitcher,
-  LazyProjectSwitcherPalette,
-  LazyGitInitDialog,
-  LazyCloneRepoDialog,
-  LazyCreateProjectFolderDialog,
-  LazyThemePalette,
-  LazyResumeSessionsPalette,
-  LazyLogLevelPalette,
-  LazyShortcutReferenceDialog,
-  LazyPluginManagerView,
-  LazyOnboardingFlow,
-  LazyGettingStartedChecklist,
-  LazyCelebrationConfetti,
-  LazyFileViewerModalHost,
-  LazyDiffViewerModalHost,
-  LazyMcpConfirmDialog,
-  LazyPluginConfirmDialog,
-  LazyPluginMcpConfirmDialog,
-  LazyPluginQuickPickDialog,
-  LazyPluginInputBoxDialog,
-  LazyPluginConfirmPromptDialog,
-  LazyPluginCapabilityConfirmDialog,
-  LazyPanelLimitConfirmDialog,
   LazyDiagnosticsReviewDialogHost,
-  LazyGitPushConfirmDialog,
-  LazyGitPullRebaseConfirmDialog,
-  LazyRecipeConflictDialog,
   LazyCrashRecoveryDialog,
   loadMotionFeatures,
 } from "./lazyPanels";
 
-import { Toaster } from "./components/ui/toaster";
-import { ShortcutHint } from "./components/ui/ShortcutHint";
-import { ReEntrySummary } from "./components/ui/ReEntrySummary";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { DndProvider } from "./components/DragDrop";
 import {
@@ -132,8 +90,6 @@ import "@/registry/builtinPluginRenderers";
 import { useShallow } from "zustand/react/shallow";
 import { LazyMotion, MotionConfig } from "framer-motion";
 import { useMacroFocusStore } from "./store/macroFocusStore";
-import type { BuiltInPanelKind } from "./types";
-import { actionService } from "./services/ActionService";
 import { voiceRecordingService } from "./services/VoiceRecordingService";
 import { useRenderProfiler } from "./utils/renderProfiler";
 import { logError } from "./utils/logger";
@@ -553,683 +509,91 @@ function AppInner() {
               </Profiler>
             </DndProvider>
 
-            <ErrorBoundary
-              variant="component"
-              componentName="QuickSwitcher"
-              resetKeys={[Number(quickSwitcher.isOpen)]}
-            >
-              {shouldMountQuickSwitcher && (
-                <Suspense fallback={null}>
-                  <LazyQuickSwitcher
-                    isOpen={quickSwitcher.isOpen}
-                    query={quickSwitcher.query}
-                    results={quickSwitcher.results}
-                    totalResults={quickSwitcher.totalResults}
-                    selectedIndex={quickSwitcher.selectedIndex}
-                    isLoading={quickSwitcher.isLoading}
-                    close={quickSwitcher.close}
-                    setQuery={quickSwitcher.setQuery}
-                    setSelectedIndex={quickSwitcher.setSelectedIndex}
-                    selectPrevious={quickSwitcher.selectPrevious}
-                    selectNext={quickSwitcher.selectNext}
-                    selectItem={quickSwitcher.selectItem}
-                    confirmSelection={quickSwitcher.confirmSelection}
-                  />
-                </Suspense>
-              )}
-            </ErrorBoundary>
-            <ErrorBoundary
-              variant="component"
-              componentName="SendToAgentPalette"
-              resetKeys={[Number(sendToAgentPalette.isOpen)]}
-            >
-              {shouldMountSendToAgentPalette && (
-                <Suspense fallback={null}>
-                  <LazySendToAgentPalette
-                    isOpen={sendToAgentPalette.isOpen}
-                    query={sendToAgentPalette.query}
-                    results={sendToAgentPalette.results}
-                    totalResults={sendToAgentPalette.totalResults}
-                    selectedIndex={sendToAgentPalette.selectedIndex}
-                    close={sendToAgentPalette.close}
-                    setQuery={sendToAgentPalette.setQuery}
-                    selectPrevious={sendToAgentPalette.selectPrevious}
-                    selectNext={sendToAgentPalette.selectNext}
-                    selectItem={sendToAgentPalette.selectItem}
-                    confirmSelection={sendToAgentPalette.confirmSelection}
-                  />
-                </Suspense>
-              )}
-            </ErrorBoundary>
-            <ErrorBoundary
-              variant="component"
-              componentName="NewTerminalPalette"
-              resetKeys={[Number(newTerminalPalette.isOpen)]}
-            >
-              {shouldMountNewTerminalPalette && (
-                <Suspense fallback={null}>
-                  <LazyNewTerminalPalette
-                    isOpen={newTerminalPalette.isOpen}
-                    query={newTerminalPalette.query}
-                    results={newTerminalPalette.results}
-                    selectedIndex={newTerminalPalette.selectedIndex}
-                    onQueryChange={newTerminalPalette.setQuery}
-                    onSelectPrevious={newTerminalPalette.selectPrevious}
-                    onSelectNext={newTerminalPalette.selectNext}
-                    onSelect={newTerminalPalette.handleSelect}
-                    onConfirm={newTerminalPalette.confirmSelection}
-                    onClose={newTerminalPalette.close}
-                    onHoverIndex={newTerminalPalette.setSelectedIndex}
-                  />
-                </Suspense>
-              )}
-            </ErrorBoundary>
-            <ErrorBoundary
-              variant="component"
-              componentName="WorktreePalette"
-              resetKeys={[Number(worktreePalette.isOpen)]}
-            >
-              {shouldMountWorktreePalette && (
-                <Suspense fallback={null}>
-                  <LazyWorktreePalette
-                    isOpen={worktreePalette.isOpen}
-                    query={worktreePalette.query}
-                    results={worktreePalette.results}
-                    totalResults={worktreePalette.totalResults}
-                    activeWorktreeId={worktreePalette.activeWorktreeId}
-                    selectedIndex={worktreePalette.selectedIndex}
-                    isStale={worktreePalette.isStale}
-                    onQueryChange={worktreePalette.setQuery}
-                    onSelectPrevious={worktreePalette.selectPrevious}
-                    onSelectNext={worktreePalette.selectNext}
-                    onSelect={worktreePalette.selectWorktree}
-                    onConfirm={worktreePalette.confirmSelection}
-                    onClose={worktreePalette.close}
-                  />
-                </Suspense>
-              )}
-            </ErrorBoundary>
-            <ErrorBoundary
-              variant="component"
-              componentName="QuickCreatePalette"
-              resetKeys={[Number(quickCreatePalette.isOpen)]}
-            >
-              {shouldMountQuickCreatePalette && (
-                <Suspense fallback={null}>
-                  <LazyQuickCreatePalette palette={quickCreatePalette} />
-                </Suspense>
-              )}
-            </ErrorBoundary>
-            <ErrorBoundary
-              variant="component"
-              componentName="PanelPalette"
-              resetKeys={[Number(panelPalette.isOpen)]}
-            >
-              {shouldMountPanelPalette && (
-                <Suspense fallback={null}>
-                  <LazyPanelPalette
-                    isOpen={panelPalette.isOpen}
-                    query={panelPalette.query}
-                    results={panelPalette.results}
-                    totalResults={panelPalette.totalResults}
-                    selectedIndex={panelPalette.selectedIndex}
-                    matchesById={panelPalette.matchesById}
-                    onQueryChange={panelPalette.setQuery}
-                    onSelectPrevious={panelPalette.selectPrevious}
-                    onSelectNext={panelPalette.selectNext}
-                    onSelect={(kind) => {
-                      const result = panelPalette.handleSelect(kind);
-                      if (!result) return;
-                      if (result.resumeSession) {
-                        void resumeSession(result.resumeSession);
-                      } else if (result.id.startsWith("agent:")) {
-                        const agentId = result.id.slice("agent:".length);
-                        if (agentId) {
-                          void handleLaunchAgent(agentId);
-                        }
-                      } else {
-                        addPanel({
-                          kind: result.id as BuiltInPanelKind,
-                          cwd: defaultTerminalCwd,
-                          worktreeId: activeWorktreeId ?? undefined,
-                          location: "grid",
-                        });
-                      }
-                    }}
-                    onConfirm={() => {
-                      const selected = panelPalette.confirmSelection();
-                      if (!selected) return;
-                      if (selected.id === MORE_AGENTS_PANEL_ID) return;
-                      if (selected.resumeSession) {
-                        void resumeSession(selected.resumeSession);
-                      } else if (selected.id.startsWith("agent:")) {
-                        const agentId = selected.id.slice("agent:".length);
-                        if (agentId) {
-                          void handleLaunchAgent(agentId);
-                        }
-                      } else {
-                        addPanel({
-                          kind: selected.id as BuiltInPanelKind,
-                          cwd: defaultTerminalCwd,
-                          worktreeId: activeWorktreeId ?? undefined,
-                          location: "grid",
-                        });
-                      }
-                    }}
-                    onClose={panelPalette.close}
-                  />
-                </Suspense>
-              )}
-            </ErrorBoundary>
-            <ErrorBoundary
-              variant="component"
-              componentName="ProjectSwitcherPalette"
-              resetKeys={[Number(isProjectSwitcherModalOpen)]}
-            >
-              {isProjectSwitcherModalOpen && (
-                <Suspense fallback={null}>
-                  <LazyProjectSwitcherPalette
-                    isOpen={isProjectSwitcherModalOpen}
-                    query={projectSwitcherPalette.query}
-                    results={projectSwitcherPalette.results}
-                    selectedIndex={projectSwitcherPalette.selectedIndex}
-                    onQueryChange={projectSwitcherPalette.setQuery}
-                    onSelectPrevious={projectSwitcherPalette.selectPrevious}
-                    onSelectNext={projectSwitcherPalette.selectNext}
-                    onSelect={projectSwitcherPalette.selectProject}
-                    onHoverProject={projectSwitcherPalette.onHoverProject}
-                    onHoverProjectEnd={projectSwitcherPalette.onHoverProjectEnd}
-                    onClose={projectSwitcherPalette.close}
-                    onStopProject={(projectId) =>
-                      void projectSwitcherPalette.stopProject(projectId)
-                    }
-                    onCloseProject={(projectId) =>
-                      void projectSwitcherPalette.removeProject(projectId)
-                    }
-                    onFreeMemoryProject={(projectId) =>
-                      void projectSwitcherPalette.freeMemoryProject(projectId)
-                    }
-                    onLocateProject={(projectId) =>
-                      void projectSwitcherPalette.locateProject(projectId)
-                    }
-                    onTogglePinProject={(projectId) =>
-                      void projectSwitcherPalette.togglePinProject(projectId)
-                    }
-                    onCopyPath={projectSwitcherPalette.copyPath}
-                    removeConfirmProject={projectSwitcherPalette.removeConfirmProject}
-                    onRemoveConfirmClose={() =>
-                      projectSwitcherPalette.setRemoveConfirmProject(null)
-                    }
-                    onConfirmRemove={projectSwitcherPalette.confirmRemoveProject}
-                    isRemovingProject={projectSwitcherPalette.isRemovingProject}
-                    freeMemoryConfirmProject={projectSwitcherPalette.freeMemoryConfirmProject}
-                    onFreeMemoryConfirmClose={() =>
-                      projectSwitcherPalette.setFreeMemoryConfirmProject(null)
-                    }
-                    onConfirmFreeMemory={projectSwitcherPalette.confirmFreeMemory}
-                    isFreeingMemory={projectSwitcherPalette.isFreeingMemory}
-                    onSelectNewWindow={(project) => {
-                      projectSwitcherPalette.close();
-                      void actionService.dispatch(
-                        "app.newWindow",
-                        { projectPath: project.path },
-                        { source: "user" }
-                      );
-                    }}
-                    scratchResults={projectSwitcherPalette.scratchResults}
-                    onCreateScratch={() => void projectSwitcherPalette.createScratch()}
-                    onSelectScratch={(scratch) =>
-                      void projectSwitcherPalette.selectScratch(scratch)
-                    }
-                    onRemoveScratch={(scratchId) =>
-                      void projectSwitcherPalette.removeScratchAction(scratchId)
-                    }
-                    onSaveAsProject={(scratchId) =>
-                      void projectSwitcherPalette.saveAsProject(scratchId)
-                    }
-                    saveAsProjectConfirm={projectSwitcherPalette.saveAsProjectConfirm}
-                    onDismissSaveAsProjectConfirm={
-                      projectSwitcherPalette.dismissSaveAsProjectConfirm
-                    }
-                    onConfirmDeleteOriginalScratch={() =>
-                      void projectSwitcherPalette.confirmDeleteOriginalScratch()
-                    }
-                    isDeletingOriginalScratch={projectSwitcherPalette.isDeletingOriginalScratch}
-                  />
-                </Suspense>
-              )}
-            </ErrorBoundary>
-            <ConfirmDialog
-              isOpen={projectSwitcherPalette.stopConfirmProjectId != null}
-              onClose={() => {
-                if (projectSwitcherPalette.isStoppingProject) return;
-                projectSwitcherPalette.setStopConfirmProjectId(null);
-              }}
-              title={`Stop project?`}
-              description="This will terminate all running sessions in this project. This can't be undone."
-              confirmLabel="Stop project"
-              cancelLabel="Cancel"
-              onConfirm={projectSwitcherPalette.confirmStopProject}
-              isConfirmLoading={projectSwitcherPalette.isStoppingProject}
-              variant="destructive"
+            <ModalHostLayer
+              quickSwitcher={quickSwitcher}
+              shouldMountQuickSwitcher={shouldMountQuickSwitcher}
+              sendToAgentPalette={sendToAgentPalette}
+              shouldMountSendToAgentPalette={shouldMountSendToAgentPalette}
+              newTerminalPalette={newTerminalPalette}
+              shouldMountNewTerminalPalette={shouldMountNewTerminalPalette}
+              worktreePalette={worktreePalette}
+              shouldMountWorktreePalette={shouldMountWorktreePalette}
+              quickCreatePalette={quickCreatePalette}
+              shouldMountQuickCreatePalette={shouldMountQuickCreatePalette}
+              panelPalette={panelPalette}
+              shouldMountPanelPalette={shouldMountPanelPalette}
+              resumeSession={resumeSession}
+              handleLaunchAgent={handleLaunchAgent}
+              addPanel={addPanel}
+              defaultTerminalCwd={defaultTerminalCwd}
+              activeWorktreeId={activeWorktreeId}
+              isProjectSwitcherModalOpen={isProjectSwitcherModalOpen}
+              projectSwitcherPalette={projectSwitcherPalette}
+              isThemePaletteOpen={isThemePaletteOpen}
+              shouldMountThemePalette={shouldMountThemePalette}
+              closeThemePalette={closeThemePalette}
+              isResumeSessionsPaletteOpen={isResumeSessionsPaletteOpen}
+              shouldMountResumeSessionsPalette={shouldMountResumeSessionsPalette}
+              isLogLevelPaletteOpen={isLogLevelPaletteOpen}
+              shouldMountLogLevelPalette={shouldMountLogLevelPalette}
+              closeLogLevelPalette={closeLogLevelPalette}
+              actionPalette={actionPalette}
+              shouldMountActionPalette={shouldMountActionPalette}
+              isWorktreeOverviewOpen={isWorktreeOverviewOpen}
+              closeWorktreeOverview={closeWorktreeOverview}
+              worktrees={worktrees}
+              isLoading={isLoading}
+              focusedWorktreeId={focusedWorktreeId}
+              selectWorktree={selectWorktree}
+              overviewWorktreeActions={overviewWorktreeActions}
+              availability={availability}
+              agentSettings={agentSettings}
+              homeDir={homeDir}
+              crossDiffDialog={crossDiffDialog}
+              shouldMountCrossDiffDialog={shouldMountCrossDiffDialog}
+              closeCrossWorktreeDiff={closeCrossWorktreeDiff}
+              isSettingsOpen={isSettingsOpen}
+              shouldMountSettings={shouldMountSettings}
+              setIsSettingsOpen={setIsSettingsOpen}
+              settingsTab={settingsTab}
+              settingsSubtab={settingsSubtab}
+              settingsSectionId={settingsSectionId}
+              refreshSettings={refreshSettings}
+              currentProject={currentProject}
+              isShortcutsOpen={isShortcutsOpen}
+              shouldMountShortcutsDialog={shouldMountShortcutsDialog}
+              setIsShortcutsOpen={setIsShortcutsOpen}
+              isPluginManagerOpen={isPluginManagerOpen}
+              shouldMountPluginManager={shouldMountPluginManager}
+              pluginDeepLink={pluginDeepLink}
+              terminalInfoResetKey={terminalInfoResetKey}
+              isStateLoaded={isStateLoaded}
+              mcpConfirmResetKey={mcpConfirmResetKey}
+              pluginConfirmResetKey={pluginConfirmResetKey}
+              pluginMcpConfirmResetKey={pluginMcpConfirmResetKey}
+              pluginCapabilityConfirmResetKey={pluginCapabilityConfirmResetKey}
+              fileViewerResetKey={fileViewerResetKey}
+              diffViewerResetKey={diffViewerResetKey}
+              panelLimitResetKey={panelLimitResetKey}
+              diagnosticsReviewResetKey={diagnosticsReviewResetKey}
+              gitPushResetKey={gitPushResetKey}
+              gitPullRebaseResetKey={gitPullRebaseResetKey}
+              recipeConflictResetKey={recipeConflictResetKey}
+              gitInitDialogOpen={gitInitDialogOpen}
+              shouldMountGitInitDialog={shouldMountGitInitDialog}
+              effectiveGitInitPath={effectiveGitInitPath}
+              handleGitInitSuccess={handleGitInitSuccess}
+              closeGitInitDialog={closeGitInitDialog}
+              createFolderDialogOpen={createFolderDialogOpen}
+              shouldMountCreateFolderDialog={shouldMountCreateFolderDialog}
+              closeCreateFolderDialog={closeCreateFolderDialog}
+              cloneRepoDialogOpen={cloneRepoDialogOpen}
+              shouldMountCloneRepoDialog={shouldMountCloneRepoDialog}
+              handleCloneSuccess={handleCloneSuccess}
+              closeCloneRepoDialog={closeCloneRepoDialog}
+              reEntrySummary={reEntrySummary}
+              gettingStarted={gettingStarted}
             />
-
-            <ErrorBoundary
-              variant="component"
-              componentName="ThemePalette"
-              resetKeys={[Number(isThemePaletteOpen)]}
-            >
-              {shouldMountThemePalette && (
-                <Suspense fallback={null}>
-                  <LazyThemePalette isOpen={isThemePaletteOpen} onClose={closeThemePalette} />
-                </Suspense>
-              )}
-            </ErrorBoundary>
-
-            <ErrorBoundary
-              variant="component"
-              componentName="ResumeSessionsPalette"
-              resetKeys={[Number(isResumeSessionsPaletteOpen)]}
-            >
-              {shouldMountResumeSessionsPalette && (
-                <Suspense fallback={null}>
-                  <LazyResumeSessionsPalette />
-                </Suspense>
-              )}
-            </ErrorBoundary>
-
-            <ErrorBoundary
-              variant="component"
-              componentName="LogLevelPalette"
-              resetKeys={[Number(isLogLevelPaletteOpen)]}
-            >
-              {shouldMountLogLevelPalette && (
-                <Suspense fallback={null}>
-                  <LazyLogLevelPalette
-                    isOpen={isLogLevelPaletteOpen}
-                    onClose={closeLogLevelPalette}
-                  />
-                </Suspense>
-              )}
-            </ErrorBoundary>
-
-            <ErrorBoundary
-              variant="component"
-              componentName="ActionPalette"
-              resetKeys={[Number(actionPalette.isOpen)]}
-            >
-              {shouldMountActionPalette && (
-                <Suspense fallback={null}>
-                  <LazyActionPalette
-                    isOpen={actionPalette.isOpen}
-                    query={actionPalette.query}
-                    results={actionPalette.results}
-                    totalResults={actionPalette.totalResults}
-                    selectedIndex={actionPalette.selectedIndex}
-                    isStale={actionPalette.isStale}
-                    pinnedCount={actionPalette.pinnedCount}
-                    close={actionPalette.close}
-                    setQuery={actionPalette.setQuery}
-                    setSelectedIndex={actionPalette.setSelectedIndex}
-                    selectPrevious={actionPalette.selectPrevious}
-                    selectNext={actionPalette.selectNext}
-                    executeAction={actionPalette.executeAction}
-                    confirmSelection={actionPalette.confirmSelection}
-                    pinAction={actionPalette.pinAction}
-                    unpinAction={actionPalette.unpinAction}
-                    hideAction={actionPalette.hideAction}
-                  />
-                </Suspense>
-              )}
-            </ErrorBoundary>
-
-            <ErrorBoundary
-              variant="component"
-              componentName="WorktreeOverviewModal"
-              resetKeys={[Number(isWorktreeOverviewOpen)]}
-            >
-              {isWorktreeOverviewOpen && (
-                <Suspense fallback={null}>
-                  <LazyWorktreeOverviewModal
-                    isOpen={isWorktreeOverviewOpen}
-                    onClose={closeWorktreeOverview}
-                    worktrees={worktrees}
-                    isLoading={isLoading}
-                    activeWorktreeId={activeWorktreeId}
-                    focusedWorktreeId={focusedWorktreeId}
-                    onSelectWorktree={selectWorktree}
-                    onCopyTree={overviewWorktreeActions.handleCopyTree}
-                    onOpenEditor={overviewWorktreeActions.handleOpenEditor}
-                    onSaveLayout={undefined}
-                    onLaunchAgent={overviewWorktreeActions.handleLaunchAgent}
-                    agentAvailability={availability}
-                    agentSettings={agentSettings}
-                    homeDir={homeDir}
-                  />
-                </Suspense>
-              )}
-            </ErrorBoundary>
-
-            <ErrorBoundary
-              variant="component"
-              componentName="CrossWorktreeDiff"
-              resetKeys={[Number(crossDiffDialog.isOpen)]}
-            >
-              {shouldMountCrossDiffDialog && (
-                <Suspense fallback={null}>
-                  <LazyCrossWorktreeDiff
-                    isOpen={crossDiffDialog.isOpen}
-                    onClose={closeCrossWorktreeDiff}
-                    initialWorktreeId={crossDiffDialog.initialWorktreeId}
-                  />
-                </Suspense>
-              )}
-            </ErrorBoundary>
-
-            <ErrorBoundary
-              variant="component"
-              componentName="SettingsDialog"
-              resetKeys={[Number(isSettingsOpen)]}
-            >
-              {shouldMountSettings && (
-                <Suspense fallback={null}>
-                  <LazySettingsDialog
-                    isOpen={isSettingsOpen}
-                    onClose={() => setIsSettingsOpen(false)}
-                    defaultTab={settingsTab}
-                    defaultSubtab={settingsSubtab}
-                    defaultSectionId={settingsSectionId}
-                    onSettingsChange={refreshSettings}
-                    projectId={currentProject?.id ?? null}
-                  />
-                </Suspense>
-              )}
-            </ErrorBoundary>
-
-            <ErrorBoundary
-              variant="component"
-              componentName="ShortcutReferenceDialog"
-              resetKeys={[Number(isShortcutsOpen)]}
-            >
-              {shouldMountShortcutsDialog && (
-                <Suspense fallback={null}>
-                  <LazyShortcutReferenceDialog
-                    isOpen={isShortcutsOpen}
-                    onClose={() => setIsShortcutsOpen(false)}
-                  />
-                </Suspense>
-              )}
-            </ErrorBoundary>
-
-            <ErrorBoundary
-              variant="component"
-              componentName="PluginManagerView"
-              resetKeys={[Number(isPluginManagerOpen)]}
-              onError={() => usePluginManagerStore.getState().close()}
-            >
-              {shouldMountPluginManager && (
-                <Suspense fallback={null}>
-                  <LazyPluginManagerView
-                    deepLinkIntent={pluginDeepLink.intent}
-                    onDeepLinkConsumed={pluginDeepLink.clear}
-                  />
-                </Suspense>
-              )}
-            </ErrorBoundary>
-
-            <ErrorBoundary
-              variant="component"
-              componentName="TerminalInfoDialogHost"
-              resetKeys={[terminalInfoResetKey]}
-            >
-              <TerminalInfoDialogHost />
-            </ErrorBoundary>
-            {isStateLoaded && (
-              <ErrorBoundary
-                variant="component"
-                componentName="McpConfirmDialog"
-                resetKeys={[mcpConfirmResetKey]}
-              >
-                <Suspense fallback={null}>
-                  <LazyMcpConfirmDialog />
-                </Suspense>
-              </ErrorBoundary>
-            )}
-            {isStateLoaded && (
-              <ErrorBoundary
-                variant="component"
-                componentName="PluginConfirmDialog"
-                resetKeys={[pluginConfirmResetKey]}
-              >
-                <Suspense fallback={null}>
-                  <LazyPluginConfirmDialog />
-                </Suspense>
-              </ErrorBoundary>
-            )}
-            {isStateLoaded && (
-              <ErrorBoundary
-                variant="component"
-                componentName="PluginMcpConfirmDialog"
-                resetKeys={[pluginMcpConfirmResetKey]}
-              >
-                <Suspense fallback={null}>
-                  <LazyPluginMcpConfirmDialog />
-                </Suspense>
-              </ErrorBoundary>
-            )}
-            {isStateLoaded && (
-              <ErrorBoundary variant="component" componentName="PluginQuickPickDialog">
-                <Suspense fallback={null}>
-                  <LazyPluginQuickPickDialog />
-                </Suspense>
-              </ErrorBoundary>
-            )}
-            {isStateLoaded && (
-              <ErrorBoundary variant="component" componentName="PluginInputBoxDialog">
-                <Suspense fallback={null}>
-                  <LazyPluginInputBoxDialog />
-                </Suspense>
-              </ErrorBoundary>
-            )}
-            {isStateLoaded && (
-              <ErrorBoundary variant="component" componentName="PluginConfirmPromptDialog">
-                <Suspense fallback={null}>
-                  <LazyPluginConfirmPromptDialog />
-                </Suspense>
-              </ErrorBoundary>
-            )}
-            {isStateLoaded && (
-              <ErrorBoundary
-                variant="component"
-                componentName="PluginCapabilityConfirmDialog"
-                resetKeys={[pluginCapabilityConfirmResetKey]}
-              >
-                <Suspense fallback={null}>
-                  <LazyPluginCapabilityConfirmDialog />
-                </Suspense>
-              </ErrorBoundary>
-            )}
-            {isStateLoaded && (
-              <ErrorBoundary
-                variant="component"
-                componentName="FileViewerModalHost"
-                resetKeys={[fileViewerResetKey]}
-              >
-                <Suspense fallback={null}>
-                  <LazyFileViewerModalHost />
-                </Suspense>
-              </ErrorBoundary>
-            )}
-            {isStateLoaded && (
-              <ErrorBoundary
-                variant="component"
-                componentName="DiffViewerModalHost"
-                resetKeys={[diffViewerResetKey]}
-              >
-                <Suspense fallback={null}>
-                  <LazyDiffViewerModalHost />
-                </Suspense>
-              </ErrorBoundary>
-            )}
-
-            <ErrorBoundary
-              variant="component"
-              componentName="GitInitDialog"
-              resetKeys={[Number(gitInitDialogOpen)]}
-            >
-              {shouldMountGitInitDialog && effectiveGitInitPath && (
-                <Suspense fallback={null}>
-                  <LazyGitInitDialog
-                    isOpen={gitInitDialogOpen}
-                    directoryPath={effectiveGitInitPath}
-                    onSuccess={handleGitInitSuccess}
-                    onCancel={closeGitInitDialog}
-                  />
-                </Suspense>
-              )}
-            </ErrorBoundary>
-
-            <ErrorBoundary
-              variant="component"
-              componentName="CreateProjectFolderDialog"
-              resetKeys={[Number(createFolderDialogOpen)]}
-            >
-              {shouldMountCreateFolderDialog && (
-                <Suspense fallback={null}>
-                  <LazyCreateProjectFolderDialog
-                    isOpen={createFolderDialogOpen}
-                    onClose={closeCreateFolderDialog}
-                  />
-                </Suspense>
-              )}
-            </ErrorBoundary>
-
-            <ErrorBoundary
-              variant="component"
-              componentName="CloneRepoDialog"
-              resetKeys={[Number(cloneRepoDialogOpen)]}
-            >
-              {shouldMountCloneRepoDialog && (
-                <Suspense fallback={null}>
-                  <LazyCloneRepoDialog
-                    isOpen={cloneRepoDialogOpen}
-                    onSuccess={handleCloneSuccess}
-                    onCancel={closeCloneRepoDialog}
-                  />
-                </Suspense>
-              )}
-            </ErrorBoundary>
-
-            <PanelTransitionOverlay />
-            {isStateLoaded && (
-              <ErrorBoundary
-                variant="component"
-                componentName="PanelLimitConfirmDialog"
-                resetKeys={[panelLimitResetKey]}
-              >
-                <Suspense fallback={null}>
-                  <LazyPanelLimitConfirmDialog />
-                </Suspense>
-              </ErrorBoundary>
-            )}
-
-            {isStateLoaded && (
-              <ErrorBoundary
-                variant="component"
-                componentName="DiagnosticsReviewDialogHost"
-                resetKeys={[diagnosticsReviewResetKey]}
-              >
-                <Suspense fallback={null}>
-                  <LazyDiagnosticsReviewDialogHost />
-                </Suspense>
-              </ErrorBoundary>
-            )}
-
-            {isStateLoaded && (
-              <ErrorBoundary
-                variant="component"
-                componentName="GitPushConfirmDialog"
-                resetKeys={[gitPushResetKey]}
-              >
-                <Suspense fallback={null}>
-                  <LazyGitPushConfirmDialog />
-                </Suspense>
-              </ErrorBoundary>
-            )}
-
-            {isStateLoaded && (
-              <ErrorBoundary
-                variant="component"
-                componentName="GitPullRebaseConfirmDialog"
-                resetKeys={[gitPullRebaseResetKey]}
-              >
-                <Suspense fallback={null}>
-                  <LazyGitPullRebaseConfirmDialog />
-                </Suspense>
-              </ErrorBoundary>
-            )}
-
-            {isStateLoaded && (
-              <ErrorBoundary
-                variant="component"
-                componentName="RecipeConflictDialog"
-                resetKeys={[recipeConflictResetKey]}
-              >
-                <Suspense fallback={null}>
-                  <LazyRecipeConflictDialog />
-                </Suspense>
-              </ErrorBoundary>
-            )}
-
-            <Toaster />
-            <ShortcutHint />
-            <ReEntrySummary state={reEntrySummary} />
-            {/* Listener hooks deferred out of the first commit flush — mount once
-                hydration settles so their effects stay off the first effect flush (#9769). */}
-            {isStateLoaded && <PostHydrationListeners />}
-            {isStateLoaded && (
-              <ErrorBoundary
-                variant="component"
-                componentName="OnboardingFlow"
-                resetKeys={[Number(isStateLoaded)]}
-              >
-                <Suspense fallback={null}>
-                  <LazyOnboardingFlow
-                    availability={availability}
-                    onRefreshSettings={refreshSettings}
-                    onComplete={gettingStarted.notifyOnboardingComplete}
-                  />
-                </Suspense>
-              </ErrorBoundary>
-            )}
-            {currentProject !== null && gettingStarted.visible && gettingStarted.checklist && (
-              <ErrorBoundary
-                variant="component"
-                componentName="GettingStartedChecklist"
-                resetKeys={[Number(gettingStarted.visible)]}
-              >
-                <Suspense fallback={null}>
-                  <LazyGettingStartedChecklist
-                    checklist={gettingStarted.checklist}
-                    collapsed={gettingStarted.collapsed}
-                    onDismiss={gettingStarted.dismiss}
-                    onToggleCollapse={gettingStarted.toggleCollapse}
-                    onMarkItem={gettingStarted.markItem}
-                  />
-                </Suspense>
-              </ErrorBoundary>
-            )}
-            <ErrorBoundary
-              variant="component"
-              componentName="CelebrationConfetti"
-              resetKeys={[Number(gettingStarted.showCelebration)]}
-            >
-              {gettingStarted.showCelebration && (
-                <Suspense fallback={null}>
-                  <LazyCelebrationConfetti />
-                </Suspense>
-              )}
-            </ErrorBoundary>
           </TooltipProvider>
         </ErrorBoundary>
       </MotionConfig>
