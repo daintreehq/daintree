@@ -1149,9 +1149,13 @@ describe("HelpSessionController — launch phase FSM", () => {
     (window.electron.terminal.gracefulKill as ReturnType<typeof vi.fn>).mockResolvedValue(
       "captured-sess"
     );
-    ctrl["_hibernateArmedFor"] = { terminalId: "term-1", agentId: "claude", projectId: "proj" };
+    ctrl["_hibernationManager"]["_hibernateArmedFor"] = {
+      terminalId: "term-1",
+      agentId: "claude",
+      projectId: "proj",
+    };
 
-    ctrl["_fireHibernate"]("term-1", "claude", "proj");
+    ctrl["_hibernationManager"]["_fireHibernate"]("term-1", "claude", "proj");
     expect(ctrl.getSnapshot().phase).toBe("hibernating");
 
     await vi.waitFor(() => {
@@ -1173,9 +1177,13 @@ describe("HelpSessionController — launch phase FSM", () => {
         resolveKill = r;
       })
     );
-    ctrl["_hibernateArmedFor"] = { terminalId: "term-1", agentId: "claude", projectId: "proj" };
+    ctrl["_hibernationManager"]["_hibernateArmedFor"] = {
+      terminalId: "term-1",
+      agentId: "claude",
+      projectId: "proj",
+    };
 
-    ctrl["_fireHibernate"]("term-1", "claude", "proj");
+    ctrl["_hibernationManager"]["_fireHibernate"]("term-1", "claude", "proj");
     expect(ctrl.getSnapshot().phase).toBe("hibernating");
 
     // The panel disappears while the kill is in flight (handleTerminalPanelMissing).
