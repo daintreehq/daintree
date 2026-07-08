@@ -118,6 +118,10 @@ type FullWakeTestService = {
   fullWakeForVisibilityRestore: (id: string) => Promise<void>;
   repaintForReveal: (id: string, opts?: { trustDomVisibility?: boolean }) => boolean;
   revealTerminal: (id: string) => Promise<boolean>;
+  revealController: {
+    fullWakeForVisibilityRestore: (id: string) => Promise<void>;
+    repaintForReveal: (id: string, opts?: { trustDomVisibility?: boolean }) => boolean;
+  };
   settleWaiters: { notifyAttachSettledWaiters: (id: string) => void };
 };
 
@@ -694,8 +698,12 @@ describe("TerminalInstanceService.revealTerminal (foreground reveal routing)", (
     const id = "rev-1";
     service.instances.set(id, makeInstance({ isOpened: true }));
 
-    const fullWake = vi.spyOn(service, "fullWakeForVisibilityRestore").mockResolvedValue(undefined);
-    const repaint = vi.spyOn(service, "repaintForReveal").mockImplementation(() => true);
+    const fullWake = vi
+      .spyOn(service.revealController, "fullWakeForVisibilityRestore")
+      .mockResolvedValue(undefined);
+    const repaint = vi
+      .spyOn(service.revealController, "repaintForReveal")
+      .mockImplementation(() => true);
 
     await expect(service.revealTerminal(id)).resolves.toBe(true);
 
@@ -707,8 +715,12 @@ describe("TerminalInstanceService.revealTerminal (foreground reveal routing)", (
     const id = "rev-3";
     service.instances.set(id, makeInstance({ isOpened: false, hostElement: renderableHost() }));
 
-    const fullWake = vi.spyOn(service, "fullWakeForVisibilityRestore").mockResolvedValue(undefined);
-    const repaint = vi.spyOn(service, "repaintForReveal").mockImplementation(() => true);
+    const fullWake = vi
+      .spyOn(service.revealController, "fullWakeForVisibilityRestore")
+      .mockResolvedValue(undefined);
+    const repaint = vi
+      .spyOn(service.revealController, "repaintForReveal")
+      .mockImplementation(() => true);
 
     await service.revealTerminal(id);
 
@@ -729,11 +741,13 @@ describe("TerminalInstanceService.revealTerminal (foreground reveal routing)", (
     // pendingVisibilityWake and leaves isAttaching true. The reveal must report
     // "retry" so the sweep doesn't spend its confirm paints before the deferred
     // wake re-runs on attach-settle.
-    vi.spyOn(service, "fullWakeForVisibilityRestore").mockImplementation(async () => {
-      inst.isOpened = true;
-      inst.isAttaching = true;
-      inst.pendingVisibilityWake = true;
-    });
+    vi.spyOn(service.revealController, "fullWakeForVisibilityRestore").mockImplementation(
+      async () => {
+        inst.isOpened = true;
+        inst.isAttaching = true;
+        inst.pendingVisibilityWake = true;
+      }
+    );
 
     await expect(service.revealTerminal(id)).resolves.toBe(false);
   });
@@ -744,7 +758,9 @@ describe("TerminalInstanceService.revealTerminal (foreground reveal routing)", (
     // retry on a later frame instead of opening against an unmeasurable host.
     service.instances.set(id, makeInstance({ isOpened: false }));
 
-    const fullWake = vi.spyOn(service, "fullWakeForVisibilityRestore").mockResolvedValue(undefined);
+    const fullWake = vi
+      .spyOn(service.revealController, "fullWakeForVisibilityRestore")
+      .mockResolvedValue(undefined);
 
     await expect(service.revealTerminal(id)).resolves.toBe(false);
 
@@ -752,8 +768,12 @@ describe("TerminalInstanceService.revealTerminal (foreground reveal routing)", (
   });
 
   it("reports settled (true) when the terminal does not exist", async () => {
-    const fullWake = vi.spyOn(service, "fullWakeForVisibilityRestore").mockResolvedValue(undefined);
-    const repaint = vi.spyOn(service, "repaintForReveal").mockImplementation(() => true);
+    const fullWake = vi
+      .spyOn(service.revealController, "fullWakeForVisibilityRestore")
+      .mockResolvedValue(undefined);
+    const repaint = vi
+      .spyOn(service.revealController, "repaintForReveal")
+      .mockImplementation(() => true);
 
     // Gone → nothing to repaint and nothing to retry.
     await expect(service.revealTerminal("missing")).resolves.toBe(true);
