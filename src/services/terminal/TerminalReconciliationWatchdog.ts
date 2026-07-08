@@ -217,7 +217,6 @@ export class TerminalReconciliationWatchdog {
    */
   private diagnoseGeometryDivergence(id: string, managed: ManagedTerminal): void {
     if (!import.meta.env?.DEV) return;
-    if (managed.isHibernated) return;
     try {
       const proposal = managed.fitAddon.proposeDimensions?.();
       if (!proposal || proposal.cols <= 1 || proposal.rows <= 1) return;
@@ -570,8 +569,7 @@ export class TerminalReconciliationWatchdog {
       inFlightWake: this.deps.hasInFlightWake(id),
       pendingWake: this.deps.hasPendingWake(id),
       webglActive: this.deps.isWebGLActive(id),
-      isHibernated: managed.isHibernated === true,
-      xtermPaused: managed.isHibernated ? undefined : isXtermRenderPaused(managed.terminal),
+      xtermPaused: isXtermRenderPaused(managed.terminal),
       isFocused: managed.isFocused,
       isAttaching: managed.isAttaching === true,
       isDetached: managed.isDetached === true,

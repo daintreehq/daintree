@@ -156,7 +156,7 @@ export class TerminalWriteController {
       // Same stale-identity guard as the write callback (#4850): the instance
       // can be replaced/destroyed between scheduling and the frame.
       if (this.deps.getInstance(id) !== managed) continue;
-      if (managed.isHibernated || managed.isAltBuffer) continue;
+      if (managed.isAltBuffer) continue;
       managed.lastActivityMarker?.dispose();
       managed.lastActivityMarker = managed.terminal.registerMarker(0);
     }
@@ -165,19 +165,6 @@ export class TerminalWriteController {
   write(id: string, data: string | Uint8Array, chunkCount = 1): void {
     const managed = this.deps.getInstance(id);
     if (!managed) return;
-
-    if (managed.isHibernated) {
-      const bytes = typeof data === "string" ? data.length : data.byteLength;
-      this.deps.acknowledgePortData(id, bytes, chunkCount);
-      // Hibernated output is dropped, never replayed — IPC-delivered chunks
-      // (always strings) were charged to the host's IPC ledger, so ack them
-      // here in UTF-8 bytes or the ledger leaks into permanent backpressure.
-      if (typeof data === "string") {
-        this.deps.acknowledgeData(id, utf8ByteLength(data));
-      }
-      this.deps.notifyWriteComplete(id, bytes);
-      return;
-    }
 
     if (managed.isSerializedRestoreInProgress) {
       // Defer WITHOUT settling any ledger. The batch's pending port-ack FIFO

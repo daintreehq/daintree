@@ -148,7 +148,7 @@ export interface ManagedTerminal {
   // Retained as a permanently-false field: the wake/resync machinery was removed
   // (terminals stay fully live in the background), so nothing arms this anymore.
   // The reveal guard (wakeForFocus) and the reconciliation watchdog still read
-  // it; kept false to avoid churning that read surface (mirrors `isHibernated`).
+  // it; kept false to avoid churning that read surface.
   needsWake?: boolean;
 
   // First-paint perf instrumentation (#9809). terminalOpenStartedAt is stamped
@@ -234,10 +234,6 @@ export interface ManagedTerminal {
   attachRevealTimer?: ReturnType<typeof setTimeout>;
   attachRevealDisposable?: { dispose: () => void };
 
-  // Retained as a permanently-false field: terminals are never hibernated
-  // anymore (they stay fully live in the background), but reveal/restore/UI
-  // guards and `useIsHibernated` still read it. No code path sets it true.
-  isHibernated?: boolean;
   ipcListenerCount: number;
 
   // Visibility-driven WebGL restore debounce. Show path waits ~100ms before

@@ -132,7 +132,6 @@ function buildManaged(agent: FakeAgent): ManagedTerminal {
     isOpened: true,
     isVisible: true,
     isFocused: false,
-    isHibernated: false,
     isAttaching: false,
     isDetached: false,
     isResizeSuppressed: false,

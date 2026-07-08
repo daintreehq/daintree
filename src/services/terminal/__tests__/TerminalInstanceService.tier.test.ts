@@ -638,18 +638,6 @@ describe("TerminalInstanceService - Activity Tier", () => {
       vi.advanceTimersByTime(1100);
       expect(managed.lastAppliedTier).toBe(tierAtDestroy);
     });
-
-    it("does not fire BURST on the hibernated write path", () => {
-      const managed = makeMockManaged({
-        lastAppliedTier: TerminalRefreshTier.BACKGROUND,
-        isHibernated: true,
-      });
-      service.instances.set("t1", managed as unknown as Record<string, unknown>);
-
-      service.writeController.write("t1", "x");
-
-      expect(managed.lastAppliedTier).toBe(TerminalRefreshTier.BACKGROUND);
-    });
   });
 
   describe("Scrollback Reduce Cooldown", () => {

@@ -132,38 +132,6 @@ describe("TerminalInstanceService - repairFontGrid (#9776)", () => {
     terminalInstanceService.destroy("repair-fit-2");
   });
 
-  it("skips hibernated instances", async () => {
-    const { terminalInstanceService } = await import("../TerminalInstanceService");
-    stubMatchMedia();
-
-    const active = await terminalInstanceService.getOrCreate(
-      "repair-active",
-      undefined,
-      {},
-      () => TerminalRefreshTier.FOCUSED,
-      undefined
-    );
-    const hibernated = await terminalInstanceService.getOrCreate(
-      "repair-hibernated",
-      undefined,
-      {},
-      () => TerminalRefreshTier.FOCUSED,
-      undefined
-    );
-    hibernated.isHibernated = true;
-
-    const fActive = vi.spyOn(active.fitAddon, "fit");
-    const fHibernated = vi.spyOn(hibernated.fitAddon, "fit");
-
-    terminalInstanceService.repairFontGrid();
-
-    expect(fActive).toHaveBeenCalled();
-    expect(fHibernated).not.toHaveBeenCalled();
-
-    terminalInstanceService.destroy("repair-active");
-    terminalInstanceService.destroy("repair-hibernated");
-  });
-
   it("pokes fontFamily to a distinct value then restores the original", async () => {
     const { terminalInstanceService } = await import("../TerminalInstanceService");
     stubMatchMedia();

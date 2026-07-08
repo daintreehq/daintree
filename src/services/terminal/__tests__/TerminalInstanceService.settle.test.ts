@@ -56,8 +56,10 @@ type SettleTestService = {
   waitForFullySettled: (id: string, options?: { timeoutMs?: number }) => Promise<void>;
   waitForAllFullySettled: (ids: string[], options?: { timeoutMs?: number }) => Promise<void>;
   notifyRestoreSettledWaiters: (id: string) => void;
-  notifyAttachSettledWaiters: (id: string) => void;
-  fullySettledWaiters: Map<string, unknown[]>;
+  settleWaiters: {
+    notifyAttachSettledWaiters: (id: string) => void;
+    fullySettledWaiters: Map<string, unknown[]>;
+  };
   destroy: (id: string) => void;
   resizeController: Record<string, (...args: unknown[]) => unknown>;
   webGLManager: Record<string, (...args: unknown[]) => unknown>;
@@ -76,7 +78,6 @@ describe("TerminalInstanceService fully-settled waits", () => {
   const makeManaged = (
     id: string,
     overrides: Partial<{
-      isHibernated: boolean;
       isOpened: boolean;
       isAttaching: boolean;
       scrollbackRestoreState: RestoreState;
@@ -95,7 +96,6 @@ describe("TerminalInstanceService fully-settled waits", () => {
       hostElement,
       isOpened: overrides.isOpened ?? true,
       isAttaching: overrides.isAttaching ?? false,
-      isHibernated: overrides.isHibernated ?? false,
       isVisible: true,
       scrollbackRestoreState: overrides.scrollbackRestoreState ?? "none",
       lastScrollbackRestoreError: overrides.lastScrollbackRestoreError,
@@ -176,7 +176,7 @@ describe("TerminalInstanceService fully-settled waits", () => {
     service.notifyRestoreSettledWaiters("t1");
     await Promise.resolve();
     expect(settled).toBe(false);
-    expect(service.fullySettledWaiters.has("t1")).toBe(true);
+    expect(service.settleWaiters.fullySettledWaiters.has("t1")).toBe(true);
 
     managed.scrollbackRestoreState = "done";
     service.notifyRestoreSettledWaiters("t1");
@@ -203,7 +203,7 @@ describe("TerminalInstanceService fully-settled waits", () => {
 
     // Attach completes — the attach notifier must also drain fully-settled.
     managed.isAttaching = false;
-    service.notifyAttachSettledWaiters("t1");
+    service.settleWaiters.notifyAttachSettledWaiters("t1");
     await promise;
     expect(settled).toBe(true);
   });
@@ -239,13 +239,6 @@ describe("TerminalInstanceService fully-settled waits", () => {
 
     await expect(promise).resolves.toBeUndefined();
     expect(managed.lastScrollbackRestoreError).toBeDefined();
-  });
-
-  it("never settles a hibernated terminal", async () => {
-    makeManaged("t1", { scrollbackRestoreState: "done", isHibernated: true });
-    await expect(service.waitForFullySettled("t1", { timeoutMs: 30 })).rejects.toThrow(
-      /fully-settle timeout/
-    );
   });
 
   it("never settles a terminal that is not visually attached", async () => {
@@ -332,8 +325,8 @@ describe("TerminalInstanceService fully-settled waits", () => {
       );
 
       // The shared timeout must have detached every per-panel waiter.
-      expect(service.fullySettledWaiters.has("p1")).toBe(false);
-      expect(service.fullySettledWaiters.has("p2")).toBe(false);
+      expect(service.settleWaiters.fullySettledWaiters.has("p1")).toBe(false);
+      expect(service.settleWaiters.fullySettledWaiters.has("p2")).toBe(false);
 
       // A late notify on a now-detached panel is a harmless no-op.
       managed.scrollbackRestoreState = "done";

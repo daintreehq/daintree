@@ -9,9 +9,6 @@ import {
   AgentStateCallback,
   PostCompleteHook,
   TerminalLink,
-  isWebGLEligibleTier,
-  WRITE_BURST_DECAY_MS,
-  GRID_RESIZE_COALESCE_MS,
 } from "./types";
 import { tallyScrollbackRestoreStates } from "./scrollbackRestoreAggregate";
 import {
@@ -29,12 +26,16 @@ import { TerminalLinkHandler } from "./TerminalLinkHandler";
 import { TerminalResizeController, hasStreamingWrites } from "./TerminalResizeController";
 import { TerminalRendererPolicy } from "./TerminalRendererPolicy";
 import { TerminalWebGLManager } from "./TerminalWebGLManager";
+import { TerminalWebGLPolicy } from "./TerminalWebGLPolicy";
+import { TerminalRevealController } from "./TerminalRevealController";
 import { TerminalAgentStateController } from "./TerminalAgentStateController";
 import { TerminalRestoreController } from "./TerminalRestoreController";
 import { TerminalReflowController, forceXtermReflow } from "./TerminalReflowController";
 import { TerminalReconciliationWatchdog } from "./TerminalReconciliationWatchdog";
 import { TerminalWriteController } from "./TerminalWriteController";
-import { agentLifecycleLedger } from "./lifecycleLedger";
+import { TerminalSettleWaiterRegistry } from "./TerminalSettleWaiterRegistry";
+import { TerminalBurstController } from "./TerminalBurstController";
+import { TerminalResizePassScheduler } from "./TerminalResizePassScheduler";
 import { reportFileLinkFailure } from "./FileLinksAddon";
 import {
   installTerminalBoundListeners,
@@ -48,78 +49,24 @@ import { applyXtermReflowFastpath } from "@shared/utils/xtermReflowFastpath";
 import { usePanelStore } from "@/store/panelStore";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { logDebug, logWarn, logError } from "@/utils/logger";
-import { yieldToScheduler } from "@/lib/schedulerYield";
 import { PaintFabricCompositor } from "./paintFabric/PaintFabricCompositor";
 import type { PaintSurface } from "./paintFabric/PaintSurfaceRegistry";
 import { createRoundRobinPlacement } from "./paintFabric/placementPolicies";
 import {
   isPaintFabricEnabled,
-  isPaintFabricWorkerIngestEnabled,
   getPaintFabricSurfaceCount,
   paintFabricAuxSurfaceId,
   PRIMARY_SURFACE_ID,
 } from "./paintFabric/paintFabricConfig";
-import { LiveWorkerIngest } from "./workerParse/LiveWorkerIngest";
-import { createParseWorkerTransport } from "./workerParse/createParseWorkerTransport";
+import { TerminalWorkerIngestController } from "./TerminalWorkerIngestController";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
-import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { stripAnsiAndOscCodes } from "@shared/utils/urlUtils";
 
 export { isNonKeyboardInput } from "./inputUtils";
 // Re-exported so existing consumers (notably tests) that import
 // `forceXtermReflow` from this module don't need to update their imports.
 export { forceXtermReflow };
-
-// Debounce on the visibility-driven WebGL restore path. Show waits this long
-// before re-acquiring so rapid tab/panel toggles don't thrash WebglAddon
-// load/unload (each cycle reallocates GPU resources).
-const WEBGL_RESTORE_DEBOUNCE_MS = 100;
-
-// Release hysteresis on the visibility-driven hide path. Holding the context
-// for this long before releasing covers normal panel-toggle and focus-cycle
-// cadences (~100–300ms) without over-occupying the 12-slot WebGL pool under
-// multi-terminal hide. Authoritative release paths (tier demotion, agent
-// demotion, destroy, hibernation) cancel this timer and release immediately.
-const WEBGL_HIDE_DWELL_MS = 500;
-
-// Poll interval while the worker-ingest engage barrier waits for the normal
-// pipeline (ingest queue + pending xterm writes) to quiesce (#10960).
-const WORKER_INGEST_DRAIN_POLL_MS = 10;
-
-// Default timeout for the restore-aware settle waits (`waitForFullySettled`,
-// `waitForAllFullySettled`). Aligned to the 30s Tier 1→3 promotion rule
-// (CLAUDE.md "Runtime Signals"): a settle that hasn't completed within 30s has
-// stalled past the point where an ambient indicator is appropriate, so the
-// gate gives up and surfaces the still-pending set rather than blocking
-// indefinitely. The wait is notification-driven (scheduler fires on each
-// restore state transition); the timer is only the safety fallback, so
-// Chromium 148 background-timer throttling in a hidden view at most delays the
-// fallback, never the correct completion path.
-const TERMINAL_BATCH_SETTLE_TIMEOUT_MS = 30000;
-
-// Terminals resized per task inside `runResizePass`, yielding to the scheduler
-// between chunks. xterm.js 6.0 reflows the whole scrollback on a
-// column-changing resize (~15-40ms each), so one-per-task keeps every task
-// under the ~50ms long-task threshold and lets paint + input run between
-// terminals instead of freezing the renderer for the whole batch.
-const RESIZE_PASS_CHUNK_SIZE = 1;
-
-// Interactive resource-profile override (symptom B): while actively scrolling a
-// full-screen TUI, ask the main process to hold the profile off efficiency.
-// DURATION must exceed THROTTLE so re-requests overlap and the hold never lapses
-// mid-scroll; both are short so the hold self-expires soon after scrolling stops.
-const INTERACTIVE_OVERRIDE_DURATION_MS = 1500;
-const INTERACTIVE_OVERRIDE_THROTTLE_MS = 500;
-// BURST-tier hold after a wheel scroll before reverting to the computed tier —
-// matches the keystroke input-burst decay so a scroll feels just as responsive.
-const WHEEL_BURST_DECAY_MS = 1000;
-
-interface Waiter {
-  resolve: () => void;
-  reject: (error: Error) => void;
-  timeout: number;
-}
 
 function canAutoInitializeTerminalIngest(): boolean {
   return (
@@ -138,35 +85,21 @@ class TerminalInstanceService {
   // this after its async addon load and aborts, so a panel torn down mid-build
   // never publishes a stale instance/onData listener for a dead id.
   private cancelledCreations = new Set<string>();
-  // Throttle for the interactive resource-profile override IPC (see onActiveWheel).
-  private lastInteractiveOverrideRequestAt = 0;
-  // Which terminal received the most recent alt-buffer wheel event, and when —
-  // drives the ingest service's background-drain hold during a scroll gesture.
-  // Uses the same decay window as the BURST tier so "gesture over" is one
-  // consistent notion across the renderer.
-  private lastActiveWheelId: string | null = null;
-  private lastActiveWheelAt = 0;
   private dataBuffer = new TerminalOutputIngestService(
     (id, data, chunkCount) => this.writeToTerminal(id, data, chunkCount),
     () => usePanelStore.getState().focusedId,
-    () =>
-      this.lastActiveWheelId !== null && Date.now() - this.lastActiveWheelAt < WHEEL_BURST_DECAY_MS
-        ? this.lastActiveWheelId
-        : null
+    () => this.burstController.getActiveWheelHoldId()
   );
   private suppressedExitUntil = new Map<string, number>();
   private unseenTracker = new TerminalUnseenOutputTracker();
-  private hibernationListeners = new Map<string, Set<() => void>>();
   private scrollbackRestoreListeners = new Set<() => void>();
   private cwdProviders = new Map<string, () => string>();
-  private readinessWaiters = new Map<string, Waiter[]>();
-  private attachSettledWaiters = new Map<string, Waiter[]>();
-  private fullySettledWaiters = new Map<string, Waiter[]>();
   private offscreenManager = new TerminalOffscreenManager();
   private linkHandler = new TerminalLinkHandler();
   private cachedSelections = new Map<string, string>();
   private resizeController: TerminalResizeController;
   private rendererPolicy: TerminalRendererPolicy;
+  private webGLPolicy: TerminalWebGLPolicy;
   private webGLManager = new TerminalWebGLManager();
   // Coalesces "why am I slow?" diagnostics pushes (#10910): multiple tier/create/
   // destroy events in one turn collapse to a single main-process report.
@@ -176,12 +109,12 @@ class TerminalInstanceService {
   private reflowController: TerminalReflowController;
   private reconciliationWatchdog: TerminalReconciliationWatchdog;
   private writeController: TerminalWriteController;
+  private settleWaiters: TerminalSettleWaiterRegistry;
+  private burstController: TerminalBurstController;
+  private resizePassScheduler: TerminalResizePassScheduler;
+  private workerIngestController: TerminalWorkerIngestController;
+  private revealController: TerminalRevealController;
   private unsubTierChanged: (() => void) | null = null;
-  // Live worker-parse ingest (issue #10960), gated by
-  // DAINTREE_PAINT_FABRIC_WORKER_INGEST. One controller per terminal that has
-  // ever gone BACKGROUND while the gate is on; disposed with the terminal.
-  private workerIngest = new Map<string, LiveWorkerIngest>();
-  private unsubWorkerIngestEngaged: (() => void) | null = null;
 
   constructor() {
     if (canAutoInitializeTerminalIngest()) {
@@ -197,9 +130,40 @@ class TerminalInstanceService {
       getInstance: (id) => this.instances.get(id),
     });
 
+    this.settleWaiters = new TerminalSettleWaiterRegistry({
+      getInstance: (id) => this.instances.get(id),
+      triggerDeferredVisibilityWake: (id) => {
+        void this.fullWakeForVisibilityRestore(id).catch((error) => {
+          logWarn(`deferred fullWakeForVisibilityRestore failed for ${id}`, {
+            error,
+          });
+        });
+      },
+    });
+
     this.restoreController = new TerminalRestoreController({
       getInstance: (id) => this.instances.get(id),
       writeData: (id, data, chunkCount) => this.writeToTerminal(id, data, chunkCount),
+    });
+
+    this.burstController = new TerminalBurstController({
+      getInstance: (id) => this.instances.get(id),
+      applyRendererPolicy: (id, tier) => this.rendererPolicy.applyRendererPolicy(id, tier),
+    });
+
+    this.resizePassScheduler = new TerminalResizePassScheduler({
+      getInstance: (id) => this.instances.get(id),
+      isResizeLocked: (id) => this.resizeController.isResizeLocked(id),
+      resize: (id, width, height) => this.resizeController.resize(id, width, height),
+    });
+
+    this.workerIngestController = new TerminalWorkerIngestController({
+      getInstance: (id) => this.instances.get(id),
+      getQueuedBytes: (id) => this.dataBuffer.getQueuedBytes(id),
+      resumeFlush: (id) => this.dataBuffer.resumeFlush(id),
+      incrementUnseen: (id, isScrolledBack) =>
+        this.unseenTracker.incrementUnseen(id, isScrolledBack),
+      fetchAndRestore: (id) => this.restoreController.fetchAndRestore(id),
     });
 
     this.writeController = new TerminalWriteController({
@@ -210,11 +174,17 @@ class TerminalInstanceService {
       notifyWriteComplete: (id, bytes) => this.dataBuffer.notifyWriteComplete(id, bytes),
       incrementUnseen: (id, isScrolledBack) =>
         this.unseenTracker.incrementUnseen(id, isScrolledBack),
-      onWrite: (id) => this.onPtyWrite(id),
+      onWrite: (id) => this.burstController.onPtyWrite(id),
     });
 
     this.reflowController = new TerminalReflowController({
       getInstances: () => this.instances.values(),
+    });
+
+    this.webGLPolicy = new TerminalWebGLPolicy({
+      getMode: () => this.webGLManager.getMode(),
+      getPinnedId: () => this.webGLManager.getPinnedId(),
+      isAltBufferPinned: (id) => this.webGLManager.isAltBufferPinned(id),
     });
 
     this.rendererPolicy = new TerminalRendererPolicy({
@@ -246,7 +216,7 @@ class TerminalInstanceService {
           void this.ensureDeferredAddons(id, managed);
         }
 
-        if (this.wantsWebGLAtTier(managed, tier)) {
+        if (this.webGLPolicy.wantsWebGLAtTier(managed, tier)) {
           this.webGLManager.ensureContext(id, managed);
         } else if (
           (managed.webGLHideTimer === undefined && !managed.isVisible) ||
@@ -286,8 +256,32 @@ class TerminalInstanceService {
         // mode via the release path above) — push a fresh diagnostics sample.
         this.scheduleWhySlowReport();
 
-        this.applyWorkerIngestPolicy(id, tier, managed);
+        this.workerIngestController.applyWorkerIngestPolicy(id, tier, managed);
       },
+    });
+
+    this.revealController = new TerminalRevealController({
+      getInstance: (id) => this.instances.get(id),
+      hostHasRenderableDims: (managed) => this.hostHasRenderableDims(managed),
+      ensureOpened: (id, managed) => this.ensureOpened(id, managed),
+      handlePostWake: (id) => this.handlePostWake(id),
+      deferGridChangeForStream: (managed, gridWouldChange) =>
+        this.deferGridChangeForStream(managed, gridWouldChange),
+      applyRendererPolicy: (id, tier) => this.rendererPolicy.applyRendererPolicy(id, tier),
+      applyDeferredResize: (id) => this.resizeController.applyDeferredResize(id),
+      lockResize: (id, locked, customTtlMs) =>
+        customTtlMs === undefined
+          ? this.resizeController.lockResize(id, locked)
+          : this.resizeController.lockResize(id, locked, customTtlMs),
+      reconcileGeometryFresh: (id) => this.resizeController.reconcileGeometryFresh(id),
+      resumeFlush: (id) => this.dataBuffer.resumeFlush(id),
+      checkStaleDirecting: (id) => this.agentStateController.checkStaleDirecting(id),
+      shouldRestoreWebGL: (managed, opts) => this.webGLPolicy.shouldRestoreWebGL(managed, opts),
+      isWebGLActive: (id) => this.webGLManager.isActive(id),
+      ensureWebGL: (id, managed) => this.webGLManager.ensureContext(id, managed),
+      releaseWebGL: (id) => this.webGLManager.releaseContext(id),
+      repairAtlasForReactivation: (id) => this.webGLManager.repairAtlasForReactivation(id),
+      cancelWebGLHideTimer: (managed) => this.cancelWebGLHideTimer(managed),
     });
 
     // Constructed last — its deps reach every other controller. The watchdog
@@ -308,7 +302,7 @@ class TerminalInstanceService {
       hasInFlightWake: () => false,
       hasPendingWake: () => false,
       isWebGLActive: (id) => this.webGLManager.isActive(id),
-      shouldHaveWebGL: (managed) => this.shouldHaveActiveWebGL(managed),
+      shouldHaveWebGL: (managed) => this.webGLPolicy.shouldHaveActiveWebGL(managed),
       ensureWebGL: (id, managed) => this.webGLManager.ensureContext(id, managed),
       forceReflow: (element) => forceXtermReflow(element),
       reconcileRevealGeometry: (id) => this.reconcileRevealGeometry(id),
@@ -388,8 +382,8 @@ class TerminalInstanceService {
       clearDirectingState: (id, trigger) =>
         this.agentStateController.clearDirectingState(id, trigger),
       onUserInput: (id, data) => this.onUserInput(id, data),
-      onActiveWheel: (id) => this.onActiveWheel(id),
-      onUserScrollIntent: (id) => this.onUserScrollIntent(id),
+      onActiveWheel: (id) => this.burstController.onActiveWheel(id),
+      onUserScrollIntent: (id) => this.burstController.onUserScrollIntent(id),
       onEnterPressed: (id) => this.onEnterPressed(id),
       updateLastObservedTitle: (id, title) =>
         usePanelStore.getState().updateLastObservedTitle(id, title),
@@ -502,94 +496,6 @@ class TerminalInstanceService {
     }
   }
 
-  /**
-   * Whether a terminal wants a WebGL context at the given tier. Agent
-   * terminals are eligible at every WebGL-eligible tier (FOCUSED/BURST/
-   * VISIBLE) — the DOM renderer mangles the block glyphs agent headers use
-   * (see isWebGLEligibleTier in types.ts). Plain terminals are eligible only
-   * while focused: FOCUSED, or a BURST on the focused pane (input bursts and
-   * streaming output must not drop the context mid-use). BURST alone is
-   * write-driven for every terminal, so granting it to unfocused plain shells
-   * would add a want per streaming build/log pane and trip the count-based
-   * mode switch; VISIBLE is excluded for the same budget reason.
-   */
-  private wantsWebGLAtTier(
-    managed: ManagedTerminal,
-    tier: TerminalRefreshTier | undefined,
-    opts?: { trustDomVisibility?: boolean }
-  ): boolean {
-    if (!isWebGLEligibleTier(tier)) return false;
-    // Visibility gates every case: an off-screen pane never wants WebGL, even
-    // an agent streaming at BURST. The want set is fleet-wide per project view,
-    // so hidden streaming agents would otherwise accumulate wants and trip the
-    // count-based mode switch, dropping the whole visible fleet to DOM
-    // (#10671). The reveal path (setVisible(true) → debounced shouldRestoreWebGL
-    // → ensureContext) re-acquires the want once the pane is on-screen again —
-    // and on a warm WebContentsView resume it passes trustDomVisibility because
-    // it has already proven the pane on-screen from DOM truth, so the stale
-    // reactive isVisible flag must not veto the want there.
-    if (!opts?.trustDomVisibility && !managed.isVisible) return false;
-    if (managed.runtimeAgentId) return true;
-    return (
-      tier === TerminalRefreshTier.FOCUSED ||
-      (tier === TerminalRefreshTier.BURST && managed.isFocused)
-    );
-  }
-
-  /**
-   * Eligibility for visibility-driven WebGL restore. Mirrors the gates in
-   * onTierApplied (agent identity / focus + tier) plus liveness checks
-   * (opened, not attaching, not hibernated). Used by the debounced timer in
-   * setVisible() before re-acquiring a context.
-   */
-  private shouldRestoreWebGL(
-    managed: ManagedTerminal,
-    opts?: { trustDomVisibility?: boolean }
-  ): boolean {
-    if (!managed.isOpened) return false;
-    // The reveal path proves visibility from DOM ground truth (isConnected +
-    // checkVisibility + box) before calling, because the reactive isVisible flag
-    // can be stale-false on a warm WebContentsView resume (#10632 item 4). Trust
-    // that here so a dropped WebGL context is reattached on reveal instead of
-    // leaving the pane on the DOM renderer until the ~3s watchdog (which is
-    // itself suppressed for the first ~5s by the project-switch resize lock).
-    if (!opts?.trustDomVisibility && !managed.isVisible) return false;
-    if (managed.isAttaching) return false;
-    if (managed.isHibernated) return false;
-    return this.wantsWebGLAtTier(
-      managed,
-      managed.lastAppliedTier ?? managed.getRefreshTier?.(),
-      opts
-    );
-  }
-
-  /**
-   * Watchdog-only WebGL eligibility. Identical to {@link shouldRestoreWebGL} but
-   * additionally false for a non-pinned pane in DOM-mode fallback: in DOM mode
-   * the manager only ever attaches the single focus-pinned context, so a
-   * non-pinned pane's context can never become active. Without this the
-   * watchdog's `shouldHaveWebGL && !isWebGLActive` stays permanently true for
-   * every non-pinned agent pane and burns a heavy-repair slot every tick (plus a
-   * spurious "context missing" warning). The reveal / visibility restore paths
-   * deliberately keep using {@link shouldRestoreWebGL} so they still call
-   * `ensureContext` and keep the pane in the manager's `wants` set — which is
-   * what lets a later focus change pin and attach it immediately.
-   */
-  private shouldHaveActiveWebGL(managed: ManagedTerminal): boolean {
-    if (!this.shouldRestoreWebGL(managed)) return false;
-    // In DOM mode the manager only keeps contexts on pinned panes (the focus
-    // pin and alt-buffer pins). A non-pinned pane can never have an active
-    // context, so the watchdog must not treat its absence as a fault.
-    if (
-      this.webGLManager.getMode() === "dom" &&
-      managed.id !== this.webGLManager.getPinnedId() &&
-      !this.webGLManager.isAltBufferPinned(managed.id)
-    ) {
-      return false;
-    }
-    return true;
-  }
-
   private onUserInput(id: string, data: string): void {
     const managed = this.instances.get(id);
     if (!managed) return;
@@ -626,127 +532,6 @@ class TerminalInstanceService {
     }, 1000);
 
     this.agentStateController.onUserInput(id, data);
-  }
-
-  /**
-   * Active wheel scroll in a focused full-screen mouse-reporting TUI. Scrolling
-   * such a TUI is an app-owned PTY round-trip per line, and a focused-but-idle
-   * pane sits at FOCUSED (10fps): without this the first flick repaints slowly
-   * until the TUI's own redraw output happens to bump the tier. We (1) lift the
-   * renderer to BURST (60fps) for the scroll — reusing the input-burst decay
-   * timer, since a scroll wants the same ~1s revert as a keystroke — and (2) ask
-   * the main process to hold the resource profile at ≥ balanced, so efficiency
-   * mode's stretched port-batch delay (40ms vs 16ms) can't throttle the
-   * returned-redraw stream mid-scroll ("gets slow and stays slow", symptom B).
-   */
-  private onActiveWheel(id: string): void {
-    const managed = this.instances.get(id);
-    if (!managed) return;
-
-    this.lastActiveWheelId = id;
-    this.lastActiveWheelAt = Date.now();
-
-    this.rendererPolicy.applyRendererPolicy(id, TerminalRefreshTier.BURST);
-    if (managed.inputBurstTimer !== undefined) {
-      clearTimeout(managed.inputBurstTimer);
-    }
-    managed.inputBurstTimer = window.setTimeout(() => {
-      const current = this.instances.get(id);
-      if (!current) return;
-      current.inputBurstTimer = undefined;
-      this.rendererPolicy.applyRendererPolicy(id, current.getRefreshTier());
-    }, WHEEL_BURST_DECAY_MS);
-
-    this.requestInteractiveProfileOverride();
-  }
-
-  /**
-   * Ordinary scrollback wheel/key scrolling (not mouse-reporting forwarding).
-   * Holds the resource profile off efficiency for the same reason as
-   * `onActiveWheel` — a profile downgrade mid-scroll drops the WebGL upper
-   * threshold and can force the visible terminal onto the DOM renderer right
-   * as the user is scrolling it (#10858). Unlike `onActiveWheel`, plain
-   * scrollback is client-side xterm rendering with no PTY round-trip per
-   * line, so there's no renderer-tier boost to apply here.
-   */
-  private onUserScrollIntent(id: string): void {
-    const managed = this.instances.get(id);
-    if (!managed) return;
-
-    this.requestInteractiveProfileOverride();
-  }
-
-  /**
-   * Fire-and-forget request that the main process keep the resource profile off
-   * efficiency while the user is actively scrolling. Throttled hard because a
-   * trackpad momentum stream calls this dozens of times/sec; the override window
-   * (INTERACTIVE_OVERRIDE_DURATION_MS) is longer than the throttle so the hold
-   * never lapses between requests, and self-expires shortly after scrolling stops.
-   */
-  private requestInteractiveProfileOverride(): void {
-    const now = Date.now();
-    if (now - this.lastInteractiveOverrideRequestAt < INTERACTIVE_OVERRIDE_THROTTLE_MS) return;
-    this.lastInteractiveOverrideRequestAt = now;
-    try {
-      // safeFireAndForget swallows the ASYNC rejection (channel skew during a
-      // reload, future validation), which a bare synchronous try/catch around a
-      // Promise-returning IPC call would miss; the try/catch still guards a
-      // synchronous throw if `window.electron.system` is absent. Either way the
-      // renderer-side BURST boost above already applied — this is non-critical.
-      safeFireAndForget(
-        window.electron.system.requestInteractiveOverride(INTERACTIVE_OVERRIDE_DURATION_MS),
-        { context: "terminal.requestInteractiveProfileOverride" }
-      );
-    } catch {
-      // window.electron.system unavailable — non-critical.
-    }
-  }
-
-  /**
-   * Write-driven BURST tier: each PTY write extends the burst window in O(1)
-   * by bumping `writeBurstDeadline`. A single self-rearming timer handles
-   * decay — it re-checks the deadline on fire and either reschedules for the
-   * remaining time (if a write extended the window while it was pending) or
-   * reverts the tier via the panel's current `getRefreshTier()`.
-   *
-   * Avoiding per-write clearTimeout/setTimeout matters: at 60fps+ output the
-   * naive pattern thrashes Chromium's timer queue and produces GC pressure.
-   *
-   * `applyRendererPolicy(BURST)` is called on every write: when BURST is
-   * already applied the policy returns early (line 50 of
-   * TerminalRendererPolicy) and as a load-bearing side-effect clears any
-   * pending tierChangeTimer — that cancellation is what prevents a
-   * concurrent focus-loss-scheduled downgrade from firing unopposed and
-   * stranding the terminal at FOCUSED/VISIBLE/BACKGROUND mid-stream.
-   */
-  private onPtyWrite(id: string): void {
-    const managed = this.instances.get(id);
-    if (!managed) return;
-
-    managed.writeBurstDeadline = Date.now() + WRITE_BURST_DECAY_MS;
-    this.rendererPolicy.applyRendererPolicy(id, TerminalRefreshTier.BURST);
-
-    if (managed.writeBurstTimer === undefined) {
-      this.scheduleWriteBurstDecay(id, WRITE_BURST_DECAY_MS);
-    }
-  }
-
-  private scheduleWriteBurstDecay(id: string, delayMs: number): void {
-    const managed = this.instances.get(id);
-    if (!managed) return;
-    managed.writeBurstTimer = window.setTimeout(() => {
-      const current = this.instances.get(id);
-      if (!current) return;
-      current.writeBurstTimer = undefined;
-      const deadline = current.writeBurstDeadline;
-      const nowFire = Date.now();
-      if (deadline !== undefined && nowFire < deadline) {
-        this.scheduleWriteBurstDecay(id, deadline - nowFire);
-        return;
-      }
-      current.writeBurstDeadline = undefined;
-      this.rendererPolicy.applyRendererPolicy(id, current.getRefreshTier());
-    }, delayMs);
   }
 
   private onEnterPressed(id: string): void {
@@ -813,120 +598,7 @@ class TerminalInstanceService {
   }
 
   setVisible(id: string, isVisible: boolean, expectedGeneration?: number): void {
-    const managed = this.instances.get(id);
-    if (!managed || managed.isHibernated) return;
-
-    // Guard: if a generation was provided and it doesn't match the current
-    // attach generation, this is a stale cleanup from a previous mount — skip.
-    if (expectedGeneration !== undefined && managed.attachGeneration !== expectedGeneration) {
-      return;
-    }
-
-    // Cold-mount observer flaps are not authoritative. XtermAdapter forces
-    // visibility true immediately after attach() so the terminal can paint
-    // before IntersectionObserver settles. During recipe/bulk-open insertion
-    // the grid may briefly report "not intersecting"; persisting that false
-    // value would strand renderer recovery behind visibility guards. Real
-    // unmounts go through detach(), which marks the instance invisible.
-    if (!isVisible && managed.isAttaching) {
-      if (managed.webGLRestoreTimer !== undefined) {
-        clearTimeout(managed.webGLRestoreTimer);
-        managed.webGLRestoreTimer = undefined;
-      }
-      this.cancelWebGLHideTimer(managed);
-      return;
-    }
-
-    const wasVisible = managed.isVisible;
-    if (wasVisible !== isVisible) {
-      managed.isVisible = isVisible;
-      managed.lastActiveTime = Date.now();
-
-      if (managed.webGLRestoreTimer !== undefined) {
-        clearTimeout(managed.webGLRestoreTimer);
-        managed.webGLRestoreTimer = undefined;
-      }
-      this.cancelWebGLHideTimer(managed);
-
-      if (isVisible) {
-        if (managed.isAttaching) {
-          return;
-        }
-
-        // Reconcile xterm's grid with dimensions captured while background
-        // before the renderer policy runs its refresh. The bulk-output
-        // garbling in #7741 manifests when xterm.cols/rows still reflect the
-        // previous active geometry but the PTY (and incoming output) have
-        // already advanced — refreshing into the old grid paints stale glyphs.
-        // Order matters: must precede the lastWidth/lastHeight rect update so
-        // that if cellDims were unavailable during background and latestCols/
-        // latestRows are stale, the rect-update doesn't dedup-poison the next
-        // ResizeObserver tick.
-        this.resizeController.applyDeferredResize(id);
-
-        const rect = managed.hostElement.getBoundingClientRect();
-        if (rect.width > 0 && rect.height > 0) {
-          const widthChanged = Math.abs(managed.lastWidth - rect.width) >= 1;
-          const heightChanged = Math.abs(managed.lastHeight - rect.height) >= 1;
-
-          if (widthChanged || heightChanged) {
-            managed.lastWidth = rect.width;
-            managed.lastHeight = rect.height;
-          }
-        }
-
-        const tier = managed.getRefreshTier
-          ? managed.getRefreshTier()
-          : TerminalRefreshTier.VISIBLE;
-        this.rendererPolicy.applyRendererPolicy(id, tier);
-
-        const termEl = managed.terminal.element;
-        if (termEl && managed.terminal.modes?.synchronizedOutputMode !== true) {
-          forceXtermReflow(termEl);
-        } else if (termEl) {
-          // Defer the unpause reflow while a DEC 2026 synchronized-output block is
-          // open (#10632). forceXtermReflow bypasses xterm's atomic-at-ESU
-          // buffering and would interleave a torn frame — the invariant
-          // TerminalReflowController.maybeReflow enforces at :139. This path IS
-          // reachable on switch-back: the grid IntersectionObserver
-          // (TerminalPane) fires setVisible(id, true) as the pane re-enters the
-          // viewport while an agent is mid-stream. applyDeferredResize above
-          // already synced geometry and applyRendererPolicy still ran; hand the
-          // unpause/repaint to the watchdog's reveal-pending backstop, which
-          // re-runs it once the block closes and the pane is on-screen.
-          managed.revealPendingRepair = true;
-          managed.revealPendingGeneration = managed.attachGeneration;
-        }
-
-        // Debounced WebGL restore for same-tier transitions. If
-        // applyRendererPolicy above triggers a tier upgrade (e.g.
-        // BACKGROUND→VISIBLE), onTierApplied loads the addon immediately
-        // and this timer becomes a (harmless) idempotent re-apply. The
-        // debounce only meaningfully gates rapid hide→show toggles where
-        // the tier doesn't change, since same-tier applyRendererPolicy
-        // is a no-op.
-        managed.webGLRestoreTimer = window.setTimeout(() => {
-          const current = this.instances.get(id);
-          if (!current) return;
-          current.webGLRestoreTimer = undefined;
-          if (!this.shouldRestoreWebGL(current)) return;
-          this.webGLManager.ensureContext(id, current);
-        }, WEBGL_RESTORE_DEBOUNCE_MS);
-      } else {
-        // Going offscreen. Hold the WebGL context for WEBGL_HIDE_DWELL_MS so
-        // rapid hide→show cycles (panel toggles, focus oscillation) don't
-        // churn the pool. The timer callback re-fetches `managed` to avoid
-        // stale refs (same pattern as webGLRestoreTimer above) and re-checks
-        // isVisible so a show during the dwell window keeps the context.
-        managed.webGLHideTimer = window.setTimeout(() => {
-          const current = this.instances.get(id);
-          if (!current) return;
-          current.webGLHideTimer = undefined;
-          if (current.isVisible) return;
-          this.webGLManager.releaseContext(id);
-        }, WEBGL_HIDE_DWELL_MS);
-      }
-    }
+    this.revealController.setVisible(id, isVisible, expectedGeneration);
   }
 
   lockResize(id: string, locked: boolean, customTtlMs?: number): void {
@@ -1057,443 +729,27 @@ class TerminalInstanceService {
   }
 
   wake(id: string): void {
-    const managed = this.instances.get(id);
-    if (!managed) return;
-    // A click/focus/reveal of a live pane is a PLAIN REPAINT. The pane stayed
-    // fully live in the background (no suspend/resync anymore), so
-    // repaintForReveal (WebGL reacquire + atlas/refresh + geometry re-fit) is
-    // sufficient and safe. A not-yet-opened pane (a parked dock tab on first
-    // reveal) takes the visibility-restore path, which opens it then repaints.
-    if (!managed.isOpened) {
-      void this.fullWakeForVisibilityRestore(id);
-      return;
-    }
-    this.repaintForReveal(id);
+    this.revealController.wake(id);
   }
 
-  /**
-   * Focus/click-driven wake. The wake-on-focus safety net (51ba86d8d) heals a
-   * frozen/garbled pane on click. `wake()` is now a plain repaint (WebGL
-   * reacquire + atlas/refresh + geometry re-fit), so it is safe for a
-   * main-buffer pane. For a LIVE, foreground alt-screen TUI (OpenCode, any agent
-   * with blockAltScreen disabled) even a geometry reconcile can reflow the
-   * absolutely-positioned frame, so a co-visible alt-screen pane fed by the live
-   * PTY stream is already current and is left untouched. A genuinely off-screen
-   * pane (backgrounded, parked dock tab) still takes the repaint reveal owned by
-   * the visibility path.
-   */
   wakeForFocus(id: string): void {
-    const managed = this.instances.get(id);
-    if (!managed) return;
-
-    const panelState = usePanelStore.getState();
-    const panel = panelState.panelsById[id];
-    const needsRealRestore =
-      managed.isHibernated ||
-      managed.needsWake === true ||
-      panel?.location === "background" ||
-      panelState.backgroundedTerminals.has(id);
-
-    if (needsRealRestore || managed.isAltBuffer !== true) {
-      this.wake(id);
-      return;
-    }
-    // Live foreground alt-screen TUI: already current from the live PTY stream.
-    // No geometry reconcile (reflows the frame). The reflow controller's
-    // focus/heartbeat recovery and the reconciliation watchdog handle any
-    // genuine renderer staleness.
+    this.revealController.wakeForFocus(id);
   }
 
-  /**
-   * Run the full reveal repaint on a visible terminal whose project view just
-   * regained visibility (#8562). Hibernation removed: there is no lossy
-   * wake/resync on this path — the pane stays fully live in the background so
-   * its buffer is already current. This method runs `applyDeferredResize`,
-   * `forceXtermReflow`,
-   * `repairAtlasForReactivation`, `xterm.refresh`, `handlePostWake`, and
-   * `dataBuffer.resumeFlush` (open + geometry + repaint, no reset+replay).
-   * Without the full sequence, visible terminals show stale geometry until the
-   * user clicks each pane.
-   *
-   * Bypasses {@link TerminalRendererPolicy.applyRendererPolicy} — that path
-   * early-returns on tier equality and a backgrounded view's terminals stay
-   * at VISIBLE the whole time. Bypasses the resize lock the same way the
-   * attach path does (record remaining suppression TTL, unlock, resize,
-   * relock with remaining TTL) so geometry resync doesn't silently no-op
-   * while project-switch suppression is active.
-   */
-  async fullWakeForVisibilityRestore(id: string): Promise<void> {
-    const current = this.instances.get(id);
-    if (!current) return;
-    if (!current.isOpened) {
-      // A not-yet-opened pane (a parked dock tab, or one whose host had no
-      // measurable layout box at attach time — e.g. behind the warm anti-flash
-      // bridge #9679) deferred its open to "attach() on next mount". But the
-      // React tree is never remounted on a warm project-view return, so attach()
-      // never re-fires and nothing re-opens it — leaving the terminal stuck
-      // blank/wonky until the user clicks it.
-      //
-      // This same method is re-run from the foreground reveal pass
-      // (repaintActiveWorktreeTerminals on `app:view-revealed`, via
-      // revealTerminal). By then the view is foreground-presented and the host
-      // has a real layout box, so finish the open here using attach()'s exact
-      // sequence. While still occluded (zero box) we leave it deferred — the
-      // reveal pass retries once layout is valid.
-      if (this.hostHasRenderableDims(current)) {
-        this.ensureOpened(id, current);
-      }
-      if (!current.isOpened) return;
-    }
-
-    // Set the deferred-wake flag before the geometry sync so an unexpected
-    // throw from applyDeferredResize (e.g. a terminal disposed between the
-    // lookup above and here) can't strand it: while attaching the async wake
-    // must re-run once attach settles, so the flag has to survive a throw. On
-    // the proceed path we clear it again below.
-    current.pendingVisibilityWake = current.isAttaching === true;
-
-    // Geometry sync runs synchronously even while attaching (#10070).
-    // applyDeferredResize only calls terminal.resize() — no buffer reset, no
-    // async — so it is safe mid-attach and corrects the grid before the warm
-    // paint gate releases the bridge view. Without this, an attaching terminal
-    // stays at the default 80x24 until the deferred wake re-runs after the
-    // bridge has already dropped, producing the visible render-small-then-snap.
-    //
-    // EXCEPT for a STREAMING main-buffer pane whose grid would actually change
-    // (#10863's missing half): terminal.resize() re-wraps committed scrollback
-    // while an Ink-style CLI is still repainting its sticky region with
-    // cursor-relative erase math sized for the old grid — the wake-path twin of
-    // the reveal-path re-wrap reconcileGeometryFresh already defers. The
-    // assistant's cold-resume boot is the canonical victim: this sweep fires on
-    // the same switch-back that just spawned it, mid-splash. Defer the geometry
-    // sync to the reconciliation watchdog (the same revealPendingRepair
-    // obligation the sync-block defer below uses); its reveal-pending branch
-    // runs the fresh atomic reconcile once the stream quiesces. A no-change
-    // pass falls through — applyDeferredResize's cache==current early-return
-    // makes it free, and skipping it would strand the #10070 correction.
-    const gridWouldChange =
-      Number.isInteger(current.latestCols) &&
-      Number.isInteger(current.latestRows) &&
-      (current.terminal.cols !== current.latestCols ||
-        current.terminal.rows !== current.latestRows);
-    if (this.deferGridChangeForStream(current, gridWouldChange)) {
-      // Deferred to the watchdog — nothing to do here.
-    } else {
-      // Unlock symmetrically with the relock in the finally below: bypass the
-      // lock whenever resize is suppressed, even if the suppression end time was
-      // already cleared (the timer can fire between switch-back and this deferred
-      // wake). Without the unlock, applyDeferredResize would no-op under the lock
-      // and geometry would stay stale.
-      const needsLockBypass = current.isResizeSuppressed === true;
-      let remainingMs = 0;
-      if (needsLockBypass) {
-        remainingMs = current.resizeSuppressionEndTime
-          ? Math.max(0, current.resizeSuppressionEndTime - Date.now())
-          : 0;
-        this.resizeController.lockResize(id, false);
-      }
-      try {
-        this.resizeController.applyDeferredResize(id);
-      } finally {
-        if (needsLockBypass) {
-          this.resizeController.lockResize(id, true, remainingMs);
-        }
-      }
-    }
-
-    // Attach is in progress — running the async wake now would race the
-    // attach's own post-rAF reconciliation, which calls terminal.reset()
-    // during buffer restore. The geometry sync above is safe to keep, but the
-    // async wake must defer: pendingVisibilityWake was already set true above
-    // so notifyAttachSettledWaiters re-runs this wake once attach settles
-    // (#9702).
-    if (current.isAttaching) {
-      return;
-    }
-
-    // We're proceeding with the full wake now, so clear any stale deferred-wake
-    // flag (e.g. a prior skip whose deferred re-run we are now satisfying).
-    current.pendingVisibilityWake = false;
-
-    // Never interleave the RENDER ops (forceXtermReflow, repairAtlasForReactivation,
-    // the post-wake refresh) into an OPEN DEC 2026 synchronized-output block
-    // (#10632). forceXtermReflow bypasses xterm's atomic-at-ESU buffering and
-    // would paint a partial frame — the exact invariant TerminalReflowController
-    // enforces at maybeReflow. The DATA path stays unconditional: applyDeferredResize
-    // (above), handlePostWake (its only reflow routes through the guarded
-    // maybeReflowTerminal), and the held-byte flush all still run.
-    //
-    // This method has no retry-return like repaintForReveal, so when paint is
-    // deferred hand the obligation to the reconciliation watchdog via
-    // revealPendingRepair: its reveal-pending branch re-runs the atomic repair
-    // (geometry + atlas + unpause) once the block closes and the pane is on-screen.
-    const deferPaintForSync = current.terminal.modes?.synchronizedOutputMode === true;
-
-    const termEl = current.terminal.element;
-    if (termEl && !deferPaintForSync) {
-      try {
-        forceXtermReflow(termEl);
-      } catch (error) {
-        logWarn(`forceXtermReflow failed for ${id}`, { error });
-      }
-    }
-
-    // Repair the stale local WebGL glyph model synchronously, before the view's
-    // first composited frame. On warm project-view reactivation the compositor
-    // can flash the pre-freeze atlas state; resetting the local model here (no
-    // breaker, no shared-atlas churn) clears it in place. No-op for DOM-renderer
-    // terminals. Deferred mid-block.
-    if (!deferPaintForSync) {
-      this.webGLManager.repairAtlasForReactivation(id);
-    }
-
-    // Hibernation removed: a visibility restore is a PLAIN REPAINT. The pane
-    // stayed fully live in the background, so its buffer is already current —
-    // geometry was re-fit (applyDeferredResize above) and the atlas/reflow
-    // repaired; here we repaint the live buffer, run the post-wake reflow/unpause
-    // (handlePostWake — never reset+replays; a no-op for alt-screen), and flush
-    // any straggler bytes.
-    if (!deferPaintForSync) {
-      current.terminal.refresh(0, current.terminal.rows - 1);
-    }
-    this.handlePostWake(id);
-    this.dataBuffer.resumeFlush(id);
-
-    // Paint was deferred to avoid interleaving an open synchronized-output block.
-    // The watchdog's reveal-pending branch re-runs the full atomic repair once
-    // the block closes and the pane is on-screen — the durable backstop this
-    // retry-less method otherwise lacks.
-    if (deferPaintForSync) {
-      current.revealPendingRepair = true;
-      current.revealPendingGeneration = current.attachGeneration;
-    }
+  fullWakeForVisibilityRestore(id: string): Promise<void> {
+    return this.revealController.fullWakeForVisibilityRestore(id);
   }
 
-  /**
-   * Post-reveal repaint for a visible terminal whose project view has just been
-   * detached from the warm anti-flash bridge and focused as the foreground
-   * surface (#10362).
-   *
-   * `fullWakeForVisibilityRestore` runs the redraw on visibilitychange/resume —
-   * while the cached view is still occluded BEHIND the bridge (#9679). Chromium
-   * culls paints for a non-foreground WebContentsView, so that repair can fail
-   * to stick and agent terminals stay garbled until the user clicks each pane.
-   * This re-runs the render repair once the compositor will actually present
-   * the frame, driven by the `app:view-revealed` signal.
-   *
-   * Self-heals both failure modes a manual click fixes: a WebGL context the
-   * freeze/thaw cycle dropped (VRAM reclaim) is re-attached, then the stale
-   * local glyph model is repaired (or a DOM-renderer pane plain-refreshed) and
-   * the grid re-fit. Unlike a click it does NOT call `terminal.focus()` —
-   * focusing every pane would steal DOM focus and emit focus-reporting
-   * sequences into every agent; exactly one pane owns focus, this is a
-   * fleet-wide repaint. The byte-pull is intentionally skipped: the headless
-   * mirror sync already ran behind the bridge (IPC data is not culled like a
-   * paint is), so only the repaint needs replaying.
-   */
   repaintForReveal(id: string, opts?: { trustDomVisibility?: boolean }): boolean {
-    const managed = this.instances.get(id);
-    if (!managed || managed.isHibernated) return false;
-    // Health-check on DOM ground truth (isConnected + checkVisibility + size),
-    // NOT the reactive `managed.isVisible` flag (#10632 item 4). On a warm
-    // WebContentsView resume the attach effect — the one place that force-sets
-    // isVisible=true (XtermAdapter) — does not re-run, and the
-    // IntersectionObserver that would flip it can lag a frame or be culled while
-    // the view un-occludes, so a stale isVisible=false would no-op the exact
-    // repaint the reveal needs. resetRenderer (manual Redraw) already keys off
-    // connected+size for this reason; unify on the same DOM-truth signal here.
-    // The element.isConnected + checkVisibility + >=50px box guards below are the
-    // real preconditions.
-    if (!managed.isOpened) return false;
-
-    const element = managed.terminal.element;
-    if (!element || !element.isConnected) return false;
-
-    // A not-yet-laid-out, content-visibility:hidden, or zero/occluded host has no
-    // model worth repainting — its first real resize builds it fresh. Use the
-    // same hostHasRenderableDims gate (isConnected + checkVisibility + box) that
-    // ensureOpened/fit rely on, then refine with resetRenderer's >=50px floor.
-    // Report "not paintable yet" (false) so the reveal sweep retries on a later
-    // frame once the foreground view has settled its layout, rather than burning
-    // its one shot against a zero box.
-    if (!this.hostHasRenderableDims(managed)) return false;
-    if (managed.hostElement.clientWidth < 50 || managed.hostElement.clientHeight < 50) {
-      return false;
-    }
-
-    // Never repaint into an OPEN DEC 2026 synchronized-output block (#10632). The
-    // atlas repair, forceXtermReflow, and reconcileGeometryFresh below would each
-    // interleave a paint with the buffered range and corrupt a live agent frame.
-    // The watchdog repair path already defers on this; the reveal path must too —
-    // dropping the !isVisible guard above made repaintForReveal more reachable, so
-    // the never-interleave-mid-block guarantee has to hold here as well. Report
-    // "not paintable yet" so the reveal sweep retries on a later frame once the
-    // block closes; the reconciliation watchdog is the backstop if it outlasts
-    // the sweep.
-    if (managed.terminal.modes?.synchronizedOutputMode === true) return false;
-
-    // Re-attach a WebGL context the freeze/thaw cycle may have dropped before
-    // repairing the local model. The warm view-reveal caller (revealTerminal)
-    // passes trustDomVisibility so a stale reactive isVisible=false on warm
-    // WebContentsView resume doesn't skip the reattach and strand non-focused
-    // agent panes on the DOM renderer. Assistant show/hide-transition callers
-    // pass nothing, so they keep the isVisible gate — a transform-hidden pane
-    // must not accumulate a fleet-wide WebGL want (#10671).
-    if (!this.webGLManager.isActive(id) && this.shouldRestoreWebGL(managed, opts)) {
-      this.webGLManager.ensureContext(id, managed);
-    }
-
-    // Drop the stale local glyph model and repaint. repairAtlasForReactivation
-    // returns false for DOM-renderer terminals — fall back to a plain refresh so
-    // the pane still repaints.
-    try {
-      if (!this.webGLManager.repairAtlasForReactivation(id)) {
-        managed.terminal.refresh(0, managed.terminal.rows - 1);
-      }
-    } catch (error) {
-      logWarn(`repaintForReveal repair failed for ${id}`, { error });
-    }
-
-    // Force a layout reflow so a renderer xterm paused while the view was
-    // occluded actually resumes drawing. This is the exact step a manual Redraw
-    // (resetRenderer) and a click both supply, and the one repaintForReveal was
-    // missing: handlePostWake unpauses standard agents via maybeReflowTerminal,
-    // but EARLY-RETURNS for settled-strategy agents (Codex, Gemini, Cursor,
-    // Copilot, …), so for those the atlas repair above landed in a still-paused
-    // renderer and the pane stayed garbled until the next write, the 3s
-    // heartbeat, or a click. Without this the reveal was not click-equivalent
-    // for most agent terminals.
-    try {
-      forceXtermReflow(element);
-    } catch (error) {
-      logWarn(`repaintForReveal reflow failed for ${id}`, { error });
-    }
-
-    // Reconcile geometry from a FRESH DOM measurement. handlePostWake could not
-    // do this on reveal: the project-switch resize lock is still active here
-    // (reveal fires ~0.5–1.5s after the switch, lock TTL 5s), so its fit()
-    // returns null under isResizeLocked and falls back to a PTY-only resize; and
-    // for settled-strategy agents (Codex, Gemini, …) it skips fit() entirely and
-    // only re-sends CACHED dims. Either way xterm's grid was never re-fit, so a
-    // container size change that happened while the view was backgrounded left
-    // the buffer wrapping at the wrong column until a manual Redraw fired after
-    // the lock expired (the long-standing garbled-line-flow-on-return bug).
-    // reconcileGeometryFresh measures the live box, ignores the lock for this one
-    // reveal correction WITHOUT clearing it (so the ResizeObserver-storm damping
-    // the lock provides survives), and resizes xterm + PTY atomically — safe for
-    // settled agents. It returns false on an unmeasurable transitional box
-    // (zero/occluded), so report "not paintable yet" and let the reveal sweep
-    // retry on a later frame.
-    // Clear any stale "directing" agent state the wake path would have cleared.
-    // Runs before the geometry guard so it still fires on a not-yet-measurable
-    // box, matching the old handlePostWake ordering.
-    this.agentStateController.checkStaleDirecting(id);
-
-    if (!this.resizeController.reconcileGeometryFresh(id)) return false;
-
-    // Clear the reflow throttle so the next write or the 3s heartbeat reflows
-    // immediately rather than being debounced away (mirrors resetRenderer).
-    managed.lastReflowAt = 0;
-
-    return true;
+    return this.revealController.repaintForReveal(id, opts);
   }
 
-  /**
-   * Watchdog-driven, alt-buffer-safe reveal repair (#10632) — the closed-loop
-   * "is it correct now" correction that the open-loop reveal backstops never
-   * reliably delivered. This is the ATOMIC half of a manual Redraw: re-fit
-   * geometry from a FRESH DOM measurement (xterm + PTY resized together via
-   * {@link TerminalResizeController.reconcileGeometryFresh}) and repair the local
-   * WebGL glyph model (or plain-refresh a DOM-renderer pane).
-   *
-   * Deliberately omits `forceXtermReflow`: a layout reflow mid DEC 2026
-   * synchronized-output block would interleave a paint with the buffered range,
-   * so the watchdog gates the unpause reflow on `synchronizedOutputMode`
-   * separately and only calls this once a block has closed. The atomic resize is
-   * safe for settled-strategy agents (no 500ms xterm/PTY split).
-   *
-   * Returns reconcileGeometryFresh's verdict: false on an unmeasurable /
-   * transitional box (zero/occluded/content-visibility:hidden) so the watchdog
-   * keeps the reveal-pending obligation and retries on a later tick once the
-   * foreground view has settled — the present-ordering guarantee that a repaint
-   * is never issued into an occluded surface.
-   */
   reconcileRevealGeometry(id: string): boolean {
-    const managed = this.instances.get(id);
-    if (!managed || managed.isHibernated) return false;
-    if (!this.resizeController.reconcileGeometryFresh(id)) return false;
-
-    try {
-      if (!this.webGLManager.repairAtlasForReactivation(id)) {
-        managed.terminal.refresh(0, managed.terminal.rows - 1);
-      }
-    } catch (error) {
-      logWarn(`reconcileRevealGeometry repair failed for ${id}`, { error });
-    }
-
-    // Clear the reflow throttle so a follow-up unpause reflow (the watchdog's
-    // render-pause branch, or the next write/heartbeat) fires immediately.
-    managed.lastReflowAt = 0;
-    return true;
+    return this.revealController.reconcileRevealGeometry(id);
   }
 
-  /**
-   * Foreground reveal entry point for a single grid terminal, driven by the
-   * `app:view-revealed` fan-out ({@link repaintActiveWorktreeTerminals}) once
-   * the cached project view is detached from the anti-flash bridge and actually
-   * presented.
-   *
-   * Splits the two states a long-dwell return can leave a terminal in:
-   *
-   * - **Hibernated or unopened** — a dwell past the hibernation delay tore the
-   *   xterm instance down, and the occluded warm wake could not re-open it
-   *   (no measurable host box behind the bridge). The lightweight repaint can't
-   *   help (it guards on `isOpened`), so run the full
-   *   {@link fullWakeForVisibilityRestore}: now that the host has real layout it
-   *   opens, pulls the missed range from the headless mirror, and repaints. This
-   *   is the gap the older reveal patches (#10362) left open for the long-dwell
-   *   case.
-   * - **Already opened and woken** (the common warm path) — only the culled
-   *   paint needs replaying, so take the cheap {@link repaintForReveal}.
-   *
-   * @returns `true` when the terminal was paintable and the repaint/open ran
-   * (or the terminal is gone — nothing to retry); `false` when it isn't paintable
-   * yet (host not laid out / not visible) and the caller should retry on a later
-   * frame. {@link repaintActiveWorktreeTerminals} drives that retry.
-   */
-  async revealTerminal(id: string): Promise<boolean> {
-    const managed = this.instances.get(id);
-    // Gone — nothing to repaint and nothing to retry, so report "settled".
-    if (!managed) return true;
-    if (managed.isHibernated || !managed.isOpened) {
-      // A hibernated/unopened pane needs the full open+wake, but
-      // fullWakeForVisibilityRestore only opens once the host has a real layout
-      // box. While the foreground view is still settling that box can read zero
-      // (or the host is visibility:hidden), so report "not paintable yet" and
-      // let the reveal sweep retry on a later frame rather than spending the
-      // open attempt against an unmeasurable host.
-      if (!this.hostHasRenderableDims(managed)) return false;
-      await this.fullWakeForVisibilityRestore(id);
-      const after = this.instances.get(id);
-      // Gone mid-wake → nothing left to retry. Otherwise it's settled only once
-      // the pane actually opened AND the wake wasn't merely DEFERRED:
-      // fullWakeForVisibilityRestore sets pendingVisibilityWake and returns early
-      // while an attach is in flight (notifyAttachSettledWaiters re-runs it on
-      // settle). Report "retry" until the open+wake has truly landed so the
-      // sweep's confirm paints aren't spent against a not-yet-revealed pane.
-      return (
-        !after ||
-        (after.isOpened === true &&
-          after.isHibernated !== true &&
-          after.isAttaching !== true &&
-          after.pendingVisibilityWake !== true)
-      );
-    }
-    // The warm view-reveal sweep has confirmed the foreground view is presented,
-    // so trust DOM-truth visibility for the WebGL reattach — the reactive
-    // isVisible flag is stale-false on a warm resume. Assistant-transition
-    // callers of repaintForReveal deliberately do NOT trust it.
-    return this.repaintForReveal(id, { trustDomVisibility: true });
+  revealTerminal(id: string): Promise<boolean> {
+    return this.revealController.revealTerminal(id);
   }
 
   /**
@@ -1509,7 +765,7 @@ class TerminalInstanceService {
    */
   injectDataLossMarker(id: string, droppedBytes: number): void {
     const managed = this.instances.get(id);
-    if (!managed || managed.isHibernated) return;
+    if (!managed) return;
     managed.terminal.write(`\x18\x1b]57301;${droppedBytes};backpressure\x07`);
   }
 
@@ -1517,13 +773,13 @@ class TerminalInstanceService {
    * Draw the user-visible yellow data-loss marker. Deferred via
    * `queueMicrotask` because it is reached from inside the OSC 57301 parse
    * callback — calling `terminal.write` synchronously during parsing would be
-   * reentrant. Re-checks instance state because hibernation can occur between
-   * the OSC write and this microtask.
+   * reentrant. Re-checks instance state because the terminal can be destroyed
+   * between the OSC write and this microtask.
    */
   private drawDataLossMarker(id: string, droppedBytes: number): void {
     queueMicrotask(() => {
       const managed = this.instances.get(id);
-      if (!managed || managed.isHibernated) return;
+      if (!managed) return;
       const label = droppedBytes > 0 ? `~${droppedBytes} bytes` : "output";
       managed.terminal.write(`\r\n\x1b[33m⚠ Output dropped (${label})\x1b[0m\r\n`);
     });
@@ -1613,7 +869,7 @@ class TerminalInstanceService {
     if (options) {
       this.updateOptions(managed.id, options);
     }
-    if (launchAgentId !== undefined && !managed.isHibernated) {
+    if (launchAgentId !== undefined) {
       managed.terminal.options.cursorBlink = false;
     }
   }
@@ -1696,7 +952,7 @@ class TerminalInstanceService {
       // controller — it acks them immediately and lands them on the mirror
       // through the session's zero-loss buffering, never through the write
       // controller.
-      const ingest = this.workerIngest.get(id);
+      const ingest = this.workerIngestController.getIngest(id);
       if (ingest?.shouldDivert()) {
         ingest.feedDiverted(data);
         return;
@@ -1711,7 +967,7 @@ class TerminalInstanceService {
         return;
       }
       const current = this.instances.get(id);
-      if (current && !current.isHibernated) {
+      if (current) {
         current.terminal.write(`\r\n\x1b[90m[Process exited with code ${exitCode}]\x1b[0m\r\n`);
       }
       exitSubscribers.forEach((cb) => cb(exitCode));
@@ -1804,7 +1060,7 @@ class TerminalInstanceService {
     // non-focused split, or BACKGROUND prewarms in a non-focused tab).
     this.applyCursorBlinkPolicy(managed);
 
-    this.notifyReadinessWaiters(id);
+    this.settleWaiters.notifyReadinessWaiters(id);
 
     this.scheduleWhySlowReport();
 
@@ -1899,150 +1155,18 @@ class TerminalInstanceService {
   }
 
   waitForInstance(id: string, options: { timeoutMs?: number } = {}): Promise<void> {
-    const existing = this.instances.get(id);
-    if (existing) {
-      return Promise.resolve();
-    }
-
-    const timeoutMs = options.timeoutMs ?? 5000;
-
-    return new Promise<void>((resolve, reject) => {
-      const timeout = window.setTimeout(() => {
-        this.removeReadinessWaiter(id, resolve);
-        reject(new Error(`Terminal ${id} frontend readiness timeout after ${timeoutMs}ms`));
-      }, timeoutMs);
-
-      const waiters = this.readinessWaiters.get(id) || [];
-      waiters.push({ resolve, reject, timeout });
-      this.readinessWaiters.set(id, waiters);
-    });
+    return this.settleWaiters.waitForInstance(id, options);
   }
 
   waitForAttachSettled(id: string, options: { timeoutMs?: number } = {}): Promise<void> {
-    if (this.isAttachSettled(id)) {
-      return Promise.resolve();
-    }
-
-    const timeoutMs = options.timeoutMs ?? 1500;
-
-    return new Promise<void>((resolve, reject) => {
-      const timeout = window.setTimeout(() => {
-        this.removeAttachSettledWaiter(id, resolve);
-        reject(new Error(`Terminal ${id} attach settle timeout after ${timeoutMs}ms`));
-      }, timeoutMs);
-
-      const waiters = this.attachSettledWaiters.get(id) || [];
-      waiters.push({ resolve, reject, timeout });
-      this.attachSettledWaiters.set(id, waiters);
-    });
-  }
-
-  private isAttachSettled(id: string): boolean {
-    const managed = this.instances.get(id);
-    if (!managed || managed.isHibernated) return false;
-    return (
-      managed.isOpened &&
-      managed.isAttaching !== true &&
-      managed.hostElement.isConnected &&
-      managed.terminal.element !== undefined
-    );
-  }
-
-  private notifyReadinessWaiters(id: string): void {
-    const waiters = this.readinessWaiters.get(id);
-    if (!waiters) return;
-
-    for (const waiter of waiters) {
-      clearTimeout(waiter.timeout);
-      waiter.resolve();
-    }
-
-    this.readinessWaiters.delete(id);
-  }
-
-  private removeReadinessWaiter(id: string, resolve: () => void): void {
-    const waiters = this.readinessWaiters.get(id);
-    if (!waiters) return;
-
-    const index = waiters.findIndex((w) => w.resolve === resolve);
-    if (index >= 0) {
-      waiters.splice(index, 1);
-    }
-
-    if (waiters.length === 0) {
-      this.readinessWaiters.delete(id);
-    }
-  }
-
-  private notifyAttachSettledWaiters(id: string): void {
-    if (!this.isAttachSettled(id)) return;
-
-    // Consume a deferred visibility wake that was skipped while this terminal
-    // was mid-attach (#9702). Read and clear the flag before dispatching so a
-    // re-entrant call can't double-fire; fullWakeForVisibilityRestore guards
-    // against stale/replaced instances on its own.
-    const managed = this.instances.get(id);
-    const deferredWake = managed?.pendingVisibilityWake === true;
-    if (managed) managed.pendingVisibilityWake = false;
-
-    // Record the first live-attach geometry in the lifecycle ledger (once per
-    // launch generation — recordFirstAttach ignores later attaches). Pairs
-    // with the 80x24 initial dims stamped at launch so a support bundle can
-    // show whether a pane ever converged from boot geometry.
-    if (managed) {
-      const generation = agentLifecycleLedger.currentGeneration(id);
-      if (generation !== undefined) {
-        agentLifecycleLedger.recordFirstAttach(
-          id,
-          generation,
-          managed.terminal.cols,
-          managed.terminal.rows
-        );
-      }
-    }
-
-    const waiters = this.attachSettledWaiters.get(id);
-    if (waiters) {
-      for (const waiter of waiters) {
-        clearTimeout(waiter.timeout);
-        waiter.resolve();
-      }
-      this.attachSettledWaiters.delete(id);
-    }
-
-    // Visual attach is one half of "fully settled". If restore already
-    // finished while this terminal was mid-attach, attach completing now is
-    // the moment it becomes fully settled — drain those waiters too.
-    this.notifyFullySettledWaitersIfReady(id);
-
-    if (deferredWake) {
-      void this.fullWakeForVisibilityRestore(id).catch((error) => {
-        logWarn(`deferred fullWakeForVisibilityRestore failed for ${id}`, {
-          error,
-        });
-      });
-    }
-  }
-
-  private removeAttachSettledWaiter(id: string, resolve: () => void): void {
-    const waiters = this.attachSettledWaiters.get(id);
-    if (!waiters) return;
-
-    const index = waiters.findIndex((w) => w.resolve === resolve);
-    if (index >= 0) {
-      waiters.splice(index, 1);
-    }
-
-    if (waiters.length === 0) {
-      this.attachSettledWaiters.delete(id);
-    }
+    return this.settleWaiters.waitForAttachSettled(id, options);
   }
 
   /**
-   * Resolves once a terminal is *fully* settled — both visually attached
-   * ({@link isAttachSettled}) and past its scrollback-restore lifecycle. Unlike
-   * {@link waitForAttachSettled}, which only gates on visual attach, this waits
-   * for the restore state machine to leave its in-flux states.
+   * Resolves once a terminal is *fully* settled — both visually attached and
+   * past its scrollback-restore lifecycle. Unlike {@link waitForAttachSettled},
+   * which only gates on visual attach, this waits for the restore state
+   * machine to leave its in-flux states.
    *
    * A restore failure still settles the wait (the terminal is usable, just
    * without restored scrollback); callers that care about success vs. silent
@@ -2054,25 +1178,7 @@ class TerminalInstanceService {
    * `"none"` — there is nothing to wait for from this method's view.
    */
   waitForFullySettled(id: string, options: { timeoutMs?: number } = {}): Promise<void> {
-    if (this.isFullySettled(id)) {
-      return Promise.resolve();
-    }
-
-    const timeoutMs = options.timeoutMs ?? TERMINAL_BATCH_SETTLE_TIMEOUT_MS;
-
-    return new Promise<void>((resolve, reject) => {
-      const timeout = window.setTimeout(() => {
-        this.removeFullySettledWaiter(id, resolve);
-        const state = this.instances.get(id)?.scrollbackRestoreState ?? "missing";
-        reject(
-          new Error(`Terminal ${id} fully-settle timeout after ${timeoutMs}ms (restore: ${state})`)
-        );
-      }, timeoutMs);
-
-      const waiters = this.fullySettledWaiters.get(id) || [];
-      waiters.push({ resolve, reject, timeout });
-      this.fullySettledWaiters.set(id, waiters);
-    });
+    return this.settleWaiters.waitForFullySettled(id, options);
   }
 
   /**
@@ -2084,102 +1190,7 @@ class TerminalInstanceService {
    * silent partial success (hence `Promise.all`, not `allSettled`).
    */
   waitForAllFullySettled(ids: string[], options: { timeoutMs?: number } = {}): Promise<void> {
-    const uniqueIds = Array.from(new Set(ids));
-    if (uniqueIds.length === 0) {
-      return Promise.resolve();
-    }
-
-    const timeoutMs = options.timeoutMs ?? TERMINAL_BATCH_SETTLE_TIMEOUT_MS;
-
-    return new Promise<void>((resolveBatch, rejectBatch) => {
-      let settled = false;
-      // Per-panel resolve handles we registered in `fullySettledWaiters`, so
-      // the shared timeout can detach them in one pass rather than leaving
-      // ghost waiters that fire after the batch has already rejected.
-      const registered: Array<{ id: string; resolve: () => void }> = [];
-
-      const detachAll = () => {
-        for (const entry of registered) {
-          this.removeFullySettledWaiter(entry.id, entry.resolve);
-        }
-      };
-
-      const timeout = window.setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        detachAll();
-        const pending = uniqueIds.filter((id) => !this.isFullySettled(id));
-        rejectBatch(
-          new Error(`Terminals not fully settled after ${timeoutMs}ms: ${pending.join(", ")}`)
-        );
-      }, timeoutMs);
-
-      const perPanel = uniqueIds.map(
-        (id) =>
-          new Promise<void>((resolve, reject) => {
-            if (this.isFullySettled(id)) {
-              resolve();
-              return;
-            }
-            registered.push({ id, resolve });
-            const waiters = this.fullySettledWaiters.get(id) || [];
-            // No per-panel timer — the shared batch timeout above governs the
-            // whole set. `timeout: 0` is never a live handle, so the
-            // `clearTimeout` calls in the notify/destroy drain paths are no-ops.
-            waiters.push({ resolve, reject, timeout: 0 });
-            this.fullySettledWaiters.set(id, waiters);
-          })
-      );
-
-      void Promise.all(perPanel).then(
-        () => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timeout);
-          resolveBatch();
-        },
-        (error: unknown) => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timeout);
-          detachAll();
-          rejectBatch(error instanceof Error ? error : new Error(String(error)));
-        }
-      );
-    });
-  }
-
-  private isFullySettled(id: string): boolean {
-    const managed = this.instances.get(id);
-    if (!managed || managed.isHibernated) return false;
-    if (!this.isAttachSettled(id)) return false;
-    // Restore is "settled" once it is no longer in flux — not queued
-    // ("pending") and not running ("in-progress"). "done" is a clean restore;
-    // "none" is terminal from a waiter's view in every case it occurs:
-    // restore was never scheduled (fresh terminal, no scrollback), aborted
-    // before starting (project switch — outcome no longer relevant), or failed
-    // and reset (lastScrollbackRestoreError set). The failure case still
-    // settles: a cosmetic scrollback failure must not strand the wait, and
-    // callers distinguish it via lastScrollbackRestoreError.
-    return managed.scrollbackRestoreState === "done" || managed.scrollbackRestoreState === "none";
-  }
-
-  /**
-   * Drains the fully-settled waiters for a terminal if it has reached the
-   * settled predicate. Reads the instance fresh (never closes over a captured
-   * `managed`) so a stale/replaced instance can't be acted on (#4850).
-   */
-  private notifyFullySettledWaitersIfReady(id: string): void {
-    if (!this.isFullySettled(id)) return;
-
-    const waiters = this.fullySettledWaiters.get(id);
-    if (!waiters) return;
-
-    for (const waiter of waiters) {
-      clearTimeout(waiter.timeout);
-      waiter.resolve();
-    }
-    this.fullySettledWaiters.delete(id);
+    return this.settleWaiters.waitForAllFullySettled(ids, options);
   }
 
   /**
@@ -2189,21 +1200,7 @@ class TerminalInstanceService {
    * scheduler lives in a sibling module and already calls into this singleton.
    */
   notifyRestoreSettledWaiters(id: string): void {
-    this.notifyFullySettledWaitersIfReady(id);
-  }
-
-  private removeFullySettledWaiter(id: string, resolve: () => void): void {
-    const waiters = this.fullySettledWaiters.get(id);
-    if (!waiters) return;
-
-    const index = waiters.findIndex((w) => w.resolve === resolve);
-    if (index >= 0) {
-      waiters.splice(index, 1);
-    }
-
-    if (waiters.length === 0) {
-      this.fullySettledWaiters.delete(id);
-    }
+    this.settleWaiters.notifyRestoreSettledWaiters(id);
   }
 
   private cancelAttachReveal(managed: ManagedTerminal): void {
@@ -2358,7 +1355,7 @@ class TerminalInstanceService {
     // visibility (gated separately below). Previously this skipped the addons on
     // background, degrading content for hidden panes.
     void this.ensureDeferredAddons(id, managed);
-    if (this.wantsWebGLAtTier(managed, managed.lastAppliedTier)) {
+    if (this.webGLPolicy.wantsWebGLAtTier(managed, managed.lastAppliedTier)) {
       this.webGLManager.ensureContext(id, managed);
     }
   }
@@ -2471,14 +1468,14 @@ class TerminalInstanceService {
         if (
           managed.isVisible &&
           !this.webGLManager.isActive(id) &&
-          this.shouldRestoreWebGL(managed)
+          this.webGLPolicy.shouldRestoreWebGL(managed)
         ) {
           this.webGLManager.ensureContext(id, managed);
         }
 
         if (!managed.terminal.element) {
           managed.hostElement.style.opacity = "";
-          this.notifyAttachSettledWaiters(id);
+          this.settleWaiters.notifyAttachSettledWaiters(id);
           return;
         }
 
@@ -2512,7 +1509,7 @@ class TerminalInstanceService {
           if (this.instances.get(id) !== managed) return;
 
           if (earlyResizeApplied) {
-            this.notifyAttachSettledWaiters(id);
+            this.settleWaiters.notifyAttachSettledWaiters(id);
             return;
           }
 
@@ -2526,7 +1523,7 @@ class TerminalInstanceService {
               logDebug(`[TIS.attach] Skipping resize for ${id} — dimensions match after detach`);
               managed.targetCols = undefined;
               managed.targetRows = undefined;
-              this.notifyAttachSettledWaiters(id);
+              this.settleWaiters.notifyAttachSettledWaiters(id);
               return;
             }
           }
@@ -2559,12 +1556,12 @@ class TerminalInstanceService {
               this.resizeController.lockResize(id, true, remainingSuppressionMs);
             }
           }
-          this.notifyAttachSettledWaiters(id);
+          this.settleWaiters.notifyAttachSettledWaiters(id);
         });
       });
     } else {
       managed.isAttaching = false;
-      this.notifyAttachSettledWaiters(id);
+      this.settleWaiters.notifyAttachSettledWaiters(id);
     }
 
     return managed;
@@ -2576,7 +1573,7 @@ class TerminalInstanceService {
 
   detach(id: string, container: HTMLElement | null): void {
     const managed = this.instances.get(id);
-    if (!managed || !container || managed.isHibernated) {
+    if (!managed || !container) {
       logDebug(`[TIS.detach] Skipping ${id} - no managed:${!managed}, no container:${!container}`);
       return;
     }
@@ -2723,7 +1720,6 @@ class TerminalInstanceService {
     const widthRatio = width / session.basis.width;
     const heightRatio = height / session.basis.height;
     for (const [id, managed] of this.instances) {
-      if (managed.isHibernated) continue;
       if (!managed.isOpened) continue;
       let origin = session.origin.get(id);
       if (!origin) {
@@ -2744,169 +1740,33 @@ class TerminalInstanceService {
   }
 
   /**
-   * Resize a set of panels in a single read-all / write-all pass (#8597).
-   *
-   * The previous grid-fit batch chained one `fit()` per requestAnimationFrame,
-   * which (a) spread the visual settle across N frames and (b) interleaved
-   * `fitAddon.fit()`'s `getComputedStyle` read with the per-panel xterm write
-   * for every panel — classic layout thrash. Here we phase the work: phase 1
-   * reads `getBoundingClientRect()` for every eligible panel up front (cheap
-   * thanks to per-panel `contain: layout style`), phase 2 calls
-   * `resizeController.resize()` for each collected rect. `resize()` computes
-   * cols/rows from cached cell metrics without touching the DOM, so the write
-   * phase performs no further layout reads. The whole pass completes in a
-   * single task.
-   *
-   * Eligibility guards mirror the per-panel checks the old chained-fit loop
-   * relied on: instance must exist, host element must be connected and
-   * visible (xterm's `fit()` path checks `checkVisibility()`, but `resize()`
-   * does not, so we apply it here), and the panel must not be resize-locked.
-   * Caller is responsible for the `isDragging` guard since the React ref
-   * holding that state is owned by the grid hook.
-   *
-   * Private — this is the synchronous primitive. Callers outside this service
-   * must go through {@link runResizePass} (chunked, cancellable) or
-   * {@link scheduleBatchResize} (coalesced) so a survivor reflow never freezes
-   * the renderer in one task. `executeResizePass` invokes this one id at a time.
-   */
-  private batchResize(ids: string[]): void {
-    if (ids.length === 0) return;
-
-    type Pending = { id: string; width: number; height: number };
-    const seen = new Set<string>();
-    const pending: Pending[] = [];
-
-    for (const id of ids) {
-      if (seen.has(id)) continue;
-      seen.add(id);
-
-      const managed = this.instances.get(id);
-      if (!managed) continue;
-      if (!managed.hostElement.isConnected) continue;
-      if (!managed.hostElement.checkVisibility()) continue;
-      if (this.resizeController.isResizeLocked(id)) continue;
-
-      const rect = managed.hostElement.getBoundingClientRect();
-      if (rect.width < 50 || rect.height < 50) continue;
-
-      pending.push({ id, width: rect.width, height: rect.height });
-    }
-
-    for (const { id, width, height } of pending) {
-      this.resizeController.resize(id, width, height);
-    }
-  }
-
-  private gridResizeTimer: number | undefined;
-  private readonly gridResizePendingIds = new Set<string>();
-  private resizePassAbort: AbortController | undefined;
-
-  /**
-   * Coalesced variant of `batchResize`. A burst of grid open/close events each
-   * union their ids and reset a trailing-edge timer; the actual resize runs
-   * once the burst settles, on the next frame — so it never lands on the
-   * synchronous open/close path the user is waiting on.
+   * Coalesced batch resize for a burst of grid open/close events — runs on
+   * the next frame once the burst settles. See
+   * {@link TerminalResizePassScheduler.scheduleBatchResize}.
    */
   scheduleBatchResize(ids: string[]): void {
-    if (ids.length === 0) return;
-    for (const id of ids) this.gridResizePendingIds.add(id);
-    if (this.gridResizeTimer !== undefined) {
-      clearTimeout(this.gridResizeTimer);
-    }
-    this.gridResizeTimer = window.setTimeout(() => {
-      this.gridResizeTimer = undefined;
-      const pendingIds = [...this.gridResizePendingIds];
-      this.gridResizePendingIds.clear();
-      requestAnimationFrame(() => this.runResizePass(pendingIds));
-    }, GRID_RESIZE_COALESCE_MS);
+    this.resizePassScheduler.scheduleBatchResize(ids);
   }
 
   /**
-   * Resize a set of panels as a chunked, cancellable pass instead of one
-   * synchronous loop. Closing or opening a panel resizes every surviving
-   * xterm; in xterm.js 6.0 a column-changing resize reflows the entire
-   * scrollback (O(scrollback)), so resizing ~15 terminals in a single
-   * synchronous loop freezes the renderer for hundreds of ms — the
-   * "app stops responding" the user feels on Cmd+W.
-   *
-   * This runs `RESIZE_PASS_CHUNK_SIZE` terminal(s) per task and yields to the
-   * scheduler between chunks (see {@link yieldToScheduler}), so paint and
-   * input stay live while the survivors settle progressively. The focused
-   * panel resizes first so the pane the user is looking at settles in the
-   * first frame; far corners of a large grid settle a beat later, unnoticed.
-   *
-   * Each new pass aborts any in-flight one: once a newer pass starts, the
-   * survivor set the old one was resizing is already stale, so its remaining
-   * reflows are cancelled. The trailing-edge debounce in
-   * {@link scheduleBatchResize} coalesces a close/open burst before a pass
-   * starts; this abort handles the case where a burst arrives once a pass is
-   * already running. Fire-and-forget — callers never await it.
+   * Chunked, cancellable resize pass across a set of panels — see
+   * {@link TerminalResizePassScheduler.runResizePass}.
    */
   runResizePass(ids: string[]): void {
-    if (ids.length === 0) return;
-    // A newer pass supersedes any in-flight one — its survivor set is stale.
-    this.resizePassAbort?.abort();
-    const controller = new AbortController();
-    this.resizePassAbort = controller;
-    const run = () => this.executeResizePass(ids, controller);
-    const task =
-      typeof scheduler !== "undefined" && typeof scheduler.postTask === "function"
-        ? scheduler.postTask(run, { priority: "user-visible", signal: controller.signal })
-        : run();
-    void task.catch((error) => {
-      if (error instanceof Error && error.name === "AbortError") return;
-      logError("terminal resize pass failed", error);
-    });
+    this.resizePassScheduler.runResizePass(ids);
   }
 
   /**
-   * Abort any in-flight chunked resize pass without starting a new one. The
-   * paint-fabric compositor uses this to give a multi-surface fabric the same
-   * pass-supersession semantics the single service has: one logical pass spans
-   * every surface, so starting a new pass must cancel stale chunked work on
-   * surfaces that have no ids in the new pass (they'd otherwise keep reflowing
-   * a survivor set that is already stale).
+   * Abort any in-flight chunked resize pass without starting a new one — see
+   * {@link TerminalResizePassScheduler.cancelActiveResizePass}.
    */
   cancelActiveResizePass(): void {
-    this.resizePassAbort?.abort();
-    this.resizePassAbort = undefined;
-  }
-
-  private async executeResizePass(ids: string[], controller: AbortController): Promise<void> {
-    const { signal } = controller;
-    try {
-      const ordered = this.orderFocusedFirst([...new Set(ids)]);
-      for (let i = 0; i < ordered.length; i += RESIZE_PASS_CHUNK_SIZE) {
-        if (signal.aborted) return;
-        // batchResize re-applies every eligibility guard (instance exists,
-        // connected, visible, not resize-locked) and reads fresh geometry —
-        // correct here because layout has settled across the yields.
-        this.batchResize(ordered.slice(i, i + RESIZE_PASS_CHUNK_SIZE));
-        if (i + RESIZE_PASS_CHUNK_SIZE < ordered.length) {
-          await yieldToScheduler();
-        }
-      }
-    } finally {
-      if (this.resizePassAbort === controller) {
-        this.resizePassAbort = undefined;
-      }
-    }
-  }
-
-  /**
-   * Order the resize set so the focused panel settles first. The user's eye
-   * is on the focused pane; resizing it in the first chunk makes the pass
-   * feel instant even though total work is unchanged.
-   */
-  private orderFocusedFirst(ids: string[]): string[] {
-    const focusedId = usePanelStore.getState().focusedId;
-    if (!focusedId || !ids.includes(focusedId)) return ids;
-    return [focusedId, ...ids.filter((id) => id !== focusedId)];
+    this.resizePassScheduler.cancelActiveResizePass();
   }
 
   scrollToBottom(id: string): void {
     const managed = this.instances.get(id);
-    if (managed && !managed.isHibernated) {
+    if (managed) {
       this.scrollToBottomSafe(managed);
     }
   }
@@ -2924,7 +1784,7 @@ class TerminalInstanceService {
 
   scrollToLastActivity(id: string): void {
     const managed = this.instances.get(id);
-    if (!managed || managed.isHibernated) return;
+    if (!managed) return;
 
     if (managed.isAltBuffer) {
       managed.terminal.scrollToBottom();
@@ -2950,26 +1810,13 @@ class TerminalInstanceService {
     return this.unseenTracker.subscribe(id, listener);
   }
 
-  // Hibernation no longer occurs (terminals stay fully live in the background),
-  // so `isHibernated` is permanently false and these listeners never fire. The
-  // subscription is retained so `useIsHibernated` keeps a stable
-  // useSyncExternalStore contract while reading the always-false snapshot.
-  subscribeHibernation(id: string, listener: () => void): () => void {
-    let listeners = this.hibernationListeners.get(id);
-    if (!listeners) {
-      listeners = new Set();
-      this.hibernationListeners.set(id, listeners);
-    }
-    listeners.add(listener);
-
-    return () => {
-      const current = this.hibernationListeners.get(id);
-      if (!current) return;
-      current.delete(listener);
-      if (current.size === 0) {
-        this.hibernationListeners.delete(id);
-      }
-    };
+  // Hibernation no longer occurs (terminals stay fully live in the
+  // background). Retained as a no-op so `useIsHibernated` and other direct
+  // callers (e.g. useAccessibilityAnnouncements) keep a stable
+  // useSyncExternalStore contract against the always-false `isHibernated`
+  // snapshot below — the listener is never notified.
+  subscribeHibernation(_id: string, _listener: () => void): () => void {
+    return () => {};
   }
 
   /**
@@ -3210,7 +2057,7 @@ class TerminalInstanceService {
 
   captureBufferText(id: string, maxChars: number = 20000): string {
     const managed = this.instances.get(id);
-    if (!managed || managed.isHibernated) return "";
+    if (!managed) return "";
 
     const buf = managed.terminal.buffer.active;
     if (buf.length === 0) return "";
@@ -3280,7 +2127,7 @@ class TerminalInstanceService {
     // one context on the pane the user is reading. Focus is tracked here
     // (not in onTierApplied) because same-tier focus moves dedup away the
     // tier application.
-    if (isFocused && !managed.isHibernated) {
+    if (isFocused) {
       this.webGLManager.pinFocus(id, managed);
     }
   }
@@ -3291,7 +2138,7 @@ class TerminalInstanceService {
 
   focus(id: string): void {
     const managed = this.instances.get(id);
-    if (!managed || managed.isHibernated) return;
+    if (!managed) return;
 
     const terminal = managed.terminal;
     const buffer = terminal.buffer.active;
@@ -3373,7 +2220,7 @@ class TerminalInstanceService {
 
   resetRenderer(id: string): boolean {
     const managed = this.instances.get(id);
-    if (!managed || managed.isHibernated) return false;
+    if (!managed) return false;
 
     try {
       if (!managed.hostElement.isConnected) {
@@ -3435,7 +2282,6 @@ class TerminalInstanceService {
 
   handleBackendRecovery(): void {
     this.instances.forEach((managed, id) => {
-      if (managed.isHibernated) return;
       try {
         managed.terminal.write("\x1b[!p");
 
@@ -3460,30 +2306,23 @@ class TerminalInstanceService {
     const textMetricKeys = ["fontSize", "fontFamily", "lineHeight", "letterSpacing", "fontWeight"];
     const textMetricsChanged = textMetricKeys.some((key) => key in options);
 
-    if (!managed.isHibernated) {
-      Object.entries(options).forEach(([key, value]) => {
-        // @ts-expect-error xterm options are indexable
-        managed.terminal.options[key] = value;
-      });
-      // Theme/font/etc. updates flow through `BASE_TERMINAL_OPTIONS` which
-      // unconditionally sets cursorBlink:true — re-clamp through the policy
-      // helper so a BACKGROUND/VISIBLE plain terminal doesn't silently start
-      // its blink timer again on a font or theme change.
-      this.applyCursorBlinkPolicy(managed);
-    }
+    Object.entries(options).forEach(([key, value]) => {
+      // @ts-expect-error xterm options are indexable
+      managed.terminal.options[key] = value;
+    });
+    // Theme/font/etc. updates flow through `BASE_TERMINAL_OPTIONS` which
+    // unconditionally sets cursorBlink:true — re-clamp through the policy
+    // helper so a BACKGROUND/VISIBLE plain terminal doesn't silently start
+    // its blink timer again on a font or theme change.
+    this.applyCursorBlinkPolicy(managed);
 
     if (textMetricsChanged) {
       managed.lastWidth = 0;
       managed.lastHeight = 0;
+      this.resizeController.fit(id);
     }
-
-    if (!managed.isHibernated) {
-      if (textMetricsChanged) {
-        this.resizeController.fit(id);
-      }
-      if ("theme" in options) {
-        managed.terminal.refresh(0, managed.terminal.rows - 1);
-      }
+    if ("theme" in options) {
+      managed.terminal.refresh(0, managed.terminal.rows - 1);
     }
   }
 
@@ -3492,29 +2331,22 @@ class TerminalInstanceService {
     const textMetricsChanged = textMetricKeys.some((key) => key in options);
 
     this.instances.forEach((managed, id) => {
-      if (!managed.isHibernated) {
-        Object.entries(options).forEach(([key, value]) => {
-          // @ts-expect-error xterm options are indexable
-          managed.terminal.options[key] = value;
-        });
-        // Same rationale as updateOptions: re-clamp cursorBlink so a global
-        // theme/font change doesn't silently re-enable the blink timer on
-        // backgrounded plain terminals.
-        this.applyCursorBlinkPolicy(managed);
-      }
+      Object.entries(options).forEach(([key, value]) => {
+        // @ts-expect-error xterm options are indexable
+        managed.terminal.options[key] = value;
+      });
+      // Same rationale as updateOptions: re-clamp cursorBlink so a global
+      // theme/font change doesn't silently re-enable the blink timer on
+      // backgrounded plain terminals.
+      this.applyCursorBlinkPolicy(managed);
 
       if (textMetricsChanged) {
         managed.lastWidth = 0;
         managed.lastHeight = 0;
+        this.resizeController.fit(id);
       }
-
-      if (!managed.isHibernated) {
-        if (textMetricsChanged) {
-          this.resizeController.fit(id);
-        }
-        if ("theme" in options) {
-          managed.terminal.refresh(0, managed.terminal.rows - 1);
-        }
+      if ("theme" in options) {
+        managed.terminal.refresh(0, managed.terminal.rows - 1);
       }
     });
   }
@@ -3533,7 +2365,6 @@ class TerminalInstanceService {
    */
   repairFontGrid(): void {
     this.instances.forEach((managed, id) => {
-      if (managed.isHibernated) return;
       try {
         const current = managed.terminal.options.fontFamily ?? DEFAULT_TERMINAL_FONT_FAMILY;
         // A trailing space parses identically in CSS (no visible flicker) but is
@@ -3605,7 +2436,7 @@ class TerminalInstanceService {
     // Route through wantsWebGLAtTier so an off-screen promotion (background
     // worktree detected mid-stream) doesn't register a fleet-wide want; the
     // reveal path re-acquires it when the pane comes on-screen (#10671).
-    if (managed.isOpened && this.wantsWebGLAtTier(managed, managed.lastAppliedTier)) {
+    if (managed.isOpened && this.webGLPolicy.wantsWebGLAtTier(managed, managed.lastAppliedTier)) {
       this.webGLManager.ensureContext(id, managed);
     }
   }
@@ -3623,7 +2454,7 @@ class TerminalInstanceService {
     // focused pane stays WebGL-eligible as a plain terminal, so keep (or
     // acquire) its context instead of churning it through a release.
     this.cancelWebGLHideTimer(managed);
-    if (managed.isOpened && this.wantsWebGLAtTier(managed, managed.lastAppliedTier)) {
+    if (managed.isOpened && this.webGLPolicy.wantsWebGLAtTier(managed, managed.lastAppliedTier)) {
       this.webGLManager.ensureContext(id, managed);
     } else {
       this.webGLManager.releaseContext(id);
@@ -3638,7 +2469,6 @@ class TerminalInstanceService {
   // reduced and is restored by the tier-upgrade path.
   restoreScrollbackAllForeground(): void {
     for (const managed of this.instances.values()) {
-      if (managed.isHibernated) continue;
       const tier = managed.lastAppliedTier ?? managed.getRefreshTier?.();
       if (tier === TerminalRefreshTier.BACKGROUND) continue;
       restoreScrollback(managed);
@@ -3652,8 +2482,10 @@ class TerminalInstanceService {
     return () => managed.exitSubscribers.delete(cb);
   }
 
-  isHibernated(id: string): boolean {
-    return this.instances.get(id)?.isHibernated === true;
+  // Hibernation no longer occurs (terminals stay fully live in the
+  // background) — always false. See subscribeHibernation above.
+  isHibernated(_id: string): boolean {
+    return false;
   }
 
   // Whether this terminal currently holds a live WebGL context (vs the DOM
@@ -3661,132 +2493,6 @@ class TerminalInstanceService {
   // via the rAF attach/release drains.
   isWebGLActive(id: string): boolean {
     return this.webGLManager.isActive(id);
-  }
-
-  /**
-   * Tier-driven worker-ingest policy (issue #10960): BACKGROUND demotes the
-   * terminal's parse into a worker via its dedicated pty-host port; any other
-   * tier (FOCUSED/BURST, and VISIBLE — a visible pane repainting at snapshot
-   * cadence would be a UX regression) promotes back to the main-thread path
-   * through the zero-loss release barrier. No-op unless
-   * DAINTREE_PAINT_FABRIC_WORKER_INGEST=1.
-   */
-  private applyWorkerIngestPolicy(
-    id: string,
-    tier: TerminalRefreshTier,
-    managed: ManagedTerminal
-  ): void {
-    if (!isPaintFabricWorkerIngestEnabled()) return;
-    if (tier === TerminalRefreshTier.BACKGROUND) {
-      // Hibernated terminals drop output entirely; an alt-buffer TUI repaints
-      // its whole viewport constantly, and snapshot cadence handles that fine —
-      // no exclusion needed beyond hibernation.
-      if (managed.isHibernated) return;
-      let ingest = this.workerIngest.get(id);
-      if (!ingest) {
-        ingest = this.createWorkerIngest(id, managed);
-        this.workerIngest.set(id, ingest);
-      }
-      ingest.setDesired(true);
-    } else {
-      this.workerIngest.get(id)?.setDesired(false);
-    }
-  }
-
-  private createWorkerIngest(id: string, managed: ManagedTerminal): LiveWorkerIngest {
-    if (!this.unsubWorkerIngestEngaged) {
-      this.unsubWorkerIngestEngaged = terminalClient.onWorkerIngestEngaged((terminalId) => {
-        this.workerIngest.get(terminalId)?.handleEngaged();
-      });
-    }
-
-    const utf8ByteLength = (data: string): number => new TextEncoder().encode(data).byteLength;
-
-    const ingest = new LiveWorkerIngest({
-      id,
-      requestPort: () => terminalClient.requestWorkerIngestPort(id),
-      releasePort: () => terminalClient.releaseWorkerIngestPort(id),
-      sendEngage: () => terminalClient.sendWorkerIngestEngage(id),
-      sendRelease: (drainId) => terminalClient.sendWorkerIngestRelease(id, drainId),
-      createTransport: () => createParseWorkerTransport(),
-      mirror: {
-        write: (data, callback) => {
-          const current = this.instances.get(id);
-          if (!current || current.isHibernated) {
-            callback?.();
-            return;
-          }
-          // Direct write — snapshot applies and replays are pre-acked, so the
-          // write controller's ack bookkeeping must never see them. Unseen
-          // tracking still counts each repaint as output activity.
-          this.unseenTracker.incrementUnseen(id, current.isUserScrolledBack);
-          current.terminal.write(data, callback);
-        },
-      },
-      serializeMirror: () => {
-        const current = this.instances.get(id);
-        return current?.serializeAddon.serialize() ?? "";
-      },
-      getGeometry: () => {
-        const current = this.instances.get(id);
-        return {
-          cols: current?.terminal.cols ?? 80,
-          rows: current?.terminal.rows ?? 24,
-          scrollback: current?.terminal.options.scrollback ?? 1000,
-        };
-      },
-      ackDiverted: (data) => {
-        // Delivery source is encoded in the chunk type (the same invariant
-        // TerminalWriteController's ackBytes rule rests on): port chunks are
-        // always Uint8Array, IPC chunks always strings. Settle exactly one
-        // port-ack FIFO entry per port chunk; never let an IPC chunk shift a
-        // port entry — that would prematurely ack a port chunk still queued.
-        if (typeof data === "string") {
-          terminalClient.acknowledgeData(id, utf8ByteLength(data));
-        } else {
-          terminalClient.acknowledgePortData(id, data.byteLength, 1);
-        }
-      },
-      drainPendingWrites: async () => {
-        // Quiesce the normal pipeline before the engage serialize: queued
-        // ingest chunks, in-flight xterm writes, and serialized-restore
-        // deferrals all still land on the mirror through the write controller
-        // — the serialize must happen after them or they vanish at the next
-        // snapshot apply. Diversion is already on, so no new inflow.
-        const deadline = Date.now() + 5000;
-        for (;;) {
-          const current = this.instances.get(id);
-          if (!current) return false;
-          if (
-            this.dataBuffer.getQueuedBytes(id) === 0 &&
-            (current.pendingWrites ?? 0) === 0 &&
-            !current.isSerializedRestoreInProgress
-          ) {
-            return true;
-          }
-          if (Date.now() > deadline) return false;
-          this.dataBuffer.resumeFlush(id);
-          await new Promise((resolve) => setTimeout(resolve, WORKER_INGEST_DRAIN_POLL_MS));
-        }
-      },
-      requestHostRestore: () => {
-        safeFireAndForget(this.restoreController.fetchAndRestore(id), {
-          context: "worker-ingest fallback restore",
-        });
-      },
-      onDidFallback: (reason) => {
-        logWarn("Worker ingest fell back to main-thread parse", { id, reason });
-      },
-    });
-
-    // Geometry follows the mirror in every mode so demotion re-seeds at the
-    // right size (session forwards resizes only while in worker mode).
-    const resizeDisposable = managed.terminal.onResize(({ cols, rows }) =>
-      ingest.resize(cols, rows)
-    );
-    managed.listeners.push(() => resizeDisposable.dispose());
-
-    return ingest;
   }
 
   destroy(id: string): void {
@@ -3803,36 +2509,12 @@ class TerminalInstanceService {
     const managed = this.instances.get(id);
     if (!managed) return;
 
-    const waiters = this.readinessWaiters.get(id);
-    if (waiters) {
-      for (const waiter of waiters) {
-        clearTimeout(waiter.timeout);
-        waiter.reject(new Error(`Terminal ${id} destroyed before frontend became ready`));
-      }
-      this.readinessWaiters.delete(id);
-    }
-
-    const attachWaiters = this.attachSettledWaiters.get(id);
-    if (attachWaiters) {
-      for (const waiter of attachWaiters) {
-        clearTimeout(waiter.timeout);
-        waiter.reject(new Error(`Terminal ${id} destroyed before attach settled`));
-      }
-      this.attachSettledWaiters.delete(id);
-    }
-
-    const fullySettledWaiters = this.fullySettledWaiters.get(id);
-    if (fullySettledWaiters) {
-      for (const waiter of fullySettledWaiters) {
-        clearTimeout(waiter.timeout);
-        waiter.reject(new Error(`Terminal ${id} destroyed before fully settled`));
-      }
-      this.fullySettledWaiters.delete(id);
-    }
+    this.settleWaiters.rejectAll(id);
 
     this.cancelAttachReveal(managed);
     this.agentStateController.destroy(id);
     this.restoreController.destroy(id);
+    this.burstController.destroy(id);
 
     managed.scrollbackRestoreState = "none";
 
@@ -3854,14 +2536,7 @@ class TerminalInstanceService {
     this.resizeController.clearResizeJob(managed);
     this.resizeController.clearResizeLock(id);
     this.resizeController.clearSettledTimer(id);
-    // Worker ingest dies with the terminal: dispose terminates the Worker and
-    // closes the dedicated port on every teardown path (kill/trash/project
-    // close/LRU eviction) — a leaked producer port queues unboundedly (#6283).
-    const ingest = this.workerIngest.get(id);
-    if (ingest) {
-      ingest.dispose();
-      this.workerIngest.delete(id);
-    }
+    this.workerIngestController.destroy(id);
     // Renderer-side destroy without a prior kill (project close, LRU
     // eviction of an exited terminal) must still drain the port-ack FIFO
     // before the held queue is wiped (#9910). kill/gracefulKill/trash clear
@@ -3869,21 +2544,11 @@ class TerminalInstanceService {
     terminalClient.discardPortAcks(id);
     this.dataBuffer.resetForTerminal(id);
     this.unseenTracker.destroy(id);
-    this.hibernationListeners.delete(id);
 
     if (managed.tierChangeTimer !== undefined) {
       clearTimeout(managed.tierChangeTimer);
       managed.tierChangeTimer = undefined;
     }
-    if (managed.inputBurstTimer !== undefined) {
-      clearTimeout(managed.inputBurstTimer);
-      managed.inputBurstTimer = undefined;
-    }
-    if (managed.writeBurstTimer !== undefined) {
-      clearTimeout(managed.writeBurstTimer);
-      managed.writeBurstTimer = undefined;
-    }
-    managed.writeBurstDeadline = undefined;
     if (managed.titleReportTimer !== undefined) {
       clearTimeout(managed.titleReportTimer);
       managed.titleReportTimer = undefined;
@@ -3915,38 +2580,35 @@ class TerminalInstanceService {
     managed.agentStateSubscribers.clear();
     managed.altBufferListeners.clear();
 
-    if (!managed.isHibernated) {
-      managed.parserHandler?.dispose();
+    managed.parserHandler?.dispose();
 
-      try {
-        managed.fileLinksDisposable?.dispose();
-      } catch (error) {
-        logWarn("Error disposing file links", { error });
-      }
-      try {
-        managed.imageLinksDisposable?.dispose();
-      } catch (error) {
-        logWarn("Error disposing image links", { error });
-      }
-      try {
-        managed.webLinksAddon?.dispose();
-      } catch (error) {
-        logWarn("Error disposing web links addon", { error });
-      }
-      try {
-        managed.imageAddon?.dispose();
-      } catch (error) {
-        logWarn("Error disposing image addon", { error });
-      }
-
-      this.webGLManager.onTerminalDestroyed(id);
-      managed.terminal.dispose();
+    try {
+      managed.fileLinksDisposable?.dispose();
+    } catch (error) {
+      logWarn("Error disposing file links", { error });
+    }
+    try {
+      managed.imageLinksDisposable?.dispose();
+    } catch (error) {
+      logWarn("Error disposing image links", { error });
+    }
+    try {
+      managed.webLinksAddon?.dispose();
+    } catch (error) {
+      logWarn("Error disposing web links addon", { error });
+    }
+    try {
+      managed.imageAddon?.dispose();
+    } catch (error) {
+      logWarn("Error disposing image addon", { error });
     }
 
-    // Detach the host element regardless of hibernation state: a hibernated
-    // terminal's host may have been parked in the shared offscreen container
-    // by detach()/detachForProjectSwitch() (raw child, not a registered slot),
-    // and the gated branch above doesn't reach it (#9909).
+    this.webGLManager.onTerminalDestroyed(id);
+    managed.terminal.dispose();
+
+    // The host may have been parked in the shared offscreen container by
+    // detach()/detachForProjectSwitch() (raw child, not a registered slot) —
+    // detach it regardless of the dispose path above (#9909).
     if (managed.hostElement.parentElement) {
       managed.hostElement.parentElement.removeChild(managed.hostElement);
     }
@@ -3962,12 +2624,8 @@ class TerminalInstanceService {
     this.stopPolling();
     this.unsubTierChanged?.();
     this.unsubTierChanged = null;
-    this.unsubWorkerIngestEngaged?.();
-    this.unsubWorkerIngestEngaged = null;
-    // Abort any in-flight chunked resize pass so its yielded continuation
-    // doesn't resume against a torn-down service.
-    this.resizePassAbort?.abort();
-    this.resizePassAbort = undefined;
+    this.workerIngestController.dispose();
+    this.resizePassScheduler.dispose();
     this.reflowController.dispose();
     this.reconciliationWatchdog.dispose();
     this.instances.forEach((_, id) => this.destroy(id));
@@ -3999,9 +2657,7 @@ class TerminalInstanceService {
     if (!managed) return;
 
     managed.isInputLocked = locked;
-    if (!managed.isHibernated) {
-      managed.terminal.options.disableStdin = locked;
-    }
+    managed.terminal.options.disableStdin = locked;
   }
 }
 

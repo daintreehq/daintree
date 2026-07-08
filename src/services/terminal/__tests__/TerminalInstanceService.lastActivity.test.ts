@@ -83,7 +83,6 @@ interface MockManaged {
   isSerializedRestoreInProgress: boolean;
   isUserScrolledBack: boolean;
   pendingWrites?: number;
-  isHibernated?: boolean;
   lastAppliedTier?: TerminalRefreshTier;
   getRefreshTier?: () => TerminalRefreshTier;
 }

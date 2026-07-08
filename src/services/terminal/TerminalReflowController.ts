@@ -116,12 +116,11 @@ export class TerminalReflowController {
    * Applies to agent terminals too: xterm 6's pause gate lives in the core
    * RenderService, so a WebGL-rendered terminal is just as susceptible as a
    * DOM one (and after a webglcontextlost it falls back to the DOM renderer
-   * with no requeue). Skips: hibernated/invisible/attaching terminals,
-   * alt-buffer (TUI) sessions, and terminals without a rendered element.
-   * Throttled per terminal.
+   * with no requeue). Skips: invisible/attaching terminals, alt-buffer (TUI)
+   * sessions, and terminals without a rendered element. Throttled per
+   * terminal.
    */
   maybeReflow(managed: ManagedTerminal): void {
-    if (managed.isHibernated) return;
     if (!managed.isVisible) return;
     if (managed.isAttaching) return;
     if (managed.isAltBuffer) return;
