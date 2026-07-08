@@ -892,6 +892,9 @@ export function DndProvider({ children }: DndProviderProps) {
 
       // Capture state before clearing
       const dropContainer = overContainer;
+      // Capture the drag-over hysteresis verdict before it is cleared so the
+      // commit can honor the same before/after decision the placeholder previewed.
+      const gridInsertMemo = gridInsertMemoRef.current;
 
       setActiveId(null);
       setActiveData(null);
@@ -998,11 +1001,17 @@ export function DndProvider({ children }: DndProviderProps) {
         const isAccordionOver = parseAccordionDragId(overId) !== null;
         // For a single-terminal dock→grid drop landing directly on an existing
         // panel (not the placeholder), resolve before/after by rect geometry so
-        // it commits to the same slot the placeholder previewed. Drops onto the
-        // placeholder already flow the correct index via sortable.index.
+        // it commits to the same slot the placeholder previewed. Reuse the
+        // hysteresis verdict for the same hover target so a drop inside the
+        // dead-zone commits where the preview showed. Drops onto the placeholder
+        // already flow the correct index via sortable.index.
         const dockToGridGeometry =
           sourceLocation === "dock" && targetContainer === "grid" && !isGroupDrag
-            ? { activeRect: active.rect.current.translated, overRect: over.rect }
+            ? {
+                activeRect: active.rect.current.translated,
+                overRect: over.rect,
+                previousIndex: gridInsertMemo?.overId === overId ? gridInsertMemo.index : undefined,
+              }
             : undefined;
         const targetIndex = resolveTargetIndex(
           freshTerminalsById,

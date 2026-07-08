@@ -31,6 +31,9 @@ export const GRID_INSERTION_HYSTERESIS_PX = 8;
 function isUsableRect(rect: ClientRectLike | null | undefined): rect is ClientRectLike {
   return (
     !!rect &&
+    Number.isFinite(rect.left) &&
+    Number.isFinite(rect.top) &&
+    Number.isFinite(rect.bottom) &&
     Number.isFinite(rect.width) &&
     Number.isFinite(rect.height) &&
     rect.width > 0 &&

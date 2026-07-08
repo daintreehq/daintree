@@ -262,8 +262,8 @@ describe("resolveTargetIndex", () => {
     ).toBe(2);
   });
 
-  it("exact grid match with missing rects biases after (append)", () => {
-    // First panel "a" (idx 0); null rects → after → 1, satisfying default-to-last
+  it("exact grid match with missing rects biases after the hovered panel, not before", () => {
+    // Hovering "a" (idx 0) with null rects → after → 1 (not the before-biased 0)
     expect(
       resolveTargetIndex(terminalsById, panelIds, "wt1", "grid", "a", undefined, false, {
         activeRect: null,
@@ -278,6 +278,17 @@ describe("resolveTargetIndex", () => {
     );
   });
 
+  it("does not apply geometry when the exact-match branch is skipped (skipAccordionOver)", () => {
+    // skipAccordionOver=true bypasses the findIndex branch entirely, so the
+    // right-half geometry (which would give idx+1=2) must NOT apply; falls to sortableIndex.
+    expect(
+      resolveTargetIndex(terminalsById, panelIds, "wt1", "grid", "b", 0, true, {
+        activeRect: makeRect(60, 40, 20, 20),
+        overRect: over,
+      })
+    ).toBe(0);
+  });
+
   it("ignores geometry when overId misses (falls to sortableIndex)", () => {
     const active = makeRect(60, 40, 20, 20);
     expect(
@@ -286,6 +297,26 @@ describe("resolveTargetIndex", () => {
         overRect: over,
       })
     ).toBe(2);
+  });
+
+  it("honors previousIndex so the commit matches the previewed slot in the dead-zone", () => {
+    // Hovering "b" (idx 1), center just left of midpoint (raw = before = 1), but the
+    // preview held after (2); passing previousIndex keeps the commit at 2.
+    const active = makeRect(38, 40, 20, 20); // center x = 48, dist 2 < 8
+    expect(
+      resolveTargetIndex(terminalsById, panelIds, "wt1", "grid", "b", undefined, false, {
+        activeRect: active,
+        overRect: over,
+        previousIndex: 2,
+      })
+    ).toBe(2);
+    // Without the memoized verdict the raw geometry would commit before (1).
+    expect(
+      resolveTargetIndex(terminalsById, panelIds, "wt1", "grid", "b", undefined, false, {
+        activeRect: active,
+        overRect: over,
+      })
+    ).toBe(1);
   });
 });
 
@@ -308,6 +339,20 @@ describe("resolveGridInsertionIndexFromRects", () => {
     expect(resolveGridInsertionIndexFromRects(0, makeRect(40, 40, Number.NaN, 20), over)).toBe(1);
   });
 
+  it("biases after for a finite-size rect with a non-finite position", () => {
+    // width/height are valid but left is NaN → centerX is NaN; must still fall
+    // back to after, not silently resolve before.
+    const active = {
+      left: Number.NaN,
+      top: 40,
+      width: 20,
+      height: 20,
+      right: Number.NaN,
+      bottom: 60,
+    };
+    expect(resolveGridInsertionIndexFromRects(0, active, over)).toBe(1);
+  });
+
   it("returns before when the center is above the target row", () => {
     const active = makeRect(40, -60, 20, 20); // center y = -50 < 0
     expect(resolveGridInsertionIndexFromRects(0, active, over)).toBe(0);
@@ -316,6 +361,18 @@ describe("resolveGridInsertionIndexFromRects", () => {
   it("returns after when the center is below the target row", () => {
     const active = makeRect(40, 120, 20, 20); // center y = 130 >= 100
     expect(resolveGridInsertionIndexFromRects(0, active, over)).toBe(1);
+  });
+
+  it("treats center exactly at the top edge as in-band (splits horizontally)", () => {
+    // center y = 0 == over.top; `< top` is false → same band, right half → after
+    expect(resolveGridInsertionIndexFromRects(0, makeRect(60, -10, 20, 20), over)).toBe(1);
+    // same edge, left half → before
+    expect(resolveGridInsertionIndexFromRects(0, makeRect(20, -10, 20, 20), over)).toBe(0);
+  });
+
+  it("treats center exactly at the bottom edge as after (>= bottom), even on the left", () => {
+    // center y = 100 == over.bottom → after regardless of x
+    expect(resolveGridInsertionIndexFromRects(0, makeRect(20, 90, 20, 20), over)).toBe(1);
   });
 
   it("returns after below the row even when x is far left (reading order)", () => {
@@ -348,6 +405,11 @@ describe("resolveGridInsertionIndexFromRects", () => {
   it("lets the raw verdict win once the center leaves the dead-zone", () => {
     const active = makeRect(60, 40, 20, 20); // center x = 70, dist 20 > 8
     expect(resolveGridInsertionIndexFromRects(0, active, over, 0)).toBe(1);
+  });
+
+  it("does not hold at exactly the dead-zone boundary (distance == hysteresisPx)", () => {
+    // center x = 42, dist exactly 8; `< 8` is false so the hold does not engage → raw before
+    expect(resolveGridInsertionIndexFromRects(0, makeRect(32, 40, 20, 20), over, 1)).toBe(0);
   });
 
   it("ignores a previousIndex that does not belong to this base index", () => {
