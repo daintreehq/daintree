@@ -165,7 +165,14 @@ export function resolveTargetIndex(
   geometry?: {
     activeRect?: ClientRectLike | null;
     overRect?: ClientRectLike | null;
-    previousIndex?: number;
+    /**
+     * The drag-over hysteresis verdict (after vs before the hovered target),
+     * space-agnostic so it reconstructs against this terminal-space index. Kept
+     * as a boolean rather than an absolute index because the placeholder preview
+     * resolves in group-space, which diverges from terminal-space when an
+     * earlier multi-panel group shifts the flat indices.
+     */
+    previousAfter?: boolean;
   }
 ): number {
   const containerTerminals = filterTerminalsByContainer(
@@ -179,11 +186,13 @@ export function resolveTargetIndex(
     const idx = containerTerminals.findIndex((t) => t.id === overId);
     if (idx !== -1) {
       if (geometry) {
+        const previousIndex =
+          geometry.previousAfter === undefined ? undefined : geometry.previousAfter ? idx + 1 : idx;
         return resolveGridInsertionIndexFromRects(
           idx,
           geometry.activeRect,
           geometry.overRect,
-          geometry.previousIndex
+          previousIndex
         );
       }
       return idx;

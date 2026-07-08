@@ -299,15 +299,16 @@ describe("resolveTargetIndex", () => {
     ).toBe(2);
   });
 
-  it("honors previousIndex so the commit matches the previewed slot in the dead-zone", () => {
+  it("honors previousAfter so the commit matches the previewed slot in the dead-zone", () => {
     // Hovering "b" (idx 1), center just left of midpoint (raw = before = 1), but the
-    // preview held after (2); passing previousIndex keeps the commit at 2.
+    // preview held after; previousAfter reconstructs the after-index (2) in
+    // terminal-space so the commit lands where the placeholder previewed.
     const active = makeRect(38, 40, 20, 20); // center x = 48, dist 2 < 8
     expect(
       resolveTargetIndex(terminalsById, panelIds, "wt1", "grid", "b", undefined, false, {
         activeRect: active,
         overRect: over,
-        previousIndex: 2,
+        previousAfter: true,
       })
     ).toBe(2);
     // Without the memoized verdict the raw geometry would commit before (1).
@@ -315,6 +316,19 @@ describe("resolveTargetIndex", () => {
       resolveTargetIndex(terminalsById, panelIds, "wt1", "grid", "b", undefined, false, {
         activeRect: active,
         overRect: over,
+      })
+    ).toBe(1);
+  });
+
+  it("reconstructs previousAfter=false as the before-index for the hovered terminal", () => {
+    // Hovering "b" (idx 1), center just right of midpoint (raw = after = 2), but the
+    // preview held before; previousAfter=false reconstructs idx (1).
+    const active = makeRect(42, 40, 20, 20); // center x = 52, dist 2 < 8
+    expect(
+      resolveTargetIndex(terminalsById, panelIds, "wt1", "grid", "b", undefined, false, {
+        activeRect: active,
+        overRect: over,
+        previousAfter: false,
       })
     ).toBe(1);
   });

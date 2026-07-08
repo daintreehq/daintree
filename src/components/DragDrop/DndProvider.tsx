@@ -609,10 +609,12 @@ export function DndProvider({ children }: DndProviderProps) {
   // undefined before handleDragEnd fires.
   const activeWorktreeSortDataRef = useRef<Record<string, unknown> | null>(null);
 
-  // Last before/after placeholder index resolved for a given hover target during
-  // a dock→grid drag. Threaded back into the geometry helper as its previous
-  // verdict so the hysteresis dead-zone can damp per-frame oscillation.
-  const gridInsertMemoRef = useRef<{ overId: string; index: number } | null>(null);
+  // Last before/after verdict for a given hover target during a dock→grid drag.
+  // Stored as a space-agnostic decision (after vs before the target) rather than
+  // an absolute index so it reconstructs correctly against both the group-space
+  // baseIndex in handleDragOver and the terminal-space baseIndex at commit. Fed
+  // back into the geometry helper's hysteresis to damp per-frame oscillation.
+  const gridInsertMemoRef = useRef<{ overId: string; after: boolean } | null>(null);
 
   const [isCancelDrop, setIsCancelDrop] = useState(false);
 
@@ -814,18 +816,21 @@ export function DndProvider({ children }: DndProviderProps) {
           // Directly over an existing panel: use pointer/rect geometry to allow
           // landing AFTER it, not only before. Without this a single full-surface
           // panel leaves no whitespace to hover, so every drop resolved to index 0.
+          const baseGroupIndex = groupIndex;
           const previousIndex =
             gridInsertMemoRef.current?.overId === overId
-              ? gridInsertMemoRef.current.index
+              ? gridInsertMemoRef.current.after
+                ? baseGroupIndex + 1
+                : baseGroupIndex
               : undefined;
           groupIndex = resolveGridInsertionIndexFromRects(
-            groupIndex,
+            baseGroupIndex,
             active.rect.current.translated,
             over.rect,
             previousIndex
           );
           groupIndex = Math.min(Math.max(0, groupIndex), tabGroups.length);
-          gridInsertMemoRef.current = { overId, index: groupIndex };
+          gridInsertMemoRef.current = { overId, after: groupIndex === baseGroupIndex + 1 };
         } else {
           gridInsertMemoRef.current = null;
         }
@@ -1010,7 +1015,7 @@ export function DndProvider({ children }: DndProviderProps) {
             ? {
                 activeRect: active.rect.current.translated,
                 overRect: over.rect,
-                previousIndex: gridInsertMemo?.overId === overId ? gridInsertMemo.index : undefined,
+                previousAfter: gridInsertMemo?.overId === overId ? gridInsertMemo.after : undefined,
               }
             : undefined;
         const targetIndex = resolveTargetIndex(
