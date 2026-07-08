@@ -1,4 +1,4 @@
-import { Profiler, Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
+import { Profiler, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 import {
   isElectronAvailable,
@@ -92,278 +92,66 @@ import { TooltipProvider } from "./components/ui/tooltip";
 import { primeRadix } from "./components/ui/radix-loader";
 import { UI_TOOLTIP_DELAY_DURATION, UI_TOOLTIP_SKIP_DELAY_DURATION } from "./lib/animationUtils";
 
-// Module-scope loaders: raw import() expressions inside component effects bail
-// React Compiler memoization for AppInner; hoisting keeps the specifiers
-// static for chunking while letting the component compile.
-const loadE2ENotificationBackdoor = () => import("./lib/e2eNotificationBackdoor");
-const loadJetbrainsMono500 = () => import("@fontsource/jetbrains-mono/latin-500.css");
-const loadJetbrainsMono600 = () => import("@fontsource/jetbrains-mono/latin-600.css");
-const preloadFileViewerModal = () => import("@/components/FileViewer/FileViewerModal");
-
-// Direct file import (not the Project barrel) so the lazy chunk doesn't pull
-// in barrel siblings. Renders only when no project is open, so it stays off
-// the returning-user first-paint path.
-function preloadWelcomeScreen() {
-  return import("./components/Project/WelcomeScreen");
-}
-const LazyWelcomeScreen = lazy(() =>
-  preloadWelcomeScreen().then((m) => ({ default: m.WelcomeScreen }))
-);
-
-function preloadSettingsDialog() {
-  return import("./components/Settings/SettingsDialog");
-}
-const LazySettingsDialog = lazy(() =>
-  preloadSettingsDialog().then((m) => ({ default: m.SettingsDialog }))
-);
-
-function preloadWorktreePalette() {
-  return import("./components/Worktree/WorktreePalette");
-}
-const LazyWorktreePalette = lazy(() =>
-  preloadWorktreePalette().then((m) => ({ default: m.WorktreePalette }))
-);
-
-function preloadWorktreeOverviewModal() {
-  return import("./components/Worktree/WorktreeOverviewModal");
-}
-const LazyWorktreeOverviewModal = lazy(() =>
-  preloadWorktreeOverviewModal().then((m) => ({ default: m.WorktreeOverviewModal }))
-);
-
-function preloadQuickCreatePalette() {
-  return import("./components/Worktree/QuickCreatePalette");
-}
-const LazyQuickCreatePalette = lazy(() =>
-  preloadQuickCreatePalette().then((m) => ({ default: m.QuickCreatePalette }))
-);
-
-function preloadCrossWorktreeDiff() {
-  return import("./components/Worktree/CrossWorktreeDiff");
-}
-const LazyCrossWorktreeDiff = lazy(() =>
-  preloadCrossWorktreeDiff().then((m) => ({ default: m.CrossWorktreeDiff }))
-);
-
-function preloadNewTerminalPalette() {
-  return import("./components/TerminalPalette/NewTerminalPalette");
-}
-const LazyNewTerminalPalette = lazy(() =>
-  preloadNewTerminalPalette().then((m) => ({ default: m.NewTerminalPalette }))
-);
-
-function preloadSendToAgentPalette() {
-  return import("./components/Terminal/SendToAgentPalette");
-}
-const LazySendToAgentPalette = lazy(() =>
-  preloadSendToAgentPalette().then((m) => ({ default: m.SendToAgentPalette }))
-);
-
-function preloadPanelPalette() {
-  return import("./components/PanelPalette/PanelPalette");
-}
-const LazyPanelPalette = lazy(() =>
-  preloadPanelPalette().then((m) => ({ default: m.PanelPalette }))
-);
-
-function preloadActionPalette() {
-  return import("./components/ActionPalette/ActionPalette");
-}
-const LazyActionPalette = lazy(() =>
-  preloadActionPalette().then((m) => ({ default: m.ActionPalette }))
-);
-
-function preloadQuickSwitcher() {
-  return import("./components/QuickSwitcher/QuickSwitcher");
-}
-const LazyQuickSwitcher = lazy(() =>
-  preloadQuickSwitcher().then((m) => ({ default: m.QuickSwitcher }))
-);
-
-function preloadProjectSwitcherPalette() {
-  return import("./components/Project/ProjectSwitcherPalette");
-}
-const LazyProjectSwitcherPalette = lazy(() =>
-  preloadProjectSwitcherPalette().then((m) => ({ default: m.ProjectSwitcherPalette }))
-);
-
-function preloadGitInitDialog() {
-  return import("./components/Project/GitInitDialog");
-}
-const LazyGitInitDialog = lazy(() =>
-  preloadGitInitDialog().then((m) => ({ default: m.GitInitDialog }))
-);
-
-function preloadCloneRepoDialog() {
-  return import("./components/Project/CloneRepoDialog");
-}
-const LazyCloneRepoDialog = lazy(() =>
-  preloadCloneRepoDialog().then((m) => ({ default: m.CloneRepoDialog }))
-);
-
-function preloadCreateProjectFolderDialog() {
-  return import("./components/Project/CreateProjectFolderDialog");
-}
-const LazyCreateProjectFolderDialog = lazy(() =>
-  preloadCreateProjectFolderDialog().then((m) => ({ default: m.CreateProjectFolderDialog }))
-);
-
-function preloadThemePalette() {
-  return import("./components/ThemePalette/ThemePalette");
-}
-const LazyThemePalette = lazy(() =>
-  preloadThemePalette().then((m) => ({ default: m.ThemePalette }))
-);
-const LazyResumeSessionsPalette = lazy(() =>
-  import("./components/Terminal/ResumeSessionsPalette").then((m) => ({
-    default: m.ResumeSessionsPalette,
-  }))
-);
-
-function preloadLogLevelPalette() {
-  return import("./components/LogLevelPalette/LogLevelPalette");
-}
-const LazyLogLevelPalette = lazy(() =>
-  preloadLogLevelPalette().then((m) => ({ default: m.LogLevelPalette }))
-);
-
-function preloadShortcutReferenceDialog() {
-  return import("./components/KeyboardShortcuts/ShortcutReferenceDialog");
-}
-const LazyShortcutReferenceDialog = lazy(() =>
-  preloadShortcutReferenceDialog().then((m) => ({ default: m.ShortcutReferenceDialog }))
-);
-
-function preloadPluginManagerView() {
-  return import("./components/Plugin/PluginManagerView");
-}
-const LazyPluginManagerView = lazy(() =>
-  preloadPluginManagerView().then((m) => ({ default: m.PluginManagerView }))
-);
-
-function preloadOnboardingFlow() {
-  return import("./components/Onboarding/OnboardingFlow");
-}
-const LazyOnboardingFlow = lazy(() =>
-  preloadOnboardingFlow().then((m) => ({ default: m.OnboardingFlow }))
-);
-
-function preloadGettingStartedChecklist() {
-  return import("./components/Onboarding/GettingStartedChecklist");
-}
-const LazyGettingStartedChecklist = lazy(() =>
-  preloadGettingStartedChecklist().then((m) => ({ default: m.GettingStartedChecklist }))
-);
-
-function preloadCelebrationConfetti() {
-  return import("./components/Onboarding/CelebrationConfetti");
-}
-const LazyCelebrationConfetti = lazy(() =>
-  preloadCelebrationConfetti().then((m) => ({ default: m.CelebrationConfetti }))
-);
-
-function preloadFileViewerModalHost() {
-  return import("./components/FileViewer/FileViewerModalHost");
-}
-const LazyFileViewerModalHost = lazy(() =>
-  preloadFileViewerModalHost().then((m) => ({ default: m.FileViewerModalHost }))
-);
-
-function preloadDiffViewerModalHost() {
-  return import("./components/Worktree/DiffViewerModalHost");
-}
-const LazyDiffViewerModalHost = lazy(() =>
-  preloadDiffViewerModalHost().then((m) => ({ default: m.DiffViewerModalHost }))
-);
-
-function preloadMcpConfirmDialog() {
-  return import("./components/McpConfirmDialog");
-}
-const LazyMcpConfirmDialog = lazy(() =>
-  preloadMcpConfirmDialog().then((m) => ({ default: m.McpConfirmDialog }))
-);
-
-function preloadPluginConfirmDialog() {
-  return import("./components/Plugin/PluginConfirmDialog");
-}
-const LazyPluginConfirmDialog = lazy(() =>
-  preloadPluginConfirmDialog().then((m) => ({ default: m.PluginConfirmDialog }))
-);
-
-function preloadPluginMcpConfirmDialog() {
-  return import("./components/Plugin/PluginMcpConfirmDialog");
-}
-const LazyPluginMcpConfirmDialog = lazy(() =>
-  preloadPluginMcpConfirmDialog().then((m) => ({ default: m.PluginMcpConfirmDialog }))
-);
-
-const LazyPluginQuickPickDialog = lazy(() =>
-  import("./components/Plugin/PluginQuickPickDialog").then((m) => ({
-    default: m.PluginQuickPickDialog,
-  }))
-);
-const LazyPluginInputBoxDialog = lazy(() =>
-  import("./components/Plugin/PluginInputBoxDialog").then((m) => ({
-    default: m.PluginInputBoxDialog,
-  }))
-);
-const LazyPluginConfirmPromptDialog = lazy(() =>
-  import("./components/Plugin/PluginConfirmPromptDialog").then((m) => ({
-    default: m.PluginConfirmPromptDialog,
-  }))
-);
-function preloadPluginCapabilityConfirmDialog() {
-  return import("./components/Plugin/PluginCapabilityConfirmDialog");
-}
-const LazyPluginCapabilityConfirmDialog = lazy(() =>
-  preloadPluginCapabilityConfirmDialog().then((m) => ({
-    default: m.PluginCapabilityConfirmDialog,
-  }))
-);
-
-function preloadPanelLimitConfirmDialog() {
-  return import("./components/Terminal/PanelLimitConfirmDialog");
-}
-const LazyPanelLimitConfirmDialog = lazy(() =>
-  preloadPanelLimitConfirmDialog().then((m) => ({ default: m.PanelLimitConfirmDialog }))
-);
-
-function preloadDiagnosticsReviewDialogHost() {
-  return import("./components/Settings/DiagnosticsReviewDialogHost");
-}
-const LazyDiagnosticsReviewDialogHost = lazy(() =>
-  preloadDiagnosticsReviewDialogHost().then((m) => ({ default: m.DiagnosticsReviewDialogHost }))
-);
-
-function preloadGitPushConfirmDialog() {
-  return import("./components/Git/GitPushConfirmDialog");
-}
-const LazyGitPushConfirmDialog = lazy(() =>
-  preloadGitPushConfirmDialog().then((m) => ({ default: m.GitPushConfirmDialog }))
-);
-
-function preloadGitPullRebaseConfirmDialog() {
-  return import("./components/Git/GitPullRebaseConfirmDialog");
-}
-const LazyGitPullRebaseConfirmDialog = lazy(() =>
-  preloadGitPullRebaseConfirmDialog().then((m) => ({
-    default: m.GitPullRebaseConfirmDialog,
-  }))
-);
-
-function preloadRecipeConflictDialog() {
-  return import("./components/TerminalRecipe/RecipeConflictDialog");
-}
-const LazyRecipeConflictDialog = lazy(() =>
-  preloadRecipeConflictDialog().then((m) => ({ default: m.RecipeConflictDialog }))
-);
-
-function preloadCrashRecoveryDialog() {
-  return import("./components/Recovery/CrashRecoveryDialog");
-}
-const LazyCrashRecoveryDialog = lazy(() =>
-  preloadCrashRecoveryDialog().then((m) => ({ default: m.CrashRecoveryDialog }))
-);
+import {
+  loadE2ENotificationBackdoor,
+  loadJetbrainsMono500,
+  loadJetbrainsMono600,
+  preloadFileViewerModal,
+  LazyWelcomeScreen,
+  preloadSettingsDialog,
+  LazySettingsDialog,
+  preloadWorktreePalette,
+  LazyWorktreePalette,
+  preloadWorktreeOverviewModal,
+  LazyWorktreeOverviewModal,
+  preloadQuickCreatePalette,
+  LazyQuickCreatePalette,
+  preloadCrossWorktreeDiff,
+  LazyCrossWorktreeDiff,
+  preloadNewTerminalPalette,
+  LazyNewTerminalPalette,
+  preloadSendToAgentPalette,
+  LazySendToAgentPalette,
+  preloadPanelPalette,
+  LazyPanelPalette,
+  preloadActionPalette,
+  LazyActionPalette,
+  preloadQuickSwitcher,
+  LazyQuickSwitcher,
+  preloadProjectSwitcherPalette,
+  LazyProjectSwitcherPalette,
+  LazyGitInitDialog,
+  LazyCloneRepoDialog,
+  LazyCreateProjectFolderDialog,
+  preloadThemePalette,
+  LazyThemePalette,
+  LazyResumeSessionsPalette,
+  preloadLogLevelPalette,
+  LazyLogLevelPalette,
+  preloadShortcutReferenceDialog,
+  LazyShortcutReferenceDialog,
+  preloadPluginManagerView,
+  LazyPluginManagerView,
+  LazyOnboardingFlow,
+  LazyGettingStartedChecklist,
+  LazyCelebrationConfetti,
+  LazyFileViewerModalHost,
+  LazyDiffViewerModalHost,
+  LazyMcpConfirmDialog,
+  LazyPluginConfirmDialog,
+  LazyPluginMcpConfirmDialog,
+  LazyPluginQuickPickDialog,
+  LazyPluginInputBoxDialog,
+  LazyPluginConfirmPromptDialog,
+  LazyPluginCapabilityConfirmDialog,
+  LazyPanelLimitConfirmDialog,
+  LazyDiagnosticsReviewDialogHost,
+  LazyGitPushConfirmDialog,
+  LazyGitPullRebaseConfirmDialog,
+  LazyRecipeConflictDialog,
+  LazyCrashRecoveryDialog,
+  loadMotionFeatures,
+} from "./lazyPanels";
 
 import { Toaster } from "./components/ui/toaster";
 import { ShortcutHint } from "./components/ui/ShortcutHint";
@@ -417,8 +205,6 @@ import { ensureHydrationBootstrap } from "./utils/stateHydration/bootstrapGuard"
 // a bare void call would surface an unhandled rejection — the swallowed early
 // failure is retried by hydrateAppState's own await.
 void ensureHydrationBootstrap().catch(() => {});
-
-const loadMotionFeatures = () => import("./lib/motionFeatures").then((mod) => mod.default);
 
 function AppInner() {
   useErrors();
