@@ -4,8 +4,7 @@ import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
 import type { UseQuickSwitcherReturn } from "./hooks/useQuickSwitcher";
 import { useSendToAgentPalette } from "./hooks/useSendToAgentPalette";
 import type { UseNewTerminalPaletteReturn } from "./hooks/useNewTerminalPalette";
-import type { UsePanelPaletteReturn } from "./hooks/usePanelPalette";
-import { MORE_AGENTS_PANEL_ID } from "./hooks/usePanelPalette";
+import { MORE_AGENTS_PANEL_ID, type UsePanelPaletteReturn } from "./hooks/usePanelPalette";
 import type { UseProjectSwitcherPaletteReturn } from "./hooks/useProjectSwitcherPalette";
 import type { UseActionPaletteReturn } from "./hooks/useActionPalette";
 import type { UseWorktreePaletteReturn } from "./hooks/useWorktreePalette";
@@ -16,7 +15,6 @@ import type { ReEntrySummaryState } from "./hooks/useReEntrySummary";
 import type { UseAgentLauncherReturn } from "./hooks/useAgentLauncher";
 import type { PluginDeepLinkState } from "./hooks/app";
 import type { SettingsTab } from "./components/Settings";
-import type { AddPanelOptions } from "./store";
 import type { BuiltInPanelKind } from "./types";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
@@ -26,7 +24,7 @@ import { ReEntrySummary } from "./components/ui/ReEntrySummary";
 import { TerminalInfoDialogHost } from "./components/Terminal/TerminalInfoDialogHost";
 import { PostHydrationListeners } from "./components/PostHydrationListeners";
 import { PanelTransitionOverlay } from "./components/Panel";
-import { usePluginManagerStore } from "./store";
+import { usePanelStore, usePluginManagerStore } from "./store";
 import { actionService } from "./services/ActionService";
 import {
   LazyQuickSwitcher,
@@ -82,7 +80,7 @@ interface ModalHostLayerProps {
   shouldMountPanelPalette: boolean;
   resumeSession: (session: AgentSessionRecord) => Promise<void>;
   handleLaunchAgent: (type: string) => void | Promise<void>;
-  addPanel: (options: AddPanelOptions) => unknown;
+  addPanel: ReturnType<typeof usePanelStore.getState>["addPanel"];
   defaultTerminalCwd: string | undefined;
   activeWorktreeId: string | null;
   isProjectSwitcherModalOpen: boolean;

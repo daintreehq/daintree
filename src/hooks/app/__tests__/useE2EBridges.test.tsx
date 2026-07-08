@@ -1,9 +1,23 @@
 // @vitest-environment jsdom
 import { renderHook } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import type { NotificationsE2EApi } from "@/lib/e2eNotificationBackdoor";
 
 const installE2EActionDispatchBridgeMock = vi.hoisted(() => vi.fn());
-const installE2ENotificationBackdoorMock = vi.hoisted(() => vi.fn());
+// Sentinel presence-only stub — the test only checks the global is set/cleared,
+// not the shape of the real 16-member NotificationsE2EApi.
+const notificationsE2EApiSentinel = vi.hoisted(
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- deliberate presence-only test sentinel, not a real NotificationsE2EApi
+  () => ({}) as NotificationsE2EApi
+);
+// Mirrors the real installE2ENotificationBackdoor(), which sets this global —
+// needed so the unmount-cleanup test can verify it's actually removed rather
+// than asserting on a key that was never set.
+const installE2ENotificationBackdoorMock = vi.hoisted(() =>
+  vi.fn(() => {
+    window.__daintreeNotificationsE2E = notificationsE2EApiSentinel;
+  })
+);
 const loadE2ENotificationBackdoorMock = vi.hoisted(() =>
   vi.fn(() =>
     Promise.resolve({ installE2ENotificationBackdoor: installE2ENotificationBackdoorMock })
@@ -127,13 +141,16 @@ describe("useE2EBridges", () => {
     });
   });
 
-  it("deletes every E2E global on unmount", () => {
+  it("deletes every E2E global on unmount", async () => {
     window.__DAINTREE_E2E_MODE__ = true;
     const { unmount } = renderHook(() => useE2EBridges());
 
     for (const key of E2E_GLOBAL_KEYS) {
       expect(window[key]).toBeDefined();
     }
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(window.__daintreeNotificationsE2E).toBeDefined();
 
     unmount();
 
