@@ -69,7 +69,7 @@ const DIRECT_RENDERER_EVENTS = new Set([
   // Host-originated active-worktree changes — fan out direct so the
   // per-view `WorktreeStoreContext` listener (`worktree-activated`) fires in
   // the same tick as any accompanying `worktree-removed` (the host-originated
-  // auto-switch in `runTopologyReconcile` and `deleteWorktree`). The legacy
+  // auto-switch in `TopologyWatcher`'s reconcile and `deleteWorktree`). The legacy
   // `CHANNELS.WORKTREE_ACTIVATED` echo path is still gated by PR #3603's
   // `silent` flag and is unaffected by this allowlist.
   "worktree-activated",
