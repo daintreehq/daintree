@@ -77,7 +77,7 @@ import type {
   FsRootClass,
   ExpandedFsPath,
   WorkspaceWorktreeEvent,
-} from "../PluginService.js";
+} from "./PluginServiceTypes.js";
 
 /**
  * Max file paths a single `host.invalidateFileDecorations` call broadcasts.
@@ -192,8 +192,8 @@ function sanitizeConfirmOptions(options: PluginConfirmOptions): PluginConfirmOpt
  * is the SAME live reference `PluginService` holds — never a snapshot — so the
  * post-await `plugins.get(id) === boundPlugin` / `plugins.has(id)` liveness
  * checks inside these closures keep observing concurrent unload races
- * correctly (#9428, #5638, #9322). Constructed once per `PluginService`
- * instance from inside its class body, where private field access is legal.
+ * correctly (#9428, #5638, #9322). Built fresh on each `createHost` call from
+ * inside `PluginService`'s class body, where private field access is legal.
  */
 export interface PluginHostFactoryDeps {
   plugins: Map<string, LoadedPlugin>;
@@ -251,7 +251,7 @@ export interface PluginHostFactoryDeps {
 
 /**
  * Replace the get-or-create-list/push/self-splicing-dispose boilerplate that
- * was copy-pasted across ~6 host closures. `teardown` runs the closure-specific
+ * was copy-pasted across 5 host closures. `teardown` runs the closure-specific
  * unsubscribe/unregister work; the list bookkeeping is identical everywhere.
  */
 function trackPluginDisposer(

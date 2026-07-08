@@ -17,12 +17,6 @@ const req = nodeCreateRequire(import.meta.url);
 const Ajv: new (opts?: Record<string, unknown>) => AjvInstance = req("ajv");
 const addFormats: (ajv: AjvInstance) => void = req("ajv-formats");
 
-export interface ValidateFn {
-  (data: unknown): boolean;
-  $async?: boolean;
-  errors?: Array<{ instancePath: string; message?: string }>;
-}
-
 interface AjvInstance {
   compile(schema: Record<string, unknown>): ValidateFn;
 }
@@ -95,6 +89,12 @@ import {
   createHost as createPluginHost,
   type PluginHostFactoryDeps,
 } from "./plugin/PluginHostFactory.js";
+import type {
+  LoadedPlugin,
+  ValidateFn,
+  WorkspaceWorktreeEvent,
+  ExpandedFsPath,
+} from "./plugin/PluginServiceTypes.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
 import { toPluginWorktreeStatus } from "../../shared/utils/pluginWorktreeSnapshot.js";
 import { getPtyClient } from "../window/serviceRefs.js";
@@ -187,24 +187,6 @@ const BUILT_IN_ACTION_ID_SET: ReadonlySet<string> = new Set<string>(BUILT_IN_ACT
  * async file-access only — no module evaluation happens until dispatch time.
  */
 const COMMAND_HANDLER_EXTENSIONS = [".js", ".mjs"] as const;
-
-export interface LoadedPlugin {
-  /** Deep-frozen at load (see `deepFreeze` call in `loadPlugin`); `Readonly` is the compile-time half of that invariant. */
-  manifest: Readonly<PluginManifest>;
-  dir: string;
-  resolvedMain?: string;
-  loadedAt: number;
-  isBuiltin: boolean;
-  /** SHA-256 hex digest of the `.dntr` archive, set by the installer at install time. */
-  archiveHash?: string;
-  /**
-   * True when the plugin dir carries a {@link DEV_MARKER_FILENAME} (written by
-   * `daintree-plugin dev`). Dev plugins activate inside a `utilityProcess.fork`
-   * worker that hot-reloads on `dist/index.js` rebuilds (#9304), instead of the
-   * in-process `import()` loader.
-   */
-  devMode?: boolean;
-}
 
 /**
  * Marker file `daintree-plugin dev` writes at the symlinked plugin dir root to
@@ -357,21 +339,6 @@ function isParkedOrTempDirName(name: string): boolean {
     name.startsWith(".old-") ||
     PARKED_OLD_DIR_RE.test(name)
   );
-}
-
-export type WorkspaceWorktreeEvent = "worktree-update" | "worktree-activated" | "worktree-removed";
-
-/**
- * Capability class of an expanded `scopes.fs.allowedPaths` root. Project /
- * worktree roots gate on `fs:project-*`; the implicit per-plugin data dir and
- * any path under the user's home dir gate on `fs:user-data-*`.
- */
-export type FsRootClass = "project" | "user-data";
-
-/** An `allowedPaths` entry after token expansion, with its capability class. */
-export interface ExpandedFsPath {
-  path: string;
-  rootClass: FsRootClass;
 }
 
 export class PluginService {
