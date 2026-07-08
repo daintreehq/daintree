@@ -37,8 +37,6 @@ import { useQuickCreatePalette } from "./hooks/useQuickCreatePalette";
 import { useDoubleShift } from "./hooks/useDoubleShift";
 import { useProjectMruSwitcher } from "./hooks/useProjectMruSwitcher";
 import { useKeepMounted } from "./hooks/useKeepMounted";
-import { stashViewFileRequest } from "./components/FileViewer/pendingViewFileRequest";
-import { stashViewDiffRequest } from "./components/Worktree/pendingViewDiffRequest";
 import { useMcpBridge } from "./hooks/useMcpBridge";
 import { useMcpAnomalyStats } from "./hooks/useMcpAnomalyStats";
 import { usePluginBridge } from "./hooks/usePluginBridge";
@@ -92,6 +90,7 @@ import { TooltipProvider } from "./components/ui/tooltip";
 import { primeRadix } from "./components/ui/radix-loader";
 import { UI_TOOLTIP_DELAY_DURATION, UI_TOOLTIP_SKIP_DELAY_DURATION } from "./lib/animationUtils";
 import { useE2EBridges } from "./hooks/app/useE2EBridges";
+import { useModalResetKeys } from "./hooks/app/useModalResetKeys";
 
 import {
   loadJetbrainsMono500,
@@ -167,15 +166,6 @@ import {
   usePreferencesStore,
   usePluginManagerStore,
 } from "./store";
-import { useRecipeConflictStore } from "./store/recipeConflictStore";
-import { useGitPushConfirmStore } from "./store/gitPushConfirmStore";
-import { useGitPullRebaseConfirmStore } from "./store/gitPullRebaseConfirmStore";
-import { usePanelLimitStore } from "./store/panelLimitStore";
-import { useMcpConfirmStore } from "./store/mcpConfirmStore";
-import { usePluginConfirmStore } from "./store/pluginConfirmStore";
-import { usePluginMcpConfirmStore } from "./store/pluginMcpConfirmStore";
-import { usePluginCapabilityConfirmStore } from "./store/pluginCapabilityConfirmStore";
-import { useDiagnosticsReviewStore } from "./store/diagnosticsReviewStore";
 // Eager side-effect import: auto-discovers every built-in plugin renderer and
 // registers its builtin view slots at module-eval time, before first render.
 // Must stay static — a deferred/idle import races the user, so getBuiltinView
@@ -387,54 +377,20 @@ function AppInner() {
     if (isStateLoaded) removeStartupSkeleton();
   }, [isStateLoaded]);
 
-  // ErrorBoundary reset signals for the always-mounted dialog hosts (#9918).
-  // A static `[Number(isStateLoaded)]` collapses to `[1]` after hydration and
-  // never changes, so a host that crashes once stays dead for the session (and
-  // its deferred promise leaks). Each host instead resets on its own
-  // pending-request signal, so a fresh request remounts the crashed boundary:
-  //   - request-counter stores bump `requestSeq` on every request (covers the
-  //     back-to-back supersede case where `pendingConfirm` never returns to null)
-  //   - FIFO-queue stores key off the live `current.requestId` UUID
-  //   - the diagnostics host toggles on its own `isOpen`
-  //   - the event-driven hosts (terminal-info, file-viewer) hold no store state,
-  //     so a local counter increments on each open event below.
-  const gitPushResetKey = useGitPushConfirmStore((s) => s.requestSeq);
-  const gitPullRebaseResetKey = useGitPullRebaseConfirmStore((s) => s.requestSeq);
-  const panelLimitResetKey = usePanelLimitStore((s) => s.requestSeq);
-  const recipeConflictResetKey = useRecipeConflictStore((s) => s.requestSeq);
-  const mcpConfirmResetKey = useMcpConfirmStore((s) => s.current?.requestId ?? "");
-  const pluginConfirmResetKey = usePluginConfirmStore((s) => s.current?.requestId ?? "");
-  const pluginMcpConfirmResetKey = usePluginMcpConfirmStore((s) => s.current?.requestId ?? "");
-  const pluginCapabilityConfirmResetKey = usePluginCapabilityConfirmStore(
-    (s) => s.current?.requestId ?? ""
-  );
-  const diagnosticsReviewResetKey = useDiagnosticsReviewStore((s) => s.requestSeq);
-  const [terminalInfoResetKey, setTerminalInfoResetKey] = useState(0);
-  const [fileViewerResetKey, setFileViewerResetKey] = useState(0);
-  const [diffViewerResetKey, setDiffViewerResetKey] = useState(0);
-  useEffect(() => {
-    const onTerminalInfo = () => setTerminalInfoResetKey((k) => k + 1);
-    const onViewFile = (e: Event) => {
-      // Stash for FileViewerModalHost's mount replay — the host's own listener
-      // lives in a lazy chunk and may not be registered yet.
-      stashViewFileRequest(e);
-      setFileViewerResetKey((k) => k + 1);
-    };
-    const onViewDiff = (e: Event) => {
-      // Stash for DiffViewerModalHost's mount replay — same lazy-chunk race as
-      // the file viewer above.
-      stashViewDiffRequest(e);
-      setDiffViewerResetKey((k) => k + 1);
-    };
-    window.addEventListener("daintree:open-terminal-info", onTerminalInfo);
-    window.addEventListener("daintree:view-file", onViewFile);
-    window.addEventListener("daintree:view-diff", onViewDiff);
-    return () => {
-      window.removeEventListener("daintree:open-terminal-info", onTerminalInfo);
-      window.removeEventListener("daintree:view-file", onViewFile);
-      window.removeEventListener("daintree:view-diff", onViewDiff);
-    };
-  }, []);
+  const {
+    gitPushResetKey,
+    gitPullRebaseResetKey,
+    panelLimitResetKey,
+    recipeConflictResetKey,
+    mcpConfirmResetKey,
+    pluginConfirmResetKey,
+    pluginMcpConfirmResetKey,
+    pluginCapabilityConfirmResetKey,
+    diagnosticsReviewResetKey,
+    terminalInfoResetKey,
+    fileViewerResetKey,
+    diffViewerResetKey,
+  } = useModalResetKeys();
   // Cross-project focus intent receiver. Subscribes unconditionally so the
   // listener is registered before `notifyViewPainted` fires, then defers the
   // local `agent.focusNextWaiting` dispatch until hydration completes (the

@@ -1,6 +1,8 @@
 export { useAppBoot } from "./useAppBoot";
 export type { SafeBootResult } from "./useAppBoot";
 export { useE2EBridges } from "./useE2EBridges";
+export { useModalResetKeys } from "./useModalResetKeys";
+export type { ModalResetKeys } from "./useModalResetKeys";
 export { useAppHydration } from "./useAppHydration";
 export { useShortcutHints } from "./useShortcutHints";
 export { usePanelStoreBootstrap } from "./usePanelStoreBootstrap";
