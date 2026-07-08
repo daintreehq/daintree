@@ -1,5 +1,4 @@
 import { useState, useCallback, useRef, useEffect, useMemo, useReducer } from "react";
-import { useBrowserActionListeners } from "@/hooks/useBrowserActionListeners";
 import { OctagonAlert, RotateCw } from "lucide-react";
 import { DevPreviewDestructiveConfirmDialog } from "./DevPreviewDestructiveConfirmDialog";
 import { usePanelStore } from "@/store";
@@ -10,13 +9,7 @@ import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import { BrowserToolbar } from "../Browser/BrowserToolbar";
 import { InlineStatusBanner } from "../Terminal/InlineStatusBanner";
 import { DevPreviewStuckBanner, DevPreviewHmrDeadBanner } from "./DevPreviewBanners";
-import { normalizeBrowserUrl } from "../Browser/browserUtils";
-import {
-  goBackBrowserHistory,
-  goForwardBrowserHistory,
-  initializeBrowserHistory,
-  pushBrowserHistory,
-} from "../Browser/historyUtils";
+import { initializeBrowserHistory } from "../Browser/historyUtils";
 import { useDevServer } from "@/hooks/useDevServer";
 import { ConsoleDrawer } from "./ConsoleDrawer";
 import { useDevPreviewConsoleCapture } from "./useDevPreviewConsoleCapture";
@@ -25,12 +18,11 @@ import { useDevPreviewScrollCapture } from "./useDevPreviewScrollCapture";
 import { useDevPreviewCrashRecovery } from "./useDevPreviewCrashRecovery";
 import { useDevPreviewViewport } from "./useDevPreviewViewport";
 import { DevPreviewWebviewOverlays } from "./DevPreviewWebviewOverlays";
+import { useDevPreviewNavigation } from "./useDevPreviewNavigation";
 import { DevPreviewLoadingState } from "./DevPreviewLoadingState";
 import { DevPreviewEmptyStates } from "./DevPreviewEmptyStates";
 import { useIsDragging } from "@/components/DragDrop";
 import { cn } from "@/lib/utils";
-import { computeDevServerUrl } from "./urlSync";
-import { actionService } from "@/services/ActionService";
 import { useWebviewThrottle } from "@/hooks/useWebviewThrottle";
 import { useHasBeenVisible } from "@/hooks/useHasBeenVisible";
 import { useWebviewEviction } from "@/hooks/useWebviewEviction";
@@ -42,7 +34,6 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { getViewportPreset } from "@/panels/dev-preview/viewportPresets";
 import { isDevPreviewPanel } from "@shared/types/panel";
 import { logError } from "@/utils/logger";
-import { notify } from "@/lib/notify";
 import { loadWebviewUrl } from "./loadWebviewUrl";
 import { useDevPreviewLoadLifecycle, type SessionStorageEntry } from "./useDevPreviewLoadLifecycle";
 
@@ -228,7 +219,6 @@ export function DevPreviewPane({
 
   const [blockedNav, dispatchBlockedNav] = useReducer(blockedNavReducer, null);
   const crashReloadRef = useRef<() => void>(() => {});
-  const screenshotInFlightRef = useRef(false);
   const blockedNavTimerRef = useRef<NodeJS.Timeout | null>(null);
   const CLIPBOARD_FEEDBACK_MS = 2000;
   const [certCopied, setCertCopied] = useState(false);
@@ -481,88 +471,6 @@ export function DevPreviewPane({
     setConsoleTerminalId(terminalId);
   }, [terminalId]);
 
-  useEffect(() => {
-    if (isUnconfigured) return;
-    // Hold navigation until the proxy port resolution settles, otherwise the pane would
-    // briefly adopt the unstable direct-localhost origin before the proxy origin is known (#9100).
-    if (proxyOrigin === undefined) return;
-    const nextUrl = url ? computeDevServerUrl(url, currentUrl, proxyOrigin) : false;
-    if (nextUrl !== false) {
-      // Push history only; the imperative navigation effect (keyed on currentUrl
-      // vs lastSetUrlRef) performs the actual loadURL. Pre-setting lastSetUrlRef
-      // here would make that effect skip — which used to be fine when `src`
-      // re-bound to currentUrl, but src is now seed-only (#9940).
-      setHistory((prev) => pushBrowserHistory(prev, nextUrl));
-    }
-  }, [url, currentUrl, isUnconfigured, proxyOrigin]);
-
-  useEffect(() => {
-    if (isUnconfigured) return;
-    if (currentUrl) {
-      setBrowserUrl(id, currentUrl);
-    }
-  }, [id, currentUrl, setBrowserUrl, isUnconfigured]);
-
-  useEffect(() => {
-    setBrowserHistory(id, history);
-  }, [id, history, setBrowserHistory]);
-
-  useEffect(() => {
-    setBrowserZoom(id, zoomFactor);
-  }, [id, zoomFactor, setBrowserZoom]);
-
-  const handleNavigate = useCallback((rawUrl: string) => {
-    const normalized = normalizeBrowserUrl(rawUrl);
-    if (normalized.url) {
-      // Push history only; the imperative navigation effect drives loadURL now
-      // that `src` is seed-only (#9940). Mirrors handleBack/handleForward.
-      setHistory((prev) => pushBrowserHistory(prev, normalized.url!));
-    }
-  }, []);
-
-  const handleBack = useCallback(() => {
-    if (canGoBack) {
-      setHistory((prev) => goBackBrowserHistory(prev));
-    }
-  }, [canGoBack]);
-
-  const handleForward = useCallback(() => {
-    if (canGoForward) {
-      setHistory((prev) => goForwardBrowserHistory(prev));
-    }
-  }, [canGoForward]);
-
-  const handleReload = useCallback(() => {
-    setWebviewLoadError(null);
-    webviewRef.current?.reload();
-  }, [setWebviewLoadError]);
-
-  const handleCancelLoad = useCallback(() => {
-    clearLoadTimers();
-    setIsLoading(false);
-    try {
-      webviewRef.current?.stop();
-    } catch {
-      // Webview detached
-    }
-    setWebviewLoadError({ code: "aborted", message: "Load cancelled." });
-  }, [clearLoadTimers, setIsLoading, setWebviewLoadError]);
-
-  const handleRetryWebviewLoad = useCallback(() => {
-    setWebviewLoadError(null);
-    setIsLoading(true);
-    if (currentUrl) {
-      // Swallow ERR_ABORTED-class rejections — did-fail-load is the source
-      // of truth for genuine failures.
-      const webview = webviewRef.current;
-      if (webview) {
-        loadWebviewUrl(webview, currentUrl);
-      }
-    } else {
-      webviewRef.current?.reload();
-    }
-  }, [currentUrl, setWebviewLoadError, setIsLoading]);
-
   const performReload = useCallback(() => {
     const webview = webviewRef.current;
     if (!webview || !isWebviewReady) return;
@@ -577,51 +485,6 @@ export function DevPreviewPane({
     }
   }, [isWebviewReady, id, setWebviewLoadError]);
 
-  const handleCaptureScreenshot = useCallback(async () => {
-    const webview = webviewRef.current;
-    if (!webview || !isWebviewReady) return false;
-    let url: string;
-    try {
-      url = webview.getURL();
-    } catch {
-      return false;
-    }
-    if (!url || url === "about:blank") return false;
-    if (screenshotInFlightRef.current) return false;
-    screenshotInFlightRef.current = true;
-    try {
-      const image = await webview.capturePage();
-      const pngData = new Uint8Array(image.toPNG());
-      await window.electron.clipboard.writeImage(pngData);
-      return true;
-    } catch (err) {
-      logError("[DevPreviewPane] Screenshot capture failed", err);
-      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-      notify({
-        type: "error",
-        title: "Screenshot failed",
-        message: "Couldn't copy the screenshot to clipboard",
-      });
-      return false;
-    } finally {
-      screenshotInFlightRef.current = false;
-    }
-  }, [isWebviewReady]);
-
-  const handleToggleDevTools = useCallback(() => {
-    const webview = webviewRef.current;
-    if (!webview || !isWebviewReady) return;
-    if (webview.isDevToolsOpened()) {
-      webview.closeDevTools();
-    } else {
-      webview.openDevTools();
-    }
-  }, [isWebviewReady]);
-
-  const handleToggleConsole = useCallback(() => {
-    setDevPreviewConsoleOpen(id, !isConsoleOpen);
-  }, [id, isConsoleOpen, setDevPreviewConsoleOpen]);
-
   const handleHardReload = useCallback(() => {
     resetCrashHistory();
     performReload();
@@ -633,76 +496,42 @@ export function DevPreviewPane({
     crashReloadRef.current = performReload;
   }, [performReload]);
 
-  const handleOpenExternal = useCallback(() => {
-    if (!currentUrl) return;
-
-    // In proxy mode (#9101), hand the system browser a short-lived signed
-    // bootstrap URL on the stable origin instead of the raw dev-server URL: it
-    // lands with a session cookie and survives dev-server restarts that reshuffle
-    // the upstream port. Fall back to the raw URL in legacy mode or if minting
-    // fails, so the button always opens *something*.
-    if (typeof proxyOrigin === "string" && currentProjectId && currentUrl.startsWith(proxyOrigin)) {
-      // Preserve the hash too — hash-router SPAs keep their route in the fragment.
-      const { pathname, search, hash } = new URL(currentUrl);
-      safeFireAndForget(
-        (async () => {
-          try {
-            const { bootstrapUrl } = await window.electron.devPreview.mintBrowserToken({
-              panelId: id,
-              projectId: currentProjectId,
-              redirectPath: `${pathname}${search}${hash}`,
-            });
-            await window.electron.system.openExternal(bootstrapUrl);
-          } catch (err) {
-            logError("[DevPreviewPane] Browser handoff token failed; opening raw URL", err);
-            await window.electron.system.openExternal(currentUrl);
-          }
-        })(),
-        { context: "Opening dev preview URL externally" }
-      );
-      return;
-    }
-
-    safeFireAndForget(window.electron.system.openExternal(currentUrl), {
-      context: "Opening dev preview URL externally",
-    });
-  }, [currentUrl, proxyOrigin, currentProjectId, id]);
-
-  const isPromotingRef = useRef(false);
-  const handlePromoteToPortal = useCallback(() => {
-    if (isPromotingRef.current) return;
-    isPromotingRef.current = true;
-    if (currentUrl) {
-      setBrowserUrl(id, currentUrl);
-    }
-    void actionService
-      .dispatch(
-        "devPreview.promoteToPortal",
-        { panelId: id, projectId: currentProjectId },
-        { source: "user" }
-      )
-      .finally(() => {
-        isPromotingRef.current = false;
-      });
-  }, [currentProjectId, currentUrl, id, setBrowserUrl]);
-
-  const handleZoomChange = useCallback((newZoom: number) => {
-    const clamped = Math.max(0.25, Math.min(2.0, newZoom));
-    setZoomFactor(clamped);
-    if (webviewRef.current) {
-      webviewRef.current.setZoomFactor(clamped);
-    }
-  }, []);
-
-  useBrowserActionListeners(id, {
-    onReload: handleReload,
-    onNavigate: handleNavigate,
-    onBack: handleBack,
-    onForward: handleForward,
-    onSetZoom: handleZoomChange,
-    onCaptureScreenshot: handleCaptureScreenshot,
-    onToggleDevTools: handleToggleDevTools,
-    onToggleConsole: handleToggleConsole,
+  const {
+    handleNavigate,
+    handleBack,
+    handleForward,
+    handleReload,
+    handleCancelLoad,
+    handleRetryWebviewLoad,
+    handleCaptureScreenshot,
+    handleToggleDevTools,
+    handleToggleConsole,
+    handleZoomChange,
+    handleOpenExternal,
+    handlePromoteToPortal,
+  } = useDevPreviewNavigation({
+    id,
+    currentProjectId,
+    currentUrl,
+    canGoBack,
+    canGoForward,
+    history,
+    setHistory,
+    zoomFactor,
+    setZoomFactor,
+    devServerUrl: url,
+    proxyOrigin,
+    isUnconfigured,
+    isWebviewReady,
+    webviewRef,
+    setBrowserUrl,
+    setBrowserHistory,
+    setBrowserZoom,
+    setIsLoading,
+    setWebviewLoadError,
+    clearLoadTimers,
+    isConsoleOpen,
+    setDevPreviewConsoleOpen,
     onHardReload: handleHardReload,
   });
 
@@ -918,7 +747,8 @@ export function DevPreviewPane({
 
   // Activate the dev-preview keybinding scope while focused so Cmd/Ctrl+R maps
   // to devPreview.reloadPreview when the panel chrome (toolbar/header) has focus.
-  // The guest-focused case is covered separately by onReloadShortcut below.
+  // The guest-focused case is covered separately by useDevPreviewNavigation's
+  // onReloadShortcut listener.
   useKeybindingScope("dev-preview", isFocused);
 
   // Listen for blocked navigation events from main process.
@@ -965,47 +795,6 @@ export function DevPreviewPane({
       }
     };
   }, [id, webviewElement]);
-
-  // Listen for the reload shortcut (Cmd/Ctrl+R) forwarded from the focused
-  // webview guest. When the guest has focus, the outer renderer's keybinding
-  // handler never fires, so the main process intercepts the key and forwards it.
-  useEffect(() => {
-    const cleanup = window.electron.webview.onReloadShortcut((payload) => {
-      if (payload.panelId !== id) return;
-      handleHardReload();
-    });
-    return cleanup;
-  }, [id, handleHardReload]);
-
-  // Listen for the close shortcut (Cmd/Ctrl+W) forwarded from the focused
-  // webview guest (#10859). Without this, focus inside the guest bypasses the
-  // host window's setIgnoreMenuShortcuts guard and the native role:"close"
-  // menu accelerator closes the whole window instead of just this panel.
-  useEffect(() => {
-    const cleanup = window.electron.webview.onCloseShortcut((payload) => {
-      if (payload.panelId !== id) return;
-      void actionService.dispatch("terminal.close", { terminalId: id }, { source: "keybinding" });
-    });
-    return cleanup;
-  }, [id]);
-
-  // Listen for action-driven hard-reload events
-  useEffect(() => {
-    const handleHardReloadEvent = (e: Event) => {
-      if (!(e instanceof CustomEvent)) return;
-      const detail = e.detail as unknown;
-      if (!detail || typeof (detail as { id?: unknown }).id !== "string") return;
-      if ((detail as { id: string }).id === id) {
-        handleHardReload();
-      }
-    };
-
-    const controller = new AbortController();
-    window.addEventListener("daintree:hard-reload-browser", handleHardReloadEvent, {
-      signal: controller.signal,
-    });
-    return () => controller.abort();
-  }, [id, handleHardReload]);
 
   // Mirrors the branch order in DevPreviewEmptyStates: true whenever that
   // ternary chain there would pick one of its non-null branches instead of
