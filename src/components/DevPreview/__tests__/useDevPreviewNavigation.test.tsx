@@ -154,15 +154,23 @@ describe("useDevPreviewNavigation — reload/cancel/retry", () => {
   });
 
   it("handleRetryWebviewLoad issues an imperative load when there's a current URL", () => {
+    const setWebviewLoadError = vi.fn();
+    const setIsLoading = vi.fn();
     const webview = makeWebview();
     const { result } = renderHook(() =>
       useDevPreviewNavigation(
-        baseParams({ currentUrl: "http://localhost:3000/x", webviewRef: { current: webview } })
+        baseParams({
+          currentUrl: "http://localhost:3000/x",
+          webviewRef: { current: webview },
+          setWebviewLoadError,
+          setIsLoading,
+        })
       )
     );
     act(() => result.current.handleRetryWebviewLoad());
-    // loadWebviewUrl calls webview.stop()+loadURL internally; getURL is enough
-    // signal here that the webview was addressed rather than blank-reloaded.
+    expect(setWebviewLoadError).toHaveBeenCalledWith(null);
+    expect(setIsLoading).toHaveBeenCalledWith(true);
+    expect(webview.loadURL).toHaveBeenCalledWith("http://localhost:3000/x");
     expect(webview.reload).not.toHaveBeenCalled();
   });
 
@@ -254,6 +262,27 @@ describe("useDevPreviewNavigation — open external / promote to portal", () => 
       expect.objectContaining({ redirectPath: "/path?x=1#frag" })
     );
     expect(window.electron.system.openExternal).toHaveBeenCalledWith("https://bootstrap.example");
+  });
+
+  it("falls back to opening the raw proxy URL when minting the bootstrap token fails", async () => {
+    (window.electron.devPreview.mintBrowserToken as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("mint failed")
+    );
+    const { result } = renderHook(() =>
+      useDevPreviewNavigation(
+        baseParams({
+          currentUrl: "https://proxy.example/path",
+          proxyOrigin: "https://proxy.example",
+        })
+      )
+    );
+    await act(async () => {
+      result.current.handleOpenExternal();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(window.electron.system.openExternal).toHaveBeenCalledWith("https://proxy.example/path");
   });
 
   it("opens the raw URL directly in legacy (non-proxy) mode", () => {

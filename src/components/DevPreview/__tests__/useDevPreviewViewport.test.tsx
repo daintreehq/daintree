@@ -102,6 +102,58 @@ describe("useDevPreviewViewport — effectiveViewport / fitScale", () => {
     );
     expect(result.current.fitScale).toBe(1);
   });
+
+  it("measures the fit container via ResizeObserver.observe and computes fitScale from its size", () => {
+    const observeSpy = vi.fn();
+    class ResizeObserverStub {
+      observe = observeSpy;
+      disconnect = vi.fn();
+      unobserve = vi.fn();
+    }
+    (global as unknown as { ResizeObserver: unknown }).ResizeObserver = ResizeObserverStub;
+
+    const { result } = renderHook(() =>
+      useDevPreviewViewport(baseParams({ viewportPreset: "iphone", viewportFit: true }))
+    );
+
+    const div = document.createElement("div");
+    Object.defineProperty(div, "clientWidth", { value: 200, configurable: true });
+    Object.defineProperty(div, "clientHeight", { value: 400, configurable: true });
+
+    act(() => {
+      result.current.setFitContainerEl(div);
+    });
+
+    expect(observeSpy).toHaveBeenCalledWith(div);
+    // iphone effective viewport is 393x852; container is 200x400.
+    const expectedScale = Math.min(200 / 393, 400 / 852);
+    expect(result.current.fitScale).toBeCloseTo(expectedScale, 5);
+  });
+
+  it("does not measure or apply a fit scale when fit mode is off, even once a container mounts", () => {
+    const observeSpy = vi.fn();
+    class ResizeObserverStub {
+      observe = observeSpy;
+      disconnect = vi.fn();
+      unobserve = vi.fn();
+    }
+    (global as unknown as { ResizeObserver: unknown }).ResizeObserver = ResizeObserverStub;
+
+    const { result } = renderHook(() =>
+      useDevPreviewViewport(baseParams({ viewportPreset: "iphone", viewportFit: false }))
+    );
+
+    const div = document.createElement("div");
+    Object.defineProperty(div, "clientWidth", { value: 200, configurable: true });
+    Object.defineProperty(div, "clientHeight", { value: 400, configurable: true });
+
+    act(() => {
+      result.current.setFitContainerEl(div);
+    });
+
+    expect(observeSpy).not.toHaveBeenCalled();
+    expect(result.current.fitScale).toBe(1);
+  });
 });
 
 describe("useDevPreviewViewport — device emulation effect", () => {

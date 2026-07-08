@@ -150,3 +150,61 @@ describe("DevPreviewEmptyStates", () => {
     expect(container.firstChild).toBeNull();
   });
 });
+
+// DevPreviewPane.tsx gates rendering this component vs. the live webview with a
+// `showEmptyState` boolean that must exactly mirror the branch order below. This
+// duplicates that formula (see DevPreviewPane.tsx) so a regression on either side
+// fails a test instead of silently mounting both the webview and a placeholder,
+// or neither.
+function computeShowEmptyState(props: {
+  isRestarting: boolean;
+  status: string;
+  isProxyUrlPending: boolean;
+  error: unknown;
+  currentUrl: string;
+  hasBeenVisible: boolean;
+  isEvicted: boolean;
+}): boolean {
+  return (
+    props.isRestarting ||
+    props.status === "starting" ||
+    props.status === "installing" ||
+    props.isProxyUrlPending ||
+    (props.status === "error" && !!props.error) ||
+    !props.currentUrl ||
+    props.status !== "running" ||
+    !props.hasBeenVisible ||
+    props.isEvicted
+  );
+}
+
+describe("DevPreviewEmptyStates — parent gate parity", () => {
+  const scenarios: Array<Partial<React.ComponentProps<typeof DevPreviewEmptyStates>>> = [
+    {
+      status: "running",
+      currentUrl: "http://localhost:3000",
+      hasBeenVisible: true,
+      isEvicted: false,
+    },
+    { isRestarting: true },
+    { status: "starting" },
+    { status: "installing" },
+    { isProxyUrlPending: true },
+    { status: "error", error: { type: "unknown", message: "boom" } as DevServerError },
+    { currentUrl: "" },
+    { status: "stopped" },
+    { status: "restored-stopped" },
+    { hasBeenVisible: false },
+    { isEvicted: true },
+  ];
+
+  for (const scenario of scenarios) {
+    it(`agrees with DevPreviewPane's showEmptyState for ${JSON.stringify(scenario)}`, () => {
+      const props = baseProps(scenario);
+      const expectedEmpty = computeShowEmptyState(props);
+      const { container } = render(<DevPreviewEmptyStates {...props} />);
+      const rendersNull = container.firstChild === null;
+      expect(rendersNull).toBe(!expectedEmpty);
+    });
+  }
+});

@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { renderHook, waitFor, act } from "@testing-library/react";
+import { renderHook, waitFor, act, render, screen } from "@testing-library/react";
 import type { RunCommand } from "@shared/types";
 
 const saveSettingsMock = vi.fn().mockResolvedValue(undefined);
@@ -17,6 +17,29 @@ vi.mock("@/clients", () => ({
     getSettings: (...args: unknown[]) => getSettingsMock(...args),
     detectRunners: (...args: unknown[]) => detectRunnersMock(...args),
   },
+}));
+
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
+vi.mock("@/components/ui/dropdown-menu", () => ({
+  DropdownMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  DropdownMenuContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  DropdownMenuItem: ({
+    children,
+    onSelect,
+  }: {
+    children: React.ReactNode;
+    onSelect?: () => void;
+  }) => (
+    <button onClick={onSelect} role="menuitem">
+      {children}
+    </button>
+  ),
 }));
 
 import { useDevPreviewCommandConfig } from "../useDevPreviewCommandConfig";
@@ -190,5 +213,85 @@ describe("useDevPreviewCommandConfig", () => {
         devServerAutoDetected: false,
       })
     );
+  });
+});
+
+describe("useDevPreviewCommandConfig — header script picker", () => {
+  it("picking the already-active script is a no-op (does not save or stop)", async () => {
+    useProjectSettingsStore.setState({
+      allDetectedRunners: [
+        runner(),
+        runner({ id: "start", name: "start", command: "npm run start" }),
+      ],
+    });
+    const stop = vi.fn();
+    const { result } = renderHook(() =>
+      useDevPreviewCommandConfig(
+        baseParams({ isUnconfigured: false, devCommand: "npm run dev", stop })
+      )
+    );
+    render(<>{result.current.headerContent}</>);
+
+    await act(async () => {
+      screen.getByRole("menuitem", { name: /dev.*npm run dev/i }).click();
+      await Promise.resolve();
+    });
+
+    expect(saveSettingsMock).not.toHaveBeenCalled();
+    expect(stop).not.toHaveBeenCalled();
+  });
+
+  it("picking a different script saves it and stops the running server", async () => {
+    getSettingsMock.mockResolvedValue({ turbopackEnabled: true });
+    useProjectSettingsStore.setState({
+      allDetectedRunners: [
+        runner(),
+        runner({ id: "start", name: "start", command: "npm run start" }),
+      ],
+    });
+    const stop = vi.fn();
+    const { result } = renderHook(() =>
+      useDevPreviewCommandConfig(
+        baseParams({ isUnconfigured: false, devCommand: "npm run dev", stop })
+      )
+    );
+    render(<>{result.current.headerContent}</>);
+
+    await act(async () => {
+      screen.getByRole("menuitem", { name: /start.*npm run start/i }).click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(saveSettingsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ devServerCommand: "npm run start" })
+    );
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not stop the server when saving the newly picked script fails", async () => {
+    getSettingsMock.mockResolvedValue(null);
+    useProjectSettingsStore.setState({
+      allDetectedRunners: [
+        runner(),
+        runner({ id: "start", name: "start", command: "npm run start" }),
+      ],
+    });
+    const stop = vi.fn();
+    const { result } = renderHook(() =>
+      useDevPreviewCommandConfig(
+        baseParams({ isUnconfigured: false, devCommand: "npm run dev", stop })
+      )
+    );
+    render(<>{result.current.headerContent}</>);
+
+    await act(async () => {
+      screen.getByRole("menuitem", { name: /start.*npm run start/i }).click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(saveSettingsMock).not.toHaveBeenCalled();
+    expect(stop).not.toHaveBeenCalled();
   });
 });
