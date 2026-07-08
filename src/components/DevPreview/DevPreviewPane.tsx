@@ -42,6 +42,7 @@ import { useDevPreviewConsoleCapture } from "./useDevPreviewConsoleCapture";
 import { useDevPreviewCommandConfig } from "./useDevPreviewCommandConfig";
 import { useDevPreviewScrollCapture } from "./useDevPreviewScrollCapture";
 import { useDevPreviewCrashRecovery } from "./useDevPreviewCrashRecovery";
+import { useDevPreviewViewport } from "./useDevPreviewViewport";
 import { DevPreviewLoadingState } from "./DevPreviewLoadingState";
 import { DevPreviewEmptyStates } from "./DevPreviewEmptyStates";
 import { useIsDragging } from "@/components/DragDrop";
@@ -59,13 +60,8 @@ import { FindBar } from "../Browser/FindBar";
 import { useFindInPage } from "@/hooks/useFindInPage";
 import { useKeybindingScope } from "@/hooks/useKeybinding";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
-import {
-  getViewportPreset,
-  getEffectiveViewportSize,
-  computeFitScale,
-} from "@/panels/dev-preview/viewportPresets";
-import { isDevPreviewPanel, type ViewportPresetId } from "@shared/types/panel";
-import { getDevPreviewWebContents, buildEmulationParams } from "./viewportEmulation";
+import { getViewportPreset } from "@/panels/dev-preview/viewportPresets";
+import { isDevPreviewPanel } from "@shared/types/panel";
 import { logError } from "@/utils/logger";
 import { notify } from "@/lib/notify";
 import { loadWebviewUrl } from "./loadWebviewUrl";
@@ -163,9 +159,6 @@ export function DevPreviewPane({
   const viewportRotated = terminal?.viewportRotated ?? false;
   const viewportDpr = terminal?.viewportDpr ?? 1;
   const viewportFit = terminal?.viewportFit ?? false;
-  const effectiveViewport = viewportPreset
-    ? getEffectiveViewportSize(viewportPreset, viewportRotated)
-    : null;
 
   const {
     status,
@@ -835,61 +828,28 @@ export function DevPreviewPane({
     }
   }, []);
 
-  const handleViewportPresetChange = useCallback(
-    (preset: ViewportPresetId | undefined) => {
-      setViewportPreset(id, preset);
-    },
-    [id, setViewportPreset]
-  );
-
-  const handleViewportRotateToggle = useCallback(() => {
-    setViewportRotated(id, !viewportRotated);
-  }, [id, setViewportRotated, viewportRotated]);
-
-  const handleViewportDprChange = useCallback(
-    (dpr: 1 | 2 | 3) => {
-      setViewportDpr(id, dpr);
-    },
-    [id, setViewportDpr]
-  );
-
-  const handleViewportFitToggle = useCallback(() => {
-    setViewportFit(id, !viewportFit);
-  }, [id, setViewportFit, viewportFit]);
-
-  // Measure the available preview area so zoom-to-fit can scale the device
-  // frame down to fit both pane dimensions. A static scale would break on
-  // pane resize, so this tracks the container via ResizeObserver.
-  // Callback ref (not useRef) so the observer effect re-runs when the
-  // fit-container div mounts for the first time — it lives in the webview
-  // branch, which only renders once the dev server reaches "running", long
-  // after viewportFit/viewportPreset may have been set.
-  const [fitContainerEl, setFitContainerEl] = useState<HTMLDivElement | null>(null);
-  const [fitContainerSize, setFitContainerSize] = useState<{ w: number; h: number }>({
-    w: 0,
-    h: 0,
+  const {
+    effectiveViewport,
+    fitScale,
+    setFitContainerEl,
+    handleViewportPresetChange,
+    handleViewportRotateToggle,
+    handleViewportDprChange,
+    handleViewportFitToggle,
+  } = useDevPreviewViewport({
+    id,
+    viewportPreset,
+    viewportRotated,
+    viewportDpr,
+    viewportFit,
+    isWebviewReady,
+    webviewElement,
+    originalUaRef,
+    setViewportPreset,
+    setViewportRotated,
+    setViewportDpr,
+    setViewportFit,
   });
-  useEffect(() => {
-    if (!viewportFit || !viewportPreset || !fitContainerEl) return;
-    const el = fitContainerEl;
-    const measure = () => {
-      setFitContainerSize({ w: el.clientWidth, h: el.clientHeight });
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [viewportFit, viewportPreset, fitContainerEl]);
-
-  const fitScale =
-    viewportFit && effectiveViewport
-      ? computeFitScale(
-          fitContainerSize.w,
-          fitContainerSize.h,
-          effectiveViewport.width,
-          effectiveViewport.height
-        )
-      : 1;
 
   useEffect(() => {
     if (isWebviewReady && currentUrl && currentUrl !== lastSetUrlRef.current) {
@@ -964,47 +924,6 @@ export function DevPreviewPane({
 
   useWebviewThrottle(id, location, isEvicted ? null : webviewElement, isWebviewReady && !isEvicted);
 
-  // Apply device emulation when viewport preset, rotation, or DPR changes.
-  // Uses enableDeviceEmulation which drives CSS media queries and window.innerWidth
-  // without a page reload, preserving in-page state across preset switches.
-  const prevEmulationKeyRef = useRef<string | null>(null);
-  const hasAppliedEmulationRef = useRef(false);
-  useEffect(() => {
-    if (!isWebviewReady || !webviewElement) return;
-    const emulationKey = `${viewportPreset ?? "none"}-${viewportRotated}-${viewportDpr}`;
-    if (prevEmulationKeyRef.current === emulationKey) return;
-    const hadPrevious = hasAppliedEmulationRef.current;
-
-    const wc = getDevPreviewWebContents(webviewElement);
-    if (!wc) return;
-
-    try {
-      if (viewportPreset) {
-        if (originalUaRef.current === null) {
-          originalUaRef.current = wc.getUserAgent();
-        }
-        wc.setUserAgent(getViewportPreset(viewportPreset).userAgent);
-        wc.enableDeviceEmulation(
-          buildEmulationParams(viewportPreset, viewportRotated, viewportDpr)!
-        );
-        prevEmulationKeyRef.current = emulationKey;
-        hasAppliedEmulationRef.current = true;
-      } else if (hadPrevious) {
-        try {
-          wc.disableDeviceEmulation();
-        } catch {
-          // disableDeviceEmulation may throw if emulation was never enabled
-        }
-        if (originalUaRef.current) {
-          wc.setUserAgent(originalUaRef.current);
-        }
-        prevEmulationKeyRef.current = emulationKey;
-        hasAppliedEmulationRef.current = false;
-      }
-    } catch {
-      // WebContents not available (webview detached)
-    }
-  }, [viewportPreset, viewportRotated, viewportDpr, isWebviewReady, webviewElement]);
   const { currentDialog, handleDialogRespond } = useWebviewDialog(
     id,
     isEvicted ? null : webviewElement,
