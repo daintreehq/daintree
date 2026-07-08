@@ -1320,19 +1320,17 @@ describe("DemoCursor", () => {
   describe("waitForIdle", () => {
     type FakeTerminal = {
       managed: {
-        isHibernated: boolean;
         terminal: { onWriteParsed: ReturnType<typeof vi.fn> };
       };
       fireWrite: () => void;
       dispose: ReturnType<typeof vi.fn>;
     };
 
-    function makeTerminal(hibernated = false): FakeTerminal {
+    function makeTerminal(): FakeTerminal {
       const listeners: Array<() => void> = [];
       const dispose = vi.fn();
       return {
         managed: {
-          isHibernated: hibernated,
           terminal: {
             onWriteParsed: vi.fn((cb: () => void) => {
               listeners.push(cb);
@@ -1391,25 +1389,6 @@ describe("DemoCursor", () => {
           expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-idle-term", undefined);
           // Subscription torn down on resolve.
           expect(term.dispose).toHaveBeenCalledTimes(1);
-        },
-        { timeout: 3000, interval: 20 }
-      );
-    });
-
-    it("skips hibernated terminals", async () => {
-      const live = makeTerminal();
-      const hibernated = makeTerminal(true);
-      registerTerminals({ "panel-live": live, "panel-hib": hibernated });
-
-      render(<DemoCursor />);
-      emit("demo:exec-wait-for-idle", { requestId: "req-idle-hib", settleMs: 30, timeoutMs: 2000 });
-
-      expect(live.managed.terminal.onWriteParsed).toHaveBeenCalledTimes(1);
-      expect(hibernated.managed.terminal.onWriteParsed).not.toHaveBeenCalled();
-
-      await vi.waitFor(
-        () => {
-          expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-idle-hib", undefined);
         },
         { timeout: 3000, interval: 20 }
       );

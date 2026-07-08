@@ -1034,8 +1034,7 @@ export function DemoCursor() {
             const terminalDisposables: Array<{ dispose: () => void }> = [];
             for (const panelId of usePanelStore.getState().panelIds) {
               const managed = terminalInstanceService.get(panelId);
-              // Hibernated terminals have a disposed xterm instance — skip them.
-              if (!managed || managed.isHibernated) continue;
+              if (!managed) continue;
               try {
                 terminalDisposables.push(managed.terminal.onWriteParsed(() => resetTimer()));
               } catch {

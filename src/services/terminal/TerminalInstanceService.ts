@@ -156,7 +156,6 @@ class TerminalInstanceService {
   );
   private suppressedExitUntil = new Map<string, number>();
   private unseenTracker = new TerminalUnseenOutputTracker();
-  private hibernationListeners = new Map<string, Set<() => void>>();
   private scrollbackRestoreListeners = new Set<() => void>();
   private cwdProviders = new Map<string, () => string>();
   private readinessWaiters = new Map<string, Waiter[]>();
@@ -555,7 +554,6 @@ class TerminalInstanceService {
     // itself suppressed for the first ~5s by the project-switch resize lock).
     if (!opts?.trustDomVisibility && !managed.isVisible) return false;
     if (managed.isAttaching) return false;
-    if (managed.isHibernated) return false;
     return this.wantsWebGLAtTier(
       managed,
       managed.lastAppliedTier ?? managed.getRefreshTier?.(),
@@ -814,7 +812,7 @@ class TerminalInstanceService {
 
   setVisible(id: string, isVisible: boolean, expectedGeneration?: number): void {
     const managed = this.instances.get(id);
-    if (!managed || managed.isHibernated) return;
+    if (!managed) return;
 
     // Guard: if a generation was provided and it doesn't match the current
     // attach generation, this is a stale cleanup from a previous mount — skip.
@@ -1089,7 +1087,6 @@ class TerminalInstanceService {
     const panelState = usePanelStore.getState();
     const panel = panelState.panelsById[id];
     const needsRealRestore =
-      managed.isHibernated ||
       managed.needsWake === true ||
       panel?.location === "background" ||
       panelState.backgroundedTerminals.has(id);
@@ -1293,7 +1290,7 @@ class TerminalInstanceService {
    */
   repaintForReveal(id: string, opts?: { trustDomVisibility?: boolean }): boolean {
     const managed = this.instances.get(id);
-    if (!managed || managed.isHibernated) return false;
+    if (!managed) return false;
     // Health-check on DOM ground truth (isConnected + checkVisibility + size),
     // NOT the reactive `managed.isVisible` flag (#10632 item 4). On a warm
     // WebContentsView resume the attach effect — the one place that force-sets
@@ -1420,7 +1417,7 @@ class TerminalInstanceService {
    */
   reconcileRevealGeometry(id: string): boolean {
     const managed = this.instances.get(id);
-    if (!managed || managed.isHibernated) return false;
+    if (!managed) return false;
     if (!this.resizeController.reconcileGeometryFresh(id)) return false;
 
     try {
@@ -1445,8 +1442,7 @@ class TerminalInstanceService {
    *
    * Splits the two states a long-dwell return can leave a terminal in:
    *
-   * - **Hibernated or unopened** — a dwell past the hibernation delay tore the
-   *   xterm instance down, and the occluded warm wake could not re-open it
+   * - **Unopened** — the occluded warm wake could not open the xterm instance
    *   (no measurable host box behind the bridge). The lightweight repaint can't
    *   help (it guards on `isOpened`), so run the full
    *   {@link fullWakeForVisibilityRestore}: now that the host has real layout it
@@ -1465,8 +1461,8 @@ class TerminalInstanceService {
     const managed = this.instances.get(id);
     // Gone — nothing to repaint and nothing to retry, so report "settled".
     if (!managed) return true;
-    if (managed.isHibernated || !managed.isOpened) {
-      // A hibernated/unopened pane needs the full open+wake, but
+    if (!managed.isOpened) {
+      // An unopened pane needs the full open+wake, but
       // fullWakeForVisibilityRestore only opens once the host has a real layout
       // box. While the foreground view is still settling that box can read zero
       // (or the host is visibility:hidden), so report "not paintable yet" and
@@ -1484,7 +1480,6 @@ class TerminalInstanceService {
       return (
         !after ||
         (after.isOpened === true &&
-          after.isHibernated !== true &&
           after.isAttaching !== true &&
           after.pendingVisibilityWake !== true)
       );
@@ -1509,7 +1504,7 @@ class TerminalInstanceService {
    */
   injectDataLossMarker(id: string, droppedBytes: number): void {
     const managed = this.instances.get(id);
-    if (!managed || managed.isHibernated) return;
+    if (!managed) return;
     managed.terminal.write(`\x18\x1b]57301;${droppedBytes};backpressure\x07`);
   }
 
@@ -1517,13 +1512,13 @@ class TerminalInstanceService {
    * Draw the user-visible yellow data-loss marker. Deferred via
    * `queueMicrotask` because it is reached from inside the OSC 57301 parse
    * callback — calling `terminal.write` synchronously during parsing would be
-   * reentrant. Re-checks instance state because hibernation can occur between
-   * the OSC write and this microtask.
+   * reentrant. Re-checks instance state because the terminal can be destroyed
+   * between the OSC write and this microtask.
    */
   private drawDataLossMarker(id: string, droppedBytes: number): void {
     queueMicrotask(() => {
       const managed = this.instances.get(id);
-      if (!managed || managed.isHibernated) return;
+      if (!managed) return;
       const label = droppedBytes > 0 ? `~${droppedBytes} bytes` : "output";
       managed.terminal.write(`\r\n\x1b[33m⚠ Output dropped (${label})\x1b[0m\r\n`);
     });
@@ -1613,7 +1608,7 @@ class TerminalInstanceService {
     if (options) {
       this.updateOptions(managed.id, options);
     }
-    if (launchAgentId !== undefined && !managed.isHibernated) {
+    if (launchAgentId !== undefined) {
       managed.terminal.options.cursorBlink = false;
     }
   }
@@ -1711,7 +1706,7 @@ class TerminalInstanceService {
         return;
       }
       const current = this.instances.get(id);
-      if (current && !current.isHibernated) {
+      if (current) {
         current.terminal.write(`\r\n\x1b[90m[Process exited with code ${exitCode}]\x1b[0m\r\n`);
       }
       exitSubscribers.forEach((cb) => cb(exitCode));
@@ -1939,7 +1934,7 @@ class TerminalInstanceService {
 
   private isAttachSettled(id: string): boolean {
     const managed = this.instances.get(id);
-    if (!managed || managed.isHibernated) return false;
+    if (!managed) return false;
     return (
       managed.isOpened &&
       managed.isAttaching !== true &&
@@ -2151,7 +2146,7 @@ class TerminalInstanceService {
 
   private isFullySettled(id: string): boolean {
     const managed = this.instances.get(id);
-    if (!managed || managed.isHibernated) return false;
+    if (!managed) return false;
     if (!this.isAttachSettled(id)) return false;
     // Restore is "settled" once it is no longer in flux — not queued
     // ("pending") and not running ("in-progress"). "done" is a clean restore;
@@ -2576,7 +2571,7 @@ class TerminalInstanceService {
 
   detach(id: string, container: HTMLElement | null): void {
     const managed = this.instances.get(id);
-    if (!managed || !container || managed.isHibernated) {
+    if (!managed || !container) {
       logDebug(`[TIS.detach] Skipping ${id} - no managed:${!managed}, no container:${!container}`);
       return;
     }
@@ -2723,7 +2718,6 @@ class TerminalInstanceService {
     const widthRatio = width / session.basis.width;
     const heightRatio = height / session.basis.height;
     for (const [id, managed] of this.instances) {
-      if (managed.isHibernated) continue;
       if (!managed.isOpened) continue;
       let origin = session.origin.get(id);
       if (!origin) {
@@ -2906,7 +2900,7 @@ class TerminalInstanceService {
 
   scrollToBottom(id: string): void {
     const managed = this.instances.get(id);
-    if (managed && !managed.isHibernated) {
+    if (managed) {
       this.scrollToBottomSafe(managed);
     }
   }
@@ -2924,7 +2918,7 @@ class TerminalInstanceService {
 
   scrollToLastActivity(id: string): void {
     const managed = this.instances.get(id);
-    if (!managed || managed.isHibernated) return;
+    if (!managed) return;
 
     if (managed.isAltBuffer) {
       managed.terminal.scrollToBottom();
@@ -2950,26 +2944,13 @@ class TerminalInstanceService {
     return this.unseenTracker.subscribe(id, listener);
   }
 
-  // Hibernation no longer occurs (terminals stay fully live in the background),
-  // so `isHibernated` is permanently false and these listeners never fire. The
-  // subscription is retained so `useIsHibernated` keeps a stable
-  // useSyncExternalStore contract while reading the always-false snapshot.
-  subscribeHibernation(id: string, listener: () => void): () => void {
-    let listeners = this.hibernationListeners.get(id);
-    if (!listeners) {
-      listeners = new Set();
-      this.hibernationListeners.set(id, listeners);
-    }
-    listeners.add(listener);
-
-    return () => {
-      const current = this.hibernationListeners.get(id);
-      if (!current) return;
-      current.delete(listener);
-      if (current.size === 0) {
-        this.hibernationListeners.delete(id);
-      }
-    };
+  // Hibernation no longer occurs (terminals stay fully live in the
+  // background). Retained as a no-op so `useIsHibernated` and other direct
+  // callers (e.g. useAccessibilityAnnouncements) keep a stable
+  // useSyncExternalStore contract against the always-false `isHibernated`
+  // snapshot below — the listener is never notified.
+  subscribeHibernation(_id: string, _listener: () => void): () => void {
+    return () => {};
   }
 
   /**
@@ -3210,7 +3191,7 @@ class TerminalInstanceService {
 
   captureBufferText(id: string, maxChars: number = 20000): string {
     const managed = this.instances.get(id);
-    if (!managed || managed.isHibernated) return "";
+    if (!managed) return "";
 
     const buf = managed.terminal.buffer.active;
     if (buf.length === 0) return "";
@@ -3280,7 +3261,7 @@ class TerminalInstanceService {
     // one context on the pane the user is reading. Focus is tracked here
     // (not in onTierApplied) because same-tier focus moves dedup away the
     // tier application.
-    if (isFocused && !managed.isHibernated) {
+    if (isFocused) {
       this.webGLManager.pinFocus(id, managed);
     }
   }
@@ -3291,7 +3272,7 @@ class TerminalInstanceService {
 
   focus(id: string): void {
     const managed = this.instances.get(id);
-    if (!managed || managed.isHibernated) return;
+    if (!managed) return;
 
     const terminal = managed.terminal;
     const buffer = terminal.buffer.active;
@@ -3373,7 +3354,7 @@ class TerminalInstanceService {
 
   resetRenderer(id: string): boolean {
     const managed = this.instances.get(id);
-    if (!managed || managed.isHibernated) return false;
+    if (!managed) return false;
 
     try {
       if (!managed.hostElement.isConnected) {
@@ -3435,7 +3416,6 @@ class TerminalInstanceService {
 
   handleBackendRecovery(): void {
     this.instances.forEach((managed, id) => {
-      if (managed.isHibernated) return;
       try {
         managed.terminal.write("\x1b[!p");
 
@@ -3460,30 +3440,23 @@ class TerminalInstanceService {
     const textMetricKeys = ["fontSize", "fontFamily", "lineHeight", "letterSpacing", "fontWeight"];
     const textMetricsChanged = textMetricKeys.some((key) => key in options);
 
-    if (!managed.isHibernated) {
-      Object.entries(options).forEach(([key, value]) => {
-        // @ts-expect-error xterm options are indexable
-        managed.terminal.options[key] = value;
-      });
-      // Theme/font/etc. updates flow through `BASE_TERMINAL_OPTIONS` which
-      // unconditionally sets cursorBlink:true — re-clamp through the policy
-      // helper so a BACKGROUND/VISIBLE plain terminal doesn't silently start
-      // its blink timer again on a font or theme change.
-      this.applyCursorBlinkPolicy(managed);
-    }
+    Object.entries(options).forEach(([key, value]) => {
+      // @ts-expect-error xterm options are indexable
+      managed.terminal.options[key] = value;
+    });
+    // Theme/font/etc. updates flow through `BASE_TERMINAL_OPTIONS` which
+    // unconditionally sets cursorBlink:true — re-clamp through the policy
+    // helper so a BACKGROUND/VISIBLE plain terminal doesn't silently start
+    // its blink timer again on a font or theme change.
+    this.applyCursorBlinkPolicy(managed);
 
     if (textMetricsChanged) {
       managed.lastWidth = 0;
       managed.lastHeight = 0;
+      this.resizeController.fit(id);
     }
-
-    if (!managed.isHibernated) {
-      if (textMetricsChanged) {
-        this.resizeController.fit(id);
-      }
-      if ("theme" in options) {
-        managed.terminal.refresh(0, managed.terminal.rows - 1);
-      }
+    if ("theme" in options) {
+      managed.terminal.refresh(0, managed.terminal.rows - 1);
     }
   }
 
@@ -3492,29 +3465,22 @@ class TerminalInstanceService {
     const textMetricsChanged = textMetricKeys.some((key) => key in options);
 
     this.instances.forEach((managed, id) => {
-      if (!managed.isHibernated) {
-        Object.entries(options).forEach(([key, value]) => {
-          // @ts-expect-error xterm options are indexable
-          managed.terminal.options[key] = value;
-        });
-        // Same rationale as updateOptions: re-clamp cursorBlink so a global
-        // theme/font change doesn't silently re-enable the blink timer on
-        // backgrounded plain terminals.
-        this.applyCursorBlinkPolicy(managed);
-      }
+      Object.entries(options).forEach(([key, value]) => {
+        // @ts-expect-error xterm options are indexable
+        managed.terminal.options[key] = value;
+      });
+      // Same rationale as updateOptions: re-clamp cursorBlink so a global
+      // theme/font change doesn't silently re-enable the blink timer on
+      // backgrounded plain terminals.
+      this.applyCursorBlinkPolicy(managed);
 
       if (textMetricsChanged) {
         managed.lastWidth = 0;
         managed.lastHeight = 0;
+        this.resizeController.fit(id);
       }
-
-      if (!managed.isHibernated) {
-        if (textMetricsChanged) {
-          this.resizeController.fit(id);
-        }
-        if ("theme" in options) {
-          managed.terminal.refresh(0, managed.terminal.rows - 1);
-        }
+      if ("theme" in options) {
+        managed.terminal.refresh(0, managed.terminal.rows - 1);
       }
     });
   }
@@ -3533,7 +3499,6 @@ class TerminalInstanceService {
    */
   repairFontGrid(): void {
     this.instances.forEach((managed, id) => {
-      if (managed.isHibernated) return;
       try {
         const current = managed.terminal.options.fontFamily ?? DEFAULT_TERMINAL_FONT_FAMILY;
         // A trailing space parses identically in CSS (no visible flicker) but is
@@ -3638,7 +3603,6 @@ class TerminalInstanceService {
   // reduced and is restored by the tier-upgrade path.
   restoreScrollbackAllForeground(): void {
     for (const managed of this.instances.values()) {
-      if (managed.isHibernated) continue;
       const tier = managed.lastAppliedTier ?? managed.getRefreshTier?.();
       if (tier === TerminalRefreshTier.BACKGROUND) continue;
       restoreScrollback(managed);
@@ -3652,8 +3616,10 @@ class TerminalInstanceService {
     return () => managed.exitSubscribers.delete(cb);
   }
 
-  isHibernated(id: string): boolean {
-    return this.instances.get(id)?.isHibernated === true;
+  // Hibernation no longer occurs (terminals stay fully live in the
+  // background) — always false. See subscribeHibernation above.
+  isHibernated(_id: string): boolean {
+    return false;
   }
 
   // Whether this terminal currently holds a live WebGL context (vs the DOM
@@ -3678,10 +3644,6 @@ class TerminalInstanceService {
   ): void {
     if (!isPaintFabricWorkerIngestEnabled()) return;
     if (tier === TerminalRefreshTier.BACKGROUND) {
-      // Hibernated terminals drop output entirely; an alt-buffer TUI repaints
-      // its whole viewport constantly, and snapshot cadence handles that fine —
-      // no exclusion needed beyond hibernation.
-      if (managed.isHibernated) return;
       let ingest = this.workerIngest.get(id);
       if (!ingest) {
         ingest = this.createWorkerIngest(id, managed);
@@ -3712,7 +3674,7 @@ class TerminalInstanceService {
       mirror: {
         write: (data, callback) => {
           const current = this.instances.get(id);
-          if (!current || current.isHibernated) {
+          if (!current) {
             callback?.();
             return;
           }
@@ -3869,7 +3831,6 @@ class TerminalInstanceService {
     terminalClient.discardPortAcks(id);
     this.dataBuffer.resetForTerminal(id);
     this.unseenTracker.destroy(id);
-    this.hibernationListeners.delete(id);
 
     if (managed.tierChangeTimer !== undefined) {
       clearTimeout(managed.tierChangeTimer);
@@ -3915,38 +3876,35 @@ class TerminalInstanceService {
     managed.agentStateSubscribers.clear();
     managed.altBufferListeners.clear();
 
-    if (!managed.isHibernated) {
-      managed.parserHandler?.dispose();
+    managed.parserHandler?.dispose();
 
-      try {
-        managed.fileLinksDisposable?.dispose();
-      } catch (error) {
-        logWarn("Error disposing file links", { error });
-      }
-      try {
-        managed.imageLinksDisposable?.dispose();
-      } catch (error) {
-        logWarn("Error disposing image links", { error });
-      }
-      try {
-        managed.webLinksAddon?.dispose();
-      } catch (error) {
-        logWarn("Error disposing web links addon", { error });
-      }
-      try {
-        managed.imageAddon?.dispose();
-      } catch (error) {
-        logWarn("Error disposing image addon", { error });
-      }
-
-      this.webGLManager.onTerminalDestroyed(id);
-      managed.terminal.dispose();
+    try {
+      managed.fileLinksDisposable?.dispose();
+    } catch (error) {
+      logWarn("Error disposing file links", { error });
+    }
+    try {
+      managed.imageLinksDisposable?.dispose();
+    } catch (error) {
+      logWarn("Error disposing image links", { error });
+    }
+    try {
+      managed.webLinksAddon?.dispose();
+    } catch (error) {
+      logWarn("Error disposing web links addon", { error });
+    }
+    try {
+      managed.imageAddon?.dispose();
+    } catch (error) {
+      logWarn("Error disposing image addon", { error });
     }
 
-    // Detach the host element regardless of hibernation state: a hibernated
-    // terminal's host may have been parked in the shared offscreen container
-    // by detach()/detachForProjectSwitch() (raw child, not a registered slot),
-    // and the gated branch above doesn't reach it (#9909).
+    this.webGLManager.onTerminalDestroyed(id);
+    managed.terminal.dispose();
+
+    // The host may have been parked in the shared offscreen container by
+    // detach()/detachForProjectSwitch() (raw child, not a registered slot) —
+    // detach it regardless of the dispose path above (#9909).
     if (managed.hostElement.parentElement) {
       managed.hostElement.parentElement.removeChild(managed.hostElement);
     }
@@ -3999,9 +3957,7 @@ class TerminalInstanceService {
     if (!managed) return;
 
     managed.isInputLocked = locked;
-    if (!managed.isHibernated) {
-      managed.terminal.options.disableStdin = locked;
-    }
+    managed.terminal.options.disableStdin = locked;
   }
 }
 

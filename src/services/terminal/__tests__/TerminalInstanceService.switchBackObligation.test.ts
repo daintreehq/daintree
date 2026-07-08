@@ -98,7 +98,6 @@ function makeManaged(id: string, host: HTMLDivElement, isDetached: boolean) {
     fitAddon: { fit: vi.fn(), proposeDimensions: () => ({ cols: 80, rows: 24 }) },
     isDetached,
     isVisible: !isDetached,
-    isHibernated: false,
     attachGeneration: 7,
     latestCols: 80,
     latestRows: 24,

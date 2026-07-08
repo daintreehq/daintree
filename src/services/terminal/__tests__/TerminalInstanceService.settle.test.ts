@@ -76,7 +76,6 @@ describe("TerminalInstanceService fully-settled waits", () => {
   const makeManaged = (
     id: string,
     overrides: Partial<{
-      isHibernated: boolean;
       isOpened: boolean;
       isAttaching: boolean;
       scrollbackRestoreState: RestoreState;
@@ -95,7 +94,6 @@ describe("TerminalInstanceService fully-settled waits", () => {
       hostElement,
       isOpened: overrides.isOpened ?? true,
       isAttaching: overrides.isAttaching ?? false,
-      isHibernated: overrides.isHibernated ?? false,
       isVisible: true,
       scrollbackRestoreState: overrides.scrollbackRestoreState ?? "none",
       lastScrollbackRestoreError: overrides.lastScrollbackRestoreError,
@@ -239,13 +237,6 @@ describe("TerminalInstanceService fully-settled waits", () => {
 
     await expect(promise).resolves.toBeUndefined();
     expect(managed.lastScrollbackRestoreError).toBeDefined();
-  });
-
-  it("never settles a hibernated terminal", async () => {
-    makeManaged("t1", { scrollbackRestoreState: "done", isHibernated: true });
-    await expect(service.waitForFullySettled("t1", { timeoutMs: 30 })).rejects.toThrow(
-      /fully-settle timeout/
-    );
   });
 
   it("never settles a terminal that is not visually attached", async () => {

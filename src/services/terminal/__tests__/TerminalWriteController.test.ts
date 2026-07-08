@@ -44,7 +44,6 @@ function makeManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTerminal 
     isOpened: true,
     isVisible: true,
     isFocused: false,
-    isHibernated: false,
     isUserScrolledBack: false,
     isAltBuffer: false,
     lastActiveTime: Date.now(),
@@ -105,18 +104,6 @@ describe("TerminalWriteController.write", () => {
     controller.write("unknown", "abc");
     expect(deps.acknowledgePortData).not.toHaveBeenCalled();
     expect(deps.notifyWriteComplete).not.toHaveBeenCalled();
-  });
-
-  it("hibernated path: ack + notify but does not touch the xterm instance", () => {
-    managed.isHibernated = true;
-    controller.write("t1", "hello");
-
-    expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 5, 1);
-    // Hibernated output is dropped, never replayed, so the IPC ledger must be
-    // drained here. ASCII "hello" is 5 UTF-8 bytes == 5 UTF-16 code units.
-    expect(deps.acknowledgeData).toHaveBeenCalledWith("t1", 5);
-    expect(deps.notifyWriteComplete).toHaveBeenCalledWith("t1", 5);
-    expect((managed.terminal as unknown as MockTerminal).write).not.toHaveBeenCalled();
   });
 
   it("serialized-restore path: defers output without settling ANY ledger", () => {
@@ -207,22 +194,6 @@ describe("TerminalWriteController.write", () => {
       expect(deps.notifyWriteComplete).toHaveBeenCalledWith("t1", 3);
     });
 
-    it("hibernated path: acks the IPC ledger in UTF-8 bytes for non-ASCII strings", () => {
-      managed.isHibernated = true;
-      controller.write("t1", "│");
-
-      expect(deps.acknowledgeData).toHaveBeenCalledWith("t1", 3);
-      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 1, 1);
-    });
-
-    it("hibernated path: does not send an IPC ack for port-delivered Uint8Array chunks", () => {
-      managed.isHibernated = true;
-      controller.write("t1", new Uint8Array([0xe2, 0x94, 0x82]));
-
-      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 3, 1);
-      expect(deps.acknowledgeData).not.toHaveBeenCalled();
-    });
-
     it("deferred-restore path: never acks the IPC ledger even for non-ASCII strings", () => {
       // The IPC ledger is drained when the deferred chunk replays through the
       // normal path after restore. Acking here would double-drain it. The
@@ -240,12 +211,6 @@ describe("TerminalWriteController.write", () => {
       controller.write("t1", new Uint8Array([1, 2, 3, 4]), 3);
       expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 4, 3);
       expect(deps.acknowledgeData).not.toHaveBeenCalled();
-    });
-
-    it("hibernated path: forwards the chunk count of dropped coalesced batches", () => {
-      managed.isHibernated = true;
-      controller.write("t1", new Uint8Array([1, 2]), 2);
-      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 2, 2);
     });
 
     it("deferred-restore path: preserves the chunk count on the held batch", () => {
@@ -314,13 +279,6 @@ describe("TerminalWriteController.write", () => {
       expect(
         (replacement.terminal as unknown as MockTerminal).registerMarker
       ).not.toHaveBeenCalled();
-    });
-
-    it("skips the refresh when the terminal hibernated before the frame", () => {
-      controller.write("t1", "x");
-      managed.isHibernated = true;
-      flushFrame();
-      expect((managed.terminal as unknown as MockTerminal).registerMarker).not.toHaveBeenCalled();
     });
   });
 
@@ -455,17 +413,6 @@ describe("TerminalWriteController.write", () => {
       // Load-bearing: onWrite must run BEFORE terminal.write so the tier
       // is BURST at paint time, not one frame late.
       expect(callOrder).toEqual(["onWrite", "terminal.write"]);
-    });
-
-    it("does NOT fire on the hibernated path (ack-only)", () => {
-      managed.isHibernated = true;
-      const onWrite = vi.fn();
-      const localDeps = makeDeps(store, { onWrite });
-      const localController = new TerminalWriteController(localDeps);
-
-      localController.write("t1", "hello");
-
-      expect(onWrite).not.toHaveBeenCalled();
     });
 
     it("does NOT fire on the deferred-restore path", () => {

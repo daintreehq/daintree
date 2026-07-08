@@ -51,7 +51,6 @@ function makeManaged(overrides: ManagedOverrides = {}): ManagedTerminal {
     isOpened: true,
     isVisible: true,
     isFocused: false,
-    isHibernated: false,
     isAttaching: false,
     isDetached: false,
     isResizeSuppressed: false,

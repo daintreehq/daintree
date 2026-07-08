@@ -117,7 +117,6 @@ describe("TerminalInstanceService attach reveal", () => {
       isOpened: true,
       isDetached: false,
       isVisible: true,
-      isHibernated: false,
       lastAttachAt: 0,
       lastDetachAt: 0,
       lastWidth: 0,

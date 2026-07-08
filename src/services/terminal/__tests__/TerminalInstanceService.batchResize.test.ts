@@ -106,7 +106,6 @@ function makeManaged(fixture: ManagedFixture): ManagedTerminal {
     isOpened: true,
     isVisible: true,
     isFocused: false,
-    isHibernated: false,
     isAttaching: false,
     isUserScrolledBack: false,
     isAltBuffer: false,

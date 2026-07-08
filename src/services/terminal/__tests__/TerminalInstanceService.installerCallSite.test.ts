@@ -156,7 +156,6 @@ function makeMockManaged(overrides: Record<string, unknown> = {}) {
     restoreGeneration: 0,
     isSerializedRestoreInProgress: false,
     deferredOutput: [] as Array<string | Uint8Array>,
-    isHibernated: false,
     isInputLocked: false,
     ipcListenerCount: 0,
     ...overrides,

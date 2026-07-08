@@ -66,7 +66,6 @@ vi.mock("../TerminalReflowController", async () => {
 type ManagedTerminalMock = {
   isOpened: boolean;
   isAttaching: boolean;
-  isHibernated: boolean;
   isFocused: boolean;
   isVisible: boolean;
   isResizeSuppressed: boolean;
@@ -124,7 +123,6 @@ function makeInstance(overrides: Partial<ManagedTerminalMock> = {}): ManagedTerm
   return {
     isOpened: true,
     isAttaching: false,
-    isHibernated: false,
     isFocused: false,
     isVisible: true,
     isResizeSuppressed: false,
@@ -692,7 +690,7 @@ describe("TerminalInstanceService.revealTerminal (foreground reveal routing)", (
 
   it("takes the cheap repaint path for an opened, live terminal", async () => {
     const id = "rev-1";
-    service.instances.set(id, makeInstance({ isOpened: true, isHibernated: false }));
+    service.instances.set(id, makeInstance({ isOpened: true }));
 
     const fullWake = vi.spyOn(service, "fullWakeForVisibilityRestore").mockResolvedValue(undefined);
     const repaint = vi.spyOn(service, "repaintForReveal").mockImplementation(() => true);
@@ -703,30 +701,9 @@ describe("TerminalInstanceService.revealTerminal (foreground reveal routing)", (
     expect(fullWake).not.toHaveBeenCalled();
   });
 
-  it("takes the full rehydration path for a hibernated terminal", async () => {
-    const id = "rev-2";
-    // Hibernated panes route through the full open+wake, but only once the host
-    // is measurable — give it a renderable box so the reveal gate proceeds.
-    service.instances.set(
-      id,
-      makeInstance({ isOpened: false, isHibernated: true, hostElement: renderableHost() })
-    );
-
-    const fullWake = vi.spyOn(service, "fullWakeForVisibilityRestore").mockResolvedValue(undefined);
-    const repaint = vi.spyOn(service, "repaintForReveal").mockImplementation(() => true);
-
-    await service.revealTerminal(id);
-
-    expect(fullWake).toHaveBeenCalledWith(id);
-    expect(repaint).not.toHaveBeenCalled();
-  });
-
   it("takes the full rehydration path for an un-opened terminal", async () => {
     const id = "rev-3";
-    service.instances.set(
-      id,
-      makeInstance({ isOpened: false, isHibernated: false, hostElement: renderableHost() })
-    );
+    service.instances.set(id, makeInstance({ isOpened: false, hostElement: renderableHost() }));
 
     const fullWake = vi.spyOn(service, "fullWakeForVisibilityRestore").mockResolvedValue(undefined);
     const repaint = vi.spyOn(service, "repaintForReveal").mockImplementation(() => true);
@@ -741,7 +718,6 @@ describe("TerminalInstanceService.revealTerminal (foreground reveal routing)", (
     const id = "rev-attach";
     const inst = makeInstance({
       isOpened: false,
-      isHibernated: false,
       hostElement: renderableHost(),
     });
     service.instances.set(id, inst);
@@ -764,7 +740,7 @@ describe("TerminalInstanceService.revealTerminal (foreground reveal routing)", (
     const id = "rev-4";
     // Bare, unconnected host → zero box → not paintable yet. The sweep should
     // retry on a later frame instead of opening against an unmeasurable host.
-    service.instances.set(id, makeInstance({ isOpened: false, isHibernated: false }));
+    service.instances.set(id, makeInstance({ isOpened: false }));
 
     const fullWake = vi.spyOn(service, "fullWakeForVisibilityRestore").mockResolvedValue(undefined);
 
@@ -811,7 +787,6 @@ describe("TerminalInstanceService.repaintForReveal grid reconcile", () => {
     document.body.appendChild(element);
     return makeInstance({
       isOpened: true,
-      isHibernated: false,
       isVisible: true,
       hostElement: renderableHost(),
       terminal: { cols: 80, rows: 24, element, refresh: vi.fn() },
@@ -840,7 +815,6 @@ describe("TerminalInstanceService.repaintForReveal grid reconcile", () => {
     document.body.appendChild(element);
     return makeInstance({
       isOpened: true,
-      isHibernated: false,
       isVisible: false, // stale on a warm WebContentsView resume (#10632 item 4)
       lastAppliedTier: TerminalRefreshTier.FOCUSED,
       hostElement: renderableHost(), // DOM truth: the pane IS on-screen

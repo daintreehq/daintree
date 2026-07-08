@@ -104,7 +104,6 @@ function makeMockManaged(overrides: Record<string, unknown> = {}) {
     isAttaching: false,
     isUserScrolledBack: false,
     isAltBuffer: false,
-    isHibernated: false,
     runtimeAgentId: "claude" as string | undefined,
     launchAgentId: "claude",
     lastActiveTime: Date.now(),
@@ -347,17 +346,6 @@ describe("TerminalInstanceService - visibility-driven WebGL lease", () => {
 
     // Timer cleared (won't fire and won't crash)
     vi.advanceTimersByTime(200);
-    expect(service.webGLManager.isActive("t1")).toBe(false);
-  });
-
-  it("hibernated terminal short-circuits — no WebGL changes", () => {
-    const managed = makeMockManaged({ isHibernated: true });
-    service.instances.set("t1", managed as unknown as Record<string, unknown>);
-
-    service.setVisible("t1", false);
-    service.setVisible("t1", true);
-    vi.advanceTimersByTime(100);
-
     expect(service.webGLManager.isActive("t1")).toBe(false);
   });
 

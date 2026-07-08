@@ -184,7 +184,6 @@ function makeManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTerminal 
     attachRevealToken: 0,
     ipcListenerCount: 0,
     isAltBuffer: false,
-    isHibernated: false,
     pendingWrites: 0,
     ...overrides,
   } as ManagedTerminal;
@@ -239,21 +238,6 @@ describe("TerminalInstanceService adversarial", () => {
     const { TerminalWebGLManager } = await import("../TerminalWebGLManager");
     TerminalWebGLManager.setWebglThresholds(originalUpperThreshold, originalLowerThreshold);
     vi.useRealTimers();
-  });
-
-  it("HEARTBEAT_SKIPS_HIBERNATED_TERMINAL", () => {
-    const managed = makeManaged({
-      isHibernated: true,
-      lastReflowAt: 123,
-    });
-    document.body.appendChild(managed.hostElement);
-    service.instances.set("t1", managed);
-
-    vi.advanceTimersByTime(3000);
-
-    expect(paddingHistory(managed)).toHaveLength(0);
-    expect(managed.terminal.refresh).not.toHaveBeenCalled();
-    expect(managed.lastReflowAt).toBe(123);
   });
 
   it("CONCURRENT_REFLOW_IS_PER_TERMINAL_NOT_GLOBAL", () => {
@@ -355,28 +339,6 @@ describe("TerminalInstanceService adversarial", () => {
     expect(testState.clientMocks.acknowledgeData).not.toHaveBeenCalled();
     expect(notifyWriteCompleteSpy).not.toHaveBeenCalled();
     expect(managed.terminal.registerMarker).not.toHaveBeenCalled();
-  });
-
-  it("HIBERNATED_WRITE_ONLY_ACKS", () => {
-    const managed = makeManaged({
-      isHibernated: true,
-      terminal: {
-        ...makeManaged().terminal,
-        write: vi.fn(),
-      } as unknown as ManagedTerminal["terminal"],
-    });
-    service.instances.set("t1", managed);
-    const notifyWriteCompleteSpy = vi.spyOn(service.dataBuffer, "notifyWriteComplete");
-
-    service.writeToTerminal("t1", "abc");
-
-    expect(testState.clientMocks.acknowledgePortData).toHaveBeenCalledWith("t1", 3, 1);
-    // Hibernated output is dropped, never replayed — IPC-delivered string
-    // chunks were charged to the host's IPC ledger, so it must be drained here
-    // or it leaks into permanent backpressure (#9893). ASCII "abc" = 3 bytes.
-    expect(testState.clientMocks.acknowledgeData).toHaveBeenCalledWith("t1", 3);
-    expect(notifyWriteCompleteSpy).toHaveBeenCalledWith("t1", 3);
-    expect(managed.terminal.write).not.toHaveBeenCalled();
   });
 
   // Verifies the contract that @xterm/addon-image's async IIPHandler.end() relies on:

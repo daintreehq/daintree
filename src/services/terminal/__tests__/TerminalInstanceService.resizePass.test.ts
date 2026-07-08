@@ -95,7 +95,6 @@ function makeManaged(visible = true, id = "term"): ManagedTerminal {
     isOpened: true,
     isVisible: true,
     isFocused: false,
-    isHibernated: false,
     isAttaching: false,
     isUserScrolledBack: false,
     isAltBuffer: false,

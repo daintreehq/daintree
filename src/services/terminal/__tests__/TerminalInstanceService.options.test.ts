@@ -291,42 +291,6 @@ describe("TerminalInstanceService - options", () => {
     terminalInstanceService.destroy("test-options-both");
   });
 
-  it("updateOptions on hibernated terminal calls neither refresh nor fit", async () => {
-    const { terminalInstanceService } = await import("../TerminalInstanceService");
-
-    window.matchMedia = vi.fn().mockReturnValue({
-      matches: false,
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-      addListener: vi.fn(),
-      removeListener: vi.fn(),
-    });
-
-    const managed = await terminalInstanceService.getOrCreate(
-      "test-options-hibernated",
-      undefined,
-      {},
-      () => TerminalRefreshTier.FOCUSED,
-      undefined
-    );
-
-    // Simulate hibernation
-    managed.isHibernated = true;
-
-    const refreshSpy = vi.spyOn(managed.terminal, "refresh");
-    const fitSpy = vi.spyOn(managed.fitAddon, "fit");
-
-    terminalInstanceService.updateOptions("test-options-hibernated", {
-      theme: { foreground: "#ffffff", background: "#000000" },
-      fontSize: 16,
-    });
-
-    expect(refreshSpy).not.toHaveBeenCalled();
-    expect(fitSpy).not.toHaveBeenCalled();
-
-    terminalInstanceService.destroy("test-options-hibernated");
-  });
-
   it("applyGlobalOptions with theme calls refresh on each instance", async () => {
     const { terminalInstanceService } = await import("../TerminalInstanceService");
 
@@ -403,47 +367,5 @@ describe("TerminalInstanceService - options", () => {
 
     terminalInstanceService.destroy("test-global-font-1");
     terminalInstanceService.destroy("test-global-font-2");
-  });
-
-  it("applyGlobalOptions skips hibernated instances", async () => {
-    const { terminalInstanceService } = await import("../TerminalInstanceService");
-
-    window.matchMedia = vi.fn().mockReturnValue({
-      matches: false,
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-      addListener: vi.fn(),
-      removeListener: vi.fn(),
-    });
-
-    const active = await terminalInstanceService.getOrCreate(
-      "test-global-active",
-      undefined,
-      {},
-      () => TerminalRefreshTier.FOCUSED,
-      undefined
-    );
-    const hibernated = await terminalInstanceService.getOrCreate(
-      "test-global-hibernated",
-      undefined,
-      {},
-      () => TerminalRefreshTier.FOCUSED,
-      undefined
-    );
-    hibernated.isHibernated = true;
-
-    const rActive = vi.spyOn(active.terminal, "refresh");
-    const rHibernated = vi.spyOn(hibernated.terminal, "refresh");
-
-    terminalInstanceService.applyGlobalOptions({
-      theme: { foreground: "#ffffff", background: "#000000" },
-      fontSize: 16,
-    });
-
-    expect(rActive).toHaveBeenCalled();
-    expect(rHibernated).not.toHaveBeenCalled();
-
-    terminalInstanceService.destroy("test-global-active");
-    terminalInstanceService.destroy("test-global-hibernated");
   });
 });
