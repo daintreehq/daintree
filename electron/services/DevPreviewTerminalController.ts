@@ -72,6 +72,7 @@ export interface TerminalControllerSessionUpdate {
   generation?: number;
   phaseLabel?: "Compiling";
   forceKilled?: boolean;
+  crashLoopStopped?: boolean;
 }
 
 export interface TerminalControllerDeps<TSession extends TerminalControllerSession> {
