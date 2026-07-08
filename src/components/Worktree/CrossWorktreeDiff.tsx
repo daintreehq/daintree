@@ -338,7 +338,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
               </div>
             )}
             {!loading && !error && !result && (
-              <div className="flex flex-col items-center justify-center py-12 text-text-muted">
+              <div className="flex flex-col items-center justify-center px-4 py-12 text-center text-text-muted">
                 <p className="text-sm">Select two worktrees to compare</p>
                 <p className="text-xs mt-1">
                   Pick branches from the selectors above to view changes
@@ -346,7 +346,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
               </div>
             )}
             {result?.files.length === 0 && (
-              <div className="flex flex-col items-center justify-center py-12 text-text-muted">
+              <div className="flex flex-col items-center justify-center px-4 py-12 text-center text-text-muted">
                 <p className="text-sm">No differences between these branches</p>
                 <p className="text-xs mt-1">
                   Select different branches or verify both branches have diverged
