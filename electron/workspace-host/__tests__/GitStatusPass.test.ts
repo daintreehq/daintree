@@ -83,7 +83,6 @@ function makeHost(overrides: Partial<GitStatusPassHost> = {}): GitStatusPassHost
     basePollingInterval: 5_000,
     wslInvocation: undefined,
     abortSignal: new AbortController().signal,
-    lastWatcherEventAt: 0,
     prevEmittedIsDetached: false,
     prevEmittedHead: undefined,
     prevEmittedRepoState: undefined,
