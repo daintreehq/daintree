@@ -1155,6 +1155,23 @@ export class HelpSessionService {
     );
   }
 
+  /**
+   * Idle-background auto-close (#10830): the assistant is tooling-internal,
+   * so its PTY must not keep an idle background project resident — and the
+   * renderer's own hibernate timer can't fire there (parked project views
+   * freeze timers, the #10739 class). The sweep capture-revokes the project's
+   * help sessions before reclaiming — the same conversation-preserving path
+   * as LRU eviction, so the next open resumes where the user left off.
+   */
+  async revokeByProjectId(projectId: string): Promise<void> {
+    const targets = [...this.sessionsById.values()].filter(
+      (record) => record.projectId === projectId
+    );
+    await Promise.all(
+      targets.map((record) => this.revokeSession(record.sessionId, { captureHibernation: true }))
+    );
+  }
+
   async revokeAll(): Promise<void> {
     // App shutdown — no time to await gracefulKill round-trips, so we skip
     // capture. The cooperative renderer-side hibernate timer is the main

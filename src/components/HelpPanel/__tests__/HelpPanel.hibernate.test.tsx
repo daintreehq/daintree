@@ -120,6 +120,30 @@ const {
   mockNotifyUserInput: vi.fn(),
 }));
 
+// Pass-through dropdown mock (same shape as PanelHeader.test.tsx) — keeps the
+// header's lazily-loaded Radix overflow menu (and its actionService import
+// chain) out of this suite's module graph.
+vi.mock("@/components/ui/dropdown-menu", () => ({
+  DropdownMenu: ({ children }: { children?: unknown }) => <div>{children as never}</div>,
+  DropdownMenuTrigger: ({ children }: { children?: unknown }) => <>{children as never}</>,
+  DropdownMenuContent: ({ children }: { children?: unknown }) => (
+    <div data-testid="overflow-menu">{children as never}</div>
+  ),
+  DropdownMenuItem: ({
+    children,
+    onSelect,
+  }: {
+    children?: unknown;
+    onSelect?: (e: Event) => void;
+    destructive?: boolean;
+  }) => (
+    <button type="button" onClick={() => onSelect?.(new Event("select"))}>
+      {children as never}
+    </button>
+  ),
+  DropdownMenuSeparator: () => <hr />,
+}));
+
 vi.mock("@/lib/utils", () => ({ cn: (...args: unknown[]) => args.filter(Boolean).join(" ") }));
 
 vi.mock("@/components/ui/button", () => ({

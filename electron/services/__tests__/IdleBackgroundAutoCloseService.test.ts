@@ -76,6 +76,23 @@ vi.mock("../SystemSleepService.js", () => ({
   }),
 }));
 
+// The assistant help PTY never blocks auto-close; it's capture-revoked before
+// teardown. Terminal ids added to `helpTerminalIds` read as help terminals via
+// the availability store; `boundHelpTerminalIds` via main's session binding.
+const helpSessionServiceMock = vi.hoisted(() => ({
+  revokeByProjectId: vi.fn(async (_projectId: string) => {}),
+  isHelpTerminal: vi.fn((id: string) => boundHelpTerminalIds.has(id)),
+}));
+const helpTerminalIds = vi.hoisted(() => new Set<string>());
+const boundHelpTerminalIds = vi.hoisted(() => new Set<string>());
+
+vi.mock("../HelpSessionService.js", () => ({ helpSessionService: helpSessionServiceMock }));
+vi.mock("../AgentAvailabilityStore.js", () => ({
+  getAgentAvailabilityStore: () => ({
+    isHelpTerminal: (id: string) => helpTerminalIds.has(id),
+  }),
+}));
+
 import { IdleBackgroundAutoCloseService } from "../IdleBackgroundAutoCloseService.js";
 import type { PtyClient } from "../PtyClient.js";
 import type { ProjectViewManager } from "../../window/ProjectViewManager.js";
@@ -137,6 +154,8 @@ describe("IdleBackgroundAutoCloseService", () => {
     ptyClientMock.gracefulKillByProject.mockResolvedValue([]);
     evictProjectRendererMock.mockReturnValue(1);
     workspaceClientMock.evictProject.mockReturnValue(true);
+    helpTerminalIds.clear();
+    boundHelpTerminalIds.clear();
   });
 
   afterEach(() => {
@@ -221,6 +240,98 @@ describe("IdleBackgroundAutoCloseService", () => {
       await runCheck(service);
       expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
       expect(broadcastToRendererMock).not.toHaveBeenCalled();
+    });
+
+    it("closes a project whose only live PTY is the assistant, capture-revoking it first (#10989)", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      ptyClientMock.getAllTerminalsAsync.mockResolvedValue([makeTerminal("proj-1")]);
+      helpTerminalIds.add("t-proj-1");
+      const service = makeService();
+      await runCheck(service);
+
+      // The assistant PTY did not block the reclaim…
+      expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith("proj-1", "closed", {
+        autoParkedAt: expect.any(Number),
+      });
+      // …and its session was capture-revoked (conversation preserved via the
+      // pending-hibernation entry) BEFORE the project-wide kill.
+      expect(helpSessionServiceMock.revokeByProjectId).toHaveBeenCalledWith("proj-1");
+      const revokeOrder =
+        helpSessionServiceMock.revokeByProjectId.mock.invocationCallOrder[0] ?? -1;
+      const killOrder = ptyClientMock.gracefulKillByProject.mock.invocationCallOrder[0] ?? -1;
+      expect(revokeOrder).toBeGreaterThanOrEqual(0);
+      expect(killOrder).toBeGreaterThan(revokeOrder);
+    });
+
+    it("still skips when a real terminal coexists with the assistant help PTY", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      ptyClientMock.getAllTerminalsAsync.mockResolvedValue([
+        makeTerminal("proj-1"),
+        { id: "t-help", projectId: "proj-1", hasPty: true },
+      ]);
+      helpTerminalIds.add("t-help");
+      const service = makeService();
+      await runCheck(service);
+
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+      expect(helpSessionServiceMock.revokeByProjectId).not.toHaveBeenCalled();
+    });
+
+    it("recognizes the assistant via main's session binding when the renderer never marked it", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      ptyClientMock.getAllTerminalsAsync.mockResolvedValue([makeTerminal("proj-1")]);
+      // A parked renderer never sent help.markTerminal — only main's live
+      // session binding identifies the PTY as the assistant.
+      boundHelpTerminalIds.add("t-proj-1");
+      const service = makeService();
+      await runCheck(service);
+
+      expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith("proj-1", "closed", {
+        autoParkedAt: expect.any(Number),
+      });
+      expect(helpSessionServiceMock.revokeByProjectId).toHaveBeenCalledWith("proj-1");
+    });
+
+    it("bails after the capture-revoke when a real terminal appeared during the await", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      helpTerminalIds.add("t-help");
+      const helpOnly = [{ id: "t-help", projectId: "proj-1", hasPty: true }];
+      // Sweep snapshot + pre-revoke recheck see only the assistant; the
+      // post-revoke recheck sees a real terminal spawned mid-await.
+      ptyClientMock.getAllTerminalsAsync
+        .mockResolvedValueOnce(helpOnly)
+        .mockResolvedValueOnce(helpOnly)
+        .mockResolvedValueOnce([...helpOnly, makeTerminal("proj-1")]);
+      const service = makeService();
+      await runCheck(service);
+
+      // The revoke already ran (conversation captured), but the reclaim must
+      // not proceed under the new terminal.
+      expect(helpSessionServiceMock.revokeByProjectId).toHaveBeenCalledWith("proj-1");
+      expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+    });
+
+    it("a failed assistant capture-revoke degrades gracefully and never blocks the reclaim", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      ptyClientMock.getAllTerminalsAsync.mockResolvedValue([makeTerminal("proj-1")]);
+      helpTerminalIds.add("t-proj-1");
+      helpSessionServiceMock.revokeByProjectId.mockRejectedValueOnce(new Error("host gone"));
+      const service = makeService();
+      await runCheck(service);
+
+      // The reclaim proceeds; only the resume entry is lost.
+      expect(ptyClientMock.gracefulKillByProject).toHaveBeenCalledWith("proj-1", {
+        preserveSession: true,
+      });
+      expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith("proj-1", "closed", {
+        autoParkedAt: expect.any(Number),
+      });
     });
 
     it("ignores ghost (hasPty===false) panels when gating on terminals", async () => {

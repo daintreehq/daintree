@@ -2074,7 +2074,7 @@ export interface SuggestedDictionaryEntry {
 
 export type HelpAssistantAuditRetention = 7 | 30 | 0;
 
-export type HelpAssistantIdleHibernateMinutes = 0 | 15 | 30 | 60 | 120;
+export type HelpAssistantIdleHibernateMinutes = 0 | 5 | 15 | 30 | 60 | 120;
 
 export interface HelpAssistantSettings {
   /** Allow the help assistant to search Daintree documentation. Defaults to true. */
@@ -2107,7 +2107,11 @@ export interface HelpAssistantSettings {
   /**
    * Minutes the assistant panel must be continuously hidden before its PTY is
    * gracefully shut down to capture the Claude resume session ID. 0 disables
-   * idle hibernation. Defaults to 30.
+   * idle hibernation. Defaults to 5 — hiding is a layout gesture, so an idle
+   * hidden assistant releases its memory quickly and reopening resumes the
+   * same conversation transparently (return-to-panel rates fall off within a
+   * few minutes; a hidden-idle reclaim in this range matches Chrome's
+   * Memory Saver tiers).
    */
   idleHibernateMinutes: HelpAssistantIdleHibernateMinutes;
   /**

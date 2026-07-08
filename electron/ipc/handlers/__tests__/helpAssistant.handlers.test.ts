@@ -84,7 +84,7 @@ describe("registerHelpAssistantHandlers", () => {
       auditRetention: 7,
       modelId: "",
       customArgs: "",
-      idleHibernateMinutes: 30,
+      idleHibernateMinutes: 5,
       debugLogging: false,
     });
   });
@@ -107,7 +107,7 @@ describe("registerHelpAssistantHandlers", () => {
       auditRetention: 30,
       modelId: "",
       customArgs: "",
-      idleHibernateMinutes: 30,
+      idleHibernateMinutes: 5,
       debugLogging: false,
     });
   });
@@ -345,7 +345,7 @@ describe("registerHelpAssistantHandlers", () => {
       auditRetention: 7,
       modelId: "",
       customArgs: "",
-      idleHibernateMinutes: 30,
+      idleHibernateMinutes: 5,
       debugLogging: false,
     });
   });
@@ -354,7 +354,7 @@ describe("registerHelpAssistantHandlers", () => {
     registerHelpAssistantHandlers();
     const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
 
-    await handler(null, { idleHibernateMinutes: 5 });
+    await handler(null, { idleHibernateMinutes: 10 });
     await handler(null, { idleHibernateMinutes: 45 });
     await handler(null, { idleHibernateMinutes: -1 });
     await handler(null, { idleHibernateMinutes: "30" });
@@ -366,12 +366,13 @@ describe("registerHelpAssistantHandlers", () => {
     registerHelpAssistantHandlers();
     const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
 
-    for (const minutes of [0, 15, 30, 60, 120]) {
+    for (const minutes of [0, 5, 15, 30, 60, 120]) {
       await handler(null, { idleHibernateMinutes: minutes });
     }
 
-    expect(storeMock.set).toHaveBeenCalledTimes(5);
+    expect(storeMock.set).toHaveBeenCalledTimes(6);
     expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.idleHibernateMinutes", 0);
+    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.idleHibernateMinutes", 5);
     expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.idleHibernateMinutes", 15);
     expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.idleHibernateMinutes", 30);
     expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.idleHibernateMinutes", 60);
@@ -387,6 +388,15 @@ describe("registerHelpAssistantHandlers", () => {
     expect(result).toMatchObject({ idleHibernateMinutes: 60 });
   });
 
+  it("loads a stored 5-minute idleHibernateMinutes (newest option) from the store", async () => {
+    storeMock.get.mockReturnValue({ idleHibernateMinutes: 5 });
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
+
+    const result = await handler(null);
+    expect(result).toMatchObject({ idleHibernateMinutes: 5 });
+  });
+
   it("rejects an out-of-range stored idleHibernateMinutes and falls back to default", async () => {
     storeMock.get.mockReturnValue({
       idleHibernateMinutes: 999,
@@ -395,7 +405,7 @@ describe("registerHelpAssistantHandlers", () => {
     const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
 
     const result = await handler(null);
-    expect(result).toMatchObject({ idleHibernateMinutes: 30 });
+    expect(result).toMatchObject({ idleHibernateMinutes: 5 });
   });
 
   it("persists a valid customArgs string", async () => {

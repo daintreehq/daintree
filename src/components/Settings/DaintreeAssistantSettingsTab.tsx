@@ -45,6 +45,7 @@ import { agentCapabilitiesClient } from "@/clients/agentCapabilitiesClient";
 import type { AgentModelConfig } from "@shared/config/agentRegistry";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import type {
+  HelpAssistantIdleHibernateMinutes,
   HelpAssistantSettings,
   HelpAssistantTier,
   HelpSessionActiveGrant,
@@ -70,7 +71,7 @@ const DEFAULT_SETTINGS: HelpAssistantSettings = {
   auditRetention: 7,
   modelId: "",
   customArgs: "",
-  idleHibernateMinutes: 30,
+  idleHibernateMinutes: 5,
   debugLogging: false,
 };
 
@@ -146,8 +147,9 @@ const RETENTION_OPTIONS = [
 
 const HIBERNATE_OPTIONS = [
   { value: "0", label: "Off" },
+  { value: "5", label: "5 minutes (default)" },
   { value: "15", label: "15 minutes" },
-  { value: "30", label: "30 minutes (default)" },
+  { value: "30", label: "30 minutes" },
   { value: "60", label: "1 hour" },
   { value: "120", label: "2 hours" },
 ];
@@ -584,10 +586,17 @@ export function DaintreeAssistantSettingsTab() {
 
   const setHibernateMinutes = (value: string) => {
     const parsed = Number(value);
-    if (parsed !== 0 && parsed !== 15 && parsed !== 30 && parsed !== 60 && parsed !== 120) {
+    if (
+      parsed !== 0 &&
+      parsed !== 5 &&
+      parsed !== 15 &&
+      parsed !== 30 &&
+      parsed !== 60 &&
+      parsed !== 120
+    ) {
       return;
     }
-    void persist({ idleHibernateMinutes: parsed as 0 | 15 | 30 | 60 | 120 });
+    void persist({ idleHibernateMinutes: parsed as HelpAssistantIdleHibernateMinutes });
   };
 
   const handleAgentChange = (value: string) => {

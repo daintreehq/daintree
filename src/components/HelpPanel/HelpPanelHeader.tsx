@@ -1,6 +1,13 @@
-import { ChevronRight, CircleHelp, CircleStop, Plus } from "lucide-react";
+import { ChevronRight, CircleHelp, CircleStop, Ellipsis, Plus } from "lucide-react";
 import { SpinnerCircle, HollowCircle, InteractingCircle } from "@/components/icons";
 import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import type { AgentState } from "@/types";
 
@@ -99,14 +106,6 @@ export function HelpPanelHeader({
         </span>
         <AssistantHeaderStateIndicator agentState={agentState} />
       </div>
-      <button
-        type="button"
-        onClick={onOpenDocs}
-        className="p-1 rounded-[var(--radius-sm)] text-daintree-text/50 hover:text-daintree-text hover:bg-tint/8 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
-        aria-label="Open assistant docs"
-      >
-        <CircleHelp className="w-3.5 h-3.5" />
-      </button>
       {canStartNewSession && (
         <button
           type="button"
@@ -117,16 +116,37 @@ export function HelpPanelHeader({
           <Plus className="w-3.5 h-3.5" />
         </button>
       )}
-      {canEndSession && (
-        <button
-          type="button"
-          onClick={onEndSession}
-          className="p-1 rounded-[var(--radius-sm)] text-daintree-text/50 hover:text-daintree-text hover:bg-tint/8 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
-          aria-label="Stop Daintree Assistant"
-        >
-          <CircleStop className="w-3.5 h-3.5" />
-        </button>
-      )}
+      {/* Secondary + destructive actions live in the overflow, per the 3-icon
+          header budget — and Stop must not sit adjacent to the benign hide
+          chevron (destructive-adjacency misfire risk). */}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            className="p-1 rounded-[var(--radius-sm)] text-daintree-text/50 hover:text-daintree-text hover:bg-tint/8 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+            aria-label="More actions"
+            aria-haspopup="menu"
+            data-testid="assistant-header-more"
+          >
+            <Ellipsis className="w-3.5 h-3.5" aria-hidden="true" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="min-w-[160px]">
+          <DropdownMenuItem onSelect={onOpenDocs}>
+            <CircleHelp className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+            Open docs
+          </DropdownMenuItem>
+          {canEndSession && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem destructive onSelect={onEndSession}>
+                <CircleStop className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                Stop assistant
+              </DropdownMenuItem>
+            </>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
       <button
         type="button"
         onClick={onClose}

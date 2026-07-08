@@ -24,8 +24,8 @@ import { resolveDaintreeMcpTier } from "@shared/types/project";
 import type { SnapshotInfo } from "@shared/types/ipc/git";
 import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
 
-const HIBERNATE_VALID_MINUTES: readonly number[] = [0, 15, 30, 60, 120];
-const DEFAULT_HIBERNATE_MINUTES = 30;
+const HIBERNATE_VALID_MINUTES: readonly number[] = [0, 5, 15, 30, 60, 120];
+const DEFAULT_HIBERNATE_MINUTES = 5;
 
 // Re-checks every 2 minutes while the agent is busy so hibernation defers
 // cleanly until the conversation is idle without restarting the full
@@ -821,8 +821,15 @@ export class HelpSessionController {
     if (terminalId === this._pendingNewTerminalId) return;
     const store = useHelpPanelStore.getState();
     if (store.terminalId !== terminalId) return;
+
+    // A controlled hibernate (`_fireHibernate`) can tear this same terminal
+    // down while its `gracefulKill` is in flight — the PTY `onExit` removes the
+    // `removeOnExit` panel out from under it. That flow owns the hibernate slot
+    // and phase reset, so keep the legacy minimal cleanup and let it finish:
+    // never clear hibernate, close the panel, or suppress relaunch here.
+    const hibernating = this._snapshot.phase === "hibernating";
+
     revokeHelpSession(store.sessionId);
-    this._hasAutoLaunched = false;
     store.clearTerminal();
     // The bound session is gone — drop any lingering activity row so the strip
     // doesn't show stale tool calls for a dead session (#9759), clear the
@@ -832,6 +839,19 @@ export class HelpSessionController {
     this.clearMcpActivity();
     this._clearGrantState();
     this._clearOutcomeAlert();
+
+    if (hibernating) {
+      this._hasAutoLaunched = false;
+      return;
+    }
+
+    // The bound assistant PTY exited on its own — the user typed `/exit`, the
+    // agent quit, or it crashed. Treat that as a real stop (like the Stop
+    // button): make it stick so a consented auto-launch can't respawn it, then
+    // slide the sidebar out. The user ended the session from inside the
+    // terminal, so hide the panel rather than lingering on the empty state.
+    this._applyStopSuppression();
+    store.setOpen(false);
   }
 
   /**
@@ -970,9 +990,40 @@ export class HelpSessionController {
    * no-op when nothing is running and no launch is in flight.
    */
   endSession(): void {
-    // Abort any in-flight launch first (mirrors `cancelLaunch`) so a
-    // late-settling provision can't bind a fresh terminal after the user asked
-    // to stop.
+    this._stopBoundSession({ close: false });
+  }
+
+  /**
+   * The bound assistant's agent CLI exited from inside its own terminal — the
+   * user typed `/exit`, or the agent quit — surfaced as `agentState: "exited"`.
+   * Most assistant agents run inside a shell, so the agent exiting does NOT
+   * exit the PTY (`handleTerminalPanelMissing` never fires and the sidebar
+   * would otherwise linger on a dead shell). Treat it like the Stop button but
+   * also slide the sidebar out: the user ended the session from the terminal,
+   * so hide the panel rather than leave it open on the empty state. No
+   * confirmation — the exit already happened.
+   *
+   * Guards keep a stale or racing signal from tearing down the wrong session:
+   * skip while a hibernate owns the teardown, and only act when `terminalId`
+   * is still the currently-bound one (a `+New session`/replace may have already
+   * moved on). The caller debounces on a settled "exited" so a transient
+   * mis-detection flap (#10911) that bounces back via `respawn` can't kill a
+   * live session.
+   */
+  handleAgentExited(terminalId: string): void {
+    if (this._snapshot.phase === "hibernating") return;
+    if (useHelpPanelStore.getState().terminalId !== terminalId) return;
+    this._stopBoundSession({ close: true });
+  }
+
+  /**
+   * Shared stop core for the Stop button (`endSession`, keeps the panel open)
+   * and the terminal self-exit (`handleAgentExited`, slides the sidebar out).
+   * Aborts any in-flight launch first (mirrors `cancelLaunch`) so a
+   * late-settling provision can't bind a fresh terminal after the stop, tears
+   * the bound session down (revoke-before-kill), then makes the stop stick.
+   */
+  private _stopBoundSession(opts: { close: boolean }): void {
     this._launchGen++;
     this._isLaunching = false;
     this._clearLaunchWatchdog();
@@ -990,24 +1041,34 @@ export class HelpSessionController {
       this._revokePendingSession();
     }
 
-    // Stop is destructive (not pause): drop the persisted hibernate entry for
-    // this project so the just-ended conversation can't resume on next open,
-    // and disarm any pending hibernate timer.
+    this._applyStopSuppression();
+
+    if (opts.close) {
+      useHelpPanelStore.getState().setOpen(false);
+    }
+  }
+
+  /**
+   * Shared "make the stop stick" tail, run once the bound session's PTY +
+   * bearer are already gone. Stop is destructive (not pause): drop the
+   * persisted hibernate entry for this project so the just-ended conversation
+   * can't resume on next open, disarm any pending hibernate timer, consume this
+   * open cycle's auto-launch budget so a consented auto-launch
+   * (`_maybeAutoLaunch`) can't immediately respawn the assistant that was just
+   * stopped (reopening the panel resets this in `_syncInputs`, so the next open
+   * still auto-launches as before), then clear session-scoped banners and drop
+   * the phase to idle so the panel lands on a clean empty / start state. Shared
+   * by `_stopBoundSession` (Stop button + agent self-exit) and the PTY-exit
+   * path (`handleTerminalPanelMissing`).
+   */
+  private _applyStopSuppression(): void {
     this._clearHibernateTimer();
     this._hibernateArmedFor = null;
     const projectId = useProjectStore.getState().currentProject?.id ?? null;
     if (projectId) {
       useHelpPanelStore.getState().clearHibernateSession(projectId);
     }
-
-    // Consume this open cycle's auto-launch budget so a consented auto-launch
-    // (`_maybeAutoLaunch`) doesn't immediately respawn the assistant we just
-    // stopped. Reopening the panel resets this in `_syncInputs`, so the next
-    // open still auto-launches as before.
     this._hasAutoLaunched = true;
-
-    // Clear session-scoped banners and drop the phase to idle so the panel
-    // lands on a clean empty / start state.
     this._patch({
       phase: "idle",
       showResumeBanner: false,

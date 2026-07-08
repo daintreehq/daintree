@@ -1,9 +1,37 @@
 // @vitest-environment jsdom
-import type { ComponentProps } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import { render, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/utils", () => ({ cn: (...args: unknown[]) => args.filter(Boolean).join(" ") }));
+
+// Same pass-through mock as PanelHeader.test.tsx — the Radix dropdown is
+// lazily loaded (radix-loader) and irrelevant here; these tests cover the
+// header's own wiring (which items render, what they invoke), not Radix.
+vi.mock("@/components/ui/dropdown-menu", () => ({
+  DropdownMenu: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  DropdownMenuTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+  DropdownMenuContent: ({ children }: { children: ReactNode; className?: string }) => (
+    <div data-testid="overflow-menu">{children}</div>
+  ),
+  DropdownMenuItem: ({
+    children,
+    onSelect,
+    destructive,
+  }: {
+    children: ReactNode;
+    onSelect?: (e: Event) => void;
+    destructive?: boolean;
+  }) => (
+    <button
+      data-destructive={destructive || undefined}
+      onClick={() => onSelect?.(new Event("select"))}
+    >
+      {children}
+    </button>
+  ),
+  DropdownMenuSeparator: () => <hr />,
+}));
 
 import { HelpPanelHeader } from "../HelpPanelHeader";
 
@@ -42,29 +70,56 @@ describe("HelpPanelHeader", () => {
     expect([...focused.firstElementChild!.classList].some((c) => c.includes("accent"))).toBe(false);
   });
 
-  it("shows the stop button only when canEndSession is true", () => {
-    const { queryByLabelText: withoutStop } = renderHeader({ canEndSession: false });
-    expect(withoutStop("Stop Daintree Assistant")).toBeNull();
+  it("keeps the primary header row to new-session, overflow, and hide", () => {
+    const { container, getByLabelText } = renderHeader({
+      canStartNewSession: true,
+      canEndSession: true,
+    });
 
-    const { queryByLabelText: withStop } = renderHeader({ canEndSession: true });
-    expect(withStop("Stop Daintree Assistant")).not.toBeNull();
-  });
-
-  it("uses a stop label distinct from the hide (close) affordance", () => {
-    const { getByLabelText } = renderHeader({ canEndSession: true });
-    // Distinct aria-labels keep the stop and hide buttons independently
-    // targetable — the hide button is "Hide Daintree Assistant".
-    expect(getByLabelText("Stop Daintree Assistant")).not.toBe(
-      getByLabelText("Hide Daintree Assistant")
+    expect(getByLabelText("Start new session")).not.toBeNull();
+    expect(getByLabelText("More actions")).not.toBeNull();
+    expect(getByLabelText("Hide Daintree Assistant")).not.toBeNull();
+    // Stop and docs are overflow items, never dedicated header icons — the
+    // destructive stop must not sit adjacent to the benign hide chevron.
+    const overflow = container.querySelector("[data-testid='overflow-menu']")!;
+    const stop = [...overflow.querySelectorAll("button")].find((b) =>
+      b.textContent?.includes("Stop assistant")
     );
+    const docs = [...overflow.querySelectorAll("button")].find((b) =>
+      b.textContent?.includes("Open docs")
+    );
+    expect(stop).toBeDefined();
+    expect(docs).toBeDefined();
   });
 
-  it("invokes onEndSession when the stop button is clicked", () => {
-    const onEndSession = vi.fn();
-    const { getByLabelText } = renderHeader({ canEndSession: true, onEndSession });
+  it("shows the Stop assistant item only when canEndSession is true", () => {
+    const { queryByText: without } = renderHeader({ canEndSession: false });
+    expect(without("Stop assistant")).toBeNull();
 
-    fireEvent.click(getByLabelText("Stop Daintree Assistant"));
+    const { queryByText: withStop } = renderHeader({ canEndSession: true });
+    expect(withStop("Stop assistant")).not.toBeNull();
+  });
+
+  it("marks the Stop assistant item destructive", () => {
+    const { getByText } = renderHeader({ canEndSession: true });
+    expect(getByText("Stop assistant").closest("button")!.dataset.destructive).toBe("true");
+  });
+
+  it("invokes onEndSession when Stop assistant is selected", () => {
+    const onEndSession = vi.fn();
+    const { getByText } = renderHeader({ canEndSession: true, onEndSession });
+
+    fireEvent.click(getByText("Stop assistant"));
 
     expect(onEndSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("invokes onOpenDocs when Open docs is selected", () => {
+    const onOpenDocs = vi.fn();
+    const { getByText } = renderHeader({ onOpenDocs });
+
+    fireEvent.click(getByText("Open docs"));
+
+    expect(onOpenDocs).toHaveBeenCalledTimes(1);
   });
 });

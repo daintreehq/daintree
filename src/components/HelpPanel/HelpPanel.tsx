@@ -68,6 +68,13 @@ const RESIZE_PAGE_STEP = 50;
 const ASSISTANT_DOCS_URL = "https://daintree.org/assistant";
 const ASSISTANT_INSTALLER_URL = "https://daintree.org/download";
 
+// How long `agentState` must stay "exited" before the assistant self-stops and
+// slides the sidebar out. The FSM's "exited" is sticky (only a `respawn` leaves
+// it), so a real `/exit` easily clears this, while a transient mis-detection
+// flap (#10911) bounces back to a live state well within the window — keeping a
+// spurious tick from tearing down a running conversation.
+const ASSISTANT_AGENT_EXIT_SETTLE_MS = 750;
+
 // First-run starter prompts. Clicking one starts the assistant AND seeds the
 // agent with the question, so the very first session is an explicit, useful
 // action rather than a bare empty terminal. Shown only before the user has
@@ -547,6 +554,21 @@ export function HelpPanel({
       }
     }
   }, [terminalId, terminalPty?.agentState, markConversationStarted]);
+
+  // When the agent CLI exits from inside its own terminal (`/exit`, or the
+  // agent quits), the FSM lands on "exited" while the wrapping shell PTY stays
+  // alive — so `handleTerminalPanelMissing` never fires and the sidebar would
+  // otherwise linger on a dead shell. Fully stop the session and slide the
+  // panel out, debounced past a mis-detection flap (see the constant). Directly
+  // launched agents that exit their PTY are covered by the removeOnExit →
+  // `handleTerminalPanelMissing` path instead.
+  useEffect(() => {
+    if (!terminalId || terminalPty?.agentState !== "exited") return;
+    const timer = setTimeout(() => {
+      controller.handleAgentExited(terminalId);
+    }, ASSISTANT_AGENT_EXIT_SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [controller, terminalId, terminalPty?.agentState]);
 
   // React to a Settings agent change while a session is already bound.
   // `setTerminal` no longer overwrites `preferredAgentId`, so a user choice

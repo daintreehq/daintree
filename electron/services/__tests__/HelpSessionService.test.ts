@@ -1290,6 +1290,39 @@ describe("HelpSessionService", () => {
       );
     });
 
+    it("captures on revokeByProjectId and touches only the matching project (auto-close reclaim, #10989)", async () => {
+      mockPtyGracefulKill.mockResolvedValueOnce("auto-close-resume-id");
+
+      const target = await service.provisionSession({
+        ...provisionInput(),
+        projectId: "proj-reclaimed",
+      });
+      if (!target) throw new Error("expected provision");
+      expect(service.markTerminalForToken(target.token, "term-reclaimed")).toBe(true);
+
+      const other = await service.provisionSession({
+        ...provisionInput(),
+        projectId: "proj-untouched",
+      });
+      if (!other) throw new Error("expected provision");
+      expect(service.markTerminalForToken(other.token, "term-untouched")).toBe(true);
+
+      await service.revokeByProjectId("proj-reclaimed");
+      await Promise.resolve();
+
+      // Capture path ran for the reclaimed project's PTY only…
+      expect(mockPtyGracefulKill).toHaveBeenCalledWith("term-reclaimed");
+      expect(mockPtyGracefulKill).not.toHaveBeenCalledWith("term-untouched");
+      expect(hibernationStore.set).toHaveBeenCalledWith(
+        "proj-reclaimed",
+        expect.objectContaining({ agentSessionId: "auto-close-resume-id" })
+      );
+      // …and the other project's session survives with a live bearer
+      // (validateToken returns the session tier when the token is live).
+      expect(service.validateToken(target.token)).toBe(false);
+      expect(service.validateToken(other.token)).toBeTruthy();
+    });
+
     it("revokeAll (app shutdown) skips capture to avoid blocking on gracefulKill round-trips", async () => {
       mockPtyGracefulKill.mockResolvedValueOnce("never-called");
 

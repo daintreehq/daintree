@@ -1,18 +1,16 @@
 // @vitest-environment jsdom
-import { render, act, fireEvent } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { render, act } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Regression for #10672: the Daintree Assistant terminal couldn't regain a
-// WebGL context when the fleet was in DOM mode (context count at cap). The
-// panel only ever called `terminalInstanceService.focus()` (xterm DOM focus),
-// never `setFocused()` — the sole service path that pins the WebGL context via
-// `webGLManager.pinFocus()`. These tests assert the panel now routes its focus
-// state through `setFocused`, and that a closed / hidden / blurred panel never
-// claims the pin.
+// The /exit self-stop (#10989): when the assistant's agent CLI exits inside a
+// surviving shell PTY, `agentState` settles on "exited" and HelpPanel calls
+// `controller.handleAgentExited(terminalId)` after a debounce so a transient
+// mis-detection flap (#10911) that bounces back via `respawn` can't tear down
+// a live session. These tests cover the DEBOUNCE itself — fire on settle,
+// cancel on flap, cancel on unmount — which the controller tests can't see.
 
-const { setFocusedMock, focusMock, helpPanelState, panelStoreState } = vi.hoisted(() => ({
-  setFocusedMock: vi.fn(),
-  focusMock: vi.fn(),
+const { handleAgentExitedMock, helpPanelState, panelStoreState } = vi.hoisted(() => ({
+  handleAgentExitedMock: vi.fn(),
   helpPanelState: {
     isOpen: true,
     width: 380,
@@ -38,7 +36,7 @@ const { setFocusedMock, focusMock, helpPanelState, panelStoreState } = vi.hoiste
   panelStoreState: {
     panelIds: ["t-1"] as string[],
     panelsById: {
-      "t-1": { agentState: "idle", cwd: "/repo", spawnStatus: "ready" },
+      "t-1": { agentState: "working", cwd: "/repo", spawnStatus: "ready" },
     } as Record<string, { agentState?: string; cwd?: string; spawnStatus?: string }>,
     removePanel: vi.fn(),
     addPanel: vi.fn().mockResolvedValue(""),
@@ -85,7 +83,7 @@ vi.mock("@/controllers/HelpSessionController", () => ({
     getSnapshot = () => snapshot;
     syncInputs = vi.fn();
     handleTerminalPanelMissing = vi.fn();
-    handleAgentExited = vi.fn();
+    handleAgentExited = (...args: unknown[]) => handleAgentExitedMock(...args);
     maybeRunPreflightSnapshot = vi.fn(() => undefined);
     selectAgent = vi.fn();
     newSession = vi.fn();
@@ -109,13 +107,12 @@ vi.mock("@/components/Terminal/terminalFocus", () => ({
   shouldShowHybridInputBar: () => false,
 }));
 vi.mock("./HelpIntroBanner", () => ({ HelpIntroBanner: () => null }));
-vi.mock("./HelpPanelHeader", () => ({ HelpPanelHeader: () => null }));
 vi.mock("./HelpPanelBanners", () => ({ HelpPanelBanners: () => null }));
 vi.mock("./HelpPanelVersionGate", () => ({ HelpPanelVersionGate: () => null }));
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
-    focus: (...args: unknown[]) => focusMock(...args),
-    setFocused: (...args: unknown[]) => setFocusedMock(...args),
+    focus: vi.fn(),
+    setFocused: vi.fn(),
     notifyUserInput: vi.fn(),
     repaintForReveal: vi.fn(),
   },
@@ -216,20 +213,15 @@ vi.mock("../FigureRail", () => ({ FigureRail: () => null }));
 
 import { HelpPanel } from "../HelpPanel";
 
-function getAside(): HTMLElement {
-  const aside = document.getElementById("daintree-assistant-panel");
-  if (!aside) throw new Error("assistant aside not found");
-  return aside;
-}
-
-// Only the `setFocused(id, true)` calls — pin acquisition — matter for the bug.
-function pinCalls(): unknown[][] {
-  return setFocusedMock.mock.calls.filter((c) => c[1] === true);
+function setAgentState(state: string): void {
+  panelStoreState.panelsById = {
+    "t-1": { ...panelStoreState.panelsById["t-1"], agentState: state },
+  };
 }
 
 beforeEach(() => {
-  setFocusedMock.mockClear();
-  focusMock.mockClear();
+  vi.useFakeTimers();
+  handleAgentExitedMock.mockClear();
 
   helpPanelState.isOpen = true;
   helpPanelState.terminalId = "t-1";
@@ -238,7 +230,7 @@ beforeEach(() => {
   helpPanelState.conversationTouched = false;
   panelStoreState.panelIds = ["t-1"];
   panelStoreState.panelsById = {
-    "t-1": { agentState: "idle", cwd: "/repo", spawnStatus: "ready" },
+    "t-1": { agentState: "working", cwd: "/repo", spawnStatus: "ready" },
   };
 
   Object.defineProperty(globalThis, "window", {
@@ -253,117 +245,63 @@ beforeEach(() => {
   });
 });
 
-describe("HelpPanel — WebGL focus pin wiring (#10672)", () => {
-  it("does not pin the assistant terminal while it lacks DOM focus", () => {
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe("HelpPanel — agent self-exit debounce (/exit, #10989)", () => {
+  it("calls handleAgentExited once agentState stays 'exited' past the settle window", () => {
+    setAgentState("exited");
     render(<HelpPanel width={380} />);
-    // Open + visible but never focused: the panel must not claim the pin.
-    expect(pinCalls()).toHaveLength(0);
+
+    act(() => {
+      vi.advanceTimersByTime(749);
+    });
+    expect(handleAgentExitedMock).not.toHaveBeenCalled();
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(handleAgentExitedMock).toHaveBeenCalledTimes(1);
+    expect(handleAgentExitedMock).toHaveBeenCalledWith("t-1");
   });
 
-  it("pins the assistant terminal when DOM focus lands inside the open panel", () => {
-    render(<HelpPanel width={380} />);
-    act(() => {
-      fireEvent.focus(getAside());
-    });
-    expect(pinCalls()).toContainEqual(["t-1", true]);
-  });
-
-  it("releases the pin (setFocused false) when focus leaves the panel", () => {
-    render(<HelpPanel width={380} />);
-    act(() => {
-      fireEvent.focus(getAside());
-    });
-    setFocusedMock.mockClear();
-    act(() => {
-      // relatedTarget outside the aside → real blur, not an inside-panel hop.
-      fireEvent.blur(getAside(), { relatedTarget: document.body });
-    });
-    expect(setFocusedMock).toHaveBeenCalledWith("t-1", false);
-    expect(pinCalls()).toHaveLength(0);
-  });
-
-  it("does not pin a hidden-but-mounted panel even when focused", () => {
-    render(<HelpPanel width={0} isVisible={false} />);
-    act(() => {
-      fireEvent.focus(getAside());
-    });
-    expect(pinCalls()).toHaveLength(0);
-  });
-
-  it("releases the pin when the panel closes", () => {
+  it("never fires when a detection flap bounces back to a live state within the window", () => {
+    setAgentState("exited");
     const { rerender } = render(<HelpPanel width={380} />);
-    act(() => {
-      fireEvent.focus(getAside());
-    });
-    expect(pinCalls()).toContainEqual(["t-1", true]);
 
-    setFocusedMock.mockClear();
-    helpPanelState.isOpen = false;
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    // Respawn/mis-detection recovery: the FSM leaves "exited" before settle.
+    setAgentState("working");
     rerender(<HelpPanel width={380} />);
-    expect(setFocusedMock).toHaveBeenCalledWith("t-1", false);
-    expect(pinCalls()).toHaveLength(0);
+
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(handleAgentExitedMock).not.toHaveBeenCalled();
   });
 
-  it("no-ops when there is no assistant terminal", () => {
-    helpPanelState.terminalId = null;
-    panelStoreState.panelIds = [];
-    panelStoreState.panelsById = {};
+  it("cancels a pending stop when the panel unmounts mid-debounce", () => {
+    setAgentState("exited");
+    const { unmount } = render(<HelpPanel width={380} />);
+
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    unmount();
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(handleAgentExitedMock).not.toHaveBeenCalled();
+  });
+
+  it("arms no timer while the agent is live", () => {
     render(<HelpPanel width={380} />);
     act(() => {
-      fireEvent.focus(getAside());
+      vi.advanceTimersByTime(5000);
     });
-    expect(setFocusedMock).not.toHaveBeenCalled();
-  });
-
-  it("releases the pin when the panel collapses to zero width without a blur", () => {
-    // A width collapse can tear down the focused descendant (xterm) without
-    // firing a blur — the !isVisible guard must still drop the pin.
-    const { rerender } = render(<HelpPanel width={380} />);
-    act(() => {
-      fireEvent.focus(getAside());
-    });
-    expect(pinCalls()).toContainEqual(["t-1", true]);
-
-    setFocusedMock.mockClear();
-    rerender(<HelpPanel width={0} isVisible={false} />);
-    expect(setFocusedMock).toHaveBeenCalledWith("t-1", false);
-    expect(pinCalls()).toHaveLength(0);
-  });
-
-  it("moves the pin to the new terminal when the assistant terminal id changes", () => {
-    const { rerender } = render(<HelpPanel width={380} />);
-    act(() => {
-      fireEvent.focus(getAside());
-    });
-    expect(pinCalls()).toContainEqual(["t-1", true]);
-
-    setFocusedMock.mockClear();
-    helpPanelState.terminalId = "t-2";
-    panelStoreState.panelIds = ["t-2"];
-    panelStoreState.panelsById = {
-      "t-2": { agentState: "idle", cwd: "/repo", spawnStatus: "ready" },
-    };
-    rerender(<HelpPanel width={380} />);
-    // Cleanup releases the old id, then the rerun pins the new one.
-    expect(setFocusedMock).toHaveBeenCalledWith("t-1", false);
-    expect(pinCalls()).toContainEqual(["t-2", true]);
-  });
-
-  it("keeps the pin across a focus hop between controls inside the panel", () => {
-    render(<HelpPanel width={380} />);
-    const aside = getAside();
-    act(() => {
-      fireEvent.focus(aside);
-    });
-    expect(pinCalls()).toContainEqual(["t-1", true]);
-
-    setFocusedMock.mockClear();
-    // Focus moves to a descendant still inside the aside → not a real blur,
-    // so hasDomFocus stays true and the pin is neither released nor churned.
-    const child = aside.querySelector("*") ?? aside;
-    act(() => {
-      fireEvent.blur(aside, { relatedTarget: child });
-    });
-    expect(setFocusedMock).not.toHaveBeenCalledWith("t-1", false);
+    expect(handleAgentExitedMock).not.toHaveBeenCalled();
   });
 });
