@@ -4,6 +4,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { useDevPreviewScrollCapture } from "../useDevPreviewScrollCapture";
+import type { DevPreviewStatus } from "@/hooks/useDevServer";
+
+interface RenderProps {
+  status: DevPreviewStatus;
+  webviewElement: Electron.WebviewTag | null;
+}
 
 const PANE_ID = "pane-1";
 const WC_ID = 42;
@@ -30,7 +36,7 @@ describe("useDevPreviewScrollCapture — status-transition (executeJavaScript) p
     const webview = makeWebview({ executeJavaScript: vi.fn(() => Promise.resolve(120)) });
     const setDevPreviewScrollPosition = vi.fn();
     const { rerender } = renderHook(
-      ({ status, webviewElement }) =>
+      ({ status, webviewElement }: RenderProps) =>
         useDevPreviewScrollCapture({
           id: PANE_ID,
           status,
@@ -57,7 +63,7 @@ describe("useDevPreviewScrollCapture — status-transition (executeJavaScript) p
     const webview = makeWebview({ executeJavaScript: vi.fn(() => Promise.resolve(0)) });
     const setDevPreviewScrollPosition = vi.fn();
     const { rerender } = renderHook(
-      ({ status, webviewElement }) =>
+      ({ status, webviewElement }: RenderProps) =>
         useDevPreviewScrollCapture({
           id: PANE_ID,
           status,
@@ -82,7 +88,7 @@ describe("useDevPreviewScrollCapture — status-transition (executeJavaScript) p
     const webview = makeWebview();
     const setDevPreviewScrollPosition = vi.fn();
     const { rerender } = renderHook(
-      ({ status, webviewElement }) =>
+      ({ status, webviewElement }: RenderProps) =>
         useDevPreviewScrollCapture({
           id: PANE_ID,
           status,
@@ -211,7 +217,7 @@ describe("useDevPreviewScrollCapture — captureScrollViaCdp (frozen-safe) path"
     });
     const setDevPreviewScrollPosition = vi.fn();
     const { result, rerender } = renderHook(
-      ({ status, webviewElement }) =>
+      ({ status, webviewElement }: RenderProps) =>
         useDevPreviewScrollCapture({
           id: PANE_ID,
           status,

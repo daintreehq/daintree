@@ -83,7 +83,7 @@ describe("useDevPreviewNavigation — history handlers", () => {
     const { result } = renderHook(() => useDevPreviewNavigation(baseParams({ setHistory })));
     act(() => result.current.handleNavigate("localhost:5173/app"));
     expect(setHistory).toHaveBeenCalled();
-    const updater = setHistory.mock.calls[0][0];
+    const updater = setHistory.mock.calls[0]![0];
     const next = updater(initializeBrowserHistory(undefined, ""));
     expect(next.present).toContain("localhost:5173/app");
   });
