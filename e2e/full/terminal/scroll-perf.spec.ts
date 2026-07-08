@@ -273,6 +273,7 @@ interface ProbeSnapshot {
 interface EchoRound {
   ch: string;
   tPress: number;
+  tInput: number | null;
   tPaint: number | null;
 }
 
@@ -315,6 +316,8 @@ interface CellMetrics {
   repaintBytesPerFrame: number;
   echoSamples: number;
   echoTimeouts: number;
+  /** Keystrokes CDP never delivered to xterm (harness artifact, not gated). */
+  echoInputDrops: number;
   echoP50Ms: number;
   echoP95Ms: number;
   echoMaxMs: number;
@@ -469,13 +472,16 @@ async function installScrollProbe(page: any, panelId: string): Promise<void> {
 // Bystander keystroke-echo probe (concurrent cell): a `cat` terminal keeps
 // keyboard focus while the wheel scrolls the measured TUI by cursor position.
 // Each round presses one char; confirmation is the accumulated line appearing
-// in a painted frame. Rounds are queued — under a lockup the queue drains
-// late or times out, which is exactly the signal (echoTimeouts must be 0).
+// in a painted frame. A round's expected text is snapshotted when xterm's
+// onData actually sees the char (input arrival), so a CDP-dropped keystroke
+// is classified as an input drop (harness artifact, reported separately) and
+// can never poison later rounds' expectations. A round with input arrival but
+// no paint within the timeout is a REAL starved echo (echoTimeouts must be 0).
 async function installEchoProbe(page: any, panelId: string): Promise<void> {
   await page.evaluate((id: string) => {
     const term = (window as any).__daintreeGetTerminalForE2E?.(id);
     if (!term) throw new Error(`echo probe: no terminal for panel ${id}`);
-    const probe: any = { rounds: [], pending: [], accumulated: "", disposed: false };
+    const probe: any = { rounds: [], pending: [], sent: "", disposed: false };
     const regionText = () => {
       const buf = term.buffer.active;
       const cursorAbs = buf.baseY + buf.cursorY;
@@ -487,29 +493,46 @@ async function installEchoProbe(page: any, panelId: string): Promise<void> {
       }
       return rows.join("\n");
     };
-    const d = term.onRender(() => {
-      if (probe.pending.length === 0) return;
-      const text = regionText();
-      while (probe.pending.length > 0 && text.includes(probe.pending[0].expect)) {
-        const r = probe.pending.shift();
-        r.rec.tPaint = performance.now();
+    const d1 = term.onData((data: string) => {
+      for (const ch of data) {
+        if (ch === "\r" || ch === "\n") {
+          probe.sent = "";
+          continue;
+        }
+        if (ch < " ") continue;
+        probe.sent += ch;
+        const rec = probe.pending.find((r: any) => r.ch === ch && r.tInput === null);
+        if (rec) {
+          rec.tInput = performance.now();
+          rec.expect = probe.sent;
+        }
       }
     });
+    const d2 = term.onRender(() => {
+      if (probe.pending.length === 0) return;
+      const text = regionText();
+      probe.pending = probe.pending.filter((r: any) => {
+        if (r.tInput === null || !text.includes(r.expect)) return true;
+        r.tPaint = performance.now();
+        return false;
+      });
+    });
     probe.begin = (ch: string) => {
-      probe.accumulated += ch;
-      const rec = { ch, tPress: performance.now(), tPaint: null };
+      const rec = { ch, tPress: performance.now(), tInput: null, expect: "", tPaint: null };
       probe.rounds.push(rec);
-      probe.pending.push({ expect: probe.accumulated, rec });
-      return probe.accumulated.length;
+      probe.pending.push(rec);
+      return probe.sent.length;
     };
     probe.resetLine = () => {
-      probe.accumulated = "";
-      probe.pending = [];
+      // Enter is observed via onData (probe.sent resets there); just drop any
+      // input-dropped rounds still pending so they can't linger forever.
+      probe.pending = probe.pending.filter((r: any) => r.tInput !== null);
     };
     probe.snapshot = () => probe.rounds;
     probe.dispose = () => {
       probe.disposed = true;
-      d.dispose();
+      d1.dispose();
+      d2.dispose();
     };
     (window as any).__DAINTREE_ECHO_PROBE__ = probe;
   }, panelId);
@@ -697,7 +720,7 @@ function fmtCell(r: CellResult): string {
     `stalls>100=${m.stallsOver100Ms} >250=${m.stallsOver250Ms} loaf=${m.loafCount} ` +
     `bytes/frame=${m.repaintBytesPerFrame.toFixed(0)}` +
     (m.echoSamples > 0
-      ? ` | echo n=${m.echoSamples} to=${m.echoTimeouts} p50=${m.echoP50Ms.toFixed(1)} p95=${m.echoP95Ms.toFixed(1)}`
+      ? ` | echo n=${m.echoSamples} to=${m.echoTimeouts} drop=${m.echoInputDrops} p50=${m.echoP50Ms.toFixed(1)} p95=${m.echoP95Ms.toFixed(1)}`
       : "")
   );
 }
@@ -1026,7 +1049,8 @@ perfDescribe("Perf: TUI scroll under load (PERF-125..127)", () => {
           loafTotalMs: snapshot.loaf.totalMs,
           repaintBytesPerFrame: paintedFrames > 0 ? snapshot.bytesWritten / paintedFrames : 0,
           echoSamples: echoLat.length,
-          echoTimeouts: echoRounds.filter((r) => r.tPaint === null).length,
+          echoTimeouts: echoRounds.filter((r) => r.tInput !== null && r.tPaint === null).length,
+          echoInputDrops: echoRounds.filter((r) => r.tInput === null).length,
           echoP50Ms: pct(echoLat, 50),
           echoP95Ms: pct(echoLat, 95),
           echoMaxMs: echoLat.length > 0 ? echoLat[echoLat.length - 1] : 0,
