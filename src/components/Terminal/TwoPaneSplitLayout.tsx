@@ -344,7 +344,10 @@ export function TwoPaneSplitLayout({
           data-grid-container="true"
           data-split-mode="true"
         >
-          <div className="relative min-w-0">
+          {/* min-h-0: the implicit row track is `auto`, so without it a panel
+              with intrinsic-height content (file viewer) sizes the row to the
+              content instead of the container (#11024). */}
+          <div className="relative min-w-0 min-h-0">
             <SortableTerminal
               terminal={terminals[0]}
               sourceLocation="grid"
@@ -372,7 +375,7 @@ export function TwoPaneSplitLayout({
             maxRatio={maxRatio}
           />
 
-          <div className="relative min-w-0">
+          <div className="relative min-w-0 min-h-0">
             <SortableTerminal
               terminal={terminals[1]}
               sourceLocation="grid"

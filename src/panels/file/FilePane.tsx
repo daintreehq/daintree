@@ -550,23 +550,38 @@ export function FilePane({
         {filePath &&
           loadState === "loaded" &&
           content !== null &&
-          (isMarkdown ? (
+          (isMarkdown && viewMode === "rendered" ? (
             <MarkdownViewer
               ref={markdownViewerRef}
               content={content}
               filePath={filePath}
               rootPath={effectiveRootPath}
-              viewMode={viewMode}
+              viewMode="rendered"
               wrapLines={markdownWrapLines}
-              className={cn(viewMode === "source" && "min-h-full")}
             />
           ) : (
-            <CodeViewer
-              ref={codeViewerRef}
-              content={content}
-              filePath={filePath}
-              className="min-h-full"
-            />
+            // min-h-full column (mirrors FileViewerModal): the editor surface
+            // stretches to the bottom of the pane even for files shorter than it.
+            <div className="flex min-h-full flex-col">
+              {isMarkdown ? (
+                <MarkdownViewer
+                  ref={markdownViewerRef}
+                  content={content}
+                  filePath={filePath}
+                  rootPath={effectiveRootPath}
+                  viewMode="source"
+                  wrapLines={markdownWrapLines}
+                  className="flex-1"
+                />
+              ) : (
+                <CodeViewer
+                  ref={codeViewerRef}
+                  content={content}
+                  filePath={filePath}
+                  className="flex-1"
+                />
+              )}
+            </div>
           ))}
       </div>
     </ContentPanel>
