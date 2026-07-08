@@ -47,14 +47,24 @@ vi.mock("@/store/projectStore", () => ({
     selector({ currentProject: { id: "test-project" } }),
 }));
 
-vi.mock("@/hooks/useResolvedForgeProvider", () => ({
-  useResolvedForgeProvider: () => ({
-    entry: { pluginId: "test.forge", contribution: { id: "provider", name: "Test Forge" } },
-    providerId: "test.forge.provider",
-    resolvedVia: "hostname",
+const { resolvedProviderRef, makeResolvedProvider } = vi.hoisted(() => {
+  const makeResolvedProvider = (providerId: string | null) => ({
+    entry: providerId
+      ? { pluginId: "test.forge", contribution: { id: "provider", name: "Test Forge" } }
+      : null,
+    providerId,
+    resolvedVia: providerId ? "hostname" : null,
     loading: false,
     refresh: () => {},
-  }),
+  });
+  return {
+    makeResolvedProvider,
+    resolvedProviderRef: { current: makeResolvedProvider("test.forge.provider") },
+  };
+});
+
+vi.mock("@/hooks/useResolvedForgeProvider", () => ({
+  useResolvedForgeProvider: () => resolvedProviderRef.current,
 }));
 
 import {
@@ -90,6 +100,7 @@ describe("useRepositoryStats", () => {
     // test that sets a bootstrap payload via mockResolvedValue can't leak it
     // into later tests' cold-start hydration.
     getFirstPageCacheMock.mockResolvedValue(null);
+    resolvedProviderRef.current = makeResolvedProvider("test.forge.provider");
     _resetPollingLifecycleForTests();
     _resetSwitchBackCacheForTests();
     useSystemWakeStore.setState({
@@ -128,6 +139,164 @@ describe("useRepositoryStats", () => {
     await waitFor(() => {
       expect(getRepoStatsMock).toHaveBeenCalledTimes(2);
       expect(getRepoStatsMock.mock.calls[1]?.[1]).toBe(true);
+    });
+  });
+
+  describe("refetch on provider resolution", () => {
+    it("refetches immediately when the provider resolves after a provider-less snapshot", async () => {
+      resolvedProviderRef.current = makeResolvedProvider(null);
+      getCurrentMock.mockResolvedValue({ id: "project-a", path: "/repo/a" });
+      onSwitchMock.mockReturnValue(() => {});
+      // Provider-less commit-only snapshot: null counts, no error, no lastUpdated.
+      getRepoStatsMock.mockResolvedValue({
+        commitCount: 5,
+        issueCount: null,
+        prCount: null,
+        loading: false,
+      });
+
+      const { result, rerender } = renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(getRepoStatsMock).toHaveBeenCalledTimes(1);
+      });
+      await waitFor(() => {
+        expect(result.current.stats).not.toBeNull();
+      });
+      expect(result.current.stats?.issueCount).toBeNull();
+
+      // Provider resolves (plugin activated/enabled mid-session) — counts are
+      // now fetchable, so the hook must not wait out the 30s poll interval.
+      getRepoStatsMock.mockResolvedValue({
+        commitCount: 5,
+        issueCount: 4,
+        prCount: 2,
+        loading: false,
+        stale: false,
+        lastUpdated: 2000,
+      });
+      resolvedProviderRef.current = makeResolvedProvider("test.forge.provider");
+      rerender();
+
+      await waitFor(() => {
+        expect(getRepoStatsMock).toHaveBeenCalledTimes(2);
+      });
+      await waitFor(() => {
+        expect(result.current.stats?.issueCount).toBe(4);
+        expect(result.current.stats?.prCount).toBe(2);
+      });
+    });
+
+    it("refetches when a provider-less fetch lands after the provider resolves (in-flight race)", async () => {
+      resolvedProviderRef.current = makeResolvedProvider(null);
+      getCurrentMock.mockResolvedValue({ id: "project-a", path: "/repo/a" });
+      onSwitchMock.mockReturnValue(() => {});
+      const deferred = createDeferred<ForgeRepositoryStats>();
+      getRepoStatsMock.mockReturnValueOnce(deferred.promise);
+
+      const { result, rerender } = renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(getRepoStatsMock).toHaveBeenCalledTimes(1);
+      });
+
+      // Provider resolves while the provider-less fetch is still in flight —
+      // at this instant no result has been applied, so a transition-only
+      // trigger would miss the refetch entirely.
+      resolvedProviderRef.current = makeResolvedProvider("test.forge.provider");
+      rerender();
+
+      getRepoStatsMock.mockResolvedValue({
+        commitCount: 5,
+        issueCount: 4,
+        prCount: 2,
+        loading: false,
+        stale: false,
+        lastUpdated: 2000,
+      });
+      await act(async () => {
+        deferred.resolve({
+          commitCount: 5,
+          issueCount: null,
+          prCount: null,
+          loading: false,
+        });
+        await Promise.resolve();
+      });
+
+      await waitFor(() => {
+        expect(getRepoStatsMock).toHaveBeenCalledTimes(2);
+      });
+      await waitFor(() => {
+        expect(result.current.stats?.issueCount).toBe(4);
+      });
+    });
+
+    it("caps the corrective refetch at one per provider resolution", async () => {
+      resolvedProviderRef.current = makeResolvedProvider(null);
+      getCurrentMock.mockResolvedValue({ id: "project-a", path: "/repo/a" });
+      onSwitchMock.mockReturnValue(() => {});
+      // Structurally provider-less repo: every fetch keeps returning the
+      // commit-only snapshot even though a provider is resolved.
+      getRepoStatsMock.mockResolvedValue({
+        commitCount: 5,
+        issueCount: null,
+        prCount: null,
+        loading: false,
+      });
+
+      const { result, rerender } = renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(getRepoStatsMock).toHaveBeenCalledTimes(1);
+      });
+      await waitFor(() => {
+        expect(result.current.stats).not.toBeNull();
+      });
+
+      resolvedProviderRef.current = makeResolvedProvider("test.forge.provider");
+      rerender();
+
+      // The corrective refetch fires once; its provider-less result must not
+      // trigger another round.
+      await waitFor(() => {
+        expect(getRepoStatsMock).toHaveBeenCalledTimes(2);
+      });
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(getRepoStatsMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not refetch on provider resolve when a dated result is already applied", async () => {
+      resolvedProviderRef.current = makeResolvedProvider(null);
+      getCurrentMock.mockResolvedValue({ id: "project-a", path: "/repo/a" });
+      onSwitchMock.mockReturnValue(() => {});
+      getRepoStatsMock.mockResolvedValue({
+        commitCount: 5,
+        issueCount: 2,
+        prCount: 1,
+        loading: false,
+        stale: false,
+        lastUpdated: 1000,
+      });
+
+      const { result, rerender } = renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(result.current.stats?.issueCount).toBe(2);
+      });
+
+      resolvedProviderRef.current = makeResolvedProvider("test.forge.provider");
+      rerender();
+
+      // The applied result carries a fetch time, so the regular schedule is
+      // already serving data — the resolve must not fire an extra fetch.
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(getRepoStatsMock).toHaveBeenCalledTimes(1);
     });
   });
 

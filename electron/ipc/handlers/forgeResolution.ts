@@ -11,6 +11,15 @@ import {
   normalizeProviderId,
 } from "../../../shared/utils/forgeProviderIds.js";
 
+// PluginService is loaded lazily (mirrors forgeRpcServer) so this eagerly
+// registered handler module never constructs the singleton at import time.
+type PluginActivator = { activatePluginForForgeProvider(namespacedId: string): Promise<void> };
+let pluginServicePromise: Promise<PluginActivator> | null = null;
+function getPluginService(): Promise<PluginActivator> {
+  pluginServicePromise ??= import("../../services/PluginService.js").then((m) => m.pluginService);
+  return pluginServicePromise;
+}
+
 /**
  * Shared `cwd → forge provider` resolution. Both the action handlers
  * (`forge.ts` — open/assign) and the data handlers (`forgeData.ts` —
@@ -74,7 +83,18 @@ export async function resolveForCwd(cwd: string): Promise<ResolvedForgeContext> 
   }
 
   const namespaceId = makeForgeProviderId(resolved.entry.pluginId, resolved.entry.contribution.id);
-  const impl = getForgeProviderImpl(namespaceId);
+  let impl = getForgeProviderImpl(namespaceId);
+  if (!impl) {
+    // Implicit activation, mirroring the forge RPC server: lazy plugins
+    // (no `activationEvents`, #10523) only bind their impl during activate(),
+    // and nothing on this IPC path triggered it. Without this, every cold-start
+    // stats/list call fails until some other surface (workspace-host PR
+    // monitoring) happens to activate the plugin — the toolbar counts then sit
+    // empty until the next 30s poll (30–60s after launch).
+    const pluginService = await getPluginService();
+    await pluginService.activatePluginForForgeProvider(namespaceId);
+    impl = getForgeProviderImpl(namespaceId);
+  }
   if (!impl) {
     throw new Error(
       `Forge provider "${resolved.entry.contribution.id}" not activated. Activate it in Settings.`

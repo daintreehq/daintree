@@ -49,6 +49,12 @@ vi.mock("../../../services/GitServiceCache.js", () => ({
   gitServiceCache: gitServiceCacheMock,
 }));
 
+const pluginServiceMock = vi.hoisted(() => ({
+  activatePluginForForgeProvider: vi.fn<(namespacedId: string) => Promise<void>>(async () => {}),
+}));
+
+vi.mock("../../../services/PluginService.js", () => ({ pluginService: pluginServiceMock }));
+
 import { resolveForCwd } from "../forgeResolution.js";
 
 const giteaEntry: ForgeProviderEntry = {
@@ -234,6 +240,52 @@ describe("resolveForCwd", () => {
       forgeProviderOverride: "acme.gitea",
       globalDefaultProviderId: "daintree.github.github",
     });
+  });
+
+  it("implicitly activates the owning plugin when the impl is not yet bound (#10523)", async () => {
+    const parseRemote = vi.fn(() => ({ owner: "owner", repo: "repo" }));
+    // First lookup misses (lazy plugin not activated); after activation the
+    // impl is bound — mirrors the forge RPC server's implicit-activation path.
+    registryMock.getForgeProviderImpl.mockReturnValueOnce(undefined);
+    pluginServiceMock.activatePluginForForgeProvider.mockImplementationOnce(async () => {
+      registryMock.getForgeProviderImpl.mockReturnValue({ parseRemote });
+    });
+    resolverMock.resolveForgeProvider.mockReturnValue({
+      entry: giteaEntry,
+      resolvedVia: "hostname",
+    });
+
+    const result = await resolveForCwd("/repo");
+
+    expect(pluginServiceMock.activatePluginForForgeProvider).toHaveBeenCalledWith("acme.gitea");
+    expect(result.namespaceId).toBe("acme.gitea");
+    expect(result.repoRef).toEqual({ owner: "owner", repo: "repo", projectPath: "/repo" });
+  });
+
+  it("skips implicit activation when the impl is already bound", async () => {
+    const parseRemote = vi.fn(() => ({ owner: "owner", repo: "repo" }));
+    registryMock.getForgeProviderImpl.mockReturnValue({ parseRemote });
+    resolverMock.resolveForgeProvider.mockReturnValue({
+      entry: giteaEntry,
+      resolvedVia: "hostname",
+    });
+
+    await resolveForCwd("/repo");
+
+    expect(pluginServiceMock.activatePluginForForgeProvider).not.toHaveBeenCalled();
+  });
+
+  it("still fails closed when the impl stays unbound after activation", async () => {
+    registryMock.getForgeProviderImpl.mockReturnValue(undefined);
+    resolverMock.resolveForgeProvider.mockReturnValue({
+      entry: giteaEntry,
+      resolvedVia: "hostname",
+    });
+
+    await expect(resolveForCwd("/repo")).rejects.toThrow(
+      'Forge provider "gitea" not activated. Activate it in Settings.'
+    );
+    expect(pluginServiceMock.activatePluginForForgeProvider).toHaveBeenCalledWith("acme.gitea");
   });
 
   it("fails closed when the override names an unregistered provider", async () => {

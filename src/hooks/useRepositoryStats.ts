@@ -373,6 +373,11 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
     providerIdRef.current = providerId;
   }, [providerId]);
 
+  // Whether the one corrective refetch for the current provider resolution
+  // has fired — see the effect below `usePollingLifecycle`. Declared here
+  // because `onProjectSwitch` re-arms it.
+  const correctiveRefetchDoneRef = useRef(false);
+
   const polling = usePollingLifecycle({
     enabled: !isWorkerInstance && currentProjectId !== null && !providerLoading,
     fetchFn: async ({ force, isInvalidated, reason }) => {
@@ -553,8 +558,42 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       setError(null);
       lastErrorRef.current = null;
       resetPollFailures();
+      // Re-arm the corrective refetch for the new project — the cap is
+      // per-project like the rest of the per-switch resets.
+      correctiveRefetchDoneRef.current = false;
     },
   });
+
+  // Corrective refetch: a resolved provider whose applied result is
+  // provider-less (null forge counts, no fetch time — the shape main returns
+  // while the lazy forge plugin was not yet activated) means the toolbar sits
+  // on em-dashes until the next scheduled poll, up to 30s out. Fire one
+  // immediate refresh instead. Re-evaluated on every applied result (`stats`
+  // identity changes on each apply) as well as on resolution changes, so it
+  // catches both orders: the provider resolving after the provider-less
+  // snapshot applied (plugin enabled/installed mid-session), AND a
+  // provider-less fetch already in flight when the provider resolved, whose
+  // result applies after the transition. Gated on `lastUpdated` still being
+  // null: provider-less snapshots never carry a fetch time, so any dated
+  // result (real counts, switch-back restore) means the regular schedule is
+  // already serving data. Errored results are excluded — the poll's error
+  // backoff already retries those. The done-ref caps it at one extra fetch
+  // per resolution (re-armed on resolution change and project switch) so a
+  // repo whose provider-less snapshots are structural (e.g. an override set
+  // but no git remote) cannot refetch-loop.
+  const prevProviderIdRef = useRef(providerId);
+  useEffect(() => {
+    if (prevProviderIdRef.current !== providerId) {
+      prevProviderIdRef.current = providerId;
+      correctiveRefetchDoneRef.current = false;
+    }
+    if (!providerId || isWorkerInstance) return;
+    if (correctiveRefetchDoneRef.current) return;
+    if (!hasAppliedResultRef.current || lastUpdatedRef.current !== null) return;
+    if (lastErrorRef.current !== null) return;
+    correctiveRefetchDoneRef.current = true;
+    void polling.refresh();
+  }, [providerId, stats, polling, isWorkerInstance]);
 
   // Cold-start hydration: before the first poll completes, ask main for the
   // disk-persisted first page so the very first dropdown click after launch
