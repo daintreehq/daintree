@@ -252,11 +252,14 @@ export class WorktreeMonitor {
   private readonly gitStatusPass: GitStatusPass;
 
   // Test-only backdoors preserving pre-split field access onto the stat
-  // baseline cache StatPrecheck now owns for real callers.
-  private get lastStatBaselineAt(): number {
+  // baseline cache StatPrecheck now owns for real callers. Not private: the
+  // only caller is a type-erased `(monitor as unknown as {...})` cast in
+  // WorktreeMonitor.test.ts, which tsc's unused-private-member check can't
+  // see — declaring these public keeps that check from flagging them dead.
+  get lastStatBaselineAt(): number {
     return this.statPrecheck.baselineCapturedAt;
   }
-  private set lastFullStatusAt(value: number) {
+  set lastFullStatusAt(value: number) {
     this.statPrecheck.fullStatusCapturedAt = value;
   }
 
