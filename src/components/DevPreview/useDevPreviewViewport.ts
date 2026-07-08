@@ -124,6 +124,7 @@ export function useDevPreviewViewport({
     try {
       if (viewportPreset) {
         if (originalUaRef.current === null) {
+          // eslint-disable-next-line react-compiler/react-compiler -- originalUaRef is a parent-owned ref threaded in as a hook param; the compiler can't see through the boundary that it's a stable ref, not a prop
           originalUaRef.current = wc.getUserAgent();
         }
         wc.setUserAgent(getViewportPreset(viewportPreset).userAgent);
