@@ -118,8 +118,8 @@ describe("Forge stats token error UX — issue #5024", () => {
     expect(commitsButton).not.toContain("isTokenError");
   });
 
-  it("suppresses error indicator status for token errors", () => {
-    expect(source).toContain("statsError && !isTokenError");
+  it("gates the error indicator on persistent severity, excluding token and rate-limit errors", () => {
+    expect(source).toContain('errorSeverity === "persistent" && !isTokenError && !rateLimitActive');
   });
 });
 

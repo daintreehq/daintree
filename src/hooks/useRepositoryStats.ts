@@ -27,7 +27,13 @@ function isValidPagePayload(page: unknown): page is {
 
 const ACTIVE_POLL_INTERVAL = 30 * 1000;
 const IDLE_POLL_INTERVAL = 5 * 60 * 1000;
-const ERROR_BACKOFF_INTERVAL = 2 * 60 * 1000;
+
+// Graduated error retry replacing the old flat 2-minute backoff: the first
+// failure retries quickly so a one-off blip (transient 5xx, momentary
+// offline) heals before the persistent-error threshold below is reached,
+// doubling toward the old ceiling for a failure that keeps failing.
+const ERROR_BACKOFF_BASE_INTERVAL = 30 * 1000;
+const ERROR_BACKOFF_MAX_INTERVAL = 2 * 60 * 1000;
 
 // Add a small buffer to the reset timestamp to avoid scheduling a poll at the
 // exact instant the provider releases the quota — paired with the provider's
@@ -42,6 +48,29 @@ const RATE_LIMIT_RESUME_BUFFER_MS = 2_000;
 // backgrounded app reaches `aging` before its next scheduled poll.
 export const FRESH_THRESHOLD_MS = 90_000;
 export const AGING_THRESHOLD_MS = 300_000;
+
+// Error-severity thresholds. A single failed poll is not a signal — the
+// toolbar keeps showing the preserved counts and the quick retry above gets a
+// chance to heal it silently. A failure run escalates to `persistent` once
+// this many consecutive polls have failed (the quick retries also failed) or
+// once the run has gone unbroken this long (covers schedules where retries
+// are sparse, e.g. a rate-limit block that parks the next poll at its reset
+// time — if the resume attempt after the wait also fails, the run's age
+// escalates it rather than waiting out three more retries).
+export const PERSISTENT_ERROR_FAILURES = 3;
+export const PERSISTENT_ERROR_MS = AGING_THRESHOLD_MS;
+
+/**
+ * Severity of the current error state, driving how loudly the UI reports it.
+ *
+ * - `transient`: a recent failure that quick retries may still heal; callers
+ *   should stay quiet (the preserved counts remain visible and the freshness
+ *   tier already communicates degraded data).
+ * - `persistent`: the failure survived retries (see the thresholds above) or
+ *   there is no baseline data to show at all — the alarm affordance is
+ *   warranted.
+ */
+export type RepositoryStatsErrorSeverity = "transient" | "persistent";
 
 // Switch-back reuse cache (issue #10761). Keyed by project path, this holds the
 // last genuinely-fresh stats result per project so a rapid switch back to a
@@ -91,6 +120,10 @@ export interface UseRepositoryStatsReturn {
   // loading indicators back on top of stale-but-visible data.
   isValidating: boolean;
   error: string | null;
+  // Null when there is no error. Distinguishes a blip mid-heal (`transient`)
+  // from a failure run that retries didn't fix (`persistent`) so alarm UI can
+  // gate on the latter only.
+  errorSeverity: RepositoryStatsErrorSeverity | null;
   isTokenError: boolean;
   isStale: boolean;
   lastUpdated: number | null;
@@ -153,6 +186,27 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
 
   const mountedRef = useRef(true);
   const lastErrorRef = useRef<string | null>(null);
+
+  // Unbroken failure-run tracking behind `errorSeverity`. `consecutiveFailures`
+  // counts applied failures since the last success; `errorSince` anchors the
+  // run's start so severity can escalate on age alone when retries are sparse.
+  // The ref mirrors the counter for synchronous reads in
+  // `calculateNextInterval` (graduated backoff).
+  const [consecutiveFailures, setConsecutiveFailures] = useState(0);
+  const [errorSince, setErrorSince] = useState<number | null>(null);
+  const consecutiveFailuresRef = useRef(0);
+
+  const recordPollFailure = useCallback(() => {
+    consecutiveFailuresRef.current += 1;
+    setConsecutiveFailures(consecutiveFailuresRef.current);
+    setErrorSince((prev) => prev ?? Date.now());
+  }, []);
+
+  const resetPollFailures = useCallback(() => {
+    consecutiveFailuresRef.current = 0;
+    setConsecutiveFailures(0);
+    setErrorSince(null);
+  }, []);
 
   // Monotonic fetch epoch (issue #10761). Incremented on every project switch
   // so an in-flight fetch started before the switch can be detected and
@@ -291,12 +345,14 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       if (repoStats.error) {
         setError(repoStats.error);
         lastErrorRef.current = repoStats.error;
+        recordPollFailure();
       } else {
         setError(null);
         lastErrorRef.current = null;
+        resetPollFailures();
       }
     },
-    []
+    [recordPollFailure, resetPollFailures]
   );
 
   // Worker instances suppress automatic background polling to conserve the
@@ -338,6 +394,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
             lastUpdatedRef.current = null;
             setLastUpdated(null);
             lastErrorRef.current = null;
+            resetPollFailures();
           }
           return;
         }
@@ -410,13 +467,20 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       } catch (err) {
         // Bail when the fetch was superseded — applying the old project's
         // error to the new project's state would surface a stale error and
-        // push `calculateNextInterval` into ERROR_BACKOFF_INTERVAL.
+        // push `calculateNextInterval` into the error backoff.
         if (isInvalidated()) return;
         if (fetchGenerationRef.current !== myGeneration) return;
         if (mountedRef.current) {
           const errorMessage = formatErrorMessage(err, "Failed to fetch repository stats");
+          // A thrown fetch is an applied result too — without this, the
+          // cold-start bootstrap hydration (gated on !hasAppliedResultRef)
+          // could land after the failure, clear the error, and reset the
+          // failure run. The resolved-error path gets the same protection
+          // inside applyStatsResult.
+          hasAppliedResultRef.current = true;
           setError(errorMessage);
           lastErrorRef.current = errorMessage;
+          recordPollFailure();
         }
       } finally {
         if (mountedRef.current) {
@@ -430,7 +494,17 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       if (resetAt !== null && resetAt > Date.now()) {
         return resetAt - Date.now() + RATE_LIMIT_RESUME_BUFFER_MS;
       }
-      if (lastErrorRef.current) return ERROR_BACKOFF_INTERVAL;
+      if (lastErrorRef.current) {
+        // First failure retries fast; each further failure doubles the wait up
+        // to the old flat ceiling. Pairs with `errorSeverity`: a run that
+        // escalates to `persistent` has already burned through the quick
+        // retries.
+        const failures = Math.max(1, consecutiveFailuresRef.current);
+        return Math.min(
+          ERROR_BACKOFF_BASE_INTERVAL * 2 ** (failures - 1),
+          ERROR_BACKOFF_MAX_INTERVAL
+        );
+      }
       if (isVisible) {
         // Honor the provider probe's adaptive cadence (issue #9741): poll
         // ~every minute while changes are landing, backing off toward the idle
@@ -474,9 +548,11 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       setRateLimitKind(null);
       // Reset error state too — without this the previous project's failure
       // (e.g. "token not configured") would carry into the new project's
-      // freshness tier as `errored` until its first poll completes.
+      // freshness tier as `errored` until its first poll completes. The
+      // failure run resets with it — severity is per-project.
       setError(null);
       lastErrorRef.current = null;
+      resetPollFailures();
     },
   });
 
@@ -781,11 +857,29 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
     return "aging";
   }, [isStale, statsError, error, lastUpdated, tick]);
 
+  // Same ticker subscription as `freshnessLevel` so the age clause can flip a
+  // long-lived `transient` to `persistent` without waiting for the next
+  // failure event.
+  const errorSeverity = useMemo<RepositoryStatsErrorSeverity | null>(() => {
+    if (!error) return null;
+    // No baseline at all — the pills are showing em-dashes, so the failure is
+    // the only signal available. Surface it immediately rather than waiting
+    // out a threshold. Mirrors the `errored` freshness tier above.
+    if (lastUpdated == null) return "persistent";
+    void tick;
+    if (consecutiveFailures >= PERSISTENT_ERROR_FAILURES) return "persistent";
+    if (errorSince !== null && Date.now() - errorSince >= PERSISTENT_ERROR_MS) {
+      return "persistent";
+    }
+    return "transient";
+  }, [error, lastUpdated, consecutiveFailures, errorSince, tick]);
+
   return {
     stats,
     loading,
     isValidating,
     error,
+    errorSeverity,
     isTokenError,
     isStale,
     lastUpdated,

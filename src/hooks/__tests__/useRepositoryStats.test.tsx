@@ -60,6 +60,7 @@ vi.mock("@/hooks/useResolvedForgeProvider", () => ({
 import {
   useRepositoryStats,
   FRESH_THRESHOLD_MS,
+  PERSISTENT_ERROR_MS,
   _resetSwitchBackCacheForTests,
 } from "../useRepositoryStats";
 import { _resetPollingLifecycleForTests } from "../usePollingLifecycle";
@@ -85,6 +86,10 @@ function createDeferred<T>() {
 describe("useRepositoryStats", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // clearAllMocks keeps implementations — restore the null default so a
+    // test that sets a bootstrap payload via mockResolvedValue can't leak it
+    // into later tests' cold-start hydration.
+    getFirstPageCacheMock.mockResolvedValue(null);
     _resetPollingLifecycleForTests();
     _resetSwitchBackCacheForTests();
     useSystemWakeStore.setState({
@@ -1737,6 +1742,44 @@ describe("useRepositoryStats", () => {
       expect(result.current.stats?.issueCount).toBeNull();
       expect(result.current.stats?.prCount).toBeNull();
     });
+
+    it("does not clear a thrown-fetch error or its failure run when bootstrap hydration resolves", async () => {
+      // Same guarantee as above but for the catch path: a rejected fetch must
+      // count as an applied result, otherwise hydration lands afterwards,
+      // silently clears the error, and resets the errorSeverity failure run.
+      const project = { id: "p", path: "/repo/throw-then-cache" };
+      getCurrentMock.mockResolvedValue(project);
+      onSwitchMock.mockReturnValue(() => {});
+      getRepoStatsMock.mockRejectedValue(new Error("IPC rate limited"));
+
+      const cacheLastUpdated = Date.now() - 5_000;
+      const hydration = createDeferred<unknown>();
+      getFirstPageCacheMock.mockImplementationOnce(() => hydration.promise);
+
+      const { result } = renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(result.current.error).not.toBeNull();
+        expect(result.current.errorSeverity).toBe("persistent");
+      });
+
+      hydration.resolve({
+        providerId: PROVIDER_ID,
+        projectPath: project.path,
+        lastUpdated: cacheLastUpdated,
+        issues: { items: [], endCursor: null, hasNextPage: false },
+        prs: { items: [], endCursor: null, hasNextPage: false },
+        stats: { issueCount: 5, prCount: 3, lastUpdated: cacheLastUpdated },
+      });
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(result.current.error).not.toBeNull();
+      expect(result.current.errorSeverity).toBe("persistent");
+      expect(result.current.stats?.issueCount).toBeUndefined();
+    });
   });
 
   describe("freshnessLevel", () => {
@@ -1922,6 +1965,226 @@ describe("useRepositoryStats", () => {
       expect(FRESH).toBe(90_000);
       expect(AGING).toBe(300_000);
       expect(AGING).toBeGreaterThan(FRESH);
+    });
+  });
+
+  describe("errorSeverity", () => {
+    function freshStats(overrides: Partial<ForgeRepositoryStats>): ForgeRepositoryStats {
+      return {
+        commitCount: 5,
+        issueCount: 2,
+        prCount: 1,
+        loading: false,
+        stale: false,
+        lastUpdated: Date.now(),
+        ...overrides,
+      };
+    }
+
+    async function mountWithBaseline() {
+      getCurrentMock.mockResolvedValue({ id: "p", path: "/repo" });
+      onSwitchMock.mockReturnValue(() => {});
+      getRepoStatsMock.mockResolvedValueOnce(freshStats({}));
+      const rendered = renderHook(() => useRepositoryStats());
+      await waitFor(() => {
+        expect(rendered.result.current.stats?.commitCount).toBe(5);
+        expect(rendered.result.current.errorSeverity).toBeNull();
+      });
+      return rendered;
+    }
+
+    it("stays null while polls succeed", async () => {
+      const { result } = await mountWithBaseline();
+      expect(result.current.error).toBeNull();
+      expect(result.current.errorSeverity).toBeNull();
+    });
+
+    it("reports a single failure after a fresh baseline as transient and keeps the counts", async () => {
+      const { result } = await mountWithBaseline();
+
+      getRepoStatsMock.mockRejectedValueOnce(new Error("Transient 502"));
+      await act(async () => {
+        await result.current.refresh();
+      });
+
+      expect(result.current.error).not.toBeNull();
+      expect(result.current.errorSeverity).toBe("transient");
+      // The baseline data must survive the blip — this is what lets the UI
+      // stay quiet instead of alarming over counts that are still visible.
+      expect(result.current.stats?.commitCount).toBe(5);
+    });
+
+    it("escalates to persistent after three consecutive failed polls", async () => {
+      const { result } = await mountWithBaseline();
+      getRepoStatsMock.mockRejectedValue(new Error("kaboom"));
+
+      for (const expected of ["transient", "transient", "persistent"]) {
+        await act(async () => {
+          await result.current.refresh();
+        });
+        expect(result.current.errorSeverity).toBe(expected);
+      }
+    });
+
+    it("counts backend stale+error disk-fallback payloads toward the failure run", async () => {
+      // The rate-limited GitHub path serves valid disk counts alongside an
+      // error string — applied via applyStatsResult rather than the catch
+      // block. Those must accrue severity the same way thrown fetches do.
+      const { result } = await mountWithBaseline();
+      getRepoStatsMock.mockResolvedValue(
+        freshStats({ stale: true, error: "GitHub rate limit exceeded" })
+      );
+
+      for (const expected of ["transient", "transient", "persistent"]) {
+        await act(async () => {
+          await result.current.refresh();
+        });
+        expect(result.current.errorSeverity).toBe(expected);
+      }
+      expect(result.current.stats?.issueCount).toBe(2);
+    });
+
+    it("is persistent immediately when a failure leaves no baseline data", async () => {
+      getCurrentMock.mockResolvedValue({ id: "p", path: "/repo" });
+      onSwitchMock.mockReturnValue(() => {});
+      getRepoStatsMock.mockRejectedValue(new Error("cold-start failure"));
+
+      const { result } = renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(result.current.error).not.toBeNull();
+        expect(result.current.lastUpdated).toBeNull();
+        expect(result.current.errorSeverity).toBe("persistent");
+      });
+    });
+
+    it("resets the failure run on a successful poll", async () => {
+      const { result } = await mountWithBaseline();
+
+      getRepoStatsMock
+        .mockRejectedValueOnce(new Error("fail 1"))
+        .mockRejectedValueOnce(new Error("fail 2"))
+        .mockResolvedValueOnce(freshStats({ commitCount: 6 }))
+        .mockRejectedValueOnce(new Error("fail after recovery"));
+
+      for (let i = 0; i < 2; i += 1) {
+        await act(async () => {
+          await result.current.refresh();
+        });
+      }
+      expect(result.current.errorSeverity).toBe("transient");
+
+      await act(async () => {
+        await result.current.refresh();
+      });
+      expect(result.current.errorSeverity).toBeNull();
+
+      // A fresh failure after recovery starts a new run — two prior failures
+      // must not carry over and tip this straight into persistent.
+      await act(async () => {
+        await result.current.refresh();
+      });
+      expect(result.current.errorSeverity).toBe("transient");
+    });
+
+    it("escalates a sparse failure run to persistent by age", async () => {
+      const realNow = Date.now.bind(Date);
+      let offset = 0;
+      const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => realNow() + offset);
+      try {
+        const { result } = await mountWithBaseline();
+        getRepoStatsMock.mockRejectedValue(new Error("kaboom"));
+
+        await act(async () => {
+          await result.current.refresh();
+        });
+        expect(result.current.errorSeverity).toBe("transient");
+
+        // Only the second failure of the run, but the run itself is now older
+        // than PERSISTENT_ERROR_MS — e.g. a rate-limit block parked the poll
+        // schedule and the resume attempt after the wait also failed.
+        offset = PERSISTENT_ERROR_MS + 1_000;
+        await act(async () => {
+          await result.current.refresh();
+        });
+        expect(result.current.errorSeverity).toBe("persistent");
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it("resets the failure run on project switch", async () => {
+      let currentProject = { id: "a", path: "/repo/a" };
+      getCurrentMock.mockImplementation(async () => currentProject);
+      let switchHandler: (() => void) | undefined;
+      onSwitchMock.mockImplementation((cb: () => void) => {
+        switchHandler = cb;
+        return () => {};
+      });
+
+      getRepoStatsMock.mockResolvedValueOnce(freshStats({}));
+      const { result } = renderHook(() => useRepositoryStats());
+      await waitFor(() => expect(result.current.stats?.commitCount).toBe(5));
+
+      getRepoStatsMock
+        .mockRejectedValueOnce(new Error("fail 1"))
+        .mockRejectedValueOnce(new Error("fail 2"))
+        .mockRejectedValueOnce(new Error("fail 3"));
+      for (let i = 0; i < 3; i += 1) {
+        await act(async () => {
+          await result.current.refresh();
+        });
+      }
+      expect(result.current.errorSeverity).toBe("persistent");
+
+      // Switch to project B: baseline success, then a single failure. If the
+      // run carried across the switch this would read persistent.
+      currentProject = { id: "b", path: "/repo/b" };
+      getRepoStatsMock
+        .mockResolvedValueOnce(freshStats({ commitCount: 12 }))
+        .mockRejectedValueOnce(new Error("first failure on B"));
+      act(() => {
+        switchHandler?.();
+      });
+      await waitFor(() => expect(result.current.stats?.commitCount).toBe(12));
+
+      await act(async () => {
+        await result.current.refresh();
+      });
+      expect(result.current.errorSeverity).toBe("transient");
+    });
+
+    it("retries a first failure quickly and backs off toward the ceiling", async () => {
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      try {
+        getCurrentMock.mockResolvedValue({ id: "p", path: "/repo" });
+        onSwitchMock.mockReturnValue(() => {});
+        getRepoStatsMock.mockRejectedValue(new Error("kaboom"));
+
+        const pollDelays = () =>
+          setTimeoutSpy.mock.calls
+            .map((call) => call[1])
+            .filter((delay): delay is number => typeof delay === "number" && delay >= 10_000);
+
+        const { result } = renderHook(() => useRepositoryStats());
+        await waitFor(() => expect(result.current.error).not.toBeNull());
+        await waitFor(() => expect(pollDelays()).toEqual([30_000]));
+
+        // Each further consecutive failure doubles the retry delay, capped at
+        // the 2-minute ceiling.
+        await act(async () => {
+          await result.current.refresh();
+        });
+        await act(async () => {
+          await result.current.refresh();
+        });
+        await act(async () => {
+          await result.current.refresh();
+        });
+        await waitFor(() => expect(pollDelays()).toEqual([30_000, 60_000, 120_000, 120_000]));
+      } finally {
+        setTimeoutSpy.mockRestore();
+      }
     });
   });
 
