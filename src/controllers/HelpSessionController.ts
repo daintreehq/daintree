@@ -30,6 +30,7 @@ import {
   asStringRecord,
 } from "./HelpSessionProvisioner";
 import { HelpVersionGate, checkAssistantVersion } from "./HelpVersionGate";
+import { LaunchNotifications, notifyLaunchFailed } from "./LaunchNotifications";
 
 const HIBERNATE_VALID_MINUTES: readonly number[] = [0, 5, 15, 30, 60, 120];
 const DEFAULT_HIBERNATE_MINUTES = 5;
@@ -39,8 +40,6 @@ const DEFAULT_HIBERNATE_MINUTES = 5;
 // countdown each time.
 const HIBERNATE_BUSY_RECHECK_MS = 2 * 60 * 1000;
 
-const RESUME_BANNER_AUTO_DISMISS_MS = 4_000;
-const SNAPSHOT_BANNER_AUTO_DISMISS_MS = 12_000;
 // The "approval ended" notice (#10042) lingers a touch longer than the
 // snapshot banner — it tells the user their per-tool grant lapsed and the
 // next call will prompt again, which is worth a beat to read.
@@ -303,67 +302,6 @@ export async function loadCustomLaunchFlags(): Promise<string[]> {
   }
 }
 
-function notifyLaunchFailed(agentId: string, reason: string): void {
-  const cfg = getAgentConfig(agentId);
-  const name = cfg?.name ?? agentId;
-  // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-  notify({
-    type: "error",
-    title: "Assistant launch failed",
-    message: `Couldn't start ${name}. ${reason}`,
-  });
-}
-
-function notifyAssistantServicesUnavailable(
-  kind: "mcp-server-not-started" | "mcp-probe-failed"
-): void {
-  notify({
-    type: "error",
-    title: "Assistant couldn't start",
-    // Mirror the inline banner's per-kind discrimination on the closed-panel
-    // fallback so the two failure modes read differently here too.
-    message:
-      kind === "mcp-probe-failed"
-        ? "Daintree's assistant services didn't respond in time. Check assistant settings, then try again."
-        : "Daintree's assistant services didn't start. Check assistant settings, then try again.",
-    action: {
-      label: "Open settings",
-      actionId: "app.settings.openTab",
-      actionArgs: { tab: "assistant" },
-      onClick: () => {
-        void actionService.dispatch("app.settings.openTab", { tab: "assistant" });
-      },
-    },
-  });
-}
-
-// Mirrors the `folder-unavailable` banner's primary recovery affordance on
-// the closed-panel toast. Single action keeps parity with the established
-// `notifyAssistantServicesUnavailable` shape; the secondary "Open logs" CTA
-// on the banner is reachable by reopening the panel.
-function notifyInstallCorrupted(agentId: string): void {
-  const cfg = getAgentConfig(agentId);
-  const name = cfg?.name ?? agentId;
-  // eslint-disable-next-line no-restricted-syntax -- notify-event-kind: ok
-  notify({
-    type: "error",
-    title: "Assistant files missing",
-    message: `Couldn't start ${name}. Daintree's bundled assistant files are missing — reinstall or check the logs.`,
-    action: {
-      label: "Open installer page",
-      actionId: "system.openExternal",
-      actionArgs: { url: "https://daintree.org/download" },
-      onClick: () => {
-        void actionService.dispatch(
-          "system.openExternal",
-          { url: "https://daintree.org/download" },
-          { source: "user" }
-        );
-      },
-    },
-  });
-}
-
 const INITIAL_SNAPSHOT: HelpSessionSnapshot = Object.freeze({
   phase: "idle",
   showResumeBanner: false,
@@ -433,8 +371,6 @@ export class HelpSessionController {
   private _isSystemSuspended = false;
   private _hibernateMinutes = DEFAULT_HIBERNATE_MINUTES;
   private _hibernateTimer: ReturnType<typeof setTimeout> | null = null;
-  private _resumeBannerTimer: ReturnType<typeof setTimeout> | null = null;
-  private _snapshotBannerTimer: ReturnType<typeof setTimeout> | null = null;
   private _grantEndedBannerTimer: ReturnType<typeof setTimeout> | null = null;
   private _disposers: Array<() => void> = [];
   /**
@@ -459,6 +395,11 @@ export class HelpSessionController {
       this._hasAutoLaunched = value;
     },
     maybeAutoLaunch: (inputs) => this._maybeAutoLaunch(inputs),
+  });
+
+  private readonly _launchNotifications = new LaunchNotifications({
+    patch: (partial) => this._patch(partial),
+    isPanelOpen: () => this._lastInputs?.isOpen === true,
   });
 
   // Bound for stable references across StrictMode re-subscribe.
@@ -566,8 +507,7 @@ export class HelpSessionController {
     }
     this._disposers = [];
     this._clearHibernateTimer();
-    this._clearResumeBannerTimer();
-    this._clearSnapshotBannerTimer();
+    this._launchNotifications.dispose();
     this._clearGrantEndedTimer();
     this._versionGate.clearCooldownTimer();
     this._clearLaunchWatchdog();
@@ -756,7 +696,7 @@ export class HelpSessionController {
         // failed early) — surfacing the banner would lie about safety.
         if (cancelled || !snapshot || !snapshot.stashRef) return;
         this._patch({ preflightSnapshot: snapshot });
-        this._armSnapshotBannerAutoDismiss();
+        this._launchNotifications.armSnapshotBannerAutoDismiss();
       })().catch((err) => {
         logError("HelpPanel: snapshot pre-flight failed", err);
       }),
@@ -1007,13 +947,11 @@ export class HelpSessionController {
   }
 
   dismissResumeBanner(): void {
-    this._clearResumeBannerTimer();
-    this._patch({ showResumeBanner: false });
+    this._launchNotifications.dismissResumeBanner();
   }
 
   dismissPreflightSnapshot(): void {
-    this._clearSnapshotBannerTimer();
-    this._patch({ preflightSnapshot: null });
+    this._launchNotifications.dismissPreflightSnapshot();
   }
 
   dismissTierMismatch(): void {
@@ -1270,17 +1208,7 @@ export class HelpSessionController {
    * toast.
    */
   private _surfaceLaunchError(agentId: string, kind: LaunchErrorKind): void {
-    if (this._lastInputs?.isOpen) {
-      this._patch({ launchError: Object.freeze({ agentId, kind }) });
-      return;
-    }
-    if (kind === "mcp-server-not-started" || kind === "mcp-probe-failed") {
-      notifyAssistantServicesUnavailable(kind);
-    } else if (kind === "folder-unavailable") {
-      notifyInstallCorrupted(agentId);
-    } else {
-      notifyLaunchFailed(agentId, "The agent didn't start. Try again.");
-    }
+    this._launchNotifications.surfaceLaunchError(agentId, kind);
   }
 
   /**
@@ -1452,36 +1380,6 @@ export class HelpSessionController {
       clearTimeout(this._hibernateTimer);
       this._hibernateTimer = null;
     }
-  }
-
-  private _clearResumeBannerTimer(): void {
-    if (this._resumeBannerTimer) {
-      clearTimeout(this._resumeBannerTimer);
-      this._resumeBannerTimer = null;
-    }
-  }
-
-  private _clearSnapshotBannerTimer(): void {
-    if (this._snapshotBannerTimer) {
-      clearTimeout(this._snapshotBannerTimer);
-      this._snapshotBannerTimer = null;
-    }
-  }
-
-  private _armResumeBannerAutoDismiss(): void {
-    this._clearResumeBannerTimer();
-    this._resumeBannerTimer = setTimeout(() => {
-      this._resumeBannerTimer = null;
-      this._patch({ showResumeBanner: false });
-    }, RESUME_BANNER_AUTO_DISMISS_MS);
-  }
-
-  private _armSnapshotBannerAutoDismiss(): void {
-    this._clearSnapshotBannerTimer();
-    this._snapshotBannerTimer = setTimeout(() => {
-      this._snapshotBannerTimer = null;
-      this._patch({ preflightSnapshot: null });
-    }, SNAPSHOT_BANNER_AUTO_DISMISS_MS);
   }
 
   /**
@@ -2140,7 +2038,7 @@ export class HelpSessionController {
             // prior session, and the renderer cannot tell from outside.
             if (resumed.resumeKind === "specific") {
               this._patch({ showResumeBanner: true });
-              this._armResumeBannerAutoDismiss();
+              this._launchNotifications.armResumeBannerAutoDismiss();
             }
             return;
           }
