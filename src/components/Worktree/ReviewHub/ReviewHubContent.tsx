@@ -501,8 +501,6 @@ export function ReviewHubContent({
   }, [worktreePath]);
 
   const {
-    handleStageFile,
-    handleUnstageFile,
     handleStageAll,
     handleUnstageAll,
     handleStageFiltered,
