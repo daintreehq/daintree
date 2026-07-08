@@ -1,5 +1,76 @@
 # Changelog
 
+## [0.23.0] - 2026-07-08
+
+A performance-focused release: the app boots 25% faster, switching back to a recent project is near-instant, agent terminals appear 5× faster, and steady-state memory drops across every process — plus a fix for the 45–60s freeze when revealing a project with backlogged terminals. A new file viewer panel opens any text file alongside your terminals, and agents now tell you why they're waiting.
+
+### Features
+
+**File viewer**
+
+- Open any text file in a read-only viewer panel — markdown gets a rendered view, with source and wrap toggles (#10982)
+- File viewer panels dock alongside terminals, keeping scroll position and view mode between dock and grid (#10988)
+
+**Agents & terminals**
+
+- Terminals now show why an agent is waiting — approval, question, error, or prompt — in the header chip, waiting popover, fleet badges, and OS notifications (#10949)
+- File links pointing outside the project offer "Reveal in File Manager" instead of dead-ending on a copy-path toast (#10947)
+
+**Memory & diagnostics**
+
+- The memory badge popover shows real totals split into app memory and terminal workloads — the actual footprint of agent CLIs and dev servers running inside terminals (#10946)
+- Background workers and utility hosts trim memory under the efficiency profile, and "Why am I slow?" gains a worker summary (#10951)
+
+**Worktrees & review**
+
+- Worktree cards show "Checking status…" while git resolves and offer "Review & Push" for unpushed commits; the review hub's clean-tree state gains a Push button naming the commit count (#10945)
+
+**macOS**
+
+- Drop a folder on the Dock icon to open it as a project (#10979)
+
+### Performance
+
+- Cold app startup is ~25% faster and warm startup ~8% faster (#10970)
+- Switching back to a recently used project is near-instant — ~70–200ms instead of a ~1.5s stall (#10965)
+- Agent terminals become visible ~5× faster after launch, and back-to-back launches no longer queue at one per second (#10972)
+- Bulk worktree creation drops from 19 seconds to under one for 20 concurrent creates (#10977)
+- Agent-output analysis costs ~3× less CPU — 30 streaming agents drop from ~12% to ~3.4% of a core (#10975)
+- Quiet git-status polls no longer re-render the whole app, cutting idle re-rendering ~75% at high worktree counts (#10978)
+- Background status polling spawns half the git subprocesses (#10974)
+- Steady-state memory drops ~87MB in a four-project benchmark via renderer purges and slimmer terminal processes (#10981), and terminal processes compact their heaps when idle (#10973)
+- Terminal resize and reflow are ~45% faster, keeping splitter drags across an 8-terminal grid under the jank threshold (#10983)
+- Hot-path sweep: faster log scrubbing and agent-state detection, less git-poll and IPC overhead, quicker first render (#10968)
+
+### Bug Fixes
+
+**Terminals & agents**
+
+- Fixed the 45–60 second renderer lockup when revealing a project view with backlogged terminals (#10957)
+- Sidebar overlay terminals spawn at their real size instead of 80×24, fixing garbled startup output and progressive corruption (#10940)
+- Agent session history is recorded exactly once per run, and relaunched terminals no longer inherit a predecessor's stale size or launch metadata (#10950)
+- A window mid-reload can no longer abort terminal crash recovery for every other window after a pty-host restart (#10969)
+- Terminal memory protection no longer goes blind to analysis-worker memory, preventing out-of-memory crashes under heavy load (#10953)
+- Composer autocomplete no longer accepts stale file matches on quick Enter/Tab, and the input tints amber when fleet broadcast is armed (#10943)
+
+**Worktrees & git**
+
+- Git changes from agents in background worktrees stream in live instead of staying invisible until a commit, and new worktrees appear immediately rather than after up to 90 seconds (#10956)
+- The forge toolbar error stripe appears only for persistent stats failures — transient blips retry quietly on a graduated backoff
+
+**UI & panels**
+
+- Cold launch shows your last project's accent color, name, and emoji on the boot skeleton instead of a gray placeholder (#10952)
+- Snoozed notifications resurface when they escalate to errors, and the "Needs attention" list shows "+N more below" instead of silently dropping threads (#10944)
+- Restored dialog, palette, and dropdown entrance animations that had degraded to fade-only snaps (#10963)
+- Lazy-loaded panels show skeletons matching their own layout instead of a browser-shaped placeholder (#10987)
+- Docked terminal title bars are draggable, and dock-to-grid drags can land in any slot (#10994, #10996)
+- Docked file panels show the inline "Move to grid" button (#10992)
+
+### Other Changes
+
+- Automatic pre-agent git stash snapshots are removed — agent starts no longer accumulate auto-stashes in `git stash`
+
 ## [0.22.0] - 2026-07-04
 
 A terminal-reliability and session-continuity release. The rendering pipeline now prioritizes whichever terminal you're looking at under heavy multi-agent load, CPU-bound work moves off the main thread, and a family of scroll and detection bugs is fixed. Closed agent sessions are now journaled and resumable from a searchable list, the empty grid becomes a recipe-forward launcher, and user plugins gain a full lifecycle — hot enable/disable, background updates, and a startup kill-switch.
