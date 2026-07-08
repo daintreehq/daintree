@@ -41,15 +41,12 @@ import {
 import { useDevServer } from "@/hooks/useDevServer";
 import { ConsoleDrawer } from "./ConsoleDrawer";
 import { useDevPreviewConsoleCapture } from "./useDevPreviewConsoleCapture";
+import { useDevPreviewCommandConfig } from "./useDevPreviewCommandConfig";
 import { DevPreviewLoadingState } from "./DevPreviewLoadingState";
 import { useIsDragging } from "@/components/DragDrop";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { computeDevServerUrl } from "./urlSync";
-import { findDevServerCandidate, findAllDevServerCandidates } from "@/utils/devServerDetection";
-import { useProjectSettings } from "@/hooks/useProjectSettings";
-import { projectClient } from "@/clients";
-import { getInvalidCommandMessage } from "@shared/utils/devCommandValidation";
 import { actionService } from "@/services/ActionService";
 import { useWebviewThrottle } from "@/hooks/useWebviewThrottle";
 import { useHasBeenVisible } from "@/hooks/useHasBeenVisible";
@@ -300,31 +297,7 @@ export function DevPreviewPane({
   const [guestWebContentsId, setGuestWebContentsId] = useState<number | undefined>(undefined);
   // Store the original guest UA so we can restore it when clearing a preset
   const originalUaRef = useRef<string | null>(null);
-  const [isAutoDetecting, setIsAutoDetecting] = useState(false);
-  // The command whose auto-detect/save attempt failed; null = no failure shown.
-  // Empty string means the attempt never resolved a command (re-detection found
-  // nothing), so retry falls back to the currently displayed candidate.
-  const [autoDetectFailedCommand, setAutoDetectFailedCommand] = useState<string | null>(null);
-  const autoDetectRef = useRef(false);
-
-  useEffect(() => {
-    if (devCommand) setAutoDetectFailedCommand(null);
-  }, [devCommand]);
-  const { saveSettings } = useProjectSettings();
-  const allDetectedRunners = useProjectSettingsStore((state) => state.allDetectedRunners);
   const isSettingsLoading = useProjectSettingsStore((state) => state.isLoading);
-
-  const candidates = useMemo(
-    () => findAllDevServerCandidates(allDetectedRunners, projectSettings?.turbopackEnabled ?? true),
-    [allDetectedRunners, projectSettings?.turbopackEnabled]
-  );
-  const primaryCandidate = candidates[0];
-  const activeCandidate = candidates.find((c) => c.command.trim() === devCommand.trim());
-  const headerLabel = activeCandidate?.name || devCommand;
-
-  const [commandInput, setCommandInput] = useState("");
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const savingRef = useRef(false);
 
   const isMountedRef = useRef(true);
   const prevStatusRef = useRef(status);
@@ -340,6 +313,30 @@ export function DevPreviewPane({
   const canGoForward = history.future.length > 0;
   const isUnconfigured =
     Boolean(currentProjectId) && !isSettingsLoading && projectSettings !== null && !devCommand;
+
+  const {
+    headerContent,
+    candidates,
+    primaryCandidate,
+    isAutoDetecting,
+    autoDetectFailedCommand,
+    handleAutoDetect,
+    handlePickCandidate,
+    pickerOpen,
+    setPickerOpen,
+    commandInput,
+    setCommandInput,
+    commandInputError,
+    handleSaveCommand,
+    handleOpenSettings,
+  } = useDevPreviewCommandConfig({
+    currentProjectId,
+    devCommand,
+    isUnconfigured,
+    projectSettings,
+    stop,
+    isMountedRef,
+  });
 
   // Hold the webview (show the loading state) while the dev server is running but the pane
   // hasn't settled onto the stable proxy origin yet (#9100). Covers two cases: the proxy port
@@ -908,146 +905,6 @@ export function DevPreviewPane({
     } else if (actionId === "devPreview.reinstallAndRestart") {
       setPendingRestartTier("reinstallAndRestart");
     }
-  }, []);
-
-  const handleAutoDetect = useCallback(
-    async (candidateCommand?: string): Promise<boolean> => {
-      if (!currentProjectId || autoDetectRef.current) return false;
-
-      autoDetectRef.current = true;
-      setIsAutoDetecting(true);
-      setAutoDetectFailedCommand(null);
-      let attemptedCommand = candidateCommand ?? "";
-      try {
-        const latestSettings = await projectClient.getSettings(currentProjectId);
-        if (!latestSettings) {
-          if (isMountedRef.current) setAutoDetectFailedCommand(attemptedCommand);
-          return false;
-        }
-
-        let command = candidateCommand;
-        if (!command) {
-          const freshRunners = await projectClient.detectRunners(currentProjectId);
-          command = findDevServerCandidate(
-            freshRunners,
-            latestSettings.turbopackEnabled ?? true
-          )?.command;
-        }
-
-        if (!command) {
-          if (isMountedRef.current) setAutoDetectFailedCommand("");
-          return false;
-        }
-        attemptedCommand = command;
-
-        await saveSettings({
-          ...latestSettings,
-          devServerCommand: command,
-          devServerAutoDetected: true,
-          devServerDismissed: false,
-        });
-
-        return true;
-      } catch (err) {
-        logError("Failed to auto-detect dev server", err);
-        if (isMountedRef.current) setAutoDetectFailedCommand(attemptedCommand);
-        return false;
-      } finally {
-        autoDetectRef.current = false;
-        if (isMountedRef.current) {
-          setIsAutoDetecting(false);
-        }
-      }
-    },
-    [currentProjectId, saveSettings]
-  );
-
-  const handlePickCandidate = useCallback(
-    (candidate: { command: string }) => {
-      void handleAutoDetect(candidate.command);
-    },
-    [handleAutoDetect]
-  );
-
-  const handleHeaderPickCandidate = useCallback(
-    async (candidate: { command: string }) => {
-      if (candidate.command.trim() === devCommand.trim()) return;
-      const saved = await handleAutoDetect(candidate.command);
-      if (saved) stop();
-    },
-    [devCommand, handleAutoDetect, stop]
-  );
-
-  const handleSaveCommand = useCallback(async () => {
-    if (!currentProjectId || savingRef.current) return;
-    const trimmed = commandInput.trim();
-    if (!trimmed || getInvalidCommandMessage(trimmed)) return;
-
-    savingRef.current = true;
-    try {
-      const latestSettings = await projectClient.getSettings(currentProjectId);
-      if (!latestSettings) return;
-
-      await saveSettings({
-        ...latestSettings,
-        devServerCommand: trimmed,
-        devServerAutoDetected: false,
-        devServerDismissed: false,
-      });
-    } catch (err) {
-      logError("Failed to save dev command", err);
-    } finally {
-      savingRef.current = false;
-    }
-  }, [currentProjectId, commandInput, saveSettings]);
-
-  const headerContent = useMemo(() => {
-    if (isUnconfigured || candidates.length === 0) return null;
-
-    return (
-      <DropdownMenu>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <DropdownMenuTrigger asChild>
-              <button
-                type="button"
-                onPointerDown={(e) => e.stopPropagation()}
-                className="flex h-6 items-center gap-1 px-1.5 rounded-sm hover:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-colors max-w-[180px]"
-                aria-label="Switch dev script"
-              >
-                <span className="min-w-0 text-xs truncate">{headerLabel}</span>
-                <ChevronDown className="h-3 w-3 shrink-0" />
-              </button>
-            </DropdownMenuTrigger>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Switch dev script</TooltipContent>
-        </Tooltip>
-        <DropdownMenuContent align="end" sideOffset={4} className="w-72 p-1">
-          {candidates.map((c) => {
-            const isActive = c.command.trim() === devCommand.trim();
-            return (
-              <DropdownMenuItem
-                key={c.id}
-                onSelect={() => void handleHeaderPickCandidate(c)}
-                className={isActive ? "bg-overlay-subtle" : ""}
-                aria-current={isActive ? "true" : undefined}
-              >
-                <span className="text-xs font-medium">{c.name}</span>
-                <code className="text-[11px] text-daintree-text/50 truncate ml-auto">
-                  {c.command}
-                </code>
-              </DropdownMenuItem>
-            );
-          })}
-        </DropdownMenuContent>
-      </DropdownMenu>
-    );
-  }, [isUnconfigured, candidates, devCommand, headerLabel, handleHeaderPickCandidate]);
-
-  const commandInputError = useMemo(() => getInvalidCommandMessage(commandInput), [commandInput]);
-
-  const handleOpenSettings = useCallback(() => {
-    void actionService.dispatch("project.settings.open", undefined, { source: "user" });
   }, []);
 
   const handleViewportPresetChange = useCallback(
