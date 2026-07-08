@@ -41,6 +41,7 @@ import { ConsoleDrawer } from "./ConsoleDrawer";
 import { useDevPreviewConsoleCapture } from "./useDevPreviewConsoleCapture";
 import { useDevPreviewCommandConfig } from "./useDevPreviewCommandConfig";
 import { useDevPreviewScrollCapture } from "./useDevPreviewScrollCapture";
+import { useDevPreviewCrashRecovery } from "./useDevPreviewCrashRecovery";
 import { DevPreviewLoadingState } from "./DevPreviewLoadingState";
 import { DevPreviewEmptyStates } from "./DevPreviewEmptyStates";
 import { useIsDragging } from "@/components/DragDrop";
@@ -258,12 +259,6 @@ export function DevPreviewPane({
   });
 
   const [blockedNav, dispatchBlockedNav] = useReducer(blockedNavReducer, null);
-  const [crashState, setCrashState] = useState<"none" | "crashed" | "unresponsive">("none");
-  const [crashDetails, setCrashDetails] = useState<{
-    reason: string;
-    exitCode: number;
-  } | null>(null);
-  const crashTimestampsRef = useRef<number[]>([]);
   const crashReloadRef = useRef<() => void>(() => {});
   const screenshotInFlightRef = useRef(false);
   const blockedNavTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -438,34 +433,17 @@ export function DevPreviewPane({
     return () => clearTimeout(timer);
   }, [status, url, phaseLabel, id, setDevPreviewConsoleOpen]);
 
-  const handleRenderProcessGone = useCallback(
-    (details: { reason: string; exitCode: number }) => {
-      const now = Date.now();
-      const timestamps = crashTimestampsRef.current.filter((ts) => now - ts < 60_000);
-      timestamps.push(now);
-      crashTimestampsRef.current = timestamps;
-
-      setCrashDetails(details);
-      setCrashState("crashed");
-
-      if (timestamps.length < 2) {
-        crashReloadRef.current();
-      } else {
-        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-        notify({
-          type: "error",
-          title: "Preview process crashed repeatedly",
-          message: `The dev preview crashed (${details.reason}) twice within 60 seconds. Auto-recovery stopped. Use Reload or Hard restart to recover.`,
-          priority: "high",
-          duration: 0,
-          context: { eventKind: "recovery", panelId: id },
-          supersedeKey: `dev-preview-crash-loop:${id}`,
-          correlationId: id,
-        });
-      }
-    },
-    [id]
-  );
+  const {
+    crashState,
+    crashDetails,
+    handleRenderProcessGone,
+    resetCrashHistory,
+    clearUnresponsiveState,
+  } = useDevPreviewCrashRecovery({
+    id,
+    currentUrl,
+    crashReloadRef,
+  });
 
   const {
     isWebviewReady,
@@ -677,11 +655,9 @@ export function DevPreviewPane({
   }, [id, isConsoleOpen, setDevPreviewConsoleOpen]);
 
   const handleHardReload = useCallback(() => {
-    setCrashState("none");
-    setCrashDetails(null);
-    crashTimestampsRef.current = [];
+    resetCrashHistory();
     performReload();
-  }, [performReload]);
+  }, [resetCrashHistory, performReload]);
 
   // Keep crashReloadRef in sync so onRenderProcessGone can call performReload
   // before it exists in the lexical scope.
@@ -777,9 +753,7 @@ export function DevPreviewPane({
     setIsLoading(false);
     setIsWebviewReady(false);
     setWebviewLoadError(null);
-    setCrashState("none");
-    setCrashDetails(null);
-    crashTimestampsRef.current = [];
+    resetCrashHistory();
   }, [
     id,
     setBrowserUrl,
@@ -789,6 +763,7 @@ export function DevPreviewPane({
     setIsLoading,
     setIsWebviewReady,
     setWebviewLoadError,
+    resetCrashHistory,
   ]);
 
   const handleRestartDevServer = useCallback(() => {
@@ -970,9 +945,7 @@ export function DevPreviewPane({
     if (isEvicted) {
       // Clear crash state so a restored panel doesn't surface a stale banner.
       // The eviction placeholder owns the visual signal in that window.
-      setCrashState("none");
-      setCrashDetails(null);
-      crashTimestampsRef.current = [];
+      resetCrashHistory();
     }
     if (isEvicted && webviewRef.current) {
       try {
@@ -987,7 +960,7 @@ export function DevPreviewPane({
       clearLoadTimers();
       clearRetryState();
     }
-  }, [isEvicted, captureScrollViaCdp, clearLoadTimers, clearRetryState]);
+  }, [isEvicted, resetCrashHistory, captureScrollViaCdp, clearLoadTimers, clearRetryState]);
 
   useWebviewThrottle(id, location, isEvicted ? null : webviewElement, isWebviewReady && !isEvicted);
 
@@ -1098,40 +1071,6 @@ export function DevPreviewPane({
       }
     };
   }, [id, webviewElement]);
-
-  // Listen for webview unresponsive/responsive events from the main process
-  useEffect(() => {
-    const cleanupUnresponsive = window.electron.webview.onUnresponsive((data) => {
-      if (data.panelId !== id) return;
-      setCrashState((prev) => (prev === "crashed" ? prev : "unresponsive"));
-    });
-    const cleanupResponsive = window.electron.webview.onResponsive((data) => {
-      if (data.panelId !== id) return;
-      setCrashState((prev) => (prev === "unresponsive" ? "none" : prev));
-    });
-    return () => {
-      cleanupUnresponsive();
-      cleanupResponsive();
-    };
-  }, [id]);
-
-  // Clear crash state when the user navigates to a fresh URL. Depending on
-  // crashState here would create an instant-reset loop: the effect would fire
-  // the moment crashState transitions from "none" and clear it back. Track the
-  // last URL we cleared at via a ref so this effect runs only on real URL
-  // transitions.
-  const lastClearedCrashUrlRef = useRef<string>(currentUrl);
-  useEffect(() => {
-    if (currentUrl === lastClearedCrashUrlRef.current) return;
-    lastClearedCrashUrlRef.current = currentUrl;
-    if (currentUrl && currentUrl !== "about:blank") {
-      setCrashState("none");
-      setCrashDetails(null);
-      // Don't carry the prior URL's crash history into the new URL's 60s
-      // window — that would mis-throttle the first auto-recovery there.
-      crashTimestampsRef.current = [];
-    }
-  }, [currentUrl]);
 
   // Listen for the reload shortcut (Cmd/Ctrl+R) forwarded from the focused
   // webview guest. When the guest has focus, the outer renderer's keybinding
@@ -1493,11 +1432,7 @@ export function DevPreviewPane({
                           ]}
                         />
                       }
-                      onClose={() => {
-                        setCrashState("none");
-                        setCrashDetails(null);
-                        crashTimestampsRef.current = [];
-                      }}
+                      onClose={resetCrashHistory}
                     />
                   )}
                   {crashState === "unresponsive" && (
@@ -1517,7 +1452,7 @@ export function DevPreviewPane({
                           ariaLabel: "Hard restart preview",
                         },
                       ]}
-                      onClose={() => setCrashState("none")}
+                      onClose={clearUnresponsiveState}
                     />
                   )}
                   {isLoading && (
