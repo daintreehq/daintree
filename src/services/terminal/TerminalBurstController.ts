@@ -7,6 +7,11 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 // matches the keystroke input-burst decay so a scroll feels just as responsive.
 const WHEEL_BURST_DECAY_MS = 1000;
 
+// Background-drain hold window for a pending keystroke echo. An echo normally
+// lands within a frame or two; the cap only bounds the hold when no echo comes
+// back at all (wedged pty, remote shell lag) so sibling drains can't starve.
+const ECHO_PENDING_HOLD_MAX_MS = 150;
+
 // Interactive resource-profile override (symptom B): while actively scrolling a
 // full-screen TUI, ask the main process to hold the profile off efficiency.
 // DURATION must exceed THROTTLE so re-requests overlap and the hold never lapses
@@ -32,8 +37,47 @@ export class TerminalBurstController {
   private lastActiveWheelAt = 0;
   // Throttle for the interactive resource-profile override IPC (see onActiveWheel).
   private lastInteractiveOverrideRequestAt = 0;
+  // Keystroke-echo round trip in flight: input left for the PTY and its echo
+  // has not been delivered yet. While set (bounded by ECHO_PENDING_HOLD_MAX_MS),
+  // the ingest service holds background drains so the echo's port delivery,
+  // parse, and render aren't queued behind sibling parse slices (#10948-class
+  // "focused terminal stops responding under load" regressions).
+  private echoPendingId: string | null = null;
+  private echoPendingAt = 0;
+  private echoPendingGen = 0;
 
   constructor(private deps: TerminalBurstControllerDeps) {}
+
+  /** Keyboard input left for this terminal's PTY — arm the echo-pending hold. */
+  onEchoPendingInput(id: string): void {
+    this.echoPendingId = id;
+    this.echoPendingAt = Date.now();
+    this.echoPendingGen++;
+  }
+
+  /**
+   * Data arrived for the echo-pending terminal. Release siblings one frame
+   * later so the echo's own render gets scheduled ahead of the backlog their
+   * drains are about to enqueue. The generation guard keeps a release scheduled
+   * for keystroke N from clearing a hold re-armed by keystroke N+1.
+   */
+  onEchoData(id: string): void {
+    if (this.echoPendingId !== id) return;
+    const gen = this.echoPendingGen;
+    requestAnimationFrame(() => {
+      if (this.echoPendingGen === gen && this.echoPendingId === id) {
+        this.echoPendingId = null;
+      }
+    });
+  }
+
+  // Which terminal has a keystroke echo in flight (bounded by
+  // ECHO_PENDING_HOLD_MAX_MS), for the ingest service's background-drain hold.
+  getEchoPendingHoldId(): string | null {
+    return this.echoPendingId !== null && Date.now() - this.echoPendingAt < ECHO_PENDING_HOLD_MAX_MS
+      ? this.echoPendingId
+      : null;
+  }
 
   // Whether a wheel-driven BURST gesture is still within its decay window —
   // and if so, which terminal it targets. Consumed by the worker-ingest data

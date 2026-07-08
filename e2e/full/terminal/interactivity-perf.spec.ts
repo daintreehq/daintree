@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- window bridges are untyped in Playwright evaluate() */
 import { test, expect } from "@playwright/test";
-import { writeFileSync, mkdirSync } from "fs";
+import { writeFileSync, mkdirSync, readFileSync, existsSync } from "fs";
 import path from "path";
 import { tmpdir } from "os";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
@@ -109,6 +109,8 @@ interface RoundRecord {
   t1: number | null;
   t4: number | null;
   t5: number | null;
+  /** onRender that confirmed the sentinel (paint scheduled/drawn). */
+  t5r: number | null;
   t6: number | null;
   bytes: number;
   confirmed: boolean;
@@ -127,6 +129,16 @@ interface CellMetrics {
   ptyRoundTripMeanMs: number;
   parseMeanMs: number;
   paintMeanMs: number;
+  /** t5→t5r: parse-complete to the confirming xterm render. */
+  renderScheduleMeanMs: number;
+  /** t5r→t6: confirming render to the next rAF (presentation approximation). */
+  presentMeanMs: number;
+  /** terminalClient write→port-data-arrival (INPUT_ECHO_LATENCY marks): the cross-process transport slice of the round trip. */
+  portEchoMeanMs: number;
+  portEchoP95Ms: number;
+  /** pty-host input-received → echo-dispatched (host-internal turnaround, host clock). */
+  hostTurnaroundMeanMs: number;
+  hostTurnaroundP95Ms: number;
   repaintBytesPerKeystroke: number;
   frameGapP50Ms: number;
   frameGapP95Ms: number;
@@ -301,6 +313,9 @@ function buildRounds(total: number): RoundSpec[] {
 
 async function installProbe(page: any, panelId: string): Promise<void> {
   await page.evaluate((id: string) => {
+    // Seed the perf-marks buffer so markRendererPerformance records
+    // INPUT_ECHO_LATENCY pairs (terminalClient samples every write under E2E).
+    (window as any).__DAINTREE_PERF_MARKS__ ||= [];
     const term = (window as any).__daintreeGetTerminalForE2E?.(id);
     if (!term) throw new Error(`interactivity probe: no terminal for panel ${id}`);
     const probe: any = {
@@ -361,6 +376,7 @@ async function installProbe(page: any, panelId: string): Promise<void> {
       if (!c || c.confirmed || c.t4 === null) return;
       if (!isConfirmedNow()) return;
       c.confirmed = true;
+      c.t5r = performance.now();
       requestAnimationFrame((ts) => {
         c.t6 = ts;
         c.done = true;
@@ -400,6 +416,7 @@ async function installProbe(page: any, panelId: string): Promise<void> {
         t1: null,
         t4: null,
         t5: null,
+        t5r: null,
         t6: null,
         bytes: 0,
         confirmed: false,
@@ -423,6 +440,7 @@ async function installProbe(page: any, panelId: string): Promise<void> {
         t1: c.t1,
         t4: c.t4,
         t5: c.t5,
+        t5r: c.t5r,
         t6: c.t6,
         bytes: c.bytes,
         confirmed: c.confirmed,
@@ -501,8 +519,12 @@ async function runRound(page: any, panelId: string, spec: RoundSpec): Promise<vo
 function computeMetrics(
   rounds: RoundRecord[],
   frameGaps: number[],
-  loaf: { count: number; totalMs: number; max: number }
+  loaf: { count: number; totalMs: number; max: number },
+  portEchoLatencies: number[],
+  hostTurnarounds: number[] = []
 ): CellMetrics {
+  const sortedPortEcho = [...portEchoLatencies].sort((a, b) => a - b);
+  const sortedHost = [...hostTurnarounds].sort((a, b) => a - b);
   const measured = rounds.filter((r) => r.measured);
   const ok = measured.filter((r) => !r.timedOut && r.t6 !== null && (r.stamp ?? r.t0) !== null);
   const start = (r: RoundRecord) => (r.stamp !== null && r.stamp > 0 ? r.stamp : (r.t0 as number));
@@ -523,6 +545,14 @@ function computeMetrics(
     ptyRoundTripMeanMs: seg((r) => (r.t4 !== null && r.t1 !== null ? r.t4 - r.t1 : null)),
     parseMeanMs: seg((r) => (r.t5 !== null && r.t4 !== null ? r.t5 - r.t4 : null)),
     paintMeanMs: seg((r) => (r.t6 !== null && r.t5 !== null ? Math.max(0, r.t6 - r.t5) : null)),
+    renderScheduleMeanMs: seg((r) =>
+      r.t5r !== null && r.t5 !== null ? Math.max(0, r.t5r - r.t5) : null
+    ),
+    presentMeanMs: seg((r) => (r.t6 !== null && r.t5r !== null ? Math.max(0, r.t6 - r.t5r) : null)),
+    portEchoMeanMs: mean(sortedPortEcho),
+    portEchoP95Ms: pct(sortedPortEcho, 95),
+    hostTurnaroundMeanMs: mean(sortedHost),
+    hostTurnaroundP95Ms: pct(sortedHost, 95),
     repaintBytesPerKeystroke: mean(ok.map((r) => r.bytes)),
     frameGapP50Ms: pct(sortedGaps, 50),
     frameGapP95Ms: pct(sortedGaps, 95),
@@ -539,7 +569,7 @@ function fmtCell(r: CellResult): string {
   return (
     `${r.cell.padEnd(15)} n=${String(m.samples).padStart(3)} to=${m.timeouts}` +
     ` paint p50=${m.keystrokePaintP50Ms.toFixed(1).padStart(7)} p95=${m.keystrokePaintP95Ms.toFixed(1).padStart(7)} p99=${m.keystrokePaintP99Ms.toFixed(1).padStart(7)}` +
-    ` | q=${m.inputQueueMeanMs.toFixed(1)} enc=${m.inputEncodeMeanMs.toFixed(1)} rtt=${m.ptyRoundTripMeanMs.toFixed(1)} parse=${m.parseMeanMs.toFixed(1)} paint=${m.paintMeanMs.toFixed(1)}` +
+    ` | q=${m.inputQueueMeanMs.toFixed(1)} enc=${m.inputEncodeMeanMs.toFixed(1)} rtt=${m.ptyRoundTripMeanMs.toFixed(1)} (port=${m.portEchoMeanMs.toFixed(1)} host=${m.hostTurnaroundMeanMs.toFixed(1)}) parse=${m.parseMeanMs.toFixed(1)} paint=${m.paintMeanMs.toFixed(1)} (rs=${m.renderScheduleMeanMs.toFixed(1)}+pr=${m.presentMeanMs.toFixed(1)})` +
     ` | gap p95=${m.frameGapP95Ms.toFixed(1)} fps=${m.fpsDuringMeasurement.toFixed(0)} loaf=${m.loafCount}` +
     ` | bytes/key=${m.repaintBytesPerKeystroke.toFixed(0)} [${r.rendererMode ?? "?"}]`
   );
@@ -562,6 +592,7 @@ perfDescribe("Perf: keystroke-to-paint interactivity (PERF-120..122)", () => {
       mkdirSync(scriptsDir, { recursive: true });
       const composerSimPath = path.join(scriptsDir, "composer-sim.js");
       const replayPath = path.join(scriptsDir, "corpus-replay.js");
+      const hostMarksPath = path.join(scriptsDir, "perf-marks.ndjson");
       writeFileSync(composerSimPath, composerSimSource());
       writeFileSync(replayPath, corpusReplaySource());
 
@@ -570,8 +601,16 @@ perfDescribe("Perf: keystroke-to-paint interactivity (PERF-120..122)", () => {
         // enableWebgl matches production rendering and keeps the GPU process
         // out-of-process — the local-macOS --in-process-gpu default makes a
         // compositor fault under sustained terminal streaming fatal to the app
-        // (see store-fanout-perf.spec.ts).
-        ctx = await launchApp({ enableWebgl: true });
+        // (see store-fanout-perf.spec.ts). PERF_CAPTURE arms the terminalClient
+        // echo probe (write→port-arrival INPUT_ECHO_LATENCY marks, sampled
+        // every write under E2E) for transport attribution.
+        ctx = await launchApp({
+          enableWebgl: true,
+          env: {
+            DAINTREE_PERF_CAPTURE: "1",
+            DAINTREE_PERF_METRICS_FILE: hostMarksPath,
+          },
+        });
         ctx.window = await openAndOnboardProject(
           ctx.app,
           ctx.window,
@@ -687,6 +726,51 @@ perfDescribe("Perf: keystroke-to-paint interactivity (PERF-120..122)", () => {
           return snap;
         })) as { rounds: RoundRecord[]; frameGaps: number[]; loaf: any };
 
+        // Host-internal turnaround: pair each pty-host input-received mark with
+        // the first interactive echo-dispatch that follows it (same process, so
+        // elapsedMs values subtract cleanly). Diagnostic only.
+        const hostTurnarounds: number[] = [];
+        if (existsSync(hostMarksPath)) {
+          const inputMarks: number[] = [];
+          const echoMarks: number[] = [];
+          for (const line of readFileSync(hostMarksPath, "utf8").trim().split("\n")) {
+            if (!line) continue;
+            try {
+              const rec = JSON.parse(line) as {
+                mark?: string;
+                elapsedMs?: number;
+                meta?: { terminalId?: string };
+              };
+              if (rec.meta?.terminalId !== measuredPanelId) continue;
+              if (rec.mark === "terminal_port_input_written") inputMarks.push(rec.elapsedMs ?? -1);
+              if (rec.mark === "terminal_interactive_echo_dispatched")
+                echoMarks.push(rec.elapsedMs ?? -1);
+            } catch {
+              // partial line mid-append — skip
+            }
+          }
+          let echoIdx = 0;
+          for (const t of inputMarks) {
+            while (echoIdx < echoMarks.length && echoMarks[echoIdx] < t) echoIdx++;
+            if (echoIdx >= echoMarks.length) break;
+            const delta = echoMarks[echoIdx] - t;
+            if (delta >= 0 && delta < 500) hostTurnarounds.push(delta);
+          }
+        }
+
+        // Transport attribution: terminalClient write→port-arrival pairs for
+        // the measured terminal (diagnostic slice of ptyRoundTripMs).
+        const portEchoLatencies = (await page.evaluate((id: string) => {
+          const marks = ((window as any).__DAINTREE_PERF_MARKS__ ?? []) as Array<{
+            mark: string;
+            meta?: { terminalId?: string; latencyMs?: number };
+          }>;
+          return marks
+            .filter((m) => m.mark === "input_echo_latency" && m.meta?.terminalId === id)
+            .map((m) => m.meta!.latencyMs!)
+            .filter((v) => typeof v === "number" && Number.isFinite(v));
+        }, measuredPanelId)) as number[];
+
         const rendererMode = (await page.evaluate((id: string) => {
           const fn = (window as any).__daintreeGetTerminalWebGLState;
           return typeof fn === "function" ? (fn(id)?.mode ?? null) : null;
@@ -697,7 +781,13 @@ perfDescribe("Perf: keystroke-to-paint interactivity (PERF-120..122)", () => {
         }, measuredPanelId)) as { cols: number; rows: number } | null;
 
         const roundRecords = snapshot.rounds.filter((r) => r.idx >= 0);
-        const metrics = computeMetrics(roundRecords, snapshot.frameGaps, snapshot.loaf);
+        const metrics = computeMetrics(
+          roundRecords,
+          snapshot.frameGaps,
+          snapshot.loaf,
+          portEchoLatencies,
+          hostTurnarounds
+        );
         const result: CellResult = {
           cell: cell.key,
           scenarioId: cell.scenarioId,

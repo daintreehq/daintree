@@ -88,7 +88,10 @@ class TerminalInstanceService {
   private dataBuffer = new TerminalOutputIngestService(
     (id, data, chunkCount) => this.writeToTerminal(id, data, chunkCount),
     () => usePanelStore.getState().focusedId,
-    () => this.burstController.getActiveWheelHoldId()
+    // Background drains are held both during an active wheel gesture and while
+    // a keystroke echo is in flight — the same "focused feel beats background
+    // throughput" contract, applied to the two sustained interactions.
+    () => this.burstController.getActiveWheelHoldId() ?? this.burstController.getEchoPendingHoldId()
   );
   private suppressedExitUntil = new Map<string, number>();
   private unseenTracker = new TerminalUnseenOutputTracker();
@@ -501,6 +504,7 @@ class TerminalInstanceService {
     if (!managed) return;
 
     this.rendererPolicy.applyRendererPolicy(id, TerminalRefreshTier.BURST);
+    this.burstController.onEchoPendingInput(id);
 
     // A paused-backpressure pane shows a "Paused" pill; typing should refresh
     // it promptly. Fire a wake() repaint, mirroring the focus path — the held
@@ -946,6 +950,7 @@ class TerminalInstanceService {
     this.ensureHostTierSubscription();
 
     const unsubData = terminalClient.onData(id, (data: string | Uint8Array) => {
+      this.burstController.onEchoData(id);
       if (this.dataBuffer.isPolling()) return;
       // Worker-ingest diversion (issue #10960): while a terminal is in (or
       // transitioning through) worker mode, main-thread chunks route into the

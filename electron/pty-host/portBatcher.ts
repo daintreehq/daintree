@@ -107,23 +107,23 @@ export class PortBatcher {
       return true;
     }
 
+    // Echo fast-path: keystroke echo flushes synchronously. Under a saturated
+    // host loop even a setImmediate sits behind milliseconds of pending poll
+    // work, and this is the one chunk the user is actively watching for.
+    // flush() drains the full pending map, so earlier queued output for this
+    // terminal still lands ahead of the echo bytes — the batch is accelerated,
+    // never reordered or bypassed (PERF-121/122 keystroke-to-paint under
+    // flood; mirrors the synchronous threshold flush above).
+    if (interactive) {
+      this.flush();
+      return true;
+    }
+
     // Per-terminal flush cadence: each terminal owns its own (mode, immediate, timeout)
     // so a quiet terminal's first write isn't stalled by a busy sibling's throughput timer.
     if (entry.mode === "idle") {
       entry.immediateHandle = setImmediate(() => this.flush());
       entry.mode = "latency";
-    } else if (interactive) {
-      // Echo fast-path: flush() drains the full pending map, so earlier queued
-      // output for this terminal still lands ahead of the echo bytes — the
-      // batch is accelerated, never reordered or bypassed. In latency mode the
-      // immediate is already pending; in throughput mode swap the timer for an
-      // immediate (mode stays "throughput" so the ladder won't re-escalate the
-      // pending immediate back onto a 16ms timer).
-      if (entry.timeoutHandle !== null) {
-        clearTimeout(entry.timeoutHandle);
-        entry.timeoutHandle = null;
-        entry.immediateHandle = setImmediate(() => this.flush());
-      }
     } else if (entry.mode === "latency") {
       if (entry.immediateHandle !== null) {
         clearImmediate(entry.immediateHandle);
