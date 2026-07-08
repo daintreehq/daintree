@@ -1,25 +1,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo, useReducer } from "react";
 import { useBrowserActionListeners } from "@/hooks/useBrowserActionListeners";
-import {
-  AlertTriangle,
-  Check,
-  ChevronDown,
-  Copy,
-  ExternalLink,
-  OctagonAlert,
-  RotateCw,
-  XCircle,
-} from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { OctagonAlert, RotateCw } from "lucide-react";
 import { DevPreviewDestructiveConfirmDialog } from "./DevPreviewDestructiveConfirmDialog";
-import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-} from "@/components/ui/dropdown-menu";
-import { Spinner } from "@/components/ui/Spinner";
 import { usePanelStore } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
@@ -27,7 +9,6 @@ import type { BrowserHistory } from "@shared/types/browser";
 import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import { BrowserToolbar } from "../Browser/BrowserToolbar";
 import { InlineStatusBanner } from "../Terminal/InlineStatusBanner";
-import { BannerOverflowMenu } from "../Terminal/BannerOverflowMenu";
 import { DevPreviewStuckBanner, DevPreviewHmrDeadBanner } from "./DevPreviewBanners";
 import { normalizeBrowserUrl } from "../Browser/browserUtils";
 import {
@@ -43,11 +24,11 @@ import { useDevPreviewCommandConfig } from "./useDevPreviewCommandConfig";
 import { useDevPreviewScrollCapture } from "./useDevPreviewScrollCapture";
 import { useDevPreviewCrashRecovery } from "./useDevPreviewCrashRecovery";
 import { useDevPreviewViewport } from "./useDevPreviewViewport";
+import { DevPreviewWebviewOverlays } from "./DevPreviewWebviewOverlays";
 import { DevPreviewLoadingState } from "./DevPreviewLoadingState";
 import { DevPreviewEmptyStates } from "./DevPreviewEmptyStates";
 import { useIsDragging } from "@/components/DragDrop";
 import { cn } from "@/lib/utils";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { computeDevServerUrl } from "./urlSync";
 import { actionService } from "@/services/ActionService";
 import { useWebviewThrottle } from "@/hooks/useWebviewThrottle";
@@ -55,8 +36,6 @@ import { useHasBeenVisible } from "@/hooks/useHasBeenVisible";
 import { useWebviewEviction } from "@/hooks/useWebviewEviction";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useWebviewDialog } from "@/hooks/useWebviewDialog";
-import { WebviewDialog } from "../Browser/WebviewDialog";
-import { FindBar } from "../Browser/FindBar";
 import { useFindInPage } from "@/hooks/useFindInPage";
 import { useKeybindingScope } from "@/hooks/useKeybinding";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
@@ -65,13 +44,9 @@ import { isDevPreviewPanel } from "@shared/types/panel";
 import { logError } from "@/utils/logger";
 import { notify } from "@/lib/notify";
 import { loadWebviewUrl } from "./loadWebviewUrl";
-import {
-  useDevPreviewLoadLifecycle,
-  webviewLoadErrorHeading,
-  type SessionStorageEntry,
-} from "./useDevPreviewLoadLifecycle";
+import { useDevPreviewLoadLifecycle, type SessionStorageEntry } from "./useDevPreviewLoadLifecycle";
 
-import { BlockedNavBanner, blockedNavReducer } from "./BlockedNavBanner";
+import { blockedNavReducer } from "./BlockedNavBanner";
 import { looksLikeOAuthUrl } from "@shared/utils/urlUtils";
 import { buildDevPreviewProxyOrigin } from "@shared/utils/devPreviewProxy";
 import { buildDevPreviewPartition } from "@shared/utils/partitionUtils";
@@ -1194,203 +1169,36 @@ export function DevPreviewPane({
                     : undefined
                 }
               >
-                <>
-                  {reconnectAttempt > 0 && !webviewLoadError && (
-                    <div className="absolute bottom-0 left-0 right-0 z-20 flex items-center justify-center gap-2 px-3 py-1.5 text-xs bg-status-info/10 border-t border-status-info/20 text-daintree-text/70">
-                      <Spinner size="xs" />
-                      <span>Reconnecting (attempt {reconnectAttempt} of 5)...</span>
-                    </div>
-                  )}
-                  {webviewLoadError && (
-                    <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-daintree-bg text-daintree-text p-6">
-                      <AlertTriangle className="w-6 h-6 text-status-warning mb-3" />
-                      <h3 className="text-sm font-medium text-daintree-text/70 mb-1">
-                        {webviewLoadErrorHeading(webviewLoadError.code)}
-                      </h3>
-                      <p className="text-xs text-daintree-text/50 text-center mb-3 max-w-md">
-                        {webviewLoadError.message}
-                      </p>
-                      <div className="flex items-center gap-1">
-                        {webviewLoadError.code === "cert" && (
-                          <Button
-                            onClick={handleCopyMkcert}
-                            variant="ghost"
-                            size="sm"
-                            className="gap-1.5 px-2.5 py-1.5 group text-daintree-text/50 hover:text-daintree-text/70"
-                          >
-                            {certCopied ? (
-                              <Check className="h-3.5 w-3.5" />
-                            ) : (
-                              <Copy className="h-3.5 w-3.5" />
-                            )}
-                            <span className="text-xs">
-                              {certCopied ? "Copied" : "Copy `mkcert -install`"}
-                            </span>
-                          </Button>
-                        )}
-                        {webviewLoadError.code === "connection_refused" ||
-                        webviewLoadError.code === "proxy_error" ? (
-                          <>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button
-                                  onClick={handleRestartDevServer}
-                                  variant="ghost"
-                                  size="sm"
-                                  disabled={isRestarting}
-                                  className="gap-1.5 px-2.5 py-1.5 rounded-r-none group"
-                                >
-                                  <RotateCw
-                                    className={cn("h-3.5 w-3.5", isRestarting && "animate-spin")}
-                                  />
-                                  <span className="text-xs">Restart dev server</span>
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent side="bottom">Restart dev server</TooltipContent>
-                            </Tooltip>
-                            <DropdownMenu>
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <DropdownMenuTrigger asChild>
-                                    <Button
-                                      variant="ghost"
-                                      size="sm"
-                                      disabled={isRestarting}
-                                      className="px-1.5 rounded-l-none group"
-                                      aria-label="More restart options"
-                                    >
-                                      <ChevronDown className="h-3.5 w-3.5" />
-                                    </Button>
-                                  </DropdownMenuTrigger>
-                                </TooltipTrigger>
-                                <TooltipContent side="bottom">More restart options</TooltipContent>
-                              </Tooltip>
-                              <DropdownMenuContent
-                                align="end"
-                                sideOffset={4}
-                                className="min-w-[14rem] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto"
-                              >
-                                <DropdownMenuItem onSelect={handleHardReload}>
-                                  Reload preview
-                                </DropdownMenuItem>
-                                <DropdownMenuItem onSelect={handleRestartDevServer}>
-                                  Restart dev server
-                                </DropdownMenuItem>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuItem onSelect={handleRequestRestartAndClearCache}>
-                                  Restart and clear cache
-                                </DropdownMenuItem>
-                                <DropdownMenuItem onSelect={handleRequestReinstallAndRestart}>
-                                  Reinstall dependencies
-                                </DropdownMenuItem>
-                              </DropdownMenuContent>
-                            </DropdownMenu>
-                          </>
-                        ) : (
-                          <Button
-                            onClick={handleRetryWebviewLoad}
-                            variant="ghost"
-                            size="sm"
-                            className="gap-1.5 px-2.5 py-1.5 group"
-                          >
-                            <RotateCw className="h-3.5 w-3.5" />
-                            <span className="text-xs">Retry</span>
-                          </Button>
-                        )}
-                        {currentUrl && (
-                          <Button
-                            onClick={handleOpenExternal}
-                            variant="ghost"
-                            size="sm"
-                            className="gap-1.5 px-2.5 py-1.5 group text-daintree-text/50 hover:text-daintree-text/70"
-                          >
-                            <ExternalLink className="h-3.5 w-3.5" />
-                            <span className="text-xs">Open external</span>
-                          </Button>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                  <BlockedNavBanner
-                    state={blockedNav}
-                    panelId={id}
-                    webviewElement={webviewElement}
-                    onDispatch={dispatchBlockedNav}
-                  />
-                  {crashState === "crashed" && (
-                    <InlineStatusBanner
-                      icon={XCircle}
-                      title="Preview process crashed"
-                      description={
-                        crashDetails
-                          ? `Reason: ${crashDetails.reason} (exit code ${crashDetails.exitCode})`
-                          : "The renderer process terminated unexpectedly."
-                      }
-                      severity="error"
-                      animated={false}
-                      action={{
-                        id: "reload",
-                        label: "Reload",
-                        icon: RotateCw,
-                        variant: "dangerFilled",
-                        onClick: handleHardReload,
-                        ariaLabel: "Reload preview page",
-                      }}
-                      trailingSlot={
-                        <BannerOverflowMenu
-                          ariaLabel="More preview recovery options"
-                          actions={[
-                            {
-                              id: "hard-restart",
-                              label: "Hard restart",
-                              icon: RotateCw,
-                              variant: "danger",
-                              onClick: handleRestartDevServer,
-                              ariaLabel: "Hard restart preview",
-                            },
-                          ]}
-                        />
-                      }
-                      onClose={resetCrashHistory}
-                    />
-                  )}
-                  {crashState === "unresponsive" && (
-                    <InlineStatusBanner
-                      icon={AlertTriangle}
-                      title="Preview is not responding"
-                      description="The page may be stuck in a long-running operation."
-                      severity="warning"
-                      animated={false}
-                      actions={[
-                        {
-                          id: "hard-restart",
-                          label: "Hard restart",
-                          icon: RotateCw,
-                          variant: "danger",
-                          onClick: handleRestartDevServer,
-                          ariaLabel: "Hard restart preview",
-                        },
-                      ]}
-                      onClose={clearUnresponsiveState}
-                    />
-                  )}
-                  {isLoading && (
-                    <DevPreviewLoadingState
-                      variant="overlay"
-                      isLoading={isLoading}
-                      phaseLabel="Loading preview"
-                      onCancel={handleCancelLoad}
-                    />
-                  )}
-                  {showRecoverySpinner && !webviewLoadError && (
-                    <DevPreviewLoadingState
-                      variant="overlay"
-                      isLoading={isRecoveringFromEviction}
-                      phaseLabel="Rehydrating preview"
-                    />
-                  )}
-                  {isDragging && <div className="absolute inset-0 z-10 bg-transparent" />}
-                  {findInPage.isOpen && <FindBar find={findInPage} />}
+                <DevPreviewWebviewOverlays
+                  reconnectAttempt={reconnectAttempt}
+                  webviewLoadError={webviewLoadError}
+                  certCopied={certCopied}
+                  onCopyMkcert={handleCopyMkcert}
+                  isRestarting={isRestarting}
+                  onRestartDevServer={handleRestartDevServer}
+                  onHardReload={handleHardReload}
+                  onRequestRestartAndClearCache={handleRequestRestartAndClearCache}
+                  onRequestReinstallAndRestart={handleRequestReinstallAndRestart}
+                  onRetryWebviewLoad={handleRetryWebviewLoad}
+                  currentUrl={currentUrl}
+                  onOpenExternal={handleOpenExternal}
+                  blockedNav={blockedNav}
+                  panelId={id}
+                  webviewElement={webviewElement}
+                  onDispatchBlockedNav={dispatchBlockedNav}
+                  crashState={crashState}
+                  crashDetails={crashDetails}
+                  onCloseCrash={resetCrashHistory}
+                  onCloseUnresponsive={clearUnresponsiveState}
+                  isLoading={isLoading}
+                  onCancelLoad={handleCancelLoad}
+                  showRecoverySpinner={showRecoverySpinner}
+                  isRecoveringFromEviction={isRecoveringFromEviction}
+                  isDragging={isDragging}
+                  findInPage={findInPage}
+                  currentDialog={currentDialog}
+                  onDialogRespond={handleDialogRespond}
+                >
                   {/* Only the webview is scaled by zoom-to-fit; overlays above
                         stay at full size relative to the outer container so
                         their action buttons remain readable and clickable. */}
@@ -1423,8 +1231,7 @@ export function DevPreviewPane({
                       )}
                     />
                   </div>
-                  <WebviewDialog dialog={currentDialog} onRespond={handleDialogRespond} />
-                </>
+                </DevPreviewWebviewOverlays>
               </div>
             </div>
           )}
