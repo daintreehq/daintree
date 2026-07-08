@@ -104,6 +104,7 @@ import {
   detectTargetContainer,
   resolveTargetIndex,
   resolveGroupPlacementIndex,
+  resolveGridInsertionIndexFromRects,
   findGroupIndex,
   type OverDropData,
 } from "./dropResolution";
@@ -608,6 +609,11 @@ export function DndProvider({ children }: DndProviderProps) {
   // undefined before handleDragEnd fires.
   const activeWorktreeSortDataRef = useRef<Record<string, unknown> | null>(null);
 
+  // Last before/after placeholder index resolved for a given hover target during
+  // a dock→grid drag. Threaded back into the geometry helper as its previous
+  // verdict so the hysteresis dead-zone can damp per-frame oscillation.
+  const gridInsertMemoRef = useRef<{ overId: string; index: number } | null>(null);
+
   const [isCancelDrop, setIsCancelDrop] = useState(false);
 
   // Configure sensors with activation constraint so clicks work for popovers.
@@ -697,6 +703,7 @@ export function DndProvider({ children }: DndProviderProps) {
 
     setActiveId(dragId);
     terminalInstanceService.lockResize(terminalId, true);
+    gridInsertMemoRef.current = null;
 
     // Clear any pending stabilization timers from previous drags
     if (stabilizationTimerRef.current) {
@@ -717,6 +724,7 @@ export function DndProvider({ children }: DndProviderProps) {
     if (!over) {
       setOverContainer(null);
       setPlaceholderIndex(null);
+      gridInsertMemoRef.current = null;
       return;
     }
 
@@ -767,12 +775,22 @@ export function DndProvider({ children }: DndProviderProps) {
 
       const overId = over.id as string;
 
+      // A multi-panel tab group dragged as a unit still commits through the
+      // before-biased group path in handleDragEnd, so keep its placeholder on
+      // that same path to avoid a placeholder/drop mismatch. Only single
+      // docked terminals get the before/after geometry treatment below.
+      const isGroupDrag =
+        !!activeDataCurrent?.groupId &&
+        !!activeDataCurrent?.groupPanelIds &&
+        activeDataCurrent.groupPanelIds.length > 1;
+
       // Determine group index based on what we're hovering over
       let groupIndex = -1;
 
       if (overId === GRID_PLACEHOLDER_ID) {
         // Hovering over the placeholder itself - use sortable.index if available
-        // (this can happen during drag oscillation)
+        // (this can happen during drag oscillation). Keep the memoized geometry
+        // verdict so drifting back onto the panel resumes with hysteresis.
         if (overData?.sortable?.index !== undefined) {
           groupIndex = Math.min(Math.max(0, overData.sortable.index), tabGroups.length);
         } else {
@@ -791,12 +809,32 @@ export function DndProvider({ children }: DndProviderProps) {
             // Dropping on empty grid or container itself - append to end
             groupIndex = tabGroups.length;
           }
+          gridInsertMemoRef.current = null;
+        } else if (!isGroupDrag) {
+          // Directly over an existing panel: use pointer/rect geometry to allow
+          // landing AFTER it, not only before. Without this a single full-surface
+          // panel leaves no whitespace to hover, so every drop resolved to index 0.
+          const previousIndex =
+            gridInsertMemoRef.current?.overId === overId
+              ? gridInsertMemoRef.current.index
+              : undefined;
+          groupIndex = resolveGridInsertionIndexFromRects(
+            groupIndex,
+            active.rect.current.translated,
+            over.rect,
+            previousIndex
+          );
+          groupIndex = Math.min(Math.max(0, groupIndex), tabGroups.length);
+          gridInsertMemoRef.current = { overId, index: groupIndex };
+        } else {
+          gridInsertMemoRef.current = null;
         }
       }
 
       setPlaceholderIndex(groupIndex);
     } else {
       setPlaceholderIndex(null);
+      gridInsertMemoRef.current = null;
     }
   }, []);
 
@@ -859,6 +897,7 @@ export function DndProvider({ children }: DndProviderProps) {
       setActiveData(null);
       setOverContainer(null);
       setPlaceholderIndex(null);
+      gridInsertMemoRef.current = null;
 
       // ALWAYS unlock resize regardless of drop target - fixes stuck resize locks
       // when dropping outside droppable areas (over === null)
@@ -957,6 +996,14 @@ export function DndProvider({ children }: DndProviderProps) {
           "grid";
 
         const isAccordionOver = parseAccordionDragId(overId) !== null;
+        // For a single-terminal dock→grid drop landing directly on an existing
+        // panel (not the placeholder), resolve before/after by rect geometry so
+        // it commits to the same slot the placeholder previewed. Drops onto the
+        // placeholder already flow the correct index via sortable.index.
+        const dockToGridGeometry =
+          sourceLocation === "dock" && targetContainer === "grid" && !isGroupDrag
+            ? { activeRect: active.rect.current.translated, overRect: over.rect }
+            : undefined;
         const targetIndex = resolveTargetIndex(
           freshTerminalsById,
           freshTerminalIds,
@@ -964,7 +1011,8 @@ export function DndProvider({ children }: DndProviderProps) {
           targetContainer,
           overId,
           overData?.sortable?.index,
-          isAccordionOver
+          isAccordionOver,
+          dockToGridGeometry
         );
 
         // Scrollable panel grid (#8805) — no grid-full rejection, the grid
@@ -1265,6 +1313,7 @@ export function DndProvider({ children }: DndProviderProps) {
     setActiveData(null);
     setOverContainer(null);
     setPlaceholderIndex(null);
+    gridInsertMemoRef.current = null;
     setIsWorktreeSortActive(false);
     setActiveSortWorktree(null);
     // No explicit refresh needed - terminals return to original state (no layout change)
