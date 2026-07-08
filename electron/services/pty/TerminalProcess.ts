@@ -28,6 +28,7 @@ import { WriteQueue } from "./WriteQueue.js";
 import { AgentOutputForwarder } from "./AgentOutputForwarder.js";
 import { TerminalInputController } from "./TerminalInputController.js";
 import { PtyDataPipeline } from "./PtyDataPipeline.js";
+import { PreservedSnapshotCapture } from "./PreservedSnapshotCapture.js";
 import { events } from "../events.js";
 import { AgentSpawnedSchema } from "../../schemas/agent.js";
 import { destroyPty, type PooledPtyDataHandoff, type PtyPool } from "../PtyPool.js";
@@ -39,8 +40,6 @@ import { SynchronizedFrameDetector } from "./SynchronizedFrameDetector.js";
 import type { IMarker } from "@xterm/headless";
 import {
   TERMINAL_SESSION_PERSISTENCE_ENABLED,
-  isSessionPersistSuppressed,
-  persistSessionSnapshotSync,
   restoreSessionFromFile,
 } from "./terminalSessionPersistence.js";
 import { SessionSnapshotter, createTerminalSessionSnapshotter } from "./SessionSnapshotter.js";
@@ -155,6 +154,7 @@ export class TerminalProcess {
   private writeQueue!: WriteQueue;
   private inputController!: TerminalInputController;
   private ptyDataPipeline!: PtyDataPipeline;
+  private preservedSnapshotCapture!: PreservedSnapshotCapture;
   private readonly processTreeKiller: ProcessTreeKiller;
   private readonly lifecycle = new TerminalProcessLifecycle();
 
@@ -476,6 +476,23 @@ export class TerminalProcess {
       },
       emitData: (data) => self.emitData(data),
       queueAgentOutput: (agentId, data) => self.queueAgentOutput(agentId, data),
+    });
+    this.preservedSnapshotCapture = new PreservedSnapshotCapture({
+      get id() {
+        return self.id;
+      },
+      get terminalInfo() {
+        return self.terminalInfo;
+      },
+      get analysis() {
+        return self.analysis;
+      },
+      get isDisposed() {
+        return self.lifecycle.isDisposed;
+      },
+      serializeForPersistence: () => self.serializeForPersistence(),
+      disposeHeadless: () => self.disposeHeadless(),
+      onPreserved: () => self.callbacks.onPreserved?.(self.id),
     });
     this.exitObservers = new TerminalExitObservers({
       id: this.id,
@@ -814,115 +831,8 @@ export class TerminalProcess {
     terminal.serializeAddon = undefined;
   }
 
-  /**
-   * Preserved exited terminals don't need a live headless xterm — the buffer
-   * is final. Serialize it once, cache the string on `terminalInfo`, and
-   * dispose the headless instance (Unicode11 + SerializeAddon + scrollback
-   * CircularList, ~15-30 MB per exited terminal). Serialization runs inside a
-   * sentinel `write("")` callback so xterm's async parser queue is fully
-   * drained first — the tail of the output must land in the buffer, and
-   * disposing with queued writes throws against the torn-down core.
-   *
-   * On serialize failure the live headless instance is kept: serving the
-   * existing buffer beats serving nothing, at the cost of the memory.
-   */
   private snapshotAndDisposePreserved(): void {
-    if (this.analysis.kind === "worker") {
-      this.snapshotAndDisposePreservedViaWorker();
-      return;
-    }
-    const terminal = this.terminalInfo;
-    const headless = terminal.headlessTerminal;
-    if (!headless || !terminal.serializeAddon) {
-      return;
-    }
-    // Route the drain-sentinel through the scheduler: it fires only after all
-    // feeds held for this terminal have been released AND parsed, preserving
-    // the "tail of the output must land in the buffer" contract now that
-    // chunks can be held outside xterm's own write queue.
-    headlessMirrorScheduler.flush(this.id, headless, () => {
-      if (terminal.headlessTerminal !== headless || !terminal.serializeAddon) {
-        return;
-      }
-      let snapshot: string;
-      try {
-        snapshot = terminal.serializeAddon.serialize();
-      } catch (error) {
-        console.error(`[TerminalProcess] Failed to snapshot preserved terminal ${this.id}:`, error);
-        return;
-      }
-      // sessionSnapshotter.dispose() already ran in the onExit handler,
-      // cancelling any debounced write — flush the final state to disk
-      // directly so crash recovery sees the post-exit buffer (#3177).
-      // Banner-aware like flushSyncOnKill; same gates (agent sessions are
-      // never replayed by crash recovery).
-      if (
-        TERMINAL_SESSION_PERSISTENCE_ENABLED &&
-        !isSessionPersistSuppressed() &&
-        !terminal.launchAgentId
-      ) {
-        try {
-          persistSessionSnapshotSync(this.id, this.serializeForPersistence() ?? snapshot);
-        } catch {
-          // best-effort only
-        }
-      }
-      terminal.preservedSnapshot = snapshot;
-      // Stamp capture time so eviction (issue #10839) sorts oldest-first. Do
-      // NOT seed preservedSnapshotLastAccessedAt here: a freshly-captured
-      // snapshot has not been viewed, and treating it as recently-accessed
-      // would shield a burst of just-exited terminals from the cap. The access
-      // stamp is set only on a real serialize request.
-      terminal.preservedAt = Date.now();
-      // The buffer is final from here on: bump the epoch so the next wake
-      // serves the preserved snapshot, and zero the parse counter (disposed
-      // headless write callbacks never fire) so that serve can serve-mark.
-      terminal.contentEpoch++;
-      terminal.pendingHeadlessWrites = 0;
-      this.disposeHeadless();
-      // Bound the in-memory preserved-snapshot count now that this terminal's
-      // snapshot is actually present — counting it (unlike an onExit-time sweep)
-      // keeps the cap accurate under bursts of simultaneous exits.
-      this.callbacks.onPreserved?.(this.id);
-    });
-  }
-
-  // Worker-mode counterpart of the in-thread capture above: the drain +
-  // serialize happens in the worker slot; on failure the slot is kept alive
-  // (serving the live buffer beats serving nothing), matching the in-thread
-  // keep-on-serialize-failure semantics.
-  private snapshotAndDisposePreservedViaWorker(): void {
-    const terminal = this.terminalInfo;
-    void this.analysis.captureFinalSnapshot().then(({ snapshot, persistence }) => {
-      // dispose() may have run while the capture was in flight (LRU eviction,
-      // app shutdown) — the slot is already released and the registry entry
-      // may be gone; a late snapshot must not resurrect preserved state or
-      // fire onPreserved. Mirrors the in-thread capture's same-headless-
-      // instance guard.
-      if (this.lifecycle.isDisposed) {
-        return;
-      }
-      if (snapshot === null) {
-        return;
-      }
-      if (
-        TERMINAL_SESSION_PERSISTENCE_ENABLED &&
-        !isSessionPersistSuppressed() &&
-        !terminal.launchAgentId
-      ) {
-        try {
-          persistSessionSnapshotSync(this.id, persistence ?? snapshot);
-        } catch {
-          // best-effort only
-        }
-      }
-      terminal.preservedSnapshot = snapshot;
-      terminal.preservedAt = Date.now();
-      terminal.contentEpoch++;
-      terminal.pendingHeadlessWrites = 0;
-      this.analysis.release();
-      this.callbacks.onPreserved?.(this.id);
-    });
+    this.preservedSnapshotCapture.snapshotAndDispose();
   }
 
   /**
