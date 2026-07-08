@@ -35,8 +35,8 @@ describe("useDevPreviewScrollCapture — status-transition (executeJavaScript) p
   it("captures via executeJavaScript when status transitions away from running", async () => {
     const webview = makeWebview({ executeJavaScript: vi.fn(() => Promise.resolve(120)) });
     const setDevPreviewScrollPosition = vi.fn();
-    const { rerender } = renderHook(
-      ({ status, webviewElement }: RenderProps) =>
+    const { rerender } = renderHook<ReturnType<typeof useDevPreviewScrollCapture>, RenderProps>(
+      ({ status, webviewElement }) =>
         useDevPreviewScrollCapture({
           id: PANE_ID,
           status,
@@ -62,8 +62,8 @@ describe("useDevPreviewScrollCapture — status-transition (executeJavaScript) p
   it("persists a captured scrollY of exactly 0 via executeJavaScript (no >0 guard on this path)", async () => {
     const webview = makeWebview({ executeJavaScript: vi.fn(() => Promise.resolve(0)) });
     const setDevPreviewScrollPosition = vi.fn();
-    const { rerender } = renderHook(
-      ({ status, webviewElement }: RenderProps) =>
+    const { rerender } = renderHook<ReturnType<typeof useDevPreviewScrollCapture>, RenderProps>(
+      ({ status, webviewElement }) =>
         useDevPreviewScrollCapture({
           id: PANE_ID,
           status,
@@ -87,8 +87,8 @@ describe("useDevPreviewScrollCapture — status-transition (executeJavaScript) p
   it("does not capture when the status was not previously running", async () => {
     const webview = makeWebview();
     const setDevPreviewScrollPosition = vi.fn();
-    const { rerender } = renderHook(
-      ({ status, webviewElement }: RenderProps) =>
+    const { rerender } = renderHook<ReturnType<typeof useDevPreviewScrollCapture>, RenderProps>(
+      ({ status, webviewElement }) =>
         useDevPreviewScrollCapture({
           id: PANE_ID,
           status,
@@ -216,8 +216,11 @@ describe("useDevPreviewScrollCapture — captureScrollViaCdp (frozen-safe) path"
       ),
     });
     const setDevPreviewScrollPosition = vi.fn();
-    const { result, rerender } = renderHook(
-      ({ status, webviewElement }: RenderProps) =>
+    const { result, rerender } = renderHook<
+      ReturnType<typeof useDevPreviewScrollCapture>,
+      RenderProps
+    >(
+      ({ status, webviewElement }) =>
         useDevPreviewScrollCapture({
           id: PANE_ID,
           status,
