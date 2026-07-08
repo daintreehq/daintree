@@ -389,25 +389,27 @@ describe("WorkspaceService external worktree removal", () => {
 
     it("restarts symmetrically across a setPollingEnabled pause/resume cycle", async () => {
       vi.useFakeTimers();
-      const reconcileSpy = vi
-        .spyOn(service["topologyWatcher"], "scheduleReconcile")
-        .mockImplementation(() => {});
+      try {
+        const reconcileSpy = vi
+          .spyOn(service["topologyWatcher"], "scheduleReconcile")
+          .mockImplementation(() => {});
 
-      service["topologyWatcher"]["startSafetyTimer"]();
-      service.setPollingEnabled(false);
-      expect(service["topologyWatcher"]["periodicSafetyTimer"]).toBeNull();
+        service["topologyWatcher"]["startSafetyTimer"]();
+        service.setPollingEnabled(false);
+        expect(service["topologyWatcher"]["periodicSafetyTimer"]).toBeNull();
 
-      await vi.advanceTimersByTimeAsync(90_000);
-      expect(reconcileSpy).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(90_000);
+        expect(reconcileSpy).not.toHaveBeenCalled();
 
-      service.setPollingEnabled(true);
-      // setPollingEnabled(true) also fires an immediate reconcile; clear it so
-      // the assertion isolates the restarted timer's tick.
-      reconcileSpy.mockClear();
-      await vi.advanceTimersByTimeAsync(90_000);
-      expect(reconcileSpy).toHaveBeenCalledTimes(1);
-
-      vi.useRealTimers();
+        service.setPollingEnabled(true);
+        // setPollingEnabled(true) also fires an immediate reconcile; clear it
+        // so the assertion isolates the restarted timer's tick.
+        reconcileSpy.mockClear();
+        await vi.advanceTimersByTimeAsync(90_000);
+        expect(reconcileSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });
