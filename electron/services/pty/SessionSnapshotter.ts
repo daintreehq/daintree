@@ -37,7 +37,7 @@ export interface TerminalSessionSnapshotterFactoryHost {
   getSerializedState(): string | null;
   getSerializedStateAsync(): Promise<string | null>;
   serializeForPersistence(): string | null;
-  serializeForPersistenceViaAnalysis(): string | null;
+  serializeForPersistenceViaAnalysis(): Promise<string | null>;
 }
 
 export function createTerminalSessionSnapshotter(
