@@ -1,10 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { EventEmitter } from "node:events";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
 import { fileURLToPath } from "node:url";
-import type { PanelKindConfig } from "../../../shared/config/panelKindRegistry.js";
 
 const appMock = vi.hoisted(() => ({
   getVersion: vi.fn(() => "0.0.0"),
@@ -215,24 +213,9 @@ vi.mock("../plugin/PluginDevWorkerMainBridge.js", () => ({
   PluginDevWorkerMainBridge: devWorkerMock.MockPluginDevWorkerMainBridge,
 }));
 
-import { z } from "zod";
 import { PluginService } from "../PluginService.js";
-import { events } from "../events.js";
-import { PluginProcessManager, type ManagedChildProcess } from "../plugin/PluginProcessManager.js";
-import {
-  getPluginCapabilityConsentService,
-  _resetPluginCapabilityServicesForTest,
-} from "../plugin-capability/instances.js";
-import { getPluginActionAuditService } from "../PluginActionAuditService.js";
-import { setPtyClientRef } from "../../window/serviceRefs.js";
-import { isAuditedHandlerFailure } from "../../utils/pluginAuditMarker.js";
-import { PluginInvokeOwnershipError } from "../plugin/PluginInvokeErrors.js";
-import { getPluginManifestSchema, isPrivateOrLoopbackHostname } from "../../schemas/plugin.js";
-import {
-  BUILT_IN_PLUGIN_CAPABILITIES,
-  type PluginIpcContext,
-  type PluginManifest,
-} from "../../../shared/types/plugin.js";
+import { getPluginManifestSchema } from "../../schemas/plugin.js";
+import { type PluginIpcContext } from "../../../shared/types/plugin.js";
 import {
   registerPanelKind,
   unregisterPluginPanelKinds,
@@ -243,10 +226,7 @@ import {
 } from "../../../shared/config/toolbarButtonRegistry.js";
 import { registerPluginMenuItem, unregisterPluginMenuItems } from "../pluginMenuRegistry.js";
 import {
-  getRegisteredForgeProviders,
-  registerForgeProviderImpl,
   registerForgeProviders,
-  unregisterForgeProviderImpl,
   unregisterForgeProviderImpls,
   unregisterForgeProviders,
 } from "../forgeProviderRegistry.js";
@@ -254,11 +234,6 @@ import {
   unregisterFileDecorationProviders,
   unregisterFileDecorationProviderImpls,
 } from "../fileDecorationRegistry.js";
-import { CHANNELS } from "../../ipc/channels.js";
-import {
-  PluginBlocklistService,
-  type ParsedPluginBlocklist,
-} from "../plugin/PluginBlocklistService.js";
 
 function makeCtx(pluginId: string, overrides: Partial<PluginIpcContext> = {}): PluginIpcContext {
   return {
