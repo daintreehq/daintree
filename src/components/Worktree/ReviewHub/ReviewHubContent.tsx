@@ -13,35 +13,24 @@ import {
 import type { StagingStatus, GitStatus } from "@shared/types";
 import type { CrossWorktreeFile } from "@shared/types/ipc/git";
 import type { PushProgressEvent } from "@shared/types/ipc/gitPush";
-import type { FileDecoration } from "@shared/types/forge";
 import { isClientAppError } from "@/utils/clientAppError";
 import { cn } from "@/lib/utils";
 
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
-import {
-  X,
-  RefreshCw,
-  CheckSquare,
-  ChevronRight,
-  ExternalLink,
-  Square,
-  AlertTriangle,
-  GitBranch,
-  GitPullRequest,
-  SlidersHorizontal,
-  ChevronUp,
-  ChevronDown,
-  Search,
-} from "lucide-react";
+import { X, RefreshCw, CheckSquare, ChevronRight, AlertTriangle, GitBranch } from "lucide-react";
 import { isProtectedBranch } from "@shared/utils/gitConstants";
 import { useUIStore } from "@/store/uiStore";
 import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
-import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useKeepMounted } from "@/hooks/useKeepMounted";
-import { FileStageRow, type FileStageRowSection } from "./FileStageRow";
+import { type FileStageRowSection } from "./FileStageRow";
+import { FileSection } from "./FileSection";
+import { useReviewHubStagingActions } from "./useReviewHubStagingActions";
+import { BaseBranchFileRow } from "./BaseBranchFileRow";
+import { PushErrorBanner } from "./PushErrorBanner";
+import { PrStatusChip } from "./PrStatusChip";
 import { CommitPanel } from "./CommitPanel";
 import { ConflictPanel } from "./ConflictPanel";
 import { ReadinessRail } from "./ReadinessRail";
@@ -61,17 +50,6 @@ const LazyBaseBranchDiffModal = lazy(() =>
 import { ForcePushConfirmDialog } from "./ForcePushConfirmDialog";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuCheckboxItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-} from "@/components/ui/dropdown-menu";
-import { EmptyState } from "@/components/ui/EmptyState";
 import { debounce } from "@/utils/debounce";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useFileDecorations } from "@/hooks/useFileDecorations";
@@ -87,18 +65,13 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { classifyGitError } from "@shared/utils/gitOperationErrors";
 import {
   type DiffMode,
-  type PushBannerCta,
   type PushErrorState,
   type SectionViewState,
   DEFAULT_SECTION_STATE,
-  getPushBannerConfig,
-  isDensity,
-  isSortKey,
   matchesFilter,
   readGitErrorFields,
   sortFiles,
-  truncateFilterQuery,
-  getBaseBranchStatusConfig,
+  sumChurn,
 } from "./reviewHubUtils";
 import { isGeneratedFile } from "../generatedFileClassifier";
 
@@ -135,118 +108,7 @@ export interface ReviewHubContentProps {
   autoStageOnOpen?: boolean;
 }
 
-interface BaseBranchFileRowProps {
-  file: CrossWorktreeFile;
-  onClick: (e: React.MouseEvent<HTMLButtonElement>) => void;
-  unresolvedDecoration?: FileDecoration;
-  onBadgeClick?: () => void;
-}
-
 const selectNoProviderHealth = () => null;
-
-function BaseBranchFileRow({
-  file,
-  onClick,
-  unresolvedDecoration,
-  onBadgeClick,
-}: BaseBranchFileRowProps) {
-  const config = getBaseBranchStatusConfig(file.status);
-  const normalized = file.path.replace(/\\/g, "/");
-  const lastSlash = normalized.lastIndexOf("/");
-  const dir = lastSlash === -1 ? "" : normalized.slice(0, lastSlash);
-  const base = lastSlash === -1 ? normalized : normalized.slice(lastSlash + 1);
-  const insertions = file.insertions ?? 0;
-  const deletions = file.deletions ?? 0;
-  const hasChurn = insertions > 0 || deletions > 0;
-  // Provider-authored badge semantics: the count lives in `decoration.badge`
-  // and the accessible label in `decoration.tooltip` — the host must never
-  // re-derive English phrases from a numeric count (issue #9953). The
-  // badge is rendered only when a provider explicitly attached a
-  // non-empty `badge`; the click target only when a `url` is present.
-  const hasBadge =
-    typeof unresolvedDecoration?.badge === "string" && unresolvedDecoration.badge.length > 0;
-  const badgeLabel = unresolvedDecoration?.tooltip ?? `Unresolved review comments on ${file.path}`;
-
-  return (
-    <TruncatedTooltip content={file.path}>
-      <div
-        className={cn(
-          "group/baserow w-full flex items-center text-xs rounded px-1.5 py-1.5",
-          "hover:bg-tint/5 transition-colors"
-        )}
-      >
-        <button
-          type="button"
-          onClick={onClick}
-          className={cn(
-            "relative flex min-w-0 flex-1 items-baseline rounded text-left",
-            "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
-          )}
-        >
-          <span
-            aria-hidden="true"
-            className={cn(
-              "inline-flex items-center justify-center rounded-sm px-1 mr-2 shrink-0",
-              "text-[10px] font-medium leading-4 h-4 min-w-[16px]",
-              config.bg,
-              config.text
-            )}
-          >
-            {config.label}
-          </span>
-          {dir && (
-            <span
-              data-testid="base-branch-file-row-dir"
-              className={cn(
-                "shrink truncate font-mono text-[11px] transition-colors",
-                "text-daintree-text/50 group-hover/baserow:text-daintree-text/70"
-              )}
-            >
-              {dir}/
-            </span>
-          )}
-          <span
-            data-testid="base-branch-file-row-base"
-            className={cn(
-              "shrink truncate font-medium font-mono text-[11px] transition-colors",
-              "text-daintree-text group-hover/baserow:text-daintree-text"
-            )}
-          >
-            {base}
-          </span>
-        </button>
-        {hasChurn && (
-          <div
-            data-testid="base-branch-file-row-churn"
-            className="ml-2 flex items-center gap-1 shrink-0 text-[10px] tabular-nums"
-          >
-            {insertions > 0 && <span className="text-status-success/80">+{insertions}</span>}
-            {deletions > 0 && <span className="text-status-error/80">-{deletions}</span>}
-          </div>
-        )}
-        {hasBadge && (
-          <button
-            type="button"
-            onClick={onBadgeClick}
-            aria-label={badgeLabel}
-            disabled={!onBadgeClick}
-            className={cn(
-              "shrink-0 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 ml-2 rounded-full",
-              "text-[10px] font-semibold tabular-nums",
-              "bg-status-warning/15 text-status-warning",
-              onBadgeClick
-                ? "hover:bg-status-warning/25 transition-colors cursor-pointer"
-                : "cursor-default",
-              "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-status-warning"
-            )}
-          >
-            {unresolvedDecoration!.badge}
-          </button>
-        )}
-      </div>
-    </TruncatedTooltip>
-  );
-}
 
 /**
  * Self-contained Review & Commit surface. All staging-status fetches,
@@ -331,7 +193,6 @@ export function ReviewHubContent({
   // Row element that opened a diff modal; AppDialog falls back to it when the
   // trigger unmounted (e.g. the file left the list while the modal was open).
   const diffTriggerRef = useRef<HTMLElement | null>(null);
-  const isBulkStagingRef = useRef(false);
   // One-shot guard for the auto-stage-on-open behavior. Resets in the close
   // branch of the isOpen effect so reopening re-arms the check.
   const hasAutoStagedRef = useRef(false);
@@ -432,29 +293,9 @@ export function ReviewHubContent({
     row?.scrollIntoView({ behavior: "instant", block: "nearest" });
   }, [focusedIndex]);
 
-  const stagedChurn = useMemo(
-    () =>
-      derivedStaged.reduce(
-        (acc, f) => ({
-          ins: acc.ins + (f.insertions ?? 0),
-          del: acc.del + (f.deletions ?? 0),
-        }),
-        { ins: 0, del: 0 }
-      ),
-    [derivedStaged]
-  );
+  const stagedChurn = useMemo(() => sumChurn(derivedStaged), [derivedStaged]);
 
-  const unstagedChurn = useMemo(
-    () =>
-      derivedUnstaged.reduce(
-        (acc, f) => ({
-          ins: acc.ins + (f.insertions ?? 0),
-          del: acc.del + (f.deletions ?? 0),
-        }),
-        { ins: 0, del: 0 }
-      ),
-    [derivedUnstaged]
-  );
+  const unstagedChurn = useMemo(() => sumChurn(derivedUnstaged), [derivedUnstaged]);
 
   const sortedBaseBranchFiles = useMemo(
     () =>
@@ -467,14 +308,7 @@ export function ReviewHubContent({
   );
 
   const baseBranchChurn = useMemo(
-    () =>
-      sortedBaseBranchFiles?.reduce(
-        (acc, f) => ({
-          ins: acc.ins + (f.insertions ?? 0),
-          del: acc.del + (f.deletions ?? 0),
-        }),
-        { ins: 0, del: 0 }
-      ) ?? { ins: 0, del: 0 },
+    () => sumChurn(sortedBaseBranchFiles ?? []),
     [sortedBaseBranchFiles]
   );
 
@@ -666,33 +500,28 @@ export function ReviewHubContent({
     }
   }, [worktreePath]);
 
-  const handleStageFiltered = useCallback(async () => {
-    const paths = derivedUnstaged.map((f) => f.path);
-    if (paths.length === 0) return;
-    setActionError(null);
-    debouncedBgRefreshRef.current?.cancel();
-    try {
-      await window.electron.git.stageFiles(worktreePath, paths);
-    } catch (err) {
-      setActionError(formatErrorMessage(err, "Failed to stage files"));
-    } finally {
-      await refresh();
-    }
-  }, [worktreePath, refresh, derivedUnstaged]);
-
-  const handleUnstageFiltered = useCallback(async () => {
-    const paths = derivedStaged.map((f) => f.path);
-    if (paths.length === 0) return;
-    setActionError(null);
-    debouncedBgRefreshRef.current?.cancel();
-    try {
-      await window.electron.git.unstageFiles(worktreePath, paths);
-    } catch (err) {
-      setActionError(formatErrorMessage(err, "Failed to unstage files"));
-    } finally {
-      await refresh();
-    }
-  }, [worktreePath, refresh, derivedStaged]);
+  const {
+    handleStageAll,
+    handleUnstageAll,
+    handleStageFiltered,
+    handleUnstageFiltered,
+    handleStageSelection,
+    handleUnstageSelection,
+    handleToggleStaged,
+    handleToggleUnstaged,
+  } = useReviewHubStagingActions({
+    worktreePath,
+    refresh,
+    derivedStaged,
+    derivedUnstaged,
+    selectedPaths,
+    selectionSection,
+    setActionError,
+    setSelectedPaths,
+    setSelectionSection,
+    selectionAnchorRef,
+    debouncedBgRefreshRef,
+  });
 
   const backgroundRefresh = useCallback(async () => {
     if (!worktreePath) return;
@@ -931,96 +760,6 @@ export function ReviewHubContent({
       debouncedBgRefreshRef.current = null;
     };
   }, [isOpen, worktreePath, backgroundRefresh]);
-
-  const handleStageFile = useCallback(
-    async (filePath: string) => {
-      setActionError(null);
-      debouncedBgRefreshRef.current?.cancel();
-      try {
-        await window.electron.git.stageFile(worktreePath, filePath);
-        await refresh();
-      } catch (err) {
-        setActionError(formatErrorMessage(err, "Failed to stage file"));
-      }
-    },
-    [worktreePath, refresh]
-  );
-
-  const handleUnstageFile = useCallback(
-    async (filePath: string) => {
-      setActionError(null);
-      debouncedBgRefreshRef.current?.cancel();
-      try {
-        await window.electron.git.unstageFile(worktreePath, filePath);
-        await refresh();
-      } catch (err) {
-        setActionError(formatErrorMessage(err, "Failed to unstage file"));
-      }
-    },
-    [worktreePath, refresh]
-  );
-
-  const handleStageAll = useCallback(async () => {
-    setActionError(null);
-    debouncedBgRefreshRef.current?.cancel();
-    try {
-      await window.electron.git.stageAll(worktreePath);
-      await refresh();
-    } catch (err) {
-      setActionError(formatErrorMessage(err, "Failed to stage all files"));
-    }
-  }, [worktreePath, refresh]);
-
-  const handleUnstageAll = useCallback(async () => {
-    setActionError(null);
-    debouncedBgRefreshRef.current?.cancel();
-    try {
-      await window.electron.git.unstageAll(worktreePath);
-      await refresh();
-    } catch (err) {
-      setActionError(formatErrorMessage(err, "Failed to unstage all files"));
-    }
-  }, [worktreePath, refresh]);
-
-  const handleStageSelection = useCallback(async () => {
-    if (isBulkStagingRef.current) return;
-    if (selectionSection !== "unstaged" || selectedPaths.size === 0) return;
-    isBulkStagingRef.current = true;
-    const paths = Array.from(selectedPaths);
-    setActionError(null);
-    debouncedBgRefreshRef.current?.cancel();
-    try {
-      await window.electron.git.stageFiles(worktreePath, paths);
-      setSelectedPaths(new Set());
-      setSelectionSection(null);
-      selectionAnchorRef.current = null;
-      await refresh();
-    } catch (err) {
-      setActionError(formatErrorMessage(err, "Failed to stage selected files"));
-    } finally {
-      isBulkStagingRef.current = false;
-    }
-  }, [worktreePath, refresh, selectedPaths, selectionSection]);
-
-  const handleUnstageSelection = useCallback(async () => {
-    if (isBulkStagingRef.current) return;
-    if (selectionSection !== "staged" || selectedPaths.size === 0) return;
-    isBulkStagingRef.current = true;
-    const paths = Array.from(selectedPaths);
-    setActionError(null);
-    debouncedBgRefreshRef.current?.cancel();
-    try {
-      await window.electron.git.unstageFiles(worktreePath, paths);
-      setSelectedPaths(new Set());
-      setSelectionSection(null);
-      selectionAnchorRef.current = null;
-      await refresh();
-    } catch (err) {
-      setActionError(formatErrorMessage(err, "Failed to unstage selected files"));
-    } finally {
-      isBulkStagingRef.current = false;
-    }
-  }, [worktreePath, refresh, selectedPaths, selectionSection]);
 
   const handleCommit = useCallback(
     async (message: string) => {
@@ -1297,20 +1036,6 @@ export function ReviewHubContent({
     savedScrollTop.current = e.currentTarget.scrollTop;
   }, []);
 
-  const handleToggleStaged = useCallback(
-    (filePath: string) => {
-      void handleUnstageFile(filePath);
-    },
-    [handleUnstageFile]
-  );
-
-  const handleToggleUnstaged = useCallback(
-    (filePath: string) => {
-      void handleStageFile(filePath);
-    },
-    [handleStageFile]
-  );
-
   const handleRowClick = useCallback(
     (
       section: FileStageRowSection,
@@ -1557,104 +1282,11 @@ export function ReviewHubContent({
                 <span>Protected</span>
               </span>
             )}
-            {status?.hasRemote &&
-              worktreePR &&
-              worktreePR.prUrl &&
-              (() => {
-                const ciVisual = getCIStatusVisual(worktreePR.prCiStatus);
-                const prStateLabel =
-                  worktreePR.prState === "merged"
-                    ? "merged"
-                    : worktreePR.prState === "closed" || worktreePR.prState === "declined"
-                      ? "closed"
-                      : "open";
-                return (
-                  <>
-                    <span
-                      className={cn(
-                        "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-mono",
-                        "bg-tint/[0.07] border border-tint/[0.08]"
-                      )}
-                      aria-label={
-                        ciVisual
-                          ? `Pull request #${worktreePR.prNumber} ${prStateLabel} — CI ${ciVisual.shortLabel}`
-                          : `Pull request #${worktreePR.prNumber} ${prStateLabel}`
-                      }
-                    >
-                      <GitPullRequest
-                        className={cn(
-                          "w-3 h-3 shrink-0",
-                          worktreePR.prState === "merged"
-                            ? "text-pr-merged"
-                            : worktreePR.prState === "closed" || worktreePR.prState === "declined"
-                              ? "text-pr-closed"
-                              : "text-pr-open"
-                        )}
-                      />
-                      <span
-                        className={
-                          worktreePR.prState === "merged"
-                            ? "text-pr-merged"
-                            : worktreePR.prState === "closed" || worktreePR.prState === "declined"
-                              ? "text-pr-closed"
-                              : "text-pr-open"
-                        }
-                      >
-                        #{worktreePR.prNumber}
-                      </span>
-                      <span className="text-daintree-text/40">·</span>
-                      <span className="text-daintree-text/60">{prStateLabel}</span>
-                      {ciVisual && (
-                        <>
-                          <span className="text-daintree-text/40">·</span>
-                          <span className="inline-flex items-center gap-1">
-                            <span
-                              className="inline-flex items-center justify-center w-3 h-3 shrink-0"
-                              aria-hidden="true"
-                            >
-                              {ciVisual.kind === "icon" ? (
-                                <ciVisual.Icon className={cn("w-3 h-3", ciVisual.colorClass)} />
-                              ) : (
-                                <span
-                                  className={cn("block w-2 h-2 rounded-full", ciVisual.colorClass)}
-                                />
-                              )}
-                            </span>
-                            <span
-                              className={
-                                ciVisual.kind === "icon"
-                                  ? ciVisual.colorClass
-                                  : "text-status-warning"
-                              }
-                            >
-                              {ciVisual.shortLabel}
-                            </span>
-                          </span>
-                        </>
-                      )}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => void systemClient.openExternal(worktreePR.prUrl as string)}
-                      className={cn(
-                        "inline-flex items-center justify-center p-0.5 rounded",
-                        "text-daintree-text/60 hover:bg-tint/5 hover:text-daintree-text",
-                        "transition-colors cursor-pointer",
-                        "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
-                      )}
-                      aria-label={`View pull request #${worktreePR.prNumber}`}
-                    >
-                      <ExternalLink className="w-3 h-3" />
-                    </button>
-                  </>
-                );
-              })()}
-            {status?.hasRemote && !worktreePR && (
-              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-tint/[0.07] border border-tint/[0.08] text-[11px] text-daintree-text/40">
-                <GitPullRequest className="w-3 h-3 shrink-0" />
-                <span>No PR</span>
-              </span>
-            )}
+            <PrStatusChip
+              hasRemote={status?.hasRemote}
+              worktreePR={worktreePR}
+              onOpenExternal={(url) => void systemClient.openExternal(url)}
+            />
           </div>
           <div className="flex items-center gap-2 shrink-0">
             {/* Diff mode toggle */}
@@ -1738,115 +1370,27 @@ export function ReviewHubContent({
             <span>{actionError}</span>
           </div>
         )}
-        {pushError &&
-          (() => {
-            const config = getPushBannerConfig(pushError, behindCount, forgeProviderId);
-            const canCollapse =
-              config.detailPolicy === "collapse" && pushError.rawMessage.length > 0;
-            const dispatchCta = (cta: PushBannerCta) => {
-              switch (cta.kind) {
-                case "settings-forge":
-                  void actionService.dispatch(
-                    "app.settings.openTab",
-                    { tab: "code-forge", subtab: cta.providerId },
-                    { source: "user" }
-                  );
-                  return;
-                case "retry":
-                  void handleRetryPush();
-                  return;
-                case "pull-rebase":
-                  setPullRebaseConfirmOpen(true);
-                  return;
-                case "force-push":
-                  setForcePushDialogOpen(true);
-                  return;
-              }
-            };
-            const renderCta = (
-              cta: PushBannerCta,
-              isPrimary: boolean,
-              key: string,
-              isLoading: boolean
-            ) => (
-              <button
-                key={key}
-                type="button"
-                onClick={() => dispatchCta(cta)}
-                disabled={isLoading}
-                data-testid={
-                  isPrimary ? "review-hub-push-error-cta" : "review-hub-push-error-secondary-cta"
-                }
-                data-cta-kind={cta.kind}
-                className={cn(
-                  "inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium transition-colors",
-                  "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-status-warning",
-                  "disabled:opacity-50 disabled:cursor-not-allowed",
-                  isPrimary
-                    ? "bg-status-warning/20 hover:bg-status-warning/30 text-status-warning"
-                    : "bg-filter-selected-bg-soft hover:bg-tint/[0.14] text-daintree-text/80"
-                )}
-              >
-                {isLoading && cta.kind === "pull-rebase" ? "Pulling…" : cta.label}
-              </button>
-            );
-            return (
-              <div
-                role="alert"
-                data-testid="review-hub-push-error"
-                data-reason={pushError.reason}
-                className="px-4 py-2 text-xs text-status-warning bg-status-warning/10 flex items-start gap-2 shrink-0"
-              >
-                <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <div>
-                    <span className="font-medium">Push failed.</span> <span>{config.message}</span>
-                  </div>
-                  {forgeErrorCode && (
-                    <div
-                      data-testid="review-hub-push-error-code"
-                      className="mt-1 text-[10px] font-mono opacity-80"
-                    >
-                      {forgeErrorCode}
-                    </div>
-                  )}
-                  {canCollapse && (
-                    <div className="mt-1.5 flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setShowPushDetails((prev) => !prev)}
-                        data-testid="review-hub-push-error-toggle"
-                        aria-expanded={showPushDetails}
-                        className={cn(
-                          "inline-flex items-center px-1.5 py-0.5 rounded",
-                          "text-status-warning/80 hover:text-status-warning",
-                          "text-[10px] font-medium underline-offset-2 hover:underline transition-colors",
-                          "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-status-warning"
-                        )}
-                      >
-                        {showPushDetails ? "Hide details" : "Show details"}
-                      </button>
-                    </div>
-                  )}
-                  {canCollapse && showPushDetails && (
-                    <pre
-                      data-testid="review-hub-push-error-details"
-                      className="mt-1 text-[10px] font-mono whitespace-pre-wrap break-all opacity-70"
-                    >
-                      {pushError.rawMessage}
-                    </pre>
-                  )}
-                  {(config.cta || config.secondaryCta) && (
-                    <div className="mt-1.5 flex flex-wrap items-center gap-2">
-                      {config.cta && renderCta(config.cta, true, "primary", pullRebasing)}
-                      {config.secondaryCta &&
-                        renderCta(config.secondaryCta, false, "secondary", pullRebasing)}
-                    </div>
-                  )}
-                </div>
-              </div>
-            );
-          })()}
+        {pushError && (
+          <PushErrorBanner
+            pushError={pushError}
+            behindCount={behindCount}
+            forgeProviderId={forgeProviderId}
+            forgeErrorCode={forgeErrorCode}
+            showPushDetails={showPushDetails}
+            onToggleDetails={() => setShowPushDetails((prev) => !prev)}
+            pullRebasing={pullRebasing}
+            onOpenForgeSettings={(providerId) =>
+              void actionService.dispatch(
+                "app.settings.openTab",
+                { tab: "code-forge", subtab: providerId },
+                { source: "user" }
+              )
+            }
+            onRetryPush={() => void handleRetryPush()}
+            onPullRebase={() => setPullRebaseConfirmOpen(true)}
+            onForcePush={() => setForcePushDialogOpen(true)}
+          />
+        )}
 
         {/* Content */}
         <div
@@ -2068,483 +1612,63 @@ export function ReviewHubContent({
                       )}
 
                       {/* Staged section */}
-                      <div className="border-b border-divider">
-                        <div className="flex items-center justify-between px-4 py-2 bg-overlay-subtle gap-2">
-                          <span className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60 shrink-0">
-                            Staged
-                            <span
-                              data-testid="staged-section-count-chip"
-                              className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal inline-flex items-center gap-1"
-                            >
-                              <span>
-                                {derivedStaged.length} file{derivedStaged.length !== 1 ? "s" : ""}
-                              </span>
-                              {(stagedChurn.ins > 0 || stagedChurn.del > 0) && (
-                                <>
-                                  <span aria-hidden="true" className="text-daintree-text/30">
-                                    ·
-                                  </span>
-                                  {stagedChurn.ins > 0 && (
-                                    <span className="text-status-success/80">{`+${stagedChurn.ins}`}</span>
-                                  )}
-                                  {stagedChurn.del > 0 && (
-                                    <span className="text-status-error/80">{`-${stagedChurn.del}`}</span>
-                                  )}
-                                </>
-                              )}
-                            </span>
-                          </span>
-                          <div className="flex items-center gap-1.5 min-w-0">
-                            <div className="relative flex items-center">
-                              <Search className="absolute left-1.5 w-3 h-3 text-daintree-text/30 pointer-events-none" />
-                              <input
-                                ref={stagedInputRef}
-                                type="text"
-                                placeholder="Filter…"
-                                defaultValue={stagedView.filterQuery}
-                                onChange={(e) => setStagedFilterQuery(e.target.value)}
-                                className={cn(
-                                  "w-[120px] h-5 pl-6 pr-1.5 rounded text-[11px]",
-                                  "bg-tint/[0.04] border border-tint/[0.08]",
-                                  "text-daintree-text placeholder:text-text-placeholder",
-                                  "focus:outline-hidden focus:border-daintree-accent/40",
-                                  "hover:bg-tint/[0.06] transition-colors"
-                                )}
-                              />
-                            </div>
-                            <DropdownMenu>
-                              <DropdownMenuTrigger asChild>
-                                <button
-                                  type="button"
-                                  className={cn(
-                                    "p-1 rounded transition-colors",
-                                    "text-daintree-text/40 hover:text-daintree-text hover:bg-tint/[0.06]",
-                                    "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent"
-                                  )}
-                                  aria-label="View options"
-                                >
-                                  <SlidersHorizontal className="w-3.5 h-3.5" />
-                                </button>
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end" className="min-w-[180px]">
-                                <DropdownMenuLabel>Sort by</DropdownMenuLabel>
-                                <DropdownMenuRadioGroup
-                                  value={stagedView.sortKey}
-                                  onValueChange={(v) =>
-                                    setStagedView((prev) => ({
-                                      ...prev,
-                                      sortKey: isSortKey(v) ? v : prev.sortKey,
-                                      sortDir:
-                                        prev.sortKey === v
-                                          ? prev.sortDir === "asc"
-                                            ? "desc"
-                                            : "asc"
-                                          : v === "churn"
-                                            ? "desc"
-                                            : prev.sortDir,
-                                    }))
-                                  }
-                                >
-                                  <DropdownMenuRadioItem value="path">
-                                    <span className="flex items-center gap-2 flex-1">
-                                      Path
-                                      {stagedView.sortKey === "path" &&
-                                        (stagedView.sortDir === "asc" ? (
-                                          <ChevronUp className="w-3 h-3 ml-auto text-daintree-text/40" />
-                                        ) : (
-                                          <ChevronDown className="w-3 h-3 ml-auto text-daintree-text/40" />
-                                        ))}
-                                    </span>
-                                  </DropdownMenuRadioItem>
-                                  <DropdownMenuRadioItem value="status">
-                                    <span className="flex items-center gap-2 flex-1">
-                                      Status
-                                      {stagedView.sortKey === "status" &&
-                                        (stagedView.sortDir === "asc" ? (
-                                          <ChevronUp className="w-3 h-3 ml-auto text-daintree-text/40" />
-                                        ) : (
-                                          <ChevronDown className="w-3 h-3 ml-auto text-daintree-text/40" />
-                                        ))}
-                                    </span>
-                                  </DropdownMenuRadioItem>
-                                  <DropdownMenuRadioItem value="churn">
-                                    <span className="flex items-center gap-2 flex-1">
-                                      Churn
-                                      {stagedView.sortKey === "churn" &&
-                                        (stagedView.sortDir === "asc" ? (
-                                          <ChevronUp className="w-3 h-3 ml-auto text-daintree-text/40" />
-                                        ) : (
-                                          <ChevronDown className="w-3 h-3 ml-auto text-daintree-text/40" />
-                                        ))}
-                                    </span>
-                                  </DropdownMenuRadioItem>
-                                </DropdownMenuRadioGroup>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuLabel>View</DropdownMenuLabel>
-                                <DropdownMenuRadioGroup
-                                  value={stagedView.density}
-                                  onValueChange={(v) =>
-                                    setStagedView((prev) => ({
-                                      ...prev,
-                                      density: isDensity(v) ? v : prev.density,
-                                    }))
-                                  }
-                                >
-                                  <DropdownMenuRadioItem value="comfortable">
-                                    Comfortable
-                                  </DropdownMenuRadioItem>
-                                  <DropdownMenuRadioItem value="compact">
-                                    Compact
-                                  </DropdownMenuRadioItem>
-                                </DropdownMenuRadioGroup>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuCheckboxItem
-                                  checked={stagedView.showGenerated}
-                                  onCheckedChange={(checked) =>
-                                    setStagedView((prev) => ({ ...prev, showGenerated: !!checked }))
-                                  }
-                                >
-                                  Show generated files
-                                </DropdownMenuCheckboxItem>
-                              </DropdownMenuContent>
-                            </DropdownMenu>
-                            {derivedStaged.length > 0 && (
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() =>
-                                  void (hasStagedSelection
-                                    ? handleUnstageSelection()
-                                    : stagedView.filterQuery || !stagedView.showGenerated
-                                      ? handleUnstageFiltered()
-                                      : handleUnstageAll())
-                                }
-                                className="h-5 px-1.5 text-[10px] shrink-0"
-                                data-testid="review-hub-unstage-section-button"
-                              >
-                                <Square className="w-3 h-3 mr-1" />
-                                {hasStagedSelection
-                                  ? `Unstage selection (${selectedPaths.size})`
-                                  : stagedView.filterQuery
-                                    ? `Unstage shown (${derivedStaged.length})`
-                                    : `Unstage all (${derivedStaged.length})`}
-                              </Button>
-                            )}
-                          </div>
-                        </div>
-                        {derivedStaged.length > 0 ? (
-                          <div
-                            className={cn(
-                              "px-2 py-1 flex flex-col",
-                              stagedView.density === "compact" ? "gap-0" : "gap-0.5"
-                            )}
-                          >
-                            {derivedStaged.map((file, i) => {
-                              const viewedKey = `staged:${file.path}`;
-                              return (
-                                <FileStageRow
-                                  key={`staged-${file.path}`}
-                                  id={`review-hub-row-${i}`}
-                                  rowIndex={i}
-                                  isFocused={focusedIndex === i}
-                                  file={file}
-                                  section="staged"
-                                  isStaged={true}
-                                  isSelected={
-                                    selectionSection === "staged" && selectedPaths.has(file.path)
-                                  }
-                                  onToggle={handleToggleStaged}
-                                  onRowClick={handleRowClick}
-                                  density={stagedView.density}
-                                  viewed={viewedFiles.has(viewedKey)}
-                                  onViewedChange={(v) => handleViewedChange(viewedKey, v)}
-                                />
-                              );
-                            })}
-                          </div>
-                        ) : stagedView.filterQuery ? (
-                          <EmptyState
-                            variant="filtered-empty"
-                            scale="sidebar"
-                            title={`No staged files matching "${truncateFilterQuery(stagedView.filterQuery)}"`}
-                            action={
-                              <button
-                                type="button"
-                                onClick={clearStagedFilter}
-                                className="text-xs text-daintree-text/60 hover:text-daintree-text transition-colors underline underline-offset-2"
-                              >
-                                Clear filter
-                              </button>
-                            }
-                          />
-                        ) : !stagedView.showGenerated &&
-                          status.staged.some((f) => isGeneratedFile(f.path)) ? (
-                          <EmptyState
-                            variant="filtered-empty"
-                            scale="sidebar"
-                            title="Only generated files staged"
-                            action={
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setStagedView((prev) => ({ ...prev, showGenerated: true }))
-                                }
-                                className="text-xs text-daintree-text/60 hover:text-daintree-text transition-colors underline underline-offset-2"
-                              >
-                                Show generated files
-                              </button>
-                            }
-                          />
-                        ) : (
-                          <EmptyState
-                            variant="user-cleared"
-                            scale="sidebar"
-                            title="Nothing staged"
-                          />
-                        )}
-                      </div>
+                      <FileSection
+                        isStaged={true}
+                        files={derivedStaged}
+                        allFiles={status.staged}
+                        churn={stagedChurn}
+                        indexOffset={0}
+                        focusedIndex={focusedIndex}
+                        selectionSection={selectionSection}
+                        selectedPaths={selectedPaths}
+                        hasSelection={hasStagedSelection}
+                        view={stagedView}
+                        setView={setStagedView}
+                        inputRef={stagedInputRef}
+                        setFilterQuery={setStagedFilterQuery}
+                        clearFilter={clearStagedFilter}
+                        onToggle={handleToggleStaged}
+                        onRowClick={handleRowClick}
+                        onBulkAction={() =>
+                          void (hasStagedSelection
+                            ? handleUnstageSelection()
+                            : stagedView.filterQuery || !stagedView.showGenerated
+                              ? handleUnstageFiltered()
+                              : handleUnstageAll())
+                        }
+                        viewedFiles={viewedFiles}
+                        onViewedChange={handleViewedChange}
+                      />
 
                       {/* Unstaged section */}
-                      <div ref={unstagedSectionRef}>
-                        <div className="flex items-center justify-between px-4 py-2 bg-overlay-subtle gap-2">
-                          <span className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60 shrink-0">
-                            Changes
-                            <span
-                              data-testid="changes-section-count-chip"
-                              className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal inline-flex items-center gap-1"
-                            >
-                              <span>
-                                {derivedUnstaged.length} file
-                                {derivedUnstaged.length !== 1 ? "s" : ""}
-                              </span>
-                              {(unstagedChurn.ins > 0 || unstagedChurn.del > 0) && (
-                                <>
-                                  <span aria-hidden="true" className="text-daintree-text/30">
-                                    ·
-                                  </span>
-                                  {unstagedChurn.ins > 0 && (
-                                    <span className="text-status-success/80">{`+${unstagedChurn.ins}`}</span>
-                                  )}
-                                  {unstagedChurn.del > 0 && (
-                                    <span className="text-status-error/80">{`-${unstagedChurn.del}`}</span>
-                                  )}
-                                </>
-                              )}
-                            </span>
-                          </span>
-                          <div className="flex items-center gap-1.5 min-w-0">
-                            <div className="relative flex items-center">
-                              <Search className="absolute left-1.5 w-3 h-3 text-daintree-text/30 pointer-events-none" />
-                              <input
-                                ref={changesInputRef}
-                                type="text"
-                                placeholder="Filter…"
-                                defaultValue={changesView.filterQuery}
-                                onChange={(e) => setChangesFilterQuery(e.target.value)}
-                                className={cn(
-                                  "w-[120px] h-5 pl-6 pr-1.5 rounded text-[11px]",
-                                  "bg-tint/[0.04] border border-tint/[0.08]",
-                                  "text-daintree-text placeholder:text-text-placeholder",
-                                  "focus:outline-hidden focus:border-daintree-accent/40",
-                                  "hover:bg-tint/[0.06] transition-colors"
-                                )}
-                              />
-                            </div>
-                            <DropdownMenu>
-                              <DropdownMenuTrigger asChild>
-                                <button
-                                  type="button"
-                                  className={cn(
-                                    "p-1 rounded transition-colors",
-                                    "text-daintree-text/40 hover:text-daintree-text hover:bg-tint/[0.06]",
-                                    "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent"
-                                  )}
-                                  aria-label="View options"
-                                >
-                                  <SlidersHorizontal className="w-3.5 h-3.5" />
-                                </button>
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end" className="min-w-[180px]">
-                                <DropdownMenuLabel>Sort by</DropdownMenuLabel>
-                                <DropdownMenuRadioGroup
-                                  value={changesView.sortKey}
-                                  onValueChange={(v) =>
-                                    setChangesView((prev) => ({
-                                      ...prev,
-                                      sortKey: isSortKey(v) ? v : prev.sortKey,
-                                      sortDir:
-                                        prev.sortKey === v
-                                          ? prev.sortDir === "asc"
-                                            ? "desc"
-                                            : "asc"
-                                          : v === "churn"
-                                            ? "desc"
-                                            : prev.sortDir,
-                                    }))
-                                  }
-                                >
-                                  <DropdownMenuRadioItem value="path">
-                                    <span className="flex items-center gap-2 flex-1">
-                                      Path
-                                      {changesView.sortKey === "path" &&
-                                        (changesView.sortDir === "asc" ? (
-                                          <ChevronUp className="w-3 h-3 ml-auto text-daintree-text/40" />
-                                        ) : (
-                                          <ChevronDown className="w-3 h-3 ml-auto text-daintree-text/40" />
-                                        ))}
-                                    </span>
-                                  </DropdownMenuRadioItem>
-                                  <DropdownMenuRadioItem value="status">
-                                    <span className="flex items-center gap-2 flex-1">
-                                      Status
-                                      {changesView.sortKey === "status" &&
-                                        (changesView.sortDir === "asc" ? (
-                                          <ChevronUp className="w-3 h-3 ml-auto text-daintree-text/40" />
-                                        ) : (
-                                          <ChevronDown className="w-3 h-3 ml-auto text-daintree-text/40" />
-                                        ))}
-                                    </span>
-                                  </DropdownMenuRadioItem>
-                                  <DropdownMenuRadioItem value="churn">
-                                    <span className="flex items-center gap-2 flex-1">
-                                      Churn
-                                      {changesView.sortKey === "churn" &&
-                                        (changesView.sortDir === "asc" ? (
-                                          <ChevronUp className="w-3 h-3 ml-auto text-daintree-text/40" />
-                                        ) : (
-                                          <ChevronDown className="w-3 h-3 ml-auto text-daintree-text/40" />
-                                        ))}
-                                    </span>
-                                  </DropdownMenuRadioItem>
-                                </DropdownMenuRadioGroup>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuLabel>View</DropdownMenuLabel>
-                                <DropdownMenuRadioGroup
-                                  value={changesView.density}
-                                  onValueChange={(v) =>
-                                    setChangesView((prev) => ({
-                                      ...prev,
-                                      density: isDensity(v) ? v : prev.density,
-                                    }))
-                                  }
-                                >
-                                  <DropdownMenuRadioItem value="comfortable">
-                                    Comfortable
-                                  </DropdownMenuRadioItem>
-                                  <DropdownMenuRadioItem value="compact">
-                                    Compact
-                                  </DropdownMenuRadioItem>
-                                </DropdownMenuRadioGroup>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuCheckboxItem
-                                  checked={changesView.showGenerated}
-                                  onCheckedChange={(checked) =>
-                                    setChangesView((prev) => ({
-                                      ...prev,
-                                      showGenerated: !!checked,
-                                    }))
-                                  }
-                                >
-                                  Show generated files
-                                </DropdownMenuCheckboxItem>
-                              </DropdownMenuContent>
-                            </DropdownMenu>
-                            {derivedUnstaged.length > 0 && (
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() =>
-                                  void (hasUnstagedSelection
-                                    ? handleStageSelection()
-                                    : changesView.filterQuery || !changesView.showGenerated
-                                      ? handleStageFiltered()
-                                      : handleStageAll())
-                                }
-                                className="h-5 px-1.5 text-[10px] shrink-0"
-                                data-testid="review-hub-stage-section-button"
-                              >
-                                <CheckSquare className="w-3 h-3 mr-1" />
-                                {hasUnstagedSelection
-                                  ? `Stage selection (${selectedPaths.size})`
-                                  : changesView.filterQuery
-                                    ? `Stage shown (${derivedUnstaged.length})`
-                                    : `Stage all (${derivedUnstaged.length})`}
-                              </Button>
-                            )}
-                          </div>
-                        </div>
-                        {derivedUnstaged.length > 0 ? (
-                          <div
-                            className={cn(
-                              "px-2 py-1 flex flex-col",
-                              changesView.density === "compact" ? "gap-0" : "gap-0.5"
-                            )}
-                          >
-                            {derivedUnstaged.map((file, i) => {
-                              const viewedKey = `unstaged:${file.path}`;
-                              const flatIndex = derivedStaged.length + i;
-                              return (
-                                <FileStageRow
-                                  key={`unstaged-${file.path}`}
-                                  id={`review-hub-row-${flatIndex}`}
-                                  rowIndex={flatIndex}
-                                  isFocused={focusedIndex === flatIndex}
-                                  file={file}
-                                  section="unstaged"
-                                  isStaged={false}
-                                  isSelected={
-                                    selectionSection === "unstaged" && selectedPaths.has(file.path)
-                                  }
-                                  onToggle={handleToggleUnstaged}
-                                  onRowClick={handleRowClick}
-                                  density={changesView.density}
-                                  viewed={viewedFiles.has(viewedKey)}
-                                  onViewedChange={(v) => handleViewedChange(viewedKey, v)}
-                                />
-                              );
-                            })}
-                          </div>
-                        ) : changesView.filterQuery ? (
-                          <EmptyState
-                            variant="filtered-empty"
-                            scale="sidebar"
-                            title={`No changed files matching "${truncateFilterQuery(changesView.filterQuery)}"`}
-                            action={
-                              <button
-                                type="button"
-                                onClick={clearChangesFilter}
-                                className="text-xs text-daintree-text/60 hover:text-daintree-text transition-colors underline underline-offset-2"
-                              >
-                                Clear filter
-                              </button>
-                            }
-                          />
-                        ) : !changesView.showGenerated &&
-                          status.unstaged.some((f) => isGeneratedFile(f.path)) ? (
-                          <EmptyState
-                            variant="filtered-empty"
-                            scale="sidebar"
-                            title="Only generated files changed"
-                            action={
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setChangesView((prev) => ({ ...prev, showGenerated: true }))
-                                }
-                                className="text-xs text-daintree-text/60 hover:text-daintree-text transition-colors underline underline-offset-2"
-                              >
-                                Show generated files
-                              </button>
-                            }
-                          />
-                        ) : (
-                          <EmptyState
-                            variant="user-cleared"
-                            scale="sidebar"
-                            title="All changes staged"
-                          />
-                        )}
-                      </div>
+                      <FileSection
+                        sectionRef={unstagedSectionRef}
+                        isStaged={false}
+                        files={derivedUnstaged}
+                        allFiles={status.unstaged}
+                        churn={unstagedChurn}
+                        indexOffset={derivedStaged.length}
+                        focusedIndex={focusedIndex}
+                        selectionSection={selectionSection}
+                        selectedPaths={selectedPaths}
+                        hasSelection={hasUnstagedSelection}
+                        view={changesView}
+                        setView={setChangesView}
+                        inputRef={changesInputRef}
+                        setFilterQuery={setChangesFilterQuery}
+                        clearFilter={clearChangesFilter}
+                        onToggle={handleToggleUnstaged}
+                        onRowClick={handleRowClick}
+                        onBulkAction={() =>
+                          void (hasUnstagedSelection
+                            ? handleStageSelection()
+                            : changesView.filterQuery || !changesView.showGenerated
+                              ? handleStageFiltered()
+                              : handleStageAll())
+                        }
+                        viewedFiles={viewedFiles}
+                        onViewedChange={handleViewedChange}
+                      />
                     </div>
                   )}
                 </div>

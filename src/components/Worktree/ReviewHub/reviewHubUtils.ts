@@ -357,6 +357,47 @@ export function isDensity(v: string): v is Density {
   return v === "comfortable" || v === "compact";
 }
 
+/**
+ * Applies a sort-column click from a `DropdownMenuRadioGroup`: switches the
+ * sort key, or flips direction when the same key is re-selected. Switching to
+ * a new key defaults to descending for `churn` (biggest change first) and
+ * otherwise keeps the current direction. `value` is untyped because it comes
+ * from `onValueChange`'s string param; an unrecognized value leaves
+ * `sortKey`/`sortDir` unchanged.
+ */
+export function applySortChange(prev: SectionViewState, value: string): SectionViewState {
+  return {
+    ...prev,
+    sortKey: isSortKey(value) ? value : prev.sortKey,
+    sortDir:
+      prev.sortKey === value
+        ? prev.sortDir === "asc"
+          ? "desc"
+          : "asc"
+        : value === "churn"
+          ? "desc"
+          : prev.sortDir,
+  };
+}
+
+export interface ChurnTotals {
+  ins: number;
+  del: number;
+}
+
+/** Sums insertions/deletions across a file list for a section's churn chip. */
+export function sumChurn(
+  files: { insertions: number | null; deletions: number | null }[]
+): ChurnTotals {
+  return files.reduce<ChurnTotals>(
+    (acc, f) => ({
+      ins: acc.ins + (f.insertions ?? 0),
+      del: acc.del + (f.deletions ?? 0),
+    }),
+    { ins: 0, del: 0 }
+  );
+}
+
 const FILTER_QUERY_DISPLAY_MAX = 40;
 
 // Filter-query echoes in narrow sidebar surfaces would overflow otherwise:
