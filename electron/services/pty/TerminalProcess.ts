@@ -52,7 +52,7 @@ import { SemanticBufferManager } from "./SemanticBufferManager.js";
 import { ProcessTreeKiller } from "./ProcessTreeKiller.js";
 import { IdentityWatcher, type IdentityWatcherDelegate } from "./IdentityWatcher.js";
 import type { SpawnContext } from "./terminalSpawn.js";
-import { computeDefaultTitle, getLiveAgentId } from "./terminalTitle.js";
+import { getLiveAgentId } from "./terminalTitle.js";
 import {
   serializeTerminal,
   serializeTerminalAsync,
@@ -74,6 +74,7 @@ import {
 } from "./analysis/headlessViewport.js";
 import type { AnalysisFinalSnapshot } from "./analysisWorkerProtocol.js";
 import { TerminalExitObservers, type TerminalExitArgs } from "./TerminalExitObservers.js";
+import { TerminalExitHandler } from "./TerminalExitHandler.js";
 import { gracefulShutdown as runGracefulShutdown } from "./TerminalGracefulShutdown.js";
 import { handleAgentDetection as runHandleAgentDetection } from "./TerminalAgentDetection.js";
 import { TerminalProcessLifecycle } from "./TerminalProcessLifecycle.js";
@@ -160,6 +161,7 @@ export class TerminalProcess {
 
   private readonly foregroundProbe: ForegroundProcessGroupProbe;
   private exitObservers!: TerminalExitObservers;
+  private exitHandler!: TerminalExitHandler;
 
   private _scrollback: number;
   private ptyDataDisposable: { dispose: () => void } | null = null;
@@ -499,6 +501,41 @@ export class TerminalProcess {
       terminalInfo: this.terminalInfo,
       forensicsBuffer: this.forensicsBuffer,
       agentStateService: this.deps.agentStateService,
+    });
+    this.exitHandler = new TerminalExitHandler({
+      get id() {
+        return self.id;
+      },
+      get terminalInfo() {
+        return self.terminalInfo;
+      },
+      get exitObservers() {
+        return self.exitObservers;
+      },
+      get identityWatcher() {
+        return self.identityWatcher;
+      },
+      get forensicsBuffer() {
+        return self.forensicsBuffer;
+      },
+      get lifecycle() {
+        return self.lifecycle;
+      },
+      get sessionSnapshotter() {
+        return self.sessionSnapshotter;
+      },
+      get lastDetectedProcessIconId() {
+        return self.lastDetectedProcessIconId;
+      },
+      set lastDetectedProcessIconId(v) {
+        self.lastDetectedProcessIconId = v;
+      },
+      teardown: (reason) => self.teardown(reason),
+      emitTerminalExited: (args) => self.emitTerminalExited(args),
+      shouldPreserveOnExit: (exitCode) => self.shouldPreserveOnExit(exitCode),
+      snapshotAndDisposePreserved: () => self.snapshotAndDisposePreserved(),
+      disposeHeadless: () => self.disposeHeadless(),
+      onExit: (id, exitCode, signal) => self.callbacks.onExit(id, exitCode, signal),
     });
 
     // Replay any output the pooled shell printed before we took ownership
@@ -1651,97 +1688,11 @@ export class TerminalProcess {
   }
 
   private setupPtyHandlers(ptyProcess: pty.IPty, dataHandoff?: PooledPtyDataHandoff): void {
-    const terminal = this.terminalInfo;
     const onData = (data: string) => this.handlePtyData(ptyProcess, data);
     this.ptyDataDisposable = dataHandoff ? dataHandoff.takeOver(onData) : ptyProcess.onData(onData);
 
     ptyProcess.onExit(({ exitCode, signal }) => {
-      if (terminal.ptyProcess !== ptyProcess) {
-        return;
-      }
-
-      // dispose() may have already emitted terminal:exited and notified
-      // the registry via callbacks.onExit. A late OS-delivered exit must
-      // not double-fire either path — both downstream subscribers and
-      // PtyManager are not idempotent.
-      if (this.exitObservers.hasEmitted) {
-        return;
-      }
-
-      this.identityWatcher.stop();
-
-      // Capture forensic tail before disposeHeadless() clears the buffer.
-      // The terminal:exited subscriber reads this via the payload — once
-      // `disposeHeadless` runs, `forensicsBuffer.getRecentOutput()` is gone.
-      const recentOutput = this.forensicsBuffer.getRecentOutput();
-
-      // teardown() returns false when kill() / dispose() got here first,
-      // in which case the prior reason is preserved in lifecycle state. The
-      // event payload still carries the actual exit code from the PTY,
-      // so subscribers see e.g. `reason: "kill"` with `code: 0`.
-      const teardownReason = this.lifecycle.getExitReason() ?? "natural";
-      this.teardown("natural");
-      this.sessionSnapshotter.dispose();
-
-      const reasonForEvent = this.lifecycle.getExitReason() ?? teardownReason;
-
-      const previousAgent = terminal.detectedAgentId;
-      const hadDetectedIdentity =
-        previousAgent !== undefined ||
-        terminal.detectedProcessIconId !== undefined ||
-        this.lastDetectedProcessIconId !== undefined;
-      if (hadDetectedIdentity && !terminal.wasKilled) {
-        terminal.detectedAgentId = undefined;
-        terminal.detectedProcessIconId = undefined;
-        this.lastDetectedProcessIconId = undefined;
-        if (previousAgent) {
-          terminal.analysisEnabled = false;
-        }
-        const nextTitle = computeDefaultTitle(terminal);
-        if (previousAgent && (terminal.titleMode ?? "default") === "default") {
-          terminal.title = nextTitle;
-        }
-        events.emit("agent:exited", {
-          terminalId: this.id,
-          agentType: previousAgent,
-          defaultTitle: previousAgent ? nextTitle : undefined,
-          timestamp: Date.now(),
-          ...(previousAgent ? { exitKind: "terminal" as const } : {}),
-        });
-      }
-
-      this.callbacks.onExit(this.id, exitCode ?? 0, signal ?? undefined);
-
-      this.emitTerminalExited({
-        code: exitCode ?? 0,
-        signal,
-        reason: reasonForEvent,
-        recentOutput,
-      });
-
-      // Persist exit metadata on every natural exit — not just the preserve
-      // path. The exit code is the authoritative pass/fail signal an MCP
-      // supervisor reads, and gating it on preserve-on-exit left ephemeral
-      // terminals with no recorded outcome (#10638). A user kill is not an
-      // outcome, so it is still excluded — that path emits agent:killed, not a
-      // completion. The write sits inside the ptyProcess identity guard and
-      // hasEmitted dedup above, so a stale exit from a respawned PTY cannot
-      // overwrite the live session (lesson #5948).
-      if (!terminal.wasKilled) {
-        terminal.exitCode = exitCode ?? 0;
-        terminal.exitSignal = signal;
-        terminal.isExited = true;
-      }
-
-      const preserve = this.shouldPreserveOnExit(exitCode ?? 0);
-      if (preserve) {
-        this.lifecycle.setExited({ code: exitCode ?? 0, signal, reason: reasonForEvent });
-        this.snapshotAndDisposePreserved();
-        return;
-      }
-
-      this.disposeHeadless();
-      this.lifecycle.setDisposed(reasonForEvent);
+      this.exitHandler.handleExit(ptyProcess, exitCode, signal);
     });
   }
 
