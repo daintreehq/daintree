@@ -74,6 +74,10 @@ import { helpSessionJobService } from "./HelpSessionJobService.js";
 import { getLifecycleLedger, ledgerFactsFromSpawnOptions } from "./pty/lifecycleLedger.js";
 import { BrokerError } from "./rpc/index.js";
 import { routeHostEvent, type PtyEventRouterDeps } from "./pty/PtyEventRouter.js";
+import { sendPtyHostRpc } from "./pty/PtyHostRpcFacade.js";
+import { mergeFlowControlSnapshots, mergeMemoryRollups } from "./pty/rollupMerge.js";
+import { HostSignalAggregator, type HostMemoryWarningPayload } from "./pty/HostSignalAggregator.js";
+import { ShardPlacementRouter } from "./pty/ShardPlacementRouter.js";
 import { PtyShard } from "./pty/PtyShard.js";
 import {
   DEFAULT_SHARD_KEY,
@@ -92,10 +96,8 @@ import type {
   CrashType,
   SpawnResult,
   FlowControlSnapshot,
-  FlowControlShardSnapshot,
   HostThrottlePayload,
   MemoryRollup,
-  MemoryRollupProject,
   GracefulKillResult,
   PtyHostWorkerGovernanceSnapshot,
 } from "../../shared/types/pty-host.js";
@@ -243,6 +245,8 @@ export class PtyClient extends EventEmitter {
   private readonly shards = new Map<string, PtyShard>();
   /** The boot shard — always exists, never retired; the only shard when the fabric is off. */
   private readonly defaultShard: PtyShard;
+  /** Placement lookups over the maps below — constructed once `defaultShard` exists. */
+  private readonly placementRouter: ShardPlacementRouter;
   /** Per-shard router deps, built once per shard (broker + emitter proxy are shard-scoped). */
   private readonly shardRouterDeps = new WeakMap<PtyShard, PtyEventRouterDeps>();
   private shardCallbacksCache: ConstructorParameters<typeof PtyShard>[1] | null = null;
@@ -267,10 +271,9 @@ export class PtyClient extends EventEmitter {
   // treat the payload as THE terminal backend's state, so with multiple shards a
   // healthy sibling's release must not clear a struggling shard's warning — the
   // fabric ORs the per-shard booleans and only forwards aggregate transitions.
-  private readonly throttledShards = new Set<string>();
-  private aggregateThrottled = false;
-  private readonly memoryWarningShards = new Set<string>();
-  private aggregateMemoryWarning = false;
+  private readonly signalAggregator = new HostSignalAggregator({
+    emit: (event, payload) => this.emit(event, payload),
+  });
   /** Mirrors the system-sleep watchdog pause so shards created mid-sleep stay quiet. */
   private healthChecksPaused = false;
 
@@ -368,6 +371,18 @@ export class PtyClient extends EventEmitter {
     this.electronDir = path.basename(__dirname) === "chunks" ? path.dirname(__dirname) : __dirname;
 
     this.defaultShard = this.ensureShard(DEFAULT_SHARD_KEY);
+    this.placementRouter = new ShardPlacementRouter({
+      fabricEnabled: this.fabricEnabled,
+      projectShardCap: this.projectShardCap,
+      defaultShard: this.defaultShard,
+      shards: this.shards,
+      terminalOwners: this.terminalOwners,
+      projectShardOverrides: this.projectShardOverrides,
+      windowPortShard: this.windowPortShard,
+      windowProjectContexts: this.windowProjectContexts,
+      ensureShard: (key) => this.ensureShard(key),
+      logWarn,
+    });
 
     if (!this.config.deferStart) {
       this.start();
@@ -569,27 +584,11 @@ export class PtyClient extends EventEmitter {
   }
 
   private emitAggregatedThrottle(shard: PtyShard, payload: HostThrottlePayload): boolean {
-    if (payload.isThrottled) {
-      this.throttledShards.add(shard.key);
-    } else {
-      this.throttledShards.delete(shard.key);
-    }
-    const aggregate = this.throttledShards.size > 0;
-    if (aggregate === this.aggregateThrottled) return false;
-    this.aggregateThrottled = aggregate;
-    return this.emit("host-throttled", { ...payload, isThrottled: aggregate });
+    return this.signalAggregator.recordThrottle(shard.key, payload);
   }
 
   private emitAggregatedMemoryWarning(shard: PtyShard, payload: HostMemoryWarningPayload): boolean {
-    if (payload.isWarning) {
-      this.memoryWarningShards.add(shard.key);
-    } else {
-      this.memoryWarningShards.delete(shard.key);
-    }
-    const aggregate = this.memoryWarningShards.size > 0;
-    if (aggregate === this.aggregateMemoryWarning) return false;
-    this.aggregateMemoryWarning = aggregate;
-    return this.emit("host-memory-warning", { ...payload, isWarning: aggregate });
+    return this.signalAggregator.recordMemoryWarning(shard.key, payload);
   }
 
   /**
@@ -621,28 +620,7 @@ export class PtyClient extends EventEmitter {
    * not pin "throttled"/"memory warning" on forever.
    */
   private dropShardSignals(shardKey: string): void {
-    if (this.throttledShards.delete(shardKey)) {
-      const aggregate = this.throttledShards.size > 0;
-      if (aggregate !== this.aggregateThrottled) {
-        this.aggregateThrottled = aggregate;
-        this.emit("host-throttled", {
-          isThrottled: aggregate,
-          reason: "host-shard-gone",
-          timestamp: Date.now(),
-        });
-      }
-    }
-    if (this.memoryWarningShards.delete(shardKey)) {
-      const aggregate = this.memoryWarningShards.size > 0;
-      if (aggregate !== this.aggregateMemoryWarning) {
-        this.aggregateMemoryWarning = aggregate;
-        this.emit("host-memory-warning", {
-          isWarning: aggregate,
-          utilizationPercent: 0,
-          timestamp: Date.now(),
-        });
-      }
-    }
+    this.signalAggregator.dropShard(shardKey);
   }
 
   /**
@@ -694,17 +672,16 @@ export class PtyClient extends EventEmitter {
 
   /** Owner shard key for a terminal id; unknown ids fall back to the default shard. */
   private ownerKey(id: string): string {
-    return this.terminalOwners.get(id) ?? DEFAULT_SHARD_KEY;
+    return this.placementRouter.ownerKey(id);
   }
 
   private shardForTerminal(id: string): PtyShard {
-    return this.shards.get(this.ownerKey(id)) ?? this.defaultShard;
+    return this.placementRouter.shardForTerminal(id);
   }
 
   /** Pure placement lookup — never creates shards or records overrides. */
   private peekPlacementKey(projectId: string | null | undefined): string {
-    if (!this.fabricEnabled || !projectId) return DEFAULT_SHARD_KEY;
-    return this.projectShardOverrides.get(projectId) ?? projectId;
+    return this.placementRouter.peekPlacementKey(projectId);
   }
 
   /**
@@ -714,55 +691,31 @@ export class PtyClient extends EventEmitter {
    * shards while it has live terminals).
    */
   private resolvePlacementKey(projectId: string | null | undefined): string {
-    if (!this.fabricEnabled || !projectId) return DEFAULT_SHARD_KEY;
-    const override = this.projectShardOverrides.get(projectId);
-    if (override) return override;
-    if (this.shards.has(projectId)) return projectId;
-    const projectShardCount = this.shards.size - (this.shards.has(DEFAULT_SHARD_KEY) ? 1 : 0);
-    if (projectShardCount >= this.projectShardCap) {
-      logWarn(
-        `[PtyClient] Project shard cap (${this.projectShardCap}) reached; project ${projectId} co-locates on the default shard`
-      );
-      this.projectShardOverrides.set(projectId, DEFAULT_SHARD_KEY);
-      return DEFAULT_SHARD_KEY;
-    }
-    return projectId;
+    return this.placementRouter.resolvePlacementKey(projectId);
   }
 
   private ensureShardForProject(projectId: string | null | undefined): PtyShard {
-    return this.ensureShard(this.resolvePlacementKey(projectId));
+    return this.placementRouter.ensureShardForProject(projectId);
   }
 
   /** Shard that owns a project's terminals (for queries/kills) — never creates. */
   private shardForProjectQuery(projectId: string): PtyShard {
-    return this.shards.get(this.peekPlacementKey(projectId)) ?? this.defaultShard;
+    return this.placementRouter.shardForProjectQuery(projectId);
   }
 
   /** Shard key a window's port should route to, from its current project context. */
   private shardKeyForWindowContext(windowId: number): string {
-    return this.resolvePlacementKey(this.windowProjectContexts.get(windowId)?.projectId ?? null);
+    return this.placementRouter.shardKeyForWindowContext(windowId);
   }
 
   /** Shard that receives window-scoped messages (focus): the port holder, else the context owner. */
   private shardForWindow(windowId: number): PtyShard {
-    const portKey = this.windowPortShard.get(windowId);
-    if (portKey !== undefined) {
-      const shard = this.shards.get(portKey);
-      if (shard) return shard;
-    }
-    return (
-      this.shards.get(
-        this.peekPlacementKey(this.windowProjectContexts.get(windowId)?.projectId ?? null)
-      ) ?? this.defaultShard
-    );
+    return this.placementRouter.shardForWindow(windowId);
   }
 
   /** Shards to fan aggregate queries over. Falls back to the default shard so callers keep the legacy timeout→sentinel path when nothing is ready. */
   private fanOutShards(): PtyShard[] {
-    const ready = [...this.shards.values()].filter(
-      (shard) => !shard.retired && shard.lifecycle.isInitialized && shard.lifecycle.child !== null
-    );
-    return ready.length > 0 ? ready : [this.defaultShard];
+    return this.placementRouter.fanOutShards();
   }
 
   // ── Shard lifecycle ──────────────────────────────────────────────────────
@@ -1766,12 +1719,12 @@ export class PtyClient extends EventEmitter {
 
   async gracefulKill(id: string): Promise<string | null> {
     const shard = this.shardForTerminal(id);
-    const requestId = shard.broker.generateId(`graceful-kill-${id}`);
-    const promise = shard.broker.register<GracefulKillResult>(requestId, {
-      method: "graceful-kill",
-      timeoutMs: PTY_TIMEOUTS["graceful-kill"],
-    });
-    shard.send({ type: "graceful-kill", id, requestId });
+    const promise = sendPtyHostRpc<GracefulKillResult>(
+      shard,
+      `graceful-kill-${id}`,
+      (requestId) => ({ type: "graceful-kill", id, requestId }),
+      { method: "graceful-kill", timeoutMs: PTY_TIMEOUTS["graceful-kill"] }
+    );
     const result = await promise.catch((error: unknown) => {
       // Sending a kill to a host that isn't there only mutates local bookkeeping.
       // Skip whenever the host is known to be gone — either because the broker
@@ -1795,33 +1748,30 @@ export class PtyClient extends EventEmitter {
     options?: { preserveSession?: boolean }
   ): Promise<Array<{ id: string; agentSessionId: string | null }>> {
     const shard = this.shardForProjectQuery(projectId);
-    const requestId = shard.broker.generateId(`graceful-kill-by-project-${projectId}`);
-    const promise = shard.broker.register<Array<{ id: string; agentSessionId: string | null }>>(
-      requestId,
-      {
-        method: "graceful-kill-by-project",
-        timeoutMs: PTY_TIMEOUTS["graceful-kill-by-project"],
-      }
+    const promise = sendPtyHostRpc<Array<{ id: string; agentSessionId: string | null }>>(
+      shard,
+      `graceful-kill-by-project-${projectId}`,
+      (requestId) => ({
+        type: "graceful-kill-by-project",
+        projectId,
+        requestId,
+        ...(options?.preserveSession !== undefined
+          ? { preserveSession: options.preserveSession }
+          : {}),
+      }),
+      { method: "graceful-kill-by-project", timeoutMs: PTY_TIMEOUTS["graceful-kill-by-project"] }
     );
-    shard.send({
-      type: "graceful-kill-by-project",
-      projectId,
-      requestId,
-      ...(options?.preserveSession !== undefined
-        ? { preserveSession: options.preserveSession }
-        : {}),
-    });
     return promise.catch(() => []);
   }
 
   async killByProject(projectId: string): Promise<number> {
     const shard = this.shardForProjectQuery(projectId);
-    const requestId = shard.broker.generateId(`kill-by-project-${projectId}`);
-    const promise = shard.broker.register<number>(requestId, {
-      method: "kill-by-project",
-      timeoutMs: PTY_TIMEOUTS["kill-by-project"],
-    });
-    shard.send({ type: "kill-by-project", projectId, requestId });
+    const promise = sendPtyHostRpc<number>(
+      shard,
+      `kill-by-project-${projectId}`,
+      (requestId) => ({ type: "kill-by-project", projectId, requestId }),
+      { method: "kill-by-project", timeoutMs: PTY_TIMEOUTS["kill-by-project"] }
+    );
     return promise.catch(() => 0);
   }
 
@@ -1831,13 +1781,15 @@ export class PtyClient extends EventEmitter {
     terminalTypes: Record<string, number>;
   }> {
     const shard = this.shardForProjectQuery(projectId);
-    const requestId = shard.broker.generateId(`project-stats-${projectId}`);
-    const promise = shard.broker.register<{
+    const promise = sendPtyHostRpc<{
       terminalCount: number;
       processIds: number[];
       terminalTypes: Record<string, number>;
-    }>(requestId);
-    shard.send({ type: "get-project-stats", projectId, requestId });
+    }>(shard, `project-stats-${projectId}`, (requestId) => ({
+      type: "get-project-stats",
+      projectId,
+      requestId,
+    }));
     return promise.catch(() => ({ terminalCount: 0, processIds: [], terminalTypes: {} }));
   }
 
@@ -1853,9 +1805,10 @@ export class PtyClient extends EventEmitter {
     const rollups = (
       await Promise.all(
         shards.map((shard) => {
-          const requestId = shard.broker.generateId("memory-rollup");
-          const promise = shard.broker.register<MemoryRollup>(requestId);
-          shard.send({ type: "get-memory-rollup", requestId });
+          const promise = sendPtyHostRpc<MemoryRollup>(shard, "memory-rollup", (requestId) => ({
+            type: "get-memory-rollup",
+            requestId,
+          }));
           return promise.catch(() => null);
         })
       )
@@ -1899,18 +1852,22 @@ export class PtyClient extends EventEmitter {
   /** Get terminal IDs for a specific project */
   async getTerminalsForProjectAsync(projectId: string): Promise<string[]> {
     const shard = this.shardForProjectQuery(projectId);
-    const requestId = shard.broker.generateId(`terminals-${projectId}`);
-    const promise = shard.broker.register<string[]>(requestId);
-    shard.send({ type: "get-terminals-for-project", projectId, requestId });
+    const promise = sendPtyHostRpc<string[]>(shard, `terminals-${projectId}`, (requestId) => ({
+      type: "get-terminals-for-project",
+      projectId,
+      requestId,
+    }));
     return promise.catch(() => []);
   }
 
   /** Get terminal info by ID */
   async getTerminalAsync(id: string): Promise<TerminalInfoResponse | null> {
     const shard = this.shardForTerminal(id);
-    const requestId = shard.broker.generateId(`terminal-${id}`);
-    const promise = shard.broker.register<TerminalInfoResponse | null>(requestId);
-    shard.send({ type: "get-terminal", id, requestId });
+    const promise = sendPtyHostRpc<TerminalInfoResponse | null>(
+      shard,
+      `terminal-${id}`,
+      (requestId) => ({ type: "get-terminal", id, requestId })
+    );
     return promise.catch(() => null);
   }
 
@@ -1918,9 +1875,11 @@ export class PtyClient extends EventEmitter {
   async getAvailableTerminalsAsync(): Promise<TerminalInfoResponse[]> {
     const results = await Promise.all(
       this.fanOutShards().map((shard) => {
-        const requestId = shard.broker.generateId("available-terminals");
-        const promise = shard.broker.register<TerminalInfoResponse[]>(requestId);
-        shard.send({ type: "get-available-terminals", requestId });
+        const promise = sendPtyHostRpc<TerminalInfoResponse[]>(
+          shard,
+          "available-terminals",
+          (requestId) => ({ type: "get-available-terminals", requestId })
+        );
         return promise.catch(() => [] as TerminalInfoResponse[]);
       })
     );
@@ -1933,9 +1892,11 @@ export class PtyClient extends EventEmitter {
   ): Promise<TerminalInfoResponse[]> {
     const results = await Promise.all(
       this.fanOutShards().map((shard) => {
-        const requestId = shard.broker.generateId(`terminals-by-state-${state}`);
-        const promise = shard.broker.register<TerminalInfoResponse[]>(requestId);
-        shard.send({ type: "get-terminals-by-state", state, requestId });
+        const promise = sendPtyHostRpc<TerminalInfoResponse[]>(
+          shard,
+          `terminals-by-state-${state}`,
+          (requestId) => ({ type: "get-terminals-by-state", state, requestId })
+        );
         return promise.catch(() => [] as TerminalInfoResponse[]);
       })
     );
@@ -1946,9 +1907,11 @@ export class PtyClient extends EventEmitter {
   async getAllTerminalsAsync(): Promise<TerminalInfoResponse[]> {
     const results = await Promise.all(
       this.fanOutShards().map((shard) => {
-        const requestId = shard.broker.generateId("all-terminals");
-        const promise = shard.broker.register<TerminalInfoResponse[]>(requestId);
-        shard.send({ type: "get-all-terminals", requestId });
+        const promise = sendPtyHostRpc<TerminalInfoResponse[]>(
+          shard,
+          "all-terminals",
+          (requestId) => ({ type: "get-all-terminals", requestId })
+        );
         return promise.catch(() => [] as TerminalInfoResponse[]);
       })
     );
@@ -1969,9 +1932,11 @@ export class PtyClient extends EventEmitter {
     const results = (
       await Promise.all(
         shards.map((shard) => {
-          const requestId = shard.broker.generateId("flow-control-snapshot");
-          const promise = shard.broker.register<FlowControlSnapshot>(requestId);
-          shard.send({ type: "get-flow-control-snapshot", requestId });
+          const promise = sendPtyHostRpc<FlowControlSnapshot>(
+            shard,
+            "flow-control-snapshot",
+            (requestId) => ({ type: "get-flow-control-snapshot", requestId })
+          );
           return promise.then(
             (snapshot) => ({ shardKey: shard.key, snapshot }),
             () => null
@@ -2018,9 +1983,11 @@ export class PtyClient extends EventEmitter {
     const snapshots = (
       await Promise.all(
         this.fanOutShards().map((shard) => {
-          const requestId = shard.broker.generateId("worker-governance-snapshot");
-          const promise = shard.broker.register<PtyHostWorkerGovernanceSnapshot>(requestId);
-          shard.send({ type: "get-worker-governance-snapshot", requestId });
+          const promise = sendPtyHostRpc<PtyHostWorkerGovernanceSnapshot>(
+            shard,
+            "worker-governance-snapshot",
+            (requestId) => ({ type: "get-worker-governance-snapshot", requestId })
+          );
           return promise.catch(() => null);
         })
       )
@@ -2050,12 +2017,14 @@ export class PtyClient extends EventEmitter {
   ): Promise<import("../../shared/types/ipc/terminal.js").SemanticSearchMatch[]> {
     const results = await Promise.all(
       this.fanOutShards().map((shard) => {
-        const requestId = shard.broker.generateId("semantic-search");
-        const promise =
-          shard.broker.register<import("../../shared/types/ipc/terminal.js").SemanticSearchMatch[]>(
-            requestId
-          );
-        shard.send({ type: "search-semantic-buffers", query, isRegex, requestId });
+        const promise = sendPtyHostRpc<
+          import("../../shared/types/ipc/terminal.js").SemanticSearchMatch[]
+        >(shard, "semantic-search", (requestId) => ({
+          type: "search-semantic-buffers",
+          query,
+          isRegex,
+          requestId,
+        }));
         return promise.catch(
           () => [] as import("../../shared/types/ipc/terminal.js").SemanticSearchMatch[]
         );
@@ -2067,9 +2036,12 @@ export class PtyClient extends EventEmitter {
   /** Replay terminal history */
   async replayHistoryAsync(id: string, maxLines: number = 100): Promise<number> {
     const shard = this.shardForTerminal(id);
-    const requestId = shard.broker.generateId(`replay-${id}`);
-    const promise = shard.broker.register<number>(requestId);
-    shard.send({ type: "replay-history", id, maxLines, requestId });
+    const promise = sendPtyHostRpc<number>(shard, `replay-${id}`, (requestId) => ({
+      type: "replay-history",
+      id,
+      maxLines,
+      requestId,
+    }));
     return promise.catch(() => 0);
   }
 
@@ -2081,13 +2053,13 @@ export class PtyClient extends EventEmitter {
    */
   async getSerializedStateAsync(id: string): Promise<string | null> {
     const shard = this.shardForTerminal(id);
-    const requestId = shard.broker.generateId(`serialize-${id}`);
     // Extended timeout for large terminals with lots of scrollback (see PTY_TIMEOUTS).
-    const promise = shard.broker.register<string | null>(requestId, {
-      method: "get-serialized-state",
-      timeoutMs: PTY_TIMEOUTS["get-serialized-state"],
-    });
-    shard.send({ type: "get-serialized-state", id, requestId });
+    const promise = sendPtyHostRpc<string | null>(
+      shard,
+      `serialize-${id}`,
+      (requestId) => ({ type: "get-serialized-state", id, requestId }),
+      { method: "get-serialized-state", timeoutMs: PTY_TIMEOUTS["get-serialized-state"] }
+    );
     return promise.catch(() => {
       console.warn(`[PtyClient] getSerializedState timeout for ${id}`);
       return null;
@@ -2101,23 +2073,23 @@ export class PtyClient extends EventEmitter {
     id: string
   ): Promise<import("../../shared/types/ipc.js").TerminalInfoPayload | null> {
     const shard = this.shardForTerminal(id);
-    const requestId = shard.broker.generateId(`terminal-info-${id}`);
-    const promise = shard.broker.register<
-      import("../../shared/types/ipc.js").TerminalInfoPayload | null
-    >(requestId);
-    shard.send({ type: "get-terminal-info", id, requestId });
+    const promise = sendPtyHostRpc<import("../../shared/types/ipc.js").TerminalInfoPayload | null>(
+      shard,
+      `terminal-info-${id}`,
+      (requestId) => ({ type: "get-terminal-info", id, requestId })
+    );
     return promise.catch(() => null);
   }
 
   /** Get a snapshot of terminal state (async due to IPC) */
   async getTerminalSnapshot(id: string): Promise<TerminalSnapshot | null> {
     const shard = this.shardForTerminal(id);
-    const requestId = shard.broker.generateId(`snapshot-${id}`);
-    const promise = shard.broker.register<TerminalSnapshot | null>(requestId, {
-      method: "get-snapshot",
-      timeoutMs: PTY_TIMEOUTS["get-snapshot"],
-    });
-    shard.send({ type: "get-snapshot", id, requestId });
+    const promise = sendPtyHostRpc<TerminalSnapshot | null>(
+      shard,
+      `snapshot-${id}`,
+      (requestId) => ({ type: "get-snapshot", id, requestId }),
+      { method: "get-snapshot", timeoutMs: PTY_TIMEOUTS["get-snapshot"] }
+    );
     return promise.catch(() => null);
   }
 
@@ -2125,12 +2097,12 @@ export class PtyClient extends EventEmitter {
   async getAllTerminalSnapshots(): Promise<TerminalSnapshot[]> {
     const results = await Promise.all(
       this.fanOutShards().map((shard) => {
-        const requestId = shard.broker.generateId("all-snapshots");
-        const promise = shard.broker.register<TerminalSnapshot[]>(requestId, {
-          method: "get-all-snapshots",
-          timeoutMs: PTY_TIMEOUTS["get-all-snapshots"],
-        });
-        shard.send({ type: "get-all-snapshots", requestId });
+        const promise = sendPtyHostRpc<TerminalSnapshot[]>(
+          shard,
+          "all-snapshots",
+          (requestId) => ({ type: "get-all-snapshots", requestId }),
+          { method: "get-all-snapshots", timeoutMs: PTY_TIMEOUTS["get-all-snapshots"] }
+        );
         return promise.catch(() => [] as TerminalSnapshot[]);
       })
     );
@@ -2153,20 +2125,20 @@ export class PtyClient extends EventEmitter {
     spawnedAt?: number
   ): Promise<boolean> {
     const shard = this.shardForTerminal(id);
-    const requestId = shard.broker.generateId(`transition-${id}`);
-    const promise = shard.broker.register<boolean>(requestId, {
-      method: "transition-state",
-      timeoutMs: PTY_TIMEOUTS["transition-state"],
-    });
-    shard.send({
-      type: "transition-state",
-      id,
-      requestId,
-      event,
-      trigger,
-      confidence,
-      spawnedAt,
-    });
+    const promise = sendPtyHostRpc<boolean>(
+      shard,
+      `transition-${id}`,
+      (requestId) => ({
+        type: "transition-state",
+        id,
+        requestId,
+        event,
+        trigger,
+        confidence,
+        spawnedAt,
+      }),
+      { method: "transition-state", timeoutMs: PTY_TIMEOUTS["transition-state"] }
+    );
     return promise.catch(() => false);
   }
 
@@ -2250,8 +2222,7 @@ export class PtyClient extends EventEmitter {
     this.terminalOwners.clear();
     this.projectShardOverrides.clear();
     this.windowPortShard.clear();
-    this.throttledShards.clear();
-    this.memoryWarningShards.clear();
+    this.signalAggregator.clear();
     this.removeAllListeners();
 
     console.log("[PtyClient] Disposed");
@@ -2290,17 +2261,6 @@ export class PtyClient extends EventEmitter {
   }
 }
 
-/** Payload shape the event router emits for `host-memory-warning`. */
-interface HostMemoryWarningPayload {
-  isWarning: boolean;
-  utilizationPercent: number;
-  heapMb?: number;
-  externalMb?: number;
-  workerHeapMb?: number;
-  workerExternalMb?: number;
-  timestamp: number;
-}
-
 /**
  * Per-shard emitter handed to the event router: every `emit` the router (or
  * the events bridge callbacks) performs is redirected into the fabric's
@@ -2316,92 +2276,6 @@ class ShardEventEmitter extends EventEmitter {
   override emit(event: string | symbol, ...args: unknown[]): boolean {
     return this.forward(String(event), args);
   }
-}
-
-/**
- * Merge per-shard memory rollups into one app-wide rollup. The fabric places
- * a project on exactly one shard, so per-project rows never overlap across
- * shards — the by-key merge below is defensive (and collapses the null-project
- * row if it ever appears on more than one shard). `available` is a global
- * claim ("the process table was read"), so one failed shard marks the merged
- * rollup unavailable rather than silently under-reporting.
- */
-function mergeMemoryRollups(rollups: MemoryRollup[]): MemoryRollup {
-  const byKey = new Map<string | null, MemoryRollupProject>();
-  for (const rollup of rollups) {
-    for (const row of rollup.byProject) {
-      const existing = byKey.get(row.projectId);
-      if (!existing) {
-        byKey.set(row.projectId, { ...row, topProcesses: [...row.topProcesses] });
-        continue;
-      }
-      existing.terminalCount += row.terminalCount;
-      existing.processCount += row.processCount;
-      existing.memoryKb += row.memoryKb;
-      existing.topProcesses = [...existing.topProcesses, ...row.topProcesses]
-        .sort((a, b) => b.memoryKb - a.memoryKb)
-        .slice(0, 5);
-    }
-  }
-  return {
-    byProject: [...byKey.values()],
-    totalMemoryKb: rollups.reduce((sum, r) => sum + r.totalMemoryKb, 0),
-    totalProcessCount: rollups.reduce((sum, r) => sum + r.totalProcessCount, 0),
-    terminalCount: rollups.reduce((sum, r) => sum + r.terminalCount, 0),
-    available: rollups.every((r) => r.available),
-    sampledAt: Math.max(...rollups.map((r) => r.sampledAt)),
-  };
-}
-
-/**
- * Merge per-shard flow-control snapshots. Terminal rows and queue depths
- * concatenate (terminals are disjoint across shards); counters sum; the
- * top-level governor/event-loop fields carry the worst-shard view so single-
- * number diagnostics ("is the terminal backend throttled", "PTY host lag
- * p99") stay meaningful; `shards` carries the per-shard breakdown.
- */
-function mergeFlowControlSnapshots(
-  entries: Array<{ shardKey: string; snapshot: FlowControlSnapshot }>
-): FlowControlSnapshot {
-  const snapshots = entries.map((e) => e.snapshot);
-  const smoothed = snapshots
-    .map((s) => s.resourceGovernor.smoothedUtilizationPercent)
-    .filter((v): v is number => v !== null);
-  const eventLoops = snapshots
-    .map((s) => s.eventLoop)
-    .filter((v): v is NonNullable<FlowControlSnapshot["eventLoop"]> => v !== null);
-  const worstEventLoop =
-    eventLoops.length > 0
-      ? eventLoops.reduce((worst, current) => (current.p99Ms > worst.p99Ms ? current : worst))
-      : null;
-  const shards: FlowControlShardSnapshot[] = entries.map(({ shardKey, snapshot }) => ({
-    shardKey,
-    terminalCount: snapshot.terminals.length,
-    totalPendingBytes: snapshot.totalPendingBytes,
-    resourceGovernor: snapshot.resourceGovernor,
-    eventLoop: snapshot.eventLoop,
-  }));
-  return {
-    timestamp: Math.max(...snapshots.map((s) => s.timestamp)),
-    terminals: snapshots.flatMap((s) => s.terminals),
-    queueDepth: snapshots.flatMap((s) => s.queueDepth),
-    totalPendingBytes: snapshots.reduce((sum, s) => sum + s.totalPendingBytes, 0),
-    stats: {
-      pauseCount: snapshots.reduce((sum, s) => sum + s.stats.pauseCount, 0),
-      resumeCount: snapshots.reduce((sum, s) => sum + s.stats.resumeCount, 0),
-      suspendCount: snapshots.reduce((sum, s) => sum + s.stats.suspendCount, 0),
-      forceResumeCount: snapshots.reduce((sum, s) => sum + s.stats.forceResumeCount, 0),
-    },
-    resourceGovernor: {
-      isThrottling: snapshots.some((s) => s.resourceGovernor.isThrottling),
-      isWarning: snapshots.some((s) => s.resourceGovernor.isWarning),
-      activeProfile: snapshots[0].resourceGovernor.activeProfile,
-      smoothedUtilizationPercent: smoothed.length > 0 ? Math.max(...smoothed) : null,
-      throttleDurationMs: Math.max(...snapshots.map((s) => s.resourceGovernor.throttleDurationMs)),
-    },
-    eventLoop: worstEventLoop,
-    shards,
-  };
 }
 
 let ptyClientInstance: PtyClient | null = null;
