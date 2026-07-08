@@ -359,10 +359,11 @@ export function isDensity(v: string): v is Density {
 
 /**
  * Applies a sort-column click from a `DropdownMenuRadioGroup`: switches the
- * sort key, or flips direction when the same key is re-selected. Defaults new
- * keys to descending for `churn` (biggest change first) and ascending
- * otherwise. `value` is untyped because it comes from `onValueChange`'s
- * string param; an unrecognized value leaves `sortKey`/`sortDir` unchanged.
+ * sort key, or flips direction when the same key is re-selected. Switching to
+ * a new key defaults to descending for `churn` (biggest change first) and
+ * otherwise keeps the current direction. `value` is untyped because it comes
+ * from `onValueChange`'s string param; an unrecognized value leaves
+ * `sortKey`/`sortDir` unchanged.
  */
 export function applySortChange(prev: SectionViewState, value: string): SectionViewState {
   return {
