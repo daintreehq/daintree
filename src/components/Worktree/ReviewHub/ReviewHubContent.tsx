@@ -13,7 +13,6 @@ import {
 import type { StagingStatus, GitStatus } from "@shared/types";
 import type { CrossWorktreeFile } from "@shared/types/ipc/git";
 import type { PushProgressEvent } from "@shared/types/ipc/gitPush";
-import type { FileDecoration } from "@shared/types/forge";
 import { isClientAppError } from "@/utils/clientAppError";
 import { cn } from "@/lib/utils";
 
@@ -23,11 +22,9 @@ import {
   RefreshCw,
   CheckSquare,
   ChevronRight,
-  ExternalLink,
   Square,
   AlertTriangle,
   GitBranch,
-  GitPullRequest,
   SlidersHorizontal,
   ChevronUp,
   ChevronDown,
@@ -37,11 +34,13 @@ import { isProtectedBranch } from "@shared/utils/gitConstants";
 import { useUIStore } from "@/store/uiStore";
 import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
-import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useKeepMounted } from "@/hooks/useKeepMounted";
 import { FileStageRow, type FileStageRowSection } from "./FileStageRow";
+import { BaseBranchFileRow } from "./BaseBranchFileRow";
+import { PushErrorBanner } from "./PushErrorBanner";
+import { PrStatusChip } from "./PrStatusChip";
 import { CommitPanel } from "./CommitPanel";
 import { ConflictPanel } from "./ConflictPanel";
 import { ReadinessRail } from "./ReadinessRail";
@@ -87,18 +86,16 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { classifyGitError } from "@shared/utils/gitOperationErrors";
 import {
   type DiffMode,
-  type PushBannerCta,
   type PushErrorState,
   type SectionViewState,
   DEFAULT_SECTION_STATE,
-  getPushBannerConfig,
+  applySortChange,
   isDensity,
-  isSortKey,
   matchesFilter,
   readGitErrorFields,
   sortFiles,
+  sumChurn,
   truncateFilterQuery,
-  getBaseBranchStatusConfig,
 } from "./reviewHubUtils";
 import { isGeneratedFile } from "../generatedFileClassifier";
 
@@ -135,118 +132,7 @@ export interface ReviewHubContentProps {
   autoStageOnOpen?: boolean;
 }
 
-interface BaseBranchFileRowProps {
-  file: CrossWorktreeFile;
-  onClick: (e: React.MouseEvent<HTMLButtonElement>) => void;
-  unresolvedDecoration?: FileDecoration;
-  onBadgeClick?: () => void;
-}
-
 const selectNoProviderHealth = () => null;
-
-function BaseBranchFileRow({
-  file,
-  onClick,
-  unresolvedDecoration,
-  onBadgeClick,
-}: BaseBranchFileRowProps) {
-  const config = getBaseBranchStatusConfig(file.status);
-  const normalized = file.path.replace(/\\/g, "/");
-  const lastSlash = normalized.lastIndexOf("/");
-  const dir = lastSlash === -1 ? "" : normalized.slice(0, lastSlash);
-  const base = lastSlash === -1 ? normalized : normalized.slice(lastSlash + 1);
-  const insertions = file.insertions ?? 0;
-  const deletions = file.deletions ?? 0;
-  const hasChurn = insertions > 0 || deletions > 0;
-  // Provider-authored badge semantics: the count lives in `decoration.badge`
-  // and the accessible label in `decoration.tooltip` — the host must never
-  // re-derive English phrases from a numeric count (issue #9953). The
-  // badge is rendered only when a provider explicitly attached a
-  // non-empty `badge`; the click target only when a `url` is present.
-  const hasBadge =
-    typeof unresolvedDecoration?.badge === "string" && unresolvedDecoration.badge.length > 0;
-  const badgeLabel = unresolvedDecoration?.tooltip ?? `Unresolved review comments on ${file.path}`;
-
-  return (
-    <TruncatedTooltip content={file.path}>
-      <div
-        className={cn(
-          "group/baserow w-full flex items-center text-xs rounded px-1.5 py-1.5",
-          "hover:bg-tint/5 transition-colors"
-        )}
-      >
-        <button
-          type="button"
-          onClick={onClick}
-          className={cn(
-            "relative flex min-w-0 flex-1 items-baseline rounded text-left",
-            "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
-          )}
-        >
-          <span
-            aria-hidden="true"
-            className={cn(
-              "inline-flex items-center justify-center rounded-sm px-1 mr-2 shrink-0",
-              "text-[10px] font-medium leading-4 h-4 min-w-[16px]",
-              config.bg,
-              config.text
-            )}
-          >
-            {config.label}
-          </span>
-          {dir && (
-            <span
-              data-testid="base-branch-file-row-dir"
-              className={cn(
-                "shrink truncate font-mono text-[11px] transition-colors",
-                "text-daintree-text/50 group-hover/baserow:text-daintree-text/70"
-              )}
-            >
-              {dir}/
-            </span>
-          )}
-          <span
-            data-testid="base-branch-file-row-base"
-            className={cn(
-              "shrink truncate font-medium font-mono text-[11px] transition-colors",
-              "text-daintree-text group-hover/baserow:text-daintree-text"
-            )}
-          >
-            {base}
-          </span>
-        </button>
-        {hasChurn && (
-          <div
-            data-testid="base-branch-file-row-churn"
-            className="ml-2 flex items-center gap-1 shrink-0 text-[10px] tabular-nums"
-          >
-            {insertions > 0 && <span className="text-status-success/80">+{insertions}</span>}
-            {deletions > 0 && <span className="text-status-error/80">-{deletions}</span>}
-          </div>
-        )}
-        {hasBadge && (
-          <button
-            type="button"
-            onClick={onBadgeClick}
-            aria-label={badgeLabel}
-            disabled={!onBadgeClick}
-            className={cn(
-              "shrink-0 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 ml-2 rounded-full",
-              "text-[10px] font-semibold tabular-nums",
-              "bg-status-warning/15 text-status-warning",
-              onBadgeClick
-                ? "hover:bg-status-warning/25 transition-colors cursor-pointer"
-                : "cursor-default",
-              "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-status-warning"
-            )}
-          >
-            {unresolvedDecoration!.badge}
-          </button>
-        )}
-      </div>
-    </TruncatedTooltip>
-  );
-}
 
 /**
  * Self-contained Review & Commit surface. All staging-status fetches,
@@ -432,29 +318,9 @@ export function ReviewHubContent({
     row?.scrollIntoView({ behavior: "instant", block: "nearest" });
   }, [focusedIndex]);
 
-  const stagedChurn = useMemo(
-    () =>
-      derivedStaged.reduce(
-        (acc, f) => ({
-          ins: acc.ins + (f.insertions ?? 0),
-          del: acc.del + (f.deletions ?? 0),
-        }),
-        { ins: 0, del: 0 }
-      ),
-    [derivedStaged]
-  );
+  const stagedChurn = useMemo(() => sumChurn(derivedStaged), [derivedStaged]);
 
-  const unstagedChurn = useMemo(
-    () =>
-      derivedUnstaged.reduce(
-        (acc, f) => ({
-          ins: acc.ins + (f.insertions ?? 0),
-          del: acc.del + (f.deletions ?? 0),
-        }),
-        { ins: 0, del: 0 }
-      ),
-    [derivedUnstaged]
-  );
+  const unstagedChurn = useMemo(() => sumChurn(derivedUnstaged), [derivedUnstaged]);
 
   const sortedBaseBranchFiles = useMemo(
     () =>
@@ -467,14 +333,7 @@ export function ReviewHubContent({
   );
 
   const baseBranchChurn = useMemo(
-    () =>
-      sortedBaseBranchFiles?.reduce(
-        (acc, f) => ({
-          ins: acc.ins + (f.insertions ?? 0),
-          del: acc.del + (f.deletions ?? 0),
-        }),
-        { ins: 0, del: 0 }
-      ) ?? { ins: 0, del: 0 },
+    () => sumChurn(sortedBaseBranchFiles ?? []),
     [sortedBaseBranchFiles]
   );
 
@@ -1557,104 +1416,11 @@ export function ReviewHubContent({
                 <span>Protected</span>
               </span>
             )}
-            {status?.hasRemote &&
-              worktreePR &&
-              worktreePR.prUrl &&
-              (() => {
-                const ciVisual = getCIStatusVisual(worktreePR.prCiStatus);
-                const prStateLabel =
-                  worktreePR.prState === "merged"
-                    ? "merged"
-                    : worktreePR.prState === "closed" || worktreePR.prState === "declined"
-                      ? "closed"
-                      : "open";
-                return (
-                  <>
-                    <span
-                      className={cn(
-                        "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-mono",
-                        "bg-tint/[0.07] border border-tint/[0.08]"
-                      )}
-                      aria-label={
-                        ciVisual
-                          ? `Pull request #${worktreePR.prNumber} ${prStateLabel} — CI ${ciVisual.shortLabel}`
-                          : `Pull request #${worktreePR.prNumber} ${prStateLabel}`
-                      }
-                    >
-                      <GitPullRequest
-                        className={cn(
-                          "w-3 h-3 shrink-0",
-                          worktreePR.prState === "merged"
-                            ? "text-pr-merged"
-                            : worktreePR.prState === "closed" || worktreePR.prState === "declined"
-                              ? "text-pr-closed"
-                              : "text-pr-open"
-                        )}
-                      />
-                      <span
-                        className={
-                          worktreePR.prState === "merged"
-                            ? "text-pr-merged"
-                            : worktreePR.prState === "closed" || worktreePR.prState === "declined"
-                              ? "text-pr-closed"
-                              : "text-pr-open"
-                        }
-                      >
-                        #{worktreePR.prNumber}
-                      </span>
-                      <span className="text-daintree-text/40">·</span>
-                      <span className="text-daintree-text/60">{prStateLabel}</span>
-                      {ciVisual && (
-                        <>
-                          <span className="text-daintree-text/40">·</span>
-                          <span className="inline-flex items-center gap-1">
-                            <span
-                              className="inline-flex items-center justify-center w-3 h-3 shrink-0"
-                              aria-hidden="true"
-                            >
-                              {ciVisual.kind === "icon" ? (
-                                <ciVisual.Icon className={cn("w-3 h-3", ciVisual.colorClass)} />
-                              ) : (
-                                <span
-                                  className={cn("block w-2 h-2 rounded-full", ciVisual.colorClass)}
-                                />
-                              )}
-                            </span>
-                            <span
-                              className={
-                                ciVisual.kind === "icon"
-                                  ? ciVisual.colorClass
-                                  : "text-status-warning"
-                              }
-                            >
-                              {ciVisual.shortLabel}
-                            </span>
-                          </span>
-                        </>
-                      )}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => void systemClient.openExternal(worktreePR.prUrl as string)}
-                      className={cn(
-                        "inline-flex items-center justify-center p-0.5 rounded",
-                        "text-daintree-text/60 hover:bg-tint/5 hover:text-daintree-text",
-                        "transition-colors cursor-pointer",
-                        "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
-                      )}
-                      aria-label={`View pull request #${worktreePR.prNumber}`}
-                    >
-                      <ExternalLink className="w-3 h-3" />
-                    </button>
-                  </>
-                );
-              })()}
-            {status?.hasRemote && !worktreePR && (
-              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-tint/[0.07] border border-tint/[0.08] text-[11px] text-daintree-text/40">
-                <GitPullRequest className="w-3 h-3 shrink-0" />
-                <span>No PR</span>
-              </span>
-            )}
+            <PrStatusChip
+              hasRemote={status?.hasRemote}
+              worktreePR={worktreePR}
+              onOpenExternal={(url) => void systemClient.openExternal(url)}
+            />
           </div>
           <div className="flex items-center gap-2 shrink-0">
             {/* Diff mode toggle */}
@@ -1738,115 +1504,27 @@ export function ReviewHubContent({
             <span>{actionError}</span>
           </div>
         )}
-        {pushError &&
-          (() => {
-            const config = getPushBannerConfig(pushError, behindCount, forgeProviderId);
-            const canCollapse =
-              config.detailPolicy === "collapse" && pushError.rawMessage.length > 0;
-            const dispatchCta = (cta: PushBannerCta) => {
-              switch (cta.kind) {
-                case "settings-forge":
-                  void actionService.dispatch(
-                    "app.settings.openTab",
-                    { tab: "code-forge", subtab: cta.providerId },
-                    { source: "user" }
-                  );
-                  return;
-                case "retry":
-                  void handleRetryPush();
-                  return;
-                case "pull-rebase":
-                  setPullRebaseConfirmOpen(true);
-                  return;
-                case "force-push":
-                  setForcePushDialogOpen(true);
-                  return;
-              }
-            };
-            const renderCta = (
-              cta: PushBannerCta,
-              isPrimary: boolean,
-              key: string,
-              isLoading: boolean
-            ) => (
-              <button
-                key={key}
-                type="button"
-                onClick={() => dispatchCta(cta)}
-                disabled={isLoading}
-                data-testid={
-                  isPrimary ? "review-hub-push-error-cta" : "review-hub-push-error-secondary-cta"
-                }
-                data-cta-kind={cta.kind}
-                className={cn(
-                  "inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium transition-colors",
-                  "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-status-warning",
-                  "disabled:opacity-50 disabled:cursor-not-allowed",
-                  isPrimary
-                    ? "bg-status-warning/20 hover:bg-status-warning/30 text-status-warning"
-                    : "bg-filter-selected-bg-soft hover:bg-tint/[0.14] text-daintree-text/80"
-                )}
-              >
-                {isLoading && cta.kind === "pull-rebase" ? "Pulling…" : cta.label}
-              </button>
-            );
-            return (
-              <div
-                role="alert"
-                data-testid="review-hub-push-error"
-                data-reason={pushError.reason}
-                className="px-4 py-2 text-xs text-status-warning bg-status-warning/10 flex items-start gap-2 shrink-0"
-              >
-                <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <div>
-                    <span className="font-medium">Push failed.</span> <span>{config.message}</span>
-                  </div>
-                  {forgeErrorCode && (
-                    <div
-                      data-testid="review-hub-push-error-code"
-                      className="mt-1 text-[10px] font-mono opacity-80"
-                    >
-                      {forgeErrorCode}
-                    </div>
-                  )}
-                  {canCollapse && (
-                    <div className="mt-1.5 flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setShowPushDetails((prev) => !prev)}
-                        data-testid="review-hub-push-error-toggle"
-                        aria-expanded={showPushDetails}
-                        className={cn(
-                          "inline-flex items-center px-1.5 py-0.5 rounded",
-                          "text-status-warning/80 hover:text-status-warning",
-                          "text-[10px] font-medium underline-offset-2 hover:underline transition-colors",
-                          "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-status-warning"
-                        )}
-                      >
-                        {showPushDetails ? "Hide details" : "Show details"}
-                      </button>
-                    </div>
-                  )}
-                  {canCollapse && showPushDetails && (
-                    <pre
-                      data-testid="review-hub-push-error-details"
-                      className="mt-1 text-[10px] font-mono whitespace-pre-wrap break-all opacity-70"
-                    >
-                      {pushError.rawMessage}
-                    </pre>
-                  )}
-                  {(config.cta || config.secondaryCta) && (
-                    <div className="mt-1.5 flex flex-wrap items-center gap-2">
-                      {config.cta && renderCta(config.cta, true, "primary", pullRebasing)}
-                      {config.secondaryCta &&
-                        renderCta(config.secondaryCta, false, "secondary", pullRebasing)}
-                    </div>
-                  )}
-                </div>
-              </div>
-            );
-          })()}
+        {pushError && (
+          <PushErrorBanner
+            pushError={pushError}
+            behindCount={behindCount}
+            forgeProviderId={forgeProviderId}
+            forgeErrorCode={forgeErrorCode}
+            showPushDetails={showPushDetails}
+            onToggleDetails={() => setShowPushDetails((prev) => !prev)}
+            pullRebasing={pullRebasing}
+            onOpenForgeSettings={(providerId) =>
+              void actionService.dispatch(
+                "app.settings.openTab",
+                { tab: "code-forge", subtab: providerId },
+                { source: "user" }
+              )
+            }
+            onRetryPush={() => void handleRetryPush()}
+            onPullRebase={() => setPullRebaseConfirmOpen(true)}
+            onForcePush={() => setForcePushDialogOpen(true)}
+          />
+        )}
 
         {/* Content */}
         <div
@@ -2131,18 +1809,7 @@ export function ReviewHubContent({
                                 <DropdownMenuRadioGroup
                                   value={stagedView.sortKey}
                                   onValueChange={(v) =>
-                                    setStagedView((prev) => ({
-                                      ...prev,
-                                      sortKey: isSortKey(v) ? v : prev.sortKey,
-                                      sortDir:
-                                        prev.sortKey === v
-                                          ? prev.sortDir === "asc"
-                                            ? "desc"
-                                            : "asc"
-                                          : v === "churn"
-                                            ? "desc"
-                                            : prev.sortDir,
-                                    }))
+                                    setStagedView((prev) => applySortChange(prev, v))
                                   }
                                 >
                                   <DropdownMenuRadioItem value="path">
@@ -2369,18 +2036,7 @@ export function ReviewHubContent({
                                 <DropdownMenuRadioGroup
                                   value={changesView.sortKey}
                                   onValueChange={(v) =>
-                                    setChangesView((prev) => ({
-                                      ...prev,
-                                      sortKey: isSortKey(v) ? v : prev.sortKey,
-                                      sortDir:
-                                        prev.sortKey === v
-                                          ? prev.sortDir === "asc"
-                                            ? "desc"
-                                            : "asc"
-                                          : v === "churn"
-                                            ? "desc"
-                                            : prev.sortDir,
-                                    }))
+                                    setChangesView((prev) => applySortChange(prev, v))
                                   }
                                 >
                                   <DropdownMenuRadioItem value="path">
