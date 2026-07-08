@@ -3,6 +3,10 @@ import { describe, it, expect, vi } from "vitest";
 import { render } from "@testing-library/react";
 import { SortableDockItem } from "../SortableDockItem";
 import { useDragHandle } from "../DragHandleContext";
+import {
+  DockPanelContext,
+  type DockPanelContextValue,
+} from "@/components/Layout/dockPanelPortalContext";
 import type { PanelInstance } from "@shared/types/panel";
 
 interface MockSortableState {
@@ -102,6 +106,120 @@ describe("SortableDockItem", () => {
     expect(captured).not.toBeNull();
     expect(captured!.setActivatorNodeRef).toBe(mockSetActivatorNodeRef);
     expect(captured!.listeners).toBeDefined();
+  });
+
+  it("registers its drag handle under the panel's own id for a single dock item (#10990)", () => {
+    mockState = { isDragging: false };
+    const registerDragHandle = vi.fn<DockPanelContextValue["registerDragHandle"]>(() => vi.fn());
+    const ctx: DockPanelContextValue = {
+      moveToDestination: vi.fn(),
+      registerDragHandle,
+    };
+    render(
+      <DockPanelContext.Provider value={ctx}>
+        <SortableDockItem terminal={terminal} sourceIndex={0}>
+          <div />
+        </SortableDockItem>
+      </DockPanelContext.Provider>
+    );
+    expect(registerDragHandle).toHaveBeenCalledTimes(1);
+    const [ids, handle] = registerDragHandle.mock.calls[0]!;
+    expect(ids).toEqual([terminal.id]);
+    expect(handle.setActivatorNodeRef).toBe(mockSetActivatorNodeRef);
+    expect(handle.listeners).toBeDefined();
+  });
+
+  it("registers under every group member id for a grouped dock item (#10990)", () => {
+    mockState = { isDragging: false };
+    const registerDragHandle = vi.fn<DockPanelContextValue["registerDragHandle"]>(() => vi.fn());
+    const ctx: DockPanelContextValue = {
+      moveToDestination: vi.fn(),
+      registerDragHandle,
+    };
+    render(
+      <DockPanelContext.Provider value={ctx}>
+        <SortableDockItem
+          terminal={terminal}
+          sourceIndex={0}
+          groupId="g1"
+          groupPanelIds={["t2", "t3", "t4"]}
+        >
+          <div />
+        </SortableDockItem>
+      </DockPanelContext.Provider>
+    );
+    expect(registerDragHandle).toHaveBeenCalledTimes(1);
+    expect(registerDragHandle.mock.calls[0]![0]).toEqual(["t2", "t3", "t4"]);
+  });
+
+  it("disposes its registration on unmount", () => {
+    mockState = { isDragging: false };
+    const dispose = vi.fn();
+    const registerDragHandle = vi.fn<DockPanelContextValue["registerDragHandle"]>(() => dispose);
+    const ctx: DockPanelContextValue = {
+      moveToDestination: vi.fn(),
+      registerDragHandle,
+    };
+    const { unmount } = render(
+      <DockPanelContext.Provider value={ctx}>
+        <SortableDockItem terminal={terminal} sourceIndex={0}>
+          <div />
+        </SortableDockItem>
+      </DockPanelContext.Provider>
+    );
+    expect(dispose).not.toHaveBeenCalled();
+    unmount();
+    expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("registers only once across re-renders despite churning listeners identity and array refs", () => {
+    // The useSortable mock returns a fresh `listeners` object on every render,
+    // mirroring how the real shared DndContext re-creates listeners on every
+    // drag frame. Combined with a fresh `groupPanelIds` array reference (same
+    // ids), the registration must NOT re-fire — a re-fire would re-render
+    // DockPanelOffscreenContainer on every drag frame app-wide.
+    mockState = { isDragging: false };
+    const dispose = vi.fn();
+    const registerDragHandle = vi.fn<DockPanelContextValue["registerDragHandle"]>(() => dispose);
+    const ctx: DockPanelContextValue = {
+      moveToDestination: vi.fn(),
+      registerDragHandle,
+    };
+    const { rerender } = render(
+      <DockPanelContext.Provider value={ctx}>
+        <SortableDockItem
+          terminal={terminal}
+          sourceIndex={0}
+          groupId="g1"
+          groupPanelIds={["t2", "t3"]}
+        >
+          <div />
+        </SortableDockItem>
+      </DockPanelContext.Provider>
+    );
+    expect(registerDragHandle).toHaveBeenCalledTimes(1);
+
+    // Re-render twice with a NEW array reference holding the SAME ids and a
+    // changed sourceIndex (forces a real re-render + fresh mock listeners).
+    for (const idx of [1, 2]) {
+      rerender(
+        <DockPanelContext.Provider value={ctx}>
+          <SortableDockItem
+            terminal={terminal}
+            sourceIndex={idx}
+            groupId="g1"
+            groupPanelIds={["t2", "t3"]}
+          >
+            <div />
+          </SortableDockItem>
+        </DockPanelContext.Provider>
+      );
+    }
+
+    // The joined id-key ("t2,t3") is unchanged, so the id set never changed —
+    // still a single registration, no dispose.
+    expect(registerDragHandle).toHaveBeenCalledTimes(1);
+    expect(dispose).not.toHaveBeenCalled();
   });
 
   it("renders no insertion indicator when idle", () => {
