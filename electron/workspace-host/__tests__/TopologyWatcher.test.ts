@@ -99,9 +99,9 @@ describe("TopologyWatcher", () => {
       expect(mockParcelSubscribe).toHaveBeenCalledTimes(1);
     });
 
-    it("skips watcher start when metadata dir is absent", () => {
+    it("skips watcher start when metadata dir is absent", async () => {
       mockGetGitCommonDir.mockReturnValue(null);
-      watcher.startWatcher();
+      await watcher.startWatcher();
       expect(mockParcelSubscribe).not.toHaveBeenCalled();
     });
 
