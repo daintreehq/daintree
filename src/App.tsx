@@ -3,10 +3,6 @@ import "@xterm/xterm/css/xterm.css";
 import {
   isElectronAvailable,
   useAgentLauncher,
-  useWorktrees,
-  useNewTerminalPalette,
-  usePanelPalette,
-  useProjectSwitcherPalette,
   useTerminalConfig,
   useAppThemeConfig,
   useGlobalKeybindings,
@@ -29,12 +25,6 @@ import { usePluginMcpConsentBridge } from "./hooks/usePluginMcpConsentBridge";
 import { usePluginCapabilityConsentBridge } from "./hooks/usePluginCapabilityConsentBridge";
 import { useMainProcessToastListener } from "./hooks/useMainProcessToastListener";
 
-import { useActionPalette } from "./hooks/useActionPalette";
-import { useQuickSwitcher } from "./hooks/useQuickSwitcher";
-import { useWorktreePalette } from "./hooks/useWorktreePalette";
-import { useQuickCreatePalette } from "./hooks/useQuickCreatePalette";
-import { useDoubleShift } from "./hooks/useDoubleShift";
-import { useProjectMruSwitcher } from "./hooks/useProjectMruSwitcher";
 import { useKeepMounted } from "./hooks/useKeepMounted";
 import { useMcpBridge } from "./hooks/useMcpBridge";
 import { useMcpAnomalyStats } from "./hooks/useMcpAnomalyStats";
@@ -70,13 +60,13 @@ import { MORE_AGENTS_PANEL_ID } from "./hooks/usePanelPalette";
 import { useResumeAgentSession } from "./hooks/useResumeAgentSession";
 import { VoiceRecordingAnnouncer } from "./components/Terminal/VoiceRecordingAnnouncer";
 import { AccessibilityAnnouncer } from "./components/Accessibility/AccessibilityAnnouncer";
-import { useSendToAgentPalette } from "./hooks/useSendToAgentPalette";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { UI_TOOLTIP_DELAY_DURATION, UI_TOOLTIP_SKIP_DELAY_DURATION } from "./lib/animationUtils";
 import { useE2EBridges } from "./hooks/app/useE2EBridges";
 import { useModalResetKeys } from "./hooks/app/useModalResetKeys";
 import { useAppBootstrap } from "./hooks/app/useAppBootstrap";
+import { usePaletteWiring } from "./hooks/app/usePaletteWiring";
 
 import {
   LazyWelcomeScreen,
@@ -199,15 +189,32 @@ function AppInner() {
   // Grid navigation hook for directional terminal switching
   const { findNearest, findByIndex, findDockByIndex, getCurrentLocation } = useGridNavigation();
 
-  const { worktrees, worktreeMap, isLoading } = useWorktrees();
-  const newTerminalPalette = useNewTerminalPalette({ worktreeMap });
-  const panelPalette = usePanelPalette();
-  const projectSwitcherPalette = useProjectSwitcherPalette();
-  const actionPalette = useActionPalette();
-  const quickSwitcher = useQuickSwitcher();
-  const sendToAgentPalette = useSendToAgentPalette();
-  useDoubleShift(actionPalette.toggle);
-  useProjectMruSwitcher();
+  const {
+    worktrees,
+    isLoading,
+    newTerminalPalette,
+    panelPalette,
+    projectSwitcherPalette,
+    actionPalette,
+    quickSwitcher,
+    sendToAgentPalette,
+    worktreePalette,
+    quickCreatePalette,
+    isThemePaletteOpen,
+    isLogLevelPaletteOpen,
+    isResumeSessionsPaletteOpen,
+    isProjectSwitcherModalOpen,
+    shouldMountQuickSwitcher,
+    shouldMountSendToAgentPalette,
+    shouldMountNewTerminalPalette,
+    shouldMountWorktreePalette,
+    shouldMountQuickCreatePalette,
+    shouldMountPanelPalette,
+    shouldMountThemePalette,
+    shouldMountResumeSessionsPalette,
+    shouldMountLogLevelPalette,
+    shouldMountActionPalette,
+  } = usePaletteWiring();
   const currentProject = useProjectStore((state) => state.currentProject);
   const gitInitDialogOpen = useProjectStore((state) => state.gitInitDialogOpen);
   const gitInitDirectoryPath = useProjectStore((state) => state.gitInitDirectoryPath);
@@ -245,9 +252,6 @@ function AppInner() {
   useAgentActivityBroadcast();
   const resumeSession = useResumeAgentSession();
 
-  const worktreePalette = useWorktreePalette({ worktrees });
-  const quickCreatePalette = useQuickCreatePalette();
-
   const {
     isSettingsOpen,
     settingsTab,
@@ -278,8 +282,6 @@ function AppInner() {
     prevPluginManagerOpenRef.current = isPluginManagerOpen;
     if (!wasOpen && isPluginManagerOpen) setIsSettingsOpen(false);
   }, [isPluginManagerOpen, setIsSettingsOpen]);
-  const isThemePaletteOpen = usePaletteStore((state) => state.activePaletteId === "theme");
-  const isLogLevelPaletteOpen = usePaletteStore((state) => state.activePaletteId === "log-level");
   const {
     isWorktreeOverviewOpen,
     toggleWorktreeOverview,
@@ -287,26 +289,6 @@ function AppInner() {
     closeWorktreeOverview,
   } = useWorktreeOverview();
 
-  // Keep each palette/dialog mounted after its first open so its exit animation
-  // (driven by useAnimatedPresence) can run — gating directly on `isOpen`
-  // unmounts in the same React commit that flips it false, killing the exit
-  // (#9917). The component still receives `isOpen` and gates its own DOM via
-  // `shouldRender`.
-  const isProjectSwitcherModalOpen =
-    projectSwitcherPalette.isOpen && projectSwitcherPalette.mode === "modal";
-  const shouldMountQuickSwitcher = useKeepMounted(quickSwitcher.isOpen);
-  const shouldMountSendToAgentPalette = useKeepMounted(sendToAgentPalette.isOpen);
-  const shouldMountNewTerminalPalette = useKeepMounted(newTerminalPalette.isOpen);
-  const shouldMountWorktreePalette = useKeepMounted(worktreePalette.isOpen);
-  const shouldMountQuickCreatePalette = useKeepMounted(quickCreatePalette.isOpen);
-  const shouldMountPanelPalette = useKeepMounted(panelPalette.isOpen);
-  const shouldMountThemePalette = useKeepMounted(isThemePaletteOpen);
-  const isResumeSessionsPaletteOpen = usePaletteStore(
-    (state) => state.activePaletteId === "resume-sessions"
-  );
-  const shouldMountResumeSessionsPalette = useKeepMounted(isResumeSessionsPaletteOpen);
-  const shouldMountLogLevelPalette = useKeepMounted(isLogLevelPaletteOpen);
-  const shouldMountActionPalette = useKeepMounted(actionPalette.isOpen);
   const shouldMountCrossDiffDialog = useKeepMounted(crossDiffDialog.isOpen);
   const shouldMountShortcutsDialog = useKeepMounted(isShortcutsOpen);
 

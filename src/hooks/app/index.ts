@@ -4,6 +4,7 @@ export { useE2EBridges } from "./useE2EBridges";
 export { useModalResetKeys } from "./useModalResetKeys";
 export type { ModalResetKeys } from "./useModalResetKeys";
 export { useAppBootstrap } from "./useAppBootstrap";
+export { usePaletteWiring } from "./usePaletteWiring";
 export { useAppHydration } from "./useAppHydration";
 export { useShortcutHints } from "./useShortcutHints";
 export { usePanelStoreBootstrap } from "./usePanelStoreBootstrap";
