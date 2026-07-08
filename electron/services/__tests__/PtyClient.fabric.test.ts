@@ -139,7 +139,9 @@ describe("PtyClient fabric", () => {
     shardByService((n) => n.startsWith(`daintree-pty-host:${projectId.slice(0, 16)}-`));
 
   const createFabricClient = (opts?: { maxProjectShards?: number }) => {
-    const client = new PtyClientClass({ fabric: true, ...opts });
+    // Pin the shard cap: the production fallback derives it from os.cpus(),
+    // which is 1 on 3-vCPU CI runners and would collapse project shards.
+    const client = new PtyClientClass({ fabric: true, maxProjectShards: 4, ...opts });
     defaultShard().child.emit("message", { type: "ready" });
     return client;
   };
