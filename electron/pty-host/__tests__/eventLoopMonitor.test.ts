@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import {
   startEventLoopMonitor,
   getEventLoopStats,
+  getEventLoopHistogramForTesting,
   stopEventLoopMonitorForTesting,
 } from "../eventLoopMonitor.js";
 
@@ -31,11 +32,22 @@ describe("eventLoopMonitor", () => {
 
   it("resets the window on each read so pulls report deltas, not high-water marks", async () => {
     startEventLoopMonitor();
-    // Let the histogram's sampling timer establish itself before blocking.
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    // Wait for real sampling ticks, not wall time: a sample interval that
+    // spans enable() or reset() is never recorded, so a block that starts
+    // before the first tick lands is silently swallowed — which is exactly
+    // what happened under Windows' 15.6ms clock quantum, where a fixed
+    // 30ms sleep could elapse before the first tick (node#34661).
+    const histogram = getEventLoopHistogramForTesting()!;
+    while (histogram.count < 2) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    getEventLoopStats(); // discard the warmup window (also resets the histogram)
+    while (histogram.count < 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
     // Block the loop long enough to guarantee a large max in window 1.
     const start = Date.now();
-    while (Date.now() - start < 120) {
+    while (Date.now() - start < 200) {
       // busy-wait
     }
     await new Promise((resolve) => setTimeout(resolve, 30));

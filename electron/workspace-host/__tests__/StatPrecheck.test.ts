@@ -79,7 +79,8 @@ describe("StatPrecheck", () => {
     // so a branch flip changes the resulting baseline unless the host's
     // current value is read fresh (not captured once up front).
     vi.mocked(stat).mockImplementation(async (path) => {
-      const p = String(path);
+      // pathJoin emits backslashes on Windows — normalize before matching.
+      const p = String(path).replace(/\\/g, "/");
       if (p.includes("refs/heads/main")) return makeStatResult(1_000);
       if (p.includes("refs/heads/other")) return makeStatResult(2_000);
       return makeStatResult(500);

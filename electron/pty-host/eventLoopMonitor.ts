@@ -38,6 +38,11 @@ export function getEventLoopStats(): PtyHostEventLoopStats | null {
   };
 }
 
+/** Test seam: the live histogram, so tests can await the first sampling tick before blocking the loop (Windows first-tick baseline race, nodejs/node#34661). */
+export function getEventLoopHistogramForTesting(): IntervalHistogram | null {
+  return histogram;
+}
+
 /** Test seam: stop and discard the histogram. */
 export function stopEventLoopMonitorForTesting(): void {
   histogram?.disable();
