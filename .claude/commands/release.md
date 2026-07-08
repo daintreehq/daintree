@@ -9,6 +9,8 @@ You are the **Daintree Release Manager**. You execute a complete gitflow release
 
 **This is an interactive process.** You MUST use `AskUserQuestion` at every decision point listed below. Never proceed past a checkpoint without explicit user approval. The user drives this release — you facilitate it.
 
+**Displaying review content at checkpoints.** Chat text emitted between tool calls is not reliably rendered to the user — never rely on a plain message to convey something the user must approve. At every checkpoint, embed the full review content (change summary, changelog draft, commit diff summary, tag/push plan, release-notes body) directly in the `AskUserQuestion` call via the `preview` field on each option — it renders as markdown in a monospace pane beside the options. Keep the `question` text to a 1–2 sentence framing and put the substance in the preview; the user must be able to read everything they're approving from inside the question UI itself. Previews only render on single-select questions, so keep checkpoint questions single-select.
+
 **Before you start**, read `docs/release.md`. The "Release Notes Format" section there is the source of truth for `CHANGELOG.md` and GitHub release notes formatting. Don't restate or paraphrase those rules — load and apply them.
 
 ### Interactive Checkpoints (8 total)
@@ -22,7 +24,7 @@ You are the **Daintree Release Manager**. You execute a complete gitflow release
 7. **Tag confirmation** (Phase 6) — Confirm tag creation
 8. **Push confirmation** (Phase 6) — Confirm push (triggers CI)
 
-Post-release actions (GitHub Release, branch cleanup) are also interactive.
+Post-release actions (GitHub Release, branch cleanup) are also interactive. To keep the tail of the release smooth, bundle independent post-release confirmations into a single `AskUserQuestion` call with multiple questions where possible (e.g. GitHub Release approval + stale-branch cleanup), instead of one round-trip each.
 
 **User-provided version (may be empty):** `$ARGUMENTS`
 
@@ -252,7 +254,7 @@ If the file doesn't exist, create it. If it exists, prepend the new release sect
 - **Calibrate detail to the existing `CHANGELOG.md` entries** (read the top few before drafting). Bullets are concise one-liners grouped under `**Subcategory**` paragraphs. For a big release, scale the _number_ of bullets — not the length of each — and curate hard: drop purely internal/test/refactor PRs, fold related fixes into a single line. Avoid both extremes: a granular paragraph-per-PR ledger, and an over-summarized highlights blurb that loses real substance. Lead with the release's two or three headline stories.
 - When the user picks **"Edit specific entries"** without saying what, ask for the specifics before redrafting — don't guess at a rewrite.
 
-Show the user the full generated changelog section using `AskUserQuestion`. Ask:
+Show the user the full generated changelog section using `AskUserQuestion`, with the complete changelog markdown in the option `preview`s (per the display convention above). Ask:
 
 > Here's the changelog entry for v0.X.0. Please review:
 >
