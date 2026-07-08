@@ -27,6 +27,7 @@ import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useKeepMounted } from "@/hooks/useKeepMounted";
 import { type FileStageRowSection } from "./FileStageRow";
 import { FileSection } from "./FileSection";
+import { useReviewHubStagingActions } from "./useReviewHubStagingActions";
 import { BaseBranchFileRow } from "./BaseBranchFileRow";
 import { PushErrorBanner } from "./PushErrorBanner";
 import { PrStatusChip } from "./PrStatusChip";
@@ -192,7 +193,6 @@ export function ReviewHubContent({
   // Row element that opened a diff modal; AppDialog falls back to it when the
   // trigger unmounted (e.g. the file left the list while the modal was open).
   const diffTriggerRef = useRef<HTMLElement | null>(null);
-  const isBulkStagingRef = useRef(false);
   // One-shot guard for the auto-stage-on-open behavior. Resets in the close
   // branch of the isOpen effect so reopening re-arms the check.
   const hasAutoStagedRef = useRef(false);
@@ -500,33 +500,30 @@ export function ReviewHubContent({
     }
   }, [worktreePath]);
 
-  const handleStageFiltered = useCallback(async () => {
-    const paths = derivedUnstaged.map((f) => f.path);
-    if (paths.length === 0) return;
-    setActionError(null);
-    debouncedBgRefreshRef.current?.cancel();
-    try {
-      await window.electron.git.stageFiles(worktreePath, paths);
-    } catch (err) {
-      setActionError(formatErrorMessage(err, "Failed to stage files"));
-    } finally {
-      await refresh();
-    }
-  }, [worktreePath, refresh, derivedUnstaged]);
-
-  const handleUnstageFiltered = useCallback(async () => {
-    const paths = derivedStaged.map((f) => f.path);
-    if (paths.length === 0) return;
-    setActionError(null);
-    debouncedBgRefreshRef.current?.cancel();
-    try {
-      await window.electron.git.unstageFiles(worktreePath, paths);
-    } catch (err) {
-      setActionError(formatErrorMessage(err, "Failed to unstage files"));
-    } finally {
-      await refresh();
-    }
-  }, [worktreePath, refresh, derivedStaged]);
+  const {
+    handleStageFile,
+    handleUnstageFile,
+    handleStageAll,
+    handleUnstageAll,
+    handleStageFiltered,
+    handleUnstageFiltered,
+    handleStageSelection,
+    handleUnstageSelection,
+    handleToggleStaged,
+    handleToggleUnstaged,
+  } = useReviewHubStagingActions({
+    worktreePath,
+    refresh,
+    derivedStaged,
+    derivedUnstaged,
+    selectedPaths,
+    selectionSection,
+    setActionError,
+    setSelectedPaths,
+    setSelectionSection,
+    selectionAnchorRef,
+    debouncedBgRefreshRef,
+  });
 
   const backgroundRefresh = useCallback(async () => {
     if (!worktreePath) return;
@@ -765,96 +762,6 @@ export function ReviewHubContent({
       debouncedBgRefreshRef.current = null;
     };
   }, [isOpen, worktreePath, backgroundRefresh]);
-
-  const handleStageFile = useCallback(
-    async (filePath: string) => {
-      setActionError(null);
-      debouncedBgRefreshRef.current?.cancel();
-      try {
-        await window.electron.git.stageFile(worktreePath, filePath);
-        await refresh();
-      } catch (err) {
-        setActionError(formatErrorMessage(err, "Failed to stage file"));
-      }
-    },
-    [worktreePath, refresh]
-  );
-
-  const handleUnstageFile = useCallback(
-    async (filePath: string) => {
-      setActionError(null);
-      debouncedBgRefreshRef.current?.cancel();
-      try {
-        await window.electron.git.unstageFile(worktreePath, filePath);
-        await refresh();
-      } catch (err) {
-        setActionError(formatErrorMessage(err, "Failed to unstage file"));
-      }
-    },
-    [worktreePath, refresh]
-  );
-
-  const handleStageAll = useCallback(async () => {
-    setActionError(null);
-    debouncedBgRefreshRef.current?.cancel();
-    try {
-      await window.electron.git.stageAll(worktreePath);
-      await refresh();
-    } catch (err) {
-      setActionError(formatErrorMessage(err, "Failed to stage all files"));
-    }
-  }, [worktreePath, refresh]);
-
-  const handleUnstageAll = useCallback(async () => {
-    setActionError(null);
-    debouncedBgRefreshRef.current?.cancel();
-    try {
-      await window.electron.git.unstageAll(worktreePath);
-      await refresh();
-    } catch (err) {
-      setActionError(formatErrorMessage(err, "Failed to unstage all files"));
-    }
-  }, [worktreePath, refresh]);
-
-  const handleStageSelection = useCallback(async () => {
-    if (isBulkStagingRef.current) return;
-    if (selectionSection !== "unstaged" || selectedPaths.size === 0) return;
-    isBulkStagingRef.current = true;
-    const paths = Array.from(selectedPaths);
-    setActionError(null);
-    debouncedBgRefreshRef.current?.cancel();
-    try {
-      await window.electron.git.stageFiles(worktreePath, paths);
-      setSelectedPaths(new Set());
-      setSelectionSection(null);
-      selectionAnchorRef.current = null;
-      await refresh();
-    } catch (err) {
-      setActionError(formatErrorMessage(err, "Failed to stage selected files"));
-    } finally {
-      isBulkStagingRef.current = false;
-    }
-  }, [worktreePath, refresh, selectedPaths, selectionSection]);
-
-  const handleUnstageSelection = useCallback(async () => {
-    if (isBulkStagingRef.current) return;
-    if (selectionSection !== "staged" || selectedPaths.size === 0) return;
-    isBulkStagingRef.current = true;
-    const paths = Array.from(selectedPaths);
-    setActionError(null);
-    debouncedBgRefreshRef.current?.cancel();
-    try {
-      await window.electron.git.unstageFiles(worktreePath, paths);
-      setSelectedPaths(new Set());
-      setSelectionSection(null);
-      selectionAnchorRef.current = null;
-      await refresh();
-    } catch (err) {
-      setActionError(formatErrorMessage(err, "Failed to unstage selected files"));
-    } finally {
-      isBulkStagingRef.current = false;
-    }
-  }, [worktreePath, refresh, selectedPaths, selectionSection]);
 
   const handleCommit = useCallback(
     async (message: string) => {
@@ -1130,20 +1037,6 @@ export function ReviewHubContent({
   const handleScrollContainer = useCallback((e: React.UIEvent<HTMLDivElement>) => {
     savedScrollTop.current = e.currentTarget.scrollTop;
   }, []);
-
-  const handleToggleStaged = useCallback(
-    (filePath: string) => {
-      void handleUnstageFile(filePath);
-    },
-    [handleUnstageFile]
-  );
-
-  const handleToggleUnstaged = useCallback(
-    (filePath: string) => {
-      void handleStageFile(filePath);
-    },
-    [handleStageFile]
-  );
 
   const handleRowClick = useCallback(
     (
