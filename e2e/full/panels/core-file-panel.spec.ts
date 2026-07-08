@@ -31,6 +31,14 @@ const SPEC_MARKDOWN = [
 
 const STYLES_CSS = ".file-panel-fixture { color: rebeccapurple; }\n";
 
+const TALL_TEXT =
+  Array.from(
+    { length: 400 },
+    (_, i) => `tall-line-${String(i + 1).padStart(3, "0")} lorem ipsum dolor sit amet`
+  ).join("\n") + "\n";
+
+const SHORT_TEXT = "short-line-1\nshort-line-2\nshort-line-3\n";
+
 async function dispatchAction(page: Page, actionId: string, args?: unknown): Promise<unknown> {
   return page.evaluate(
     ([id, a]) =>
@@ -67,6 +75,8 @@ test.describe.serial("Core: File viewer panel (dialog + panel)", () => {
     fixtureCleanup = cleanup;
     writeFileSync(path.join(dir, "spec.md"), SPEC_MARKDOWN);
     writeFileSync(path.join(dir, "styles.css"), STYLES_CSS);
+    writeFileSync(path.join(dir, "tall.txt"), TALL_TEXT);
+    writeFileSync(path.join(dir, "short.txt"), SHORT_TEXT);
     ctx = await launchApp();
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "File Panel");
   });
@@ -226,5 +236,56 @@ test.describe.serial("Core: File viewer panel (dialog + panel)", () => {
     await chip.dblclick();
     await expect(gridFilePanels).toHaveCount(3, { timeout: T_MEDIUM });
     await expect(chip).not.toBeVisible({ timeout: T_MEDIUM });
+  });
+
+  test("a file taller than its pane scrolls internally instead of blowing out the grid", async () => {
+    await dispatchAction(ctx.window, "file.openPanel", { path: "tall.txt" });
+    await expect(filePanes(ctx.window)).toHaveCount(4, { timeout: T_LONG });
+
+    const tallPane = filePanes(ctx.window).filter({ hasText: "tall-line-001" }).first();
+    await expect(tallPane.locator(".cm-content")).toBeVisible({ timeout: T_LONG });
+
+    // #11024: the pane body owns the scroll. Without the grid-item min-height
+    // fix the cell inflates to the file's intrinsic height, so the pane has no
+    // internal scroll and its client height explodes past the window.
+    await expect
+      .poll(
+        () =>
+          tallPane.evaluate((el) => ({
+            scrollsInternally: el.scrollHeight > el.clientHeight,
+            paneBounded: el.clientHeight <= window.innerHeight,
+          })),
+        { timeout: T_MEDIUM }
+      )
+      .toEqual({ scrollsInternally: true, paneBounded: true });
+  });
+
+  test("a short file's editor surface stretches to fill the pane", async () => {
+    await dispatchAction(ctx.window, "file.openPanel", { path: "short.txt" });
+    await expect(filePanes(ctx.window)).toHaveCount(5, { timeout: T_LONG });
+
+    const shortPane = filePanes(ctx.window).filter({ hasText: "short-line-1" }).first();
+    await expect(shortPane.locator(".cm-content")).toBeVisible({ timeout: T_LONG });
+
+    // The min-h-full column mirrors the file viewer dialog: the editor surface
+    // reaches the bottom of the pane, and the pane background resolves to the
+    // same color as the editor background so the fill is seamless.
+    await expect
+      .poll(
+        () =>
+          shortPane.evaluate((el) => {
+            const column = el.firstElementChild;
+            const editor = el.querySelector(".cm-editor");
+            return {
+              columnFillsPane:
+                column instanceof HTMLElement && column.offsetHeight >= el.clientHeight - 1,
+              backgroundsMatch:
+                editor !== null &&
+                getComputedStyle(el).backgroundColor === getComputedStyle(editor).backgroundColor,
+            };
+          }),
+        { timeout: T_MEDIUM }
+      )
+      .toEqual({ columnFillsPane: true, backgroundsMatch: true });
   });
 });

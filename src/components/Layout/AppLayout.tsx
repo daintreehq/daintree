@@ -819,10 +819,16 @@ export function AppLayout({
             scrolls this row right — shifting sidebar+main left and pushing the
             worktree sidebar off the left edge. `overflow:clip` is not a scroll
             container, so focus can never scroll it. Both the class and the inline
-            style are set because the inline `overflow` wins over the utility. */}
+            style are set because the inline `overflow` wins over the utility.
+
+            min-height MUST be 0 (#11024): because `clip` is not a scroll
+            container, it does not zero the flex automatic minimum size the way
+            `overflow:hidden` does — without it, any panel content with a large
+            intrinsic height (file viewer) inflates this row past the window and
+            wrecks the whole layout. */}
         <div
-          className="flex-1 flex overflow-clip relative"
-          style={{ flex: 1, display: "flex", overflow: "clip", position: "relative" }}
+          className="flex-1 flex overflow-clip relative min-h-0"
+          style={{ flex: 1, display: "flex", overflow: "clip", position: "relative", minHeight: 0 }}
         >
           <div
             className={cn(
