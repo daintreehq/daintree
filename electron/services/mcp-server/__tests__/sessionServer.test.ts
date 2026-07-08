@@ -2292,12 +2292,7 @@ describe("worktree resource lifecycle dedup (#10683)", () => {
 });
 
 describe("MCP_DEDUP_ALLOWLIST widening (#9156)", () => {
-  const NEW_MUTATIONS = [
-    "worktree.delete",
-    "git.snapshotRevert",
-    "git.snapshotDelete",
-    "forge.assignIssue",
-  ];
+  const NEW_MUTATIONS = ["worktree.delete", "forge.assignIssue"];
 
   it("adds the remaining destructive-mutation cohort", () => {
     for (const tool of NEW_MUTATIONS) {
@@ -2306,7 +2301,7 @@ describe("MCP_DEDUP_ALLOWLIST widening (#9156)", () => {
   });
 
   it("stays bounded — adjacent read-only tools remain excluded", () => {
-    expect(MCP_DEDUP_ALLOWLIST.has("git.snapshotGet")).toBe(false);
+    expect(MCP_DEDUP_ALLOWLIST.has("git.getStagingStatus")).toBe(false);
   });
 
   it.each(NEW_MUTATIONS)(

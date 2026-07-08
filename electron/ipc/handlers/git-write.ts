@@ -39,10 +39,7 @@ function playSoundFireAndForget(id: SoundId): void {
     .then((svc) => svc.play(id))
     .catch((err) => console.error("[git-write] sound play failed:", err));
 }
-import { preAgentSnapshotService } from "../../services/PreAgentSnapshotService.js";
 import type {
-  SnapshotInfo,
-  SnapshotRevertResult,
   ConflictMarkerScanEntry,
   GitScanConflictMarkersPayload,
   GitCheckoutOursTheirsPayload,
@@ -843,34 +840,6 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     await git.add(["--", payload.filePath]);
   };
   handlers.push(typedHandle(CHANNELS.GIT_CHECKOUT_OURS_THEIRS, handleCheckoutOursTheirs));
-
-  // Snapshot handlers
-  const handleSnapshotGet = async (worktreeId: string): Promise<SnapshotInfo | null> => {
-    if (typeof worktreeId !== "string" || !worktreeId) return null;
-    return preAgentSnapshotService.getSnapshot(worktreeId);
-  };
-  handlers.push(typedHandle(CHANNELS.GIT_SNAPSHOT_GET, handleSnapshotGet));
-
-  const handleSnapshotList = async (): Promise<SnapshotInfo[]> => {
-    return preAgentSnapshotService.listSnapshots();
-  };
-  handlers.push(typedHandle(CHANNELS.GIT_SNAPSHOT_LIST, handleSnapshotList));
-
-  const handleSnapshotRevert = async (worktreeId: string): Promise<SnapshotRevertResult> => {
-    validateCwd(worktreeId);
-    checkRateLimit(CHANNELS.GIT_SNAPSHOT_REVERT, 3, 10_000);
-    return preAgentSnapshotService.revertToSnapshot(worktreeId);
-  };
-  handlers.push(
-    // @ts-expect-error: SnapshotRevertResult contains {success} — pending migration to throw AppError. See #6020.
-    typedHandle(CHANNELS.GIT_SNAPSHOT_REVERT, handleSnapshotRevert)
-  );
-
-  const handleSnapshotDelete = async (worktreeId: string): Promise<void> => {
-    validateCwd(worktreeId);
-    await preAgentSnapshotService.deleteSnapshot(worktreeId);
-  };
-  handlers.push(typedHandle(CHANNELS.GIT_SNAPSHOT_DELETE, handleSnapshotDelete));
 
   // Normalizes a path for comparison against git config safe.directory entries:
   // resolve → realpath (fall back to resolved) → forward slashes.

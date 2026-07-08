@@ -76,7 +76,6 @@ import {
 } from "./window/powerMonitor.js";
 import { getProjectStatsService } from "./ipc/handlers/projectCrud/index.js";
 import { getIdleTerminalNotificationService } from "./services/IdleTerminalNotificationService.js";
-import { preAgentSnapshotService } from "./services/PreAgentSnapshotService.js";
 import { isDemoMode, isSmokeTest, kickOffEarlyPathRefresh } from "./setup/environment.js";
 import { store } from "./store.js";
 import { initializeLogger, registerLoggerTransport, setLogLevelOverrides } from "./utils/logger.js";
@@ -490,7 +489,6 @@ if (!gotTheLock) {
         getWorkspaceClient: getWorkspaceClientRef,
         getProjectStatsService,
         getIdleTerminalNotificationService: () => getIdleTerminalNotificationService(),
-        getPreAgentSnapshotService: () => preAgentSnapshotService,
       });
     }
 

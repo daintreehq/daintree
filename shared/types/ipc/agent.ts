@@ -27,7 +27,7 @@ export interface AgentStateChangePayload {
   terminalId: string;
   /** Worktree ID (if terminal is associated with a worktree — renderer-originated only; no longer emitted by backend) */
   worktreeId?: string;
-  /** Terminal working directory (used by PreAgentSnapshotService as the git target) */
+  /** Terminal working directory (the worktree root in the typical case) */
   cwd?: string;
   /** New state */
   state: AgentState;

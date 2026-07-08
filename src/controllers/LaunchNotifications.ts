@@ -1,6 +1,6 @@
-// Launch-failure toasts/banner routing and the resume/snapshot auto-dismiss
-// banners, split out of HelpSessionController.ts (#11009). No behavior
-// change — the notify() calls and timers are unchanged, just relocated.
+// Launch-failure toasts/banner routing and the resume auto-dismiss banner,
+// split out of HelpSessionController.ts (#11009). No behavior change — the
+// notify() calls and timers are unchanged, just relocated.
 
 import { getAgentConfig } from "@/config/agents";
 import { actionService } from "@/services/ActionService";
@@ -8,7 +8,6 @@ import { notify } from "@/lib/notify";
 import type { HelpSessionSnapshot, LaunchErrorKind } from "./HelpSessionController";
 
 const RESUME_BANNER_AUTO_DISMISS_MS = 4_000;
-const SNAPSHOT_BANNER_AUTO_DISMISS_MS = 12_000;
 
 // Exported directly: the launch FSM also calls this before a launch reaches
 // the version gate (e.g. project state still loading), not just from
@@ -80,29 +79,22 @@ export interface LaunchNotificationsHost {
 }
 
 /**
- * Owns launch-failure toast/banner routing plus the resume-success and
- * preflight-snapshot banners' auto-dismiss timers.
+ * Owns launch-failure toast/banner routing plus the resume-success banner's
+ * auto-dismiss timer.
  */
 export class LaunchNotifications {
   private _resumeBannerTimer: ReturnType<typeof setTimeout> | null = null;
-  private _snapshotBannerTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly host: LaunchNotificationsHost) {}
 
-  /** Clears both banner timers — called on controller stop(). */
+  /** Clears the banner timer — called on controller stop(). */
   dispose(): void {
     this._clearResumeBannerTimer();
-    this._clearSnapshotBannerTimer();
   }
 
   dismissResumeBanner(): void {
     this._clearResumeBannerTimer();
     this.host.patch({ showResumeBanner: false });
-  }
-
-  dismissPreflightSnapshot(): void {
-    this._clearSnapshotBannerTimer();
-    this.host.patch({ preflightSnapshot: null });
   }
 
   armResumeBannerAutoDismiss(): void {
@@ -111,14 +103,6 @@ export class LaunchNotifications {
       this._resumeBannerTimer = null;
       this.host.patch({ showResumeBanner: false });
     }, RESUME_BANNER_AUTO_DISMISS_MS);
-  }
-
-  armSnapshotBannerAutoDismiss(): void {
-    this._clearSnapshotBannerTimer();
-    this._snapshotBannerTimer = setTimeout(() => {
-      this._snapshotBannerTimer = null;
-      this.host.patch({ preflightSnapshot: null });
-    }, SNAPSHOT_BANNER_AUTO_DISMISS_MS);
   }
 
   /**
@@ -147,13 +131,6 @@ export class LaunchNotifications {
     if (this._resumeBannerTimer) {
       clearTimeout(this._resumeBannerTimer);
       this._resumeBannerTimer = null;
-    }
-  }
-
-  private _clearSnapshotBannerTimer(): void {
-    if (this._snapshotBannerTimer) {
-      clearTimeout(this._snapshotBannerTimer);
-      this._snapshotBannerTimer = null;
     }
   }
 }

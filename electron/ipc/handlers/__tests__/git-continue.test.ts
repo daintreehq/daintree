@@ -16,15 +16,6 @@ vi.mock("../../../services/SoundService.js", () => ({
   soundService: { play: vi.fn() },
 }));
 
-vi.mock("../../../services/PreAgentSnapshotService.js", () => ({
-  preAgentSnapshotService: {
-    getSnapshot: vi.fn(),
-    listSnapshots: vi.fn(),
-    revertToSnapshot: vi.fn(),
-    deleteSnapshot: vi.fn(),
-  },
-}));
-
 const createHardenedGitMock = vi.hoisted(() => vi.fn());
 // Sentinel returned by the mocked buildContinueEnv so the test can assert the
 // handler passes its result to .env() rather than raw process.env.

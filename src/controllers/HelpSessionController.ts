@@ -9,13 +9,10 @@ import { getAgentConfig } from "@/config/agents";
 import { actionService } from "@/services/ActionService";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { usePanelStore, useProjectStore } from "@/store";
-import { projectClient } from "@/clients/projectClient";
 import { logError } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import type { ActionContext } from "@shared/types/actions";
 import { buildResumeCommand, buildResumeLatestCommand } from "@shared/types/agentSettings";
-import { resolveDaintreeMcpTier } from "@shared/types/project";
-import type { SnapshotInfo } from "@shared/types/ipc/git";
 import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
 import {
   type HelpSessionRef,
@@ -178,7 +175,6 @@ export interface HelpSessionSnapshot {
   showResumeBanner: boolean;
   assistantVersionTooOld: VersionTooOld | null;
   tierMismatch: TierMismatchState | null;
-  preflightSnapshot: SnapshotInfo | null;
   isApprovingTier: boolean;
   /**
    * True while a manual "Check again" version re-probe is in flight or its
@@ -292,7 +288,6 @@ const INITIAL_SNAPSHOT: HelpSessionSnapshot = Object.freeze({
   showResumeBanner: false,
   assistantVersionTooOld: null,
   tierMismatch: null,
-  preflightSnapshot: null,
   isApprovingTier: false,
   isCheckingVersion: false,
   launchError: null,
@@ -347,12 +342,6 @@ export class HelpSessionController {
    */
   private _launchWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly LAUNCH_WATCHDOG_MS = 90_000;
-  /**
-   * Once-per-terminal-id guard for the auto-snapshot pre-flight. Stores the
-   * terminal id we last took a snapshot for so React 19 StrictMode's
-   * double-invoke can't fire two parallel pre-flights.
-   */
-  private _preflightSnapshotTerminalId: string | null = null;
   private _lastInputs: HelpSessionInputs | null = null;
 
   private readonly _versionGate = new HelpVersionGate({
@@ -565,50 +554,6 @@ export class HelpSessionController {
   }
 
   /**
-   * Auto-snapshot pre-flight: when the project's MCP tier is `system`, take
-   * a pre-flight snapshot once per session and surface a Tier-1 ambient
-   * banner. The guard is set synchronously to survive React 19 StrictMode
-   * double-invocation; callers should pass `cancelled` to skip the surface
-   * on unmount.
-   */
-  maybeRunPreflightSnapshot(args: {
-    terminalId: string | null;
-    terminalExists: boolean;
-    projectId: string | null;
-    worktreeId: string | null;
-  }): (() => void) | void {
-    const { terminalId, terminalExists, projectId, worktreeId } = args;
-    if (!terminalId || !terminalExists) return;
-    if (this._preflightSnapshotTerminalId === terminalId) return;
-    if (!projectId) return;
-    if (!worktreeId) return;
-
-    let cancelled = false;
-    this._preflightSnapshotTerminalId = terminalId;
-    safeFireAndForget(
-      (async () => {
-        const settings = await projectClient.getSettings(projectId);
-        const tier = resolveDaintreeMcpTier(settings);
-        if (tier !== "system") return;
-        const snapshot = await window.electron.git.snapshotGet(worktreeId);
-        // PreAgentSnapshotService records a sentinel (`stashRef: ""`)
-        // before the actual stash completes to coordinate concurrent
-        // creation. A sentinel means the snapshot is still in-flight (or
-        // failed early) — surfacing the banner would lie about safety.
-        if (cancelled || !snapshot || !snapshot.stashRef) return;
-        this._patch({ preflightSnapshot: snapshot });
-        this._launchNotifications.armSnapshotBannerAutoDismiss();
-      })().catch((err) => {
-        logError("HelpPanel: snapshot pre-flight failed", err);
-      }),
-      { context: "HelpPanel:snapshot pre-flight" }
-    );
-    return () => {
-      cancelled = true;
-    };
-  }
-
-  /**
    * User-initiated launch from the empty-state agent picker or other
    * caller. Mirrors the original `handleSelectAgent` semantics: removes the
    * existing terminal if present, runs the version gate, provisions, then
@@ -725,7 +670,6 @@ export class HelpSessionController {
     this._patch({
       phase: "idle",
       showResumeBanner: false,
-      preflightSnapshot: null,
       tierMismatch: null,
       sessionRevoked: null,
     });
@@ -845,10 +789,6 @@ export class HelpSessionController {
 
   dismissResumeBanner(): void {
     this._launchNotifications.dismissResumeBanner();
-  }
-
-  dismissPreflightSnapshot(): void {
-    this._launchNotifications.dismissPreflightSnapshot();
   }
 
   dismissTierMismatch(): void {
@@ -1008,7 +948,6 @@ export class HelpSessionController {
       next.showResumeBanner === this._snapshot.showResumeBanner &&
       next.assistantVersionTooOld === this._snapshot.assistantVersionTooOld &&
       next.tierMismatch === this._snapshot.tierMismatch &&
-      next.preflightSnapshot === this._snapshot.preflightSnapshot &&
       next.isApprovingTier === this._snapshot.isApprovingTier &&
       next.isCheckingVersion === this._snapshot.isCheckingVersion &&
       next.launchError === this._snapshot.launchError &&

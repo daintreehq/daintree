@@ -11,7 +11,6 @@ import {
   getServiceConnectivityRegistry,
 } from "../services/connectivity/index.js";
 import { notificationService } from "../services/NotificationService.js";
-import { preAgentSnapshotService } from "../services/PreAgentSnapshotService.js";
 import { getActionBreadcrumbService } from "../services/ActionBreadcrumbService.js";
 import { getPluginActionAuditService } from "../services/PluginActionAuditService.js";
 import {
@@ -223,10 +222,10 @@ export async function initGlobalServices(
   }
 
   // Notifications (global singletons)
-  // AgentNotificationService and PreAgentSnapshotService are deferred — agents
-  // can't emit state events before the renderer is interactive, and the boot
-  // grace period now starts from the deferred initialize() so the suppression
-  // window still covers the actual agent startup interval.
+  // AgentNotificationService is deferred — agents can't emit state events
+  // before the renderer is interactive, and the boot grace period now starts
+  // from the deferred initialize() so the suppression window still covers the
+  // actual agent startup interval.
   getActionBreadcrumbService().initialize();
 
   // Plugin-action audit log: subscribes to action:dispatched and records every
@@ -293,17 +292,6 @@ export async function initGlobalServices(
     name: "database-maintenance",
     run: () => {
       getDatabaseMaintenanceService().startMaintenance();
-    },
-  });
-
-  // Pre-agent snapshot pruning + 1-hour interval timer. Deferred so the
-  // initial pruneAllWorktrees() pass and setInterval arming don't contend
-  // with renderer hydration. Registered AFTER system-sleep-service so the
-  // suspend/wake listeners attach to a live service.
-  registerDeferredTask({
-    name: "pre-agent-snapshot-service",
-    run: () => {
-      preAgentSnapshotService.initialize();
     },
   });
 

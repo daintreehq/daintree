@@ -93,8 +93,8 @@ export interface ContentPanelProps extends BasePanelProps {
   queueCount?: number;
   flowStatus?: PersistableFlowStatus;
   /**
-   * True when the agent transitioned to `completed` and the pre-agent snapshot
-   * confirms no file changes were made. Drives the "Finished, no changes" pill
+   * True when the agent transitioned to `completed` and the worktree's
+   * changed-file count is zero. Drives the "Finished, no changes" pill
    * in the auto-constructed TerminalHeaderContent.
    */
   completedWithNoChanges?: boolean;

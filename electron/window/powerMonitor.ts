@@ -4,7 +4,6 @@ import type { WorkspaceClient } from "../services/WorkspaceClient.js";
 import type { MainProcessWatchdogClient } from "../services/MainProcessWatchdogClient.js";
 import type { ProjectStatsService } from "../services/ProjectStatsService.js";
 import type { IdleTerminalNotificationService } from "../services/IdleTerminalNotificationService.js";
-import type { PreAgentSnapshotService } from "../services/PreAgentSnapshotService.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { getAppWebContents } from "./webContentsRegistry.js";
 import { getForgeProviderImplEntries } from "../services/forgeProviderRegistry.js";
@@ -150,14 +149,12 @@ const BLUR_DEBOUNCE_MS = 100;
 const DISK_SPACE_NORMAL = 5 * 60 * 1000;
 const APP_METRICS_NORMAL = 30_000;
 const IDLE_TERMINAL_NORMAL = 5 * 60 * 1000;
-const PRE_AGENT_PRUNE_NORMAL = 60 * 60 * 1000;
 
 export interface WindowFocusThrottleDeps {
   getPtyClient: () => PtyClient | null;
   getWorkspaceClient: () => WorkspaceClient | null;
   getProjectStatsService: () => ProjectStatsService | null;
   getIdleTerminalNotificationService?: () => IdleTerminalNotificationService | null;
-  getPreAgentSnapshotService?: () => PreAgentSnapshotService | null;
 }
 
 const focusThrottleState = {
@@ -217,11 +214,6 @@ function applyThrottle(): void {
   if (idleTerminalService) {
     idleTerminalService.updatePollInterval(IDLE_TERMINAL_NORMAL * THROTTLE_MULTIPLIER);
   }
-
-  const preAgentSnapshotService = focusThrottleDeps.getPreAgentSnapshotService?.() ?? null;
-  if (preAgentSnapshotService) {
-    preAgentSnapshotService.updatePollInterval(PRE_AGENT_PRUNE_NORMAL * THROTTLE_MULTIPLIER);
-  }
 }
 
 function removeThrottle(): void {
@@ -260,11 +252,6 @@ function removeThrottle(): void {
   const idleTerminalService = focusThrottleDeps.getIdleTerminalNotificationService?.() ?? null;
   if (idleTerminalService) {
     idleTerminalService.updatePollInterval(IDLE_TERMINAL_NORMAL);
-  }
-
-  const preAgentSnapshotService = focusThrottleDeps.getPreAgentSnapshotService?.() ?? null;
-  if (preAgentSnapshotService) {
-    preAgentSnapshotService.updatePollInterval(PRE_AGENT_PRUNE_NORMAL);
   }
 
   // Opportunistic token-health re-check on focus regain, gated by each

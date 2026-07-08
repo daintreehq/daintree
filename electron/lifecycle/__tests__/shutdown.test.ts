@@ -156,11 +156,6 @@ vi.mock("../../services/NotificationService.js", () => ({
   notificationService: notificationServiceMock,
 }));
 
-const preAgentSnapshotMock = vi.hoisted(() => ({ dispose: vi.fn() }));
-vi.mock("../../services/PreAgentSnapshotService.js", () => ({
-  preAgentSnapshotService: preAgentSnapshotMock,
-}));
-
 const pluginServiceMock = vi.hoisted(() => ({ setWorkspaceClient: vi.fn() }));
 vi.mock("../../services/PluginService.js", () => ({
   pluginService: pluginServiceMock,
@@ -774,7 +769,6 @@ describe("registerShutdownHandler", () => {
       expect(agentConnectivityMock.dispose).toHaveBeenCalledTimes(1);
       expect(connectivityRegistryMock.dispose).toHaveBeenCalledTimes(1);
       expect(notificationServiceMock.dispose).toHaveBeenCalledTimes(1);
-      expect(preAgentSnapshotMock.dispose).toHaveBeenCalledTimes(1);
     });
 
     it("disposes optional refs only when present and nulls them after", async () => {

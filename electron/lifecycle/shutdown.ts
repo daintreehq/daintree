@@ -31,7 +31,6 @@ import {
   getServiceConnectivityRegistry,
 } from "../services/connectivity/index.js";
 import { notificationService } from "../services/NotificationService.js";
-import { preAgentSnapshotService } from "../services/PreAgentSnapshotService.js";
 import {
   getCcrConfigService,
   setCcrConfigService,
@@ -454,11 +453,6 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
               console.warn("[MAIN] AgentNotificationService.dispose failed:", err);
             }
             setAgentNotificationServiceRef(null);
-            try {
-              preAgentSnapshotService.dispose();
-            } catch (err) {
-              console.warn("[MAIN] preAgentSnapshotService.dispose failed:", err);
-            }
             try {
               getAutoUpdaterServiceRef()?.dispose();
             } catch (err) {

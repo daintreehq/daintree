@@ -15,15 +15,6 @@ vi.mock("../../../services/SoundService.js", () => ({
   soundService: { play: vi.fn() },
 }));
 
-vi.mock("../../../services/PreAgentSnapshotService.js", () => ({
-  preAgentSnapshotService: {
-    getSnapshot: vi.fn(),
-    listSnapshots: vi.fn(),
-    revertToSnapshot: vi.fn(),
-    deleteSnapshot: vi.fn(),
-  },
-}));
-
 const createHardenedGitMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../../utils/hardenedGit.js", () => ({

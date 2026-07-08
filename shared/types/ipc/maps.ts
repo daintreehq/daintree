@@ -81,8 +81,6 @@ import type {
   GitGetFileDiffPayload,
   GitCompareWorktreesPayload,
   CrossWorktreeDiffResult,
-  SnapshotInfo,
-  SnapshotRevertResult,
 } from "./git.js";
 import type {
   FileSearchPayload,
@@ -884,22 +882,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   "git:get-working-diff": {
     args: [payload: { cwd: string; type: "unstaged" | "staged" | "head" }];
     result: string;
-  };
-  "git:snapshot-get": {
-    args: [worktreeId: string];
-    result: SnapshotInfo | null;
-  };
-  "git:snapshot-list": {
-    args: [];
-    result: SnapshotInfo[];
-  };
-  "git:snapshot-revert": {
-    args: [worktreeId: string];
-    result: SnapshotRevertResult;
-  };
-  "git:snapshot-delete": {
-    args: [worktreeId: string];
-    result: void;
   };
   "git:mark-safe-directory": {
     args: [path: string];

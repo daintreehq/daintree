@@ -82,9 +82,6 @@ interface WorktreeActionsToolbarProps {
     onCompareDiff?: () => void;
     onOpenPanelPalette?: () => void;
     onDeleteWorktree?: () => void;
-    onRevertAgentChanges?: () => void;
-    onDeleteSnapshot?: () => void;
-    hasSnapshot?: boolean;
     hasResourceConfig?: boolean;
     worktreeMode?: string;
     resourceEnvironmentKeys?: string[];
@@ -263,9 +260,6 @@ export function WorktreeActionsToolbar({
             onSelectWorkingAgents={menu.onSelectWorkingAgents}
             onOpenPanelPalette={menu.onOpenPanelPalette}
             onDeleteWorktree={menu.onDeleteWorktree}
-            onRevertAgentChanges={menu.onRevertAgentChanges}
-            onDeleteSnapshot={menu.onDeleteSnapshot}
-            hasSnapshot={menu.hasSnapshot}
             hasResourceConfig={menu.hasResourceConfig}
             worktreeMode={menu.worktreeMode}
             resourceEnvironmentKeys={menu.resourceEnvironmentKeys}

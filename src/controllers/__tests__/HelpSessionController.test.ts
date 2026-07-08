@@ -284,7 +284,6 @@ beforeEach(() => {
           resetDenialCounts: mockMcpResetDenialCounts,
           revokeSessionGrants: mockMcpRevokeSessionGrants,
         },
-        git: { snapshotGet: vi.fn().mockResolvedValue(null) },
         terminal: { gracefulKill: vi.fn().mockResolvedValue(null) },
       },
     },
@@ -353,7 +352,6 @@ describe("HelpSessionController — subscribe / getSnapshot", () => {
     expect(snap.showResumeBanner).toBe(false);
     expect(snap.assistantVersionTooOld).toBeNull();
     expect(snap.tierMismatch).toBeNull();
-    expect(snap.preflightSnapshot).toBeNull();
     expect(snap.isApprovingTier).toBe(false);
     expect(snap.isCheckingVersion).toBe(false);
     expect(snap.launchError).toBeNull();

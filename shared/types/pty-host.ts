@@ -434,7 +434,7 @@ export type PtyHostEvent =
       traceId?: string;
       trigger: string;
       confidence: number;
-      /** Terminal cwd (used by PreAgentSnapshotService as the git target). */
+      /** Terminal cwd (the worktree root in the typical case). */
       cwd?: string;
       waitingReason?: WaitingReason;
       sessionCost?: number;

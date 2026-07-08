@@ -59,8 +59,8 @@ export interface TerminalHeaderContentProps {
   queueCount?: number;
   flowStatus?: TerminalFlowStatus;
   /**
-   * True when the agent transitioned to `completed` and the pre-agent snapshot
-   * confirms no file changes were made. Drives the "Finished, no changes" pill
+   * True when the agent transitioned to `completed` and the worktree's
+   * changed-file count is zero. Drives the "Finished, no changes" pill
    * so users get a quiet confirmation instead of the chip silently disappearing.
    */
   completedWithNoChanges?: boolean;

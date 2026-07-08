@@ -1965,16 +1965,6 @@ function buildElectronApi(): ElectronAPI {
       getWorkingDiff: (cwd: string, type: "unstaged" | "staged" | "head") =>
         _unwrappingInvoke(CHANNELS.GIT_GET_WORKING_DIFF, { cwd, type }),
 
-      snapshotGet: (worktreeId: string) => _unwrappingInvoke(CHANNELS.GIT_SNAPSHOT_GET, worktreeId),
-
-      snapshotList: () => _unwrappingInvoke(CHANNELS.GIT_SNAPSHOT_LIST),
-
-      snapshotRevert: (worktreeId: string) =>
-        _unwrappingInvoke(CHANNELS.GIT_SNAPSHOT_REVERT, worktreeId),
-
-      snapshotDelete: (worktreeId: string) =>
-        _unwrappingInvoke(CHANNELS.GIT_SNAPSHOT_DELETE, worktreeId),
-
       markSafeDirectory: (path: string) =>
         _unwrappingInvoke(CHANNELS.GIT_MARK_SAFE_DIRECTORY, path),
     },
