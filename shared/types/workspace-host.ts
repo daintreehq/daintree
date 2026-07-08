@@ -592,7 +592,7 @@ export type WorkspaceHostEvent =
   // Host-originated active-worktree change. Emitted from the host's authoritative
   // `setActiveWorktree` writer so the per-view renderer's WorktreeStoreContext
   // learns the new active id in the same tick as any accompanying
-  // `worktree-removed` (auto-switch in `runTopologyReconcile` and
+  // `worktree-removed` (auto-switch in `TopologyWatcher`'s reconcile and
   // `deleteWorktree`). Separate surface from the legacy
   // `CHANNELS.WORKTREE_ACTIVATED` echo path that PR #3603's `silent` flag
   // suppresses for renderer-initiated IPC.
