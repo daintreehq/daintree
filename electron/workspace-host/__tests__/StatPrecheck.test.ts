@@ -119,14 +119,10 @@ describe("StatPrecheck", () => {
     const precheck = new StatPrecheck(makeHost());
     expect(await precheck.statMtime("/repo/.git/index")).toBe(1_000);
 
-    vi.mocked(stat).mockRejectedValueOnce(
-      Object.assign(new Error("ENOENT"), { code: "ENOENT" })
-    );
+    vi.mocked(stat).mockRejectedValueOnce(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
     expect(await precheck.statMtime("/repo/.git/packed-refs")).toBe(-1);
 
-    vi.mocked(stat).mockRejectedValueOnce(
-      Object.assign(new Error("EACCES"), { code: "EACCES" })
-    );
+    vi.mocked(stat).mockRejectedValueOnce(Object.assign(new Error("EACCES"), { code: "EACCES" }));
     await expect(precheck.statMtime("/repo/.git/HEAD")).rejects.toThrow("EACCES");
   });
 });

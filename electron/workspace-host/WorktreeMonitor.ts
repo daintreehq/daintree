@@ -1,5 +1,4 @@
 import { access } from "fs/promises";
-import { join as pathJoin } from "path";
 import type { WslGitInvocation } from "../utils/hardenedGit.js";
 import type PQueue from "p-queue";
 import type { WorktreeChanges } from "../../shared/types/git.js";

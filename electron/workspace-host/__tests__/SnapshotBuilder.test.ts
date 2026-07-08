@@ -190,8 +190,8 @@ describe("SnapshotBuilder", () => {
     expect(new SnapshotBuilder(makeHost({ worktreeMode: "local" })).build().worktreeMode).toBe(
       undefined
     );
-    expect(
-      new SnapshotBuilder(makeHost({ worktreeMode: "remote" })).build().worktreeMode
-    ).toBe("remote");
+    expect(new SnapshotBuilder(makeHost({ worktreeMode: "remote" })).build().worktreeMode).toBe(
+      "remote"
+    );
   });
 });

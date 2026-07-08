@@ -99,9 +99,9 @@ describe("BaseDivergence", () => {
   });
 
   it("falls back to the local base ref when the remote ref rev-list fails", async () => {
-    mockGitRaw.mockRejectedValueOnce(new Error("unknown revision: origin/main")).mockResolvedValueOnce(
-      "1\t2\n"
-    );
+    mockGitRaw
+      .mockRejectedValueOnce(new Error("unknown revision: origin/main"))
+      .mockResolvedValueOnce("1\t2\n");
     const divergence = new BaseDivergence(makeHost(), makeStatPrecheck());
 
     const result = await divergence.compute(false);
@@ -123,9 +123,7 @@ describe("BaseDivergence", () => {
   });
 
   it("sets matchesUpstream true only when @{u} and the base ref resolve to the same commit", async () => {
-    mockGitRaw
-      .mockResolvedValueOnce("0\t0\n")
-      .mockResolvedValueOnce("abc123\nabc123\n");
+    mockGitRaw.mockResolvedValueOnce("0\t0\n").mockResolvedValueOnce("abc123\nabc123\n");
     const divergence = new BaseDivergence(makeHost(), makeStatPrecheck());
 
     const result = await divergence.compute(true);
@@ -134,9 +132,7 @@ describe("BaseDivergence", () => {
   });
 
   it("sets matchesUpstream false when @{u} and the base ref diverge", async () => {
-    mockGitRaw
-      .mockResolvedValueOnce("0\t0\n")
-      .mockResolvedValueOnce("abc123\ndef456\n");
+    mockGitRaw.mockResolvedValueOnce("0\t0\n").mockResolvedValueOnce("abc123\ndef456\n");
     const divergence = new BaseDivergence(makeHost(), makeStatPrecheck());
 
     const result = await divergence.compute(true);
