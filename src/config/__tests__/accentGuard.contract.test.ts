@@ -169,7 +169,7 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/Browser/WebviewDialog.tsx",
     "src/components/Commands/CommandBuilder.tsx",
     "src/components/Commands/CommandPicker.tsx",
-    "src/components/DevPreview/DevPreviewPane.tsx",
+    "src/components/DevPreview/DevPreviewEmptyStates.tsx",
     "src/components/Diagnostics/DiagnosticsDock.tsx",
     "src/components/Diagnostics/TelemetryContent.tsx",
     "src/components/Fleet/FleetArmingRibbon.tsx",
