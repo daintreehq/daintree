@@ -215,6 +215,13 @@ test.describe.serial("Core: File viewer panel (dialog + panel)", () => {
       ctx.window.locator('[data-dock-portal-target] [data-testid="file-pane-body"]')
     ).toBeVisible({ timeout: T_LONG });
 
+    // #10991: a single docked file panel exposes the inline "Move to grid"
+    // button in its header (matching docked terminals), not just the overflow
+    // menu.
+    await expect(
+      ctx.window.locator('[data-dock-portal-target] [data-testid="panel-move-to-grid"]')
+    ).toBeVisible({ timeout: T_SHORT });
+
     // Double-click restores the panel to the grid.
     await chip.dblclick();
     await expect(gridFilePanels).toHaveCount(3, { timeout: T_MEDIUM });
