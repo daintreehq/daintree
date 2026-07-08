@@ -143,6 +143,7 @@ export function HelpPanel({
     if (!isVisible) setHasDomFocus(false);
   }, [isVisible]);
   const [showNewSessionConfirm, setShowNewSessionConfirm] = useState(false);
+  const [showEndSessionConfirm, setShowEndSessionConfirm] = useState(false);
   const [showAgentSwitchConfirm, setShowAgentSwitchConfirm] = useState(false);
   // Tracks the last preferredAgentId the switch effect acted on so a single
   // preference change drives at most one switch attempt (the effect re-runs
@@ -837,6 +838,26 @@ export function HelpPanel({
     setShowNewSessionConfirm(false);
   }, []);
 
+  // Stop reuses the same "something to lose" gate as +New session — confirm
+  // only when a working agent or an engaged conversation would be discarded.
+  const handleEndSession = useCallback(() => {
+    if (!terminalId || !agentId) return;
+    if (shouldConfirmNewSession) {
+      setShowEndSessionConfirm(true);
+      return;
+    }
+    controller.endSession();
+  }, [controller, terminalId, agentId, shouldConfirmNewSession]);
+
+  const handleConfirmEndSession = useCallback(() => {
+    setShowEndSessionConfirm(false);
+    controller.endSession();
+  }, [controller]);
+
+  const handleCancelEndSession = useCallback(() => {
+    setShowEndSessionConfirm(false);
+  }, []);
+
   const handleConfirmAgentSwitch = useCallback(() => {
     setShowAgentSwitchConfirm(false);
     // Guard against the preference having moved back to the running agent (or
@@ -1032,7 +1053,9 @@ export function HelpPanel({
       <HelpPanelHeader
         agentState={terminalPty?.agentState}
         canStartNewSession={Boolean(terminalId && agentId)}
+        canEndSession={Boolean(terminalId && agentId)}
         onNewSession={handleNewSession}
+        onEndSession={handleEndSession}
         onOpenDocs={handleOpenAssistantDocs}
         onClose={handleClose}
         isFocused={isHighlighted}
@@ -1362,6 +1385,15 @@ export function HelpPanel({
         confirmLabel="Start new session"
         onConfirm={handleConfirmNewSession}
         onClose={handleCancelNewSession}
+        variant="destructive"
+      />
+      <ConfirmDialog
+        isOpen={showEndSessionConfirm}
+        title="Stop assistant?"
+        description="The assistant will stop and the conversation will be discarded"
+        confirmLabel="Stop assistant"
+        onConfirm={handleConfirmEndSession}
+        onClose={handleCancelEndSession}
         variant="destructive"
       />
       <ConfirmDialog

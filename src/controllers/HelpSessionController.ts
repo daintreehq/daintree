@@ -962,6 +962,62 @@ export class HelpSessionController {
   }
 
   /**
+   * User-facing "Stop assistant" — actually end the running assistant terminal
+   * rather than merely hiding the panel (`handleClose` only flips `isOpen`,
+   * leaving the agent running). Unlike `newSession()` this does NOT relaunch:
+   * it tears the bound session down and leaves the panel open on its empty /
+   * start state so restarting is one click away (D0 inverse). Idempotent — a
+   * no-op when nothing is running and no launch is in flight.
+   */
+  endSession(): void {
+    // Abort any in-flight launch first (mirrors `cancelLaunch`) so a
+    // late-settling provision can't bind a fresh terminal after the user asked
+    // to stop.
+    this._launchGen++;
+    this._isLaunching = false;
+    this._clearLaunchWatchdog();
+
+    const help = useHelpPanelStore.getState();
+    const existingTerminalId = help.terminalId;
+    const previousSessionId = help.sessionId;
+    if (existingTerminalId) {
+      this._teardownBoundSession(existingTerminalId, previousSessionId, {
+        revokePending: true,
+      });
+    } else {
+      // No committed terminal, but a reserved-but-uncommitted session may still
+      // hold a live bearer — drop it so it can't outlive the stop.
+      this._revokePendingSession();
+    }
+
+    // Stop is destructive (not pause): drop the persisted hibernate entry for
+    // this project so the just-ended conversation can't resume on next open,
+    // and disarm any pending hibernate timer.
+    this._clearHibernateTimer();
+    this._hibernateArmedFor = null;
+    const projectId = useProjectStore.getState().currentProject?.id ?? null;
+    if (projectId) {
+      useHelpPanelStore.getState().clearHibernateSession(projectId);
+    }
+
+    // Consume this open cycle's auto-launch budget so a consented auto-launch
+    // (`_maybeAutoLaunch`) doesn't immediately respawn the assistant we just
+    // stopped. Reopening the panel resets this in `_syncInputs`, so the next
+    // open still auto-launches as before.
+    this._hasAutoLaunched = true;
+
+    // Clear session-scoped banners and drop the phase to idle so the panel
+    // lands on a clean empty / start state.
+    this._patch({
+      phase: "idle",
+      showResumeBanner: false,
+      preflightSnapshot: null,
+      tierMismatch: null,
+      sessionRevoked: null,
+    });
+  }
+
+  /**
    * "Run anyway" from the missing-CLI gate — same as `newSession` plus
    * `force: true` so the dispatcher bypasses the missing-CLI guard.
    */
@@ -986,7 +1042,7 @@ export class HelpSessionController {
    *
    * Synchronous write order before the first `await` (preserving #6951):
    *   1. Capture live state + bump _launchGen.
-   *   2. If `replaceExisting`, remove existing panel and revoke prior sessions.
+   *   2. If `replaceExisting`, revoke prior sessions then remove the panel.
    *   3. If `requestedId`, set `_pendingNewTerminalId` synchronously, then
    *      write the reservation via `setTerminal(reservedId, agentId, null)`.
    *   4. Only then enter the async provision/dispatch sequence.
@@ -1040,17 +1096,9 @@ export class HelpSessionController {
       if (existingTerminalId) {
         const panel = usePanelStore.getState().panelsById[existingTerminalId];
         presetEnv = asStringRecord(panel?.extensionState?.presetEnv);
-        usePanelStore.getState().removePanel(existingTerminalId);
-        revokeHelpSession(previousSessionId);
-        if (reservedId) this._revokePendingSession();
-        useHelpPanelStore.getState().clearTerminal();
-        // Replacing the session — clear the prior session's activity row (#9759)
-        // and its figures, since the new help session restarts the figure
-        // counter at 1 in the main process (#9828).
-        useHelpPanelStore.getState().clearFigures();
-        this.clearMcpActivity();
-        this._clearGrantState();
-        this._clearOutcomeAlert();
+        this._teardownBoundSession(existingTerminalId, previousSessionId, {
+          revokePending: reservedId != null,
+        });
       }
       // Discarding the current conversation invalidates any persisted
       // hibernate entry for this project — leaving it would resume the
@@ -1317,6 +1365,34 @@ export class HelpSessionController {
 
   private _resetPhase(): void {
     this._patch({ phase: "idle" });
+  }
+
+  /**
+   * Tear down the currently-bound help session's renderer state in the order
+   * the auth race requires: revoke the session bearer BEFORE removing the PTY
+   * so any in-flight MCP call 401s before teardown reaches the host (#7522);
+   * drop the reserved-but-uncommitted bearer when asked; then clear the
+   * store-side session UI (terminal slot, figures #9828, MCP activity #9759,
+   * grant state #10042, outcome pip #10018). Shared by `launch({
+   * replaceExisting })` and the user-facing `endSession()`. Callers own
+   * presetEnv capture and hibernate cleanup.
+   */
+  private _teardownBoundSession(
+    existingTerminalId: string,
+    previousSessionId: string | null,
+    options: { revokePending: boolean }
+  ): void {
+    // Revoke the bearer(s) BEFORE removing the panel: removePanel fires the PTY
+    // kill IPC, so revoking first ensures any in-flight MCP call 401s before the
+    // teardown reaches the host (#7522), rather than racing the kill.
+    revokeHelpSession(previousSessionId);
+    if (options.revokePending) this._revokePendingSession();
+    usePanelStore.getState().removePanel(existingTerminalId);
+    useHelpPanelStore.getState().clearTerminal();
+    useHelpPanelStore.getState().clearFigures();
+    this.clearMcpActivity();
+    this._clearGrantState();
+    this._clearOutcomeAlert();
   }
 
   /**

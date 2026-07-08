@@ -65,6 +65,7 @@ const {
     hibernateSessions: {} as Record<string, unknown>,
     setTerminal: vi.fn(),
     clearTerminal: vi.fn(),
+    clearFigures: vi.fn(),
     setHibernateSession: vi.fn(),
     clearHibernateSession: vi.fn(),
   },
@@ -136,6 +137,7 @@ function resetState() {
   helpPanelState.hibernateSessions = {};
   helpPanelState.setTerminal = vi.fn();
   helpPanelState.clearTerminal = vi.fn();
+  helpPanelState.clearFigures = vi.fn();
   helpPanelState.setHibernateSession = vi.fn();
   helpPanelState.clearHibernateSession = vi.fn();
   panelStoreState.panelIds = [];
@@ -518,6 +520,140 @@ describe("HelpSessionController — syncInputs", () => {
       visibilityEpoch: 0,
     });
     expect(ctrl.getSnapshot().assistantVersionTooOld).toBeNull();
+    ctrl.stop();
+  });
+});
+
+describe("HelpSessionController — endSession (Stop assistant, #10989)", () => {
+  function bindLiveSession() {
+    helpPanelState.terminalId = "term-1";
+    helpPanelState.agentId = "claude";
+    helpPanelState.sessionId = "sess-bound";
+    projectStoreState.currentProject = { id: "proj-1", path: "/repo" };
+    panelStoreState.panelsById = {
+      "term-1": { id: "term-1", kind: "terminal", cwd: "/help" },
+    };
+  }
+
+  it("tears the bound session down without relaunching", () => {
+    const ctrl = new HelpSessionController();
+    ctrl["_patch"]({ phase: "live" });
+    bindLiveSession();
+
+    ctrl.endSession();
+
+    expect(panelStoreState.removePanel).toHaveBeenCalledWith("term-1");
+    expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-bound");
+    expect(helpPanelState.clearTerminal).toHaveBeenCalled();
+    expect(helpPanelState.clearFigures).toHaveBeenCalled();
+    // Stop is destructive, not pause: the persisted hibernate slot is dropped so
+    // the discarded conversation can't resume on next open.
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1");
+    // No fresh terminal is reserved — unlike newSession(), stop does not relaunch.
+    expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
+    expect(ctrl.getSnapshot().phase).toBe("idle");
+  });
+
+  it("revokes the bearer before killing the PTY (revoke-before-kill, #7522)", () => {
+    const ctrl = new HelpSessionController();
+    bindLiveSession();
+
+    ctrl.endSession();
+
+    // removePanel fires the PTY kill IPC; the revoke must be dispatched first so
+    // an in-flight MCP call 401s before teardown reaches the host. `?? -1` keeps
+    // both operands `number`: a missing (never-called) order fails the guards below.
+    const revokeOrder =
+      (window.electron.help.revokeSession as ReturnType<typeof vi.fn>).mock
+        .invocationCallOrder[0] ?? -1;
+    const removeOrder =
+      (panelStoreState.removePanel as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0] ?? -1;
+    expect(revokeOrder).toBeGreaterThanOrEqual(0);
+    expect(removeOrder).toBeGreaterThan(revokeOrder);
+  });
+
+  it("revokes a reserved-but-uncommitted bearer even when no terminal is bound", () => {
+    const ctrl = new HelpSessionController();
+    ctrl["_pendingSessionId"] = "sess-pending";
+
+    ctrl.endSession();
+
+    expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-pending");
+    expect(panelStoreState.removePanel).not.toHaveBeenCalled();
+    expect(ctrl["_pendingSessionId"]).toBeNull();
+  });
+
+  it("aborts an in-flight launch by bumping the gen and clearing the guard", () => {
+    const ctrl = new HelpSessionController();
+    ctrl["_patch"]({ phase: "provisioning" });
+    ctrl["_isLaunching"] = true;
+    const genBefore = ctrl["_launchGen"] as number;
+
+    ctrl.endSession();
+
+    expect(ctrl["_launchGen"]).toBe(genBefore + 1);
+    expect(ctrl["_isLaunching"]).toBe(false);
+    expect(ctrl.getSnapshot().phase).toBe("idle");
+  });
+
+  it("is a no-op teardown when no terminal is bound", () => {
+    const ctrl = new HelpSessionController();
+
+    ctrl.endSession();
+
+    expect(panelStoreState.removePanel).not.toHaveBeenCalled();
+    expect(helpPanelState.clearTerminal).not.toHaveBeenCalled();
+    expect(ctrl.getSnapshot().phase).toBe("idle");
+  });
+
+  it("suppresses an immediate consented auto-relaunch in the same open cycle", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    bindLiveSession();
+
+    ctrl.endSession();
+    expect(ctrl["_hasAutoLaunched"]).toBe(true);
+
+    // clearTerminal ran — the store now reports no bound terminal.
+    helpPanelState.terminalId = null;
+    // The panel is still open with auto-launch consented; without the guard this
+    // would immediately respawn the assistant the user just stopped.
+    ctrl.syncInputs({
+      isOpen: true,
+      isReadyToLaunch: true,
+      currentProject: { id: "proj-1", path: "/repo" },
+      terminalId: null,
+      preferredAgentId: null,
+      supportedInstalledAgentIds: ["claude"],
+      autoLaunchEnabled: true,
+      visibilityEpoch: 0,
+    });
+
+    expect(ctrl.getSnapshot().phase).toBe("idle");
+    ctrl.stop();
+  });
+
+  it("re-arms auto-launch after the panel closes and reopens", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    bindLiveSession();
+    ctrl.endSession();
+    expect(ctrl["_hasAutoLaunched"]).toBe(true);
+    helpPanelState.terminalId = null;
+
+    // Closing the panel resets the per-open-cycle auto-launch budget.
+    ctrl.syncInputs({
+      isOpen: false,
+      isReadyToLaunch: true,
+      currentProject: { id: "proj-1", path: "/repo" },
+      terminalId: null,
+      preferredAgentId: null,
+      supportedInstalledAgentIds: ["claude"],
+      autoLaunchEnabled: true,
+      visibilityEpoch: 0,
+    });
+
+    expect(ctrl["_hasAutoLaunched"]).toBe(false);
     ctrl.stop();
   });
 });

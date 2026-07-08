@@ -20,12 +20,19 @@ const eventEmitter = vi.hoisted(() => {
   };
 });
 
+const availabilityMock = vi.hoisted(() => ({
+  isHelpTerminal: vi.fn<(id: string) => boolean>(() => false),
+}));
+
 vi.mock("../../ipc/utils.js", () => ({
   typedBroadcast: broadcastMock,
 }));
 
 vi.mock("../events.js", () => ({ events: eventEmitter }));
 vi.mock("../ProjectStore.js", () => ({ projectStore: projectStoreMock }));
+vi.mock("../AgentAvailabilityStore.js", () => ({
+  getAgentAvailabilityStore: () => availabilityMock,
+}));
 
 import { ProjectStatsService } from "../ProjectStatsService.js";
 
@@ -50,6 +57,8 @@ beforeEach(() => {
   vi.setSystemTime(1_830_001);
   eventEmitter._reset();
   projectStoreMock.getAllProjects.mockReturnValue([]);
+  availabilityMock.isHelpTerminal.mockReset();
+  availabilityMock.isHelpTerminal.mockReturnValue(false);
 });
 
 afterEach(() => {
@@ -144,6 +153,154 @@ describe("ProjectStatsService adversarial", () => {
     ];
     expect(payload.p1.activeAgentCount).toBe(2);
     expect(payload.p1.waitingAgentCount).toBe(1);
+    svc.stop();
+  });
+
+  it("excludes the Daintree Assistant help terminal from agent counts and subtracts it from processCount (#10989)", async () => {
+    const ptyClient = makePtyClient();
+    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    availabilityMock.isHelpTerminal.mockImplementation((id: string) => id === "help-1");
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([
+      // The assistant help terminal — a real agent PTY, but tooling-internal.
+      {
+        id: "help-1",
+        projectId: "p1",
+        kind: "terminal",
+        launchAgentId: "daintree-assistant",
+        agentState: "waiting",
+      },
+      // A genuine user agent — must still count.
+      {
+        id: "t-2",
+        projectId: "p1",
+        kind: "terminal",
+        launchAgentId: "claude",
+        agentState: "working",
+      },
+    ]);
+    // PTY host counts both PTYs (it has no help awareness).
+    ptyClient.getProjectStats.mockResolvedValue({ projectId: "p1", terminalCount: 2 });
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    const [, payload] = broadcastMock.mock.calls.at(-1) as [
+      string,
+      { p1: { activeAgentCount: number; waitingAgentCount: number; processCount: number } },
+    ];
+    // The waiting help terminal is not surfaced; only the real working agent.
+    expect(payload.p1.activeAgentCount).toBe(1);
+    expect(payload.p1.waitingAgentCount).toBe(0);
+    // processCount nets out the help PTY: 2 counted − 1 help = 1.
+    expect(payload.p1.processCount).toBe(1);
+    svc.stop();
+  });
+
+  it("only subtracts help terminals from their own project's processCount (#10989)", async () => {
+    const ptyClient = makePtyClient();
+    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }, { id: "p2" }]);
+    availabilityMock.isHelpTerminal.mockImplementation((id: string) => id === "help-p1");
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([
+      {
+        id: "help-p1",
+        projectId: "p1",
+        kind: "terminal",
+        launchAgentId: "daintree-assistant",
+        agentState: "idle",
+      },
+      {
+        id: "t-p2",
+        projectId: "p2",
+        kind: "terminal",
+        launchAgentId: "claude",
+        agentState: "working",
+      },
+    ]);
+    ptyClient.getProjectStats.mockImplementation(async (id: string) => ({
+      projectId: id,
+      terminalCount: id === "p1" ? 1 : 1,
+    }));
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    const [, payload] = broadcastMock.mock.calls.at(-1) as [
+      string,
+      {
+        p1: { processCount: number; activeAgentCount: number; waitingAgentCount: number };
+        p2: { processCount: number; activeAgentCount: number };
+      },
+    ];
+    // p1's only PTY is the help terminal → 1 − 1 = 0, and it never surfaces in
+    // the agent counts.
+    expect(payload.p1.processCount).toBe(0);
+    expect(payload.p1.activeAgentCount).toBe(0);
+    expect(payload.p1.waitingAgentCount).toBe(0);
+    // p2 is untouched — its help count is 0.
+    expect(payload.p2.processCount).toBe(1);
+    expect(payload.p2.activeAgentCount).toBe(1);
+    svc.stop();
+  });
+
+  it("clamps processCount to zero if the PTY-host count momentarily lags the help count (#10989)", async () => {
+    const ptyClient = makePtyClient();
+    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    availabilityMock.isHelpTerminal.mockImplementation((id: string) => id === "help-1");
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([
+      {
+        id: "help-1",
+        projectId: "p1",
+        kind: "terminal",
+        launchAgentId: "daintree-assistant",
+        agentState: "idle",
+      },
+    ]);
+    // Stats lag: main process sees the help PTY but the host reports 0.
+    ptyClient.getProjectStats.mockResolvedValue({ projectId: "p1", terminalCount: 0 });
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    const [, payload] = broadcastMock.mock.calls.at(-1) as [
+      string,
+      { p1: { processCount: number } },
+    ];
+    expect(payload.p1.processCount).toBe(0);
+    svc.stop();
+  });
+
+  it("does not subtract a trashed or hasPty:false help terminal from processCount (#10989)", async () => {
+    const ptyClient = makePtyClient();
+    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    availabilityMock.isHelpTerminal.mockReturnValue(true);
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([
+      // Trashed → the PTY host already excludes it from terminalCount, so it
+      // must not be subtracted (double-counting would drive processCount negative).
+      {
+        id: "help-trashed",
+        projectId: "p1",
+        isTrashed: true,
+        kind: "terminal",
+        agentState: "idle",
+      },
+      // No live PTY → likewise not part of terminalCount.
+      { id: "help-nopty", projectId: "p1", hasPty: false, kind: "terminal", agentState: "idle" },
+    ]);
+    ptyClient.getProjectStats.mockResolvedValue({ projectId: "p1", terminalCount: 3 });
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    const [, payload] = broadcastMock.mock.calls.at(-1) as [
+      string,
+      { p1: { processCount: number } },
+    ];
+    // Neither help terminal was live-counted, so nothing is subtracted.
+    expect(payload.p1.processCount).toBe(3);
     svc.stop();
   });
 
