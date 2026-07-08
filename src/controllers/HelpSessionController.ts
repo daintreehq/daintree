@@ -9,12 +9,10 @@ import { getAgentConfig } from "@/config/agents";
 import { actionService } from "@/services/ActionService";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { usePanelStore, useProjectStore } from "@/store";
-import { isPtyPanel } from "@shared/types/panel";
 import { projectClient } from "@/clients/projectClient";
 import { logError } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import type { ActionContext } from "@shared/types/actions";
-import { ACTIVE_AGENT_STATES } from "@shared/types/agent";
 import { buildResumeCommand, buildResumeLatestCommand } from "@shared/types/agentSettings";
 import { resolveDaintreeMcpTier } from "@shared/types/project";
 import type { SnapshotInfo } from "@shared/types/ipc/git";
@@ -30,14 +28,7 @@ import {
 import { HelpVersionGate, checkAssistantVersion } from "./HelpVersionGate";
 import { LaunchNotifications, notifyLaunchFailed } from "./LaunchNotifications";
 import { McpActivityTracker } from "./McpActivityTracker";
-
-const HIBERNATE_VALID_MINUTES: readonly number[] = [0, 5, 15, 30, 60, 120];
-const DEFAULT_HIBERNATE_MINUTES = 5;
-
-// Re-checks every 2 minutes while the agent is busy so hibernation defers
-// cleanly until the conversation is idle without restarting the full
-// countdown each time.
-const HIBERNATE_BUSY_RECHECK_MS = 2 * 60 * 1000;
+import { HibernationManager } from "./HibernationManager";
 
 export type HelpSessionPhase =
   | "idle"
@@ -362,16 +353,7 @@ export class HelpSessionController {
    * double-invoke can't fire two parallel pre-flights.
    */
   private _preflightSnapshotTerminalId: string | null = null;
-  private _isSystemSuspended = false;
-  private _hibernateMinutes = DEFAULT_HIBERNATE_MINUTES;
-  private _hibernateTimer: ReturnType<typeof setTimeout> | null = null;
-  private _disposers: Array<() => void> = [];
   private _lastInputs: HelpSessionInputs | null = null;
-  private _hibernateArmedFor: {
-    terminalId: string;
-    agentId: string | null;
-    projectId: string | null;
-  } | null = null;
 
   private readonly _versionGate = new HelpVersionGate({
     getSnapshot: () => this._snapshot,
@@ -391,6 +373,13 @@ export class HelpSessionController {
   private readonly _mcpTracker = new McpActivityTracker({
     getSnapshot: () => this._snapshot,
     patch: (partial) => this._patch(partial),
+  });
+
+  private readonly _hibernationManager = new HibernationManager({
+    getSnapshot: () => this._snapshot,
+    patch: (partial) => this._patch(partial),
+    resetPhase: () => this._resetPhase(),
+    isLaunchCurrent: (gen) => gen === this._launchGen,
   });
 
   // Bound for stable references across StrictMode re-subscribe.
@@ -413,29 +402,14 @@ export class HelpSessionController {
     this._started = true;
 
     this._mcpTracker.start();
-
-    const offSuspend = window.electron.systemSleep.onSuspend(() => {
-      this._isSystemSuspended = true;
-    });
-    const offWake = window.electron.systemSleep.onWake(() => {
-      this._isSystemSuspended = false;
-    });
-    this._disposers.push(offSuspend, offWake);
+    this._hibernationManager.start();
   }
 
   stop(): void {
     if (!this._started) return;
     this._started = false;
-    for (const dispose of this._disposers) {
-      try {
-        dispose();
-      } catch (err) {
-        logError("HelpSessionController: disposer threw", err);
-      }
-    }
-    this._disposers = [];
     this._mcpTracker.dispose();
-    this._clearHibernateTimer();
+    this._hibernationManager.dispose();
     this._launchNotifications.dispose();
     this._versionGate.clearCooldownTimer();
     this._clearLaunchWatchdog();
@@ -448,7 +422,6 @@ export class HelpSessionController {
     // teardown happens through user-driven paths (`newSession`,
     // `replaceExisting`) or main-side eviction.
     this._launchGen++;
-    this._hibernateArmedFor = null;
     this._lastInputs = null;
   }
 
@@ -487,7 +460,7 @@ export class HelpSessionController {
       this._hasAutoLaunched = false;
     }
 
-    this._maybeArmHibernate(inputs);
+    this._hibernationManager.maybeArm(inputs);
     this._maybeAutoLaunch(inputs);
   }
 
@@ -746,12 +719,8 @@ export class HelpSessionController {
    * path (`handleTerminalPanelMissing`).
    */
   private _applyStopSuppression(): void {
-    this._clearHibernateTimer();
-    this._hibernateArmedFor = null;
     const projectId = useProjectStore.getState().currentProject?.id ?? null;
-    if (projectId) {
-      useHelpPanelStore.getState().clearHibernateSession(projectId);
-    }
+    this._hibernationManager.clearAndSuppress(projectId);
     this._hasAutoLaunched = true;
     this._patch({
       phase: "idle",
@@ -1062,13 +1031,6 @@ export class HelpSessionController {
     }
   }
 
-  private _clearHibernateTimer(): void {
-    if (this._hibernateTimer) {
-      clearTimeout(this._hibernateTimer);
-      this._hibernateTimer = null;
-    }
-  }
-
   private _revokePendingSession(): void {
     const pending = this._pendingSessionId;
     if (pending) {
@@ -1111,236 +1073,6 @@ export class HelpSessionController {
     if (options.resetAutoLaunch) {
       this._hasAutoLaunched = false;
     }
-  }
-
-  /**
-   * Pulls any main-captured pending hibernation entry for the project and
-   * folds it into `helpPanelStore.hibernateSessions` so the existing resume
-   * lookup picks it up. Main captures these on LRU eviction / window close
-   * when the renderer-side hibernate timer couldn't run because the view was
-   * being torn down. Best-effort: failures are logged and swallowed — a
-   * missing pending entry just means we'll cold-start the agent like before.
-   *
-   * The IPC takes-and-clears atomically on main: a one-shot read so a stale
-   * entry from many launches ago can't keep resurrecting an old conversation
-   * after the user has explicitly started a new session somewhere along the
-   * way.
-   *
-   * Stale-gen guard: the caller passes the launch generation it started in.
-   * If anything bumps `_launchGen` during the IPC await (user hits "+ New
-   * session" which clears the project's hibernate slot, panel close, etc.),
-   * we DROP the pulled entry on the floor instead of writing it back. Main
-   * has already cleared the entry on its side (atomic take), so the cost is
-   * losing one resume opportunity — much cheaper than resurrecting a
-   * conversation the user just explicitly discarded.
-   */
-  private async _seedHibernateFromMain(projectId: string, gen: number): Promise<void> {
-    try {
-      const pending = await window.electron.help.takePendingHibernation(projectId);
-      if (!pending) return;
-      if (gen !== this._launchGen) return;
-      // `pending.agentSessionId` can be the empty-string sentinel when main's
-      // `revokeSession({ captureHibernation: true })` placeholder write raced
-      // the agent's real session-id echo (LRU eviction of the per-project
-      // WebContentsView, #10057). The empty sentinel flows through to
-      // `_spawnResumed`, which classifies the resume as `"latest"` and the
-      // arm sites skip the "Resumed your previous session." banner on that
-      // branch — see the comment in `_spawnResumed` and `ResumeSpawnResult`.
-      // The root-cause capture race is in main; the fix here is the
-      // renderer-side truth-in-trigger only.
-      useHelpPanelStore.getState().setHibernateSession(projectId, {
-        sessionId: pending.agentSessionId,
-        cwd: pending.cwd,
-        agentId: pending.agentId,
-      });
-    } catch (err) {
-      logError("HelpPanel: failed to pull pending hibernation from main", err);
-    }
-  }
-
-  private _maybeArmHibernate(inputs: HelpSessionInputs): void {
-    const { isOpen, terminalId, preferredAgentId } = inputs;
-    if (isOpen || !terminalId) {
-      this._clearHibernateTimer();
-      this._hibernateArmedFor = null;
-      return;
-    }
-    // Already armed for this exact terminal+agent — leave the timer.
-    if (
-      this._hibernateArmedFor &&
-      this._hibernateArmedFor.terminalId === terminalId &&
-      this._hibernateArmedFor.agentId === preferredAgentId
-    ) {
-      return;
-    }
-    this._clearHibernateTimer();
-    // Capture the project at arm time so a project switch between panel
-    // close and hibernate fire doesn't write project A's session into
-    // project B's slot. The fire path reads this captured value, never
-    // the live currentProject.
-    this._hibernateArmedFor = {
-      terminalId,
-      agentId: useHelpPanelStore.getState().agentId,
-      projectId: useProjectStore.getState().currentProject?.id ?? null,
-    };
-    const initialTerminalId = terminalId;
-    const initialAgentId = this._hibernateArmedFor.agentId;
-    const initialProjectId = this._hibernateArmedFor.projectId;
-
-    safeFireAndForget(
-      window.electron.helpAssistant
-        .getSettings()
-        .then((settings) => {
-          if (!this._isStillArmedFor(initialTerminalId)) return;
-          const minutes = settings.idleHibernateMinutes;
-          if (!HIBERNATE_VALID_MINUTES.includes(minutes)) {
-            this._hibernateMinutes = DEFAULT_HIBERNATE_MINUTES;
-          } else {
-            this._hibernateMinutes = minutes;
-          }
-          if (this._hibernateMinutes <= 0) return;
-          this._clearHibernateTimer();
-          this._hibernateTimer = setTimeout(
-            () => this._fireHibernate(initialTerminalId, initialAgentId, initialProjectId),
-            this._hibernateMinutes * 60 * 1000
-          );
-        })
-        .catch((err) => {
-          if (!this._isStillArmedFor(initialTerminalId)) return;
-          logError("HelpPanel: failed to load idleHibernateMinutes", err);
-          this._hibernateMinutes = DEFAULT_HIBERNATE_MINUTES;
-          this._clearHibernateTimer();
-          this._hibernateTimer = setTimeout(
-            () => this._fireHibernate(initialTerminalId, initialAgentId, initialProjectId),
-            DEFAULT_HIBERNATE_MINUTES * 60 * 1000
-          );
-        }),
-      { context: "HelpPanel:hibernate getSettings" }
-    );
-  }
-
-  private _isStillArmedFor(terminalId: string): boolean {
-    return this._hibernateArmedFor?.terminalId === terminalId;
-  }
-
-  private _fireHibernate(
-    initialTerminalId: string,
-    initialAgentId: string | null,
-    initialProjectId: string | null
-  ): void {
-    this._hibernateTimer = null;
-    if (!this._isStillArmedFor(initialTerminalId)) return;
-
-    const helpState = useHelpPanelStore.getState();
-    if (helpState.terminalId !== initialTerminalId) return;
-    if (helpState.isOpen) return;
-    if (this._isSystemSuspended) return;
-
-    const panelState = usePanelStore.getState();
-    const livePanel = panelState.panelsById[initialTerminalId];
-    if (!livePanel || !isPtyPanel(livePanel)) return;
-    const agentState = livePanel.agentState;
-    if (agentState && ACTIVE_AGENT_STATES.has(agentState)) {
-      // Re-check shortly without restarting the full hibernate countdown —
-      // the user is presumably about to come back.
-      this._hibernateTimer = setTimeout(
-        () => this._fireHibernate(initialTerminalId, initialAgentId, initialProjectId),
-        HIBERNATE_BUSY_RECHECK_MS
-      );
-      return;
-    }
-
-    // Past the active-agent recheck — hibernation will actually run now, so
-    // surface it. The panel is closed during the gracefulKill window, so this
-    // is only visible if the user reopens mid-teardown (handled below); the
-    // teardown completion resets the phase so a later reopen lands on a clean
-    // empty state rather than a stuck "Saving session…".
-    this._patch({ phase: "hibernating" });
-
-    // Use the projectId captured at arm time, not the live currentProject.
-    // The user may have switched projects between panel close and timer
-    // fire — writing project A's session into project B's hibernate slot
-    // would resume the wrong conversation on next open.
-    const projectId = initialProjectId;
-    const cwd = livePanel.cwd;
-    const sessionToRevoke = helpState.sessionId;
-    const liveAgentId = helpState.agentId ?? initialAgentId;
-
-    safeFireAndForget(
-      window.electron.terminal
-        .gracefulKill(initialTerminalId)
-        .then((capturedSessionId) => {
-          const after = useHelpPanelStore.getState();
-          if (after.terminalId !== initialTerminalId) {
-            // Another flow took over the slot, or the panel was torn down
-            // (e.g. `handleTerminalPanelMissing` cleared the terminal) while
-            // the kill was in flight. If a new launch took over it already
-            // wrote its own phase; only when the phase is still "hibernating"
-            // is this hibernate the last writer, so drop back to idle and
-            // don't strand the "Saving session…" skeleton.
-            if (this._snapshot.phase === "hibernating") this._resetPhase();
-            return;
-          }
-          // Critical race: user reopened the panel while gracefulKill was
-          // in flight. Terminal is still live — don't tear it down out
-          // from under them. The captured session ID is also discarded;
-          // the next hibernation cycle will capture a fresh one.
-          if (after.isOpen) {
-            this._patch({ phase: "live" });
-            return;
-          }
-          if (capturedSessionId && projectId && liveAgentId && cwd) {
-            after.setHibernateSession(projectId, {
-              sessionId: capturedSessionId,
-              cwd,
-              agentId: liveAgentId,
-            });
-          } else if (
-            projectId &&
-            liveAgentId &&
-            cwd &&
-            buildResumeLatestCommand(liveAgentId) !== undefined
-          ) {
-            // Capture missed but the agent has a resume-latest flag — persist
-            // a sentinel hibernate entry (empty sessionId) so the next panel
-            // open hits the `--continue`-style fallback in `_spawnResumed`
-            // instead of starting a fresh session (#8787).
-            after.setHibernateSession(projectId, {
-              sessionId: "",
-              cwd,
-              agentId: liveAgentId,
-            });
-          } else if (projectId) {
-            after.clearHibernateSession(projectId);
-          }
-          usePanelStore.getState().removePanel(initialTerminalId);
-          revokeHelpSession(sessionToRevoke);
-          useHelpPanelStore.getState().clearTerminal();
-          this._resetPhase();
-        })
-        .catch((err) => {
-          const after = useHelpPanelStore.getState();
-          if (after.terminalId !== initialTerminalId) {
-            // See the `.then()` guard: only reset when this hibernate is still
-            // the phase's last writer.
-            if (this._snapshot.phase === "hibernating") this._resetPhase();
-            return;
-          }
-          if (after.isOpen) {
-            this._patch({ phase: "live" });
-            return;
-          }
-          logError("HelpPanel: gracefulKill during hibernate failed", err);
-          if (projectId) {
-            useHelpPanelStore.getState().clearHibernateSession(projectId);
-          }
-          usePanelStore.getState().removePanel(initialTerminalId);
-          revokeHelpSession(sessionToRevoke);
-          useHelpPanelStore.getState().clearTerminal();
-          this._resetPhase();
-        }),
-      { context: "HelpPanel:hibernate gracefulKill" }
-    );
   }
 
   private _maybeAutoLaunch(inputs: HelpSessionInputs): void {
@@ -1594,7 +1326,7 @@ export class HelpSessionController {
         // return null (the entry is consumed) and clear nothing, but running it
         // is wasteful and misleading.
         if (!options.resumeOnly) {
-          await this._seedHibernateFromMain(launchProject.id, gen);
+          await this._hibernationManager.seedFromMain(launchProject.id, gen);
           if (gen !== this._launchGen) {
             this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch });
             return;
