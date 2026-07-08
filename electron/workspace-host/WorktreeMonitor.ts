@@ -1,6 +1,5 @@
-import { readFile, access, stat } from "fs/promises";
-import { isAbsolute, join as pathJoin } from "path";
-import { createHardenedGit, createWslHardenedGit } from "../utils/hardenedGit.js";
+import { access } from "fs/promises";
+import { join as pathJoin } from "path";
 import type { WslGitInvocation } from "../utils/hardenedGit.js";
 import type PQueue from "p-queue";
 import type { WorktreeChanges } from "../../shared/types/git.js";
@@ -13,23 +12,17 @@ import type {
 } from "../../shared/types/worktree.js";
 import type { CIStatusState } from "../../shared/types/forge.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
-import { invalidateGitStatusCache, getWorktreeChangesWithStats } from "../utils/git.js";
-import { getGitDir } from "../utils/gitUtils.js";
-import { getRepoOperationStateSync } from "../utils/gitRepoOperationState.js";
-import { WorktreeRemovedError } from "../utils/errorTypes.js";
-import { categorizeWorktree } from "../services/worktree/mood.js";
+import { invalidateGitStatusCache } from "../utils/git.js";
 import { AdaptivePollingStrategy, NoteFileReader } from "../services/worktree/index.js";
-import {
-  extractIssueNumberSync,
-  extractIssueNumber,
-  deriveIssueTitleFromBranch,
-} from "../services/issueExtractor.js";
+import { deriveIssueTitleFromBranch } from "../services/issueExtractor.js";
 import { FetchScheduler, type FetchSchedulerHost } from "./FetchScheduler.js";
 import { ResourcePollTimer, type ResourcePollTimerHost } from "./ResourcePollTimer.js";
 import { WatcherController, type WatcherControllerHost } from "./WatcherController.js";
-import { timeoutSignal, withTimeout } from "../utils/withTimeout.js";
-
-const PLAN_FILE_CANDIDATES = ["TODO.md", "PLAN.md", "plan.md", "TASKS.md"] as const;
+import { SnapshotBuilder, type SnapshotBuilderHost } from "./SnapshotBuilder.js";
+import { StatPrecheck, type StatPrecheckHost } from "./StatPrecheck.js";
+import { BaseDivergence, type BaseDivergenceHost } from "./BaseDivergence.js";
+import { GitStatusPass, type GitStatusPassHost } from "./GitStatusPass.js";
+import { withTimeout } from "../utils/withTimeout.js";
 
 // Hard ceiling for individual filesystem syscalls on the poll path. On a
 // healthy disk these return in well under a millisecond; on a stalled mount
@@ -61,40 +54,10 @@ const HEARTBEAT_GAP_CEILING_MS = 360_000;
 // fresh data on app launch.
 const STATUS_INITIAL_DELAY_MIN_MS = 2_000;
 const STATUS_INITIAL_DELAY_MAX_MS = 5_000;
-// Sentinel for "this git path doesn't exist". Used so the baseline can
-// stably record absence (packed-refs, detached HEAD's branch ref) and still
-// match on the next stat pass without forcing a real git check.
-const STAT_ABSENT_SENTINEL = -1;
-// Ceiling on how long the stat pre-check may keep skipping full git-status
-// passes while the working tree is NOT covered by a recursive watcher. The
-// four statted files are all .git metadata, so pure working-tree edits (an
-// agent editing sources without staging) never perturb the baseline — without
-// this bound they would stay invisible indefinitely on git-only/unwatched
-// worktrees. Recursive-watched worktrees are exempt: their watcher observes
-// every working-tree write and forces a refresh itself.
-const FULL_STATUS_MAX_AGE_MS = 120_000;
-
-// FNV-1a 32-bit offset basis. Also the digest of an empty change list, which
-// makes it the natural initial value for `previousStateHash` (see below).
-const FNV_OFFSET_BASIS = 0x811c9dc5;
 
 function randomBetween(minMs: number, maxMs: number): number {
   if (maxMs <= minMs) return minMs;
   return minMs + Math.floor(Math.random() * (maxMs - minMs));
-}
-
-interface GitFileStatBaseline {
-  index: number;
-  head: number;
-  refsHead: number;
-  packedRefs: number;
-}
-
-interface BaseDivergence {
-  baseBranchName: string | null;
-  aheadCount: number | null;
-  behindCount: number | null;
-  matchesUpstream: boolean;
 }
 
 export interface WorktreeMonitorConfig {
@@ -146,35 +109,13 @@ export class WorktreeMonitor {
   private _agentActive: boolean = false;
   private _isMainWorktree: boolean;
 
-  // State
+  // State — `worktreeChanges`/`mood`/`summary` stay here (written from
+  // `poll()`/`scheduleNextPoll()` too, not just the git-status pass); the
+  // rest of the pass's output (modifiedCount, notes, plan file, upstream and
+  // base-branch divergence, activity timestamp) is owned by `gitStatusPass`.
   private worktreeChanges: WorktreeChanges | null = null;
   private mood: WorktreeMood = "stable";
   private summary: string | undefined;
-  private modifiedCount: number = 0;
-  private lastActivityTimestamp: number | null = null;
-  // Seeded with the FNV-1a offset basis — the digest of an empty change list —
-  // mirroring the legacy string implementation where the initial sentinel ""
-  // equaled the clean-tree hash, so a first poll of a clean tree reads as
-  // "no change" exactly as before.
-  private previousStateHash: number = FNV_OFFSET_BASIS;
-
-  // Note state
-  private aiNote: string | undefined;
-  private aiNoteTimestamp: number | undefined;
-
-  // Plan file state
-  private hasPlanFile: boolean = false;
-  private planFilePath: string | undefined;
-
-  // Upstream tracking state
-  private aheadCount: number | undefined;
-  private behindCount: number | undefined;
-
-  // Base-branch divergence state
-  private _baseBranchName: string | null | undefined;
-  private _baseAheadCount: number | null | undefined;
-  private _baseBehindCount: number | null | undefined;
-  private _baseMatchesUpstream: boolean | undefined;
 
   // Issue/PR state
   private _issueNumber: number | undefined;
@@ -224,19 +165,6 @@ export class WorktreeMonitor {
   // whether an event arrived since the baseline was captured — if so, the
   // skip is invalid and we must run the full git check.
   private lastWatcherEventAt: number = 0;
-  // mtime cache for .git/index, HEAD, refs/heads/<branch>, packed-refs.
-  // Populated after every successful git check. When the next poll finds all
-  // four mtimes unchanged AND no watcher event has fired since, we skip the
-  // simple-git fork-exec. null = no baseline yet (first poll, or post-error).
-  private lastStatBaseline: GitFileStatBaseline | null = null;
-  private lastStatBaselineAt: number = 0;
-  // Timestamp of the last completed FULL status pass (one that actually ran
-  // git, not a stat-skip). Bounds how long stat-skips may mask working-tree
-  // edits on worktrees without recursive coverage (FULL_STATUS_MAX_AGE_MS).
-  private lastFullStatusAt: number = 0;
-  private lastBaseDivergenceKey: string | null = null;
-  private lastBaseDivergenceResult: BaseDivergence | null = null;
-  private cachedCommonDir: string | null = null;
   // Timer used to defer the initial `updateGitStatus` call for background
   // monitors so N monitors starting together don't fork git simultaneously.
   // Cleared by `clearTimers()` so `stop()` cancels the deferred poll.
@@ -319,6 +247,19 @@ export class WorktreeMonitor {
   private pollingStrategy: AdaptivePollingStrategy;
   private noteReader: NoteFileReader;
   private pollQueue?: PQueue;
+  private readonly snapshotBuilder: SnapshotBuilder;
+  private readonly statPrecheck: StatPrecheck;
+  private readonly baseDivergence: BaseDivergence;
+  private readonly gitStatusPass: GitStatusPass;
+
+  // Test-only backdoors preserving pre-split field access onto the stat
+  // baseline cache StatPrecheck now owns for real callers.
+  private get lastStatBaselineAt(): number {
+    return this.statPrecheck.baselineCapturedAt;
+  }
+  private set lastFullStatusAt(value: number) {
+    this.statPrecheck.fullStatusCapturedAt = value;
+  }
 
   constructor(
     worktree: Worktree,
@@ -450,6 +391,364 @@ export class WorktreeMonitor {
       onWatcherRecovered: () => monitor.callbacks.onWatcherRecovered?.(monitor.id),
     };
     this.watcherController = new WatcherController(watcherHost);
+
+    const snapshotHost: SnapshotBuilderHost = {
+      get id() {
+        return monitor.id;
+      },
+      get path() {
+        return monitor.path;
+      },
+      get name() {
+        return monitor._name;
+      },
+      get branch() {
+        return monitor._branch;
+      },
+      get isCurrent() {
+        return monitor._isCurrent;
+      },
+      get isMainWorktree() {
+        return monitor._isMainWorktree;
+      },
+      get gitDir() {
+        return monitor._gitDir;
+      },
+      get summary() {
+        return monitor.summary;
+      },
+      get modifiedCount() {
+        return monitor.gitStatusPass.modifiedCount;
+      },
+      get mood() {
+        return monitor.mood;
+      },
+      get lastActivityTimestamp() {
+        return monitor.gitStatusPass.lastActivityTimestamp;
+      },
+      get createdAt() {
+        return monitor._createdAt;
+      },
+      get aiNote() {
+        return monitor.gitStatusPass.aiNote;
+      },
+      get aiNoteTimestamp() {
+        return monitor.gitStatusPass.aiNoteTimestamp;
+      },
+      get issueNumber() {
+        return monitor._issueNumber;
+      },
+      get prNumber() {
+        return monitor.prNumber;
+      },
+      get prUrl() {
+        return monitor.prUrl;
+      },
+      get prState() {
+        return monitor.prState;
+      },
+      get prCiStatus() {
+        return monitor.prCiStatus;
+      },
+      get prTitle() {
+        return monitor.prTitle;
+      },
+      get issueTitle() {
+        return monitor.issueTitle;
+      },
+      get branchDerivedTitle() {
+        return monitor._branchDerivedTitle;
+      },
+      get sourcePrNumber() {
+        return monitor._sourcePrNumber;
+      },
+      get prLastUpdatedAt() {
+        return monitor.prLastUpdatedAt;
+      },
+      get issueLastUpdatedAt() {
+        return monitor.issueLastUpdatedAt;
+      },
+      get worktreeChanges() {
+        return monitor.worktreeChanges;
+      },
+      get lifecycleStatus() {
+        return monitor._lifecycleStatus;
+      },
+      get lifecyclePhaseResults() {
+        return monitor._lifecyclePhaseResults;
+      },
+      get resourceStatus() {
+        return monitor._resourceStatus;
+      },
+      get resourceConnectCommand() {
+        return monitor._resourceConnectCommand;
+      },
+      get resourceProvider() {
+        return monitor._resourceProvider;
+      },
+      get hasResourceConfig() {
+        return monitor._hasResourceConfig;
+      },
+      get hasStatusCommand() {
+        return monitor._hasStatusCommand;
+      },
+      get hasPauseCommand() {
+        return monitor._hasPauseCommand;
+      },
+      get hasResumeCommand() {
+        return monitor._hasResumeCommand;
+      },
+      get hasTeardownCommand() {
+        return monitor._hasTeardownCommand;
+      },
+      get hasProvisionCommand() {
+        return monitor._hasProvisionCommand;
+      },
+      get worktreeMode() {
+        return monitor._worktreeMode;
+      },
+      get worktreeEnvironmentLabel() {
+        return monitor._worktreeEnvironmentLabel;
+      },
+      get hasPlanFile() {
+        return monitor.gitStatusPass.hasPlanFile;
+      },
+      get planFilePath() {
+        return monitor.gitStatusPass.planFilePath;
+      },
+      get aheadCount() {
+        return monitor.gitStatusPass.aheadCount;
+      },
+      get behindCount() {
+        return monitor.gitStatusPass.behindCount;
+      },
+      get baseBranchName() {
+        return monitor.gitStatusPass.baseBranchName;
+      },
+      get baseAheadCount() {
+        return monitor.gitStatusPass.baseAheadCount;
+      },
+      get baseBehindCount() {
+        return monitor.gitStatusPass.baseBehindCount;
+      },
+      get baseMatchesUpstream() {
+        return monitor.gitStatusPass.baseMatchesUpstream;
+      },
+      get lastFetchedAt() {
+        return monitor._lastFetchedAt;
+      },
+      get lastGitStatusCheckedAt() {
+        return monitor.lastGitStatusCompletedAt;
+      },
+      get fetchAuthFailed() {
+        return monitor._fetchAuthFailed;
+      },
+      get fetchNetworkFailed() {
+        return monitor._fetchNetworkFailed;
+      },
+      get isFetchInFlight() {
+        return monitor.fetchScheduler.isFetchInFlight;
+      },
+      get matchedForgeProviderId() {
+        return monitor._matchedForgeProviderId;
+      },
+      get isWslPath() {
+        return monitor._isWslPath;
+      },
+      get wslDistro() {
+        return monitor._wslDistro;
+      },
+      get wslPosixPath() {
+        return monitor._wslPosixPath;
+      },
+      get wslGitEligible() {
+        return monitor._wslGitEligible;
+      },
+      get wslGitOptIn() {
+        return monitor._wslGitOptIn;
+      },
+      get wslGitDismissed() {
+        return monitor._wslGitDismissed;
+      },
+      get linked() {
+        return monitor._linked;
+      },
+      get repoState() {
+        return monitor._repoState;
+      },
+      get isDetached() {
+        return monitor._isDetached;
+      },
+      get head() {
+        return monitor._head;
+      },
+    };
+    this.snapshotBuilder = new SnapshotBuilder(snapshotHost);
+
+    const statPrecheckHost: StatPrecheckHost = {
+      get abortSignal() {
+        return monitor._pollAbortController.signal;
+      },
+    };
+    this.statPrecheck = new StatPrecheck(statPrecheckHost);
+
+    const baseDivergenceHost: BaseDivergenceHost = {
+      get branch() {
+        return monitor._branch;
+      },
+      get isMainWorktree() {
+        return monitor._isMainWorktree;
+      },
+      get mainBranch() {
+        return monitor.mainBranch;
+      },
+      get linkedPrBaseRef() {
+        return monitor._linked?.pr?.baseRef;
+      },
+      get path() {
+        return monitor.path;
+      },
+      get wslInvocation() {
+        return monitor.wslInvocation;
+      },
+      get abortSignal() {
+        return monitor._pollAbortController.signal;
+      },
+    };
+    this.baseDivergence = new BaseDivergence(baseDivergenceHost, this.statPrecheck);
+
+    const gitStatusPassHost: GitStatusPassHost = {
+      get id() {
+        return monitor.id;
+      },
+      get path() {
+        return monitor.path;
+      },
+      get name() {
+        return monitor._name;
+      },
+      get mainBranch() {
+        return monitor.mainBranch;
+      },
+      get isCurrent() {
+        return monitor._isCurrent;
+      },
+      get isRunning() {
+        return monitor._isRunning;
+      },
+      get basePollingInterval() {
+        return monitor.config.basePollingInterval;
+      },
+      get wslInvocation() {
+        return monitor.wslInvocation;
+      },
+      get abortSignal() {
+        return monitor._pollAbortController.signal;
+      },
+      get lastWatcherEventAt() {
+        return monitor.lastWatcherEventAt;
+      },
+      get prevEmittedIsDetached() {
+        return monitor._prevEmittedIsDetached;
+      },
+      get prevEmittedHead() {
+        return monitor._prevEmittedHead;
+      },
+      get prevEmittedRepoState() {
+        return monitor._prevEmittedRepoState;
+      },
+      get hasInitialStatus() {
+        return monitor._hasInitialStatus;
+      },
+      set hasInitialStatus(value: boolean) {
+        monitor._hasInitialStatus = value;
+      },
+      get repoState() {
+        return monitor._repoState;
+      },
+      set repoState(value) {
+        monitor._repoState = value;
+      },
+      get lastGitStatusCompletedAt() {
+        return monitor.lastGitStatusCompletedAt;
+      },
+      set lastGitStatusCompletedAt(value: number) {
+        monitor.lastGitStatusCompletedAt = value;
+      },
+      get isUpdating() {
+        return monitor._isUpdating;
+      },
+      set isUpdating(value: boolean) {
+        monitor._isUpdating = value;
+      },
+      get branch() {
+        return monitor._branch;
+      },
+      set branch(value: string | undefined) {
+        monitor._branch = value;
+      },
+      get issueNumber() {
+        return monitor._issueNumber;
+      },
+      set issueNumber(value: number | undefined) {
+        monitor._issueNumber = value;
+      },
+      get branchDerivedTitle() {
+        return monitor._branchDerivedTitle;
+      },
+      set branchDerivedTitle(value: string | undefined) {
+        monitor._branchDerivedTitle = value;
+      },
+      get issueTitle() {
+        return monitor.issueTitle;
+      },
+      set issueTitle(value: string | undefined) {
+        monitor.issueTitle = value;
+      },
+      get isDetached() {
+        return monitor._isDetached;
+      },
+      set isDetached(value: boolean) {
+        monitor._isDetached = value;
+      },
+      get head() {
+        return monitor._head;
+      },
+      set head(value: string | undefined) {
+        monitor._head = value;
+      },
+      get mood() {
+        return monitor.mood;
+      },
+      set mood(value: WorktreeMood) {
+        monitor.mood = value;
+      },
+      get summary() {
+        return monitor.summary;
+      },
+      set summary(value: string | undefined) {
+        monitor.summary = value;
+      },
+      get worktreeChanges() {
+        return monitor.worktreeChanges;
+      },
+      set worktreeChanges(value: WorktreeChanges | null) {
+        monitor.worktreeChanges = value;
+      },
+      clearPRInfo: () => monitor.clearPRInfo(),
+      onBranchChanged: (branch: string) => monitor.callbacks.onBranchChanged?.(monitor.id, branch),
+      onRemoved: () => monitor.callbacks.onRemoved?.(monitor.id),
+      stop: () => monitor.stop(),
+      emitUpdate: () => monitor.emitUpdate(),
+    };
+    this.gitStatusPass = new GitStatusPass(
+      gitStatusPassHost,
+      this.statPrecheck,
+      this.baseDivergence,
+      this.watcherController,
+      this.pollingStrategy,
+      this.noteReader
+    );
 
     this._isWslPath = Boolean(worktree.isWslPath);
     this._wslDistro = worktree.wslDistro;
@@ -1184,106 +1483,7 @@ export class WorktreeMonitor {
   }
 
   getSnapshot(): WorktreeSnapshot {
-    let resourceStatus: import("../../shared/types/worktree.js").WorktreeResourceStatus | undefined;
-    if (this._resourceStatus) {
-      resourceStatus = { ...this._resourceStatus, provider: this._resourceProvider };
-    } else if (this._resourceProvider) {
-      resourceStatus = { provider: this._resourceProvider };
-    }
-
-    // `linked` is the source of truth (#8452). When present, the legacy flat
-    // fields are derived from it; the private flat fields only serve the
-    // legacy/branch-parse path where `_linked` was never populated.
-    const linkedPr = this._linked?.pr;
-    const linkedIssue = this._linked?.issue;
-    const linkedPrState: "open" | "merged" | "closed" | undefined = linkedPr
-      ? linkedPr.state === "declined"
-        ? "closed"
-        : linkedPr.state
-      : undefined;
-    const linkedPrCiStatus: CIStatusState | undefined =
-      linkedPr?.ciStatus &&
-      (linkedPr.ciStatus.state === "success" ||
-        linkedPr.ciStatus.state === "failure" ||
-        linkedPr.ciStatus.state === "pending")
-        ? linkedPr.ciStatus.state
-        : undefined;
-
-    const snapshot: WorktreeSnapshot = {
-      id: this.id,
-      path: this.path,
-      name: this._name,
-      branch: this._branch,
-      isCurrent: this._isCurrent,
-      isMainWorktree: this._isMainWorktree,
-      gitDir: this._gitDir,
-      summary: this.summary,
-      modifiedCount: this.modifiedCount,
-      mood: this.mood,
-      lastActivityTimestamp: this.lastActivityTimestamp,
-      createdAt: this._createdAt,
-      aiNote: this.aiNote,
-      aiNoteTimestamp: this.aiNoteTimestamp,
-      issueNumber: linkedIssue?.ref.number ?? this._issueNumber,
-      prNumber: linkedPr?.ref.number ?? this.prNumber,
-      prUrl: linkedPr?.url ?? this.prUrl,
-      prState: linkedPr ? linkedPrState : this.prState === "declined" ? "closed" : this.prState,
-      prCiStatus: linkedPr ? linkedPrCiStatus : this.prCiStatus,
-      prTitle: linkedPr ? linkedPr.title : this.prTitle,
-      issueTitle: linkedIssue ? linkedIssue.title : this.issueTitle,
-      branchDerivedTitle: this._branchDerivedTitle,
-      sourcePrNumber: this._sourcePrNumber,
-      prLastUpdatedAt: this.prLastUpdatedAt,
-      issueLastUpdatedAt: this.issueLastUpdatedAt,
-      worktreeChanges: this.worktreeChanges,
-      worktreeId: this.id,
-      timestamp: Date.now(),
-      lifecycleStatus: this._lifecycleStatus,
-      lifecyclePhaseResults:
-        this._lifecyclePhaseResults.length > 0 ? [...this._lifecyclePhaseResults] : undefined,
-      resourceStatus,
-      resourceConnectCommand: this._resourceConnectCommand,
-      hasResourceConfig: this._hasResourceConfig || undefined,
-      hasStatusCommand: this._hasStatusCommand || undefined,
-      hasPauseCommand: this._hasPauseCommand || undefined,
-      hasResumeCommand: this._hasResumeCommand || undefined,
-      hasTeardownCommand: this._hasTeardownCommand || undefined,
-      hasProvisionCommand: this._hasProvisionCommand || undefined,
-      worktreeMode: this._worktreeMode !== "local" ? this._worktreeMode : undefined,
-      worktreeEnvironmentLabel: this._worktreeEnvironmentLabel,
-      hasPlanFile: this.hasPlanFile || undefined,
-      planFilePath: this.planFilePath,
-      aheadCount: this.aheadCount,
-      behindCount: this.behindCount,
-      baseBranchName: this._baseBranchName ?? undefined,
-      baseAheadCount: this._baseAheadCount ?? undefined,
-      baseBehindCount: this._baseBehindCount ?? undefined,
-      baseMatchesUpstream: this._baseMatchesUpstream ?? undefined,
-      lastFetchedAt: this._lastFetchedAt ?? undefined,
-      lastGitStatusCheckedAt: this.lastGitStatusCompletedAt,
-      fetchAuthFailed: this._fetchAuthFailed || undefined,
-      fetchNetworkFailed: this._fetchNetworkFailed || undefined,
-      // Read in-flight state authoritatively at snapshot time (lesson #1700)
-      // so a snapshot emitted between fetch-start and fetch-end always
-      // serializes the correct value, never a stale cached copy.
-      isFetchInFlight: this.fetchScheduler.isFetchInFlight || undefined,
-      matchedForgeProviderId: this._matchedForgeProviderId ?? undefined,
-      isWslPath: this._isWslPath || undefined,
-      wslDistro: this._wslDistro,
-      wslPosixPath: this._wslPosixPath,
-      // Emit the three-state value directly for WSL paths so the renderer can
-      // tell "ineligible" (distro mismatch) from "unprobed" (probe pending /
-      // failed). Suppressed for non-WSL worktrees to keep snapshots lean.
-      wslGitEligible: this._isWslPath ? this._wslGitEligible : undefined,
-      wslGitOptIn: this._wslGitOptIn || undefined,
-      wslGitDismissed: this._wslGitDismissed || undefined,
-      linked: this._linked,
-      repoState: this._repoState || undefined,
-      isDetached: this._isDetached || undefined,
-      head: this._head || undefined,
-    };
-
-    return snapshot;
+    return this.snapshotBuilder.build();
   }
 
   isCircuitBreakerTripped(): boolean {
@@ -1570,674 +1770,7 @@ export class WorktreeMonitor {
   // --- Git status ---
 
   async updateGitStatus(forceRefresh: boolean = false): Promise<void> {
-    if (this._isUpdating) {
-      return;
-    }
-    // Claim the single-flight slot before the first await. Everything below
-    // suspends (git-dir resolution, the stat pre-check), and forced refreshes
-    // bypass both the worktree-changes in-flight cache and the pre-check — so
-    // without the early claim two rapid forced refreshes could pass the guard
-    // together and run duplicate status passes with out-of-order commits.
-    this._isUpdating = true;
-
-    // Definite-assignment: assigned as the first statement of the try below;
-    // the status pass (the only later reader) is unreachable unless that try
-    // completed normally, so every read is dominated by the assignment.
-    let gitDir!: string | null;
-    let reachedStatusPass = false;
-    try {
-      // Skip the git status invocation while a rebase/merge/cherry-pick/revert
-      // is in progress — running it would compete with the user's git client
-      // for .git/index.lock. The watcher tracks the same sentinel files, so
-      // it fires when the operation finishes and triggers a fresh refresh.
-      // Polling continues uninterrupted, so the next scheduled poll after
-      // sentinels clear also picks up the change.
-      gitDir = await getGitDir(this.path, { cache: true, logErrors: false });
-
-      // Detect blocking git operation state from sentinel files so the renderer
-      // can surface it even when git status is skipped.
-      let opState: import("../../shared/types/git.js").RepoState | undefined;
-      if (gitDir) {
-        opState = getRepoOperationStateSync(gitDir);
-        if (opState !== this._repoState) {
-          this._repoState = opState;
-          if (this._hasInitialStatus) {
-            this.emitUpdate();
-          }
-        }
-      } else {
-        this._repoState = undefined;
-      }
-
-      if (gitDir && opState !== undefined) {
-        // Stamp the completion timestamp before any emit so every snapshot below
-        // carries the advanced value. Git status was skipped, but the sentinel
-        // state was freshly observed above, so the freshness signal is accurate
-        // and the heartbeat-gap detector (which reads this field) won't
-        // false-positive on a long blocking operation. Without this, a
-        // user-triggered refresh during a stuck blocking operation never advances
-        // lastGitStatusCompletedAt, leaving the freshness pill permanently stale
-        // and its Refresh button a no-op (#10715).
-        this.lastGitStatusCompletedAt = Date.now();
-        if (!this._hasInitialStatus) {
-          // First poll started mid-operation (e.g. app started mid-rebase) — emit
-          // a default snapshot so the renderer can still display the worktree.
-          // Mirrors startWithoutGitStatus()'s contract.
-          this._hasInitialStatus = true;
-          this.emitUpdate();
-        } else if (forceRefresh) {
-          // The user clicked Refresh on a stale card. Emit so the renderer
-          // receives the advanced timestamp and the freshness pill resets —
-          // otherwise the click is silently dropped. Background polls stamp
-          // silently; the watcher emits a real status once sentinels clear.
-          this.emitUpdate();
-        }
-        return;
-      }
-
-      // Cheap stat pre-check: when the four git files we care about haven't
-      // changed since the last baseline and no watcher event has fired since,
-      // the simple-git fork-exec would be redundant. Skip it. This is the
-      // common case on a quiet repo — the per-poll cost drops from ~15-50ms
-      // (fork + git status) to ~1ms (four stat() calls).
-      //
-      // The baseline only exists after the first real check, so this branch
-      // is a no-op on the very first poll. Forced refreshes (watcher events,
-      // user actions) always run the full check.
-      //
-      // The skip is only trustworthy for working-tree freshness while the
-      // recursive watcher covers the tree (its events force refreshes). In
-      // git-only/unwatched modes the four statted files can't reflect pure
-      // working-tree edits, so cap how long skips may stack up: past
-      // FULL_STATUS_MAX_AGE_MS the poll falls through to a real git check.
-      const skipTrustworthy =
-        this.watcherController.currentMode === "recursive" ||
-        Date.now() - this.lastFullStatusAt < FULL_STATUS_MAX_AGE_MS;
-      if (
-        !forceRefresh &&
-        gitDir &&
-        this._hasInitialStatus &&
-        this.lastStatBaseline !== null &&
-        skipTrustworthy
-      ) {
-        const baselineAt = this.lastStatBaselineAt;
-        const checkStartedAt = Date.now();
-        try {
-          const commonDir = await this.resolveCommonDirAsync(gitDir);
-          const fresh = await this.buildStatBaseline(gitDir, commonDir);
-          if (
-            fresh !== null &&
-            this.lastWatcherEventAt <= baselineAt &&
-            this.statBaselineMatches(this.lastStatBaseline, fresh)
-          ) {
-            // Treat the skip as a no-change observation so the idle backoff
-            // ramps up the next interval. lastGitStatusCompletedAt bumps too,
-            // otherwise the heartbeat-gap check would false-positive on a
-            // long quiet streak that only ran stat-skips.
-            this.pollingStrategy.recordNoChange();
-            this.lastStatBaselineAt = checkStartedAt;
-            this.lastGitStatusCompletedAt = Date.now();
-            return;
-          }
-        } catch {
-          // Unexpected stat error — fall through to the full git check.
-          // Don't poison the baseline; the post-check rebuild will refresh it.
-        }
-      }
-
-      reachedStatusPass = true;
-    } finally {
-      // Early exits (sentinel skip, stat skip, a throw above) release the
-      // claim here and drain any pending watcher flush that queued while it
-      // was held. The status pass below keeps the claim; its own finally is
-      // the release point — and stays the LAST code to touch the flag, so a
-      // flush-triggered synchronous re-entry can't have its claim clobbered.
-      if (!reachedStatusPass) {
-        this._isUpdating = false;
-        this.watcherController.flushPendingIfReady(true);
-      }
-    }
-
-    // Tracks whether the try block reached a clean exit point — either the
-    // no-change early return or the post-emit fall-through. The catch block
-    // doesn't flip it (so the finally clears the stale baseline) which means
-    // a flaky git that throws here can't get its old baseline re-stamped and
-    // silently suppress the next retry.
-    let checkSucceeded = false;
-
-    try {
-      if (forceRefresh) {
-        invalidateGitStatusCache(this.path);
-      }
-
-      const pollingInterval = this.config.basePollingInterval;
-      const cacheTTL =
-        Number.isFinite(pollingInterval) && pollingInterval > 0
-          ? Math.max(500, pollingInterval - 500)
-          : undefined;
-      const newChanges = await getWorktreeChangesWithStats(this.path, {
-        forceRefresh,
-        cacheTTL,
-        wsl: this.wslInvocation,
-      });
-
-      if (!this._isRunning) {
-        return;
-      }
-
-      // Detect branch changes by reading HEAD directly
-      const currentBranch = await this.readCurrentBranch();
-      const branchChanged = currentBranch !== undefined && currentBranch !== this._branch;
-      if (branchChanged) {
-        this._branch = currentBranch;
-        const hadPendingRefresh = this.watcherController.takePending();
-        this.watcherController.update();
-        if (hadPendingRefresh) {
-          this.watcherController.markPending();
-        }
-        const syncIssueNumber = extractIssueNumberSync(currentBranch, this._name);
-        if (syncIssueNumber) {
-          this._issueNumber = syncIssueNumber;
-        } else {
-          this._issueNumber = undefined;
-          void this.extractIssueNumberAsync(currentBranch, this._name);
-        }
-        this._branchDerivedTitle = deriveIssueTitleFromBranch(currentBranch);
-        this.issueTitle = undefined;
-        // Clear PR info synchronously in the same emit as the branch change
-        // so the renderer never sees a frame with the new branch but the old
-        // PR (#8079). PullRequestService still emits its own clear downstream;
-        // by then this snapshot already has null PR fields, so that second
-        // emit collapses to a no-op via snapshotsEqual.
-        this.clearPRInfo();
-        this.callbacks.onBranchChanged?.(this.id, currentBranch);
-      }
-
-      // Bound the AI-note read: a slow/stalled note file must degrade to "no
-      // note" for this pass, not hang the whole git-status update.
-      const noteData = await withTimeout(
-        this.noteReader.read(),
-        FS_OP_TIMEOUT_MS,
-        `note read: ${this.path}`
-      ).catch(() => undefined);
-
-      const hasUpstream = !!newChanges.tracking;
-      const nextAheadCount = hasUpstream ? (newChanges.ahead ?? 0) : undefined;
-      const nextBehindCount = hasUpstream ? (newChanges.behind ?? 0) : undefined;
-
-      // Base-branch divergence — runs in parallel with plan file detection.
-      const baseDivergencePromise = this.computeBaseDivergence(hasUpstream);
-
-      const planResults = await Promise.allSettled(
-        PLAN_FILE_CANDIDATES.map((candidate) =>
-          withTimeout(
-            access(pathJoin(this.path, candidate)),
-            FS_OP_TIMEOUT_MS,
-            `plan-file probe: ${candidate}`
-          )
-        )
-      );
-      const detectedPlanFile = PLAN_FILE_CANDIDATES.find(
-        (_, i) => planResults[i].status === "fulfilled"
-      );
-      const nextHasPlanFile = detectedPlanFile !== undefined;
-      const nextPlanFilePath = detectedPlanFile;
-
-      const baseDivergence = await baseDivergencePromise;
-      const nextBaseBranchName = baseDivergence?.baseBranchName ?? undefined;
-      const nextBaseAheadCount = baseDivergence?.aheadCount ?? undefined;
-      const nextBaseBehindCount = baseDivergence?.behindCount ?? undefined;
-      const nextBaseMatchesUpstream = baseDivergence?.matchesUpstream ?? undefined;
-
-      const currentHash = this.calculateStateHash(newChanges);
-      const stateChanged = currentHash !== this.previousStateHash;
-      const noteChanged =
-        noteData?.content !== this.aiNote || noteData?.timestamp !== this.aiNoteTimestamp;
-      const planChanged =
-        nextHasPlanFile !== this.hasPlanFile || nextPlanFilePath !== this.planFilePath;
-      const upstreamChanged =
-        nextAheadCount !== this.aheadCount || nextBehindCount !== this.behindCount;
-      const baseDivergenceChanged =
-        nextBaseBranchName !== this._baseBranchName ||
-        nextBaseAheadCount !== this._baseAheadCount ||
-        nextBaseBehindCount !== this._baseBehindCount ||
-        nextBaseMatchesUpstream !== this._baseMatchesUpstream;
-
-      const gitStateChanged =
-        this._isDetached !== this._prevEmittedIsDetached ||
-        this._head !== this._prevEmittedHead ||
-        this._repoState !== this._prevEmittedRepoState;
-
-      const anythingChanged =
-        stateChanged ||
-        noteChanged ||
-        branchChanged ||
-        planChanged ||
-        upstreamChanged ||
-        baseDivergenceChanged ||
-        gitStateChanged;
-
-      // Drive the idle backoff from what the git check actually observed —
-      // a real state change resets, otherwise we count one quiet tick. The
-      // skip path above runs its own recordNoChange so this branch only
-      // sees ticks that paid the full fork-exec cost.
-      if (anythingChanged) {
-        this.pollingStrategy.recordStateChange();
-      } else {
-        this.pollingStrategy.recordNoChange();
-      }
-
-      if (!anythingChanged && !forceRefresh) {
-        checkSucceeded = true;
-        return;
-      }
-
-      // True on initial load OR while the tree has stayed clean — the two are
-      // deliberately indistinguishable (legacy ""-hash semantics).
-      const isInitialLoad = this.previousStateHash === FNV_OFFSET_BASIS;
-      const isNowClean = newChanges.changedFileCount === 0;
-      const hasPendingChanges = newChanges.changedFileCount > 0;
-      const shouldUpdateTimestamp =
-        (stateChanged && !isInitialLoad) || (isInitialLoad && hasPendingChanges);
-
-      if (shouldUpdateTimestamp) {
-        this.lastActivityTimestamp = Date.now();
-      }
-
-      if (isInitialLoad && isNowClean && this.lastActivityTimestamp === null) {
-        this.lastActivityTimestamp = newChanges.lastCommitTimestampMs ?? null;
-      }
-
-      if (
-        isNowClean ||
-        isInitialLoad ||
-        (this.worktreeChanges && this.worktreeChanges.changedFileCount === 0)
-      ) {
-        this.summary = await this.fetchLastCommitMessage(newChanges);
-      }
-
-      let nextMood = this.mood;
-      try {
-        nextMood = await categorizeWorktree(
-          {
-            id: this.id,
-            path: this.path,
-            name: this._name,
-            branch: this._branch,
-            isCurrent: this._isCurrent,
-          },
-          newChanges || undefined,
-          this.mainBranch
-        );
-      } catch {
-        nextMood = "error";
-      }
-
-      this.previousStateHash = currentHash;
-      this.worktreeChanges = newChanges;
-      this.modifiedCount = newChanges.changedFileCount;
-      this.mood = nextMood;
-      this.aiNote = noteData?.content;
-      this.aiNoteTimestamp = noteData?.timestamp;
-      this.hasPlanFile = nextHasPlanFile;
-      this.planFilePath = nextPlanFilePath;
-      this.aheadCount = nextAheadCount;
-      this.behindCount = nextBehindCount;
-      this._baseBranchName = nextBaseBranchName;
-      this._baseAheadCount = nextBaseAheadCount;
-      this._baseBehindCount = nextBaseBehindCount;
-      this._baseMatchesUpstream = nextBaseMatchesUpstream;
-      this._hasInitialStatus = true;
-
-      this.emitUpdate();
-      checkSucceeded = true;
-    } catch (error) {
-      if (error instanceof WorktreeRemovedError) {
-        this.stop();
-        this.callbacks.onRemoved?.(this.id);
-        return;
-      }
-
-      const errorMessage = (error as Error).message || "";
-      if (errorMessage.includes("index.lock")) {
-        this.watcherController.markPending();
-        this.watcherController.scheduleDelayedFlush();
-        return;
-      }
-
-      this.mood = "error";
-      this.emitUpdate();
-      throw error;
-    } finally {
-      this._isUpdating = false;
-      this.lastGitStatusCompletedAt = Date.now();
-      // Rebuild the stat baseline only when a real git check finished
-      // cleanly. On failure (anything that didn't set checkSucceeded — git
-      // throw, WorktreeRemovedError, index.lock retry path) we drop the
-      // baseline so the next non-forced poll falls through to a full check
-      // rather than skipping against a snapshot that predates the failure.
-      if (checkSucceeded && gitDir) {
-        // A full pass ran git and landed cleanly — reset the stat-skip
-        // staleness budget alongside the baseline rebuild.
-        this.lastFullStatusAt = Date.now();
-        try {
-          const commonDir = await this.resolveCommonDirAsync(gitDir);
-          const fresh = await this.buildStatBaseline(gitDir, commonDir);
-          if (fresh !== null) {
-            this.lastStatBaseline = fresh;
-            this.lastStatBaselineAt = Date.now();
-          } else {
-            this.lastStatBaseline = null;
-          }
-        } catch {
-          this.lastStatBaseline = null;
-        }
-      } else {
-        this.lastStatBaseline = null;
-      }
-      this.watcherController.flushPendingIfReady(true);
-    }
-  }
-
-  /**
-   * Resolve the common git directory for a linked worktree (the `gitDir`
-   * inside `<repo>/.git/worktrees/<name>/` points at `commondir`, which
-   * holds packed-refs and the shared refs/heads tree). Returns `gitDir`
-   * itself for the main worktree, or when the commondir file is missing.
-   * Mirrors `GitFileWatcher.resolveCommonDir`.
-   */
-  private async resolveCommonDirAsync(gitDir: string): Promise<string> {
-    // The commondir pointer is immutable for the lifetime of a worktree, so
-    // a successful resolve is cached for the monitor's lifetime. Fallback
-    // paths (missing file, timeout) stay uncached so transient errors retry.
-    if (this.cachedCommonDir !== null) return this.cachedCommonDir;
-    const { signal, dispose } = timeoutSignal(FS_OP_TIMEOUT_MS, this._pollAbortController.signal);
-    try {
-      const commondirContent = await readFile(pathJoin(gitDir, "commondir"), {
-        encoding: "utf-8",
-        signal,
-      });
-      const trimmed = commondirContent.trim();
-      if (!trimmed) return gitDir;
-      this.cachedCommonDir = isAbsolute(trimmed) ? trimmed : pathJoin(gitDir, trimmed);
-      return this.cachedCommonDir;
-    } catch {
-      // Missing file, timeout, or poll abort — fall back to gitDir. A timeout
-      // here just degrades the next poll to a full git check rather than the
-      // stat fast path; it never freezes the loop.
-      return gitDir;
-    } finally {
-      dispose();
-    }
-  }
-
-  /**
-   * Capture mtimeMs for the four git files whose changes would invalidate
-   * the previous status snapshot: index, HEAD, refs/heads/<branch>, and
-   * packed-refs. Returns `null` if any unexpected error occurs (caller
-   * falls back to a full git check). ENOENT is normal for packed-refs and
-   * the branch ref (detached HEAD, or branch not pushed yet) — those paths
-   * return STAT_ABSENT_SENTINEL and the baseline comparison still works.
-   */
-  private async buildStatBaseline(
-    gitDir: string,
-    commonDir: string
-  ): Promise<GitFileStatBaseline | null> {
-    try {
-      const [indexStat, headStat, refsHeadStat, packedRefsStat] = await Promise.all([
-        this.statMtime(pathJoin(gitDir, "index")),
-        this.statMtime(pathJoin(gitDir, "HEAD")),
-        this._branch
-          ? this.statMtime(pathJoin(commonDir, "refs", "heads", this._branch))
-          : Promise.resolve(STAT_ABSENT_SENTINEL),
-        this.statMtime(pathJoin(commonDir, "packed-refs")),
-      ]);
-      return {
-        index: indexStat,
-        head: headStat,
-        refsHead: refsHeadStat,
-        packedRefs: packedRefsStat,
-      };
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * Stat one git path. Returns `STAT_ABSENT_SENTINEL` when the file is
-   * missing (the most common case for packed-refs and unpushed branch
-   * refs) so the baseline can still compare equal on the next pass without
-   * forcing a full git check. Other errors propagate up so the caller
-   * falls back to the full path — a permission flip or filesystem hiccup
-   * should not silently freeze the cached baseline.
-   */
-  private async statMtime(filePath: string): Promise<number> {
-    try {
-      // fs.stat has no AbortSignal option (unlike readFile), so it can't be
-      // cancelled — bound the await with withTimeout instead. The timeout
-      // surfaces as a TimeoutError (not ENOENT), so it propagates and
-      // buildStatBaseline falls back to a full git check rather than trusting a
-      // half-captured baseline.
-      const result = await withTimeout(stat(filePath), FS_OP_TIMEOUT_MS, `stat: ${filePath}`);
-      return result.mtimeMs;
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException)?.code;
-      if (code === "ENOENT") return STAT_ABSENT_SENTINEL;
-      throw error;
-    }
-  }
-
-  private statBaselineMatches(a: GitFileStatBaseline, b: GitFileStatBaseline): boolean {
-    return (
-      a.index === b.index &&
-      a.head === b.head &&
-      a.refsHead === b.refsHead &&
-      a.packedRefs === b.packedRefs
-    );
-  }
-
-  private async readCurrentBranch(): Promise<string | undefined> {
-    const gitDir = await getGitDir(this.path, { cache: true, logErrors: false });
-    if (!gitDir) {
-      this._isDetached = false;
-      this._head = undefined;
-      return undefined;
-    }
-
-    const { signal, dispose } = timeoutSignal(FS_OP_TIMEOUT_MS, this._pollAbortController.signal);
-    try {
-      const headContent = await readFile(pathJoin(gitDir, "HEAD"), { encoding: "utf-8", signal });
-      const trimmed = headContent.trim();
-      const prefix = "ref: refs/heads/";
-      if (trimmed.startsWith(prefix)) {
-        this._isDetached = false;
-        this._head = undefined;
-        return trimmed.slice(prefix.length);
-      }
-      // Detached HEAD — the file contains a commit SHA
-      if (/^[0-9a-f]{40}$/.test(trimmed)) {
-        this._isDetached = true;
-        this._head = trimmed;
-      } else {
-        this._isDetached = false;
-        this._head = undefined;
-      }
-      return undefined;
-    } catch {
-      // Includes a timeout/abort (AbortError) on a stalled filesystem — treat
-      // as "branch unchanged" rather than letting the read hang the poll.
-      this._isDetached = false;
-      this._head = undefined;
-      return undefined;
-    } finally {
-      dispose();
-    }
-  }
-
-  private async extractIssueNumberAsync(branchName: string, folderName?: string): Promise<void> {
-    try {
-      const issueNum = await extractIssueNumber(branchName, folderName);
-      if (issueNum && this._isRunning && this._branch === branchName) {
-        this._issueNumber = issueNum;
-        if (this._hasInitialStatus) {
-          this.emitUpdate();
-        }
-      }
-    } catch {
-      // Silently ignore extraction errors
-    }
-  }
-
-  private async computeBaseDivergence(hasUpstream: boolean): Promise<BaseDivergence | null> {
-    if (!this._branch || this._isMainWorktree) return null;
-
-    // Pick the branch to diff against. A linked PR's base branch is
-    // authoritative — it's exactly where this worktree's work will merge,
-    // which may differ from the repo's integration branch (e.g. a hotfix
-    // PR targeting `main` in a gitflow repo). Without a PR, fall back to
-    // the repository's main/integration branch.
-    const baseBranch = this._linked?.pr?.baseRef?.trim() || this.mainBranch;
-
-    // Divergence only moves when refs move, never on working-tree edits, so
-    // a stat key over the involved refs lets forced passes (watcher-driven
-    // edit storms) reuse the last result without any git spawns.
-    const key = await this.buildBaseDivergenceKey(baseBranch, hasUpstream);
-    if (key !== null && key === this.lastBaseDivergenceKey) {
-      return this.lastBaseDivergenceResult;
-    }
-
-    const wsl = this.wslInvocation;
-    const git = wsl
-      ? await createWslHardenedGit(wsl, this._pollAbortController.signal)
-      : await createHardenedGit(this.path, this._pollAbortController.signal);
-
-    try {
-      // Resolve base ref via the rev-list itself: try origin/<branch> first
-      // (remote ref stays fresh after fetch), fall back to the local branch
-      // for repos without a remote.
-      const remoteRef = `origin/${baseBranch}`;
-      const localRef = baseBranch;
-      const baseBranchName = baseBranch;
-      let resolvedRef = remoteRef;
-      let result: string;
-      try {
-        result = await git.raw(["rev-list", "--count", "--left-right", `${remoteRef}...HEAD`]);
-      } catch {
-        try {
-          result = await git.raw(["rev-list", "--count", "--left-right", `${localRef}...HEAD`]);
-          resolvedRef = localRef;
-        } catch {
-          this.lastBaseDivergenceKey = null;
-          return null;
-        }
-      }
-      const trimmed = result.trim();
-      const parts = trimmed.split("\t");
-      const behindCount = parts[0] != null && parts[0] !== "" ? parseInt(parts[0], 10) : 0;
-      const aheadCount = parts[1] != null && parts[1] !== "" ? parseInt(parts[1], 10) : 0;
-
-      let matchesUpstream = false;
-      if (hasUpstream) {
-        try {
-          // One invocation resolves both revs — rev-parse prints one OID per
-          // line, and either failing exits non-zero (caught below), matching
-          // the previous two-call error semantics.
-          const out = await git.raw(["rev-parse", "@{u}", resolvedRef]);
-          const [upstreamCommit, baseCommit] = out.trim().split("\n");
-          matchesUpstream = baseCommit !== undefined && upstreamCommit.trim() === baseCommit.trim();
-        } catch {
-          matchesUpstream = false;
-        }
-      }
-
-      const divergence: BaseDivergence = {
-        baseBranchName,
-        aheadCount: Number.isFinite(aheadCount) ? aheadCount : null,
-        behindCount: Number.isFinite(behindCount) ? behindCount : null,
-        matchesUpstream,
-      };
-      this.lastBaseDivergenceKey = key;
-      this.lastBaseDivergenceResult = divergence;
-      return divergence;
-    } catch {
-      this.lastBaseDivergenceKey = null;
-      return null;
-    }
-  }
-
-  /**
-   * Stat-derived cache key for `computeBaseDivergence`. Covers every ref the
-   * computation reads: HEAD, this branch's local ref, the base branch's local
-   * and remote refs, the upstream remote ref (the `@{u}` proxy for
-   * `matchesUpstream`), and packed-refs. The remote-ref stats are essential —
-   * `git fetch` writes loose refs under refs/remotes/ without touching
-   * packed-refs, so the stat-baseline fields alone would serve stale
-   * behind-of-base counts after background fetches. Returns `null` (compute,
-   * don't cache) on any stat failure beyond ENOENT.
-   */
-  private async buildBaseDivergenceKey(
-    baseBranch: string,
-    hasUpstream: boolean
-  ): Promise<string | null> {
-    const branch = this._branch;
-    if (!branch) return null;
-    const gitDir = await getGitDir(this.path, { cache: true, logErrors: false });
-    if (!gitDir) return null;
-    try {
-      const commonDir = await this.resolveCommonDirAsync(gitDir);
-      const stats = await Promise.all([
-        this.statMtime(pathJoin(gitDir, "HEAD")),
-        this.statMtime(pathJoin(commonDir, "refs", "heads", branch)),
-        this.statMtime(pathJoin(commonDir, "packed-refs")),
-        this.statMtime(pathJoin(commonDir, "refs", "heads", baseBranch)),
-        this.statMtime(pathJoin(commonDir, "refs", "remotes", "origin", baseBranch)),
-        this.statMtime(pathJoin(commonDir, "refs", "remotes", "origin", branch)),
-      ]);
-      return [branch, baseBranch, hasUpstream, ...stats].join(" ");
-    } catch {
-      return null;
-    }
-  }
-
-  // 32-bit FNV-1a digest instead of the raw joined string: the previous
-  // implementation retained a path+stats concatenation proportional to the
-  // worktree's change count for the monitor's lifetime. A hash collision
-  // (~1 in 2^32 per state pair) suppresses the change event until the next
-  // non-colliding state or a forced refresh.
-  private calculateStateHash(changes: WorktreeChanges): number {
-    const hashInput = changes.changes
-      .map((c) => `${c.path}:${c.status}:${c.insertions ?? 0}:${c.deletions ?? 0}`)
-      .sort()
-      .join("|");
-    let hash = FNV_OFFSET_BASIS;
-    for (let i = 0; i < hashInput.length; i++) {
-      hash = Math.imul(hash ^ hashInput.charCodeAt(i), 0x01000193) >>> 0;
-    }
-    return hash >>> 0;
-  }
-
-  private async fetchLastCommitMessage(changes: WorktreeChanges): Promise<string> {
-    if (changes.lastCommitMessage) {
-      const firstLine = changes.lastCommitMessage.split("\n")[0].trim();
-      return `✅ ${firstLine}`;
-    }
-
-    try {
-      const wsl = this.wslInvocation;
-      const git = wsl
-        ? await createWslHardenedGit(wsl, this._pollAbortController.signal)
-        : await createHardenedGit(this.path, this._pollAbortController.signal);
-      const log = await git.log({ maxCount: 1 });
-      const lastCommitMsg = log.latest?.message;
-
-      if (lastCommitMsg) {
-        const firstLine = lastCommitMsg.split("\n")[0].trim();
-        return `✅ ${firstLine}`;
-      }
-      return "🌱 Ready to get started";
-    } catch {
-      return "🌱 Ready to get started";
-    }
+    return this.gitStatusPass.run(forceRefresh);
   }
 
   emitUpdate(): void {

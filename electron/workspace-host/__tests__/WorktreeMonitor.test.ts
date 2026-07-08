@@ -237,26 +237,6 @@ describe("WorktreeMonitor", () => {
     expect(mockGetWorktreeChangesWithStats).not.toHaveBeenCalled();
   });
 
-  it("calculateStateHash is a deterministic, order-insensitive numeric digest sensitive to content", () => {
-    const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, makeCallbacks(), "main");
-    const hashOf = (changes: unknown[]) =>
-      monitor["calculateStateHash"]({ changes } as Parameters<
-        (typeof monitor)["calculateStateHash"]
-      >[0]);
-
-    const a = { path: "/w/a.ts", status: "modified", insertions: 1, deletions: 2 };
-    const b = { path: "/w/b.ts", status: "untracked", insertions: 5, deletions: 0 };
-
-    const hash = hashOf([a, b]);
-    expect(typeof hash).toBe("number");
-    expect(hashOf([a, b])).toBe(hash);
-    expect(hashOf([b, a])).toBe(hash);
-    expect(hashOf([a])).not.toBe(hash);
-    expect(hashOf([a, { ...b, insertions: 6 }])).not.toBe(hash);
-
-    monitor.stop();
-  });
-
   it("calls onUpdate on successful git status", async () => {
     mockGetWorktreeChangesWithStats.mockResolvedValue({
       worktreeId: "/test/worktree",
