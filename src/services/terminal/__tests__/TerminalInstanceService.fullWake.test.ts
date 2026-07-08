@@ -116,7 +116,7 @@ type FullWakeTestService = {
   fullWakeForVisibilityRestore: (id: string) => Promise<void>;
   repaintForReveal: (id: string, opts?: { trustDomVisibility?: boolean }) => boolean;
   revealTerminal: (id: string) => Promise<boolean>;
-  notifyAttachSettledWaiters: (id: string) => void;
+  settleWaiters: { notifyAttachSettledWaiters: (id: string) => void };
 };
 
 function makeInstance(overrides: Partial<ManagedTerminalMock> = {}): ManagedTerminalMock {
@@ -555,7 +555,7 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
     vi.spyOn(service.dataBuffer, "resumeFlush").mockImplementation(() => {});
 
-    service.notifyAttachSettledWaiters(id);
+    service.settleWaiters.notifyAttachSettledWaiters(id);
     // The deferred repaint is dispatched as a floating promise; flush microtasks.
     await Promise.resolve();
     await Promise.resolve();
@@ -577,7 +577,7 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
       .spyOn(service.resizeController, "applyDeferredResize")
       .mockImplementation(() => {});
 
-    service.notifyAttachSettledWaiters(id);
+    service.settleWaiters.notifyAttachSettledWaiters(id);
     await Promise.resolve();
     await Promise.resolve();
 
