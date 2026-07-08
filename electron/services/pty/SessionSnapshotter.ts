@@ -24,6 +24,71 @@ export interface SessionSnapshotterHost {
   serializeForPersistence(): string | null | Promise<string | null>;
 }
 
+// Narrow view of a TerminalProcess-shaped owner, sufficient to build either
+// the worker-mode or in-thread SessionSnapshotterHost without this module
+// depending on TerminalProcess itself.
+export interface TerminalSessionSnapshotterFactoryHost {
+  readonly id: string;
+  readonly isWorkerAnalysis: boolean;
+  readonly wasKilled: boolean;
+  readonly launchAgentId: string | undefined;
+  readonly contentEpoch: number;
+  readonly hasRestoreBannerMarkers: boolean;
+  getSerializedState(): string | null;
+  getSerializedStateAsync(): Promise<string | null>;
+  serializeForPersistence(): string | null;
+  serializeForPersistenceViaAnalysis(): string | null;
+}
+
+export function createTerminalSessionSnapshotter(
+  host: TerminalSessionSnapshotterFactoryHost
+): SessionSnapshotter {
+  if (host.isWorkerAnalysis) {
+    const snapshotterHost: SessionSnapshotterHost = {
+      get id() {
+        return host.id;
+      },
+      get wasKilled() {
+        return host.wasKilled;
+      },
+      get launchAgentId() {
+        return host.launchAgentId;
+      },
+      get contentEpoch() {
+        return host.contentEpoch;
+      },
+      // Route every persistence serialize through the worker's banner-aware
+      // op (it falls back to a plain serialize when no banner markers exist),
+      // so the host never needs to know whether a restore banner is present.
+      hasBannerMarkers: () => true,
+      getSerializedState: () => null,
+      getSerializedStateAsync: () => host.getSerializedStateAsync(),
+      serializeForPersistence: () => host.serializeForPersistenceViaAnalysis(),
+    };
+    return new SessionSnapshotter(snapshotterHost);
+  }
+
+  const snapshotterHost: SessionSnapshotterHost = {
+    get id() {
+      return host.id;
+    },
+    get wasKilled() {
+      return host.wasKilled;
+    },
+    get launchAgentId() {
+      return host.launchAgentId;
+    },
+    get contentEpoch() {
+      return host.contentEpoch;
+    },
+    hasBannerMarkers: () => host.hasRestoreBannerMarkers,
+    getSerializedState: () => host.getSerializedState(),
+    getSerializedStateAsync: () => host.getSerializedStateAsync(),
+    serializeForPersistence: () => host.serializeForPersistence(),
+  };
+  return new SessionSnapshotter(snapshotterHost);
+}
+
 export class SessionSnapshotter {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private dirty = false;

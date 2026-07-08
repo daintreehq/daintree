@@ -59,7 +59,7 @@ import {
   persistSessionSnapshotSync,
   restoreSessionFromFile,
 } from "./terminalSessionPersistence.js";
-import { SessionSnapshotter, type SessionSnapshotterHost } from "./SessionSnapshotter.js";
+import { SessionSnapshotter, createTerminalSessionSnapshotter } from "./SessionSnapshotter.js";
 import {
   createProcessStateValidator,
   buildActivityMonitorOptions,
@@ -253,70 +253,32 @@ export class TerminalProcess {
   }
 
   private createSessionSnapshotter(): SessionSnapshotter {
-    if (this.analysis.kind === "worker") {
-      // eslint-disable-next-line @typescript-eslint/no-this-alias
-      const parent = this;
-      const host: SessionSnapshotterHost = {
-        get id() {
-          return parent.id;
-        },
-        get wasKilled() {
-          return parent.terminalInfo.wasKilled === true;
-        },
-        get launchAgentId() {
-          return parent.terminalInfo.launchAgentId;
-        },
-        get contentEpoch() {
-          return parent.terminalInfo.contentEpoch;
-        },
-        // Route every persistence serialize through the worker's banner-aware
-        // op (it falls back to a plain serialize when no banner markers exist),
-        // so the host never needs to know whether a restore banner is present.
-        hasBannerMarkers: () => true,
-        getSerializedState: () => null,
-        getSerializedStateAsync: () => parent.getSerializedStateAsync(),
-        serializeForPersistence: () => parent.analysis.serializeForPersistence(),
-      };
-      return new SessionSnapshotter(host);
-    }
-
-    class Host implements SessionSnapshotterHost {
-      constructor(private parent: TerminalProcess) {}
-
-      get id(): string {
-        return this.parent.id;
-      }
-
-      get wasKilled(): boolean {
-        return this.parent.terminalInfo.wasKilled === true;
-      }
-
-      get launchAgentId(): string | undefined {
-        return this.parent.terminalInfo.launchAgentId;
-      }
-
-      get contentEpoch(): number {
-        return this.parent.terminalInfo.contentEpoch;
-      }
-
-      hasBannerMarkers(): boolean {
-        return !!(this.parent._restoreBannerStart || this.parent._restoreBannerEnd);
-      }
-
-      getSerializedState(): string | null {
-        return this.parent.getSerializedState();
-      }
-
-      getSerializedStateAsync(): Promise<string | null> {
-        return this.parent.getSerializedStateAsync();
-      }
-
-      serializeForPersistence(): string | null {
-        return this.parent.serializeForPersistence();
-      }
-    }
-
-    return new SessionSnapshotter(new Host(this));
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const parent = this;
+    return createTerminalSessionSnapshotter({
+      get id() {
+        return parent.id;
+      },
+      get isWorkerAnalysis() {
+        return parent.analysis.kind === "worker";
+      },
+      get wasKilled() {
+        return parent.terminalInfo.wasKilled === true;
+      },
+      get launchAgentId() {
+        return parent.terminalInfo.launchAgentId;
+      },
+      get contentEpoch() {
+        return parent.terminalInfo.contentEpoch;
+      },
+      get hasRestoreBannerMarkers() {
+        return !!(parent._restoreBannerStart || parent._restoreBannerEnd);
+      },
+      getSerializedState: () => parent.getSerializedState(),
+      getSerializedStateAsync: () => parent.getSerializedStateAsync(),
+      serializeForPersistence: () => parent.serializeForPersistence(),
+      serializeForPersistenceViaAnalysis: () => parent.analysis.serializeForPersistence(),
+    });
   }
 
   private logWriteError(error: unknown, context: { operation: string; traceId?: string }): void {
