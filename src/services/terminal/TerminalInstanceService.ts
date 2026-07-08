@@ -9,7 +9,6 @@ import {
   AgentStateCallback,
   PostCompleteHook,
   TerminalLink,
-  isWebGLEligibleTier,
 } from "./types";
 import { tallyScrollbackRestoreStates } from "./scrollbackRestoreAggregate";
 import {
@@ -27,6 +26,7 @@ import { TerminalLinkHandler } from "./TerminalLinkHandler";
 import { TerminalResizeController, hasStreamingWrites } from "./TerminalResizeController";
 import { TerminalRendererPolicy } from "./TerminalRendererPolicy";
 import { TerminalWebGLManager } from "./TerminalWebGLManager";
+import { TerminalWebGLPolicy } from "./TerminalWebGLPolicy";
 import { TerminalAgentStateController } from "./TerminalAgentStateController";
 import { TerminalRestoreController } from "./TerminalRestoreController";
 import { TerminalReflowController, forceXtermReflow } from "./TerminalReflowController";
@@ -111,6 +111,7 @@ class TerminalInstanceService {
   private cachedSelections = new Map<string, string>();
   private resizeController: TerminalResizeController;
   private rendererPolicy: TerminalRendererPolicy;
+  private webGLPolicy: TerminalWebGLPolicy;
   private webGLManager = new TerminalWebGLManager();
   // Coalesces "why am I slow?" diagnostics pushes (#10910): multiple tier/create/
   // destroy events in one turn collapse to a single main-process report.
@@ -191,6 +192,12 @@ class TerminalInstanceService {
       getInstances: () => this.instances.values(),
     });
 
+    this.webGLPolicy = new TerminalWebGLPolicy({
+      getMode: () => this.webGLManager.getMode(),
+      getPinnedId: () => this.webGLManager.getPinnedId(),
+      isAltBufferPinned: (id) => this.webGLManager.isAltBufferPinned(id),
+    });
+
     this.rendererPolicy = new TerminalRendererPolicy({
       getInstance: (id) => this.instances.get(id),
       onPostWake: (id) => this.handlePostWake(id),
@@ -220,7 +227,7 @@ class TerminalInstanceService {
           void this.ensureDeferredAddons(id, managed);
         }
 
-        if (this.wantsWebGLAtTier(managed, tier)) {
+        if (this.webGLPolicy.wantsWebGLAtTier(managed, tier)) {
           this.webGLManager.ensureContext(id, managed);
         } else if (
           (managed.webGLHideTimer === undefined && !managed.isVisible) ||
@@ -282,7 +289,7 @@ class TerminalInstanceService {
       hasInFlightWake: () => false,
       hasPendingWake: () => false,
       isWebGLActive: (id) => this.webGLManager.isActive(id),
-      shouldHaveWebGL: (managed) => this.shouldHaveActiveWebGL(managed),
+      shouldHaveWebGL: (managed) => this.webGLPolicy.shouldHaveActiveWebGL(managed),
       ensureWebGL: (id, managed) => this.webGLManager.ensureContext(id, managed),
       forceReflow: (element) => forceXtermReflow(element),
       reconcileRevealGeometry: (id) => this.reconcileRevealGeometry(id),
@@ -474,93 +481,6 @@ class TerminalInstanceService {
     if (managed.terminal.options.cursorBlink !== desired) {
       managed.terminal.options.cursorBlink = desired;
     }
-  }
-
-  /**
-   * Whether a terminal wants a WebGL context at the given tier. Agent
-   * terminals are eligible at every WebGL-eligible tier (FOCUSED/BURST/
-   * VISIBLE) — the DOM renderer mangles the block glyphs agent headers use
-   * (see isWebGLEligibleTier in types.ts). Plain terminals are eligible only
-   * while focused: FOCUSED, or a BURST on the focused pane (input bursts and
-   * streaming output must not drop the context mid-use). BURST alone is
-   * write-driven for every terminal, so granting it to unfocused plain shells
-   * would add a want per streaming build/log pane and trip the count-based
-   * mode switch; VISIBLE is excluded for the same budget reason.
-   */
-  private wantsWebGLAtTier(
-    managed: ManagedTerminal,
-    tier: TerminalRefreshTier | undefined,
-    opts?: { trustDomVisibility?: boolean }
-  ): boolean {
-    if (!isWebGLEligibleTier(tier)) return false;
-    // Visibility gates every case: an off-screen pane never wants WebGL, even
-    // an agent streaming at BURST. The want set is fleet-wide per project view,
-    // so hidden streaming agents would otherwise accumulate wants and trip the
-    // count-based mode switch, dropping the whole visible fleet to DOM
-    // (#10671). The reveal path (setVisible(true) → debounced shouldRestoreWebGL
-    // → ensureContext) re-acquires the want once the pane is on-screen again —
-    // and on a warm WebContentsView resume it passes trustDomVisibility because
-    // it has already proven the pane on-screen from DOM truth, so the stale
-    // reactive isVisible flag must not veto the want there.
-    if (!opts?.trustDomVisibility && !managed.isVisible) return false;
-    if (managed.runtimeAgentId) return true;
-    return (
-      tier === TerminalRefreshTier.FOCUSED ||
-      (tier === TerminalRefreshTier.BURST && managed.isFocused)
-    );
-  }
-
-  /**
-   * Eligibility for visibility-driven WebGL restore. Mirrors the gates in
-   * onTierApplied (agent identity / focus + tier) plus liveness checks
-   * (opened, not attaching, not hibernated). Used by the debounced timer in
-   * setVisible() before re-acquiring a context.
-   */
-  private shouldRestoreWebGL(
-    managed: ManagedTerminal,
-    opts?: { trustDomVisibility?: boolean }
-  ): boolean {
-    if (!managed.isOpened) return false;
-    // The reveal path proves visibility from DOM ground truth (isConnected +
-    // checkVisibility + box) before calling, because the reactive isVisible flag
-    // can be stale-false on a warm WebContentsView resume (#10632 item 4). Trust
-    // that here so a dropped WebGL context is reattached on reveal instead of
-    // leaving the pane on the DOM renderer until the ~3s watchdog (which is
-    // itself suppressed for the first ~5s by the project-switch resize lock).
-    if (!opts?.trustDomVisibility && !managed.isVisible) return false;
-    if (managed.isAttaching) return false;
-    return this.wantsWebGLAtTier(
-      managed,
-      managed.lastAppliedTier ?? managed.getRefreshTier?.(),
-      opts
-    );
-  }
-
-  /**
-   * Watchdog-only WebGL eligibility. Identical to {@link shouldRestoreWebGL} but
-   * additionally false for a non-pinned pane in DOM-mode fallback: in DOM mode
-   * the manager only ever attaches the single focus-pinned context, so a
-   * non-pinned pane's context can never become active. Without this the
-   * watchdog's `shouldHaveWebGL && !isWebGLActive` stays permanently true for
-   * every non-pinned agent pane and burns a heavy-repair slot every tick (plus a
-   * spurious "context missing" warning). The reveal / visibility restore paths
-   * deliberately keep using {@link shouldRestoreWebGL} so they still call
-   * `ensureContext` and keep the pane in the manager's `wants` set — which is
-   * what lets a later focus change pin and attach it immediately.
-   */
-  private shouldHaveActiveWebGL(managed: ManagedTerminal): boolean {
-    if (!this.shouldRestoreWebGL(managed)) return false;
-    // In DOM mode the manager only keeps contexts on pinned panes (the focus
-    // pin and alt-buffer pins). A non-pinned pane can never have an active
-    // context, so the watchdog must not treat its absence as a fault.
-    if (
-      this.webGLManager.getMode() === "dom" &&
-      managed.id !== this.webGLManager.getPinnedId() &&
-      !this.webGLManager.isAltBufferPinned(managed.id)
-    ) {
-      return false;
-    }
-    return true;
   }
 
   private onUserInput(id: string, data: string): void {
@@ -761,7 +681,7 @@ class TerminalInstanceService {
           const current = this.instances.get(id);
           if (!current) return;
           current.webGLRestoreTimer = undefined;
-          if (!this.shouldRestoreWebGL(current)) return;
+          if (!this.webGLPolicy.shouldRestoreWebGL(current)) return;
           this.webGLManager.ensureContext(id, current);
         }, WEBGL_RESTORE_DEBOUNCE_MS);
       } else {
@@ -1190,7 +1110,7 @@ class TerminalInstanceService {
     // agent panes on the DOM renderer. Assistant show/hide-transition callers
     // pass nothing, so they keep the isVisible gate — a transform-hidden pane
     // must not accumulate a fleet-wide WebGL want (#10671).
-    if (!this.webGLManager.isActive(id) && this.shouldRestoreWebGL(managed, opts)) {
+    if (!this.webGLManager.isActive(id) && this.webGLPolicy.shouldRestoreWebGL(managed, opts)) {
       this.webGLManager.ensureContext(id, managed);
     }
 
@@ -1948,7 +1868,7 @@ class TerminalInstanceService {
     // visibility (gated separately below). Previously this skipped the addons on
     // background, degrading content for hidden panes.
     void this.ensureDeferredAddons(id, managed);
-    if (this.wantsWebGLAtTier(managed, managed.lastAppliedTier)) {
+    if (this.webGLPolicy.wantsWebGLAtTier(managed, managed.lastAppliedTier)) {
       this.webGLManager.ensureContext(id, managed);
     }
   }
@@ -2061,7 +1981,7 @@ class TerminalInstanceService {
         if (
           managed.isVisible &&
           !this.webGLManager.isActive(id) &&
-          this.shouldRestoreWebGL(managed)
+          this.webGLPolicy.shouldRestoreWebGL(managed)
         ) {
           this.webGLManager.ensureContext(id, managed);
         }
@@ -3029,7 +2949,7 @@ class TerminalInstanceService {
     // Route through wantsWebGLAtTier so an off-screen promotion (background
     // worktree detected mid-stream) doesn't register a fleet-wide want; the
     // reveal path re-acquires it when the pane comes on-screen (#10671).
-    if (managed.isOpened && this.wantsWebGLAtTier(managed, managed.lastAppliedTier)) {
+    if (managed.isOpened && this.webGLPolicy.wantsWebGLAtTier(managed, managed.lastAppliedTier)) {
       this.webGLManager.ensureContext(id, managed);
     }
   }
@@ -3047,7 +2967,7 @@ class TerminalInstanceService {
     // focused pane stays WebGL-eligible as a plain terminal, so keep (or
     // acquire) its context instead of churning it through a release.
     this.cancelWebGLHideTimer(managed);
-    if (managed.isOpened && this.wantsWebGLAtTier(managed, managed.lastAppliedTier)) {
+    if (managed.isOpened && this.webGLPolicy.wantsWebGLAtTier(managed, managed.lastAppliedTier)) {
       this.webGLManager.ensureContext(id, managed);
     } else {
       this.webGLManager.releaseContext(id);

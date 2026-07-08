@@ -112,7 +112,9 @@ type FullWakeTestService = {
   rendererPolicy: { applyRendererPolicy: (id: string, tier: number) => void };
   ensureOpened: (id: string, managed: ManagedTerminalMock) => void;
   ensureDeferredAddons: (id: string, managed: ManagedTerminalMock) => void;
-  wantsWebGLAtTier: (managed: ManagedTerminalMock, tier: number | undefined) => boolean;
+  webGLPolicy: {
+    wantsWebGLAtTier: (managed: ManagedTerminalMock, tier: number | undefined) => boolean;
+  };
   fullWakeForVisibilityRestore: (id: string) => Promise<void>;
   repaintForReveal: (id: string, opts?: { trustDomVisibility?: boolean }) => boolean;
   revealTerminal: (id: string) => Promise<boolean>;
@@ -662,7 +664,7 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     service.instances.set(id, instance);
 
     vi.spyOn(service, "ensureDeferredAddons").mockImplementation(() => {});
-    vi.spyOn(service, "wantsWebGLAtTier").mockReturnValue(false);
+    vi.spyOn(service.webGLPolicy, "wantsWebGLAtTier").mockReturnValue(false);
 
     service.ensureOpened(id, instance);
 

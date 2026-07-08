@@ -639,13 +639,15 @@ describe("TerminalInstanceService - visibility-driven WebGL lease", () => {
   describe("WebGL DOM-mode fallback eligibility (W3)", () => {
     function callShouldRestore(managed: unknown): boolean {
       return (
-        service as unknown as { shouldRestoreWebGL: (m: unknown) => boolean }
-      ).shouldRestoreWebGL(managed);
+        service as unknown as { webGLPolicy: { shouldRestoreWebGL: (m: unknown) => boolean } }
+      ).webGLPolicy.shouldRestoreWebGL(managed);
     }
     function callShouldHaveActive(managed: unknown): boolean {
       return (
-        service as unknown as { shouldHaveActiveWebGL: (m: unknown) => boolean }
-      ).shouldHaveActiveWebGL(managed);
+        service as unknown as {
+          webGLPolicy: { shouldHaveActiveWebGL: (m: unknown) => boolean };
+        }
+      ).webGLPolicy.shouldHaveActiveWebGL(managed);
     }
 
     it("keeps a non-pinned DOM pane RESTORE-eligible so it stays in the manager's wants set", () => {
@@ -734,9 +736,11 @@ describe("TerminalInstanceService - visibility-driven WebGL lease", () => {
     function callShouldRestore(managed: unknown, opts?: { trustDomVisibility?: boolean }): boolean {
       return (
         service as unknown as {
-          shouldRestoreWebGL: (m: unknown, o?: { trustDomVisibility?: boolean }) => boolean;
+          webGLPolicy: {
+            shouldRestoreWebGL: (m: unknown, o?: { trustDomVisibility?: boolean }) => boolean;
+          };
         }
-      ).shouldRestoreWebGL(managed, opts);
+      ).webGLPolicy.shouldRestoreWebGL(managed, opts);
     }
 
     it("withholds restore for a stale isVisible=false pane by default", () => {
