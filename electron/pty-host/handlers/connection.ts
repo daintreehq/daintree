@@ -1,6 +1,7 @@
 import type { MessagePort } from "node:worker_threads";
 import { SharedRingBuffer } from "../../../shared/utils/SharedRingBuffer.js";
 import { POOL_ENV_EMPTY_HASH, computePoolEnvHash } from "../../services/pty/ptyPoolEnvHash.js";
+import { markPerformance } from "../../utils/performance.js";
 import { PortBatcher, type PortBatcherFailedBatch } from "../index.js";
 import type { HandlerMap, HostContext } from "./types.js";
 
@@ -105,6 +106,13 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
             typeof portMsg.data === "string"
           ) {
             ptyManager.write(portMsg.id, portMsg.data, portMsg.traceId);
+            // PERF-120 T2 attribution mark (no-op unless DAINTREE_PERF_CAPTURE):
+            // paired with terminal_interactive_echo_dispatched to expose the
+            // host-internal slice of the keystroke round trip.
+            markPerformance("terminal_port_input_written", {
+              terminalId: portMsg.id,
+              bytes: portMsg.data.length,
+            });
           } else if (
             portMsg.type === "resize" &&
             typeof portMsg.id === "string" &&

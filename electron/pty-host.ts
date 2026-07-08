@@ -33,6 +33,7 @@ nodeV8.setHeapSnapshotNearHeapLimit(2);
 import { MessagePort } from "node:worker_threads";
 import os from "node:os";
 import { PtyManager } from "./services/PtyManager.js";
+import { markPerformance } from "./utils/performance.js";
 import {
   IdleHeapCompactor,
   IDLE_HEAP_COMPACT_CHECK_INTERVAL_MS,
@@ -912,6 +913,15 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
       const interactive =
         terminalInfo !== undefined &&
         Date.now() - terminalInfo.lastInputTime < PORT_BATCH_INTERACTIVE_INPUT_WINDOW_MS;
+      if (interactive) {
+        // PERF-120 T3 attribution mark (no-op unless DAINTREE_PERF_CAPTURE):
+        // echo output for a just-typed terminal is leaving the host. Paired
+        // with terminal_port_input_written for the host-internal slice.
+        markPerformance("terminal_interactive_echo_dispatched", {
+          terminalId: id,
+          bytes: byteCount,
+        });
+      }
       const saturated: RendererConnection[] = [];
       for (const { windowId, conn } of targets) {
         // An engaged worker-ingest terminal routes to its dedicated port —

@@ -112,9 +112,16 @@ const ECHO_PROBE_SAMPLE_INTERVAL = 32;
 const ECHO_PROBE_MAX_PAIR_MS = 250;
 
 function maybeStartEchoProbe(id: string): void {
-  echoProbeEnabled ??= isRendererPerfCaptureEnabled();
+  // DAINTREE_PERF_CAPTURE is a build-time flag in the sandboxed renderer, so
+  // the E2E interactivity bench (launch-time env only) arms the probe via the
+  // preload-injected E2E marker instead; marks still only record once the spec
+  // seeds __DAINTREE_PERF_MARKS__ (see markRendererPerformance's gate).
+  echoProbeEnabled ??= isRendererPerfCaptureEnabled() || window.__DAINTREE_E2E_MODE__ === true;
   if (!echoProbeEnabled) return;
-  if (++echoProbeCounter % ECHO_PROBE_SAMPLE_INTERVAL !== 0) return;
+  // E2E interactivity bench (PERF-120..122): sample every write so each paced
+  // round yields a transport-attribution pair; production keeps 1/32 sampling.
+  const sampleInterval = window.__DAINTREE_E2E_MODE__ === true ? 1 : ECHO_PROBE_SAMPLE_INTERVAL;
+  if (++echoProbeCounter % sampleInterval !== 0) return;
   if (pendingEchoProbes.has(id)) return;
   pendingEchoProbes.set(id, performance.now());
 }

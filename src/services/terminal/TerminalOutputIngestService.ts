@@ -13,6 +13,17 @@ import { yieldToScheduler } from "@/lib/schedulerYield";
 const RENDERER_HIGH_WATERMARK_BYTES = 128 * 1024;
 const RENDERER_LOW_WATERMARK_BYTES = 32 * 1024;
 const COALESCE_BATCH_CAP_BYTES = 256 * 1024;
+// Background (non-focused) terminals get a much smaller in-flight window and
+// batch size: bytes already handed to xterm.write() are un-holdable parse
+// backlog (xterm chews them in ~12ms main-thread slices), so a flood pane
+// fed 128KB+256KB keeps blocking the thread long after a focused-echo hold
+// engages (#10948-class feel regressions). A 32KB window keeps the per-pane
+// un-holdable backlog to roughly one parse slice while costing throughput
+// only one extra drain wakeup per 32KB — background floods are parse-bound,
+// not scheduling-bound.
+const BACKGROUND_HIGH_WATERMARK_BYTES = 32 * 1024;
+const BACKGROUND_LOW_WATERMARK_BYTES = 16 * 1024;
+const BACKGROUND_COALESCE_CAP_BYTES = 32 * 1024;
 const IPC_LOOKBACK_CHARS = 32;
 const INK_ERASE_LINE_PATTERN = "\x1b[2K\x1b[1A";
 
@@ -124,7 +135,10 @@ export class TerminalOutputIngestService {
     const queue = this.queues.get(id);
     if (!queue) return;
     queue.inFlightBytes = Math.max(0, queue.inFlightBytes - bytes);
-    if (queue.inFlightBytes <= RENDERER_LOW_WATERMARK_BYTES && queue.chunks.length > 0) {
+    const lowWatermark = this.shouldDeferDrain(id)
+      ? BACKGROUND_LOW_WATERMARK_BYTES
+      : RENDERER_LOW_WATERMARK_BYTES;
+    if (queue.inFlightBytes <= lowWatermark && queue.chunks.length > 0) {
       this.scheduleOrDrain(id, queue);
     }
   }
@@ -355,8 +369,13 @@ export class TerminalOutputIngestService {
   }
 
   private tryDrain(id: string, queue: TerminalIngestQueue): void {
-    while (queue.chunks.length > 0 && queue.inFlightBytes < RENDERER_HIGH_WATERMARK_BYTES) {
-      const batch = this.coalesceBatch(queue);
+    const deferred = this.shouldDeferDrain(id);
+    const highWatermark = deferred
+      ? BACKGROUND_HIGH_WATERMARK_BYTES
+      : RENDERER_HIGH_WATERMARK_BYTES;
+    const batchCap = deferred ? BACKGROUND_COALESCE_CAP_BYTES : COALESCE_BATCH_CAP_BYTES;
+    while (queue.chunks.length > 0 && queue.inFlightBytes < highWatermark) {
+      const batch = this.coalesceBatch(queue, batchCap);
       const batchBytes = this.chunkByteSize(batch.data);
       queue.inFlightBytes += batchBytes;
       this.writeToTerminal(id, batch.data, batch.chunkCount);
@@ -364,13 +383,16 @@ export class TerminalOutputIngestService {
   }
 
   // Merge the longest same-type chunk prefix into one write, capped at
-  // COALESCE_BATCH_CAP_BYTES (#4853 — xterm yields between write-buffer
-  // entries, not within one chunk, so an unbounded merge would block the main
-  // thread). The first chunk is always taken even when it alone exceeds the
-  // cap. Uint8Array prefixes merge into one freshly-allocated array — the
-  // MessagePort path delivers binary chunks, so without this branch a
-  // backpressure/wake backlog drains as hundreds of per-chunk writes.
-  private coalesceBatch(queue: TerminalIngestQueue): CoalescedBatch {
+  // `batchCap` (#4853 — xterm yields between write-buffer entries, not within
+  // one chunk, so an unbounded merge would block the main thread). The first
+  // chunk is always taken even when it alone exceeds the cap. Uint8Array
+  // prefixes merge into one freshly-allocated array — the MessagePort path
+  // delivers binary chunks, so without this branch a backpressure/wake backlog
+  // drains as hundreds of per-chunk writes.
+  private coalesceBatch(
+    queue: TerminalIngestQueue,
+    batchCap: number = COALESCE_BATCH_CAP_BYTES
+  ): CoalescedBatch {
     if (queue.chunks.length === 1) {
       const chunk = queue.chunks[0]!;
       queue.chunks.length = 0;
@@ -386,7 +408,7 @@ export class TerminalOutputIngestService {
       const next = queue.chunks[count]!;
       if ((typeof next === "string") !== firstIsString) break;
       const size = this.chunkByteSize(next);
-      if (taken + size > COALESCE_BATCH_CAP_BYTES) break;
+      if (taken + size > batchCap) break;
       taken += size;
       count++;
     }

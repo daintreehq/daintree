@@ -88,7 +88,10 @@ class TerminalInstanceService {
   private dataBuffer = new TerminalOutputIngestService(
     (id, data, chunkCount) => this.writeToTerminal(id, data, chunkCount),
     () => usePanelStore.getState().focusedId,
-    () => this.burstController.getActiveWheelHoldId()
+    // Background drains are held both during an active wheel gesture and while
+    // a keystroke echo is in flight — the same "focused feel beats background
+    // throughput" contract, applied to the two sustained interactions.
+    () => this.burstController.getActiveWheelHoldId() ?? this.burstController.getEchoPendingHoldId()
   );
   private suppressedExitUntil = new Map<string, number>();
   private unseenTracker = new TerminalUnseenOutputTracker();
@@ -501,6 +504,7 @@ class TerminalInstanceService {
     if (!managed) return;
 
     this.rendererPolicy.applyRendererPolicy(id, TerminalRefreshTier.BURST);
+    this.burstController.onEchoPendingInput(id);
 
     // A paused-backpressure pane shows a "Paused" pill; typing should refresh
     // it promptly. Fire a wake() repaint, mirroring the focus path — the held
@@ -946,6 +950,7 @@ class TerminalInstanceService {
     this.ensureHostTierSubscription();
 
     const unsubData = terminalClient.onData(id, (data: string | Uint8Array) => {
+      this.burstController.onEchoData(id);
       if (this.dataBuffer.isPolling()) return;
       // Worker-ingest diversion (issue #10960): while a terminal is in (or
       // transitioning through) worker mode, main-thread chunks route into the
@@ -2841,6 +2846,16 @@ if (typeof window !== "undefined" && window.__DAINTREE_E2E_MODE__ === true) {
     terminalInstanceService.triggerTerminalLinkForE2E(panelId, url, syntheticEvent);
     return "ok";
   };
+
+  // Test-only: hand the live xterm Terminal instance to the interactivity perf
+  // probe (e2e/full/terminal/interactivity-perf.spec.ts) so it can hook
+  // onData/onWriteParsed/onRender and read the buffer without a bridge per
+  // event. Same-realm only — the instance never crosses a serialization
+  // boundary. Object.assign keeps it off the type-assertion lint ratchet.
+  Object.assign(window, {
+    __daintreeGetTerminalForE2E: (panelId: string): Terminal | null =>
+      terminalInstanceService.getInstanceForE2E(panelId)?.terminal ?? null,
+  });
 
   // Test-only WebGL leak-regression bridges (#9540). Attached via Object.assign
   // (not a window cast) so they don't add to the no-unsafe-type-assertion lint
