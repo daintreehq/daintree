@@ -414,7 +414,7 @@ export class PtyPool {
    * the renderer's data path or the user will see a blank pane until they
    * type something — see #7625 for the failure mode this prevents.
    */
-  acquireByKey(cwd: string, envHash: string): AcquiredPty | null {
+  acquireByKey(cwd: string, envHash: string, terminalId?: string): AcquiredPty | null {
     if (this.isDisposed) {
       console.warn("[PtyPool] Cannot acquire - pool disposed");
       return null;
@@ -434,7 +434,7 @@ export class PtyPool {
         console.log(`[PtyPool] Miss on key ${wantedKey}; pool size: ${this.pool.size}`);
       }
       if (isHostPerformanceCaptureEnabled()) {
-        markHostPerformance(PERF_MARKS.POOL_MISS, { cwd, envHash });
+        markHostPerformance(PERF_MARKS.POOL_MISS, { cwd, envHash, terminalId });
       }
       return null;
     }
@@ -467,7 +467,7 @@ export class PtyPool {
       destroyPty(entry.process);
       this.warmForKey(cwd, entry.env, envHash);
       if (isHostPerformanceCaptureEnabled()) {
-        markHostPerformance(PERF_MARKS.POOL_MISS, { cwd, envHash });
+        markHostPerformance(PERF_MARKS.POOL_MISS, { cwd, envHash, terminalId });
       }
       return null;
     }
@@ -486,6 +486,7 @@ export class PtyPool {
       markHostPerformance(PERF_MARKS.POOL_HIT, {
         cwd,
         envHash,
+        terminalId,
         preludeBytes: prelude.length,
       });
     }
