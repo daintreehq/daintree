@@ -33,7 +33,7 @@ const REPO_ROOT = path.resolve(import.meta.dirname, "../../..");
 const DEFAULT_OUTPUT = path.join(REPO_ROOT, ".tmp", "perf-results", "recipe-fanout.json");
 const SAMPLE_TIMEOUT_MS = 10 * 60_000;
 const WHOLE_RUN_TIMEOUT_MS = 45 * 60_000;
-const STARTUP_DEADLINE_MS = 120_000;
+const STARTUP_DEADLINE_MS = 30_000;
 const SETTLE_MS = 750;
 const MAX_RECIPE_TERMINALS = 10;
 const RELEVANT_MARK =
@@ -137,6 +137,9 @@ interface BrowserTerminalState {
   readyMs: number;
   tokenOccurrences: number;
   foreignTokenOccurrences: number;
+  renderedTextLength: number;
+  renderedNonWhitespaceLength: number;
+  renderedTokenSlots: number[];
 }
 
 interface ListedTerminal {
@@ -671,11 +674,24 @@ async function measureInBrowser(
       let lastFrame = performance.now();
       let frameNumber = 0;
       const nextFrame = async (): Promise<number> => {
-        const now = await new Promise<number>((resolve) => requestAnimationFrame(resolve));
-        frameGapsMs.push(now - lastFrame);
-        lastFrame = now;
-        frameNumber++;
-        return now;
+        return await new Promise<number>((resolve) => {
+          let settled = false;
+          const requestId = requestAnimationFrame((now) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeoutId);
+            frameGapsMs.push(now - lastFrame);
+            lastFrame = now;
+            frameNumber++;
+            resolve(now);
+          });
+          const timeoutId = window.setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            cancelAnimationFrame(requestId);
+            resolve(performance.now());
+          }, 250);
+        });
       };
 
       const overallStart = performance.now();
@@ -769,6 +785,9 @@ async function measureInBrowser(
         readyMs: -1,
         tokenOccurrences: 0,
         foreignTokenOccurrences: 0,
+        renderedTextLength: 0,
+        renderedNonWhitespaceLength: 0,
+        renderedTokenSlots: [],
       }));
       const tokenSeenFrame = new Map<number, number>();
       let firstPanelCommittedMs = -1;
@@ -816,7 +835,7 @@ async function measureInBrowser(
               (root.textContent ?? "").includes(slot.title)
             );
             const tokenMatches = newRoots.filter((root) =>
-              (root.querySelector(".xterm-rows")?.textContent ?? "").includes(slot.token)
+              (root.querySelector(".xterm")?.textContent ?? "").includes(slot.token)
             );
             const match = titleMatches.length === 1 ? titleMatches[0] : tokenMatches[0];
             if (match?.dataset.panelId) {
@@ -835,7 +854,12 @@ async function measureInBrowser(
             if (firstXtermAttachedMs < 0) firstXtermAttachedMs = state.attachedMs;
           }
 
-          const text = root.querySelector(".xterm-rows")?.textContent ?? "";
+          const text = root.querySelector(".xterm")?.textContent ?? "";
+          state.renderedTextLength = text.length;
+          state.renderedNonWhitespaceLength = text.replace(/\s/g, "").length;
+          state.renderedTokenSlots = slots
+            .filter((candidate) => text.includes(candidate.token))
+            .map((candidate) => candidate.slot);
           state.tokenOccurrences = countOccurrences(text, slot.token);
           state.foreignTokenOccurrences = slots.reduce(
             (count, candidate) =>
@@ -919,8 +943,15 @@ async function measureInBrowser(
           .filter((state) => state.panelId)
           .map((state) => `${state.slot}:${state.panelId}`)
           .join(",");
+        const textDiagnostics = states
+          .filter((state) => state.readyMs < 0)
+          .map(
+            (state) =>
+              `${state.slot}[chars=${state.renderedTextLength},nonWhitespace=${state.renderedNonWhitespaceLength},knownTokenSlots=${state.renderedTokenSlots.join("|") || "none"}]`
+          )
+          .join(",");
         errors.push(
-          `missing painted readiness tokens for slots ${missingReady.join(",")}; known terminals=${known || "none"}`
+          `missing painted readiness tokens for slots ${missingReady.join(",")}; text=${textDiagnostics}; known terminals=${known || "none"}`
         );
       }
 
