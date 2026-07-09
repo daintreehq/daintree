@@ -166,6 +166,38 @@ describe("migration024 — backfill legacy GitHub token into forgeCredentials", 
     warnSpy.mockRestore();
   });
 
+  it("replaces an array-shaped forgeCredentials rather than spreading its indices", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const data: Record<string, unknown> = {
+      [LEGACY_KEY]: "ghp_legacytoken",
+      forgeCredentials: [],
+    };
+    const store = makeStoreMock(data);
+
+    migration024.up(store);
+
+    expect(Array.isArray(data.forgeCredentials)).toBe(false);
+    expect(storedToken(data)).toBe("ghp_legacytoken");
+    warnSpy.mockRestore();
+  });
+
+  it("writes the canonical provider id alongside a legacy-keyed alias", () => {
+    // Nothing writes `github`/`builtin.github` into forgeCredentials today, and
+    // no reader normalizes these keys — both index by the canonical id. Left
+    // untouched so a hand-edited config keeps whatever it had.
+    const alias = JSON.stringify({ token: "ghp_alias" });
+    const data: Record<string, unknown> = {
+      [LEGACY_KEY]: "ghp_legacytoken",
+      forgeCredentials: { github: alias },
+    };
+    const store = makeStoreMock(data);
+
+    migration024.up(store);
+
+    expect(storedToken(data)).toBe("ghp_legacytoken");
+    expect(credentialsOf(data).github).toBe(alias);
+  });
+
   it("trims surrounding whitespace off the migrated token", () => {
     const data: Record<string, unknown> = { [LEGACY_KEY]: "  ghp_legacytoken\n" };
     const store = makeStoreMock(data);
