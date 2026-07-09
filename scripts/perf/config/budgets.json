@@ -215,6 +215,32 @@
         "heapDeltaMb": 128,
         "memoryGrowthPct": 25
       }
+    },
+
+    "PERF-150": { "p95Ms": 15, "maxRegressionPct": 75 },
+    "PERF-151": {
+      "p95Ms": 15,
+      "maxRegressionPct": 75,
+      "maxMetricValues": { "msPerTargetAt48": 1 }
+    },
+
+    "PERF-160": { "p95Ms": 320, "maxRegressionPct": 75 },
+    "PERF-161": {
+      "p95Ms": 1900,
+      "maxRegressionPct": 75,
+      "maxMetricValues": { "markedIntraLine": 0 }
+    },
+    "PERF-162": { "p95Ms": 460, "maxRegressionPct": 75 },
+
+    "PERF-170": {
+      "p95Ms": 60,
+      "maxRegressionPct": 75,
+      "maxMetricValues": { "p99KeystrokeMs": 8 }
+    },
+    "PERF-171": {
+      "p95Ms": 140,
+      "maxRegressionPct": 75,
+      "maxMetricValues": { "msPerKAction": 6 }
     }
   }
 }
