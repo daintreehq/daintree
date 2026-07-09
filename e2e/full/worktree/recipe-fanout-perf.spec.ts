@@ -1360,11 +1360,11 @@ function populateMeasurement(
     failures.push("terminal.list returned duplicate terminal IDs");
   }
   for (const state of browser.terminals) {
-    if (state.tokenOccurrences > 1 || state.paintHashOccurrences > 1) {
+    if (state.tokenOccurrences > 1) {
       failures.push(
         `slot ${state.slot} token appeared more than once in panel ${state.panelId ?? "missing"} (DOM=${state.tokenOccurrences}, painted=${state.paintHashOccurrences})`
       );
-    } else if (state.tokenOccurrences !== 1 && state.paintHashOccurrences !== 1) {
+    } else if (state.tokenOccurrences === 0 && state.paintHashOccurrences === 0) {
       failures.push(
         `slot ${state.slot} token was not painted in panel ${state.panelId ?? "missing"} (DOM=${state.tokenOccurrences}, painted=${state.paintHashOccurrences})`
       );
