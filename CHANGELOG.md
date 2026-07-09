@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.23.1] - 2026-07-09
+
+A fast follow-up to 0.23.0 focused on keeping terminals responsive under heavy output — smoother concurrent scrolling across mouse-reporting TUIs and snappier keystroke echo under load — plus fixes for the file viewer inflating the app layout and the forge toolbar starting up empty.
+
+### Performance
+
+- Scrolling several mouse-reporting TUIs at once no longer serializes their redraws — every actively-wheeled pane drains inline instead of stalling up to 250ms behind the others (#11026)
+- Focused terminal keystroke echo stays responsive under heavy background output — saturated keystroke-to-paint latency roughly halves (p95 ~84ms → ~52ms) and frame pacing returns to 60fps (#11023)
+
+### Bug Fixes
+
+- The file viewer panel no longer blows out the app layout on tall files — long files scroll within their own pane (#11024)
+- Forge toolbar repository counts populate immediately on a cold start instead of sitting empty for 30–60 seconds after launch
+
 ## [0.23.0] - 2026-07-08
 
 A performance-focused release: the app boots 25% faster, switching back to a recent project is near-instant, agent terminals appear 5× faster, and steady-state memory drops across every process — plus a fix for the 45–60s freeze when revealing a project with backlogged terminals. A new file viewer panel opens any text file alongside your terminals, and agents now tell you why they're waiting.
