@@ -1,276 +1,99 @@
-# Daintree — Planning Agent Guide
+# Daintree
 
-You are being called as a **planning sub-agent**. Your input is a GitHub issue (or PR) plus pre-gathered research. Your output is a structured, file-level implementation plan that another agent will execute. You do not write code. You do not run commands. The plan is your only deliverable.
+**Overview:** Electron IDE for orchestrating AI coding agents — many agent terminals in parallel across git worktrees: fleet broadcasting, worktree dashboard, context injection, MCP control surface. 15+ agent CLIs supported; roster in `shared/config/agents/` + `shared/config/agentRegistry.ts`. **Stack:** Electron 42 (Chromium 148), React 19, Vite 8, TypeScript, Tailwind CSS v4, Zustand 5, node-pty, simple-git, @xterm/xterm 6.x beta (exact pins in `package.json`). Product, repo, and config dir are all "Daintree" (`daintreehq/daintree`, `.daintree/`).
 
-A good plan names every file and symbol that will change, preserves the architectural invariants below, and lists what you will deliberately not touch. A bad plan either misses a secondary touchpoint (under-scope) or bundles unrelated cleanup (over-scope). Both fail review.
+## Critical Rules
 
----
+- **Deps & native modules:** `npm install` (dev) / `npm ci` (CI); `postinstall` rebuilds `node-pty` for Electron. Native-module errors → `npm run rebuild`.
+- **Code style:** Minimal comments, no decorative headers, high signal-to-noise.
+- **Markdown style:** Never hard-wrap prose — every paragraph/list item/table row is ONE physical line (soft wrap is the renderer's job). Applies to all `.md`. Code blocks and ASCII diagrams keep internal breaks.
+- **GitHub:** Public repo `daintreehq/daintree`. Use the `gh` CLI for ALL GitHub ops — HTTP fetches fail on auth.
+- **Branching:** Gitflow. All PRs target `develop`, NEVER `main` (release merges only).
+- **Tracked configs:** `.daintree/recipes/*.json` (recipes = saved parameterized agent-launch configs) are intentionally tracked — never remove or gitignore.
+- **Agent config boundary:** Never modify user-owned agent config (`~/.claude/`, `~/.gemini/`, `~/.codex/`, user hooks, CLAUDE.md/AGENTS.md/GEMINI.md in user projects) — not even additive CLI injection like `--settings`. If a capability needs it, it's out of scope; use passive observation instead (output parsing, OSC titles, process tree, `AgentPatternDetector`-style regex). Precedent #4100.
+- **`human-review` label:** marks issues unsolvable autonomously; 10-20x cost, apply sparingly; skip labeled issues when working issues.
+- **Research versions:** Always research against our exact versions (Electron 42 / Chromium 148 — `build.target` `chrome148` in `vite.config.ts`; xterm 6.x betas; React 19); never assume older docs apply. Known traps: Electron 42 — unsigned macOS notifications silently emit `failed`, `Session.clearStorageData` drops `quotas`, better-sqlite3 needs a V8 14.8 patch; Electron 33→41 — `console-message` signature, utility-process unhandled-rejection behavior; xterm 6.x — canvas renderer and `windowsMode`/`fastScrollModifier` removed, VS Code viewport/scrollbar, new event system.
 
-## Plan Output Contract
+### Design & UX Rules
 
-Every plan MUST include these sections, in roughly this order.
+Hard constraints. Linked docs own the full catalogs/audits; rules without a pointer live only here.
 
-**Code Mapping.** Concrete pointers to the symbols, files, and line ranges your plan depends on. Name functions and classes, not just directories. If you reference a pattern, cite the file that implements it today. Ground every claim in a path.
+- **Accent restraint:** Accent (`--color-accent-primary`, `text-accent-primary`, `outline-daintree-accent`) = at most ONE load-bearing signal (focus anchor or primary CTA) per active focus region (focus trap / arrow-key domain). Never for multi-select, membership, secondary emphasis, or anything on multiple elements at once — use the `bg-overlay-subtle` title-bar lift, focus styling, or neutral surfaces. In doubt → no accent. Checklist: `docs/themes/theme-system.md`.
+- **Motion timing:** Shared tiers unless the duration encodes meaning: state changes 150ms `ease-out`; entry/exit 200/120ms; palette/tooltip 150/100ms; panel motion 200/120ms. Use the constants in `src/lib/animationUtils.ts`, never literals. Semantic exceptions (decay/width/sequencing IS the signal — e.g. `ActivityLight`, `FileChangeList` recency) are exempt from tier-fixing. Narrowest transition property set — never widen to bare `transition`/`transition-all`. Keep `transform` out of press snaps (copy `src/styles/components/toolbar.css` or `button.tsx`'s `active:scale-[0.98] active:duration-[1ms]`); box-shadow interpolates in its own named 150ms slot OR snaps with `active:shadow-none`, never both. Focus-ring transitions are wired once globally (`src/index.css` `*:focus-visible`) — no per-element `outline-*` transitions. Patterns: `docs/themes/interaction-state-recipes.md`.
+- **High-contrast dual-block:** `@media (prefers-contrast: more)` and `@media (forced-colors: active)` in `src/index.css` are separate on purpose (macOS fires only the former; Windows swaps in system colors) — NEVER consolidate. Rationale inline in the block comments.
+- **Loading indicators:** 400ms Doherty gate: <400ms nothing; 400ms–1s skeleton (`animate-pulse-delayed`, gate built in; reduced-motion/performance modes bypass) when the layout shape is predictable, else `Spinner`; >1s skeleton mandatory; >5s add "Still working…". `animate-pulse-immediate` only for waits already known to exceed the gate. `Spinner` has no delay — never for sub-400ms or predictable shapes. Programmatic gate: `useDeferredLoading(isPending, UI_DOHERTY_THRESHOLD)`; canonical: `BrowserPaneSkeleton`. Settings tabs render chrome immediately from safe defaults and populate on resolve — never a full-area `Spinner`.
+- **Microcopy:** Sentence case; no period on titles/buttons/labels/single-clause subtitles. Contractions; drop "we". Error toasts = verb-noun title + 1-2 sentence why/fix + ONE contextual recovery action (never "Dismiss"). Destructive buttons verb-noun ("Delete worktree"). Toggle labels never change with state. Confirm dialogs: question naming the entity (`Delete 'foo'?`), body = the specific consequence (never "Are you sure"), verb-noun button. Recovery verbs: `Try again` (error boundaries) / `Retry` (inline banners). Toast titles: past-tense verb for discrete actions ("Token saved" — no "successfully"), noun phrase for ambient state ("Connection lost"); body never restates the title. Action-free error toasts opt out via `// eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok`.
+- **Empty states:** Name the next action, not what's absent; when sidebar + grid are both empty, only the canvas gets the primary CTA; completed-work states stay quiet (the `user-cleared` variant of `EmptyState.tsx` nulls its action). Gotcha: gate `RecipeRunner` on `useRecipeStore` `currentProjectId !== null && !isLoading` — NOT `hasEverLaunchedAgent`; `loadRecipes()` sets `currentProjectId` synchronously before IPC resolves, so without the `isLoading` half it flashes empty. Gate teaching content on `hasEverLaunchedAgent`, derived from `usePanelStore` (mirrors `useGettingStartedChecklist`).
+- **notify():** Only for events the user couldn't otherwise observe. Gate: timely? helpful next step? not already visible? if ignorable → `console.warn` instead. Surfaces least→most restricted: frame indicator (`panel-state-*`) → grid-bar (`placement: "grid-bar"`) → inbox → toast (the default placement and the MOST restricted) — pick the least-restricted that conveys the signal. `priority: "low"` = inbox only; `{ type: "error", priority: "low" }` is lint-banned. A `ReactNode` message requires `inboxMessage` (compile-enforced, `src/lib/notify.ts`). Grid-bar for signals from outside the visible UI; component-owned `InlineStatusBanner` when the signal and its recovery live in one component. Routing matrix: `docs/architecture/notification-system.md`; canonical code: `useAgentWaitingNudge`, `TerminalCountWarning`, `HostCrashBanner`.
+- **Runtime signals:** Lowest tier that stays actionable: T0 silent log → T1 ambient pane chrome (flow pill, toolbar pips) → T2 inline warning banner → T3 inline error banner + recovery → T4 global banner. Demote if ignoring changes nothing; escalate if multi-terminal; auto-recovering states stay T1 until recovery stalls >30s or exhausts retries → T3 with a recovery action. Top-of-app globals contend for ONE slot via `useGlobalBannerPriority` in `GlobalBannerCoordinator.tsx` (mounted in `AppLayout.tsx`) — register there, never as siblings; a suppressible global also routes a `priority: "low"` inbox notify (project-scoped `supersedeKey`). While host-crash is active, suppress duplicate per-pane error banners. Tier table: `docs/architecture/notification-system.md`.
+- **Destructive tiers:** Safeguard ∝ reversibility × blast radius (#7880): D0 reversible-local — no confirm but a discoverable inverse; D1 local-irreversible (`terminal.kill`, recipe delete) — `ConfirmDialog` + verb-noun button; D2 shared-state (`git.push`, `worktree.delete`, merge PR) — confirm + preview of ACTUAL content (diff/message/file list; a count is insufficient); D3 catastrophic (delete repo/project) — `typedNameTarget`. Hard rules: (1) no silent fallback defaults — any "if X empty, use Y" on a destructive submit is a review blocker (the #7880 root cause); (2) every wired `ConfirmDialog` carries `danger:"confirm"` (excludes the action from `repeatLast` + palette MRU); (3) direct `window.electron.*` IPC bypasses `ActionService` — wire confirm in the component and log it in the audit; (4) bundled multi-step ops need a preview step or one confirmation naming all operations. Audit + per-tier lists: `docs/architecture/destructive-action-safeguards.md`.
 
-**Implementation Roadmap.** Numbered steps in dependency order. Each step names the specific file and what changes. Small and ordered beats big and vague. If step N depends on step M, say so.
+## Development
 
-**Files to Touch.** A flat table: file path, approximate change size (lines or "new file"), one-sentence reason. Include tests, types, schemas, docs. Completeness here is the number-one thing review will check.
+```bash
+npm run dev          # Main + Renderer (Vite)
+npm run build        # Production build
+npm run check        # typecheck + codegen/channel/confirm-wiring/plugin-manifest guards + lint ratchet + format
+npm run fix          # Auto-fix lint/format
+npm run package      # Distribute
+npm run rebuild      # Rebuild native modules
+```
 
-**Testing Strategy.** Which `__tests__/` files to add or extend, which existing tests may break, specific cases to cover. For cross-process features, note whether an `e2e/core/` or `e2e/online/` test applies. Call out async/cleanup pitfalls.
+### CI Testing Strategy
 
-**Adversarial Test Matrix.** How this could break. Work through each category that applies and list concrete scenarios — not generics:
+- **No tautological assertions:** never assert a value that's a literal copied from the source-of-truth (`expect(DEFAULT_TIMEOUT).toBe(5000)`, `toHaveClass("text-accent-primary")`) — test computed output, invariants, and conditional logic instead. If changing the implementation value forces the same edit in the test, delete the test.
+- **PRs/pushes:** typecheck/lint/format/unit/build on Ubuntu only; no E2E. Perf/size budget scripts are intentionally NOT in CI pre-1.0 (dormancy note in `ci.yml`); `ci-ok` is the sole required check.
+- **Stabilize (on-demand full surface):** `stabilize.yml` (`workflow_dispatch`; `platform` input, default `linux-windows`) runs check + tests + build + smoke + all E2E suites cross-platform; the `stabilize` skill (`.agents/skills/stabilize/`) drives it (local-first flow, flake triage, re-runs); verdict = the `stabilize-ok` gate. Opens no issues; replaced the cron test-nightly — never re-add cron test runs or issue-creation.
+- **Nightly publish:** `nightly-publish.yml` (2 AM UTC) is the only remaining cron — publishes macOS+Linux nightlies to `updates.daintree.org/nightly/`, launch smoke only. Not a validation surface; never drive it "green".
+- **Releases:** per-OS workflows (`release-{macos,linux,windows}.yml`) on the same `v*` tag, each a full vertical slice (checks → unit → e2e → build → R2 upload → notify); failures isolate per-OS. E2E core + online + all seven `full-*` buckets gate each publish (buckets auto-shard 4× in `e2e.yml`).
+- **E2E tiers:** `e2e/core/` release smoke; `e2e/full/<bucket>/` — seven Playwright projects (`full-terminal`, `full-worktree`, `full-presets`, `full-platform`, `full-panels`, `full-resilience`, `full-plugins`); `e2e/online/` real-API agent tests (gates releases); `e2e/nightly/` memory-leak detection. Boundaries: `docs/e2e-testing.md`. All suites run via `.github/workflows/e2e.yml` (`suite` + optional `test_file`), e.g. `gh workflow run "E2E Tests" --ref develop -f platform=linux -f suite=full-terminal -f test_file=e2e/full/terminal/core-terminal-search.spec.ts`.
+- **Local E2E first:** touching a feature with an existing E2E test → run the spec or its bucket locally before pushing (`npx playwright test <spec>` / `npm run test:e2e:full-terminal`).
 
-- Boundary values (zero, one, max, overflow)
-- Invalid / malformed input
-- Empty / null / undefined / missing
-- Partial failure (step 2 of 3 fails)
-- Retry / idempotency (called twice)
-- State leakage / stale cache
-- Path, OS, encoding, timezone, locale
-- Cleanup / teardown / resource leaks
-- Concurrency or ordering
-- **Daintree-specific:** multi-window isolation (3 windows open), LRU eviction mid-operation, PTY backpressure during heavy output, agent-state heuristic coverage, all 14 themes, app-restart persistence
+## Architecture
 
-**Assumptions and Risks.** What you are relying on being true. Be specific about what you are uncertain about. A risk is "adding an IPC channel without a Zod schema will pass typecheck but fail validation at runtime" — not "could introduce bugs."
+- **Main (`electron/`):** node-pty, git, OS access. Services in `services/`; IPC handlers by domain in `ipc/handlers/` (channel registry `ipc/channels.ts`); windowing in `window/`. Utility subprocesses with crash recovery: `pty-host/`, `workspace-host/`, `watchdog-host*`, `plugin-dev-worker*` (`docs/architecture/crash-recovery-and-safe-mode.md`).
+- **Renderer (`src/`):** React UI; reaches Main only via `window.electron`. Homes: actions → `services/actions/definitions/`; panel modules → `panels/<kind>/`; stores → `store/`; components by domain → `components/`; hooks → `hooks/`; IPC clients → `clients/`.
+- **Shared (`shared/`):** cross-process only — types (`types/`, incl. `ipc/`), registries/config (`config/`), theme system (`theme/`).
 
-**Rejected Approaches.** Approaches you considered and will NOT use, with the specific reason (e.g., "cannot use middleware because the Actions dispatcher runs before middleware is registered"). This saves the executing agent from rediscovering dead ends.
+**State & persistence:** ~100 Zustand stores in two flavors, app-global vs per-project-view (`docs/architecture/state-management.md`); cross-store reads go through `src/store/storeAccessors.ts`, never direct partner-store imports at module eval (TDZ — `docs/architecture/store-init-order.md`). Durable state spans two engines with separate migrations: better-sqlite3 + drizzle-orm (`drizzle.config.ts`, `npm run db:generate`) and electron-store JSON (`electron/store.ts`) — `docs/architecture/persistence-and-migrations.md`.
 
-**Pushback Requested.** 2–3 areas where you want the implementer to challenge your plan — places where you are least confident, alternatives exist, or codebase conventions may override your suggestion. See _Where to flag pushback_ below for the usual suspects.
+### Actions
 
-**Out of Scope.** Explicit list of nearby things you deliberately will not touch. If the issue reads like two changes, plan one and declare the other out of scope.
+`ActionService` (`src/services/ActionService.ts`) is the typed dispatch layer for menus, keybindings, context menus, and agent automation: `dispatch(actionId, args?, opts?)`, `list()` / `get(id)`. IDs in `BUILT_IN_ACTION_IDS` (`shared/config/actionIds.ts`); types in `shared/types/actions.ts` (`ActionSource` incl. `"plugin"`; `ActionDanger`). The manifest is also the tool surface of the local MCP server (`electron/services/mcp-server/`) — external agents and the in-app assistant drive the IDE through it under tiered auth (`docs/architecture/mcp-server.md`).
 
-**Implementation Starting Point.** End with exactly three lines: the first file to edit, the first test to add or update, the first concrete check that will confirm the change works.
+### Panels
 
-**For PR work only — add these two sections at the top:**
+`PanelInstance = PtyPanelData | BrowserPanelData | DevPreviewPanelData | ReviewPanelData` (`shared/types/panel.ts`); registry + `panelKindHasPty(kind)` in `shared/config/panelKindRegistry.ts`; per-kind modules (serializer, defaults factory, component) in `src/panels/<kind>/`, unified in `src/panels/registry.tsx`.
 
-- **Disposition.** One of `PROCEED` (worth improving) or `REJECT` (fundamentally wrong approach). If `REJECT`, give a clear, specific reason and stop — no roadmap needed. See _PR disposition criteria_ below.
-- **What's Already Good.** Brief assessment of what the contributor got right — patterns followed, tests included, edge cases considered. This frames the scope: you are improving, not rewriting.
+### Multi-Window & Project Views
 
----
+Each project gets its own `WebContentsView` + V8 context via `ProjectViewManager` (`electron/window/ProjectViewManager.ts`); LRU eviction under memory pressure. Per-window services live in `WindowContext.services`; global services (PtyClient, WorkspaceClient) are shared.
 
-## Issue Routing Matrix
+### IPC Bridge (`window.electron`)
 
-Read the named entry point before scoping.
+~75 namespaces exposed via `contextBridge` in `electron/preload.cts`; methods return Promises or cleanups. Representative: `worktree`, `terminal`, `files`, `git`, `forge`, `appAgent`, `mcpServer`, `plugin`.
 
-| Signal | Start reading |
-| --- | --- |
-| Terminal render, input, xterm behavior | `src/components/Terminal/TerminalPane.tsx`, `electron/pty-host/` |
-| Agent state wrong (idle/working/waiting/directing) | `src/services/terminal/TerminalAgentStateController.ts`, `electron/services/AgentStateMachine.ts` |
-| Worktree status stale, not refreshing | `electron/workspace-host/WorktreeLifecycleService.ts`, `WorktreeMonitor.ts` |
-| IPC error, renderer can't reach main | `electron/ipc/channels.ts`, `electron/ipc/handlers.ts` |
-| Panel state, layout, kind, persistence | `src/store/panelStore.ts`, `shared/config/panelKindRegistry.ts` |
-| Keybinding not firing, menu item missing | `src/services/actions/actionDefinitions.ts`, `shared/types/keymap.ts`, `electron/menu.ts` |
-| Theme token, color, semantic styling | `shared/theme/semantic.ts`, `shared/theme/builtInThemes/` |
-| Multi-window, project view, LRU | `electron/window/ProjectViewManager.ts`, `electron/window/WindowRegistry.ts` |
-| Memory, event loop lag, resource profile | `electron/services/ResourceProfileService.ts`, `shared/perf/` |
-| Notifications / Pulse / Portal / Commands — see which one | _Anti-patterns → Four "on-screen" systems_ |
-| Browser panel, dev-preview | `src/panels/browser/`, `src/panels/dev-preview/` |
-| Settings persistence | `src/components/Settings/`, `electron/services/persistence/` |
-| GitHub PR/issue integration | `plugins/builtin/github/main/`, `plugins/builtin/github/renderer/` |
-| Onboarding, first-run | `src/components/Onboarding/`, `src/components/Setup/` |
-| MCP server, plugin, external tool | `electron/services/rpc/`, `shared/types/plugin.ts` |
+### Plugins
 
-If nothing matches, grep outward from `src/store/` or `electron/services/`.
+Manifest-driven extensions run in sandboxed utility subprocesses and contribute actions, panels, agents, toolbar buttons, and forge providers, gated by capability + consent. Host runtime `electron/services/plugin/`; registries `shared/config/plugin*.ts`; builtins in `plugins/builtin/` — GitHub ships as a builtin forge plugin, keeping the host forge-neutral (`docs/architecture/forge-provider-abstraction.md`). Author SDK = the npm workspace `packages/*` (`@daintreehq/plugin-sdk` et al.; `npm run packages:build`). Docs: `docs/plugins/`.
 
-## Spine Map
+### Key Services
 
-High-signal anchors for Code Mapping. Use these to ground references; do not use them as a substitute for reading the actual files.
+- `PtyManager` (Main) and `terminalInstanceService` (Renderer) own PTY processes / xterm instances.
+- `WorkspaceService` polls git status; `WorktreeMonitor` tracks each worktree; per-view stores ride dedicated MessagePorts (`WorktreePortBroker`).
+- `AgentStateService` (`electron/services/pty/AgentStateService.ts`; FSM in `shared/utils/agentFsm.ts`) tracks idle/working/waiting/directing/completed/exited via passive output heuristics; `running` is a runtime status, not an agent state.
+- `CopyTreeService` builds agent context and injects it into terminals; `ResourceProfileService` picks Performance/Balanced/Efficiency from memory, event-loop lag, battery, and worktree count.
 
-**Processes.** Four Node process classes run under Electron: the **main process** (`electron/main.ts`, `electron/bootstrap.ts`) owns windows, menus, and service registration; the **PTY host** (`electron/pty-host.ts` + `electron/pty-host/`) is a separate UtilityProcess that owns node-pty; the **workspace host** (`electron/workspace-host.ts` + `electron/workspace-host/`) is a per-project UtilityProcess that monitors worktrees and git state; the **watchdog host** (`electron/watchdog-host.ts`) watches main-process liveness from outside the main event loop. The renderer (`src/`) talks to main via `contextBridge` (`electron/preload.cts`) and to the hosts via MessagePorts.
+## Icons
 
-**Dispatch layer (renderer).** `src/services/ActionService.ts` is the single dispatcher for user-facing operations; action definitions live in `src/services/actions/definitions/`; built-in runtime action IDs live in `shared/config/actionIds.ts`; action types live in `shared/types/actions.ts`; keybindings live in `shared/types/keymap.ts`; registration happens in `src/hooks/useActionRegistry.ts`.
+Lucide only (`lucide-react`) — no bespoke glyphs for app concepts. New concept → closest Lucide icon, added to the alias list in `src/components/icons/index.ts`. Bespoke exceptions: `DaintreeIcon`, `AgentStateCircles`, `McpServerIcon`, `brands/`. See `src/components/icons/README.md`.
 
-**Panel system.** `shared/types/panel.ts` defines the built-in discriminated union (`terminal`, `browser`, `dev-preview`, `review`); `shared/config/panelKindRegistry.ts` carries the shared config; `src/panels/<kind>/` provides per-kind `defaults.ts`, `serializer.ts`, component, and `index.ts`; `src/panels/registry.tsx` wires them together. Agent identity is runtime state inside a PTY-backed terminal, not a separate panel kind.
+## Common Tasks
 
-**State.** Zustand 5 stores in `src/store/` — `panelStore` (panels), `projectStore` (projects), `worktreeStore` (worktrees) all persisted; most others transient. Slice pattern in `src/store/slices/<domain>/`. Init order documented in `docs/architecture/store-init-order.md`. Cross-store reads use lazy-getter injection.
+- **New action:** add the ID to `BUILT_IN_ACTION_IDS` → definition in `src/services/actions/definitions/*.ts` → auto-registers via `useActionRegistry`.
+- **New IPC channel:** copy an existing `defineIpcNamespace` handler pair (`electron/ipc/handlers/<domain>.ts` + `<domain>.preload.ts`, e.g. `editorConfig`) → assign the namespace in `electron/preload.cts` → `npm run codegen:ipc && npm run codegen:ipc-renderer` (CI-enforced). Generated types: `shared/types/ipc/generated*.ts`; hand-maintained shapes: `shared/types/ipc/api.ts` / `maps.ts` (`src/types/electron.d.ts` is only the global shim). The `check:ipc-handwritten` ratchet blocks new hand-wired channels.
+- **New performance benchmark:** add one entry to the `REGISTRY` in `scripts/perf/index.ts` (the single `npm run perf <command>` dispatcher) — never add a new `perf:*` script to `package.json`.
 
-**IPC.** Channel constants in `electron/ipc/channels.ts`; typed maps in `shared/types/ipc/`; Zod schemas in `electron/schemas/`; domain handlers in `electron/ipc/handlers/`; wired in `electron/ipc/handlers.ts`; exposed via `electron/preload.cts`; typed on the renderer in `src/types/electron.d.ts`. A drift check keeps the names in sync.
+## Documentation
 
-**Theme.** `shared/theme/semantic.ts` derives semantic tokens from a palette; the palette comes from one of 14 theme files in `shared/theme/builtInThemes/`. Component public vars live alongside components, not in semantic. See `docs/themes/theme-system.md`.
-
-**Windows.** `electron/window/ProjectViewManager.ts` manages a `WebContentsView` per project with LRU eviction (cache 1–5). `WindowContext.services` holds per-view services (EventBuffer, PortalManager, ProjectSwitchService, active ports). Global singletons (PtyClient, WorkspaceClient, WorktreePortBroker) are shared across windows. Agent state controls eviction ordering — views with active agents are evicted last.
-
-**Tests.** Unit tests co-locate in `__tests__/` folders next to source. E2E lives in `e2e/core/` (13 tests, gates releases), `e2e/full/` (seven domain buckets — gate releases, also run in the on-demand `stabilize` sweep), `e2e/online/` (agent integration, gates releases), `e2e/nightly/` (memory leak / soak — runs in the `stabilize` sweep and on demand).
-
----
-
-## Architectural Invariants
-
-Preserve these or the plan is wrong. They are not discoverable from casual reading.
-
-**Actions are the central dispatcher.** All user-facing UI operations flow through `src/services/ActionService.ts`. Keybindings, menus, context menus, and agent tool calls dispatch the same typed action. Before planning a new IPC channel for a user-facing operation, check whether it belongs in an existing action domain. Existing domains: agent, app, artifacts, browser, copyTree, devServer, diagnostics, errors, files, git, github, help, introspection, logs, navigation, notes, panel, portal, preferences, project, recipes, settings, system, terminal, ui, voice, worktree.
-
-**Data flow is Service → IPC → Store → UI.** Services (main) own side effects. IPC is the only bridge. Stores (renderer, Zustand) own UI state. Components read stores. Plans that skip layers — a component calling IPC directly, a service reading renderer state — break the boundary and the tests that enforce it. From `docs/development.md`.
-
-**Agent state is DERIVED, not set.** `AgentStateMachine.nextAgentState()` is a pure function `(current, event) → next`. State comes from output heuristics (silence detection, OSC title, pattern detection, exit code). Valid states: idle, working, waiting, directing, completed, exited. **"Running" is not a state.** `directing` is renderer-only (user typing over output) and reverts on silence. Issues asking for "force the agent into state X" or "deterministic state" are not tractable without changing the heuristic detectors — say so, and flag it as pushback.
-
-**Panel state is persisted in Zustand with persist middleware.** `panelStore` + `panelPersistence` own panel layout and kind data. `projectStore` owns per-project data. `worktreeStore` owns worktree data. Transient UI state lives in non-persisted stores. Moving state between these breaks restart restore. From `docs/architecture/store-init-order.md`.
-
-**Per-window vs global services are strictly separated.** Per-window (in `WindowContext.services`): EventBuffer, PortalManager, ProjectSwitchService, active ports. Global singletons: PtyClient, WorkspaceClient, WorktreePortBroker, CliAvailabilityService, AgentVersionService. Treating a global as window-scoped (or vice versa) breaks multi-window. PtyClient maintains internal window→port maps; never broadcast pty writes.
-
-**Views do not survive LRU eviction.** `ProjectViewManager` caches 1–5 project views; views with active agent states are evicted last. When a view is evicted, its renderer context is destroyed — MessagePorts close, renderer stores reset. PTY and worktree state survive (main-process singletons). Plans must not assume renderer-side state persists across a switch or eviction. Re-brokering happens in `onViewReady()`.
-
-**Worktree updates use per-view MessagePorts, not IPC.** `WorktreePortBroker` establishes one port per view; the shared-memory ring buffer is single-consumer, so broadcasting via IPC races on the read pointer and drops data. Never plan "broadcast worktree updates to all views" via IPC.
-
-**PTY host is a separate UtilityProcess.** Renderer ↔ PTY uses MessagePort first, SharedArrayBuffer second, IPC fallback last. Backpressure is ack-driven via `PauseCoordinator`; on 30s pause timeout the stream suspends and requires an explicit wake snapshot to resume. Plans that hammer writes without ack handling starve the PTY. IPC-only write paths drop data silently on queue-full.
-
-**Cross-store dependencies use lazy-getter injection, not direct imports.** From `docs/architecture/store-init-order.md`: the setter runs at module-init, the closure runs later at runtime. Direct cross-store imports in a cyclic graph crash the renderer with `ReferenceError: Cannot access before initialization`.
-
----
-
-## Feature Anatomy (cross-boundary recipes)
-
-These five spine patterns cross layers. A plan that names only the "primary" file is incomplete.
-
-### Add an Action
-
-1. `shared/types/actions.ts` — extend `BuiltInActionId` union
-2. `src/services/actions/definitions/<domain>Actions.ts` — define action, set `ActionSource` / `ActionDanger`
-3. `src/services/actions/actionDefinitions.ts` — wire via `register<Domain>Actions()` in `createActionDefinitions()`
-4. `shared/types/keymap.ts` — only if bindable, add to `BuiltInKeyAction`
-5. `electron/menu.ts` — only if menu entry
-6. `src/services/__tests__/ActionService.test.ts` — duplicate-ID and manifest assertions catch an incomplete chain
-
-**Invariant:** ActionId in the union before `.register()`; domain register fn invoked in `createActionDefinitions()`.
-
-### Add an IPC channel
-
-1. `electron/ipc/channels.ts` — `CHANNEL: "namespace:channel"` in `CHANNELS`
-2. `shared/types/ipc/maps.ts` (or domain file) + `shared/types/ipc/index.ts` — entry in `IpcInvokeMap` or `IpcEventMap`
-3. `electron/schemas/<domain>.ts` — Zod schema for payload
-4. `electron/ipc/handlers/<domain>.ts` — `typedHandle(CHANNELS.NAME, …)`
-5. `electron/ipc/handlers.ts` — register domain handler in `registerIpcHandlers()`
-6. `electron/preload.cts` — expose on `contextBridge`
-7. `src/types/electron.d.ts` — declare on `window.electron`
-
-**Invariant:** Channel string in `CHANNELS` == preload key == `IpcInvokeMap` entry key, exactly. A drift check enforces this.
-
-### Add a Panel Kind
-
-1. `shared/types/panel.ts` — extend `BuiltInPanelKind` union and `isBuiltInPanelKind()` guard
-2. `shared/config/panelKindRegistry.ts` — entry in `PANEL_KIND_REGISTRY`
-3. `shared/theme/entityColors.ts` — brand color in `PANEL_KIND_BRAND_COLORS`
-4. `src/panels/<kind>/` — `defaults.ts`, `serializer.ts`, `index.ts`, component
-5. `src/panels/registry.tsx` — entries in `BUILT_IN_SERIALIZE_DEFAULTS` and `PANEL_KIND_DEFINITION_REGISTRY`
-6. `src/store/slices/panelRegistry/core.ts` — only if the kind needs PTY (uses `panelKindHasPty()`)
-
-**Invariant:** Every kind appears in the union, the registry, the brand colors map, and `registry.tsx`. Missing any ONE is a silent runtime failure, not a typecheck error.
-
-### Add a Zustand store or slice
-
-1. Create store/slice in `src/store/` or `src/store/slices/<domain>/`
-2. Use `StateCreator<T>`; compose slices via spread in `create()` (see `src/store/panelStore.ts`)
-3. Inject cross-slice/cross-store deps as closures, never as module-top imports
-4. `src/store/index.ts` — re-export if consumed outside the module
-5. `src/store/__tests__/<storeName>.test.ts` — co-locate
-
-**Invariant:** Lazy-getter injection for cross-store reads. Never direct import in a cyclic graph.
-
-### Add a semantic theme token
-
-1. `shared/theme/types.ts` — extend `AppColorSchemeTokens`
-2. `shared/theme/semantic.ts` — mapping in `createSemanticTokens()`
-3. `shared/theme/builtInThemes/*.ts` — palette entry in **all 14** themes (daintree, bondi, table-mountain, arashiyama, fiordland, galapagos, highlands, namib, redwoods, atacama, bali, hokkaido, serengeti, svalbard)
-
-**Invariant:** Any token missing in any theme fails `builtInThemes.test.ts`. From `docs/themes/theme-system.md`: _"Add a semantic token only when the value is genuinely app-wide. Add a component public var when a visual decision belongs to one shell or component family. Do not add recipe-style theme tokens or alias compatibility layers."_
-
----
-
-## Anti-patterns (reject these in your plan)
-
-When the issue reads like one of these, prefer the alternative and add the rejected approach to the _Rejected Approaches_ section with the reason.
-
-**New IPC channel for what should be an action.** If the operation is user-facing and fits an existing action domain, extend the domain. New IPC is a red flag. Alternative: add an Action.
-
-**New panel kind for a variant.** Only four built-in kinds ship today. Another built-in kind is almost always better modeled as browser/dev-preview/review configuration, a terminal runtime state, or a plugin-contributed kind. Prefer a config-driven variant.
-
-**State that duplicates the filesystem.** From `docs/feature-curation.md`: _"Use the file system (git) as the source of truth whenever possible. Don't sync state that can be derived from the folder structure."_ Worktrees, projects, and `.daintree/recipes/*.json` are derived from disk — plan to read, not to shadow.
-
-**Recipe tokens or alias layers in the theme.** Palette → semantic → component extension. Ad-hoc colors, recipe-style tokens, and alias compatibility layers are explicitly forbidden.
-
-**Four "on-screen" systems conflated.** Plans routinely confuse these:
-
-| System | Purpose | Lifetime |
-| --- | --- | --- |
-| Notifications (toast) | Transient alerts, success / error / info | Ephemeral, dismissable, max 3 visible |
-| Pulse | Activity summary / commit timeline dashboard | Persisted view state |
-| Portal | Tabbed dock for web UIs, localhost preview, agent dashboards | Persisted tabs/width |
-| Commands overlay / QuickSwitcher | Palette for dispatching actions | Transient UI |
-
-Pulse is not a notification system. Portal is not a transient alert. Use the right one.
-
-**Forcing a modal into the agent state machine.** If the plan depends on setting an agent state that is not reachable from current heuristics, the plan is structurally wrong. Propose a heuristic change (regex, OSC, process-tree detector) or flag as pushback.
-
----
-
-## Where to flag pushback
-
-Use these as candidates for the _Pushback Requested_ section when they apply:
-
-- **Action vs new IPC** — when an operation fits both, which should it be?
-- **Extending panelStore vs new store** — when does a new domain earn its own store?
-- **Semantic token vs component public var** — is the color app-wide or component-local?
-- **Worktree / project state** — should derived state be computed or persisted?
-- **Panel-kind variant vs new kind** — config switch, or does it justify a new entry?
-- **Heuristic detector change** — is the agent-state-machine change isolated, or does it cascade to other detectors?
-- **Multi-window scoping** — is this service per-window or global?
-
-These are the high-leverage decisions where the executing agent benefits from being told "I considered X, here's why I picked Y — challenge me if you see it differently."
-
----
-
-## PR disposition criteria
-
-When the input is a pull request, your first job is deciding whether to improve it (`PROCEED`) or close it (`REJECT`).
-
-Lean **REJECT** when any of these hold:
-
-- The approach fundamentally conflicts with the architectural invariants above (e.g., bypasses the action dispatcher, adds IPC where an action exists, bypasses the semantic theme layer).
-- The PR reinvents the code editor, the git GUI, or the chat UI — see _Feature-curation red lines_ below.
-- The change requires configuration to do its primary job (violates "works with zero config").
-- The PR duplicates an existing feature without adding orchestration value.
-- The scope is too broad — the PR solves two or three problems that should be separate issues.
-- The code is unsalvageable — a full rewrite would be cheaper than improvements.
-
-Otherwise **PROCEED**. The contributor's working libraries and architectural decisions are respected. You are scoping improvements: bugs, missing tests, edge cases, convention alignment, CI failures. Not replacements, not refactors beyond the PR's scope.
-
-### Feature-curation red lines (auto-reject on principle)
-
-From `docs/feature-curation.md`:
-
-- **Reinvents the code editor** — editing, refactoring, linting belong in VS Code. Read-only viewing is the line.
-- **Reinvents the git GUI** — no merge-conflict resolution, no git graph. Lightweight commit/push only.
-- **Reinvents the chat UI** — agents run in terminals. (Assistant with orchestration context is the exception.)
-- **Excessive configuration** — the feature must work with zero config.
-- **Duplicates agents without context** — if the CLI agent already does it and the plan just rebuilds it in the GUI without orchestration value, reject.
-
----
-
-## Hard Negatives
-
-- **Never plan modification of user-owned agent config.** Not `~/.claude/`, `~/.gemini/`, `~/.codex/`, user hooks, or user `AGENTS.md`/`CLAUDE.md`/`GEMINI.md`. Additive CLI injection counts as modification. Use passive observation (output parsing, OSC title sniffing, process-tree state, regex detectors). Precedent: issue #4100.
-- **Never plan `any` across IPC or module boundaries.** If the type is unknown, the plan is wrong.
-- **Never plan the canvas renderer, `windowsMode`, or `fastScrollModifier`** — removed in @xterm/xterm 6.0.
-- **Never plan an IPC channel without a Zod schema.**
-- **Never plan to remove or gitignore `.daintree/recipes/*.json`** — tracked intentionally.
-- **Never plan work on issues labeled `human-review`** — they require human observation, not agent planning.
-- **Never plan render-time ref mutations or side effects in render** — React 19's Compiler will bail the component out. Flag any such pattern as a risk.
-
----
-
-## Version Pinning
-
-Plans assume exact versions. Breaking changes between majors are frequent.
-
-- **Electron 41** — `console-message` signature (v35), `WebRequestFilter` empty `urls` (v36), macOS 11 dropped (v38), utility-process unhandled-rejection crash (v37).
-- **@xterm/xterm 6.0** + **@xterm/addon-fit 0.11** — canvas addon removed, VS Code viewport replacement, Emitter migration.
-- **React 19** — Compiler active; flag any render-time ref mutation or render-side-effect as a Compiler bailout risk.
-- **Zustand 5**, **Vite 8**, **Tailwind v4**, strict **TypeScript**.
-
-When incoming research cites older docs, assume drift and flag it in _Assumptions and Risks_.
-
----
-
-## Repo
-
-Public: `daintreehq/daintree` — https://github.com/daintreehq/daintree. Issue numbers you cite should link here.
+`docs/README.md` is the full index. Most-used: `docs/development.md` (IPC patterns, debugging, compiler-bailout tooling), `docs/themes/` (theme pipeline, tokens, interaction recipes), `docs/e2e-testing.md`, `docs/architecture/` (actions, MCP server, state, persistence, terminal lifecycle, notifications, destructive safeguards, crash recovery, process/window model), `docs/plugins/`.
