@@ -699,12 +699,9 @@ export default tseslint.config(
     rules: { "no-restricted-imports": "off" },
   },
 
-  // Allowlist — framer-motion GitHub, Fleet, Layout chrome.
+  // Allowlist — framer-motion Fleet, Layout chrome.
   {
     files: [
-      "src/components/GitHub/BulkActionBar.tsx",
-      "src/components/GitHub/CommitList.tsx",
-      "src/components/GitHub/GitHubResourceList.tsx",
       "src/components/Fleet/FleetArmingRibbon.tsx",
       "src/components/Layout/DockedTabGroup.tsx",
     ],
@@ -791,7 +788,7 @@ export default tseslint.config(
   // handler files. The codebase is migrating from typedHandle /
   // typedHandleWithContext / typedHandleValidated / typedHandleWithContextValidated
   // (defined in electron/ipc/utils.ts) to `defineIpcNamespace` (electron/ipc/define.ts).
-  // New handler files get a hard error; the existing 62 legacy files get
+  // New handler files get a hard error; the existing 61 legacy files get
   // a warn-level override below so they ratchet down via lint-ratchet.mjs.
   //
   // Re-lists all 5 selectors from the shared/**+electron/** warn block
@@ -924,7 +921,7 @@ export default tseslint.config(
     },
   },
 
-  // Legacy migration allowlist for #8577. These 62 production handler
+  // Legacy migration allowlist for #8577. These 61 production handler
   // files were using the legacy typedHandle* registration pattern when
   // the gate landed; their call sites surface as ratchetable warnings
   // via eslint-warnings-baseline.json. Remove a file from this list as
@@ -958,7 +955,6 @@ export default tseslint.config(
       "electron/ipc/handlers/gemini.ts",
       "electron/ipc/handlers/git-read.ts",
       "electron/ipc/handlers/git-write.ts",
-      "electron/ipc/handlers/github.ts",
       "electron/ipc/handlers/globalRecipes.ts",
       "electron/ipc/handlers/helpAssistant.ts",
       "electron/ipc/handlers/hibernation.ts",
