@@ -126,6 +126,58 @@
       "maxMetricValues": { "statusPasses": 3, "gitSpawns": 10 }
     },
 
+    "PERF-130": {
+      "p95Ms": 800,
+      "maxRegressionPct": 75,
+      "maxMetricValues": { "gitSpawns": 8 }
+    },
+    "PERF-131": {
+      "p95Ms": 900,
+      "maxRegressionPct": 75,
+      "maxMetricValues": { "gitSpawns": 10 }
+    },
+    "PERF-132": {
+      "p95Ms": 4000,
+      "maxRegressionPct": 75,
+      "maxMetricValues": { "detectionToIntervalRatio": 2.5 }
+    },
+    "PERF-133": {
+      "p95Ms": 3500,
+      "maxRegressionPct": 75,
+      "maxMetricValues": { "emitCount": 5, "gitSpawns": 18 }
+    },
+    "PERF-134": {
+      "p95Ms": 2500,
+      "maxRegressionPct": 75
+    },
+    "PERF-135": {
+      "p95Ms": 1500,
+      "maxRegressionPct": 75,
+      "maxMetricValues": { "worktreeListSpawns": 5 }
+    },
+    "PERF-136": { "p95Ms": 1500, "maxRegressionPct": 75 },
+    "PERF-137": {
+      "p95Ms": 6000,
+      "maxRegressionPct": 75,
+      "maxMetricValues": { "worktreeListSpawns": 8 }
+    },
+    "PERF-138": { "p95Ms": 2000, "maxRegressionPct": 75 },
+    "PERF-139": {
+      "p95Ms": 1500,
+      "maxRegressionPct": 75,
+      "maxMetricValues": { "cooldownRemovalMs": 9000 }
+    },
+    "PERF-140": {
+      "p95Ms": 60,
+      "maxRegressionPct": 75,
+      "maxMetricValues": { "mapChangesPerApply": 1.05 }
+    },
+    "PERF-141": {
+      "p95Ms": 40,
+      "maxRegressionPct": 75,
+      "maxMetricValues": { "mapIdentityChanges": 0 }
+    },
+
     "PERF-110": { "p95Ms": 80, "maxRegressionPct": 50 },
     "PERF-111": {
       "p95Ms": 3500,

@@ -378,10 +378,20 @@ async function run(): Promise<void> {
   }
 }
 
-run().catch((error) => {
-  console.error("[perf] run failed", error);
-  process.exit(1);
-});
+run()
+  .then(
+    // Scenario fixtures can leave live native handles behind (file watchers,
+    // long-lived monitor harnesses), which would keep the process alive after
+    // all results are written. Drain stdout, then exit explicitly.
+    () =>
+      new Promise<never>((resolve) => {
+        process.stdout.write("", () => resolve(process.exit(process.exitCode ?? 0)));
+      })
+  )
+  .catch((error) => {
+    console.error("[perf] run failed", error);
+    process.exit(1);
+  });
 
 function getMergeBase(compareBase: string): string | null {
   try {
