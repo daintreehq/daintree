@@ -1,5 +1,6 @@
 import { Suspense, lazy, useEffect, useCallback, useState, useRef } from "react";
 import type { GitStatus } from "@shared/types";
+import type { DiffChangeSetEntry } from "@/components/FileViewer/diffChangeSet";
 import type { RestoreFocusTarget } from "@/components/ui/AppDialog";
 import { actionService } from "@/services/ActionService";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
@@ -121,6 +122,10 @@ export interface FileDiffModalProps {
   onNavigateFile?: (delta: -1 | 1) => void;
   /** Resolve the neighboring file in the set, for prefetching its diff. */
   getAdjacentFile?: (delta: -1 | 1) => { path: string; status: GitStatus } | null;
+  /** Full changeset (indexed like `currentFileIndex`) — enables the review workspace. */
+  changeSet?: DiffChangeSetEntry[];
+  /** Jump directly to a file in `changeSet`. */
+  onSelectFile?: (index: number) => void;
 }
 
 export function FileDiffModal({
@@ -134,6 +139,8 @@ export function FileDiffModal({
   totalFileCount,
   onNavigateFile,
   getAdjacentFile,
+  changeSet,
+  onSelectFile,
 }: FileDiffModalProps) {
   const [diff, setDiff] = useState<string | undefined>(undefined);
   const requestRef = useRef(0);
@@ -232,6 +239,9 @@ export function FileDiffModal({
         currentFileIndex={currentFileIndex}
         totalFileCount={totalFileCount}
         onNavigateFile={onNavigateFile}
+        changeSet={changeSet}
+        onSelectFile={onSelectFile}
+        fileStatus={status}
       />
     </Suspense>
   );

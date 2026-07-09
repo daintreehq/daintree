@@ -1,4 +1,5 @@
 import { useEffect, useEffectEvent, useCallback, useState, useRef, useMemo } from "react";
+import type { CSSProperties } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import type { RestoreFocusTarget } from "@/components/ui/AppDialog";
 import { DiffViewer } from "@/components/Worktree/DiffViewer";
@@ -20,22 +21,28 @@ import {
   ChevronUp,
   ChevronDown,
   Grid2x2Plus,
+  PanelLeft,
   Pilcrow,
   Search,
   WrapText,
   X,
 } from "lucide-react";
+import { DiffFileSidebar } from "./DiffFileSidebar";
+import type { DiffChangeSetEntry } from "./diffChangeSet";
+import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
+import { ImageDiffViewer, isImageDiffCandidate } from "./ImageDiffViewer";
 import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/utils";
 import { formatBytes } from "@/lib/formatBytes";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { FileReadErrorCode } from "@shared/types/ipc/files";
+import type { GitStatus } from "@shared/types";
 import { isClientAppError } from "@/utils/clientAppError";
 import { sanitizeSvg } from "@shared/utils/svgSanitizer";
 import { createTrustedHTML } from "@/lib/trustedTypesPolicy";
 import { logError } from "@/utils/logger";
 import { usePreferencesStore } from "@/store/preferencesStore";
-import type { DiffViewType } from "@/store/preferencesStore";
+import type { DiffFontSize, DiffViewType } from "@/store/preferencesStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
 
@@ -63,9 +70,31 @@ export interface FileViewerModalProps {
   totalFileCount?: number;
   /** Step to the previous (-1) or next (1) file in the set. */
   onNavigateFile?: (delta: -1 | 1) => void;
+  /**
+   * Full changeset this file belongs to, indexed identically to
+   * `currentFileIndex`/`onSelectFile`. With more than one entry the modal
+   * becomes a review workspace: changed-files sidebar, viewed markers, and
+   * cross-file change navigation.
+   */
+  changeSet?: DiffChangeSetEntry[];
+  /** Jump directly to a file in `changeSet`. */
+  onSelectFile?: (index: number) => void;
+  /**
+   * Git status of the open file, when the opener knows it. Enables the image
+   * compare view (HEAD vs working tree) for changed image files.
+   */
+  fileStatus?: GitStatus;
 }
 
 type ViewMode = "view" | "diff" | "rendered";
+
+const DIFF_FONT_SIZE_PX: Record<DiffFontSize, string> = { s: "11px", m: "12px", l: "14px" };
+const DIFF_FONT_SIZE_ORDER: DiffFontSize[] = ["s", "m", "l"];
+const DIFF_FONT_SIZE_LABEL: Record<DiffFontSize, string> = {
+  s: "Small",
+  m: "Medium",
+  l: "Large",
+};
 type LoadState = "loading" | "loaded" | "error" | "image" | "svg";
 
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico"]);
@@ -159,6 +188,9 @@ export function FileViewerModal({
   currentFileIndex,
   totalFileCount,
   onNavigateFile,
+  changeSet,
+  onSelectFile,
+  fileStatus,
 }: FileViewerModalProps) {
   // If the file is outside the project root, use its parent directory as the
   // effective root so that the daintree-file:// protocol and files.read IPC
@@ -191,6 +223,10 @@ export function FileViewerModal({
   const setDiffIgnoreWhitespace = usePreferencesStore((s) => s.setDiffIgnoreWhitespace);
   const markdownWrapLines = usePreferencesStore((s) => s.markdownWrapLines);
   const setMarkdownWrapLines = usePreferencesStore((s) => s.setMarkdownWrapLines);
+  const diffShowFileList = usePreferencesStore((s) => s.diffShowFileList);
+  const setDiffShowFileList = usePreferencesStore((s) => s.setDiffShowFileList);
+  const diffFontSize = usePreferencesStore((s) => s.diffFontSize);
+  const setDiffFontSize = usePreferencesStore((s) => s.setDiffFontSize);
   const [diffCopied, setDiffCopied] = useState(false);
   const [pathCopied, setPathCopied] = useState(false);
   const [sanitizedSvg, setSanitizedSvg] = useState<string | null>(null);
@@ -233,6 +269,22 @@ export function FileViewerModal({
 
   const imageFile = isImageFile(filePath);
   const svgFile = isSvgFile(filePath);
+
+  // Review-workspace mode: the opener supplied its full changeset, so the
+  // modal grows a changed-files sidebar, viewed markers, and cross-file
+  // change navigation. Single-file openers keep the classic layout.
+  const isWorkspace = (changeSet?.length ?? 0) > 1;
+  const workspaceEntry =
+    changeSet && currentFileIndex !== undefined ? (changeSet[currentFileIndex] ?? null) : null;
+  const viewedSet = useDiffViewedStore(
+    useCallback((state) => selectViewedSet(state, rootPath), [rootPath])
+  );
+  const setViewed = useDiffViewedStore((state) => state.setViewed);
+  const toggleViewed = useDiffViewedStore((state) => state.toggleViewed);
+  // Cross-file hunk stepping: where to land in the next file once its hunks
+  // render. Carries the expected file index so a manual jump elsewhere (or a
+  // hunkless file) invalidates the target instead of firing late.
+  const pendingHunkTargetRef = useRef<{ fileIndex: number; place: "first" | "last" } | null>(null);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -393,6 +445,31 @@ export function FileViewerModal({
 
   const fileName = filePath.split(/[/\\]/).filter(Boolean).pop() || filePath;
 
+  // Worktree-relative path, when the file lives under rootPath. Feeds the
+  // breadcrumb title (directory muted, basename strong — the Kaleidoscope
+  // path-bar read) and the image compare's git lookups.
+  const workspaceRelPath = useMemo(() => {
+    const fwdPath = filePath.replace(/\\/g, "/");
+    const fwdRootDir = rootPath.replace(/\\/g, "/").replace(/\/$/, "") + "/";
+    return fwdPath.startsWith(fwdRootDir) ? fwdPath.slice(fwdRootDir.length) : null;
+  }, [filePath, rootPath]);
+
+  const relDir = useMemo(() => {
+    if (!workspaceRelPath) return null;
+    const lastSlash = workspaceRelPath.lastIndexOf("/");
+    return lastSlash > 0 ? workspaceRelPath.slice(0, lastSlash) : null;
+  }, [workspaceRelPath]);
+
+  // Changed image files opened from a changeset get the HEAD-vs-working-tree
+  // compare (Two-up / Swipe / Onion skin) instead of the static preview.
+  const imageDiffEligible = Boolean(
+    imageFile && fileStatus && workspaceRelPath && isImageDiffCandidate(filePath)
+  );
+
+  const diffFontStyle: CSSProperties & Record<"--diff-font-size", string> = {
+    "--diff-font-size": DIFF_FONT_SIZE_PX[diffFontSize],
+  };
+
   const canShowView = loadState === "loaded" && content !== null;
   const isImageMode = loadState === "image" || loadState === "svg";
 
@@ -464,14 +541,56 @@ export function FileViewerModal({
     useAnnouncerStore.getState().announce(`Hunk ${next + 1} of ${hunks.length}`);
   }, []);
 
+  // File stepping state is needed by stepHunk's cross-file continuation, so
+  // it is derived above the hunk navigation that consumes it.
+  const canStepFiles = Boolean(onNavigateFile) && (totalFileCount ?? 0) > 1;
+  const hasPrevFile = canStepFiles && (currentFileIndex ?? 0) > 0;
+  const hasNextFile = canStepFiles && (currentFileIndex ?? 0) < (totalFileCount ?? 0) - 1;
+
+  const fileStepAnnouncePendingRef = useRef(false);
+  const navigateFile = useEffectEvent((delta: -1 | 1) => {
+    if (delta === -1 && hasPrevFile) fileStepAnnouncePendingRef.current = true;
+    if (delta === 1 && hasNextFile) fileStepAnnouncePendingRef.current = true;
+    if (delta === -1 && hasPrevFile) onNavigateFile?.(-1);
+    if (delta === 1 && hasNextFile) onNavigateFile?.(1);
+  });
+
   const stepHunk = useCallback(
     (delta: -1 | 1) => {
       const current = currentHunkIndexRef.current;
-      // Stepping from the initial sentinel (-1) lands on the first hunk so
-      // the user gets feedback either way before they've started navigating.
-      scrollToHunkIndex(current < 0 ? 0 : current + delta);
+      if (current < 0) {
+        // Stepping from the initial sentinel (-1) lands on the first hunk so
+        // the user gets feedback either way before they've started navigating.
+        scrollToHunkIndex(0);
+        return;
+      }
+      const next = current + delta;
+      const count =
+        diffViewerRef.current?.querySelectorAll<HTMLElement>("tbody.diff-hunk").length ?? 0;
+      // Past either end of the file, the step flows into the neighboring file
+      // of the changeset (Kaleidoscope-style continuous change navigation).
+      // `onNavigateFile` is called directly (not via the `navigateFile`
+      // effect event — those are effect-only) with the announce ref set so
+      // the landed-on file is still read out.
+      if (next < 0) {
+        if (hasPrevFile) {
+          pendingHunkTargetRef.current = { fileIndex: (currentFileIndex ?? 0) - 1, place: "last" };
+          fileStepAnnouncePendingRef.current = true;
+          onNavigateFile?.(-1);
+        }
+        return;
+      }
+      if (next >= count) {
+        if (hasNextFile) {
+          pendingHunkTargetRef.current = { fileIndex: (currentFileIndex ?? 0) + 1, place: "first" };
+          fileStepAnnouncePendingRef.current = true;
+          onNavigateFile?.(1);
+        }
+        return;
+      }
+      scrollToHunkIndex(next);
     },
-    [scrollToHunkIndex]
+    [scrollToHunkIndex, hasPrevFile, hasNextFile, currentFileIndex, onNavigateFile]
   );
 
   useEffect(() => {
@@ -504,17 +623,7 @@ export function FileViewerModal({
   // `n`/`p` are taken by hunk navigation and the arrow keys conflict with split-
   // diff horizontal scrolling, so brackets (the git-review convention) are the
   // free keys. The handler is a no-op unless the opener wired `onNavigateFile`.
-  const canStepFiles = Boolean(onNavigateFile) && (totalFileCount ?? 0) > 1;
-  const hasPrevFile = canStepFiles && (currentFileIndex ?? 0) > 0;
-  const hasNextFile = canStepFiles && (currentFileIndex ?? 0) < (totalFileCount ?? 0) - 1;
-
-  const fileStepAnnouncePendingRef = useRef(false);
-  const navigateFile = useEffectEvent((delta: -1 | 1) => {
-    if (delta === -1 && hasPrevFile) fileStepAnnouncePendingRef.current = true;
-    if (delta === 1 && hasNextFile) fileStepAnnouncePendingRef.current = true;
-    if (delta === -1 && hasPrevFile) onNavigateFile?.(-1);
-    if (delta === 1 && hasNextFile) onNavigateFile?.(1);
-  });
+  // (State derived above stepHunk, which needs it for cross-file continuation.)
 
   // Announce the landed-on file after a step swaps the dialog contents —
   // aria-labelledby title text changes are not announced by AT on their own.
@@ -553,6 +662,52 @@ export function FileViewerModal({
     };
   }, [isOpen, canStepFiles]);
 
+  // `v` — mark the open file viewed and advance to the next unviewed file
+  // (wrapping), the GitHub-review muscle memory. Workspace mode only.
+  const markViewedAndAdvance = useEffectEvent(() => {
+    if (!workspaceEntry || !changeSet || currentFileIndex === undefined) return;
+    const alreadyViewed = viewedSet.has(workspaceEntry.viewedKey);
+    if (!alreadyViewed) setViewed(rootPath, workspaceEntry.viewedKey, true);
+    useAnnouncerStore.getState().announce("Marked viewed");
+    if (!onSelectFile) return;
+    for (let step = 1; step < changeSet.length; step++) {
+      const index = (currentFileIndex + step) % changeSet.length;
+      const entry = changeSet[index];
+      if (!entry || entry.viewedKey === workspaceEntry.viewedKey) continue;
+      if (!viewedSet.has(entry.viewedKey)) {
+        fileStepAnnouncePendingRef.current = true;
+        onSelectFile(index);
+        return;
+      }
+    }
+  });
+
+  useEffect(() => {
+    if (!isOpen || !isWorkspace) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "v") return;
+      if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+      if (
+        e.target instanceof HTMLElement &&
+        (e.target.tagName === "INPUT" ||
+          e.target.tagName === "TEXTAREA" ||
+          e.target.tagName === "SELECT" ||
+          e.target.isContentEditable)
+      ) {
+        return;
+      }
+
+      e.preventDefault();
+      markViewedAndAdvance();
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isOpen, isWorkspace]);
+
   // IntersectionObserver tracks the most-visible hunk during free scrolling.
   // Observes tr:first-child (not tbody — table-row-group collapses to 0 height
   // in Chromium and races with layout). The observer is keyed on diffViewType
@@ -586,6 +741,19 @@ export function FileViewerModal({
     const hunks = container.querySelectorAll<HTMLElement>("tbody.diff-hunk");
     const count = hunks.length;
     setHunkCount(count);
+
+    // Land a cross-file hunk step once the destination file's hunks exist.
+    // A stale target (user jumped elsewhere meanwhile) is dropped instead.
+    const pending = pendingHunkTargetRef.current;
+    if (pending) {
+      if (pending.fileIndex !== (currentFileIndex ?? -1)) {
+        pendingHunkTargetRef.current = null;
+      } else if (count > 0) {
+        pendingHunkTargetRef.current = null;
+        const landingIndex = pending.place === "last" ? count - 1 : 0;
+        requestAnimationFrame(() => scrollToHunkIndex(landingIndex));
+      }
+    }
 
     // Overview rail: one tick per hunk at its proportional scroll position,
     // colored by the hunk's dominant change kind.
@@ -669,7 +837,16 @@ export function FileViewerModal({
       observerDisposedRef.current = true;
       observer.disconnect();
     };
-  }, [isOpen, mode, diff, diffViewType, diffWrapLines, collapseRevision]);
+  }, [
+    isOpen,
+    mode,
+    diff,
+    diffViewType,
+    diffWrapLines,
+    collapseRevision,
+    currentFileIndex,
+    scrollToHunkIndex,
+  ]);
 
   const handleDiffToggleCollapse = useCallback(() => {
     setCollapseRevision((r) => r + 1);
@@ -817,8 +994,14 @@ export function FileViewerModal({
     <AppDialog
       isOpen={isOpen}
       onClose={onClose}
-      size={mode === "diff" && hasDiff && diffViewType === "split" ? "7xl" : "6xl"}
-      maxHeight="max-h-[90vh]"
+      size={
+        isWorkspace
+          ? "workspace"
+          : mode === "diff" && hasDiff && diffViewType === "split"
+            ? "7xl"
+            : "6xl"
+      }
+      maxHeight={isWorkspace ? "max-h-[92vh]" : "max-h-[90vh]"}
       restoreFocusTo={restoreFocusTo}
       data-testid="file-viewer-dialog"
     >
@@ -827,13 +1010,28 @@ export function FileViewerModal({
           <Tooltip>
             <AppDialog.Title className="text-sm font-medium min-w-0">
               <TooltipTrigger asChild>
-                <span className="truncate cursor-default text-daintree-text">{fileName}</span>
+                <span className="truncate cursor-default text-daintree-text">
+                  {relDir && <span className="text-daintree-text/45">{relDir}/</span>}
+                  {fileName}
+                </span>
               </TooltipTrigger>
             </AppDialog.Title>
             <TooltipContent side="bottom" className="max-w-lg break-all">
               {branch ? `${branch} — ${filePath}` : filePath}
             </TooltipContent>
           </Tooltip>
+
+          {workspaceEntry &&
+            ((workspaceEntry.insertions ?? 0) > 0 || (workspaceEntry.deletions ?? 0) > 0) && (
+              <span className="flex shrink-0 items-center gap-1 font-mono text-[11px]">
+                {(workspaceEntry.insertions ?? 0) > 0 && (
+                  <span className="text-status-success">+{workspaceEntry.insertions}</span>
+                )}
+                {(workspaceEntry.deletions ?? 0) > 0 && (
+                  <span className="text-status-error">-{workspaceEntry.deletions}</span>
+                )}
+              </span>
+            )}
 
           {/* Mode toggle: markdown files get Rendered/Source (plus Diff when
               available); other files keep the original View/Diff pair. */}
@@ -945,227 +1143,253 @@ export function FileViewerModal({
         </div>
       </AppDialog.Header>
 
-      <div className="relative flex-1 min-h-0 flex flex-col">
-        <AppDialog.BodyScroll className="p-0 diff-scroll-root">
-          {isImageMode && (
-            <div className="flex items-center justify-center p-6 min-h-[300px]">
-              {loadState === "image" && (
-                <img
-                  key={filePath}
-                  src={buildDaintreeFileUrl(filePath, effectiveRootPath)}
-                  alt={fileName}
-                  className="max-w-full max-h-[70vh] object-contain rounded"
-                  draggable={false}
-                  onError={handleImageError}
+      <div className="flex flex-1 min-h-0">
+        {isWorkspace && diffShowFileList && changeSet && onSelectFile && (
+          <DiffFileSidebar
+            files={changeSet}
+            currentIndex={currentFileIndex ?? -1}
+            worktreePath={rootPath}
+            onSelect={(index) => {
+              fileStepAnnouncePendingRef.current = true;
+              onSelectFile(index);
+            }}
+          />
+        )}
+        <div className="relative flex-1 min-w-0 min-h-0 flex flex-col" style={diffFontStyle}>
+          <AppDialog.BodyScroll className="p-0 diff-scroll-root">
+            {isImageMode && imageDiffEligible && fileStatus && workspaceRelPath && (
+              <div className="h-full min-h-[300px]">
+                <ImageDiffViewer
+                  relPath={workspaceRelPath}
+                  worktreePath={rootPath}
+                  status={fileStatus}
                 />
-              )}
-              {loadState === "svg" && sanitizedSvg && (
-                <div
-                  className="max-w-full max-h-[70vh] overflow-auto [&>svg]:max-w-full [&>svg]:h-auto"
-                  dangerouslySetInnerHTML={{ __html: createTrustedHTML(sanitizedSvg) }}
-                />
-              )}
-            </div>
-          )}
+              </div>
+            )}
 
-          {!isImageMode && (mode === "view" || mode === "rendered") && (
-            <>
-              {loadState === "loading" && (
-                <div className="p-4 space-y-3">
-                  <Skeleton label="Loading file">
-                    <SkeletonBone className="h-5 w-1/3" />
-                    <SkeletonText lines={15} />
-                  </Skeleton>
-                </div>
-              )}
-
-              {loadState === "error" && (displayErrorMessage || errorCode) && (
-                <div className="flex flex-col items-center justify-center h-64 gap-3">
-                  <p className="text-sm text-muted-foreground">
-                    {displayErrorMessage ?? (errorCode ? FILE_READ_ERROR_MESSAGES[errorCode] : "")}
-                  </p>
-                  {imageFile ? (
-                    <button
-                      type="button"
-                      onClick={handleOpenInImageViewer}
-                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-daintree-text bg-daintree-border hover:bg-daintree-border/80 rounded transition-colors"
-                    >
-                      <ImageIcon className="w-3.5 h-3.5" />
-                      Open in image viewer
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={handleOpenInEditor}
-                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-daintree-text bg-daintree-border hover:bg-daintree-border/80 rounded transition-colors"
-                    >
-                      <ExternalLink className="w-3.5 h-3.5" />
-                      Open in editor
-                    </button>
-                  )}
-                </div>
-              )}
-
-              {loadState === "loaded" &&
-                content !== null &&
-                (mode === "rendered" && markdownFile ? (
-                  <MarkdownViewer
-                    content={content}
-                    filePath={filePath}
-                    rootPath={effectiveRootPath}
-                    viewMode="rendered"
+            {isImageMode && !imageDiffEligible && (
+              <div className="flex items-center justify-center p-6 min-h-[300px]">
+                {loadState === "image" && (
+                  <img
+                    key={filePath}
+                    src={buildDaintreeFileUrl(filePath, effectiveRootPath)}
+                    alt={fileName}
+                    className="max-w-full max-h-[70vh] object-contain rounded"
+                    draggable={false}
+                    onError={handleImageError}
                   />
-                ) : (
-                  // min-h-full column: the editor surface stretches to the
-                  // footer even for files shorter than the dialog body.
-                  <div className="flex min-h-full flex-col">
-                    {metadata && (
-                      <div
-                        data-testid="file-viewer-metadata"
-                        className="px-3 py-1 border-b border-daintree-border text-xs text-muted-foreground font-mono shrink-0"
+                )}
+                {loadState === "svg" && sanitizedSvg && (
+                  <div
+                    className="max-w-full max-h-[70vh] overflow-auto [&>svg]:max-w-full [&>svg]:h-auto"
+                    dangerouslySetInnerHTML={{ __html: createTrustedHTML(sanitizedSvg) }}
+                  />
+                )}
+              </div>
+            )}
+
+            {!isImageMode && (mode === "view" || mode === "rendered") && (
+              <>
+                {loadState === "loading" && (
+                  <div className="p-4 space-y-3">
+                    <Skeleton label="Loading file">
+                      <SkeletonBone className="h-5 w-1/3" />
+                      <SkeletonText lines={15} />
+                    </Skeleton>
+                  </div>
+                )}
+
+                {loadState === "error" && (displayErrorMessage || errorCode) && (
+                  <div className="flex flex-col items-center justify-center h-64 gap-3">
+                    <p className="text-sm text-muted-foreground">
+                      {displayErrorMessage ??
+                        (errorCode ? FILE_READ_ERROR_MESSAGES[errorCode] : "")}
+                    </p>
+                    {imageFile ? (
+                      <button
+                        type="button"
+                        onClick={handleOpenInImageViewer}
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-daintree-text bg-daintree-border hover:bg-daintree-border/80 rounded transition-colors"
                       >
-                        {metadata.lineCount} lines · {metadata.sizeLabel} · UTF-8
-                      </div>
+                        <ImageIcon className="w-3.5 h-3.5" />
+                        Open in image viewer
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={handleOpenInEditor}
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-daintree-text bg-daintree-border hover:bg-daintree-border/80 rounded transition-colors"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                        Open in editor
+                      </button>
                     )}
-                    <CodeViewer
-                      ref={codeViewerRef}
+                  </div>
+                )}
+
+                {loadState === "loaded" &&
+                  content !== null &&
+                  (mode === "rendered" && markdownFile ? (
+                    <MarkdownViewer
                       content={content}
                       filePath={filePath}
-                      initialLine={initialLine}
-                      wrapLines={markdownFile && markdownWrapLines}
-                      className="min-h-[300px] flex-1"
+                      rootPath={effectiveRootPath}
+                      viewMode="rendered"
                     />
-                  </div>
-                ))}
-            </>
-          )}
+                  ) : (
+                    // min-h-full column: the editor surface stretches to the
+                    // footer even for files shorter than the dialog body.
+                    <div className="flex min-h-full flex-col">
+                      {metadata && (
+                        <div
+                          data-testid="file-viewer-metadata"
+                          className="px-3 py-1 border-b border-daintree-border text-xs text-muted-foreground font-mono shrink-0"
+                        >
+                          {metadata.lineCount} lines · {metadata.sizeLabel} · UTF-8
+                        </div>
+                      )}
+                      <CodeViewer
+                        ref={codeViewerRef}
+                        content={content}
+                        filePath={filePath}
+                        initialLine={initialLine}
+                        wrapLines={markdownFile && markdownWrapLines}
+                        className="min-h-[300px] flex-1"
+                      />
+                    </div>
+                  ))}
+              </>
+            )}
 
-          {!isImageMode && mode === "diff" && diff && (
-            <DiffViewer
-              ref={diffViewerRef}
-              diff={diff}
-              viewType={diffViewType}
-              rootPath={rootPath}
-              wrapLines={diffWrapLines}
-              searchQuery={searchActive ? searchQuery : undefined}
-              // Expansion needs the diff's new side to byte-match the loaded
-              // file; an ignore-whitespace diff can show old-side context lines.
-              source={diffMatchesFile && !diffIgnoreWhitespace && canShowView ? content : undefined}
-              onRetry={onRetryDiff}
-              onToggleCollapse={handleDiffToggleCollapse}
-              onTokensRendered={handleTokensRendered}
-            />
-          )}
+            {!isImageMode && mode === "diff" && diff && (
+              <DiffViewer
+                ref={diffViewerRef}
+                diff={diff}
+                viewType={diffViewType}
+                rootPath={rootPath}
+                wrapLines={diffWrapLines}
+                searchQuery={searchActive ? searchQuery : undefined}
+                // Expansion needs the diff's new side to byte-match the loaded
+                // file; an ignore-whitespace diff can show old-side context lines.
+                source={
+                  diffMatchesFile && !diffIgnoreWhitespace && canShowView ? content : undefined
+                }
+                onRetry={onRetryDiff}
+                onToggleCollapse={handleDiffToggleCollapse}
+                onTokensRendered={handleTokensRendered}
+              />
+            )}
 
-          {!isImageMode && mode === "diff" && !diff && (
-            <div className="p-4 space-y-3">
-              <Skeleton label="Loading diff">
-                <SkeletonBone className="h-7 w-3/4" />
-                <SkeletonText lines={8} />
-              </Skeleton>
+            {!isImageMode && mode === "diff" && !diff && (
+              <div className="p-4 space-y-3">
+                <Skeleton label="Loading diff">
+                  <SkeletonBone className="h-7 w-3/4" />
+                  <SkeletonText lines={8} />
+                </Skeleton>
+              </div>
+            )}
+          </AppDialog.BodyScroll>
+
+          {/* In-diff find bar (Cmd+F in diff mode). Floats over the top-right of
+            the diff; Enter / Shift+Enter cycle matches. */}
+          {searchActive && (
+            <div
+              className="absolute top-2 right-7 z-20 flex items-center gap-1 pl-2 pr-1 py-1 rounded-md surface-overlay shadow-[var(--theme-shadow-floating)] focus-within:border-daintree-accent focus-within:ring-1 focus-within:ring-daintree-accent/20"
+              data-testid="diff-search-bar"
+            >
+              <Search className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+              <input
+                ref={searchInputRef}
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={handleSearchKeyDown}
+                placeholder="Find in diff"
+                aria-label="Find in diff"
+                className="w-44 bg-transparent text-xs text-daintree-text placeholder:text-text-placeholder focus:outline-hidden"
+              />
+              <span
+                className="text-xs text-muted-foreground tabular-nums shrink-0 min-w-0"
+                data-testid="diff-search-count"
+                aria-live="polite"
+              >
+                {searchQuery
+                  ? searchMatchCount === 0
+                    ? "No matches"
+                    : searchMatchIndex >= 0
+                      ? `${searchMatchIndex + 1} of ${searchMatchCount}`
+                      : `${searchMatchCount} ${searchMatchCount === 1 ? "match" : "matches"}`
+                  : ""}
+              </span>
+              <button
+                type="button"
+                onClick={() => stepSearchMatch(-1)}
+                disabled={searchMatchCount === 0}
+                aria-label="Previous match"
+                className="p-1 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-overlay-medium disabled:opacity-40 disabled:pointer-events-none"
+              >
+                <ChevronUp className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => stepSearchMatch(1)}
+                disabled={searchMatchCount === 0}
+                aria-label="Next match"
+                className="p-1 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-overlay-medium disabled:opacity-40 disabled:pointer-events-none"
+              >
+                <ChevronDown className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={closeSearch}
+                aria-label="Close search"
+                className="p-1 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-overlay-medium"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
             </div>
           )}
-        </AppDialog.BodyScroll>
 
-        {/* In-diff find bar (Cmd+F in diff mode). Floats over the top-right of
-            the diff; Enter / Shift+Enter cycle matches. */}
-        {searchActive && (
-          <div
-            className="absolute top-2 right-7 z-20 flex items-center gap-1 pl-2 pr-1 py-1 rounded-md surface-overlay shadow-[var(--theme-shadow-floating)] focus-within:border-daintree-accent focus-within:ring-1 focus-within:ring-daintree-accent/20"
-            data-testid="diff-search-bar"
-          >
-            <Search className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-            <input
-              ref={searchInputRef}
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              onKeyDown={handleSearchKeyDown}
-              placeholder="Find in diff"
-              aria-label="Find in diff"
-              className="w-44 bg-transparent text-xs text-daintree-text placeholder:text-text-placeholder focus:outline-hidden"
-            />
-            <span
-              className="text-xs text-muted-foreground tabular-nums shrink-0 min-w-0"
-              data-testid="diff-search-count"
-              aria-live="polite"
-            >
-              {searchQuery
-                ? searchMatchCount === 0
-                  ? "No matches"
-                  : searchMatchIndex >= 0
-                    ? `${searchMatchIndex + 1} of ${searchMatchCount}`
-                    : `${searchMatchCount} ${searchMatchCount === 1 ? "match" : "matches"}`
-                : ""}
-            </span>
-            <button
-              type="button"
-              onClick={() => stepSearchMatch(-1)}
-              disabled={searchMatchCount === 0}
-              aria-label="Previous match"
-              className="p-1 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-overlay-medium disabled:opacity-40 disabled:pointer-events-none"
-            >
-              <ChevronUp className="w-3.5 h-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={() => stepSearchMatch(1)}
-              disabled={searchMatchCount === 0}
-              aria-label="Next match"
-              className="p-1 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-overlay-medium disabled:opacity-40 disabled:pointer-events-none"
-            >
-              <ChevronDown className="w-3.5 h-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={closeSearch}
-              aria-label="Close search"
-              className="p-1 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-overlay-medium"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        )}
-
-        {/* Overview rail: one tick per hunk at its proportional position in the
+          {/* Overview rail: one tick per hunk at its proportional position in the
             scroll run (plus search-match ticks and a viewport thumb); sits left
             of the body scrollbar. */}
-        {mode === "diff" && (hunkMarkers.length > 1 || searchMarkers.length > 0) && (
-          <div
-            className="absolute right-2.5 top-1 bottom-1 w-2 z-10"
-            data-testid="hunk-overview-rail"
-          >
+          {mode === "diff" && (hunkMarkers.length > 1 || searchMarkers.length > 0) && (
             <div
-              ref={viewportIndicatorRef}
-              data-testid="rail-viewport-indicator"
-              className="absolute left-0 right-0 rounded-full bg-tint/10 pointer-events-none"
-            />
-            {hunkMarkers.map((marker, index) => (
-              <button
-                key={index}
-                type="button"
-                aria-label={`Go to hunk ${index + 1} of ${hunkMarkers.length}`}
-                onClick={() => scrollToHunkIndex(index)}
-                style={{ top: `${marker.ratio * 100}%` }}
-                className={cn(
-                  "absolute left-0 right-0 h-[3px] rounded-full transition-colors",
-                  marker.kind === "insert" && "bg-status-success/60 hover:bg-status-success",
-                  marker.kind === "delete" && "bg-status-danger/60 hover:bg-status-danger",
-                  marker.kind === "mixed" &&
-                    "bg-gradient-to-r from-status-success/60 to-status-danger/60",
-                  index === activeHunkIndex && "h-[5px] opacity-100"
-                )}
-              />
-            ))}
-            {searchMarkers.map((ratio, index) => (
+              className="absolute right-2.5 top-1 bottom-1 w-2 z-10"
+              data-testid="hunk-overview-rail"
+            >
               <div
-                key={`search-${index}`}
-                data-testid="rail-search-tick"
-                style={{ top: `${ratio * 100}%` }}
-                className="absolute right-0 w-1 h-[2px] rounded-full bg-text-muted pointer-events-none"
+                ref={viewportIndicatorRef}
+                data-testid="rail-viewport-indicator"
+                className="absolute left-0 right-0 rounded-full bg-tint/10 pointer-events-none"
               />
-            ))}
-          </div>
-        )}
+              {hunkMarkers.map((marker, index) => (
+                <button
+                  key={index}
+                  type="button"
+                  aria-label={`Go to hunk ${index + 1} of ${hunkMarkers.length}`}
+                  onClick={() => scrollToHunkIndex(index)}
+                  style={{ top: `${marker.ratio * 100}%` }}
+                  className={cn(
+                    "absolute left-0 right-0 h-[3px] rounded-full transition-colors",
+                    marker.kind === "insert" && "bg-status-success/60 hover:bg-status-success",
+                    marker.kind === "delete" && "bg-status-danger/60 hover:bg-status-danger",
+                    marker.kind === "mixed" &&
+                      "bg-gradient-to-r from-status-success/60 to-status-danger/60",
+                    index === activeHunkIndex && "h-[5px] opacity-100"
+                  )}
+                />
+              ))}
+              {searchMarkers.map((ratio, index) => (
+                <div
+                  key={`search-${index}`}
+                  data-testid="rail-search-tick"
+                  style={{ top: `${ratio * 100}%` }}
+                  className="absolute right-0 w-1 h-[2px] rounded-full bg-text-muted pointer-events-none"
+                />
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Slim footer toolbar: navigation + diff display controls (Kaleidoscope-
@@ -1174,6 +1398,15 @@ export function FileViewerModal({
       {(canStepFiles || (mode === "diff" && hasDiff) || (markdownFile && mode === "view")) && (
         <div className="flex items-center justify-between gap-3 px-4 py-1.5 border-t border-border-strong bg-surface-panel shrink-0">
           <div className="flex items-center gap-1 min-w-0">
+            {isWorkspace && (
+              <IconToggle
+                pressed={diffShowFileList}
+                label="Show file list"
+                onToggle={() => setDiffShowFileList(!diffShowFileList)}
+              >
+                <PanelLeft className="w-4 h-4" />
+              </IconToggle>
+            )}
             {canStepFiles && (
               <>
                 <Tooltip>
@@ -1212,6 +1445,31 @@ export function FileViewerModal({
                 </Tooltip>
               </>
             )}
+            {workspaceEntry && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() => toggleViewed(rootPath, workspaceEntry.viewedKey)}
+                    aria-pressed={viewedSet.has(workspaceEntry.viewedKey)}
+                    aria-label="Viewed"
+                    data-testid="diff-viewed-button"
+                    className={cn(
+                      "ml-1 flex items-center gap-1.5 rounded px-2 py-1 text-xs transition-colors",
+                      viewedSet.has(workspaceEntry.viewedKey)
+                        ? "bg-status-success/15 text-status-success"
+                        : "text-muted-foreground hover:text-daintree-text hover:bg-daintree-border"
+                    )}
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                    Viewed
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  Mark as viewed — v also steps to the next file
+                </TooltipContent>
+              </Tooltip>
+            )}
           </div>
 
           {mode === "diff" && hasDiff && hunkCount > 0 && (
@@ -1221,7 +1479,7 @@ export function FileViewerModal({
                   <button
                     type="button"
                     onClick={() => stepHunk(-1)}
-                    disabled={hunkCount < 2 || activeHunkIndex === 0}
+                    disabled={activeHunkIndex <= 0 && !hasPrevFile}
                     aria-label="Previous hunk"
                     className="p-1.5 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-daintree-border disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
                   >
@@ -1243,7 +1501,7 @@ export function FileViewerModal({
                   <button
                     type="button"
                     onClick={() => stepHunk(1)}
-                    disabled={hunkCount < 2 || activeHunkIndex >= hunkCount - 1}
+                    disabled={activeHunkIndex >= hunkCount - 1 && !hasNextFile}
                     aria-label="Next hunk"
                     className="p-1.5 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-daintree-border disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
                   >
@@ -1295,6 +1553,15 @@ export function FileViewerModal({
                 >
                   <Pilcrow className="w-4 h-4" />
                 </IconToggle>
+                <SegmentedToggle
+                  options={DIFF_FONT_SIZE_ORDER.map((size) => ({
+                    value: size,
+                    label: size.toUpperCase(),
+                    ariaLabel: `${DIFF_FONT_SIZE_LABEL[size]} text`,
+                  }))}
+                  value={diffFontSize}
+                  onChange={setDiffFontSize}
+                />
                 <SegmentedToggle
                   options={[
                     { value: "split" as DiffViewType, label: "Split" },

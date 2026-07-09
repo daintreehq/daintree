@@ -28,6 +28,7 @@ import { registerWorktreeConfigHandlers } from "./handlers/worktreeConfig.js";
 import { registerNotificationHandlers } from "./handlers/notifications.js";
 import { registerMenuHandlers } from "./handlers/menu.js";
 import { registerFilesHandlers } from "./handlers/files.js";
+import { registerDiffMediaHandlers } from "./handlers/diffMedia.js";
 import { registerSlashCommandHandlers } from "./handlers/slashCommands.js";
 import { registerGeminiHandlers } from "./handlers/gemini.js";
 import { registerEventsHandlers } from "./handlers/events.js";
@@ -122,6 +123,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerWorktreeHandlers(deps));
     register(() => registerTerminalHandlers(deps));
     register(() => registerFilesHandlers());
+    register(() => registerDiffMediaHandlers());
     register(() => registerCopyTreeHandlers(deps));
     register(() => registerAiHandlers(deps));
     register(() => registerSlashCommandHandlers());

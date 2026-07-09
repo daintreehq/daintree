@@ -1,5 +1,6 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { FileChangeDetail, GitStatus } from "../../types";
+import type { DiffChangeSetEntry } from "@/components/FileViewer/diffChangeSet";
 import { cn } from "../../lib/utils";
 import { FileDiffModal } from "./FileDiffModal";
 import { Folder } from "lucide-react";
@@ -185,6 +186,30 @@ export function FileChangeList({
       return change ? { path: change.relativePath, status: change.status } : null;
     },
     [selectedIndex, sortedChanges]
+  );
+
+  // Changeset handed to the diff modal so it can render the review-workspace
+  // sidebar. Indexed identically to `selectedIndex`/`navigateFile`.
+  const diffChangeSet = useMemo(
+    (): DiffChangeSetEntry[] =>
+      sortedChanges.map((change) => ({
+        path: change.relativePath,
+        status: change.status,
+        insertions: change.insertions,
+        deletions: change.deletions,
+        viewedKey: `${change.status}:${change.relativePath}`,
+      })),
+    [sortedChanges]
+  );
+
+  const selectFileAt = useCallback(
+    (index: number) => {
+      const change = sortedChanges[index];
+      if (!change) return;
+      setSelectedFile({ path: change.relativePath, status: change.status });
+      setSelectedIndex(index);
+    },
+    [sortedChanges]
   );
 
   const groupedChanges = useMemo((): FolderGroup[] => {
@@ -377,6 +402,8 @@ export function FileChangeList({
           totalFileCount={sortedChanges.length}
           onNavigateFile={navigateFile}
           getAdjacentFile={getAdjacentFile}
+          changeSet={diffChangeSet}
+          onSelectFile={selectFileAt}
         />
       </>
     );
@@ -417,6 +444,8 @@ export function FileChangeList({
         totalFileCount={sortedChanges.length}
         onNavigateFile={navigateFile}
         getAdjacentFile={getAdjacentFile}
+        changeSet={diffChangeSet}
+        onSelectFile={selectFileAt}
       />
     </>
   );

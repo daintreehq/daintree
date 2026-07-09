@@ -22,6 +22,8 @@ import { isProtectedBranch } from "@shared/utils/gitConstants";
 import { useUIStore } from "@/store/uiStore";
 import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
+import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
+import type { DiffChangeSetEntry } from "@/components/FileViewer/diffChangeSet";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useKeepMounted } from "@/hooks/useKeepMounted";
@@ -151,11 +153,16 @@ export function ReviewHubContent({
     status: GitStatus;
     section: FileStageRowSection;
   } | null>(null);
-  // Session-scoped per-file Viewed indicator. Keys are `staged:{path}` or
+  // Session-scoped per-file Viewed indicator, shared with the diff
+  // workspace's sidebar through diffViewedStore so a file checked off in
+  // either surface reads as reviewed in both. Keys are `staged:{path}` or
   // `unstaged:{path}` so that the same path appearing in both sections (valid
-  // during partial staging) tracks Viewed independently. Resets on close and
-  // on ReviewHub unmount — intentional, this is not persisted.
-  const [viewedFiles, setViewedFiles] = useState<Set<string>>(() => new Set());
+  // during partial staging) tracks Viewed independently. Survives close and
+  // reopen within an app session; not persisted.
+  const viewedFiles = useDiffViewedStore(
+    useCallback((state) => selectViewedSet(state, worktreePath), [worktreePath])
+  );
+  const setStoreViewed = useDiffViewedStore((state) => state.setViewed);
   const [diffMode, setDiffMode] = useState<DiffMode>("working-tree");
   const [forcePushDialogOpen, setForcePushDialogOpen] = useState(false);
   const [pullRebaseConfirmOpen, setPullRebaseConfirmOpen] = useState(false);
@@ -325,6 +332,58 @@ export function ReviewHubContent({
     const byPath = navigableItems.findIndex((item) => item.file.path === selectedFile.path);
     return byPath === -1 ? null : byPath;
   }, [selectedFile, navigableItems]);
+
+  // Changesets handed to the diff modals so they can render the
+  // review-workspace sidebar. Indexed identically to the modal's
+  // `currentFileIndex`, and viewed keys match the hub's own conventions so
+  // markers stay in sync across both surfaces.
+  const workingTreeChangeSet = useMemo(
+    (): DiffChangeSetEntry[] =>
+      navigableItems.map((item) => ({
+        path: item.file.path,
+        status: item.file.status,
+        insertions: item.file.insertions,
+        deletions: item.file.deletions,
+        viewedKey: `${item.section}:${item.file.path}`,
+      })),
+    [navigableItems]
+  );
+
+  const selectWorkingTreeFileAt = useCallback(
+    (index: number) => {
+      const item = navigableItems[index];
+      if (!item) return;
+      setSelectedFile({ path: item.file.path, status: item.file.status, section: item.section });
+    },
+    [navigableItems]
+  );
+
+  const baseBranchChangeSet = useMemo((): DiffChangeSetEntry[] | undefined => {
+    if (!sortedBaseBranchFiles) return undefined;
+    const statusMap: Record<string, GitStatus> = {
+      A: "added",
+      D: "deleted",
+      M: "modified",
+      R: "renamed",
+      C: "copied",
+      U: "conflicted",
+    };
+    return sortedBaseBranchFiles.map((file) => ({
+      path: file.path,
+      status: statusMap[file.status] ?? "modified",
+      insertions: file.insertions,
+      deletions: file.deletions,
+      viewedKey: `base:${file.path}`,
+    }));
+  }, [sortedBaseBranchFiles]);
+
+  const selectBaseBranchFileAt = useCallback(
+    (index: number) => {
+      const file = sortedBaseBranchFiles?.[index];
+      if (file) setSelectedBaseBranchFile(file);
+    },
+    [sortedBaseBranchFiles]
+  );
 
   const lastSelectedFileIndexRef = useRef(0);
   useEffect(() => {
@@ -619,7 +678,7 @@ export function ReviewHubContent({
       setForcePushDialogOpen(false);
       setPullRebasing(false);
       isPullRebasingRef.current = false;
-      setViewedFiles(new Set());
+      // Viewed markers deliberately survive close/reopen (diffViewedStore).
       setSelectedPaths(new Set());
       setSelectionSection(null);
       selectionAnchorRef.current = null;
@@ -1091,14 +1150,12 @@ export function ReviewHubContent({
     [status, selectionSection]
   );
 
-  const handleViewedChange = useCallback((viewedKey: string, viewed: boolean) => {
-    setViewedFiles((prev) => {
-      const next = new Set(prev);
-      if (viewed) next.add(viewedKey);
-      else next.delete(viewedKey);
-      return next;
-    });
-  }, []);
+  const handleViewedChange = useCallback(
+    (viewedKey: string, viewed: boolean) => {
+      setStoreViewed(worktreePath, viewedKey, viewed);
+    },
+    [setStoreViewed, worktreePath]
+  );
 
   const handleDiffModeChange = useCallback(
     (mode: DiffMode) => {
@@ -1733,6 +1790,8 @@ export function ReviewHubContent({
             totalFileCount={navigableItems.length}
             onNavigateFile={navigateWorkingTreeFile}
             getAdjacentFile={getAdjacentWorkingTreeFile}
+            changeSet={workingTreeChangeSet}
+            onSelectFile={selectWorkingTreeFileAt}
           />
         </Suspense>
       )}
@@ -1751,6 +1810,8 @@ export function ReviewHubContent({
             currentFileIndex={selectedBaseBranchIndex ?? undefined}
             totalFileCount={sortedBaseBranchFiles?.length ?? 0}
             onNavigateFile={navigateBaseBranchFile}
+            changeSet={baseBranchChangeSet}
+            onSelectFile={selectBaseBranchFileAt}
           />
         </Suspense>
       )}
