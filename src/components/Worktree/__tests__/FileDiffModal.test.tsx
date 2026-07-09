@@ -63,9 +63,12 @@ const baseProps = {
   onClose: vi.fn(),
 };
 
+// Store entries carry absolute paths in production (electron/utils/git.ts
+// keys changesMap by absolutePath) while the modal receives worktree-relative
+// paths — the fixtures mirror that mismatch on purpose.
 function changeEntry(overrides: Partial<FileChangeDetail> = {}): FileChangeDetail {
   return {
-    path: "src/index.ts",
+    path: "/repo/src/index.ts",
     status: "modified",
     insertions: 3,
     deletions: 1,
@@ -226,11 +229,30 @@ describe("FileDiffModal", () => {
       store.setState({
         worktrees: worktreesMap([
           changeEntry(),
-          changeEntry({ path: "src/other.ts", mtimeMs: 9999 }),
+          changeEntry({ path: "/repo/src/other.ts", mtimeMs: 9999 }),
         ]),
       });
     });
     expect(capturedProps.diffContentStale).toBe(false);
+  });
+
+  it("matches store entries that carry worktree-relative paths too", async () => {
+    mockDispatch.mockResolvedValue({ ok: true, result: { content: "diff text" } });
+    const store = createTestWorktreeStore([changeEntry({ path: "src/index.ts" })]);
+    renderWithStore(<FileDiffModal {...baseProps} />, store);
+    await waitFor(() => {
+      expect(capturedProps.diff).toBe("diff text");
+    });
+    expect(capturedProps.diffContentStale).toBe(false);
+
+    act(() => {
+      store.setState({
+        worktrees: worktreesMap([changeEntry({ path: "src/index.ts", mtimeMs: 2000 })]),
+      });
+    });
+    await waitFor(() => {
+      expect(capturedProps.diffContentStale).toBe(true);
+    });
   });
 
   it("clears the stale flag after a refresh that bypasses the cache", async () => {
@@ -287,7 +309,10 @@ describe("FileDiffModal", () => {
   it("surfaces staleness for a prefetched adjacent diff on navigation", async () => {
     mockDispatch.mockResolvedValue({ ok: true, result: { content: "diff text" } });
     const next = { path: "src/next.ts", status: "modified" as GitStatus };
-    const store = createTestWorktreeStore([changeEntry(), changeEntry({ path: next.path })]);
+    const store = createTestWorktreeStore([
+      changeEntry(),
+      changeEntry({ path: "/repo/src/next.ts" }),
+    ]);
     const view = renderWithStore(
       <FileDiffModal {...baseProps} getAdjacentFile={(delta) => (delta === 1 ? next : null)} />,
       store
@@ -295,13 +320,17 @@ describe("FileDiffModal", () => {
     await waitFor(() => {
       expect(capturedProps.diff).toBe("diff text");
     });
-    // Prefetch fires after the dwell timer and caches the adjacent diff
-    // together with its fetch-time freshness key.
-    await waitFor(() => expect(mockDispatch).toHaveBeenCalledTimes(2), { timeout: 3000 });
+    // Prefetch fires after the dwell timer (real 500ms) and caches the
+    // adjacent diff together with its fetch-time freshness key. Generous
+    // timeout so loaded CI runners can't flake it.
+    await waitFor(() => expect(mockDispatch).toHaveBeenCalledTimes(2), { timeout: 10000 });
 
     act(() => {
       store.setState({
-        worktrees: worktreesMap([changeEntry(), changeEntry({ path: next.path, mtimeMs: 2000 })]),
+        worktrees: worktreesMap([
+          changeEntry(),
+          changeEntry({ path: "/repo/src/next.ts", mtimeMs: 2000 }),
+        ]),
       });
     });
     view.rerender(

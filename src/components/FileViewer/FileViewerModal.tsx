@@ -1226,21 +1226,26 @@ export function FileViewerModal({
           />
         )}
         <div className="relative flex-1 min-w-0 min-h-0 flex flex-col" style={diffFontStyle}>
-          {!isImageMode && mode === "diff" && diffContentStale && !!diff && onRetryDiff && (
-            <InlineStatusBanner
-              severity="info"
-              icon={FileDiffIcon}
-              title="File changed since this diff loaded"
-              role="status"
-              ariaLive="polite"
-              action={{
-                id: "refresh-diff",
-                label: "Refresh",
-                icon: RefreshCw,
-                onClick: onRetryDiff,
-              }}
-            />
-          )}
+          {!isImageMode &&
+            mode === "diff" &&
+            diffContentStale &&
+            !!diff &&
+            diff !== "ERROR" &&
+            onRetryDiff && (
+              <InlineStatusBanner
+                severity="info"
+                icon={FileDiffIcon}
+                title="File changed since this diff loaded"
+                role="status"
+                ariaLive="polite"
+                action={{
+                  id: "refresh-diff",
+                  label: "Refresh",
+                  icon: RefreshCw,
+                  onClick: onRetryDiff,
+                }}
+              />
+            )}
           <AppDialog.BodyScroll className="p-0 diff-scroll-root">
             {isImageMode && imageDiffEligible && fileStatus && workspaceRelPath && (
               <div className="h-full min-h-[300px]">
