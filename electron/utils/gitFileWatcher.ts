@@ -61,6 +61,15 @@ export interface GitFileWatcherOptions {
   worktreeMaxDebounceMs?: number;
   /** Max wait ceiling for worktree debounce — forces a flush during sustained bursts. */
   worktreeMaxWaitMs?: number;
+  /** Leading-edge fast path: when worktree events arrive after at least
+   *  `worktreeQuietWindowMs` of flush-free quiet, the first flush fires after
+   *  this short delay instead of `worktreeMinDebounceMs`, so an isolated edit
+   *  surfaces almost immediately. A burst that keeps producing events resets
+   *  the timer onto the adaptive trailing ramp, preserving coalescing. */
+  worktreeLeadingDebounceMs?: number;
+  /** Quiet period (since the last worktree flush) that re-arms the
+   *  leading-edge fast path. Defaults to 2000ms. */
+  worktreeQuietWindowMs?: number;
   /** Called when the recursive worktree watcher fails because of the Linux
    *  inotify watch limit (ENOSPC) or macOS FSEvents fd ceiling (EMFILE). */
   onWatcherFailed?: () => void;
@@ -87,6 +96,9 @@ export class GitFileWatcher {
   private readonly worktreeMinDebounceMs: number;
   private readonly worktreeMaxDebounceMs: number;
   private readonly worktreeMaxWaitMs: number | undefined;
+  private readonly worktreeLeadingDebounceMs: number | undefined;
+  private readonly worktreeQuietWindowMs: number;
+  private lastWorktreeFlushAt = 0;
   /** Per-event ramp applied inside the min..max range. Private tuning constant. */
   private readonly worktreeDebounceRampMs = 10;
   private readonly onChange: () => void;
@@ -102,6 +114,8 @@ export class GitFileWatcher {
     this.worktreeMinDebounceMs = options.worktreeMinDebounceMs ?? options.debounceMs;
     this.worktreeMaxDebounceMs = options.worktreeMaxDebounceMs ?? this.worktreeMinDebounceMs;
     this.worktreeMaxWaitMs = options.worktreeMaxWaitMs;
+    this.worktreeLeadingDebounceMs = options.worktreeLeadingDebounceMs;
+    this.worktreeQuietWindowMs = options.worktreeQuietWindowMs ?? 2_000;
     this.onChange = options.onChange;
     this.onWatcherFailed = options.onWatcherFailed;
     this.onInotifyLimitReached = options.onInotifyLimitReached;
@@ -393,17 +407,29 @@ export class GitFileWatcher {
    * in a burst fires at `worktreeMinDebounceMs`; each subsequent event adds
    * `worktreeDebounceRampMs` to the pending delay up to `worktreeMaxDebounceMs`.
    * A `worktreeMaxWaitMs` ceiling forces a flush during sustained bursts.
+   * With `worktreeLeadingDebounceMs` set, a burst that starts after a quiet
+   * period flushes on the short leading delay instead — an isolated save
+   * surfaces near-instantly, while continued events replace the leading timer
+   * with the trailing ramp so real bursts still coalesce.
    */
   private handleWorktreeChange(eventCount = 1): void {
     if (this.disposed) {
       return;
     }
 
+    const burstStart = this.worktreeBurstCount === 0;
     this.worktreeBurstCount += eventCount;
-    const delay = Math.min(
+    let delay = Math.min(
       this.worktreeMaxDebounceMs,
       this.worktreeMinDebounceMs + (this.worktreeBurstCount - 1) * this.worktreeDebounceRampMs
     );
+    if (
+      burstStart &&
+      this.worktreeLeadingDebounceMs !== undefined &&
+      Date.now() - this.lastWorktreeFlushAt >= this.worktreeQuietWindowMs
+    ) {
+      delay = Math.min(delay, this.worktreeLeadingDebounceMs);
+    }
 
     if (this.worktreeDebounceTimer) {
       clearTimeout(this.worktreeDebounceTimer);
@@ -428,6 +454,7 @@ export class GitFileWatcher {
       this.worktreeMaxWaitTimer = null;
     }
     this.worktreeBurstCount = 0;
+    this.lastWorktreeFlushAt = Date.now();
     if (!this.disposed) {
       this.onChange();
     }

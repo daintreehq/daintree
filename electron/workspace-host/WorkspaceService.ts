@@ -154,7 +154,7 @@ export class WorkspaceService {
   private pollIntervalMax: number = 30000;
   private circuitBreakerThreshold: number = 3;
   private gitWatchEnabled: boolean = true;
-  private gitWatchDebounceMs: number = 300;
+  private gitWatchDebounceMs: number = 150;
   // Profile-aware ceiling on concurrent background `git-only` watchers (#9538).
   // The focused worktree always keeps its (recursive) watcher and is excluded
   // from this budget; background worktrees beyond the cap fall back to the

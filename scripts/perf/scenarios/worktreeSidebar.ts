@@ -31,9 +31,10 @@ import {
  * real createWorktreeStore).
  *
  * These scenarios return LATENCY, not work done — expect debounce-shaped
- * floors (working-tree ramp 250→800ms/1500ms max-wait, git-metadata 300ms,
- * topology 300ms + 2s reconcile cooldown, 1s self-trigger cooldown) and use
- * generous regression margins; latency is noisier than cost.
+ * floors (the working-tree leading/trailing debounce, the git-metadata
+ * debounce, the topology debounce + reconcile cooldown, the 1s self-trigger
+ * cooldown) and use generous regression margins; latency is noisier than
+ * cost.
  *
  * All fixture setup is lazy (first run()/warmup) so importing this module
  * never builds repos, services, or bundles. E2E variants of this suite
@@ -166,11 +167,16 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
         // one full poll cycle — the true poll-bound worst case — instead of
         // sampling whatever phase the fixed setup time happens to land on.
         const stampBefore = rm.monitor.getSnapshot().lastGitStatusCheckedAt ?? 0;
-        await pollUntil(
+        const aligned = await pollUntil(
           () => (rm.monitor.getSnapshot().lastGitStatusCheckedAt ?? 0) > stampBefore,
           POLL_BOUND_INTERVAL_MS * 3,
           15
         );
+        if (!aligned) {
+          return failClosed(15_000, "poll phase alignment never observed", {
+            detectionToIntervalRatio: 15_000 / POLL_BOUND_INTERVAL_MS,
+          });
+        }
         const from = rm.recorder.cursor();
         const t0 = performance.now();
         editFile = writeEditFile(fixture.pollPath, `poll-edit-${uid()}.txt`);
@@ -347,6 +353,9 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
       const wtPath = harness.addWorktreeExternal(name);
       const addDoneAt = performance.now();
       const surfaced = await harness.waitForSurfaced(name, TOPOLOGY_TIMEOUT_MS, from);
+      // A cooldown-deferred follow-up reconcile is part of this add's
+      // coalescing cost — settle before closing the spawn window.
+      await harness.settle();
       const worktreeListSpawns = gitSpawnsSince(mark).bySubcommand["worktree"] ?? 0;
       await harness.cleanupWorktree(wtPath, name, from);
       if (!surfaced) {
@@ -418,8 +427,11 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
         }
         await sleep(5);
       }
-      const window = gitSpawnsSince(mark);
       const allSurfaced = remainingAdds.size === 0;
+      // Trailing cooldown drains belong to the add burst — settle before
+      // closing the spawn window.
+      await harness.settle();
+      const window = gitSpawnsSince(mark);
 
       for (const wtPath of paths) harness.removeWorktreeExternal(wtPath);
       harness.svc.scheduleTopologyReconcile(true);
@@ -483,7 +495,11 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
         await harness.cleanupWorktree(wtPath, name, from);
       }
       return {
-        durationMs: latencies.get(50) ?? TOPOLOGY_TIMEOUT_MS,
+        // Worst leg, so a pickup failure at ANY scale fails the p95 gate —
+        // the per-N metrics carry the scaling story.
+        durationMs: Math.max(
+          ...TOPOLOGY_SCALING_COUNTS.map((count) => latencies.get(count) ?? TOPOLOGY_TIMEOUT_MS)
+        ),
         metrics: {
           latencyMsN1: latencies.get(1) ?? TOPOLOGY_TIMEOUT_MS,
           latencyMsN5: latencies.get(5) ?? TOPOLOGY_TIMEOUT_MS,

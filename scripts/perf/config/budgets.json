@@ -127,12 +127,12 @@
     },
 
     "PERF-130": {
-      "p95Ms": 800,
+      "p95Ms": 400,
       "maxRegressionPct": 75,
       "maxMetricValues": { "gitSpawns": 8 }
     },
     "PERF-131": {
-      "p95Ms": 900,
+      "p95Ms": 600,
       "maxRegressionPct": 75,
       "maxMetricValues": { "gitSpawns": 10 }
     },
@@ -142,30 +142,30 @@
       "maxMetricValues": { "detectionToIntervalRatio": 2.5 }
     },
     "PERF-133": {
-      "p95Ms": 3500,
+      "p95Ms": 1200,
       "maxRegressionPct": 75,
       "maxMetricValues": { "emitCount": 5, "gitSpawns": 18 }
     },
     "PERF-134": {
-      "p95Ms": 2500,
+      "p95Ms": 800,
       "maxRegressionPct": 75
     },
     "PERF-135": {
-      "p95Ms": 1500,
+      "p95Ms": 800,
       "maxRegressionPct": 75,
       "maxMetricValues": { "worktreeListSpawns": 5 }
     },
     "PERF-136": { "p95Ms": 1500, "maxRegressionPct": 75 },
     "PERF-137": {
-      "p95Ms": 6000,
+      "p95Ms": 3000,
       "maxRegressionPct": 75,
       "maxMetricValues": { "worktreeListSpawns": 8 }
     },
-    "PERF-138": { "p95Ms": 2000, "maxRegressionPct": 75 },
+    "PERF-138": { "p95Ms": 1000, "maxRegressionPct": 75 },
     "PERF-139": {
-      "p95Ms": 1500,
+      "p95Ms": 800,
       "maxRegressionPct": 75,
-      "maxMetricValues": { "cooldownRemovalMs": 9000 }
+      "maxMetricValues": { "cooldownRemovalMs": 1200 }
     },
     "PERF-140": {
       "p95Ms": 60,

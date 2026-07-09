@@ -85,7 +85,7 @@ export const DEFAULT_CONFIG: DaintreeConfig = {
     adaptiveBackoff: true,
     circuitBreakerThreshold: 3,
     gitWatchEnabled: true,
-    gitWatchDebounceMs: 300,
+    gitWatchDebounceMs: 150,
   },
   note: {
     enabled: true,

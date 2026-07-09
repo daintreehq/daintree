@@ -87,6 +87,27 @@ export async function quiesceGitSpawns(
   return false;
 }
 
+// Long-lived harnesses (steady/scale topology projects) intentionally live
+// until process exit, so their temp roots can't be reaped by dispose(). One
+// shared exit hook sweeps whatever is still registered.
+const tempRootsPendingCleanup = new Set<string>();
+let tempRootExitHookInstalled = false;
+
+function registerTempRootCleanup(root: string): void {
+  tempRootsPendingCleanup.add(root);
+  if (tempRootExitHookInstalled) return;
+  tempRootExitHookInstalled = true;
+  process.on("exit", () => {
+    for (const pending of tempRootsPendingCleanup) {
+      try {
+        rmSync(pending, { recursive: true, force: true });
+      } catch {
+        // Best-effort temp cleanup.
+      }
+    }
+  });
+}
+
 function runGit(cwd: string, args: string[]): void {
   execFileSync("git", args, {
     cwd,
@@ -200,7 +221,6 @@ export async function createRecordingMonitor(
     pollIntervalMax: Math.max(basePollingInterval, 30_000),
     circuitBreakerThreshold: 3,
     gitWatchEnabled: options.gitWatchEnabled ?? true,
-    gitWatchDebounceMs: 300,
   };
   const monitor = new WorktreeMonitor(
     worktree,
@@ -216,8 +236,9 @@ export async function createRecordingMonitor(
  * Start a recording monitor deterministically: emit the initial clean
  * snapshot, run one forced status pass (no background-start jitter), and —
  * when a watcher is expected — wait until the async arm actually completed
- * (`hasWatcher` flips only after the parcel/fs.watch subscription resolves;
- * measuring before that measures watcher-arm latency, not detection).
+ * (`hasArmedWatcher` flips only once the parcel/fs.watch subscription
+ * resolved; `hasWatcher` is optimistic during an in-flight arm, and measuring
+ * before the arm resolves measures watcher-arm latency, not detection).
  */
 export async function startArmedMonitor(
   rm: RecordingMonitor,
@@ -226,7 +247,7 @@ export async function startArmedMonitor(
   rm.monitor.startWithoutGitStatus();
   await rm.monitor.refresh();
   if (requireWatcher) {
-    const armed = await pollUntil(() => rm.monitor.hasWatcher, 8_000);
+    const armed = await pollUntil(() => rm.monitor.hasArmedWatcher, 8_000);
     if (!armed) {
       throw new Error(`watcher failed to arm for ${rm.monitor.path}`);
     }
@@ -346,10 +367,11 @@ const QUIET_MONITOR_CONFIG: MonitorConfig = {
   fetchIntervalBackgroundMs: 3_600_000,
 };
 
-// The topology reconcile queue enforces a 2s post-run cooldown; an external
+// The topology reconcile queue enforces a post-run cooldown
+// (TOPOLOGY_RECONCILE_COOLDOWN_MS in TopologyWatcher, 500ms); an external
 // mutation inside that window is deferred to cooldown expiry, so settled
-// measurement windows must start beyond it.
-export const TOPOLOGY_COOLDOWN_SETTLE_MS = 2_300;
+// measurement windows must exceed cooldown + the drain epsilon.
+export const TOPOLOGY_COOLDOWN_SETTLE_MS = 800;
 
 export interface RecordedHostEvent {
   atMs: number;
@@ -371,6 +393,7 @@ export class TopologyHarness {
     const { WorkspaceService } = await loadWorkspaceServiceModule();
 
     const root = mkdtempSync(join(tmpdir(), "daintree-perf-topo-"));
+    registerTempRootCleanup(root);
     const repoPath = join(root, "repo");
     mkdirSync(repoPath, { recursive: true });
     runGit(repoPath, ["init", "-b", "main"]);
@@ -514,6 +537,7 @@ export class TopologyHarness {
     if (this.disposed) return;
     this.disposed = true;
     this.svc.dispose();
+    tempRootsPendingCleanup.delete(this.root);
     try {
       rmSync(this.root, { recursive: true, force: true });
     } catch {
