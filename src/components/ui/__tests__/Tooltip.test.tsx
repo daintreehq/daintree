@@ -5,6 +5,7 @@ import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FixedDropdownVisibleContext } from "../fixed-dropdown";
 import { Tooltip, TooltipTrigger, TooltipContent } from "../tooltip";
+import { _resetForTests, dismissAllTooltips } from "@/lib/tooltipDismissRegistry";
 
 const { rootSpy, mountSpy, primeOnEventSpy, contentSpy } = vi.hoisted(() => ({
   rootSpy: vi.fn<(props: { open?: boolean; onOpenChange?: (open: boolean) => void }) => void>(),
@@ -301,6 +302,171 @@ describe("Tooltip wrapper — auto-dismiss window", () => {
 
     void act(() => vi.runAllTimers());
     expect(rootSpy.mock.calls.at(-1)?.[0]?.open).toBe(false);
+  });
+});
+
+describe("Tooltip wrapper — dialog-transition dismissal (issue #11030)", () => {
+  beforeEach(() => {
+    rootSpy.mockClear();
+    _resetForTests();
+  });
+
+  afterEach(() => {
+    _resetForTests();
+  });
+
+  function openLastRoot() {
+    const call = rootSpy.mock.calls.at(-1)?.[0];
+    void act(() => call!.onOpenChange!(true));
+  }
+
+  it("force-closes an open uncontrolled tooltip on dismissAllTooltips", () => {
+    render(
+      <Tooltip>
+        <TooltipTrigger>trigger</TooltipTrigger>
+        <TooltipContent>content</TooltipContent>
+      </Tooltip>
+    );
+
+    openLastRoot();
+    expect(rootSpy.mock.calls.at(-1)?.[0]?.open).toBe(true);
+
+    void act(() => dismissAllTooltips());
+    expect(rootSpy.mock.calls.at(-1)?.[0]?.open).toBe(false);
+  });
+
+  it("force-closes an autoDismiss={false} tooltip (the FileChangeList row case)", () => {
+    // The offending file-row tooltip opts out of the timed auto-dismiss so
+    // long paths get full read time — the dialog-transition dismissal must
+    // still close it, or nothing ever does.
+    render(
+      <Tooltip autoDismiss={false}>
+        <TooltipTrigger>trigger</TooltipTrigger>
+        <TooltipContent>content</TooltipContent>
+      </Tooltip>
+    );
+
+    openLastRoot();
+    expect(rootSpy.mock.calls.at(-1)?.[0]?.open).toBe(true);
+
+    void act(() => dismissAllTooltips());
+    expect(rootSpy.mock.calls.at(-1)?.[0]?.open).toBe(false);
+  });
+
+  it("notifies a controlled consumer through onOpenChange", () => {
+    function Harness() {
+      const [open, setOpen] = useState(true);
+      return (
+        <Tooltip open={open} onOpenChange={setOpen}>
+          <TooltipTrigger>trigger</TooltipTrigger>
+          <TooltipContent>content</TooltipContent>
+        </Tooltip>
+      );
+    }
+    render(<Harness />);
+    expect(rootSpy.mock.calls.at(-1)?.[0]?.open).toBe(true);
+
+    void act(() => dismissAllTooltips());
+    expect(rootSpy.mock.calls.at(-1)?.[0]?.open).toBe(false);
+  });
+
+  it("leaves a pinned `open` without an onOpenChange handler alone (escape hatch)", () => {
+    render(
+      <Tooltip open={true}>
+        <TooltipTrigger>trigger</TooltipTrigger>
+        <TooltipContent>content</TooltipContent>
+      </Tooltip>
+    );
+
+    void act(() => dismissAllTooltips());
+    expect(rootSpy.mock.calls.at(-1)?.[0]?.open).toBe(true);
+  });
+
+  it("does not close a dismissOnDialogTransition={false} rich hover card", () => {
+    render(
+      <Tooltip autoDismiss={false} dismissOnDialogTransition={false}>
+        <TooltipTrigger>trigger</TooltipTrigger>
+        <TooltipContent>content</TooltipContent>
+      </Tooltip>
+    );
+
+    openLastRoot();
+    void act(() => dismissAllTooltips());
+    expect(rootSpy.mock.calls.at(-1)?.[0]?.open).toBe(true);
+  });
+
+  it("ignores opens during the post-dismissal suppression window", () => {
+    // Focus restoration after a dialog closes re-opens tooltips through
+    // Radix's focus path — the open request lands right after the dismiss
+    // and must be dropped.
+    render(
+      <Tooltip>
+        <TooltipTrigger>trigger</TooltipTrigger>
+        <TooltipContent>content</TooltipContent>
+      </Tooltip>
+    );
+
+    void act(() => dismissAllTooltips());
+    openLastRoot();
+    expect(rootSpy.mock.calls.at(-1)?.[0]?.open).toBe(false);
+  });
+
+  it("lets a genuine pointer entry end suppression and open again", () => {
+    const { getByTestId } = render(
+      <Tooltip>
+        <TooltipTrigger data-testid="trigger">trigger</TooltipTrigger>
+        <TooltipContent>content</TooltipContent>
+      </Tooltip>
+    );
+
+    void act(() => dismissAllTooltips());
+    fireEvent.pointerEnter(getByTestId("trigger"));
+    openLastRoot();
+    expect(rootSpy.mock.calls.at(-1)?.[0]?.open).toBe(true);
+  });
+
+  it("exempt tooltips ignore the suppression window entirely", () => {
+    render(
+      <Tooltip dismissOnDialogTransition={false}>
+        <TooltipTrigger>trigger</TooltipTrigger>
+        <TooltipContent>content</TooltipContent>
+      </Tooltip>
+    );
+
+    void act(() => dismissAllTooltips());
+    openLastRoot();
+    expect(rootSpy.mock.calls.at(-1)?.[0]?.open).toBe(true);
+  });
+
+  it("still dismisses after a StrictMode double-mount cycle", () => {
+    // StrictMode's dev mount→unmount→mount must leave exactly one live
+    // registration whose callback reads current state through refs.
+    render(
+      <React.StrictMode>
+        <Tooltip>
+          <TooltipTrigger>trigger</TooltipTrigger>
+          <TooltipContent>content</TooltipContent>
+        </Tooltip>
+      </React.StrictMode>
+    );
+
+    openLastRoot();
+    expect(rootSpy.mock.calls.at(-1)?.[0]?.open).toBe(true);
+
+    void act(() => dismissAllTooltips());
+    expect(rootSpy.mock.calls.at(-1)?.[0]?.open).toBe(false);
+  });
+
+  it("unregisters on unmount", () => {
+    const { unmount } = render(
+      <Tooltip>
+        <TooltipTrigger>trigger</TooltipTrigger>
+        <TooltipContent>content</TooltipContent>
+      </Tooltip>
+    );
+
+    unmount();
+    expect(() => dismissAllTooltips()).not.toThrow();
   });
 });
 

@@ -3,7 +3,6 @@ import { SquareTerminal, Search } from "lucide-react";
 import { KbdChord } from "@/components/ui/Kbd";
 import { useEffectiveCombo, useAriaKeyshortcuts } from "@/hooks/useKeybinding";
 import { actionService } from "@/services/ActionService";
-import { shortcutHintStore } from "@/store/shortcutHintStore";
 import { getLaunchOptions, type LaunchOption } from "@/components/TerminalPalette/launchOptions";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
@@ -56,15 +55,9 @@ function PaletteSearchButton() {
   const combo = useEffectiveCombo("panel.palette");
   const ariaKeyshortcuts = useAriaKeyshortcuts("panel.palette");
   const handleClick = () => {
-    // panel.palette opens a modal palette. Its post-dispatch shortcut hint
-    // (ShortcutHint sits at z-toast, above z-modal) would otherwise land on
-    // top of the just-opened palette and linger until its 2.5s auto-dismiss.
-    // Mirror the toolbar's palette/resume buttons and tear the hint down once
-    // the dispatch chain settles.
-    shortcutHintStore.getState().hide();
-    void actionService
-      .dispatch("panel.palette", undefined, { source: "user" })
-      .finally(() => shortcutHintStore.getState().hide());
+    // The palette's open transition clears the shortcut hint globally
+    // (AppPaletteDialog overlay clearing, issue #11030).
+    void actionService.dispatch("panel.palette", undefined, { source: "user" });
   };
   return (
     <button

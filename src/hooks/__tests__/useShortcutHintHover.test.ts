@@ -3,6 +3,11 @@ import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { useShortcutHintHover } from "../useShortcutHintHover";
 import { shortcutHintStore } from "@/store/shortcutHintStore";
+import {
+  _resetForTests as resetTooltipRegistry,
+  dismissAllTooltips,
+  TOOLTIP_FOCUS_SUPPRESS_MS,
+} from "@/lib/tooltipDismissRegistry";
 
 const { getDisplayComboMock, subscribeMock } = vi.hoisted(() => ({
   getDisplayComboMock: vi.fn(() => "⌘B"),
@@ -62,6 +67,7 @@ describe("useShortcutHintHover", () => {
   });
 
   afterEach(() => {
+    resetTooltipRegistry();
     vi.useRealTimers();
   });
 
@@ -403,6 +409,35 @@ describe("useShortcutHintHover", () => {
     });
 
     expect(shortcutHintStore.getState().activeHint).toBeNull();
+  });
+
+  it("suppresses focus hint during the post-dialog-transition window (issue #11030)", () => {
+    // A dialog's focus restoration lands on the trigger with nothing
+    // hovered — the teaching hint must not fire, mirroring the tooltip
+    // focus-open suppression.
+    getDisplayComboMock.mockReturnValue("⌘B");
+    shortcutHintStore.getState().hydrateCounts({ "nav.toggleSidebar": 0 });
+
+    const { result } = renderHook(() => useShortcutHintHover("nav.toggleSidebar"));
+
+    act(() => {
+      vi.advanceTimersByTime(10);
+    });
+
+    dismissAllTooltips();
+    act(() => {
+      result.current.onFocus(createFocusEvent(createFocusTarget({ left: 1, top: 2 })));
+    });
+    expect(shortcutHintStore.getState().activeHint).toBeNull();
+
+    // Once the window expires, focus hints behave normally again.
+    act(() => {
+      vi.advanceTimersByTime(TOOLTIP_FOCUS_SUPPRESS_MS + 1);
+    });
+    act(() => {
+      result.current.onFocus(createFocusEvent(createFocusTarget({ left: 1, top: 2 })));
+    });
+    expect(shortcutHintStore.getState().activeHint).not.toBeNull();
   });
 
   it("hides the hint on blur", () => {

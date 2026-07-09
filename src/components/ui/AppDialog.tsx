@@ -21,6 +21,7 @@ import {
   markBackstopConsumedEscape,
 } from "@/lib/dialogEscapeBackstop";
 import { usePortalStore } from "@/store";
+import { clearDialogOverlays } from "@/lib/dialogOverlayDismissal";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
 import {
@@ -149,6 +150,11 @@ export function AppDialog({
     const el = previousActiveElement.current;
     previousActiveElement.current = null;
     if (!el) return;
+    // Re-arm the tooltip focus-open suppression right before the focus
+    // move: focusing a tooltip trigger re-opens its tooltip synchronously
+    // through Radix's focus path, and this runs an exit animation after
+    // the close-transition clear already fired (issue #11030).
+    clearDialogOverlays();
     if (document.contains(el)) {
       el.focus();
       return;
@@ -175,6 +181,18 @@ export function AppDialog({
   });
 
   useOverlayState(isOpen || shouldRender);
+
+  // Clear stranded tooltips and shortcut hints on every open and close
+  // transition (issue #11030): on open before the RAF-deferred autofocus
+  // below fires, on close before the exit animation finishes. Transition-
+  // guarded because most dialogs stay mounted with isOpen=false — a bare
+  // effect would dismiss unrelated tooltips whenever one mounts.
+  const wasOpenRef = useRef(false);
+  useEffect(() => {
+    if (isOpen === wasOpenRef.current) return;
+    wasOpenRef.current = isOpen;
+    clearDialogOverlays();
+  }, [isOpen]);
 
   useEffect(() => {
     if (isOpen) {

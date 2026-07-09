@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback } from "react";
 import { History } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -7,7 +7,6 @@ import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { useAriaKeyshortcuts, useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { actionService } from "@/services/ActionService";
-import { shortcutHintStore } from "@/store/shortcutHintStore";
 
 const RESUME_ACTION_ID = "terminal.resumeSessions" as const;
 const RESUME_LABEL = "Resume session";
@@ -24,52 +23,23 @@ export function ResumeSessionsToolbarButton({
   const ariaShortcut = useAriaKeyshortcuts(RESUME_ACTION_ID);
   const hover = useShortcutHintHover(RESUME_ACTION_ID);
 
-  // The launcher opens via dispatch and AppPaletteDialog imperatively restores
-  // focus to this button on close. Mirror ToolbarCommandPaletteButton: a
-  // controlled tooltip gated on the focus restore so it doesn't re-fire.
-  const [tooltipOpen, setTooltipOpen] = useState(false);
-  const isRestoringFocusRef = useRef(false);
-
-  const handleTooltipOpenChange = useCallback((open: boolean) => {
-    if (open && isRestoringFocusRef.current) return;
-    setTooltipOpen(open);
-  }, []);
-
-  const handlePointerEnter = useCallback(
-    (e: React.PointerEvent<HTMLButtonElement>) => {
-      isRestoringFocusRef.current = false;
-      hover.onPointerEnter(e);
-    },
-    [hover]
-  );
-
-  const handleFocus = useCallback(
-    (e: React.FocusEvent<HTMLButtonElement>) => {
-      if (isRestoringFocusRef.current) return;
-      hover.onFocus(e);
-    },
-    [hover]
-  );
-
+  // Tooltip and shortcut-hint teardown around the launcher's open/close is
+  // handled globally by AppPaletteDialog's overlay clearing and the shared
+  // focus-open suppression window (issue #11030) — no local suppression.
   const handleClick = useCallback(() => {
-    isRestoringFocusRef.current = true;
-    setTooltipOpen(false);
-    shortcutHintStore.getState().hide();
-    void actionService.dispatch(RESUME_ACTION_ID, undefined, { source: "user" }).finally(() => {
-      shortcutHintStore.getState().hide();
-    });
+    void actionService.dispatch(RESUME_ACTION_ID, undefined, { source: "user" });
   }, []);
 
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <Tooltip open={tooltipOpen} onOpenChange={handleTooltipOpenChange}>
+        <Tooltip>
           <TooltipTrigger asChild>
             <Button
-              onPointerEnter={handlePointerEnter}
+              onPointerEnter={hover.onPointerEnter}
               onPointerLeave={hover.onPointerLeave}
               onPointerDown={hover.onPointerDown}
-              onFocus={handleFocus}
+              onFocus={hover.onFocus}
               onBlur={hover.onBlur}
               variant="ghost"
               size="icon"

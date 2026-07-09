@@ -111,7 +111,15 @@ export function PRBadge({
   const freshness: TooltipFreshness = { cause: freshnessCause, now, rateLimitResetAt };
 
   return (
-    <Tooltip open={isOpen} onOpenChange={handleOpenChange} delayDuration={300} autoDismiss={false}>
+    <Tooltip
+      open={isOpen}
+      onOpenChange={handleOpenChange}
+      delayDuration={300}
+      autoDismiss={false}
+      // Rich hover card whose body IS the content — exempt from the global
+      // dialog-transition dismissal (issue #11030).
+      dismissOnDialogTransition={false}
+    >
       <TooltipTrigger asChild>
         <button
           type="button"
