@@ -1,5 +1,6 @@
-import { tokenize, markEdits, pickRanges } from "react-diff-view";
-import type { HunkData, HunkTokens, TokenizeOptions } from "react-diff-view";
+import { markEdits, pickRanges } from "react-diff-view";
+import type { HunkData, HunkTokens } from "react-diff-view";
+import { tokenizeFast, type FastTokenizeOptions } from "./diffTokenizePipeline";
 import {
   ensureLanguage,
   isLanguageFailed,
@@ -58,7 +59,7 @@ export async function runDiffTokenize(request: DiffTokenizeRequest): Promise<Dif
     return { tokens: null, langLoadFailed };
   }
   try {
-    const options: TokenizeOptions = {
+    const options: FastTokenizeOptions = {
       highlight,
       refractor: refractorAdapter,
       language,
@@ -69,7 +70,7 @@ export async function runDiffTokenize(request: DiffTokenizeRequest): Promise<Dif
         ...(extraRanges ? [pickRanges(extraRanges.old, extraRanges.new)] : []),
       ],
     };
-    return { tokens: tokenize(hunks, options) ?? null, langLoadFailed };
+    return { tokens: tokenizeFast(hunks, options), langLoadFailed };
   } catch (err) {
     // A null token pass silently degrades highlighting, edit pills, and
     // search marks to plain text — keep the failure observable.

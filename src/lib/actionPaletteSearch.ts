@@ -32,25 +32,55 @@ export interface RankContext {
   isSettingsOpen?: boolean;
 }
 
-const SEPARATOR_RE = /[/\\\-._\s]/;
-const LOWER_RE = /[a-z]/;
-const UPPER_RE = /[A-Z]/;
-const ALNUM_RE = /[a-zA-Z0-9]/;
 const TITLE_COLLATOR = new Intl.Collator("en", { sensitivity: "base" });
+
+// Character-code equivalents of /[/\\\-._\s]/, /[a-z]/, /[A-Z]/ and
+// /[a-zA-Z0-9]/ — this module runs per catalog entry on every palette
+// keystroke, and per-character regex tests dominated its cost.
+function isSeparatorCode(code: number): boolean {
+  if (code < 128) {
+    return (
+      code === 32 ||
+      (code >= 9 && code <= 13) ||
+      code === 45 ||
+      code === 46 ||
+      code === 47 ||
+      code === 92 ||
+      code === 95
+    );
+  }
+  return (
+    code === 160 ||
+    code === 0x1680 ||
+    (code >= 0x2000 && code <= 0x200a) ||
+    code === 0x2028 ||
+    code === 0x2029 ||
+    code === 0x202f ||
+    code === 0x205f ||
+    code === 0x3000 ||
+    code === 0xfeff
+  );
+}
 
 function isBoundary(str: string, index: number): boolean {
   if (index === 0) return true;
-  const prev = str.charAt(index - 1);
-  const curr = str.charAt(index);
-  return SEPARATOR_RE.test(prev) || (LOWER_RE.test(prev) && UPPER_RE.test(curr));
+  const prev = str.charCodeAt(index - 1);
+  if (isSeparatorCode(prev)) return true;
+  if (prev >= 97 && prev <= 122) {
+    const curr = str.charCodeAt(index);
+    return curr >= 65 && curr <= 90;
+  }
+  return false;
 }
 
 export function extractAcronym(field: string): string {
   let acronym = "";
   for (let i = 0; i < field.length; i++) {
-    const ch = field.charAt(i);
-    if (ALNUM_RE.test(ch) && isBoundary(field, i)) {
-      acronym += ch.toLowerCase();
+    const code = field.charCodeAt(i);
+    const isAlnum =
+      (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+    if (isAlnum && isBoundary(field, i)) {
+      acronym += field.charAt(i).toLowerCase();
     }
   }
   return acronym;
@@ -65,12 +95,19 @@ export function scoreSubsequence(lowerQuery: string, field: string, lowerField: 
     }
   }
 
+  const qLen = lowerQuery.length;
+  const fLen = lowerField.length;
+  if (qLen > fLen) {
+    return 0;
+  }
+
   let qi = 0;
+  let queryCode = lowerQuery.charCodeAt(0);
   let lastMatchIndex = -1;
   let consecutiveRun = 0;
 
-  for (let fi = 0; fi < lowerField.length && qi < lowerQuery.length; fi++) {
-    if (lowerField.charAt(fi) === lowerQuery.charAt(qi)) {
+  for (let fi = 0; fi < fLen && qi < qLen; fi++) {
+    if (lowerField.charCodeAt(fi) === queryCode) {
       if (lastMatchIndex >= 0) {
         const gap = fi - lastMatchIndex - 1;
         if (gap > 0) {
@@ -93,10 +130,11 @@ export function scoreSubsequence(lowerQuery: string, field: string, lowerField: 
 
       lastMatchIndex = fi;
       qi++;
+      queryCode = lowerQuery.charCodeAt(qi);
     }
   }
 
-  if (qi < lowerQuery.length) {
+  if (qi < qLen) {
     return 0;
   }
 
@@ -209,6 +247,43 @@ export function getBoostedCategories(context: RankContext | undefined): Set<stri
   return boosted;
 }
 
+// Collator tiebreaks are the sort's hot spot: Intl.Collator.compare costs
+// orders of magnitude more than a numeric compare and integer usage counts
+// make full ties common. Since one stable collator sort of the catalog yields
+// per-position ranks whose numeric comparison reproduces the collator order
+// exactly (collator-equal titles keep catalog order, same as a stable sort's
+// 0-return), the ranks are computed once per catalog array and reused every
+// keystroke. Ranks are positional (so duplicate item references stay exact)
+// and guarded by an identity snapshot: any in-place mutation of the cached
+// array — reorder, replacement, resize — is detected and triggers a recompute.
+interface TitleRankCacheEntry {
+  snapshot: readonly SearchableAction[];
+  ranks: number[];
+}
+
+const titleRankCache = new WeakMap<readonly SearchableAction[], TitleRankCacheEntry>();
+
+function computeTitleRanks(items: readonly SearchableAction[]): TitleRankCacheEntry {
+  const indices = items.map((_, index) => index);
+  indices.sort((a, b) => TITLE_COLLATOR.compare(items[a]!.title, items[b]!.title));
+  const ranks = new Array<number>(items.length);
+  for (let rank = 0; rank < indices.length; rank++) {
+    ranks[indices[rank]!] = rank;
+  }
+  return { snapshot: items.slice(), ranks };
+}
+
+function isSnapshotCurrent(
+  snapshot: readonly SearchableAction[],
+  items: readonly SearchableAction[]
+): boolean {
+  if (snapshot.length !== items.length) return false;
+  for (let i = 0; i < items.length; i++) {
+    if (snapshot[i] !== items[i]) return false;
+  }
+  return true;
+}
+
 export function rankActionMatches<T extends SearchableAction>(
   query: string,
   items: T[],
@@ -221,32 +296,45 @@ export function rankActionMatches<T extends SearchableAction>(
 
   const mruScoreById = new Map<string, number>();
   const mruRecencyById = new Map<string, number>();
-  mruList.forEach(({ id, score, lastAccessedAt }) => {
+  for (const { id, score, lastAccessedAt } of mruList) {
     mruScoreById.set(id, score);
     mruRecencyById.set(id, lastAccessedAt);
-  });
+  }
   const boostedCategories = getBoostedCategories(context);
 
-  const scored: Array<{ item: T; score: number }> = [];
-  for (const item of items) {
+  let cache = titleRankCache.get(items);
+  if (!cache || !isSnapshotCurrent(cache.snapshot, items)) {
+    cache = computeTitleRanks(items);
+    titleRankCache.set(items, cache);
+  }
+  const titleRanks = cache.ranks;
+
+  const scored: Array<{ item: T; score: number; enabled: boolean; recency: number; rank: number }> =
+    [];
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]!;
     const base = scoreActionLower(lowerQuery, item);
     if (base <= 0) continue;
     const frecencyScore = mruScoreById.get(item.id);
     const mruBonus =
       frecencyScore !== undefined ? MRU_BONUS_CAP * Math.tanh(frecencyScore / MRU_SCORE_SCALE) : 0;
     const contextBonus = boostedCategories.has(item.categoryLower) ? CONTEXT_BOOST : 0;
-    scored.push({ item, score: base + mruBonus + contextBonus });
+    scored.push({
+      item,
+      score: base + mruBonus + contextBonus,
+      enabled: item.enabled,
+      // Usage is now an integer count, so ties are common; break them by most
+      // recent use so a recently-used-once action outranks a stale one.
+      recency: mruRecencyById.get(item.id) ?? 0,
+      rank: titleRanks[i]!,
+    });
   }
 
   scored.sort((a, b) => {
-    if (a.item.enabled !== b.item.enabled) return a.item.enabled ? -1 : 1;
+    if (a.enabled !== b.enabled) return a.enabled ? -1 : 1;
     if (a.score !== b.score) return b.score - a.score;
-    // Usage is now an integer count, so ties are common; break them by most
-    // recent use so a recently-used-once action outranks a stale one.
-    const ra = mruRecencyById.get(a.item.id) ?? 0;
-    const rb = mruRecencyById.get(b.item.id) ?? 0;
-    if (ra !== rb) return rb - ra;
-    return TITLE_COLLATOR.compare(a.item.title, b.item.title);
+    if (a.recency !== b.recency) return b.recency - a.recency;
+    return a.rank - b.rank;
   });
 
   return scored.map((entry) => entry.item);
