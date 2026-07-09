@@ -284,6 +284,10 @@ export interface GeneratedIpcInvokeMap {
     args: [request: import("./devPreview.js").DevPreviewStopDevServerByWorktreeRequest];
     result: import("./devPreview.js").DevPreviewSessionState;
   };
+  "diff-media:read-file-versions": {
+    args: [payload: import("./diffMedia.js").DiffMediaReadFileVersionsPayload];
+    result: import("./diffMedia.js").DiffMediaFileVersions;
+  };
   "editor:discover": {
     args: [];
     result: import("../editor.js").DiscoveredEditor[];

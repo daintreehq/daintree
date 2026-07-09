@@ -138,6 +138,11 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["dev-preview:stop-dev-server-by-worktree"]["args"]
     ): Promise<IpcInvokeMap["dev-preview:stop-dev-server-by-worktree"]["result"]>;
   };
+  diffMedia: {
+    readFileVersions(
+      ...args: IpcInvokeMap["diff-media:read-file-versions"]["args"]
+    ): Promise<IpcInvokeMap["diff-media:read-file-versions"]["result"]>;
+  };
   eventInspector: {
     clear(
       ...args: IpcInvokeMap["event-inspector:clear"]["args"]

@@ -75,6 +75,8 @@ export const CHANNELS = {
   FILES_SEARCH: "files:search",
   FILES_READ: "files:read",
 
+  DIFF_MEDIA_READ_FILE_VERSIONS: "diff-media:read-file-versions",
+
   TERMINAL_ACTIVITY: "terminal:activity",
 
   ARTIFACT_DETECTED: "artifact:detected",

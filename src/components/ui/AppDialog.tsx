@@ -33,7 +33,7 @@ import {
 import { X } from "lucide-react";
 import { Button } from "./button";
 
-type DialogSize = "sm" | "md" | "lg" | "4xl" | "5xl" | "6xl" | "7xl";
+type DialogSize = "sm" | "md" | "lg" | "4xl" | "5xl" | "6xl" | "7xl" | "workspace";
 type DialogVariant = "default" | "destructive" | "info";
 type DialogZIndex = "modal" | "nested";
 type DialogInitialFocus = "first" | "cancel" | "confirm" | "none";
@@ -102,6 +102,8 @@ const sizeClasses: Record<DialogSize, string> = {
   "5xl": "max-w-5xl",
   "6xl": "max-w-6xl",
   "7xl": "max-w-[min(96rem,92vw)]",
+  // App-scale surfaces (diff review workspace): near-full-window canvas.
+  workspace: "max-w-[min(110rem,95vw)]",
 };
 
 export function AppDialog({

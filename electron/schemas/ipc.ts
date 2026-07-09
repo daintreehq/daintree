@@ -488,6 +488,21 @@ export const FileReadPayloadSchema = z.object({
     .regex(/^[^\x00]*$/, "Null bytes not allowed"),
 });
 
+export const DiffMediaReadFileVersionsPayloadSchema = z.object({
+  cwd: z
+    .string()
+    .min(1)
+    .max(4096)
+    // eslint-disable-next-line no-control-regex
+    .regex(/^[^\x00]*$/, "Null bytes not allowed"),
+  filePath: z
+    .string()
+    .min(1)
+    .max(4096)
+    // eslint-disable-next-line no-control-regex
+    .regex(/^[^\x00]*$/, "Null bytes not allowed"),
+});
+
 export const VoiceInputCorrectPayloadSchema = z.object({
   rawText: z.string(),
   recentContext: z.array(z.string()).optional(),

@@ -47,6 +47,18 @@
   background: var(--sidebar-hover-bg, rgba(255, 255, 255, 0.03));
 }
 
+/* The selected-card fill as a standalone opaque plane (the details panel's
+   Changed Files well). `--sidebar-active-bg` is a translucent lift on dark
+   themes, so it must composite over the sidebar surface — the same stack a
+   selected card renders on — or the color shifts with whatever's beneath. */
+.sidebar-active-well {
+  background-color: var(--theme-surface-sidebar);
+  background-image: linear-gradient(
+    var(--sidebar-active-bg, rgba(255, 255, 255, 0.05)),
+    var(--sidebar-active-bg, rgba(255, 255, 255, 0.05))
+  );
+}
+
 html[data-dragging="true"]
   .sidebar-worktree-card[data-hoverable="true"]:not([data-drop-target="true"]):hover,
 html[data-dragging="true"]

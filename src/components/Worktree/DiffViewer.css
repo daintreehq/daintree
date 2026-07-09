@@ -13,7 +13,8 @@
 /* React-Diff-View Tokyo Night Theme Overrides */
 .diff-viewer {
   font-family: var(--font-mono);
-  font-size: 12px;
+  /* Set per-surface by the diff workspace's text-size control (S/M/L). */
+  font-size: var(--diff-font-size, 12px);
   line-height: 1.5;
 }
 
@@ -163,11 +164,21 @@
   color: var(--color-status-danger);
 }
 
-/* Split-view empty-side placeholders: dim the void so "nothing exists here"
-   reads differently from an unchanged blank line. */
+/* Split-view empty-side placeholders: a faint diagonal hatch (the classic
+   comparison-tool void pattern) so "nothing exists here" reads differently
+   from an unchanged blank line, in any theme and under grayscale. */
 .diff-viewer .diff-code-omit,
 .diff-viewer .diff-gutter-omit {
-  background: color-mix(in oklab, var(--color-daintree-sidebar) 45%, var(--color-daintree-bg));
+  background-color: color-mix(
+    in oklab,
+    var(--color-daintree-sidebar) 45%,
+    var(--color-daintree-bg)
+  );
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent 0 5px,
+    color-mix(in oklab, var(--color-daintree-border) 55%, transparent) 5px 6px
+  );
 }
 
 .diff-viewer .diff-gutter-omit::before {
@@ -238,7 +249,7 @@
 
 .light .diff-viewer .diff-code-omit,
 .light .diff-viewer .diff-gutter-omit {
-  background: color-mix(in oklab, var(--color-daintree-sidebar) 45%, var(--color-surface));
+  background-color: color-mix(in oklab, var(--color-daintree-sidebar) 45%, var(--color-surface));
 }
 
 /* Light edit pills consume the per-palette tokens (theme-engine owned, D1b
@@ -704,6 +715,12 @@
   }
   .diff-viewer .diff-gutter {
     border-right: 1px solid CanvasText;
+  }
+  /* Split-view void cells: the hatch background is stripped to Canvas, so the
+     "nothing exists on this side" cue rides a dotted system-color edge. */
+  .diff-viewer .diff-code-omit {
+    background-image: none;
+    border-left: 1px dotted GrayText;
   }
   /* Moved lines: the tinted fill and inset bar are stripped, so the cue rides
      a pattern change — dash the side edge the rules above draw solid. */

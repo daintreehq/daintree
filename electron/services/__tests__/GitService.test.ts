@@ -525,3 +525,111 @@ describe("GitService", () => {
     expect(logErrorMock).not.toHaveBeenCalled();
   });
 });
+
+describe("GitService.readFileAtHead", () => {
+  let tempDir: string;
+  const binaryCatFileMock = vi.fn();
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-git-head-"));
+    vi.clearAllMocks();
+    createHardenedGitMock.mockImplementation(() => ({
+      ...gitClientMock,
+      binaryCatFile: binaryCatFileMock,
+    }));
+    gitClientMock.raw.mockResolvedValue("");
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("rejects absolute paths before touching git", async () => {
+    const service = new GitService(tempDir);
+    await expect(service.readFileAtHead("/etc/passwd", 1024)).rejects.toThrow(/absolute/i);
+    expect(gitClientMock.raw).not.toHaveBeenCalled();
+  });
+
+  it("rejects traversal that only appears after normalization", async () => {
+    const service = new GitService(tempDir);
+    await expect(service.readFileAtHead("assets/../../outside.png", 1024)).rejects.toThrow(
+      /traversal/i
+    );
+    expect(gitClientMock.raw).not.toHaveBeenCalled();
+  });
+
+  it("rejects null bytes", async () => {
+    const service = new GitService(tempDir);
+    await expect(service.readFileAtHead("img\0.png", 1024)).rejects.toThrow(/null/i);
+    expect(gitClientMock.raw).not.toHaveBeenCalled();
+  });
+
+  it("size-probes with --end-of-options and a HEAD: spec so leading-dash names stay inert", async () => {
+    gitClientMock.raw.mockResolvedValue("10\n");
+    binaryCatFileMock.mockResolvedValue(Buffer.from("image-data"));
+    const service = new GitService(tempDir);
+
+    const result = await service.readFileAtHead("-flag.png", 1024);
+
+    expect(gitClientMock.raw).toHaveBeenCalledWith([
+      "cat-file",
+      "-s",
+      "--end-of-options",
+      "HEAD:-flag.png",
+    ]);
+    // binaryCatFile has no --end-of-options; the HEAD: prefix is what keeps
+    // the spec from ever starting with a dash.
+    expect(binaryCatFileMock).toHaveBeenCalledWith(["blob", "HEAD:-flag.png"]);
+    expect(result).toEqual({ ok: true, content: Buffer.from("image-data") });
+  });
+
+  it("converts backslash separators to git's forward-slash object spec", async () => {
+    gitClientMock.raw.mockResolvedValue("4\n");
+    binaryCatFileMock.mockResolvedValue(Buffer.from("data"));
+    const service = new GitService(tempDir);
+
+    await service.readFileAtHead("assets\\logo.png", 1024);
+
+    expect(gitClientMock.raw).toHaveBeenCalledWith([
+      "cat-file",
+      "-s",
+      "--end-of-options",
+      "HEAD:assets/logo.png",
+    ]);
+  });
+
+  it("maps a file missing at HEAD to NOT_FOUND", async () => {
+    gitClientMock.raw.mockRejectedValue(
+      new Error("fatal: path 'new.png' does not exist in 'HEAD'")
+    );
+    const service = new GitService(tempDir);
+
+    await expect(service.readFileAtHead("new.png", 1024)).resolves.toEqual({
+      ok: false,
+      reason: "NOT_FOUND",
+    });
+    expect(binaryCatFileMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects oversized blobs from the size probe without reading content", async () => {
+    gitClientMock.raw.mockResolvedValue(String(5 * 1024 * 1024) + "\n");
+    const service = new GitService(tempDir);
+
+    await expect(service.readFileAtHead("big.png", 1024)).resolves.toEqual({
+      ok: false,
+      reason: "TOO_LARGE",
+    });
+    expect(binaryCatFileMock).not.toHaveBeenCalled();
+  });
+
+  it("caps content that slips past a malformed size probe", async () => {
+    gitClientMock.raw.mockResolvedValue("not-a-number\n");
+    binaryCatFileMock.mockResolvedValue(Buffer.alloc(2048));
+    const service = new GitService(tempDir);
+
+    await expect(service.readFileAtHead("odd.png", 1024)).resolves.toEqual({
+      ok: false,
+      reason: "TOO_LARGE",
+    });
+  });
+});

@@ -965,7 +965,20 @@ function FileDiff({
       {relPath && (
         <div className="sticky top-0 z-10 flex items-center justify-between px-3 py-1.5 bg-daintree-sidebar border-b border-daintree-border text-xs font-mono">
           <TruncatedTooltip content={relPath}>
-            <span className="truncate text-daintree-text/80">{relPath}</span>
+            <span className="truncate text-daintree-text/80">
+              {relPath.includes("/") ? (
+                <>
+                  <span className="text-daintree-text/45">
+                    {relPath.slice(0, relPath.lastIndexOf("/") + 1)}
+                  </span>
+                  <span className="text-daintree-text">
+                    {relPath.slice(relPath.lastIndexOf("/") + 1)}
+                  </span>
+                </>
+              ) : (
+                relPath
+              )}
+            </span>
           </TruncatedTooltip>
           {langLoadFailed && (
             <span

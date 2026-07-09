@@ -333,6 +333,7 @@ vi.mock("@/components/ui/EmptyState", () => ({
 import { ReviewHub } from "../ReviewHub";
 import { useUIStore } from "@/store/uiStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
+import { useDiffViewedStore } from "@/store/diffViewedStore";
 
 const WORKTREE_PATH = "/home/user/project";
 
@@ -390,6 +391,10 @@ describe("ReviewHub", () => {
     // #8025: reset the per-worktree push-confirm opt-out so a previous test
     // that pre-set it can't leak into the next one.
     usePreferencesStore.getState().setSkipPushConfirmForWorktree(WORKTREE_PATH, false);
+
+    // Viewed markers live in the shared diffViewedStore (they deliberately
+    // survive hub close/reopen), so tests must reset them explicitly.
+    useDiffViewedStore.setState({ viewedByWorktree: {} });
 
     worktreeStoreData.current = new Map([
       [
@@ -851,7 +856,10 @@ describe("ReviewHub", () => {
       expect(viewedCount).toBe(1);
     });
 
-    it("resets Viewed state when the modal closes and reopens", async () => {
+    it("keeps Viewed state when the modal closes and reopens", async () => {
+      // Viewed markers live in the shared diffViewedStore so an in-progress
+      // review survives closing the hub (and shows in the diff workspace's
+      // sidebar); only an app restart clears them.
       const { rerender } = render(
         <ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
       );
@@ -866,9 +874,9 @@ describe("ReviewHub", () => {
       await waitFor(() => screen.getByText("index.ts"));
 
       const reopened = screen.getByRole("checkbox", {
-        name: "Mark src/index.ts as viewed",
+        name: "Mark src/index.ts as not viewed",
       }) as HTMLInputElement;
-      expect(reopened.checked).toBe(false);
+      expect(reopened.checked).toBe(true);
     });
   });
 
