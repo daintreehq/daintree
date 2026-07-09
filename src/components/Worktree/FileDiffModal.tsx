@@ -1,11 +1,22 @@
-import { Suspense, lazy, useEffect, useCallback, useState, useRef } from "react";
-import type { GitStatus } from "@shared/types";
+import {
+  Suspense,
+  lazy,
+  use,
+  useEffect,
+  useCallback,
+  useState,
+  useRef,
+  useSyncExternalStore,
+} from "react";
+import type { GitStatus, WorktreeSnapshot } from "@shared/types";
 import type { DiffChangeSetEntry } from "@/components/FileViewer/diffChangeSet";
 import type { RestoreFocusTarget } from "@/components/ui/AppDialog";
 import { actionService } from "@/services/ActionService";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { useBranchForPath } from "@/hooks/useBranchForPath";
 import { usePreferencesStore } from "@/store/preferencesStore";
+import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
+import { isAbsolute, join, normalize } from "@shared/utils/path";
 
 // Session-scoped LRU so stepping back and forth through a change set doesn't
 // re-pay git spawn + IPC + parse for files already viewed (and doesn't burn
@@ -13,9 +24,54 @@ import { usePreferencesStore } from "@/store/preferencesStore";
 // which bounds staleness to a single review session.
 const DIFF_CACHE_MAX = 20;
 const PREFETCH_DWELL_MS = 500;
-const diffCache = new Map<string, string>();
-const inflightDiffRequests = new Map<string, Promise<string | null>>();
+
+interface CachedDiff {
+  content: string;
+  /**
+   * Freshness key at fetch initiation, undefined when the worktree store had
+   * no signal for the file. Stored with the entry so a prefetched diff whose
+   * file changed before the user navigated to it still reads as stale.
+   */
+  freshnessKey: string | undefined;
+}
+
+const diffCache = new Map<string, CachedDiff>();
+const inflightDiffRequests = new Map<string, Promise<CachedDiff | null>>();
 let diffCacheGeneration = 0;
+
+// Distinct from undefined (no signal at all): the worktree is tracked but the
+// file is absent from its change list, so a file staged/reverted/committed
+// while its diff is open still reads as changed.
+const FRESHNESS_MISSING = "missing";
+
+// Store change paths are absolute (electron/utils/git.ts keys changesMap by
+// absolutePath) while hosts pass worktree-relative paths — resolve both
+// against the worktree root before comparing.
+function comparablePath(worktreePath: string, path: string): string {
+  return isAbsolute(path) ? normalize(path) : join(worktreePath, path);
+}
+
+// Primitive freshness key for one file from the live worktree store.
+// `changes` is rebuilt wholesale every poll tick, so returning the found
+// entry would defeat Object.is bail-outs — the scalar collapses re-renders
+// to actual changes of this one file (#8635).
+export function selectDiffFreshnessKey(
+  state: { worktrees: Map<string, WorktreeSnapshot> },
+  worktreePath: string,
+  filePath: string
+): string | undefined {
+  const worktreeKey = normalize(worktreePath);
+  const fileKey = comparablePath(worktreePath, filePath);
+  for (const worktree of state.worktrees.values()) {
+    if (normalize(worktree.path) !== worktreeKey) continue;
+    const changes = worktree.worktreeChanges?.changes;
+    if (!changes) return undefined;
+    const entry = changes.find((change) => comparablePath(worktreePath, change.path) === fileKey);
+    if (!entry) return FRESHNESS_MISSING;
+    return `${entry.status}:${entry.mtimeMs ?? entry.mtime ?? ""}:${entry.insertions ?? ""}:${entry.deletions ?? ""}`;
+  }
+  return undefined;
+}
 
 export function _resetDiffCacheForTests(): void {
   diffCache.clear();
@@ -32,7 +88,7 @@ function diffCacheKey(
   return `${worktreePath}\u0000${filePath}\u0000${status}\u0000${ignoreWhitespace}`;
 }
 
-function cacheDiff(key: string, value: string): void {
+function cacheDiff(key: string, value: CachedDiff): void {
   diffCache.delete(key);
   diffCache.set(key, value);
   if (diffCache.size > DIFF_CACHE_MAX) {
@@ -51,8 +107,9 @@ function requestDiff(
   filePath: string,
   status: GitStatus,
   ignoreWhitespace: boolean,
-  bypassCache = false
-): Promise<string | null> {
+  bypassCache = false,
+  freshnessKey?: string
+): Promise<CachedDiff | null> {
   const key = diffCacheKey(worktreePath, filePath, status, ignoreWhitespace);
   if (!bypassCache) {
     const cached = diffCache.get(key);
@@ -69,9 +126,12 @@ function requestDiff(
     )
     .then((result) => {
       if (!result.ok) return null;
-      const content = result.result.content || "NO_CHANGES";
-      if (generation === diffCacheGeneration) cacheDiff(key, content);
-      return content;
+      const entry: CachedDiff = {
+        content: result.result.content || "NO_CHANGES",
+        freshnessKey,
+      };
+      if (generation === diffCacheGeneration) cacheDiff(key, entry);
+      return entry;
     })
     .finally(() => {
       if (inflightDiffRequests.get(key) === request) inflightDiffRequests.delete(key);
@@ -143,9 +203,34 @@ export function FileDiffModal({
   onSelectFile,
 }: FileDiffModalProps) {
   const [diff, setDiff] = useState<string | undefined>(undefined);
+  // Freshness key the shown diff was fetched under, tagged with its cache key
+  // so a navigation in progress never compares one file's baseline against
+  // another file's live key.
+  const [freshnessBaseline, setFreshnessBaseline] = useState<{
+    subject: string;
+    key: string | undefined;
+  } | null>(null);
   const requestRef = useRef(0);
   const branch = useBranchForPath(worktreePath);
   const ignoreWhitespace = usePreferencesStore((s) => s.diffIgnoreWhitespace);
+
+  // Tolerate hosts mounted without a worktree-store provider (mirrors
+  // useFleetPicker): staleness detection simply never fires there.
+  const worktreeStore = use(WorktreeStoreContext);
+  const liveFreshnessKey = useSyncExternalStore(
+    useCallback(
+      (onStoreChange: () => void) =>
+        worktreeStore ? worktreeStore.subscribe(onStoreChange) : () => {},
+      [worktreeStore]
+    ),
+    useCallback(
+      () =>
+        worktreeStore
+          ? selectDiffFreshnessKey(worktreeStore.getState(), worktreePath, filePath)
+          : undefined,
+      [worktreeStore, worktreePath, filePath]
+    )
+  );
 
   // Toggling ignore-whitespace strands every entry built under the other flag
   // (their keys can no longer be requested this session unless the user
@@ -167,27 +252,38 @@ export function FileDiffModal({
       if (!bypassCache) {
         const cached = diffCache.get(cacheKey);
         if (cached !== undefined) {
-          setDiff(cached);
+          setFreshnessBaseline({ subject: cacheKey, key: cached.freshnessKey });
+          setDiff(cached.content);
           return;
         }
       }
+      // Captured at initiation — a change landing mid-fetch then reads as
+      // stale (a spurious banner costs one cheap refresh; a miss defeats
+      // the feature).
+      const freshnessKey = worktreeStore
+        ? selectDiffFreshnessKey(worktreeStore.getState(), worktreePath, filePath)
+        : undefined;
       setDiff(undefined);
       try {
-        const content = await requestDiff(
+        const entry = await requestDiff(
           worktreePath,
           filePath,
           status,
           ignoreWhitespace,
-          bypassCache
+          bypassCache,
+          freshnessKey
         );
         if (requestRef.current !== requestId) return;
-        setDiff(content ?? "ERROR");
+        // Baseline from the entry, not the local key: a joined in-flight
+        // request's content corresponds to its initiator's capture time.
+        if (entry) setFreshnessBaseline({ subject: cacheKey, key: entry.freshnessKey });
+        setDiff(entry?.content ?? "ERROR");
       } catch {
         if (requestRef.current !== requestId) return;
         setDiff("ERROR");
       }
     },
-    [worktreePath, filePath, status, ignoreWhitespace]
+    [worktreeStore, worktreePath, filePath, status, ignoreWhitespace]
   );
 
   const handleRetry = useCallback(() => {
@@ -197,6 +293,7 @@ export function FileDiffModal({
   useEffect(() => {
     if (!isOpen) {
       setDiff(undefined);
+      setFreshnessBaseline(null);
       requestRef.current++;
       diffCache.clear();
       diffCacheGeneration++;
@@ -216,12 +313,32 @@ export function FileDiffModal({
     const timer = window.setTimeout(() => {
       const next = getAdjacentFile(1);
       if (!next) return;
-      void requestDiff(worktreePath, next.path, next.status, ignoreWhitespace).catch(
-        () => undefined
-      );
+      const nextFreshnessKey = worktreeStore
+        ? selectDiffFreshnessKey(worktreeStore.getState(), worktreePath, next.path)
+        : undefined;
+      void requestDiff(
+        worktreePath,
+        next.path,
+        next.status,
+        ignoreWhitespace,
+        false,
+        nextFreshnessKey
+      ).catch(() => undefined);
     }, PREFETCH_DWELL_MS);
     return () => window.clearTimeout(timer);
-  }, [isOpen, diff, getAdjacentFile, worktreePath, ignoreWhitespace]);
+  }, [isOpen, diff, getAdjacentFile, worktreeStore, worktreePath, ignoreWhitespace]);
+
+  // Stale = the store saw the file change after the shown diff was fetched.
+  // Undefined keys (unprovided host, untracked worktree, store not yet
+  // hydrated at fetch time) never flag — no signal, not "fresh".
+  const diffContentStale =
+    diff !== undefined &&
+    diff !== "ERROR" &&
+    freshnessBaseline !== null &&
+    freshnessBaseline.subject === diffCacheKey(worktreePath, filePath, status, ignoreWhitespace) &&
+    freshnessBaseline.key !== undefined &&
+    liveFreshnessKey !== undefined &&
+    liveFreshnessKey !== freshnessBaseline.key;
 
   return (
     <Suspense fallback={<FileViewerModalFallback isOpen={isOpen} />}>
@@ -233,6 +350,7 @@ export function FileDiffModal({
         diff={diff}
         defaultMode="diff"
         diffMatchesFile
+        diffContentStale={diffContentStale}
         onRetryDiff={handleRetry}
         onClose={onClose}
         restoreFocusTo={restoreFocusTo}

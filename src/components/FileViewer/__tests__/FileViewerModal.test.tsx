@@ -591,6 +591,80 @@ describe("FileViewerModal", () => {
     });
   });
 
+  describe("stale diff banner (#11032)", () => {
+    const diff = "diff --git a/file b/file\n--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n+new";
+
+    // jsdom has no matchMedia; InlineStatusBanner reads it during render.
+    beforeEach(() => {
+      window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+        matches: false,
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+        onchange: null,
+      }));
+    });
+
+    it("shows the refresh banner alongside the loaded diff and wires Refresh to onRetryDiff", async () => {
+      const onRetryDiff = vi.fn();
+      render(
+        <FileViewerModal
+          {...defaultProps}
+          diff={diff}
+          defaultMode="diff"
+          diffContentStale
+          onRetryDiff={onRetryDiff}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("File changed since this diff loaded")).toBeTruthy();
+      });
+      // The diff itself stays visible — the banner never replaces content.
+      expect(screen.getByTestId("diff-viewer")).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+      expect(onRetryDiff).toHaveBeenCalledTimes(1);
+    });
+
+    it("renders no banner while the diff is current", async () => {
+      render(
+        <FileViewerModal {...defaultProps} diff={diff} defaultMode="diff" onRetryDiff={vi.fn()} />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId("diff-viewer")).toBeTruthy();
+      });
+      expect(screen.queryByText("File changed since this diff loaded")).toBeNull();
+    });
+
+    it("hides the banner outside diff mode", async () => {
+      render(
+        <FileViewerModal
+          {...defaultProps}
+          diff={diff}
+          defaultMode="diff"
+          diffContentStale
+          onRetryDiff={vi.fn()}
+        />
+      );
+
+      await waitFor(() => {
+        const viewBtn = screen.getByRole("button", { name: "View" });
+        expect(viewBtn.hasAttribute("disabled")).toBe(false);
+      });
+      fireEvent.click(screen.getByRole("button", { name: "View" }));
+
+      await waitFor(() => {
+        expect(screen.getByTestId("code-viewer")).toBeTruthy();
+      });
+      expect(screen.queryByText("File changed since this diff loaded")).toBeNull();
+    });
+  });
+
   describe("keyboard hunk navigation in diff mode", () => {
     const diff = "diff --git a/file b/file\n--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n+new";
 
