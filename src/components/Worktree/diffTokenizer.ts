@@ -28,7 +28,7 @@ export type DiffTokenizeWorkerResponse =
   | { id: number; ok: false; error: string };
 
 /** Changed-line budget above which word-level edit marking is skipped. */
-const MAX_INTRALINE_CHANGES = 3000;
+export const MAX_INTRALINE_CHANGES = 3000;
 
 // Past the budget, intra-line diffing (diff-match-patch per change block) is
 // churn-on-churn: the marks stop being review signal and the per-block diffs
