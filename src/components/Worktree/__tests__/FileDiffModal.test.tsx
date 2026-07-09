@@ -1,9 +1,13 @@
 // @vitest-environment jsdom
+import type { ReactElement } from "react";
 import { render, waitFor, act } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import type { GitStatus } from "@shared/types";
+import { createStore } from "zustand/vanilla";
+import type { FileChangeDetail, GitStatus, WorktreeSnapshot } from "@shared/types";
 import { FileDiffModal, _resetDiffCacheForTests } from "../FileDiffModal";
 import { usePreferencesStore } from "@/store/preferencesStore";
+import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
+import type { WorktreeViewStoreApi } from "@/store/createWorktreeStore";
 
 // Capture the `diff` prop the lazy FileViewerModal receives so we can assert
 // what `fetchDiff` resolves to for each dispatch outcome.
@@ -11,6 +15,8 @@ const { mockDispatch, capturedProps } = vi.hoisted(() => ({
   mockDispatch: vi.fn(),
   capturedProps: {
     diff: undefined as string | undefined,
+    diffContentStale: undefined as boolean | undefined,
+    onRetryDiff: undefined as (() => void) | undefined,
     restoreFocusTo: undefined as unknown,
     currentFileIndex: undefined as number | undefined,
     totalFileCount: undefined as number | undefined,
@@ -27,12 +33,16 @@ vi.mock("@/services/ActionService", () => ({
 vi.mock("@/components/FileViewer/FileViewerModal", () => ({
   FileViewerModal: (props: {
     diff?: string;
+    diffContentStale?: boolean;
+    onRetryDiff?: () => void;
     restoreFocusTo?: unknown;
     currentFileIndex?: number;
     totalFileCount?: number;
     onNavigateFile?: (delta: -1 | 1) => void;
   }) => {
     capturedProps.diff = props.diff;
+    capturedProps.diffContentStale = props.diffContentStale;
+    capturedProps.onRetryDiff = props.onRetryDiff;
     capturedProps.restoreFocusTo = props.restoreFocusTo;
     capturedProps.currentFileIndex = props.currentFileIndex;
     capturedProps.totalFileCount = props.totalFileCount;
@@ -53,11 +63,42 @@ const baseProps = {
   onClose: vi.fn(),
 };
 
+function changeEntry(overrides: Partial<FileChangeDetail> = {}): FileChangeDetail {
+  return {
+    path: "src/index.ts",
+    status: "modified",
+    insertions: 3,
+    deletions: 1,
+    mtimeMs: 1000,
+    ...overrides,
+  };
+}
+
+function worktreesMap(changes: FileChangeDetail[]): Map<string, WorktreeSnapshot> {
+  return new Map([
+    ["/repo", { path: "/repo", worktreeChanges: { changes } } as unknown as WorktreeSnapshot],
+  ]);
+}
+
+// Minimal stand-in for the per-view worktree store: the component only reads
+// `worktrees` via getState/subscribe.
+function createTestWorktreeStore(changes: FileChangeDetail[]): WorktreeViewStoreApi {
+  return createStore(() => ({
+    worktrees: worktreesMap(changes),
+  })) as unknown as WorktreeViewStoreApi;
+}
+
+function renderWithStore(ui: ReactElement, store: WorktreeViewStoreApi) {
+  return render(<WorktreeStoreContext.Provider value={store}>{ui}</WorktreeStoreContext.Provider>);
+}
+
 describe("FileDiffModal", () => {
   beforeEach(() => {
     _resetDiffCacheForTests();
     mockDispatch.mockReset();
     capturedProps.diff = undefined;
+    capturedProps.diffContentStale = undefined;
+    capturedProps.onRetryDiff = undefined;
     capturedProps.restoreFocusTo = undefined;
     capturedProps.currentFileIndex = undefined;
     capturedProps.totalFileCount = undefined;
@@ -153,5 +194,125 @@ describe("FileDiffModal", () => {
       { cwd: "/repo", filePath: "src/index.ts", status: "modified", ignoreWhitespace: false },
       { source: "user" }
     );
+  });
+
+  it("flags the diff stale when the file changes under the same status, without refetching (#11032)", async () => {
+    mockDispatch.mockResolvedValue({ ok: true, result: { content: "diff text" } });
+    const store = createTestWorktreeStore([changeEntry()]);
+    renderWithStore(<FileDiffModal {...baseProps} />, store);
+    await waitFor(() => {
+      expect(capturedProps.diff).toBe("diff text");
+    });
+    expect(capturedProps.diffContentStale).toBe(false);
+
+    act(() => {
+      store.setState({ worktrees: worktreesMap([changeEntry({ mtimeMs: 2000, insertions: 9 })]) });
+    });
+    await waitFor(() => {
+      expect(capturedProps.diffContentStale).toBe(true);
+    });
+    expect(mockDispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores changes to other files in the same worktree", async () => {
+    mockDispatch.mockResolvedValue({ ok: true, result: { content: "diff text" } });
+    const store = createTestWorktreeStore([changeEntry()]);
+    renderWithStore(<FileDiffModal {...baseProps} />, store);
+    await waitFor(() => {
+      expect(capturedProps.diff).toBe("diff text");
+    });
+
+    act(() => {
+      store.setState({
+        worktrees: worktreesMap([
+          changeEntry(),
+          changeEntry({ path: "src/other.ts", mtimeMs: 9999 }),
+        ]),
+      });
+    });
+    expect(capturedProps.diffContentStale).toBe(false);
+  });
+
+  it("clears the stale flag after a refresh that bypasses the cache", async () => {
+    mockDispatch.mockResolvedValue({ ok: true, result: { content: "diff text" } });
+    const store = createTestWorktreeStore([changeEntry()]);
+    renderWithStore(<FileDiffModal {...baseProps} />, store);
+    await waitFor(() => {
+      expect(capturedProps.diff).toBe("diff text");
+    });
+
+    act(() => {
+      store.setState({ worktrees: worktreesMap([changeEntry({ mtimeMs: 2000 })]) });
+    });
+    await waitFor(() => {
+      expect(capturedProps.diffContentStale).toBe(true);
+    });
+
+    mockDispatch.mockResolvedValue({ ok: true, result: { content: "fresh diff" } });
+    act(() => {
+      capturedProps.onRetryDiff?.();
+    });
+    await waitFor(() => {
+      expect(capturedProps.diff).toBe("fresh diff");
+    });
+    expect(capturedProps.diffContentStale).toBe(false);
+    expect(mockDispatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("flags the diff stale when the file leaves the change list", async () => {
+    mockDispatch.mockResolvedValue({ ok: true, result: { content: "diff text" } });
+    const store = createTestWorktreeStore([changeEntry()]);
+    renderWithStore(<FileDiffModal {...baseProps} />, store);
+    await waitFor(() => {
+      expect(capturedProps.diff).toBe("diff text");
+    });
+
+    act(() => {
+      store.setState({ worktrees: worktreesMap([]) });
+    });
+    await waitFor(() => {
+      expect(capturedProps.diffContentStale).toBe(true);
+    });
+  });
+
+  it("never flags staleness without a worktree-store provider", async () => {
+    mockDispatch.mockResolvedValue({ ok: true, result: { content: "diff text" } });
+    render(<FileDiffModal {...baseProps} />);
+    await waitFor(() => {
+      expect(capturedProps.diff).toBe("diff text");
+    });
+    expect(capturedProps.diffContentStale).toBe(false);
+  });
+
+  it("surfaces staleness for a prefetched adjacent diff on navigation", async () => {
+    mockDispatch.mockResolvedValue({ ok: true, result: { content: "diff text" } });
+    const next = { path: "src/next.ts", status: "modified" as GitStatus };
+    const store = createTestWorktreeStore([changeEntry(), changeEntry({ path: next.path })]);
+    const view = renderWithStore(
+      <FileDiffModal {...baseProps} getAdjacentFile={(delta) => (delta === 1 ? next : null)} />,
+      store
+    );
+    await waitFor(() => {
+      expect(capturedProps.diff).toBe("diff text");
+    });
+    // Prefetch fires after the dwell timer and caches the adjacent diff
+    // together with its fetch-time freshness key.
+    await waitFor(() => expect(mockDispatch).toHaveBeenCalledTimes(2), { timeout: 3000 });
+
+    act(() => {
+      store.setState({
+        worktrees: worktreesMap([changeEntry(), changeEntry({ path: next.path, mtimeMs: 2000 })]),
+      });
+    });
+    view.rerender(
+      <WorktreeStoreContext.Provider value={store}>
+        <FileDiffModal {...baseProps} filePath={next.path} getAdjacentFile={() => null} />
+      </WorktreeStoreContext.Provider>
+    );
+    await waitFor(() => {
+      expect(capturedProps.diffContentStale).toBe(true);
+    });
+    // Served from the prefetch cache — no third fetch, yet still marked stale.
+    expect(mockDispatch).toHaveBeenCalledTimes(2);
   });
 });

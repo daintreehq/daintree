@@ -15,6 +15,7 @@ import {
   ExternalLink,
   Copy,
   Check,
+  FileDiff as FileDiffIcon,
   Image as ImageIcon,
   ChevronLeft,
   ChevronRight,
@@ -23,10 +24,12 @@ import {
   Grid2x2Plus,
   PanelLeft,
   Pilcrow,
+  RefreshCw,
   Search,
   WrapText,
   X,
 } from "lucide-react";
+import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { DiffFileSidebar } from "./DiffFileSidebar";
 import type { DiffChangeSetEntry } from "./diffChangeSet";
 import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
@@ -61,6 +64,11 @@ export interface FileViewerModalProps {
    */
   diffMatchesFile?: boolean;
   onRetryDiff?: () => void;
+  /**
+   * True when the source file changed after `diff` was produced. Surfaces a
+   * refresh banner above the diff; the refresh action reuses `onRetryDiff`.
+   */
+  diffContentStale?: boolean;
   onClose: () => void;
   /** Element to focus when the dialog closes and its trigger was unmounted. */
   restoreFocusTo?: RestoreFocusTarget;
@@ -183,6 +191,7 @@ export function FileViewerModal({
   defaultMode,
   diffMatchesFile = false,
   onRetryDiff,
+  diffContentStale = false,
   onClose,
   restoreFocusTo,
   currentFileIndex,
@@ -1217,6 +1226,21 @@ export function FileViewerModal({
           />
         )}
         <div className="relative flex-1 min-w-0 min-h-0 flex flex-col" style={diffFontStyle}>
+          {!isImageMode && mode === "diff" && diffContentStale && !!diff && onRetryDiff && (
+            <InlineStatusBanner
+              severity="info"
+              icon={FileDiffIcon}
+              title="File changed since this diff loaded"
+              role="status"
+              ariaLive="polite"
+              action={{
+                id: "refresh-diff",
+                label: "Refresh",
+                icon: RefreshCw,
+                onClick: onRetryDiff,
+              }}
+            />
+          )}
           <AppDialog.BodyScroll className="p-0 diff-scroll-root">
             {isImageMode && imageDiffEligible && fileStatus && workspaceRelPath && (
               <div className="h-full min-h-[300px]">
