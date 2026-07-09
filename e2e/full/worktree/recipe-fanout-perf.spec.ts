@@ -17,6 +17,7 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { hashPerfLine } from "@shared/perf/marks";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { safeRecipeFilename } from "@shared/utils/recipeFilename";
 import { closeApp, launchApp, type AppContext } from "../../helpers/launch";
@@ -37,7 +38,7 @@ const STARTUP_DEADLINE_MS = 30_000;
 const SETTLE_MS = 750;
 const MAX_RECIPE_TERMINALS = 10;
 const RELEVANT_MARK =
-  /^(agentlaunch\.|terminal_open_|terminal_first_write|terminal_data_|pty_pool_)/;
+  /^(agentlaunch\.|terminal_open_|terminal_first_write|terminal_data_|terminal_output_|pty_pool_)/;
 
 function parseInteger(
   name: string,
@@ -98,6 +99,7 @@ interface SlotFixture {
   title: string;
   token: string;
   tokenHash: string;
+  paintHash: string;
 }
 
 interface BenchmarkCase {
@@ -137,9 +139,8 @@ interface BrowserTerminalState {
   readyMs: number;
   tokenOccurrences: number;
   foreignTokenOccurrences: number;
-  renderedTextLength: number;
-  renderedNonWhitespaceLength: number;
-  renderedTokenSlots: number[];
+  paintHashOccurrences: number;
+  foreignPaintHashOccurrences: number;
 }
 
 interface ListedTerminal {
@@ -435,6 +436,7 @@ function makeCase(nonce: string, mode: BenchmarkMode, scale: number, round: numb
       title: `Fanout ${modeId} n${scale} r${round} s${slot} ${nonce}`,
       token,
       tokenHash: hashToken(token),
+      paintHash: hashPerfLine(token),
     };
   });
   return {
@@ -607,7 +609,7 @@ interface BrowserMeasurementInput {
   mainWorktreeId: string;
   targetWorktreePath: string;
   branch: string | null;
-  slots: Array<{ slot: number; title: string; token: string }>;
+  slots: Array<{ slot: number; title: string; token: string; paintHash: string }>;
   startupDeadlineMs: number;
 }
 
@@ -785,11 +787,15 @@ async function measureInBrowser(
         readyMs: -1,
         tokenOccurrences: 0,
         foreignTokenOccurrences: 0,
-        renderedTextLength: 0,
-        renderedNonWhitespaceLength: 0,
-        renderedTokenSlots: [],
+        paintHashOccurrences: 0,
+        foreignPaintHashOccurrences: 0,
       }));
       const tokenSeenFrame = new Map<number, number>();
+      const paintedHashCounts = new Map<string, Map<string, number>>();
+      let processedPaintMarkCount = 0;
+      let lastProcessedPaintMark: RawMark | undefined;
+      let revealCursor = 0;
+      let nextRevealFrame = 0;
       let firstPanelCommittedMs = -1;
       let allPanelsCommittedMs = -1;
       let firstXtermAttachedMs = -1;
@@ -809,7 +815,33 @@ async function measureInBrowser(
         }
       };
 
+      const scanPaintMarks = () => {
+        const marks = ((window as any).__DAINTREE_PERF_MARKS__ ?? []) as RawMark[];
+        if (
+          marks.length < processedPaintMarkCount ||
+          (processedPaintMarkCount > 0 &&
+            marks[processedPaintMarkCount - 1] !== lastProcessedPaintMark)
+        ) {
+          processedPaintMarkCount = 0;
+        }
+        for (let index = processedPaintMarkCount; index < marks.length; index++) {
+          const mark = marks[index];
+          if (mark?.mark !== "terminal_output_painted") continue;
+          const terminalId = mark.meta?.terminalId;
+          const lineHashes = mark.meta?.lineHashes;
+          if (typeof terminalId !== "string" || !Array.isArray(lineHashes)) continue;
+          const counts = paintedHashCounts.get(terminalId) ?? new Map<string, number>();
+          for (const hash of lineHashes) {
+            if (typeof hash === "string") counts.set(hash, (counts.get(hash) ?? 0) + 1);
+          }
+          paintedHashCounts.set(terminalId, counts);
+        }
+        processedPaintMarkCount = marks.length;
+        lastProcessedPaintMark = marks.at(-1);
+      };
+
       const scanPanels = (now: number) => {
+        scanPaintMarks();
         const panelRoots = Array.from(
           document.querySelectorAll<HTMLElement>('[data-panel-location="grid"][data-panel-id]')
         );
@@ -835,7 +867,7 @@ async function measureInBrowser(
               (root.textContent ?? "").includes(slot.title)
             );
             const tokenMatches = newRoots.filter((root) =>
-              (root.querySelector(".xterm")?.textContent ?? "").includes(slot.token)
+              (root.querySelector(".xterm-rows")?.textContent ?? "").includes(slot.token)
             );
             const match = titleMatches.length === 1 ? titleMatches[0] : tokenMatches[0];
             if (match?.dataset.panelId) {
@@ -854,12 +886,7 @@ async function measureInBrowser(
             if (firstXtermAttachedMs < 0) firstXtermAttachedMs = state.attachedMs;
           }
 
-          const text = root.querySelector(".xterm")?.textContent ?? "";
-          state.renderedTextLength = text.length;
-          state.renderedNonWhitespaceLength = text.replace(/\s/g, "").length;
-          state.renderedTokenSlots = slots
-            .filter((candidate) => text.includes(candidate.token))
-            .map((candidate) => candidate.slot);
+          const text = root.querySelector(".xterm-rows")?.textContent ?? "";
           state.tokenOccurrences = countOccurrences(text, slot.token);
           state.foreignTokenOccurrences = slots.reduce(
             (count, candidate) =>
@@ -868,7 +895,18 @@ async function measureInBrowser(
                 : count + countOccurrences(text, candidate.token),
             0
           );
-          if (state.tokenOccurrences > 0 && !tokenSeenFrame.has(state.slot)) {
+          const paintCounts = paintedHashCounts.get(state.panelId) ?? new Map<string, number>();
+          state.paintHashOccurrences = paintCounts.get(slot.paintHash) ?? 0;
+          state.foreignPaintHashOccurrences = slots.reduce(
+            (count, candidate) =>
+              candidate.slot === slot.slot
+                ? count
+                : count + (paintCounts.get(candidate.paintHash) ?? 0),
+            0
+          );
+          if (state.paintHashOccurrences > 0 && state.readyMs < 0) {
+            state.readyMs = now - overallStart;
+          } else if (state.tokenOccurrences > 0 && !tokenSeenFrame.has(state.slot)) {
             tokenSeenFrame.set(state.slot, frameNumber);
           } else if (
             state.tokenOccurrences > 0 &&
@@ -881,6 +919,25 @@ async function measureInBrowser(
 
         if (states.every((state) => state.attachedMs >= 0) && allXtermsAttachedMs < 0) {
           allXtermsAttachedMs = now - overallStart;
+        }
+
+        // The production grid scrolls once a fanout exceeds the visible rows.
+        // Rotate through pending panes so every xterm receives a real viewport
+        // paint opportunity without one failed slot blocking the rest.
+        if (frameNumber >= nextRevealFrame && states.some((state) => state.readyMs < 0)) {
+          for (let offset = 0; offset < states.length; offset++) {
+            const index = (revealCursor + offset) % states.length;
+            const state = states[index]!;
+            if (state.readyMs >= 0 || !state.panelId) continue;
+            const root = newRoots.find(
+              (candidate) => candidate.dataset.panelId === state.panelId
+            );
+            if (!root) continue;
+            root.scrollIntoView({ block: "center", inline: "nearest" });
+            revealCursor = (index + 1) % states.length;
+            nextRevealFrame = frameNumber + 2;
+            break;
+          }
         }
       };
 
@@ -945,10 +1002,24 @@ async function measureInBrowser(
           .join(",");
         const textDiagnostics = states
           .filter((state) => state.readyMs < 0)
-          .map(
-            (state) =>
-              `${state.slot}[chars=${state.renderedTextLength},nonWhitespace=${state.renderedNonWhitespaceLength},knownTokenSlots=${state.renderedTokenSlots.join("|") || "none"}]`
-          )
+          .map((state) => {
+            const root = state.panelId
+              ? document.querySelector<HTMLElement>(`[data-panel-id="${state.panelId}"]`)
+              : null;
+            const rowsText = root?.querySelector(".xterm-rows")?.textContent ?? "";
+            const xtermText = root?.querySelector(".xterm")?.textContent ?? "";
+            const knownTokenSlots = slots
+              .filter((candidate) => xtermText.includes(candidate.token))
+              .map((candidate) => candidate.slot);
+            let preview = xtermText.replace(/\s+/g, " ").trim();
+            for (const candidate of slots) {
+              preview = preview.replaceAll(candidate.token, `<token:${candidate.slot}>`);
+            }
+            preview = preview
+              .replace(/\b(?:existing|new)-\d+-\d+-\d+-[a-z0-9-]+\b/g, "<unknown-perf-token>")
+              .slice(0, 160);
+            return `${state.slot}[rowsChars=${rowsText.length},xtermChars=${xtermText.length},knownTokenSlots=${knownTokenSlots.join("|") || "none"},preview=${JSON.stringify(preview)}]`;
+          })
           .join(",");
         errors.push(
           `missing painted readiness tokens for slots ${missingReady.join(",")}; text=${textDiagnostics}; known terminals=${known || "none"}`
@@ -968,7 +1039,7 @@ async function measureInBrowser(
           .map((terminal) => terminal.id),
       ]);
       const relevantMark =
-        /^(agentlaunch\.|terminal_open_|terminal_first_write|terminal_data_|pty_pool_)/;
+        /^(agentlaunch\.|terminal_open_|terminal_first_write|terminal_data_|terminal_output_|pty_pool_)/;
       const rendererMarks = ((window as any).__DAINTREE_PERF_MARKS__ ?? []).filter(
         (mark: RawMark) => {
           if (!relevantMark.test(String(mark.mark))) return false;
@@ -1289,14 +1360,18 @@ function populateMeasurement(
     failures.push("terminal.list returned duplicate terminal IDs");
   }
   for (const state of browser.terminals) {
-    if (state.tokenOccurrences !== 1) {
+    if (state.tokenOccurrences > 1 || state.paintHashOccurrences > 1) {
       failures.push(
-        `slot ${state.slot} token occurrence count was ${state.tokenOccurrences}, expected 1 in panel ${state.panelId ?? "missing"}`
+        `slot ${state.slot} token appeared more than once in panel ${state.panelId ?? "missing"} (DOM=${state.tokenOccurrences}, painted=${state.paintHashOccurrences})`
+      );
+    } else if (state.tokenOccurrences !== 1 && state.paintHashOccurrences !== 1) {
+      failures.push(
+        `slot ${state.slot} token was not painted in panel ${state.panelId ?? "missing"} (DOM=${state.tokenOccurrences}, painted=${state.paintHashOccurrences})`
       );
     }
-    if (state.foreignTokenOccurrences !== 0) {
+    if (state.foreignTokenOccurrences !== 0 || state.foreignPaintHashOccurrences !== 0) {
       failures.push(
-        `slot ${state.slot} panel ${state.panelId ?? "missing"} rendered ${state.foreignTokenOccurrences} foreign token(s)`
+        `slot ${state.slot} panel ${state.panelId ?? "missing"} rendered foreign token(s) (DOM=${state.foreignTokenOccurrences}, painted=${state.foreignPaintHashOccurrences})`
       );
     }
   }
@@ -1650,7 +1725,12 @@ async function runSample(benchmarkCase: BenchmarkCase, testInfo: TestInfo): Prom
       mainWorktreeId,
       targetWorktreePath,
       branch,
-      slots: benchmarkCase.slots.map(({ slot, title, token }) => ({ slot, title, token })),
+      slots: benchmarkCase.slots.map(({ slot, title, token, paintHash }) => ({
+        slot,
+        title,
+        token,
+        paintHash,
+      })),
       startupDeadlineMs: STARTUP_DEADLINE_MS,
     });
     if (browser.worktreeId && branch) {
@@ -1780,7 +1860,12 @@ async function runWarmup(benchmarkCase: BenchmarkCase): Promise<void> {
     mainWorktreeId,
     targetWorktreePath: fixtureDir,
     branch: null,
-    slots: benchmarkCase.slots.map(({ slot, title, token }) => ({ slot, title, token })),
+    slots: benchmarkCase.slots.map(({ slot, title, token, paintHash }) => ({
+      slot,
+      title,
+      token,
+      paintHash,
+    })),
     startupDeadlineMs: STARTUP_DEADLINE_MS,
   });
   const failures = [...measured.errors];

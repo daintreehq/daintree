@@ -7,8 +7,16 @@ import {
   wheelEventToLineCount,
   type TerminalListenerInstallDeps,
 } from "../TerminalListenerInstaller";
+import { hashPerfLine, PERF_MARKS } from "../../../../shared/perf/marks";
 
 const writeTerminalInputOrFleetMock = vi.hoisted(() => vi.fn());
+const isRendererPerfCaptureActiveMock = vi.hoisted(() => vi.fn(() => false));
+const markRendererPerformanceMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@/utils/performance", () => ({
+  isRendererPerfCaptureActive: isRendererPerfCaptureActiveMock,
+  markRendererPerformance: markRendererPerformanceMock,
+}));
 
 vi.mock("../fleetInputRouter", () => ({
   writeTerminalInputOrFleet: writeTerminalInputOrFleetMock,
@@ -54,7 +62,7 @@ interface CapturedCallbacks {
   onWriteParsed?: () => void;
   onSelectionChange?: () => void;
   onScroll?: () => void;
-  onRender?: () => void;
+  onRender?: (event?: { start: number; end: number }) => void;
   wheelHandler?: (event: WheelEvent) => boolean;
 }
 
@@ -75,7 +83,15 @@ function makeMockTerminal(captured: CapturedCallbacks) {
     // value the amplifier/normalizer tests are written against.
     _core: { _renderService: { dimensions: { css: { cell: { width: 9, height: 20 } } } } },
     buffer: {
-      active: { length: 0, type: "normal", baseY: 0, viewportY: 0 },
+      active: {
+        length: 0,
+        type: "normal",
+        baseY: 0,
+        viewportY: 0,
+        getLine: vi.fn(
+          (_index: number): { translateToString: () => string } | undefined => undefined
+        ),
+      },
       onBufferChange: vi.fn(() => ({ dispose: vi.fn() })),
     },
     parser: {
@@ -105,8 +121,8 @@ function makeMockTerminal(captured: CapturedCallbacks) {
       captured.onSelectionChange = cb;
       return { dispose: vi.fn() };
     }),
-    onRender: vi.fn((cb: () => void) => {
-      captured.onRender = cb;
+    onRender: vi.fn((cb: (event: { start: number; end: number }) => void) => {
+      captured.onRender = (event) => cb(event ?? { start: 0, end: -1 });
       return { dispose: vi.fn() };
     }),
     onTitleChange: vi.fn((cb: (title: string) => void) => {
@@ -194,6 +210,7 @@ describe("installTerminalBoundListeners", () => {
     vi.useFakeTimers();
     vi.clearAllMocks();
     isLinuxMock.mockReturnValue(false);
+    isRendererPerfCaptureActiveMock.mockReturnValue(false);
     getEffectiveAgentConfigMock.mockReset();
 
     (window as unknown as Record<string, unknown>).electron = {
@@ -1301,6 +1318,26 @@ describe("installTerminalBoundListeners", () => {
       managed.terminal = asXterm;
       installTerminalBoundListeners(asXterm, managed, "t1", deps);
     }
+
+    it("records each newly painted non-empty buffer line once during perf capture", () => {
+      const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
+      const terminal = makeMockTerminal(captured);
+      const lines = ["ready-token", "", "next-line"];
+      terminal.buffer.active.getLine.mockImplementation((index: number) => ({
+        translateToString: () => lines[index] ?? "",
+      }));
+      isRendererPerfCaptureActiveMock.mockReturnValue(true);
+
+      install(terminal, makeDeps());
+      captured.onRender!({ start: 0, end: 2 });
+      captured.onRender!({ start: 0, end: 2 });
+
+      expect(markRendererPerformanceMock).toHaveBeenCalledTimes(1);
+      expect(markRendererPerformanceMock).toHaveBeenCalledWith(PERF_MARKS.TERMINAL_OUTPUT_PAINTED, {
+        terminalId: "t1",
+        lineHashes: [hashPerfLine("ready-token"), hashPerfLine("next-line")],
+      });
+    });
 
     it("snaps fractional row heights to integers that sum exactly to the canvas height", () => {
       const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
