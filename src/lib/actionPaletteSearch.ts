@@ -250,23 +250,38 @@ export function getBoostedCategories(context: RankContext | undefined): Set<stri
 // Collator tiebreaks are the sort's hot spot: Intl.Collator.compare costs
 // orders of magnitude more than a numeric compare and integer usage counts
 // make full ties common. Since one stable collator sort of the catalog yields
-// per-item ranks whose numeric comparison reproduces the collator order
+// per-position ranks whose numeric comparison reproduces the collator order
 // exactly (collator-equal titles keep catalog order, same as a stable sort's
 // 0-return), the ranks are computed once per catalog array and reused every
-// keystroke. Keyed by array identity; in-place mutation is detected via items
-// missing from the rank map and triggers a recompute.
-const titleRankCache = new WeakMap<
-  readonly SearchableAction[],
-  WeakMap<SearchableAction, number>
->();
+// keystroke. Ranks are positional (so duplicate item references stay exact)
+// and guarded by an identity snapshot: any in-place mutation of the cached
+// array — reorder, replacement, resize — is detected and triggers a recompute.
+interface TitleRankCacheEntry {
+  snapshot: readonly SearchableAction[];
+  ranks: number[];
+}
 
-function computeTitleRanks(items: readonly SearchableAction[]): WeakMap<SearchableAction, number> {
-  const sorted = items.slice().sort((a, b) => TITLE_COLLATOR.compare(a.title, b.title));
-  const ranks = new WeakMap<SearchableAction, number>();
-  for (let i = 0; i < sorted.length; i++) {
-    ranks.set(sorted[i]!, i);
+const titleRankCache = new WeakMap<readonly SearchableAction[], TitleRankCacheEntry>();
+
+function computeTitleRanks(items: readonly SearchableAction[]): TitleRankCacheEntry {
+  const indices = items.map((_, index) => index);
+  indices.sort((a, b) => TITLE_COLLATOR.compare(items[a]!.title, items[b]!.title));
+  const ranks = new Array<number>(items.length);
+  for (let rank = 0; rank < indices.length; rank++) {
+    ranks[indices[rank]!] = rank;
   }
-  return ranks;
+  return { snapshot: items.slice(), ranks };
+}
+
+function isSnapshotCurrent(
+  snapshot: readonly SearchableAction[],
+  items: readonly SearchableAction[]
+): boolean {
+  if (snapshot.length !== items.length) return false;
+  for (let i = 0; i < items.length; i++) {
+    if (snapshot[i] !== items[i]) return false;
+  }
+  return true;
 }
 
 export function rankActionMatches<T extends SearchableAction>(
@@ -287,24 +302,23 @@ export function rankActionMatches<T extends SearchableAction>(
   }
   const boostedCategories = getBoostedCategories(context);
 
-  let titleRanks = titleRankCache.get(items);
-  if (!titleRanks) {
-    titleRanks = computeTitleRanks(items);
-    titleRankCache.set(items, titleRanks);
+  let cache = titleRankCache.get(items);
+  if (!cache || !isSnapshotCurrent(cache.snapshot, items)) {
+    cache = computeTitleRanks(items);
+    titleRankCache.set(items, cache);
   }
+  const titleRanks = cache.ranks;
 
   const scored: Array<{ item: T; score: number; enabled: boolean; recency: number; rank: number }> =
     [];
-  let missingRank = false;
-  for (const item of items) {
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]!;
     const base = scoreActionLower(lowerQuery, item);
     if (base <= 0) continue;
     const frecencyScore = mruScoreById.get(item.id);
     const mruBonus =
       frecencyScore !== undefined ? MRU_BONUS_CAP * Math.tanh(frecencyScore / MRU_SCORE_SCALE) : 0;
     const contextBonus = boostedCategories.has(item.categoryLower) ? CONTEXT_BOOST : 0;
-    const rank = titleRanks.get(item);
-    if (rank === undefined) missingRank = true;
     scored.push({
       item,
       score: base + mruBonus + contextBonus,
@@ -312,16 +326,8 @@ export function rankActionMatches<T extends SearchableAction>(
       // Usage is now an integer count, so ties are common; break them by most
       // recent use so a recently-used-once action outranks a stale one.
       recency: mruRecencyById.get(item.id) ?? 0,
-      rank: rank ?? 0,
+      rank: titleRanks[i]!,
     });
-  }
-
-  if (missingRank) {
-    titleRanks = computeTitleRanks(items);
-    titleRankCache.set(items, titleRanks);
-    for (const entry of scored) {
-      entry.rank = titleRanks.get(entry.item) ?? 0;
-    }
   }
 
   scored.sort((a, b) => {

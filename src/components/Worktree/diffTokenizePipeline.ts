@@ -39,7 +39,12 @@ function toText(changes: ChangeData[], computeLineNumber: (change: ChangeData) =
   const maxLineNumber = computeLineNumber(changes[changes.length - 1]!);
   const byLine = new Array<string>(maxLineNumber).fill("");
   for (const change of changes) {
-    byLine[computeLineNumber(change) - 1] = change.content;
+    const lineNumber = computeLineNumber(change);
+    // Out-of-range line numbers (malformed/unordered hunks) are dropped, as
+    // the library's fixed-length 1..maxLineNumber mapping does.
+    if (lineNumber >= 1 && lineNumber <= maxLineNumber) {
+      byLine[lineNumber - 1] = change.content;
+    }
   }
   return byLine.join("\n");
 }

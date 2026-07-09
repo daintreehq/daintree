@@ -129,4 +129,56 @@ describe("tokenizeFast parity with react-diff-view tokenize", () => {
   it("matches on empty hunks", () => {
     expectParity([], "typescript", { enhancers: [] });
   });
+
+  it("matches on a hunk starting deep in the file", () => {
+    const deepDiff = `diff --git a/src/deep.ts b/src/deep.ts
+index 1111111..2222222 100644
+--- a/src/deep.ts
++++ b/src/deep.ts
+@@ -500,5 +500,6 @@
+   deepContext();
+-  const removed = legacy(1);
++  const added = fresh(1);
++  const extra = fresh(2);
+   deepTail();
+`;
+    const hunks = hunksOf(deepDiff);
+    expectParity(hunks, "typescript", {
+      enhancers: [markEdits(hunks, { type: "block" }), suppressFullLineEdits()],
+    });
+  });
+
+  it("matches on unicode content and CR-bearing lines", () => {
+    const unicodeDiff = `diff --git a/src/u.ts b/src/u.ts
+index 1111111..2222222 100644
+--- a/src/u.ts
++++ b/src/u.ts
+@@ -1,4 +1,4 @@
+   const label = "héllo wörld";
+-  const emoji = "🚀 déjà vu";\r
++  const emoji = "🎯 naïve café";\r
+   const cjk = "漢字テスト";
+`;
+    const hunks = hunksOf(unicodeDiff);
+    expectParity(hunks, "typescript", {
+      enhancers: [markEdits(hunks, { type: "block" }), suppressFullLineEdits()],
+    });
+  });
+
+  it("matches when the file has no trailing newline", () => {
+    const noNewlineDiff = `diff --git a/src/n.ts b/src/n.ts
+index 1111111..2222222 100644
+--- a/src/n.ts
++++ b/src/n.ts
+@@ -1,3 +1,3 @@
+   before();
+-  old();
++  fresh();
+\\ No newline at end of file
+`;
+    const hunks = hunksOf(noNewlineDiff);
+    expectParity(hunks, "typescript", {
+      enhancers: [markEdits(hunks, { type: "block" }), suppressFullLineEdits()],
+    });
+  });
 });
