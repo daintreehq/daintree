@@ -39,7 +39,7 @@ jobs:
         run: npm ci
 
       - name: Run perf CI matrix
-        run: npm run perf:ci
+        run: npm run perf ci
 
       - name: Upload perf artifacts
         if: always()
@@ -106,10 +106,10 @@ jobs:
       - name: Run nightly matrix
         env:
           DBUS_SESSION_BUS_ADDRESS: /dev/null
-        run: xvfb-run --auto-servernum npm run perf:nightly
+        run: xvfb-run --auto-servernum npm run perf nightly
 
       - name: Run soak matrix
-        run: npm run perf:soak
+        run: npm run perf soak
 
       - name: Upload perf artifacts
         if: always()
@@ -145,19 +145,19 @@ jobs:
       # against the old values (run.ts exits 1 in that case), so don't let the
       # non-zero exit abort the job before the PR step runs.
       - name: Regenerate smoke baseline
-        run: npm run perf:update-baselines:smoke
+        run: npm run perf -- smoke --update-baseline
         continue-on-error: true
 
       - name: Regenerate CI baseline
-        run: npm run perf:update-baselines:ci
+        run: npm run perf -- ci --update-baseline
         continue-on-error: true
 
       - name: Regenerate nightly baseline
-        run: npm run perf:update-baselines:nightly
+        run: npm run perf -- nightly --update-baseline
         continue-on-error: true
 
       - name: Regenerate soak baseline
-        run: npm run perf:update-baselines:soak
+        run: npm run perf -- soak --update-baseline
         continue-on-error: true
 
       - name: Open baseline update PR

@@ -2,6 +2,14 @@
 
 This directory contains the benchmark harness for app-level performance regression tracking.
 
+## Entry point
+
+Every benchmark runs through one dispatcher, `scripts/perf/index.ts`, exposed as the `perf` npm script. `npm run perf list` prints the full command table; each command spawns its benchmark in its own process, so behavior matches invoking the underlying script directly. Add a benchmark by adding one entry to the `REGISTRY` in `index.ts` — nothing else changes.
+
+```bash
+npm run perf list
+```
+
 ## Modes
 
 - `smoke`: fast local smoke suite (not invoked by any workflow — run on demand)
@@ -12,10 +20,10 @@ This directory contains the benchmark harness for app-level performance regressi
 ## Commands
 
 ```bash
-npm run perf:smoke
-npm run perf:ci
-npm run perf:nightly
-npm run perf:soak
+npm run perf smoke
+npm run perf ci
+npm run perf nightly
+npm run perf soak
 ```
 
 ## Outputs
@@ -34,38 +42,38 @@ Baselines are read from `scripts/perf/config/baseline.<mode>.json`.
 Update baseline after accepted optimization work:
 
 ```bash
-npm run perf:smoke -- --update-baseline
-npm run perf:ci -- --update-baseline
+npm run perf smoke -- --update-baseline
+npm run perf ci -- --update-baseline
 ```
 
 ## Manual cold-start
 
-`npm run perf:cold-start` is a manual, one-shot cold-start sampler. It launches the packaged binary N times from a fresh profile, parses the NDJSON marks (`DAINTREE_PERF_METRICS_FILE`) after each run, and prints an aggregated p50/p95 table covering key phase durations, individual marks, and IPC round-trip timings per channel. No thresholds, no baselines, no CI gating.
+`npm run perf cold-start` is a manual, one-shot cold-start sampler. It launches the packaged binary N times from a fresh profile, parses the NDJSON marks (`DAINTREE_PERF_METRICS_FILE`) after each run, and prints an aggregated p50/p95 table covering key phase durations, individual marks, and IPC round-trip timings per channel. No thresholds, no baselines, no CI gating.
 
 Requires a packaged binary under `release/` — build one first with `npm run package` (or `npm run package:local` on macOS for an unsigned dev build).
 
 ```bash
-npm run perf:cold-start                   # 5 runs, text table
-npm run perf:cold-start -- --runs 10      # custom run count
-npm run perf:cold-start -- --json         # structured JSON for diffing
-npm run perf:cold-start -- --trace        # capture GPU/compositor traces
+npm run perf cold-start                   # 5 runs, text table
+npm run perf cold-start -- --runs 10      # custom run count
+npm run perf cold-start -- --json         # structured JSON for diffing
+npm run perf cold-start -- --trace        # capture GPU/compositor traces
 ```
 
 IPC sampling is forced to 100% for this command so per-channel stats are meaningful across a small number of runs.
 
 The `main_window_shown` mark records the moment `win.show()` is called (when the OS is asked to map the window). It surfaces as the `boot → main_window_shown` and `main_window_created → main_window_shown` phase pairs, exposing the dom-ready-gated window-reveal wait the harness was previously blind to. A mark carries `meta: { fallback: true }` when the 5s dom-ready fallback timer fired instead of the normal dom-ready signal.
 
-## Manual launch A/B (`perf:launch-ab`)
+## Manual launch A/B (`perf launch-ab`)
 
-`npm run perf:launch-ab` is a direct-spawn launch benchmark: it spawns the packaged binary (no Playwright, no debugger attach, no CDP handshake) and reads the app's own NDJSON perf marks, so each sample matches what a user actually experiences. With `--a <exeA> --b <exeB>` it alternates launches between two binaries (A, B, A, B, ...) so machine-state drift lands on both variants equally, then prints per-variant p50/mean/stdDev for the key launch phases plus the delta table. `--warm` gives each variant a persisted profile dir and one unmeasured warmup boot so measured runs are compile-cache/code-cache warm (steady-state boots); the default is a fresh profile per run (first-launch boots).
+`npm run perf launch-ab` is a direct-spawn launch benchmark: it spawns the packaged binary (no Playwright, no debugger attach, no CDP handshake) and reads the app's own NDJSON perf marks, so each sample matches what a user actually experiences. With `--a <exeA> --b <exeB>` it alternates launches between two binaries (A, B, A, B, ...) so machine-state drift lands on both variants equally, then prints per-variant p50/mean/stdDev for the key launch phases plus the delta table. `--warm` gives each variant a persisted profile dir and one unmeasured warmup boot so measured runs are compile-cache/code-cache warm (steady-state boots); the default is a fresh profile per run (first-launch boots).
 
 ```bash
-npm run perf:launch-ab -- --runs 15                       # current release/ build
-npm run perf:launch-ab -- --a <exeA> --b <exeB> --runs 15 # interleaved A/B
-npm run perf:launch-ab -- --warm --json ...               # steady-state, machine-readable
+npm run perf launch-ab -- --runs 15                       # current release/ build
+npm run perf launch-ab -- --a <exeA> --b <exeB> --runs 15 # interleaved A/B
+npm run perf launch-ab -- --warm --json ...               # steady-state, machine-readable
 ```
 
-Prefer this over `perf:cold-start` for before/after comparisons across branches: build each branch with `npm run package:local`, move each `release/mac-<arch>` bundle aside, and point `--a`/`--b` at the two executables. (`electron-builder` wipes `release/` on every package run — never leave the only copy of a comparison build there.)
+Prefer this over `perf cold-start` for before/after comparisons across branches: build each branch with `npm run package:local`, move each `release/mac-<arch>` bundle aside, and point `--a`/`--b` at the two executables. (`electron-builder` wipes `release/` on every package run — never leave the only copy of a comparison build there.)
 
 ## GPU/compositor traces (`--trace`)
 

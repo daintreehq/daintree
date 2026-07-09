@@ -9,7 +9,7 @@ import { mean, percentile, round, stdDev } from "./lib/stats";
 
 // Direct-spawn launch benchmark with interleaved A/B support.
 //
-// Unlike perf:cold-start (which drives the binary through Playwright's
+// Unlike perf cold-start (which drives the binary through Playwright's
 // electron.launch), this harness spawns the packaged executable directly and
 // reads the app's own NDJSON perf marks (DAINTREE_PERF_CAPTURE). No debugger
 // is attached, so the measured launch matches what a user experiences, and
@@ -20,9 +20,9 @@ import { mean, percentile, round, stdDev } from "./lib/stats";
 // machine-state drift (thermals, page cache, background load) lands on both
 // variants equally instead of biasing whichever variant ran last.
 //
-//   npm run perf:launch-ab -- --runs 15                       # current release/ build
-//   npm run perf:launch-ab -- --a <exeA> --b <exeB> --runs 15 # interleaved A/B
-//   npm run perf:launch-ab -- --warm ...                      # per-variant persisted
+//   npm run perf launch-ab -- --runs 15                       # current release/ build
+//   npm run perf launch-ab -- --a <exeA> --b <exeB> --runs 15 # interleaved A/B
+//   npm run perf launch-ab -- --warm ...                      # per-variant persisted
 //                                                             # profile + warmup boot
 
 interface RunMetrics {
@@ -306,7 +306,7 @@ async function main(): Promise<void> {
   });
 
   if (values.help) {
-    console.log(`Usage: npm run perf:launch-ab -- [--a exeA --b exeB] [--runs N] [--warm] [--json]
+    console.log(`Usage: npm run perf launch-ab -- [--a exeA --b exeB] [--runs N] [--warm] [--json]
 
 Direct-spawn launch benchmark. With --a/--b, alternates launches between two
 packaged binaries and reports per-variant stats plus the delta. Without them,

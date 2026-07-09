@@ -93,6 +93,7 @@ Lucide only (`lucide-react`) — no bespoke glyphs for app concepts. New concept
 
 - **New action:** add the ID to `BUILT_IN_ACTION_IDS` → definition in `src/services/actions/definitions/*.ts` → auto-registers via `useActionRegistry`.
 - **New IPC channel:** copy an existing `defineIpcNamespace` handler pair (`electron/ipc/handlers/<domain>.ts` + `<domain>.preload.ts`, e.g. `editorConfig`) → assign the namespace in `electron/preload.cts` → `npm run codegen:ipc && npm run codegen:ipc-renderer` (CI-enforced). Generated types: `shared/types/ipc/generated*.ts`; hand-maintained shapes: `shared/types/ipc/api.ts` / `maps.ts` (`src/types/electron.d.ts` is only the global shim). The `check:ipc-handwritten` ratchet blocks new hand-wired channels.
+- **New performance benchmark:** add one entry to the `REGISTRY` in `scripts/perf/index.ts` (the single `npm run perf <command>` dispatcher) — never add a new `perf:*` script to `package.json`.
 
 ## Documentation
 
