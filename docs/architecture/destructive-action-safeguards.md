@@ -220,9 +220,7 @@ These open URLs, files, or processes outside the app. The blast radius isn't app
 | Call site | Sink | Input source | Gate | Tier |
 | --- | --- | --- | --- | --- |
 | `electron/services/OAuthLoopbackService.ts` `startOAuthLoopback` | `openExternalUrl` | renderer-supplied `authUrl` (webview) | protocol allowlist (`https:` etc.); disallowed scheme settles `open-external-failed` (#9155) | D2 |
-| `electron/ipc/handlers/github.ts` `handleGitHubOpenPR` | `openExternalUrl` | renderer-supplied `prUrl` | allowlist **plus** inline `github.com` / `*.github.com` hostname gate (second layer, preserved) | D1 |
-| `electron/ipc/handlers/github.ts` open issues / prs / commits / issue | `openExternalUrl` | `getRepoUrl(cwd)` (git-derived) | protocol allowlist | D1 |
-| `electron/ipc/handlers/forge.ts` open issues / prs / commits / issue | `openExternalUrl` | `ForgeProvider.build*Url()` (git-derived; typed `string`) | protocol allowlist | D1 |
+| `electron/ipc/handlers/forge.ts` open issues / prs / commits / issue / PR | `openExternalUrl` | `ForgeProvider.build*Url()` (git-derived; typed `string`); renderer supplies numbers/ids, free-text filters (`query`/`state`), or a `branch` ref — all URL-encoded into the provider-built URL, never a URL itself — `handleForgeOpenPR` validates `prNumber` as a positive integer, all handlers rate-limited | protocol allowlist | D1 |
 | `electron/ipc/handlers/voiceInput.ts` `openMicSettings` | `openExternalUrl` | hardcoded `x-apple.systempreferences:` (darwin) / `ms-settings:` (win32) | platform-conditional allowlist; rejection logged via `logDebug` | D0 |
 | `electron/menu.ts` "Learn More" | `openExternalUrl` | hardcoded `https://github.com/daintreehq/daintree` | protocol allowlist | D0 |
 | `electron/setup/protocols.ts`, `electron/window/createWindow.ts`, `electron/window/ProjectViewManager.ts`, `electron/services/PortalManager.ts`, `electron/ipc/handlers/systemShell.ts` | `openExternalUrl` | navigation / link intercepts | protocol allowlist (already funneled pre-#9155) | D1 |

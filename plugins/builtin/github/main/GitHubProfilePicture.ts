@@ -128,7 +128,8 @@ export const gitHubProfilePictureProvider: ProfilePictureProvider = {
 };
 
 /**
- * IPC-facing entry point — `electron/ipc/handlers/github.ts` calls this.
+ * IPC-facing entry point — the forge avatars capability calls this
+ * (`electron/ipc/handlers/forgeData.ts` via `forgeProvider.ts`).
  * Returns `string | null`; `undefined`-while-loading is the renderer hook's
  * abstraction, not part of the provider contract.
  */

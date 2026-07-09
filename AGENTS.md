@@ -66,7 +66,7 @@ Read the named entry point before scoping.
 | Notifications / Pulse / Portal / Commands — see which one | _Anti-patterns → Four "on-screen" systems_ |
 | Browser panel, dev-preview | `src/panels/browser/`, `src/panels/dev-preview/` |
 | Settings persistence | `src/components/Settings/`, `electron/services/persistence/` |
-| GitHub PR/issue integration | `electron/services/github/`, `src/components/GitHub/` |
+| GitHub PR/issue integration | `plugins/builtin/github/main/`, `plugins/builtin/github/renderer/` |
 | Onboarding, first-run | `src/components/Onboarding/`, `src/components/Setup/` |
 | MCP server, plugin, external tool | `electron/services/rpc/`, `shared/types/plugin.ts` |
 
