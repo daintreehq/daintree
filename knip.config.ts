@@ -96,25 +96,12 @@ const config: KnipConfig = {
     // imports. They are tracked files that gate reviewed API changes.
     "packages/plugin-sdk/api-report/*.d.ts",
 
-    // why: compat shims preserved for legacy test/import paths after the
-    // GitHub services moved into plugins/builtin/github/main (#8060). No
-    // runtime code imports these leaf shims directly today, but removing them
-    // would break the compatibility promise documented in
-    // electron/services/github/index.ts.
-    "electron/services/github/GitHubRateLimitService.ts",
-    "electron/services/github/types.ts",
-
     // why: local native packages expose package-level declarations through
     // their own package.json "main" entries and are consumed via createRequire.
     // Knip walks the app source graph and does not treat local file:
     // dependency declaration files as package entry points.
     "electron/native/posix-pty-reaper/index.d.ts",
     "electron/native/win-job-object/index.d.ts",
-
-    // why: legacy one-shot migration helpers kept for auditability of the
-    // structured E2E skip migration. They are not part of the build graph.
-    "scripts/fix-skip-locations.mjs",
-    "scripts/migrate-test-skips.mjs",
 
     // why: plugin-facing renderer helper documented in docs/plugins/host-api.md.
     // Plugin views import this surface dynamically through the SDK path, so the

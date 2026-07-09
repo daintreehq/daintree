@@ -26,7 +26,7 @@ The canonical data path is **Service → IPC → Store → UI** (and the reverse
 ### When a feature needs a service vs an inline handler
 
 - **Inline handler** (`electron/ipc/handlers/<domain>.ts`) — when the operation is a thin, stateless bridge: read a value, call one library function, return. The handler body _is_ the logic. Most of the ~105 handler files are this thin.
-- **Service** (`electron/services/<x>.ts` or a cluster directory) — when there is durable state, a process/resource to own (a node-pty host, a poll loop, a cache), cross-handler reuse, or lifecycle (init/dispose) to manage. Handlers then become thin adapters that call the service. Examples: `CopyTreeService`, `GitHubService`, `DevPreviewSessionService`, `HibernationService`.
+- **Service** (`electron/services/<x>.ts` or a cluster directory) — when there is durable state, a process/resource to own (a node-pty host, a poll loop, a cache), cross-handler reuse, or lifecycle (init/dispose) to manage. Handlers then become thin adapters that call the service. Examples: `CopyTreeService`, `GitService`, `DevPreviewSessionService`, `HibernationService`.
 
 Rule of thumb: if two handlers would need the same logic, or the logic outlives a single IPC call, it belongs in a service.
 
@@ -114,7 +114,6 @@ These hosts keep expensive/risky work off the Main thread; a host crash is isola
 Top-level files live directly in `electron/services/`; cohesive subsystems get a subdirectory with its own `index.ts`. Where to look:
 
 - **`pty/`** (~58 files) — agent terminal brain. `PtyClient` (host transport + correlation), `AgentStateService` / `AgentStateMachine`, `AgentPatternDetector`, `CompletionDetector`/`CompletionTimer`, `BootDetector`, `agentSessionHistory`, `PtyEventRouter`/`PtyEventsBridge`/`PtyEventBuffer`. This is where output heuristics turn raw PTY bytes into idle/working/waiting/completed state.
-- **`github/`** — `GitHubAuth`, `GitHubQueries`, `GitHubRateLimitService`, `GitHubTokenHealthService` (top-level `GitHubService.ts`, `GitHubStatsCache.ts`, `GitHubFirstPageCache.ts` orchestrate above the cluster).
 - **`git/`** + top-level `GitService.ts` / `GitServiceCache.ts` — simple-git operations, porcelain conflict parsing (`porcelainConflicts.ts`, `conflictMarkerScan.ts`), repo operation state.
 - **`worktree/`** + `workspace-client/` — worktree polling strategy, mood/notes readers; the `workspace-client/` shims that talk to the workspace host.
 - **DevPreview (`DevPreview*.ts`, 7 top-level files)** — `DevPreviewSessionService`, `DevPreviewProxyService`, `DevPreviewPortAllocator`, `DevPreviewReadinessProbe`, `DevPreviewManifestService`, `DevPreviewCommandNormalizer`, `DevPreviewRequestValidators`. Event routing for this cluster has its own doc: [dev-preview-event-routing.md](./dev-preview-event-routing.md).

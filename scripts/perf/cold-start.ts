@@ -355,7 +355,7 @@ async function main(): Promise<void> {
   });
 
   if (values.help) {
-    console.log(`Usage: npm run perf:cold-start -- [--runs N] [--warm] [--json] [--trace]
+    console.log(`Usage: npm run perf cold-start -- [--runs N] [--warm] [--json] [--trace]
 
 Launch the packaged Daintree binary N times and print aggregated p50/p95.
 

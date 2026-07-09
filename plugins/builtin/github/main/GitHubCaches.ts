@@ -246,8 +246,8 @@ function invalidateByPrefix(cache: Cache<string, unknown>, prefix: string): void
  * Per-type on purpose: issue churn must not evict PR pages (and vice versa) —
  * busting both on any delta would double the refetch volume on active repos.
  * The combined stats-and-page snapshot embeds BOTH first pages, so any delta
- * drops it; same for the legacy list caches that the `window.electron.github`
- * dropdown IPC path still reads alongside the forge caches.
+ * drops it; same for the legacy-shaped list caches that `GitHubIssues.listIssues`
+ * / `GitHubPRs.listPullRequests` still read alongside the forge caches.
  *
  * List keys are `${type}:${owner}/${repo}:${state}:${search}:${sort}:${cursor}`
  * (see `buildListCacheKey`), so the repo prefix sweeps every state/sort/cursor

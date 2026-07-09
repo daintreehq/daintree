@@ -48,8 +48,8 @@ Terminal action definitions were split out of the old monolithic `terminalAction
 - `electron/services/PtyPool.ts`
 - `electron/services/commands/githubWorkIssue.ts`
 - `electron/services/commands/githubCreateIssue.ts`
-- `electron/services/github/GitHubAuth.ts`
-- `electron/services/github/GitHubQueries.ts`
+- `plugins/builtin/github/main/GitHubAuth.ts`
+- `plugins/builtin/github/main/GitHubQueries.ts`
 - `electron/services/pty/AgentStateService.ts`
 - `electron/services/pty/PtyEventsBridge.ts`
 - `electron/services/pty/terminalSessionPersistence.ts`
@@ -58,7 +58,6 @@ Terminal action definitions were split out of the old monolithic `terminalAction
 - `src/services/SemanticAnalysisService.ts`
 - `src/services/terminal/TerminalOutputIngestService.ts`
 - `src/services/terminal/TerminalResizeController.ts`
-- `src/services/terminal/TerminalWakeManager.ts`
 - `src/store/errorStore.ts`
 - `src/store/eventStore.ts`
 - `src/store/logsStore.ts`

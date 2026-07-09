@@ -99,6 +99,8 @@ npm install
 
 The `postinstall` step rebuilds `node-pty` for Electron automatically. If you see PTY errors, run `npm run rebuild`.
 
+Performance benchmarks live in `scripts/perf/` and run through one command — `npm run perf list` shows every benchmark and how to invoke it.
+
 For AI features, open **Settings** (bottom-left sidebar) and configure your GitHub token and per-agent defaults.
 
 ## Install agent CLIs

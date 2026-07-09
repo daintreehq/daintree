@@ -91,7 +91,7 @@ describe("PortBatcher", () => {
     expect(deps.postMessage).toHaveBeenCalledWith("t1", bytes("abc"), 3);
   });
 
-  it("interactive write in throughput mode swaps the 16ms timer for an immediate", () => {
+  it("interactive write in throughput mode flushes synchronously, cancelling the 16ms timer", () => {
     const deps = createDeps();
     const batcher = new PortBatcher(deps);
 
@@ -99,41 +99,47 @@ describe("PortBatcher", () => {
     batcher.write("t1", bytes("bbb"), 3); // upgrade to throughput (16ms timer)
     batcher.write("t1", bytes("x"), 1, false, true); // keystroke echo
 
-    // Flushes on the immediate, well before the 16ms throughput window —
-    // and the echo byte rides behind the already-queued chunks in order.
-    vi.advanceTimersByTime(1);
+    // Flushes synchronously — no timer advance needed — and the echo byte
+    // rides behind the already-queued chunks in order.
     expect(deps.postMessage).toHaveBeenCalledOnce();
     expect(deps.postMessage).toHaveBeenCalledWith("t1", bytes("aaabbbx"), 7);
 
-    // The swapped-out throughput timer must not fire a second flush.
-    vi.advanceTimersByTime(16);
+    // The cancelled throughput timer must not fire a second flush.
+    vi.advanceTimersByTime(17);
     expect(deps.postMessage).toHaveBeenCalledOnce();
   });
 
-  it("interactive write in latency mode keeps the pending immediate (no escalation)", () => {
+  it("interactive write in latency mode flushes synchronously, and the stale immediate no-ops", () => {
     const deps = createDeps();
     const batcher = new PortBatcher(deps);
 
     batcher.write("t1", bytes("a"), 1);
-    batcher.write("t1", bytes("b"), 1, false, true); // would normally escalate to 16ms
+    batcher.write("t1", bytes("b"), 1, false, true); // keystroke echo
 
-    vi.advanceTimersByTime(1);
     expect(deps.postMessage).toHaveBeenCalledOnce();
     expect(deps.postMessage).toHaveBeenCalledWith("t1", bytes("ab"), 2);
+
+    // The latency-mode immediate scheduled by the first write fires against an
+    // already-drained map — it must not post again.
+    vi.advanceTimersByTime(1);
+    expect(deps.postMessage).toHaveBeenCalledOnce();
   });
 
-  it("non-interactive write after an interactive swap does not re-escalate the pending immediate", () => {
+  it("non-interactive write after an interactive flush starts a fresh latency-mode batch", () => {
     const deps = createDeps();
     const batcher = new PortBatcher(deps);
 
     batcher.write("t1", bytes("a"), 1);
     batcher.write("t1", bytes("b"), 1); // throughput
-    batcher.write("t1", bytes("c"), 1, false, true); // swap timer → immediate
-    batcher.write("t1", bytes("d"), 1); // mode is still throughput: must not reschedule
+    batcher.write("t1", bytes("c"), 1, false, true); // synchronous echo flush
+    expect(deps.postMessage).toHaveBeenCalledOnce();
+    expect(deps.postMessage).toHaveBeenCalledWith("t1", bytes("abc"), 3);
+
+    batcher.write("t1", bytes("d"), 1); // fresh entry: latency-mode immediate
 
     vi.advanceTimersByTime(1);
-    expect(deps.postMessage).toHaveBeenCalledOnce();
-    expect(deps.postMessage).toHaveBeenCalledWith("t1", bytes("abcd"), 4);
+    expect(deps.postMessage).toHaveBeenCalledTimes(2);
+    expect(deps.postMessage).toHaveBeenLastCalledWith("t1", bytes("d"), 1);
   });
 
   it("profile-tuned cadence: a longer throughput delay stretches the flush window", () => {

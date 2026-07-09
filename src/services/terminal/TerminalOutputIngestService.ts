@@ -13,6 +13,17 @@ import { yieldToScheduler } from "@/lib/schedulerYield";
 const RENDERER_HIGH_WATERMARK_BYTES = 128 * 1024;
 const RENDERER_LOW_WATERMARK_BYTES = 32 * 1024;
 const COALESCE_BATCH_CAP_BYTES = 256 * 1024;
+// Background (non-focused) terminals get a much smaller in-flight window and
+// batch size: bytes already handed to xterm.write() are un-holdable parse
+// backlog (xterm chews them in ~12ms main-thread slices), so a flood pane
+// fed 128KB+256KB keeps blocking the thread long after a focused-echo hold
+// engages (#10948-class feel regressions). A 32KB window keeps the per-pane
+// un-holdable backlog to roughly one parse slice while costing throughput
+// only one extra drain wakeup per 32KB — background floods are parse-bound,
+// not scheduling-bound.
+const BACKGROUND_HIGH_WATERMARK_BYTES = 32 * 1024;
+const BACKGROUND_LOW_WATERMARK_BYTES = 16 * 1024;
+const BACKGROUND_COALESCE_CAP_BYTES = 32 * 1024;
 const IPC_LOOKBACK_CHARS = 32;
 const INK_ERASE_LINE_PATTERN = "\x1b[2K\x1b[1A";
 
@@ -77,12 +88,17 @@ export class TerminalOutputIngestService {
     // keeps the legacy fully-synchronous drain — null focus means "drain
     // synchronously for everyone", never "defer everyone".
     private readonly getFocusedId: () => string | null = () => null,
-    // The terminal the user is actively wheel-scrolling (null when no wheel
-    // burst is live). While non-null, other non-focused terminals' drains are
-    // held on a recheck timer instead of draining after one yield. The wheeled
-    // terminal itself is exempt — scrolling an unfocused full-screen TUI is a
-    // PTY round-trip and holding its own output would stall the gesture.
-    private readonly getActiveWheelId: () => string | null = () => null
+    // Whether a sustained interaction (a live wheel gesture on any terminal,
+    // or a keystroke echo in flight) is in effect. While true, non-participant
+    // background drains are held on a recheck timer instead of draining after
+    // one yield.
+    private readonly hasInteractionHold: () => boolean = () => false,
+    // Whether this terminal is a participant in the live interaction (it is
+    // being wheel-scrolled, or its keystroke echo is in flight). Participants
+    // drain inline like the focused pane: scrolling an unfocused full-screen
+    // TUI is a PTY round-trip per redraw, and deferring — let alone holding —
+    // its own output stalls the very gesture the hold regime protects.
+    private readonly isInteractionParticipant: (id: string) => boolean = () => false
   ) {}
 
   public async initialize(): Promise<void> {
@@ -124,7 +140,10 @@ export class TerminalOutputIngestService {
     const queue = this.queues.get(id);
     if (!queue) return;
     queue.inFlightBytes = Math.max(0, queue.inFlightBytes - bytes);
-    if (queue.inFlightBytes <= RENDERER_LOW_WATERMARK_BYTES && queue.chunks.length > 0) {
+    const lowWatermark = this.shouldDeferDrain(id)
+      ? BACKGROUND_LOW_WATERMARK_BYTES
+      : RENDERER_LOW_WATERMARK_BYTES;
+    if (queue.inFlightBytes <= lowWatermark && queue.chunks.length > 0) {
       this.scheduleOrDrain(id, queue);
     }
   }
@@ -346,17 +365,22 @@ export class TerminalOutputIngestService {
   private shouldDeferDrain(id: string): boolean {
     if (!FOCUSED_DRAIN_PRIORITY_ENABLED) return false;
     const focusedId = this.getFocusedId();
-    return focusedId !== null && focusedId !== id;
+    if (focusedId === null || focusedId === id) return false;
+    return !this.isInteractionParticipant(id);
   }
 
   private shouldHoldDrain(id: string): boolean {
-    const wheelId = this.getActiveWheelId();
-    return wheelId !== null && wheelId !== id;
+    return this.hasInteractionHold() && !this.isInteractionParticipant(id);
   }
 
   private tryDrain(id: string, queue: TerminalIngestQueue): void {
-    while (queue.chunks.length > 0 && queue.inFlightBytes < RENDERER_HIGH_WATERMARK_BYTES) {
-      const batch = this.coalesceBatch(queue);
+    const deferred = this.shouldDeferDrain(id);
+    const highWatermark = deferred
+      ? BACKGROUND_HIGH_WATERMARK_BYTES
+      : RENDERER_HIGH_WATERMARK_BYTES;
+    const batchCap = deferred ? BACKGROUND_COALESCE_CAP_BYTES : COALESCE_BATCH_CAP_BYTES;
+    while (queue.chunks.length > 0 && queue.inFlightBytes < highWatermark) {
+      const batch = this.coalesceBatch(queue, batchCap);
       const batchBytes = this.chunkByteSize(batch.data);
       queue.inFlightBytes += batchBytes;
       this.writeToTerminal(id, batch.data, batch.chunkCount);
@@ -364,13 +388,16 @@ export class TerminalOutputIngestService {
   }
 
   // Merge the longest same-type chunk prefix into one write, capped at
-  // COALESCE_BATCH_CAP_BYTES (#4853 — xterm yields between write-buffer
-  // entries, not within one chunk, so an unbounded merge would block the main
-  // thread). The first chunk is always taken even when it alone exceeds the
-  // cap. Uint8Array prefixes merge into one freshly-allocated array — the
-  // MessagePort path delivers binary chunks, so without this branch a
-  // backpressure/wake backlog drains as hundreds of per-chunk writes.
-  private coalesceBatch(queue: TerminalIngestQueue): CoalescedBatch {
+  // `batchCap` (#4853 — xterm yields between write-buffer entries, not within
+  // one chunk, so an unbounded merge would block the main thread). The first
+  // chunk is always taken even when it alone exceeds the cap. Uint8Array
+  // prefixes merge into one freshly-allocated array — the MessagePort path
+  // delivers binary chunks, so without this branch a backpressure/wake backlog
+  // drains as hundreds of per-chunk writes.
+  private coalesceBatch(
+    queue: TerminalIngestQueue,
+    batchCap: number = COALESCE_BATCH_CAP_BYTES
+  ): CoalescedBatch {
     if (queue.chunks.length === 1) {
       const chunk = queue.chunks[0]!;
       queue.chunks.length = 0;
@@ -386,7 +413,7 @@ export class TerminalOutputIngestService {
       const next = queue.chunks[count]!;
       if ((typeof next === "string") !== firstIsString) break;
       const size = this.chunkByteSize(next);
-      if (taken + size > COALESCE_BATCH_CAP_BYTES) break;
+      if (taken + size > batchCap) break;
       taken += size;
       count++;
     }
