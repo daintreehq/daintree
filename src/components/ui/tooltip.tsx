@@ -167,7 +167,16 @@ const TooltipTrigger = React.forwardRef<
   TooltipTriggerProps
 >(
   (
-    { asChild, children, onPointerEnter, onPointerDown, onPointerUp, onFocusCapture, ...props },
+    {
+      asChild,
+      children,
+      onPointerEnter,
+      onPointerMove,
+      onPointerDown,
+      onPointerUp,
+      onFocusCapture,
+      ...props
+    },
     ref
   ) => {
     const radix = useRadixPrimitives();
@@ -188,6 +197,14 @@ const TooltipTrigger = React.forwardRef<
       notifyTooltipPointerActivity();
       primeOnEvent();
       onPointerEnter?.(event);
+    };
+    const handlePointerMove: React.PointerEventHandler<HTMLButtonElement> = (event) => {
+      // Radix opens tooltips from pointermove (not pointerenter), so clear
+      // suppression here too — covers a pointer already resting on the
+      // trigger whose next micro-move should open normally. Touch moves
+      // never open Radix tooltips, so they don't count as hover intent.
+      if (event.pointerType !== "touch") notifyTooltipPointerActivity();
+      onPointerMove?.(event);
     };
     const handlePointerDown: React.PointerEventHandler<HTMLButtonElement> = (event) => {
       pointerActiveRef.current = true;
@@ -215,6 +232,7 @@ const TooltipTrigger = React.forwardRef<
           <Slot
             ref={ref}
             onPointerEnter={handlePointerEnter}
+            onPointerMove={handlePointerMove}
             onPointerDown={handlePointerDown}
             onPointerUp={handlePointerUp}
             onFocusCapture={handleFocusCapture}
@@ -229,6 +247,7 @@ const TooltipTrigger = React.forwardRef<
           type="button"
           ref={ref as React.Ref<HTMLButtonElement>}
           onPointerEnter={handlePointerEnter}
+          onPointerMove={handlePointerMove}
           onPointerDown={handlePointerDown}
           onPointerUp={handlePointerUp}
           onFocusCapture={handleFocusCapture}
@@ -245,6 +264,7 @@ const TooltipTrigger = React.forwardRef<
         ref={ref}
         asChild={asChild}
         onPointerEnter={handlePointerEnter}
+        onPointerMove={handlePointerMove}
         onPointerDown={handlePointerDown}
         onPointerUp={handlePointerUp}
         onFocusCapture={handleFocusCapture}

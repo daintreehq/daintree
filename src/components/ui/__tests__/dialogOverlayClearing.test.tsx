@@ -3,7 +3,7 @@
 // tooltips and the ShortcutHint teaching overlay — on every open and close
 // transition, and arm the tooltip focus-open suppression window so the
 // focus moves they perform can't re-open a tooltip (issue #11030).
-import { render } from "@testing-library/react";
+import { act, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppDialog } from "../AppDialog";
 import { AppPaletteDialog } from "../AppPaletteDialog";
@@ -30,6 +30,13 @@ vi.mock("@/hooks", async (importOriginal) => {
   };
 });
 
+// Capture onAnimateOut instead of invoking it, so the close-transition
+// tests observe the transition effect in isolation and the restore-focus
+// test drives the (real-world: exit-animation-deferred) path explicitly.
+const captured = vi.hoisted(() => ({
+  onAnimateOut: undefined as (() => void) | undefined,
+}));
+
 vi.mock("@/hooks/useAnimatedPresence", () => ({
   useAnimatedPresence: ({
     isOpen,
@@ -38,9 +45,7 @@ vi.mock("@/hooks/useAnimatedPresence", () => ({
     isOpen: boolean;
     onAnimateOut?: () => void;
   }) => {
-    // The exit path runs onAnimateOut synchronously when isOpen is false —
-    // close enough to the real timing for the restore-focus clearing path.
-    if (!isOpen && onAnimateOut) onAnimateOut();
+    captured.onAnimateOut = onAnimateOut;
     return { isVisible: isOpen, shouldRender: isOpen };
   },
 }));
@@ -150,6 +155,23 @@ describe.each(harnesses)("$name overlay clearing (issue #11030)", ({ node }) => 
     expect(shortcutHintStore.getState().activeHint).toBeNull();
     // The suppression window must be armed so the focus restore that
     // follows can't re-open a tooltip through Radix's focus path.
+    expect(isTooltipFocusOpenSuppressed()).toBe(true);
+  });
+
+  it("re-arms suppression from the restore-focus path after the exit animation", () => {
+    const { rerender } = render(node(true));
+    rerender(node(false));
+    // Drop the state the transitions armed so the assertions isolate the
+    // restore-focus clear, which runs a full exit animation later.
+    resetTooltipRegistry();
+    const dismissSpy = vi.fn();
+    registerTooltipDismiss(dismissSpy);
+    showHint();
+
+    act(() => captured.onAnimateOut?.());
+
+    expect(dismissSpy).toHaveBeenCalled();
+    expect(shortcutHintStore.getState().activeHint).toBeNull();
     expect(isTooltipFocusOpenSuppressed()).toBe(true);
   });
 });

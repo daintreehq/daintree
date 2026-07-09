@@ -57,14 +57,15 @@ export function AppPaletteDialog({
     const el = previousFocusRef.current;
     previousFocusRef.current = null;
     if (!el) return;
+    // Palette-to-palette handoff: the next palette will install its
+    // own focus, so skip restore entirely — and skip the overlay clear
+    // below, which would wipe overlays the incoming palette owns.
+    if (usePaletteStore.getState().activePaletteId) return;
     // Re-arm the tooltip focus-open suppression right before the focus
     // move: focusing a tooltip trigger re-opens its tooltip synchronously
     // through Radix's focus path, and this runs an exit animation after
     // the close-transition clear already fired (issue #11030).
     clearDialogOverlays();
-    // Palette-to-palette handoff: the next palette will install its
-    // own focus, so skip restore entirely.
-    if (usePaletteStore.getState().activePaletteId) return;
     if (document.contains(el)) {
       el.focus();
       return;

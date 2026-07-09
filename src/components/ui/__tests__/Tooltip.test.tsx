@@ -425,6 +425,39 @@ describe("Tooltip wrapper — dialog-transition dismissal (issue #11030)", () =>
     expect(rootSpy.mock.calls.at(-1)?.[0]?.open).toBe(true);
   });
 
+  it("lets a pointer move on the trigger end suppression (pointer resting through the transition)", () => {
+    // Radix opens from pointermove, so a pointer already resting on the
+    // trigger re-earns tooltips on its next micro-move without needing a
+    // fresh pointerenter.
+    const { getByTestId } = render(
+      <Tooltip>
+        <TooltipTrigger data-testid="trigger">trigger</TooltipTrigger>
+        <TooltipContent>content</TooltipContent>
+      </Tooltip>
+    );
+
+    void act(() => dismissAllTooltips());
+    fireEvent.pointerMove(getByTestId("trigger"), { pointerType: "mouse" });
+    openLastRoot();
+    expect(rootSpy.mock.calls.at(-1)?.[0]?.open).toBe(true);
+  });
+
+  it("ignores touch pointer moves for suppression clearing", () => {
+    // Touch moves never open Radix tooltips — they must not count as hover
+    // intent that re-enables focus opens.
+    const { getByTestId } = render(
+      <Tooltip>
+        <TooltipTrigger data-testid="trigger">trigger</TooltipTrigger>
+        <TooltipContent>content</TooltipContent>
+      </Tooltip>
+    );
+
+    void act(() => dismissAllTooltips());
+    fireEvent.pointerMove(getByTestId("trigger"), { pointerType: "touch" });
+    openLastRoot();
+    expect(rootSpy.mock.calls.at(-1)?.[0]?.open).toBe(false);
+  });
+
   it("exempt tooltips ignore the suppression window entirely", () => {
     render(
       <Tooltip dismissOnDialogTransition={false}>
