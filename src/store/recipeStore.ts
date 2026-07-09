@@ -794,9 +794,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       (index) => recipe.terminals[index]?.type !== "dev-preview"
     ).length;
     const spawnBatch =
-      ptySpawnCount > 1
-        ? { spawnBatchId: crypto.randomUUID(), spawnBatchSize: ptySpawnCount }
-        : {};
+      ptySpawnCount > 1 ? { spawnBatchId: crypto.randomUUID(), spawnBatchSize: ptySpawnCount } : {};
     try {
       const settled = await Promise.allSettled(
         spawnIndices.map(async (index) => {

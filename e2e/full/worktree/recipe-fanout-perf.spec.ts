@@ -929,9 +929,7 @@ async function measureInBrowser(
             const index = (revealCursor + offset) % states.length;
             const state = states[index]!;
             if (state.readyMs >= 0 || !state.panelId) continue;
-            const root = newRoots.find(
-              (candidate) => candidate.dataset.panelId === state.panelId
-            );
+            const root = newRoots.find((candidate) => candidate.dataset.panelId === state.panelId);
             if (!root) continue;
             root.scrollIntoView({ block: "center", inline: "nearest" });
             revealCursor = (index + 1) % states.length;

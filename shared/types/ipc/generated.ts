@@ -1517,6 +1517,8 @@ export interface GeneratedIpcInvokeMap {
         title?: string | undefined;
         titleMode?: "default" | "custom" | "user" | undefined;
         restore?: boolean | undefined;
+        spawnBatchId?: string | undefined;
+        spawnBatchSize?: number | undefined;
         isEphemeral?: boolean | undefined;
         agentLaunchFlags?: string[] | undefined;
         agentModelId?: string | undefined;
