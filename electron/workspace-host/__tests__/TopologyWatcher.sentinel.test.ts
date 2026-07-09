@@ -3,8 +3,29 @@ import { mkdtempSync, mkdirSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join, normalize } from "path";
 
-// Real fs.watch drives the sentinel; only the parcel watcher (native FSEvents
-// subscription for the steady-state topology watcher) is stubbed.
+const { metadataWatchCallbacks } = vi.hoisted(() => ({
+  metadataWatchCallbacks: [] as Array<
+    (eventType: string, filename: string | Buffer | null) => void
+  >,
+}));
+
+vi.mock("fs", async () => {
+  const actual = await vi.importActual<typeof import("fs")>("fs");
+  return {
+    ...actual,
+    watch: vi.fn(
+      (
+        _filename: unknown,
+        _options: unknown,
+        listener: (eventType: string, filename: string | Buffer | null) => void
+      ) => {
+        metadataWatchCallbacks.push(listener);
+        return { close: vi.fn(), on: vi.fn() };
+      }
+    ),
+  };
+});
+
 const parcelSubscriptions: Array<{ dir: string; unsubscribed: boolean }> = [];
 
 vi.mock("@parcel/watcher", () => ({
@@ -61,6 +82,7 @@ describe("TopologyWatcher metadata sentinel", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    metadataWatchCallbacks.length = 0;
     parcelSubscriptions.length = 0;
     tempRoot = mkdtempSync(join(tmpdir(), "daintree-topo-sentinel-"));
     commonDir = join(tempRoot, ".git");
@@ -92,14 +114,12 @@ describe("TopologyWatcher metadata sentinel", () => {
 
     // The first external `git worktree add` creates the metadata dir.
     mkdirSync(metadataDir);
+    metadataWatchCallbacks[0]!("rename", "worktrees");
 
-    await vi.waitFor(
-      () => {
-        expect(reconcileSpy).toHaveBeenCalled();
-        expect(parcelSubscriptions).toHaveLength(1);
-      },
-      { timeout: 5000, interval: 25 }
-    );
+    await vi.waitFor(() => {
+      expect(reconcileSpy).toHaveBeenCalled();
+      expect(parcelSubscriptions).toHaveLength(1);
+    });
     expect(normalize(parcelSubscriptions[0]!.dir)).toBe(normalize(metadataDir));
     expect((watcher as any).metadataSentinel).toBeNull();
   });

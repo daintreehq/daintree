@@ -365,6 +365,10 @@ export async function extractPluginArchive(archivePath: string, destDir: string)
 
   const root = path.resolve(destDir);
   const zipfile = await openZip(archivePath);
+  if (zipfile.entryCount > MAX_DNTR_ENTRIES) {
+    zipfile.close();
+    throw new Error(`Archive exceeds ${MAX_DNTR_ENTRIES} entry limit`);
+  }
 
   return new Promise<void>((resolve, reject) => {
     let settled = false;

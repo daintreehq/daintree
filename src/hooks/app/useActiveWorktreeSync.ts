@@ -22,14 +22,14 @@ export function useActiveWorktreeSync() {
   );
 
   useEffect(() => {
-    if (worktrees.length === 0) return;
+    if (!isInitialized || worktrees.length === 0) return;
 
     const worktreeExists = activeWorktreeId && worktrees.some((w) => w.id === activeWorktreeId);
     if (!worktreeExists) {
       const mainWorktree = worktrees.find((w) => w.isMainWorktree) ?? worktrees[0]!;
       selectWorktree(mainWorktree.id);
     }
-  }, [worktrees, activeWorktreeId, selectWorktree]);
+  }, [worktrees, activeWorktreeId, isInitialized, selectWorktree]);
 
   useEffect(() => {
     const projectId = currentProject?.id ?? null;

@@ -97,7 +97,6 @@ export function RecipeEditor({
   const [scope, setScope] = useState<"global" | "project">("project");
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const recipeNameInputRef = useRef<HTMLInputElement>(null);
   const initialStateRef = useRef<string>("");
 
   useEffect(() => {
@@ -156,12 +155,6 @@ export function RecipeEditor({
     closeConfirm();
     onClose();
   }, [closeConfirm, onClose]);
-
-  useEffect(() => {
-    if (isOpen) {
-      setTimeout(() => recipeNameInputRef.current?.focus(), 0);
-    }
-  }, [isOpen]);
 
   const handleAddTerminal = () => {
     if (terminals.length >= MAX_TERMINALS_PER_RECIPE) {
@@ -276,7 +269,6 @@ export function RecipeEditor({
               Recipe Name
             </label>
             <input
-              ref={recipeNameInputRef}
               id="recipe-name"
               type="text"
               value={recipeName}
