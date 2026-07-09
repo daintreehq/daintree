@@ -338,7 +338,7 @@ export async function createMonitorHarness(
     pollIntervalMax: 3_600_000,
     circuitBreakerThreshold: 3,
     gitWatchEnabled: options.gitWatchEnabled ?? false,
-    gitWatchDebounceMs: 300,
+    gitWatchDebounceMs: 150,
   };
   return new WorktreeMonitor(worktree, config, { onUpdate: () => {} }, "main", pollQueue);
 }

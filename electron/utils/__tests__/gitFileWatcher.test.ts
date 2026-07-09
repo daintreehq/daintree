@@ -409,6 +409,119 @@ describe("GitFileWatcher", () => {
     expect(onChange).toHaveBeenCalledTimes(1);
   });
 
+  it("leading-edge flush fires an isolated event at the short delay after quiet", async () => {
+    const onChange = vi.fn();
+    const mock = setupSubscribeMock();
+
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "main",
+      debounceMs: 300,
+      onChange,
+      watchWorktree: true,
+      worktreeMinDebounceMs: 150,
+      worktreeMaxDebounceMs: 800,
+      worktreeMaxWaitMs: 1500,
+      worktreeLeadingDebounceMs: 50,
+      worktreeQuietWindowMs: 2000,
+    });
+
+    await expect(gitWatcher.start()).resolves.toBe(true);
+    mock.resolve();
+    const cb = mock.getCallback();
+
+    fireEvents(cb, [{ type: "update" }]);
+
+    await vi.advanceTimersByTimeAsync(49);
+    expect(onChange).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("burst continuation cancels the leading flush back onto the trailing ramp", async () => {
+    const onChange = vi.fn();
+    const mock = setupSubscribeMock();
+
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "main",
+      debounceMs: 300,
+      onChange,
+      watchWorktree: true,
+      worktreeMinDebounceMs: 150,
+      worktreeMaxDebounceMs: 800,
+      worktreeMaxWaitMs: 1500,
+      worktreeLeadingDebounceMs: 50,
+      worktreeQuietWindowMs: 2000,
+    });
+
+    await expect(gitWatcher.start()).resolves.toBe(true);
+    mock.resolve();
+    const cb = mock.getCallback();
+
+    fireEvents(cb, [{ type: "update" }]);
+    await vi.advanceTimersByTimeAsync(20);
+    // Burst continues before the 50ms leading timer fires — the recomputed
+    // trailing delay (150 + (5-1)*10 = 190ms from now) replaces it.
+    fireEvents(cb, [
+      { type: "update" },
+      { type: "update" },
+      { type: "update" },
+      { type: "update" },
+    ]);
+
+    await vi.advanceTimersByTimeAsync(189);
+    expect(onChange).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("leading-edge does not re-fire inside the quiet window", async () => {
+    const onChange = vi.fn();
+    const mock = setupSubscribeMock();
+
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "main",
+      debounceMs: 300,
+      onChange,
+      watchWorktree: true,
+      worktreeMinDebounceMs: 150,
+      worktreeMaxDebounceMs: 800,
+      worktreeMaxWaitMs: 1500,
+      worktreeLeadingDebounceMs: 50,
+      worktreeQuietWindowMs: 2000,
+    });
+
+    await expect(gitWatcher.start()).resolves.toBe(true);
+    mock.resolve();
+    const cb = mock.getCallback();
+
+    fireEvents(cb, [{ type: "update" }]);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(onChange).toHaveBeenCalledTimes(1);
+
+    // 500ms after the flush is still inside the 2000ms quiet window — the
+    // next event waits out the normal trailing minimum, not the leading delay.
+    await vi.advanceTimersByTimeAsync(500);
+    fireEvents(cb, [{ type: "update" }]);
+
+    await vi.advanceTimersByTimeAsync(149);
+    expect(onChange).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(onChange).toHaveBeenCalledTimes(2);
+
+    // Once the quiet window elapses the leading fast path re-arms.
+    await vi.advanceTimersByTimeAsync(2000);
+    fireEvents(cb, [{ type: "update" }]);
+
+    await vi.advanceTimersByTimeAsync(50);
+    expect(onChange).toHaveBeenCalledTimes(3);
+  });
+
   it("burst ramps debounce delay proportional to event count", async () => {
     const onChange = vi.fn();
     const mock = setupSubscribeMock();

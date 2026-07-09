@@ -5,7 +5,7 @@ import { getConstructedReflowTerminalCount } from "../lib/reflowFixture";
 describe("perf scenario matrix", () => {
   it("covers full PERF matrix", () => {
     expect(() => assertMatrixCoverage()).not.toThrow();
-    expect(allScenarios).toHaveLength(44);
+    expect(allScenarios).toHaveLength(56);
   });
 
   it("importing the resize/reflow scenario module constructs no terminals", () => {
