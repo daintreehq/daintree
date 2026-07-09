@@ -1,5 +1,6 @@
 import { refractor } from "refractor/core";
 import type { Syntax } from "refractor/core";
+import type { TokenNode } from "react-diff-view";
 import bash from "refractor/bash";
 import css from "refractor/css";
 import javascript from "refractor/javascript";
@@ -14,17 +15,17 @@ for (const lang of [bash, css, javascript, jsx, json, markdown, tsx, typescript]
 }
 
 /**
- * react-diff-view's tokenize expects refractor v3's highlight() contract — a
- * plain array of nodes. refractor v4+ returns a hast Root object, whose
- * non-iterable shape makes the token tree walk throw, which the catch in
- * runDiffTokenize silently turns into tokens = null: no syntax highlighting,
- * no word-level edit pills, no search marks. Unwrapping .children restores the
- * v3 shape the library walks correctly.
+ * The tokenize pipeline expects refractor v3's highlight() contract — a plain
+ * array of nodes. refractor v4+ returns a hast Root object, whose non-iterable
+ * shape makes the token tree walk throw, which the catch in runDiffTokenize
+ * silently turns into tokens = null: no syntax highlighting, no word-level
+ * edit pills, no search marks. Unwrapping .children restores the v3 shape the
+ * pipeline walks correctly.
  */
-// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- structurally satisfies the lib's { highlight } contract; the v5 Root type can't
 export const refractorAdapter = {
-  highlight: (code: string, language: string) => refractor.highlight(code, language).children,
-} as unknown as typeof refractor;
+  highlight: (code: string, language: string): TokenNode[] =>
+    refractor.highlight(code, language).children,
+};
 
 const LANG_LOADERS: Record<string, () => Promise<{ default: Syntax }>> = {
   c: () => import("refractor/c"),

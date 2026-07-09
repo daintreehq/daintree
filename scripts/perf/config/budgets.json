@@ -224,21 +224,21 @@
       "maxMetricValues": { "msPerTargetAt48": 1 }
     },
 
-    "PERF-160": { "p95Ms": 320, "maxRegressionPct": 75 },
+    "PERF-160": { "p95Ms": 170, "maxRegressionPct": 75 },
     "PERF-161": {
-      "p95Ms": 1900,
+      "p95Ms": 320,
       "maxRegressionPct": 75,
       "maxMetricValues": { "markedIntraLine": 0 }
     },
-    "PERF-162": { "p95Ms": 460, "maxRegressionPct": 75 },
+    "PERF-162": { "p95Ms": 260, "maxRegressionPct": 75 },
 
     "PERF-170": {
-      "p95Ms": 60,
+      "p95Ms": 40,
       "maxRegressionPct": 75,
       "maxMetricValues": { "p99KeystrokeMs": 8 }
     },
     "PERF-171": {
-      "p95Ms": 140,
+      "p95Ms": 55,
       "maxRegressionPct": 75,
       "maxMetricValues": { "msPerKAction": 6 }
     }
