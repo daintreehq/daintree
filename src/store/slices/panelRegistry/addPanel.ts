@@ -905,6 +905,8 @@ export const createAddPanelActions = (
           titleMode: options.titleMode,
           env: mergedEnv,
           restore: options.restore,
+          spawnBatchId: options.spawnBatchId,
+          spawnBatchSize: options.spawnBatchSize,
           agentLaunchFlags: options.agentLaunchFlags,
           agentModelId: options.agentModelId,
           worktreeId: options.worktreeId,

@@ -790,6 +790,13 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     // the batch when nothing will spawn (hard limit hit or all indices invalid)
     // so `isHydrationBatchActive()` never briefly flips for unrelated work. (#9165)
     const batchToken = spawnIndices.length > 0 ? terminalStore.beginSpawnBatch() : null;
+    const ptySpawnCount = spawnIndices.filter(
+      (index) => recipe.terminals[index]?.type !== "dev-preview"
+    ).length;
+    const spawnBatch =
+      ptySpawnCount > 1
+        ? { spawnBatchId: crypto.randomUUID(), spawnBatchSize: ptySpawnCount }
+        : {};
     try {
       const settled = await Promise.allSettled(
         spawnIndices.map(async (index) => {
@@ -917,6 +924,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
               spawnedBy,
               focusPolicy,
               bypassLimits: true,
+              ...spawnBatch,
             });
           }
 
@@ -931,6 +939,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
             spawnedBy,
             focusPolicy,
             bypassLimits: true,
+            ...spawnBatch,
           });
         })
       );

@@ -34,6 +34,67 @@ import type * as PluginServiceModule from "../../../services/PluginService.js";
 
 type ValidatedTerminalSpawnOptions = z.output<typeof TerminalSpawnOptionsSchema>;
 
+const TERMINAL_SPAWN_INTERVAL_MS = 1_000;
+const TERMINAL_SPAWN_BURST = 6;
+const RECIPE_SPAWN_BATCH_TTL_MS = 30_000;
+
+interface RecipeSpawnBatchAdmission {
+  expectedSize: number;
+  claimed: number;
+  gate: Promise<void>;
+}
+
+const recipeSpawnBatchAdmissions = new Map<string, RecipeSpawnBatchAdmission>();
+
+function claimRecipeSpawnBatchAdmission(
+  options: ValidatedTerminalSpawnOptions
+): Promise<void> | null {
+  const batchId = options.spawnBatchId;
+  const batchSize = options.spawnBatchSize;
+  if (!batchId || !batchSize || batchSize > MAX_TERMINALS_PER_RECIPE) return null;
+
+  const existing = recipeSpawnBatchAdmissions.get(batchId);
+  if (existing) {
+    if (existing.expectedSize !== batchSize || existing.claimed >= existing.expectedSize) {
+      return null;
+    }
+    existing.claimed++;
+    return existing.gate;
+  }
+
+  const gate = waitForBurstRateLimitSlot("terminalRecipeSpawnBatch", TERMINAL_SPAWN_INTERVAL_MS, 1);
+  const admission: RecipeSpawnBatchAdmission = {
+    expectedSize: batchSize,
+    claimed: 1,
+    gate,
+  };
+  recipeSpawnBatchAdmissions.set(batchId, admission);
+
+  const expiry = setTimeout(() => {
+    if (recipeSpawnBatchAdmissions.get(batchId) === admission) {
+      recipeSpawnBatchAdmissions.delete(batchId);
+    }
+  }, RECIPE_SPAWN_BATCH_TTL_MS);
+  expiry.unref();
+
+  return gate;
+}
+
+async function waitForTerminalSpawnAdmission(
+  options: ValidatedTerminalSpawnOptions
+): Promise<void> {
+  const recipeBatchGate = claimRecipeSpawnBatchAdmission(options);
+  if (recipeBatchGate) {
+    await recipeBatchGate;
+    return;
+  }
+  await waitForBurstRateLimitSlot(
+    "terminalSpawn",
+    TERMINAL_SPAWN_INTERVAL_MS,
+    TERMINAL_SPAWN_BURST
+  );
+}
+
 // Lazy cached accessor (same pattern as `helpAssistant.ts`) — the MCP server
 // stack is ~637KB and only needed for Claude launches with a non-"off" MCP
 // tier, so keep it out of this module's static import set (it loads eagerly
@@ -91,6 +152,7 @@ import type { WorkspaceClient } from "../../../services/WorkspaceClient.js";
 import { getDefaultShell } from "../../../services/pty/terminalShell.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { quoteCommandArg } from "../../../../shared/utils/shellEscape.js";
+import { MAX_TERMINALS_PER_RECIPE } from "../../../../shared/utils/recipeSanitizer.js";
 import { buildCommandLaunchShell } from "./commandLaunch.js";
 
 export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): () => void {
@@ -111,12 +173,9 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
 
     const bypassedRateLimit = validatedOptions.restore === true && consumeRestoreQuota();
     if (!bypassedRateLimit) {
-      // Burst-tolerant token bucket: a user launching several agents
-      // back-to-back (fleet launch, "up to 4 in parallel" MCP guidance) gets
-      // up to 6 instant spawns, then the schedule falls back to the smooth
-      // 1/sec leaky-bucket cadence that #5352 chose for batch spawns — the
-      // sliding-window overload and its every-N-terminals stall stay out.
-      await waitForBurstRateLimitSlot("terminalSpawn", 1_000, 6);
+      // A bounded recipe consumes one admission slot, not one slot per panel.
+      // Ordinary spawns keep the six-terminal burst and 1/sec sustained guard.
+      await waitForTerminalSpawnAdmission(validatedOptions);
     }
 
     const cols = Math.max(1, Math.min(500, Math.floor(validatedOptions.cols) || 80));
