@@ -29,12 +29,15 @@ export interface TerminalBurstControllerDeps {
  * interactive resource-profile override IPC throttle.
  */
 export class TerminalBurstController {
-  // Which terminal received the most recent alt-buffer wheel event, and when —
-  // drives the ingest service's background-drain hold during a scroll gesture.
-  // Uses the same decay window as the BURST tier so "gesture over" is one
-  // consistent notion across the renderer.
-  private lastActiveWheelId: string | null = null;
-  private lastActiveWheelAt = 0;
+  // Every terminal with a live alt-buffer wheel gesture (id → last wheel
+  // wall-clock), pruned lazily against the decay window. A Map rather than a
+  // single last-wheeled slot: scrolling several mouse-reporting TUIs at once
+  // (split panes, fleet review) must not let each pane's wheel put the OTHER
+  // actively-scrolled panes' redraw streams on the background-drain hold —
+  // that serializes the very gestures the hold exists to protect. Uses the
+  // same decay window as the BURST tier so "gesture over" is one consistent
+  // notion across the renderer.
+  private activeWheelAt = new Map<string, number>();
   // Throttle for the interactive resource-profile override IPC (see onActiveWheel).
   private lastInteractiveOverrideRequestAt = 0;
   // Keystroke-echo round trip in flight: input left for the PTY and its echo
@@ -79,14 +82,28 @@ export class TerminalBurstController {
       : null;
   }
 
-  // Whether a wheel-driven BURST gesture is still within its decay window —
-  // and if so, which terminal it targets. Consumed by the worker-ingest data
-  // buffer to hold its background-drain during an active scroll.
-  getActiveWheelHoldId(): string | null {
-    return this.lastActiveWheelId !== null &&
-      Date.now() - this.lastActiveWheelAt < WHEEL_BURST_DECAY_MS
-      ? this.lastActiveWheelId
-      : null;
+  // Whether ANY wheel-driven BURST gesture is still within its decay window.
+  // Consumed by the ingest data buffer to decide that a background-drain hold
+  // regime is in effect at all.
+  hasActiveWheelGesture(): boolean {
+    const now = Date.now();
+    for (const [id, at] of this.activeWheelAt) {
+      if (now - at < WHEEL_BURST_DECAY_MS) return true;
+      this.activeWheelAt.delete(id);
+    }
+    return false;
+  }
+
+  // Whether THIS terminal has a live wheel gesture — a hold participant whose
+  // own redraw stream must drain inline (holding it would stall the gesture).
+  isWheelActive(id: string): boolean {
+    const at = this.activeWheelAt.get(id);
+    if (at === undefined) return false;
+    if (Date.now() - at >= WHEEL_BURST_DECAY_MS) {
+      this.activeWheelAt.delete(id);
+      return false;
+    }
+    return true;
   }
 
   /**
@@ -104,8 +121,7 @@ export class TerminalBurstController {
     const managed = this.deps.getInstance(id);
     if (!managed) return;
 
-    this.lastActiveWheelId = id;
-    this.lastActiveWheelAt = Date.now();
+    this.activeWheelAt.set(id, Date.now());
 
     this.deps.applyRendererPolicy(id, TerminalRefreshTier.BURST);
     if (managed.inputBurstTimer !== undefined) {
@@ -213,6 +229,7 @@ export class TerminalBurstController {
   // Clears the wheel-burst and write-burst timers for a destroyed terminal.
   // Called from `TerminalInstanceService.destroy()`.
   destroy(id: string): void {
+    this.activeWheelAt.delete(id);
     const managed = this.deps.getInstance(id);
     if (!managed) return;
 

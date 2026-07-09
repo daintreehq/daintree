@@ -88,12 +88,17 @@ export class TerminalOutputIngestService {
     // keeps the legacy fully-synchronous drain — null focus means "drain
     // synchronously for everyone", never "defer everyone".
     private readonly getFocusedId: () => string | null = () => null,
-    // The terminal the user is actively wheel-scrolling (null when no wheel
-    // burst is live). While non-null, other non-focused terminals' drains are
-    // held on a recheck timer instead of draining after one yield. The wheeled
-    // terminal itself is exempt — scrolling an unfocused full-screen TUI is a
-    // PTY round-trip and holding its own output would stall the gesture.
-    private readonly getActiveWheelId: () => string | null = () => null
+    // Whether a sustained interaction (a live wheel gesture on any terminal,
+    // or a keystroke echo in flight) is in effect. While true, non-participant
+    // background drains are held on a recheck timer instead of draining after
+    // one yield.
+    private readonly hasInteractionHold: () => boolean = () => false,
+    // Whether this terminal is a participant in the live interaction (it is
+    // being wheel-scrolled, or its keystroke echo is in flight). Participants
+    // drain inline like the focused pane: scrolling an unfocused full-screen
+    // TUI is a PTY round-trip per redraw, and deferring — let alone holding —
+    // its own output stalls the very gesture the hold regime protects.
+    private readonly isInteractionParticipant: (id: string) => boolean = () => false
   ) {}
 
   public async initialize(): Promise<void> {
@@ -360,12 +365,12 @@ export class TerminalOutputIngestService {
   private shouldDeferDrain(id: string): boolean {
     if (!FOCUSED_DRAIN_PRIORITY_ENABLED) return false;
     const focusedId = this.getFocusedId();
-    return focusedId !== null && focusedId !== id;
+    if (focusedId === null || focusedId === id) return false;
+    return !this.isInteractionParticipant(id);
   }
 
   private shouldHoldDrain(id: string): boolean {
-    const wheelId = this.getActiveWheelId();
-    return wheelId !== null && wheelId !== id;
+    return this.hasInteractionHold() && !this.isInteractionParticipant(id);
   }
 
   private tryDrain(id: string, queue: TerminalIngestQueue): void {

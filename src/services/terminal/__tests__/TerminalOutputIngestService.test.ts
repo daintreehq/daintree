@@ -719,7 +719,12 @@ describe("TerminalOutputIngestService", () => {
       focusedId: string | null,
       getWheelId: () => string | null
     ) {
-      return new TerminalOutputIngestService(writeToTerminal, () => focusedId, getWheelId);
+      return new TerminalOutputIngestService(
+        writeToTerminal,
+        () => focusedId,
+        () => getWheelId() !== null,
+        (id) => getWheelId() === id
+      );
     }
 
     it("holds a background queue while a wheel burst is active elsewhere", async () => {
@@ -770,19 +775,41 @@ describe("TerminalOutputIngestService", () => {
       expect(writeToTerminal).toHaveBeenCalledWith("term-bg", "capped", 1);
     });
 
-    it("never holds the terminal being wheeled (unfocused TUI scroll round-trip)", async () => {
-      vi.stubGlobal("scheduler", undefined);
-      vi.useFakeTimers();
+    it("drains the wheeled terminal inline (unfocused TUI scroll round-trip)", () => {
       const writeToTerminal = vi.fn();
       const service = makeService(writeToTerminal, "term-focused", () => "term-wheel");
 
-      // The wheeled terminal is background (not focused) but exempt from the
-      // hold — its redraw frames ARE the scroll. Normal one-yield defer only.
+      // The wheeled terminal is background (not focused) but a participant in
+      // the gesture — its redraw frames ARE the scroll, so it drains inline
+      // like the focused pane, not after a scheduler yield.
       service.bufferData("term-wheel", "frames");
-      expect(writeToTerminal).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(0);
       expect(writeToTerminal).toHaveBeenCalledTimes(1);
       expect(writeToTerminal).toHaveBeenCalledWith("term-wheel", "frames", 1);
+    });
+
+    it("never lets concurrently wheeled terminals hold each other", async () => {
+      vi.stubGlobal("scheduler", undefined);
+      vi.useFakeTimers();
+      const writeToTerminal = vi.fn();
+      const wheeled = new Set(["term-wheel-a", "term-wheel-b"]);
+      const service = new TerminalOutputIngestService(
+        writeToTerminal,
+        () => "term-focused",
+        () => wheeled.size > 0,
+        (id) => wheeled.has(id)
+      );
+
+      // Both actively-scrolled TUIs drain inline; a third terminal is held.
+      service.bufferData("term-wheel-a", "frames-a");
+      service.bufferData("term-wheel-b", "frames-b");
+      expect(writeToTerminal).toHaveBeenCalledTimes(2);
+      expect(writeToTerminal).toHaveBeenCalledWith("term-wheel-a", "frames-a", 1);
+      expect(writeToTerminal).toHaveBeenCalledWith("term-wheel-b", "frames-b", 1);
+
+      service.bufferData("term-bg", "held");
+      await vi.advanceTimersByTimeAsync(24);
+      expect(writeToTerminal).toHaveBeenCalledTimes(2);
+      expect(service.getQueuedBytes("term-bg")).toBe(4);
     });
 
     it("never holds the focused terminal", async () => {
@@ -804,7 +831,8 @@ describe("TerminalOutputIngestService", () => {
       const service = new TerminalOutputIngestService(
         writeToTerminal,
         () => focusedId,
-        () => "term-wheel"
+        () => true,
+        (id) => id === "term-wheel"
       );
 
       service.bufferData("term-bg", "a");

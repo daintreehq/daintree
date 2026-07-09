@@ -91,7 +91,14 @@ class TerminalInstanceService {
     // Background drains are held both during an active wheel gesture and while
     // a keystroke echo is in flight — the same "focused feel beats background
     // throughput" contract, applied to the two sustained interactions.
-    () => this.burstController.getActiveWheelHoldId() ?? this.burstController.getEchoPendingHoldId()
+    // Participants (every actively-wheeled terminal — plural, so concurrently
+    // scrolled TUIs never hold each other — and the echo-pending terminal)
+    // drain inline like the focused pane.
+    () =>
+      this.burstController.hasActiveWheelGesture() ||
+      this.burstController.getEchoPendingHoldId() !== null,
+    (id) =>
+      this.burstController.isWheelActive(id) || this.burstController.getEchoPendingHoldId() === id
   );
   private suppressedExitUntil = new Map<string, number>();
   private unseenTracker = new TerminalUnseenOutputTracker();
