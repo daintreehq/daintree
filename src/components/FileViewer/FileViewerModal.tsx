@@ -270,21 +270,59 @@ export function FileViewerModal({
   const imageFile = isImageFile(filePath);
   const svgFile = isSvgFile(filePath);
 
+  // Worktree-relative path, when the file lives under rootPath. Feeds the
+  // breadcrumb title (directory muted, basename strong — the Kaleidoscope
+  // path-bar read), the image compare's git lookups, and the workspace-entry
+  // identity guard below.
+  const workspaceRelPath = useMemo(() => {
+    const fwdPath = filePath.replace(/\\/g, "/");
+    const fwdRootDir = rootPath.replace(/\\/g, "/").replace(/\/$/, "") + "/";
+    return fwdPath.startsWith(fwdRootDir) ? fwdPath.slice(fwdRootDir.length) : null;
+  }, [filePath, rootPath]);
+
   // Review-workspace mode: the opener supplied its full changeset, so the
   // modal grows a changed-files sidebar, viewed markers, and cross-file
   // change navigation. Single-file openers keep the classic layout.
+  // Defense in depth on the entry: it must describe the OPEN file — an index
+  // that drifted against a refreshed changeset (list re-sorted while the
+  // modal is up) must never mark the wrong file's viewedKey.
   const isWorkspace = (changeSet?.length ?? 0) > 1;
-  const workspaceEntry =
+  const rawWorkspaceEntry =
     changeSet && currentFileIndex !== undefined ? (changeSet[currentFileIndex] ?? null) : null;
-  const viewedSet = useDiffViewedStore(
-    useCallback((state) => selectViewedSet(state, rootPath), [rootPath])
+  const workspaceEntry =
+    rawWorkspaceEntry &&
+    workspaceRelPath !== null &&
+    rawWorkspaceEntry.path.replace(/\\/g, "/") === workspaceRelPath
+      ? rawWorkspaceEntry
+      : null;
+
+  // Changed image files opened from a changeset get the HEAD-vs-working-tree
+  // compare (Two-up / Swipe / Onion skin) instead of the static preview.
+  // Declared before loadFile, which consults it to skip the working-tree read.
+  const imageDiffEligible = Boolean(
+    imageFile && fileStatus && workspaceRelPath && isImageDiffCandidate(filePath)
+  );
+  // Subscribe only to the OPEN file's viewed flag — subscribing to the whole
+  // set would re-render the mounted diff tree on every sidebar checklist
+  // toggle. markViewedAndAdvance reads the full set imperatively instead.
+  const currentViewed = useDiffViewedStore(
+    useCallback(
+      (state) =>
+        workspaceEntry ? selectViewedSet(state, rootPath).has(workspaceEntry.viewedKey) : false,
+      [rootPath, workspaceEntry]
+    )
   );
   const setViewed = useDiffViewedStore((state) => state.setViewed);
   const toggleViewed = useDiffViewedStore((state) => state.toggleViewed);
   // Cross-file hunk stepping: where to land in the next file once its hunks
-  // render. Carries the expected file index so a manual jump elsewhere (or a
-  // hunkless file) invalidates the target instead of firing late.
-  const pendingHunkTargetRef = useRef<{ fileIndex: number; place: "first" | "last" } | null>(null);
+  // render. Carries the expected file index (a manual jump elsewhere
+  // invalidates the target) and the diff that was on screen when the step
+  // was armed (the landing must wait for a different diff to commit).
+  const pendingHunkTargetRef = useRef<{
+    fileIndex: number;
+    place: "first" | "last";
+    armedDiff: string | undefined;
+  } | null>(null);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -309,6 +347,7 @@ export function FileViewerModal({
       requestRef.current++;
       hasSwitchedToDiffRef.current = false;
       currentHunkIndexRef.current = -1;
+      pendingHunkTargetRef.current = null;
       setSearchOpen(false);
       setSearchQuery("");
       const nextMode = defaultMode ?? (hasDiff && !initialLine ? "diff" : "view");
@@ -330,7 +369,10 @@ export function FileViewerModal({
       current === "rendered" && !markdownFile ? (hasDiff ? "diff" : "view") : current
     );
 
-    if (imageFile && !svgFile) {
+    // Image-compare-eligible files (including SVG) never need the working-tree
+    // read — ImageDiffViewer fetches both sides itself, and a deleted image
+    // has no working file to read anyway.
+    if (imageFile && (!svgFile || imageDiffEligible)) {
       setLoadState("image");
       return;
     }
@@ -445,26 +487,11 @@ export function FileViewerModal({
 
   const fileName = filePath.split(/[/\\]/).filter(Boolean).pop() || filePath;
 
-  // Worktree-relative path, when the file lives under rootPath. Feeds the
-  // breadcrumb title (directory muted, basename strong — the Kaleidoscope
-  // path-bar read) and the image compare's git lookups.
-  const workspaceRelPath = useMemo(() => {
-    const fwdPath = filePath.replace(/\\/g, "/");
-    const fwdRootDir = rootPath.replace(/\\/g, "/").replace(/\/$/, "") + "/";
-    return fwdPath.startsWith(fwdRootDir) ? fwdPath.slice(fwdRootDir.length) : null;
-  }, [filePath, rootPath]);
-
   const relDir = useMemo(() => {
     if (!workspaceRelPath) return null;
     const lastSlash = workspaceRelPath.lastIndexOf("/");
     return lastSlash > 0 ? workspaceRelPath.slice(0, lastSlash) : null;
   }, [workspaceRelPath]);
-
-  // Changed image files opened from a changeset get the HEAD-vs-working-tree
-  // compare (Two-up / Swipe / Onion skin) instead of the static preview.
-  const imageDiffEligible = Boolean(
-    imageFile && fileStatus && workspaceRelPath && isImageDiffCandidate(filePath)
-  );
 
   const diffFontStyle: CSSProperties & Record<"--diff-font-size", string> = {
     "--diff-font-size": DIFF_FONT_SIZE_PX[diffFontSize],
@@ -557,6 +584,32 @@ export function FileViewerModal({
 
   const stepHunk = useCallback(
     (delta: -1 | 1) => {
+      const count =
+        diffViewerRef.current?.querySelectorAll<HTMLElement>("tbody.diff-hunk").length ?? 0;
+      // Past either end of the file, the step flows into the neighboring file
+      // of the changeset (Kaleidoscope-style continuous change navigation).
+      // `onNavigateFile` is called directly (not via the `navigateFile`
+      // effect event — those are effect-only) with the announce ref set so
+      // the landed-on file is still read out. `armedDiff` records which diff
+      // string was on screen when the step was armed: the landing only fires
+      // once a DIFFERENT diff has committed, so the outgoing file's DOM can
+      // never satisfy the target during the swap.
+      const crossToFile = (fileDelta: -1 | 1, place: "first" | "last") => {
+        pendingHunkTargetRef.current = {
+          fileIndex: (currentFileIndex ?? 0) + fileDelta,
+          place,
+          armedDiff: diff,
+        };
+        fileStepAnnouncePendingRef.current = true;
+        onNavigateFile?.(fileDelta);
+      };
+      if (count === 0) {
+        // Hunkless file (binary, image, no changes): keep the flow continuous
+        // instead of dead-ending mid-changeset.
+        if (delta === 1 && hasNextFile) crossToFile(1, "first");
+        else if (delta === -1 && hasPrevFile) crossToFile(-1, "last");
+        return;
+      }
       const current = currentHunkIndexRef.current;
       if (current < 0) {
         // Stepping from the initial sentinel (-1) lands on the first hunk so
@@ -564,33 +617,21 @@ export function FileViewerModal({
         scrollToHunkIndex(0);
         return;
       }
-      const next = current + delta;
-      const count =
-        diffViewerRef.current?.querySelectorAll<HTMLElement>("tbody.diff-hunk").length ?? 0;
-      // Past either end of the file, the step flows into the neighboring file
-      // of the changeset (Kaleidoscope-style continuous change navigation).
-      // `onNavigateFile` is called directly (not via the `navigateFile`
-      // effect event — those are effect-only) with the announce ref set so
-      // the landed-on file is still read out.
+      // Clamp before stepping: collapse/reveal can shrink the live hunk count
+      // under a stale ref, and an unclamped `p` would otherwise read as "past
+      // the end" and step forward.
+      const next = Math.min(current, count - 1) + delta;
       if (next < 0) {
-        if (hasPrevFile) {
-          pendingHunkTargetRef.current = { fileIndex: (currentFileIndex ?? 0) - 1, place: "last" };
-          fileStepAnnouncePendingRef.current = true;
-          onNavigateFile?.(-1);
-        }
+        if (hasPrevFile) crossToFile(-1, "last");
         return;
       }
       if (next >= count) {
-        if (hasNextFile) {
-          pendingHunkTargetRef.current = { fileIndex: (currentFileIndex ?? 0) + 1, place: "first" };
-          fileStepAnnouncePendingRef.current = true;
-          onNavigateFile?.(1);
-        }
+        if (hasNextFile) crossToFile(1, "first");
         return;
       }
       scrollToHunkIndex(next);
     },
-    [scrollToHunkIndex, hasPrevFile, hasNextFile, currentFileIndex, onNavigateFile]
+    [scrollToHunkIndex, hasPrevFile, hasNextFile, currentFileIndex, onNavigateFile, diff]
   );
 
   useEffect(() => {
@@ -663,12 +704,16 @@ export function FileViewerModal({
   }, [isOpen, canStepFiles]);
 
   // `v` — mark the open file viewed and advance to the next unviewed file
-  // (wrapping), the GitHub-review muscle memory. Workspace mode only.
+  // (wrapping), the GitHub-review muscle memory. Requires a matching
+  // changeSet entry; only the footer button unmarks.
   const markViewedAndAdvance = useEffectEvent(() => {
     if (!workspaceEntry || !changeSet || currentFileIndex === undefined) return;
+    const viewedSet = selectViewedSet(useDiffViewedStore.getState(), rootPath);
     const alreadyViewed = viewedSet.has(workspaceEntry.viewedKey);
-    if (!alreadyViewed) setViewed(rootPath, workspaceEntry.viewedKey, true);
-    useAnnouncerStore.getState().announce("Marked viewed");
+    if (!alreadyViewed) {
+      setViewed(rootPath, workspaceEntry.viewedKey, true);
+      useAnnouncerStore.getState().announce("Marked viewed");
+    }
     if (!onSelectFile) return;
     for (let step = 1; step < changeSet.length; step++) {
       const index = (currentFileIndex + step) % changeSet.length;
@@ -683,7 +728,9 @@ export function FileViewerModal({
   });
 
   useEffect(() => {
-    if (!isOpen || !isWorkspace) return;
+    // Gated on the entry (not multi-file workspace mode) so `v` also works
+    // for a single-file changeset, where it marks the file and stays put.
+    if (!isOpen || !workspaceEntry) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key !== "v") return;
@@ -706,7 +753,7 @@ export function FileViewerModal({
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [isOpen, isWorkspace]);
+  }, [isOpen, workspaceEntry]);
 
   // IntersectionObserver tracks the most-visible hunk during free scrolling.
   // Observes tr:first-child (not tbody — table-row-group collapses to 0 height
@@ -714,6 +761,13 @@ export function FileViewerModal({
   // so split/unified toggles re-observe the new DOM.
   useEffect(() => {
     if (!isOpen || mode !== "diff" || !diff) {
+      // Destination diff observed loading: drop the armed-diff identity check
+      // so a destination whose diff STRING happens to equal the source's
+      // (sentinel pairs) can still land once it commits.
+      const pendingWhileLoading = pendingHunkTargetRef.current;
+      if (pendingWhileLoading && pendingWhileLoading.fileIndex === (currentFileIndex ?? -1)) {
+        pendingWhileLoading.armedDiff = undefined;
+      }
       setActiveHunkIndex(-1);
       setHunkCount(0);
       setHunkMarkers([]);
@@ -743,12 +797,15 @@ export function FileViewerModal({
     setHunkCount(count);
 
     // Land a cross-file hunk step once the destination file's hunks exist.
-    // A stale target (user jumped elsewhere meanwhile) is dropped instead.
+    // A stale target (user jumped elsewhere meanwhile) is dropped instead,
+    // and the outgoing file's still-rendered diff never satisfies the target
+    // (`armedDiff` identity check) — the swap can commit the new index a
+    // frame before the new diff arrives.
     const pending = pendingHunkTargetRef.current;
     if (pending) {
       if (pending.fileIndex !== (currentFileIndex ?? -1)) {
         pendingHunkTargetRef.current = null;
-      } else if (count > 0) {
+      } else if (count > 0 && diff !== pending.armedDiff) {
         pendingHunkTargetRef.current = null;
         const landingIndex = pending.place === "last" ? count - 1 : 0;
         requestAnimationFrame(() => scrollToHunkIndex(landingIndex));
@@ -1001,7 +1058,10 @@ export function FileViewerModal({
             ? "7xl"
             : "6xl"
       }
-      maxHeight={isWorkspace ? "max-h-[92vh]" : "max-h-[90vh]"}
+      /* Workspace mode holds a fixed frame (h-, not just max-h-): a short
+         diff must not shrink-wrap the dialog mid-review — stepping files
+         would otherwise resize the whole surface on every jump. */
+      maxHeight={isWorkspace ? "h-[92vh] max-h-[92vh]" : "max-h-[90vh]"}
       restoreFocusTo={restoreFocusTo}
       data-testid="file-viewer-dialog"
     >
@@ -1150,6 +1210,7 @@ export function FileViewerModal({
             currentIndex={currentFileIndex ?? -1}
             worktreePath={rootPath}
             onSelect={(index) => {
+              if (index === currentFileIndex) return;
               fileStepAnnouncePendingRef.current = true;
               onSelectFile(index);
             }}
@@ -1413,7 +1474,10 @@ export function FileViewerModal({
                   <TooltipTrigger asChild>
                     <button
                       type="button"
-                      onClick={() => onNavigateFile?.(-1)}
+                      onClick={() => {
+                        fileStepAnnouncePendingRef.current = true;
+                        onNavigateFile?.(-1);
+                      }}
                       disabled={!hasPrevFile}
                       aria-label="Previous file"
                       className="p-1.5 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-daintree-border disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
@@ -1433,7 +1497,10 @@ export function FileViewerModal({
                   <TooltipTrigger asChild>
                     <button
                       type="button"
-                      onClick={() => onNavigateFile?.(1)}
+                      onClick={() => {
+                        fileStepAnnouncePendingRef.current = true;
+                        onNavigateFile?.(1);
+                      }}
                       disabled={!hasNextFile}
                       aria-label="Next file"
                       className="p-1.5 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-daintree-border disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
@@ -1451,12 +1518,12 @@ export function FileViewerModal({
                   <button
                     type="button"
                     onClick={() => toggleViewed(rootPath, workspaceEntry.viewedKey)}
-                    aria-pressed={viewedSet.has(workspaceEntry.viewedKey)}
+                    aria-pressed={currentViewed}
                     aria-label="Viewed"
                     data-testid="diff-viewed-button"
                     className={cn(
                       "ml-1 flex items-center gap-1.5 rounded px-2 py-1 text-xs transition-colors",
-                      viewedSet.has(workspaceEntry.viewedKey)
+                      currentViewed
                         ? "bg-status-success/15 text-status-success"
                         : "text-muted-foreground hover:text-daintree-text hover:bg-daintree-border"
                     )}

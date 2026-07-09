@@ -3,6 +3,7 @@ import { Check, Folder, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { basename, dirname } from "@shared/utils/path";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
 import { DIFF_STATUS_CONFIG, summarizeChangeSet } from "./diffChangeSet";
 import type { DiffChangeSetEntry } from "./diffChangeSet";
@@ -82,17 +83,22 @@ export function DiffFileSidebar({
   );
 
   // Keep the open file's row in view while stepping with the keyboard.
+  // `groups` is a dependency so the row is re-revealed when a filter that hid
+  // it is cleared.
   useEffect(() => {
     if (currentIndex < 0 || !listRef.current) return;
     const row = listRef.current.querySelector<HTMLElement>(`[data-file-index="${currentIndex}"]`);
     if (typeof row?.scrollIntoView === "function") {
       row.scrollIntoView({ behavior: "instant", block: "nearest" });
     }
-  }, [currentIndex]);
+  }, [currentIndex, groups]);
 
+  // self-stretch (not h-full): a percentage height against the dialog's
+  // content-sized row collapses to content height and lets the dialog
+  // surface show beneath the list — flex stretch always fills the row.
   return (
     <div
-      className="flex h-full w-60 shrink-0 flex-col border-r border-daintree-border bg-daintree-sidebar"
+      className="flex min-h-0 w-60 shrink-0 select-none flex-col self-stretch border-r border-daintree-border bg-daintree-sidebar"
       data-testid="diff-file-sidebar"
     >
       <div className="shrink-0 border-b border-daintree-border px-3 py-2">
@@ -109,27 +115,38 @@ export function DiffFileSidebar({
             )}
           </span>
         </div>
-        <div className="mt-1.5" data-testid="diff-sidebar-progress">
-          <div className="flex items-center justify-between text-[11px] text-text-muted">
-            <span>
-              {viewedCount} of {files.length} viewed
-            </span>
-          </div>
-          <div className="mt-1 h-0.5 overflow-hidden rounded-full bg-daintree-border">
-            <div
-              className="h-full rounded-full bg-status-success/70 transition-[width] duration-150 ease-out"
-              style={{ width: `${files.length ? (viewedCount / files.length) * 100 : 0}%` }}
-            />
-          </div>
+        <div className="mt-1" data-testid="diff-sidebar-progress">
+          <span className="text-[11px] text-text-muted">
+            {viewedCount} of {files.length} viewed
+          </span>
+          {/* The track only appears once review has started — an empty
+              full-width strip at zero progress reads as stray chrome. */}
+          {viewedCount > 0 && (
+            <div className="mt-1 h-0.5 overflow-hidden rounded-full bg-tint/10">
+              <div
+                className="h-full rounded-full bg-status-success/70 transition-[width] duration-150 ease-out"
+                style={{ width: `${files.length ? (viewedCount / files.length) * 100 : 0}%` }}
+              />
+            </div>
+          )}
         </div>
       </div>
 
       <div className="shrink-0 px-2 py-1.5">
-        <div className="flex items-center gap-1.5 rounded border border-daintree-border bg-daintree-bg px-2 py-1 focus-within:border-border-strong">
+        <div className="flex items-center gap-1.5 rounded border border-daintree-border bg-daintree-bg px-2 py-1 focus-within:border-daintree-accent focus-within:ring-1 focus-within:ring-daintree-accent/20">
           <Search className="h-3 w-3 shrink-0 text-text-muted" />
           <input
             value={filter}
             onChange={(event) => setFilter(event.target.value)}
+            onKeyDown={(event) => {
+              // Escape clears an active filter instead of bubbling to the
+              // dialog's escape stack and closing the whole workspace.
+              if (event.key === "Escape" && filter) {
+                event.preventDefault();
+                event.stopPropagation();
+                setFilter("");
+              }
+            }}
             placeholder="Filter files"
             aria-label="Filter files"
             className="w-full bg-transparent text-xs text-daintree-text placeholder:text-text-placeholder focus:outline-hidden"
@@ -140,7 +157,20 @@ export function DiffFileSidebar({
 
       <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-2">
         {visibleCount === 0 && (
-          <p className="px-1.5 py-2 text-xs text-text-muted">No files match the filter</p>
+          <EmptyState
+            variant="filtered-empty"
+            scale="sidebar"
+            title="No files match the filter"
+            action={
+              <button
+                type="button"
+                onClick={() => setFilter("")}
+                className="text-xs text-daintree-text/60 hover:text-daintree-text transition-colors underline underline-offset-2"
+              >
+                Clear filter
+              </button>
+            }
+          />
         )}
         {groups.map((group) => (
           <div key={group.dir || "(root)"} className="mb-1.5">
@@ -175,7 +205,7 @@ export function DiffFileSidebar({
                       </span>
                       <span
                         className={cn(
-                          "truncate",
+                          "truncate font-medium",
                           viewed ? "text-daintree-text/50" : "text-daintree-text"
                         )}
                       >
@@ -196,11 +226,7 @@ export function DiffFileSidebar({
                           type="button"
                           onClick={() => toggleViewed(worktreePath, file.viewedKey)}
                           aria-pressed={viewed}
-                          aria-label={
-                            viewed
-                              ? `Mark ${file.path} as not viewed`
-                              : `Mark ${file.path} as viewed`
-                          }
+                          aria-label={`Mark ${file.path} as viewed`}
                           className={cn(
                             "ml-1 flex h-4 w-4 shrink-0 items-center justify-center rounded-sm border transition-colors",
                             viewed
@@ -212,9 +238,7 @@ export function DiffFileSidebar({
                           <Check className="h-3 w-3" />
                         </button>
                       </TooltipTrigger>
-                      <TooltipContent side="right">
-                        {viewed ? "Viewed" : "Mark as viewed (v)"}
-                      </TooltipContent>
+                      <TooltipContent side="right">Viewed</TooltipContent>
                     </Tooltip>
                   </div>
                 );

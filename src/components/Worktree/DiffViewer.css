@@ -716,6 +716,12 @@
   .diff-viewer .diff-gutter {
     border-right: 1px solid CanvasText;
   }
+  /* Split-view void cells: the hatch background is stripped to Canvas, so the
+     "nothing exists on this side" cue rides a dotted system-color edge. */
+  .diff-viewer .diff-code-omit {
+    background-image: none;
+    border-left: 1px dotted GrayText;
+  }
   /* Moved lines: the tinted fill and inset bar are stripped, so the cue rides
      a pattern change — dash the side edge the rules above draw solid. */
   .diff-viewer tr.diff-line-moved-old td.diff-code-delete,

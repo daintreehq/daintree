@@ -181,16 +181,20 @@ export function WorktreeDetails({
             </div>
           )}
 
-          {/* Block 3: Artifacts (grouped file changes + system path) */}
+          {/* Block 3: Artifacts (grouped file changes + system path). The list
+              sits in a well painted the selected-worktree-card color
+              (`.sidebar-active-well`, sidebar.css) — a hairline carries the
+              shape on themes where that fill lands close to the panel's. */}
           {hasChanges && worktree.worktreeChanges && (
-            <div className="space-y-2">
-              <div className="text-xs font-medium text-text-secondary">Changed Files</div>
+            <div className="space-y-2.5">
+              <div className="px-2 text-xs font-medium text-text-secondary">Changed Files</div>
               <FileChangeList
                 changes={worktree.worktreeChanges.changes}
                 rootPath={worktree.worktreeChanges.rootPath}
                 maxVisible={MAX_VISIBLE_FILES}
                 groupByFolder={worktree.worktreeChanges.changedFileCount > 5}
                 isStale={isStale}
+                className="sidebar-active-well rounded-[var(--radius-md)] border border-border-subtle p-2"
               />
             </div>
           )}

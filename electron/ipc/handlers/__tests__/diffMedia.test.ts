@@ -11,6 +11,7 @@ const getGitServiceMock = vi.hoisted(() => vi.fn());
 
 const fileHandleMock = vi.hoisted(() => ({
   readFile: vi.fn(),
+  stat: vi.fn(),
   close: vi.fn(async () => {}),
 }));
 
@@ -29,6 +30,7 @@ vi.mock("../../../services/GitServiceCache.js", () => ({
 
 import { registerDiffMediaHandlers } from "../diffMedia.js";
 import { DIFF_MEDIA_METHOD_CHANNELS } from "../diffMedia.preload.js";
+import { _resetRateLimitQueuesForTest } from "../../utils.js";
 import type { DiffMediaFileVersions } from "../../../../shared/types/ipc/diffMedia.js";
 
 type Handler = (
@@ -59,14 +61,19 @@ describe("diffMedia readFileVersions", () => {
   beforeEach(() => {
     ipcHandlers.clear();
     vi.clearAllMocks();
+    _resetRateLimitQueuesForTest();
 
     getGitServiceMock.mockReturnValue({ readFileAtHead: readFileAtHeadMock });
     readFileAtHeadMock.mockResolvedValue({ ok: true, content: HEAD_BUFFER });
 
     fsMock.realpath.mockImplementation(async (p: string) => p);
-    fsMock.stat.mockResolvedValue({ size: WORKING_BUFFER.byteLength });
+    fsMock.stat.mockResolvedValue({ size: WORKING_BUFFER.byteLength, isFile: () => true });
     fsMock.open.mockResolvedValue(fileHandleMock);
     fileHandleMock.readFile.mockResolvedValue(WORKING_BUFFER);
+    fileHandleMock.stat.mockResolvedValue({
+      size: WORKING_BUFFER.byteLength,
+      isFile: () => true,
+    });
     fileHandleMock.close.mockResolvedValue(undefined);
 
     cleanup = registerDiffMediaHandlers();
@@ -96,7 +103,11 @@ describe("diffMedia readFileVersions", () => {
   });
 
   it("rejects null bytes in filePath", async () => {
-    await expect(invoke({ cwd: "/repo", filePath: "img\0.png" })).rejects.toThrow(/null/i);
+    // Caught at the zod boundary (opValidated), whose ValidationError message
+    // is deliberately sanitized — no schema details reach the renderer.
+    await expect(invoke({ cwd: "/repo", filePath: "img\0.png" })).rejects.toThrow(
+      /validation failed/i
+    );
   });
 
   it("rejects a relative cwd", async () => {
@@ -137,7 +148,7 @@ describe("diffMedia readFileVersions", () => {
   });
 
   it("caps the working side at the size limit", async () => {
-    fsMock.stat.mockResolvedValue({ size: 9 * 1024 * 1024 });
+    fsMock.stat.mockResolvedValue({ size: 9 * 1024 * 1024, isFile: () => true });
 
     const result = await invoke({ cwd: "/repo", filePath: "img.png" });
 

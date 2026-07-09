@@ -1600,5 +1600,48 @@ describe("FileViewerModal", () => {
 
       expect(screen.getAllByTestId("diff-sidebar-file")).toHaveLength(1);
     });
+
+    it("Escape in the filter clears it instead of closing the workspace", async () => {
+      const onClose = vi.fn();
+      renderWorkspace({ onClose });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("diff-file-sidebar")).toBeTruthy();
+      });
+      const filter = screen.getByTestId("diff-sidebar-filter");
+      fireEvent.change(filter, { target: { value: "docs" } });
+      expect(screen.getAllByTestId("diff-sidebar-file")).toHaveLength(1);
+
+      fireEvent.keyDown(filter, { key: "Escape" });
+
+      expect((filter as HTMLInputElement).value).toBe("");
+      expect(screen.getAllByTestId("diff-sidebar-file")).toHaveLength(3);
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("`n` on a hunkless file continues to the next file instead of dead-ending", async () => {
+      // Collapsed mock = no tbody.diff-hunk rows, standing in for a binary
+      // or image file mid-changeset.
+      mockDiffViewerControl.startCollapsed = true;
+      const { onNavigateFile } = renderWorkspace({ currentFileIndex: 1 });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("diff-viewer")).toBeTruthy();
+      });
+      fireEvent.keyDown(window, { key: "n" });
+
+      expect(onNavigateFile).toHaveBeenCalledWith(1);
+    });
+
+    it("hides viewed controls when the changeset entry does not match the open file", async () => {
+      // Index/list drift: currentFileIndex points at src/b.ts while the open
+      // file is src/a.ts — the guard must refuse to mark the wrong viewedKey.
+      renderWorkspace({ currentFileIndex: 1 });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("diff-viewer")).toBeTruthy();
+      });
+      expect(screen.queryByTestId("diff-viewed-button")).toBeNull();
+    });
   });
 });

@@ -51,6 +51,8 @@ interface FileChangeListProps {
   rootPath: string;
   groupByFolder?: boolean;
   isStale?: boolean;
+  /** Extra classes for the scroll container (surface, radius, padding). */
+  className?: string;
 }
 
 function splitPath(filePath: string): { dir: string; base: string } {
@@ -91,9 +93,9 @@ export function FileChangeList({
   rootPath,
   groupByFolder = false,
   isStale = false,
+  className,
 }: FileChangeListProps) {
   const [selectedFile, setSelectedFile] = useState<SelectedFile | null>(null);
-  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   // Plugin-contributed `file` context-menu items. Pulled once for the list; a
   // row is only wrapped in a ContextMenu when there are items, so a zero-plugin
   // file list keeps its existing flat-row DOM (no per-row trigger overhead).
@@ -179,6 +181,26 @@ export function FileChangeList({
     [sortedChanges, maxVisible]
   );
 
+  // Position of the open file, re-derived from the live list every render so
+  // a background refresh that re-sorts (churn ordering) can't strand the
+  // index on a different file. Falls back to path-only when the status
+  // changed under the open modal (e.g. untracked → added).
+  const selectedIndex = useMemo(() => {
+    if (!selectedFile) return null;
+    const exact = sortedChanges.findIndex(
+      (change) => change.relativePath === selectedFile.path && change.status === selectedFile.status
+    );
+    if (exact !== -1) return exact;
+    const byPath = sortedChanges.findIndex((change) => change.relativePath === selectedFile.path);
+    return byPath === -1 ? null : byPath;
+  }, [selectedFile, sortedChanges]);
+
+  // The modal's fetch subject follows the LIVE entry, not the open-time
+  // snapshot: a file whose status flips under the open modal (untracked →
+  // added, added → modified after an agent commit) must be re-fetched under
+  // its current status, or the diff renders in the wrong mode.
+  const liveSelected = selectedIndex !== null ? (sortedChanges[selectedIndex] ?? null) : null;
+
   const getAdjacentFile = useCallback(
     (delta: -1 | 1) => {
       if (selectedIndex === null) return null;
@@ -189,7 +211,10 @@ export function FileChangeList({
   );
 
   // Changeset handed to the diff modal so it can render the review-workspace
-  // sidebar. Indexed identically to `selectedIndex`/`navigateFile`.
+  // sidebar. Indexed identically to `selectedIndex`/`navigateFile`. Viewed
+  // keys are status-scoped (this list mixes staged and unstaged changes, so
+  // it can't use the Review Hub's `section:path` namespace); markers are
+  // invalidated wholesale when the hub commits (diffViewedStore.clearWorktree).
   const diffChangeSet = useMemo(
     (): DiffChangeSetEntry[] =>
       sortedChanges.map((change) => ({
@@ -207,7 +232,6 @@ export function FileChangeList({
       const change = sortedChanges[index];
       if (!change) return;
       setSelectedFile({ path: change.relativePath, status: change.status });
-      setSelectedIndex(index);
     },
     [sortedChanges]
   );
@@ -248,27 +272,22 @@ export function FileChangeList({
     if (!change) return;
     triggerElementRef.current = triggerEl;
     setSelectedFile({ path: change.relativePath, status: change.status });
-    setSelectedIndex(index);
   };
 
   const closeModal = () => {
     setSelectedFile(null);
-    setSelectedIndex(null);
   };
 
   const navigateFile = (delta: -1 | 1) => {
-    setSelectedIndex((current) => {
-      if (current === null) return current;
-      // Clamp against the live length first — a worktree refresh can shrink the
-      // set while the modal is open, leaving the index stale.
-      const safeCurrent = Math.min(current, sortedChanges.length - 1);
-      const next = Math.min(Math.max(safeCurrent + delta, 0), sortedChanges.length - 1);
-      const change = sortedChanges[next];
-      if (change) {
-        setSelectedFile({ path: change.relativePath, status: change.status });
-      }
-      return next;
-    });
+    // Clamp against the live length first — a worktree refresh can shrink the
+    // set while the modal is open, leaving the derived index stale.
+    if (selectedIndex === null) return;
+    const safeCurrent = Math.min(selectedIndex, sortedChanges.length - 1);
+    const next = Math.min(Math.max(safeCurrent + delta, 0), sortedChanges.length - 1);
+    const change = sortedChanges[next];
+    if (change) {
+      setSelectedFile({ path: change.relativePath, status: change.status });
+    }
   };
 
   const renderFileItem = (change: FileChangeWithRelativePath, showDir: boolean) => {
@@ -361,7 +380,13 @@ export function FileChangeList({
       <>
         <div
           className={cn(
-            "space-y-3 w-full max-h-64 overflow-y-auto overscroll-contain",
+            "space-y-3 w-full max-h-64 overscroll-contain",
+            className,
+            // After `className` so no caller can undo it: the rows' -mx-1.5
+            // hover bleed overflows the container, and with overflow-y set,
+            // `visible` on x computes to `auto` — a horizontal scrollbar. The
+            // container's padding absorbs the bleed; anything longer truncates.
+            "overflow-y-auto overflow-x-hidden",
             isStale && "surface-stale"
           )}
           aria-busy={isStale || undefined}
@@ -369,9 +394,9 @@ export function FileChangeList({
           {groupedChanges.map((group) => (
             <div key={group.dir}>
               <div className="flex items-center gap-1.5 text-[11px] text-daintree-text/40 mb-1">
-                <Folder className="w-3 h-3" />
-                <span className="font-mono">{group.displayDir}</span>
-                <span className="text-daintree-text/30">({group.files.length})</span>
+                <Folder className="w-3 h-3 shrink-0" />
+                <span className="min-w-0 truncate font-mono">{group.displayDir}</span>
+                <span className="shrink-0 text-daintree-text/30">({group.files.length})</span>
               </div>
               <div className="pl-4 flex flex-col gap-0.5">
                 {group.files.map((file) => renderFileItem(file, false))}
@@ -393,8 +418,8 @@ export function FileChangeList({
 
         <FileDiffModal
           isOpen={selectedFile !== null}
-          filePath={selectedFile?.path ?? ""}
-          status={selectedFile?.status ?? "modified"}
+          filePath={liveSelected?.relativePath ?? selectedFile?.path ?? ""}
+          status={liveSelected?.status ?? selectedFile?.status ?? "modified"}
           worktreePath={rootPath}
           onClose={closeModal}
           restoreFocusTo={triggerElementRef}
@@ -413,7 +438,10 @@ export function FileChangeList({
     <>
       <div
         className={cn(
-          "flex flex-col gap-0.5 w-full max-h-64 overflow-y-auto overscroll-contain",
+          "flex flex-col gap-0.5 w-full max-h-64 overscroll-contain",
+          className,
+          // Same post-className overflow guarantee as the grouped container.
+          "overflow-y-auto overflow-x-hidden",
           isStale && "surface-stale"
         )}
         aria-busy={isStale || undefined}
@@ -435,8 +463,8 @@ export function FileChangeList({
 
       <FileDiffModal
         isOpen={selectedFile !== null}
-        filePath={selectedFile?.path ?? ""}
-        status={selectedFile?.status ?? "modified"}
+        filePath={liveSelected?.relativePath ?? selectedFile?.path ?? ""}
+        status={liveSelected?.status ?? selectedFile?.status ?? "modified"}
         worktreePath={rootPath}
         onClose={closeModal}
         restoreFocusTo={triggerElementRef}

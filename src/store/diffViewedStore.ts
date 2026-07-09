@@ -38,6 +38,10 @@ export const useDiffViewedStore = create<DiffViewedState>((set) => ({
       else next.add(key);
       return { viewedByWorktree: { ...state.viewedByWorktree, [worktreePath]: next } };
     }),
+  // Called on commit success (Review Hub) — a commit starts a new review, so
+  // stale markers must not stick to files that change again afterwards. Not
+  // wired to worktree deletion; leftover markers there are a few strings
+  // until app restart.
   clearWorktree: (worktreePath) =>
     set((state) => {
       if (!(worktreePath in state.viewedByWorktree)) return state;

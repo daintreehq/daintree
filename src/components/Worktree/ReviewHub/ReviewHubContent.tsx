@@ -826,6 +826,9 @@ export function ReviewHubContent({
       debouncedBgRefreshRef.current?.cancel();
       try {
         await window.electron.git.commit(worktreePath, message);
+        // A commit resets the review: anything still (or newly) changed after
+        // it is a new change, so stale viewed markers must not stick to it.
+        useDiffViewedStore.getState().clearWorktree(worktreePath);
         await refresh();
       } catch (err) {
         setActionError(formatErrorMessage(err, "Failed to commit changes"));
@@ -976,6 +979,8 @@ export function ReviewHubContent({
         setActionError(formatErrorMessage(err, "Failed to commit changes"));
         throw err;
       }
+      // Same review reset as handleCommit — the changeset starts over.
+      useDiffViewedStore.getState().clearWorktree(worktreePath);
       await refresh();
       await runPush();
     },
@@ -1782,7 +1787,16 @@ export function ReviewHubContent({
           <LazyFileDiffModal
             isOpen={selectedFile !== null}
             filePath={selectedFile?.path ?? ""}
-            status={selectedFile?.status ?? "modified"}
+            // Status follows the LIVE entry — a file whose status flips under
+            // the open modal (stage/unstage, agent commit) must be re-fetched
+            // under its current status, not the open-time snapshot.
+            status={
+              (selectedFileIndex !== null
+                ? navigableItems[selectedFileIndex]?.file.status
+                : undefined) ??
+              selectedFile?.status ??
+              "modified"
+            }
             worktreePath={worktreePath}
             onClose={() => setSelectedFile(null)}
             restoreFocusTo={diffTriggerRef}

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { GripVertical, ImageOff } from "lucide-react";
 import type { DiffMediaFileVersions, DiffMediaSide, GitStatus } from "@shared/types";
+import { getDiffMediaImageMime } from "@shared/types/ipc/diffMedia";
 import { diffMediaClient } from "@/clients/diffMediaClient";
 import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -17,10 +18,8 @@ export interface ImageDiffViewerProps {
   status: GitStatus;
 }
 
-const IMAGE_DIFF_EXTENSION_RE = /\.(png|jpe?g|gif|webp|bmp|ico|svg)$/i;
-
 export function isImageDiffCandidate(path: string): boolean {
-  return IMAGE_DIFF_EXTENSION_RE.test(path);
+  return getDiffMediaImageMime(path) !== null;
 }
 
 type ImageDiffMode = "two-up" | "swipe" | "onion";
@@ -76,10 +75,12 @@ interface ImagePaneProps {
 
 function ImagePane({ label, side, relPath, caption }: ImagePaneProps) {
   const [dims, setDims] = useState<{ width: number; height: number } | null>(null);
+  const [decodeFailed, setDecodeFailed] = useState(false);
   const src = side.ok ? side.dataUrl : null;
 
   useEffect(() => {
     setDims(null);
+    setDecodeFailed(false);
   }, [src]);
 
   return (
@@ -90,9 +91,9 @@ function ImagePane({ label, side, relPath, caption }: ImagePaneProps) {
       </div>
       <div
         className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-md border border-daintree-border"
-        style={side.ok ? CHECKERBOARD_STYLE : undefined}
+        style={side.ok && !decodeFailed ? CHECKERBOARD_STYLE : undefined}
       >
-        {side.ok ? (
+        {side.ok && !decodeFailed ? (
           <img
             src={side.dataUrl}
             alt={`${label} version of ${relPath}`}
@@ -104,14 +105,15 @@ function ImagePane({ label, side, relPath, caption }: ImagePaneProps) {
                 height: event.currentTarget.naturalHeight,
               })
             }
+            onError={() => setDecodeFailed(true)}
           />
         ) : (
           <p className="px-4 text-center text-xs text-muted-foreground">
-            {sideErrorMessage(side.error)}
+            {side.ok ? "Couldn't display this version" : sideErrorMessage(side.error)}
           </p>
         )}
       </div>
-      {side.ok ? (
+      {side.ok && !decodeFailed ? (
         <p className="text-[11px] tabular-nums text-muted-foreground">
           {dims ? `${dims.width}×${dims.height} px · ` : ""}
           {formatBytes(side.byteSize)}

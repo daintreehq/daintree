@@ -1,35 +1,26 @@
 import path from "path";
 import fs from "fs/promises";
-import { defineIpcNamespace, op } from "../define.js";
+import { defineIpcNamespace, opValidated } from "../define.js";
 import { checkRateLimit } from "../utils.js";
 import { DIFF_MEDIA_METHOD_CHANNELS } from "./diffMedia.preload.js";
+import { isLfsPointer } from "./files.js";
+import { DiffMediaReadFileVersionsPayloadSchema } from "../../schemas/ipc.js";
 import { gitServiceCache } from "../../services/GitServiceCache.js";
 import { AppError } from "../../utils/errorTypes.js";
 import {
   DIFF_MEDIA_MAX_BYTES,
+  getDiffMediaImageMime,
   type DiffMediaFileVersions,
   type DiffMediaReadFileVersionsPayload,
   type DiffMediaSide,
 } from "../../../shared/types/ipc/diffMedia.js";
 
-const IMAGE_MIME_BY_EXTENSION: Record<string, string> = {
-  png: "image/png",
-  jpg: "image/jpeg",
-  jpeg: "image/jpeg",
-  gif: "image/gif",
-  webp: "image/webp",
-  bmp: "image/bmp",
-  ico: "image/x-icon",
-  svg: "image/svg+xml",
-};
-
-function getImageMime(filePath: string): string | null {
-  const dot = filePath.lastIndexOf(".");
-  if (dot === -1) return null;
-  return IMAGE_MIME_BY_EXTENSION[filePath.slice(dot + 1).toLowerCase()] ?? null;
-}
-
 function toImageSide(mime: string, content: Buffer): DiffMediaSide {
+  // Git LFS pointer files are text stand-ins for the real blob — served as
+  // image bytes they just render broken.
+  if (isLfsPointer(content)) {
+    return { ok: false, error: "UNSUPPORTED" };
+  }
   return {
     ok: true,
     dataUrl: `data:${mime};base64,${content.toString("base64")}`,
@@ -37,16 +28,18 @@ function toImageSide(mime: string, content: Buffer): DiffMediaSide {
   };
 }
 
+// Semantic path checks (absoluteness, traversal, null bytes) beyond the
+// structural zod validation at the IPC boundary.
 function validatePayload(payload: DiffMediaReadFileVersionsPayload): void {
-  const { cwd, filePath } = payload ?? {};
-  if (typeof cwd !== "string" || !path.isAbsolute(cwd)) {
+  const { cwd, filePath } = payload;
+  if (!path.isAbsolute(cwd)) {
     throw new AppError({
       code: "INVALID_PATH",
       message: "cwd must be an absolute path",
       context: { cwd },
     });
   }
-  if (typeof filePath !== "string" || !filePath.trim()) {
+  if (!filePath.trim()) {
     throw new AppError({
       code: "INVALID_PATH",
       message: "filePath is required",
@@ -130,13 +123,24 @@ async function readWorkingSide(
     }
 
     const stat = await fs.stat(realFile);
+    // Only regular files: a FIFO in the worktree would wedge the read forever.
+    if (!stat.isFile()) {
+      return { ok: false, error: "ERROR" };
+    }
     if (stat.size > DIFF_MEDIA_MAX_BYTES) {
       return { ok: false, error: "TOO_LARGE" };
     }
 
+    // O_NONBLOCK (no-op on Windows) so a file swapped for a FIFO between the
+    // stat and the open can't block the open itself; the fd stat below then
+    // rejects anything that is no longer a regular in-budget file — the
+    // pre-open checks only vetted a path, this vets what was actually opened.
     let fileHandle: Awaited<ReturnType<typeof fs.open>>;
     try {
-      fileHandle = await fs.open(absolutePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+      fileHandle = await fs.open(
+        absolutePath,
+        fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | (fs.constants.O_NONBLOCK ?? 0)
+      );
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         return { ok: false, error: "NOT_FOUND" };
@@ -146,6 +150,13 @@ async function readWorkingSide(
 
     let content: Buffer;
     try {
+      const fdStat = await fileHandle.stat();
+      if (!fdStat.isFile()) {
+        return { ok: false, error: "ERROR" };
+      }
+      if (fdStat.size > DIFF_MEDIA_MAX_BYTES) {
+        return { ok: false, error: "TOO_LARGE" };
+      }
       content = await fileHandle.readFile();
     } finally {
       await fileHandle.close().catch(() => {});
@@ -164,10 +175,12 @@ async function readWorkingSide(
 async function handleReadFileVersions(
   payload: DiffMediaReadFileVersionsPayload
 ): Promise<DiffMediaFileVersions> {
-  checkRateLimit(DIFF_MEDIA_METHOD_CHANNELS.readFileVersions, 20, 10_000);
+  // Modest budget: each call can return up to ~21 MB of base64 (8 MB raw ×
+  // ~1.33 × two sides), so the window is tighter than the text-diff channels.
+  checkRateLimit(DIFF_MEDIA_METHOD_CHANNELS.readFileVersions, 10, 10_000);
   validatePayload(payload);
 
-  const mime = getImageMime(payload.filePath);
+  const mime = getDiffMediaImageMime(payload.filePath);
   if (!mime) {
     return {
       head: { ok: false, error: "UNSUPPORTED" },
@@ -185,7 +198,11 @@ async function handleReadFileVersions(
 export const diffMediaNamespace = defineIpcNamespace({
   name: "diffMedia",
   ops: {
-    readFileVersions: op(DIFF_MEDIA_METHOD_CHANNELS.readFileVersions, handleReadFileVersions),
+    readFileVersions: opValidated(
+      DIFF_MEDIA_METHOD_CHANNELS.readFileVersions,
+      DiffMediaReadFileVersionsPayloadSchema,
+      handleReadFileVersions
+    ),
   },
 });
 
