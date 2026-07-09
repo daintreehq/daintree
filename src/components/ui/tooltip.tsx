@@ -5,6 +5,11 @@ import { cn } from "@/lib/utils";
 import { primeOnEvent, useRadixPrimitives } from "./radix-loader";
 import { FixedDropdownVisibleContext } from "./fixed-dropdown";
 import { useIsDockPopoverChild } from "./DockPopoverChildContext";
+import {
+  isTooltipFocusOpenSuppressed,
+  notifyTooltipPointerActivity,
+  registerTooltipDismiss,
+} from "@/lib/tooltipDismissRegistry";
 
 type TooltipProviderProps = React.ComponentProps<typeof TooltipPrimitiveType.Provider>;
 
@@ -34,6 +39,14 @@ const TOOLTIP_AUTO_DISMISS_MS = 2500;
 
 type TooltipProps = TooltipRootProps & {
   autoDismiss?: boolean;
+  /**
+   * When true (default), this tooltip closes on every dialog open/close
+   * transition (issue #11030) and honors the brief focus-open suppression
+   * window that follows. Rich hover cards whose body IS the content
+   * (IssueBadge, PRBadge) opt out with `false` — they are fully exempt
+   * from both the forced close and the suppression.
+   */
+  dismissOnDialogTransition?: boolean;
 };
 
 const Tooltip = ({
@@ -42,6 +55,7 @@ const Tooltip = ({
   defaultOpen,
   onOpenChange,
   autoDismiss = true,
+  dismissOnDialogTransition = true,
   ...props
 }: TooltipProps) => {
   const radix = useRadixPrimitives();
@@ -70,10 +84,38 @@ const Tooltip = ({
     onOpenChangeRef.current = onOpenChange;
   });
 
-  const handleOpenChange = React.useCallback((next: boolean) => {
-    setManagedOpen(next);
-    onOpenChangeRef.current?.(next);
-  }, []);
+  const handleOpenChange = React.useCallback(
+    (next: boolean) => {
+      // Focus restoration after a dialog transition re-opens tooltips
+      // through Radix's focus path with nothing hovered. Ignore opens
+      // during the post-dismiss suppression window; genuine hovers are
+      // unaffected because pointerenter on any trigger clears it first.
+      if (next && dismissOnDialogTransition && isTooltipFocusOpenSuppressed()) return;
+      setManagedOpen(next);
+      onOpenChangeRef.current?.(next);
+    },
+    [dismissOnDialogTransition]
+  );
+
+  // Mirror of the rendered open state for the dismiss callback, which must
+  // read it post-commit without re-registering on every open/close.
+  const effectiveOpenRef = React.useRef(false);
+  React.useEffect(() => {
+    effectiveOpenRef.current = effectiveOpen;
+  });
+
+  // Register with the global dismiss registry so dialog transitions can
+  // force-close this tooltip (issue #11030). The callback is a stable
+  // closure over refs, so StrictMode's mount→unmount→mount cycle
+  // registers and unregisters cleanly without stale state.
+  React.useEffect(() => {
+    if (!dismissOnDialogTransition) return;
+    return registerTooltipDismiss(() => {
+      if (!effectiveOpenRef.current) return;
+      setManagedOpen(false);
+      onOpenChangeRef.current?.(false);
+    });
+  }, [dismissOnDialogTransition]);
 
   // Fixed display window: each open transition arms the dismiss timer; a
   // close (pointer leave, Escape, click) clears it via the effect cleanup.
@@ -125,7 +167,16 @@ const TooltipTrigger = React.forwardRef<
   TooltipTriggerProps
 >(
   (
-    { asChild, children, onPointerEnter, onPointerDown, onPointerUp, onFocusCapture, ...props },
+    {
+      asChild,
+      children,
+      onPointerEnter,
+      onPointerMove,
+      onPointerDown,
+      onPointerUp,
+      onFocusCapture,
+      ...props
+    },
     ref
   ) => {
     const radix = useRadixPrimitives();
@@ -141,8 +192,19 @@ const TooltipTrigger = React.forwardRef<
     const pointerActiveRef = React.useRef(false);
 
     const handlePointerEnter: React.PointerEventHandler<HTMLButtonElement> = (event) => {
+      // A real hover ends the post-dialog-transition focus-open
+      // suppression — the user is pointing, so tooltips are wanted again.
+      notifyTooltipPointerActivity();
       primeOnEvent();
       onPointerEnter?.(event);
+    };
+    const handlePointerMove: React.PointerEventHandler<HTMLButtonElement> = (event) => {
+      // Radix opens tooltips from pointermove (not pointerenter), so clear
+      // suppression here too — covers a pointer already resting on the
+      // trigger whose next micro-move should open normally. Touch moves
+      // never open Radix tooltips, so they don't count as hover intent.
+      if (event.pointerType !== "touch") notifyTooltipPointerActivity();
+      onPointerMove?.(event);
     };
     const handlePointerDown: React.PointerEventHandler<HTMLButtonElement> = (event) => {
       pointerActiveRef.current = true;
@@ -170,6 +232,7 @@ const TooltipTrigger = React.forwardRef<
           <Slot
             ref={ref}
             onPointerEnter={handlePointerEnter}
+            onPointerMove={handlePointerMove}
             onPointerDown={handlePointerDown}
             onPointerUp={handlePointerUp}
             onFocusCapture={handleFocusCapture}
@@ -184,6 +247,7 @@ const TooltipTrigger = React.forwardRef<
           type="button"
           ref={ref as React.Ref<HTMLButtonElement>}
           onPointerEnter={handlePointerEnter}
+          onPointerMove={handlePointerMove}
           onPointerDown={handlePointerDown}
           onPointerUp={handlePointerUp}
           onFocusCapture={handleFocusCapture}
@@ -200,6 +264,7 @@ const TooltipTrigger = React.forwardRef<
         ref={ref}
         asChild={asChild}
         onPointerEnter={handlePointerEnter}
+        onPointerMove={handlePointerMove}
         onPointerDown={handlePointerDown}
         onPointerUp={handlePointerUp}
         onFocusCapture={handleFocusCapture}

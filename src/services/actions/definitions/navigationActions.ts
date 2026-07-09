@@ -27,6 +27,9 @@ export function registerNavigationActions(
     danger: "safe",
     scope: "renderer",
     nonRepeatable: true,
+    // Opens a modal palette — a post-dispatch hint would land on top of it
+    // (ShortcutHint sits at z-toast, above z-modal). Issue #11030.
+    suppressShortcutHint: true,
     run: async () => {
       callbacks.onOpenActionPalette();
     },

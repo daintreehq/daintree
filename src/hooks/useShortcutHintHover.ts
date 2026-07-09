@@ -1,6 +1,7 @@
 import { useRef, useEffect } from "react";
 import type React from "react";
 import { shortcutHintStore } from "@/store/shortcutHintStore";
+import { isTooltipFocusOpenSuppressed } from "@/lib/tooltipDismissRegistry";
 import { keybindingService } from "./useKeybinding";
 
 const HOVER_DWELL_MS = 1500;
@@ -99,6 +100,11 @@ export function useShortcutHintHover(actionId: string) {
   const onFocus = (e: React.FocusEvent) => {
     // Cancel any racing pointer dwell so it can't double-show after focus did.
     clearTimer();
+
+    // Focus restoration after a dialog transition lands here with nothing
+    // hovered — showing a teaching hint then reads as a stray overlay.
+    // Same window that gates tooltip focus-opens (issue #11030).
+    if (isTooltipFocusOpenSuppressed()) return;
 
     const displayCombo = displayComboRef.current;
     if (!displayCombo) return;

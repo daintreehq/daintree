@@ -2,7 +2,6 @@ import { useMemo } from "react";
 import { History } from "@/components/icons";
 import { PanelKindIcon } from "@/components/PanelPalette/PanelKindIcon";
 import { actionService } from "@/services/ActionService";
-import { shortcutHintStore } from "@/store/shortcutHintStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useAgentSessionRecords } from "@/hooks/useAgentSessionRecords";
@@ -37,13 +36,9 @@ export function ResumeSessionLine() {
   if (!hasLoaded || !primary) return null;
 
   const openLauncher = () => {
-    // Same as the toolbar resume button: terminal.resumeSessions opens a modal
-    // launcher, and the post-dispatch shortcut hint (z-toast, above z-modal)
-    // would otherwise sit on top of it. Clear it once the dispatch settles.
-    shortcutHintStore.getState().hide();
-    void actionService
-      .dispatch("terminal.resumeSessions", undefined, { source: "user" })
-      .finally(() => shortcutHintStore.getState().hide());
+    // The launcher's open transition clears the shortcut hint globally
+    // (AppPaletteDialog overlay clearing, issue #11030).
+    void actionService.dispatch("terminal.resumeSessions", undefined, { source: "user" });
   };
 
   return (
