@@ -8,6 +8,14 @@ import {
 type CursorBufferLine = {
   translateToString: (trimRight?: boolean) => string;
   getCell?: (index: number, cell?: IBufferCell) => IBufferCell | undefined;
+  _line?: RawBufferLine;
+};
+
+type RawBufferLine = {
+  _data: Uint32Array;
+  _combined: Record<number, string | undefined>;
+  _extendedAttrs: Record<number, { underlineStyle?: number } | undefined>;
+  length: number;
 };
 
 type CursorBuffer = {
@@ -76,6 +84,27 @@ const FNV_SEED = 0x811c9dc5;
 const FNV_PRIME = 0x01000193;
 const HASH_UNIT_SEPARATOR = 10;
 
+// Mirrors the pinned xterm 6.1 buffer layout. The public BufferLineApiView
+// retains `_line`; shape checks below keep a public-cell fallback for drift.
+const CELL_SIZE = 3;
+const CONTENT_CODEPOINT_MASK = 0x1fffff;
+const CONTENT_IS_COMBINED_MASK = 0x200000;
+const CONTENT_HAS_CONTENT_MASK = 0x3fffff;
+const CONTENT_WIDTH_SHIFT = 22;
+const COLOR_MODE_MASK = 0x3000000;
+const COLOR_PALETTE_16 = 0x1000000;
+const COLOR_PALETTE_256 = 0x2000000;
+const COLOR_RGB = 0x3000000;
+const FG_BOLD = 0x8000000;
+const FG_UNDERLINE = 0x10000000;
+const FG_BLINK = 0x20000000;
+const FG_INVISIBLE = 0x40000000;
+const FG_STRIKETHROUGH = 0x80000000;
+const BG_ITALIC = 0x4000000;
+const BG_DIM = 0x8000000;
+const BG_HAS_EXTENDED = 0x10000000;
+const BG_OVERLINE = 0x40000000;
+
 // Exactly the code points JS regex \s matches (tab through CR, space, and the
 // Unicode space set). Mirrors the /^\s*$/u blank-cell test without running a
 // regex per cell on the polling hot path — including its refusal to treat
@@ -101,6 +130,18 @@ function isBlankCellText(chars: string): boolean {
     return isWhitespaceCode(chars.charCodeAt(0));
   }
   return /^\s*$/u.test(chars);
+}
+
+function rawBufferLine(line: CursorBufferLine, cols: number): RawBufferLine | undefined {
+  const raw = line._line;
+  return raw?._data instanceof Uint32Array &&
+    raw._data.length >= cols * CELL_SIZE &&
+    typeof raw._combined === "object" &&
+    raw._combined !== null &&
+    typeof raw._extendedAttrs === "object" &&
+    raw._extendedAttrs !== null
+    ? raw
+    : undefined;
 }
 
 /**
@@ -152,33 +193,98 @@ function buildViewportUnitsSnapshot(
       continue;
     }
 
-    for (let x = 0; x < cols; x += 1) {
-      const cell = line.getCell(x, reusableCell);
-      if (!cell) continue;
-      const width = cell.getWidth();
-      if (width === 0) continue;
-      const chars = cell.getChars();
-      if (chars.length === 0 || isBlankCellText(chars)) continue;
+    const raw = rawBufferLine(line, cols);
+    let cellLimit = cols;
+    if (raw) {
+      cellLimit = 0;
+      for (let x = Math.min(cols, raw.length) - 1; x >= 0; x -= 1) {
+        const content = raw._data[x * CELL_SIZE] ?? 0;
+        if ((content & CONTENT_HAS_CONTENT_MASK) !== 0) {
+          cellLimit = Math.min(cols, x + (content >>> CONTENT_WIDTH_SHIFT));
+          break;
+        }
+      }
+    }
 
-      // Attribute bit layout matches the old createVisibleContentCellFrom,
-      // minus the inverse bit (1 << 5), which foregroundContentAttributes
-      // always masked out of keys.
-      const attributes =
-        (cell.isBold() ? 1 : 0) |
-        (cell.isItalic() ? 1 << 1 : 0) |
-        (cell.isDim() ? 1 << 2 : 0) |
-        (cell.isUnderline() ? 1 << 3 : 0) |
-        (cell.isBlink() ? 1 << 4 : 0) |
-        (cell.isInvisible() ? 1 << 6 : 0) |
-        (cell.isStrikethrough() ? 1 << 7 : 0) |
-        (cell.isOverline() ? 1 << 8 : 0);
-      const fgColorMode = cell.getFgColorMode();
-      const fgColor = cell.getFgColor();
+    for (let x = 0; x < cellLimit; x += 1) {
+      let chars: string;
+      let code: number;
+      let width: number;
+      let attributes: number;
+      let fgColorMode: number;
+      let fgColor: number;
+
+      if (raw) {
+        const offset = x * CELL_SIZE;
+        const content = raw._data[offset] ?? 0;
+        width = content >>> CONTENT_WIDTH_SHIFT;
+        if (width === 0) continue;
+
+        const codePoint = content & CONTENT_CODEPOINT_MASK;
+        if ((content & CONTENT_IS_COMBINED_MASK) !== 0) {
+          chars = raw._combined[x] ?? "";
+          if (chars.length === 0 || isBlankCellText(chars)) continue;
+          code = chars.charCodeAt(chars.length - 1);
+        } else {
+          if (codePoint === 0 || isWhitespaceCode(codePoint)) continue;
+          chars =
+            codePoint <= 0xffff ? String.fromCharCode(codePoint) : String.fromCodePoint(codePoint);
+          code = codePoint;
+        }
+
+        const fg = raw._data[offset + 1] ?? 0;
+        const bg = raw._data[offset + 2] ?? 0;
+        if (fg === 0 && bg === 0) {
+          attributes = 0;
+          fgColorMode = 0;
+          fgColor = -1;
+        } else {
+          const hasExtendedUnderline =
+            (bg & BG_HAS_EXTENDED) !== 0 && (raw._extendedAttrs[x]?.underlineStyle ?? 0) !== 0;
+          attributes =
+            ((fg & FG_BOLD) !== 0 ? 1 : 0) |
+            ((bg & BG_ITALIC) !== 0 ? 1 << 1 : 0) |
+            ((bg & BG_DIM) !== 0 ? 1 << 2 : 0) |
+            ((fg & FG_UNDERLINE) !== 0 || hasExtendedUnderline ? 1 << 3 : 0) |
+            ((fg & FG_BLINK) !== 0 ? 1 << 4 : 0) |
+            ((fg & FG_INVISIBLE) !== 0 ? 1 << 6 : 0) |
+            ((fg & FG_STRIKETHROUGH) !== 0 ? 1 << 7 : 0) |
+            ((bg & BG_OVERLINE) !== 0 ? 1 << 8 : 0);
+          fgColorMode = fg & COLOR_MODE_MASK;
+          fgColor =
+            fgColorMode === COLOR_PALETTE_16 || fgColorMode === COLOR_PALETTE_256
+              ? fg & 0xff
+              : fgColorMode === COLOR_RGB
+                ? fg & 0xffffff
+                : -1;
+        }
+      } else {
+        const cell = line.getCell(x, reusableCell);
+        if (!cell) continue;
+        width = cell.getWidth();
+        if (width === 0) continue;
+        chars = cell.getChars();
+        if (chars.length === 0 || isBlankCellText(chars)) continue;
+        code = cell.getCode();
+        // Attribute bit layout matches the old createVisibleContentCellFrom,
+        // minus inverse, which foregroundContentAttributes masks out.
+        attributes =
+          (cell.isBold() ? 1 : 0) |
+          (cell.isItalic() ? 1 << 1 : 0) |
+          (cell.isDim() ? 1 << 2 : 0) |
+          (cell.isUnderline() ? 1 << 3 : 0) |
+          (cell.isBlink() ? 1 << 4 : 0) |
+          (cell.isInvisible() ? 1 << 6 : 0) |
+          (cell.isStrikethrough() ? 1 << 7 : 0) |
+          (cell.isOverline() ? 1 << 8 : 0);
+        fgColorMode = cell.getFgColorMode();
+        fgColor = cell.getFgColor();
+      }
 
       const key =
         attributes === 0 && fgColorMode === 0 && fgColor === -1 && width === 1 && chars.length <= 2
           ? chars
-          : `${chars}|${cell.getCode()}|${width}|${fgColorMode}|${fgColor}|${attributes}`;
+          : `${chars}|${code}|${width}|${fgColorMode}|${fgColor}|${attributes}`;
 
       if (lastKey === key && isCollapsibleFillText(chars)) continue;
       units.push(key);

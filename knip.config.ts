@@ -38,6 +38,13 @@ const config: KnipConfig = {
     // consumes the global it installs.
     "scripts/perf/render-fanout-probe.js",
 
+    // The perf dispatcher launches these string-resolved paths in child
+    // processes, so Knip cannot follow them from scripts/perf/index.ts.
+    "scripts/perf/run.ts",
+    "scripts/perf/cold-start.ts",
+    "scripts/perf/launch-ab.ts",
+    "scripts/perf/memory-bench-compare.ts",
+
     // Playwright discovers specs by filesystem glob; knip has no visibility
     // into the test runner, so tests appear unused without these roots.
     "e2e/**/*.spec.ts",

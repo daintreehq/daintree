@@ -1,17 +1,22 @@
+import { lazy } from "react";
 import { registerBuiltinView } from "@/registry/builtinRendererRegistry";
 import { GitHubIcon } from "@/components/icons/brands";
-import { BulkCreateWorktreeDialog } from "./components/BulkCreateWorktreeDialog";
-import { IssueSelector } from "./components/IssueSelector";
-import { GitHubSettingsTab } from "./components/GitHubSettingsTab";
 import { GitHubStatsDropdown } from "./components/GitHubStatsDropdown";
 import { useGitHubConfigStore } from "./stores/githubConfigStore";
 
-// Registration runs at module-load time. The host bootstrap imports this
-// module once at app start so plugin slots are populated before any host
-// dialog tries to resolve them. Slot ids stay dot-namespaced by plugin so
-// future forge plugins can fill the same seams without colliding. The
-// `pluginId` ties each slot to the daintree.github enable state — resolution
-// returns null while the plugin is disabled, so these views drop out live.
+const BulkCreateWorktreeDialog = lazy(() =>
+  import("./components/BulkCreateWorktreeDialog").then((m) => ({
+    default: m.BulkCreateWorktreeDialog,
+  }))
+);
+const IssueSelector = lazy(() =>
+  import("./components/IssueSelector").then((m) => ({ default: m.IssueSelector }))
+);
+const GitHubSettingsTab = lazy(() =>
+  import("./components/GitHubSettingsTab").then((m) => ({ default: m.GitHubSettingsTab }))
+);
+
+// Registration stays synchronous while infrequently used views load only when rendered.
 registerBuiltinView("github.bulkCreateWorktreeDialog", BulkCreateWorktreeDialog, {
   pluginId: "daintree.github",
 });

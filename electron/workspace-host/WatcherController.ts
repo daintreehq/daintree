@@ -12,11 +12,11 @@ const WATCHER_WORKTREE_MIN_DEBOUNCE_MS = 250;
 const WATCHER_WORKTREE_MAX_DEBOUNCE_MS = 800;
 const WATCHER_WORKTREE_MAX_WAIT_MS = 1500;
 // Leading-edge fast path: an isolated edit after a quiet stretch flushes at
-// 50ms instead of waiting out the 250ms trailing floor, so the sidebar
+// 25ms instead of waiting out the 250ms trailing floor, so the sidebar
 // reflects a single save near-instantly. Continued burst events cancel the
 // leading timer back onto the trailing ramp, so storm coalescing (and the
 // PERF-104 quiescence profile) is preserved.
-const WATCHER_WORKTREE_LEADING_DEBOUNCE_MS = 50;
+const WATCHER_WORKTREE_LEADING_DEBOUNCE_MS = 25;
 const WATCHER_WORKTREE_QUIET_WINDOW_MS = 2_000;
 const WATCHER_ELEVATION_DOWNGRADE_DELAY_MS = 3_000;
 

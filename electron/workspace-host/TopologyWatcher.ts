@@ -24,7 +24,7 @@ const TOPOLOGY_RECONCILE_TIMEOUT_MS = 60_000;
 // several metadata files within a few milliseconds, so a short window still
 // coalesces one operation into one reconcile while keeping pickup latency low
 // (a reconcile is one `git worktree list` — cheap enough to run promptly).
-const TOPOLOGY_EVENT_DEBOUNCE_MS = 100;
+const TOPOLOGY_EVENT_DEBOUNCE_MS = 50;
 
 // Rate-limit window after a completed reconcile. Events that land inside it
 // set the dirty flag and drain via `armCooldownDrain()` at expiry — the

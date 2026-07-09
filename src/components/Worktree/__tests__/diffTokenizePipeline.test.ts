@@ -4,6 +4,7 @@ import type { HunkData, TokenizeEnhancer } from "react-diff-view";
 import { tokenizeFast } from "../diffTokenizePipeline";
 import { refractorAdapter } from "../diffRefractor";
 import { suppressFullLineEdits } from "../diffEditSuppression";
+import { runDiffTokenize } from "../diffTokenizer";
 
 // The fast pipeline exists purely for speed — its output must be
 // indistinguishable from react-diff-view's tokenize for every shape the
@@ -180,5 +181,71 @@ index 1111111..2222222 100644
     expectParity(hunks, "typescript", {
       enhancers: [markEdits(hunks, { type: "block" }), suppressFullLineEdits()],
     });
+  });
+});
+
+describe("runDiffTokenize intra-line edit strategy", () => {
+  it("keeps block-edit output for large balanced, strongly paired changes", async () => {
+    const lines = [
+      "diff --git a/src/generated.ts b/src/generated.ts",
+      "--- a/src/generated.ts",
+      "+++ b/src/generated.ts",
+      "@@ -1,14 +1,14 @@",
+      "   before();",
+      "   setup();",
+      "   begin();",
+    ];
+    for (let i = 0; i < 8; i += 1) {
+      lines.push(`-  const value_${i} = legacyCompute(${i}, { retries: 3 });`);
+    }
+    for (let i = 0; i < 8; i += 1) {
+      lines.push(`+  const value_${i} = compute(${i}, { retries: 3, backoff: "expo" });`);
+    }
+    lines.push("   finish();", "   cleanup();", "   after();", "");
+    const hunks = hunksOf(lines.join("\n"));
+
+    const actual = await runDiffTokenize({
+      hunks,
+      language: "typescript",
+      highlight: true,
+      extraRanges: null,
+    });
+    const expected = tokenize(hunks, {
+      highlight: true,
+      refractor: refractorAdapter,
+      language: "typescript",
+      enhancers: [markEdits(hunks, { type: "block" }), suppressFullLineEdits()],
+    });
+
+    expect(actual.tokens).toEqual(expected);
+  });
+
+  it("falls back to block edits when balanced lines are not similar", async () => {
+    const lines = [
+      "diff --git a/src/unrelated.ts b/src/unrelated.ts",
+      "--- a/src/unrelated.ts",
+      "+++ b/src/unrelated.ts",
+      "@@ -1,10 +1,10 @@",
+      "   before();",
+    ];
+    for (let i = 0; i < 8; i += 1) lines.push(`-old_${i}_alpha_beta_gamma();`);
+    for (let i = 0; i < 8; i += 1) lines.push(`+replacement_${i}_one_two_three();`);
+    lines.push("   after();", "");
+    const hunks = hunksOf(lines.join("\n"));
+
+    const actual = await runDiffTokenize({
+      hunks,
+      language: "typescript",
+      highlight: true,
+      extraRanges: null,
+    });
+    const expected = tokenize(hunks, {
+      highlight: true,
+      refractor: refractorAdapter,
+      language: "typescript",
+      enhancers: [markEdits(hunks, { type: "block" }), suppressFullLineEdits()],
+    });
+
+    expect(actual.tokens).toEqual(expected);
   });
 });

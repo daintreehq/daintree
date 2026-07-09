@@ -283,7 +283,7 @@ export class WorktreeMonitor {
     this._isDetached = Boolean(worktree.isDetached);
     this._head = worktree.head;
     this.gitWatchEnabled = config.gitWatchEnabled ?? true;
-    this.gitWatchDebounceMs = config.gitWatchDebounceMs ?? 150;
+    this.gitWatchDebounceMs = config.gitWatchDebounceMs ?? 100;
     this.pollQueue = pollQueue;
 
     this.pollingStrategy = new AdaptivePollingStrategy({

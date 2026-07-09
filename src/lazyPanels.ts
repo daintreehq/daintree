@@ -10,6 +10,13 @@ export const loadJetbrainsMono500 = () => import("@fontsource/jetbrains-mono/lat
 export const loadJetbrainsMono600 = () => import("@fontsource/jetbrains-mono/latin-600.css");
 export const preloadFileViewerModal = () => import("@/components/FileViewer/FileViewerModal");
 
+export function preloadModalHostLayer() {
+  return import("./ModalHostLayer");
+}
+export const LazyModalHostLayer = lazy(() =>
+  preloadModalHostLayer().then((m) => ({ default: m.ModalHostLayer }))
+);
+
 // Direct file import (not the Project barrel) so the lazy chunk doesn't pull
 // in barrel siblings. Renders only when no project is open, so it stays off
 // the returning-user first-paint path.

@@ -31,6 +31,7 @@ import {
   useAriaKeyshortcuts,
   useKeybindingDisplay,
   useDohertyGate,
+  useKeepMounted,
   useSkeletonDisplayFloor,
 } from "@/hooks";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
@@ -38,7 +39,6 @@ import { WorktreeSidebarSearchBar, QuickStateFilterBar } from "@/components/Work
 import { useBuiltinView } from "@/registry/builtinRendererRegistry";
 import type { ForgeBulkCreateWorktreeDialogProps } from "@/types/forgeSlotProps";
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
-import { FleetPickerPalette } from "@/components/Fleet/FleetPickerPalette";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
@@ -87,8 +87,6 @@ import { WorktreeCardPlaceholder } from "./WorktreeCardPlaceholder";
 import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import { useScrollIndicator } from "./useScrollIndicator";
 import { useRecipeDialogState } from "./useRecipeDialogState";
-import { RecipeEditor } from "@/components/TerminalRecipe/RecipeEditor";
-import { RecipeManager } from "@/components/TerminalRecipe/RecipeManager";
 import { useWorktreeIds } from "@/hooks/useTerminalSelectors";
 import { logError } from "@/utils/logger";
 import { useWorktreeSidebarKeyboard, type SidebarKeyboardItem } from "./useWorktreeSidebarKeyboard";
@@ -100,6 +98,17 @@ export function preloadNewWorktreeDialog() {
 }
 const LazyNewWorktreeDialog = lazy(() =>
   preloadNewWorktreeDialog().then((m) => ({ default: m.NewWorktreeDialog }))
+);
+const LazyFleetPickerPalette = lazy(() =>
+  import("@/components/Fleet/FleetPickerPalette").then((m) => ({
+    default: m.FleetPickerPalette,
+  }))
+);
+const LazyRecipeEditor = lazy(() =>
+  import("@/components/TerminalRecipe/RecipeEditor").then((m) => ({ default: m.RecipeEditor }))
+);
+const LazyRecipeManager = lazy(() =>
+  import("@/components/TerminalRecipe/RecipeManager").then((m) => ({ default: m.RecipeManager }))
 );
 
 function formatButtonTitle(label: string, shortcut?: string | null): string {
@@ -550,6 +559,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   }, [createDialog.isOpen]);
 
   const [isFleetPickerOpen, setIsFleetPickerOpen] = useState(false);
+  const shouldMountFleetPicker = useKeepMounted(isFleetPickerOpen);
   const [isRestartConfirmOpen, setIsRestartConfirmOpen] = useState(false);
   const openFleetPicker = useCallback(() => setIsFleetPickerOpen(true), []);
   const closeFleetPicker = useCallback(() => setIsFleetPickerOpen(false), []);
@@ -677,6 +687,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     handleRecipeManagerEdit,
     handleRecipeManagerCreate,
   } = useRecipeDialogState();
+  const shouldMountRecipeEditor = useKeepMounted(isRecipeEditorOpen);
+  const shouldMountRecipeManager = useKeepMounted(isRecipeManagerOpen);
 
   const [homeDir, setHomeDir] = useState<string | undefined>(undefined);
 
@@ -1881,14 +1893,18 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         componentName="RecipeEditor"
         resetKeys={[Number(isRecipeEditorOpen)]}
       >
-        <RecipeEditor
-          recipe={recipeManagerEdit}
-          worktreeId={recipeEditorWorktreeId}
-          initialTerminals={recipeEditorInitialTerminals}
-          defaultScope={recipeEditorDefaultScope}
-          isOpen={isRecipeEditorOpen}
-          onClose={handleCloseRecipeEditor}
-        />
+        {shouldMountRecipeEditor && (
+          <Suspense fallback={null}>
+            <LazyRecipeEditor
+              recipe={recipeManagerEdit}
+              worktreeId={recipeEditorWorktreeId}
+              initialTerminals={recipeEditorInitialTerminals}
+              defaultScope={recipeEditorDefaultScope}
+              isOpen={isRecipeEditorOpen}
+              onClose={handleCloseRecipeEditor}
+            />
+          </Suspense>
+        )}
       </ErrorBoundary>
 
       <ErrorBoundary
@@ -1896,12 +1912,16 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         componentName="RecipeManager"
         resetKeys={[Number(isRecipeManagerOpen)]}
       >
-        <RecipeManager
-          isOpen={isRecipeManagerOpen}
-          onClose={handleCloseRecipeManager}
-          onEditRecipe={handleRecipeManagerEdit}
-          onCreateRecipe={handleRecipeManagerCreate}
-        />
+        {shouldMountRecipeManager && (
+          <Suspense fallback={null}>
+            <LazyRecipeManager
+              isOpen={isRecipeManagerOpen}
+              onClose={handleCloseRecipeManager}
+              onEditRecipe={handleRecipeManagerEdit}
+              onCreateRecipe={handleRecipeManagerCreate}
+            />
+          </Suspense>
+        )}
       </ErrorBoundary>
 
       {newWorktreeDialogElement}
@@ -1911,15 +1931,17 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         componentName="BulkCreateWorktreeDialog"
         resetKeys={[Number(bulkCreateDialog.isOpen)]}
       >
-        {BulkCreateWorktreeDialog && (
-          <BulkCreateWorktreeDialog
-            isOpen={bulkCreateDialog.isOpen}
-            onClose={closeBulkCreateDialog}
-            mode={bulkCreateDialog.mode}
-            selectedIssues={bulkCreateDialog.selectedIssues}
-            selectedPRs={bulkCreateDialog.selectedPRs}
-            onComplete={closeBulkCreateDialog}
-          />
+        {bulkCreateDialog.isOpen && BulkCreateWorktreeDialog && (
+          <Suspense fallback={null}>
+            <BulkCreateWorktreeDialog
+              isOpen
+              onClose={closeBulkCreateDialog}
+              mode={bulkCreateDialog.mode}
+              selectedIssues={bulkCreateDialog.selectedIssues}
+              selectedPRs={bulkCreateDialog.selectedPRs}
+              onComplete={closeBulkCreateDialog}
+            />
+          </Suspense>
         )}
       </ErrorBoundary>
 
@@ -1928,7 +1950,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         componentName="FleetPickerPalette"
         resetKeys={[Number(isFleetPickerOpen)]}
       >
-        <FleetPickerPalette isOpen={isFleetPickerOpen} onClose={closeFleetPicker} />
+        {shouldMountFleetPicker && (
+          <Suspense fallback={null}>
+            <LazyFleetPickerPalette isOpen={isFleetPickerOpen} onClose={closeFleetPicker} />
+          </Suspense>
+        )}
       </ErrorBoundary>
 
       {restartConfirmDialog}

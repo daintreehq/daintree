@@ -1,4 +1,4 @@
-import { _electron as electron, type ElectronApplication, type Page } from "@playwright/test";
+import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -140,27 +140,17 @@ export function findPackagedExecutable(
   return null;
 }
 
-async function pollForWindow(app: ElectronApplication, timeoutMs: number): Promise<Page> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    for (const w of app.windows()) {
-      const url = w.url();
-      if (url.startsWith("app://") || url.includes("localhost")) {
-        return w;
-      }
-    }
-    await new Promise((r) => setTimeout(r, 200));
-  }
-  throw new Error("Timed out waiting for app window");
-}
-
 async function waitForNdjsonMark(
   ndjsonPath: string,
   targetMark: string,
-  timeoutMs: number
+  timeoutMs: number,
+  getProcessError?: () => Error | null
 ): Promise<MarkRecord | null> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    const processError = getProcessError?.();
+    if (processError) throw processError;
+
     if (!fs.existsSync(ndjsonPath)) {
       await new Promise((r) => setTimeout(r, 100));
       continue;
@@ -188,6 +178,41 @@ async function waitForNdjsonMark(
     await new Promise((r) => setTimeout(r, 100));
   }
   return null;
+}
+
+function waitForExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      resolve(true);
+      return;
+    }
+
+    const timer = setTimeout(() => resolve(false), timeoutMs);
+    child.once("exit", () => {
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
+}
+
+async function stopProcess(child: ChildProcess, traceEnabled: boolean): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+
+  try {
+    child.kill("SIGTERM");
+  } catch {
+    return;
+  }
+
+  const exited = await waitForExit(child, traceEnabled ? 15_000 : 5_000);
+  if (exited) return;
+
+  try {
+    child.kill("SIGKILL");
+  } catch {
+    return;
+  }
+  await waitForExit(child, 2_000);
 }
 
 export function parseBootDuration(ndjsonPath: string): {
@@ -329,7 +354,7 @@ export async function launchPackagedAndMeasure(
     }
   }
 
-  // Wall-clock anchor captured immediately before electron.launch() so the
+  // Wall-clock anchor captured immediately before spawn() so the
   // Electron main process can compute `os_to_app_boot_ms` against a Unix-epoch
   // reference. Cannot use performance.now() across processes — different time
   // origins. Date.now() aligns to the Unix epoch on both sides.
@@ -371,21 +396,35 @@ export async function launchPackagedAndMeasure(
   const launchEnv: Record<string, string | undefined> = { ...process.env, ...env };
   delete launchEnv.NODE_COMPILE_CACHE;
   delete launchEnv.NODE_DISABLE_COMPILE_CACHE;
+  delete launchEnv.ELECTRON_RUN_AS_NODE;
 
-  let app: ElectronApplication | null = null;
+  let child: ChildProcess | null = null;
+  let childError: Error | null = null;
+  let result: PackagedLaunchResult;
   const startMs = performance.now();
 
   try {
-    app = await electron.launch({
-      executablePath,
-      args,
+    child = spawn(executablePath, args, {
       env: launchEnv,
-      timeout: timeoutMs,
+      stdio: "ignore",
+      detached: false,
+    });
+    child.once("error", (error) => {
+      childError = error;
     });
 
-    await pollForWindow(app, timeoutMs);
+    const getProcessError = (): Error | null => {
+      if (childError) return childError;
+      if (child?.exitCode !== null && child?.exitCode !== undefined) {
+        return new Error(`Packaged app exited before startup marks (code ${child.exitCode})`);
+      }
+      if (child?.signalCode) {
+        return new Error(`Packaged app exited before startup marks (signal ${child.signalCode})`);
+      }
+      return null;
+    };
 
-    await waitForNdjsonMark(ndjsonPath, PERF_MARKS.RENDERER_READY, timeoutMs);
+    await waitForNdjsonMark(ndjsonPath, PERF_MARKS.RENDERER_READY, timeoutMs, getProcessError);
 
     // After RENDERER_READY arrives, wait for RENDERER_FIRST_INTERACTIVE — the
     // post-hydration interactive signal. It typically arrives within 100ms of
@@ -393,7 +432,12 @@ export async function launchPackagedAndMeasure(
     // contention can push it past 500ms, so a deterministic mark wait is
     // safer than a fixed sleep. 5s is generous; if it doesn't arrive,
     // parseBootDuration falls back to RENDERER_READY with a degraded note.
-    await waitForNdjsonMark(ndjsonPath, PERF_MARKS.RENDERER_FIRST_INTERACTIVE, 5_000);
+    await waitForNdjsonMark(
+      ndjsonPath,
+      PERF_MARKS.RENDERER_FIRST_INTERACTIVE,
+      5_000,
+      getProcessError
+    );
 
     const { durationMs, metrics, degraded } = parseBootDuration(ndjsonPath);
     const wallClockMs = performance.now() - startMs;
@@ -401,7 +445,7 @@ export async function launchPackagedAndMeasure(
 
     if (durationMs < 0) {
       metrics.wallClockMs = wallClockMs;
-      return {
+      result = {
         durationMs: wallClockMs,
         metrics,
         ndjsonPath,
@@ -410,17 +454,11 @@ export async function launchPackagedAndMeasure(
         cacheKind,
         cacheFileCount,
       };
+    } else {
+      result = { durationMs, metrics, ndjsonPath, notes: degraded, cacheKind, cacheFileCount };
     }
-
-    return { durationMs, metrics, ndjsonPath, notes: degraded, cacheKind, cacheFileCount };
   } finally {
-    if (app) {
-      try {
-        await app.close();
-      } catch {
-        // Force cleanup
-      }
-    }
+    if (child) await stopProcess(child, Boolean(options.traceFile));
 
     // Kill any lingering processes
     try {
@@ -451,4 +489,6 @@ export async function launchPackagedAndMeasure(
       }, 1000);
     }
   }
+
+  return result;
 }
