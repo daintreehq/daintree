@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import type { Issue } from "@shared/types/forge";
 import { useBuiltinView } from "@/registry/builtinRendererRegistry";
 import type { ForgeIssueSelectorProps } from "@/types/forgeSlotProps";
@@ -62,12 +63,14 @@ export function IssueLinkerView({
           </Tooltip>
         </div>
         {IssueSelector && (
-          <IssueSelector
-            projectPath={projectPath}
-            selectedIssue={selectedIssue}
-            onSelect={onSelectIssue}
-            disabled={disabled}
-          />
+          <Suspense fallback={null}>
+            <IssueSelector
+              projectPath={projectPath}
+              selectedIssue={selectedIssue}
+              onSelect={onSelectIssue}
+              disabled={disabled}
+            />
+          </Suspense>
         )}
       </div>
 
