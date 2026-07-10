@@ -668,6 +668,31 @@ describe("workflow.startWorkOnIssue", () => {
     expect(copyTreeClientMock.injectToTerminal).not.toHaveBeenCalled();
   });
 
+  it("throws PARTIAL_SUCCESS without injecting when the CLI is missing (setup-diagnostic panel)", async () => {
+    forgeClientMock.getIssue.mockResolvedValue({ number: 2, title: "x", url: "u" });
+    const callbacks = makeCallbacks();
+    // A missing CLI yields a real panel id but no PTY; the workflow must not
+    // treat it as a launched agent or inject context into it.
+    callbacks.onLaunchAgent.mockResolvedValue({
+      terminalId: "diagnostic-1",
+      location: "grid",
+      spawnStatus: "missing-cli",
+    });
+    const def = setupActions(callbacks)("workflow.startWorkOnIssue");
+    try {
+      await def.run({ issueNumber: 2, agentId: "claude" }, {} as never);
+      throw new Error("expected throw");
+    } catch (err) {
+      const message = (err as Error).message;
+      expect(message).toMatch(/^PARTIAL_SUCCESS:/);
+      expect(message).toMatch(/setup diagnostic|not available/i);
+      const payload = JSON.parse(message.slice(message.indexOf("{")));
+      expect(payload.partialResult.terminalId).toBeNull();
+      expect(payload.partialResult.contextInjected).toBe(false);
+    }
+    expect(copyTreeClientMock.injectToTerminal).not.toHaveBeenCalled();
+  });
+
   it("partial-success error embeds message + partial result as a single JSON envelope", async () => {
     forgeClientMock.getIssue.mockResolvedValue({ number: 7, title: "t", url: "u" });
     const callbacks = makeCallbacks();

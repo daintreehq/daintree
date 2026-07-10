@@ -543,17 +543,19 @@ describe("help-session tier policy (#10640)", () => {
   });
 });
 
-// agent.listToolbar (#10838) is the narrow, read-only discovery surface for the
-// toolbar agent set. It must be reachable by every tier — including external
+// agent.listToolbar and agent.listAvailable are the narrow, read-only discovery
+// surfaces for toolbar state and the effective launch registry. They must be reachable by every tier — including external
 // api-key consumers and workbench help sessions — WITHOUT exposing the broad
 // `agentSettings.get` (which leaks custom flags, dangerous args, global env, and
 // presets). These assertions pin that exact boundary: the safe alternative is
 // reachable everywhere the leaky one must stay walled off from external.
-describe("agent.listToolbar tier reachability (#10838)", () => {
-  it.each(["workbench", "action", "system", "external"] as const)(
-    "permits agent.listToolbar at the %s tier",
-    (tier) => {
-      expect(isTierPermitted(tier, "agent.listToolbar", false)).toBe(true);
+describe("narrow agent discovery tier reachability", () => {
+  it.each(["agent.listToolbar", "agent.listAvailable"] as const)(
+    "permits %s at every tier",
+    (toolId) => {
+      for (const tier of ["workbench", "action", "system", "external"] as const) {
+        expect(isTierPermitted(tier, toolId, false)).toBe(true);
+      }
     }
   );
 
