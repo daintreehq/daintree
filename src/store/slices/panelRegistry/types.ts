@@ -23,13 +23,17 @@ export type { AddPanelOptions };
  */
 export interface RestartTerminalOptions {
   /**
-   * When `false`, suppresses the "resume the most recent session" fallback
-   * even if the agent declares `resumeLatestArgs`. Used by
-   * `moveToNewWorktreeAndTransfer` where the CWD has changed and a fresh
-   * launch with buffer-injected context is intentional — letting the agent
-   * silently resume a stale session in the new CWD would mask the move. See
-   * issue #4781 for the cross-worktree-transfer rationale.
-   * Defaults to `true` (fallback enabled).
+   * When `false`, suppresses session continuity from the kill: the session id
+   * captured by the graceful shutdown is discarded and the "resume the most
+   * recent session" fallback is skipped even if the agent declares
+   * `resumeLatestArgs`. Used by `moveToNewWorktreeAndTransfer` where the CWD
+   * has changed and a fresh launch with buffer-injected context is
+   * intentional — silently resuming a session in the new CWD would mask the
+   * move and double up the injected history. A session id already stored on
+   * the panel still resumes exactly (pre-existing contract; the update-cwd
+   * flow relies on it). See issue #4781 for the cross-worktree-transfer
+   * rationale.
+   * Defaults to `true` (resume enabled).
    */
   allowResumeLatest?: boolean;
 }

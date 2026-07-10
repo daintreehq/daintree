@@ -3,6 +3,7 @@ import type { PtyPanelData } from "@shared/types/panel";
 
 const mockSpawn = vi.fn().mockResolvedValue({ id: "test-1" });
 const mockKill = vi.fn().mockResolvedValue(undefined);
+const mockGracefulKill = vi.fn().mockResolvedValue(null);
 const getMergedPresetMock = vi.hoisted(() => vi.fn().mockReturnValue(undefined));
 const buildAgentLaunchFlagsMock = vi.hoisted(() => vi.fn().mockReturnValue([]));
 
@@ -17,7 +18,7 @@ vi.mock("@/clients", () => ({
     onData: vi.fn(),
     onExit: vi.fn(),
     onAgentStateChanged: vi.fn(),
-    gracefulKill: vi.fn().mockResolvedValue(null),
+    gracefulKill: mockGracefulKill,
     submit: vi.fn().mockResolvedValue(undefined),
     acknowledgeData: vi.fn(),
     acknowledgePortData: vi.fn(),
@@ -648,11 +649,254 @@ describe("restartTerminal resume-latest fallback (#8787)", () => {
   });
 });
 
+describe("restartTerminal captured live-session resume", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    getMergedPresetMock.mockReturnValue(undefined);
+    buildAgentLaunchFlagsMock.mockReturnValue([]);
+    mockGracefulKill.mockResolvedValue(null);
+    const { agentSettingsClient, projectClient } = await import("@/clients");
+    (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    (projectClient.getSettings as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    const { buildResumeCommand, buildResumeLatestCommand } = await import("@shared/types");
+    (buildResumeCommand as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    (buildResumeLatestCommand as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    const { reset } = usePanelStore.getState();
+    await reset();
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
+      tabGroups: new Map(),
+      trashedTerminals: new Map(),
+      backgroundedTerminals: new Map(),
+      focusedId: null,
+      maximizedId: null,
+      commandQueue: [],
+    });
+  });
+
+  it("resumes the exact session id captured by the graceful kill", async () => {
+    const { buildResumeCommand, buildResumeLatestCommand } = await import("@shared/types");
+    mockGracefulKill.mockResolvedValue("live-123");
+    (buildResumeCommand as ReturnType<typeof vi.fn>).mockReturnValue("claude --resume live-123");
+    const active = {
+      ...agentPanelBase,
+      agentState: "working" as const,
+      agentSessionId: undefined,
+    };
+    usePanelStore.setState({
+      panelsById: { [active.id]: active },
+      panelIds: [active.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockGracefulKill).toHaveBeenCalledWith("test-1");
+    expect(buildResumeCommand).toHaveBeenCalledWith("claude", "live-123", ["--persisted-flag"]);
+    // Exact resume must preempt the resume-latest fallback — resume-latest
+    // resolves to the most recently active session in scope, which with
+    // several terminals of the same agent is often another pane's session.
+    expect(buildResumeLatestCommand).not.toHaveBeenCalled();
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.command).toBe("claude --resume live-123");
+    expect(payload.launchAgentId).toBe("claude");
+  });
+
+  it("keeps the pre-restart command durable when resuming a captured id", async () => {
+    const { buildResumeCommand } = await import("@shared/types");
+    mockGracefulKill.mockResolvedValue("live-123");
+    (buildResumeCommand as ReturnType<typeof vi.fn>).mockReturnValue("claude --resume live-123");
+    const active = { ...agentPanelBase, agentState: "working" as const };
+    usePanelStore.setState({
+      panelsById: { [active.id]: active },
+      panelIds: [active.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    // The resume command is transient: storing it durably would replay the
+    // consumed session id on the next restart.
+    const after = usePanelStore.getState().panelsById["test-1"] as PtyPanelData | undefined;
+    expect(after?.command).toBe(agentPanelBase.command);
+  });
+
+  it("prefers the captured live id over a stale stored one", async () => {
+    const { buildResumeCommand } = await import("@shared/types");
+    mockGracefulKill.mockResolvedValue("live-123");
+    (buildResumeCommand as ReturnType<typeof vi.fn>).mockImplementation(
+      (_agentId: string, sessionId: string) => `claude --resume ${sessionId}`
+    );
+    const active = {
+      ...agentPanelBase,
+      agentState: "working" as const,
+      agentSessionId: "stale-abc",
+    };
+    usePanelStore.setState({
+      panelsById: { [active.id]: active },
+      panelIds: [active.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(buildResumeCommand).toHaveBeenCalledWith("claude", "live-123", ["--persisted-flag"]);
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.command).toBe("claude --resume live-123");
+  });
+
+  it("discards the captured id when allowResumeLatest is false (worktree-move)", async () => {
+    const { buildResumeCommand, buildResumeLatestCommand } = await import("@shared/types");
+    mockGracefulKill.mockResolvedValue("live-123");
+    const active = {
+      ...agentPanelBase,
+      agentState: "working" as const,
+      agentSessionId: undefined,
+    };
+    usePanelStore.setState({
+      panelsById: { [active.id]: active },
+      panelIds: [active.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1", { allowResumeLatest: false });
+
+    // Fresh-launch intent: resuming would make the move flow's injected
+    // history land in an already-loaded conversation.
+    expect(buildResumeCommand).not.toHaveBeenCalled();
+    expect(buildResumeLatestCommand).not.toHaveBeenCalled();
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.command).toBe("claude --flag");
+  });
+
+  it("falls back to bare kill and resume-latest when gracefulKill rejects", async () => {
+    const { buildResumeLatestCommand } = await import("@shared/types");
+    mockGracefulKill.mockRejectedValueOnce(new Error("ipc dead"));
+    (buildResumeLatestCommand as ReturnType<typeof vi.fn>).mockReturnValue("claude --continue");
+    const active = { ...agentPanelBase, agentState: "working" as const };
+    usePanelStore.setState({
+      panelsById: { [active.id]: active },
+      panelIds: [active.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockKill).toHaveBeenCalledWith("test-1");
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.command).toBe("claude --continue");
+  });
+
+  it("uses bare kill (not gracefulKill) for demoted terminals", async () => {
+    const demoted = { ...agentPanelBase, agentState: "exited" as const, exitCode: 0 };
+    usePanelStore.setState({
+      panelsById: { [demoted.id]: demoted },
+      panelIds: [demoted.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockGracefulKill).not.toHaveBeenCalled();
+    expect(mockKill).toHaveBeenCalledWith("test-1");
+  });
+
+  it("uses bare kill for failed-spawn retries (no live process to quit)", async () => {
+    const failedToStart = {
+      ...agentPanelBase,
+      agentState: "exited" as const,
+      spawnStatus: "failed" as const,
+    };
+    usePanelStore.setState({
+      panelsById: { [failedToStart.id]: failedToStart },
+      panelIds: [failedToStart.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockGracefulKill).not.toHaveBeenCalled();
+    expect(mockKill).toHaveBeenCalledWith("test-1");
+    // The retry still relaunches as the agent (#10816).
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.launchAgentId).toBe("claude");
+  });
+
+  it("never degrades an exact candidate to resume-latest when its command is unbuildable", async () => {
+    const { buildResumeCommand, buildResumeLatestCommand } = await import("@shared/types");
+    mockGracefulKill.mockResolvedValue("live-123");
+    (buildResumeCommand as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    (buildResumeLatestCommand as ReturnType<typeof vi.fn>).mockReturnValue("claude --continue");
+    const active = { ...agentPanelBase, agentState: "working" as const };
+    usePanelStore.setState({
+      panelsById: { [active.id]: active },
+      panelIds: [active.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    // Resume-latest resolves to "most recent session in scope" — the safe
+    // outcome for a known-but-unbuildable session is a fresh launch.
+    expect(buildResumeCommand).toHaveBeenCalled();
+    expect(buildResumeLatestCommand).not.toHaveBeenCalled();
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.command).toBe("claude --flag");
+  });
+
+  it("ignores the captured id when a different agent is live in the pane", async () => {
+    const { buildResumeCommand, buildResumeLatestCommand } = await import("@shared/types");
+    mockGracefulKill.mockResolvedValue("codex-session-9");
+    (buildResumeLatestCommand as ReturnType<typeof vi.fn>).mockReturnValue("claude --continue");
+    // Claude-launched pane whose live detected identity is Codex: the
+    // graceful shutdown quit (and captured a session from) Codex, so the id
+    // must not be fed to `claude --resume`.
+    const hijacked = {
+      ...agentPanelBase,
+      agentState: "working" as const,
+      detectedAgentId: "codex" as const,
+    };
+    usePanelStore.setState({
+      panelsById: { [hijacked.id]: hijacked },
+      panelIds: [hijacked.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(buildResumeCommand).not.toHaveBeenCalled();
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.command).toBe("claude --continue");
+  });
+
+  it("restores the captured session id for retry when the respawn fails", async () => {
+    const { buildResumeCommand } = await import("@shared/types");
+    mockGracefulKill.mockResolvedValue("live-123");
+    (buildResumeCommand as ReturnType<typeof vi.fn>).mockReturnValue("claude --resume live-123");
+    mockSpawn.mockRejectedValueOnce(new Error("spawn failed"));
+    const active = {
+      ...agentPanelBase,
+      agentState: "working" as const,
+      agentSessionId: "stale-abc",
+    };
+    usePanelStore.setState({
+      panelsById: { [active.id]: active },
+      panelIds: [active.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const after = usePanelStore.getState().panelsById["test-1"] as PtyPanelData | undefined;
+    expect(after?.restartError).toBeDefined();
+    // The consumed live id — not the stale stored one — must survive for the
+    // retry to resume the same conversation.
+    expect(after?.agentSessionId).toBe("live-123");
+  });
+});
+
 describe("restartTerminal stale flow state cleared (#9899)", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     getMergedPresetMock.mockReturnValue(undefined);
     buildAgentLaunchFlagsMock.mockReturnValue([]);
+    // clearAllMocks keeps implementations — undo any per-test overrides from
+    // earlier suites.
+    mockGracefulKill.mockResolvedValue(null);
+    const { buildResumeCommand, buildResumeLatestCommand } = await import("@shared/types");
+    (buildResumeCommand as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    (buildResumeLatestCommand as ReturnType<typeof vi.fn>).mockReturnValue(null);
     const { agentSettingsClient, projectClient } = await import("@/clients");
     (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockResolvedValue({});
     (projectClient.getSettings as ReturnType<typeof vi.fn>).mockResolvedValue(null);
@@ -702,6 +946,12 @@ describe("restartTerminal input lock + parallel IPC (#9164)", () => {
     vi.clearAllMocks();
     getMergedPresetMock.mockReturnValue(undefined);
     buildAgentLaunchFlagsMock.mockReturnValue([]);
+    // clearAllMocks keeps implementations — undo any per-test overrides from
+    // earlier suites.
+    mockGracefulKill.mockResolvedValue(null);
+    const { buildResumeCommand, buildResumeLatestCommand } = await import("@shared/types");
+    (buildResumeCommand as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    (buildResumeLatestCommand as ReturnType<typeof vi.fn>).mockReturnValue(null);
     const { agentSettingsClient, projectClient } = await import("@/clients");
     (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockResolvedValue({});
     (projectClient.getSettings as ReturnType<typeof vi.fn>).mockResolvedValue(null);
@@ -802,15 +1052,21 @@ describe("restartTerminal input lock + parallel IPC (#9164)", () => {
     expect(after?.isInputLocked).not.toBe(true);
   });
 
-  it("starts terminalClient.kill before awaiting buildRestartEnv IPCs (parallelization)", async () => {
+  it("starts the kill IPC before awaiting buildRestartEnv IPCs (parallelization)", async () => {
     const { projectClient, globalEnvClient } = await import("@/clients");
     const projectSettings = projectClient.getSettings as ReturnType<typeof vi.fn>;
     const globalEnvGet = globalEnvClient.get as ReturnType<typeof vi.fn>;
 
     const order: string[] = [];
-    mockKill.mockImplementation(() => {
+    // Agent restarts kill via gracefulKill (session-id capture). Hold the
+    // kill promise open: if the env IPCs still start, they were launched in
+    // parallel with the kill, not awaited after it.
+    let resolveKill: (value: string | null) => void = () => {};
+    mockGracefulKill.mockImplementationOnce(() => {
       order.push("kill-start");
-      return Promise.resolve();
+      return new Promise<string | null>((resolve) => {
+        resolveKill = resolve;
+      });
     });
     projectSettings.mockImplementation(() => {
       order.push("project-settings-start");
@@ -830,15 +1086,19 @@ describe("restartTerminal input lock + parallel IPC (#9164)", () => {
       panelIds: [active.id],
     });
 
-    await usePanelStore.getState().restartTerminal("test-1");
+    const restartPromise = usePanelStore.getState().restartTerminal("test-1");
 
-    // All three IPC starts should appear before spawn — i.e. they were
-    // launched as part of the Promise.all, not awaited serially.
+    await vi.waitFor(() => {
+      expect(order).toContain("global-env-start");
+    });
     expect(order).toContain("kill-start");
-    expect(order).toContain("global-env-start");
-    // The kill IPC must have been invoked before the spawn IPC.
-    const killOrder = mockKill.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY;
-    const spawnOrder = mockSpawn.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY;
-    expect(killOrder).toBeLessThan(spawnOrder);
+    // The kill is still pending, so nothing downstream of the Promise.all —
+    // including spawn — may have run yet.
+    expect(mockSpawn).not.toHaveBeenCalled();
+
+    resolveKill(null);
+    await restartPromise;
+
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
   });
 });
