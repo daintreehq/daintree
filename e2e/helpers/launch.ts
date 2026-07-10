@@ -19,6 +19,7 @@ const ROOT = path.resolve(import.meta.dirname, "../..");
 
 const fallbackGraceMs = 1_500;
 const INITIAL_PROJECT_ID_EXPRESSION = "window.__DAINTREE_INITIAL_PROJECT__?.id ?? null";
+const RENDERER_PROBE_TIMEOUT_MS = 1_000;
 const E2E_MODE_ARG = "--daintree-e2e-mode";
 const E2E_SKIP_FIRST_RUN_DIALOGS_ARG = "--daintree-e2e-skip-first-run-dialogs";
 const E2E_FAULT_MODE_ARG = "--daintree-e2e-fault-mode";
@@ -179,16 +180,21 @@ async function getAttachedProjectInfo(
           const url = wc.getURL();
           if (fallbackUrl === null) fallbackUrl = url;
 
-          const projectId = await wc
-            .executeJavaScript(payload.projectIdExpression, true)
-            .catch(() => null);
+          const projectId = await Promise.race([
+            wc.executeJavaScript(payload.projectIdExpression, true).catch(() => null),
+            new Promise<null>((resolve) => setTimeout(resolve, payload.probeTimeoutMs)),
+          ]);
           if (typeof projectId === "string" && projectId.length > 0) {
             return { projectId, url };
           }
         }
         return { projectId: null, url: fallbackUrl };
       },
-      { windowId: windowId ?? null, projectIdExpression: INITIAL_PROJECT_ID_EXPRESSION }
+      {
+        windowId: windowId ?? null,
+        projectIdExpression: INITIAL_PROJECT_ID_EXPRESSION,
+        probeTimeoutMs: RENDERER_PROBE_TIMEOUT_MS,
+      }
     );
   } catch {
     return { projectId: null, url: null };
@@ -771,16 +777,21 @@ export async function refreshActiveWindow(app: ElectronApplication, oldPage?: Pa
           for (const child of views) {
             const wc = (child as Electron.WebContentsView).webContents;
             if (!wc || wc.isDestroyed()) continue;
-            const childProjectId = await wc
-              .executeJavaScript(payload.projectIdExpression, true)
-              .catch(() => null);
+            const childProjectId = await Promise.race([
+              wc.executeJavaScript(payload.projectIdExpression, true).catch(() => null),
+              new Promise<null>((resolve) => setTimeout(resolve, payload.probeTimeoutMs)),
+            ]);
             if (childProjectId === payload.projectId) {
               wc.focus();
               break;
             }
           }
         },
-        { projectId, projectIdExpression: INITIAL_PROJECT_ID_EXPRESSION }
+        {
+          projectId,
+          projectIdExpression: INITIAL_PROJECT_ID_EXPRESSION,
+          probeTimeoutMs: RENDERER_PROBE_TIMEOUT_MS,
+        }
       );
     }
 
@@ -1081,16 +1092,22 @@ export async function focusWindow(
         for (const child of views) {
           const wc = (child as Electron.WebContentsView).webContents;
           if (!wc || wc.isDestroyed()) continue;
-          const childProjectId = await wc
-            .executeJavaScript(payload.projectIdExpression, true)
-            .catch(() => null);
+          const childProjectId = await Promise.race([
+            wc.executeJavaScript(payload.projectIdExpression, true).catch(() => null),
+            new Promise<null>((resolve) => setTimeout(resolve, payload.probeTimeoutMs)),
+          ]);
           if (childProjectId === payload.projectId) {
             wc.focus();
             break;
           }
         }
       },
-      { id: windowId, projectId, projectIdExpression: INITIAL_PROJECT_ID_EXPRESSION }
+      {
+        id: windowId,
+        projectId,
+        projectIdExpression: INITIAL_PROJECT_ID_EXPRESSION,
+        probeTimeoutMs: RENDERER_PROBE_TIMEOUT_MS,
+      }
     );
 
     await page.bringToFront().catch(() => {});

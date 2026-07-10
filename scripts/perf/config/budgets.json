@@ -126,6 +126,58 @@
       "maxMetricValues": { "statusPasses": 3, "gitSpawns": 10 }
     },
 
+    "PERF-130": {
+      "p95Ms": 400,
+      "maxRegressionPct": 75,
+      "maxMetricValues": { "gitSpawns": 8 }
+    },
+    "PERF-131": {
+      "p95Ms": 600,
+      "maxRegressionPct": 75,
+      "maxMetricValues": { "gitSpawns": 10 }
+    },
+    "PERF-132": {
+      "p95Ms": 4000,
+      "maxRegressionPct": 75,
+      "maxMetricValues": { "detectionToIntervalRatio": 2.5 }
+    },
+    "PERF-133": {
+      "p95Ms": 1200,
+      "maxRegressionPct": 75,
+      "maxMetricValues": { "emitCount": 5, "gitSpawns": 18 }
+    },
+    "PERF-134": {
+      "p95Ms": 800,
+      "maxRegressionPct": 75
+    },
+    "PERF-135": {
+      "p95Ms": 800,
+      "maxRegressionPct": 75,
+      "maxMetricValues": { "worktreeListSpawns": 5 }
+    },
+    "PERF-136": { "p95Ms": 1500, "maxRegressionPct": 75 },
+    "PERF-137": {
+      "p95Ms": 3000,
+      "maxRegressionPct": 75,
+      "maxMetricValues": { "worktreeListSpawns": 8 }
+    },
+    "PERF-138": { "p95Ms": 1000, "maxRegressionPct": 75 },
+    "PERF-139": {
+      "p95Ms": 800,
+      "maxRegressionPct": 75,
+      "maxMetricValues": { "cooldownRemovalMs": 1200 }
+    },
+    "PERF-140": {
+      "p95Ms": 60,
+      "maxRegressionPct": 75,
+      "maxMetricValues": { "mapChangesPerApply": 1.05 }
+    },
+    "PERF-141": {
+      "p95Ms": 40,
+      "maxRegressionPct": 75,
+      "maxMetricValues": { "mapIdentityChanges": 0 }
+    },
+
     "PERF-110": { "p95Ms": 80, "maxRegressionPct": 50 },
     "PERF-111": {
       "p95Ms": 3500,
@@ -163,6 +215,32 @@
         "heapDeltaMb": 128,
         "memoryGrowthPct": 25
       }
+    },
+
+    "PERF-150": { "p95Ms": 15, "maxRegressionPct": 75 },
+    "PERF-151": {
+      "p95Ms": 15,
+      "maxRegressionPct": 75,
+      "maxMetricValues": { "msPerTargetAt48": 1 }
+    },
+
+    "PERF-160": { "p95Ms": 170, "maxRegressionPct": 75 },
+    "PERF-161": {
+      "p95Ms": 320,
+      "maxRegressionPct": 75,
+      "maxMetricValues": { "markedIntraLine": 0 }
+    },
+    "PERF-162": { "p95Ms": 260, "maxRegressionPct": 75 },
+
+    "PERF-170": {
+      "p95Ms": 40,
+      "maxRegressionPct": 75,
+      "maxMetricValues": { "p99KeystrokeMs": 8 }
+    },
+    "PERF-171": {
+      "p95Ms": 55,
+      "maxRegressionPct": 75,
+      "maxMetricValues": { "msPerKAction": 6 }
     }
   }
 }

@@ -5,7 +5,7 @@ import { getConstructedReflowTerminalCount } from "../lib/reflowFixture";
 describe("perf scenario matrix", () => {
   it("covers full PERF matrix", () => {
     expect(() => assertMatrixCoverage()).not.toThrow();
-    expect(allScenarios).toHaveLength(44);
+    expect(allScenarios).toHaveLength(63);
   });
 
   it("importing the resize/reflow scenario module constructs no terminals", () => {
@@ -105,6 +105,56 @@ describe("perf scenario matrix", () => {
     // 12 background terminals × 30 rounds × ~1.8 KB chunks — if this shrinks,
     // the flood stopped flooding and the degradation signal is meaningless.
     expect(sample.metrics!.floodBytes).toBeGreaterThan(500_000);
+  });
+
+  it("PERF-150 fleet broadcast filters chaff to exactly the live grid terminals", async () => {
+    const scenario = allScenarios.find((s) => s.id === "PERF-150");
+    expect(scenario).toBeDefined();
+
+    const context = { mode: "smoke" as const, now: () => performance.now() };
+    const sample = await scenario!.run(context);
+
+    expect(sample.metrics).toBeDefined();
+    // The armed set is 24 eligible + 12 ineligible panels; the real grid-location
+    // predicate must drop the chaff (dock/exited/pty-less/browser) and keep 24.
+    expect(sample.metrics!.eligibleTargets).toBe(24);
+    expect(sample.metrics!.totalPanels).toBe(36);
+    // Every target got a substituted payload dispatched through the broker.
+    expect(sample.metrics!.ackBytes).toBeGreaterThan(0);
+    expect(sample.durationMs).toBeGreaterThanOrEqual(0);
+    expect(Number.isFinite(sample.durationMs)).toBe(true);
+  });
+
+  it("PERF-161 oversized diff engages the whole-line fallback (no intra-line marking)", async () => {
+    const scenario = allScenarios.find((s) => s.id === "PERF-161");
+    expect(scenario).toBeDefined();
+
+    const context = { mode: "smoke" as const, now: () => performance.now() };
+    const sample = await scenario!.run(context);
+
+    expect(sample.metrics).toBeDefined();
+    // Above the 3000-line markEdits budget, so the fallback path must be taken.
+    expect(sample.metrics!.changedLines).toBeGreaterThan(3000);
+    expect(sample.metrics!.markedIntraLine).toBe(0);
+    // The real tokenizer still produced a highlighted token tree.
+    expect(sample.metrics!.tokensProduced).toBe(1);
+  });
+
+  it("PERF-170 palette filter re-ranks every keystroke and measures the per-keystroke tail", async () => {
+    const scenario = allScenarios.find((s) => s.id === "PERF-170");
+    expect(scenario).toBeDefined();
+
+    const context = { mode: "smoke" as const, now: () => performance.now() };
+    const sample = await scenario!.run(context);
+
+    expect(sample.metrics).toBeDefined();
+    // One re-rank per typed character across the 7 queries (57 keystrokes total).
+    expect(sample.metrics!.reRankCount).toBe(57);
+    // The ranker matched real actions, and the per-keystroke tail is measured.
+    // The frame-budget limit itself lives in budgets.json, not here.
+    expect(sample.metrics!.totalMatches).toBeGreaterThan(0);
+    expect(sample.metrics!.p99KeystrokeMs).toBeGreaterThanOrEqual(0);
+    expect(Number.isFinite(sample.metrics!.p99KeystrokeMs)).toBe(true);
   });
 
   it("PERF-112 keeps the over-budget reveal flat with respect to backlog size", async () => {

@@ -103,6 +103,36 @@ function playwrightMemory(): Runner {
     );
 }
 
+function npmScript(name: string): Promise<number> {
+  const npmCli = process.env.npm_execpath;
+  if (!npmCli) {
+    console.error(`[perf] cannot run npm script '${name}': npm_execpath is unavailable`);
+    return Promise.resolve(1);
+  }
+  return spawnNode([npmCli, "run", name]);
+}
+
+function playwrightRecipeFanout(): Runner {
+  return async (rest) => {
+    const buildExitCode = await npmScript("build:e2e:bench");
+    if (buildExitCode !== 0) return buildExitCode;
+    return spawnNode(
+      [
+        resolveBin(
+          ["node_modules/@playwright/test/cli.js", "node_modules/playwright/cli.js"],
+          "playwright"
+        ),
+        "test",
+        "--project=full-worktree",
+        "--workers=1",
+        "e2e/full/worktree/recipe-fanout-perf.spec.ts",
+        ...rest,
+      ],
+      { RUN_PERF_RECIPE_FANOUT: "1" }
+    );
+  };
+}
+
 const REGISTRY: Record<string, Command> = {
   smoke: { summary: "Fast local smoke matrix (run on demand)", runner: harness("smoke") },
   ci: { summary: "CI validation matrix (scheduled + manual dispatch)", runner: harness("ci") },
@@ -115,6 +145,10 @@ const REGISTRY: Record<string, Command> = {
   "launch-ab": {
     summary: "Direct-spawn launch A/B benchmark (before/after across branches)",
     runner: tsxScript("launch-ab.ts"),
+  },
+  "recipe-fanout": {
+    summary: "Cold recipe fanout through worktree, PTY host, and xterm",
+    runner: playwrightRecipeFanout(),
   },
   memory: {
     summary: "Memory kitchen-sink soak spec via Playwright",

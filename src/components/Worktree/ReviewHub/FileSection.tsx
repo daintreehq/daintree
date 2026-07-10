@@ -58,7 +58,7 @@ interface FileSectionProps {
     e: React.MouseEvent
   ) => void;
   onBulkAction: () => void;
-  viewedFiles: Set<string>;
+  viewedFiles: ReadonlySet<string>;
   onViewedChange: (viewedKey: string, viewed: boolean) => void;
   sectionRef?: Ref<HTMLDivElement>;
 }

@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
   useMemo,
+  Suspense,
   type ComponentType,
   type ReactNode,
 } from "react";
@@ -358,7 +359,13 @@ function ProviderPanel({ providerId, entry }: { providerId: string; entry: Forge
   const SlotView = useBuiltinView<Record<string, never>>(
     entry.contribution.slots?.settingsTab ?? ""
   );
-  if (SlotView) return <SlotView />;
+  if (SlotView) {
+    return (
+      <Suspense fallback={null}>
+        <SlotView />
+      </Suspense>
+    );
+  }
   return (
     <ProviderSettingsBody
       providerId={providerId}

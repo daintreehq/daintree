@@ -205,6 +205,7 @@ describe("extractPluginArchive", () => {
     await fs.mkdir(dest, { recursive: true });
 
     await expect(extractPluginArchive(archivePath, dest)).rejects.toThrow(/entry limit/);
+    expect(await fs.readdir(dest)).toEqual([]);
   });
 
   it("rejects an archive with a duplicate normalized entry name", async () => {

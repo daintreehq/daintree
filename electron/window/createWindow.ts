@@ -214,6 +214,11 @@ export function setupBrowserWindow(
         ? {
             titleBarStyle: "hiddenInset" as const,
             trafficLightPosition: { x: 12, y: 18 },
+            // Deliver the window-activating click to the content instead of
+            // swallowing it (macOS default), so clicking a panel in an
+            // inactive window focuses that panel. Propagates to all child
+            // WebContentsViews. Matches VS Code (clickThroughInactive) and iTerm2.
+            acceptFirstMouse: true,
           }
         : process.platform === "win32"
           ? {

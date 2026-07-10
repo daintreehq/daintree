@@ -1,6 +1,7 @@
 import { useEffect, useCallback, useState, useRef } from "react";
 import type { RestoreFocusTarget } from "@/components/ui/AppDialog";
 import { FileViewerModal } from "@/components/FileViewer/FileViewerModal";
+import type { DiffChangeSetEntry } from "@/components/FileViewer/diffChangeSet";
 import { useBranchForPath } from "@/hooks/useBranchForPath";
 import { usePreferencesStore } from "@/store/preferencesStore";
 
@@ -19,6 +20,10 @@ interface BaseBranchDiffModalProps {
   totalFileCount?: number;
   /** Step to the previous (-1) or next (1) file in the set. */
   onNavigateFile?: (delta: -1 | 1) => void;
+  /** Full changeset (indexed like `currentFileIndex`) — enables the review workspace. */
+  changeSet?: DiffChangeSetEntry[];
+  /** Jump directly to a file in `changeSet`. */
+  onSelectFile?: (index: number) => void;
 }
 
 export function BaseBranchDiffModal({
@@ -32,6 +37,8 @@ export function BaseBranchDiffModal({
   currentFileIndex,
   totalFileCount,
   onNavigateFile,
+  changeSet,
+  onSelectFile,
 }: BaseBranchDiffModalProps) {
   const [diff, setDiff] = useState<string | undefined>(undefined);
   const requestRef = useRef(0);
@@ -89,6 +96,8 @@ export function BaseBranchDiffModal({
       currentFileIndex={currentFileIndex}
       totalFileCount={totalFileCount}
       onNavigateFile={onNavigateFile}
+      changeSet={changeSet}
+      onSelectFile={onSelectFile}
     />
   );
 }

@@ -71,7 +71,7 @@ export interface MonitorConfig {
   circuitBreakerThreshold?: number;
   /** Enable git file watching for instant updates (default: true) */
   gitWatchEnabled?: boolean;
-  /** Debounce time for file watch events in ms (default: 300) */
+  /** Debounce time for file watch events in ms (default: 150) */
   gitWatchDebounceMs?: number;
 }
 

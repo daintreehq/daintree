@@ -18,6 +18,15 @@ function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+export type HeadFileReadResult =
+  | { ok: true; content: Buffer }
+  | { ok: false; reason: "NOT_FOUND" | "TOO_LARGE" };
+
+// Git error text for a path/revision that cannot resolve to a blob at HEAD:
+// missing path, untracked path, empty repo (unborn HEAD), or a non-blob object.
+const MISSING_AT_HEAD_RE =
+  /does not exist in|exists on disk, but not in|invalid object name|not a valid object name|bad revision|bad file/i;
+
 export class GitService {
   private git: Promise<SimpleGit> | null = null;
   private rootPath: string;
@@ -303,6 +312,61 @@ ${lines.map((l) => "+" + l).join("\n")}`;
       });
       throw new Error(`Failed to generate diff: ${(error as Error).message}`);
     }
+  }
+
+  /**
+   * Read a file's blob content at HEAD. Size-checks via `cat-file -s` before
+   * reading so an oversized blob is never loaded, and reads the content with
+   * `binaryCatFile` (Buffer-safe — `raw()` is utf8-lossy for binary blobs).
+   */
+  async readFileAtHead(filePath: string, maxBytes: number): Promise<HeadFileReadResult> {
+    if (isAbsolute(filePath)) {
+      throw new Error("Absolute paths are not allowed");
+    }
+    if (filePath.includes("\0")) {
+      throw new Error("Path contains null bytes");
+    }
+
+    const normalizedPath = normalize(filePath);
+    const pathSegments = normalizedPath.split(/[\\/]+/).filter(Boolean);
+    if (pathSegments.includes("..") || normalizedPath.startsWith(sep)) {
+      throw new Error("Path traversal detected");
+    }
+
+    // Git object specs always use forward slashes, even on Windows. The
+    // `HEAD:` prefix also guarantees the spec never starts with a dash.
+    const objectSpec = `HEAD:${normalizedPath.replaceAll("\\", "/")}`;
+    const git = await this.getGit();
+
+    let sizeRaw: string;
+    try {
+      sizeRaw = await git.raw(["cat-file", "-s", "--end-of-options", objectSpec]);
+    } catch (error) {
+      if (MISSING_AT_HEAD_RE.test((error as Error).message ?? "")) {
+        return { ok: false, reason: "NOT_FOUND" };
+      }
+      throw toGitOperationError(error, { cwd: this.rootPath, op: "read-file-at-head" });
+    }
+
+    const size = Number.parseInt(sizeRaw.trim(), 10);
+    if (Number.isFinite(size) && size > maxBytes) {
+      return { ok: false, reason: "TOO_LARGE" };
+    }
+
+    let content: Buffer;
+    try {
+      content = (await git.binaryCatFile(["blob", objectSpec])) as Buffer;
+    } catch (error) {
+      if (MISSING_AT_HEAD_RE.test((error as Error).message ?? "")) {
+        return { ok: false, reason: "NOT_FOUND" };
+      }
+      throw toGitOperationError(error, { cwd: this.rootPath, op: "read-file-at-head" });
+    }
+
+    if (content.byteLength > maxBytes) {
+      return { ok: false, reason: "TOO_LARGE" };
+    }
+    return { ok: true, content };
   }
 
   async compareWorktrees(

@@ -284,6 +284,10 @@ export interface GeneratedIpcInvokeMap {
     args: [request: import("./devPreview.js").DevPreviewStopDevServerByWorktreeRequest];
     result: import("./devPreview.js").DevPreviewSessionState;
   };
+  "diff-media:read-file-versions": {
+    args: [payload: import("./diffMedia.js").DiffMediaReadFileVersionsPayload];
+    result: import("./diffMedia.js").DiffMediaFileVersions;
+  };
   "editor:discover": {
     args: [];
     result: import("../editor.js").DiscoveredEditor[];
@@ -1513,6 +1517,8 @@ export interface GeneratedIpcInvokeMap {
         title?: string | undefined;
         titleMode?: "default" | "custom" | "user" | undefined;
         restore?: boolean | undefined;
+        spawnBatchId?: string | undefined;
+        spawnBatchSize?: number | undefined;
         isEphemeral?: boolean | undefined;
         agentLaunchFlags?: string[] | undefined;
         agentModelId?: string | undefined;

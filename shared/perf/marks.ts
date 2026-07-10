@@ -125,6 +125,8 @@ export const PERF_MARKS = {
    * measurable in `perf:cold-start` (#9809).
    */
   TERMINAL_FIRST_WRITE: "terminal_first_write",
+  /** Renderer-independent hashes of newly painted xterm buffer lines. */
+  TERMINAL_OUTPUT_PAINTED: "terminal_output_painted",
 
   /**
    * Emitted per spawn from the pty-host when `acquireByKey` finds (HIT) or
@@ -152,6 +154,18 @@ export const PERF_MARKS = {
 } as const;
 
 export type PerfMarkName = (typeof PERF_MARKS)[keyof typeof PERF_MARKS];
+
+/** Non-cryptographic 64-bit fingerprint for correlating terminal lines without recording output. */
+export function hashPerfLine(value: string): string {
+  let first = 0x811c9dc5;
+  let second = 0x9e3779b9;
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index);
+    first = Math.imul(first ^ code, 0x01000193);
+    second = Math.imul(second ^ code, 0x85ebca6b);
+  }
+  return `${(first >>> 0).toString(36)}-${(second >>> 0).toString(36)}`;
+}
 
 export interface RendererPerfRecord {
   mark: PerfMarkName | string;

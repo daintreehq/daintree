@@ -11,6 +11,13 @@ const MAX_RESETS_PER_SESSION = 3;
 const WATCHER_WORKTREE_MIN_DEBOUNCE_MS = 250;
 const WATCHER_WORKTREE_MAX_DEBOUNCE_MS = 800;
 const WATCHER_WORKTREE_MAX_WAIT_MS = 1500;
+// Leading-edge fast path: an isolated edit after a quiet stretch flushes at
+// 25ms instead of waiting out the 250ms trailing floor, so the sidebar
+// reflects a single save near-instantly. Continued burst events cancel the
+// leading timer back onto the trailing ramp, so storm coalescing (and the
+// PERF-104 quiescence profile) is preserved.
+const WATCHER_WORKTREE_LEADING_DEBOUNCE_MS = 25;
+const WATCHER_WORKTREE_QUIET_WINDOW_MS = 2_000;
 const WATCHER_ELEVATION_DOWNGRADE_DELAY_MS = 3_000;
 
 export type WatcherMode = "none" | "git-only" | "recursive";
@@ -91,6 +98,14 @@ export class WatcherController {
     return this.gitWatcher.value !== undefined || this.pendingArm !== null;
   }
 
+  /** True only once the current watcher's async arm has fully resolved (live
+   *  fs handles). `hasWatcher` is intentionally optimistic while an arm is in
+   *  flight; this is the pessimistic variant for callers that must not act
+   *  before events can actually be delivered (diagnostics, perf harnesses). */
+  get watcherArmed(): boolean {
+    return this.gitWatcher.value !== undefined;
+  }
+
   get currentMode(): WatcherMode {
     return this.gitWatcherMode;
   }
@@ -144,6 +159,8 @@ export class WatcherController {
       worktreeMinDebounceMs: WATCHER_WORKTREE_MIN_DEBOUNCE_MS,
       worktreeMaxDebounceMs: WATCHER_WORKTREE_MAX_DEBOUNCE_MS,
       worktreeMaxWaitMs: WATCHER_WORKTREE_MAX_WAIT_MS,
+      worktreeLeadingDebounceMs: WATCHER_WORKTREE_LEADING_DEBOUNCE_MS,
+      worktreeQuietWindowMs: WATCHER_WORKTREE_QUIET_WINDOW_MS,
       onWatcherFailed: () => this.handleWatcherFailed(),
       onInotifyLimitReached: () => this.host.onInotifyLimitReached(this.host.worktreeId),
       onEmfileLimitReached: () => this.host.onEmfileLimitReached(this.host.worktreeId),

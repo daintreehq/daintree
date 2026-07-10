@@ -20,6 +20,18 @@ const TOPOLOGY_SAFETY_INTERVAL_MS = 90_000;
 // pending flag forever, freezing all worktree add/remove detection.
 const TOPOLOGY_RECONCILE_TIMEOUT_MS = 60_000;
 
+// Trailing debounce over buffered watcher events. `git worktree add` writes
+// several metadata files within a few milliseconds, so a short window still
+// coalesces one operation into one reconcile while keeping pickup latency low
+// (a reconcile is one `git worktree list` — cheap enough to run promptly).
+const TOPOLOGY_EVENT_DEBOUNCE_MS = 50;
+
+// Rate-limit window after a completed reconcile. Events that land inside it
+// set the dirty flag and drain via `armCooldownDrain()` at expiry — the
+// cooldown bounds reconcile frequency, it must never strand an external
+// change (PERF-139's in-cooldown removal guards exactly this).
+const TOPOLOGY_RECONCILE_COOLDOWN_MS = 500;
+
 export interface TopologyWatcherHost {
   readonly pollingEnabled: boolean;
   readonly projectRootPath: string | null;
@@ -62,11 +74,13 @@ export class TopologyWatcher {
   private pendingCreate = new Set<string>();
   private pendingDelete = new Set<string>();
   private pendingSafetyTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  // Events accumulate here across the 300ms debounce window and are filtered
-  // against the pending sets at drain time, preserving burst coalescing.
+  // Events accumulate here across the TOPOLOGY_EVENT_DEBOUNCE_MS window and
+  // are filtered against the pending sets at drain time, preserving burst
+  // coalescing.
   private eventBuffer: Array<{ path: string; type?: string }> = [];
   private watchCooldownUntil = 0;
   private watchCooldownDirty = false;
+  private cooldownDrainTimer: ReturnType<typeof setTimeout> | null = null;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private enabled = true;
   private generation = 0;
@@ -193,7 +207,7 @@ export class TopologyWatcher {
         if (this.debounceTimer) {
           clearTimeout(this.debounceTimer);
         }
-        this.debounceTimer = setTimeout(drain, 300);
+        this.debounceTimer = setTimeout(drain, TOPOLOGY_EVENT_DEBOUNCE_MS);
       })
       .then((subscription) => {
         if (generation !== this.generation) {
@@ -314,6 +328,10 @@ export class TopologyWatcher {
     this.pendingDelete.clear();
     this.reconcilePending = false;
     this.watchCooldownDirty = false;
+    if (this.cooldownDrainTimer) {
+      clearTimeout(this.cooldownDrainTimer);
+      this.cooldownDrainTimer = null;
+    }
     if (this.periodicSafetyTimer !== null) {
       clearInterval(this.periodicSafetyTimer);
       this.periodicSafetyTimer = null;
@@ -418,17 +436,30 @@ export class TopologyWatcher {
     if (!this.enabled) return;
     if (!force && !this.host.pollingEnabled) return;
     if (!force && Date.now() < this.watchCooldownUntil) {
+      // Deferred, not dropped: the drain timer guarantees a pass at cooldown
+      // expiry. Without it a change landing here with no reconcile in flight
+      // was stranded until the next unrelated event or the 90s safety net.
       this.watchCooldownDirty = true;
+      this.armCooldownDrain();
       return;
     }
     if (this.reconcilePending) {
       // A pass is already running. Mark dirty so a follow-up fires once it
       // settles — for both coalesced watcher events and forced user requests.
+      // The finally below arms the drain once the new cooldown is known.
       this.watchCooldownDirty = true;
       return;
     }
 
     this.reconcilePending = true;
+    // This pass will observe whatever topology state the deferred request
+    // wanted verified — absorb the dirt and its drain timer rather than
+    // running a redundant follow-up after the new cooldown.
+    this.watchCooldownDirty = false;
+    if (this.cooldownDrainTimer) {
+      clearTimeout(this.cooldownDrainTimer);
+      this.cooldownDrainTimer = null;
+    }
     this.reconcileQueue.add(async () => {
       try {
         // Watchdog the reconcile so a stuck `git worktree prune`/`list` can't
@@ -443,14 +474,31 @@ export class TopologyWatcher {
         console.warn(`[WorkspaceHost] topology reconciliation failed: ${(err as Error).message}`);
       } finally {
         this.reconcilePending = false;
-        this.watchCooldownUntil = Date.now() + 2000;
+        this.watchCooldownUntil = Date.now() + TOPOLOGY_RECONCILE_COOLDOWN_MS;
         if (this.watchCooldownDirty) {
-          this.watchCooldownDirty = false;
-          const remaining = this.watchCooldownUntil - Date.now();
-          setTimeout(() => this.scheduleReconcile(), Math.max(remaining, 0));
+          this.armCooldownDrain();
         }
       }
     });
+  }
+
+  /**
+   * One-shot timer that re-attempts a dirty reconcile just past cooldown
+   * expiry. Clears the dirty flag before re-entering scheduleReconcile: a
+   * re-deferral (new cooldown, or a pass in flight) re-sets it and re-arms
+   * through the paths above, so the flag can never strand. The 5ms epsilon
+   * keeps an early-firing timer from landing inside the cooldown it waits on.
+   */
+  private armCooldownDrain(): void {
+    if (this.cooldownDrainTimer) return;
+    const delay = Math.max(this.watchCooldownUntil - Date.now(), 0) + 5;
+    this.cooldownDrainTimer = setTimeout(() => {
+      this.cooldownDrainTimer = null;
+      if (!this.watchCooldownDirty) return;
+      this.watchCooldownDirty = false;
+      this.scheduleReconcile();
+    }, delay);
+    this.cooldownDrainTimer.unref?.();
   }
 
   private async runReconcile(): Promise<void> {

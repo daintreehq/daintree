@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.24.0] - 2026-07-10
+
+The diff viewer grows into a full multi-file review workspace, worktree sidebar updates land far faster, and recipe fanout cold-spawns in a single batch — plus fixes for GitHub panels reading "not connected", stale diff content, stranded tooltips, and a swallowed first click on inactive macOS windows.
+
+### Features
+
+**Diff review workspace**
+
+- Opening a multi-file changeset now opens a dedicated review workspace: a file sidebar with change counts, review progress, a filter, and per-file viewed markers, in a fixed frame that doesn't resize as you step between files (#11028)
+- `n`/`p` navigation flows continuously across file boundaries, `v` marks the current file viewed and advances, and viewed state stays in sync with the Review Hub (#11028)
+- Changed images get a compare view with two-up, swipe, and onion-skin modes, and diff text size is now an S/M/L preference that persists (#11028)
+
+### Performance
+
+- Worktree sidebar updates land far faster — a single file edit surfaces 3.6× sooner, 50 rapid edits 11.4×, and external worktree adds/removes 2.2–2.6× (#11029)
+- Launching a recipe across worktrees cold-spawns as a single bounded batch instead of one at a time (#11038)
+- Faster diff syntax tokenizing, command-palette ranking, and worktree pickup on the interactive hot paths (#11037, #11039)
+
+### Bug Fixes
+
+- GitHub panels no longer read "not connected" while the toolbar counts work — a legacy GitHub token is backfilled into forge credentials (#11033)
+- The diff review no longer shows stale content while open — it surfaces a refresh banner when the underlying diff changes (#11032)
+- Tooltips no longer strand on top of a modal — every dialog open and close clears them (#11030)
+- The first click on an inactive Daintree window now registers on macOS instead of only focusing the window
+
 ## [0.23.1] - 2026-07-09
 
 A fast follow-up to 0.23.0 focused on keeping terminals responsive under heavy output — smoother concurrent scrolling across mouse-reporting TUIs and snappier keystroke echo under load — plus fixes for the file viewer inflating the app layout and the forge toolbar starting up empty.

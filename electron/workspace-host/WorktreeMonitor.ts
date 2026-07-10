@@ -283,7 +283,7 @@ export class WorktreeMonitor {
     this._isDetached = Boolean(worktree.isDetached);
     this._head = worktree.head;
     this.gitWatchEnabled = config.gitWatchEnabled ?? true;
-    this.gitWatchDebounceMs = config.gitWatchDebounceMs ?? 300;
+    this.gitWatchDebounceMs = config.gitWatchDebounceMs ?? 100;
     this.pollQueue = pollQueue;
 
     this.pollingStrategy = new AdaptivePollingStrategy({
@@ -1033,6 +1033,11 @@ export class WorktreeMonitor {
 
   get hasWatcher(): boolean {
     return this.watcherController.hasWatcher;
+  }
+
+  /** True only once the watcher's async arm resolved — see WatcherController.watcherArmed. */
+  get hasArmedWatcher(): boolean {
+    return this.watcherController.watcherArmed;
   }
 
   setIssueNumber(issueNumber: number | undefined): void {

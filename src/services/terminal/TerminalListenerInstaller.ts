@@ -12,6 +12,8 @@ import { writeTerminalInputOrFleet } from "./fleetInputRouter";
 import { getXtermCellDimensions } from "./TerminalResizeController";
 import { MouseWheelClassifier } from "./mouseWheelClassifier";
 import { getTerminalMetrics } from "@/config/xtermConfig";
+import { hashPerfLine, PERF_MARKS } from "@shared/perf/marks";
+import { isRendererPerfCaptureActive, markRendererPerformance } from "@/utils/performance";
 
 // Debounce: coalesce a burst of OSC 0/2 title changes from agent shells
 // (which can emit many per second) into a single panel-store / main-process
@@ -50,6 +52,7 @@ const WAITING_TITLE_HYSTERESIS_MS = 250;
 // ~6 lines at a 14px font. Pixel-mode only — line/page events carry the OS step.
 const WHEEL_FALLBACK_PIXELS_PER_LINE = 20;
 const DEFAULT_FONT_SIZE_PX = 14;
+const PERF_PAINT_LINE_LIMIT = 64;
 
 // Max synthetic line-reports flushed per animation frame for a mouse-reporting
 // TUI — the SEND-RATE lever (NOT a render-FPS lever). Each report is an
@@ -335,7 +338,28 @@ export function installTerminalBoundListeners(
   // is the trigger because it also fires when a pane swaps WebGL→DOM on a fleet
   // mode flip and on DPR changes that re-stamp heights without a cols/rows
   // resize. The snap is idempotent and bails immediately for WebGL panes.
-  const renderDisposable = terminal.onRender(() => {
+  const perfPaintedLines = isRendererPerfCaptureActive() ? new Set<string>() : null;
+  const renderDisposable = terminal.onRender(({ start, end } = { start: 0, end: -1 }) => {
+    if (perfPaintedLines && perfPaintedLines.size < PERF_PAINT_LINE_LIMIT) {
+      const lineHashes: string[] = [];
+      const viewportY = terminal.buffer.active.viewportY;
+      for (let row = start; row <= end && perfPaintedLines.size < PERF_PAINT_LINE_LIMIT; row++) {
+        const bufferIndex = viewportY + row;
+        const text = terminal.buffer.active.getLine(bufferIndex)?.translateToString(true) ?? "";
+        if (!text) continue;
+        const hash = hashPerfLine(text);
+        const identity = `${bufferIndex}:${hash}`;
+        if (perfPaintedLines.has(identity)) continue;
+        perfPaintedLines.add(identity);
+        lineHashes.push(hash);
+      }
+      if (lineHashes.length > 0) {
+        markRendererPerformance(PERF_MARKS.TERMINAL_OUTPUT_PAINTED, {
+          terminalId: id,
+          lineHashes,
+        });
+      }
+    }
     if (deps.isWebGLActive(id)) return;
     snapDomRowHeightsToIntegerPixels(terminal);
   });

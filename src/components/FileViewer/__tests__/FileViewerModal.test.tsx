@@ -46,6 +46,7 @@ vi.mock("@/lib/trustedTypesPolicy", () => ({
 }));
 
 import { FileViewerModal } from "../FileViewerModal";
+import { useDiffViewedStore } from "@/store/diffViewedStore";
 
 const { capturedDialogProps } = vi.hoisted(() => ({
   capturedDialogProps: { restoreFocusTo: undefined as unknown },
@@ -163,10 +164,16 @@ vi.mock("@/components/Worktree/DiffViewer", () => ({
 }));
 
 const setDiffViewTypeMock = vi.fn();
+const setDiffShowFileListMock = vi.fn();
+const setDiffFontSizeMock = vi.fn();
 const usePreferencesStoreMock = vi.fn((selector?: (s: Record<string, unknown>) => unknown) => {
   const state = {
     diffViewType: "split" as const,
     setDiffViewType: setDiffViewTypeMock,
+    diffShowFileList: true,
+    setDiffShowFileList: setDiffShowFileListMock,
+    diffFontSize: "m" as const,
+    setDiffFontSize: setDiffFontSizeMock,
   };
   return selector ? selector(state) : state;
 });
@@ -224,6 +231,10 @@ beforeEach(() => {
       const state = {
         diffViewType: "split" as const,
         setDiffViewType: setDiffViewTypeMock,
+        diffShowFileList: true,
+        setDiffShowFileList: setDiffShowFileListMock,
+        diffFontSize: "m" as const,
+        setDiffFontSize: setDiffFontSizeMock,
       };
       return selector ? selector(state) : state;
     }
@@ -580,6 +591,80 @@ describe("FileViewerModal", () => {
     });
   });
 
+  describe("stale diff banner (#11032)", () => {
+    const diff = "diff --git a/file b/file\n--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n+new";
+
+    // jsdom has no matchMedia; InlineStatusBanner reads it during render.
+    beforeEach(() => {
+      window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+        matches: false,
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+        onchange: null,
+      }));
+    });
+
+    it("shows the refresh banner alongside the loaded diff and wires Refresh to onRetryDiff", async () => {
+      const onRetryDiff = vi.fn();
+      render(
+        <FileViewerModal
+          {...defaultProps}
+          diff={diff}
+          defaultMode="diff"
+          diffContentStale
+          onRetryDiff={onRetryDiff}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("File changed since this diff loaded")).toBeTruthy();
+      });
+      // The diff itself stays visible — the banner never replaces content.
+      expect(screen.getByTestId("diff-viewer")).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+      expect(onRetryDiff).toHaveBeenCalledTimes(1);
+    });
+
+    it("renders no banner while the diff is current", async () => {
+      render(
+        <FileViewerModal {...defaultProps} diff={diff} defaultMode="diff" onRetryDiff={vi.fn()} />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId("diff-viewer")).toBeTruthy();
+      });
+      expect(screen.queryByText("File changed since this diff loaded")).toBeNull();
+    });
+
+    it("hides the banner outside diff mode", async () => {
+      render(
+        <FileViewerModal
+          {...defaultProps}
+          diff={diff}
+          defaultMode="diff"
+          diffContentStale
+          onRetryDiff={vi.fn()}
+        />
+      );
+
+      await waitFor(() => {
+        const viewBtn = screen.getByRole("button", { name: "View" });
+        expect(viewBtn.hasAttribute("disabled")).toBe(false);
+      });
+      fireEvent.click(screen.getByRole("button", { name: "View" }));
+
+      await waitFor(() => {
+        expect(screen.getByTestId("code-viewer")).toBeTruthy();
+      });
+      expect(screen.queryByText("File changed since this diff loaded")).toBeNull();
+    });
+  });
+
   describe("keyboard hunk navigation in diff mode", () => {
     const diff = "diff --git a/file b/file\n--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n+new";
 
@@ -638,8 +723,6 @@ describe("FileViewerModal", () => {
         expect(screen.getByTestId("diff-viewer")).toBeTruthy();
       });
 
-      const hunk1 = screen.getByTestId("hunk-1");
-
       // Walk forward to the last hunk, then press past the end.
       fireEvent.keyDown(window, { key: "n" }); // hunk 0
       fireEvent.keyDown(window, { key: "n" }); // hunk 1 (last)
@@ -647,11 +730,9 @@ describe("FileViewerModal", () => {
       fireEvent.keyDown(window, { key: "n" });
       fireEvent.keyDown(window, { key: "n" });
 
-      // Clamping past the end must keep landing on hunk 1, never wrap to hunk 0.
-      expect(scrollIntoViewCalls.length).toBeGreaterThan(0);
-      for (const target of scrollIntoViewCalls) {
-        expect(target).toBe(hunk1);
-      }
+      // Past the end with no next file in the changeset the step is a no-op:
+      // no wrap to hunk 0 and no redundant re-scroll of the last hunk.
+      expect(scrollIntoViewCalls.length).toBe(0);
     });
 
     it("scrolls to the previous hunk on `p`", async () => {
@@ -1416,6 +1497,225 @@ describe("FileViewerModal", () => {
       });
 
       expect(capturedDialogProps.restoreFocusTo).toBe(ref);
+    });
+  });
+
+  describe("review workspace (changeSet)", () => {
+    const diff = "diff --git a/file.ts b/file.ts\n@@ -1 +1 @@\n-a\n+b\n";
+    const changeSet = [
+      {
+        path: "src/a.ts",
+        status: "modified" as const,
+        insertions: 3,
+        deletions: 1,
+        viewedKey: "modified:src/a.ts",
+      },
+      {
+        path: "src/b.ts",
+        status: "added" as const,
+        insertions: 10,
+        deletions: 0,
+        viewedKey: "added:src/b.ts",
+      },
+      {
+        path: "docs/c.md",
+        status: "deleted" as const,
+        insertions: 0,
+        deletions: 5,
+        viewedKey: "deleted:docs/c.md",
+      },
+    ];
+
+    beforeEach(() => {
+      useDiffViewedStore.setState({ viewedByWorktree: {} });
+    });
+
+    function renderWorkspace(overrides: Record<string, unknown> = {}) {
+      const onSelectFile = vi.fn();
+      const onNavigateFile = vi.fn();
+      render(
+        <FileViewerModal
+          {...defaultProps}
+          filePath="/project/src/a.ts"
+          diff={diff}
+          defaultMode="diff"
+          changeSet={changeSet}
+          onSelectFile={onSelectFile}
+          onNavigateFile={onNavigateFile}
+          currentFileIndex={0}
+          totalFileCount={changeSet.length}
+          {...overrides}
+        />
+      );
+      return { onSelectFile, onNavigateFile };
+    }
+
+    it("renders the changed-files sidebar with all changeset entries", async () => {
+      renderWorkspace();
+
+      await waitFor(() => {
+        expect(screen.getByTestId("diff-file-sidebar")).toBeTruthy();
+      });
+      expect(screen.getAllByTestId("diff-sidebar-file")).toHaveLength(3);
+      expect(screen.getByTestId("diff-sidebar-progress").textContent).toContain("0 of 3 viewed");
+    });
+
+    it("does not render the sidebar for single-file openers", async () => {
+      render(<FileViewerModal {...defaultProps} diff={diff} defaultMode="diff" />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("diff-viewer")).toBeTruthy();
+      });
+      expect(screen.queryByTestId("diff-file-sidebar")).toBeNull();
+    });
+
+    it("jumps to a file when its sidebar row is clicked", async () => {
+      const { onSelectFile } = renderWorkspace();
+
+      await waitFor(() => {
+        expect(screen.getByTestId("diff-file-sidebar")).toBeTruthy();
+      });
+      // Rows are directory-grouped, so target by label rather than position;
+      // the callback still receives the file's index in the flat changeset.
+      fireEvent.click(screen.getByLabelText("Open docs/c.md"));
+      expect(onSelectFile).toHaveBeenCalledWith(2);
+    });
+
+    it("`v` marks the open file viewed and advances to the next unviewed file", async () => {
+      const { onSelectFile } = renderWorkspace();
+
+      await waitFor(() => {
+        expect(screen.getByTestId("diff-file-sidebar")).toBeTruthy();
+      });
+      fireEvent.keyDown(window, { key: "v" });
+
+      expect(
+        useDiffViewedStore.getState().viewedByWorktree["/project"]?.has("modified:src/a.ts")
+      ).toBe(true);
+      expect(onSelectFile).toHaveBeenCalledWith(1);
+    });
+
+    it("`v` skips already-viewed files when advancing", async () => {
+      useDiffViewedStore.getState().setViewed("/project", "added:src/b.ts", true);
+      const { onSelectFile } = renderWorkspace();
+
+      await waitFor(() => {
+        expect(screen.getByTestId("diff-file-sidebar")).toBeTruthy();
+      });
+      fireEvent.keyDown(window, { key: "v" });
+
+      expect(onSelectFile).toHaveBeenCalledWith(2);
+    });
+
+    it("the footer Viewed button toggles without advancing", async () => {
+      const { onSelectFile } = renderWorkspace();
+
+      await waitFor(() => {
+        expect(screen.getByTestId("diff-viewed-button")).toBeTruthy();
+      });
+      fireEvent.click(screen.getByTestId("diff-viewed-button"));
+
+      expect(
+        useDiffViewedStore.getState().viewedByWorktree["/project"]?.has("modified:src/a.ts")
+      ).toBe(true);
+      expect(onSelectFile).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByTestId("diff-viewed-button"));
+      expect(
+        useDiffViewedStore.getState().viewedByWorktree["/project"]?.has("modified:src/a.ts")
+      ).toBe(false);
+    });
+
+    it("`n` past the last hunk steps to the next file", async () => {
+      const { onNavigateFile } = renderWorkspace();
+
+      await waitFor(() => {
+        expect(screen.getByTestId("diff-viewer")).toBeTruthy();
+      });
+      fireEvent.keyDown(window, { key: "n" }); // hunk 0
+      fireEvent.keyDown(window, { key: "n" }); // hunk 1 (last)
+      fireEvent.keyDown(window, { key: "n" }); // crosses into the next file
+
+      expect(onNavigateFile).toHaveBeenCalledWith(1);
+    });
+
+    it("`p` before the first hunk steps to the previous file", async () => {
+      const { onNavigateFile } = renderWorkspace({ currentFileIndex: 1 });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("diff-viewer")).toBeTruthy();
+      });
+      fireEvent.keyDown(window, { key: "n" }); // hunk 0
+      fireEvent.keyDown(window, { key: "p" }); // crosses into the previous file
+
+      expect(onNavigateFile).toHaveBeenCalledWith(-1);
+    });
+
+    it("`n` at the end of the last file stays put", async () => {
+      const { onNavigateFile } = renderWorkspace({ currentFileIndex: 2 });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("diff-viewer")).toBeTruthy();
+      });
+      fireEvent.keyDown(window, { key: "n" }); // hunk 0
+      fireEvent.keyDown(window, { key: "n" }); // hunk 1 (last)
+      fireEvent.keyDown(window, { key: "n" });
+
+      expect(onNavigateFile).not.toHaveBeenCalled();
+    });
+
+    it("sidebar filter narrows the list without touching the open file", async () => {
+      renderWorkspace();
+
+      await waitFor(() => {
+        expect(screen.getByTestId("diff-file-sidebar")).toBeTruthy();
+      });
+      fireEvent.change(screen.getByTestId("diff-sidebar-filter"), { target: { value: "docs" } });
+
+      expect(screen.getAllByTestId("diff-sidebar-file")).toHaveLength(1);
+    });
+
+    it("Escape in the filter clears it instead of closing the workspace", async () => {
+      const onClose = vi.fn();
+      renderWorkspace({ onClose });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("diff-file-sidebar")).toBeTruthy();
+      });
+      const filter = screen.getByTestId("diff-sidebar-filter");
+      fireEvent.change(filter, { target: { value: "docs" } });
+      expect(screen.getAllByTestId("diff-sidebar-file")).toHaveLength(1);
+
+      fireEvent.keyDown(filter, { key: "Escape" });
+
+      expect((filter as HTMLInputElement).value).toBe("");
+      expect(screen.getAllByTestId("diff-sidebar-file")).toHaveLength(3);
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("`n` on a hunkless file continues to the next file instead of dead-ending", async () => {
+      // Collapsed mock = no tbody.diff-hunk rows, standing in for a binary
+      // or image file mid-changeset.
+      mockDiffViewerControl.startCollapsed = true;
+      const { onNavigateFile } = renderWorkspace({ currentFileIndex: 1 });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("diff-viewer")).toBeTruthy();
+      });
+      fireEvent.keyDown(window, { key: "n" });
+
+      expect(onNavigateFile).toHaveBeenCalledWith(1);
+    });
+
+    it("hides viewed controls when the changeset entry does not match the open file", async () => {
+      // Index/list drift: currentFileIndex points at src/b.ts while the open
+      // file is src/a.ts — the guard must refuse to mark the wrong viewedKey.
+      renderWorkspace({ currentFileIndex: 1 });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("diff-viewer")).toBeTruthy();
+      });
+      expect(screen.queryByTestId("diff-viewed-button")).toBeNull();
     });
   });
 });

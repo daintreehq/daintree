@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vite
 import fs from "fs";
 import os from "os";
 import path from "path";
+import { BUILTIN_GITHUB_PROVIDER_ID } from "../../../shared/utils/forgeProviderIds.js";
 
 // The migrations barrel transitively imports modules that touch `electron.app`
 // at module load (ProjectStore in migration003). Mock it before the barrel
@@ -909,6 +910,23 @@ describe("MigrationRunner", () => {
     const plugins = store.data.plugins as Record<string, unknown>;
     expect(plugins.disabled).toEqual(["daintree.github"]);
     expect("disabledBuiltins" in plugins).toBe(false);
+  });
+
+  it("runs migration024 from v23 under the full barrel, backfilling the GitHub token (#11033)", async () => {
+    const store = createMockStore(storePath, {
+      _schemaVersion: 23,
+      "userConfig.githubToken": "ghp_pre_cutover",
+    });
+    const runner = new MigrationRunner(store as never);
+
+    await runner.runMigrations(migrations);
+
+    expect(store.data._schemaVersion).toBe(LATEST_SCHEMA_VERSION);
+    expect("userConfig.githubToken" in store.data).toBe(false);
+    const credentials = store.data.forgeCredentials as Record<string, string>;
+    expect(JSON.parse(credentials[BUILTIN_GITHUB_PROVIDER_ID])).toEqual({
+      token: "ghp_pre_cutover",
+    });
   });
 
   it("does nothing when there are no pending migrations", async () => {

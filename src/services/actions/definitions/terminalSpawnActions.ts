@@ -62,6 +62,9 @@ export function registerTerminalSpawnActions(
     scope: "renderer",
     keywords: ["resume", "reopen", "closed", "history", "session", "restore"],
     nonRepeatable: true,
+    // Opens a modal palette — a post-dispatch hint would land on top of it
+    // (ShortcutHint sits at z-toast, above z-modal). Issue #11030.
+    suppressShortcutHint: true,
     run: async () => {
       callbacks.onOpenResumeSessionsPalette();
     },

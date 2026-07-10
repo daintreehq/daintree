@@ -1,4 +1,4 @@
 interface:
   display_name: "Stabilize"
-  short_description: "Drive Daintree to fully green across every check, locally and cross-platform."
-  default_prompt: "Use $stabilize to drive Daintree to a green, stable state one OS at a time: run the full local gate on macOS to green, then dispatch stabilize.yml for Linux to green, then Windows to green — fixing real failures and intelligently re-running flaky E2E at each stage (plus release dry-runs when releasing). Never run Linux and Windows in parallel; squash to a single commit and merge to develop once everything passes."
+  short_description: "Explicit-only overnight stabilization workflow — run only when a human invokes it, never proactively."
+  default_prompt: "Use $stabilize (an explicitly-invoked, overnight workflow — never run it proactively) to drive Daintree to a green, stable state one OS at a time: run the full local gate on macOS to green, then dispatch stabilize.yml for Linux to green, then Windows to green — fixing real failures and intelligently re-running flaky E2E at each stage (plus release dry-runs when releasing). Never run Linux and Windows in parallel. If fixes were made, squash them into a single commit and merge to develop; if the tree was already green, commit nothing."

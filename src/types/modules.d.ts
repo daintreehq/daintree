@@ -37,8 +37,14 @@ declare module "react-diff-view" {
 
   export const parseDiff: (diff: string) => any[];
   export const tokenize: (hunks: HunkData[], options: TokenizeOptions) => HunkTokens;
-  export const markEdits: (hunks: HunkData[], options?: { type: string }) => any;
+  export const markEdits: (hunks: HunkData[], options?: { type: string }) => TokenizeEnhancer;
   export const getChangeKey: (change: ChangeData) => string;
+  export const isInsert: (change: ChangeData) => boolean;
+  export const isDelete: (change: ChangeData) => boolean;
+  export const isNormal: (change: ChangeData) => boolean;
+  /** 1-based line number on the given side; -1 for changes absent from it. */
+  export const computeOldLineNumber: (change: ChangeData) => number;
+  export const computeNewLineNumber: (change: ChangeData) => number;
 
   /**
    * Tokenize enhancer wrapping arbitrary per-line ranges in token nodes.
@@ -53,7 +59,10 @@ declare module "react-diff-view" {
     length: number;
     className?: string;
   }
-  export const pickRanges: (oldRanges: RangeTokenNode[], newRanges: RangeTokenNode[]) => unknown;
+  export const pickRanges: (
+    oldRanges: RangeTokenNode[],
+    newRanges: RangeTokenNode[]
+  ) => TokenizeEnhancer;
 
   export interface TokenNode {
     type: string;
@@ -62,6 +71,11 @@ declare module "react-diff-view" {
     className?: string;
     properties?: { className?: string };
     children?: TokenNode[];
+  }
+
+  export interface TextNode extends TokenNode {
+    type: "text";
+    value: string;
   }
   /**
    * Root-to-leaf node path used inside tokenize enhancers. The leaf is always

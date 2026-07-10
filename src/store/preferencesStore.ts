@@ -9,6 +9,8 @@ export type DockDensity = "compact" | "normal" | "comfortable";
 // from the UI library.
 export type DiffViewType = "split" | "unified";
 
+export type DiffFontSize = "s" | "m" | "l";
+
 interface PreferencesState {
   showProjectPulse: boolean;
   setShowProjectPulse: (show: boolean) => void;
@@ -33,6 +35,11 @@ interface PreferencesState {
   setDiffWrapLines: (value: boolean) => void;
   diffIgnoreWhitespace: boolean;
   setDiffIgnoreWhitespace: (value: boolean) => void;
+  /** Show the changed-files sidebar in the diff workspace (multi-file review). */
+  diffShowFileList: boolean;
+  setDiffShowFileList: (value: boolean) => void;
+  diffFontSize: DiffFontSize;
+  setDiffFontSize: (value: DiffFontSize) => void;
   /** Soft-wrap long lines in markdown Source view (panel + file viewer). */
   markdownWrapLines: boolean;
   setMarkdownWrapLines: (value: boolean) => void;
@@ -51,6 +58,10 @@ function isDockDensity(value: unknown): value is DockDensity {
 
 function isDiffViewType(value: unknown): value is DiffViewType {
   return value === "split" || value === "unified";
+}
+
+function isDiffFontSize(value: unknown): value is DiffFontSize {
+  return value === "s" || value === "m" || value === "l";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -75,6 +86,8 @@ function sanitizePersistedPreferences(
   if (!isDiffViewType(sanitized.diffViewType)) sanitized.diffViewType = "split";
   if (typeof sanitized.diffWrapLines !== "boolean") sanitized.diffWrapLines = false;
   if (typeof sanitized.diffIgnoreWhitespace !== "boolean") sanitized.diffIgnoreWhitespace = false;
+  if (typeof sanitized.diffShowFileList !== "boolean") sanitized.diffShowFileList = true;
+  if (!isDiffFontSize(sanitized.diffFontSize)) sanitized.diffFontSize = "m";
   if (typeof sanitized.markdownWrapLines !== "boolean") sanitized.markdownWrapLines = true;
   if (typeof sanitized.showAgentTaskTitles !== "boolean") sanitized.showAgentTaskTitles = true;
 
@@ -116,6 +129,10 @@ export const usePreferencesStore = create<PreferencesState>()(
       setDiffWrapLines: (value) => set({ diffWrapLines: value }),
       diffIgnoreWhitespace: false,
       setDiffIgnoreWhitespace: (value) => set({ diffIgnoreWhitespace: value }),
+      diffShowFileList: true,
+      setDiffShowFileList: (value) => set({ diffShowFileList: value }),
+      diffFontSize: "m",
+      setDiffFontSize: (value) => set({ diffFontSize: value }),
       markdownWrapLines: true,
       setMarkdownWrapLines: (value) => set({ markdownWrapLines: value }),
       lastSelectedWorktreeRecipeIdByProject: {},
@@ -149,7 +166,7 @@ export const usePreferencesStore = create<PreferencesState>()(
     {
       name: "daintree-preferences",
       storage: createSafeJSONStorage(),
-      version: 11,
+      version: 12,
       // Runs on every hydration (unlike `migrate`, which Zustand skips when the
       // persisted version matches). Closed-set normalisation lives here so a
       // corrupt-but-parseable value is clamped even at the current version.
@@ -248,6 +265,10 @@ export const usePreferencesStore = create<PreferencesState>()(
             persisted.showAgentTaskTitles = true;
           }
         }
+        if (version < 12 && isRecord(persisted)) {
+          if (typeof persisted.diffShowFileList !== "boolean") persisted.diffShowFileList = true;
+          if (!isDiffFontSize(persisted.diffFontSize)) persisted.diffFontSize = "m";
+        }
         return persisted as PreferencesState;
       },
     }
@@ -258,5 +279,5 @@ registerPersistedStore({
   storeId: "preferencesStore",
   store: usePreferencesStore,
   persistedStateType:
-    "{ showProjectPulse: boolean; showDeveloperTools: boolean; showGridAgentHighlights: boolean; showDockAgentHighlights: boolean; showAgentTaskTitles: boolean; dockDensity: DockDensity; assignWorktreeToSelf: boolean; reduceAnimations: boolean; diffViewType: DiffViewType; diffWrapLines: boolean; diffIgnoreWhitespace: boolean; markdownWrapLines: boolean; lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>; skipPushConfirmByWorktreePath: Record<string, boolean> }",
+    "{ showProjectPulse: boolean; showDeveloperTools: boolean; showGridAgentHighlights: boolean; showDockAgentHighlights: boolean; showAgentTaskTitles: boolean; dockDensity: DockDensity; assignWorktreeToSelf: boolean; reduceAnimations: boolean; diffViewType: DiffViewType; diffWrapLines: boolean; diffIgnoreWhitespace: boolean; diffShowFileList: boolean; diffFontSize: DiffFontSize; markdownWrapLines: boolean; lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>; skipPushConfirmByWorktreePath: Record<string, boolean> }",
 });

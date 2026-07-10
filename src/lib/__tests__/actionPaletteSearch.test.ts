@@ -264,3 +264,36 @@ describe("rankActionMatches", () => {
     expect(results.map((r) => r.id)).toEqual(["a", "b"]);
   });
 });
+
+describe("rankActionMatches title-rank cache exactness", () => {
+  it("keeps catalog order for collator-equal titles even with duplicate references", () => {
+    const cafe = makeAction({ id: "a", title: "Cafe terminal" });
+    const cafeAccent = makeAction({ id: "b", title: "café terminal" });
+    // Same object appearing twice interleaved with a collator-equal title —
+    // positional ranks must preserve the stable catalog order.
+    const items = [cafe, cafeAccent, cafe];
+    const results = rankActionMatches("terminal", items, []);
+    expect(results.map((r) => r.id)).toEqual(["a", "b", "a"]);
+  });
+
+  it("re-ranks after the same array is reordered in place", () => {
+    const first = makeAction({ id: "a", title: "Cafe terminal" });
+    const second = makeAction({ id: "b", title: "café terminal" });
+    const items = [first, second];
+    expect(rankActionMatches("terminal", items, []).map((r) => r.id)).toEqual(["a", "b"]);
+    items.reverse();
+    // Collator-equal titles tiebreak by current catalog order, so the cached
+    // ranks must be invalidated by the in-place mutation.
+    expect(rankActionMatches("terminal", items, []).map((r) => r.id)).toEqual(["b", "a"]);
+  });
+
+  it("returns 0 for queries longer than every field", () => {
+    const item = makeAction({ id: "a", title: "Go" });
+    expect(scoreAction("golang toolchain", item)).toBe(0);
+  });
+
+  it("treats unicode whitespace as an acronym boundary like the \\s class", () => {
+    expect(extractAcronym("Open Terminal")).toBe("ot");
+    expect(extractAcronym("Open Terminal")).toBe("ot");
+  });
+});

@@ -235,6 +235,11 @@ export type {
   FileReadPayload,
   FileReadResult,
   FileReadErrorCode,
+  // Diff media (image compare) types
+  DiffMediaReadFileVersionsPayload,
+  DiffMediaSide,
+  DiffMediaSideError,
+  DiffMediaFileVersions,
   // Electron API
   ElectronAPI,
   NotificationSettings,
@@ -341,6 +346,9 @@ export {
 
 // Per-service connectivity helpers
 export { CONNECTIVITY_SERVICE_KEYS } from "./ipc/connectivity.js";
+
+// Diff media helpers
+export { DIFF_MEDIA_MAX_BYTES } from "./ipc/diffMedia.js";
 
 // MCP server audit log + runtime state + turn outcomes
 export type {

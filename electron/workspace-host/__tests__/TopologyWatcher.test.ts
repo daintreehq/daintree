@@ -308,7 +308,7 @@ describe("TopologyWatcher", () => {
       }
     });
 
-    it("respects post-reconciliation cooldown", async () => {
+    it("defers events inside the post-reconciliation cooldown and drains them at expiry", async () => {
       vi.useFakeTimers();
       try {
         watcher.startWatcher();
@@ -317,15 +317,49 @@ describe("TopologyWatcher", () => {
         parcelWatcherCallbacks[0]!(null, [
           { type: "delete", path: "/test/root/.git/worktrees/wt-1" },
         ]);
-        await vi.advanceTimersByTimeAsync(350);
+        await vi.advanceTimersByTimeAsync(150);
         expect(host.discoverAndSyncWorktrees).toHaveBeenCalledTimes(1);
 
-        (watcher as any).reconcilePending = false; // simulate reconcile completion reset
         parcelWatcherCallbacks[0]!(null, [
           { type: "delete", path: "/test/root/.git/worktrees/wt-2" },
         ]);
-        await vi.advanceTimersByTimeAsync(350);
+        await vi.advanceTimersByTimeAsync(150);
+        // The debounced drain landed inside the cooldown — deferred, not run.
         expect(host.discoverAndSyncWorktrees).toHaveBeenCalledTimes(1);
+
+        // The cooldown drain must pick the deferred event up at expiry on its
+        // own — before the drain timer existed it stranded until the next
+        // unrelated event or the 90s safety net.
+        await vi.advanceTimersByTimeAsync(600);
+        expect(host.discoverAndSyncWorktrees).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("a forced reconcile absorbs a pending deferred drain", async () => {
+      vi.useFakeTimers();
+      try {
+        watcher.startWatcher();
+        await vi.runAllTimersAsync();
+
+        parcelWatcherCallbacks[0]!(null, [
+          { type: "delete", path: "/test/root/.git/worktrees/wt-1" },
+        ]);
+        await vi.advanceTimersByTimeAsync(150);
+        expect(host.discoverAndSyncWorktrees).toHaveBeenCalledTimes(1);
+
+        parcelWatcherCallbacks[0]!(null, [
+          { type: "delete", path: "/test/root/.git/worktrees/wt-2" },
+        ]);
+        await vi.advanceTimersByTimeAsync(150);
+        expect(host.discoverAndSyncWorktrees).toHaveBeenCalledTimes(1);
+
+        // The forced pass observes everything the deferred event wanted
+        // verified — the armed drain must not run a redundant follow-up.
+        watcher.scheduleReconcile(true);
+        await vi.advanceTimersByTimeAsync(700);
+        expect(host.discoverAndSyncWorktrees).toHaveBeenCalledTimes(2);
       } finally {
         vi.useRealTimers();
       }

@@ -7,7 +7,7 @@ import type { ActionDanger, ActionManifestEntry } from "@shared/types/actions";
 import { usePaletteStore } from "@/store/paletteStore";
 import { useActionMruStore } from "@/store/actionMruStore";
 import { useActionPrefsStore } from "@/store/actionPrefsStore";
-import { extractAcronym, rankActionMatches } from "@/lib/actionPaletteSearch";
+import { createActionRanker, extractAcronym, rankActionMatches } from "@/lib/actionPaletteSearch";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { useSearchablePalette } from "./useSearchablePalette";
 
@@ -122,6 +122,7 @@ export function toActionPaletteItem(entry: ActionManifestEntry): ActionPaletteIt
 export function useActionPalette(): UseActionPaletteReturn {
   const isActionOpen = usePaletteStore((state) => state.activePaletteId === "action");
   const getSortedActionMruList = useActionMruStore((state) => state.getSortedActionMruList);
+  const actionUsageEntries = useActionMruStore((state) => state.actionUsageEntries);
   const pinnedActionIds = useActionPrefsStore((state) => state.pinnedActionIds);
   const hiddenActionIds = useActionPrefsStore((state) => state.hiddenActionIds);
 
@@ -155,13 +156,14 @@ export function useActionPalette(): UseActionPaletteReturn {
   const itemById = useMemo(() => new Map(allActions.map((item) => [item.id, item])), [allActions]);
   const hiddenSet = useMemo(() => new Set(hiddenActionIds), [hiddenActionIds]);
   const pinnedSet = useMemo(() => new Set(pinnedActionIds), [pinnedActionIds]);
+  const rankActions = useMemo(() => createActionRanker(allActions), [allActions]);
+  const actionMruList = useMemo(() => {
+    if (actionUsageEntries.size === 0) return [];
+    return getSortedActionMruList().filter(({ id }) => !confirmDangerIds.has(id));
+  }, [getSortedActionMruList, actionUsageEntries, confirmDangerIds]);
 
   const filterFn = useCallback(
     (items: ActionPaletteItem[], query: string): ActionPaletteItem[] => {
-      // Keep the full frecency entries (id + score) so `rankActionMatches` can
-      // derive the MRU bonus from the frecency score, not list position (#8823).
-      const actionMruList = getSortedActionMruList().filter(({ id }) => !confirmDangerIds.has(id));
-
       if (!query.trim()) {
         // Favorites: ordered by pin time (insertion order), strip danger:"confirm"
         // and skip ids the action registry no longer exposes.
@@ -188,13 +190,25 @@ export function useActionPalette(): UseActionPaletteReturn {
       }
 
       const context = actionService.getContext();
-      return rankActionMatches(query, items, actionMruList, {
+      const rankContext = {
         focusedTerminalKind: context.focusedTerminalKind,
         focusedWorktreeId: context.focusedWorktreeId,
         isSettingsOpen: context.isSettingsOpen,
-      });
+      };
+      return items === allActions
+        ? rankActions(query, actionMruList, rankContext)
+        : rankActionMatches(query, items, actionMruList, rankContext);
     },
-    [getSortedActionMruList, pinnedActionIds, confirmDangerIds, itemById, hiddenSet, pinnedSet]
+    [
+      pinnedActionIds,
+      confirmDangerIds,
+      itemById,
+      hiddenSet,
+      pinnedSet,
+      allActions,
+      rankActions,
+      actionMruList,
+    ]
   );
 
   const {

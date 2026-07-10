@@ -32,11 +32,25 @@ const config: KnipConfig = {
     "electron-builder.config.cjs",
     "scripts/generate-sounds.mjs",
 
+    // The perf dispatcher launches these entry points by string path in
+    // isolated subprocesses, so static analysis cannot follow those edges.
+    "scripts/perf/run.ts",
+    "scripts/perf/cold-start.ts",
+    "scripts/perf/launch-ab.ts",
+    "scripts/perf/memory-bench-compare.ts",
+
     // why: bench-only classic script inlined by vite.config.ts via readFileSync
     // when DAINTREE_RENDER_PROBE=1 (`npm run build:e2e:bench`). Knip cannot
     // follow filesystem reads, but e2e/full/panels/store-fanout-perf.spec.ts
     // consumes the global it installs.
     "scripts/perf/render-fanout-probe.js",
+
+    // The perf dispatcher launches these string-resolved paths in child
+    // processes, so Knip cannot follow them from scripts/perf/index.ts.
+    "scripts/perf/run.ts",
+    "scripts/perf/cold-start.ts",
+    "scripts/perf/launch-ab.ts",
+    "scripts/perf/memory-bench-compare.ts",
 
     // Playwright discovers specs by filesystem glob; knip has no visibility
     // into the test runner, so tests appear unused without these roots.

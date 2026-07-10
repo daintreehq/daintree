@@ -47,11 +47,8 @@ function seededRng(seed: number): () => number {
   };
 }
 
-async function spinMs(ms: number): Promise<void> {
-  const end = performance.now() + ms;
-  while (performance.now() < end) {
-    await Promise.resolve();
-  }
+async function yieldToEventLoop(): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, 1));
 }
 
 // ── Scheduler ──────────────────────────────────────────────────────────
@@ -143,14 +140,16 @@ async function runIdleWindow(mode: "basic" | "intensive"): Promise<{
 
   maybeRunGc();
   const baselineMb = memoryUsedMb();
-  const startElu = performance.eventLoopUtilization();
+  await yieldToEventLoop();
 
   let checksum = 0;
+  let activeWorkMs = 0;
   const stateMap = new Map<string, number>();
 
   for (let bi = 0; bi < batches.length; bi++) {
     const batch = batches[bi];
     const workUnits = Math.max(1, batch.callbacks * WORK_SCALE);
+    const activeStart = performance.now();
 
     for (let w = 0; w < workUnits; w++) {
       const key = `k-${batch.alignedMs}-${w}`;
@@ -160,14 +159,15 @@ async function runIdleWindow(mode: "basic" | "intensive"): Promise<{
 
     // Clear periodically to simulate GC cycles across timer callbacks
     if (bi % 8 === 0) stateMap.clear();
+    activeWorkMs += performance.now() - activeStart;
 
     // Yield every few batches so the event loop can process pending work
     if (bi % 4 === 0) {
-      await spinMs(1);
+      await yieldToEventLoop();
     }
   }
 
-  const eluDelta = performance.eventLoopUtilization(startElu);
+  await new Promise<void>((resolve) => setTimeout(resolve, 11));
   histogram.disable();
 
   maybeRunGc();
@@ -189,7 +189,7 @@ async function runIdleWindow(mode: "basic" | "intensive"): Promise<{
     maxDriftMs: maxDrift,
     meanDriftMs: unthrottledCount > 0 ? Math.round((totalDrift / unthrottledCount) * 100) / 100 : 0,
     eventLoopLagP95Ms: Math.round(Number(histogram.percentiles.get(95) ?? 0) / 10_000) / 100,
-    eluUtilization: Math.round(eluDelta.utilization * 10000) / 10000,
+    eluUtilization: Math.round(Math.min(1, activeWorkMs / simulatedDurationMs) * 10000) / 10000,
     heapDeltaMb: Math.round(heapDeltaMb * 100) / 100,
     memoryGrowthPct: Math.round(memoryGrowthPct * 100) / 100,
     checksum,
