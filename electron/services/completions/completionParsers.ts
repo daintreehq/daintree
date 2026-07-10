@@ -8,9 +8,10 @@ const TOML_MAX_BYTES = 16 * 1024;
 
 /**
  * Raw output of a directory parser — deliberately free of `agentId`, trigger,
- * scope, label, or final id. The engine derives all of that per consumer, which
- * is what lets one physical `.agents/skills` scan become Claude's `/name` and
- * Codex's `$name` without semantic leakage.
+ * scope, label, or final id. The engine derives all of that from the source
+ * config, so the same file layout can surface under different triggers/labels
+ * for different agents (e.g. a skill dir as `/name` vs `$name`) without the
+ * parser knowing anything about the consumer.
  */
 export interface RawCompletionEntry {
   /** Name segments (nested dirs); joined by the source's nesting joiner. */
@@ -196,9 +197,19 @@ async function scanSkillDirectories(rootDir: string): Promise<RawCompletionEntry
   return sortByPath(results);
 }
 
-/** Deterministic order — filesystem enumeration order is not portable. */
+/**
+ * Deterministic order — filesystem enumeration order is not portable. Uses a
+ * code-unit comparison (a total order, unlike `localeCompare`, which can rank
+ * NFC/NFD-equivalent distinct paths as equal and leak insertion order back in).
+ */
 function sortByPath(entries: RawCompletionEntry[]): RawCompletionEntry[] {
-  return entries.sort((a, b) => a.relativeSourcePath.localeCompare(b.relativeSourcePath));
+  return entries.sort((a, b) =>
+    a.relativeSourcePath < b.relativeSourcePath
+      ? -1
+      : a.relativeSourcePath > b.relativeSourcePath
+        ? 1
+        : 0
+  );
 }
 
 /** The closed allow-list of named parsers, resolved from config strings. */

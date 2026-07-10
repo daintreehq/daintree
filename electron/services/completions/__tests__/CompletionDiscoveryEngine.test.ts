@@ -75,6 +75,14 @@ describe("adaptBuiltinSlashCommands", () => {
       expect(cmd.scope).toBe("built-in");
     }
   });
+
+  it("honors the passed trigger rather than hardcoding '/'", () => {
+    // Guards the source.trigger stamping (a static source could declare a
+    // non-slash trigger); a hardcoded "/" would fail this.
+    for (const cmd of adaptBuiltinSlashCommands("codex", "$")) {
+      expect(cmd.trigger).toBe("$");
+    }
+  });
 });
 
 describe("resolveLocationDir", () => {
