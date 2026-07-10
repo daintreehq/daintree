@@ -126,12 +126,8 @@ async function scanRecursiveFiles(
   const results: RawCompletionEntry[] = [];
 
   const walk = async (currentDir: string): Promise<void> => {
-    let entries: Array<import("fs").Dirent> = [];
-    try {
-      entries = await fs.readdir(currentDir, { withFileTypes: true });
-    } catch {
-      return;
-    }
+    const entries = await fs.readdir(currentDir, { withFileTypes: true }).catch(() => null);
+    if (entries === null) return;
 
     await Promise.all(
       entries.map(async (entry) => {
@@ -162,12 +158,8 @@ async function scanRecursiveFiles(
 
 /** Immediate child directories that contain a `SKILL.md`, skipping hidden. */
 async function scanSkillDirectories(rootDir: string): Promise<RawCompletionEntry[]> {
-  let entries: Array<import("fs").Dirent> = [];
-  try {
-    entries = await fs.readdir(rootDir, { withFileTypes: true });
-  } catch {
-    return [];
-  }
+  const entries = await fs.readdir(rootDir, { withFileTypes: true }).catch(() => null);
+  if (entries === null) return [];
 
   const results: RawCompletionEntry[] = [];
 
