@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AutocompleteItem } from "@/components/Terminal/AutocompleteMenu";
 import { slashCommandsClient } from "@/clients";
-import { rankSlashCommands } from "@/lib/slashCommandMatch";
+import { toSlashAutocompleteItems } from "@/hooks/slashAutocompleteItems";
 
 import { getBuiltinSlashCommands, type SlashCommand } from "@shared/types";
 import { getAgentConfig } from "@/config/agents";
@@ -61,23 +61,10 @@ export function useSlashCommandAutocomplete({
       });
   }, [agentId, projectPath]);
 
-  const items = useMemo((): AutocompleteItem[] => {
-    if (!enabled) return [];
-
-    // The slash menu lists only `/` completions. An agent's `$` capabilities
-    // arrive in the same discovery result and are filtered out here so they
-    // never leak into the `/` list.
-    const slashCommands = commands.filter((cmd) => (cmd.trigger ?? "/") === "/");
-    const ranked = rankSlashCommands(slashCommands, query);
-
-    return ranked.map((cmd) => ({
-      key: cmd.id,
-      label: cmd.label,
-      value: cmd.label,
-      description: cmd.description,
-      category: cmd.kind ?? "command",
-    }));
-  }, [commands, enabled, query]);
+  const items = useMemo(
+    (): AutocompleteItem[] => (enabled ? toSlashAutocompleteItems(commands, query) : []),
+    [commands, enabled, query]
+  );
 
   return { items, isLoading };
 }

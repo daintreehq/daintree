@@ -97,11 +97,32 @@ describe("getBuiltinSlashCommands", () => {
     expect(getBuiltinSlashCommands("codex").some((c) => c.label === "/add-dir")).toBe(false);
   });
 
-  it("codex catalog drops /approvals in favor of /permissions and adds /skills", () => {
-    const codex = getBuiltinSlashCommands("codex").map((c) => c.label);
-    expect(codex).not.toContain("/approvals");
-    expect(codex).toContain("/permissions");
-    expect(codex).toContain("/skills");
+  it("codex catalog is refreshed: /approvals dropped, /permissions kept, 14 additions present", () => {
+    const codex = new Set(getBuiltinSlashCommands("codex").map((c) => c.label));
+    // /approvals is a deprecated alias of the already-shared /permissions.
+    expect(codex.has("/approvals")).toBe(false);
+    expect(codex.has("/permissions")).toBe(true);
+    // /mention and /logout are retained (present in installed Codex 0.144.1).
+    expect(codex.has("/mention")).toBe(true);
+    expect(codex.has("/logout")).toBe(true);
+    // The 14 additions researched against the installed CLI.
+    const additions = [
+      "/apps",
+      "/plugins",
+      "/skills",
+      "/fast",
+      "/plan",
+      "/goal",
+      "/personality",
+      "/memories",
+      "/agent",
+      "/feedback",
+      "/raw",
+      "/stop",
+      "/approve",
+      "/sandbox-add-read-dir",
+    ];
+    for (const label of additions) expect(codex.has(label)).toBe(true);
   });
 
   it("does not include kind or sourcePath on returned commands", () => {

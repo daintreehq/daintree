@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from "react";
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 
 vi.mock("@/components/ui/ScrollShadow", () => ({
   ScrollShadow: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
@@ -162,14 +162,19 @@ describe("AutocompleteMenu", () => {
       />
     );
 
-    // Skill item: visible badge is hidden from AT, paired with an sr-only label.
-    const visibleBadge = screen.getByText("Skill", { selector: "[aria-hidden='true']" });
-    expect(visibleBadge).toBeTruthy();
-    expect(screen.getByText("Category: Skill")).toBeTruthy();
+    const options = screen.getAllByRole("option");
+    const skillRow = options.find((o) => within(o).queryByText("/commit"))!;
+    const commandRow = options.find((o) => within(o).queryByText("/help"))!;
 
-    // Command item does not render a "[Command]" badge — plain by design.
-    expect(screen.queryByText("Command")).toBeNull();
-    expect(screen.queryByText("Category: Command")).toBeNull();
+    // Skill row: visible badge is hidden from AT, paired with an sr-only label.
+    expect(within(skillRow).getByText("Skill", { selector: "[aria-hidden='true']" })).toBeTruthy();
+    expect(within(skillRow).getByText("Category: Skill")).toBeTruthy();
+
+    // Command row carries no badge — plain by design.
+    expect(
+      within(commandRow).queryByText("Skill", { selector: "[aria-hidden='true']" })
+    ).toBeNull();
+    expect(within(commandRow).queryByText(/Category:/)).toBeNull();
   });
 
   it("scrolls the keyboard-selected option into view as selection moves", () => {

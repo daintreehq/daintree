@@ -354,6 +354,42 @@ Generate images.
     }
   });
 
+  it("honours CODEX_HOME for user skill discovery", async () => {
+    const homeRoot = await makeTempDir();
+    const codexHome = await makeTempDir();
+    const projectRoot = await makeTempDir();
+    const service = new SlashCommandService();
+    const prev = overrideHome(homeRoot);
+    process.env.CODEX_HOME = codexHome;
+
+    try {
+      await fs.mkdir(path.join(projectRoot, ".git"));
+
+      await writeFile(
+        path.join(codexHome, "skills", "research", "SKILL.md"),
+        `---
+description: "Relocated user skill"
+---
+
+Research things.
+`
+      );
+
+      const commands = await service.list("codex", projectRoot);
+      const skill = commands.find((c) => c.label === "$research");
+
+      expect(skill).toBeDefined();
+      expect(skill?.scope).toBe("user");
+      expect(skill?.kind).toBe("skill");
+      expect(skill?.description).toBe("Relocated user skill");
+    } finally {
+      restoreHome(prev);
+      await fs.rm(homeRoot, { recursive: true, force: true });
+      await fs.rm(codexHome, { recursive: true, force: true });
+      await fs.rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it("excludes commands with user-invocable: false", async () => {
     const root = await makeTempDir();
     const service = new SlashCommandService();
@@ -955,6 +991,8 @@ Review via skill.
       expect(skill?.trigger).toBe("$");
       expect(skill?.kind).toBe("skill");
       expect(skill?.description).toBe("Review skill");
+      // Exact id proves the skill idNamespace survives (scope:skill:name).
+      expect(skill?.id).toBe("project:skill:review");
 
       expect(command?.id).not.toBe(skill?.id);
     } finally {

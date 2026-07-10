@@ -239,35 +239,14 @@ export const config: AgentConfig = {
       },
     },
     {
-      // Shared cross-agent skills standard (`.agents/skills`), read by Claude
-      // and Codex alike. Exposed as `/name` here, `$name` for Codex.
-      id: "shared-skills",
-      trigger: "/",
-      sourcePrecedence: 20,
-      discovery: {
-        method: "directory",
-        parser: "skill-dir",
-        derive: {
-          labelPrefix: "/",
-          kind: "skill",
-          idNamespace: "skill",
-          fallbackDescription: "Skill",
-        },
-        locations: [
-          {
-            id: "project:agents-skills",
-            scope: "project",
-            base: { type: "projectRoot" },
-            segments: [".agents", "skills"],
-            locationPrecedence: 0,
-          },
-        ],
-      },
-    },
-    {
+      // Native Claude skills only. Claude Code declined the `.agents/skills`
+      // convention (anthropics/claude-code#56193) — Daintree translates that
+      // shared tree into `.claude/skills` for assistant sessions
+      // (AssistantContentMirror), so a regular Claude terminal reads only
+      // `.claude/skills`. Codex is the agent that reads `.agents/skills`.
       id: "skills",
       trigger: "/",
-      sourcePrecedence: 30,
+      sourcePrecedence: 20,
       discovery: {
         method: "directory",
         parser: "skill-dir",

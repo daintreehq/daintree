@@ -45,6 +45,12 @@ function resolveConcreteBase(base: CompletionConcreteBase, ctx: PathResolveConte
 function resolveBaseDir(base: CompletionBaseDir, ctx: PathResolveContext): string | null {
   if (base.type === "env") {
     const raw = ctx.env[base.name];
+    // A set env value is always resolved to an absolute base. This is uniform
+    // across CONFIG_DIR/CODEX_HOME/XDG/ProgramData — the old service resolved
+    // only the CONFIG_DIR vars and join()-ed XDG/ProgramData; the difference is
+    // visible only for the rare relative env value (an always-absolute
+    // sourcePath is the intentional normalization). Absolute values (the norm)
+    // are identical either way.
     if (raw) return path.resolve(raw);
     return resolveConcreteBase(base.fallback, ctx);
   }

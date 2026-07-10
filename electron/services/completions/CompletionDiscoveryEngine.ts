@@ -8,11 +8,7 @@ import type {
   CompletionLocation,
   CompletionSourceConfig,
 } from "../../../shared/types/completionSources.js";
-import {
-  getCompletionParser,
-  type CompletionParser,
-  type RawCompletionEntry,
-} from "./completionParsers.js";
+import { getCompletionParser, type RawCompletionEntry } from "./completionParsers.js";
 import {
   resolveLocationDir,
   resolveProjectRoot,
@@ -21,7 +17,6 @@ import {
 import { adaptBuiltinSlashCommands } from "./staticCatalog.js";
 
 const RESULT_CACHE_TTL_MS = 30_000;
-const SCAN_CACHE_TTL_MS = 30_000;
 const DEFAULT_SCAN_CONCURRENCY = 8;
 
 /** Merge order: built-ins lose to global, global to user, user to project. */
@@ -48,9 +43,9 @@ interface CachedResult {
   expires: number;
 }
 
-interface CachedScan {
-  promise: Promise<RawCompletionEntry[]>;
-  expires: number;
+/** Shallow-clone each result so callers can't mutate a cached entry. */
+function cloneResults(results: SlashCommand[]): SlashCommand[] {
+  return results.map((cmd) => ({ ...cmd }));
 }
 
 /**
@@ -61,20 +56,18 @@ interface CachedScan {
  * `(scopeRank, sourcePrecedence, locationPrecedence, declarationOrder)`,
  * dedupes by `trigger + label`, and sorts by trigger then label.
  *
- * Caches are instance-level: a 30s result cache (keyed on
- * `agentId + projectRoot + env revision`, coalesced, evicted on failure) and a
- * lower-level raw-scan cache (keyed on resolved dir + parser) so a shared
- * `.agents/skills` scan is reused across agents on the same engine.
+ * The result is cached per instance for 30s (keyed on
+ * `agentId + projectRoot + env revision`, coalesced, evicted on failure) so
+ * repeated picker-opens don't rescan. Fresh instances (one per test) isolate
+ * the cache.
  */
 export class CompletionDiscoveryEngine {
   private readonly resultCache = new Map<string, CachedResult>();
-  private readonly scanCache = new Map<string, CachedScan>();
 
   constructor(private readonly scanConcurrency: number = DEFAULT_SCAN_CONCURRENCY) {}
 
   clearCache(): void {
     this.resultCache.clear();
-    this.scanCache.clear();
   }
 
   async list(agentId: BuiltInAgentId, projectPath?: string): Promise<SlashCommand[]> {
@@ -92,14 +85,16 @@ export class CompletionDiscoveryEngine {
     const key = this.resultKey(agentId, projectRoot, ctx);
     const now = Date.now();
     const cached = this.resultCache.get(key);
-    if (cached && cached.expires > now) return cached.promise.then((r) => r.slice());
+    if (cached && cached.expires > now) return cached.promise.then(cloneResults);
 
     const promise = this.compute(agentId, sources, ctx).catch((err) => {
       if (this.resultCache.get(key)?.promise === promise) this.resultCache.delete(key);
       throw err;
     });
     this.resultCache.set(key, { promise, expires: now + RESULT_CACHE_TTL_MS });
-    return promise.then((r) => r.slice());
+    // Clone so a caller can never mutate a cached entry (element-level, not just
+    // the array) on the next cache hit.
+    return promise.then(cloneResults);
   }
 
   private async compute(
@@ -115,7 +110,7 @@ export class CompletionDiscoveryEngine {
       const discovery = source.discovery;
 
       if (discovery.method === "static") {
-        for (const cmd of adaptBuiltinSlashCommands(agentId)) {
+        for (const cmd of adaptBuiltinSlashCommands(agentId, source.trigger)) {
           contributions.push({
             scopeRank: SCOPE_RANK[cmd.scope],
             sourcePrecedence: source.sourcePrecedence,
@@ -143,7 +138,7 @@ export class CompletionDiscoveryEngine {
         // regardless of async scan completion order.
         const order = declarationOrder++;
         scanJobs.push(async () => {
-          const raw = await this.scan(dir, discovery.parser, parser);
+          const raw = await parser(dir);
           for (const entry of raw) {
             if (!entry.userInvocable) continue;
             contributions.push({
@@ -203,24 +198,6 @@ export class CompletionDiscoveryEngine {
       kind: derivation.kind,
       trigger: source.trigger,
     };
-  }
-
-  private scan(
-    dir: string,
-    parserName: string,
-    parser: CompletionParser
-  ): Promise<RawCompletionEntry[]> {
-    const key = `${path.resolve(dir)}\u0000${parserName}`;
-    const now = Date.now();
-    const cached = this.scanCache.get(key);
-    if (cached && cached.expires > now) return cached.promise;
-
-    const promise = parser(dir).catch((err) => {
-      if (this.scanCache.get(key)?.promise === promise) this.scanCache.delete(key);
-      throw err;
-    });
-    this.scanCache.set(key, { promise, expires: now + SCAN_CACHE_TTL_MS });
-    return promise;
   }
 
   private async runWithConcurrency(jobs: Array<() => Promise<void>>): Promise<void> {

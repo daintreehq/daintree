@@ -156,7 +156,7 @@ async function scanRecursiveFiles(
   };
 
   await walk(rootDir);
-  return results;
+  return sortByPath(results);
 }
 
 /** Immediate child directories that contain a `SKILL.md`, skipping hidden. */
@@ -193,7 +193,12 @@ async function scanSkillDirectories(rootDir: string): Promise<RawCompletionEntry
     })
   );
 
-  return results;
+  return sortByPath(results);
+}
+
+/** Deterministic order — filesystem enumeration order is not portable. */
+function sortByPath(entries: RawCompletionEntry[]): RawCompletionEntry[] {
+  return entries.sort((a, b) => a.relativeSourcePath.localeCompare(b.relativeSourcePath));
 }
 
 /** The closed allow-list of named parsers, resolved from config strings. */

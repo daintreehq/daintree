@@ -1,11 +1,14 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { promises as fsp } from "fs";
 import * as os from "os";
 import * as path from "path";
 import { CompletionDiscoveryEngine } from "../CompletionDiscoveryEngine.js";
 import { adaptBuiltinSlashCommands } from "../staticCatalog.js";
 import { resolveLocationDir, type PathResolveContext } from "../completionPathTemplates.js";
-import type { CompletionLocation } from "../../../../shared/types/completionSources.js";
+import type {
+  CompletionLocation,
+  CompletionPlatform,
+} from "../../../../shared/types/completionSources.js";
 
 async function makeTempDir(): Promise<string> {
   return fsp.mkdtemp(path.join(os.tmpdir(), "daintree-completions-"));
@@ -43,7 +46,9 @@ function restoreHome(prev: Record<string, string | undefined>): void {
   }
 }
 
-const otherPlatform: NodeJS.Platform = process.platform === "linux" ? "darwin" : "linux";
+const currentPlatform: CompletionPlatform =
+  process.platform === "win32" ? "win32" : process.platform === "darwin" ? "darwin" : "linux";
+const otherPlatform: CompletionPlatform = currentPlatform === "linux" ? "darwin" : "linux";
 
 function ctx(overrides: Partial<PathResolveContext> = {}): PathResolveContext {
   return {
@@ -55,9 +60,14 @@ function ctx(overrides: Partial<PathResolveContext> = {}): PathResolveContext {
   };
 }
 
+function readdirCallsFor(spy: { mock: { calls: unknown[][] } }, dir: string): number {
+  const target = path.resolve(dir);
+  return spy.mock.calls.filter((call) => path.resolve(String(call[0])) === target).length;
+}
+
 describe("adaptBuiltinSlashCommands", () => {
-  it("stamps trigger '/' and kind 'command' on every built-in", () => {
-    const stamped = adaptBuiltinSlashCommands("claude");
+  it("stamps the source trigger and kind 'command' on every built-in", () => {
+    const stamped = adaptBuiltinSlashCommands("claude", "/");
     expect(stamped.length).toBeGreaterThan(0);
     for (const cmd of stamped) {
       expect(cmd.trigger).toBe("/");
@@ -94,7 +104,7 @@ describe("resolveLocationDir", () => {
     expect(resolveLocationDir(loc, ctx({ projectRoot: undefined }))).toBeNull();
   });
 
-  it("prefers the config-dir env value over the home fallback", () => {
+  it("prefers the config-dir env value (resolved) over the home fallback", () => {
     const loc: CompletionLocation = {
       id: "u",
       scope: "user",
@@ -107,7 +117,7 @@ describe("resolveLocationDir", () => {
       locationPrecedence: 0,
     };
     expect(resolveLocationDir(loc, ctx({ env: { CLAUDE_CONFIG_DIR: "/custom/claude" } }))).toBe(
-      path.join("/custom/claude", "commands")
+      path.join(path.resolve("/custom/claude"), "commands")
     );
     expect(resolveLocationDir(loc, ctx({ home, env: {} }))).toBe(
       path.join(home, ".claude", "commands")
@@ -130,7 +140,7 @@ describe("resolveLocationDir", () => {
       path.join(home, ".config", "claude", "commands")
     );
     expect(resolveLocationDir(loc, ctx({ env: { XDG_CONFIG_HOME: "/xdg" } }))).toBe(
-      path.join("/xdg", "claude", "commands")
+      path.join(path.resolve("/xdg"), "claude", "commands")
     );
   });
 
@@ -142,7 +152,7 @@ describe("resolveLocationDir", () => {
       segments: ["claude", "commands"],
       locationPrecedence: 0,
     };
-    expect(resolveLocationDir({ ...base, platforms: [process.platform] }, ctx())).toBe(
+    expect(resolveLocationDir({ ...base, platforms: [currentPlatform] }, ctx())).toBe(
       path.join("/etc", "claude", "commands")
     );
     expect(resolveLocationDir({ ...base, platforms: [otherPlatform] }, ctx())).toBeNull();
@@ -156,55 +166,26 @@ describe("resolveLocationDir", () => {
       segments,
       locationPrecedence: 0,
     });
-    expect(resolveLocationDir(mk([".."]), ctx({ home }))).toBeNull();
-    expect(resolveLocationDir(mk(["a/b"]), ctx({ home }))).toBeNull();
-    expect(resolveLocationDir(mk(["/abs"]), ctx({ home }))).toBeNull();
+    for (const bad of [[".."], ["."], [""], ["a/b"], ["a\\b"], ["..\\escape"], ["/abs"]]) {
+      expect(resolveLocationDir(mk(bad), ctx({ home }))).toBeNull();
+    }
     expect(resolveLocationDir(mk(["ok"]), ctx({ home }))).toBe(path.join(home, ".claude", "ok"));
+  });
+
+  it("rejects unsafe segments in a homeRelative base too", () => {
+    const loc: CompletionLocation = {
+      id: "b",
+      scope: "user",
+      base: { type: "homeRelative", segments: ["..", "escape"] },
+      segments: ["skills"],
+      locationPrecedence: 0,
+    };
+    expect(resolveLocationDir(loc, ctx({ home }))).toBeNull();
   });
 });
 
 describe("CompletionDiscoveryEngine", () => {
-  it("reuses one physical scan of shared .agents/skills across agents", async () => {
-    const homeRoot = await makeTempDir();
-    const projectRoot = await makeTempDir();
-    const prev = overrideHome(homeRoot);
-    const engine = new CompletionDiscoveryEngine();
-
-    const readdirSpy = vi.spyOn(fsp, "readdir");
-    const sharedDir = path.join(projectRoot, ".agents", "skills");
-
-    try {
-      await fsp.mkdir(path.join(projectRoot, ".git"));
-      await writeFile(
-        path.join(sharedDir, "stabilize", "SKILL.md"),
-        `---
-description: "Shared stabilize skill"
----
-
-Body.
-`
-      );
-
-      const claude = await engine.list("claude", projectRoot);
-      const codex = await engine.list("codex", projectRoot);
-
-      // Claude exposes it as /stabilize, Codex as $stabilize — same physical dir.
-      expect(claude.find((c) => c.label === "/stabilize")?.kind).toBe("skill");
-      expect(codex.find((c) => c.label === "$stabilize")?.kind).toBe("skill");
-
-      const sharedReads = readdirSpy.mock.calls.filter(
-        (call) => path.resolve(String(call[0])) === path.resolve(sharedDir)
-      );
-      expect(sharedReads).toHaveLength(1);
-    } finally {
-      readdirSpy.mockRestore();
-      restoreHome(prev);
-      await fsp.rm(homeRoot, { recursive: true, force: true });
-      await fsp.rm(projectRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("caches results and re-scans only after clearCache", async () => {
+  it("caches results and re-scans only after clearCache (result cache, not scan I/O)", async () => {
     const homeRoot = await makeTempDir();
     const projectRoot = await makeTempDir();
     const prev = overrideHome(homeRoot);
@@ -225,25 +206,41 @@ Body.
       );
 
       await engine.list("claude", projectRoot);
-      const readsAfterFirst = readdirSpy.mock.calls.filter(
-        (call) => path.resolve(String(call[0])) === path.resolve(commandsDir)
-      ).length;
-      expect(readsAfterFirst).toBe(1);
+      expect(readdirCallsFor(readdirSpy, commandsDir)).toBe(1);
 
+      // Second call is served from the result cache — no compute(), no scan.
       await engine.list("claude", projectRoot);
-      const readsAfterSecond = readdirSpy.mock.calls.filter(
-        (call) => path.resolve(String(call[0])) === path.resolve(commandsDir)
-      ).length;
-      expect(readsAfterSecond).toBe(1); // served from cache
+      expect(readdirCallsFor(readdirSpy, commandsDir)).toBe(1);
 
+      // clearCache drops the result → the next call recomputes and rescans.
       engine.clearCache();
       await engine.list("claude", projectRoot);
-      const readsAfterClear = readdirSpy.mock.calls.filter(
-        (call) => path.resolve(String(call[0])) === path.resolve(commandsDir)
-      ).length;
-      expect(readsAfterClear).toBe(2); // cache dropped → rescanned
+      expect(readdirCallsFor(readdirSpy, commandsDir)).toBe(2);
     } finally {
       readdirSpy.mockRestore();
+      restoreHome(prev);
+      await fsp.rm(homeRoot, { recursive: true, force: true });
+      await fsp.rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("returns cloned results so a caller cannot mutate the cache", async () => {
+    const homeRoot = await makeTempDir();
+    const projectRoot = await makeTempDir();
+    const prev = overrideHome(homeRoot);
+    const engine = new CompletionDiscoveryEngine();
+
+    try {
+      await fsp.mkdir(path.join(projectRoot, ".git"));
+
+      const first = await engine.list("claude", projectRoot);
+      const help = first.find((c) => c.label === "/help");
+      expect(help).toBeDefined();
+      help!.description = "MUTATED";
+
+      const second = await engine.list("claude", projectRoot);
+      expect(second.find((c) => c.label === "/help")?.description).not.toBe("MUTATED");
+    } finally {
       restoreHome(prev);
       await fsp.rm(homeRoot, { recursive: true, force: true });
       await fsp.rm(projectRoot, { recursive: true, force: true });
@@ -255,7 +252,7 @@ Body.
     expect(await engine.list("opencode")).toEqual([]);
   });
 
-  it("orders results by trigger (/ before $) then label", async () => {
+  it("orders results by trigger (/ before $) then label within each trigger", async () => {
     const homeRoot = await makeTempDir();
     const projectRoot = await makeTempDir();
     const prev = overrideHome(homeRoot);
@@ -263,21 +260,29 @@ Body.
 
     try {
       await fsp.mkdir(path.join(projectRoot, ".git"));
-      await writeFile(
-        path.join(projectRoot, ".agents", "skills", "zzz", "SKILL.md"),
-        `---
-description: "Z skill"
+      for (const name of ["zebra", "alpha"]) {
+        await writeFile(
+          path.join(projectRoot, ".agents", "skills", name, "SKILL.md"),
+          `---
+description: "${name} skill"
 ---
 
 Body.
 `
-      );
+        );
+      }
 
       const codex = await engine.list("codex", projectRoot);
-      const slashIdx = codex.findIndex((c) => c.trigger === "/");
-      const dollarIdx = codex.findIndex((c) => c.trigger === "$");
-      expect(slashIdx).toBeGreaterThanOrEqual(0);
-      expect(dollarIdx).toBeGreaterThan(slashIdx);
+      const lastSlash = codex.map((c) => c.trigger).lastIndexOf("/");
+      const firstDollar = codex.findIndex((c) => c.trigger === "$");
+      expect(lastSlash).toBeGreaterThanOrEqual(0);
+      expect(firstDollar).toBeGreaterThan(lastSlash);
+
+      // $ partition is label-sorted: $alpha before $zebra.
+      const dollarLabels = codex.filter((c) => c.trigger === "$").map((c) => c.label);
+      expect(dollarLabels).toEqual([...dollarLabels].sort((a, b) => a.localeCompare(b)));
+      expect(dollarLabels).toContain("$alpha");
+      expect(dollarLabels).toContain("$zebra");
     } finally {
       restoreHome(prev);
       await fsp.rm(homeRoot, { recursive: true, force: true });
