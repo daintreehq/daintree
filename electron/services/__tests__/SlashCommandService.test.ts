@@ -203,68 +203,63 @@ prompt = "Do hidden thing"
     }
   });
 
-  it("merges Codex project prompts over user prompts and supports nested namespaces", async () => {
+  it("merges Codex project skills over user skills as $-prefixed capabilities", async () => {
     const homeRoot = await makeTempDir();
     const projectRoot = await makeTempDir();
     const service = new SlashCommandService();
-
-    const prevHome = process.env.HOME;
-    const prevCodexHome = process.env.CODEX_HOME;
-    const prevXdgConfigHome = process.env.XDG_CONFIG_HOME;
-
-    process.env.HOME = homeRoot;
-    delete process.env.CODEX_HOME;
-    delete process.env.XDG_CONFIG_HOME;
+    const prev = overrideHome(homeRoot);
 
     try {
       await fs.mkdir(path.join(projectRoot, ".git"));
 
       await writeFile(
-        path.join(homeRoot, ".codex", "prompts", "git", "work-issue.md"),
+        path.join(homeRoot, ".codex", "skills", "deploy", "SKILL.md"),
         `---
-description: "User work issue prompt"
+description: "User deploy skill"
 ---
 
-Do the user thing.
+Deploy from the user skill.
 `
       );
 
       await writeFile(
-        path.join(projectRoot, ".codex", "prompts", "git", "work-issue.md"),
+        path.join(projectRoot, ".agents", "skills", "deploy", "SKILL.md"),
         `---
-description: "Project work issue prompt"
+description: "Project deploy skill"
 ---
 
-Do the project thing.
+Deploy from the project skill.
 `
       );
 
       const commands = await service.list("codex", path.join(projectRoot, "nested", "dir"));
-      const cmd = commands.find((c) => c.label === "/prompts:git:work-issue");
-      const oldLabel = commands.find((c) => c.label === "/git:work-issue");
+      const skill = commands.find((c) => c.label === "$deploy");
+      const oldPromptLabel = commands.find((c) => c.label === "/prompts:deploy");
 
-      expect(cmd).toBeDefined();
-      expect(cmd?.scope).toBe("project");
-      expect(cmd?.description).toBe("Project work issue prompt");
-      expect(oldLabel).toBeUndefined();
+      expect(skill).toBeDefined();
+      expect(skill?.scope).toBe("project");
+      expect(skill?.kind).toBe("skill");
+      expect(skill?.trigger).toBe("$");
+      expect(skill?.description).toBe("Project deploy skill");
+      expect(oldPromptLabel).toBeUndefined();
     } finally {
-      process.env.HOME = prevHome;
-      if (prevCodexHome !== undefined) process.env.CODEX_HOME = prevCodexHome;
-      if (prevXdgConfigHome !== undefined) process.env.XDG_CONFIG_HOME = prevXdgConfigHome;
+      restoreHome(prev);
       await fs.rm(homeRoot, { recursive: true, force: true });
       await fs.rm(projectRoot, { recursive: true, force: true });
     }
   });
 
-  it("prefixes simple Codex prompts with /prompts:", async () => {
+  it("labels simple Codex skills with $", async () => {
+    const homeRoot = await makeTempDir();
     const projectRoot = await makeTempDir();
     const service = new SlashCommandService();
+    const prev = overrideHome(homeRoot);
 
     try {
       await fs.mkdir(path.join(projectRoot, ".git"));
 
       await writeFile(
-        path.join(projectRoot, ".codex", "prompts", "merge-prs.md"),
+        path.join(projectRoot, ".agents", "skills", "merge-prs", "SKILL.md"),
         `---
 description: "Merge all PRs"
 ---
@@ -274,19 +269,24 @@ Merge them all.
       );
 
       const commands = await service.list("codex", projectRoot);
-      const cmd = commands.find((c) => c.label === "/prompts:merge-prs");
+      const skill = commands.find((c) => c.label === "$merge-prs");
 
-      expect(cmd).toBeTruthy();
-      expect(cmd?.scope).toBe("project");
-      expect(cmd?.description).toBe("Merge all PRs");
+      expect(skill).toBeTruthy();
+      expect(skill?.scope).toBe("project");
+      expect(skill?.kind).toBe("skill");
+      expect(skill?.description).toBe("Merge all PRs");
     } finally {
+      restoreHome(prev);
+      await fs.rm(homeRoot, { recursive: true, force: true });
       await fs.rm(projectRoot, { recursive: true, force: true });
     }
   });
 
-  it("does not prefix Codex commands from commands directory", async () => {
+  it("ignores the retired .codex/commands and .codex/prompts directories", async () => {
+    const homeRoot = await makeTempDir();
     const projectRoot = await makeTempDir();
     const service = new SlashCommandService();
+    const prev = overrideHome(homeRoot);
 
     try {
       await fs.mkdir(path.join(projectRoot, ".git"));
@@ -300,42 +300,92 @@ description: "My custom command"
 Do the command.
 `
       );
+      await writeFile(
+        path.join(projectRoot, ".codex", "prompts", "old-prompt.md"),
+        `---
+description: "An old prompt"
+---
+
+Old prompt body.
+`
+      );
 
       const commands = await service.list("codex", projectRoot);
-      const cmd = commands.find((c) => c.label === "/my-command");
 
-      expect(cmd).toBeTruthy();
-      expect(cmd?.scope).toBe("project");
-      expect(cmd?.description).toBe("My custom command");
+      expect(commands.find((c) => c.label === "/my-command")).toBeUndefined();
+      expect(commands.find((c) => c.label === "/prompts:old-prompt")).toBeUndefined();
     } finally {
+      restoreHome(prev);
+      await fs.rm(homeRoot, { recursive: true, force: true });
       await fs.rm(projectRoot, { recursive: true, force: true });
     }
   });
 
-  it("handles deeply nested Codex prompts", async () => {
+  it("discovers Codex built-in system skills under ~/.codex/skills/.system", async () => {
+    const homeRoot = await makeTempDir();
     const projectRoot = await makeTempDir();
     const service = new SlashCommandService();
+    const prev = overrideHome(homeRoot);
 
     try {
       await fs.mkdir(path.join(projectRoot, ".git"));
 
       await writeFile(
-        path.join(projectRoot, ".codex", "prompts", "github", "issues", "create.md"),
+        path.join(homeRoot, ".codex", "skills", ".system", "imagegen", "SKILL.md"),
         `---
-description: "Create a GitHub issue"
+description: "Generate images"
 ---
 
-Create an issue.
+Generate images.
 `
       );
 
       const commands = await service.list("codex", projectRoot);
-      const cmd = commands.find((c) => c.label === "/prompts:github:issues:create");
+      const skill = commands.find((c) => c.label === "$imagegen");
 
-      expect(cmd).toBeDefined();
-      expect(cmd?.scope).toBe("project");
-      expect(cmd?.description).toBe("Create a GitHub issue");
+      expect(skill).toBeDefined();
+      expect(skill?.scope).toBe("built-in");
+      expect(skill?.kind).toBe("skill");
+      expect(skill?.description).toBe("Generate images");
     } finally {
+      restoreHome(prev);
+      await fs.rm(homeRoot, { recursive: true, force: true });
+      await fs.rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("honours CODEX_HOME for user skill discovery", async () => {
+    const homeRoot = await makeTempDir();
+    const codexHome = await makeTempDir();
+    const projectRoot = await makeTempDir();
+    const service = new SlashCommandService();
+    const prev = overrideHome(homeRoot);
+    process.env.CODEX_HOME = codexHome;
+
+    try {
+      await fs.mkdir(path.join(projectRoot, ".git"));
+
+      await writeFile(
+        path.join(codexHome, "skills", "research", "SKILL.md"),
+        `---
+description: "Relocated user skill"
+---
+
+Research things.
+`
+      );
+
+      const commands = await service.list("codex", projectRoot);
+      const skill = commands.find((c) => c.label === "$research");
+
+      expect(skill).toBeDefined();
+      expect(skill?.scope).toBe("user");
+      expect(skill?.kind).toBe("skill");
+      expect(skill?.description).toBe("Relocated user skill");
+    } finally {
+      restoreHome(prev);
+      await fs.rm(homeRoot, { recursive: true, force: true });
+      await fs.rm(codexHome, { recursive: true, force: true });
       await fs.rm(projectRoot, { recursive: true, force: true });
     }
   });
@@ -473,17 +523,19 @@ Hidden.
     }
   });
 
-  it("excludes Codex prompts with user-invocable: false", async () => {
+  it("excludes Codex skills with user-invocable: false", async () => {
+    const homeRoot = await makeTempDir();
     const projectRoot = await makeTempDir();
     const service = new SlashCommandService();
+    const prev = overrideHome(homeRoot);
 
     try {
       await fs.mkdir(path.join(projectRoot, ".git"));
 
       await writeFile(
-        path.join(projectRoot, ".codex", "prompts", "internal-prompt.md"),
+        path.join(projectRoot, ".agents", "skills", "internal", "SKILL.md"),
         `---
-description: "Internal Codex prompt"
+description: "Internal Codex skill"
 user-invocable: false
 ---
 
@@ -492,10 +544,12 @@ Not for users.
       );
 
       const commands = await service.list("codex", projectRoot);
-      const internal = commands.find((c) => c.label === "/prompts:internal-prompt");
+      const internal = commands.find((c) => c.label === "$internal");
 
       expect(internal).toBeUndefined();
     } finally {
+      restoreHome(prev);
+      await fs.rm(homeRoot, { recursive: true, force: true });
       await fs.rm(projectRoot, { recursive: true, force: true });
     }
   });
@@ -904,47 +958,46 @@ prompt = "Do the thing"
     }
   });
 
-  it("allows same basename in commands and prompts with distinct IDs", async () => {
+  it("keeps a /review command and a $review skill distinct (dedupe includes trigger)", async () => {
+    const homeRoot = await makeTempDir();
     const projectRoot = await makeTempDir();
     const service = new SlashCommandService();
+    const prev = overrideHome(homeRoot);
 
     try {
       await fs.mkdir(path.join(projectRoot, ".git"));
 
+      // /review is a Codex built-in command; a project skill named "review"
+      // must coexist as $review rather than dedupe against it.
       await writeFile(
-        path.join(projectRoot, ".codex", "commands", "deploy.md"),
+        path.join(projectRoot, ".agents", "skills", "review", "SKILL.md"),
         `---
-description: "Deploy command"
+description: "Review skill"
 ---
 
-Deploy the app.
-`
-      );
-
-      await writeFile(
-        path.join(projectRoot, ".codex", "prompts", "deploy.md"),
-        `---
-description: "Deploy prompt"
----
-
-Deploy prompt content.
+Review via skill.
 `
       );
 
       const commands = await service.list("codex", projectRoot);
-      const command = commands.find((c) => c.label === "/deploy");
-      const prompt = commands.find((c) => c.label === "/prompts:deploy");
+      const command = commands.find((c) => c.label === "/review");
+      const skill = commands.find((c) => c.label === "$review");
 
       expect(command).toBeDefined();
-      expect(command?.id).toBe("project:deploy");
-      expect(command?.description).toBe("Deploy command");
+      expect(command?.trigger).toBe("/");
+      expect(command?.kind).toBe("command");
 
-      expect(prompt).toBeDefined();
-      expect(prompt?.id).toBe("project:prompts:deploy");
-      expect(prompt?.description).toBe("Deploy prompt");
+      expect(skill).toBeDefined();
+      expect(skill?.trigger).toBe("$");
+      expect(skill?.kind).toBe("skill");
+      expect(skill?.description).toBe("Review skill");
+      // Exact id proves the skill idNamespace survives (scope:skill:name).
+      expect(skill?.id).toBe("project:skill:review");
 
-      expect(command?.id).not.toBe(prompt?.id);
+      expect(command?.id).not.toBe(skill?.id);
     } finally {
+      restoreHome(prev);
+      await fs.rm(homeRoot, { recursive: true, force: true });
       await fs.rm(projectRoot, { recursive: true, force: true });
     }
   });

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { slashCommandsClient } from "@/clients";
 
 import { getBuiltinSlashCommands, type SlashCommand } from "@shared/types";
+import { getAgentConfig } from "@/config/agents";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 
 export interface UseSlashCommandListArgs {
@@ -29,7 +30,8 @@ export function useSlashCommandList({ agentId, projectPath }: UseSlashCommandLis
   }, [initial]);
 
   useEffect(() => {
-    if (agentId !== "claude" && agentId !== "gemini" && agentId !== "codex") return;
+    // Data-driven: fetch for any agent that declares completion sources.
+    if (!agentId || !getAgentConfig(agentId)?.completionSources?.length) return;
     if (!window.electron?.slashCommands?.list) return;
 
     const requestId = ++requestIdRef.current;
@@ -54,6 +56,9 @@ export function useSlashCommandList({ agentId, projectPath }: UseSlashCommandLis
   const commandMap = useMemo(() => {
     const map = new Map<string, SlashCommand>();
     for (const cmd of agentCommands) {
+      // The slash-chip validation only resolves `/` tokens; keep `$`/`@`
+      // completions out of the map so they can't mark a `/token` valid.
+      if ((cmd.trigger ?? "/") !== "/") continue;
       map.set(cmd.label, cmd);
     }
     return map;

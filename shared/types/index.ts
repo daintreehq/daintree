@@ -514,6 +514,23 @@ export type {
 } from "./slashCommands.js";
 export { BUILTIN_SLASH_COMMANDS, getBuiltinSlashCommands } from "./slashCommands.js";
 
+// Declarative agent completion-source schema (discovery engine input)
+export type {
+  CompletionTrigger,
+  CompletionKind,
+  CompletionParserName,
+  CompletionPlatform,
+  CompletionEnvName,
+  CompletionConcreteBase,
+  CompletionBaseDir,
+  CompletionLocation,
+  CompletionDerivation,
+  CompletionStaticDiscovery,
+  CompletionDirectoryDiscovery,
+  CompletionDiscovery,
+  CompletionSourceConfig,
+} from "./completionSources.js";
+
 // Action system types - unified action dispatch and introspection
 export type {
   ActionSource,

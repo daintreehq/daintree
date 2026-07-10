@@ -136,4 +136,61 @@ export const config: AgentConfig = {
       installUrl: "https://github.com/openai/codex",
     },
   ],
+  completionSources: [
+    {
+      id: "builtin",
+      trigger: "/",
+      sourcePrecedence: 0,
+      discovery: { method: "static", catalog: "builtin-slash-commands" },
+    },
+    {
+      // Codex Skills, invoked as `$name`. Custom prompts (`~/.codex/prompts`,
+      // `/prompts:`) and `.codex/commands` were retired — neither exists in
+      // current Codex. Apps/Plugins are deferred pending manifest verification.
+      id: "skills",
+      trigger: "$",
+      sourcePrecedence: 20,
+      discovery: {
+        method: "directory",
+        parser: "skill-dir",
+        derive: {
+          labelPrefix: "$",
+          kind: "skill",
+          idNamespace: "skill",
+          fallbackDescription: "Skill",
+        },
+        locations: [
+          {
+            id: "builtin:system-skills",
+            scope: "built-in",
+            base: {
+              type: "env",
+              name: "CODEX_HOME",
+              fallback: { type: "homeRelative", segments: [".codex"] },
+            },
+            segments: ["skills", ".system"],
+            locationPrecedence: 0,
+          },
+          {
+            id: "user:codex-skills",
+            scope: "user",
+            base: {
+              type: "env",
+              name: "CODEX_HOME",
+              fallback: { type: "homeRelative", segments: [".codex"] },
+            },
+            segments: ["skills"],
+            locationPrecedence: 0,
+          },
+          {
+            id: "project:agents-skills",
+            scope: "project",
+            base: { type: "projectRoot" },
+            segments: [".agents", "skills"],
+            locationPrecedence: 0,
+          },
+        ],
+      },
+    },
+  ],
 };

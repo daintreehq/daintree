@@ -1,4 +1,5 @@
 import type { AgentConfig } from "../agentRegistry.js";
+import { standardConfigLocations } from "./completionSourceHelpers.js";
 
 export const config: AgentConfig = {
   id: "claude",
@@ -210,6 +211,58 @@ export const config: AgentConfig = {
       description: "Custom OpenAI-compatible endpoint.",
       env: {
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+      },
+    },
+  ],
+  completionSources: [
+    {
+      id: "builtin",
+      trigger: "/",
+      sourcePrecedence: 0,
+      discovery: { method: "static", catalog: "builtin-slash-commands" },
+    },
+    {
+      id: "commands",
+      trigger: "/",
+      sourcePrecedence: 10,
+      discovery: {
+        method: "directory",
+        parser: "markdown-frontmatter",
+        derive: { labelPrefix: "/", kind: "command", fallbackDescription: "Custom command" },
+        locations: standardConfigLocations({
+          dotDir: ".claude",
+          sub: "commands",
+          configDirEnv: "CLAUDE_CONFIG_DIR",
+          lowerName: "claude",
+          appName: "Claude",
+        }),
+      },
+    },
+    {
+      // Native Claude skills only. Claude Code declined the `.agents/skills`
+      // convention (anthropics/claude-code#56193) — Daintree translates that
+      // shared tree into `.claude/skills` for assistant sessions
+      // (AssistantContentMirror), so a regular Claude terminal reads only
+      // `.claude/skills`. Codex is the agent that reads `.agents/skills`.
+      id: "skills",
+      trigger: "/",
+      sourcePrecedence: 20,
+      discovery: {
+        method: "directory",
+        parser: "skill-dir",
+        derive: {
+          labelPrefix: "/",
+          kind: "skill",
+          idNamespace: "skill",
+          fallbackDescription: "Skill",
+        },
+        locations: standardConfigLocations({
+          dotDir: ".claude",
+          sub: "skills",
+          configDirEnv: "CLAUDE_CONFIG_DIR",
+          lowerName: "claude",
+          appName: "Claude",
+        }),
       },
     },
   ],
