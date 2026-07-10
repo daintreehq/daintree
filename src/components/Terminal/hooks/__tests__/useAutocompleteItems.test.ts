@@ -47,10 +47,10 @@ describe("useAutocompleteItems", () => {
     const [nested, root] = result.current.autocompleteItems;
     expect(nested!.label).toBe("Button.tsx");
     expect(nested!.description).toBe("src/components");
-    expect(nested!.value).toBe("src/components/Button.tsx");
+    expect(nested!.insertText).toBe("src/components/Button.tsx");
     expect(root!.label).toBe("README.md");
     expect(root!.description).toBeUndefined();
-    expect(root!.value).toBe("README.md");
+    expect(root!.insertText).toBe("README.md");
   });
 
   it("disambiguates duplicate basenames via directory descriptions", () => {
@@ -82,7 +82,7 @@ describe("useAutocompleteItems", () => {
     expect(win!.description).toBe("src\\utils");
     // Trailing separator yields an empty basename — falls back to the full path.
     expect(trailing!.label).toBe("src/dir/");
-    expect(trailing!.value).toBe("src/dir/");
+    expect(trailing!.insertText).toBe("src/dir/");
   });
 
   it("returns diff items filtered by partial", () => {
@@ -125,8 +125,8 @@ describe("useAutocompleteItems", () => {
 
   it("returns command items when activeMode is command", () => {
     const commands = [
-      { key: "/help", label: "/help", value: "/help" },
-      { key: "/clear", label: "/clear", value: "/clear" },
+      { key: "/help", label: "/help", insertText: "/help" },
+      { key: "/clear", label: "/clear", insertText: "/clear" },
     ];
     const { result } = renderHook(() =>
       useAutocompleteItems({

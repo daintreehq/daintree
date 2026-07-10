@@ -25,7 +25,7 @@ function makeLatest(overrides: Partial<LatestShape> = {}): LatestShape {
     isInHistoryMode: false,
     activeMode: "file",
     isAutocompleteOpen: true,
-    autocompleteItems: [{ key: "src/a.ts", label: "a.ts", value: "src/a.ts" }],
+    autocompleteItems: [{ key: "src/a.ts", label: "a.ts", insertText: "src/a.ts" }],
     isResultsStale: false,
     selectedIndex: 0,
     value: "@a",
@@ -107,7 +107,7 @@ describe("useEditorKeymap", () => {
       const { handlers } = renderKeymap(
         makeLatest({
           activeMode: "command",
-          autocompleteItems: [{ key: "/help", label: "/help", value: "/help" }],
+          autocompleteItems: [{ key: "/help", label: "/help", insertText: "/help" }],
           value: "/he",
         })
       );

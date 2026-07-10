@@ -27,17 +27,21 @@ describe("toSlashAutocompleteItems", () => {
     expect(labels).not.toContain("$imagegen");
   });
 
-  it("carries kind through as category (skill badged, command default)", () => {
+  it("carries kind through as category (skill/app/plugin badged, command default)", () => {
     const items = toSlashAutocompleteItems(
       [
         make({ label: "/commit", trigger: "/", kind: "skill" }),
         make({ label: "/help", trigger: "/", kind: "command" }),
+        make({ label: "/connect", trigger: "/", kind: "app" }),
+        make({ label: "/gh", trigger: "/", kind: "plugin" }),
       ],
       ""
     );
 
     expect(items.find((i) => i.label === "/commit")?.category).toBe("skill");
     expect(items.find((i) => i.label === "/help")?.category).toBe("command");
+    expect(items.find((i) => i.label === "/connect")?.category).toBe("app");
+    expect(items.find((i) => i.label === "/gh")?.category).toBe("plugin");
   });
 
   it("treats a triggerless built-in fallback as a slash command", () => {
@@ -47,8 +51,27 @@ describe("toSlashAutocompleteItems", () => {
     expect(items[0]?.category).toBe("command");
   });
 
-  it("uses the canonical label as the inserted value", () => {
+  it("falls back to the label for insert text when no distinct token is supplied", () => {
     const items = toSlashAutocompleteItems([make({ label: "/diff", trigger: "/" })], "");
-    expect(items[0]).toMatchObject({ label: "/diff", value: "/diff", key: "/diff" });
+    expect(items[0]).toMatchObject({ label: "/diff", insertText: "/diff", key: "/diff" });
+  });
+
+  it("keeps a distinct insertText separate from the display label (never derives from it)", () => {
+    const items = toSlashAutocompleteItems(
+      [
+        make({
+          label: "Plugin Creator",
+          insertText: "$plugin-creator",
+          trigger: "/",
+          kind: "plugin",
+        }),
+      ],
+      ""
+    );
+    expect(items[0]).toMatchObject({
+      label: "Plugin Creator",
+      insertText: "$plugin-creator",
+      category: "plugin",
+    });
   });
 });

@@ -68,8 +68,8 @@ describe("AutocompleteMenu", () => {
 
   it("renders listbox with options when items are present", () => {
     const items: AutocompleteItem[] = [
-      { key: "a", label: "alpha", value: "alpha" },
-      { key: "b", label: "beta", value: "beta" },
+      { key: "a", label: "alpha", insertText: "alpha" },
+      { key: "b", label: "beta", insertText: "beta" },
     ];
 
     render(
@@ -91,7 +91,7 @@ describe("AutocompleteMenu", () => {
     render(
       <AutocompleteMenu
         isOpen={true}
-        items={[{ key: "a", label: "alpha", value: "alpha" }]}
+        items={[{ key: "a", label: "alpha", insertText: "alpha" }]}
         selectedIndex={0}
         onSelect={noop}
         title="Commands"
@@ -105,7 +105,7 @@ describe("AutocompleteMenu", () => {
   });
 
   it("marks the listbox busy while results are stale or loading", () => {
-    const items: AutocompleteItem[] = [{ key: "a", label: "alpha", value: "alpha" }];
+    const items: AutocompleteItem[] = [{ key: "a", label: "alpha", insertText: "alpha" }];
 
     const { rerender } = render(
       <AutocompleteMenu
@@ -146,10 +146,12 @@ describe("AutocompleteMenu", () => {
     expect(screen.getByRole("listbox").getAttribute("aria-busy")).toBeNull();
   });
 
-  it("renders a neutral, screen-reader-labeled badge for skill items only", () => {
+  it("renders a neutral, screen-reader-labeled badge for skill, app, and plugin items", () => {
     const items: AutocompleteItem[] = [
-      { key: "s", label: "/commit", value: "/commit", category: "skill" },
-      { key: "c", label: "/help", value: "/help", category: "command" },
+      { key: "s", label: "/commit", insertText: "/commit", category: "skill" },
+      { key: "a", label: "/connect", insertText: "/connect", category: "app" },
+      { key: "p", label: "/gh", insertText: "/gh", category: "plugin" },
+      { key: "c", label: "/help", insertText: "/help", category: "command" },
     ];
 
     render(
@@ -163,18 +165,45 @@ describe("AutocompleteMenu", () => {
     );
 
     const options = screen.getAllByRole("option");
-    const skillRow = options.find((o) => within(o).queryByText("/commit"))!;
-    const commandRow = options.find((o) => within(o).queryByText("/help"))!;
+    const rowFor = (text: string) => options.find((o) => within(o).queryByText(text))!;
 
-    // Skill row: visible badge is hidden from AT, paired with an sr-only label.
-    expect(within(skillRow).getByText("Skill", { selector: "[aria-hidden='true']" })).toBeTruthy();
-    expect(within(skillRow).getByText("Category: Skill")).toBeTruthy();
+    // Each notable kind: visible badge hidden from AT, paired with an sr-only label.
+    for (const [text, badge] of [
+      ["/commit", "Skill"],
+      ["/connect", "App"],
+      ["/gh", "Plugin"],
+    ] as const) {
+      const row = rowFor(text);
+      expect(within(row).getByText(badge, { selector: "[aria-hidden='true']" })).toBeTruthy();
+      expect(within(row).getByText(`Category: ${badge}`)).toBeTruthy();
+    }
 
     // Command row carries no badge — plain by design.
+    const commandRow = rowFor("/help");
     expect(
       within(commandRow).queryByText("Skill", { selector: "[aria-hidden='true']" })
     ).toBeNull();
     expect(within(commandRow).queryByText(/Category:/)).toBeNull();
+  });
+
+  it("displays the label, not the insert token, when they differ", () => {
+    const items: AutocompleteItem[] = [
+      { key: "p", label: "Plugin Creator", insertText: "$plugin-creator", category: "plugin" },
+    ];
+
+    render(
+      <AutocompleteMenu
+        isOpen={true}
+        items={items}
+        selectedIndex={0}
+        onSelect={noop}
+        emptyMessage="No matches"
+      />
+    );
+
+    const option = screen.getByRole("option");
+    expect(within(option).getByText("Plugin Creator")).toBeTruthy();
+    expect(within(option).queryByText("$plugin-creator")).toBeNull();
   });
 
   it("scrolls the keyboard-selected option into view as selection moves", () => {
@@ -183,9 +212,9 @@ describe("AutocompleteMenu", () => {
     Element.prototype.scrollIntoView = scrollSpy;
     try {
       const items: AutocompleteItem[] = [
-        { key: "a", label: "alpha", value: "alpha" },
-        { key: "b", label: "beta", value: "beta" },
-        { key: "c", label: "gamma", value: "gamma" },
+        { key: "a", label: "alpha", insertText: "alpha" },
+        { key: "b", label: "beta", insertText: "beta" },
+        { key: "c", label: "gamma", insertText: "gamma" },
       ];
 
       const { rerender } = render(

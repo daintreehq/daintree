@@ -18,12 +18,12 @@ import type { SlashCommandScope } from "./slashCommands.js";
 export type CompletionTrigger = "/" | "$" | "@";
 
 /**
- * Semantic category of a completion. Only `command` and `skill` are produced
- * today; `app`/`plugin` are a deliberate follow-up (Codex Apps/Plugins have no
- * verified local manifest yet — see #11043) and extend this union
- * non-breakingly when they land.
+ * Semantic category of a completion. `command` and `skill` are produced today;
+ * `app`/`plugin` are modelled ahead of their discovery backends (Codex
+ * Apps/Plugins have no verified local manifest yet — see #11043) so the item
+ * model, badges, and ranking can carry them the moment a source populates them.
  */
-export type CompletionKind = "command" | "skill";
+export type CompletionKind = "command" | "skill" | "app" | "plugin";
 
 /**
  * Closed allow-list of directory parsers implemented in `electron/`. The

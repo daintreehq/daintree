@@ -17,7 +17,10 @@ export function toSlashAutocompleteItems(
   return rankSlashCommands(slashCommands, query).map((cmd) => ({
     key: cmd.id,
     label: cmd.label,
-    value: cmd.label,
+    // Carry the canonical token through; fall back to the label only when the
+    // source didn't supply a distinct one (built-ins, where label *is* the
+    // token) — never derive a display-only label into inserted text.
+    insertText: cmd.insertText ?? cmd.label,
     description: cmd.description,
     category: cmd.kind ?? "command",
   }));

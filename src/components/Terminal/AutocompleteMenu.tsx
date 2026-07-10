@@ -21,16 +21,20 @@ function getDescriptionSnippet(description: string, maxLength = 60): string {
 /**
  * Visible badge text per category. `command` is intentionally absent — plain
  * commands render without a badge (a `[Command]` on every slash token is noise),
- * so only the notable kinds (skills, and later apps/plugins) are called out.
+ * so only the notable kinds (skills, apps, plugins) are called out.
  */
 const CATEGORY_LABEL: Partial<Record<CompletionKind, string>> = {
   skill: "Skill",
+  app: "App",
+  plugin: "Plugin",
 };
 
 export interface AutocompleteItem {
   key: string;
+  /** Display text shown in the menu. May differ from what gets inserted. */
   label: string;
-  value: string;
+  /** Canonical token inserted on selection (e.g. `/diff`, `$plugin-creator`). */
+  insertText: string;
   description?: string;
   /** Semantic category; drives the neutral badge. Undefined for file/context items. */
   category?: CompletionKind;
