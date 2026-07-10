@@ -15,6 +15,8 @@ import {
   type PooledPtyDataHandoff,
   type PtyPool,
 } from "../PtyPool.js";
+import { markHostPerformance } from "../../utils/hostPerformance.js";
+import { PERF_MARKS } from "../../../shared/perf/marks.js";
 
 // Agent CLIs that ship as Node binaries and benefit from V8 bytecode
 // caching across launches. Codex is a Rust binary and would silently
@@ -164,8 +166,8 @@ export function acquirePtyProcess(
     !options.shell &&
     !options.args &&
     options.kind !== "dev-preview";
-  const envHash = canUsePool ? computePoolEnvHash(options.env) : null;
-  let pooled = canUsePool && envHash !== null ? ptyPool!.acquireByKey(options.cwd, envHash) : null;
+  const envHash = computePoolEnvHash(options.env);
+  let pooled = canUsePool ? ptyPool!.acquireByKey(options.cwd, envHash, id) : null;
   // Suppress unused-parameter lint for the write-error callback; kept in the
   // signature so future pool-acquisition logic (e.g. agent-preamble writes) can
   // still report through the same channel.
@@ -217,8 +219,19 @@ export function acquirePtyProcess(
   // Pool miss — kick off a background warm for this exact (cwd, envHash) key
   // so the next spawn with the same shape hits the pool. The fresh spawn
   // below proceeds in parallel; the warm is fire-and-forget.
-  if (canUsePool && envHash !== null) {
+  if (canUsePool) {
     ptyPool!.warmForKey(options.cwd, options.env, envHash);
+  } else if (shouldEnablePtyPool()) {
+    markHostPerformance(PERF_MARKS.POOL_MISS, {
+      terminalId: id,
+      cwd: options.cwd,
+      envHash,
+      reason: !ptyPool
+        ? "pool-unavailable"
+        : options.shell || options.args
+          ? "ineligible-custom-shell"
+          : "ineligible-dev-preview",
+    });
   }
 
   try {

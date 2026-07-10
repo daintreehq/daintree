@@ -26,6 +26,13 @@ export function isRendererPerfCaptureEnabled(): boolean {
   return isDaintreeEnvEnabled("DAINTREE_PERF_CAPTURE");
 }
 
+export function isRendererPerfCaptureActive(): boolean {
+  return (
+    isRendererPerfCaptureEnabled() ||
+    (typeof window !== "undefined" && Array.isArray(window.__DAINTREE_PERF_MARKS__))
+  );
+}
+
 export function markRendererPerformance(
   mark: PerfMarkName | string,
   meta?: Record<string, unknown>
@@ -33,8 +40,7 @@ export function markRendererPerformance(
   if (typeof window === "undefined") return;
 
   const captureEnabled = isRendererPerfCaptureEnabled();
-  const hasConsumerBuffer = Array.isArray(window.__DAINTREE_PERF_MARKS__);
-  if (!captureEnabled && !hasConsumerBuffer) {
+  if (!isRendererPerfCaptureActive()) {
     return;
   }
 

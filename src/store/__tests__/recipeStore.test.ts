@@ -780,6 +780,18 @@ describe("recipeStore", () => {
           (c) => (c[0] as { bypassLimits?: boolean })?.bypassLimits === true
         )
       ).toBe(true);
+      const spawnAdmissions = addTerminalMock.mock.calls.map(
+        (call) =>
+          call[0] as {
+            spawnBatchId?: string;
+            spawnBatchSize?: number;
+          }
+      );
+      expect(new Set(spawnAdmissions.map((admission) => admission.spawnBatchId)).size).toBe(1);
+      expect(spawnAdmissions.every((admission) => admission.spawnBatchId)).toBe(true);
+      expect(
+        spawnAdmissions.every((admission) => admission.spawnBatchSize === spawnAdmissions.length)
+      ).toBe(true);
     });
 
     it("focuses the last spawned grid panel after the batch flush", async () => {
