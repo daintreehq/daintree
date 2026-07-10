@@ -40,6 +40,55 @@ function write(term: HeadlessTerminalType, data: string): Promise<void> {
   return new Promise((resolve) => term.write(data, () => resolve()));
 }
 
+function createDefaultCell(chars: string): IBufferCell {
+  const code = chars.codePointAt(0)!;
+  return {
+    getWidth: () => 1,
+    getChars: () => chars,
+    getCode: () => code,
+    isBold: () => false,
+    isItalic: () => false,
+    isDim: () => false,
+    isUnderline: () => false,
+    isBlink: () => false,
+    isInvisible: () => false,
+    isStrikethrough: () => false,
+    isOverline: () => false,
+    getFgColorMode: () => 0,
+    getFgColor: () => -1,
+  } as unknown as IBufferCell;
+}
+
+function createSingleCellTerminal(chars: string, useRawBuffer: boolean): HeadlessTerminalType {
+  const cell = createDefaultCell(chars);
+  const code = chars.codePointAt(0)!;
+  const line = {
+    translateToString: () => chars,
+    getCell: () => cell,
+    ...(useRawBuffer
+      ? {
+          _line: {
+            _data: new Uint32Array([code | (1 << 22), 0, 0]),
+            _combined: {},
+            _extendedAttrs: {},
+            length: 1,
+          },
+        }
+      : {}),
+  };
+  return {
+    rows: 1,
+    cols: 1,
+    buffer: {
+      active: {
+        baseY: 0,
+        getNullCell: () => cell,
+        getLine: () => line,
+      },
+    },
+  } as unknown as HeadlessTerminalType;
+}
+
 // The pre-fusion pipeline, verbatim: full-viewport cell extraction with the
 // original per-cell blank checks and 9-bit attribute capture, fed through the
 // still-exported createVisibleCellContentSnapshot.
@@ -154,6 +203,20 @@ describe("fused viewport snapshot parity (PERF-035)", () => {
       changedChars: 0,
     });
   });
+
+  it.each(["h", "𝕩", "─"])(
+    "keeps the same unit key for raw and public-cell extraction of %s",
+    (chars) => {
+      const raw = readVisibleActivitySnapshot(createSingleCellTerminal(chars, true), 1)!;
+      const fallback = readVisibleActivitySnapshot(createSingleCellTerminal(chars, false), 1)!;
+
+      expect(fallback.units).toEqual(raw.units);
+      expect(measureVisibleContentDelta(raw, fallback)).toEqual({
+        changed: false,
+        changedChars: 0,
+      });
+    }
+  );
 
   it("masks the inverse attribute like the legacy key scheme (cursor toggles are not changes)", async () => {
     await write(term, "prompt ready > ");

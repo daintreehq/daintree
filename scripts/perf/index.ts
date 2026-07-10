@@ -133,6 +133,27 @@ function playwrightRecipeFanout(): Runner {
   };
 }
 
+function playwrightBulkIssueWorktrees(): Runner {
+  return async (rest) => {
+    const buildExitCode = await npmScript("build:e2e:bench");
+    if (buildExitCode !== 0) return buildExitCode;
+    return spawnNode(
+      [
+        resolveBin(
+          ["node_modules/@playwright/test/cli.js", "node_modules/playwright/cli.js"],
+          "playwright"
+        ),
+        "test",
+        "--project=full-panels",
+        "--workers=1",
+        "e2e/full/panels/bulk-issue-worktree-recipe-perf.spec.ts",
+        ...rest,
+      ],
+      { RUN_PERF_BULK_ISSUE_WORKTREES: "1" }
+    );
+  };
+}
+
 const REGISTRY: Record<string, Command> = {
   smoke: { summary: "Fast local smoke matrix (run on demand)", runner: harness("smoke") },
   ci: { summary: "CI validation matrix (scheduled + manual dispatch)", runner: harness("ci") },
@@ -149,6 +170,10 @@ const REGISTRY: Record<string, Command> = {
   "recipe-fanout": {
     summary: "Cold recipe fanout through worktree, PTY host, and xterm",
     runner: playwrightRecipeFanout(),
+  },
+  "bulk-issue-worktrees": {
+    summary: "Fake issue selection through bulk worktree recipes and real PTYs",
+    runner: playwrightBulkIssueWorktrees(),
   },
   memory: {
     summary: "Memory kitchen-sink soak spec via Playwright",

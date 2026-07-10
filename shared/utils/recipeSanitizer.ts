@@ -20,6 +20,9 @@ import type { RecipeTerminal, RecipeTerminalType } from "../types/project.js";
  */
 export const MAX_TERMINALS_PER_RECIPE = 10;
 
+/** Maximum PTY count admitted as one user-confirmed recipe batch across worktrees. */
+export const MAX_TERMINALS_PER_RECIPE_ADMISSION_BATCH = 30;
+
 /**
  * Control characters forbidden in command-like fields (`command`, `args`,
  * `devCommand`, and `env` keys/values). Rejects CR, LF, and all C0 control

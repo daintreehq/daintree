@@ -44,7 +44,9 @@ import {
   QUEUE_CONCURRENCY,
   BACKOFF_BASE_MS,
   ASSIGNMENT_BACKOFF_CAP_MS,
-  VERIFICATION_SETTLE_MS,
+  VERIFICATION_EXIT_SETTLE_MS,
+  VERIFICATION_SPAWN_WAIT_MS,
+  planBulkRecipeSpawnBatches,
 } from "./bulkCreateUtils";
 import type { PlannedWorktree } from "./bulkCreateUtils";
 import type { ForgeBulkCreateWorktreeDialogProps } from "@/types/forgeSlotProps";
@@ -52,6 +54,35 @@ import type { BranchInfo } from "@shared/types";
 
 /** Conforms to the host's bulk-create slot contract (forge-normalized shapes). */
 export type BulkCreateWorktreeDialogProps = ForgeBulkCreateWorktreeDialogProps;
+
+function waitForPanelSpawns(panelIds: string[], timeoutMs: number): Promise<void> {
+  if (panelIds.length === 0) return Promise.resolve();
+  const allSettled = () => {
+    const { panelsById } = usePanelStore.getState();
+    return panelIds.every((panelId) => {
+      const panel = panelsById[panelId];
+      return !panel || !isPtyPanel(panel) || panel.spawnStatus !== "spawning";
+    });
+  };
+  if (allSettled()) return Promise.resolve();
+
+  return new Promise((resolve) => {
+    let settled = false;
+    let unsubscribe = () => {};
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      unsubscribe();
+      resolve();
+    };
+    const timeout = setTimeout(finish, timeoutMs);
+    unsubscribe = usePanelStore.subscribe(() => {
+      if (allSettled()) finish();
+    });
+    if (allSettled()) finish();
+  });
+}
 
 export function BulkCreateWorktreeDialog({
   isOpen,
@@ -243,6 +274,13 @@ export function BulkCreateWorktreeDialog({
       });
       queueRef.current = queue;
       const currentRunItems = new Set(toCreate.map((p) => p.item.number));
+      const ptyTerminalsPerRecipe =
+        selectedRecipe?.terminals.filter((terminal) => terminal.type !== "dev-preview").length ?? 0;
+      const recipeSpawnBatches = planBulkRecipeSpawnBatches(
+        [...currentRunItems],
+        ptyTerminalsPerRecipe,
+        () => crypto.randomUUID()
+      );
       const succeededItems = new Set<number>();
       const failedItems = new Set<number>();
       let lastSuccessfulWorktreeId: string | null = null;
@@ -597,6 +635,7 @@ export function BulkCreateWorktreeDialog({
                       recipeContext,
                       {
                         terminalIndices: shouldRetryTerminals,
+                        spawnBatch: recipeSpawnBatches.get(itemNumber),
                       }
                     );
 
@@ -759,7 +798,16 @@ export function BulkCreateWorktreeDialog({
 
       // Post-batch verification: check terminal health for current run items only
       if (selectedRecipeId) {
-        await delay(VERIFICATION_SETTLE_MS);
+        const verificationPanelIds = [...tracking]
+          .filter(
+            ([itemNumber, tracked]) =>
+              currentRunItems.has(itemNumber) &&
+              !failedItems.has(itemNumber) &&
+              tracked.failedTerminalIndices.length === 0
+          )
+          .flatMap(([, tracked]) => tracked.spawnedTerminalIds);
+        await waitForPanelSpawns(verificationPanelIds, VERIFICATION_SPAWN_WAIT_MS);
+        await delay(VERIFICATION_EXIT_SETTLE_MS);
         if (runIdRef.current !== currentRunId) return;
 
         const { panelsById } = usePanelStore.getState();
@@ -799,7 +847,7 @@ export function BulkCreateWorktreeDialog({
 
       dispatchProgress({ type: "DONE" });
     },
-    [selectedRecipeId, assignWorktreeToSelf, currentProject?.path]
+    [selectedRecipeId, selectedRecipe, assignWorktreeToSelf, currentProject?.path]
   );
 
   const handleCreate = useCallback(async () => {

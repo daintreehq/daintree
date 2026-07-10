@@ -1,6 +1,7 @@
 import { detectPrefixFromIssue, buildBranchName } from "@/components/Worktree/branchPrefixUtils";
 import { generateBranchSlug } from "@/utils/textParsing";
 import type { Issue, PR } from "@shared/types/forge";
+import { MAX_TERMINALS_PER_RECIPE_ADMISSION_BATCH } from "@shared/utils/recipeSanitizer";
 import type { PlannedWorktree } from "./bulkCreatePrequery";
 
 export type { PlannedWorktree };
@@ -29,7 +30,37 @@ export const BACKOFF_CAP_MS = 30000;
 // wait at least 60s when no Retry-After header is supplied, so the assignment
 // retry loop uses its own cap instead of the shared 30s value.
 export const ASSIGNMENT_BACKOFF_CAP_MS = 60000;
-export const VERIFICATION_SETTLE_MS = 800;
+export const VERIFICATION_SPAWN_WAIT_MS = 700;
+export const VERIFICATION_EXIT_SETTLE_MS = 100;
+
+export interface BulkRecipeSpawnBatch {
+  id: string;
+  size: number;
+}
+
+export function planBulkRecipeSpawnBatches(
+  itemNumbers: number[],
+  ptyTerminalsPerItem: number,
+  createBatchId: () => string
+): Map<number, BulkRecipeSpawnBatch> {
+  const batches = new Map<number, BulkRecipeSpawnBatch>();
+  if (ptyTerminalsPerItem <= 0 || ptyTerminalsPerItem > MAX_TERMINALS_PER_RECIPE_ADMISSION_BATCH) {
+    return batches;
+  }
+
+  const itemsPerBatch = Math.max(
+    1,
+    Math.floor(MAX_TERMINALS_PER_RECIPE_ADMISSION_BATCH / ptyTerminalsPerItem)
+  );
+  for (let offset = 0; offset < itemNumbers.length; offset += itemsPerBatch) {
+    const itemBatch = itemNumbers.slice(offset, offset + itemsPerBatch);
+    const size = itemBatch.length * ptyTerminalsPerItem;
+    if (size < 2) continue;
+    const batch = { id: createBatchId(), size };
+    for (const itemNumber of itemBatch) batches.set(itemNumber, batch);
+  }
+  return batches;
+}
 
 // IPC strips structured error fields (lesson #3769), so renderer-side classification
 // matches the strings emitted by `parseGitHubError` in the main process — not status codes.

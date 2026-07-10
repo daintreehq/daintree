@@ -110,13 +110,13 @@ function estimateOverlayGridDims(fontSize: number): { cols: number; rows: number
 }
 
 class TerminalStartupQueue {
-  private readonly tasks: Array<() => Promise<void>> = [];
-  private isDraining = false;
+  private readonly tasks: Array<{ run: () => Promise<void>; concurrency: number }> = [];
+  private activeTasks = 0;
   private reservations = 0;
 
   /** True when an enqueued task would start immediately (single-launch fast path). */
   get isIdle(): boolean {
-    return this.tasks.length === 0 && !this.isDraining && this.reservations === 0;
+    return this.tasks.length === 0 && this.activeTasks === 0 && this.reservations === 0;
   }
 
   /**
@@ -130,37 +130,35 @@ class TerminalStartupQueue {
     this.reservations++;
   }
 
-  enqueue(task: () => Promise<void>): void {
+  enqueue(task: () => Promise<void>, concurrency = 1): void {
     if (this.reservations > 0) this.reservations--;
-    this.tasks.push(task);
-    void this.drain();
+    this.tasks.push({ run: task, concurrency });
+    this.drain();
   }
 
-  private async drain(): Promise<void> {
-    if (this.isDraining) return;
-    this.isDraining = true;
+  private drain(): void {
+    while (this.tasks.length > 0 && this.activeTasks < this.tasks[0]!.concurrency) {
+      const task = this.tasks.shift();
+      if (!task) continue;
+      this.activeTasks++;
+      void this.runTask(task.run);
+    }
+  }
 
+  private async runTask(task: () => Promise<void>): Promise<void> {
     try {
-      while (this.tasks.length > 0) {
-        const task = this.tasks.shift();
-        if (!task) continue;
-
-        try {
-          await task();
-        } catch (error) {
-          logError("[TerminalStore] Terminal startup task failed", error);
-        }
-      }
+      await task();
+    } catch (error) {
+      logError("[TerminalStore] Terminal startup task failed", error);
     } finally {
-      this.isDraining = false;
-      if (this.tasks.length > 0) {
-        void this.drain();
-      }
+      this.activeTasks--;
+      this.drain();
     }
   }
 }
 
 const terminalStartupQueue = new TerminalStartupQueue();
+const RECIPE_TERMINAL_STARTUP_CONCURRENCY = 2;
 
 export const createAddPanelActions = (
   set: Set,
@@ -429,7 +427,7 @@ export const createAddPanelActions = (
     // and the first fit with the env fetch + spawn IPC below. Decided at
     // commit time — the flag must be in the first committed panel record
     // because TerminalPane reads it on first render. Burst spawns (queue
-    // busy) keep the gate so panels realize one at a time (#5789).
+    // busy) keep the gate so panels realize with bounded concurrency (#5789).
     const eagerAttach =
       !isReconnect && location === "grid" && isInActiveWorktree && terminalStartupQueue.isIdle;
     // Every non-reconnect PTY panel reaches the enqueue below (prewarm and
@@ -865,187 +863,192 @@ export const createAddPanelActions = (
     const shouldWaitForVisibleAttach = location === "grid" && isInActiveWorktree;
 
     // The panel chrome is already committed. Realize backend PTY startup and
-    // visible xterm.open() through a single queue so bulk recipes can add many
+    // visible xterm.open() through a bounded queue so bulk recipes can add many
     // panels without making Chromium/xterm settle every terminal in the same
     // frame. spawnStatus remains "spawning" while queued, so TerminalPane shows
     // lightweight chrome instead of mounting XtermAdapter.
-    terminalStartupQueue.enqueue(async () => {
-      const _p0 = get().panelsById[id];
-      if (!_p0 || !isPtyPanel(_p0) || _p0.spawnStatus !== "spawning") return;
-      markRendererPerformance("agentlaunch.task-start", { id });
+    terminalStartupQueue.enqueue(
+      async () => {
+        const _p0 = get().panelsById[id];
+        if (!_p0 || !isPtyPanel(_p0) || _p0.spawnStatus !== "spawning") return;
+        markRendererPerformance("agentlaunch.task-start", { id });
 
-      try {
-        const mergedEnv = await spawnEnvPromise;
+        try {
+          const mergedEnv = await spawnEnvPromise;
 
-        markRendererPerformance("agentlaunch.env-ready", { id });
-        const _p1 = get().panelsById[id];
-        if (!_p1 || !isPtyPanel(_p1) || _p1.spawnStatus !== "spawning") return;
+          markRendererPerformance("agentlaunch.env-ready", { id });
+          const _p1 = get().panelsById[id];
+          if (!_p1 || !isPtyPanel(_p1) || _p1.spawnStatus !== "spawning") return;
 
-        const commandToExecute = options.skipCommandExecution ? undefined : options.command;
-        // Spawn the PTY at the grid the renderer is actually showing. The
-        // overlay XtermAdapter mounts without waiting for spawnStatus, so by
-        // now the xterm may already be attached and fitted — a PTY resize it
-        // sent before this spawn resolved was silently dropped by the
-        // pty-host (no terminal yet), and booting at 80×24 anyway left the
-        // CLI painting a width the renderer wasn't wrapping at (#10863).
-        const attachedDims = getAttachedGridDims(id);
-        const spawnCols = attachedDims?.cols ?? overlayDims?.cols ?? 80;
-        const spawnRows = attachedDims?.rows ?? overlayDims?.rows ?? 24;
-        await terminalClient.spawn({
-          id,
-          projectId: capturedProjectId,
-          cwd: options.cwd,
-          shell: options.shell,
-          cols: spawnCols,
-          rows: spawnRows,
-          command: commandToExecute,
-          kind,
-          launchAgentId,
-          title,
-          titleMode: options.titleMode,
-          env: mergedEnv,
-          restore: options.restore,
-          spawnBatchId: options.spawnBatchId,
-          spawnBatchSize: options.spawnBatchSize,
-          agentLaunchFlags: options.agentLaunchFlags,
-          agentModelId: options.agentModelId,
-          worktreeId: options.worktreeId,
-          agentPresetId: options.agentPresetId,
-          agentPresetColor: options.agentPresetColor,
-          originalAgentPresetId: options.originalPresetId ?? options.agentPresetId,
-          // Launch-time context for the daintree-assistant pinned session
-          // (#10647). Threaded straight through; the main-process handler only
-          // consumes it for that agent and ignores it otherwise.
-          actionContext: options.actionContext,
-        });
+          const commandToExecute = options.skipCommandExecution ? undefined : options.command;
+          // Spawn the PTY at the grid the renderer is actually showing. The
+          // overlay XtermAdapter mounts without waiting for spawnStatus, so by
+          // now the xterm may already be attached and fitted — a PTY resize it
+          // sent before this spawn resolved was silently dropped by the
+          // pty-host (no terminal yet), and booting at 80×24 anyway left the
+          // CLI painting a width the renderer wasn't wrapping at (#10863).
+          const attachedDims = getAttachedGridDims(id);
+          const spawnCols = attachedDims?.cols ?? overlayDims?.cols ?? 80;
+          const spawnRows = attachedDims?.rows ?? overlayDims?.rows ?? 24;
+          await terminalClient.spawn({
+            id,
+            projectId: capturedProjectId,
+            cwd: options.cwd,
+            shell: options.shell,
+            cols: spawnCols,
+            rows: spawnRows,
+            command: commandToExecute,
+            kind,
+            launchAgentId,
+            title,
+            titleMode: options.titleMode,
+            env: mergedEnv,
+            restore: options.restore,
+            spawnBatchId: options.spawnBatchId,
+            spawnBatchSize: options.spawnBatchSize,
+            agentLaunchFlags: options.agentLaunchFlags,
+            agentModelId: options.agentModelId,
+            worktreeId: options.worktreeId,
+            agentPresetId: options.agentPresetId,
+            agentPresetColor: options.agentPresetColor,
+            originalAgentPresetId: options.originalPresetId ?? options.agentPresetId,
+            // Launch-time context for the daintree-assistant pinned session
+            // (#10647). Threaded straight through; the main-process handler only
+            // consumes it for that agent and ignores it otherwise.
+            actionContext: options.actionContext,
+          });
 
-        markRendererPerformance("agentlaunch.spawn-ipc-resolved", { id });
+          markRendererPerformance("agentlaunch.spawn-ipc-resolved", { id });
 
-        // Reject a spawn resolution that no longer belongs to this incarnation:
-        // if a restart or hydration replay re-launched the id while our IPC was
-        // in flight, the successor owns spawnStatus now and its own resolution
-        // manages it. The ledger records the rejection as an anomaly. One
-        // carve-out: when the successor's panel is ALSO gone, the backend PTY
-        // this resolution just created has no owner at all — kill it, exactly
-        // like the orphan path below (killing the shared id is safe only when
-        // no live panel claims it).
-        if (!agentLifecycleLedger.recordSpawnResolved(id, launchGeneration, true).accepted) {
-          if (!get().panelsById[id]) {
+          // Reject a spawn resolution that no longer belongs to this incarnation:
+          // if a restart or hydration replay re-launched the id while our IPC was
+          // in flight, the successor owns spawnStatus now and its own resolution
+          // manages it. The ledger records the rejection as an anomaly. One
+          // carve-out: when the successor's panel is ALSO gone, the backend PTY
+          // this resolution just created has no owner at all — kill it, exactly
+          // like the orphan path below (killing the shared id is safe only when
+          // no live panel claims it).
+          if (!agentLifecycleLedger.recordSpawnResolved(id, launchGeneration, true).accepted) {
+            if (!get().panelsById[id]) {
+              terminalClient.kill(id).catch((killError) => {
+                logWarn("[TerminalStore] Compensating kill after stale spawn resolution failed", {
+                  id,
+                  error: killError,
+                });
+              });
+            }
+            return;
+          }
+
+          // Promote spawnStatus to "ready" once the PTY is live. If the panel was
+          // removed during the spawn window, issue a compensating kill to avoid
+          // orphaning the freshly-spawned PTY (removePanel's kill IPC was a no-op
+          // at the time because the backend had no terminal yet).
+          let orphaned = false;
+          let mountedPanel = false;
+          set((state) => {
+            const current = state.panelsById[id];
+            if (!current) {
+              orphaned = true;
+              return state;
+            }
+            if (!isPtyPanel(current) || current.spawnStatus !== "spawning") return state;
+            mountedPanel = true;
+            return {
+              panelsById: { ...state.panelsById, [id]: { ...current, spawnStatus: "ready" } },
+            };
+          });
+          if (orphaned) {
             terminalClient.kill(id).catch((killError) => {
-              logWarn("[TerminalStore] Compensating kill after stale spawn resolution failed", {
+              logWarn("[TerminalStore] Compensating kill after orphan spawn failed", {
                 id,
                 error: killError,
               });
             });
+          } else {
+            if (mountedPanel) markRendererPerformance("agentlaunch.ready", { id });
+            // Recover the attach-during-spawn race: a fit that ran while the
+            // spawn IPC was in flight had its PTY resize dropped (no terminal
+            // existed yet), which would strand the CLI at the spawn dims while
+            // xterm renders the fitted grid — the assistant's progressively
+            // garbled prompt (#10863). Re-assert the live grid now that the PTY
+            // exists. PTY-only and direct: xterm already shows these dims, and
+            // sendPtyResize would defer 500ms for a settled-strategy agent —
+            // exactly the window in which the CLI paints its banner at the
+            // stale spawn width. The backend dedupes when nothing drifted.
+            const settledDims = getAttachedGridDims(id);
+            if (settledDims && (settledDims.cols !== spawnCols || settledDims.rows !== spawnRows)) {
+              terminalClient.resize(id, settledDims.cols, settledDims.rows);
+            }
           }
-          return;
-        }
 
-        // Promote spawnStatus to "ready" once the PTY is live. If the panel was
-        // removed during the spawn window, issue a compensating kill to avoid
-        // orphaning the freshly-spawned PTY (removePanel's kill IPC was a no-op
-        // at the time because the backend had no terminal yet).
-        let orphaned = false;
-        let mountedPanel = false;
-        set((state) => {
-          const current = state.panelsById[id];
-          if (!current) {
-            orphaned = true;
-            return state;
+          if (mountedPanel && shouldWaitForVisibleAttach) {
+            try {
+              await terminalInstanceService.waitForAttachSettled(id, {
+                timeoutMs: TERMINAL_STARTUP_ATTACH_TIMEOUT_MS,
+              });
+            } catch (error) {
+              logWarn("[TerminalStore] Terminal did not attach before startup queue advanced", {
+                id,
+                error,
+              });
+            }
           }
-          if (!isPtyPanel(current) || current.spawnStatus !== "spawning") return state;
-          mountedPanel = true;
-          return {
-            panelsById: { ...state.panelsById, [id]: { ...current, spawnStatus: "ready" } },
-          };
-        });
-        if (orphaned) {
-          terminalClient.kill(id).catch((killError) => {
-            logWarn("[TerminalStore] Compensating kill after orphan spawn failed", {
-              id,
-              error: killError,
-            });
-          });
-        } else {
-          if (mountedPanel) markRendererPerformance("agentlaunch.ready", { id });
-          // Recover the attach-during-spawn race: a fit that ran while the
-          // spawn IPC was in flight had its PTY resize dropped (no terminal
-          // existed yet), which would strand the CLI at the spawn dims while
-          // xterm renders the fitted grid — the assistant's progressively
-          // garbled prompt (#10863). Re-assert the live grid now that the PTY
-          // exists. PTY-only and direct: xterm already shows these dims, and
-          // sendPtyResize would defer 500ms for a settled-strategy agent —
-          // exactly the window in which the CLI paints its banner at the
-          // stale spawn width. The backend dedupes when nothing drifted.
-          const settledDims = getAttachedGridDims(id);
-          if (settledDims && (settledDims.cols !== spawnCols || settledDims.rows !== spawnRows)) {
-            terminalClient.resize(id, settledDims.cols, settledDims.rows);
+        } catch (error) {
+          logError("[TerminalStore] Failed to spawn terminal", error);
+          // Same staleness gate as the success path: never stamp a failure onto
+          // a successor incarnation that re-launched this id mid-flight.
+          if (!agentLifecycleLedger.recordSpawnResolved(id, launchGeneration, false).accepted) {
+            return;
           }
-        }
+          const current = get().panelsById[id];
+          if (!current || !isPtyPanel(current) || current.spawnStatus !== "spawning") return;
 
-        if (mountedPanel && shouldWaitForVisibleAttach) {
-          try {
-            await terminalInstanceService.waitForAttachSettled(id, {
-              timeoutMs: TERMINAL_STARTUP_ATTACH_TIMEOUT_MS,
-            });
-          } catch (error) {
-            logWarn("[TerminalStore] Terminal did not attach before startup queue advanced", {
-              id,
-              error,
-            });
-          }
-        }
-      } catch (error) {
-        logError("[TerminalStore] Failed to spawn terminal", error);
-        // Same staleness gate as the success path: never stamp a failure onto
-        // a successor incarnation that re-launched this id mid-flight.
-        if (!agentLifecycleLedger.recordSpawnResolved(id, launchGeneration, false).accepted) {
-          return;
-        }
-        const current = get().panelsById[id];
-        if (!current || !isPtyPanel(current) || current.spawnStatus !== "spawning") return;
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- error shape from node-pty spawn rejection
+          const err = error as { code?: string; errno?: number; syscall?: string; path?: string };
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- SpawnError construction from caught IPC error
+          const spawnError = {
+            code: err.code ?? "UNKNOWN",
+            message: formatErrorMessage(error, "Failed to start terminal process"),
+            errno: err.errno,
+            syscall: err.syscall,
+            path: err.path,
+          } as import("@shared/types/pty-host").SpawnError;
 
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- error shape from node-pty spawn rejection
-        const err = error as { code?: string; errno?: number; syscall?: string; path?: string };
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- SpawnError construction from caught IPC error
-        const spawnError = {
-          code: err.code ?? "UNKNOWN",
-          message: formatErrorMessage(error, "Failed to start terminal process"),
-          errno: err.errno,
-          syscall: err.syscall,
-          path: err.path,
-        } as import("@shared/types/pty-host").SpawnError;
-
-        set((state) => {
-          const _current = state.panelsById[id];
-          if (!_current || !isPtyPanel(_current) || _current.spawnStatus !== "spawning")
-            return state;
-          // A launched agent that fails to start never produces a PTY exit, so
-          // its optimistic agentState would stay stuck (e.g. "working"). Mark it
-          // "exited" so terminal.list / terminal.getStatus report the crash
-          // instead of a phantom running agent (#10816). Plain shells have no
-          // launchAgentId and keep agentState undefined.
-          const agentPatch = _current.launchAgentId
-            ? { agentState: "exited" as const, lastStateChange: Date.now() }
-            : {};
-          return {
-            panelsById: {
-              ...state.panelsById,
-              [id]: {
-                ..._current,
-                spawnStatus: "failed",
-                spawnError,
-                runtimeStatus: "error",
-                ...agentPatch,
+          set((state) => {
+            const _current = state.panelsById[id];
+            if (!_current || !isPtyPanel(_current) || _current.spawnStatus !== "spawning")
+              return state;
+            // A launched agent that fails to start never produces a PTY exit, so
+            // its optimistic agentState would stay stuck (e.g. "working"). Mark it
+            // "exited" so terminal.list / terminal.getStatus report the crash
+            // instead of a phantom running agent (#10816). Plain shells have no
+            // launchAgentId and keep agentState undefined.
+            const agentPatch = _current.launchAgentId
+              ? { agentState: "exited" as const, lastStateChange: Date.now() }
+              : {};
+            return {
+              panelsById: {
+                ...state.panelsById,
+                [id]: {
+                  ..._current,
+                  spawnStatus: "failed",
+                  spawnError,
+                  runtimeStatus: "error",
+                  ...agentPatch,
+                },
               },
-            },
-          };
-        });
+            };
+          });
 
-        const after = get();
-        saveNormalized(after.panelsById, after.panelIds);
-      }
-    });
+          const after = get();
+          saveNormalized(after.panelsById, after.panelIds);
+        }
+      },
+      options.spawnBatchId && (options.spawnBatchSize ?? 0) > 1
+        ? RECIPE_TERMINAL_STARTUP_CONCURRENCY
+        : 1
+    );
 
     return id;
   },

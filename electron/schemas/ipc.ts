@@ -17,7 +17,7 @@ import type {
   McpConfirmationDecision,
   TurnOutcomeClass,
 } from "../../shared/types/ipc/mcpServer.js";
-import { MAX_TERMINALS_PER_RECIPE } from "../../shared/utils/recipeSanitizer.js";
+import { MAX_TERMINALS_PER_RECIPE_ADMISSION_BATCH } from "../../shared/utils/recipeSanitizer.js";
 
 /** Schema for a launch hint — built-in agent id or plugin-provided string. */
 const LaunchAgentIdSchema = z.union([z.enum(BUILT_IN_AGENT_IDS), z.string().min(1)]);
@@ -354,7 +354,7 @@ export const TerminalSpawnOptionsSchema = z.object({
   titleMode: TitleModeSchema.optional(),
   restore: z.boolean().optional(),
   spawnBatchId: z.string().uuid().optional(),
-  spawnBatchSize: z.number().int().min(2).max(MAX_TERMINALS_PER_RECIPE).optional(),
+  spawnBatchSize: z.number().int().min(2).max(MAX_TERMINALS_PER_RECIPE_ADMISSION_BATCH).optional(),
   isEphemeral: z.boolean().optional(),
   agentLaunchFlags: z.array(z.string()).optional(),
   agentModelId: z.string().optional(),
