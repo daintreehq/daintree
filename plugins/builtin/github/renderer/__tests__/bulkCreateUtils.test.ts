@@ -12,6 +12,7 @@ import {
   BACKOFF_CAP_MS,
   ASSIGNMENT_BACKOFF_CAP_MS,
   MAX_TRANSIENT_RETRY_MS,
+  planBulkRecipeSpawnBatches,
 } from "../components/bulkCreateUtils";
 
 function makeIssue(overrides: Partial<Issue> = {}): Issue {
@@ -68,6 +69,45 @@ describe("planIssueWorktrees", () => {
     ];
     const result = planIssueWorktrees(issues, new Set());
     expect(result[0]!.branchName).not.toBe(result[1]!.branchName);
+  });
+});
+
+describe("planBulkRecipeSpawnBatches", () => {
+  it("shares one admission across single-terminal recipes for ten worktrees", () => {
+    const batches = planBulkRecipeSpawnBatches(
+      Array.from({ length: 10 }, (_, index) => index + 1),
+      1,
+      () => "batch-a"
+    );
+
+    expect(batches).toHaveLength(10);
+    expect(new Set([...batches.values()].map((batch) => batch.id))).toEqual(new Set(["batch-a"]));
+    expect([...batches.values()].every((batch) => batch.size === batches.size)).toBe(true);
+  });
+
+  it("splits larger operations into bounded groups without splitting a recipe", () => {
+    let nextId = 0;
+    const batches = planBulkRecipeSpawnBatches(
+      Array.from({ length: 7 }, (_, index) => index + 1),
+      5,
+      () => `batch-${++nextId}`
+    );
+
+    const groups = new Map<string, Array<{ id: string; size: number }>>();
+    for (const batch of batches.values()) {
+      const group = groups.get(batch.id) ?? [];
+      group.push(batch);
+      groups.set(batch.id, group);
+    }
+    expect(groups.size).toBe(2);
+    expect(groups.get("batch-1")).toHaveLength(6);
+    expect(groups.get("batch-1")?.every((batch) => batch.size === 30)).toBe(true);
+    expect(groups.get("batch-2")).toHaveLength(1);
+    expect(groups.get("batch-2")?.[0]?.size).toBe(5);
+  });
+
+  it("does not attach batch metadata to one single-terminal launch", () => {
+    expect(planBulkRecipeSpawnBatches([1], 1, () => "unused")).toEqual(new Map());
   });
 });
 

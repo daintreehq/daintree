@@ -52,9 +52,9 @@ export interface AddPanelOptionsBase {
   focusPolicy?: AddPanelFocusPolicy;
   /** Bypass rate limiter during session restore (consumes main-process quota) */
   restore?: boolean;
-  /** Opaque admission group shared by PTY panels from one bounded recipe run. */
+  /** Opaque admission group shared by PTY panels from one bounded recipe operation. */
   spawnBatchId?: string;
-  /** Number of PTY panels declared by the bounded recipe run. */
+  /** Total PTY panels declared by that recipe operation, potentially across worktrees. */
   spawnBatchSize?: number;
   /** Bypass panel limit checks (used during hydration/state restoration) */
   bypassLimits?: boolean;

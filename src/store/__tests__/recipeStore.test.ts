@@ -794,6 +794,36 @@ describe("recipeStore", () => {
       ).toBe(true);
     });
 
+    it("forwards a shared bulk admission to a single-terminal recipe", async () => {
+      addTerminalMock.mockResolvedValue("terminal-1");
+      useRecipeStore.setState({
+        recipes: [
+          {
+            id: "recipe-1",
+            name: "Test Recipe",
+            projectId: "project-1",
+            terminals: [{ type: "terminal", title: "Shell", command: "a", env: {} }],
+            createdAt: Date.now(),
+          },
+        ],
+        isLoading: false,
+        currentProjectId: "project-1",
+      });
+
+      await useRecipeStore
+        .getState()
+        .runRecipeWithResults("recipe-1", "/tmp/worktree", "worktree-1", undefined, {
+          spawnBatch: { id: "00000000-0000-4000-8000-000000000010", size: 10 },
+        });
+
+      expect(addTerminalMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          spawnBatchId: "00000000-0000-4000-8000-000000000010",
+          spawnBatchSize: 10,
+        })
+      );
+    });
+
     it("focuses the last spawned grid panel after the batch flush", async () => {
       let callIndex = 0;
       addTerminalMock.mockImplementation(() => Promise.resolve(`terminal-${++callIndex}`));

@@ -55,6 +55,8 @@ export interface RecipeRunOptions {
   spawnedBy?: TerminalSpawnSource;
   focusPolicy?: AddPanelFocusPolicy;
   terminalIndices?: number[];
+  /** Shared admission batch for one user-confirmed recipe operation spanning worktrees. */
+  spawnBatch?: { id: string; size: number };
   /**
    * The action dispatch source that triggered this run. When `"agent"`, a
    * lower per-run terminal cap ({@link MAX_AGENT_RECIPE_TERMINALS}) is applied
@@ -793,8 +795,18 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     const ptySpawnCount = spawnIndices.filter(
       (index) => recipe.terminals[index]?.type !== "dev-preview"
     ).length;
+    const requestedSpawnBatch = options?.spawnBatch;
     const spawnBatch =
-      ptySpawnCount > 1 ? { spawnBatchId: crypto.randomUUID(), spawnBatchSize: ptySpawnCount } : {};
+      requestedSpawnBatch &&
+      requestedSpawnBatch.size >= ptySpawnCount &&
+      requestedSpawnBatch.size > 1
+        ? {
+            spawnBatchId: requestedSpawnBatch.id,
+            spawnBatchSize: requestedSpawnBatch.size,
+          }
+        : ptySpawnCount > 1
+          ? { spawnBatchId: crypto.randomUUID(), spawnBatchSize: ptySpawnCount }
+          : {};
     try {
       const settled = await Promise.allSettled(
         spawnIndices.map(async (index) => {

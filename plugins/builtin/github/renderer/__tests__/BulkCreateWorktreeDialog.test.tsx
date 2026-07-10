@@ -954,6 +954,12 @@ describe("BulkCreateWorktreeDialog", () => {
     expect(screen.getByText(/6 of 6 created/)).toBeTruthy();
     expect(screen.queryByText(/0 of/)).toBeNull();
     expect(screen.queryByText(/failed/)).toBeNull();
+    const spawnBatches = mockRunRecipeWithResults.mock.calls.map(
+      (call) => (call[4] as { spawnBatch?: { id: string; size: number } })?.spawnBatch
+    );
+    expect(spawnBatches.every(Boolean)).toBe(true);
+    expect(new Set(spawnBatches.map((batch) => batch?.id)).size).toBe(1);
+    expect(spawnBatches.every((batch) => batch?.size === spawnBatches.length)).toBe(true);
   });
 
   it("done-phase counts match UI after recipe verification with mixed outcomes", async () => {

@@ -753,6 +753,37 @@ describe("terminal spawn rate limiting (#5352)", () => {
     expect(waitForBurstRateLimitSlotMock).toHaveBeenLastCalledWith("terminalSpawn", 1_000, 6);
   });
 
+  it("shares one admission across a multi-worktree recipe batch", async () => {
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    const batch = {
+      spawnBatchId: "00000000-0000-4000-8000-000000000012",
+      spawnBatchSize: 12,
+    };
+    await handler({} as Electron.IpcMainInvokeEvent, {
+      id: "bulk-terminal-1",
+      cols: 80,
+      rows: 24,
+      ...batch,
+    });
+    await handler({} as Electron.IpcMainInvokeEvent, {
+      id: "bulk-terminal-2",
+      cols: 80,
+      rows: 24,
+      ...batch,
+    });
+
+    expect(waitForBurstRateLimitSlotMock).toHaveBeenCalledTimes(1);
+    expect(waitForBurstRateLimitSlotMock).toHaveBeenCalledWith(
+      "terminalRecipeSpawnBatch",
+      1_000,
+      1
+    );
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(2);
+  });
+
   it("rejects without calling ptyClient.spawn when the rate-limit slot rejects", async () => {
     waitForBurstRateLimitSlotMock.mockRejectedValueOnce(new Error("Spawn queue full"));
 

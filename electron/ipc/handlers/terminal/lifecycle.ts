@@ -51,7 +51,7 @@ function claimRecipeSpawnBatchAdmission(
 ): Promise<void> | null {
   const batchId = options.spawnBatchId;
   const batchSize = options.spawnBatchSize;
-  if (!batchId || !batchSize || batchSize > MAX_TERMINALS_PER_RECIPE) return null;
+  if (!batchId || !batchSize || batchSize > MAX_TERMINALS_PER_RECIPE_ADMISSION_BATCH) return null;
 
   const existing = recipeSpawnBatchAdmissions.get(batchId);
   if (existing) {
@@ -152,7 +152,7 @@ import type { WorkspaceClient } from "../../../services/WorkspaceClient.js";
 import { getDefaultShell } from "../../../services/pty/terminalShell.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { quoteCommandArg } from "../../../../shared/utils/shellEscape.js";
-import { MAX_TERMINALS_PER_RECIPE } from "../../../../shared/utils/recipeSanitizer.js";
+import { MAX_TERMINALS_PER_RECIPE_ADMISSION_BATCH } from "../../../../shared/utils/recipeSanitizer.js";
 import { buildCommandLaunchShell } from "./commandLaunch.js";
 
 export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): () => void {
