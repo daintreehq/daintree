@@ -1,4 +1,12 @@
-import { useRef, useState, useEffect, useLayoutEffect, useMemo, useCallback } from "react";
+import {
+  Suspense,
+  useRef,
+  useState,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useCallback,
+} from "react";
 import type React from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -53,6 +61,7 @@ import { useWorktreeActions } from "@/hooks/useWorktreeActions";
 import {
   useAriaKeyshortcuts,
   useDohertyGate,
+  useKeepMounted,
   useKeybindingDisplay,
   useShortcutHintHover,
 } from "@/hooks";
@@ -80,7 +89,7 @@ import type { ForgeRepositoryStats } from "@shared/types/ipc/forge";
 import { isAgentToolbarVisible } from "../../../shared/utils/agentPinned";
 import { projectClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
-import { ProjectSwitcherPalette } from "@/components/Project/ProjectSwitcherPalette";
+import { LazyProjectSwitcherPalette } from "@/lazyPanels";
 import { VoiceRecordingToolbarButton } from "./VoiceRecordingToolbarButton";
 import { useUIStore } from "@/store/uiStore";
 import { ForgeStatsToolbarButton, type ForgeStatsHandle } from "./ForgeStatsToolbarButton";
@@ -1378,6 +1387,7 @@ export function Toolbar({
   );
 
   const isDropdownOpen = projectSwitcher.isOpen && projectSwitcher.mode === "dropdown";
+  const shouldMountProjectSwitcherDropdown = useKeepMounted(isDropdownOpen);
   const handleDropdownClose = useCallback(() => {
     if (projectSwitcher.mode !== "dropdown") return;
     projectSwitcher.close();
@@ -1417,6 +1427,54 @@ export function Toolbar({
     if (!currentProject) return;
     void projectSwitcher.togglePinProject(currentProject.id);
   }, [currentProject, projectSwitcher]);
+
+  const projectSwitcherTrigger = (
+    <ContextMenuTrigger asChild>
+      <TooltipTrigger asChild>
+        <button
+          data-toolbar-item=""
+          className="toolbar-project-pill app-no-drag pointer-events-auto flex h-9 min-w-0 max-w-full items-center justify-center gap-2 overflow-hidden border px-3 outline-hidden focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+          data-testid="project-switcher-trigger"
+          aria-label={
+            currentProject ? `Open project switcher for ${currentProject.name}` : "Open project"
+          }
+          role={currentProject ? "combobox" : undefined}
+          aria-haspopup={currentProject ? "listbox" : undefined}
+          aria-expanded={currentProject ? isDropdownOpen : undefined}
+          onClick={() => projectSwitcher.open("dropdown")}
+          onPointerEnter={clearPillTooltipFocusSuppression}
+        >
+          <span
+            className={cn("text-base leading-none shrink-0", !currentProject && "opacity-0")}
+            aria-label={currentProject ? "Project emoji" : undefined}
+            aria-hidden={currentProject ? undefined : true}
+          >
+            {currentProject?.emoji ?? "•"}
+          </span>
+          <span
+            className={cn(
+              "min-w-0 truncate text-xs tracking-wide text-daintree-text",
+              currentProject ? "font-semibold" : "font-medium"
+            )}
+          >
+            {currentProject?.name ?? "Open project"}
+          </span>
+          <span
+            className={cn(
+              "toolbar-project-chip shrink-0 inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 font-mono tabular-nums",
+              !branchName && "opacity-0"
+            )}
+            aria-label={branchName ? `Current branch ${branchName}` : undefined}
+            aria-hidden={branchName ? undefined : true}
+          >
+            <GitBranch className="toolbar-project-chip-icon h-3 w-3 shrink-0" />
+            <span className="toolbar-project-chip-label">{truncatedBranchName ?? "main"}</span>
+          </span>
+          <ChevronsUpDown className="toolbar-project-meta h-3 w-3 shrink-0" />
+        </button>
+      </TooltipTrigger>
+    </ContextMenuTrigger>
+  );
 
   return (
     <header>
@@ -1471,104 +1529,63 @@ export function Toolbar({
             onOpenChange={currentProject ? handlePillTooltipOpenChange : undefined}
           >
             <ContextMenu>
-              <ProjectSwitcherPalette
-                mode="dropdown"
-                isOpen={isDropdownOpen}
-                query={projectSwitcher.query}
-                results={projectSwitcher.results}
-                selectedIndex={projectSwitcher.selectedIndex}
-                onQueryChange={projectSwitcher.setQuery}
-                onSelectPrevious={projectSwitcher.selectPrevious}
-                onSelectNext={projectSwitcher.selectNext}
-                onSelect={projectSwitcher.selectProject}
-                onHoverProject={projectSwitcher.onHoverProject}
-                onHoverProjectEnd={projectSwitcher.onHoverProjectEnd}
-                onClose={handlePillDropdownClose}
-                onDropdownCloseAutoFocus={suppressPillTooltipForFocusRestore}
-                onAddProject={projectSwitcher.addProject}
-                onCloneRepo={projectSwitcher.cloneRepo}
-                onStopProject={handleStopProject}
-                onCloseProject={handleCloseProject}
-                onFreeMemoryProject={handleFreeMemoryProject}
-                onLocateProject={handleLocateProject}
-                onTogglePinProject={projectSwitcher.togglePinProject}
-                onCopyPath={projectSwitcher.copyPath}
-                onOpenProjectSettings={currentProject ? handleOpenProjectSettings : undefined}
-                onSelectNewWindow={handleSelectNewWindow}
-                dropdownAlign="center"
-                removeConfirmProject={projectSwitcher.removeConfirmProject}
-                onRemoveConfirmClose={handleRemoveConfirmClose}
-                onConfirmRemove={projectSwitcher.confirmRemoveProject}
-                isRemovingProject={projectSwitcher.isRemovingProject}
-                freeMemoryConfirmProject={projectSwitcher.freeMemoryConfirmProject}
-                onFreeMemoryConfirmClose={() => projectSwitcher.setFreeMemoryConfirmProject(null)}
-                onConfirmFreeMemory={projectSwitcher.confirmFreeMemory}
-                isFreeingMemory={projectSwitcher.isFreeingMemory}
-                scratchResults={projectSwitcher.scratchResults}
-                onCreateScratch={() => void projectSwitcher.createScratch()}
-                onSelectScratch={(scratch) => void projectSwitcher.selectScratch(scratch)}
-                onRemoveScratch={(scratchId) => void projectSwitcher.removeScratchAction(scratchId)}
-                onSaveAsProject={(scratchId) => void projectSwitcher.saveAsProject(scratchId)}
-                saveAsProjectConfirm={projectSwitcher.saveAsProjectConfirm}
-                onDismissSaveAsProjectConfirm={projectSwitcher.dismissSaveAsProjectConfirm}
-                onConfirmDeleteOriginalScratch={() =>
-                  void projectSwitcher.confirmDeleteOriginalScratch()
-                }
-                isDeletingOriginalScratch={projectSwitcher.isDeletingOriginalScratch}
-              >
-                <ContextMenuTrigger asChild>
-                  <TooltipTrigger asChild>
-                    <button
-                      data-toolbar-item=""
-                      className="toolbar-project-pill app-no-drag pointer-events-auto flex h-9 min-w-0 max-w-full items-center justify-center gap-2 overflow-hidden border px-3 outline-hidden focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
-                      data-testid="project-switcher-trigger"
-                      aria-label={
-                        currentProject
-                          ? `Open project switcher for ${currentProject.name}`
-                          : "Open project"
-                      }
-                      role={currentProject ? "combobox" : undefined}
-                      aria-haspopup={currentProject ? "listbox" : undefined}
-                      aria-expanded={currentProject ? isDropdownOpen : undefined}
-                      onClick={() => projectSwitcher.open("dropdown")}
-                      onPointerEnter={clearPillTooltipFocusSuppression}
-                    >
-                      <span
-                        className={cn(
-                          "text-base leading-none shrink-0",
-                          !currentProject && "opacity-0"
-                        )}
-                        aria-label={currentProject ? "Project emoji" : undefined}
-                        aria-hidden={currentProject ? undefined : true}
-                      >
-                        {currentProject?.emoji ?? "•"}
-                      </span>
-                      <span
-                        className={cn(
-                          "min-w-0 truncate text-xs tracking-wide text-daintree-text",
-                          currentProject ? "font-semibold" : "font-medium"
-                        )}
-                      >
-                        {currentProject?.name ?? "Open project"}
-                      </span>
-                      <span
-                        className={cn(
-                          "toolbar-project-chip shrink-0 inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 font-mono tabular-nums",
-                          !branchName && "opacity-0"
-                        )}
-                        aria-label={branchName ? `Current branch ${branchName}` : undefined}
-                        aria-hidden={branchName ? undefined : true}
-                      >
-                        <GitBranch className="toolbar-project-chip-icon h-3 w-3 shrink-0" />
-                        <span className="toolbar-project-chip-label">
-                          {truncatedBranchName ?? "main"}
-                        </span>
-                      </span>
-                      <ChevronsUpDown className="toolbar-project-meta h-3 w-3 shrink-0" />
-                    </button>
-                  </TooltipTrigger>
-                </ContextMenuTrigger>
-              </ProjectSwitcherPalette>
+              {shouldMountProjectSwitcherDropdown ? (
+                <Suspense fallback={projectSwitcherTrigger}>
+                  <LazyProjectSwitcherPalette
+                    mode="dropdown"
+                    isOpen={isDropdownOpen}
+                    query={projectSwitcher.query}
+                    results={projectSwitcher.results}
+                    selectedIndex={projectSwitcher.selectedIndex}
+                    onQueryChange={projectSwitcher.setQuery}
+                    onSelectPrevious={projectSwitcher.selectPrevious}
+                    onSelectNext={projectSwitcher.selectNext}
+                    onSelect={projectSwitcher.selectProject}
+                    onHoverProject={projectSwitcher.onHoverProject}
+                    onHoverProjectEnd={projectSwitcher.onHoverProjectEnd}
+                    onClose={handlePillDropdownClose}
+                    onDropdownCloseAutoFocus={suppressPillTooltipForFocusRestore}
+                    onAddProject={projectSwitcher.addProject}
+                    onCloneRepo={projectSwitcher.cloneRepo}
+                    onStopProject={handleStopProject}
+                    onCloseProject={handleCloseProject}
+                    onFreeMemoryProject={handleFreeMemoryProject}
+                    onLocateProject={handleLocateProject}
+                    onTogglePinProject={projectSwitcher.togglePinProject}
+                    onCopyPath={projectSwitcher.copyPath}
+                    onOpenProjectSettings={currentProject ? handleOpenProjectSettings : undefined}
+                    onSelectNewWindow={handleSelectNewWindow}
+                    dropdownAlign="center"
+                    removeConfirmProject={projectSwitcher.removeConfirmProject}
+                    onRemoveConfirmClose={handleRemoveConfirmClose}
+                    onConfirmRemove={projectSwitcher.confirmRemoveProject}
+                    isRemovingProject={projectSwitcher.isRemovingProject}
+                    freeMemoryConfirmProject={projectSwitcher.freeMemoryConfirmProject}
+                    onFreeMemoryConfirmClose={() =>
+                      projectSwitcher.setFreeMemoryConfirmProject(null)
+                    }
+                    onConfirmFreeMemory={projectSwitcher.confirmFreeMemory}
+                    isFreeingMemory={projectSwitcher.isFreeingMemory}
+                    scratchResults={projectSwitcher.scratchResults}
+                    onCreateScratch={() => void projectSwitcher.createScratch()}
+                    onSelectScratch={(scratch) => void projectSwitcher.selectScratch(scratch)}
+                    onRemoveScratch={(scratchId) =>
+                      void projectSwitcher.removeScratchAction(scratchId)
+                    }
+                    onSaveAsProject={(scratchId) => void projectSwitcher.saveAsProject(scratchId)}
+                    saveAsProjectConfirm={projectSwitcher.saveAsProjectConfirm}
+                    onDismissSaveAsProjectConfirm={projectSwitcher.dismissSaveAsProjectConfirm}
+                    onConfirmDeleteOriginalScratch={() =>
+                      void projectSwitcher.confirmDeleteOriginalScratch()
+                    }
+                    isDeletingOriginalScratch={projectSwitcher.isDeletingOriginalScratch}
+                  >
+                    {projectSwitcherTrigger}
+                  </LazyProjectSwitcherPalette>
+                </Suspense>
+              ) : (
+                projectSwitcherTrigger
+              )}
               {currentProject && (
                 <ContextMenuContent
                   className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto"

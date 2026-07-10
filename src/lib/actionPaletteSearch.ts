@@ -87,18 +87,17 @@ export function extractAcronym(field: string): string {
 }
 
 export function scoreSubsequence(lowerQuery: string, field: string, lowerField: string): number {
-  let score = 0;
-  if (lowerField.includes(lowerQuery)) {
-    score += 200;
-    if (lowerField.startsWith(lowerQuery)) {
-      score += 300;
-    }
-  }
-
   const qLen = lowerQuery.length;
   const fLen = lowerField.length;
   if (qLen > fLen) {
     return 0;
+  }
+
+  let score = 0;
+  if (lowerField.startsWith(lowerQuery)) {
+    score += 500;
+  } else if (lowerField.includes(lowerQuery)) {
+    score += 200;
   }
 
   let qi = 0;
@@ -290,48 +289,108 @@ export function rankActionMatches<T extends SearchableAction>(
   mruList: readonly ActionFrecencyEntry[],
   context?: RankContext
 ): T[] {
-  const trimmed = query.trim();
-  if (!trimmed) return [];
-  const lowerQuery = trimmed.toLowerCase();
-
-  const mruScoreById = new Map<string, number>();
-  const mruRecencyById = new Map<string, number>();
-  for (const { id, score, lastAccessedAt } of mruList) {
-    mruScoreById.set(id, score);
-    mruRecencyById.set(id, lastAccessedAt);
-  }
-  const boostedCategories = getBoostedCategories(context);
-
+  const lowerQuery = normalizeRankQuery(query);
+  if (lowerQuery === undefined) return [];
   let cache = titleRankCache.get(items);
   if (!cache || !isSnapshotCurrent(cache.snapshot, items)) {
     cache = computeTitleRanks(items);
     titleRankCache.set(items, cache);
   }
-  const titleRanks = cache.ranks;
+  return rankActionMatchesWithTitleRanks(
+    lowerQuery,
+    items,
+    cache.ranks,
+    buildMruMap(mruList),
+    getBoostedCategories(context)
+  );
+}
 
-  const scored: Array<{ item: T; score: number; enabled: boolean; recency: number; rank: number }> =
-    [];
+export type ActionRanker<T extends SearchableAction> = (
+  query: string,
+  mruList: readonly ActionFrecencyEntry[],
+  context?: RankContext
+) => T[];
+
+export function createActionRanker<T extends SearchableAction>(
+  items: readonly T[]
+): ActionRanker<T> {
+  let titleRanks: number[] | undefined;
+  let cachedMruList: readonly ActionFrecencyEntry[] | undefined;
+  let cachedMruMap: ReadonlyMap<string, ActionFrecencyEntry> | undefined;
+  let cachedTerminalKind: string | undefined;
+  let cachedWorktreeId: string | undefined;
+  let cachedSettingsOpen: boolean | undefined;
+  let cachedBoostedCategories: ReadonlySet<string> | undefined;
+
+  return (query, mruList, context) => {
+    const lowerQuery = normalizeRankQuery(query);
+    if (lowerQuery === undefined) return [];
+    titleRanks ??= computeTitleRanks(items).ranks;
+    if (cachedMruList !== mruList) {
+      cachedMruList = mruList;
+      cachedMruMap = buildMruMap(mruList);
+    }
+    if (
+      cachedBoostedCategories === undefined ||
+      cachedTerminalKind !== context?.focusedTerminalKind ||
+      cachedWorktreeId !== context?.focusedWorktreeId ||
+      cachedSettingsOpen !== context?.isSettingsOpen
+    ) {
+      cachedTerminalKind = context?.focusedTerminalKind;
+      cachedWorktreeId = context?.focusedWorktreeId;
+      cachedSettingsOpen = context?.isSettingsOpen;
+      cachedBoostedCategories = getBoostedCategories(context);
+    }
+    return rankActionMatchesWithTitleRanks(
+      lowerQuery,
+      items,
+      titleRanks,
+      cachedMruMap!,
+      cachedBoostedCategories
+    );
+  };
+}
+
+function normalizeRankQuery(query: string): string | undefined {
+  const trimmed = query.trim();
+  return trimmed ? trimmed.toLowerCase() : undefined;
+}
+
+function buildMruMap(
+  mruList: readonly ActionFrecencyEntry[]
+): ReadonlyMap<string, ActionFrecencyEntry> {
+  const mruById = new Map<string, ActionFrecencyEntry>();
+  for (const entry of mruList) mruById.set(entry.id, entry);
+  return mruById;
+}
+
+function rankActionMatchesWithTitleRanks<T extends SearchableAction>(
+  lowerQuery: string,
+  items: readonly T[],
+  titleRanks: readonly number[],
+  mruById: ReadonlyMap<string, ActionFrecencyEntry>,
+  boostedCategories: ReadonlySet<string>
+): T[] {
+  const scored: Array<{ item: T; score: number; recency: number; rank: number }> = [];
   for (let i = 0; i < items.length; i++) {
     const item = items[i]!;
     const base = scoreActionLower(lowerQuery, item);
     if (base <= 0) continue;
-    const frecencyScore = mruScoreById.get(item.id);
-    const mruBonus =
-      frecencyScore !== undefined ? MRU_BONUS_CAP * Math.tanh(frecencyScore / MRU_SCORE_SCALE) : 0;
+    const mru = mruById.get(item.id);
+    const mruBonus = mru ? MRU_BONUS_CAP * Math.tanh(mru.score / MRU_SCORE_SCALE) : 0;
     const contextBonus = boostedCategories.has(item.categoryLower) ? CONTEXT_BOOST : 0;
     scored.push({
       item,
       score: base + mruBonus + contextBonus,
-      enabled: item.enabled,
       // Usage is now an integer count, so ties are common; break them by most
       // recent use so a recently-used-once action outranks a stale one.
-      recency: mruRecencyById.get(item.id) ?? 0,
+      recency: mru?.lastAccessedAt ?? 0,
       rank: titleRanks[i]!,
     });
   }
 
   scored.sort((a, b) => {
-    if (a.enabled !== b.enabled) return a.enabled ? -1 : 1;
+    if (a.item.enabled !== b.item.enabled) return a.item.enabled ? -1 : 1;
     if (a.score !== b.score) return b.score - a.score;
     if (a.recency !== b.recency) return b.recency - a.recency;
     return a.rank - b.rank;

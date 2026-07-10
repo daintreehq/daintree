@@ -142,27 +142,39 @@ function classify(proc: PsProc, rootPid: number): ProcessClass {
 }
 
 /**
- * Per-pid phys_footprint via macOS `footprint`. One invocation per pid —
- * multi-pid output interleaves sections ambiguously, and a single-process
- * report pairs unambiguously. Empty map off-macOS; missing pids are skipped.
+ * Per-pid physical footprint from macOS `top`. Its `mem` field reads the
+ * kernel footprint ledger without the process suspension and full VM-map walk
+ * performed by `footprint`, which can destabilize a multi-gigabyte Electron
+ * process tree and materially perturb the value being measured.
  */
 function measureFootprintByPid(pids: number[]): Map<number, number> {
   const result = new Map<number, number>();
   if (process.platform !== "darwin" || pids.length === 0) return result;
-  for (const pid of pids) {
-    try {
-      const out = execFileSync("footprint", ["-p", String(pid)], {
-        encoding: "utf8",
-        timeout: 10_000,
-      });
-      const phys = out.match(/phys_footprint:\s+([\d.]+)\s+(KB|MB|GB)/);
-      if (!phys) continue;
-      const value = Number(phys[1]);
-      const kb = phys[2] === "GB" ? value * 1024 * 1024 : phys[2] === "MB" ? value * 1024 : value;
-      result.set(pid, Math.round(kb));
-    } catch {
-      // Process may have exited between the ps snapshot and this call.
+  const uniquePids = [...new Set(pids)];
+  const args = [
+    "-l",
+    "1",
+    "-n",
+    String(uniquePids.length),
+    "-F",
+    "-R",
+    ...uniquePids.flatMap((pid) => ["-pid", String(pid)]),
+    "-stats",
+    "pid,mem",
+  ];
+  try {
+    const out = execFileSync("top", args, {
+      encoding: "utf8",
+      timeout: 5_000,
+    });
+    const row = /^(\d+)\s+([\d.]+)([KMG])\s*$/gm;
+    for (const match of out.matchAll(row)) {
+      const value = Number(match[2]);
+      const kb = match[3] === "G" ? value * 1024 * 1024 : match[3] === "M" ? value * 1024 : value;
+      result.set(Number(match[1]), Math.round(kb));
     }
+  } catch {
+    // A process may exit between the ps snapshot and the top sample.
   }
   return result;
 }
@@ -206,7 +218,9 @@ async function takeSample(ctx: AppContext): Promise<MemorySample> {
   const treeTotalRssKb = tree.reduce((acc, p) => acc + p.rssKb, 0);
   const shellRssKb = rssByClass.shell;
 
-  const footprintByPid = measureFootprintByPid(tree.map((p) => p.pid));
+  const footprintByPid = measureFootprintByPid(
+    tree.filter((proc) => classify(proc, rootPid) !== "shell").map((proc) => proc.pid)
+  );
   const footprintByClass: Record<ProcessClass, number> = {
     main: 0,
     renderer: 0,
@@ -500,14 +514,16 @@ perfDescribe("Resilience: kitchen-sink memory benchmark", () => {
               `awk 'BEGIN{for(i=0;i<${SCROLLBACK_LINES};i++)printf("memline %06d ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 %06d\\n",i,i)}'; printf 'MEMBENCH_%s\\n' DONE`
             );
             await waitForTerminalText(panel, "MEMBENCH_DONE", 60_000);
-            // Endless fixed-rate emitter (~4 lines/s) until the Ctrl-C in the
-            // stop phase. The %06d output can't be matched by the echo line.
+            // One persistent fixed-rate emitter (~4 lines/s) until the Ctrl-C
+            // in the stop phase. A shell `sleep 0.25` loop would spawn thousands
+            // of transient processes per lifecycle and contaminate the process
+            // and memory signals this benchmark is meant to observe.
             await runTerminalCommand(
               page,
               panel,
-              `i=0; while :; do printf 'bgstream %06d abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ\\n' $i; i=$((i+1)); sleep 0.25; done`
+              `node -e 'let i=0;setInterval(()=>console.log(\`bgstream \${String(i++).padStart(6,"0")} abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ\`),250)'`
             );
-            await waitForTerminalText(panel, "bgstream 0000", 15_000);
+            await waitForTerminalText(panel, "bgstream 000000", 15_000);
             seededPanels.push(panelId);
           }
           expect(seededPanels.length).toBeGreaterThanOrEqual(TERMINALS_PER_PROJECT);

@@ -1,3 +1,4 @@
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const ipcHandlers = vi.hoisted(() => new Map<string, unknown>());
@@ -54,6 +55,9 @@ function invoke(payload: { cwd: string; filePath: string }): Promise<DiffMediaFi
 
 const WORKING_BUFFER = Buffer.from("working-image-bytes");
 const HEAD_BUFFER = Buffer.from("head-image-bytes");
+const ROOT = path.parse(process.cwd()).root;
+const REPO_ROOT = path.join(ROOT, "repo");
+const OUTSIDE_FILE = path.join(ROOT, "elsewhere", "img.png");
 
 describe("diffMedia readFileVersions", () => {
   let cleanup: () => void;
@@ -84,20 +88,22 @@ describe("diffMedia readFileVersions", () => {
   });
 
   it("rejects absolute filePath without touching git or the filesystem", async () => {
-    await expect(invoke({ cwd: "/repo", filePath: "/etc/passwd.png" })).rejects.toThrow(/relative/);
+    await expect(
+      invoke({ cwd: REPO_ROOT, filePath: path.join(ROOT, "etc", "passwd.png") })
+    ).rejects.toThrow(/relative/);
     expect(getGitServiceMock).not.toHaveBeenCalled();
     expect(fsMock.open).not.toHaveBeenCalled();
   });
 
   it("rejects .. traversal segments", async () => {
-    await expect(invoke({ cwd: "/repo", filePath: "../outside.png" })).rejects.toThrow(
+    await expect(invoke({ cwd: REPO_ROOT, filePath: "../outside.png" })).rejects.toThrow(
       /traversal/i
     );
     expect(getGitServiceMock).not.toHaveBeenCalled();
   });
 
   it("rejects traversal that only appears after normalization", async () => {
-    await expect(invoke({ cwd: "/repo", filePath: "assets/../../outside.png" })).rejects.toThrow(
+    await expect(invoke({ cwd: REPO_ROOT, filePath: "assets/../../outside.png" })).rejects.toThrow(
       /traversal/i
     );
   });
@@ -105,7 +111,7 @@ describe("diffMedia readFileVersions", () => {
   it("rejects null bytes in filePath", async () => {
     // Caught at the zod boundary (opValidated), whose ValidationError message
     // is deliberately sanitized — no schema details reach the renderer.
-    await expect(invoke({ cwd: "/repo", filePath: "img\0.png" })).rejects.toThrow(
+    await expect(invoke({ cwd: REPO_ROOT, filePath: "img\0.png" })).rejects.toThrow(
       /validation failed/i
     );
   });
@@ -115,7 +121,7 @@ describe("diffMedia readFileVersions", () => {
   });
 
   it("returns UNSUPPORTED for both sides on a non-image extension without I/O", async () => {
-    const result = await invoke({ cwd: "/repo", filePath: "notes.txt" });
+    const result = await invoke({ cwd: REPO_ROOT, filePath: "notes.txt" });
     expect(result.head).toEqual({ ok: false, error: "UNSUPPORTED" });
     expect(result.working).toEqual({ ok: false, error: "UNSUPPORTED" });
     expect(getGitServiceMock).not.toHaveBeenCalled();
@@ -125,7 +131,7 @@ describe("diffMedia readFileVersions", () => {
   it("maps a file missing at HEAD to NOT_FOUND while the working side loads", async () => {
     readFileAtHeadMock.mockResolvedValue({ ok: false, reason: "NOT_FOUND" });
 
-    const result = await invoke({ cwd: "/repo", filePath: "img.png" });
+    const result = await invoke({ cwd: REPO_ROOT, filePath: "img.png" });
 
     expect(result.head).toEqual({ ok: false, error: "NOT_FOUND" });
     expect(result.working).toEqual({
@@ -137,11 +143,11 @@ describe("diffMedia readFileVersions", () => {
 
   it("maps a missing working-tree file to NOT_FOUND", async () => {
     fsMock.realpath.mockImplementation(async (p: string) => {
-      if (p === "/repo") return "/repo";
+      if (p === REPO_ROOT) return REPO_ROOT;
       throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
     });
 
-    const result = await invoke({ cwd: "/repo", filePath: "img.png" });
+    const result = await invoke({ cwd: REPO_ROOT, filePath: "img.png" });
 
     expect(result.working).toEqual({ ok: false, error: "NOT_FOUND" });
     expect(result.head.ok).toBe(true);
@@ -150,7 +156,7 @@ describe("diffMedia readFileVersions", () => {
   it("caps the working side at the size limit", async () => {
     fsMock.stat.mockResolvedValue({ size: 9 * 1024 * 1024, isFile: () => true });
 
-    const result = await invoke({ cwd: "/repo", filePath: "img.png" });
+    const result = await invoke({ cwd: REPO_ROOT, filePath: "img.png" });
 
     expect(result.working).toEqual({ ok: false, error: "TOO_LARGE" });
     expect(fsMock.open).not.toHaveBeenCalled();
@@ -160,7 +166,7 @@ describe("diffMedia readFileVersions", () => {
   it("passes the HEAD-side TOO_LARGE result through", async () => {
     readFileAtHeadMock.mockResolvedValue({ ok: false, reason: "TOO_LARGE" });
 
-    const result = await invoke({ cwd: "/repo", filePath: "img.png" });
+    const result = await invoke({ cwd: REPO_ROOT, filePath: "img.png" });
 
     expect(result.head).toEqual({ ok: false, error: "TOO_LARGE" });
   });
@@ -169,7 +175,7 @@ describe("diffMedia readFileVersions", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     readFileAtHeadMock.mockRejectedValue(new Error("git exploded"));
 
-    const result = await invoke({ cwd: "/repo", filePath: "img.png" });
+    const result = await invoke({ cwd: REPO_ROOT, filePath: "img.png" });
 
     expect(result.head).toEqual({ ok: false, error: "ERROR" });
     expect(result.working.ok).toBe(true);
@@ -177,17 +183,17 @@ describe("diffMedia readFileVersions", () => {
 
   it("returns ERROR for a working-tree file that escapes the root via symlink", async () => {
     fsMock.realpath.mockImplementation(async (p: string) =>
-      p === "/repo" ? "/repo" : "/elsewhere/img.png"
+      p === REPO_ROOT ? REPO_ROOT : OUTSIDE_FILE
     );
 
-    const result = await invoke({ cwd: "/repo", filePath: "img.png" });
+    const result = await invoke({ cwd: REPO_ROOT, filePath: "img.png" });
 
     expect(result.working).toEqual({ ok: false, error: "ERROR" });
     expect(fsMock.open).not.toHaveBeenCalled();
   });
 
   it("encodes both sides with the extension's mime type and real byte sizes", async () => {
-    const result = await invoke({ cwd: "/repo", filePath: "logo.svg" });
+    const result = await invoke({ cwd: REPO_ROOT, filePath: "logo.svg" });
 
     expect(result.head).toEqual({
       ok: true,
@@ -200,7 +206,7 @@ describe("diffMedia readFileVersions", () => {
       byteSize: WORKING_BUFFER.byteLength,
     });
     expect(fsMock.open).toHaveBeenCalledWith(
-      "/repo/logo.svg",
+      path.join(REPO_ROOT, "logo.svg"),
       fsMock.constants.O_RDONLY | fsMock.constants.O_NOFOLLOW
     );
   });

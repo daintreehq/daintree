@@ -9,12 +9,10 @@ import { mean, percentile, round, stdDev } from "./lib/stats";
 
 // Direct-spawn launch benchmark with interleaved A/B support.
 //
-// Unlike perf cold-start (which drives the binary through Playwright's
-// electron.launch), this harness spawns the packaged executable directly and
-// reads the app's own NDJSON perf marks (DAINTREE_PERF_CAPTURE). No debugger
-// is attached, so the measured launch matches what a user experiences, and
-// Playwright's packaged-binary CDP-handshake flake (see the executablePath
-// comment in e2e/helpers/launch.ts) can't poison runs.
+// Like perf cold-start, this harness spawns the packaged executable directly
+// and reads the app's own NDJSON perf marks (DAINTREE_PERF_CAPTURE). Its extra
+// responsibility is interleaving two binaries so machine-state drift lands on
+// both variants equally.
 //
 // A/B mode alternates launches between two binaries (A, B, A, B, ...) so slow
 // machine-state drift (thermals, page cache, background load) lands on both

@@ -95,7 +95,7 @@ export const startupScenarios: PerfScenario[] = [
     id: "PERF-004",
     name: "Real Cold Start - Packaged Binary",
     description:
-      "Launch the packaged Electron binary via Playwright, capture APP_BOOT_START to RENDERER_FIRST_INTERACTIVE via NDJSON pipeline.",
+      "Launch the packaged Electron binary directly and capture APP_BOOT_START to RENDERER_FIRST_INTERACTIVE via NDJSON pipeline.",
     tier: "heavy",
     modes: ["nightly"],
     iterations: { nightly: 30 },

@@ -3,8 +3,9 @@ import type { PerfScenario } from "../types";
 import { createRng } from "../lib/workloads";
 import { percentile } from "../lib/stats";
 import {
-  rankActionMatches,
+  createActionRanker,
   extractAcronym,
+  type ActionRanker,
   type SearchableAction,
   type RankContext,
 } from "../../../src/lib/actionPaletteSearch";
@@ -159,7 +160,7 @@ interface FilterStreamResult {
 
 // Type each query one keystroke at a time, timing every individual re-rank.
 function runFilterStream(
-  catalog: SearchableAction[],
+  rank: ActionRanker<SearchableAction>,
   mru: ActionFrecencyEntry[]
 ): FilterStreamResult {
   const perKeystroke: number[] = [];
@@ -169,7 +170,7 @@ function runFilterStream(
     for (let end = 1; end <= query.length; end += 1) {
       const prefix = query.slice(0, end);
       const start = performance.now();
-      const matches = rankActionMatches(prefix, catalog, mru, RANK_CONTEXT);
+      const matches = rank(prefix, mru, RANK_CONTEXT);
       perKeystroke.push(performance.now() - start);
       totalMatches += matches.length;
     }
@@ -201,8 +202,9 @@ export const paletteFilterScenarios: PerfScenario[] = [
       // so build them outside the timed bracket — the gate measures re-ranking.
       const catalog = buildCatalog(380);
       const mru = buildMruList(catalog);
+      const rank = createActionRanker(catalog);
       const start = performance.now();
-      const result = runFilterStream(catalog, mru);
+      const result = runFilterStream(rank, mru);
       const durationMs = performance.now() - start;
 
       return {
@@ -235,17 +237,21 @@ export const paletteFilterScenarios: PerfScenario[] = [
       // rankActionMatches calls, not O(n) fixture construction.
       const fixtures = sizes.map((size) => {
         const catalog = buildCatalog(size);
-        return { size, catalog, mru: buildMruList(catalog) };
+        return {
+          size,
+          rank: createActionRanker(catalog),
+          mru: buildMruList(catalog),
+        };
       });
       const worstBySize = new Map<number, number>();
       let checksum = 0;
 
       const start = performance.now();
-      for (const { size, catalog, mru } of fixtures) {
+      for (const { size, rank, mru } of fixtures) {
         const samples: number[] = [];
         for (let r = 0; r < REPEATS; r += 1) {
           const t0 = performance.now();
-          const matches = rankActionMatches("e", catalog, mru, RANK_CONTEXT);
+          const matches = rank("e", mru, RANK_CONTEXT);
           samples.push(performance.now() - t0);
           checksum += matches.length;
         }
