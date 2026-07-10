@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import type { WorktreeState } from "@/types";
 import type { WorktreeChanges } from "@shared/types/git";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -10,6 +10,23 @@ import { WorktreeDetails, type WorktreeDetailsProps } from "../WorktreeDetails";
 
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: vi.fn() },
+}));
+
+const { capturedModalProps } = vi.hoisted(() => ({
+  capturedModalProps: {
+    isOpen: false as boolean,
+    filePath: "" as string,
+    restoreFocusTo: undefined as unknown,
+  },
+}));
+
+vi.mock("../FileDiffModal", () => ({
+  FileDiffModal: (props: { isOpen: boolean; filePath: string; restoreFocusTo?: unknown }) => {
+    capturedModalProps.isOpen = props.isOpen;
+    capturedModalProps.filePath = props.filePath;
+    capturedModalProps.restoreFocusTo = props.restoreFocusTo;
+    return null;
+  },
 }));
 
 const noop = () => {};
@@ -96,5 +113,45 @@ describe("WorktreeDetails last-active line", () => {
     const { container } = renderDetails({ worktree });
     expect(screen.getByText("Last active")).toBeDefined();
     expect(container.querySelector("img")).toBeNull();
+  });
+});
+
+describe("WorktreeDetails — open changes button (#11041)", () => {
+  const worktreeWithChanges: WorktreeState = {
+    ...baseWorktree,
+    worktreeChanges: {
+      ...baseWorktree.worktreeChanges,
+      changedFileCount: 2,
+      changes: [
+        { path: "a.ts", status: "modified", insertions: 5, deletions: 1 },
+        { path: "b.ts", status: "added", insertions: 2, deletions: 0 },
+      ],
+      rootPath: "/tmp/wt",
+    } as WorktreeChanges,
+  };
+
+  beforeEach(() => {
+    capturedModalProps.isOpen = false;
+    capturedModalProps.filePath = "";
+    capturedModalProps.restoreFocusTo = undefined;
+  });
+
+  it("shows the button when there are changes and opens the first file's diff from it", () => {
+    renderDetails({ worktree: worktreeWithChanges, hasChanges: true });
+    const button = screen.getByLabelText("Open changes");
+
+    fireEvent.click(button);
+
+    expect(capturedModalProps.isOpen).toBe(true);
+    // a.ts has the higher churn (6 vs 2), so it sorts to the first slot.
+    expect(capturedModalProps.filePath).toBe("a.ts");
+    // Focus restores to the header button that opened the modal, not a row.
+    const restore = capturedModalProps.restoreFocusTo as { current: HTMLElement | null };
+    expect(restore.current).toBe(button);
+  });
+
+  it("hides the button when the change list is empty", () => {
+    renderDetails({ worktree: baseWorktree, hasChanges: true });
+    expect(screen.queryByLabelText("Open changes")).toBeNull();
   });
 });

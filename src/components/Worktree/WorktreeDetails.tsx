@@ -1,13 +1,13 @@
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 import type { WorktreeState } from "../../types";
 import type { ErrorRecord, RetryAction } from "../../store/errorStore";
 import { ErrorBanner } from "../Errors/ErrorBanner";
-import { FileChangeList } from "./FileChangeList";
+import { FileChangeList, type FileChangeListHandle } from "./FileChangeList";
 import { LiveTimeAgo } from "./LiveTimeAgo";
 import { CommitAuthorAvatar } from "./WorktreeCard/CommitAuthorAvatar";
 import { CommitInfoTooltip } from "./WorktreeCard/CommitInfoTooltip";
 import { cn } from "../../lib/utils";
-import { GitCommit, Copy, Check, ExternalLink } from "lucide-react";
+import { GitCommit, Copy, Check, ExternalLink, FileDiff } from "lucide-react";
 import { parseNoteWithLinks, formatPath, type TextSegment } from "../../utils/textParsing";
 import { actionService } from "@/services/ActionService";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
@@ -57,6 +57,7 @@ export function WorktreeDetails({
   const displayPath = formatPath(worktree.path, homeDir);
   const rawLastCommitMsg = worktree.worktreeChanges?.lastCommitMessage;
   const { copied: pathCopied, copy: copyPath } = useCopyWithFeedback();
+  const fileChangeListRef = useRef<FileChangeListHandle>(null);
 
   // "Last active" footer line. Prefers the worktree's activity timestamp, but
   // falls back to the last-commit time so a worktree with no in-session
@@ -187,8 +188,26 @@ export function WorktreeDetails({
               shape on themes where that fill lands close to the panel's. */}
           {hasChanges && worktree.worktreeChanges && (
             <div className="space-y-2.5">
-              <div className="px-2 text-xs font-medium text-text-secondary">Changed Files</div>
+              <div className="flex items-center justify-between gap-2 px-2">
+                <span className="text-xs font-medium text-text-secondary">Changed Files</span>
+                {worktree.worktreeChanges.changes.length > 0 && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={(e) => fileChangeListRef.current?.openFirstFile(e.currentTarget)}
+                        className="shrink-0 rounded p-1 text-text-muted transition-colors hover:bg-overlay-soft hover:text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                        aria-label="Open changes"
+                      >
+                        <FileDiff className="w-3.5 h-3.5" aria-hidden="true" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">Open changes</TooltipContent>
+                  </Tooltip>
+                )}
+              </div>
               <FileChangeList
+                ref={fileChangeListRef}
                 changes={worktree.worktreeChanges.changes}
                 rootPath={worktree.worktreeChanges.rootPath}
                 maxVisible={MAX_VISIBLE_FILES}

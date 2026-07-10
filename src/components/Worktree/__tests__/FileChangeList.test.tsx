@@ -3,6 +3,7 @@
  */
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { act, render, cleanup, fireEvent } from "@testing-library/react";
+import { createRef } from "react";
 import type { FileChangeDetail } from "../../../types";
 
 const { capturedModalProps } = vi.hoisted(() => ({
@@ -45,7 +46,7 @@ vi.mock("@/components/ui/tooltip", () => ({
   TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
-import { FileChangeList } from "../FileChangeList";
+import { FileChangeList, type FileChangeListHandle } from "../FileChangeList";
 
 const ROOT = "/repo";
 
@@ -396,5 +397,61 @@ describe("FileChangeList — focus restore & file stepping (#9217)", () => {
     act(() => capturedModalProps.onClose!());
     expect(capturedModalProps.isOpen).toBe(false);
     expect(capturedModalProps.currentFileIndex).toBeUndefined();
+  });
+});
+
+describe("FileChangeList — openFirstFile imperative handle (#11041)", () => {
+  beforeEach(() => {
+    capturedModalProps.isOpen = false;
+    capturedModalProps.filePath = "";
+    capturedModalProps.restoreFocusTo = undefined;
+    capturedModalProps.currentFileIndex = undefined;
+    capturedModalProps.totalFileCount = undefined;
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it.each([false, true])(
+    "opens the highest-churn file first and seeds the given trigger (groupByFolder=%s)",
+    (groupByFolder) => {
+      const ref = createRef<FileChangeListHandle>();
+      // Raw order lists b.ts first, but a.ts has more churn, so it sorts to index 0.
+      const changes = [
+        { ...file("b.ts"), insertions: 1 },
+        { ...file("a.ts"), insertions: 100 },
+      ];
+      render(
+        <FileChangeList ref={ref} changes={changes} rootPath={ROOT} groupByFolder={groupByFolder} />
+      );
+
+      const trigger = document.createElement("button");
+      act(() => ref.current!.openFirstFile(trigger));
+
+      expect(capturedModalProps.isOpen).toBe(true);
+      expect(capturedModalProps.filePath).toBe("a.ts");
+      expect(capturedModalProps.currentFileIndex).toBe(0);
+      const restore = capturedModalProps.restoreFocusTo as { current: HTMLElement | null };
+      expect(restore.current).toBe(trigger);
+    }
+  );
+
+  it("keeps the handle stable across an empty→populated transition and no-ops while empty", () => {
+    const ref = createRef<FileChangeListHandle>();
+    const { rerender } = render(<FileChangeList ref={ref} changes={[]} rootPath={ROOT} />);
+
+    // The hook is registered above the empty-list early return, so the handle
+    // exists even though nothing rendered; calling it is a safe no-op.
+    expect(ref.current).not.toBeNull();
+    act(() => ref.current!.openFirstFile(document.createElement("button")));
+    expect(capturedModalProps.isOpen).toBe(false);
+
+    act(() => {
+      rerender(<FileChangeList ref={ref} changes={[file("a.ts")]} rootPath={ROOT} />);
+    });
+    act(() => ref.current!.openFirstFile(document.createElement("button")));
+    expect(capturedModalProps.isOpen).toBe(true);
+    expect(capturedModalProps.filePath).toBe("a.ts");
   });
 });
