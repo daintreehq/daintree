@@ -144,9 +144,44 @@ export const config: AgentConfig = {
       discovery: { method: "static", catalog: "builtin-slash-commands" },
     },
     {
+      // Codex Plugins, invoked as `$name` (e.g. `$github`). Discovered from the
+      // local registry: enabled `[plugins."name@market"]` tables in
+      // `config.toml` intersected with the manifests under `plugins/cache/*`.
+      // Lower precedence than `skills` so a user's own `$name` skill wins a
+      // label collision. Plugin-BUNDLED skills (`$github:gh-fix-ci`) and Apps
+      // are out of scope: bundled skills are a separate namespace-qualified
+      // surface, and Apps are resolved server-side with no local manifest.
+      id: "plugins",
+      trigger: "$",
+      sourcePrecedence: 10,
+      discovery: {
+        method: "registry",
+        parser: "codex-plugin-registry",
+        derive: {
+          labelPrefix: "$",
+          kind: "plugin",
+          idNamespace: "plugin",
+          fallbackDescription: "Plugin",
+        },
+        locations: [
+          {
+            id: "user:codex-plugins",
+            scope: "user",
+            base: {
+              type: "env",
+              name: "CODEX_HOME",
+              fallback: { type: "homeRelative", segments: [".codex"] },
+            },
+            segments: [],
+            locationPrecedence: 0,
+          },
+        ],
+      },
+    },
+    {
       // Codex Skills, invoked as `$name`. Custom prompts (`~/.codex/prompts`,
       // `/prompts:`) and `.codex/commands` were retired — neither exists in
-      // current Codex. Apps/Plugins are deferred pending manifest verification.
+      // current Codex.
       id: "skills",
       trigger: "$",
       sourcePrecedence: 20,

@@ -297,4 +297,88 @@ Body.
       await fsp.rm(projectRoot, { recursive: true, force: true });
     }
   });
+
+  it("surfaces enabled Codex plugins as $-kind:plugin, and a user skill wins a label collision", async () => {
+    const homeRoot = await makeTempDir();
+    const projectRoot = await makeTempDir();
+    const prev = overrideHome(homeRoot);
+    const engine = new CompletionDiscoveryEngine();
+    const codexHome = path.join(homeRoot, ".codex");
+
+    try {
+      await fsp.mkdir(path.join(projectRoot, ".git"));
+      await writeFile(
+        path.join(codexHome, "config.toml"),
+        [
+          `[plugins."github@openai-curated"]`,
+          `enabled = true`,
+          ``,
+          `[plugins."gmail@openai-curated"]`,
+          `enabled = true`,
+        ].join("\n")
+      );
+      const manifest = (name: string, short: string) =>
+        JSON.stringify({
+          name,
+          description: `${name} top`,
+          interface: { shortDescription: short },
+        });
+      await writeFile(
+        path.join(
+          codexHome,
+          "plugins",
+          "cache",
+          "openai-curated",
+          "github",
+          "v1",
+          ".codex-plugin",
+          "plugin.json"
+        ),
+        manifest("github", "Triage PRs and CI")
+      );
+      await writeFile(
+        path.join(
+          codexHome,
+          "plugins",
+          "cache",
+          "openai-curated",
+          "gmail",
+          "v1",
+          ".codex-plugin",
+          "plugin.json"
+        ),
+        manifest("gmail", "Read and manage Gmail")
+      );
+      // A user skill named `github` collides with the plugin's `$github` token.
+      await writeFile(
+        path.join(codexHome, "skills", "github", "SKILL.md"),
+        `---
+description: "user github skill"
+---
+
+Body.
+`
+      );
+
+      const codex = await engine.list("codex", projectRoot);
+
+      const gmail = codex.find((c) => c.label === "$gmail");
+      expect(gmail).toMatchObject({
+        kind: "plugin",
+        trigger: "$",
+        scope: "user",
+        description: "Read and manage Gmail",
+      });
+
+      // Dedupe by trigger+label: plugin sourcePrecedence (10) < skill (20), so
+      // the user's own skill wins the `$github` label.
+      const github = codex.filter((c) => c.label === "$github");
+      expect(github).toHaveLength(1);
+      expect(github[0]).toMatchObject({ kind: "skill", description: "user github skill" });
+    } finally {
+      restoreHome(prev);
+      await fsp.rm(homeRoot, { recursive: true, force: true });
+      await fsp.rm(projectRoot, { recursive: true, force: true });
+    }
+  });
 });
