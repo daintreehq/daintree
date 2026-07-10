@@ -22,11 +22,13 @@ export interface ChangeObservation {
 }
 
 export interface VisibleContentSnapshot {
-  text: string;
-  units: readonly string[];
+  text?: string;
+  units: readonly VisibleContentUnit[];
   hash: number;
   length: number;
 }
+
+export type VisibleContentUnit = string | number;
 
 export interface VisibleContentDelta {
   changed: boolean;
@@ -177,17 +179,22 @@ export function measureVisibleContentDelta(
   previous: VisibleContentSnapshot | undefined,
   current: VisibleContentSnapshot
 ): VisibleContentDelta {
+  const previousUnits = previous?.units;
+  const currentUnits = current.units;
   if (
     !previous ||
+    previous === current ||
     (previous.hash === current.hash &&
       previous.length === current.length &&
-      previous.text === current.text)
+      (previousUnits && currentUnits
+        ? unitsEqual(previousUnits, currentUnits)
+        : previous.text === current.text))
   ) {
     return { changed: false, changedChars: 0 };
   }
 
-  const previousChars = previous.units ?? Array.from(previous.text);
-  const currentChars = current.units ?? Array.from(current.text);
+  const previousChars = previousUnits ?? Array.from(previous.text ?? "");
+  const currentChars = currentUnits ?? Array.from(current.text ?? "");
   if (isSuffixOf(previousChars, currentChars) || isSuffixOf(currentChars, previousChars)) {
     return { changed: false, changedChars: 0 };
   }
@@ -217,7 +224,18 @@ export function measureVisibleContentDelta(
   return { changed: changedChars > 0, changedChars };
 }
 
-function isSuffixOf(needle: readonly string[], haystack: readonly string[]): boolean {
+function unitsEqual(a: readonly VisibleContentUnit[], b: readonly VisibleContentUnit[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let index = 0; index < a.length; index += 1) {
+    if (a[index] !== b[index]) return false;
+  }
+  return true;
+}
+
+function isSuffixOf(
+  needle: readonly VisibleContentUnit[],
+  haystack: readonly VisibleContentUnit[]
+): boolean {
   if (needle.length > haystack.length) {
     return false;
   }

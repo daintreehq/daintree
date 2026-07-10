@@ -59,6 +59,7 @@ const SIMPLE_COMPLETION_MIN_QUIET_MS = 1500;
 // snapshot — long enough for xterm's async parse of the last chunk (and any
 // resize/focus-triggered redraw) to land before a frame is latched.
 const SIMPLE_SNAPSHOT_SETTLE_MS = 1000;
+const SIMPLE_SNAPSHOT_MIN_INTERVAL_MS = 250;
 // Idle-agent polling backoff (#10906). Once a simple-output agent has settled
 // into idle and stayed silent this long, drop the polling cadence to
 // FSM_IDLE_BACKOFF_POLLING_INTERVAL_MS so a prompt sitting idle for an hour
@@ -270,10 +271,13 @@ export class ActivityMonitor {
   private readonly skipInitialStateEmit: boolean;
   private readonly simpleOutputState: boolean;
   private readonly simpleOutputTemperature = new AgentActivityTemperature();
-  // Memoized captureSimpleOutputSnapshot result, valid only while the quiet
-  // clock it was keyed on (`simpleSnapshotCacheKey`) is unchanged.
+  // Memoized captureSimpleOutputSnapshot result. Streaming agents cap full
+  // viewport extraction at 4Hz; quiet agents reuse it until new data arrives.
   private simpleSnapshotCache?: VisibleContentSnapshot;
   private simpleSnapshotCacheKey = 0;
+  private simpleSnapshotCapturedAt = 0;
+  private simpleSnapshotCapturedByteAt = 0;
+  private simpleSnapshotLastByteAt = 0;
   private simpleSnapshotSettleFrom = 0;
 
   // Polling interval configuration.
@@ -587,6 +591,7 @@ export class ActivityMonitor {
         return;
       }
       this.lastDataTimestamp = now;
+      this.simpleSnapshotLastByteAt = now;
       // Wake-on-data: any output means the agent is live again — restore the
       // full polling cadence before the settle timer fires or while backed off.
       this.cancelFsmIdleBackoff(true);
@@ -868,20 +873,25 @@ export class ActivityMonitor {
     // settle window — extracting and hashing the full viewport 20x/sec for an
     // idle terminal is pure waste. New data moves `lastDataTimestamp`; resize,
     // focus, agent swap, and external promotion invalidate explicitly.
+    const now = Date.now();
     const quietSince = Math.max(this.lastDataTimestamp, this.simpleSnapshotSettleFrom);
-    const settled = Date.now() - quietSince >= SIMPLE_SNAPSHOT_SETTLE_MS;
+    const settled = now - quietSince >= SIMPLE_SNAPSHOT_SETTLE_MS;
     if (
-      settled &&
       this.simpleSnapshotCache !== undefined &&
-      this.simpleSnapshotCacheKey === quietSince
+      ((settled && this.simpleSnapshotCacheKey === quietSince) ||
+        (!settled &&
+          this.simpleSnapshotLastByteAt !== this.simpleSnapshotCapturedByteAt &&
+          now - this.simpleSnapshotCapturedAt < SIMPLE_SNAPSHOT_MIN_INTERVAL_MS))
     ) {
       return this.simpleSnapshotCache;
     }
 
     const snapshot = this.computeSimpleOutputSnapshot();
-    if (settled && snapshot !== undefined) {
+    if (snapshot !== undefined) {
       this.simpleSnapshotCache = snapshot;
       this.simpleSnapshotCacheKey = quietSince;
+      this.simpleSnapshotCapturedAt = now;
+      this.simpleSnapshotCapturedByteAt = this.simpleSnapshotLastByteAt;
     } else {
       this.simpleSnapshotCache = undefined;
     }
@@ -905,6 +915,8 @@ export class ActivityMonitor {
   // dropping the cached frame.
   private invalidateSimpleSnapshotCache(): void {
     this.simpleSnapshotCache = undefined;
+    this.simpleSnapshotCapturedAt = 0;
+    this.simpleSnapshotCapturedByteAt = 0;
     this.simpleSnapshotSettleFrom = Date.now();
   }
 
@@ -1008,6 +1020,9 @@ export class ActivityMonitor {
     this.simpleOutputTemperature.reset();
     this.simpleSnapshotCache = undefined;
     this.simpleSnapshotCacheKey = 0;
+    this.simpleSnapshotCapturedAt = 0;
+    this.simpleSnapshotCapturedByteAt = 0;
+    this.simpleSnapshotLastByteAt = 0;
     this.simpleSnapshotSettleFrom = 0;
     this.lineRewriteDetector.reset();
     this.synchronizedFrameAnalyzer.reset();

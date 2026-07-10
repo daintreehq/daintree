@@ -3,6 +3,7 @@ import {
   createVisibleContentSnapshot,
   isCollapsibleFillText,
   type VisibleContentSnapshot,
+  type VisibleContentUnit,
 } from "../SustainedChangeTracker.js";
 
 type CursorBufferLine = {
@@ -132,6 +133,27 @@ function isBlankCellText(chars: string): boolean {
   return /^\s*$/u.test(chars);
 }
 
+function isCollapsibleFillCode(code: number): boolean {
+  return (
+    code === 0x2d ||
+    code === 0x5f ||
+    code === 0x3d ||
+    code === 0x2e ||
+    code === 0x00b7 ||
+    code === 0x2022 ||
+    code === 0x2219 ||
+    code === 0x25cf ||
+    code === 0x2500 ||
+    code === 0x2501 ||
+    code === 0x2550 ||
+    code === 0x254c ||
+    code === 0x254d ||
+    code === 0x23af ||
+    code === 0x2581 ||
+    code === 0x2594
+  );
+}
+
 function rawBufferLine(line: CursorBufferLine, cols: number): RawBufferLine | undefined {
   const raw = line._line;
   return raw?._data instanceof Uint32Array &&
@@ -156,13 +178,10 @@ function rawBufferLine(line: CursorBufferLine, cols: number): RawBufferLine | un
  * object, a NormalizedVisibleUnit object, and a 6-segment template-string key
  * per visible cell, plus a second full pass to hash them):
  *
- *   * default-styled single-width cells — the overwhelming majority of real
- *     terminal content — use their raw chars as the unit key. Styled or wide
- *     cells keep the full 6-segment key. The two forms cannot collide (a
- *     full key always carries 5 "|" separators and is longer than any 1–2
- *     codepoint chars value), and within each form key equality is exactly
- *     the old scheme's, so unit-level deltas (changed/changedChars) are
- *     unchanged.
+ *   * default-styled single-width raw cells — the overwhelming majority of
+ *     real terminal content — use their numeric code point as the unit key,
+ *     avoiding one string allocation per occupied cell. Combined cells keep
+ *     a string key; styled and wide cells keep the full 6-segment key.
  *   * the FNV-1a hash is accumulated while units are built instead of in a
  *     second pass over every key char.
  *   * the inverse attribute (masked out of keys by design — see
@@ -183,9 +202,9 @@ function buildViewportUnitsSnapshot(
   const cols = terminal.cols;
   const reusableCell = buffer.getNullCell();
 
-  const units: string[] = [];
+  const units: VisibleContentUnit[] = [];
   let hash = FNV_SEED;
-  let lastKey: string | undefined;
+  let lastKey: VisibleContentUnit | undefined;
 
   for (let y = start; y < end; y += 1) {
     const line = buffer.getLine(y);
@@ -207,12 +226,13 @@ function buildViewportUnitsSnapshot(
     }
 
     for (let x = 0; x < cellLimit; x += 1) {
-      let chars: string;
+      let chars: string | undefined;
       let code: number;
       let width: number;
       let attributes: number;
       let fgColorMode: number;
       let fgColor: number;
+      let rawCodePoint: number | undefined;
 
       if (raw) {
         const offset = x * CELL_SIZE;
@@ -227,9 +247,8 @@ function buildViewportUnitsSnapshot(
           code = chars.charCodeAt(chars.length - 1);
         } else {
           if (codePoint === 0 || isWhitespaceCode(codePoint)) continue;
-          chars =
-            codePoint <= 0xffff ? String.fromCharCode(codePoint) : String.fromCodePoint(codePoint);
           code = codePoint;
+          rawCodePoint = codePoint;
         }
 
         const fg = raw._data[offset + 1] ?? 0;
@@ -281,16 +300,44 @@ function buildViewportUnitsSnapshot(
         fgColor = cell.getFgColor();
       }
 
-      const key =
-        attributes === 0 && fgColorMode === 0 && fgColor === -1 && width === 1 && chars.length <= 2
-          ? chars
-          : `${chars}|${code}|${width}|${fgColorMode}|${fgColor}|${attributes}`;
+      const defaultSingleWidth =
+        attributes === 0 && fgColorMode === 0 && fgColor === -1 && width === 1;
+      let key: VisibleContentUnit;
+      let collapsible: boolean;
+      if (defaultSingleWidth && rawCodePoint !== undefined) {
+        key = rawCodePoint;
+        collapsible = isCollapsibleFillCode(rawCodePoint);
+      } else {
+        const resolvedChars =
+          chars ??
+          (rawCodePoint! <= 0xffff
+            ? String.fromCharCode(rawCodePoint!)
+            : String.fromCodePoint(rawCodePoint!));
+        key =
+          defaultSingleWidth && resolvedChars.length <= 2
+            ? resolvedChars
+            : `${resolvedChars}|${code}|${width}|${fgColorMode}|${fgColor}|${attributes}`;
+        collapsible = isCollapsibleFillText(resolvedChars);
+      }
 
-      if (lastKey === key && isCollapsibleFillText(chars)) continue;
+      if (lastKey === key && collapsible) continue;
       units.push(key);
-      for (let i = 0; i < key.length; i += 1) {
-        hash ^= key.charCodeAt(i);
-        hash = Math.imul(hash, FNV_PRIME);
+      if (typeof key === "number") {
+        if (key <= 0xffff) {
+          hash ^= key;
+          hash = Math.imul(hash, FNV_PRIME);
+        } else {
+          const astral = key - 0x10000;
+          hash ^= 0xd800 + (astral >> 10);
+          hash = Math.imul(hash, FNV_PRIME);
+          hash ^= 0xdc00 + (astral & 0x3ff);
+          hash = Math.imul(hash, FNV_PRIME);
+        }
+      } else {
+        for (let i = 0; i < key.length; i += 1) {
+          hash ^= key.charCodeAt(i);
+          hash = Math.imul(hash, FNV_PRIME);
+        }
       }
       hash ^= HASH_UNIT_SEPARATOR;
       hash = Math.imul(hash, FNV_PRIME);
@@ -299,7 +346,6 @@ function buildViewportUnitsSnapshot(
   }
 
   return {
-    text: units.join(""),
     units,
     hash: hash >>> 0,
     length: units.length,

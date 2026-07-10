@@ -17,7 +17,7 @@ const WATCHER_WORKTREE_MAX_WAIT_MS = 1500;
 // leading timer back onto the trailing ramp, so storm coalescing (and the
 // PERF-104 quiescence profile) is preserved.
 const WATCHER_WORKTREE_LEADING_DEBOUNCE_MS = 25;
-const WATCHER_WORKTREE_QUIET_WINDOW_MS = 2_000;
+const WATCHER_WORKTREE_QUIET_WINDOW_MS = GIT_WATCH_SELF_TRIGGER_COOLDOWN_MS;
 const WATCHER_ELEVATION_DOWNGRADE_DELAY_MS = 3_000;
 
 export type WatcherMode = "none" | "git-only" | "recursive";
