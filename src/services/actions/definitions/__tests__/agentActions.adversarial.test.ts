@@ -789,12 +789,17 @@ describe("agent.listToolbar (#10838)", () => {
   function setStores(
     settings: { agents?: Record<string, unknown> } | null,
     availability: Record<string, string>,
-    hasRealData = true
+    hasRealData = true,
+    // Defaults to the steady state (a live probe has completed). Pass false to
+    // model the cache-hydrated window, where `availability` is synthesized and
+    // must not be certified.
+    isInitialized = true
   ): void {
     agentSettingsStoreMock.useAgentSettingsStore.getState.mockReturnValue({ settings });
     cliAvailabilityStoreMock.useCliAvailabilityStore.getState.mockReturnValue({
       availability,
       hasRealData,
+      isInitialized,
     });
   }
 
@@ -964,12 +969,17 @@ describe("agent.listAvailable", () => {
   function setStores(
     settings: { agents?: Record<string, unknown> } | null,
     availability: Record<string, string>,
-    hasRealData = true
+    hasRealData = true,
+    // Defaults to the steady state (a live probe has completed). Pass false to
+    // model the cache-hydrated window, where `availability` is synthesized and
+    // must not be certified.
+    isInitialized = true
   ): void {
     agentSettingsStoreMock.useAgentSettingsStore.getState.mockReturnValue({ settings });
     cliAvailabilityStoreMock.useCliAvailabilityStore.getState.mockReturnValue({
       availability,
       hasRealData,
+      isInitialized,
     });
   }
 
@@ -1021,6 +1031,36 @@ describe("agent.listAvailable", () => {
     expect(result.agents[2]).not.toHaveProperty("installed");
     expect(result.agents[2]).not.toHaveProperty("launchable");
     expect(result.agents[2]).not.toHaveProperty("pinned");
+  });
+
+  it("omits availability and never certifies completeness from a still-hydrating cache", async () => {
+    // hasRealData is true (cache hydrated) but the live probe has not finished:
+    // the availability map here is the synthesized cache, so "missing" must not
+    // leak out as an authoritative probe result.
+    setStores(
+      { agents: { claude: { pinned: true } } },
+      { claude: "ready", "new-builtin": "missing" },
+      true,
+      false
+    );
+    clientsMock.agentCapabilitiesClient.getRegistry.mockResolvedValue({
+      claude: { name: "Claude" },
+    });
+    clientsMock.userAgentRegistryClient.get.mockResolvedValue({});
+    const actions = setupActions(makeCallbacks());
+    const result = (await callAction(actions, "agent.listAvailable")) as {
+      availabilityComplete: boolean;
+      agents: AvailableRow[];
+    };
+
+    expect(result.availabilityComplete).toBe(false);
+    const claude = result.agents[0]!;
+    // Membership and toolbar visibility still resolve; the unproven probe fields do not.
+    expect(claude).toMatchObject({ id: "claude", source: "built-in", pinned: true });
+    expect(claude).toHaveProperty("toolbarVisible");
+    expect(claude).not.toHaveProperty("availability");
+    expect(claude).not.toHaveProperty("installed");
+    expect(claude).not.toHaveProperty("launchable");
   });
 
   it("registers as a narrow discoverable read with a structured MCP result", () => {

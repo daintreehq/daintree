@@ -39,7 +39,14 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     const availability = availabilityStore.hasRealData
       ? availabilityStore.availability
       : await cliAvailabilityClient.get();
-    return { settings, availability };
+    // `hasRealData` flips true the moment the localStorage cache hydrates, where
+    // absent agents are synthesized as "missing" — only `isInitialized` proves a
+    // live CLI probe has actually completed this session. listAvailable uses this
+    // so it never certifies a never-probed agent as "missing"; listToolbar keeps
+    // reading `availability` directly because it must mirror the live toolbar,
+    // which renders from the same hydrating store.
+    const availabilityLive = availabilityStore.isInitialized === true;
+    return { settings, availability, availabilityLive };
   };
 
   actions.set("agent.launch", () => ({
@@ -564,7 +571,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "agent.listAvailable",
     title: "List Available Agents",
     description:
-      "List every registered direct-agent candidate in Daintree's current effective registry, including built-in, user-defined, and plugin agents. Returns { complete, availabilityComplete, agents: [{ id, displayName, source, availability?, installed?, launchable?, pinned?, toolbarVisible? }] }. Registry membership comes from the authoritative main process. `launchable` is true only for ready/unauthenticated agents and is omitted with availability while the host's CLI probe cache is still hydrating. Built-in rows include tri-state explicit pin intent and resolved main-toolbar visibility; user/plugin rows omit toolbar fields because they are not toolbar entries.",
+      "List every registered direct-agent candidate in Daintree's current effective registry, including built-in, user-defined, and plugin agents. Returns { complete, availabilityComplete, agents: [{ id, displayName, source, availability?, installed?, launchable?, pinned?, toolbarVisible? }] }. Registry membership comes from the authoritative main process; `complete` marks a full (never-truncated) read of the current effective registry — plugin agents still initializing at call time appear on a later call. `launchable` is true only for ready/unauthenticated agents and is omitted with availability (and `availabilityComplete` is false) until a live CLI probe has finished this session — never inferred from the still-hydrating cache. Built-in rows include tri-state explicit pin intent and resolved main-toolbar visibility; user/plugin rows omit toolbar fields because they are not toolbar entries.",
     category: "agent",
     kind: "query",
     danger: "safe",
@@ -590,11 +597,12 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     }),
     mcpOutputSchema: true,
     run: async () => {
-      const [{ settings, availability }, registry, userRegistry] = await Promise.all([
-        readAgentDiscoveryState(),
-        agentCapabilitiesClient.getRegistry(),
-        userAgentRegistryClient.get(),
-      ]);
+      const [{ settings, availability, availabilityLive }, registry, userRegistry] =
+        await Promise.all([
+          readAgentDiscoveryState(),
+          agentCapabilitiesClient.getRegistry(),
+          userAgentRegistryClient.get(),
+        ]);
       const registryIds = [
         ...LAUNCHABLE_AGENT_IDS.filter((id) => Object.hasOwn(registry, id)),
         ...Object.keys(registry)
@@ -603,9 +611,17 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       ];
       return {
         complete: true as const,
-        availabilityComplete: registryIds.every((id) => Object.hasOwn(availability, id)),
+        // Only certify completeness once a live probe has run: a hydrating cache
+        // synthesizes "missing" for unprobed agents, which would otherwise pass
+        // the own-key check and mislabel a never-checked agent as uninstalled.
+        availabilityComplete:
+          availabilityLive && registryIds.every((id) => Object.hasOwn(availability, id)),
         agents: registryIds.map((id) => {
-          const state = availability[id];
+          // `rawState` mirrors what the toolbar renders (used for toolbarVisible);
+          // `probedState` is the authoritative probe result we're willing to
+          // report as availability/installed/launchable — undefined until live.
+          const rawState = availability[id];
+          const probedState = availabilityLive ? rawState : undefined;
           const builtIn = isBuiltInAgentId(id);
           const entry = builtIn ? settings.agents?.[id] : undefined;
           return {
@@ -616,15 +632,15 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
               : Object.prototype.hasOwnProperty.call(userRegistry, id)
                 ? ("user" as const)
                 : ("plugin" as const),
-            ...(state
+            ...(probedState
               ? {
-                  availability: state,
-                  installed: isAgentInstalled(state),
-                  launchable: isAgentLaunchable(state),
+                  availability: probedState,
+                  installed: isAgentInstalled(probedState),
+                  launchable: isAgentLaunchable(probedState),
                 }
               : {}),
             ...(builtIn && typeof entry?.pinned === "boolean" ? { pinned: entry.pinned } : {}),
-            ...(builtIn ? { toolbarVisible: isAgentToolbarVisible(entry, state) } : {}),
+            ...(builtIn ? { toolbarVisible: isAgentToolbarVisible(entry, rawState) } : {}),
           };
         }),
       };
