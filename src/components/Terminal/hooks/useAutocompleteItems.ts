@@ -28,26 +28,28 @@ export function useAutocompleteItems({
   const autocompleteDiffItems = useMemo((): AutocompleteItem[] => {
     if (!diffContext) return [];
     const items: AutocompleteItem[] = [
-      { key: "diff", label: "Working tree diff (@diff)", value: "@diff" },
-      { key: "diff:staged", label: "Staged diff (@diff:staged)", value: "@diff:staged" },
-      { key: "diff:head", label: "HEAD diff (@diff:head)", value: "@diff:head" },
+      { key: "diff", label: "Working tree diff (@diff)", insertText: "@diff" },
+      { key: "diff:staged", label: "Staged diff (@diff:staged)", insertText: "@diff:staged" },
+      { key: "diff:head", label: "HEAD diff (@diff:head)", insertText: "@diff:head" },
     ];
     const partial =
       diffContext.tokenEnd > diffContext.atStart + 1
         ? value.slice(diffContext.atStart + 1, diffContext.tokenEnd)
         : "";
     if (!partial) return items;
-    return items.filter((item) => item.value.slice(1).startsWith(partial));
+    return items.filter((item) => item.insertText.slice(1).startsWith(partial));
   }, [diffContext, value]);
 
   const autocompleteTerminalItems = useMemo((): AutocompleteItem[] => {
     if (!terminalContext) return [];
-    return [{ key: "terminal", label: "Terminal output (@terminal)", value: "@terminal" }];
+    return [{ key: "terminal", label: "Terminal output (@terminal)", insertText: "@terminal" }];
   }, [terminalContext]);
 
   const autocompleteSelectionItems = useMemo((): AutocompleteItem[] => {
     if (!selectionContext) return [];
-    return [{ key: "selection", label: "Terminal selection (@selection)", value: "@selection" }];
+    return [
+      { key: "selection", label: "Terminal selection (@selection)", insertText: "@selection" },
+    ];
   }, [selectionContext]);
 
   const autocompleteItems = useMemo((): AutocompleteItem[] => {
@@ -70,7 +72,7 @@ export function useAutocompleteItems({
         return {
           key: file,
           label: base || file,
-          value: file,
+          insertText: file,
           description: dir || undefined,
         };
       });

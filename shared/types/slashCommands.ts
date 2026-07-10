@@ -1,16 +1,28 @@
 import type { BuiltInAgentId } from "../config/agentIds.js";
-import type { CompletionTrigger } from "./completionSources.js";
+import type { CompletionKind, CompletionTrigger } from "./completionSources.js";
 
 export type SlashCommandScope = "built-in" | "global" | "user" | "project";
 
 export interface SlashCommand {
   id: string;
-  label: string; // e.g. "/compact"
+  label: string; // display token, e.g. "/compact" or "Plugin Creator"
   description: string;
   scope: SlashCommandScope;
   agentId: BuiltInAgentId;
   sourcePath?: string;
-  kind?: "command" | "skill";
+  kind?: CompletionKind;
+  /**
+   * The canonical token inserted when the command is chosen (e.g. `/compact`,
+   * `$plugin-creator`). Distinct from `label` (display) so a capability whose
+   * name differs from its token can be expressed. Optional: absent when the
+   * label *is* the token (built-ins), where consumers fall back to `label`.
+   */
+  insertText?: string;
+  /**
+   * Extra search-only tokens matched during ranking but never displayed or
+   * inserted. Mirrors `searchAliases` on the panel-kind registry.
+   */
+  aliases?: readonly string[];
   /**
    * Which trigger opens this completion (`/`, `$`, `@`). Stamped by the
    * discovery engine; absent on the renderer's built-in fallback, where it is

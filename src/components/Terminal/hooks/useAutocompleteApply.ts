@@ -66,7 +66,7 @@ function applyAutocompleteItem(
   if (latest.activeMode === "terminal") {
     const ctx = getTerminalContext(currentValue, caret) ?? latest.terminalContext;
     if (!ctx) return;
-    const token = `${item.value} `;
+    const token = `${item.insertText} `;
     const before = currentValue.slice(0, ctx.atStart);
     const after = currentValue.slice(ctx.tokenEnd);
     const nextValue = `${before}${token}${after}`;
@@ -84,7 +84,7 @@ function applyAutocompleteItem(
   if (latest.activeMode === "selection") {
     const ctx = getSelectionContext(currentValue, caret) ?? latest.selectionContext;
     if (!ctx) return;
-    const token = `${item.value} `;
+    const token = `${item.insertText} `;
     const before = currentValue.slice(0, ctx.atStart);
     const after = currentValue.slice(ctx.tokenEnd);
     const nextValue = `${before}${token}${after}`;
@@ -102,7 +102,7 @@ function applyAutocompleteItem(
   if (latest.activeMode === "diff") {
     const ctx = getDiffContext(currentValue, caret) ?? latest.diffContext;
     if (!ctx) return;
-    const token = `${item.value} `;
+    const token = `${item.insertText} `;
     const before = currentValue.slice(0, ctx.atStart);
     const after = currentValue.slice(ctx.tokenEnd);
     const nextValue = `${before}${token}${after}`;
@@ -131,7 +131,7 @@ function applyAutocompleteItem(
   if (latest.activeMode === "file") {
     const ctx = getAtFileContext(currentValue, caret);
     if (!ctx) return;
-    const token = `${formatAtFileToken(item.value)} `;
+    const token = `${formatAtFileToken(item.insertText)} `;
     const before = currentValue.slice(0, ctx.atStart);
     const after = currentValue.slice(ctx.tokenEnd);
     const nextValue = `${before}${token}${after}`;
@@ -162,7 +162,7 @@ function applyAutocompleteItem(
     const after = currentValue.slice(slashCtx.tokenEnd);
     const hasLeadingSpace = after.startsWith(" ");
     const shouldAppendSpace = action === "insert" && !hasLeadingSpace;
-    const token = shouldAppendSpace ? `${item.value} ` : item.value;
+    const token = shouldAppendSpace ? `${item.insertText} ` : item.insertText;
     const nextValue = `${before}${token}${after}`;
     const nextCaret =
       before.length + token.length + (action === "insert" && hasLeadingSpace ? 1 : 0);
