@@ -163,7 +163,12 @@ export interface UseAgentLauncherReturn {
   launchAgent: (
     agentId: string,
     options?: LaunchAgentOptions
-  ) => Promise<{ terminalId: string; location: "grid" | "dock" } | null>;
+  ) => Promise<{
+    terminalId: string;
+    location: "grid" | "dock";
+    /** Atomic launch result: no PTY was started; a setup diagnostic panel was opened. */
+    spawnStatus?: "missing-cli";
+  } | null>;
   availability: CliAvailability;
   isCheckingAvailability: boolean;
   agentSettings: AgentSettings | null;
@@ -292,7 +297,11 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
     async (
       agentId: string,
       launchOptions?: LaunchAgentOptions
-    ): Promise<{ terminalId: string; location: "grid" | "dock" } | null> => {
+    ): Promise<{
+      terminalId: string;
+      location: "grid" | "dock";
+      spawnStatus?: "missing-cli";
+    } | null> => {
       if (!isElectronAvailable()) {
         console.warn("Electron API not available");
         return null;
@@ -674,6 +683,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
             return {
               terminalId: gateId,
               location: gatePanel.location === "dock" ? "dock" : "grid",
+              spawnStatus: "missing-cli" as const,
             };
           }
         }

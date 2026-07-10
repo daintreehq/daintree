@@ -32,6 +32,12 @@ const clientsMock = vi.hoisted(() => ({
   cliAvailabilityClient: {
     get: vi.fn(),
   },
+  agentCapabilitiesClient: {
+    getRegistry: vi.fn(),
+  },
+  userAgentRegistryClient: {
+    get: vi.fn(),
+  },
 }));
 
 const agentSettingsStoreMock = vi.hoisted(() => ({
@@ -48,12 +54,16 @@ vi.mock("@/store/worktreeStore", () => worktreeSelectionMock);
 vi.mock("@/store/agentSettingsStore", () => agentSettingsStoreMock);
 vi.mock("@/store/cliAvailabilityStore", () => cliAvailabilityStoreMock);
 vi.mock("@/config/agents", () => agentRegistryMock);
+vi.mock("@/clients/userAgentRegistryClient", () => ({
+  userAgentRegistryClient: clientsMock.userAgentRegistryClient,
+}));
 vi.mock("@/clients", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/clients")>();
   return {
     ...actual,
     agentSettingsClient: clientsMock.agentSettingsClient,
     cliAvailabilityClient: clientsMock.cliAvailabilityClient,
+    agentCapabilitiesClient: clientsMock.agentCapabilitiesClient,
   };
 });
 
@@ -143,6 +153,24 @@ describe("agentActions adversarial", () => {
       modelId: "gpt-5",
     });
     expect(result).toEqual({ terminalId: "term-1", location: "grid" });
+  });
+
+  it("agent.launch preserves the atomic missing-CLI diagnostic discriminant", async () => {
+    const callbacks = makeCallbacks();
+    callbacks.onLaunchAgent.mockResolvedValueOnce({
+      terminalId: "diagnostic-panel",
+      location: "grid",
+      spawnStatus: "missing-cli",
+    });
+    const actions = setupActions(callbacks);
+
+    const result = await callAction(actions, "agent.launch", { agentId: "claude" });
+
+    expect(result).toEqual({
+      terminalId: "diagnostic-panel",
+      location: "grid",
+      spawnStatus: "missing-cli",
+    });
   });
 
   it("agent.launch forwards 'name' to the launch callback", async () => {
@@ -918,6 +946,150 @@ describe("agent.listToolbar (#10838)", () => {
     expect(def.scope).toBe("renderer");
     expect(def.mcpVisibility).toBe("discoverable");
     expect(def.argsSchema).toBeUndefined();
+  });
+});
+
+describe("agent.listAvailable", () => {
+  type AvailableRow = {
+    id: string;
+    displayName: string;
+    source: "built-in" | "user" | "plugin";
+    launchable?: boolean;
+    availability?: string;
+    installed?: boolean;
+    pinned?: boolean;
+    toolbarVisible?: boolean;
+  };
+
+  function setStores(
+    settings: { agents?: Record<string, unknown> } | null,
+    availability: Record<string, string>,
+    hasRealData = true
+  ): void {
+    agentSettingsStoreMock.useAgentSettingsStore.getState.mockReturnValue({ settings });
+    cliAvailabilityStoreMock.useCliAvailabilityStore.getState.mockReturnValue({
+      availability,
+      hasRealData,
+    });
+  }
+
+  it("returns the complete effective registry with toolbar fields only for built-ins", async () => {
+    setStores(
+      { agents: { claude: { pinned: true } } },
+      { claude: "ready", "custom-agent": "missing" }
+    );
+    clientsMock.agentCapabilitiesClient.getRegistry.mockResolvedValue({
+      "plugin-agent": { name: "Plugin" },
+      "custom-agent": { name: "Custom" },
+      claude: { name: "Claude" },
+      "daintree-assistant": { name: "Assistant" },
+    });
+    clientsMock.userAgentRegistryClient.get.mockResolvedValue({
+      "custom-agent": { name: "Custom" },
+    });
+    const actions = setupActions(makeCallbacks());
+    const result = (await callAction(actions, "agent.listAvailable")) as {
+      complete: boolean;
+      availabilityComplete: boolean;
+      agents: AvailableRow[];
+    };
+
+    expect(result.complete).toBe(true);
+    expect(result.availabilityComplete).toBe(false);
+    expect(result.agents.map((row) => row.id)).toEqual(["claude", "custom-agent", "plugin-agent"]);
+    const claude = result.agents[0];
+    expect(claude).toMatchObject({
+      source: "built-in",
+      availability: "ready",
+      installed: true,
+      launchable: true,
+      pinned: true,
+      toolbarVisible: true,
+    });
+    expect(result.agents[1]).toMatchObject({
+      source: "user",
+      availability: "missing",
+      installed: false,
+      launchable: false,
+    });
+    expect(result.agents[1]).not.toHaveProperty("toolbarVisible");
+    expect(result.agents[2]).toMatchObject({
+      source: "plugin",
+      displayName: "Plugin",
+    });
+    expect(result.agents[2]).not.toHaveProperty("availability");
+    expect(result.agents[2]).not.toHaveProperty("installed");
+    expect(result.agents[2]).not.toHaveProperty("launchable");
+    expect(result.agents[2]).not.toHaveProperty("pinned");
+  });
+
+  it("registers as a narrow discoverable read with a structured MCP result", () => {
+    const actions = setupActions(makeCallbacks());
+    const def = actions.get("agent.listAvailable")?.() as AnyActionDefinition;
+    expect(def.kind).toBe("query");
+    expect(def.danger).toBe("safe");
+    expect(def.scope).toBe("renderer");
+    expect(def.mcpVisibility).toBe("discoverable");
+    expect(def.mcpOutputSchema).toBe(true);
+  });
+
+  it("re-reads authoritative registry membership and never leaks registry/settings details", async () => {
+    setStores(
+      {
+        agents: {
+          claude: {
+            pinned: false,
+            env: { SECRET: "shh" },
+            customFlags: "--dangerous",
+            presets: [{ id: "private" }],
+          },
+        },
+      },
+      { claude: "ready", "plugin-agent": "blocked" }
+    );
+    clientsMock.agentCapabilitiesClient.getRegistry
+      .mockResolvedValueOnce({
+        claude: { name: "Claude", command: "claude", env: { TOKEN: "secret" } },
+        "plugin-agent": {
+          name: "Plugin Agent",
+          command: "private-command",
+          args: ["--secret"],
+        },
+      })
+      .mockResolvedValueOnce({ claude: { name: "Claude" } });
+    clientsMock.userAgentRegistryClient.get.mockResolvedValue({});
+    const actions = setupActions(makeCallbacks());
+
+    const first = (await callAction(actions, "agent.listAvailable")) as {
+      availabilityComplete: boolean;
+      agents: AvailableRow[];
+    };
+    expect(first.availabilityComplete).toBe(true);
+    expect(first.agents.map((row) => row.id)).toEqual(["claude", "plugin-agent"]);
+    expect(Object.keys(first.agents[0]!).sort()).toEqual(
+      [
+        "availability",
+        "displayName",
+        "id",
+        "installed",
+        "launchable",
+        "pinned",
+        "source",
+        "toolbarVisible",
+      ].sort()
+    );
+    expect(Object.keys(first.agents[1]!).sort()).toEqual(
+      ["availability", "displayName", "id", "installed", "launchable", "source"].sort()
+    );
+    expect(JSON.stringify(first)).not.toContain("secret");
+    expect(JSON.stringify(first)).not.toContain("private-command");
+    expect(JSON.stringify(first)).not.toContain("dangerous");
+
+    const second = (await callAction(actions, "agent.listAvailable")) as {
+      agents: AvailableRow[];
+    };
+    expect(second.agents.map((row) => row.id)).toEqual(["claude"]);
+    expect(clientsMock.agentCapabilitiesClient.getRegistry).toHaveBeenCalledTimes(2);
   });
 });
 

@@ -70,7 +70,12 @@ export interface ActionCallbacks {
       force?: boolean;
       name?: string;
     }
-  ) => Promise<{ terminalId: string; location: "grid" | "dock" } | null>;
+  ) => Promise<{
+    terminalId: string;
+    location: "grid" | "dock";
+    /** Present only when Daintree opened a setup diagnostic instead of spawning a PTY. */
+    spawnStatus?: "missing-cli";
+  } | null>;
   onInject: (worktreeId: string) => void;
   getDefaultCwd: () => string;
   getActiveWorktreeId: () => string | undefined;
