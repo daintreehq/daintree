@@ -1,4 +1,5 @@
 import type { AgentConfig } from "../agentRegistry.js";
+import { standardConfigLocations } from "./completionSourceHelpers.js";
 
 export const config: AgentConfig = {
   id: "gemini",
@@ -144,6 +145,31 @@ export const config: AgentConfig = {
       versionArgs: ["--version"],
       severity: "fatal",
       installUrl: "https://github.com/google-gemini/gemini-cli#readme",
+    },
+  ],
+  completionSources: [
+    {
+      id: "builtin",
+      trigger: "/",
+      sourcePrecedence: 0,
+      discovery: { method: "static", catalog: "builtin-slash-commands" },
+    },
+    {
+      id: "commands",
+      trigger: "/",
+      sourcePrecedence: 10,
+      discovery: {
+        method: "directory",
+        parser: "toml",
+        derive: { labelPrefix: "/", kind: "command", fallbackDescription: "Custom command" },
+        locations: standardConfigLocations({
+          dotDir: ".gemini",
+          sub: "commands",
+          configDirEnv: "GEMINI_CONFIG_DIR",
+          lowerName: "gemini",
+          appName: "Gemini",
+        }),
+      },
     },
   ],
 };

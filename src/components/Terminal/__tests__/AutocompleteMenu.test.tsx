@@ -146,6 +146,32 @@ describe("AutocompleteMenu", () => {
     expect(screen.getByRole("listbox").getAttribute("aria-busy")).toBeNull();
   });
 
+  it("renders a neutral, screen-reader-labeled badge for skill items only", () => {
+    const items: AutocompleteItem[] = [
+      { key: "s", label: "/commit", value: "/commit", category: "skill" },
+      { key: "c", label: "/help", value: "/help", category: "command" },
+    ];
+
+    render(
+      <AutocompleteMenu
+        isOpen={true}
+        items={items}
+        selectedIndex={0}
+        onSelect={noop}
+        emptyMessage="No matches"
+      />
+    );
+
+    // Skill item: visible badge is hidden from AT, paired with an sr-only label.
+    const visibleBadge = screen.getByText("Skill", { selector: "[aria-hidden='true']" });
+    expect(visibleBadge).toBeTruthy();
+    expect(screen.getByText("Category: Skill")).toBeTruthy();
+
+    // Command item does not render a "[Command]" badge — plain by design.
+    expect(screen.queryByText("Command")).toBeNull();
+    expect(screen.queryByText("Category: Command")).toBeNull();
+  });
+
   it("scrolls the keyboard-selected option into view as selection moves", () => {
     const scrollSpy = vi.fn();
     const original = Element.prototype.scrollIntoView;

@@ -4,6 +4,7 @@ import { slashCommandsClient } from "@/clients";
 import { rankSlashCommands } from "@/lib/slashCommandMatch";
 
 import { getBuiltinSlashCommands, type SlashCommand } from "@shared/types";
+import { getAgentConfig } from "@/config/agents";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 
 export interface UseSlashCommandAutocompleteArgs {
@@ -37,7 +38,9 @@ export function useSlashCommandAutocomplete({
   }, [initial]);
 
   useEffect(() => {
-    if (agentId !== "claude" && agentId !== "gemini" && agentId !== "codex") return;
+    // Data-driven: fetch for any agent that declares completion sources, rather
+    // than a hard-coded agent-id allowlist.
+    if (!agentId || !getAgentConfig(agentId)?.completionSources?.length) return;
     if (!window.electron?.slashCommands?.list) return;
 
     const requestId = ++requestIdRef.current;
@@ -61,15 +64,19 @@ export function useSlashCommandAutocomplete({
   const items = useMemo((): AutocompleteItem[] => {
     if (!enabled) return [];
 
-    const ranked = rankSlashCommands(commands, query);
-    const agentCommands = ranked.map((cmd) => ({
+    // The slash menu lists only `/` completions. An agent's `$` capabilities
+    // arrive in the same discovery result and are filtered out here so they
+    // never leak into the `/` list.
+    const slashCommands = commands.filter((cmd) => (cmd.trigger ?? "/") === "/");
+    const ranked = rankSlashCommands(slashCommands, query);
+
+    return ranked.map((cmd) => ({
       key: cmd.id,
       label: cmd.label,
       value: cmd.label,
       description: cmd.description,
+      category: cmd.kind ?? "command",
     }));
-
-    return agentCommands;
   }, [commands, enabled, query]);
 
   return { items, isLoading };

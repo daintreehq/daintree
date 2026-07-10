@@ -1,4 +1,5 @@
 import { forwardRef, useEffect, useRef } from "react";
+import type { CompletionKind } from "@shared/types";
 import { cn } from "@/lib/utils";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -17,11 +18,22 @@ function getDescriptionSnippet(description: string, maxLength = 60): string {
   return `${cleaned.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
 }
 
+/**
+ * Visible badge text per category. `command` is intentionally absent — plain
+ * commands render without a badge (a `[Command]` on every slash token is noise),
+ * so only the notable kinds (skills, and later apps/plugins) are called out.
+ */
+const CATEGORY_LABEL: Partial<Record<CompletionKind, string>> = {
+  skill: "Skill",
+};
+
 export interface AutocompleteItem {
   key: string;
   label: string;
   value: string;
   description?: string;
+  /** Semantic category; drives the neutral badge. Undefined for file/context items. */
+  category?: CompletionKind;
 }
 
 export interface AutocompleteMenuProps {
@@ -139,6 +151,14 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
               const descriptionSnippet = item.description
                 ? getDescriptionSnippet(item.description)
                 : undefined;
+              const badge = item.category ? CATEGORY_LABEL[item.category] : undefined;
+              const tooltipText = [
+                item.label,
+                badge ? `(${badge})` : "",
+                item.description ? `— ${item.description}` : "",
+              ]
+                .filter(Boolean)
+                .join(" ");
 
               return (
                 <Tooltip key={item.key}>
@@ -159,6 +179,17 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
                       <span className="min-w-0 flex-none max-w-full truncate font-mono text-xs leading-4">
                         {item.label}
                       </span>
+                      {badge && (
+                        <>
+                          <span
+                            aria-hidden="true"
+                            className="shrink-0 rounded-sm border border-tint/10 bg-overlay-subtle px-1 text-[9px] font-medium uppercase leading-4 tracking-wide text-daintree-text/50"
+                          >
+                            {badge}
+                          </span>
+                          <span className="sr-only">Category: {badge}</span>
+                        </>
+                      )}
                       {descriptionSnippet && (
                         <span
                           className={cn(
@@ -173,9 +204,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
                       )}
                     </button>
                   </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    {item.description ? `${item.label} — ${item.description}` : item.label}
-                  </TooltipContent>
+                  <TooltipContent side="bottom">{tooltipText}</TooltipContent>
                 </Tooltip>
               );
             })}

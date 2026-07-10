@@ -28,8 +28,8 @@ describe("getBuiltinSlashCommands", () => {
     expect(getBuiltinSlashCommands("gemini")).toHaveLength(27);
   });
 
-  it("returns 22 commands for codex", () => {
-    expect(getBuiltinSlashCommands("codex")).toHaveLength(22);
+  it("returns 35 commands for codex", () => {
+    expect(getBuiltinSlashCommands("codex")).toHaveLength(35);
   });
 
   it("returns empty array for unsupported agents", () => {
@@ -95,6 +95,13 @@ describe("getBuiltinSlashCommands", () => {
     expect(getBuiltinSlashCommands("claude").some((c) => c.label === "/add-dir")).toBe(true);
     expect(getBuiltinSlashCommands("gemini").some((c) => c.label === "/add-dir")).toBe(false);
     expect(getBuiltinSlashCommands("codex").some((c) => c.label === "/add-dir")).toBe(false);
+  });
+
+  it("codex catalog drops /approvals in favor of /permissions and adds /skills", () => {
+    const codex = getBuiltinSlashCommands("codex").map((c) => c.label);
+    expect(codex).not.toContain("/approvals");
+    expect(codex).toContain("/permissions");
+    expect(codex).toContain("/skills");
   });
 
   it("does not include kind or sourcePath on returned commands", () => {
