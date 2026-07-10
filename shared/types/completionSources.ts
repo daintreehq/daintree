@@ -18,10 +18,13 @@ import type { SlashCommandScope } from "./slashCommands.js";
 export type CompletionTrigger = "/" | "$" | "@";
 
 /**
- * Semantic category of a completion. `command` and `skill` are produced today;
- * `app`/`plugin` are modelled ahead of their discovery backends (Codex
- * Apps/Plugins have no verified local manifest yet — see #11043) so the item
- * model, badges, and ranking can carry them the moment a source populates them.
+ * Semantic category of a completion. `command`, `skill`, and `plugin` are
+ * produced today — `plugin` covers Codex Plugins surfaced from the local plugin
+ * registry (see the `registry` discovery + `codex-plugin-registry` parser).
+ * `app` is modelled ahead of its discovery backend: Codex Apps/connectors are
+ * resolved server-side (chatgpt.com/backend-api/wham/apps) with no local
+ * manifest to discover, so the item model, badges, and ranking can carry the
+ * kind the moment a source populates it — see #11049 / #11043.
  */
 export type CompletionKind = "command" | "skill" | "app" | "plugin";
 
@@ -36,8 +39,17 @@ export type CompletionKind = "command" | "skill" | "app" | "plugin";
  *    from the TOML `description` key (bounded read).
  *  - `skill-dir`: immediate child directories containing `SKILL.md`, name from
  *    the child directory name, description from the `SKILL.md` frontmatter.
+ *  - `codex-plugin-registry`: a `registry` parser (not a plain directory scan)
+ *    handed `$CODEX_HOME`. It intersects the enabled `[plugins."name@market"]`
+ *    tables in `config.toml` with the manifests under `plugins/cache/*`, picks
+ *    each plugin's active version, and reads `.codex-plugin/plugin.json`
+ *    (fallback `.claude-plugin/plugin.json`) for the name/description.
  */
-export type CompletionParserName = "markdown-frontmatter" | "toml" | "skill-dir";
+export type CompletionParserName =
+  | "markdown-frontmatter"
+  | "toml"
+  | "skill-dir"
+  | "codex-plugin-registry";
 
 /** Platforms a location applies to. Matches `process.platform` values. */
 export type CompletionPlatform = "darwin" | "win32" | "linux";
@@ -113,7 +125,26 @@ export interface CompletionDirectoryDiscovery {
   locations: readonly CompletionLocation[];
 }
 
-export type CompletionDiscovery = CompletionStaticDiscovery | CompletionDirectoryDiscovery;
+/**
+ * A registry-backed source: structurally identical to `directory`, but the
+ * `method` distinguishes a parser that does more than turn one directory into
+ * entries (it cross-references sibling manifests/config and resolves versions —
+ * e.g. `codex-plugin-registry` reads `config.toml` + walks `plugins/cache/*`).
+ * The engine treats it exactly like `directory` (same parser/locations/derive
+ * fields), so no engine branch is needed — the distinct `method` only keeps the
+ * schema honest about what the parser does.
+ */
+export interface CompletionRegistryDiscovery {
+  method: "registry";
+  parser: CompletionParserName;
+  derive: CompletionDerivation;
+  locations: readonly CompletionLocation[];
+}
+
+export type CompletionDiscovery =
+  | CompletionStaticDiscovery
+  | CompletionDirectoryDiscovery
+  | CompletionRegistryDiscovery;
 
 /**
  * One completion source an agent declares. `sourcePrecedence` orders
