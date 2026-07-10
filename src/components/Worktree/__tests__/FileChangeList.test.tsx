@@ -437,7 +437,7 @@ describe("FileChangeList — openFirstFile imperative handle (#11041)", () => {
     }
   );
 
-  it("keeps the handle stable across an empty→populated transition and no-ops while empty", () => {
+  it("keeps the handle available across an empty→populated transition and no-ops while empty", () => {
     const ref = createRef<FileChangeListHandle>();
     const { rerender } = render(<FileChangeList ref={ref} changes={[]} rootPath={ROOT} />);
 
@@ -450,6 +450,10 @@ describe("FileChangeList — openFirstFile imperative handle (#11041)", () => {
     act(() => {
       rerender(<FileChangeList ref={ref} changes={[file("a.ts")]} rootPath={ROOT} />);
     });
+    // The modal renders now that a file exists but stays closed until the handle
+    // is invoked, so the open below is a real effect of the call, not a leftover.
+    expect(capturedModalProps.isOpen).toBe(false);
+
     act(() => ref.current!.openFirstFile(document.createElement("button")));
     expect(capturedModalProps.isOpen).toBe(true);
     expect(capturedModalProps.filePath).toBe("a.ts");

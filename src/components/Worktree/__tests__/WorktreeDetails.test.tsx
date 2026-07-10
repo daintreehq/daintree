@@ -122,9 +122,11 @@ describe("WorktreeDetails — open changes button (#11041)", () => {
     worktreeChanges: {
       ...baseWorktree.worktreeChanges,
       changedFileCount: 2,
+      // b.ts is listed first but has lower churn (2 vs 6), so a discriminating
+      // test proves the button opens the *sorted* first file, not raw index 0.
       changes: [
-        { path: "a.ts", status: "modified", insertions: 5, deletions: 1 },
         { path: "b.ts", status: "added", insertions: 2, deletions: 0 },
+        { path: "a.ts", status: "modified", insertions: 5, deletions: 1 },
       ],
       rootPath: "/tmp/wt",
     } as WorktreeChanges,
@@ -138,20 +140,39 @@ describe("WorktreeDetails — open changes button (#11041)", () => {
 
   it("shows the button when there are changes and opens the first file's diff from it", () => {
     renderDetails({ worktree: worktreeWithChanges, hasChanges: true });
-    const button = screen.getByLabelText("Open changes");
+    const button = screen.getByRole("button", { name: "Open changes" });
 
     fireEvent.click(button);
 
     expect(capturedModalProps.isOpen).toBe(true);
-    // a.ts has the higher churn (6 vs 2), so it sorts to the first slot.
+    // a.ts has the higher churn (6 vs 2), so it sorts ahead of the raw-first b.ts.
     expect(capturedModalProps.filePath).toBe("a.ts");
     // Focus restores to the header button that opened the modal, not a row.
     const restore = capturedModalProps.restoreFocusTo as { current: HTMLElement | null };
     expect(restore.current).toBe(button);
   });
 
+  it("does not bubble the click to the surrounding card (stops propagation)", () => {
+    // In the overview modal, a click reaching WorktreeCard's onSelect closes the
+    // card and unmounts the list before the diff can open — so the button must
+    // not let its click bubble.
+    const onParentClick = vi.fn();
+    render(
+      <TooltipProvider>
+        <div onClick={onParentClick}>
+          <WorktreeDetails {...baseProps} worktree={worktreeWithChanges} hasChanges />
+        </div>
+      </TooltipProvider>
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open changes" }));
+
+    expect(capturedModalProps.isOpen).toBe(true);
+    expect(onParentClick).not.toHaveBeenCalled();
+  });
+
   it("hides the button when the change list is empty", () => {
     renderDetails({ worktree: baseWorktree, hasChanges: true });
-    expect(screen.queryByLabelText("Open changes")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Open changes" })).toBeNull();
   });
 });

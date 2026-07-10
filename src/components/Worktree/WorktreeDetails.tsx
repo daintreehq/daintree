@@ -195,7 +195,13 @@ export function WorktreeDetails({
                     <TooltipTrigger asChild>
                       <button
                         type="button"
-                        onClick={(e) => fileChangeListRef.current?.openFirstFile(e.currentTarget)}
+                        onClick={(e) => {
+                          // Stop the click reaching WorktreeCard's onSelect — in the
+                          // overview modal that closes the card and unmounts this list
+                          // before the diff can open (matches the sibling path buttons).
+                          e.stopPropagation();
+                          fileChangeListRef.current?.openFirstFile(e.currentTarget);
+                        }}
                         className="shrink-0 rounded p-1 text-text-muted transition-colors hover:bg-overlay-soft hover:text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
                         aria-label="Open changes"
                       >
