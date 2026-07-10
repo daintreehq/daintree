@@ -133,6 +133,11 @@ function isBlankCellText(chars: string): boolean {
   return /^\s*$/u.test(chars);
 }
 
+function singleCodePoint(chars: string): number | undefined {
+  const code = chars.codePointAt(0);
+  return code !== undefined && String.fromCodePoint(code) === chars ? code : undefined;
+}
+
 function isCollapsibleFillCode(code: number): boolean {
   return (
     code === 0x2d ||
@@ -178,10 +183,11 @@ function rawBufferLine(line: CursorBufferLine, cols: number): RawBufferLine | un
  * object, a NormalizedVisibleUnit object, and a 6-segment template-string key
  * per visible cell, plus a second full pass to hash them):
  *
- *   * default-styled single-width raw cells — the overwhelming majority of
- *     real terminal content — use their numeric code point as the unit key,
- *     avoiding one string allocation per occupied cell. Combined cells keep
- *     a string key; styled and wide cells keep the full 6-segment key.
+ *   * default-styled single-width cells — the overwhelming majority of real
+ *     terminal content — use their numeric code point as the unit key,
+ *     avoiding one string allocation per occupied cell in either extraction
+ *     path. Combined cells keep a string key; styled and wide cells keep the
+ *     full 6-segment key.
  *   * the FNV-1a hash is accumulated while units are built instead of in a
  *     second pass over every key char.
  *   * the inverse attribute (masked out of keys by design — see
@@ -302,11 +308,13 @@ function buildViewportUnitsSnapshot(
 
       const defaultSingleWidth =
         attributes === 0 && fgColorMode === 0 && fgColor === -1 && width === 1;
+      const defaultCodePoint =
+        defaultSingleWidth && chars !== undefined ? singleCodePoint(chars) : rawCodePoint;
       let key: VisibleContentUnit;
       let collapsible: boolean;
-      if (defaultSingleWidth && rawCodePoint !== undefined) {
-        key = rawCodePoint;
-        collapsible = isCollapsibleFillCode(rawCodePoint);
+      if (defaultSingleWidth && defaultCodePoint !== undefined) {
+        key = defaultCodePoint;
+        collapsible = isCollapsibleFillCode(defaultCodePoint);
       } else {
         const resolvedChars =
           chars ??
