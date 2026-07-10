@@ -43,6 +43,14 @@ vi.mock("@/clients", () => ({
   systemClient: {
     getTmpDir: vi.fn().mockResolvedValue("/tmp"),
   },
+  globalEnvClient: {
+    get: vi.fn().mockResolvedValue({}),
+    set: vi.fn().mockResolvedValue(undefined),
+    invalidate: vi.fn(),
+  },
+  worktreeClient: {
+    getAll: vi.fn().mockResolvedValue([{ id: "wt-new", path: "/new/worktree" }]),
+  },
 }));
 
 vi.mock("@/services/TerminalInstanceService", () => ({
@@ -57,6 +65,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     fit: vi.fn(),
     captureBufferText: mockCaptureBufferText,
     addAgentStateListener: mockAddAgentStateListener,
+    setInputLocked: vi.fn(),
   },
 }));
 
@@ -97,13 +106,17 @@ vi.mock("@/config/agents", () => ({
   sanitizeAgentEnv: (env: Record<string, string> | undefined) => env,
 }));
 
-vi.mock("@shared/types", () => ({
-  generateAgentCommand: vi.fn().mockReturnValue("claude --resume"),
-  buildAgentLaunchFlags: vi.fn().mockReturnValue([]),
-  buildResumeCommand: vi.fn().mockReturnValue(null),
-  buildResumeLatestCommand: vi.fn().mockReturnValue(null),
-  buildLaunchCommandFromFlags: vi.fn().mockReturnValue("claude"),
-}));
+vi.mock("@shared/types", async () => {
+  const actual = await vi.importActual<typeof import("@shared/types")>("@shared/types");
+  return {
+    ...actual,
+    generateAgentCommand: vi.fn().mockReturnValue("claude --fresh"),
+    buildAgentLaunchFlags: vi.fn().mockReturnValue([]),
+    buildResumeCommand: vi.fn().mockReturnValue(null),
+    buildResumeLatestCommand: vi.fn().mockReturnValue(null),
+    buildLaunchCommandFromFlags: vi.fn().mockReturnValue("claude"),
+  };
+});
 
 vi.mock("@/store/ccrPresetsStore", () => ({
   useCcrPresetsStore: {
@@ -186,7 +199,12 @@ describe("moveToNewWorktreeAndTransfer (#4773)", () => {
     expect(mockCaptureBufferText).not.toHaveBeenCalled();
   });
 
-  it("does not call gracefulKill (abandoned session resume path)", async () => {
+  it("discards the session id captured by the restart's graceful kill (fresh session)", async () => {
+    const { buildResumeCommand, buildResumeLatestCommand } = await import("@shared/types");
+    // The restart kills the agent via gracefulKill, which captures the live
+    // session id — but the move flow re-seeds context by injecting the old
+    // buffer, so the capture must be discarded, not resumed.
+    mockGracefulKill.mockResolvedValueOnce("live-session-42");
     mockCaptureBufferText.mockReturnValue("some history");
     usePanelStore.setState({
       panelsById: { [agentTerminal.id]: agentTerminal },
@@ -197,22 +215,15 @@ describe("moveToNewWorktreeAndTransfer (#4773)", () => {
 
     await vi.dynamicImportSettled();
 
-    // Simulate worktree creation callback
-    if (openCreateDialogCallback) {
-      // Mock worktreeClient.getAll inside the callback
-      vi.doMock("@/clients", async (importOriginal) => {
-        const original = (await importOriginal()) as Record<string, unknown>;
-        return {
-          ...original,
-          worktreeClient: {
-            getAll: vi.fn().mockResolvedValue([{ id: "wt-new", path: "/new/worktree" }]),
-          },
-        };
-      });
-    }
+    expect(openCreateDialogCallback).not.toBeNull();
+    await openCreateDialogCallback!("wt-new");
 
-    // gracefulKill should never be called in the new flow
-    expect(mockGracefulKill).not.toHaveBeenCalled();
+    expect(mockGracefulKill).toHaveBeenCalledWith("test-1");
+    expect(buildResumeCommand).not.toHaveBeenCalled();
+    expect(buildResumeLatestCommand).not.toHaveBeenCalled();
+    const restarted = usePanelStore.getState().panelsById["test-1"] as PtyPanelData | undefined;
+    expect(restarted?.restartError).toBeUndefined();
+    expect(restarted?.agentSessionId).toBeUndefined();
   });
 
   it("clears agentSessionId in state before restart", async () => {
