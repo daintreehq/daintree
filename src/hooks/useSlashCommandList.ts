@@ -59,7 +59,10 @@ export function useSlashCommandList({ agentId, projectPath }: UseSlashCommandLis
       // The slash-chip validation only resolves `/` tokens; keep `$`/`@`
       // completions out of the map so they can't mark a `/token` valid.
       if ((cmd.trigger ?? "/") !== "/") continue;
-      map.set(cmd.label, cmd);
+      // Key by the inserted token (what the chip parser resolves), not the
+      // display label — they diverge once a source supplies a distinct
+      // `insertText`, and the label alone would fail the `/token` lookup.
+      map.set(cmd.insertText ?? cmd.label, cmd);
     }
     return map;
   }, [agentCommands]);

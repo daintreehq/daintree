@@ -9,14 +9,10 @@ import { useAutocompleteApply } from "../useAutocompleteApply";
 type Params = Parameters<typeof useAutocompleteApply>[0];
 type Latest = NonNullable<Params["latestRef"]["current"]>;
 
-function makeView(doc: string, caret = doc.length) {
-  return new EditorView({
-    state: EditorState.create({ doc, selection: { anchor: caret } }),
-  });
-}
-
 function setup(doc: string, item: AutocompleteItem) {
-  const view = makeView(doc);
+  const view = new EditorView({
+    state: EditorState.create({ doc, selection: { anchor: doc.length } }),
+  });
   const applyEditorValue = vi.fn<Params["applyEditorValue"]>();
   const sendText = vi.fn<Params["sendText"]>();
   const latest: Latest = {
@@ -45,7 +41,7 @@ function setup(doc: string, item: AutocompleteItem) {
   };
 
   const { result } = renderHook(() => useAutocompleteApply(params));
-  return { ...result.current, applyEditorValue, sendText };
+  return { ...result.current, applyEditorValue, sendText, view };
 }
 
 describe("useAutocompleteApply", () => {
@@ -57,24 +53,29 @@ describe("useAutocompleteApply", () => {
   };
 
   it("inserts the canonical token, never the display label", () => {
-    const { handleAutocompleteSelect, applyEditorValue } = setup("/plug", item);
+    const { handleAutocompleteSelect, applyEditorValue, sendText, view } = setup("/plug", item);
+    try {
+      handleAutocompleteSelect(item);
 
-    handleAutocompleteSelect(item);
-
-    expect(applyEditorValue).toHaveBeenCalledTimes(1);
-    const inserted = applyEditorValue.mock.calls[0]![0];
-    expect(inserted).toContain("$plugin-creator");
-    expect(inserted).not.toContain("Plugin Creator");
+      expect(applyEditorValue).toHaveBeenCalledTimes(1);
+      // Replaces the whole "/plug" slash token with the canonical insert token.
+      expect(applyEditorValue.mock.calls[0]![0]).toBe("$plugin-creator ");
+      expect(sendText).not.toHaveBeenCalled();
+    } finally {
+      view.destroy();
+    }
   });
 
   it("executes with the canonical token, never the display label", () => {
-    const { applyAutocompleteSelection, sendText } = setup("/plug", item);
+    const { applyAutocompleteSelection, applyEditorValue, sendText, view } = setup("/plug", item);
+    try {
+      expect(applyAutocompleteSelection("execute")).toBe(true);
 
-    expect(applyAutocompleteSelection("execute")).toBe(true);
-
-    expect(sendText).toHaveBeenCalledTimes(1);
-    const sent = sendText.mock.calls[0]![0];
-    expect(sent).toContain("$plugin-creator");
-    expect(sent).not.toContain("Plugin Creator");
+      expect(sendText).toHaveBeenCalledTimes(1);
+      expect(sendText.mock.calls[0]![0]).toBe("$plugin-creator");
+      expect(applyEditorValue).not.toHaveBeenCalled();
+    } finally {
+      view.destroy();
+    }
   });
 });

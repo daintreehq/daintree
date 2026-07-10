@@ -55,45 +55,66 @@ describe("rankSlashCommands", () => {
     }
   });
 
-  it("matches a space-separated label by each word", () => {
-    const item = make({ label: "Plugin Creator", insertText: "$plugin-creator" });
-    for (const query of ["plugin", "creator"]) {
-      expect(rankSlashCommands([item], query).map((c) => c.label)).toEqual(["Plugin Creator"]);
-    }
+  it("tokenizes a space-separated label so each word matches at token tier", () => {
+    // Without splitting on whitespace, "creator" matches "Plugin Creator" only as a
+    // substring (rank 3) and would lose to the prefix match on "creatorx" (rank 1);
+    // token-tier matching (rank 0) requires the whitespace split, so order proves it.
+    const commands = [make({ label: "creatorx" }), make({ label: "Plugin Creator" })];
+    expect(rankSlashCommands(commands, "creator").map((c) => c.label)).toEqual([
+      "Plugin Creator",
+      "creatorx",
+    ]);
+    expect(
+      rankSlashCommands([make({ label: "Plugin Creator" })], "plugin").map((c) => c.label)
+    ).toEqual(["Plugin Creator"]);
   });
 
-  it("matches against the triggerless insert text", () => {
-    const item = make({ label: "Plugin Creator", insertText: "$plugin-creator" });
-    expect(rankSlashCommands([item], "plugin-creator").map((c) => c.label)).toEqual([
+  it("matches against the triggerless insert text when the label alone would not", () => {
+    // Label "Ship It" shares nothing with "deploy" — only a distinct insertText matches.
+    const deployItem = make({ label: "Ship It", insertText: "$deploy" });
+    expect(rankSlashCommands([deployItem], "deploy").map((c) => c.label)).toEqual(["Ship It"]);
+
+    const pluginCreator = make({ label: "Plugin Creator", insertText: "$plugin-creator" });
+    expect(rankSlashCommands([pluginCreator], "plugin-creator").map((c) => c.label)).toEqual([
       "Plugin Creator",
     ]);
   });
 
-  it("matches against aliases but never against badge/kind text", () => {
+  it("matches against every alias but never against kind/badge text", () => {
     const aliased = make({ label: "/deploy", aliases: ["ship", "release"] });
-    expect(rankSlashCommands([aliased], "ship").map((c) => c.label)).toEqual(["/deploy"]);
+    for (const query of ["ship", "release"]) {
+      expect(rankSlashCommands([aliased], query).map((c) => c.label)).toEqual(["/deploy"]);
+    }
 
     // `kind: "plugin"` must not make the command matchable by "plugin".
     const kinded = make({ label: "/deploy", kind: "plugin" });
     expect(rankSlashCommands([kinded], "plugin")).toEqual([]);
   });
 
-  it("ranks identically regardless of the trigger prefix on the query", () => {
-    const commands = [
-      make({ label: "Plugin Creator", insertText: "$plugin-creator" }),
-      cmd("/help"),
-    ];
-    const baseline = rankSlashCommands(commands, "plugin").map((c) => c.label);
-    for (const query of ["/plugin", "$plugin", "@plugin"]) {
-      expect(rankSlashCommands(commands, query).map((c) => c.label)).toEqual(baseline);
+  it("strips a leading trigger from the query so ranking is trigger-neutral", () => {
+    // Unprefixed candidate: only stripping the query's trigger can make it match,
+    // so a pass proves each of /, $, @ is normalized off the query.
+    const item = make({ label: "plugin" });
+    for (const query of ["plugin", "/plugin", "$plugin", "@plugin"]) {
+      expect(rankSlashCommands([item], query).map((c) => c.label)).toEqual(["plugin"]);
     }
-    expect(baseline).toEqual(["Plugin Creator"]);
   });
 
-  it("strips only one leading trigger — repeated prefixes are not normalized twice", () => {
-    const item = make({ label: "Plugin Creator", insertText: "$plugin-creator" });
-    // A single `$` matches; a doubled `$$` leaves a literal `$` that cannot match.
-    expect(rankSlashCommands([item], "$plugin").map((c) => c.label)).toEqual(["Plugin Creator"]);
+  it("strips only one leading trigger — a doubled prefix is not normalized twice", () => {
+    const item = make({ label: "plugin" });
+    expect(rankSlashCommands([item], "$plugin").map((c) => c.label)).toEqual(["plugin"]);
+    // "$$plugin" normalizes to "$plugin" (one strip), which cannot match "plugin".
     expect(rankSlashCommands([item], "$$plugin")).toEqual([]);
+  });
+
+  it("returns commands in original order for an empty or trigger-only query", () => {
+    const commands = [cmd("/zebra"), cmd("/alpha"), cmd("/mango")];
+    for (const query of ["", "   ", "/", "$", "@"]) {
+      expect(rankSlashCommands(commands, query).map((c) => c.label)).toEqual([
+        "/zebra",
+        "/alpha",
+        "/mango",
+      ]);
+    }
   });
 });

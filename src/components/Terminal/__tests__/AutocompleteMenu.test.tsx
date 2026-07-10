@@ -203,7 +203,8 @@ describe("AutocompleteMenu", () => {
 
     const option = screen.getByRole("option");
     expect(within(option).getByText("Plugin Creator")).toBeTruthy();
-    expect(within(option).queryByText("$plugin-creator")).toBeNull();
+    // The raw insert token must never surface in the row — the label is shown, not the token.
+    expect(option.textContent).not.toContain("$plugin-creator");
   });
 
   it("scrolls the keyboard-selected option into view as selection moves", () => {
