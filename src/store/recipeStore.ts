@@ -982,7 +982,16 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     // Restore the per-panel focus the batch suppressed: focus the last spawned
     // grid panel, matching the prior serial behaviour (last `addPanel` won).
     if (!suppressFocus && results.spawned.length > 0) {
-      terminalStore.setFocused(results.spawned[results.spawned.length - 1]!.terminalId);
+      const focusId = results.spawned[results.spawned.length - 1]!.terminalId;
+      // The batch suppressed addPanel's maximize exit along with its focus set,
+      // so apply it here too — the agents the user just launched have to be
+      // visible, not stranded behind a fullscreen cell (#11060). Read the
+      // committed location fresh: `terminalStore` is a pre-spawn snapshot, and a
+      // panel requested for the grid can still auto-dock at capacity.
+      if (usePanelStore.getState().panelsById[focusId]?.location !== "dock") {
+        terminalStore.exitMaximize();
+      }
+      terminalStore.setFocused(focusId);
     }
 
     // Record this run in the durable history (#9949). Fire-and-forget AFTER the

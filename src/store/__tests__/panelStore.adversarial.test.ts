@@ -420,5 +420,129 @@ describe("panelStore adversarial", () => {
       expect(s.maximizedId).toBe("p1");
       expect(s.maximizeTarget).toEqual({ type: "panel", id: "p1" });
     });
+
+    describe("addPanel leaves fullscreen so the new panel is visible (#11060)", () => {
+      // `review` has no PTY and is not dockable, so it always commits to the
+      // grid without touching the terminal client. `browser` is the non-PTY
+      // kind that IS dockable — the dock branch below needs it.
+      const gridAdd = { kind: "review", worktreeId: "wt-1" } as const;
+
+      it("exits fullscreen and focuses the new panel, keeping the layout snapshot", async () => {
+        seedMaximizedPanel();
+        const snapshot = usePanelStore.getState().preMaximizeLayout;
+
+        const id = await usePanelStore.getState().addPanel(gridAdd);
+
+        const s = usePanelStore.getState();
+        expect(id).not.toBeNull();
+        expect(s.focusedId).toBe(id);
+        expect(s.maximizedId).toBeNull();
+        expect(s.maximizeTarget).toBeNull();
+        // The distinction from clearMaximize: the user is returning to the grid,
+        // not destroying the panel, so the column count still restores.
+        expect(s.preMaximizeLayout).toBe(snapshot);
+      });
+
+      it("exits a group target whose group has dissolved instead of re-maximizing", async () => {
+        // maximizeTarget points at g1, but no such group exists. toggleMaximize
+        // cannot resolve it, treats the call as a fresh maximize, and would
+        // re-maximize p1 — the exact misfire exitMaximize exists to avoid.
+        usePanelStore.setState({
+          panelsById: { p1: makePanel("p1") },
+          panelIds: ["p1"],
+          panelIdsByWorktreeId: { "wt-1": ["p1"] },
+          tabGroups: new Map(),
+          maximizedId: "p1",
+          maximizeTarget: { type: "group", id: "g1" },
+        });
+
+        await usePanelStore.getState().addPanel(gridAdd);
+
+        const s = usePanelStore.getState();
+        expect(s.maximizedId).toBeNull();
+        expect(s.maximizeTarget).toBeNull();
+      });
+
+      it("stays fullscreen for a preserve-policy spawn, which never takes focus", async () => {
+        seedMaximizedPanel();
+        usePanelStore.setState({ focusedId: "p1" });
+
+        const id = await usePanelStore.getState().addPanel({
+          ...gridAdd,
+          focusPolicy: "preserve",
+        });
+
+        const s = usePanelStore.getState();
+        expect(id).not.toBeNull();
+        expect(s.focusedId).toBe("p1");
+        expect(s.maximizedId).toBe("p1");
+        expect(s.maximizeTarget).toEqual({ type: "panel", id: "p1" });
+      });
+
+      it("stays fullscreen when preserveMaximize opts the tab-strip add out", async () => {
+        // The tab-strip "+" adds the panel first and groups it second, so at
+        // commit time it looks like a plain new grid cell. It still takes focus.
+        seedMaximizedGroup();
+
+        const id = await usePanelStore.getState().addPanel({
+          ...gridAdd,
+          preserveMaximize: true,
+        });
+
+        const s = usePanelStore.getState();
+        expect(s.focusedId).toBe(id);
+        expect(s.maximizedId).toBe("p1");
+        expect(s.maximizeTarget).toEqual({ type: "group", id: "g1" });
+      });
+
+      it("leaves the grid's fullscreen view alone for a panel committed to the dock", async () => {
+        seedMaximizedPanel();
+
+        await usePanelStore
+          .getState()
+          .addPanel({ kind: "browser", worktreeId: "wt-1", location: "dock" });
+
+        const s = usePanelStore.getState();
+        expect(s.maximizedId).toBe("p1");
+        expect(s.maximizeTarget).toEqual({ type: "panel", id: "p1" });
+      });
+    });
+
+    describe("restore leaves fullscreen so the restored panel is visible (#11060)", () => {
+      it("exits fullscreen when a trashed panel is restored to the grid", () => {
+        seedMaximizedPanel();
+        usePanelStore.getState().trashPanel("p2");
+        // Trashing p2 (unrelated to the maximized p1) must not have cleared it.
+        expect(usePanelStore.getState().maximizedId).toBe("p1");
+
+        usePanelStore.getState().restoreTerminal("p2");
+
+        const s = usePanelStore.getState();
+        expect(s.focusedId).toBe("p2");
+        expect(s.maximizedId).toBeNull();
+        expect(s.maximizeTarget).toBeNull();
+      });
+
+      it("stays fullscreen when the restored panel lands back in the dock", () => {
+        usePanelStore.setState({
+          panelsById: {
+            p1: makePanel("p1"),
+            d1: makePanel("d1", { location: "dock", kind: "terminal" }),
+          },
+          panelIds: ["p1", "d1"],
+          panelIdsByWorktreeId: { "wt-1": ["p1", "d1"] },
+          maximizedId: "p1",
+          maximizeTarget: { type: "panel", id: "p1" },
+        });
+        usePanelStore.getState().trashPanel("d1");
+
+        usePanelStore.getState().restoreTerminal("d1");
+
+        const s = usePanelStore.getState();
+        // The dock popover reveals it; the grid's fullscreen view is untouched.
+        expect(s.activeDockTerminalId).toBe("d1");
+        expect(s.maximizedId).toBe("p1");
+      });
+    });
   });
 });

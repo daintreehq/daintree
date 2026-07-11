@@ -387,6 +387,18 @@ export const usePanelStore = create<PanelGridState>()(
           ) {
             return id;
           }
+          // The new panel is about to take focus, but a fullscreen panel/group
+          // would keep rendering over the grid — so the panel the user just
+          // asked for lands focused and invisible (#11060). Leave fullscreen
+          // first. This must precede the focus set: `focusedId` promotes the
+          // panel's worktree to active, and `maximizedId` is global, so a
+          // cross-worktree spawn would otherwise render the newly active grid
+          // against a maximize target that isn't in it. `preserveMaximize`
+          // opts out the caller that is folding this panel into the group that
+          // is already maximized.
+          if (!options.preserveMaximize) {
+            get().exitMaximize();
+          }
           if (focusedBeforeCreate !== id) {
             set({ focusedId: id, previousFocusedId: focusedBeforeCreate });
           } else {
@@ -778,6 +790,15 @@ export const usePanelStore = create<PanelGridState>()(
         if (!restoredPanel) return;
         const previousFocusedId = get().focusedId;
         const landsInDock = restoredPanel.location === "dock" && isDockPanel(restoredPanel);
+        // A grid restore takes focus, so it must be visible: leave fullscreen
+        // rather than focus the panel behind the maximized cell (#11060). The
+        // registry restore only rewrites location/worktree — it never rejoins a
+        // tab group — so the restored panel is always its own grid cell and can
+        // never be a member of the group being maximized. A dock restore opens
+        // the popover instead and leaves the grid's fullscreen view alone.
+        if (!landsInDock) {
+          get().exitMaximize();
+        }
         set({
           focusedId: id,
           // Open the dock popover when the panel landed back in the dock so
@@ -826,6 +847,12 @@ export const usePanelStore = create<PanelGridState>()(
         const restoredPanel = get().panelsById[focusId]!;
         const previousFocusedId = get().focusedId;
         const landsInDock = restoredPanel.location === "dock" && isDockPanel(restoredPanel);
+        // Same as `restoreTerminal`: a grid restore must be visible, so leave
+        // fullscreen (#11060). The restored group was trashed, so it can never
+        // be the group currently maximized.
+        if (!landsInDock) {
+          get().exitMaximize();
+        }
         set({
           focusedId: focusId,
           // Match the restored panel's location so a docked group reopens the

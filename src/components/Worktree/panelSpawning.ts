@@ -204,6 +204,14 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
   // Restore the per-panel focus the batch suppressed: focus the last spawned
   // grid panel, matching the prior serial behaviour.
   if (!suppressFocus && lastSpawnedId !== null) {
+    // The batch suppressed addPanel's maximize exit along with its focus set, so
+    // apply it here too — a spawned grid panel that takes focus has to be
+    // visible, not stranded behind a fullscreen cell (#11060). Read the
+    // committed location fresh: `store` is a pre-spawn snapshot, and a panel
+    // requested for the grid can still auto-dock at capacity.
+    if (usePanelStore.getState().panelsById[lastSpawnedId]?.location !== "dock") {
+      store.exitMaximize();
+    }
     store.setFocused(lastSpawnedId);
   }
 

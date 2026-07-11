@@ -29,20 +29,31 @@ vi.mock("@shared/types", async (importActual) => {
 });
 
 const mockSetFocused = vi.fn();
+const mockExitMaximize = vi.fn();
 const mockBeginSpawnBatch = vi.fn(() => Symbol("spawn-batch"));
 const mockFlushSpawnBatch = vi.fn();
+/** Committed panels, keyed by id — the post-batch focus path reads this back to
+ * tell a grid landing from an auto-docked one. Mutable so tests can stage it. */
+const mockPanelsById: Record<string, { location?: string }> = {};
 
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: {
     getState: () => ({
       addPanel: (...args: unknown[]) => mockAddPanel(...args),
       panelIds: [],
-      panelsById: {},
+      panelsById: mockPanelsById,
       beginSpawnBatch: mockBeginSpawnBatch,
       flushSpawnBatch: mockFlushSpawnBatch,
       setFocused: mockSetFocused,
+      exitMaximize: mockExitMaximize,
     }),
   },
+}));
+
+const mockIsMcpSpawnFocusSuppressed = vi.fn(() => false);
+
+vi.mock("@/store/mcpSpawnFocusGuard", () => ({
+  isMcpSpawnFocusSuppressed: () => mockIsMcpSpawnFocusSuppressed(),
 }));
 
 function makeTerminal(overrides: Partial<RecipeTerminal> = {}): RecipeTerminal {
@@ -79,6 +90,10 @@ function makeAgent(overrides: Partial<RecipeTerminal> = {}): RecipeTerminal {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  for (const key of Object.keys(mockPanelsById)) delete mockPanelsById[key];
+  // clearAllMocks leaves mockReturnValue overrides in place — pin the default
+  // back so the MCP-suppressed case can't leak into the tests after it.
+  mockIsMcpSpawnFocusSuppressed.mockReturnValue(false);
   mockAddPanel.mockResolvedValue("panel-id-123");
   mockAgentSettingsGet.mockResolvedValue({ agents: { claude: { modelId: "sonnet" } } });
   mockSystemGetTmpDir.mockResolvedValue("/tmp/daintree");
@@ -462,6 +477,57 @@ describe("spawnPanelsFromRecipe", () => {
 
     expect(mockSetFocused).toHaveBeenCalledTimes(1);
     expect(mockSetFocused).toHaveBeenCalledWith("panel-grid");
+  });
+
+  it("leaves fullscreen before focusing the spawned grid panel (#11060)", async () => {
+    mockAddPanel.mockResolvedValueOnce("panel-grid");
+    mockPanelsById["panel-grid"] = { location: "grid" };
+
+    await spawnPanelsFromRecipe({
+      terminals: [makeTerminal()],
+      worktreeId: "wt-1",
+      cwd: "/path/to/wt",
+    });
+
+    expect(mockExitMaximize).toHaveBeenCalledTimes(1);
+    // Ordering is the whole point: focusing first would promote the panel's
+    // worktree while a stale global maximize target still gated the grid.
+    expect(mockExitMaximize.mock.invocationCallOrder[0]!).toBeLessThan(
+      mockSetFocused.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("stays fullscreen when the spawned panel auto-docks at capacity (#11060)", async () => {
+    // Requested for the grid, but committed to the dock — the fullscreen grid
+    // view is not what the user is being shown, so it must not be disturbed.
+    mockAddPanel.mockResolvedValueOnce("panel-autodocked");
+    mockPanelsById["panel-autodocked"] = { location: "dock" };
+
+    await spawnPanelsFromRecipe({
+      terminals: [makeTerminal()],
+      worktreeId: "wt-1",
+      cwd: "/path/to/wt",
+    });
+
+    expect(mockExitMaximize).not.toHaveBeenCalled();
+    expect(mockSetFocused).toHaveBeenCalledWith("panel-autodocked");
+  });
+
+  it("leaves fullscreen alone for a background MCP spawn (#11060)", async () => {
+    // A suppressed spawn never takes focus, so there is nothing to reveal —
+    // yanking the user out of fullscreen would be focus-steal-adjacent (#6959).
+    mockIsMcpSpawnFocusSuppressed.mockReturnValue(true);
+    mockAddPanel.mockResolvedValueOnce("panel-grid");
+    mockPanelsById["panel-grid"] = { location: "grid" };
+
+    await spawnPanelsFromRecipe({
+      terminals: [makeTerminal()],
+      worktreeId: "wt-1",
+      cwd: "/path/to/wt",
+    });
+
+    expect(mockSetFocused).not.toHaveBeenCalled();
+    expect(mockExitMaximize).not.toHaveBeenCalled();
   });
 
   it("focuses the last grid panel in a mixed dock/grid interleaving (#9764)", async () => {
