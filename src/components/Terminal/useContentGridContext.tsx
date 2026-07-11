@@ -292,6 +292,7 @@ export function useContentGridContext({
     getTerminal,
     getActiveTabId,
     setFocused,
+    activeDockTerminalId,
   } = usePanelStore(
     useShallow((state) => ({
       storeTerminalIds: state.panelIds,
@@ -306,6 +307,7 @@ export function useContentGridContext({
       getTerminal: state.getTerminal,
       getActiveTabId: state.getActiveTabId,
       setFocused: state.setFocused,
+      activeDockTerminalId: state.activeDockTerminalId,
     }))
   );
 
@@ -1093,9 +1095,10 @@ export function useContentGridContext({
             groupId: maximizedGroup.id,
             groupPanels: maximizedGroupPanels,
             getActiveTabId,
+            activeDockTerminalId,
           })
         : null,
-    [focusedId, getActiveTabId, maximizedGroup, maximizedGroupPanels]
+    [activeDockTerminalId, focusedId, getActiveTabId, maximizedGroup, maximizedGroupPanels]
   );
 
   useEffect(() => {
