@@ -148,16 +148,31 @@ describe("panelStore.addPanel dockability guard (#11054)", () => {
     expect(usePanelStore.getState().panelsById[id!]?.location).toBe("grid");
   });
 
+  it("does not activate the dock for a redirected (non-dockable) dock request", async () => {
+    // The create-focus wrapper keys on the COMMITTED location: a browser
+    // requested into the dock is redirected to the grid, so it must NOT take
+    // the dock-activation path — otherwise activeDockTerminalId would point at a
+    // panel that isn't actually in the dock.
+    const id = await usePanelStore
+      .getState()
+      .addPanel({ kind: "browser", location: "dock", activateDockOnCreate: true });
+
+    expect(id).toBeTruthy();
+    const state = usePanelStore.getState();
+    expect(state.panelsById[id!]?.location).toBe("grid");
+    expect(state.activeDockTerminalId).toBeNull();
+  });
+
   it("redirects a restore-shaped dock request (preserved id + saved dock location) to the grid", async () => {
     // This is the addPanel-contract half of the hydration rescue, not a full
     // restart. On restart, `buildArgsForNonPtyRecreation` (statePatcher.ts)
-    // forwards a persisted non-PTY panel's saved `location: "dock"` and
-    // preserves its id, then `restorePanelsPhase` calls `addPanel` with those
-    // args — both verified by the mocked-addPanel hydration tests in
-    // stateHydration.panelRehydration. Here we prove the other half: addPanel
-    // redirects that request to the grid while preserving the id, so a
-    // previously stranded panel comes back instead of carrying invisible dock
-    // state forever.
+    // forwards a persisted non-PTY panel's saved `location`, and
+    // `restorePanelsPhase` calls `addPanel` with the restored id/config (the
+    // latter covered by the mocked-addPanel hydration tests in
+    // stateHydration.panelRehydration). Here we prove the other half: given a
+    // restore-shaped dock request, addPanel redirects it to the grid while
+    // preserving the id — so a previously stranded panel comes back instead of
+    // carrying invisible dock state forever.
     const id = await usePanelStore.getState().addPanel({
       kind: "browser",
       location: "dock",

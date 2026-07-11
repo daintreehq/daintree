@@ -361,9 +361,15 @@ export const usePanelStore = create<PanelGridState>()(
         // rescued grid panel would skip grid focus AND falsely take the dock-
         // activation path below — which the registry's atomic commit never ran
         // for it, since that path requires the panel to actually land in the dock.
-        const committedLocation = get().panelsById[id]?.location;
-        const committedToGrid = committedLocation === "grid" || committedLocation === undefined;
-        const committedToDock = committedLocation === "dock";
+        // If the panel was removed during addPanel's async tail (a PTY prewarm
+        // await, a project switch, or an explicit removePanel), the lookup is
+        // undefined — there is nothing to focus, so fall through to neither
+        // branch rather than treating a missing panel as a grid panel.
+        const committedPanel = get().panelsById[id];
+        const committedToGrid =
+          committedPanel !== undefined &&
+          (committedPanel.location === "grid" || committedPanel.location === undefined);
+        const committedToDock = committedPanel?.location === "dock";
         // Skip the per-panel focus mutation while a hydration batch is collecting panels:
         // firing `set({ focusedId })` here would schedule one extra render per panel and
         // defeat the batch's single-render guarantee. The arbitrary "last panel added"
