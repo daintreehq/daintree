@@ -99,11 +99,15 @@ function fileChipTitle(panel: FilePanelData): string {
 }
 
 // Host beats the generic "Browser" title in the chip, mirroring BrowserPane's
-// displayTitle (a page-supplied title still wins).
+// displayTitle (a page-supplied title still wins; a user-locked rename always
+// wins). Falls back to the kind title when there's no host to show (e.g.
+// about:blank, whose URL.host is empty) so the chip is never blank.
 function browserChipTitle(panel: BrowserPanelData): string {
+  if (panel.titleMode === "user") return panel.title;
   if (panel.title && panel.title !== "Browser") return panel.title;
   const currentUrl = panel.browserHistory?.present || panel.browserUrl || "";
-  return currentUrl ? extractHostPort(currentUrl) : panel.title;
+  const host = currentUrl ? extractHostPort(currentUrl) : "";
+  return host || panel.title;
 }
 
 export function ContentDock({ density = "normal" }: ContentDockProps) {

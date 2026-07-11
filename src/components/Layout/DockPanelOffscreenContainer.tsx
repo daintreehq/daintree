@@ -3,7 +3,7 @@ import { canDuplicatePanelKind } from "@/services/terminal/panelDuplicationServi
 import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { usePanelStore, useWorktreeSelectionStore } from "@/store";
-import { isDockPanel, type DockPanelData } from "@shared/types/panel";
+import { isDockPanel, isPtyPanel, type DockPanelData } from "@shared/types/panel";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { DockedPanel } from "@/components/Terminal/DockedPanel";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
@@ -337,7 +337,11 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
                   terminal={terminal}
                   onPopoverClose={handlePopoverClose}
                   onAddTab={
-                    isSinglePanel && canDuplicatePanelKind(terminal.kind)
+                    // Dock tab groups are PTY-only (ContentDock resolves groups
+                    // through isPtyPanel), so only PTY panels get the add-tab
+                    // affordance. A duplicable non-PTY kind like browser would
+                    // otherwise spawn a dock group the dock can't render as one.
+                    isSinglePanel && isPtyPanel(terminal) && canDuplicatePanelKind(terminal.kind)
                       ? () => handleAddTabForPanel(terminal)
                       : undefined
                   }

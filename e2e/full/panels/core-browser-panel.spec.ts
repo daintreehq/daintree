@@ -305,8 +305,9 @@ test.describe.serial("Core: Browser Panel", () => {
       await expect(gridBrowsers).toHaveCount(0, { timeout: T_MEDIUM });
 
       // A single dock chip appears; clicking opens the popover with the live
-      // browser relocated into it. Its URL survived the move — the webview's
-      // guest is preserved by the offscreen container's moveBefore relocation.
+      // browser relocated into it via the offscreen container's moveBefore, and
+      // its navigation state survives the relocation (address bar still page-a).
+      // (This asserts URL/history survival, not full guest-DOM preservation.)
       const chip = window.locator("[data-dock-item]");
       await expect(chip).toHaveCount(1, { timeout: T_MEDIUM });
       await chip.click();
@@ -321,10 +322,13 @@ test.describe.serial("Core: Browser Panel", () => {
         window.locator('[data-dock-portal-target] [data-testid="panel-move-to-grid"]')
       ).toBeVisible({ timeout: T_SHORT });
 
-      // Double-click restores the panel to the grid.
+      // Double-click restores the panel to the grid with its URL intact.
       await chip.dblclick();
       await expect(gridBrowsers).toHaveCount(1, { timeout: T_MEDIUM });
       await expect(chip).toHaveCount(0, { timeout: T_MEDIUM });
+      await expect(gridBrowsers.locator(SEL.browser.addressBar)).toHaveValue(/page-a/, {
+        timeout: T_MEDIUM,
+      });
     });
   });
 
