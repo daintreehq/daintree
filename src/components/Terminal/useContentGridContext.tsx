@@ -25,6 +25,8 @@ import { getNarrowPanel, getRenderablePanel } from "@/store/slices/panelRegistry
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
 import { useProjectStore } from "@/store/projectStore";
+import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { isDockPanelRendered } from "@/components/Layout/dockPanelVisibility";
 import { computeGridSelectedAgentIds } from "./contentGridAgentFilter";
 import { buildFleetPanels } from "./contentGridFleetPanels";
 import { useDndPlaceholder, useIsDragging, GRID_PLACEHOLDER_ID } from "@/components/DragDrop";
@@ -322,6 +324,7 @@ export function useContentGridContext({
     rawMaximizedId !== null && closingIds.has(rawMaximizedId) ? null : rawMaximizedId;
 
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
+  const helpTerminalId = useHelpPanelStore((state) => state.terminalId);
   const showProjectPulse = usePreferencesStore((state) => state.showProjectPulse);
   const currentProject = useProjectStore((state) => state.currentProject);
   const isAvailabilityInitialized = useCliAvailabilityStore((s) => s.isInitialized);
@@ -1087,6 +1090,26 @@ export function useContentGridContext({
       .map((raw) => getRenderablePanel(byId, raw.id))
       .filter((p): p is PanelInstance => p !== undefined);
   }, [getTabGroupPanels, maximizedGroup]);
+  // `activeDockTerminalId` outlives the popover it names — the offscreen
+  // container's watchdog keeps it pointing at a panel the dock has filtered out
+  // (e.g. after a worktree switch) so the popover can reopen on the way back.
+  // Intersect it with what the dock actually renders, or focus enforcement below
+  // would stand down for a popover that isn't on screen and strand focus outside
+  // the maximized group (#11065).
+  // `panelsById` is read non-reactively on purpose: subscribing to the panel
+  // object would re-render this hook on every agent-state tick of that terminal
+  // (#8593). The snapshot is safe because every transition that could invalidate
+  // it also moves one of the reactive deps below — a dock panel that is trashed,
+  // removed, or moved to the grid has its pointer cleared or its trash entry set,
+  // and a worktree switch changes `activeWorktreeId`.
+  const openDockPopoverId = useMemo(() => {
+    if (!activeDockTerminalId) return null;
+    const panel = panelStoreApi.getState().panelsById[activeDockTerminalId];
+    return isDockPanelRendered(panel, { trashedTerminals, helpTerminalId, activeWorktreeId })
+      ? activeDockTerminalId
+      : null;
+  }, [activeDockTerminalId, trashedTerminals, helpTerminalId, activeWorktreeId]);
+
   const maximizedGroupFocusTarget = useMemo(
     () =>
       maximizedGroup
@@ -1095,10 +1118,10 @@ export function useContentGridContext({
             groupId: maximizedGroup.id,
             groupPanels: maximizedGroupPanels,
             getActiveTabId,
-            activeDockTerminalId,
+            openDockPopoverId,
           })
         : null,
-    [activeDockTerminalId, focusedId, getActiveTabId, maximizedGroup, maximizedGroupPanels]
+    [focusedId, getActiveTabId, maximizedGroup, maximizedGroupPanels, openDockPopoverId]
   );
 
   useEffect(() => {

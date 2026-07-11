@@ -23,7 +23,7 @@ describe("getMaximizedGroupFocusTarget", () => {
       groupId: "group-1",
       groupPanels,
       getActiveTabId: () => "term-1",
-      activeDockTerminalId: null,
+      openDockPopoverId: null,
     });
 
     expect(nextFocus).toBe("term-2");
@@ -35,7 +35,7 @@ describe("getMaximizedGroupFocusTarget", () => {
       groupId: "group-1",
       groupPanels,
       getActiveTabId: () => "term-2",
-      activeDockTerminalId: null,
+      openDockPopoverId: null,
     });
 
     expect(nextFocus).toBe("term-2");
@@ -47,7 +47,7 @@ describe("getMaximizedGroupFocusTarget", () => {
       groupId: "group-1",
       groupPanels,
       getActiveTabId: () => "missing-panel",
-      activeDockTerminalId: null,
+      openDockPopoverId: null,
     });
 
     expect(nextFocus).toBe("term-1");
@@ -59,7 +59,7 @@ describe("getMaximizedGroupFocusTarget", () => {
       groupId: "group-1",
       groupPanels,
       getActiveTabId: () => "term-2",
-      activeDockTerminalId: "dock-1",
+      openDockPopoverId: "dock-1",
     });
 
     expect(nextFocus).toBeNull();
@@ -73,10 +73,10 @@ describe("getMaximizedGroupFocusTarget", () => {
       getActiveTabId: () => "term-2",
     };
 
-    expect(getMaximizedGroupFocusTarget({ ...args, activeDockTerminalId: "dock-1" })).toBeNull();
+    expect(getMaximizedGroupFocusTarget({ ...args, openDockPopoverId: "dock-1" })).toBeNull();
     // `closeDockTerminal` clears only `activeDockTerminalId`, leaving focus on
     // the closed dock terminal — enforcement resumes and reclaims the group.
-    expect(getMaximizedGroupFocusTarget({ ...args, activeDockTerminalId: null })).toBe("term-2");
+    expect(getMaximizedGroupFocusTarget({ ...args, openDockPopoverId: null })).toBe("term-2");
   });
 
   it("still rescues stale focus while an unrelated dock popover is open", () => {
@@ -85,7 +85,7 @@ describe("getMaximizedGroupFocusTarget", () => {
       groupId: "group-1",
       groupPanels,
       getActiveTabId: () => "term-2",
-      activeDockTerminalId: "dock-1",
+      openDockPopoverId: "dock-1",
     });
 
     expect(nextFocus).toBe("term-2");
@@ -97,7 +97,7 @@ describe("getMaximizedGroupFocusTarget", () => {
       groupId: "group-1",
       groupPanels,
       getActiveTabId: () => "term-2",
-      activeDockTerminalId: null,
+      openDockPopoverId: null,
     });
 
     expect(nextFocus).toBe("term-2");
