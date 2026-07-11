@@ -44,14 +44,15 @@ function applyAutocompleteItem(
 
   const currentValue = view.state.doc.toString();
   const caret = view.state.selection.main.head;
-  // Reparse against the live document to survive edits between render and apply;
-  // fall back to the stored context if the token no longer matches.
-  const ctx =
-    getActiveCompletionContext(
-      currentValue,
-      caret,
-      new Set([latest.activeCompletionContext.triggerChar])
-    ) ?? latest.activeCompletionContext;
+  // Reparse against the live document so we never splice using stale offsets: if
+  // the token the caret sits in no longer matches the open menu's trigger (the
+  // doc changed out from under us), abort rather than corrupt unrelated text.
+  const ctx = getActiveCompletionContext(
+    currentValue,
+    caret,
+    new Set([latest.activeCompletionContext.triggerChar])
+  );
+  if (!ctx) return;
 
   const action = mode === "enter" ? (item.enterAction ?? "insert") : "insert";
 

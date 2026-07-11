@@ -16,8 +16,9 @@ export interface ActiveCompletionContext {
  * Detect the completion token the caret sits in. The token is the
  * whitespace-delimited run containing the caret; it opens a menu only when its
  * FIRST char is an active trigger — a start-or-whitespace boundary that rejects
- * `email@x`, `a/b`, `http://…` while still allowing slashes inside the token
- * (`@src/App.tsx`). A doubled trigger (`//help`, `$$foo`, `@@x`) is rejected.
+ * `email@x`, `a/b`, `http://…` while still allowing OTHER triggers inside the
+ * token (the `/` in `@src/App.tsx`). A repeated instance of the SAME trigger in
+ * the query rejects it (`//help`, `$$foo`, `@@x`, and slash-path `/usr/bin`).
  */
 export function getActiveCompletionContext(
   text: string,
@@ -34,17 +35,14 @@ export function getActiveCompletionContext(
 
   const triggerChar = text[start]!;
   if (!activeTriggers.has(triggerChar as CompletionTrigger)) return null;
-  if (text[start + 1] === triggerChar) return null;
+
+  const query = text.slice(start + 1, caret);
+  if (query.includes(triggerChar)) return null;
 
   let tokenEnd = caret;
   while (tokenEnd < text.length && !/\s/.test(text[tokenEnd]!)) tokenEnd++;
 
-  return {
-    triggerChar: triggerChar as CompletionTrigger,
-    start,
-    tokenEnd,
-    query: text.slice(start + 1, caret),
-  };
+  return { triggerChar: triggerChar as CompletionTrigger, start, tokenEnd, query };
 }
 
 /** Daintree's own `@` providers; each claims its prefix ahead of `@file`. */

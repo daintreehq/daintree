@@ -146,7 +146,7 @@ describe("AutocompleteMenu", () => {
     expect(screen.getByRole("listbox").getAttribute("aria-busy")).toBeNull();
   });
 
-  it("dims only stale rows and ignores clicks on them", () => {
+  it("marks only stale rows disabled and ignores clicks on them", () => {
     const onSelect = vi.fn();
     const items: AutocompleteItem[] = [
       { key: "fresh", label: "fresh", insertText: "fresh" },
@@ -167,13 +167,15 @@ describe("AutocompleteMenu", () => {
     const options = screen.getAllByRole("option");
     const freshRow = options.find((o) => within(o).queryByText("fresh"))!;
     const staleRow = options.find((o) => within(o).queryByText("stale"))!;
-    expect(staleRow.className).toContain("opacity-50");
-    expect(freshRow.className).not.toContain("opacity-50");
+    // Only the stale row is flagged disabled to assistive tech.
+    expect(staleRow.getAttribute("aria-disabled")).toBe("true");
+    expect(freshRow.getAttribute("aria-disabled")).toBeNull();
 
+    // A click on a stale row is a no-op; a fresh row selects that exact item.
     staleRow.click();
     expect(onSelect).not.toHaveBeenCalled();
     freshRow.click();
-    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onSelect).toHaveBeenCalledWith(items[0]);
   });
 
   it("renders a neutral, screen-reader-labeled badge for skill, app, and plugin items", () => {

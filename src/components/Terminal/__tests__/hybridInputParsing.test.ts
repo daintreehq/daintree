@@ -69,6 +69,34 @@ describe("getActiveCompletionContext", () => {
     expect(getActiveCompletionContext("@@x", 3, ALL)).toBeNull();
   });
 
+  it("rejects a repeated same-trigger later in the token (/usr/bin, @foo@bar)", () => {
+    // A second `/` in a `/` token is a path, not a command session.
+    expect(getActiveCompletionContext("/usr/bin", "/usr/bin".length, ALL)).toBeNull();
+    // ...but a bare `/usr` (no inner slash yet) is still a command session.
+    expect(getActiveCompletionContext("/usr", 4, ALL)?.query).toBe("usr");
+    // A second `@` in an `@` token is rejected (matches the old last-@ parser).
+    expect(getActiveCompletionContext("@foo@bar", "@foo@bar".length, ALL)).toBeNull();
+    // The `/` inside an `@` file token is NOT a repeat — it stays open.
+    expect(getActiveCompletionContext("@src/App.tsx", "@src/App.tsx".length, ALL)?.query).toBe(
+      "src/App.tsx"
+    );
+  });
+
+  it("handles caret exactly at boundaries and after CRLF", () => {
+    // Caret on the trigger itself (start === caret) — nothing typed yet.
+    expect(getActiveCompletionContext("echo @", 5, ALL)).toBeNull();
+    // Caret at token end just before whitespace — active.
+    expect(getActiveCompletionContext("@diff here", 5, ALL)).toMatchObject({
+      triggerChar: "@",
+      tokenEnd: 5,
+      query: "diff",
+    });
+    // Caret immediately after a delimiter (before a trigger not yet typed past).
+    expect(getActiveCompletionContext("a @", 2, ALL)).toBeNull();
+    // Active token after CRLF.
+    expect(getActiveCompletionContext("x\r\n/help", "x\r\n/he".length, ALL)?.triggerChar).toBe("/");
+  });
+
   it("is inactive when the caret is in the token's arguments", () => {
     expect(getActiveCompletionContext("/open src/App.tsx", "/open src/App.tsx".length, ALL)).toBe(
       null

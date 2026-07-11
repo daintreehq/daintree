@@ -188,6 +188,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
                       type="button"
                       role="option"
                       aria-selected={idx === selectedIndex}
+                      aria-disabled={isRowStale || undefined}
                       className={cn(
                         "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left transition-[color,background-color,opacity] duration-150 ease-out",
                         idx === selectedIndex

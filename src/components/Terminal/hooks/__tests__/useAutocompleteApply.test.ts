@@ -16,6 +16,7 @@ function setup(doc: string, item: AutocompleteItem, context: ActiveCompletionCon
   });
   const applyEditorValue = vi.fn<Params["applyEditorValue"]>();
   const sendText = vi.fn<Params["sendText"]>();
+  const setActiveCompletionContext = vi.fn<Params["setActiveCompletionContext"]>();
   const latest: Latest = {
     autocompleteItems: [item],
     selectedIndex: 0,
@@ -28,12 +29,12 @@ function setup(doc: string, item: AutocompleteItem, context: ActiveCompletionCon
     lastQueryRef: { current: "" },
     applyEditorValue,
     sendText,
-    setActiveCompletionContext: vi.fn(),
+    setActiveCompletionContext,
     setSelectedIndex: vi.fn(),
   };
 
   const { result } = renderHook(() => useAutocompleteApply(params));
-  return { ...result.current, applyEditorValue, sendText, view };
+  return { ...result.current, applyEditorValue, sendText, setActiveCompletionContext, view };
 }
 
 const dollarContext: ActiveCompletionContext = {
@@ -83,17 +84,22 @@ describe("useAutocompleteApply", () => {
     }
   });
 
-  it("a $ capability inserts (not executes) on Enter — enterAction is insert", () => {
-    const { applyAutocompleteSelection, applyEditorValue, sendText, view } = setup(
-      "$plug",
-      capability,
-      dollarContext
-    );
+  it("a $ capability inserts (not executes) on Enter and closes the menu", () => {
+    const {
+      applyAutocompleteSelection,
+      applyEditorValue,
+      sendText,
+      setActiveCompletionContext,
+      view,
+    } = setup("$plug", capability, dollarContext);
     try {
       expect(applyAutocompleteSelection("enter")).toBe(true);
       expect(applyEditorValue).toHaveBeenCalledTimes(1);
       expect(applyEditorValue.mock.calls[0]![0]).toBe("$plugin-creator ");
       expect(sendText).not.toHaveBeenCalled();
+      // Menu closes after the first Enter — so the NEXT Enter has no active
+      // context and falls through to a normal send (the two-Enter $ flow).
+      expect(setActiveCompletionContext).toHaveBeenCalledWith(null);
     } finally {
       view.destroy();
     }
