@@ -15,13 +15,7 @@ import {
   getAllAtSelectionTokens,
   getAllAtDiffTokens,
   type DiffContextType,
-} from "../hybridInputParsing";
-import type {
-  AtFileContext,
-  SlashCommandContext,
-  AtDiffContext,
-  AtTerminalContext,
-  AtSelectionContext,
+  type ActiveCompletionContext,
 } from "../hybridInputParsing";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
@@ -132,11 +126,7 @@ interface UseTokenResolutionParams {
     options?: { selection?: EditorSelection; focus?: boolean }
   ) => void;
   setIsExpanded: Dispatch<SetStateAction<boolean>>;
-  setAtContext: Dispatch<SetStateAction<AtFileContext | null>>;
-  setSlashContext: Dispatch<SetStateAction<SlashCommandContext | null>>;
-  setDiffContext: Dispatch<SetStateAction<AtDiffContext | null>>;
-  setTerminalContext: Dispatch<SetStateAction<AtTerminalContext | null>>;
-  setSelectionContext: Dispatch<SetStateAction<AtSelectionContext | null>>;
+  setActiveCompletionContext: Dispatch<SetStateAction<ActiveCompletionContext | null>>;
   terminalId: string;
   cwd: string;
   agentId?: BuiltInAgentId;
@@ -146,11 +136,7 @@ export function useTokenResolution({
   latestRef,
   applyEditorValue,
   setIsExpanded,
-  setAtContext,
-  setSlashContext,
-  setDiffContext,
-  setTerminalContext,
-  setSelectionContext,
+  setActiveCompletionContext,
   terminalId,
   cwd,
   agentId,
@@ -248,11 +234,7 @@ export function useTokenResolution({
       setIsExpanded(false);
       applyEditorValue("", { selection: EditorSelection.create([EditorSelection.cursor(0)]) });
       latest.clearDraftInput(latest.terminalId, latest.projectId);
-      setAtContext(null);
-      setSlashContext(null);
-      setDiffContext(null);
-      setTerminalContext(null);
-      setSelectionContext(null);
+      setActiveCompletionContext(null);
     },
     [
       applyEditorValue,
@@ -260,12 +242,8 @@ export function useTokenResolution({
       cwd,
       terminalId,
       latestRef,
-      setAtContext,
-      setDiffContext,
+      setActiveCompletionContext,
       setIsExpanded,
-      setSelectionContext,
-      setSlashContext,
-      setTerminalContext,
     ]
   );
 

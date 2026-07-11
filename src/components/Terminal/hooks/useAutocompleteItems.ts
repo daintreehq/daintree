@@ -1,101 +1,124 @@
 import { useMemo } from "react";
 import type { AutocompleteItem } from "../AutocompleteMenu";
-import type { AtDiffContext, AtTerminalContext, AtSelectionContext } from "../hybridInputParsing";
+import {
+  getDaintreeAtClaim,
+  formatAtFileToken,
+  type ActiveCompletionContext,
+} from "../hybridInputParsing";
 
 interface UseAutocompleteItemsParams {
-  activeMode: "command" | "file" | "diff" | "terminal" | "selection" | null;
-  diffContext: AtDiffContext | null;
-  terminalContext: AtTerminalContext | null;
-  selectionContext: AtSelectionContext | null;
-  value: string;
+  activeCompletionContext: ActiveCompletionContext | null;
   autocompleteFiles: string[];
   isAutocompleteLoading: boolean;
   autocompleteCommands: AutocompleteItem[];
   isCommandsLoading: boolean;
 }
 
+const DIFF_ITEMS: AutocompleteItem[] = [
+  {
+    key: "diff",
+    label: "Working tree diff (@diff)",
+    insertText: "@diff",
+    enterAction: "insert",
+    insert: { insert: "resolve", resolverId: "diff" },
+  },
+  {
+    key: "diff:staged",
+    label: "Staged diff (@diff:staged)",
+    insertText: "@diff:staged",
+    enterAction: "insert",
+    insert: { insert: "resolve", resolverId: "diff" },
+  },
+  {
+    key: "diff:head",
+    label: "HEAD diff (@diff:head)",
+    insertText: "@diff:head",
+    enterAction: "insert",
+    insert: { insert: "resolve", resolverId: "diff" },
+  },
+];
+
+const TERMINAL_ITEM: AutocompleteItem = {
+  key: "terminal",
+  label: "Terminal output (@terminal)",
+  insertText: "@terminal",
+  enterAction: "insert",
+  insert: { insert: "resolve", resolverId: "terminal" },
+};
+
+const SELECTION_ITEM: AutocompleteItem = {
+  key: "selection",
+  label: "Terminal selection (@selection)",
+  insertText: "@selection",
+  enterAction: "insert",
+  insert: { insert: "resolve", resolverId: "selection" },
+};
+
+/**
+ * Merge the active trigger's completion items. `/` and `$` come pre-mapped from
+ * discovery; `@` is served by Daintree's diff/terminal/selection providers
+ * (which claim their prefixes ahead of file search) with `@file` fuzzy search
+ * as the fallback provider.
+ */
 export function useAutocompleteItems({
-  activeMode,
-  diffContext,
-  terminalContext,
-  selectionContext,
-  value,
+  activeCompletionContext,
   autocompleteFiles,
   isAutocompleteLoading,
   autocompleteCommands,
   isCommandsLoading,
 }: UseAutocompleteItemsParams) {
-  const autocompleteDiffItems = useMemo((): AutocompleteItem[] => {
-    if (!diffContext) return [];
-    const items: AutocompleteItem[] = [
-      { key: "diff", label: "Working tree diff (@diff)", insertText: "@diff" },
-      { key: "diff:staged", label: "Staged diff (@diff:staged)", insertText: "@diff:staged" },
-      { key: "diff:head", label: "HEAD diff (@diff:head)", insertText: "@diff:head" },
-    ];
-    const partial =
-      diffContext.tokenEnd > diffContext.atStart + 1
-        ? value.slice(diffContext.atStart + 1, diffContext.tokenEnd)
-        : "";
-    if (!partial) return items;
-    return items.filter((item) => item.insertText.slice(1).startsWith(partial));
-  }, [diffContext, value]);
+  const query = activeCompletionContext?.query ?? "";
 
-  const autocompleteTerminalItems = useMemo((): AutocompleteItem[] => {
-    if (!terminalContext) return [];
-    return [{ key: "terminal", label: "Terminal output (@terminal)", insertText: "@terminal" }];
-  }, [terminalContext]);
-
-  const autocompleteSelectionItems = useMemo((): AutocompleteItem[] => {
-    if (!selectionContext) return [];
-    return [
-      { key: "selection", label: "Terminal selection (@selection)", insertText: "@selection" },
-    ];
-  }, [selectionContext]);
-
-  const autocompleteItems = useMemo((): AutocompleteItem[] => {
-    if (activeMode === "terminal") {
-      return autocompleteTerminalItems;
-    }
-    if (activeMode === "selection") {
-      return autocompleteSelectionItems;
-    }
-    if (activeMode === "diff") {
-      return autocompleteDiffItems;
-    }
-    if (activeMode === "file") {
+  const fileItems = useMemo(
+    (): AutocompleteItem[] =>
       // Basename first, directory as the dimmed description — scannable in a
       // dense list and disambiguates duplicate filenames across directories.
-      return autocompleteFiles.map((file) => {
+      autocompleteFiles.map((file) => {
         const sep = Math.max(file.lastIndexOf("/"), file.lastIndexOf("\\"));
         const base = sep >= 0 ? file.slice(sep + 1) : file;
         const dir = sep >= 0 ? file.slice(0, sep) : "";
         return {
           key: file,
           label: base || file,
-          insertText: file,
+          insertText: formatAtFileToken(file),
           description: dir || undefined,
+          enterAction: "insert",
+          insert: "literal",
         };
-      });
-    }
-    if (activeMode === "command") {
-      return autocompleteCommands;
-    }
-    return [];
-  }, [
-    activeMode,
-    autocompleteTerminalItems,
-    autocompleteSelectionItems,
-    autocompleteDiffItems,
-    autocompleteCommands,
-    autocompleteFiles,
-  ]);
+      }),
+    [autocompleteFiles]
+  );
 
-  const isLoading =
-    activeMode === "file"
-      ? isAutocompleteLoading
-      : activeMode === "command"
-        ? isCommandsLoading
-        : false;
+  const diffItems = useMemo((): AutocompleteItem[] => {
+    if (!query) return DIFF_ITEMS;
+    return DIFF_ITEMS.filter((item) => item.insertText.slice(1).startsWith(query));
+  }, [query]);
+
+  const { autocompleteItems, isLoading } = useMemo((): {
+    autocompleteItems: AutocompleteItem[];
+    isLoading: boolean;
+  } => {
+    const ctx = activeCompletionContext;
+    if (!ctx) return { autocompleteItems: [], isLoading: false };
+
+    if (ctx.triggerChar === "/" || ctx.triggerChar === "$") {
+      return { autocompleteItems: autocompleteCommands, isLoading: isCommandsLoading };
+    }
+
+    // ctx.triggerChar === "@": Daintree providers claim their prefix; else file.
+    const claim = getDaintreeAtClaim(ctx.query);
+    if (claim === "terminal") return { autocompleteItems: [TERMINAL_ITEM], isLoading: false };
+    if (claim === "selection") return { autocompleteItems: [SELECTION_ITEM], isLoading: false };
+    if (claim === "diff") return { autocompleteItems: diffItems, isLoading: false };
+    return { autocompleteItems: fileItems, isLoading: isAutocompleteLoading };
+  }, [
+    activeCompletionContext,
+    autocompleteCommands,
+    isCommandsLoading,
+    diffItems,
+    fileItems,
+    isAutocompleteLoading,
+  ]);
 
   return { autocompleteItems, isLoading };
 }

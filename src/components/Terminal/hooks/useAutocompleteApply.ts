@@ -2,24 +2,12 @@ import { useCallback } from "react";
 import { EditorSelection } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import type { AutocompleteItem } from "../AutocompleteMenu";
-import {
-  getSlashCommandContext,
-  getAtFileContext,
-  getDiffContext,
-  getTerminalContext,
-  getSelectionContext,
-  formatAtFileToken,
-} from "../hybridInputParsing";
+import { getActiveCompletionContext, type ActiveCompletionContext } from "../hybridInputParsing";
 
 interface LatestRefShape {
-  activeMode: "command" | "file" | "diff" | "terminal" | "selection" | null;
   autocompleteItems: AutocompleteItem[];
   selectedIndex: number;
-  slashContext: import("../hybridInputParsing").SlashCommandContext | null;
-  atContext: import("../hybridInputParsing").AtFileContext | null;
-  diffContext: import("../hybridInputParsing").AtDiffContext | null;
-  terminalContext: import("../hybridInputParsing").AtTerminalContext | null;
-  selectionContext: import("../hybridInputParsing").AtSelectionContext | null;
+  activeCompletionContext: ActiveCompletionContext | null;
 }
 
 interface UseAutocompleteApplyParams {
@@ -31,160 +19,68 @@ interface UseAutocompleteApplyParams {
     options?: { selection?: EditorSelection; focus?: boolean }
   ) => void;
   sendText: (text: string) => void;
-  setAtContext: (value: import("../hybridInputParsing").AtFileContext | null) => void;
-  setSlashContext: (value: import("../hybridInputParsing").SlashCommandContext | null) => void;
-  setDiffContext: (value: import("../hybridInputParsing").AtDiffContext | null) => void;
-  setTerminalContext: (value: import("../hybridInputParsing").AtTerminalContext | null) => void;
-  setSelectionContext: (value: import("../hybridInputParsing").AtSelectionContext | null) => void;
+  setActiveCompletionContext: (value: ActiveCompletionContext | null) => void;
   setSelectedIndex: (value: number) => void;
 }
 
+/** "enter" honors the item's own enterAction; "complete" (Tab/click) always inserts. */
+type ApplyMode = "enter" | "complete";
+
 function applyAutocompleteItem(
   item: AutocompleteItem,
-  action: "insert" | "execute",
+  mode: ApplyMode,
   editorViewRef: React.RefObject<EditorView | null>,
   latestRef: React.RefObject<LatestRefShape | null>,
   lastQueryRef: React.RefObject<string>,
   applyEditorValue: UseAutocompleteApplyParams["applyEditorValue"],
   sendText: UseAutocompleteApplyParams["sendText"],
-  setAtContext: UseAutocompleteApplyParams["setAtContext"],
-  setSlashContext: UseAutocompleteApplyParams["setSlashContext"],
-  setDiffContext: UseAutocompleteApplyParams["setDiffContext"],
-  setTerminalContext: UseAutocompleteApplyParams["setTerminalContext"],
-  setSelectionContext: UseAutocompleteApplyParams["setSelectionContext"],
+  setActiveCompletionContext: UseAutocompleteApplyParams["setActiveCompletionContext"],
   setSelectedIndex: UseAutocompleteApplyParams["setSelectedIndex"]
 ) {
   const view = editorViewRef.current;
   if (!view) return;
   const latest = latestRef.current;
-  if (!latest) return;
+  if (!latest?.activeCompletionContext) return;
 
   const currentValue = view.state.doc.toString();
   const caret = view.state.selection.main.head;
-  const slashCtx = getSlashCommandContext(currentValue, caret) ?? latest.slashContext;
+  // Reparse against the live document so we never splice using stale offsets: if
+  // the token the caret sits in no longer matches the open menu's trigger (the
+  // doc changed out from under us), abort rather than corrupt unrelated text.
+  const ctx = getActiveCompletionContext(
+    currentValue,
+    caret,
+    new Set([latest.activeCompletionContext.triggerChar])
+  );
+  if (!ctx) return;
 
-  if (latest.activeMode === "terminal") {
-    const ctx = getTerminalContext(currentValue, caret) ?? latest.terminalContext;
-    if (!ctx) return;
-    const token = `${item.insertText} `;
-    const before = currentValue.slice(0, ctx.atStart);
-    const after = currentValue.slice(ctx.tokenEnd);
-    const nextValue = `${before}${token}${after}`;
-    const nextCaret = before.length + token.length;
-    applyEditorValue(nextValue, {
-      selection: EditorSelection.create([EditorSelection.cursor(nextCaret)]),
-      focus: true,
-    });
-    setTerminalContext(null);
+  const action = mode === "enter" ? (item.enterAction ?? "insert") : "insert";
+
+  const before = currentValue.slice(0, ctx.start);
+  const after = currentValue.slice(ctx.tokenEnd);
+  const hasLeadingSpace = after.startsWith(" ");
+  const shouldAppendSpace = action === "insert" && !hasLeadingSpace;
+  const token = shouldAppendSpace ? `${item.insertText} ` : item.insertText;
+  const nextValue = `${before}${token}${after}`;
+
+  const clear = () => {
+    setActiveCompletionContext(null);
     setSelectedIndex(0);
     lastQueryRef.current = "";
+  };
+
+  if (action === "execute") {
+    sendText(nextValue);
+    clear();
     return;
   }
 
-  if (latest.activeMode === "selection") {
-    const ctx = getSelectionContext(currentValue, caret) ?? latest.selectionContext;
-    if (!ctx) return;
-    const token = `${item.insertText} `;
-    const before = currentValue.slice(0, ctx.atStart);
-    const after = currentValue.slice(ctx.tokenEnd);
-    const nextValue = `${before}${token}${after}`;
-    const nextCaret = before.length + token.length;
-    applyEditorValue(nextValue, {
-      selection: EditorSelection.create([EditorSelection.cursor(nextCaret)]),
-      focus: true,
-    });
-    setSelectionContext(null);
-    setSelectedIndex(0);
-    lastQueryRef.current = "";
-    return;
-  }
-
-  if (latest.activeMode === "diff") {
-    const ctx = getDiffContext(currentValue, caret) ?? latest.diffContext;
-    if (!ctx) return;
-    const token = `${item.insertText} `;
-    const before = currentValue.slice(0, ctx.atStart);
-    const after = currentValue.slice(ctx.tokenEnd);
-    const nextValue = `${before}${token}${after}`;
-    const nextCaret = before.length + token.length;
-    if (action === "execute") {
-      sendText(nextValue);
-      setDiffContext(null);
-      setAtContext(null);
-      setSlashContext(null);
-      setSelectedIndex(0);
-      lastQueryRef.current = "";
-      return;
-    }
-    applyEditorValue(nextValue, {
-      selection: EditorSelection.create([EditorSelection.cursor(nextCaret)]),
-      focus: true,
-    });
-    setDiffContext(null);
-    setAtContext(null);
-    setSlashContext(null);
-    setSelectedIndex(0);
-    lastQueryRef.current = "";
-    return;
-  }
-
-  if (latest.activeMode === "file") {
-    const ctx = getAtFileContext(currentValue, caret);
-    if (!ctx) return;
-    const token = `${formatAtFileToken(item.insertText)} `;
-    const before = currentValue.slice(0, ctx.atStart);
-    const after = currentValue.slice(ctx.tokenEnd);
-    const nextValue = `${before}${token}${after}`;
-    const nextCaret = before.length + token.length;
-    if (action === "execute") {
-      sendText(nextValue);
-      setAtContext(null);
-      setSlashContext(null);
-      setDiffContext(null);
-      setSelectedIndex(0);
-      lastQueryRef.current = "";
-      return;
-    }
-    applyEditorValue(nextValue, {
-      selection: EditorSelection.create([EditorSelection.cursor(nextCaret)]),
-      focus: true,
-    });
-    setAtContext(null);
-    setSlashContext(null);
-    setDiffContext(null);
-    setSelectedIndex(0);
-    lastQueryRef.current = "";
-    return;
-  }
-
-  if (latest.activeMode === "command" && slashCtx) {
-    const before = currentValue.slice(0, slashCtx.start);
-    const after = currentValue.slice(slashCtx.tokenEnd);
-    const hasLeadingSpace = after.startsWith(" ");
-    const shouldAppendSpace = action === "insert" && !hasLeadingSpace;
-    const token = shouldAppendSpace ? `${item.insertText} ` : item.insertText;
-    const nextValue = `${before}${token}${after}`;
-    const nextCaret =
-      before.length + token.length + (action === "insert" && hasLeadingSpace ? 1 : 0);
-    if (action === "execute") {
-      sendText(nextValue);
-      setAtContext(null);
-      setSlashContext(null);
-      setDiffContext(null);
-      setSelectedIndex(0);
-      lastQueryRef.current = "";
-      return;
-    }
-    applyEditorValue(nextValue, {
-      selection: EditorSelection.create([EditorSelection.cursor(nextCaret)]),
-      focus: true,
-    });
-    setAtContext(null);
-    setSlashContext(null);
-    setDiffContext(null);
-    setSelectedIndex(0);
-    lastQueryRef.current = "";
-  }
+  const nextCaret = before.length + token.length + (hasLeadingSpace ? 1 : 0);
+  applyEditorValue(nextValue, {
+    selection: EditorSelection.create([EditorSelection.cursor(nextCaret)]),
+    focus: true,
+  });
+  clear();
 }
 
 export function useAutocompleteApply({
@@ -193,32 +89,24 @@ export function useAutocompleteApply({
   lastQueryRef,
   applyEditorValue,
   sendText,
-  setAtContext,
-  setSlashContext,
-  setDiffContext,
-  setTerminalContext,
-  setSelectionContext,
+  setActiveCompletionContext,
   setSelectedIndex,
 }: UseAutocompleteApplyParams) {
   const applyAutocompleteSelection = useCallback(
-    (action: "insert" | "execute") => {
+    (mode: ApplyMode) => {
       const latest = latestRef.current;
       if (!latest) return false;
       const item = latest.autocompleteItems[latest.selectedIndex];
       if (!item) return false;
       applyAutocompleteItem(
         item,
-        action,
+        mode,
         editorViewRef,
         latestRef,
         lastQueryRef,
         applyEditorValue,
         sendText,
-        setAtContext,
-        setSlashContext,
-        setDiffContext,
-        setTerminalContext,
-        setSelectionContext,
+        setActiveCompletionContext,
         setSelectedIndex
       );
       return true;
@@ -229,11 +117,7 @@ export function useAutocompleteApply({
       lastQueryRef,
       applyEditorValue,
       sendText,
-      setAtContext,
-      setSlashContext,
-      setDiffContext,
-      setTerminalContext,
-      setSelectionContext,
+      setActiveCompletionContext,
       setSelectedIndex,
     ]
   );
@@ -242,17 +126,13 @@ export function useAutocompleteApply({
     (item: AutocompleteItem) =>
       applyAutocompleteItem(
         item,
-        "insert",
+        "complete",
         editorViewRef,
         latestRef,
         lastQueryRef,
         applyEditorValue,
         sendText,
-        setAtContext,
-        setSlashContext,
-        setDiffContext,
-        setTerminalContext,
-        setSelectionContext,
+        setActiveCompletionContext,
         setSelectedIndex
       ),
     [
@@ -261,11 +141,7 @@ export function useAutocompleteApply({
       lastQueryRef,
       applyEditorValue,
       sendText,
-      setAtContext,
-      setSlashContext,
-      setDiffContext,
-      setTerminalContext,
-      setSelectionContext,
+      setActiveCompletionContext,
       setSelectedIndex,
     ]
   );

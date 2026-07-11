@@ -3,13 +3,7 @@ import { EditorView } from "@codemirror/view";
 import { EditorSelection } from "@codemirror/state";
 import type { Compartment } from "@codemirror/state";
 import type { AutocompleteItem } from "../AutocompleteMenu";
-import type {
-  AtFileContext,
-  SlashCommandContext,
-  AtDiffContext,
-  AtTerminalContext,
-  AtSelectionContext,
-} from "../hybridInputParsing";
+import type { ActiveCompletionContext } from "../hybridInputParsing";
 
 interface LatestRefShape {
   terminalId: string;
@@ -17,10 +11,9 @@ interface LatestRefShape {
   disabled: boolean;
   isInitializing: boolean;
   isInHistoryMode: boolean;
-  activeMode: "command" | "file" | "diff" | "terminal" | "selection" | null;
   isAutocompleteOpen: boolean;
   autocompleteItems: AutocompleteItem[];
-  isResultsStale: boolean;
+  staleItemKeys: ReadonlySet<string>;
   selectedIndex: number;
   value: string;
   onSendKey?: (key: string) => void;
@@ -35,7 +28,7 @@ interface UseEditorKeymapParams {
   handledEnterRef: React.MutableRefObject<boolean>;
   editableCompartmentRef: React.RefObject<Compartment>;
   historyPaletteOpenRef: React.RefObject<(() => void) | null>;
-  applyAutocompleteSelection: (action: "insert" | "execute") => boolean;
+  applyAutocompleteSelection: (mode: "enter" | "complete") => boolean;
   handleHistoryNavigation: (direction: "up" | "down") => boolean;
   sendFromEditor: () => void;
   startVoiceWaitSubmit: () => void;
@@ -45,11 +38,7 @@ interface UseEditorKeymapParams {
     terminalId: string,
     projectId?: string
   ) => EditorView["state"] | undefined;
-  setAtContext: Dispatch<SetStateAction<AtFileContext | null>>;
-  setSlashContext: Dispatch<SetStateAction<SlashCommandContext | null>>;
-  setDiffContext: Dispatch<SetStateAction<AtDiffContext | null>>;
-  setTerminalContext: Dispatch<SetStateAction<AtTerminalContext | null>>;
-  setSelectionContext: Dispatch<SetStateAction<AtSelectionContext | null>>;
+  setActiveCompletionContext: Dispatch<SetStateAction<ActiveCompletionContext | null>>;
   setIsExpanded: Dispatch<SetStateAction<boolean>>;
   setSelectedIndex: Dispatch<SetStateAction<number>>;
 }
@@ -83,11 +72,7 @@ export function useEditorKeymap({
   cancelVoiceWaitSubmit,
   stashEditorState,
   popStashedEditorState,
-  setAtContext,
-  setSlashContext,
-  setDiffContext,
-  setTerminalContext,
-  setSelectionContext,
+  setActiveCompletionContext,
   setIsExpanded,
   setSelectedIndex,
 }: UseEditorKeymapParams) {
@@ -106,20 +91,18 @@ export function useEditorKeymap({
 
       // Stale results (query changed since they were produced) must not be
       // accepted by a fast Enter — fall through to the normal send path so
-      // the user's literal text wins over an outdated top match.
-      if (
-        latest.isAutocompleteOpen &&
-        !latest.isResultsStale &&
-        latest.autocompleteItems[latest.selectedIndex]
-      ) {
-        const action = latest.activeMode === "command" ? "execute" : "insert";
-
+      // the user's literal text wins over an outdated top match. Enter behavior
+      // (insert vs execute) is owned by the selected item, not the trigger.
+      const enterItem = latest.isAutocompleteOpen
+        ? latest.autocompleteItems[latest.selectedIndex]
+        : undefined;
+      if (enterItem && !latest.staleItemKeys.has(enterItem.key)) {
         handledEnterRef.current = true;
         setTimeout(() => {
           handledEnterRef.current = false;
         }, 0);
 
-        applyAutocompleteSelection(action);
+        applyAutocompleteSelection("enter");
         return true;
       }
 
@@ -162,11 +145,7 @@ export function useEditorKeymap({
       if (cancelVoiceWaitSubmit()) return true;
 
       if (latest.isAutocompleteOpen) {
-        setAtContext(null);
-        setSlashContext(null);
-        setDiffContext(null);
-        setTerminalContext(null);
-        setSelectionContext(null);
+        setActiveCompletionContext(null);
         return true;
       }
 
@@ -270,11 +249,14 @@ export function useEditorKeymap({
       if (!latest) return false;
       if (isComposingRef.current) return false;
 
-      if (latest.isAutocompleteOpen && latest.autocompleteItems[latest.selectedIndex]) {
-        // Swallow Tab while results are stale — inserting an outdated match
-        // is worse than a no-op, and letting Tab through would move focus.
-        if (latest.isResultsStale) return true;
-        applyAutocompleteSelection("insert");
+      const tabItem = latest.isAutocompleteOpen
+        ? latest.autocompleteItems[latest.selectedIndex]
+        : undefined;
+      if (tabItem) {
+        // Swallow Tab while the selected item is stale — inserting an outdated
+        // match is worse than a no-op, and letting Tab through would move focus.
+        if (latest.staleItemKeys.has(tabItem.key)) return true;
+        applyAutocompleteSelection("complete");
         return true;
       }
 

@@ -2,82 +2,100 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { useAutocompleteState } from "../useAutocompleteState";
+import type { ActiveCompletionContext } from "../../hybridInputParsing";
+import type { AutocompleteItem } from "../../AutocompleteMenu";
+
+type Props = Parameters<typeof useAutocompleteState>[0];
+
+function item(key: string): AutocompleteItem {
+  return { key, label: key, insertText: key };
+}
+
+function atContext(query: string): ActiveCompletionContext {
+  return { triggerChar: "@", start: 0, tokenEnd: query.length + 1, query };
+}
 
 describe("useAutocompleteState", () => {
-  let setSelectedIndex: ReturnType<typeof vi.fn>;
+  let setSelectedIndex: ReturnType<typeof vi.fn<Props["setSelectedIndex"]>>;
+  let setActiveCompletionContext: ReturnType<typeof vi.fn<Props["setActiveCompletionContext"]>>;
   let lastQueryRef: { current: string };
-  let setAtContext: ReturnType<typeof vi.fn>;
-  let setSlashContext: ReturnType<typeof vi.fn>;
-  let setDiffContext: ReturnType<typeof vi.fn>;
-  let setTerminalContext: ReturnType<typeof vi.fn>;
-  let setSelectionContext: ReturnType<typeof vi.fn>;
   let rootRef: { current: HTMLDivElement | null };
 
   beforeEach(() => {
-    setSelectedIndex = vi.fn();
+    setSelectedIndex = vi.fn<Props["setSelectedIndex"]>();
+    setActiveCompletionContext = vi.fn<Props["setActiveCompletionContext"]>();
     lastQueryRef = { current: "" };
-    setAtContext = vi.fn();
-    setSlashContext = vi.fn();
-    setDiffContext = vi.fn();
-    setTerminalContext = vi.fn();
-    setSelectionContext = vi.fn();
     rootRef = { current: document.createElement("div") };
-    vi.restoreAllMocks();
   });
 
-  function render(overrides: Partial<Parameters<typeof useAutocompleteState>[0]> = {}) {
-    return renderHook(() =>
-      useAutocompleteState({
-        isAutocompleteOpen: false,
-        activeMode: null,
-        atContext: null,
-        slashContext: null,
-        diffContext: null,
-        terminalContext: null,
-        selectionContext: null,
-        autocompleteItemsLength: 0,
-        rootRef: rootRef as any,
-        selectedIndex: 0,
-        setSelectedIndex: setSelectedIndex as any,
-        lastQueryRef: lastQueryRef as any,
-        setAtContext: setAtContext as any,
-        setSlashContext: setSlashContext as any,
-        setDiffContext: setDiffContext as any,
-        setTerminalContext: setTerminalContext as any,
-        setSelectionContext: setSelectionContext as any,
-        ...overrides,
-      })
-    );
+  function base(overrides: Partial<Props> = {}): Props {
+    return {
+      isAutocompleteOpen: false,
+      activeCompletionContext: null,
+      autocompleteItems: [],
+      rootRef: rootRef as Props["rootRef"],
+      selectedIndex: 0,
+      setSelectedIndex,
+      lastQueryRef: lastQueryRef as Props["lastQueryRef"],
+      setActiveCompletionContext,
+      ...overrides,
+    };
   }
 
-  describe("query reset", () => {
-    it("resets selectedIndex when query changes", () => {
-      render({
-        activeMode: "command",
-        slashContext: { start: 0, tokenEnd: 5, query: "hel" } as any,
-      });
+  function render(initial: Props) {
+    return renderHook((props: Props) => useAutocompleteState(props), { initialProps: initial });
+  }
+
+  describe("selection", () => {
+    it("resets to the top on a new completion session", () => {
+      render(
+        base({
+          activeCompletionContext: { triggerChar: "/", start: 0, tokenEnd: 4, query: "hel" },
+          autocompleteItems: [item("/help"), item("/hey")],
+          selectedIndex: 3,
+        })
+      );
       expect(setSelectedIndex).toHaveBeenCalledWith(0);
     });
 
-    it("does not reset selectedIndex when query is same as lastQueryRef", () => {
-      lastQueryRef.current = "command:hel";
-      render({
-        activeMode: "command",
-        slashContext: { start: 0, tokenEnd: 5, query: "hel" } as any,
-      });
-      expect(setSelectedIndex).not.toHaveBeenCalled();
+    it("preserves the selected key when async items merge in for the same query", () => {
+      const { rerender } = render(
+        base({
+          activeCompletionContext: atContext("src"),
+          autocompleteItems: [item("f1")],
+          selectedIndex: 0,
+        })
+      );
+      setSelectedIndex.mockClear();
+
+      // A slower provider inserts an item BEFORE the selected one.
+      rerender(
+        base({
+          activeCompletionContext: atContext("src"),
+          autocompleteItems: [item("f0"), item("f1")],
+          selectedIndex: 0,
+        })
+      );
+      expect(setSelectedIndex).toHaveBeenCalledWith(1);
     });
 
-    it("creates query key for file mode", () => {
-      render({ activeMode: "file", atContext: { atStart: 0, queryForSearch: "src" } as any });
-      expect(setSelectedIndex).toHaveBeenCalledWith(0);
-    });
+    it("clamps into range when the selected key vanishes", () => {
+      const { rerender } = render(
+        base({
+          activeCompletionContext: atContext("src"),
+          autocompleteItems: [item("a"), item("b"), item("c")],
+          selectedIndex: 0,
+        })
+      );
+      setSelectedIndex.mockClear();
 
-    it("creates query key for diff mode", () => {
-      render({
-        activeMode: "diff",
-        diffContext: { atStart: 0, tokenEnd: 5, diffType: "unstaged" } as any,
-      });
+      rerender(
+        base({
+          activeCompletionContext: atContext("src"),
+          autocompleteItems: [item("x")],
+          selectedIndex: 2,
+        })
+      );
       expect(setSelectedIndex).toHaveBeenCalledWith(0);
     });
   });
@@ -87,7 +105,7 @@ describe("useAutocompleteState", () => {
       const addSpy = vi.spyOn(document, "addEventListener");
       const removeSpy = vi.spyOn(document, "removeEventListener");
 
-      const { unmount } = render({ isAutocompleteOpen: true });
+      const { unmount } = render(base({ isAutocompleteOpen: true }));
 
       expect(addSpy).toHaveBeenCalledWith("pointerdown", expect.any(Function), true);
 
@@ -95,14 +113,8 @@ describe("useAutocompleteState", () => {
       expect(removeSpy).toHaveBeenCalledWith("pointerdown", expect.any(Function), true);
     });
 
-    it("does not register listener when autocomplete is closed", () => {
-      const addSpy = vi.spyOn(document, "addEventListener");
-      render({ isAutocompleteOpen: false });
-      expect(addSpy).not.toHaveBeenCalled();
-    });
-
-    it("closes contexts when clicking outside root", () => {
-      render({ isAutocompleteOpen: true });
+    it("ignores an outside pointerdown when autocomplete is closed", () => {
+      render(base({ isAutocompleteOpen: false }));
       const outside = document.createElement("div");
       document.body.appendChild(outside);
 
@@ -110,33 +122,29 @@ describe("useAutocompleteState", () => {
         outside.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
       });
 
-      expect(setAtContext).toHaveBeenCalledWith(null);
-      expect(setSlashContext).toHaveBeenCalledWith(null);
-      expect(setDiffContext).toHaveBeenCalledWith(null);
-      expect(setTerminalContext).toHaveBeenCalledWith(null);
-      expect(setSelectionContext).toHaveBeenCalledWith(null);
+      expect(setActiveCompletionContext).not.toHaveBeenCalled();
     });
 
-    it("does not close contexts when clicking inside root", () => {
-      render({ isAutocompleteOpen: true });
+    it("clears the context when clicking outside root", () => {
+      render(base({ isAutocompleteOpen: true }));
+      const outside = document.createElement("div");
+      document.body.appendChild(outside);
+
+      act(() => {
+        outside.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+      });
+
+      expect(setActiveCompletionContext).toHaveBeenCalledWith(null);
+    });
+
+    it("does not clear the context when clicking inside root", () => {
+      render(base({ isAutocompleteOpen: true }));
 
       act(() => {
         rootRef.current!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
       });
 
-      expect(setAtContext).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("selectedIndex clamp", () => {
-    it("sets index to 0 when items become empty", () => {
-      render({
-        isAutocompleteOpen: true,
-        autocompleteItemsLength: 0,
-        selectedIndex: 3,
-      });
-
-      expect(setSelectedIndex).toHaveBeenCalledWith(0);
+      expect(setActiveCompletionContext).not.toHaveBeenCalled();
     });
   });
 });
