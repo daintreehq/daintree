@@ -19,7 +19,7 @@ import type { PtyPanelData } from "@shared/types/panel";
  */
 
 /** Framer's own layout union; anything truthy here opts the node into FLIP. */
-type MotionLayout = boolean | "position" | "size" | "preserve-aspect" | undefined;
+type MotionLayout = boolean | "position" | "size" | "preserve-aspect" | "x" | "y" | undefined;
 
 interface MotionDivProps extends HTMLAttributes<HTMLDivElement> {
   layout?: MotionLayout;
@@ -190,5 +190,11 @@ describe("empty-dock placeholder snaps too (#11063)", () => {
     const dropTarget = container.querySelector("[data-placeholder-id]");
     expect(dropTarget).not.toBeNull();
     expect(dropTarget).toBe(transformNode);
+
+    // Same split as the chip: the motion wrapper stays wrapped around the
+    // sortable node rather than being merged into it.
+    const motionWrapper = container.firstChild;
+    expect(motionWrapper).not.toBe(dropTarget);
+    expect(motionWrapper?.contains(dropTarget)).toBe(true);
   });
 });
