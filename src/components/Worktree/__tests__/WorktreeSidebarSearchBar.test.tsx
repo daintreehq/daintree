@@ -323,6 +323,31 @@ describe("WorktreeSidebarSearchBar", () => {
     }
   });
 
+  it("renders statusText under the field when provided", () => {
+    render(<WorktreeSidebarSearchBar statusText="1 of 2 worktrees" />, {
+      wrapper: TooltipProvider,
+    });
+    expect(screen.getByText("1 of 2 worktrees")).toBeTruthy();
+  });
+
+  it("renders no status text when the prop is absent", () => {
+    renderBar();
+    expect(screen.queryByText(/of \d+ worktrees/)).toBeNull();
+  });
+
+  it("shares one row between statusText and 'Clear all' when both apply", () => {
+    render(<WorktreeSidebarSearchBar statusText="1 of 2 worktrees" />, {
+      wrapper: TooltipProvider,
+    });
+    act(() => {
+      useWorktreeFilterStore.getState().setQuickStateFilter("working");
+    });
+    fireEvent.change(getInput(), { target: { value: "foo" } });
+    const status = screen.getByText("1 of 2 worktrees");
+    const clearAll = screen.getByRole("button", { name: "Clear all" });
+    expect(status.parentElement).toBe(clearAll.parentElement);
+  });
+
   it("'Clear all' click resets query, facets, and quick-state via clearAll()", () => {
     renderBar();
     act(() => {
