@@ -427,7 +427,13 @@ async function handleForgeGetProjectHealth(payload: {
 
     const { impl, repoRef } = await resolveForCwd(cwd);
     if (!impl.projectHealth) {
-      throw new Error("Provider does not support project health");
+      // Capability absent is not an error and not a missing remote — mark it
+      // so the pulse card hides the health section rather than telling the
+      // user to "connect a git remote" they already have.
+      return {
+        ...buildEmptyForgeProjectHealth({ hasRemote: true }),
+        unsupported: true,
+      };
     }
     const result = await impl.projectHealth.getProjectHealth(repoRef, {
       bypassCache: payload.bypassCache === true,

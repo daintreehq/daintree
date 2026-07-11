@@ -38,6 +38,9 @@ export function IssueLinkerView({
   const IssueSelector = useBuiltinView<ForgeIssueSelectorProps>(
     entry?.contribution.slots?.issueSelector ?? ""
   );
+  // No issue-selector view from the active provider — hide the whole section
+  // rather than rendering an orphaned "Link Issue" label with no control.
+  if (!IssueSelector) return null;
   return (
     <>
       <div className="space-y-2">

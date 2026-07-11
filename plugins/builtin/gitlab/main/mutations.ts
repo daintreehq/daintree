@@ -187,9 +187,11 @@ export async function mergePRImpl(
       method: "PUT",
       path: `${projectPath(repo)}/merge_requests/${prNumber}/merge`,
       body: {
-        // An explicit method pins `squash` both ways so the project's
-        // squash-by-default option can't silently override the caller;
-        // omitting the method leaves the project default in charge.
+        // An explicit method sends `squash` both ways so the project's
+        // squash-by-default option doesn't silently flip the caller's choice.
+        // The project's `squash_option` stays authoritative at the extremes
+        // (`always`/`never` ignore the per-request flag); omitting the method
+        // leaves the project default in charge.
         ...(input?.mergeMethod !== undefined ? { squash } : {}),
         ...(commitMessage !== undefined
           ? squash

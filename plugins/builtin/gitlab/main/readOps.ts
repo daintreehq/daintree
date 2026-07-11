@@ -342,7 +342,7 @@ export async function getLatestReleaseImpl(repo: RepoRef) {
       repo: repo.repo,
     });
   } catch (err) {
-    // Older instances (pre-13.12) lack the permalink route; 404 also means
+    // Older instances (pre-14.10) lack the permalink route; 404 also means
     // "no releases yet". Either way fall back to the newest list entry.
     if (!(err instanceof GitLabApiError && err.status === 404)) throw err;
   }
@@ -393,15 +393,18 @@ export async function resolveAuthorAvatarImpl(
   instanceHost: string,
   email: string
 ): Promise<string | null> {
-  const key = email.trim().toLowerCase();
-  if (key.length === 0) return null;
+  const normalizedEmail = email.trim().toLowerCase();
+  if (normalizedEmail.length === 0) return null;
+  // Keyed by host + email: an instance-URL change must not serve avatars
+  // resolved against the previous instance.
+  const key = `${instanceHost.toLowerCase()}:${normalizedEmail}`;
   const cached = cacheGet(avatarCache, key, AVATAR_CACHE_TTL_MS);
   if (cached !== undefined) return cached;
   try {
     const { data } = await gitlabRest<{ avatar_url?: unknown }>({
       host: instanceHost,
       path: "/avatar",
-      query: { email: key, size: 64 },
+      query: { email: normalizedEmail, size: 64 },
     });
     const url =
       typeof data.avatar_url === "string" && data.avatar_url.length > 0 ? data.avatar_url : null;

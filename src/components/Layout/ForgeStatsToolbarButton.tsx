@@ -664,6 +664,10 @@ export const ForgeStatsToolbarButton = memo(
     const handlePrefetchPointerEnter = useCallback(
       (type: "issue" | "pr", e: React.PointerEvent) => {
         if (e.pointerType !== "mouse") return;
+        // No dropdown view (provider contributes no statsDropdown slot) means
+        // no consumer for the warmed list — a click opens the forge website
+        // instead, so prefetching would be pure wasted quota.
+        if (!DropdownView) return;
         const isOpen = type === "issue" ? issuesOpen : prsOpen;
         if (isOpen) return;
         // Fire immediately — no debounce. The in-flight + freshness guards in
@@ -672,7 +676,7 @@ export const ForgeStatsToolbarButton = memo(
         // cursor lands buys the maximum head-start before the click.
         prefetchResourceList(type);
       },
-      [issuesOpen, prsOpen, prefetchResourceList]
+      [DropdownView, issuesOpen, prsOpen, prefetchResourceList]
     );
 
     // Delta check for the digit-pulse animation. Wrapped in useEffectEvent so
@@ -812,6 +816,16 @@ export const ForgeStatsToolbarButton = memo(
             openSettingsForToken();
             return;
           }
+          // No dropdown view for this provider — route to the forge website,
+          // mirroring the pill's own click handling.
+          if (!DropdownView) {
+            void actionService.dispatch(
+              "forge.openIssues",
+              { projectPath: currentProject?.path },
+              { source: "user" }
+            );
+            return;
+          }
           // Clear the chip on the open transition only — toggling closed
           // should not dismiss it, and the digit-pulse detector won't fire
           // again until a fresh count increase.
@@ -823,6 +837,14 @@ export const ForgeStatsToolbarButton = memo(
             openSettingsForToken();
             return;
           }
+          if (!DropdownView) {
+            void actionService.dispatch(
+              "forge.openPRs",
+              { projectPath: currentProject?.path },
+              { source: "user" }
+            );
+            return;
+          }
           if (!prsOpenRef.current) setPrsPulseAt(null);
           setPrsOpen((p) => !p);
         },
@@ -831,7 +853,7 @@ export const ForgeStatsToolbarButton = memo(
         },
         stats,
       }),
-      [stats, isTokenError, openSettingsForToken]
+      [stats, isTokenError, openSettingsForToken, DropdownView, currentProject?.path]
     );
 
     // No project: nothing to count. While provider resolution is in flight,
@@ -906,6 +928,18 @@ export const ForgeStatsToolbarButton = memo(
                   if (isTokenError) {
                     setIssuesOpen(false);
                     openSettingsForToken();
+                    return;
+                  }
+                  // Provider contributes no dropdown view — route the click to
+                  // the forge's own issues page instead of toggling an empty
+                  // popover shell.
+                  if (!DropdownView) {
+                    setIssuesOpen(false);
+                    void actionService.dispatch(
+                      "forge.openIssues",
+                      { projectPath: currentProject.path },
+                      { source: "user" }
+                    );
                     return;
                   }
                   const willOpen = !issuesOpen;
@@ -989,6 +1023,16 @@ export const ForgeStatsToolbarButton = memo(
                   if (isTokenError) {
                     setPrsOpen(false);
                     openSettingsForToken();
+                    return;
+                  }
+                  // Same no-dropdown routing as the issues pill.
+                  if (!DropdownView) {
+                    setPrsOpen(false);
+                    void actionService.dispatch(
+                      "forge.openPRs",
+                      { projectPath: currentProject.path },
+                      { source: "user" }
+                    );
                     return;
                   }
                   const willOpen = !prsOpen;

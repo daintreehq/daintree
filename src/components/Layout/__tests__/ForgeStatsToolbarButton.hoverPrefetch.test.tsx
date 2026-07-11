@@ -67,8 +67,11 @@ vi.mock("@/hooks/useResolvedForgeProvider", () => ({
   }),
 }));
 
+// The provider must resolve a dropdown view: hover prefetch is gated on a
+// consumer existing for the warmed list (a slotless provider routes clicks to
+// the forge website instead, so prefetching would waste quota).
 vi.mock("@/registry/builtinRendererRegistry", () => ({
-  useBuiltinView: () => null,
+  useBuiltinView: (slotId: string) => (slotId === "github.statsDropdown" ? () => null : null),
 }));
 
 vi.mock("@/hooks/useGlobalMinuteTicker", () => ({

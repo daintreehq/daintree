@@ -646,9 +646,11 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
             (signals, skeleton, no-remote hint, offline hint) can swap without
             growing or collapsing the card. `min-h-9` matches the chip row
             height (h-5 chip + pt-3 padding) so the loaded HealthSignals row
-            doesn't push siblings down when it resolves after pulse (#7671). */}
+            doesn't push siblings down when it resolves after pulse (#7671).
+            A provider with no projectHealth capability (`unsupported`) stays
+            quiet — hinting at remote/network recovery wouldn't help. */}
         <div className="border-t border-daintree-border pt-3 min-h-9">
-          {health && !health.error && health.repoUrl ? (
+          {health?.unsupported ? null : health && !health.error && health.repoUrl ? (
             <HealthSignals health={health} rangeDays={rangeDays} />
           ) : healthLoading ? (
             <HealthSectionSkeleton />
