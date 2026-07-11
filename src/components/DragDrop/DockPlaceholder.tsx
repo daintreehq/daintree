@@ -51,7 +51,9 @@ export function SortableDockPlaceholder() {
   };
 
   return (
-    <m.div layout="position" className="h-full">
+    // No FLIP on the dock path — the placeholder hands off to the first real
+    // chip without a shuffle, matching SortableDockItem (#11063).
+    <m.div layout={false} className="h-full">
       <div
         ref={setNodeRef}
         style={style}

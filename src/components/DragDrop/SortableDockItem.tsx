@@ -119,8 +119,12 @@ export function SortableDockItem({
   void _tabIndex;
 
   return (
+    // A dropped chip snaps straight into its slot like the macOS dock, so FLIP
+    // stays off here — framer would otherwise slide every non-dragged chip from
+    // its old slot to its new one (#11063). The wrapper itself still carries the
+    // forwarded dnd-kit attributes, so it can't be collapsed away.
     <m.div
-      layout="position"
+      layout={false}
       className="flex-shrink-0"
       {...remainingAttributes}
       aria-roledescription="sortable item"
