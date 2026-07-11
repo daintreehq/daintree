@@ -393,8 +393,11 @@ describe("atomic dock activation on create (#6590)", () => {
     expect(wake).not.toHaveBeenCalled();
   });
 
-  it("activates a non-PTY (browser) panel in the dock atomically", async () => {
-    const targetId = "browser-dock-1";
+  it("activates a non-PTY (file) panel in the dock atomically", async () => {
+    // `file` is a dockable non-PTY kind. `browser` is no longer usable here:
+    // since #11054, addPanel redirects a dock request for a non-dockable kind
+    // to the grid, so it would never reach the dock-activation path.
+    const targetId = "file-dock-1";
     const snapshotsWithPanel: Array<{
       hasPanelInById: boolean;
       activeDockTerminalId: string | null;
@@ -412,7 +415,8 @@ describe("atomic dock activation on create (#6590)", () => {
     try {
       const { addPanel } = usePanelStore.getState();
       await addPanel({
-        kind: "browser",
+        kind: "file",
+        filePath: "/readme.md",
         requestedId: targetId,
         cwd: "/",
         location: "dock",
@@ -443,6 +447,9 @@ describe("dockPopoverOnSpawn policy gate (#8946)", () => {
       iconId: "test",
       color: "#000",
       hasPty: false,
+      // Must be dockable, or the #11054 guard redirects the dock request to the
+      // grid and the popover assertion below becomes vacuous.
+      dockable: true,
       canRestart: false,
       canConvert: false,
       usesTerminalUi: false,
@@ -488,6 +495,9 @@ describe("dockPopoverOnSpawn policy gate (#8946)", () => {
       iconId: "test",
       color: "#000",
       hasPty: false,
+      // Must be dockable, or the #11054 guard redirects the dock request to the
+      // grid and the suppression assertion below becomes vacuous.
+      dockable: true,
       canRestart: false,
       canConvert: false,
       usesTerminalUi: false,
@@ -522,7 +532,8 @@ describe("dockPopoverOnSpawn policy gate (#8946)", () => {
   it("kind without a dockPopoverOnSpawn override (default true) still opens the popover", async () => {
     const { addPanel } = usePanelStore.getState();
     const id = await addPanel({
-      // browser only overrides dockFallbackTarget — dockPopoverOnSpawn stays the default true.
+      // browser only overrides dockFallbackTarget — dockPopoverOnSpawn stays the
+      // default true. It is dockable (#11058), so the popover path runs.
       kind: "browser",
       requestedId: "browser-default-popover",
       cwd: "/",

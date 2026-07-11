@@ -148,11 +148,16 @@ describe("panelStore.addPanel dockability guard (#11054)", () => {
     expect(usePanelStore.getState().panelsById[id!]?.location).toBe("grid");
   });
 
-  it("rescues an already-stranded persisted dock panel back to the grid on restore", async () => {
-    // Mirrors what `buildArgsForNonPtyRecreation` passes into `addPanel` when
-    // rehydrating a persisted non-PTY panel: a preserved id plus the saved
-    // `location: "dock"`. The guard redirects it to the grid so the user gets
-    // the panel back instead of carrying invisible state forever.
+  it("redirects a restore-shaped dock request (preserved id + saved dock location) to the grid", async () => {
+    // This is the addPanel-contract half of the hydration rescue, not a full
+    // restart. On restart, `buildArgsForNonPtyRecreation` (statePatcher.ts)
+    // forwards a persisted non-PTY panel's saved `location: "dock"` and
+    // preserves its id, then `restorePanelsPhase` calls `addPanel` with those
+    // args — both verified by the mocked-addPanel hydration tests in
+    // stateHydration.panelRehydration. Here we prove the other half: addPanel
+    // redirects that request to the grid while preserving the id, so a
+    // previously stranded panel comes back instead of carrying invisible dock
+    // state forever.
     const id = await usePanelStore.getState().addPanel({
       kind: "browser",
       location: "dock",

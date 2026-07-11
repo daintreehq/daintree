@@ -355,12 +355,21 @@ export const usePanelStore = create<PanelGridState>()(
             : { ...options, focusPolicy: resolvedFocusPolicy };
         const id = await registrySlice.addPanel(panelOptions);
         if (id === null) return null;
+        // A non-dockable kind requested into the dock is redirected to the grid
+        // by the registry (#11054), so the focus / dock-activation decision must
+        // key off the COMMITTED location, not the requested one. Otherwise a
+        // rescued grid panel would skip grid focus AND falsely take the dock-
+        // activation path below — which the registry's atomic commit never ran
+        // for it, since that path requires the panel to actually land in the dock.
+        const committedLocation = get().panelsById[id]?.location;
+        const committedToGrid = committedLocation === "grid" || committedLocation === undefined;
+        const committedToDock = committedLocation === "dock";
         // Skip the per-panel focus mutation while a hydration batch is collecting panels:
         // firing `set({ focusedId })` here would schedule one extra render per panel and
         // defeat the batch's single-render guarantee. The arbitrary "last panel added"
         // focus also isn't meaningful during restore — focus is resolved elsewhere once
         // the active worktree is set.
-        if ((!options.location || options.location === "grid") && !isHydrationBatchActive()) {
+        if (committedToGrid && !isHydrationBatchActive()) {
           // Suppress focus capture for preserve-policy spawns or when the
           // Daintree Assistant currently owns keyboard focus. The new panel
           // still lands in the grid; the user keeps typing where they were.
@@ -379,7 +388,7 @@ export const usePanelStore = create<PanelGridState>()(
           }
         } else if (
           options.activateDockOnCreate &&
-          options.location === "dock" &&
+          committedToDock &&
           !isHydrationBatchActive()
         ) {
           // The registry slice atomically advances `focusedId` to the new id
