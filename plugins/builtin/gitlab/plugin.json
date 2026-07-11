@@ -1,0 +1,61 @@
+{
+  "name": "daintree.gitlab",
+  "version": "0.1.0",
+  "displayName": "GitLab",
+  "description": "First-party GitLab forge provider — issues, merge requests, CI status, and releases for gitlab.com and self-hosted GitLab instances.",
+  "tagline": "Merge requests, issues, and pipelines for GitLab repositories",
+  "category": "forge",
+  "main": "main/index.js",
+  "engines": {
+    "daintree": ">=0.11.0"
+  },
+  "capabilities": [],
+  "contributes": {
+    "settings": [
+      {
+        "id": "instanceUrl",
+        "type": "string",
+        "label": "GitLab instance URL",
+        "description": "Base URL of the GitLab instance Daintree authenticates against. Change for self-hosted GitLab.",
+        "default": "https://gitlab.com"
+      }
+    ],
+    "forgeProviders": [
+      {
+        "id": "gitlab",
+        "name": "GitLab",
+        "matches": [
+          "gitlab.com",
+          "invent.kde.org",
+          "salsa.debian.org",
+          "gitlab.freedesktop.org",
+          "gitlab.gnome.org",
+          "gitlab.haskell.org"
+        ],
+        "capabilities": [
+          "issues",
+          "pulls",
+          "draft-prs",
+          "assignees",
+          "releases",
+          "batch-branch-prs",
+          "identity"
+        ],
+        "credentialFields": [
+          {
+            "id": "token",
+            "label": "Personal access token",
+            "type": "password",
+            "placeholder": "glpat-…",
+            "helpText": "Create under GitLab → User settings → Access tokens with the api scope (read_api works for read-only use)."
+          }
+        ],
+        "settingsScopeRef": "instanceUrl",
+        "slots": {
+          "settingsTab": "gitlab.forgeSettingsTab",
+          "icon": "gitlab.providerIcon"
+        }
+      }
+    ]
+  }
+}
