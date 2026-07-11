@@ -23,6 +23,17 @@ import {
   WAIT_UNTIL_IDLE_OUTPUT_SCHEMA,
 } from "../../../shared/types/terminalWaitUntilIdle.js";
 
+const stateChangedListenerCount = (events: unknown): number =>
+  (
+    events as {
+      bus: import("node:events").EventEmitter;
+    }
+  ).bus.listenerCount("agent:state-changed");
+
+const waitForStateChangedListener = async (events: unknown, baseline: number): Promise<void> => {
+  await expect.poll(() => stateChangedListenerCount(events)).toBeGreaterThan(baseline);
+};
+
 const waitUntilIdleManifestEntry = (): ActionManifestEntry => ({
   id: "terminal.waitUntilIdle" as ActionId,
   name: "terminal.waitUntilIdle",
@@ -591,13 +602,13 @@ describe("McpServerService", () => {
       const { client, transport } = await connectClient(service.currentPort!);
       transports.push(transport);
 
+      const listenerBaseline = stateChangedListenerCount(events);
       const callPromise = client.callTool({
         name: "terminal.waitUntilIdle",
         arguments: { terminalId },
       }) as Promise<TextToolResult>;
 
-      // Give the call time to register its listener.
-      await new Promise((r) => setTimeout(r, 30));
+      await waitForStateChangedListener(events, listenerBaseline);
 
       const transitionTs = Date.now();
       events.emit("agent:state-changed", {
@@ -636,12 +647,13 @@ describe("McpServerService", () => {
       const { client, transport } = await connectClient(service.currentPort!);
       transports.push(transport);
 
+      const listenerBaseline = stateChangedListenerCount(events);
       const callPromise = client.callTool({
         name: "terminal.waitUntilIdle",
         arguments: { terminalId },
       }) as Promise<TextToolResult & { structuredContent?: Record<string, unknown> }>;
 
-      await new Promise((r) => setTimeout(r, 30));
+      await waitForStateChangedListener(events, listenerBaseline);
 
       const transitionTs = Date.now();
       events.emit("agent:state-changed", {
@@ -684,12 +696,13 @@ describe("McpServerService", () => {
       const { client, transport } = await connectClient(service.currentPort!);
       transports.push(transport);
 
+      const listenerBaseline = stateChangedListenerCount(events);
       const callPromise = client.callTool({
         name: "terminal.waitUntilIdle",
         arguments: { terminalId },
       }) as Promise<TextToolResult>;
 
-      await new Promise((r) => setTimeout(r, 30));
+      await waitForStateChangedListener(events, listenerBaseline);
 
       events.emit("agent:state-changed", {
         agentId,
@@ -718,12 +731,13 @@ describe("McpServerService", () => {
       const { client, transport } = await connectClient(service.currentPort!);
       transports.push(transport);
 
+      const listenerBaseline = stateChangedListenerCount(events);
       const callPromise = client.callTool({
         name: "terminal.waitUntilIdle",
         arguments: { terminalId },
       }) as Promise<TextToolResult & { structuredContent?: Record<string, unknown> }>;
 
-      await new Promise((r) => setTimeout(r, 30));
+      await waitForStateChangedListener(events, listenerBaseline);
 
       events.emit("agent:state-changed", {
         agentId,
@@ -781,12 +795,13 @@ describe("McpServerService", () => {
       const { client, transport } = await connectClient(service.currentPort!);
       transports.push(transport);
 
+      const listenerBaseline = stateChangedListenerCount(events);
       const callPromise = client.callTool({
         name: "terminal.waitUntilIdle",
         arguments: { terminalId, timeoutMs: 200 },
       }) as Promise<TextToolResult>;
 
-      await new Promise((r) => setTimeout(r, 30));
+      await waitForStateChangedListener(events, listenerBaseline);
 
       // working → working is a no-op for the tool — the listener must not resolve.
       events.emit("agent:state-changed", {
@@ -841,12 +856,13 @@ describe("McpServerService", () => {
       const { client, transport } = await connectClient(service.currentPort!);
       transports.push(transport);
 
+      const listenerBaseline = stateChangedListenerCount(events);
       const callPromise = client.callTool({
         name: "terminal.waitUntilIdle",
         arguments: { terminalId, timeoutMs: 150 },
       }) as Promise<TextToolResult>;
 
-      await new Promise((r) => setTimeout(r, 30));
+      await waitForStateChangedListener(events, listenerBaseline);
 
       // Unrelated agent transitions must not satisfy the wait.
       events.emit("agent:state-changed", {
@@ -886,12 +902,13 @@ describe("McpServerService", () => {
       const { client, transport } = await connectClient(service.currentPort!);
       transports.push(transport);
 
+      const listenerBaseline = stateChangedListenerCount(events);
       const callPromise = client.callTool({
         name: "terminal.waitUntilIdle",
         arguments: { terminalId: terminalA, timeoutMs: 120 },
       }) as Promise<TextToolResult>;
 
-      await new Promise((r) => setTimeout(r, 30));
+      await waitForStateChangedListener(events, listenerBaseline);
 
       // Terminal B finishes — must NOT resolve the wait on terminal A.
       events.emit("agent:state-changed", {
