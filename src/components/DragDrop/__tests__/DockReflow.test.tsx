@@ -6,19 +6,20 @@ import type { PtyPanelData } from "@shared/types/panel";
 
 /**
  * Regression coverage for #11063. Dropping a chip into the dock must land it in
- * its slot the way the macOS dock does — no sibling shuffle. Two independent
- * engines can reflow the row, and both have to stay off: framer-motion's FLIP
- * (the `layout` prop on the wrapper) and dnd-kit's own sort transition
- * (`animateLayoutChanges`). jsdom can't observe animation, so these assert the
- * enablement contract each engine reads, not the frames it would paint.
+ * its slot the way the macOS dock does — no sibling shuffle. The reflow came
+ * from framer-motion's FLIP, which a motion node opts into via the raw
+ * `layout`/`layoutId` predicate: truthy either one and framer measures and
+ * animates the node between layouts. jsdom can't observe painted frames, so
+ * these assert that opt-in predicate across every motion node the dock renders,
+ * in both the idle and dragging states.
  *
- * The assertions are deliberately written against framer's own predicate —
- * layout projection is enabled iff `layout` or `layoutId` is truthy — so
- * dropping the prop entirely (behaviorally identical) keeps them green, while
- * restoring `layout="position"` fails them.
+ * Asserting the predicate rather than the literal prop is deliberate: dropping
+ * `layout` entirely is behaviorally identical and stays green, while any truthy
+ * `layout`/`layoutId` — on either wrapper, in either state — fails.
  */
 
-type MotionLayout = boolean | "position" | "size" | undefined;
+/** Framer's own layout union; anything truthy here opts the node into FLIP. */
+type MotionLayout = boolean | "position" | "size" | "preserve-aspect" | undefined;
 
 interface MotionDivProps extends HTMLAttributes<HTMLDivElement> {
   layout?: MotionLayout;
@@ -33,7 +34,6 @@ interface MotionRecord {
   layoutId: string | undefined;
   animate: { opacity?: number } | undefined;
   transition: { duration?: number } | undefined;
-  roleDescription: string | undefined;
 }
 
 const motionRecords: MotionRecord[] = [];
@@ -41,42 +41,31 @@ const motionRecords: MotionRecord[] = [];
 vi.mock("framer-motion", () => ({
   m: {
     div: ({ layout, layoutId, animate, transition, children, ...rest }: MotionDivProps) => {
-      motionRecords.push({
-        layout,
-        layoutId,
-        animate,
-        transition,
-        roleDescription: rest["aria-roledescription"],
-      });
+      motionRecords.push({ layout, layoutId, animate, transition });
       return <div {...rest}>{children}</div>;
     },
   },
 }));
 
-interface SortableOptions {
-  id: string;
-  animateLayoutChanges?: () => boolean;
-}
-
-const sortableCalls: SortableOptions[] = [];
+/** The element dnd-kit puts its drag transform on — must stay a separate node. */
+let transformNode: HTMLElement | null = null;
 let mockIsDragging = false;
 
 vi.mock("@dnd-kit/sortable", () => ({
-  useSortable: (options: SortableOptions) => {
-    sortableCalls.push(options);
-    return {
-      attributes: { role: "button", tabIndex: 0, "aria-describedby": "dnd-describedby" },
-      listeners: { onPointerDown: vi.fn() },
-      setNodeRef: vi.fn(),
-      setActivatorNodeRef: vi.fn(),
-      transform: null,
-      transition: undefined,
-      isDragging: mockIsDragging,
-      isOver: false,
-      active: null,
-      over: null,
-    };
-  },
+  useSortable: () => ({
+    attributes: { role: "button", tabIndex: 0, "aria-describedby": "dnd-describedby" },
+    listeners: { onPointerDown: vi.fn() },
+    setNodeRef: (el: HTMLElement | null) => {
+      if (el) transformNode = el;
+    },
+    setActivatorNodeRef: vi.fn(),
+    transform: null,
+    transition: undefined,
+    isDragging: mockIsDragging,
+    isOver: false,
+    active: null,
+    over: null,
+  }),
 }));
 
 vi.mock("@dnd-kit/utilities", () => ({
@@ -106,9 +95,19 @@ const terminal: PtyPanelData = {
   isVisible: true,
 };
 
-/** Framer enables layout projection iff `layout` or `layoutId` is truthy. */
+/** Framer opts a node into FLIP iff `layout` or `layoutId` is truthy. */
 function projectsLayout(record: MotionRecord): boolean {
   return Boolean(record.layout) || Boolean(record.layoutId);
+}
+
+/**
+ * No motion node the dock rendered may opt into FLIP. Checking every record —
+ * rather than the one wrapper the issue named — is what catches reflow coming
+ * back on a different node, or only in one drag state.
+ */
+function expectNothingProjectsLayout() {
+  expect(motionRecords.length).toBeGreaterThan(0);
+  expect(motionRecords.filter(projectsLayout)).toEqual([]);
 }
 
 function renderDockItem() {
@@ -117,13 +116,6 @@ function renderDockItem() {
       <div data-testid="chip" />
     </SortableDockItem>
   );
-}
-
-/** The wrapper that forwards dnd-kit's ARIA — the one that used to carry FLIP. */
-function chipWrapper(): MotionRecord {
-  const wrapper = motionRecords.find((r) => r.roleDescription === "sortable item");
-  expect(wrapper).toBeDefined();
-  return wrapper!;
 }
 
 /** The inner wrapper that fades the dragged chip — a separate animation. */
@@ -135,34 +127,20 @@ function fadeWrapper(): MotionRecord {
 
 beforeEach(() => {
   motionRecords.length = 0;
-  sortableCalls.length = 0;
+  transformNode = null;
   mockIsDragging = false;
 });
 
 describe("dock chips snap into place on drop (#11063)", () => {
-  it("leaves framer's layout projection off on the chip wrapper", () => {
+  it("opts no chip motion node into FLIP while idle", () => {
     renderDockItem();
-    expect(projectsLayout(chipWrapper())).toBe(false);
+    expectNothingProjectsLayout();
   });
 
-  it("leaves dnd-kit's own reorder transition off on the chip", () => {
+  it("opts no chip motion node into FLIP while dragging", () => {
+    mockIsDragging = true;
     renderDockItem();
-    const options = sortableCalls.find((c) => c.id === terminal.id);
-    expect(options?.animateLayoutChanges).toBeDefined();
-    expect(options!.animateLayoutChanges!()).toBe(false);
-  });
-
-  it("keeps the wrapper — and the dnd-kit attributes it forwards — in the tree", () => {
-    // Guards the tempting follow-up cleanup: with FLIP off the wrapper looks
-    // inert, but it still carries dnd-kit's forwarded attributes, and keeping
-    // it separate from the transform node is the #9029 contract.
-    const { container } = renderDockItem();
-    const wrapper = container.firstChild;
-    expect(wrapper).toBeInstanceOf(HTMLElement);
-    const el = container.querySelector("[aria-roledescription='sortable item']");
-    expect(el).not.toBeNull();
-    expect(el?.getAttribute("aria-describedby")).toBe("dnd-describedby");
-    expect(el?.getAttribute("role")).toBeNull();
+    expectNothingProjectsLayout();
   });
 
   it("still fades the dragged chip, and animates that fade", () => {
@@ -175,31 +153,42 @@ describe("dock chips snap into place on drop (#11063)", () => {
     const dragging = fadeWrapper();
 
     // Relational, not a copy of DRAG_GHOST_OPACITY: the dragged chip must be
-    // more transparent than an idle one, and get there over time rather than
-    // snapping — the fade is the one dock animation this issue preserves.
+    // more transparent than an idle one and get there over time rather than
+    // snapping. This fade is the one dock animation #11063 preserves, so it has
+    // to survive turning FLIP off.
     expect(dragging.animate?.opacity).toBeLessThan(idleOpacity!);
     expect(dragging.transition?.duration).toBeGreaterThan(0);
-    // ...and the fade must not have smuggled FLIP back in on its own wrapper.
-    expect(projectsLayout(dragging)).toBe(false);
+  });
+
+  it("keeps the ARIA wrapper wrapped around — not merged into — the transform node", () => {
+    // With FLIP off the outer wrapper looks inert, and the tempting follow-up is
+    // to delete it. It still forwards dnd-kit's attributes, and collapsing it
+    // into the transform node would put framer's and dnd-kit's transforms on one
+    // element — the exact pairing #9029 separated.
+    const { container } = renderDockItem();
+
+    const ariaWrapper = container.querySelector("[aria-roledescription='sortable item']");
+    expect(ariaWrapper).not.toBeNull();
+    expect(ariaWrapper?.getAttribute("aria-describedby")).toBe("dnd-describedby");
+
+    expect(transformNode).not.toBeNull();
+    expect(ariaWrapper).not.toBe(transformNode);
+    expect(ariaWrapper?.contains(transformNode)).toBe(true);
   });
 });
 
 describe("empty-dock placeholder snaps too (#11063)", () => {
-  it("leaves framer's layout projection off on the placeholder wrapper", () => {
+  it("opts no placeholder motion node into FLIP", () => {
     render(<SortableDockPlaceholder />);
-    expect(motionRecords).toHaveLength(1);
-    expect(projectsLayout(motionRecords[0]!)).toBe(false);
-  });
-
-  it("leaves dnd-kit's own reorder transition off on the placeholder", () => {
-    render(<SortableDockPlaceholder />);
-    const options = sortableCalls[0];
-    expect(options?.animateLayoutChanges).toBeDefined();
-    expect(options!.animateLayoutChanges!()).toBe(false);
+    expectNothingProjectsLayout();
   });
 
   it("keeps the sortable drop target mounted inside the motion wrapper", () => {
+    // Positive control: without it, the negative assertion above would also pass
+    // on a placeholder that rendered nothing at all.
     const { container } = render(<SortableDockPlaceholder />);
-    expect(container.querySelector("[data-placeholder-id]")).not.toBeNull();
+    const dropTarget = container.querySelector("[data-placeholder-id]");
+    expect(dropTarget).not.toBeNull();
+    expect(dropTarget).toBe(transformNode);
   });
 });
