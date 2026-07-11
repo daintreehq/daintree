@@ -12,6 +12,17 @@ export interface ActiveCompletionContext {
   query: string;
 }
 
+/** Narrow an arbitrary char to a declared trigger without an unsafe assertion. */
+function activeTrigger(
+  ch: string,
+  activeTriggers: ReadonlySet<CompletionTrigger>
+): CompletionTrigger | null {
+  for (const trigger of activeTriggers) {
+    if (trigger === ch) return trigger;
+  }
+  return null;
+}
+
 /**
  * Detect the completion token the caret sits in. The token is the
  * whitespace-delimited run containing the caret; it opens a menu only when its
@@ -33,8 +44,8 @@ export function getActiveCompletionContext(
   // once you've typed the trigger itself).
   if (start >= caret) return null;
 
-  const triggerChar = text[start]!;
-  if (!activeTriggers.has(triggerChar as CompletionTrigger)) return null;
+  const triggerChar = activeTrigger(text[start]!, activeTriggers);
+  if (triggerChar === null) return null;
 
   const query = text.slice(start + 1, caret);
   if (query.includes(triggerChar)) return null;
@@ -42,7 +53,7 @@ export function getActiveCompletionContext(
   let tokenEnd = caret;
   while (tokenEnd < text.length && !/\s/.test(text[tokenEnd]!)) tokenEnd++;
 
-  return { triggerChar: triggerChar as CompletionTrigger, start, tokenEnd, query };
+  return { triggerChar, start, tokenEnd, query };
 }
 
 /** Daintree's own `@` providers; each claims its prefix ahead of `@file`. */
