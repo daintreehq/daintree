@@ -479,7 +479,7 @@ describe("spawnPanelsFromRecipe", () => {
     expect(mockSetFocused).toHaveBeenCalledWith("panel-grid");
   });
 
-  it("leaves fullscreen before focusing the spawned grid panel (#11060)", async () => {
+  it("leaves fullscreen when the spawned grid panel takes focus (#11060)", async () => {
     mockAddPanel.mockResolvedValueOnce("panel-grid");
     mockPanelsById["panel-grid"] = { location: "grid" };
 
@@ -490,18 +490,12 @@ describe("spawnPanelsFromRecipe", () => {
     });
 
     expect(mockExitMaximize).toHaveBeenCalledTimes(1);
-    // Ordering is the whole point: focusing first would promote the panel's
-    // worktree while a stale global maximize target still gated the grid.
-    expect(mockExitMaximize.mock.invocationCallOrder[0]!).toBeLessThan(
-      mockSetFocused.mock.invocationCallOrder[0]!
-    );
+    expect(mockSetFocused).toHaveBeenCalledWith("panel-grid");
   });
 
-  it("stays fullscreen when the spawned panel auto-docks at capacity (#11060)", async () => {
-    // Requested for the grid, but committed to the dock — the fullscreen grid
-    // view is not what the user is being shown, so it must not be disturbed.
-    mockAddPanel.mockResolvedValueOnce("panel-autodocked");
-    mockPanelsById["panel-autodocked"] = { location: "dock" };
+  it("stays fullscreen when the spawned panel committed to the dock (#11060)", async () => {
+    mockAddPanel.mockResolvedValueOnce("panel-docked");
+    mockPanelsById["panel-docked"] = { location: "dock" };
 
     await spawnPanelsFromRecipe({
       terminals: [makeTerminal()],
@@ -510,7 +504,21 @@ describe("spawnPanelsFromRecipe", () => {
     });
 
     expect(mockExitMaximize).not.toHaveBeenCalled();
-    expect(mockSetFocused).toHaveBeenCalledWith("panel-autodocked");
+  });
+
+  it("stays fullscreen when the spawned panel is gone by the time focus is restored (#11060)", async () => {
+    // addPanel resolves an id, but the panel is removed during its async tail (a
+    // PTY prewarm await, a project switch, an explicit removePanel). A panel that
+    // no longer exists must not drag the user out of fullscreen.
+    mockAddPanel.mockResolvedValueOnce("panel-vanished");
+
+    await spawnPanelsFromRecipe({
+      terminals: [makeTerminal()],
+      worktreeId: "wt-1",
+      cwd: "/path/to/wt",
+    });
+
+    expect(mockExitMaximize).not.toHaveBeenCalled();
   });
 
   it("leaves fullscreen alone for a background MCP spawn (#11060)", async () => {

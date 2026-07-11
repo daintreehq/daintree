@@ -543,6 +543,96 @@ describe("panelStore adversarial", () => {
         expect(s.activeDockTerminalId).toBe("d1");
         expect(s.maximizedId).toBe("p1");
       });
+
+      it("exits fullscreen when a trashed group is restored to the grid", () => {
+        // p3/p4 are a group unrelated to the maximized p1; trashing them must not
+        // clear maximize, but restoring them to the grid must.
+        usePanelStore.setState({
+          panelsById: {
+            p1: makePanel("p1"),
+            p3: makePanel("p3"),
+            p4: makePanel("p4"),
+          },
+          panelIds: ["p1", "p3", "p4"],
+          panelIdsByWorktreeId: { "wt-1": ["p1", "p3", "p4"] },
+          tabGroups: new Map([
+            ["g2", { id: "g2", location: "grid", activeTabId: "p3", panelIds: ["p3", "p4"] }],
+          ]) as never,
+          maximizedId: "p1",
+          maximizeTarget: { type: "panel", id: "p1" },
+        });
+        // Takes a member panel id, not the group id.
+        usePanelStore.getState().trashPanelGroup("p3");
+        expect(usePanelStore.getState().maximizedId).toBe("p1");
+
+        const groupRestoreId = Array.from(usePanelStore.getState().trashedTerminals.values())[0]
+          ?.groupRestoreId;
+        expect(groupRestoreId).toBeDefined();
+        usePanelStore.getState().restoreTrashedGroup(groupRestoreId!);
+
+        const s = usePanelStore.getState();
+        expect(s.maximizedId).toBeNull();
+        expect(s.maximizeTarget).toBeNull();
+      });
+
+      it("exits fullscreen when a backgrounded panel is restored to the grid", () => {
+        seedMaximizedPanel();
+        usePanelStore.getState().backgroundTerminal("p2");
+        // p2 is unrelated to the maximized p1, so backgrounding it left maximize
+        // alone — restoring it to the grid is what has to clear it.
+        expect(usePanelStore.getState().maximizedId).toBe("p1");
+
+        usePanelStore.getState().restoreBackgroundTerminal("p2");
+
+        const s = usePanelStore.getState();
+        expect(s.maximizedId).toBeNull();
+        expect(s.maximizeTarget).toBeNull();
+      });
+    });
+
+    describe("dock to grid moves leave fullscreen (#11060)", () => {
+      it("exits fullscreen when a docked panel is moved to the grid", () => {
+        usePanelStore.setState({
+          panelsById: {
+            p1: makePanel("p1"),
+            d1: makePanel("d1", { location: "dock", kind: "terminal" }),
+          },
+          panelIds: ["p1", "d1"],
+          panelIdsByWorktreeId: { "wt-1": ["p1", "d1"] },
+          maximizedId: "p1",
+          maximizeTarget: { type: "panel", id: "p1" },
+        });
+
+        expect(usePanelStore.getState().moveTerminalToGrid("d1")).toBe(true);
+
+        const s = usePanelStore.getState();
+        expect(s.focusedId).toBe("d1");
+        expect(s.maximizedId).toBeNull();
+        expect(s.maximizeTarget).toBeNull();
+      });
+
+      it("exits fullscreen when a docked tab group is moved to the grid", () => {
+        usePanelStore.setState({
+          panelsById: {
+            p1: makePanel("p1"),
+            d1: makePanel("d1", { location: "dock", kind: "terminal" }),
+            d2: makePanel("d2", { location: "dock", kind: "terminal" }),
+          },
+          panelIds: ["p1", "d1", "d2"],
+          panelIdsByWorktreeId: { "wt-1": ["p1", "d1", "d2"] },
+          tabGroups: new Map([
+            ["gd", { id: "gd", location: "dock", activeTabId: "d1", panelIds: ["d1", "d2"] }],
+          ]) as never,
+          maximizedId: "p1",
+          maximizeTarget: { type: "panel", id: "p1" },
+        });
+
+        usePanelStore.getState().moveTabGroupToLocation("gd", "grid");
+
+        const s = usePanelStore.getState();
+        expect(s.maximizedId).toBeNull();
+        expect(s.maximizeTarget).toBeNull();
+      });
     });
   });
 });

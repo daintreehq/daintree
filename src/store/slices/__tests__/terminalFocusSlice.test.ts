@@ -158,6 +158,19 @@ describe("TerminalFocusSlice - Layout Snapshot", () => {
     expect(state.maximizeTarget).toEqual({ type: "panel", id: "term-1" });
   });
 
+  it("focusOrMaximizeByIndex restores the grid even when the maximized group has dissolved (#11060)", () => {
+    // The index hotkey routes its force-exit through exitMaximize, so it can't
+    // fall into toggleMaximize's re-maximize branch (pinned by the test above).
+    state.maximizedId = "term-1";
+    state.maximizeTarget = { type: "group", id: "group-gone" };
+
+    state.focusOrMaximizeByIndex(1, () => "term-2", mockGetPanelGroup);
+
+    expect(state.maximizedId).toBe(null);
+    expect(state.maximizeTarget).toBe(null);
+    expect(state.focusedId).toBe("term-2");
+  });
+
   it("exitMaximize is a no-op when nothing is fullscreen (#11060)", () => {
     state.exitMaximize();
 

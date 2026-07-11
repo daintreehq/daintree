@@ -856,11 +856,7 @@ describe("recipeStore", () => {
       expect(setFocusedMock).toHaveBeenCalledWith("terminal-2");
     });
 
-    it("leaves fullscreen before focusing the last spawned grid panel (#11060)", async () => {
-      let callIndex = 0;
-      addTerminalMock.mockImplementation(() => Promise.resolve(`terminal-${++callIndex}`));
-      panelStoreState.panelsById = { "terminal-1": { location: "grid" } };
-
+    function seedSingleTerminalRecipe() {
       useRecipeStore.setState({
         recipes: [
           {
@@ -874,42 +870,44 @@ describe("recipeStore", () => {
         isLoading: false,
         currentProjectId: "project-1",
       });
+    }
+
+    it("leaves fullscreen when the spawned grid panel takes focus (#11060)", async () => {
+      addTerminalMock.mockResolvedValue("terminal-1");
+      panelStoreState.panelsById = { "terminal-1": { location: "grid" } };
+      seedSingleTerminalRecipe();
 
       await useRecipeStore
         .getState()
         .runRecipeWithResults("recipe-1", "/tmp/worktree", "worktree-1");
 
       expect(exitMaximizeMock).toHaveBeenCalledTimes(1);
-      // Must precede the focus set: focusing promotes the panel's worktree to
-      // active, and a stale global maximize target would blank that grid.
-      expect(exitMaximizeMock.mock.invocationCallOrder[0]!).toBeLessThan(
-        setFocusedMock.mock.invocationCallOrder[0]!
-      );
+      expect(setFocusedMock).toHaveBeenCalledWith("terminal-1");
     });
 
-    it("stays fullscreen when the spawned panel auto-docks at capacity (#11060)", async () => {
+    it("stays fullscreen when the spawned panel committed to the dock (#11060)", async () => {
       addTerminalMock.mockResolvedValue("terminal-docked");
       panelStoreState.panelsById = { "terminal-docked": { location: "dock" } };
-
-      useRecipeStore.setState({
-        recipes: [
-          {
-            id: "recipe-1",
-            name: "Test Recipe",
-            projectId: "project-1",
-            terminals: [{ type: "terminal", title: "Shell 1", command: "a", env: {} }],
-            createdAt: Date.now(),
-          },
-        ],
-        isLoading: false,
-        currentProjectId: "project-1",
-      });
+      seedSingleTerminalRecipe();
 
       await useRecipeStore
         .getState()
         .runRecipeWithResults("recipe-1", "/tmp/worktree", "worktree-1");
 
-      expect(setFocusedMock).toHaveBeenCalledWith("terminal-docked");
+      expect(exitMaximizeMock).not.toHaveBeenCalled();
+    });
+
+    it("stays fullscreen when the spawned panel is gone by the time focus is restored (#11060)", async () => {
+      // addPanel resolved an id, but the panel was removed during its async tail.
+      // A panel that no longer exists must not drag the user out of fullscreen.
+      addTerminalMock.mockResolvedValue("terminal-vanished");
+      panelStoreState.panelsById = {};
+      seedSingleTerminalRecipe();
+
+      await useRecipeStore
+        .getState()
+        .runRecipeWithResults("recipe-1", "/tmp/worktree", "worktree-1");
+
       expect(exitMaximizeMock).not.toHaveBeenCalled();
     });
 

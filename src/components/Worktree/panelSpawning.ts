@@ -206,10 +206,12 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
   if (!suppressFocus && lastSpawnedId !== null) {
     // The batch suppressed addPanel's maximize exit along with its focus set, so
     // apply it here too — a spawned grid panel that takes focus has to be
-    // visible, not stranded behind a fullscreen cell (#11060). Read the
-    // committed location fresh: `store` is a pre-spawn snapshot, and a panel
-    // requested for the grid can still auto-dock at capacity.
-    if (usePanelStore.getState().panelsById[lastSpawnedId]?.location !== "dock") {
+    // visible, not stranded behind a fullscreen cell (#11060). Read the panel
+    // back fresh (`store` is a pre-spawn snapshot) and require it to still be a
+    // live grid panel: it can be removed during addPanel's async tail, and a
+    // missing panel must not drop the user out of fullscreen.
+    const committed = usePanelStore.getState().panelsById[lastSpawnedId];
+    if (committed !== undefined && committed.location !== "dock") {
       store.exitMaximize();
     }
     store.setFocused(lastSpawnedId);
