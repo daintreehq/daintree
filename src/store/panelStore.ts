@@ -355,12 +355,27 @@ export const usePanelStore = create<PanelGridState>()(
             : { ...options, focusPolicy: resolvedFocusPolicy };
         const id = await registrySlice.addPanel(panelOptions);
         if (id === null) return null;
+        // A non-dockable kind requested into the dock is redirected to the grid
+        // by the registry (#11054), so the focus / dock-activation decision must
+        // key off the COMMITTED location, not the requested one. Otherwise a
+        // rescued grid panel would skip grid focus AND falsely take the dock-
+        // activation path below — which the registry's atomic commit never ran
+        // for it, since that path requires the panel to actually land in the dock.
+        // If the panel was removed during addPanel's async tail (a PTY prewarm
+        // await, a project switch, or an explicit removePanel), the lookup is
+        // undefined — there is nothing to focus, so fall through to neither
+        // branch rather than treating a missing panel as a grid panel.
+        const committedPanel = get().panelsById[id];
+        const committedToGrid =
+          committedPanel !== undefined &&
+          (committedPanel.location === "grid" || committedPanel.location === undefined);
+        const committedToDock = committedPanel?.location === "dock";
         // Skip the per-panel focus mutation while a hydration batch is collecting panels:
         // firing `set({ focusedId })` here would schedule one extra render per panel and
         // defeat the batch's single-render guarantee. The arbitrary "last panel added"
         // focus also isn't meaningful during restore — focus is resolved elsewhere once
         // the active worktree is set.
-        if ((!options.location || options.location === "grid") && !isHydrationBatchActive()) {
+        if (committedToGrid && !isHydrationBatchActive()) {
           // Suppress focus capture for preserve-policy spawns or when the
           // Daintree Assistant currently owns keyboard focus. The new panel
           // still lands in the grid; the user keeps typing where they were.
@@ -377,11 +392,7 @@ export const usePanelStore = create<PanelGridState>()(
           } else {
             set({ focusedId: id });
           }
-        } else if (
-          options.activateDockOnCreate &&
-          options.location === "dock" &&
-          !isHydrationBatchActive()
-        ) {
+        } else if (options.activateDockOnCreate && committedToDock && !isHydrationBatchActive()) {
           // The registry slice atomically advances `focusedId` to the new id
           // inside its commit for normal dock activations (#6590). When the
           // assistant currently owns input we issue a corrective set() to roll

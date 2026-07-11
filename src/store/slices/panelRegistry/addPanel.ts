@@ -9,6 +9,7 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 import {
   panelKindUsesTerminalUi,
+  panelKindIsDockable,
   getPanelKindConfig,
   getExtensionFallbackDefaults,
   resolvePanelKindPolicy,
@@ -203,7 +204,20 @@ export const createAddPanelActions = (
       // The scrollable grid (#8805) accepts every panel — there's no
       // screen-fit cap any more. Honor the requested location directly; the
       // hard ceiling has already been enforced upstream by `panelLimitStore`.
-      const location = options.location || "grid";
+      const requestedLocation = options.location || "grid";
+      // The dock only renders kinds it can host (`isDockPanel`). A dock request
+      // for a non-dockable kind would strand the panel invisibly — still
+      // persisted, still counted, unreachable from any UI (#11054). Redirect it
+      // to the grid instead. This also rescues already-stranded panels on
+      // restart: hydration funnels non-PTY panels through this same branch
+      // (`buildArgsForNonPtyRecreation` → `addPanel`), so a persisted dock panel
+      // of a non-dockable kind is returned to the grid on next load. Must run
+      // before the `shouldBackground`/`runtimeStatus` derivation below, or a
+      // redirected-to-grid panel would still get dock-flavored background state.
+      const location =
+        requestedLocation === "dock" && !panelKindIsDockable(requestedKind)
+          ? "grid"
+          : requestedLocation;
       const activeWorktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null;
       // When activeWorktreeId is null (worktree store not yet hydrated — common
       // during a project switch), treat the panel as being in the active worktree

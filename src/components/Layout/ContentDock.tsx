@@ -37,7 +37,9 @@ import {
   SortableDockPlaceholder,
   DOCK_PLACEHOLDER_ID,
   useIsWorktreeSortDragging,
+  useDndPlaceholder,
 } from "@/components/DragDrop";
+import { panelKindIsDockable } from "@shared/config/panelKindRegistry";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { useHorizontalScrollControls } from "@/hooks";
 import { useProjectSettings } from "@/hooks/useProjectSettings";
@@ -383,6 +385,15 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   // Worktree-card sort drags cannot drop here — signal rejection with cursor-no-drop.
   const isWorktreeSortDragging = useIsWorktreeSortDragging();
 
+  // A panel whose kind the dock can't render can't drop here either (#11054).
+  // Read the active drag from the placeholder context and gate on the same
+  // dockability predicate the store guards use, so the reject cue matches what
+  // `cancelDrop`/`collisionDetection` actually enforce.
+  const { activeTerminal } = useDndPlaceholder();
+  const isDraggingNonDockable =
+    activeTerminal !== null && !panelKindIsDockable(activeTerminal.kind ?? "terminal");
+  const isDockDropRejected = isWorktreeSortDragging || isDraggingNonDockable;
+
   // Sync droppable ref with scroll container ref using stable callback
   // This prevents ResizeObserver thrashing that causes infinite update loops
   const combinedRef = useCallback(
@@ -508,9 +519,9 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
               onFocusCapture={handleDockFocusCapture}
               className={cn(
                 "flex items-center gap-[var(--dock-gap)] overflow-x-auto overscroll-x-none flex-1 min-h-[var(--dock-item-height)] no-scrollbar scroll-smooth scroll-px-4 px-1 transition-[color,background-color,box-shadow]",
-                isWorktreeSortDragging && "cursor-no-drop",
+                isDockDropRejected && "cursor-no-drop",
                 isOver &&
-                  !isWorktreeSortDragging &&
+                  !isDockDropRejected &&
                   "cursor-copy bg-overlay-soft ring-2 ring-border-default ring-inset rounded-[var(--radius-md)]"
               )}
             >

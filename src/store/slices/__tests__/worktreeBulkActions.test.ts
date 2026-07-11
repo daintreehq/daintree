@@ -49,11 +49,13 @@ function setTerminals(terminals: PtyPanelData[]) {
 function createMockTerminal(
   id: string,
   worktreeId: string,
-  location: "grid" | "dock" | "trash" = "grid"
+  location: "grid" | "dock" | "trash" = "grid",
+  kind?: string
 ): PtyPanelData {
   return {
     id,
     type: "terminal",
+    ...(kind !== undefined && { kind }),
     title: `Terminal ${id}`,
     cwd: "/test",
     cols: 80,
@@ -89,6 +91,23 @@ describe("Worktree-scoped bulk actions", () => {
     expect(state.panelsById["wt1-grid-1"]?.location).toBe("dock");
     expect(state.panelsById["wt1-dock-1"]?.location).toBe("dock");
     expect(state.panelsById["wt2-grid-1"]?.location).toBe("grid");
+  });
+
+  it("bulkMoveToDockByWorktree skips a non-dockable kind — it would strand invisibly (#11054)", () => {
+    // A dev-preview panel can't render in the dock (`isDockPanel` filters it out),
+    // so bulk-docking a worktree must leave it on the grid, matching the guard
+    // on `bulkMoveToDock`.
+    setTerminals([
+      createMockTerminal("wt1-grid-1", "wt1", "grid"),
+      createMockTerminal("wt1-devpreview-1", "wt1", "grid", "dev-preview"),
+    ]);
+
+    usePanelStore.getState().bulkMoveToDockByWorktree("wt1");
+
+    const state = usePanelStore.getState();
+    expect(state.panelsById["wt1-grid-1"]?.location).toBe("dock");
+    // The non-dockable dev-preview panel stays on the grid.
+    expect(state.panelsById["wt1-devpreview-1"]?.location).toBe("grid");
   });
 
   it("bulkMoveToGridByWorktree respects grid capacity and only moves that worktree's docked terminals", () => {

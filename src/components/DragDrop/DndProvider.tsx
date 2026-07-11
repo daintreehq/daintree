@@ -106,8 +106,11 @@ import {
   resolveGroupPlacementIndex,
   resolveGridInsertionIndexFromRects,
   findGroupIndex,
+  isNonDockableDockDrop,
+  filterOutDockDroppables,
   type OverDropData,
 } from "./dropResolution";
+import { panelKindIsDockable } from "@shared/config/panelKindRegistry";
 import {
   DURATION_100,
   DURATION_300,
@@ -1290,6 +1293,22 @@ export function DndProvider({ children }: DndProviderProps) {
         return true;
       }
 
+      // A panel whose kind the dock can't render must never commit into the
+      // dock — it would strand invisibly (#11054). Reject the drop so it snaps
+      // back to its origin. `cursor-no-drop` already signals this during hover
+      // (ContentDock), and `collisionDetection` keeps the dock out of the hover
+      // candidates, so this is the defensive final gate on the same capability
+      // predicate the launch menu and move-to-dock use.
+      const targetContainer =
+        overData?.container ??
+        (overData?.sortable?.containerId
+          ? resolveContainerId(overData.sortable.containerId)
+          : null);
+      if (isNonDockableDockDrop(targetContainer, activeDataRaw.terminal.kind)) {
+        setIsCancelDrop(true);
+        return true;
+      }
+
       // Scrollable panel grid (#8805) — dock→grid drops are never rejected on
       // capacity grounds; the grid scrolls vertically to absorb new panels.
 
@@ -1342,19 +1361,35 @@ export function DndProvider({ children }: DndProviderProps) {
         return closestCenter(args);
       }
 
+      // A drag whose panel kind can't live in the dock (#11054) must never
+      // resolve the dock as a collision target — otherwise the dock's
+      // SortableContext reflows during hover before `cancelDrop` snaps it back.
+      // Filter the dock droppable (and its chip sortables) out of the candidate
+      // set and skip the dock-specific closestCenter branch, so the dock is
+      // invisible to collision detection for this drag. Read the kind
+      // synchronously from the drag data (no ref) to keep this callback stable.
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- dnd-kit data.current is loosely typed
+      const activeDragData = args.active.data.current as DragData | undefined;
+      const rejectsDock = !panelKindIsDockable(activeDragData?.terminal?.kind ?? "terminal");
+      const effectiveArgs = rejectsDock
+        ? { ...args, droppableContainers: filterOutDockDroppables(args.droppableContainers) }
+        : args;
+
       // First check if we're directly over any droppable
-      const pointerCollisions = pointerWithin(args);
+      const pointerCollisions = pointerWithin(effectiveArgs);
       if (pointerCollisions.length > 0) {
         return pointerCollisions;
       }
 
       // For dock, use closest center (better for 1D); otherwise rect intersection
       // Using rectIntersection as default prevents oscillation when cursor is
-      // outside all containers (e.g., over disabled worktree drop target)
-      if (overContainerRef.current === "dock") {
-        return closestCenter(args);
+      // outside all containers (e.g., over disabled worktree drop target). A
+      // non-dockable drag never takes the dock branch — its stale
+      // `overContainerRef` could otherwise make closestCenter reorder the grid.
+      if (!rejectsDock && overContainerRef.current === "dock") {
+        return closestCenter(effectiveArgs);
       }
-      return rectIntersection(args);
+      return rectIntersection(effectiveArgs);
     },
     [] // Empty deps - function must be stable to prevent dnd-kit measurement loops
   );
