@@ -25,6 +25,8 @@ import { getNarrowPanel, getRenderablePanel } from "@/store/slices/panelRegistry
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
 import { useProjectStore } from "@/store/projectStore";
+import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { isDockPanelRendered } from "@/components/Layout/dockPanelVisibility";
 import { computeGridSelectedAgentIds } from "./contentGridAgentFilter";
 import { buildFleetPanels } from "./contentGridFleetPanels";
 import { useDndPlaceholder, useIsDragging, GRID_PLACEHOLDER_ID } from "@/components/DragDrop";
@@ -320,6 +322,7 @@ export function useContentGridContext({
     rawMaximizedId !== null && closingIds.has(rawMaximizedId) ? null : rawMaximizedId;
 
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
+  const helpTerminalId = useHelpPanelStore((state) => state.terminalId);
   const showProjectPulse = usePreferencesStore((state) => state.showProjectPulse);
   const currentProject = useProjectStore((state) => state.currentProject);
   const isAvailabilityInitialized = useCliAvailabilityStore((s) => s.isInitialized);
@@ -1085,6 +1088,40 @@ export function useContentGridContext({
       .map((raw) => getRenderablePanel(byId, raw.id))
       .filter((p): p is PanelInstance => p !== undefined);
   }, [getTabGroupPanels, maximizedGroup]);
+  // `activeDockTerminalId` outlives the popover it names — the offscreen
+  // container's watchdog keeps it pointing at a panel the dock has filtered out
+  // (e.g. after a worktree switch) so the popover can reopen on the way back.
+  // Intersect it with what the dock actually renders, or focus enforcement below
+  // would stand down for a popover that isn't on screen and strand focus outside
+  // the maximized group (#11065).
+  // Which dock popover is genuinely on screen, or null. `activeDockTerminalId`
+  // alone can't answer that: the offscreen watchdog keeps the pointer alive for
+  // panels the dock has filtered out (#7278), so focus enforcement below would
+  // stand down for a popover that isn't rendered and strand focus outside the
+  // maximized group (#11065).
+  //
+  // Derived in the selector rather than a useMemo over `panelsById` snapshots:
+  // the panel's structure can change while the pointer holds still (layout undo
+  // rewrites a panel's worktree in place), which a memo keyed on the pointer
+  // would miss. Selecting the id — a primitive — rather than the panel object is
+  // what keeps this free of the per-panel re-render churn of #8593: the selector
+  // re-runs on every store write but returns the same string, so the equality
+  // check short-circuits and the hook doesn't re-render.
+  const openDockPopoverId = usePanelStore((state) => {
+    const id = state.activeDockTerminalId;
+    if (id === null) return null;
+    // Both dock surfaces render from `panelIds`; a panel that lingers in
+    // `panelsById` without being registered there has no chip, hence no popover.
+    const panel = state.panelIds.includes(id) ? state.panelsById[id] : undefined;
+    return isDockPanelRendered(panel, {
+      trashedTerminals: state.trashedTerminals,
+      helpTerminalId,
+      activeWorktreeId,
+    })
+      ? id
+      : null;
+  });
+
   const maximizedGroupFocusTarget = useMemo(
     () =>
       maximizedGroup
@@ -1093,9 +1130,10 @@ export function useContentGridContext({
             groupId: maximizedGroup.id,
             groupPanels: maximizedGroupPanels,
             getActiveTabId,
+            openDockPopoverId,
           })
         : null,
-    [focusedId, getActiveTabId, maximizedGroup, maximizedGroupPanels]
+    [focusedId, getActiveTabId, maximizedGroup, maximizedGroupPanels, openDockPopoverId]
   );
 
   useEffect(() => {
