@@ -156,6 +156,7 @@ const mockAddPanel = vi.fn();
 const mockBeginSpawnBatch = vi.fn(() => Symbol("test-spawn-batch"));
 const mockFlushSpawnBatch = vi.fn();
 const mockSetFocused = vi.fn();
+const mockExitMaximize = vi.fn();
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: {
     getState: () => ({
@@ -165,6 +166,7 @@ vi.mock("@/store/panelStore", () => ({
       beginSpawnBatch: () => mockBeginSpawnBatch(),
       flushSpawnBatch: (token: unknown) => mockFlushSpawnBatch(token),
       setFocused: (id: string) => mockSetFocused(id),
+      exitMaximize: () => mockExitMaximize(),
     }),
   },
 }));
