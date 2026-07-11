@@ -4,12 +4,15 @@ import { slashCommandsClient } from "@/clients";
 import { toSlashAutocompleteItems } from "@/hooks/slashAutocompleteItems";
 
 import { getBuiltinSlashCommands, type SlashCommand } from "@shared/types";
+import type { CompletionTrigger } from "@shared/types";
 import { getAgentConfig } from "@/config/agents";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 
 export interface UseSlashCommandAutocompleteArgs {
   query: string;
   enabled: boolean;
+  /** Which trigger's completions to surface — `/` commands or `$` capabilities. */
+  trigger: CompletionTrigger;
   agentId?: BuiltInAgentId;
   projectPath?: string;
 }
@@ -17,6 +20,7 @@ export interface UseSlashCommandAutocompleteArgs {
 export function useSlashCommandAutocomplete({
   query,
   enabled,
+  trigger,
   agentId,
   projectPath,
 }: UseSlashCommandAutocompleteArgs): {
@@ -62,8 +66,8 @@ export function useSlashCommandAutocomplete({
   }, [agentId, projectPath]);
 
   const items = useMemo(
-    (): AutocompleteItem[] => (enabled ? toSlashAutocompleteItems(commands, query) : []),
-    [commands, enabled, query]
+    (): AutocompleteItem[] => (enabled ? toSlashAutocompleteItems(commands, query, trigger) : []),
+    [commands, enabled, query, trigger]
   );
 
   return { items, isLoading };

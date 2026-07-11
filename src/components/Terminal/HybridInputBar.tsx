@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { EditorView } from "@codemirror/view";
 import { EditorSelection } from "@codemirror/state";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
@@ -12,12 +12,11 @@ import { useSlashCommandList } from "@/hooks/useSlashCommandList";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { AutocompleteMenu, type AutocompleteItem } from "./AutocompleteMenu";
 import {
-  type AtFileContext,
-  type SlashCommandContext,
-  type AtDiffContext,
-  type AtTerminalContext,
-  type AtSelectionContext,
+  getDaintreeAtClaim,
+  fileSearchQuery,
+  type ActiveCompletionContext,
 } from "./hybridInputParsing";
+import type { CompletionTrigger } from "@shared/types";
 import { CommandPickerHost } from "@/components/Commands";
 import { PromptHistoryPalette } from "./PromptHistoryPalette";
 import { useCommandStore } from "@/store/commandStore";
@@ -85,17 +84,12 @@ interface LatestState {
   disabled: boolean;
   isInitializing: boolean;
   isInHistoryMode: boolean;
-  activeMode: "command" | "file" | "diff" | "terminal" | "selection" | null;
   isAutocompleteOpen: boolean;
   autocompleteItems: AutocompleteItem[];
-  isResultsStale: boolean;
+  staleItemKeys: ReadonlySet<string>;
   selectedIndex: number;
   value: string;
-  atContext: AtFileContext | null;
-  slashContext: SlashCommandContext | null;
-  diffContext: AtDiffContext | null;
-  terminalContext: AtTerminalContext | null;
-  selectionContext: AtSelectionContext | null;
+  activeCompletionContext: ActiveCompletionContext | null;
   onSend: HybridInputBarProps["onSend"];
   onSendKey?: HybridInputBarProps["onSendKey"];
   addToHistory: (terminalId: string, command: string, projectId?: string) => void;
@@ -120,6 +114,8 @@ type ApplyEditorValue = (
   nextValue: string,
   options?: { selection?: EditorSelection; focus?: boolean }
 ) => void;
+
+const EMPTY_STALE_KEYS: ReadonlySet<string> = new Set<string>();
 
 const hybridInputE2EControllers = new Map<string, HybridInputE2EController>();
 
@@ -189,11 +185,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const rootRef = useRef<HTMLDivElement | null>(null);
     const lastEmittedValueRef = useRef<string>(value);
     const focusGenerationRef = useRef(0);
-    const [atContext, setAtContext] = useState<AtFileContext | null>(null);
-    const [slashContext, setSlashContext] = useState<SlashCommandContext | null>(null);
-    const [diffContext, setDiffContext] = useState<AtDiffContext | null>(null);
-    const [terminalContext, setTerminalContext] = useState<AtTerminalContext | null>(null);
-    const [selectionContext, setSelectionContext] = useState<AtSelectionContext | null>(null);
+    const [activeCompletionContext, setActiveCompletionContext] =
+      useState<ActiveCompletionContext | null>(null);
 
     const [selectedIndex, setSelectedIndex] = useState(0);
     const lastQueryRef = useRef<string>("");
@@ -274,9 +267,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const draft = getDraftInput(terminalId, projectId);
       setValue(draft);
       lastEmittedValueRef.current = draft;
-      setAtContext(null);
-      setSlashContext(null);
-      setDiffContext(null);
+      setActiveCompletionContext(null);
       setSelectedIndex(0);
       lastQueryRef.current = "";
       lastEnterKeydownNewlineRef.current = false;
@@ -317,40 +308,41 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       return agentName ? `Ask ${agentName}` : "Ask anything";
     })();
 
-    const activeMode = slashContext
-      ? "command"
-      : terminalContext
-        ? "terminal"
-        : selectionContext
-          ? "selection"
-          : diffContext
-            ? "diff"
-            : atContext
-              ? "file"
-              : null;
-    const isAutocompleteOpen = activeMode !== null && !disabled;
+    // Trigger chars that open a menu, data-driven from the agent's declared
+    // completionSources — `/` and Daintree's `@` are always available; `$`
+    // (Codex capabilities) is added only when the agent declares a `$` source.
+    const activeTriggers = useMemo(() => {
+      const triggers = new Set<CompletionTrigger>(["/", "@"]);
+      for (const source of agentId ? (getAgentConfig(agentId)?.completionSources ?? []) : []) {
+        triggers.add(source.trigger);
+      }
+      return triggers;
+    }, [agentId]);
 
+    const triggerChar = activeCompletionContext?.triggerChar ?? null;
+    // Which Daintree `@` provider claims the query (else `@file` fallback).
+    const atClaim =
+      triggerChar === "@" ? getDaintreeAtClaim(activeCompletionContext?.query ?? "") : null;
+    const isFileMode = triggerChar === "@" && atClaim === null;
+    const isAutocompleteOpen = activeCompletionContext !== null && !disabled;
+
+    const fileQuery = isFileMode ? fileSearchQuery(activeCompletionContext?.query ?? "") : "";
     const {
       files: autocompleteFiles,
       isLoading: isAutocompleteLoading,
       resultsQuery: fileResultsQuery,
     } = useFileAutocomplete({
       cwd,
-      query: atContext?.queryForSearch ?? "",
-      enabled: isAutocompleteOpen && activeMode === "file",
+      query: fileQuery,
+      enabled: isAutocompleteOpen && isFileMode,
       limit: 50,
     });
 
-    // File search is debounced + async; every other mode filters synchronously.
-    // While the visible results belong to an earlier query they are "stale":
-    // rendered dimmed, and never accepted by Enter/Tab (the literal text wins).
-    const isResultsStale =
-      activeMode === "file" && fileResultsQuery !== (atContext?.queryForSearch ?? "");
-
     const { items: autocompleteCommands, isLoading: isCommandsLoading } =
       useSlashCommandAutocomplete({
-        query: slashContext?.query ?? "",
-        enabled: isAutocompleteOpen && activeMode === "command",
+        query: activeCompletionContext?.query ?? "",
+        enabled: isAutocompleteOpen && (triggerChar === "/" || triggerChar === "$"),
+        trigger: triggerChar === "$" ? "$" : "/",
         agentId,
         projectPath: cwd,
       });
@@ -358,16 +350,21 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const { commandMap } = useSlashCommandList({ agentId, projectPath: cwd });
 
     const { autocompleteItems, isLoading } = useAutocompleteItems({
-      activeMode,
-      diffContext,
-      terminalContext,
-      selectionContext,
-      value,
+      activeCompletionContext,
       autocompleteFiles,
       isAutocompleteLoading,
       autocompleteCommands,
       isCommandsLoading,
     });
+
+    // Per-provider staleness: only the debounced async `@file` search can go
+    // stale. Its item keys ARE the file paths, so a stale file search dims only
+    // those rows — never a fresh `$` or static `@diff` list.
+    const isFileStale = isFileMode && fileResultsQuery !== fileQuery;
+    const staleItemKeys = useMemo(
+      () => (isFileStale ? new Set(autocompleteFiles) : EMPTY_STALE_KEYS),
+      [isFileStale, autocompleteFiles]
+    );
 
     useEffect(() => {
       latestRef.current = {
@@ -376,17 +373,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         disabled,
         isInitializing,
         isInHistoryMode,
-        activeMode,
         isAutocompleteOpen,
         autocompleteItems,
-        isResultsStale,
+        staleItemKeys,
         selectedIndex,
         value,
-        atContext,
-        slashContext,
-        diffContext,
-        terminalContext,
-        selectionContext,
+        activeCompletionContext,
         onSend,
         onSendKey,
         addToHistory,
@@ -403,33 +395,19 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       inputShellRef,
       menuRef,
       isAutocompleteOpen,
-      activeMode,
-      atContext,
-      slashContext,
-      diffContext,
-      terminalContext,
-      selectionContext,
+      activeCompletionContext,
       setMenuLeftPx,
     });
 
     useAutocompleteState({
       isAutocompleteOpen,
-      activeMode,
-      atContext,
-      slashContext,
-      diffContext,
-      terminalContext,
-      selectionContext,
-      autocompleteItemsLength: autocompleteItems.length,
+      activeCompletionContext,
+      autocompleteItems,
       rootRef,
       selectedIndex,
       setSelectedIndex,
       lastQueryRef,
-      setAtContext,
-      setSlashContext,
-      setDiffContext,
-      setTerminalContext,
-      setSelectionContext,
+      setActiveCompletionContext,
     });
 
     const applyEditorValue = (
@@ -484,11 +462,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       latestRef,
       applyEditorValue,
       setIsExpanded,
-      setAtContext,
-      setSlashContext,
-      setDiffContext,
-      setTerminalContext,
-      setSelectionContext,
+      setActiveCompletionContext,
       terminalId,
       cwd,
       agentId,
@@ -606,11 +580,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       lastQueryRef,
       applyEditorValue,
       sendText,
-      setAtContext,
-      setSlashContext,
-      setDiffContext,
-      setTerminalContext,
-      setSelectionContext,
+      setActiveCompletionContext,
       setSelectedIndex,
     });
 
@@ -650,6 +620,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     const { handleUpdateRef: contextUpdateRef } = useContextDetection({
       latestRef,
+      activeTriggers,
       applyDocChange: (next) => {
         if (next === lastEmittedValueRef.current) return false;
         lastEmittedValueRef.current = next;
@@ -661,11 +632,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         isApplyingExternalValueRef.current = false;
         return true;
       },
-      setAtContext,
-      setSlashContext,
-      setDiffContext,
-      setTerminalContext,
-      setSelectionContext,
+      setActiveCompletionContext,
     });
 
     const {
@@ -686,11 +653,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       cancelVoiceWaitSubmit,
       stashEditorState,
       popStashedEditorState,
-      setAtContext,
-      setSlashContext,
-      setDiffContext,
-      setTerminalContext,
-      setSelectionContext,
+      setActiveCompletionContext,
       setIsExpanded,
       setSelectedIndex,
     });
@@ -707,11 +670,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       applyAutocompleteSelection,
       sendFromEditor,
       rootRef,
-      setAtContext,
-      setSlashContext,
-      setDiffContext,
-      setTerminalContext,
-      setSelectionContext,
+      setActiveCompletionContext,
     });
 
     useEditorFactory({
@@ -850,39 +809,47 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               items={autocompleteItems}
               selectedIndex={selectedIndex}
               isLoading={isLoading}
-              isStale={isResultsStale}
+              staleKeys={staleItemKeys}
               onSelect={handleAutocompleteSelect}
               style={{ left: `${menuLeftPx}px` }}
               title={
-                activeMode === "command"
+                triggerChar === "/"
                   ? "Commands"
-                  : activeMode === "terminal"
-                    ? "Terminal output"
-                    : activeMode === "selection"
-                      ? "Terminal selection"
-                      : activeMode === "diff"
-                        ? "Diffs"
-                        : "Files"
+                  : triggerChar === "$"
+                    ? "Capabilities"
+                    : atClaim === "terminal"
+                      ? "Terminal output"
+                      : atClaim === "selection"
+                        ? "Terminal selection"
+                        : atClaim === "diff"
+                          ? "Diffs"
+                          : "Files"
               }
-              keyHint={activeMode === "command" ? "↵ run · ⇥ complete" : "↵ insert"}
+              keyHint={
+                autocompleteItems[selectedIndex]?.enterAction === "execute"
+                  ? "↵ run · ⇥ complete"
+                  : "↵ insert"
+              }
               ariaLabel={
-                activeMode === "command"
+                triggerChar === "/"
                   ? "Command autocomplete"
-                  : activeMode === "terminal"
-                    ? "Terminal autocomplete"
-                    : activeMode === "selection"
-                      ? "Selection autocomplete"
-                      : activeMode === "diff"
-                        ? "Diff autocomplete"
-                        : "File autocomplete"
+                  : triggerChar === "$"
+                    ? "Capability autocomplete"
+                    : atClaim === "terminal"
+                      ? "Terminal autocomplete"
+                      : atClaim === "selection"
+                        ? "Selection autocomplete"
+                        : atClaim === "diff"
+                          ? "Diff autocomplete"
+                          : "File autocomplete"
               }
               emptyMessage={
-                activeMode === "command"
+                triggerChar === "/"
                   ? "No commands match"
-                  : activeMode === "file"
-                    ? "No files match"
-                    : activeMode === "terminal"
-                      ? "No terminals match"
+                  : triggerChar === "$"
+                    ? "No capabilities match"
+                    : isFileMode
+                      ? "No files match"
                       : "No matches"
               }
             />

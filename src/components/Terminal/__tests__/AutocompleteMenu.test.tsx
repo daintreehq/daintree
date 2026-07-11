@@ -104,7 +104,7 @@ describe("AutocompleteMenu", () => {
     expect(screen.getByText("↵ run · ⇥ complete")).toBeTruthy();
   });
 
-  it("marks the listbox busy while results are stale or loading", () => {
+  it("marks the listbox busy while any row is stale or results are loading", () => {
     const items: AutocompleteItem[] = [{ key: "a", label: "alpha", insertText: "alpha" }];
 
     const { rerender } = render(
@@ -112,7 +112,7 @@ describe("AutocompleteMenu", () => {
         isOpen={true}
         items={items}
         selectedIndex={0}
-        isStale={true}
+        staleKeys={new Set(["a"])}
         onSelect={noop}
         emptyMessage="No matches"
       />
@@ -124,7 +124,7 @@ describe("AutocompleteMenu", () => {
         isOpen={true}
         items={items}
         selectedIndex={0}
-        isStale={false}
+        staleKeys={new Set()}
         isLoading={true}
         onSelect={noop}
         emptyMessage="No matches"
@@ -137,13 +137,43 @@ describe("AutocompleteMenu", () => {
         isOpen={true}
         items={items}
         selectedIndex={0}
-        isStale={false}
+        staleKeys={new Set()}
         isLoading={false}
         onSelect={noop}
         emptyMessage="No matches"
       />
     );
     expect(screen.getByRole("listbox").getAttribute("aria-busy")).toBeNull();
+  });
+
+  it("dims only stale rows and ignores clicks on them", () => {
+    const onSelect = vi.fn();
+    const items: AutocompleteItem[] = [
+      { key: "fresh", label: "fresh", insertText: "fresh" },
+      { key: "stale", label: "stale", insertText: "stale" },
+    ];
+
+    render(
+      <AutocompleteMenu
+        isOpen={true}
+        items={items}
+        selectedIndex={0}
+        staleKeys={new Set(["stale"])}
+        onSelect={onSelect}
+        emptyMessage="No matches"
+      />
+    );
+
+    const options = screen.getAllByRole("option");
+    const freshRow = options.find((o) => within(o).queryByText("fresh"))!;
+    const staleRow = options.find((o) => within(o).queryByText("stale"))!;
+    expect(staleRow.className).toContain("opacity-50");
+    expect(freshRow.className).not.toContain("opacity-50");
+
+    staleRow.click();
+    expect(onSelect).not.toHaveBeenCalled();
+    freshRow.click();
+    expect(onSelect).toHaveBeenCalledTimes(1);
   });
 
   it("renders a neutral, screen-reader-labeled badge for skill, app, and plugin items", () => {

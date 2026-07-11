@@ -1,78 +1,83 @@
-import { useEffect, type Dispatch, type SetStateAction } from "react";
-import type {
-  AtFileContext,
-  SlashCommandContext,
-  AtDiffContext,
-  AtTerminalContext,
-  AtSelectionContext,
-} from "../hybridInputParsing";
+import { useEffect, useRef, type Dispatch, type SetStateAction } from "react";
+import type { AutocompleteItem } from "@/components/Terminal/AutocompleteMenu";
+import type { ActiveCompletionContext } from "../hybridInputParsing";
 
 interface UseAutocompleteStateParams {
   isAutocompleteOpen: boolean;
-  activeMode: "command" | "file" | "diff" | "terminal" | "selection" | null;
-  atContext: AtFileContext | null;
-  slashContext: SlashCommandContext | null;
-  diffContext: AtDiffContext | null;
-  terminalContext: AtTerminalContext | null;
-  selectionContext: AtSelectionContext | null;
-  autocompleteItemsLength: number;
+  activeCompletionContext: ActiveCompletionContext | null;
+  autocompleteItems: AutocompleteItem[];
   rootRef: React.RefObject<HTMLDivElement | null>;
   selectedIndex: number;
   setSelectedIndex: Dispatch<SetStateAction<number>>;
   lastQueryRef: React.RefObject<string>;
-  setAtContext: Dispatch<SetStateAction<AtFileContext | null>>;
-  setSlashContext: Dispatch<SetStateAction<SlashCommandContext | null>>;
-  setDiffContext: Dispatch<SetStateAction<AtDiffContext | null>>;
-  setTerminalContext: Dispatch<SetStateAction<AtTerminalContext | null>>;
-  setSelectionContext: Dispatch<SetStateAction<AtSelectionContext | null>>;
+  setActiveCompletionContext: Dispatch<SetStateAction<ActiveCompletionContext | null>>;
 }
 
 export function useAutocompleteState({
   isAutocompleteOpen,
-  activeMode,
-  atContext,
-  slashContext,
-  diffContext,
-  terminalContext,
-  selectionContext,
-  autocompleteItemsLength,
+  activeCompletionContext,
+  autocompleteItems,
   rootRef,
   selectedIndex,
   setSelectedIndex,
   lastQueryRef,
-  setAtContext,
-  setSlashContext,
-  setDiffContext,
-  setTerminalContext,
-  setSelectionContext,
+  setActiveCompletionContext,
 }: UseAutocompleteStateParams) {
+  // A new query (user typed) resets selection to the top; items arriving async
+  // for the SAME query preserve the selected item by key so a slow provider
+  // merge doesn't jump the highlight. Tracking the items reference lets user
+  // arrow-navigation (selectedIndex changes, items don't) pass through untouched.
+  const prevRef = useRef<{
+    queryKey: string;
+    items: AutocompleteItem[];
+    selectedKey: string | null;
+  }>({ queryKey: "", items: [], selectedKey: null });
+
+  const queryKey = activeCompletionContext
+    ? `${activeCompletionContext.triggerChar}:${activeCompletionContext.start}:${activeCompletionContext.query}`
+    : "";
+
   useEffect(() => {
-    const activeQuery =
-      activeMode === "terminal"
-        ? `terminal:${terminalContext?.atStart ?? ""}`
-        : activeMode === "selection"
-          ? `selection:${selectionContext?.atStart ?? ""}`
-          : activeMode === "diff"
-            ? `diff:${diffContext?.atStart ?? ""}:${diffContext?.tokenEnd ?? ""}:${diffContext?.diffType ?? ""}`
-            : activeMode === "file"
-              ? `file:${atContext?.queryForSearch ?? ""}`
-              : activeMode === "command"
-                ? `command:${slashContext?.query ?? ""}`
-                : "";
-    if (activeQuery !== lastQueryRef.current) {
-      lastQueryRef.current = activeQuery;
-      setSelectedIndex(0);
+    const prev = prevRef.current;
+
+    if (queryKey !== prev.queryKey) {
+      lastQueryRef.current = queryKey;
+      if (selectedIndex !== 0) setSelectedIndex(0);
+      prevRef.current = {
+        queryKey,
+        items: autocompleteItems,
+        selectedKey: autocompleteItems[0]?.key ?? null,
+      };
+      return;
     }
-  }, [
-    activeMode,
-    atContext?.queryForSearch,
-    diffContext?.atStart,
-    diffContext?.tokenEnd,
-    diffContext?.diffType,
-    terminalContext?.atStart,
-    selectionContext?.atStart,
-    slashContext?.query,
-  ]);
+
+    if (autocompleteItems !== prev.items) {
+      // Items merged/refreshed for the same query: keep the selected key if it
+      // survived, else clamp into range.
+      let nextIndex = selectedIndex;
+      if (prev.selectedKey) {
+        const idx = autocompleteItems.findIndex((item) => item.key === prev.selectedKey);
+        nextIndex =
+          idx >= 0 ? idx : Math.min(selectedIndex, Math.max(0, autocompleteItems.length - 1));
+      } else {
+        nextIndex = Math.min(selectedIndex, Math.max(0, autocompleteItems.length - 1));
+      }
+      if (nextIndex !== selectedIndex) setSelectedIndex(nextIndex);
+      prevRef.current = {
+        queryKey,
+        items: autocompleteItems,
+        selectedKey: autocompleteItems[nextIndex]?.key ?? null,
+      };
+      return;
+    }
+
+    // Only selectedIndex changed (user arrow-nav): record the new selection.
+    prevRef.current = {
+      queryKey,
+      items: autocompleteItems,
+      selectedKey: autocompleteItems[selectedIndex]?.key ?? prev.selectedKey,
+    };
+  }, [queryKey, autocompleteItems, selectedIndex, setSelectedIndex, lastQueryRef]);
 
   useEffect(() => {
     if (!isAutocompleteOpen) return;
@@ -82,24 +87,9 @@ export function useAutocompleteState({
       const target = event.target as Node | null;
       if (!target) return;
       if (root.contains(target)) return;
-      setAtContext(null);
-      setSlashContext(null);
-      setDiffContext(null);
-      setTerminalContext(null);
-      setSelectionContext(null);
+      setActiveCompletionContext(null);
     };
     document.addEventListener("pointerdown", onPointerDown, true);
     return () => document.removeEventListener("pointerdown", onPointerDown, true);
-  }, [isAutocompleteOpen]);
-
-  useEffect(() => {
-    if (!isAutocompleteOpen) return;
-    if (autocompleteItemsLength === 0) {
-      setSelectedIndex(0);
-      return;
-    }
-    if (selectedIndex >= autocompleteItemsLength) {
-      setSelectedIndex((prev) => Math.max(0, Math.min(prev, autocompleteItemsLength - 1)));
-    }
-  }, [autocompleteItemsLength, isAutocompleteOpen]);
+  }, [isAutocompleteOpen, rootRef, setActiveCompletionContext]);
 }

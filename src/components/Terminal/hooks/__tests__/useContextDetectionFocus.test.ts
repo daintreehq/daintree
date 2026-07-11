@@ -33,11 +33,7 @@ function makeUpdate(opts: {
 
 function setupHook() {
   const setIsEditorFocused = vi.fn();
-  const setAtContext = vi.fn();
-  const setSlashContext = vi.fn();
-  const setDiffContext = vi.fn();
-  const setTerminalContext = vi.fn();
-  const setSelectionContext = vi.fn();
+  const setActiveCompletionContext = vi.fn();
   const applyDocChange = vi.fn(() => false);
   const consumeExternalValueFlag = vi.fn(() => false);
 
@@ -49,13 +45,10 @@ function setupHook() {
     });
     return useContextDetection({
       latestRef,
+      activeTriggers: new Set(["/", "$", "@"]),
       applyDocChange,
       consumeExternalValueFlag,
-      setAtContext,
-      setSlashContext,
-      setDiffContext,
-      setTerminalContext,
-      setSelectionContext,
+      setActiveCompletionContext,
       setIsEditorFocused,
     });
   });

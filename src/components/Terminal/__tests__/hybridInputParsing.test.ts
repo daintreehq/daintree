@@ -1,124 +1,135 @@
 import { describe, expect, it } from "vitest";
+import type { CompletionTrigger } from "@shared/types";
 import {
-  getAtFileContext,
-  getSlashCommandContext,
+  getActiveCompletionContext,
+  getDaintreeAtClaim,
+  matchesDiffPrefix,
+  matchesTerminalPrefix,
+  matchesSelectionPrefix,
+  fileSearchQuery,
   getLeadingSlashCommand,
   getAllSlashCommandTokens,
-  getDiffContext,
   getAllAtDiffTokens,
-  getTerminalContext,
   getAllAtTerminalTokens,
-  getSelectionContext,
   getAllAtSelectionTokens,
 } from "../hybridInputParsing";
 
-describe("getAtFileContext", () => {
-  it("detects an @ token at the caret", () => {
+const ALL: ReadonlySet<CompletionTrigger> = new Set(["/", "$", "@"]);
+const SLASH_AT: ReadonlySet<CompletionTrigger> = new Set(["/", "@"]);
+
+describe("getActiveCompletionContext", () => {
+  it("detects an @ file token at the caret", () => {
     const text = "run @src/App.tsx please";
     const caret = "run @src/".length;
-    const ctx = getAtFileContext(text, caret);
+    const ctx = getActiveCompletionContext(text, caret, ALL);
     expect(ctx).not.toBeNull();
-    expect(ctx?.atStart).toBe(4);
+    expect(ctx?.triggerChar).toBe("@");
+    expect(ctx?.start).toBe(4);
     expect(ctx?.tokenEnd).toBe("run @src/App.tsx".length);
-    expect(ctx?.queryRaw).toBe("src/");
-    expect(ctx?.queryForSearch).toBe("src/");
+    expect(ctx?.query).toBe("src/");
   });
 
-  it("requires @ to be preceded by whitespace (or start)", () => {
-    const text = "email@test.com";
-    const caret = text.length;
-    expect(getAtFileContext(text, caret)).toBeNull();
+  it("detects a slash command at start of input", () => {
+    const ctx = getActiveCompletionContext("/help", 2, ALL);
+    expect(ctx?.triggerChar).toBe("/");
+    expect(ctx?.start).toBe(0);
+    expect(ctx?.query).toBe("h");
   });
 
-  it("strips a leading quote for queryForSearch", () => {
-    const text = 'open @"My Folder/file name.txt"';
-    const caret = 'open @"My'.length;
-    const ctx = getAtFileContext(text, caret);
-    expect(ctx).not.toBeNull();
-    expect(ctx?.queryRaw).toBe('"My');
-    expect(ctx?.queryForSearch).toBe("My");
+  it("detects a $ capability token", () => {
+    const ctx = getActiveCompletionContext("$neo", 4, ALL);
+    expect(ctx?.triggerChar).toBe("$");
+    expect(ctx?.start).toBe(0);
+    expect(ctx?.tokenEnd).toBe(4);
+    expect(ctx?.query).toBe("neo");
+  });
+
+  it("only activates triggers in the active set", () => {
+    expect(getActiveCompletionContext("$neo", 4, SLASH_AT)).toBeNull();
+    expect(getActiveCompletionContext("$neo", 4, ALL)?.triggerChar).toBe("$");
+  });
+
+  it("detects a token mid-text after whitespace / tab / newline", () => {
+    expect(getActiveCompletionContext("echo /help", "echo /h".length, ALL)?.start).toBe(5);
+    expect(getActiveCompletionContext("text\t/compact", "text\t/com".length, ALL)?.query).toBe(
+      "com"
+    );
+    expect(getActiveCompletionContext("line1\n/help", "line1\n/he".length, ALL)?.start).toBe(6);
+  });
+
+  it("rejects a trigger not preceded by whitespace (URLs, emails, paths)", () => {
+    expect(getActiveCompletionContext("email@test.com", "email@test.com".length, ALL)).toBeNull();
+    expect(getActiveCompletionContext("http://example.com", 8, ALL)).toBeNull();
+    expect(getActiveCompletionContext("path/to/file", 6, ALL)).toBeNull();
+  });
+
+  it("rejects doubled triggers (//help, $$foo, @@x)", () => {
+    expect(getActiveCompletionContext("//help", 3, ALL)).toBeNull();
+    expect(getActiveCompletionContext("$$foo", 3, ALL)).toBeNull();
+    expect(getActiveCompletionContext("@@x", 3, ALL)).toBeNull();
+  });
+
+  it("is inactive when the caret is in the token's arguments", () => {
+    expect(getActiveCompletionContext("/open src/App.tsx", "/open src/App.tsx".length, ALL)).toBe(
+      null
+    );
+  });
+
+  it("anchors on the second token when the caret is inside it", () => {
+    const text = "/help /compact";
+    const ctx = getActiveCompletionContext(text, "/help /com".length, ALL);
+    expect(ctx?.start).toBe(6);
+    expect(ctx?.tokenEnd).toBe(14);
+    expect(ctx?.query).toBe("com");
+  });
+
+  it("activates for a bare trigger", () => {
+    expect(getActiveCompletionContext("/", 1, ALL)).toMatchObject({ triggerChar: "/", query: "" });
+    expect(getActiveCompletionContext("echo @", 6, ALL)).toMatchObject({
+      triggerChar: "@",
+      query: "",
+    });
+  });
+
+  it("activates with the caret in the middle of a token", () => {
+    const ctx = getActiveCompletionContext("@diff:staged", "@diff:st".length, ALL);
+    expect(ctx?.triggerChar).toBe("@");
+    expect(ctx?.start).toBe(0);
+    expect(ctx?.query).toBe("diff:st");
+  });
+
+  it("returns null when the caret precedes the trigger or follows the token", () => {
+    expect(getActiveCompletionContext("check @diff", 3, ALL)).toBeNull();
+    expect(getActiveCompletionContext("@diff rest", "@diff r".length, ALL)).toBeNull();
   });
 });
 
-describe("getSlashCommandContext", () => {
-  it("detects a slash command at start of input", () => {
-    expect(getSlashCommandContext("/help", 2)?.query).toBe("/h");
+describe("getDaintreeAtClaim + prefix matchers", () => {
+  it("claims diff for a bare @ and diff prefixes", () => {
+    expect(getDaintreeAtClaim("")).toBe("diff");
+    expect(getDaintreeAtClaim("diff")).toBe("diff");
+    expect(getDaintreeAtClaim("diff:s")).toBe("diff");
+    expect(matchesDiffPrefix("")).toBe(true);
   });
 
-  it("detects a slash command mid-text after whitespace", () => {
-    const ctx = getSlashCommandContext("echo /help", "echo /h".length);
-    expect(ctx).not.toBeNull();
-    expect(ctx?.start).toBe(5);
-    expect(ctx?.tokenEnd).toBe(10);
-    expect(ctx?.query).toBe("/h");
+  it("claims terminal/selection only from four chars in", () => {
+    expect(getDaintreeAtClaim("te")).toBeNull();
+    expect(getDaintreeAtClaim("term")).toBe("terminal");
+    expect(getDaintreeAtClaim("sele")).toBe("selection");
+    expect(matchesTerminalPrefix("ter")).toBe(false);
+    expect(matchesSelectionPrefix("sel")).toBe(false);
   });
 
-  it("detects slash command after tab", () => {
-    const ctx = getSlashCommandContext("text\t/compact", "text\t/com".length);
-    expect(ctx).not.toBeNull();
-    expect(ctx?.start).toBe(5);
-    expect(ctx?.query).toBe("/com");
+  it("falls through to file search for non-provider queries", () => {
+    expect(getDaintreeAtClaim("src/")).toBeNull();
+    expect(getDaintreeAtClaim("ters")).toBeNull();
   });
+});
 
-  it("detects slash command after newline", () => {
-    const ctx = getSlashCommandContext("line1\n/help", "line1\n/he".length);
-    expect(ctx).not.toBeNull();
-    expect(ctx?.start).toBe(6);
-    expect(ctx?.query).toBe("/he");
-  });
-
-  it("rejects slash inside a URL (not preceded by whitespace)", () => {
-    expect(getSlashCommandContext("http://example.com", 8)).toBeNull();
-  });
-
-  it("rejects slash not preceded by whitespace", () => {
-    expect(getSlashCommandContext("path/to/file", 6)).toBeNull();
-  });
-
-  it("is inactive when caret is in arguments", () => {
-    const text = "/open src/App.tsx";
-    const caret = text.length;
-    expect(getSlashCommandContext(text, caret)).toBeNull();
-  });
-
-  it("replaces only the first token", () => {
-    const text = "/cl arg1";
-    const caret = "/cl".length;
-    const ctx = getSlashCommandContext(text, caret);
-    expect(ctx).not.toBeNull();
-    expect(ctx?.start).toBe(0);
-    expect(ctx?.tokenEnd).toBe("/cl".length);
-    expect(ctx?.query).toBe("/cl");
-  });
-
-  it("returns correct context for second slash command", () => {
-    const text = "/help /compact";
-    const caret = "/help /com".length;
-    const ctx = getSlashCommandContext(text, caret);
-    expect(ctx).not.toBeNull();
-    expect(ctx?.start).toBe(6);
-    expect(ctx?.tokenEnd).toBe(14);
-    expect(ctx?.query).toBe("/com");
-  });
-
-  it("rejects consecutive slashes like //help", () => {
-    expect(getSlashCommandContext("//help", 3)).toBeNull();
-  });
-
-  it("activates for bare slash at start", () => {
-    const ctx = getSlashCommandContext("/", 1);
-    expect(ctx).not.toBeNull();
-    expect(ctx?.start).toBe(0);
-    expect(ctx?.tokenEnd).toBe(1);
-    expect(ctx?.query).toBe("/");
-  });
-
-  it("activates for bare slash mid-text", () => {
-    const ctx = getSlashCommandContext("echo /", 6);
-    expect(ctx).not.toBeNull();
-    expect(ctx?.start).toBe(5);
-    expect(ctx?.tokenEnd).toBe(6);
-    expect(ctx?.query).toBe("/");
+describe("fileSearchQuery", () => {
+  it("strips a single leading quote", () => {
+    expect(fileSearchQuery('"My')).toBe("My");
+    expect(fileSearchQuery("src/")).toBe("src/");
   });
 });
 
@@ -150,11 +161,12 @@ describe("getLeadingSlashCommand", () => {
   it("handles mixed input with @file references", () => {
     const text = "/compact @src/App.tsx some text";
     const slashToken = getLeadingSlashCommand(text);
-    const atContext = getAtFileContext(text, text.indexOf("@") + 1);
+    const atContext = getActiveCompletionContext(text, text.indexOf("@") + 1, ALL);
 
     expect(slashToken?.command).toBe("/compact");
     expect(atContext).not.toBeNull();
-    expect(atContext?.atStart).toBe(9);
+    expect(atContext?.triggerChar).toBe("@");
+    expect(atContext?.start).toBe(9);
   });
 
   it("only treats first slash as command", () => {
@@ -237,89 +249,6 @@ describe("getAllSlashCommandTokens", () => {
   });
 });
 
-describe("getDiffContext", () => {
-  it("detects @diff at the caret", () => {
-    const text = "check @diff please";
-    const caret = "check @diff".length;
-    const ctx = getDiffContext(text, caret);
-    expect(ctx).not.toBeNull();
-    expect(ctx?.atStart).toBe(6);
-    expect(ctx?.tokenEnd).toBe("check @diff".length);
-    expect(ctx?.diffType).toBe("unstaged");
-  });
-
-  it("detects @diff:staged", () => {
-    const text = "show @diff:staged here";
-    const caret = "show @diff:staged".length;
-    const ctx = getDiffContext(text, caret);
-    expect(ctx).not.toBeNull();
-    expect(ctx?.diffType).toBe("staged");
-  });
-
-  it("detects @diff:head", () => {
-    const text = "@diff:head";
-    const caret = text.length;
-    const ctx = getDiffContext(text, caret);
-    expect(ctx).not.toBeNull();
-    expect(ctx?.diffType).toBe("head");
-  });
-
-  it("returns null diffType for partial typing", () => {
-    const text = "check @dif";
-    const caret = text.length;
-    const ctx = getDiffContext(text, caret);
-    expect(ctx).not.toBeNull();
-    expect(ctx?.diffType).toBeNull();
-  });
-
-  it("returns null for non-diff @ tokens", () => {
-    const text = "check @src/file.ts";
-    const caret = "check @src/".length;
-    expect(getDiffContext(text, caret)).toBeNull();
-  });
-
-  it("requires @ to be preceded by whitespace", () => {
-    const text = "nodiff@diff";
-    const caret = text.length;
-    expect(getDiffContext(text, caret)).toBeNull();
-  });
-
-  it("returns null for unknown suffixes like @diff:foo", () => {
-    const text = "@diff:foo";
-    const caret = text.length;
-    expect(getDiffContext(text, caret)).toBeNull();
-  });
-
-  it("activates for partial prefix @diff:", () => {
-    const text = "@diff:s";
-    const caret = text.length;
-    const ctx = getDiffContext(text, caret);
-    expect(ctx).not.toBeNull();
-    expect(ctx?.diffType).toBeNull(); // partial, not a full match
-  });
-
-  it("activates with caret in middle of @diff:staged", () => {
-    const text = "@diff:staged";
-    const caret = "@diff:st".length;
-    const ctx = getDiffContext(text, caret);
-    expect(ctx).not.toBeNull();
-    expect(ctx?.atStart).toBe(0);
-    expect(ctx?.diffType).toBe("staged"); // full token is diff:staged
-  });
-
-  it("returns null when caret is before the @", () => {
-    const text = "check @diff";
-    const caret = 3; // before @
-    expect(getDiffContext(text, caret)).toBeNull();
-  });
-
-  it("returns null when caret is after the token with trailing text", () => {
-    const text = "@diff rest";
-    const caret = "@diff r".length; // past the @diff token
-    expect(getDiffContext(text, caret)).toBeNull();
-  });
-});
-
 describe("getAllAtDiffTokens", () => {
   it("finds @diff tokens in text", () => {
     const tokens = getAllAtDiffTokens("check @diff and @diff:staged please");
@@ -369,37 +298,6 @@ describe("getAllAtDiffTokens", () => {
   });
 });
 
-describe("getTerminalContext", () => {
-  it("detects @terminal at the caret", () => {
-    const text = "check @terminal please";
-    const caret = "check @terminal".length;
-    const ctx = getTerminalContext(text, caret);
-    expect(ctx).not.toBeNull();
-    expect(ctx?.atStart).toBe(6);
-    expect(ctx?.tokenEnd).toBe("check @terminal".length);
-  });
-
-  it("returns null for short prefixes like @t or @te", () => {
-    expect(getTerminalContext("@t", 2)).toBeNull();
-    expect(getTerminalContext("@te", 3)).toBeNull();
-    expect(getTerminalContext("@ter", 4)).toBeNull();
-  });
-
-  it("activates for partial prefix @term", () => {
-    const ctx = getTerminalContext("@term", 5);
-    expect(ctx).not.toBeNull();
-    expect(ctx?.atStart).toBe(0);
-  });
-
-  it("returns null for non-terminal @ tokens", () => {
-    expect(getTerminalContext("@src/file.ts", 5)).toBeNull();
-  });
-
-  it("requires @ to be preceded by whitespace", () => {
-    expect(getTerminalContext("no@terminal", "no@terminal".length)).toBeNull();
-  });
-});
-
 describe("getAllAtTerminalTokens", () => {
   it("finds @terminal tokens in text", () => {
     const tokens = getAllAtTerminalTokens("check @terminal please");
@@ -431,37 +329,6 @@ describe("getAllAtTerminalTokens", () => {
     const tokens = getAllAtTerminalTokens("@terminal @diff @src/file.ts");
     expect(tokens).toHaveLength(1);
     expect(tokens[0]!.start).toBe(0);
-  });
-});
-
-describe("getSelectionContext", () => {
-  it("detects @selection at the caret", () => {
-    const text = "check @selection please";
-    const caret = "check @selection".length;
-    const ctx = getSelectionContext(text, caret);
-    expect(ctx).not.toBeNull();
-    expect(ctx?.atStart).toBe(6);
-    expect(ctx?.tokenEnd).toBe("check @selection".length);
-  });
-
-  it("returns null for short prefixes like @s or @se", () => {
-    expect(getSelectionContext("@s", 2)).toBeNull();
-    expect(getSelectionContext("@se", 3)).toBeNull();
-    expect(getSelectionContext("@sel", 4)).toBeNull();
-  });
-
-  it("activates for partial prefix @sele", () => {
-    const ctx = getSelectionContext("@sele", 5);
-    expect(ctx).not.toBeNull();
-    expect(ctx?.atStart).toBe(0);
-  });
-
-  it("returns null for non-selection @ tokens", () => {
-    expect(getSelectionContext("@src/file.ts", 5)).toBeNull();
-  });
-
-  it("requires @ to be preceded by whitespace", () => {
-    expect(getSelectionContext("no@selection", "no@selection".length)).toBeNull();
   });
 });
 

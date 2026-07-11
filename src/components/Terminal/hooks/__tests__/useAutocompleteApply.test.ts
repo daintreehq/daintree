@@ -4,26 +4,22 @@ import { renderHook } from "@testing-library/react";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import type { AutocompleteItem } from "../../AutocompleteMenu";
+import type { ActiveCompletionContext } from "../../hybridInputParsing";
 import { useAutocompleteApply } from "../useAutocompleteApply";
 
 type Params = Parameters<typeof useAutocompleteApply>[0];
 type Latest = NonNullable<Params["latestRef"]["current"]>;
 
-function setup(doc: string, item: AutocompleteItem) {
+function setup(doc: string, item: AutocompleteItem, context: ActiveCompletionContext) {
   const view = new EditorView({
     state: EditorState.create({ doc, selection: { anchor: doc.length } }),
   });
   const applyEditorValue = vi.fn<Params["applyEditorValue"]>();
   const sendText = vi.fn<Params["sendText"]>();
   const latest: Latest = {
-    activeMode: "command",
     autocompleteItems: [item],
     selectedIndex: 0,
-    slashContext: null,
-    atContext: null,
-    diffContext: null,
-    terminalContext: null,
-    selectionContext: null,
+    activeCompletionContext: context,
   };
 
   const params: Params = {
@@ -32,11 +28,7 @@ function setup(doc: string, item: AutocompleteItem) {
     lastQueryRef: { current: "" },
     applyEditorValue,
     sendText,
-    setAtContext: vi.fn(),
-    setSlashContext: vi.fn(),
-    setDiffContext: vi.fn(),
-    setTerminalContext: vi.fn(),
-    setSelectionContext: vi.fn(),
+    setActiveCompletionContext: vi.fn(),
     setSelectedIndex: vi.fn(),
   };
 
@@ -44,21 +36,46 @@ function setup(doc: string, item: AutocompleteItem) {
   return { ...result.current, applyEditorValue, sendText, view };
 }
 
+const dollarContext: ActiveCompletionContext = {
+  triggerChar: "$",
+  start: 0,
+  tokenEnd: 5,
+  query: "plug",
+};
+const slashContext: ActiveCompletionContext = {
+  triggerChar: "/",
+  start: 0,
+  tokenEnd: 5,
+  query: "plug",
+};
+
 describe("useAutocompleteApply", () => {
-  const item: AutocompleteItem = {
+  const capability: AutocompleteItem = {
     key: "plugin-creator",
     label: "Plugin Creator",
     insertText: "$plugin-creator",
     category: "plugin",
+    enterAction: "insert",
+    insert: "literal",
   };
 
-  it("inserts the canonical token, never the display label", () => {
-    const { handleAutocompleteSelect, applyEditorValue, sendText, view } = setup("/plug", item);
-    try {
-      handleAutocompleteSelect(item);
+  const command: AutocompleteItem = {
+    key: "commit",
+    label: "/commit",
+    insertText: "/commit",
+    enterAction: "execute",
+    insert: "literal",
+  };
 
+  it("inserts the canonical token on click, never the display label", () => {
+    const { handleAutocompleteSelect, applyEditorValue, sendText, view } = setup(
+      "$plug",
+      capability,
+      dollarContext
+    );
+    try {
+      handleAutocompleteSelect(capability);
       expect(applyEditorValue).toHaveBeenCalledTimes(1);
-      // Replaces the whole "/plug" slash token with the canonical insert token.
       expect(applyEditorValue.mock.calls[0]![0]).toBe("$plugin-creator ");
       expect(sendText).not.toHaveBeenCalled();
     } finally {
@@ -66,14 +83,49 @@ describe("useAutocompleteApply", () => {
     }
   });
 
-  it("executes with the canonical token, never the display label", () => {
-    const { applyAutocompleteSelection, applyEditorValue, sendText, view } = setup("/plug", item);
+  it("a $ capability inserts (not executes) on Enter — enterAction is insert", () => {
+    const { applyAutocompleteSelection, applyEditorValue, sendText, view } = setup(
+      "$plug",
+      capability,
+      dollarContext
+    );
     try {
-      expect(applyAutocompleteSelection("execute")).toBe(true);
+      expect(applyAutocompleteSelection("enter")).toBe(true);
+      expect(applyEditorValue).toHaveBeenCalledTimes(1);
+      expect(applyEditorValue.mock.calls[0]![0]).toBe("$plugin-creator ");
+      expect(sendText).not.toHaveBeenCalled();
+    } finally {
+      view.destroy();
+    }
+  });
 
+  it("a / command executes on Enter with the canonical token", () => {
+    const { applyAutocompleteSelection, applyEditorValue, sendText, view } = setup(
+      "/plug",
+      command,
+      slashContext
+    );
+    try {
+      expect(applyAutocompleteSelection("enter")).toBe(true);
       expect(sendText).toHaveBeenCalledTimes(1);
-      expect(sendText.mock.calls[0]![0]).toBe("$plugin-creator");
+      expect(sendText.mock.calls[0]![0]).toBe("/commit");
       expect(applyEditorValue).not.toHaveBeenCalled();
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("Tab/complete always inserts even for an execute item", () => {
+    const { applyAutocompleteSelection, applyEditorValue, sendText, view } = setup(
+      "/plug",
+      command,
+      slashContext
+    );
+    try {
+      expect(applyAutocompleteSelection("complete")).toBe(true);
+      expect(applyEditorValue).toHaveBeenCalledTimes(1);
+      expect(applyEditorValue.mock.calls[0]![0]).toBe("/commit ");
+      expect(sendText).not.toHaveBeenCalled();
     } finally {
       view.destroy();
     }

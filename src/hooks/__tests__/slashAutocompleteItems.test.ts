@@ -27,6 +27,28 @@ describe("toSlashAutocompleteItems", () => {
     expect(labels).not.toContain("$imagegen");
   });
 
+  it("filters to the requested trigger, keeping $ and / menus disjoint", () => {
+    const commands = [
+      make({ label: "/help", trigger: "/" }),
+      make({ label: "$imagegen", insertText: "$imagegen", trigger: "$", kind: "skill" }),
+    ];
+
+    const dollarLabels = toSlashAutocompleteItems(commands, "", "$").map((i) => i.label);
+    expect(dollarLabels).toEqual(["$imagegen"]);
+    expect(dollarLabels).not.toContain("/help");
+  });
+
+  it("stamps enterAction from the trigger and marks every item literal", () => {
+    const [slash] = toSlashAutocompleteItems([make({ label: "/help", trigger: "/" })], "", "/");
+    const [dollar] = toSlashAutocompleteItems(
+      [make({ label: "$gen", insertText: "$gen", trigger: "$", kind: "skill" })],
+      "",
+      "$"
+    );
+    expect(slash).toMatchObject({ enterAction: "execute", insert: "literal" });
+    expect(dollar).toMatchObject({ enterAction: "insert", insert: "literal" });
+  });
+
   it("carries kind through as category (skill/app/plugin badged, command default)", () => {
     const items = toSlashAutocompleteItems(
       [

@@ -29,6 +29,23 @@ const CATEGORY_LABEL: Partial<Record<CompletionKind, string>> = {
   plugin: "Plugin",
 };
 
+/** What Enter does on the selected item: complete it, or run it. */
+export type AutocompleteEnterAction = "insert" | "execute";
+
+/** Daintree resolvers that expand a token to content at send time. */
+export type CompletionResolverId = "diff" | "terminal" | "selection";
+
+/**
+ * How the inserted token behaves at send time. `literal` passes through the PTY
+ * verbatim (files, commands, `$` capabilities); a resolver token is expanded by
+ * the matching send-time scanner in `useTokenResolution`. The field is
+ * declarative — the scanners are authoritative, so a manually-typed `@diff`
+ * still resolves.
+ */
+export type AutocompleteInsert =
+  | "literal"
+  | { insert: "resolve"; resolverId: CompletionResolverId };
+
 export interface AutocompleteItem {
   key: string;
   /** Display text shown in the menu. May differ from what gets inserted. */
@@ -38,6 +55,10 @@ export interface AutocompleteItem {
   description?: string;
   /** Semantic category; drives the neutral badge. Undefined for file/context items. */
   category?: CompletionKind;
+  /** Enter behavior; defaults to `insert` when absent. */
+  enterAction?: AutocompleteEnterAction;
+  /** Send-time behavior; defaults to `literal` when absent. */
+  insert?: AutocompleteInsert;
 }
 
 export interface AutocompleteMenuProps {
@@ -45,9 +66,10 @@ export interface AutocompleteMenuProps {
   items: AutocompleteItem[];
   selectedIndex: number;
   isLoading?: boolean;
-  /** Results were produced for an earlier query and a refresh is pending;
-   *  rows render dimmed so they don't read as matches for the current text. */
-  isStale?: boolean;
+  /** Keys of items produced for an earlier query and pending a refresh; those
+   *  rows render dimmed so they don't read as matches for the current text.
+   *  Per-item so a stale async `@file` search can't dim fresh `$`/`@diff`. */
+  staleKeys?: ReadonlySet<string>;
   onSelect: (item: AutocompleteItem) => void;
   style?: React.CSSProperties;
   title?: string;
@@ -64,7 +86,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
       items,
       selectedIndex,
       isLoading = false,
-      isStale = false,
+      staleKeys,
       onSelect,
       style,
       title,
@@ -114,7 +136,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
         }}
         role={isEmpty ? undefined : "listbox"}
         aria-label={ariaLabel ?? title ?? "Autocomplete"}
-        aria-busy={isLoading || isStale || undefined}
+        aria-busy={isLoading || (staleKeys !== undefined && staleKeys.size > 0) || undefined}
       >
         {(title || keyHint) && (
           <div className="flex items-center justify-between gap-2 border-b border-tint/5 px-2 py-1.5">
@@ -144,18 +166,13 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
             </div>
           )}
 
-          <div
-            ref={listRef}
-            className={cn(
-              "transition-opacity duration-150 ease-out",
-              isStale && items.length > 0 && "opacity-50"
-            )}
-          >
+          <div ref={listRef}>
             {items.map((item, idx) => {
               const descriptionSnippet = item.description
                 ? getDescriptionSnippet(item.description)
                 : undefined;
               const badge = item.category ? CATEGORY_LABEL[item.category] : undefined;
+              const isRowStale = staleKeys?.has(item.key) ?? false;
               const tooltipText = [
                 item.label,
                 badge ? `(${badge})` : "",
@@ -172,13 +189,17 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
                       role="option"
                       aria-selected={idx === selectedIndex}
                       className={cn(
-                        "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left transition-colors",
+                        "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left transition-[color,background-color,opacity] duration-150 ease-out",
                         idx === selectedIndex
                           ? "bg-overlay-soft text-daintree-text"
-                          : "text-daintree-text/70 hover:bg-tint/[0.05] hover:text-daintree-text"
+                          : "text-daintree-text/70 hover:bg-tint/[0.05] hover:text-daintree-text",
+                        isRowStale && "opacity-50"
                       )}
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => onSelect(item)}
+                      onClick={() => {
+                        if (isRowStale) return;
+                        onSelect(item);
+                      }}
                     >
                       <span className="min-w-0 flex-none max-w-full truncate font-mono text-xs leading-4">
                         {item.label}

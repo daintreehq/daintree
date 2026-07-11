@@ -1,10 +1,73 @@
-export type DiffContextType = "unstaged" | "staged" | "head";
+import type { CompletionTrigger } from "@shared/types";
 
-export interface AtDiffContext {
-  atStart: number;
+/**
+ * One completion menu is open at a time, keyed by the trigger char that opened
+ * it. `query` is the triggerless token text between the trigger and the caret;
+ * `start`/`tokenEnd` bound the whole token in the document.
+ */
+export interface ActiveCompletionContext {
+  triggerChar: CompletionTrigger;
+  start: number;
   tokenEnd: number;
-  diffType: DiffContextType | null;
+  query: string;
 }
+
+/**
+ * Detect the completion token the caret sits in. The token is the
+ * whitespace-delimited run containing the caret; it opens a menu only when its
+ * FIRST char is an active trigger — a start-or-whitespace boundary that rejects
+ * `email@x`, `a/b`, `http://…` while still allowing slashes inside the token
+ * (`@src/App.tsx`). A doubled trigger (`//help`, `$$foo`, `@@x`) is rejected.
+ */
+export function getActiveCompletionContext(
+  text: string,
+  caret: number,
+  activeTriggers: ReadonlySet<CompletionTrigger>
+): ActiveCompletionContext | null {
+  if (caret < 0 || caret > text.length) return null;
+
+  let start = caret;
+  while (start > 0 && !/\s/.test(text[start - 1]!)) start--;
+  // The caret must sit strictly past the trigger char (bare `@`/`/` opens only
+  // once you've typed the trigger itself).
+  if (start >= caret) return null;
+
+  const triggerChar = text[start]!;
+  if (!activeTriggers.has(triggerChar as CompletionTrigger)) return null;
+  if (text[start + 1] === triggerChar) return null;
+
+  let tokenEnd = caret;
+  while (tokenEnd < text.length && !/\s/.test(text[tokenEnd]!)) tokenEnd++;
+
+  return {
+    triggerChar: triggerChar as CompletionTrigger,
+    start,
+    tokenEnd,
+    query: text.slice(start + 1, caret),
+  };
+}
+
+/** Daintree's own `@` providers; each claims its prefix ahead of `@file`. */
+export type DaintreeAtClaim = "terminal" | "selection" | "diff";
+
+/**
+ * Which Daintree `@` provider (if any) claims a query, in priority order
+ * terminal > selection > diff. `@file` fuzzy search is the fallback when no
+ * provider claims. Mirrors the old per-parser prefix gates exactly.
+ */
+export function getDaintreeAtClaim(query: string): DaintreeAtClaim | null {
+  if (matchesTerminalPrefix(query)) return "terminal";
+  if (matchesSelectionPrefix(query)) return "selection";
+  if (matchesDiffPrefix(query)) return "diff";
+  return null;
+}
+
+/** Strip a leading quote so `@"src` searches for `src` (matches old queryForSearch). */
+export function fileSearchQuery(query: string): string {
+  return query.replace(/^['"]/, "");
+}
+
+export type DiffContextType = "unstaged" | "staged" | "head";
 
 const DIFF_TOKEN_MAP: Record<string, DiffContextType> = {
   diff: "unstaged",
@@ -27,28 +90,9 @@ const DIFF_PREFIXES = [
   "diff:head",
 ];
 
-export function getDiffContext(text: string, caret: number): AtDiffContext | null {
-  if (caret < 0 || caret > text.length) return null;
-  const beforeCaret = text.slice(0, caret);
-  const atStart = beforeCaret.lastIndexOf("@");
-  if (atStart === -1) return null;
-  if (atStart > 0 && !/\s/.test(beforeCaret[atStart - 1]!)) return null;
-
-  let tokenEnd = atStart + 1;
-  while (tokenEnd < text.length && !/\s/.test(text[tokenEnd]!)) {
-    tokenEnd++;
-  }
-
-  if (caret < atStart + 1 || caret > tokenEnd) return null;
-
-  const token = text.slice(atStart + 1, tokenEnd);
-
-  // Check if the partial text typed so far matches a diff prefix
-  const partial = text.slice(atStart + 1, caret);
-  if (!DIFF_PREFIXES.some((p) => p.startsWith(partial) || partial === p)) return null;
-
-  const diffType = DIFF_TOKEN_MAP[token] ?? null;
-  return { atStart, tokenEnd, diffType };
+/** A query claims the diff provider when it prefixes any diff token (bare `@` too). */
+export function matchesDiffPrefix(query: string): boolean {
+  return DIFF_PREFIXES.some((p) => p.startsWith(query) || query === p);
 }
 
 export interface AtDiffToken {
@@ -92,32 +136,12 @@ export function getAllAtDiffTokens(text: string): AtDiffToken[] {
 
 // --- @terminal context ---
 
-export interface AtTerminalContext {
-  atStart: number;
-  tokenEnd: number;
-}
-
 const TERMINAL_PREFIXES = ["term", "termi", "termin", "termina", "terminal"];
 
-export function getTerminalContext(text: string, caret: number): AtTerminalContext | null {
-  if (caret < 0 || caret > text.length) return null;
-  const beforeCaret = text.slice(0, caret);
-  const atStart = beforeCaret.lastIndexOf("@");
-  if (atStart === -1) return null;
-  if (atStart > 0 && !/\s/.test(beforeCaret[atStart - 1]!)) return null;
-
-  let tokenEnd = atStart + 1;
-  while (tokenEnd < text.length && !/\s/.test(text[tokenEnd]!)) {
-    tokenEnd++;
-  }
-
-  if (caret < atStart + 1 || caret > tokenEnd) return null;
-
-  const partial = text.slice(atStart + 1, caret);
-  if (partial.length < 4) return null;
-  if (!TERMINAL_PREFIXES.some((p) => p.startsWith(partial) || partial === p)) return null;
-
-  return { atStart, tokenEnd };
+/** `@terminal` claims from four chars in (so `@te` still falls to file search). */
+export function matchesTerminalPrefix(query: string): boolean {
+  if (query.length < 4) return false;
+  return TERMINAL_PREFIXES.some((p) => p.startsWith(query) || query === p);
 }
 
 export interface AtTerminalToken {
@@ -159,32 +183,12 @@ export function getAllAtTerminalTokens(text: string): AtTerminalToken[] {
 
 // --- @selection context ---
 
-export interface AtSelectionContext {
-  atStart: number;
-  tokenEnd: number;
-}
-
 const SELECTION_PREFIXES = ["sele", "selec", "select", "selecti", "selectio", "selection"];
 
-export function getSelectionContext(text: string, caret: number): AtSelectionContext | null {
-  if (caret < 0 || caret > text.length) return null;
-  const beforeCaret = text.slice(0, caret);
-  const atStart = beforeCaret.lastIndexOf("@");
-  if (atStart === -1) return null;
-  if (atStart > 0 && !/\s/.test(beforeCaret[atStart - 1]!)) return null;
-
-  let tokenEnd = atStart + 1;
-  while (tokenEnd < text.length && !/\s/.test(text[tokenEnd]!)) {
-    tokenEnd++;
-  }
-
-  if (caret < atStart + 1 || caret > tokenEnd) return null;
-
-  const partial = text.slice(atStart + 1, caret);
-  if (partial.length < 4) return null;
-  if (!SELECTION_PREFIXES.some((p) => p.startsWith(partial) || partial === p)) return null;
-
-  return { atStart, tokenEnd };
+/** `@selection` claims from four chars in, same as `@terminal`. */
+export function matchesSelectionPrefix(query: string): boolean {
+  if (query.length < 4) return false;
+  return SELECTION_PREFIXES.some((p) => p.startsWith(query) || query === p);
 }
 
 export interface AtSelectionToken {
@@ -224,64 +228,11 @@ export function getAllAtSelectionTokens(text: string): AtSelectionToken[] {
   return tokens;
 }
 
-// --- @file context ---
-
-export interface AtFileContext {
-  atStart: number;
-  tokenEnd: number;
-  queryRaw: string;
-  queryForSearch: string;
-}
-
-export function getAtFileContext(text: string, caret: number): AtFileContext | null {
-  if (caret < 0 || caret > text.length) return null;
-  const beforeCaret = text.slice(0, caret);
-  const atStart = beforeCaret.lastIndexOf("@");
-  if (atStart === -1) return null;
-  if (atStart > 0 && !/\s/.test(beforeCaret[atStart - 1]!)) return null;
-
-  let tokenEnd = atStart + 1;
-  while (tokenEnd < text.length && !/\s/.test(text[tokenEnd]!)) {
-    tokenEnd++;
-  }
-
-  if (caret < atStart + 1 || caret > tokenEnd) return null;
-
-  const token = text.slice(atStart + 1, tokenEnd);
-  if (/\s/.test(token)) return null;
-
-  const queryRaw = text.slice(atStart + 1, caret);
-  const queryForSearch = queryRaw.replace(/^['"]/, "");
-
-  return { atStart, tokenEnd, queryRaw, queryForSearch };
-}
+// --- @file token ---
 
 export function formatAtFileToken(file: string): string {
   const needsQuotes = /\s/.test(file);
   return `@${needsQuotes ? `"${file}"` : file}`;
-}
-
-export interface SlashCommandContext {
-  start: number;
-  tokenEnd: number;
-  query: string;
-}
-
-export function getSlashCommandContext(text: string, caret: number): SlashCommandContext | null {
-  if (caret < 0 || caret > text.length) return null;
-  const beforeCaret = text.slice(0, caret);
-  const slashStart = beforeCaret.lastIndexOf("/");
-  if (slashStart === -1) return null;
-  if (slashStart > 0 && !/\s/.test(beforeCaret[slashStart - 1]!)) return null;
-
-  let tokenEnd = slashStart + 1;
-  while (tokenEnd < text.length && !/\s/.test(text[tokenEnd]!)) {
-    tokenEnd++;
-  }
-
-  if (caret < slashStart + 1 || caret > tokenEnd) return null;
-
-  return { start: slashStart, tokenEnd, query: text.slice(slashStart, caret) };
 }
 
 export interface SlashCommandToken {
