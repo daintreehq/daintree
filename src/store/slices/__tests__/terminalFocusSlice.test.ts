@@ -118,6 +118,65 @@ describe("TerminalFocusSlice - Layout Snapshot", () => {
     expect(state.preMaximizeLayout).toBe(null);
   });
 
+  it("exitMaximize leaves fullscreen but keeps the layout snapshot (#11060)", () => {
+    const snapshot = { gridCols: 2, gridItemCount: 4, worktreeId: "worktree-1" };
+    state.maximizedId = "term-1";
+    state.maximizeTarget = { type: "panel", id: "term-1" };
+    state.preMaximizeLayout = snapshot;
+
+    state.exitMaximize();
+
+    expect(state.maximizedId).toBe(null);
+    expect(state.maximizeTarget).toBe(null);
+    // The whole difference from clearMaximize: the grid still restores its
+    // column count, because the panel isn't going away — the user is.
+    expect(state.preMaximizeLayout).toBe(snapshot);
+  });
+
+  it("exitMaximize leaves fullscreen even when the group target no longer resolves (#11060)", () => {
+    // A group target whose group has dissolved. toggleMaximize can't resolve it,
+    // so it falls through to its maximize branch and re-maximizes term-1 —
+    // exitMaximize must not care about the target at all.
+    state.maximizedId = "term-1";
+    state.maximizeTarget = { type: "group", id: "group-gone" };
+
+    state.exitMaximize();
+
+    expect(state.maximizedId).toBe(null);
+    expect(state.maximizeTarget).toBe(null);
+  });
+
+  it("toggleMaximize re-maximizes a dissolved group target, which is why exitMaximize exists (#11060)", () => {
+    // Pins the hazard this change routes around: the same seed, through the
+    // conditional toggle, ends up maximized rather than back in the grid.
+    state.maximizedId = "term-1";
+    state.maximizeTarget = { type: "group", id: "group-gone" };
+
+    state.toggleMaximize("term-1", undefined, undefined, mockGetPanelGroup);
+
+    expect(state.maximizedId).toBe("term-1");
+    expect(state.maximizeTarget).toEqual({ type: "panel", id: "term-1" });
+  });
+
+  it("focusOrMaximizeByIndex restores the grid even when the maximized group has dissolved (#11060)", () => {
+    // The index hotkey routes its force-exit through exitMaximize, so it can't
+    // fall into toggleMaximize's re-maximize branch (pinned by the test above).
+    state.maximizedId = "term-1";
+    state.maximizeTarget = { type: "group", id: "group-gone" };
+
+    state.focusOrMaximizeByIndex(1, () => "term-2", mockGetPanelGroup);
+
+    expect(state.maximizedId).toBe(null);
+    expect(state.maximizeTarget).toBe(null);
+    expect(state.focusedId).toBe("term-2");
+  });
+
+  it("exitMaximize is a no-op when nothing is fullscreen (#11060)", () => {
+    state.exitMaximize();
+
+    expect(setState).not.toHaveBeenCalled();
+  });
+
   it("clearMaximize is a no-op when the trio is already null (#9935)", () => {
     expect(state.maximizedId).toBe(null);
     expect(state.maximizeTarget).toBe(null);

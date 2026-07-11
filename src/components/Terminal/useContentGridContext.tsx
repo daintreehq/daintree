@@ -128,8 +128,11 @@ export async function addTabForPanel(panel: PanelInstance): Promise<void> {
       createdNewGroup = true;
     }
 
+    // The new tab joins `groupId` below, but only after `addPanel` commits — so
+    // at commit time it looks like a plain new grid cell and would otherwise
+    // drop the user out of a fullscreen group they're adding a tab to (#11060).
     const options = await buildPanelDuplicateOptions(panel, "grid");
-    newPanelId = await addPanel(options);
+    newPanelId = await addPanel({ ...options, preserveMaximize: true });
     if (!newPanelId) {
       if (createdNewGroup && groupId) deleteTabGroup(groupId);
       return;

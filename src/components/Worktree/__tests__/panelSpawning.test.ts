@@ -29,20 +29,31 @@ vi.mock("@shared/types", async (importActual) => {
 });
 
 const mockSetFocused = vi.fn();
+const mockExitMaximize = vi.fn();
 const mockBeginSpawnBatch = vi.fn(() => Symbol("spawn-batch"));
 const mockFlushSpawnBatch = vi.fn();
+/** Committed panels, keyed by id — the post-batch focus path reads this back to
+ * tell a grid landing from an auto-docked one. Mutable so tests can stage it. */
+const mockPanelsById: Record<string, { location?: string }> = {};
 
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: {
     getState: () => ({
       addPanel: (...args: unknown[]) => mockAddPanel(...args),
       panelIds: [],
-      panelsById: {},
+      panelsById: mockPanelsById,
       beginSpawnBatch: mockBeginSpawnBatch,
       flushSpawnBatch: mockFlushSpawnBatch,
       setFocused: mockSetFocused,
+      exitMaximize: mockExitMaximize,
     }),
   },
+}));
+
+const mockIsMcpSpawnFocusSuppressed = vi.fn(() => false);
+
+vi.mock("@/store/mcpSpawnFocusGuard", () => ({
+  isMcpSpawnFocusSuppressed: () => mockIsMcpSpawnFocusSuppressed(),
 }));
 
 function makeTerminal(overrides: Partial<RecipeTerminal> = {}): RecipeTerminal {
@@ -79,6 +90,10 @@ function makeAgent(overrides: Partial<RecipeTerminal> = {}): RecipeTerminal {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  for (const key of Object.keys(mockPanelsById)) delete mockPanelsById[key];
+  // clearAllMocks leaves mockReturnValue overrides in place — pin the default
+  // back so the MCP-suppressed case can't leak into the tests after it.
+  mockIsMcpSpawnFocusSuppressed.mockReturnValue(false);
   mockAddPanel.mockResolvedValue("panel-id-123");
   mockAgentSettingsGet.mockResolvedValue({ agents: { claude: { modelId: "sonnet" } } });
   mockSystemGetTmpDir.mockResolvedValue("/tmp/daintree");
@@ -462,6 +477,65 @@ describe("spawnPanelsFromRecipe", () => {
 
     expect(mockSetFocused).toHaveBeenCalledTimes(1);
     expect(mockSetFocused).toHaveBeenCalledWith("panel-grid");
+  });
+
+  it("leaves fullscreen when the spawned grid panel takes focus (#11060)", async () => {
+    mockAddPanel.mockResolvedValueOnce("panel-grid");
+    mockPanelsById["panel-grid"] = { location: "grid" };
+
+    await spawnPanelsFromRecipe({
+      terminals: [makeTerminal()],
+      worktreeId: "wt-1",
+      cwd: "/path/to/wt",
+    });
+
+    expect(mockExitMaximize).toHaveBeenCalledTimes(1);
+    expect(mockSetFocused).toHaveBeenCalledWith("panel-grid");
+  });
+
+  it("stays fullscreen when the spawned panel committed to the dock (#11060)", async () => {
+    mockAddPanel.mockResolvedValueOnce("panel-docked");
+    mockPanelsById["panel-docked"] = { location: "dock" };
+
+    await spawnPanelsFromRecipe({
+      terminals: [makeTerminal()],
+      worktreeId: "wt-1",
+      cwd: "/path/to/wt",
+    });
+
+    expect(mockExitMaximize).not.toHaveBeenCalled();
+  });
+
+  it("stays fullscreen when the spawned panel is gone by the time focus is restored (#11060)", async () => {
+    // addPanel resolves an id, but the panel is removed during its async tail (a
+    // PTY prewarm await, a project switch, an explicit removePanel). A panel that
+    // no longer exists must not drag the user out of fullscreen.
+    mockAddPanel.mockResolvedValueOnce("panel-vanished");
+
+    await spawnPanelsFromRecipe({
+      terminals: [makeTerminal()],
+      worktreeId: "wt-1",
+      cwd: "/path/to/wt",
+    });
+
+    expect(mockExitMaximize).not.toHaveBeenCalled();
+  });
+
+  it("leaves fullscreen alone for a background MCP spawn (#11060)", async () => {
+    // A suppressed spawn never takes focus, so there is nothing to reveal —
+    // yanking the user out of fullscreen would be focus-steal-adjacent (#6959).
+    mockIsMcpSpawnFocusSuppressed.mockReturnValue(true);
+    mockAddPanel.mockResolvedValueOnce("panel-grid");
+    mockPanelsById["panel-grid"] = { location: "grid" };
+
+    await spawnPanelsFromRecipe({
+      terminals: [makeTerminal()],
+      worktreeId: "wt-1",
+      cwd: "/path/to/wt",
+    });
+
+    expect(mockSetFocused).not.toHaveBeenCalled();
+    expect(mockExitMaximize).not.toHaveBeenCalled();
   });
 
   it("focuses the last grid panel in a mixed dock/grid interleaving (#9764)", async () => {

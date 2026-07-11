@@ -387,6 +387,17 @@ export const usePanelStore = create<PanelGridState>()(
           ) {
             return id;
           }
+          // The new panel is about to take focus, but a fullscreen panel/group
+          // keeps rendering over the grid — so the panel the user just asked for
+          // would land focused and invisible (#11060). Leave fullscreen. Both
+          // sets land before React reads the store, so the order between them
+          // isn't observable; exiting first just keeps a synchronous store
+          // subscriber from seeing a focused-but-hidden panel. `preserveMaximize`
+          // opts out the caller that folds this panel into the group that is
+          // already maximized.
+          if (!options.preserveMaximize) {
+            get().exitMaximize();
+          }
           if (focusedBeforeCreate !== id) {
             set({ focusedId: id, previousFocusedId: focusedBeforeCreate });
           } else {
@@ -461,6 +472,10 @@ export const usePanelStore = create<PanelGridState>()(
         const moveSucceeded = registrySlice.moveTerminalToGrid(id);
         if (moveSucceeded) {
           const previousFocusedId = get().focusedId;
+          // The panel arrives from the dock and takes focus, so it has to be
+          // visible rather than parked behind a fullscreen cell (#11060). It came
+          // from the dock, so it can never be the panel/group being maximized.
+          get().exitMaximize();
           set({
             focusedId: id,
             activeDockTerminalId: null,
@@ -485,6 +500,10 @@ export const usePanelStore = create<PanelGridState>()(
             activeDockTerminalId !== null &&
             groupBeforeMove.panelIds.includes(activeDockTerminalId);
 
+          // The group arrives from the dock and takes focus, so it has to be
+          // visible rather than parked behind a fullscreen cell (#11060). It came
+          // from the dock, so it can never be the panel/group being maximized.
+          get().exitMaximize();
           set({
             focusedId: nextFocusedId,
             ...(shouldClearDock && { activeDockTerminalId: null }),
@@ -778,6 +797,15 @@ export const usePanelStore = create<PanelGridState>()(
         if (!restoredPanel) return;
         const previousFocusedId = get().focusedId;
         const landsInDock = restoredPanel.location === "dock" && isDockPanel(restoredPanel);
+        // A grid restore takes focus, so it must be visible: leave fullscreen
+        // rather than focus the panel behind the maximized cell (#11060). The
+        // registry restore only rewrites location/worktree — it never rejoins a
+        // tab group — so the restored panel is always its own grid cell and can
+        // never be a member of the group being maximized. A dock restore opens
+        // the popover instead and leaves the grid's fullscreen view alone.
+        if (!landsInDock) {
+          get().exitMaximize();
+        }
         set({
           focusedId: id,
           // Open the dock popover when the panel landed back in the dock so
@@ -826,6 +854,12 @@ export const usePanelStore = create<PanelGridState>()(
         const restoredPanel = get().panelsById[focusId]!;
         const previousFocusedId = get().focusedId;
         const landsInDock = restoredPanel.location === "dock" && isDockPanel(restoredPanel);
+        // Same as `restoreTerminal`: a grid restore must be visible, so leave
+        // fullscreen (#11060). The restored group was trashed, so it can never
+        // be the group currently maximized.
+        if (!landsInDock) {
+          get().exitMaximize();
+        }
         set({
           focusedId: focusId,
           // Match the restored panel's location so a docked group reopens the
@@ -843,6 +877,37 @@ export const usePanelStore = create<PanelGridState>()(
         const group = get().getPanelGroup(focusId);
         if (group) {
           get().setActiveTab(group.id, focusId);
+        }
+      },
+
+      // Un-backgrounding doesn't focus in the registry — every caller activates
+      // the panel right after (BackgroundContainer, useQuickSwitcher). So a grid
+      // landing still has to leave fullscreen, or the panel the user just asked
+      // to see stays hidden behind the maximized cell (#11060). A dock landing is
+      // revealed by the popover and leaves the grid's fullscreen view alone.
+      restoreBackgroundTerminal: (id: string, targetWorktreeId?: string) => {
+        registrySlice.restoreBackgroundTerminal(id, targetWorktreeId);
+        const restored = get().panelsById[id];
+        if (restored !== undefined && restored.location !== "dock") {
+          get().exitMaximize();
+        }
+      },
+
+      restoreBackgroundGroup: (groupRestoreId: string, targetWorktreeId?: string) => {
+        // Snapshot membership before the restore — it clears `backgroundedTerminals`.
+        const memberIds: string[] = [];
+        for (const [id, backgrounded] of get().backgroundedTerminals.entries()) {
+          if (backgrounded.groupRestoreId === groupRestoreId) memberIds.push(id);
+        }
+
+        registrySlice.restoreBackgroundGroup(groupRestoreId, targetWorktreeId);
+
+        const landedInGrid = memberIds.some((id) => {
+          const restored = get().panelsById[id];
+          return restored !== undefined && restored.location !== "dock";
+        });
+        if (landedInGrid) {
+          get().exitMaximize();
         }
       },
 
