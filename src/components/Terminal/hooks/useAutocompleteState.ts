@@ -54,14 +54,11 @@ export function useAutocompleteState({
     if (autocompleteItems !== prev.items) {
       // Items merged/refreshed for the same query: keep the selected key if it
       // survived, else clamp into range.
-      let nextIndex = selectedIndex;
-      if (prev.selectedKey) {
-        const idx = autocompleteItems.findIndex((item) => item.key === prev.selectedKey);
-        nextIndex =
-          idx >= 0 ? idx : Math.min(selectedIndex, Math.max(0, autocompleteItems.length - 1));
-      } else {
-        nextIndex = Math.min(selectedIndex, Math.max(0, autocompleteItems.length - 1));
-      }
+      const clamped = Math.min(selectedIndex, Math.max(0, autocompleteItems.length - 1));
+      const survivingIndex = prev.selectedKey
+        ? autocompleteItems.findIndex((item) => item.key === prev.selectedKey)
+        : -1;
+      const nextIndex = survivingIndex >= 0 ? survivingIndex : clamped;
       if (nextIndex !== selectedIndex) setSelectedIndex(nextIndex);
       prevRef.current = {
         queryKey,
