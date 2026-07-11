@@ -41,6 +41,9 @@ describe("DockPlaceholder height containment (#11055)", () => {
     });
     const { container } = render(<DockPlaceholder />);
     const root = container.querySelector("[aria-hidden='true']");
+    // Guard against a false pass on an empty render: the ghost must exist before
+    // the class/body assertions below are meaningful.
+    expect(root).not.toBeNull();
     // The #11055 bug was `h-full` resolving to auto height that grew with the
     // ghost content. The box must be pinned to a definite height instead.
     expect(root?.className ?? "").not.toContain("h-full");
@@ -54,6 +57,7 @@ describe("DockPlaceholder height containment (#11055)", () => {
       isDragging: true,
     });
     const { container } = render(<DockPlaceholder />);
+    expect(container.querySelector("[aria-hidden='true']")).not.toBeNull();
     expect(container.querySelector("[data-placeholder-body]")).toBeNull();
   });
 });

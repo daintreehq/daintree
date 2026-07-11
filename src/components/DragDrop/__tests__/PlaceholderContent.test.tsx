@@ -32,12 +32,13 @@ describe("PlaceholderContent compact body gating (#11055)", () => {
 
   it("keeps compact browser/dev-preview placeholders non-empty (address bar survives)", () => {
     // Dropping the body must not blank the ghost — the address-bar row still
-    // renders so the drop target stays visually distinct as a browser panel.
+    // renders so the drop target stays visually distinct. Assert the placeholder
+    // root actually has rendered art, not just that some element exists.
     const browser = render(<PlaceholderContent kind="browser" compact />);
-    expect(browser.container.querySelector("div")).not.toBeNull();
+    expect(browser.container.firstElementChild?.children.length ?? 0).toBeGreaterThan(0);
 
     const devPreview = render(<PlaceholderContent kind="dev-preview" compact />);
-    expect(devPreview.container.querySelector("div")).not.toBeNull();
+    expect(devPreview.container.firstElementChild?.children.length ?? 0).toBeGreaterThan(0);
   });
 
   it("does not introduce a content body for kinds that never had one (terminal)", () => {
