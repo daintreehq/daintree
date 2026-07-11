@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { FilePanelData, PtyPanelData } from "@shared/types/panel";
+import type { BrowserPanelData, FilePanelData, PtyPanelData } from "@shared/types/panel";
 import type { TabGroup } from "@/types";
 import { buildDockRenderItems } from "../dockRenderItems";
 
@@ -36,6 +36,17 @@ function filePanel(id: string): FilePanelData {
   } as FilePanelData;
 }
 
+function browserPanel(id: string): BrowserPanelData {
+  return {
+    id,
+    title: id,
+    kind: "browser",
+    location: "dock",
+    isVisible: false,
+    browserUrl: `https://example.com/${id}`,
+  } as BrowserPanelData;
+}
+
 describe("buildDockRenderItems", () => {
   it("renders a docked file panel as a standalone chip", () => {
     const items = buildDockRenderItems([], () => [], null, [filePanel("spec")]);
@@ -43,6 +54,32 @@ describe("buildDockRenderItems", () => {
     expect(items).toHaveLength(1);
     expect(items[0]?.panels[0]?.kind).toBe("file");
     expect(items[0]?.group.panelIds).toEqual(["spec"]);
+  });
+
+  it("renders a docked browser panel as a standalone chip", () => {
+    // #11053: browser panels were committable to the dock but had no render
+    // membership, so they vanished. They must surface as standalone chips.
+    const items = buildDockRenderItems([], () => [], null, [browserPanel("docs")]);
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.panels[0]?.kind).toBe("browser");
+    expect(items[0]?.group.panelIds).toEqual(["docs"]);
+  });
+
+  it("renders a browser panel standalone even when its stored group only resolves PTY panels", () => {
+    // A grid tab group containing a terminal and a browser panel moved to the
+    // dock: groups resolve PTY-only, so the browser panel falls through to the
+    // flat membership list and must not vanish (#11053).
+    const items = buildDockRenderItems(
+      [group(["term-1", "docs"], "term-1")],
+      () => [terminal("term-1")],
+      null,
+      [terminal("term-1"), browserPanel("docs")]
+    );
+
+    expect(items).toHaveLength(2);
+    expect(items[0]?.group.panelIds).toEqual(["term-1"]);
+    expect(items[1]?.panels[0]?.id).toBe("docs");
   });
 
   it("renders a file panel standalone even when its stored group only resolves PTY panels", () => {

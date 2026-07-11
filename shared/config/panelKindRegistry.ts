@@ -191,11 +191,15 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     hasPty: false,
     canRestart: false,
     canConvert: false,
+    dockable: true,
     keepAliveOnProjectSwitch: true,
     showInPalette: true,
     searchAliases: ["web", "chrome", "internet", "www"],
     firstRenderRestore: true,
     lazyImportPath: "src/components/Browser/BrowserPane.tsx",
+    // Reading surface like file/review: focus returns to what the user was
+    // last viewing when the panel leaves the grid, not the first grid terminal.
+    policy: { dockFallbackTarget: "previous-focused" },
   },
   "dev-preview": {
     id: "dev-preview",
