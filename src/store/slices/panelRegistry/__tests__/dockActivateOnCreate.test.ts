@@ -522,7 +522,7 @@ describe("dockPopoverOnSpawn policy gate (#8946)", () => {
   it("kind without policy (default dockPopoverOnSpawn: true) still opens the popover", async () => {
     const { addPanel } = usePanelStore.getState();
     const id = await addPanel({
-      // browser has no policy — uses default dockPopoverOnSpawn: true.
+      // browser only overrides dockFallbackTarget — dockPopoverOnSpawn stays the default true.
       kind: "browser",
       requestedId: "browser-default-popover",
       cwd: "/",
@@ -652,7 +652,7 @@ describe("defaultFocusOnCreate policy gate (#8946)", () => {
     expect(usePanelStore.getState().focusedId).toBe("anchor-2");
 
     const secondId = await addPanel({
-      // browser has no policy → default defaultFocusOnCreate: true.
+      // browser only overrides dockFallbackTarget → defaultFocusOnCreate stays the default true.
       kind: "browser",
       requestedId: "stealer-2",
       cwd: "/",

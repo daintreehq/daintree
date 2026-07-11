@@ -15,9 +15,9 @@ let ctx: AppContext;
 let fixtureDir: string;
 let fixtureCleanup: (() => void) | undefined;
 
-test.describe.serial("Core: Non-PTY panels reject the dock", () => {
+test.describe.serial("Core: Panel dockability", () => {
   test.beforeAll(async () => {
-    const { dir, cleanup } = createFixtureRepo({ name: "non-pty-dock" });
+    const { dir, cleanup } = createFixtureRepo({ name: "panel-dockability" });
     fixtureDir = dir;
     fixtureCleanup = cleanup;
     ctx = await launchApp();
@@ -29,7 +29,7 @@ test.describe.serial("Core: Non-PTY panels reject the dock", () => {
     fixtureCleanup?.();
   });
 
-  test("terminal panels expose move-to-dock, browser panels do not", async () => {
+  test("terminal and browser panels both expose move-to-dock", async () => {
     const { window } = ctx;
 
     await test.step("A terminal panel shows the move-to-dock control", async () => {
@@ -41,7 +41,7 @@ test.describe.serial("Core: Non-PTY panels reject the dock", () => {
       await expect(terminal.locator(SEL.panel.minimize)).toBeVisible({ timeout: T_SHORT });
     });
 
-    await test.step("A browser panel has no move-to-dock control", async () => {
+    await test.step("A browser panel shows the move-to-dock control (#11053)", async () => {
       await openBrowser(window);
       await expect
         .poll(() => getGridPanelCount(window), { timeout: T_LONG })
@@ -53,9 +53,10 @@ test.describe.serial("Core: Non-PTY panels reject the dock", () => {
         .filter({ has: window.locator(SEL.browser.addressBar) });
       await expect(browserPanel).toHaveCount(1, { timeout: T_MEDIUM });
 
-      // showMoveToDock requires `hasPty` — browser panels render no dock button.
-      // Rendering it would silently strand the panel (ContentDock filters by isPtyPanel).
-      await expect(browserPanel.locator(SEL.panel.minimize)).toHaveCount(0);
+      // browser is now a dockable reading surface (panelKindIsDockable), so the
+      // dock affordance renders — the panel can leave the grid without vanishing.
+      await browserPanel.hover();
+      await expect(browserPanel.locator(SEL.panel.minimize)).toBeVisible({ timeout: T_SHORT });
       // It still has the standard close affordance, confirming this is a real
       // panel header and not a missing-panel false negative.
       await expect(browserPanel.locator(SEL.panel.close)).toHaveCount(1);

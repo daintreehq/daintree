@@ -9,14 +9,18 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { usePanelStore, useProjectStore, useWorktreeSelectionStore } from "@/store";
 import {
   isDockPanel,
+  isFilePanel,
   isPtyPanel,
+  type BrowserPanelData,
   type DockPanelData,
+  type FilePanelData,
   type PanelInstance,
 } from "@shared/types/panel";
+import { extractHostPort } from "@/components/Browser/browserUtils";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import type { TrashedTerminal } from "@/store/slices";
 import { DockedTerminalItem } from "./DockedTerminalItem";
-import { DockedFilePanelItem } from "./DockedFilePanelItem";
+import { DockedNonPtyPanelItem } from "./DockedNonPtyPanelItem";
 import { DockedTabGroup } from "./DockedTabGroup";
 import { TrashContainer } from "./TrashContainer";
 import { WaitingContainer } from "./WaitingContainer";
@@ -85,6 +89,21 @@ const EMPTY_DOCK_TERMINALS: readonly DockPanelData[] = [];
 
 interface ContentDockProps {
   density?: DockDensity;
+}
+
+// File name beats the generic kind title in the chip, mirroring FilePane's own
+// title layering (a user-locked rename still wins).
+function fileChipTitle(panel: FilePanelData): string {
+  const fileName = panel.filePath?.split(/[/\\]/).filter(Boolean).pop();
+  return panel.titleMode === "user" ? panel.title : (fileName ?? panel.title);
+}
+
+// Host beats the generic "Browser" title in the chip, mirroring BrowserPane's
+// displayTitle (a page-supplied title still wins).
+function browserChipTitle(panel: BrowserPanelData): string {
+  if (panel.title && panel.title !== "Browser") return panel.title;
+  const currentUrl = panel.browserHistory?.present || panel.browserUrl || "";
+  return currentUrl ? extractHostPort(currentUrl) : panel.title;
 }
 
 export function ContentDock({ density = "normal" }: ContentDockProps) {
@@ -507,8 +526,16 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
                           <SortableDockItem key={group.id} terminal={terminal} sourceIndex={index}>
                             {isPtyPanel(terminal) ? (
                               <DockedTerminalItem terminal={terminal} />
+                            ) : isFilePanel(terminal) ? (
+                              <DockedNonPtyPanelItem
+                                panel={terminal}
+                                displayTitle={fileChipTitle(terminal)}
+                              />
                             ) : (
-                              <DockedFilePanelItem panel={terminal} />
+                              <DockedNonPtyPanelItem
+                                panel={terminal}
+                                displayTitle={browserChipTitle(terminal)}
+                              />
                             )}
                           </SortableDockItem>
                         );

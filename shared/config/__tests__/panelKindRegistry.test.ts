@@ -536,12 +536,12 @@ describe("panelKindIsDockable", () => {
     expect(panelKindIsDockable("terminal")).toBe(true);
   });
 
-  it("file panels opt in via the dockable capability", () => {
+  it("file and browser panels opt in via the dockable capability", () => {
     expect(panelKindIsDockable("file")).toBe(true);
+    expect(panelKindIsDockable("browser")).toBe(true);
   });
 
   it("non-PTY kinds without the capability are not dockable", () => {
-    expect(panelKindIsDockable("browser")).toBe(false);
     expect(panelKindIsDockable("dev-preview")).toBe(false);
     expect(panelKindIsDockable("review")).toBe(false);
   });

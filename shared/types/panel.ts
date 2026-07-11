@@ -634,10 +634,10 @@ export function isFilePanel(panel: PanelInstance | TerminalInstance): panel is F
  * `dockable` capability (`panelKindIsDockable`) — extend both together when a
  * new kind gains dock support, along with a chip branch in `ContentDock`.
  */
-export type DockPanelData = PtyPanelData | FilePanelData;
+export type DockPanelData = PtyPanelData | FilePanelData | BrowserPanelData;
 
 export function isDockPanel(panel: PanelInstance | TerminalInstance): panel is DockPanelData {
-  return isPtyPanel(panel) || isFilePanel(panel);
+  return isPtyPanel(panel) || isFilePanel(panel) || isBrowserPanel(panel);
 }
 
 /**
