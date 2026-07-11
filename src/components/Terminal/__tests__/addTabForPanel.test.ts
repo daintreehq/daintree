@@ -64,8 +64,7 @@ describe("addTabForPanel", () => {
     await addTabForPanel(makePanel());
 
     expect(addPanelMock).toHaveBeenCalledTimes(1);
-    const options = addPanelMock.mock.calls[0]?.[0] as { preserveMaximize?: boolean };
-    expect(options.preserveMaximize).toBe(true);
+    expect(addPanelMock).toHaveBeenCalledWith(expect.objectContaining({ preserveMaximize: true }));
   });
 
   it("folds the new tab into the group and activates it", async () => {

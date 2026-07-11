@@ -555,9 +555,9 @@ describe("panelStore adversarial", () => {
           },
           panelIds: ["p1", "p3", "p4"],
           panelIdsByWorktreeId: { "wt-1": ["p1", "p3", "p4"] },
-          tabGroups: new Map([
-            ["g2", { id: "g2", location: "grid", activeTabId: "p3", panelIds: ["p3", "p4"] }],
-          ]) as never,
+        });
+        usePanelStore.getState().createTabGroup("grid", "wt-1", ["p3", "p4"], "p3");
+        usePanelStore.setState({
           maximizedId: "p1",
           maximizeTarget: { type: "panel", id: "p1" },
         });
@@ -620,14 +620,15 @@ describe("panelStore adversarial", () => {
           },
           panelIds: ["p1", "d1", "d2"],
           panelIdsByWorktreeId: { "wt-1": ["p1", "d1", "d2"] },
-          tabGroups: new Map([
-            ["gd", { id: "gd", location: "dock", activeTabId: "d1", panelIds: ["d1", "d2"] }],
-          ]) as never,
+        });
+        const groupId = usePanelStore.getState().createTabGroup("dock", "wt-1", ["d1", "d2"], "d1");
+        expect(groupId).toBeDefined();
+        usePanelStore.setState({
           maximizedId: "p1",
           maximizeTarget: { type: "panel", id: "p1" },
         });
 
-        usePanelStore.getState().moveTabGroupToLocation("gd", "grid");
+        usePanelStore.getState().moveTabGroupToLocation(groupId!, "grid");
 
         const s = usePanelStore.getState();
         expect(s.maximizedId).toBeNull();
