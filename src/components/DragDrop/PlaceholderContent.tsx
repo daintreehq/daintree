@@ -151,48 +151,49 @@ function BrowserPlaceholder({ color, compact }: PlaceholderProps) {
           borderRadius: "var(--radius-sm)",
         }}
       />
-      {/* Page content area */}
-      <div
-        style={{
-          flex: 1,
-          minHeight: compact ? 0 : 30,
-          padding: compact ? 4 : 6,
-          backgroundColor: `color-mix(in srgb, ${color} 5%, transparent)`,
-          borderRadius: "var(--radius-sm)",
-          display: "flex",
-          flexDirection: "column",
-          gap: compact ? 3 : 4,
-        }}
-      >
-        {/* Page elements row */}
-        <div style={{ display: "flex", gap: compact ? 3 : 4 }}>
-          <div
-            style={{
-              width: compact ? 8 : 10,
-              height: compact ? 8 : 10,
-              backgroundColor: `color-mix(in srgb, ${color} 12%, transparent)`,
-              borderRadius: "var(--radius-sm)",
-            }}
-          />
-          <div
-            style={{
-              width: compact ? 8 : 10,
-              height: compact ? 8 : 10,
-              backgroundColor: `color-mix(in srgb, ${color} 12%, transparent)`,
-              borderRadius: "var(--radius-sm)",
-            }}
-          />
-          <div
-            style={{
-              width: compact ? 8 : 10,
-              height: compact ? 8 : 10,
-              backgroundColor: `color-mix(in srgb, ${color} 12%, transparent)`,
-              borderRadius: "var(--radius-sm)",
-            }}
-          />
-        </div>
-        {/* Content line */}
-        {!compact && (
+      {/* Page content area — omitted in compact so the dock ghost stays within --dock-item-height */}
+      {!compact && (
+        <div
+          data-placeholder-body
+          style={{
+            flex: 1,
+            minHeight: 30,
+            padding: 6,
+            backgroundColor: `color-mix(in srgb, ${color} 5%, transparent)`,
+            borderRadius: "var(--radius-sm)",
+            display: "flex",
+            flexDirection: "column",
+            gap: 4,
+          }}
+        >
+          {/* Page elements row */}
+          <div style={{ display: "flex", gap: 4 }}>
+            <div
+              style={{
+                width: 10,
+                height: 10,
+                backgroundColor: `color-mix(in srgb, ${color} 12%, transparent)`,
+                borderRadius: "var(--radius-sm)",
+              }}
+            />
+            <div
+              style={{
+                width: 10,
+                height: 10,
+                backgroundColor: `color-mix(in srgb, ${color} 12%, transparent)`,
+                borderRadius: "var(--radius-sm)",
+              }}
+            />
+            <div
+              style={{
+                width: 10,
+                height: 10,
+                backgroundColor: `color-mix(in srgb, ${color} 12%, transparent)`,
+                borderRadius: "var(--radius-sm)",
+              }}
+            />
+          </div>
+          {/* Content line */}
           <div
             style={{
               height: 5,
@@ -201,8 +202,8 @@ function BrowserPlaceholder({ color, compact }: PlaceholderProps) {
               borderRadius: "var(--radius-sm)",
             }}
           />
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -324,76 +325,77 @@ function DevPreviewPlaceholder({ color, compact }: PlaceholderProps) {
           }}
         />
       </div>
-      {/* Split preview content */}
-      <div
-        style={{
-          flex: 1,
-          minHeight: compact ? 0 : 30,
-          display: "flex",
-          gap: compact ? 3 : 4,
-        }}
-      >
-        {/* Code/terminal side (narrower) */}
+      {/* Split preview content — omitted in compact so the dock ghost stays within --dock-item-height */}
+      {!compact && (
         <div
-          style={{
-            width: "30%",
-            backgroundColor: `color-mix(in srgb, ${color} 6%, transparent)`,
-            borderRadius: "var(--radius-sm)",
-            padding: compact ? 3 : 4,
-            display: "flex",
-            flexDirection: "column",
-            gap: 2,
-          }}
-        >
-          <div
-            style={{
-              height: 3,
-              width: "80%",
-              backgroundColor: `color-mix(in srgb, ${color} 10%, transparent)`,
-              borderRadius: "var(--radius-sm)",
-            }}
-          />
-          <div
-            style={{
-              height: 3,
-              width: "60%",
-              backgroundColor: `color-mix(in srgb, ${color} 10%, transparent)`,
-              borderRadius: "var(--radius-sm)",
-            }}
-          />
-        </div>
-        {/* Preview side (wider) */}
-        <div
+          data-placeholder-body
           style={{
             flex: 1,
-            backgroundColor: `color-mix(in srgb, ${color} 5%, transparent)`,
-            borderRadius: "var(--radius-sm)",
-            padding: compact ? 3 : 4,
+            minHeight: 30,
             display: "flex",
-            flexDirection: "column",
-            gap: compact ? 2 : 3,
+            gap: 4,
           }}
         >
-          {/* Preview content elements */}
-          <div style={{ display: "flex", gap: compact ? 2 : 3 }}>
+          {/* Code/terminal side (narrower) */}
+          <div
+            style={{
+              width: "30%",
+              backgroundColor: `color-mix(in srgb, ${color} 6%, transparent)`,
+              borderRadius: "var(--radius-sm)",
+              padding: 4,
+              display: "flex",
+              flexDirection: "column",
+              gap: 2,
+            }}
+          >
             <div
               style={{
-                width: compact ? 6 : 8,
-                height: compact ? 6 : 8,
-                backgroundColor: `color-mix(in srgb, ${color} 12%, transparent)`,
+                height: 3,
+                width: "80%",
+                backgroundColor: `color-mix(in srgb, ${color} 10%, transparent)`,
                 borderRadius: "var(--radius-sm)",
               }}
             />
             <div
               style={{
-                width: compact ? 6 : 8,
-                height: compact ? 6 : 8,
-                backgroundColor: `color-mix(in srgb, ${color} 12%, transparent)`,
+                height: 3,
+                width: "60%",
+                backgroundColor: `color-mix(in srgb, ${color} 10%, transparent)`,
                 borderRadius: "var(--radius-sm)",
               }}
             />
           </div>
-          {!compact && (
+          {/* Preview side (wider) */}
+          <div
+            style={{
+              flex: 1,
+              backgroundColor: `color-mix(in srgb, ${color} 5%, transparent)`,
+              borderRadius: "var(--radius-sm)",
+              padding: 4,
+              display: "flex",
+              flexDirection: "column",
+              gap: 3,
+            }}
+          >
+            {/* Preview content elements */}
+            <div style={{ display: "flex", gap: 3 }}>
+              <div
+                style={{
+                  width: 8,
+                  height: 8,
+                  backgroundColor: `color-mix(in srgb, ${color} 12%, transparent)`,
+                  borderRadius: "var(--radius-sm)",
+                }}
+              />
+              <div
+                style={{
+                  width: 8,
+                  height: 8,
+                  backgroundColor: `color-mix(in srgb, ${color} 12%, transparent)`,
+                  borderRadius: "var(--radius-sm)",
+                }}
+              />
+            </div>
             <div
               style={{
                 height: 4,
@@ -402,9 +404,9 @@ function DevPreviewPlaceholder({ color, compact }: PlaceholderProps) {
                 borderRadius: "var(--radius-sm)",
               }}
             />
-          )}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
