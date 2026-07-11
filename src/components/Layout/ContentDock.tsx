@@ -107,7 +107,8 @@ function browserChipTitle(panel: BrowserPanelData): string {
   if (panel.title && panel.title !== "Browser") return panel.title;
   const currentUrl = panel.browserHistory?.present || panel.browserUrl || "";
   const host = currentUrl ? extractHostPort(currentUrl) : "";
-  return host || panel.title;
+  // Ultimate fallback so the chip is never blank (e.g. empty title + no URL).
+  return host || panel.title || "Browser";
 }
 
 export function ContentDock({ density = "normal" }: ContentDockProps) {
