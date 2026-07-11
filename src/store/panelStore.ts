@@ -392,11 +392,7 @@ export const usePanelStore = create<PanelGridState>()(
           } else {
             set({ focusedId: id });
           }
-        } else if (
-          options.activateDockOnCreate &&
-          committedToDock &&
-          !isHydrationBatchActive()
-        ) {
+        } else if (options.activateDockOnCreate && committedToDock && !isHydrationBatchActive()) {
           // The registry slice atomically advances `focusedId` to the new id
           // inside its commit for normal dock activations (#6590). When the
           // assistant currently owns input we issue a corrective set() to roll

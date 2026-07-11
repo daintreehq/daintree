@@ -49,11 +49,13 @@ function setTerminals(terminals: PtyPanelData[]) {
 function createMockTerminal(
   id: string,
   worktreeId: string,
-  location: "grid" | "dock" | "trash" = "grid"
+  location: "grid" | "dock" | "trash" = "grid",
+  kind?: string
 ): PtyPanelData {
   return {
     id,
     type: "terminal",
+    ...(kind !== undefined && { kind }),
     title: `Terminal ${id}`,
     cwd: "/test",
     cols: 80,
@@ -95,16 +97,10 @@ describe("Worktree-scoped bulk actions", () => {
     // A browser panel can't render in the dock (`isDockPanel` filters it out),
     // so bulk-docking a worktree must leave it on the grid, matching the guard
     // on `bulkMoveToDock`.
-    const browserPanel = {
-      id: "wt1-browser-1",
-      type: "browser",
-      kind: "browser",
-      title: "Browser",
-      worktreeId: "wt1",
-      location: "grid",
-    } as unknown as PtyPanelData;
-
-    setTerminals([createMockTerminal("wt1-grid-1", "wt1", "grid"), browserPanel]);
+    setTerminals([
+      createMockTerminal("wt1-grid-1", "wt1", "grid"),
+      createMockTerminal("wt1-browser-1", "wt1", "grid", "browser"),
+    ]);
 
     usePanelStore.getState().bulkMoveToDockByWorktree("wt1");
 

@@ -61,19 +61,23 @@ vi.mock("@/store/terminalInputStore", () => ({
   },
 }));
 
-(globalThis as Record<string, unknown>).window = globalThis.window ?? {};
-(window as unknown as Record<string, unknown>).electron = {
-  ...((window as unknown as Record<string, unknown>).electron ?? {}),
-  terminal: {
-    spawn: vi.fn().mockResolvedValue(undefined),
-    trash: vi.fn().mockResolvedValue(undefined),
-    kill: vi.fn().mockResolvedValue(undefined),
-    restore: vi.fn().mockResolvedValue(undefined),
+// jsdom provides `window`; define a partial `electron` bridge via
+// defineProperty (its descriptor value is untyped) so the store's clients can
+// resolve without an unsafe cast on the typed global shim.
+Object.defineProperty(window, "electron", {
+  configurable: true,
+  value: {
+    terminal: {
+      spawn: vi.fn().mockResolvedValue(undefined),
+      trash: vi.fn().mockResolvedValue(undefined),
+      kill: vi.fn().mockResolvedValue(undefined),
+      restore: vi.fn().mockResolvedValue(undefined),
+    },
+    globalEnv: {
+      get: vi.fn().mockResolvedValue({}),
+    },
   },
-  globalEnv: {
-    get: vi.fn().mockResolvedValue({}),
-  },
-};
+});
 
 import { usePanelStore } from "../panelStore";
 
