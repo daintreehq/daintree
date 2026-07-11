@@ -27,7 +27,7 @@ export function DockPlaceholder({ className }: DockPlaceholderProps) {
   return (
     <div
       className={cn(
-        "flex flex-col gap-1 px-3 py-2 min-w-[120px] h-full",
+        "flex flex-col gap-1 px-3 py-2 min-w-[120px] h-[var(--dock-item-height)] overflow-hidden",
         "rounded border border-border-strong bg-overlay-subtle",
         className
       )}
