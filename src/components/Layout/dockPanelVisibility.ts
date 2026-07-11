@@ -22,6 +22,11 @@ export interface DockPanelScope {
  * Mirrors the filters in `ContentDock` and `DockPanelOffscreenContainer`, which
  * inline these conditions across a store selector (panel fields) and a memo
  * (help/worktree stores a store selector cannot read).
+ *
+ * One condition stays with the caller: both dock surfaces iterate `panelIds`, so
+ * a panel must also be registered there. That lives on the store state rather
+ * than the panel, so callers resolve `panel` through `panelIds` and pass
+ * `undefined` for an unregistered id.
  */
 export function isDockPanelRendered(
   panel: PanelInstance | undefined,

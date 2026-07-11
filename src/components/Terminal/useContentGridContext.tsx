@@ -294,7 +294,6 @@ export function useContentGridContext({
     getTerminal,
     getActiveTabId,
     setFocused,
-    activeDockTerminalId,
   } = usePanelStore(
     useShallow((state) => ({
       storeTerminalIds: state.panelIds,
@@ -309,7 +308,6 @@ export function useContentGridContext({
       getTerminal: state.getTerminal,
       getActiveTabId: state.getActiveTabId,
       setFocused: state.setFocused,
-      activeDockTerminalId: state.activeDockTerminalId,
     }))
   );
 
@@ -1096,19 +1094,33 @@ export function useContentGridContext({
   // Intersect it with what the dock actually renders, or focus enforcement below
   // would stand down for a popover that isn't on screen and strand focus outside
   // the maximized group (#11065).
-  // `panelsById` is read non-reactively on purpose: subscribing to the panel
-  // object would re-render this hook on every agent-state tick of that terminal
-  // (#8593). The snapshot is safe because every transition that could invalidate
-  // it also moves one of the reactive deps below — a dock panel that is trashed,
-  // removed, or moved to the grid has its pointer cleared or its trash entry set,
-  // and a worktree switch changes `activeWorktreeId`.
-  const openDockPopoverId = useMemo(() => {
-    if (!activeDockTerminalId) return null;
-    const panel = panelStoreApi.getState().panelsById[activeDockTerminalId];
-    return isDockPanelRendered(panel, { trashedTerminals, helpTerminalId, activeWorktreeId })
-      ? activeDockTerminalId
+  // Which dock popover is genuinely on screen, or null. `activeDockTerminalId`
+  // alone can't answer that: the offscreen watchdog keeps the pointer alive for
+  // panels the dock has filtered out (#7278), so focus enforcement below would
+  // stand down for a popover that isn't rendered and strand focus outside the
+  // maximized group (#11065).
+  //
+  // Derived in the selector rather than a useMemo over `panelsById` snapshots:
+  // the panel's structure can change while the pointer holds still (layout undo
+  // rewrites a panel's worktree in place), which a memo keyed on the pointer
+  // would miss. Selecting the id — a primitive — rather than the panel object is
+  // what keeps this free of the per-panel re-render churn of #8593: the selector
+  // re-runs on every store write but returns the same string, so the equality
+  // check short-circuits and the hook doesn't re-render.
+  const openDockPopoverId = usePanelStore((state) => {
+    const id = state.activeDockTerminalId;
+    if (id === null) return null;
+    // Both dock surfaces render from `panelIds`; a panel that lingers in
+    // `panelsById` without being registered there has no chip, hence no popover.
+    const panel = state.panelIds.includes(id) ? state.panelsById[id] : undefined;
+    return isDockPanelRendered(panel, {
+      trashedTerminals: state.trashedTerminals,
+      helpTerminalId,
+      activeWorktreeId,
+    })
+      ? id
       : null;
-  }, [activeDockTerminalId, trashedTerminals, helpTerminalId, activeWorktreeId]);
+  });
 
   const maximizedGroupFocusTarget = useMemo(
     () =>

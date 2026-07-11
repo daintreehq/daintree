@@ -168,21 +168,47 @@ test.describe.serial("Core: Dock popover dismissal guard", () => {
     const { window, app } = ctx;
     await ensureWindowFocused(app);
 
+    // Build the layout this test needs rather than inheriting the previous
+    // test's, so it stays runnable on its own (`--grep`) instead of passing or
+    // failing on whatever the earlier test happened to leave behind.
+    await test.step("Ensure a docked panel and a grid panel to maximize", async () => {
+      if ((await getDockPanelCount(window)) === 0) {
+        // Keep a panel behind in the grid — docking the last one tears the
+        // project view down (#4898).
+        while ((await getGridPanelIds(window)).length < 2) {
+          await openTerminal(window);
+          await window.waitForTimeout(T_SETTLE);
+        }
+        const gridIds = await getGridPanelIds(window);
+        await dispatchAction(window, "terminal.moveToDock", { terminalId: gridIds[0]! });
+        await expect
+          .poll(() => getDockPanelCount(window), { timeout: T_MEDIUM })
+          .toBeGreaterThan(0);
+      }
+
+      while ((await getGridPanelIds(window)).length === 0) {
+        await openTerminal(window);
+        await window.waitForTimeout(T_SETTLE);
+      }
+    });
+
     const dockedId = (await getDockPanelIds(window))[0]!;
     expect(dockedId).toBeTruthy();
 
     const gridPanel = getFirstGridPanel(window);
     await expect(gridPanel).toBeVisible({ timeout: T_MEDIUM });
 
-    await test.step("Turn the remaining grid panel into a tab group", async () => {
-      // The + button is opacity-0 on single panels, so force the click.
-      await gridPanel
-        .locator(SEL.panel.duplicate)
-        .first()
-        .click({ force: true, timeout: T_MEDIUM });
-
+    await test.step("Make the grid panel a tab group — only group maximize enforces focus", async () => {
       const tabs = gridPanel.locator(SEL.panel.tabList).locator(SEL.panel.tab);
-      await expect(tabs).toHaveCount(2, { timeout: T_MEDIUM });
+      if ((await tabs.count()) < 2) {
+        // The + button is opacity-0 on single panels, so force the click.
+        await gridPanel
+          .locator(SEL.panel.duplicate)
+          .first()
+          .click({ force: true, timeout: T_MEDIUM });
+      }
+      await expect(tabs.first()).toBeVisible({ timeout: T_MEDIUM });
+      expect(await tabs.count()).toBeGreaterThanOrEqual(2);
     });
 
     const restoreBtn = window.locator(SEL.panel.restore).first();
