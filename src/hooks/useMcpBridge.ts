@@ -136,18 +136,20 @@ export function useMcpBridge(): void {
           }
 
           const dispatchArgs = tagMcpSpawnSource(actionId, args);
-          const result = await runWithMcpSpawnFocusSuppressed(() =>
-            actionService.dispatch(actionId as ActionId, dispatchArgs, {
-              source: "agent",
-              confirmed: effectiveConfirmed,
-              // Pinned help-session dispatch carries the provision-time
-              // context snapshot; replay it so the action targets the
-              // worktree/terminal focused at launch, not wherever focus
-              // drifted during the model's turn (#8317). Undefined for
-              // unpinned external dispatch — ActionService then falls
-              // back to live renderer context, unchanged behaviour.
-              contextOverride: context,
-            })
+          const result = await runWithMcpSpawnFocusSuppressed(
+            () =>
+              actionService.dispatch(actionId as ActionId, dispatchArgs, {
+                source: "agent",
+                confirmed: effectiveConfirmed,
+                // Pinned help-session dispatch carries the provision-time
+                // context snapshot; replay it so the action targets the
+                // worktree/terminal focused at launch, not wherever focus
+                // drifted during the model's turn (#8317). Undefined for
+                // unpinned external dispatch — ActionService then falls
+                // back to live renderer context, unchanged behaviour.
+                contextOverride: context,
+              }),
+            actionId
           );
           if (disposed) return;
           window.electron.mcpBridge.sendDispatchActionResponse({
