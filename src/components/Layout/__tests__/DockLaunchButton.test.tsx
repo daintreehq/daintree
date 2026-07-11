@@ -319,29 +319,15 @@ describe("DockLaunchButton", () => {
     expect(getByText("Gemini").hasAttribute("disabled")).toBe(false);
   });
 
-  it("always exposes Terminal and Browser, gates Dev preview on hasDevPreview", () => {
+  it("offers Terminal but gates non-dockable kinds (browser, dev preview) out of the dock launcher (#11054)", () => {
+    // The dock launcher creates panels directly in the dock, so it must only
+    // offer kinds the dock can render. Terminal is a PTY kind — always dockable,
+    // always offered and launchable. Browser and dev preview can't render in the
+    // dock, so — even with hasDevPreview — they must be hidden here, matching the
+    // `addPanel` redirect. (When #11053 makes browser dockable, its shared
+    // `panelKindIsDockable` flag flips this on without touching this menu.)
     const onLaunchAgent = vi.fn();
-    const { getByText, queryByText, rerender } = render(
-      <DockLaunchButton
-        agents={[]}
-        hasDevPreview={false}
-        onLaunchAgent={onLaunchAgent}
-        activeWorktreeId={null}
-        cwd="/tmp"
-      />
-    );
-
-    expect(getByText("Terminal")).toBeTruthy();
-    expect(getByText("Browser")).toBeTruthy();
-    expect(queryByText("Dev preview")).toBeNull();
-
-    fireEvent.click(getByText("Terminal"));
-    expect(onLaunchAgent).toHaveBeenLastCalledWith("terminal");
-
-    fireEvent.click(getByText("Browser"));
-    expect(onLaunchAgent).toHaveBeenLastCalledWith("browser");
-
-    rerender(
+    const { getByText, queryByText } = render(
       <DockLaunchButton
         agents={[]}
         hasDevPreview
@@ -351,8 +337,12 @@ describe("DockLaunchButton", () => {
       />
     );
 
-    fireEvent.click(getByText("Dev preview"));
-    expect(onLaunchAgent).toHaveBeenLastCalledWith("dev-preview");
+    expect(getByText("Terminal")).toBeTruthy();
+    fireEvent.click(getByText("Terminal"));
+    expect(onLaunchAgent).toHaveBeenLastCalledWith("terminal");
+
+    expect(queryByText("Browser")).toBeNull();
+    expect(queryByText("Dev preview")).toBeNull();
   });
 
   it("shows a No recipes yet discovery cue when no recipes match the active worktree", () => {

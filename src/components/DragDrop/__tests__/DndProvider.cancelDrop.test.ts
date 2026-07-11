@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { DragData } from "../DndProvider";
-import type { OverDropData } from "../dropResolution";
+import { isNonDockableDockDrop, type OverDropData } from "../dropResolution";
 
 // ── Helpers ──────────────────────────────────────────────
 
@@ -78,7 +78,13 @@ function runCancelDrop(params: {
     return { cancel: true };
   }
 
-  // Predicate 3: Dock-to-grid when grid is full
+  // Predicate 3: Dock drop of a kind the dock can't render (#11054). Calls the
+  // real helper so this stays a genuine test of production logic, not a copy.
+  if (isNonDockableDockDrop(targetContainer, activeData.terminal.kind)) {
+    return { cancel: true };
+  }
+
+  // Predicate 4: Dock-to-grid when grid is full
   if (isDockToGridFull(sourceLocation, targetContainer, gridIsFull)) {
     return { cancel: true };
   }
@@ -107,6 +113,12 @@ function makeDragData(overrides: Partial<ActiveDragData> = {}): ActiveDragData {
     sourceIndex: 0,
     ...overrides,
   };
+}
+
+/** Drag data for a panel of a specific kind (for the #11054 dockability guard). */
+function makeDragDataOfKind(kind: string, overrides: Partial<ActiveDragData> = {}): ActiveDragData {
+  const base = makeDragData(overrides);
+  return { ...base, terminal: { ...base.terminal, kind } as DragData["terminal"] };
 }
 
 // ── Tests ────────────────────────────────────────────────
@@ -157,6 +169,56 @@ describe("cancelDrop predicates", () => {
         activeData: makeDragData({ sourceLocation: "dock" }),
         sourceLocation: "dock",
         targetContainer: "dock",
+        gridIsFull: false,
+        isWorktreeSort: false,
+      });
+      expect(result).toEqual({ cancel: false });
+    });
+  });
+
+  describe("non-dockable dock drop (#11054)", () => {
+    it("cancels a browser panel dropped on the dock (direct container)", () => {
+      const result = runCancelDrop({
+        overData: { container: "dock" },
+        activeData: makeDragDataOfKind("browser"),
+        sourceLocation: "grid",
+        targetContainer: "dock",
+        gridIsFull: false,
+        isWorktreeSort: false,
+      });
+      expect(result).toEqual({ cancel: true });
+    });
+
+    it("cancels a dev-preview panel dropped on a dock chip (sortable container)", () => {
+      const result = runCancelDrop({
+        overData: { sortable: { containerId: "dock-container", index: 0 } },
+        activeData: makeDragDataOfKind("dev-preview"),
+        sourceLocation: "grid",
+        targetContainer: "dock",
+        gridIsFull: false,
+        isWorktreeSort: false,
+      });
+      expect(result).toEqual({ cancel: true });
+    });
+
+    it("does not cancel a dockable non-PTY (file) panel dropped on the dock", () => {
+      const result = runCancelDrop({
+        overData: { container: "dock" },
+        activeData: makeDragDataOfKind("file"),
+        sourceLocation: "grid",
+        targetContainer: "dock",
+        gridIsFull: false,
+        isWorktreeSort: false,
+      });
+      expect(result).toEqual({ cancel: false });
+    });
+
+    it("does not cancel a browser panel dropped on the grid (dock guard is target-scoped)", () => {
+      const result = runCancelDrop({
+        overData: { container: "grid" },
+        activeData: makeDragDataOfKind("browser"),
+        sourceLocation: "grid",
+        targetContainer: "grid",
         gridIsFull: false,
         isWorktreeSort: false,
       });

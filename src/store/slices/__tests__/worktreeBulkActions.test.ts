@@ -91,6 +91,29 @@ describe("Worktree-scoped bulk actions", () => {
     expect(state.panelsById["wt2-grid-1"]?.location).toBe("grid");
   });
 
+  it("bulkMoveToDockByWorktree skips a non-dockable kind — it would strand invisibly (#11054)", () => {
+    // A browser panel can't render in the dock (`isDockPanel` filters it out),
+    // so bulk-docking a worktree must leave it on the grid, matching the guard
+    // on `bulkMoveToDock`.
+    const browserPanel = {
+      id: "wt1-browser-1",
+      type: "browser",
+      kind: "browser",
+      title: "Browser",
+      worktreeId: "wt1",
+      location: "grid",
+    } as unknown as PtyPanelData;
+
+    setTerminals([createMockTerminal("wt1-grid-1", "wt1", "grid"), browserPanel]);
+
+    usePanelStore.getState().bulkMoveToDockByWorktree("wt1");
+
+    const state = usePanelStore.getState();
+    expect(state.panelsById["wt1-grid-1"]?.location).toBe("dock");
+    // The non-dockable browser panel stays on the grid.
+    expect(state.panelsById["wt1-browser-1"]?.location).toBe("grid");
+  });
+
   it("bulkMoveToGridByWorktree respects grid capacity and only moves that worktree's docked terminals", () => {
     const otherGrid = Array.from({ length: 15 }, (_, i) =>
       createMockTerminal(`wt2-grid-${i}`, "wt2", "grid")

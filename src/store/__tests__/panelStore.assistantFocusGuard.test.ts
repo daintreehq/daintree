@@ -275,9 +275,15 @@ describe("panelStore.addPanel focus guard (#6959)", () => {
       expect(state.panelsById[newId!]?.location).toBe("dock");
     });
 
-    it("focus-preserve spawn of a non-PTY (browser) panel into the dock does not steal focus", async () => {
+    it("focus-preserve spawn of a non-PTY (file) panel into the dock does not steal focus", async () => {
+      // Uses `file` (a dockable non-PTY kind) rather than `browser`: since
+      // #11054, `addPanel` redirects a dock request for a non-dockable kind to
+      // the grid, so `browser` would no longer land in the dock. `file` keeps
+      // this test exercising the non-PTY dock-spawn focus path it was written
+      // for.
       const newId = await usePanelStore.getState().addPanel({
-        kind: "browser",
+        kind: "file",
+        filePath: "/test/readme.md",
         location: "dock",
         activateDockOnCreate: true,
         focusPolicy: "preserve",

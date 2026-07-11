@@ -187,7 +187,12 @@ export const createTerminalBulkActionsSlice = (
     bulkMoveToDockByWorktree: (worktreeId) => {
       const terminals = getTerminals();
       const gridTerminals = terminals.filter(
-        (t) => t.worktreeId === worktreeId && (t.location === "grid" || t.location === undefined)
+        (t) =>
+          t.worktreeId === worktreeId &&
+          (t.location === "grid" || t.location === undefined) &&
+          // Never bulk-move a kind the dock can't render (#11054) — it would
+          // strand invisibly. Matches the guard already on `bulkMoveToDock`.
+          panelKindIsDockable(t.kind ?? "terminal")
       );
       gridTerminals.forEach((t) => moveTerminalToDock(t.id));
     },

@@ -7,6 +7,8 @@ import {
   resolveGroupPlacementIndex,
   resolveGridInsertionIndexFromRects,
   findGroupIndex,
+  isNonDockableDockDrop,
+  filterOutDockDroppables,
   type ClientRectLike,
 } from "../dropResolution";
 import type { PanelInstance } from "@shared/types/panel";
@@ -54,6 +56,62 @@ describe("resolveContainerId", () => {
     expect(resolveContainerId("worktree-foo-accordion")).toBeNull();
     expect(resolveContainerId("")).toBeNull();
     expect(resolveContainerId("random")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isNonDockableDockDrop (#11054)
+// ---------------------------------------------------------------------------
+describe("isNonDockableDockDrop", () => {
+  it("rejects a dock drop of a non-dockable kind", () => {
+    expect(isNonDockableDockDrop("dock", "browser")).toBe(true);
+    expect(isNonDockableDockDrop("dock", "dev-preview")).toBe(true);
+  });
+
+  it("allows a dock drop of a dockable kind", () => {
+    // `file` opts into the dock via `dockable: true`; `terminal` is a PTY kind.
+    expect(isNonDockableDockDrop("dock", "file")).toBe(false);
+    expect(isNonDockableDockDrop("dock", "terminal")).toBe(false);
+  });
+
+  it("treats an undefined kind as a legacy PTY panel (dockable)", () => {
+    expect(isNonDockableDockDrop("dock", undefined)).toBe(false);
+  });
+
+  it("never rejects when the target is not the dock", () => {
+    expect(isNonDockableDockDrop("grid", "browser")).toBe(false);
+    expect(isNonDockableDockDrop(null, "browser")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// filterOutDockDroppables (#11054)
+// ---------------------------------------------------------------------------
+describe("filterOutDockDroppables", () => {
+  const grid = { id: "grid-container", data: { current: { container: "grid" } } };
+  const dock = { id: "dock-container", data: { current: { container: "dock" } } };
+  const dockChip = {
+    id: "chip-1",
+    data: { current: { sortable: { containerId: "dock-container" } } },
+  };
+  const gridChip = {
+    id: "chip-2",
+    data: { current: { sortable: { containerId: "grid-container" } } },
+  };
+
+  it("drops the dock droppable and its chip sortables", () => {
+    const result = filterOutDockDroppables([grid, dock, dockChip, gridChip]);
+    expect(result).toEqual([grid, gridChip]);
+  });
+
+  it("preserves candidate order for the survivors", () => {
+    const result = filterOutDockDroppables([gridChip, dock, grid]);
+    expect(result.map((c) => c.id)).toEqual(["chip-2", "grid-container"]);
+  });
+
+  it("keeps candidates with no data (e.g. plain droppables)", () => {
+    const bare = { id: "bare", data: { current: null } };
+    expect(filterOutDockDroppables([bare, dock])).toEqual([bare]);
   });
 });
 
