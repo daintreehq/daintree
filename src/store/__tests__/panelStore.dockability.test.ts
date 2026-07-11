@@ -110,8 +110,8 @@ describe("panelStore.addPanel dockability guard (#11054)", () => {
     resetState();
   });
 
-  it("redirects a dock request for a non-dockable kind (browser) to the grid", async () => {
-    const id = await usePanelStore.getState().addPanel({ kind: "browser", location: "dock" });
+  it("redirects a dock request for a non-dockable kind (review) to the grid", async () => {
+    const id = await usePanelStore.getState().addPanel({ kind: "review", location: "dock" });
 
     expect(id).toBeTruthy();
     const panel = usePanelStore.getState().panelsById[id!];
@@ -146,20 +146,20 @@ describe("panelStore.addPanel dockability guard (#11054)", () => {
   });
 
   it("leaves an explicit grid request for a non-dockable kind untouched", async () => {
-    const id = await usePanelStore.getState().addPanel({ kind: "browser", location: "grid" });
+    const id = await usePanelStore.getState().addPanel({ kind: "dev-preview", location: "grid" });
 
     expect(id).toBeTruthy();
     expect(usePanelStore.getState().panelsById[id!]?.location).toBe("grid");
   });
 
   it("does not activate the dock for a redirected (non-dockable) dock request", async () => {
-    // The create-focus wrapper keys on the COMMITTED location: a browser
+    // The create-focus wrapper keys on the COMMITTED location: a dev-preview
     // requested into the dock is redirected to the grid, so it must NOT take
     // the dock-activation path — otherwise activeDockTerminalId would point at a
     // panel that isn't actually in the dock.
     const id = await usePanelStore
       .getState()
-      .addPanel({ kind: "browser", location: "dock", activateDockOnCreate: true });
+      .addPanel({ kind: "dev-preview", location: "dock", activateDockOnCreate: true });
 
     expect(id).toBeTruthy();
     const state = usePanelStore.getState();
@@ -178,12 +178,12 @@ describe("panelStore.addPanel dockability guard (#11054)", () => {
     // preserving the id — so a previously stranded panel comes back instead of
     // carrying invisible dock state forever.
     const id = await usePanelStore.getState().addPanel({
-      kind: "browser",
+      kind: "dev-preview",
       location: "dock",
-      requestedId: "stranded-browser-1",
+      requestedId: "stranded-devpreview-1",
     });
 
-    expect(id).toBe("stranded-browser-1");
-    expect(usePanelStore.getState().panelsById["stranded-browser-1"]?.location).toBe("grid");
+    expect(id).toBe("stranded-devpreview-1");
+    expect(usePanelStore.getState().panelsById["stranded-devpreview-1"]?.location).toBe("grid");
   });
 });

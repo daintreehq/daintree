@@ -177,10 +177,10 @@ describe("cancelDrop predicates", () => {
   });
 
   describe("non-dockable dock drop (#11054)", () => {
-    it("cancels a browser panel dropped on the dock (direct container)", () => {
+    it("cancels a review panel dropped on the dock (direct container)", () => {
       const result = runCancelDrop({
         overData: { container: "dock" },
-        activeData: makeDragDataOfKind("browser"),
+        activeData: makeDragDataOfKind("review"),
         sourceLocation: "grid",
         targetContainer: "dock",
         gridIsFull: false,
@@ -213,10 +213,10 @@ describe("cancelDrop predicates", () => {
       expect(result).toEqual({ cancel: false });
     });
 
-    it("does not cancel a browser panel dropped on the grid (dock guard is target-scoped)", () => {
+    it("does not cancel a dev-preview panel dropped on the grid (dock guard is target-scoped)", () => {
       const result = runCancelDrop({
         overData: { container: "grid" },
-        activeData: makeDragDataOfKind("browser"),
+        activeData: makeDragDataOfKind("dev-preview"),
         sourceLocation: "grid",
         targetContainer: "grid",
         gridIsFull: false,

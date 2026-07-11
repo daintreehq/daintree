@@ -319,13 +319,13 @@ describe("DockLaunchButton", () => {
     expect(getByText("Gemini").hasAttribute("disabled")).toBe(false);
   });
 
-  it("offers Terminal but gates non-dockable kinds (browser, dev preview) out of the dock launcher (#11054)", () => {
+  it("offers Terminal and browser but gates non-dockable kinds (dev preview) out of the dock launcher (#11054)", () => {
     // The dock launcher creates panels directly in the dock, so it must only
-    // offer kinds the dock can render. Terminal is a PTY kind — always dockable,
-    // always offered and launchable. Browser and dev preview can't render in the
-    // dock, so — even with hasDevPreview — they must be hidden here, matching the
-    // `addPanel` redirect. (When #11053 makes browser dockable, its shared
-    // `panelKindIsDockable` flag flips this on without touching this menu.)
+    // offer kinds the dock can render, gating on the shared `panelKindIsDockable`
+    // predicate. Terminal is a PTY kind — always dockable, always offered. Browser
+    // is dockable since #11058, so it appears here. Dev preview can't render in the
+    // dock, so — even with hasDevPreview — it stays hidden, matching the `addPanel`
+    // redirect.
     const onLaunchAgent = vi.fn();
     const { getByText, queryByText } = render(
       <DockLaunchButton
@@ -341,7 +341,7 @@ describe("DockLaunchButton", () => {
     fireEvent.click(getByText("Terminal"));
     expect(onLaunchAgent).toHaveBeenLastCalledWith("terminal");
 
-    expect(queryByText("Browser")).toBeNull();
+    expect(getByText("Browser")).toBeTruthy();
     expect(queryByText("Dev preview")).toBeNull();
   });
 

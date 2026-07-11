@@ -394,9 +394,9 @@ describe("atomic dock activation on create (#6590)", () => {
   });
 
   it("activates a non-PTY (file) panel in the dock atomically", async () => {
-    // `file` is a dockable non-PTY kind. `browser` is no longer usable here:
-    // since #11054, addPanel redirects a dock request for a non-dockable kind
-    // to the grid, so it would never reach the dock-activation path.
+    // `file` is a dockable non-PTY kind, so it reaches the dock-activation path.
+    // A non-dockable kind (e.g. dev-preview) would be redirected to the grid by
+    // addPanel since #11054 and never activate the dock.
     const targetId = "file-dock-1";
     const snapshotsWithPanel: Array<{
       hasPanelInById: boolean;

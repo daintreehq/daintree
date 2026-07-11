@@ -64,13 +64,14 @@ describe("resolveContainerId", () => {
 // ---------------------------------------------------------------------------
 describe("isNonDockableDockDrop", () => {
   it("rejects a dock drop of a non-dockable kind", () => {
-    expect(isNonDockableDockDrop("dock", "browser")).toBe(true);
+    expect(isNonDockableDockDrop("dock", "review")).toBe(true);
     expect(isNonDockableDockDrop("dock", "dev-preview")).toBe(true);
   });
 
   it("allows a dock drop of a dockable kind", () => {
-    // `file` opts into the dock via `dockable: true`; `terminal` is a PTY kind.
+    // `file` and `browser` opt into the dock via `dockable: true`; `terminal` is a PTY kind.
     expect(isNonDockableDockDrop("dock", "file")).toBe(false);
+    expect(isNonDockableDockDrop("dock", "browser")).toBe(false);
     expect(isNonDockableDockDrop("dock", "terminal")).toBe(false);
   });
 
@@ -79,8 +80,8 @@ describe("isNonDockableDockDrop", () => {
   });
 
   it("never rejects when the target is not the dock", () => {
-    expect(isNonDockableDockDrop("grid", "browser")).toBe(false);
-    expect(isNonDockableDockDrop(null, "browser")).toBe(false);
+    expect(isNonDockableDockDrop("grid", "dev-preview")).toBe(false);
+    expect(isNonDockableDockDrop(null, "dev-preview")).toBe(false);
   });
 });
 
