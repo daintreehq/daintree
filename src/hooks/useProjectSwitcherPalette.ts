@@ -330,12 +330,13 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       const isActive = p.id === currentProject?.id;
       const isMissing = p.status === "missing";
       const hasProcesses = (stats?.processCount ?? 0) > 0;
-      // Main repairs a stale "active" row — one that isn't the current project —
-      // down to "background" on its next read, but a scratch switch clears the
-      // project pointer without demoting or broadcasting the row it left. Without
-      // mirroring that repair here, the pre-scratch project is neither active nor
-      // background and `isVisibleInModalBrowse` drops it from the list entirely
-      // until the async reload lands (#11085).
+      // A scratch switch clears the project pointer without demoting or
+      // broadcasting the row it left, so the pre-scratch project reaches us still
+      // marked "active" while nothing is active. Untreated it is neither active
+      // nor background, and `isVisibleInModalBrowse` drops it from the list until
+      // the async reload lands — main makes the same repair on its next read once
+      // the canonical pointer is null (#11085). View-relative by design: a project
+      // another window owns isn't this view's either.
       const isStaleActive = !isActive && p.status === "active";
       const isBackground =
         p.status === "background" || isStaleActive || (!isActive && !isMissing && hasProcesses);
