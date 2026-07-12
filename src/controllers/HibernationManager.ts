@@ -4,7 +4,7 @@
 // their handlers are unchanged, just relocated.
 
 import { useHelpPanelStore } from "@/store/helpPanelStore";
-import { usePanelStore, useProjectStore } from "@/store";
+import { usePanelStore } from "@/store";
 import { isPtyPanel } from "@shared/types/panel";
 import { logError } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
@@ -107,14 +107,16 @@ export class HibernationManager {
       return;
     }
     this.clearTimer();
-    // Capture the project at arm time so a project switch between panel
-    // close and hibernate fire doesn't write project A's session into
-    // project B's slot. The fire path reads this captured value, never
-    // the live currentProject.
+    // Capture the workspace at arm time so a workspace switch between panel
+    // close and hibernate fire doesn't write workspace A's session into
+    // workspace B's slot. The fire path reads this captured value, never live
+    // store state. Sourced from the synced inputs rather than the project
+    // store: the active workspace may be a scratch, which leaves
+    // `currentProject` null by design (#11068).
     this._hibernateArmedFor = {
       terminalId,
       agentId: useHelpPanelStore.getState().agentId,
-      projectId: useProjectStore.getState().currentProject?.id ?? null,
+      projectId: inputs.currentProject?.id ?? null,
     };
     const initialTerminalId = terminalId;
     const initialAgentId = this._hibernateArmedFor.agentId;
