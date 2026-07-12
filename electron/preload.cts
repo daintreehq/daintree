@@ -3157,8 +3157,16 @@ if (window.top === window && isTrustedRendererUrl(rendererUrl)) {
 // Subscribed through the shared events:push dispatcher so the underlying
 // ipcRenderer listener is ref-counted alongside user-facing subscribers.
 _eventBusOn("window:reclaim-memory", () => {
-  webFrame.clearCache();
-  (globalThis as unknown as { gc?: () => void }).gc?.();
+  if (isE2EFaultMode) {
+    performance.mark("daintree-e2e-reclaim-memory");
+  }
+  if (document.visibilityState !== "hidden") return;
+  const reclaim = () => (globalThis as unknown as { gc?: () => void }).gc?.();
+  if (typeof requestIdleCallback === "function") {
+    requestIdleCallback(reclaim, { timeout: 5_000 });
+  } else {
+    setTimeout(reclaim, 0);
+  }
 });
 
 // Private listener: report Blink (DOM/CSS/cross-frame) memory back to

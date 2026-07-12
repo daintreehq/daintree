@@ -2180,6 +2180,23 @@ describe("ProjectViewManager — low-memory eviction", () => {
     expect(wcA.close).toHaveBeenCalled();
   });
 
+  it("explicit pressure reclaim clamps to the active view without waiting for the sampler", async () => {
+    stubSystemMemoryInfo({ free: 2 * 1024 * 1024, purgeable: 0, total: 8 * 1024 * 1024 });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+    await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
+    await manager.switchTo("proj-c", "/path/c");
+    await flushImmediates();
+
+    manager.reclaimCachedViewsUnderPressure();
+
+    expect(manager.getAllViews().map((view) => view.projectId)).toEqual(["proj-c"]);
+    expect(wcA.close).toHaveBeenCalled();
+  });
+
   it("periodic pressure check evicts cached views while idle — no project switch needed", async () => {
     // Healthy at switch time so the switch-driven eviction pass does nothing.
     let freeKb = 2 * 1024 * 1024;

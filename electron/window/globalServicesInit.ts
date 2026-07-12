@@ -1,5 +1,5 @@
 // eager-import-allow: reads boot config via store.get synchronously while wiring global services
-import { app, dialog, session } from "electron";
+import { app, dialog } from "electron";
 import {
   LATEST_SCHEMA_VERSION,
   MigrationRunner,
@@ -378,34 +378,6 @@ export async function initGlobalServices(
       if (getStopAppMetricsMonitor()) return;
       setStopAppMetricsMonitor(
         startAppMetricsMonitor({
-          clearCaches: async () => {
-            try {
-              await session.defaultSession.clearCache();
-            } catch {
-              /* non-critical */
-            }
-            try {
-              await session.defaultSession.clearStorageData({
-                storages: ["shadercache", "cachestorage"],
-              });
-            } catch {
-              /* non-critical */
-            }
-            if (windowRegistry) {
-              for (const wCtx of windowRegistry.all()) {
-                if (!wCtx.browserWindow.isDestroyed()) {
-                  try {
-                    sendToRenderer(wCtx.browserWindow, CHANNELS.EVENTS_PUSH, {
-                      name: "window:reclaim-memory",
-                      payload: { reason: "memory-pressure" },
-                    });
-                  } catch {
-                    /* non-critical */
-                  }
-                }
-              }
-            }
-          },
           destroyHiddenWebviews: async (tier) => {
             if (windowRegistry) {
               for (const wCtx of windowRegistry.all()) {
@@ -435,6 +407,12 @@ export async function initGlobalServices(
           },
           hibernateIdleProjects: async () => {
             await getHibernationService().hibernateUnderMemoryPressure();
+          },
+          evictCachedProjectViews: () => {
+            if (!windowRegistry) return;
+            for (const wCtx of windowRegistry.all()) {
+              wCtx.services.projectViewManager?.reclaimCachedViewsUnderPressure();
+            }
           },
           trimPtyHostState: () => {
             getPtyClient()?.trimState(SCROLLBACK_BACKGROUND);

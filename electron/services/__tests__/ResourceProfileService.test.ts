@@ -1567,17 +1567,17 @@ describe("ResourceProfileService", () => {
       }));
     }
 
-    it("system available memory below 10% of total adds +2 to pressure", () => {
+    it("system available memory below the critical floor enters efficiency by itself", () => {
       // 8 GB total. 10% = 819 MB. Stub free+purgeable = 500 MB (well below LOW threshold).
       // Free 300 MB + purgeable 200 MB = 500 MB available.
       stubSystemMemory(300 * 1024, 200 * 1024, EIGHT_GB / 1024);
 
       const deps = createDeps();
       const service = new ResourceProfileService(deps);
-      mockIsOnBatteryPower.mockReturnValue(true);
+      mockIsOnBatteryPower.mockReturnValue(false);
       service.start();
 
-      // Low app memory (0) + battery (+1) + sys mem <10% (+2) = 3 => efficiency
+      // Critical system memory is sufficient to enter efficiency without a corroborating signal.
       mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
 
       vi.advanceTimersByTime(60_000 + 30_000 + 30_000);

@@ -3,6 +3,7 @@ import { app, dialog, shell } from "electron";
 import os from "node:os";
 import v8 from "node:v8";
 import { monitorEventLoopDelay, type IntervalHistogram } from "node:perf_hooks";
+import { readSystemMemorySnapshot } from "../../utils/systemMemory.js";
 import { promises as fs, createWriteStream } from "node:fs";
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -207,18 +208,8 @@ function readSystemMemoryMB(): { systemTotalMB?: number; systemAvailableMB?: num
     if (Number.isFinite(totalBytes) && totalBytes > 0) {
       out.systemTotalMB = Math.round(totalBytes / 1024 / 1024);
     }
-    const getInfo = (
-      process as {
-        getSystemMemoryInfo?: () => { free: number; purgeable?: number; total: number };
-      }
-    ).getSystemMemoryInfo;
-    if (typeof getInfo === "function") {
-      const info = getInfo.call(process);
-      const freeKb = typeof info.free === "number" ? info.free : 0;
-      const purgeableKb = typeof info.purgeable === "number" ? info.purgeable : 0;
-      const availableKb = freeKb + purgeableKb;
-      if (availableKb > 0) out.systemAvailableMB = Math.round(availableKb / 1024);
-    }
+    const memory = readSystemMemorySnapshot();
+    if (memory) out.systemAvailableMB = Math.round(memory.availableMb);
     return out;
   } catch {
     return {};

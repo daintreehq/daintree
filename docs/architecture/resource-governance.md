@@ -34,7 +34,7 @@ The profile is intentionally **coarse**. There are only three states, so every c
 
 ## Signal inputs
 
-`computeTargetProfile()` (`ResourceProfileService.ts:601`) sums a `pressureScore` from these signals. All thresholds that compare against physical RAM are expressed as **fractions of `os.totalmem()`** so an 8 GB and a 64 GB machine behave sensibly without per-device tuning.
+`computeTargetProfile()` (`ResourceProfileService.ts:601`) sums a `pressureScore` from these signals. App, terminal-workload, and fleet thresholds scale with physical RAM. System-available memory uses RAM-relative thresholds capped at 1 GB critical / 2 GB warning so a high-memory macOS machine's normal file-cache occupancy cannot manufacture a multi-gigabyte "critical" floor.
 
 | Signal | Source | Contribution to `pressureScore` |
 | --- | --- | --- |
@@ -43,7 +43,7 @@ The profile is intentionally **coarse**. There are only three states, so every c
 | Thermal (macOS only) | `powerMonitor` `thermal-state-change` + `getCurrentThermalState()` | `+2` critical, `+1` serious |
 | CPU speed limit (macOS & Windows) | `powerMonitor` `speed-limit-change` | `+2` below 50, `+1` below 100 |
 | Active-agent fleet size | cached count from `PtyClient.getAllTerminalsAsync()`, filtered | `+3` ≥ 24, `+2` ≥ 16, `+1` ≥ 8 |
-| System-available memory | `process.getSystemMemoryInfo()` (free + purgeable on macOS, free elsewhere) | `+2` below 0.1 × RAM, `+1` below 0.2 × RAM |
+| System-available memory | `process.getSystemMemoryInfo()` (free + purgeable on macOS, free elsewhere) | `+3` below `min(0.1 × RAM, 1024 MB)`, `+1` below `min(0.2 × RAM, 2048 MB)` |
 | Terminal-workload memory | cached `PtyClient.getMemoryRollup()` (descendant RSS from the pty-host `ProcessTreeCache`, PID-deduplicated, via `electron/services/memoryAccounting.ts`) | `+2` above 0.4 × RAM, `+1` above 0.25 × RAM — only from a fresh (≤ 60 s), successful process-table sweep; stale/unavailable data contributes 0. Per-tier 10% exit band. Bounded at +2 so terminal workloads alone can never latch `efficiency`. |
 
 Mapping (`ResourceProfileService.ts:669`): `score >= 3 → efficiency`, `score === 0 → performance`, otherwise `balanced`.
@@ -125,6 +125,8 @@ Every per-profile knob lives in `RESOURCE_PROFILE_CONFIGS` (`shared/types/resour
 
 - **Scheduled idle** — `inactiveThresholdHours` (default 24 h), user-configurable, profile-independent.
 - **Memory-pressure** — `hibernateUnderMemoryPressure()` (`:267`), invoked by `ProcessMemoryMonitor`'s tier-2 mitigation (`ProcessMemoryMonitor.ts:581`, wired through `globalServicesInit.ts:550`). It hibernates non-current projects idle longer than `memoryPressureInactiveMs`, skipping any project with an active agent (`ACTIVE_AGENT_STATES`) or an in-flight git operation. The profile makes this threshold stricter under pressure (15 min on `efficiency` vs 60 min on `performance`).
+
+`ProcessMemoryMonitor` applies tier 1 once at the start of a pressure episode, then at most once per five minutes while the same episode persists. Tier 1 trims PTY-host state and hidden browser/dev-preview webviews; it never clears caches or forces GC in the visible renderer. Tier 2 requires three consecutive pressure samples, rechecks the originating system-memory signal after tier 1, and is limited to once per ten minutes. It destroys hidden webviews, evicts cached project renderers down to the active view, and runs memory-pressure hibernation. A clean sample resets the episode so a later independent event can react immediately.
 
 ### PtyClient → ResourceGovernor (cross-process)
 
