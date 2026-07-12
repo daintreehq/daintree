@@ -330,7 +330,16 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       const isActive = p.id === currentProject?.id;
       const isMissing = p.status === "missing";
       const hasProcesses = (stats?.processCount ?? 0) > 0;
-      const isBackground = p.status === "background" || (!isActive && !isMissing && hasProcesses);
+      // A scratch switch clears the project pointer without demoting or
+      // broadcasting the row it left, so the pre-scratch project reaches us still
+      // marked "active" while nothing is active. Untreated it is neither active
+      // nor background, and `isVisibleInModalBrowse` drops it from the list until
+      // the async reload lands — main makes the same repair on its next read once
+      // the canonical pointer is null (#11085). View-relative by design: a project
+      // another window owns isn't this view's either.
+      const isStaleActive = !isActive && p.status === "active";
+      const isBackground =
+        p.status === "background" || isStaleActive || (!isActive && !isMissing && hasProcesses);
 
       return {
         id: p.id,
@@ -452,11 +461,14 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         setDropdownIsOpen(true);
       }
       setQuery("");
-      // Preselect row 2 (the MRU switch target) against the list the palette is
-      // about to render. `mode` state hasn't committed yet, so `results` still
-      // describes the mode we're leaving — build the destination list instead.
+      // Preselect the MRU switch target — the first row that isn't the project
+      // we're already in — against the list the palette is about to render.
+      // `mode` state hasn't committed yet, so `results` still describes the mode
+      // we're leaving; build the destination list instead. From a scratch there
+      // is no active row, so this lands on row 1 (the project used just before
+      // the scratch) rather than skipping past it (#11085).
       const initialResults = buildResults(sortedProjects, nextMode, "", false);
-      const initial = initialResults[initialResults.length >= 2 ? 1 : 0];
+      const initial = initialResults.find((project) => !project.isActive) ?? initialResults[0];
       setSelectedProjectId(initial?.id ?? null);
     },
     [sortedProjects]

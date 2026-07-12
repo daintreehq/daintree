@@ -14,15 +14,37 @@ function make(id: string, lastOpened: number, name = id): Project {
 }
 
 describe("getProjectMruSwitchTarget", () => {
-  it("returns null when no current project is set", () => {
+  it("targets the MRU head for 'older' when no current project is set (scratch active)", () => {
+    // Supplied out of MRU order: "b" is the freshest, so it's the project that
+    // was active immediately before the scratch took over (#11085).
     const projects = [make("a", 100), make("b", 200)];
-    expect(getProjectMruSwitchTarget(projects, null, "older")).toBeNull();
-    expect(getProjectMruSwitchTarget(projects, undefined, "newer")).toBeNull();
+    expect(getProjectMruSwitchTarget(projects, null, "older")?.id).toBe("b");
+    expect(getProjectMruSwitchTarget(projects, undefined, "older")?.id).toBe("b");
+  });
+
+  it("targets the MRU tail for 'newer' when no current project is set", () => {
+    const projects = [make("a", 100), make("b", 200)];
+    expect(getProjectMruSwitchTarget(projects, null, "newer")?.id).toBe("a");
+    expect(getProjectMruSwitchTarget(projects, undefined, "newer")?.id).toBe("a");
+  });
+
+  it("returns the sole project in both directions when no current project is set", () => {
+    const projects = [make("a", 100)];
+    expect(getProjectMruSwitchTarget(projects, null, "older")?.id).toBe("a");
+    expect(getProjectMruSwitchTarget(projects, null, "newer")?.id).toBe("a");
+  });
+
+  it("returns null when no current project is set and no projects exist", () => {
+    expect(getProjectMruSwitchTarget([], null, "older")).toBeNull();
+    expect(getProjectMruSwitchTarget([], null, "newer")).toBeNull();
   });
 
   it("returns null when the current project is not in the list", () => {
+    // A stale id is inconsistent state, not the deliberate "no anchor" that a
+    // null id means — it must stay a no-op rather than firing a surprise switch.
     const projects = [make("a", 100), make("b", 200)];
     expect(getProjectMruSwitchTarget(projects, "ghost", "older")).toBeNull();
+    expect(getProjectMruSwitchTarget(projects, "ghost", "newer")).toBeNull();
   });
 
   it("returns null when only the current project exists", () => {

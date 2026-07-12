@@ -389,4 +389,100 @@ describe("useProjectMruSwitcher", () => {
     expect(event.defaultPrevented).toBe(false);
     expect(switchProjectMock).not.toHaveBeenCalled();
   });
+
+  describe("with a scratch active (no current project)", () => {
+    beforeEach(() => {
+      // Switching to a scratch clears `currentProject` but leaves every
+      // project's `lastOpened` untouched, so the pre-scratch project is still
+      // the MRU head. Statuses here are the post-reconciliation snapshot, once
+      // main has repaired the departed row to "background" (#11085).
+      projectState.currentProject = null;
+      projectState.projects = [
+        {
+          id: "p-prev",
+          path: "/p-prev",
+          name: "Previous",
+          emoji: "tree",
+          lastOpened: 500,
+          status: "background",
+        },
+        {
+          id: "p-older",
+          path: "/p-older",
+          name: "Older",
+          emoji: "carrot",
+          lastOpened: 300,
+          status: "background",
+        },
+      ];
+    });
+
+    it("Cmd+Alt+= returns to the project active before the scratch", () => {
+      renderHook(() => useProjectMruSwitcher());
+
+      act(() => {
+        keyDown("Equal");
+      });
+
+      expect(reopenProjectMock).toHaveBeenCalledTimes(1);
+      expect(reopenProjectMock).toHaveBeenCalledWith("p-prev");
+      expect(switchProjectMock).not.toHaveBeenCalled();
+    });
+
+    it("Cmd+Shift+Alt+= wraps to the least-recent project", () => {
+      renderHook(() => useProjectMruSwitcher());
+
+      act(() => {
+        keyDown("Equal", { shiftKey: true });
+      });
+
+      expect(reopenProjectMock).toHaveBeenCalledTimes(1);
+      expect(reopenProjectMock).toHaveBeenCalledWith("p-older");
+      expect(switchProjectMock).not.toHaveBeenCalled();
+    });
+
+    it("still targets the pre-scratch project before main reconciles its status", () => {
+      // The immediate post-switch snapshot: the departed row is still "active"
+      // because the scratch switch never demoted or broadcast it.
+      projectState.projects = [
+        {
+          id: "p-prev",
+          path: "/p-prev",
+          name: "Previous",
+          emoji: "tree",
+          lastOpened: 500,
+          status: "active",
+        },
+        {
+          id: "p-older",
+          path: "/p-older",
+          name: "Older",
+          emoji: "carrot",
+          lastOpened: 300,
+          status: "background",
+        },
+      ];
+      renderHook(() => useProjectMruSwitcher());
+
+      act(() => {
+        keyDown("Equal");
+      });
+
+      expect(switchProjectMock).toHaveBeenCalledTimes(1);
+      expect(switchProjectMock).toHaveBeenCalledWith("p-prev");
+      expect(reopenProjectMock).not.toHaveBeenCalled();
+    });
+
+    it("no-ops when no projects exist at all", () => {
+      projectState.projects = [];
+      renderHook(() => useProjectMruSwitcher());
+
+      act(() => {
+        keyDown("Equal");
+      });
+
+      expect(switchProjectMock).not.toHaveBeenCalled();
+      expect(reopenProjectMock).not.toHaveBeenCalled();
+    });
+  });
 });
