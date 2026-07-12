@@ -630,12 +630,20 @@ export function NewWorktreeDialog({
         // Skip when the selected issue already lists the current user as an
         // assignee: the assign call would be a no-op and the resulting Undo
         // would strip a pre-existing assignment this flow never created.
+        // Compared case-insensitively — forge logins are, so an "Ada" row would
+        // otherwise slip past this guard and hand the user an Undo that removes
+        // an assignment they already had.
+        const alreadyAssignedToViewer =
+          snapCurrentUser != null &&
+          snapIssue?.assignees.some(
+            (a) => a.login.trim().toLowerCase() === snapCurrentUser.trim().toLowerCase()
+          );
         if (
           !snapUseExisting &&
           snapIssue &&
           snapAssignToSelf &&
           snapCurrentUser &&
-          !snapIssue.assignees.some((a) => a.login === snapCurrentUser)
+          !alreadyAssignedToViewer
         ) {
           try {
             await forgeClient.assignIssue(rootPath, snapIssue.number, snapCurrentUser);

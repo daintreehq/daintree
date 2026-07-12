@@ -618,11 +618,20 @@ export const ForgeStatsToolbarButton = memo(
         // hover with zero GraphQL; only a cold slot spends a query — the same
         // query the click would have made anyway. This is what makes firing on
         // every hover quota-safe. `bypassCache: true` stays reserved for
-        // explicit intent (dropdown open / manual refresh).
+        // explicit intent (dropdown open / manual refresh) — and for a `stale`
+        // entry, which needs it for correctness, not freshness: a cache-first
+        // read joins any list query already in flight (the main-process
+        // singleflight only skips the join when bypassing), so a hover landing
+        // right after an assign could be handed the page that request fetched
+        // BEFORE the assign — and the write below, being newer than the
+        // optimistic patch, would commit those rows and clear `stale`. The
+        // extra query is not extra spend: an assign invalidates the backend's
+        // issue pages, so a cache-first read would have missed and queried too.
+        const bypassCache = cached?.stale === true;
         const fetchOptions = {
           state: "open" as const,
           sort: "created",
-          bypassCache: false,
+          bypassCache,
         };
         const request =
           type === "issue"

@@ -291,6 +291,62 @@ describe("ForgeStatsToolbarButton hover prefetch", () => {
     expect(refreshStatsMock).not.toHaveBeenCalled();
   });
 
+  it("prefetches a `stale` entry even when its timestamp is fresh", async () => {
+    // An optimistic assignee patch restamps `timestamp` (#11087), so freshness
+    // alone would skip the warm-up on exactly the entry that needs it.
+    setCache(buildCacheKey("/test/proj", "issue", "open", "created"), {
+      items: [makeIssue(99)],
+      nextCursor: null,
+      hasMore: false,
+      timestamp: Date.now(),
+      stale: true,
+    });
+    const { container } = renderToolbar();
+
+    await act(async () => {
+      pointerEnter(getIssuesButton(container));
+    });
+
+    expect(mockListIssues).toHaveBeenCalledTimes(1);
+  });
+
+  it("bypasses the cache when prefetching a `stale` entry so it cannot join a pre-mutation query", async () => {
+    // The main-process singleflight only skips joining an in-flight request when
+    // bypassing. A cache-first hover right after an assign could otherwise be
+    // handed the page that request fetched BEFORE the assign, and its write
+    // would clear `stale` and drop the optimistic assignee.
+    setCache(buildCacheKey("/test/proj", "issue", "open", "created"), {
+      items: [makeIssue(99)],
+      nextCursor: null,
+      hasMore: false,
+      timestamp: Date.now(),
+      stale: true,
+    });
+    const { container } = renderToolbar();
+
+    await act(async () => {
+      pointerEnter(getIssuesButton(container));
+    });
+
+    expect(mockListIssues.mock.calls[0]?.[1]).toMatchObject({ bypassCache: true });
+  });
+
+  it("keeps the cache-first prefetch for a non-stale entry — that is what makes hovering quota-safe", async () => {
+    setCache(buildCacheKey("/test/proj", "issue", "open", "created"), {
+      items: [makeIssue(99)],
+      nextCursor: null,
+      hasMore: false,
+      timestamp: Date.now() - 11_000,
+    });
+    const { container } = renderToolbar();
+
+    await act(async () => {
+      pointerEnter(getIssuesButton(container));
+    });
+
+    expect(mockListIssues.mock.calls[0]?.[1]).toMatchObject({ bypassCache: false });
+  });
+
   it("does fire the prefetch when the cache entry is stale (>10s)", async () => {
     setCache(buildCacheKey("/test/proj", "issue", "open", "created"), {
       items: [makeIssue(99)],
