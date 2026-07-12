@@ -44,6 +44,7 @@ import {
 } from "@/utils/agentRuntimeSettings";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { transferBetweenWorktreeIndex } from "./worktreeIndex";
+import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 
 // Lazy accessor to break circular dependency: restart -> projectStore -> panelPersistence -> core.
 let _cachedProjectStore: typeof import("@/store/projectStore").useProjectStore | null = null;
@@ -555,8 +556,12 @@ export const createRestartActions = (
       terminalInstanceService.suppressNextExit(id, 10000);
 
       // Capture project ID before async work to avoid race conditions (issue #3690).
+      // The respawn keeps the panel's workspace ownership (project or scratch) so a
+      // restarted scratch terminal is still killed with its scratch (#11079); project
+      // settings stay keyed on the registered project id.
       const projectStore = await resolveProjectStore();
       const capturedProjectId = projectStore.getState().currentProject?.id;
+      const capturedWorkspaceId = capturedProjectId ?? getViewWorkspaceId() ?? undefined;
 
       // Agent terminals kill via gracefulKill: Main already routes every
       // agent kill through the graceful-shutdown quit-and-capture flow, but
@@ -695,7 +700,7 @@ export const createRestartActions = (
       agentLifecycleLedger.recordLaunch(id, {
         launchAgentId: isAgent ? currentTerminal.launchAgentId : undefined,
         cwd: currentTerminal.cwd,
-        projectId: capturedProjectId,
+        projectId: capturedWorkspaceId,
         worktreeId: currentTerminal.worktreeId,
         worktreeSource: currentTerminal.worktreeId !== undefined ? "explicit" : undefined,
         agentModelId: isAgent ? currentTerminal.agentModelId : undefined,
@@ -709,7 +714,7 @@ export const createRestartActions = (
 
       await terminalClient.spawn({
         id,
-        projectId: capturedProjectId,
+        projectId: capturedWorkspaceId,
         cwd: currentTerminal.cwd,
         cols: spawnCols,
         rows: spawnRows,
@@ -1210,6 +1215,7 @@ export const createRestartActions = (
 
       const projectStore = await resolveProjectStore();
       const capturedProjectId = projectStore.getState().currentProject?.id;
+      const capturedWorkspaceId = capturedProjectId ?? getViewWorkspaceId() ?? undefined;
 
       const restartEnv = await buildRestartEnv(capturedProjectId, runtimeSettings.env, "fallback");
 
@@ -1218,7 +1224,7 @@ export const createRestartActions = (
       agentLifecycleLedger.recordLaunch(id, {
         launchAgentId: terminal.launchAgentId,
         cwd: terminal.cwd,
-        projectId: capturedProjectId,
+        projectId: capturedWorkspaceId,
         worktreeId: terminal.worktreeId,
         worktreeSource: terminal.worktreeId !== undefined ? "explicit" : undefined,
         agentModelId: terminal.agentModelId,
@@ -1232,7 +1238,7 @@ export const createRestartActions = (
 
       await terminalClient.spawn({
         id,
-        projectId: capturedProjectId,
+        projectId: capturedWorkspaceId,
         cwd: terminal.cwd,
         cols: spawnCols,
         rows: spawnRows,
