@@ -23,6 +23,7 @@ const {
   cliAvailabilityState,
   agentSettingsState,
   projectStoreState,
+  scratchStoreState,
   preferencesState,
   terminalInputState,
   worktreeSelectionState,
@@ -114,6 +115,9 @@ const {
   },
   projectStoreState: {
     currentProject: { id: "proj-default", path: "/repo" } as { id: string; path: string } | null,
+  },
+  scratchStoreState: {
+    currentScratch: null as { id: string; path: string } | null,
   },
   preferencesState: { reduceAnimations: false },
   terminalInputState: { hybridInputEnabled: true } as { hybridInputEnabled: boolean },
@@ -333,6 +337,15 @@ vi.mock("@/store", () => {
   };
 });
 
+// Leaf-path mock, mirroring the component's import (#11068) — kept out of the
+// `@/store` barrel above so barrel-mocking suites don't have to list it.
+vi.mock("@/store/scratchStore", () => {
+  const store = (selector?: (state: typeof scratchStoreState) => unknown) =>
+    selector ? selector(scratchStoreState) : scratchStoreState;
+  store.getState = () => scratchStoreState;
+  return { useScratchStore: store };
+});
+
 vi.mock("@/store/macroFocusStore", () => {
   const state = { focusedRegion: null, setRegionRef: vi.fn(), setVisibility: vi.fn() };
   const store = (selector?: (s: typeof state) => unknown) => (selector ? selector(state) : state);
@@ -446,6 +459,7 @@ function resetState() {
   agentSettingsState.settings = { agents: {} };
 
   projectStoreState.currentProject = { id: "proj-default", path: "/repo" };
+  scratchStoreState.currentScratch = null;
   preferencesState.reduceAnimations = false;
   terminalInputState.hybridInputEnabled = true;
   worktreeSelectionState.activeWorktreeId = null;
@@ -748,6 +762,36 @@ describe("HelpPanel — auto-launch (preferredAgentId)", () => {
       expect.objectContaining({ agentId: "claude" }),
       { source: "user" }
     );
+  });
+
+  // #11068: the headline regression. A scratch is a valid workspace (same
+  // ProjectViewManager, same PTY host), but switching to one clears
+  // `currentProject`, so the assistant used to bail with "Project state is still
+  // loading" and never launch.
+  it("launches into an active scratch workspace when no project is active", async () => {
+    projectStoreState.currentProject = null;
+    scratchStoreState.currentScratch = { id: "scratch-1", path: "/scratches/scratch-1" };
+    helpPanelState.preferredAgentId = "claude";
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "auto-term-1" } });
+
+    await act(async () => {
+      render(<HelpPanel width={380} />);
+    });
+
+    expect(mockProvisionSession).toHaveBeenCalledWith({
+      projectId: "scratch-1",
+      projectPath: "/scratches/scratch-1",
+      agentId: "claude",
+      context: {},
+    });
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({ agentId: "claude" }),
+      { source: "user" }
+    );
+    // The bug's signature: a "still loading" toast instead of a launch.
+    expect(mockNotify).not.toHaveBeenCalled();
   });
 
   it("does not launch the terminal when session provisioning returns null", async () => {

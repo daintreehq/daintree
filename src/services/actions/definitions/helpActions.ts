@@ -9,7 +9,13 @@ import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useFocusStore } from "@/store/focusStore";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { useProjectStore } from "@/store/projectStore";
+import { useScratchStore } from "@/store/scratchStore";
 import { isAssistantFocused } from "@/store/macroFocusStore";
+import {
+  notifyLaunchFailed,
+  LAUNCH_BLOCKED_LOADING,
+  LAUNCH_BLOCKED_NO_WORKSPACE,
+} from "@/controllers/LaunchNotifications";
 import { logError } from "@/utils/logger";
 import { getDefaultAgentId } from "@/lib/resolveAgentId";
 import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
@@ -122,12 +128,21 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
       // during the model's turn can't retarget actions onto the wrong
       // worktree/terminal (#8317). Capturing after an await would
       // reintroduce the exact stale-read race this fixes (lesson #5087).
-      // `currentProject` is captured in the same synchronous block so the
-      // session is provisioned with a project identity and context snapshot
-      // that are guaranteed consistent — a project switch during the
+      // The workspace is captured in the same synchronous block so the
+      // session is provisioned with a workspace identity and context snapshot
+      // that are guaranteed consistent — a workspace switch during the
       // `getFolderPath()` await can't split them (#8317).
+      //
+      // The active workspace is a project OR a scratch (#11068): switching to a
+      // scratch clears `currentProject` by design, and main keys the assistant's
+      // session on an opaque workspace id (`ctx.projectId` resolves through
+      // ProjectViewManager, which maps scratch ids the same as project ids), so
+      // a scratch's `{ id, path }` provisions unchanged. The two pointers are
+      // mutually exclusive; project-first only guards a transient inconsistency.
       const capturedContext = actionService.getContext();
-      const project = useProjectStore.getState().currentProject;
+      const projectState = useProjectStore.getState();
+      const workspace = projectState.currentProject ?? useScratchStore.getState().currentScratch;
+      const isProjectStateSettled = projectState.isBootstrapped;
       const folderPath = await window.electron.help.getFolderPath();
       if (!folderPath) {
         // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
@@ -156,20 +171,21 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
         "I need help with Daintree, an Electron-based IDE for orchestrating AI coding agents. Please briefly tell me how you can help.";
 
       let session: Awaited<ReturnType<typeof window.electron.help.provisionSession>> | null = null;
-      if (!project) {
-        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-        notify({
-          type: "error",
-          title: "Daintree Assistant",
-          message: "Project state is still loading.",
-        });
+      if (!workspace) {
+        // Shares the panel controller's copy so both launch entry points fail
+        // identically, and only claims "loading" when state really is still
+        // hydrating — the old message said so unconditionally (#11068).
+        notifyLaunchFailed(
+          agentId,
+          isProjectStateSettled ? LAUNCH_BLOCKED_NO_WORKSPACE : LAUNCH_BLOCKED_LOADING
+        );
         return;
       }
 
       try {
         session = await window.electron.help.provisionSession({
-          projectId: project.id,
-          projectPath: project.path,
+          projectId: workspace.id,
+          projectPath: workspace.path,
           agentId,
           context: capturedContext,
         });
@@ -208,16 +224,16 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
 
       // The Daintree Assistant is env-only (MCP via DAINTREE_MCP_* env vars)
       // and ships its own skills, so it reads nothing from cwd. Run it in the
-      // project root so its file tools (read/list/grep/edit) and the terminal's
-      // file-link resolution operate on the actual project; other help agents
+      // workspace root so its file tools (read/list/grep/edit) and the terminal's
+      // file-link resolution operate on the actual workspace; other help agents
       // stay in the session dir that owns their .mcp.json / settings. The
-      // session token still scopes the assistant's MCP surface to this project.
-      const cwd = isAssistantOnlyAgentId(agentId) ? project.path : session.sessionPath;
+      // session token still scopes the assistant's MCP surface to this workspace.
+      const cwd = isAssistantOnlyAgentId(agentId) ? workspace.path : session.sessionPath;
       const env: Record<string, string> = {
         DAINTREE_MCP_TOKEN: session.token,
         DAINTREE_WINDOW_ID: String(session.windowId),
         ...(session.mcpUrl ? { DAINTREE_MCP_URL: session.mcpUrl } : {}),
-        DAINTREE_PROJECT_ID: project.id,
+        DAINTREE_PROJECT_ID: workspace.id,
       };
 
       const result = await actionService.dispatch<{ terminalId: string | null }>(

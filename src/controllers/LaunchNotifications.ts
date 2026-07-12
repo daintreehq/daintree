@@ -9,9 +9,25 @@ import type { HelpSessionSnapshot, LaunchErrorKind } from "./HelpSessionControll
 
 const RESUME_BANNER_AUTO_DISMISS_MS = 4_000;
 
+/**
+ * Workspace state hasn't hydrated yet — retrying really does help.
+ * Says "workspace", not "project": a scratch is an equally valid assistant
+ * workspace (#11068).
+ */
+export const LAUNCH_BLOCKED_LOADING = "Workspace state is still loading. Try again.";
+
+/**
+ * Hydrated, but nothing is open. Both assistant launch paths used to report
+ * this as "Project state is still loading", which was a lie in a scratch
+ * workspace and unhelpful everywhere else (#11068).
+ */
+export const LAUNCH_BLOCKED_NO_WORKSPACE =
+  "No project or scratch workspace is active. Open one, then try again.";
+
 // Exported directly: the launch FSM also calls this before a launch reaches
-// the version gate (e.g. project state still loading), not just from
-// `surfaceLaunchError`.
+// the version gate (e.g. workspace state still loading), not just from
+// `surfaceLaunchError`. The `help.launchAgent` action shares it too, so both
+// launch entry points fail with identical copy.
 export function notifyLaunchFailed(agentId: string, reason: string): void {
   const cfg = getAgentConfig(agentId);
   const name = cfg?.name ?? agentId;

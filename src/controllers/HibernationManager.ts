@@ -4,7 +4,7 @@
 // their handlers are unchanged, just relocated.
 
 import { useHelpPanelStore } from "@/store/helpPanelStore";
-import { usePanelStore, useProjectStore } from "@/store";
+import { usePanelStore } from "@/store";
 import { isPtyPanel } from "@shared/types/panel";
 import { logError } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
@@ -106,15 +106,29 @@ export class HibernationManager {
     ) {
       return;
     }
+    // Never arm without a workspace to key the entry on. `_fireHibernate` would
+    // tear the session down (kill the PTY, revoke, clear the terminal) and then
+    // skip every `if (projectId)` persistence branch — destroying the
+    // conversation instead of hibernating it. Bailing here keeps the session
+    // alive until a workspace is known; because we return BEFORE touching
+    // `_hibernateArmedFor`, an arm already captured against a real workspace
+    // survives a transient null and keeps its own countdown (the anti-bleed
+    // capture below). Reachable when the active workspace pointer is
+    // transiently null — e.g. the scratch pointer being cleared out from under
+    // a closed panel (#11068).
+    const workspaceId = inputs.currentProject?.id ?? null;
+    if (!workspaceId) return;
     this.clearTimer();
-    // Capture the project at arm time so a project switch between panel
-    // close and hibernate fire doesn't write project A's session into
-    // project B's slot. The fire path reads this captured value, never
-    // the live currentProject.
+    // Capture the workspace at arm time so a workspace switch between panel
+    // close and hibernate fire doesn't write workspace A's session into
+    // workspace B's slot. The fire path reads this captured value, never live
+    // store state. Sourced from the synced inputs rather than the project
+    // store: the active workspace may be a scratch, which leaves
+    // `currentProject` null by design (#11068).
     this._hibernateArmedFor = {
       terminalId,
       agentId: useHelpPanelStore.getState().agentId,
-      projectId: useProjectStore.getState().currentProject?.id ?? null,
+      projectId: workspaceId,
     };
     const initialTerminalId = terminalId;
     const initialAgentId = this._hibernateArmedFor.agentId;

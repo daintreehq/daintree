@@ -27,6 +27,7 @@ const {
   cliAvailabilityState,
   agentSettingsState,
   projectStoreState,
+  scratchStoreState,
   preferencesState,
   terminalInputState,
   mockTerminalSubmit,
@@ -112,6 +113,9 @@ const {
   },
   projectStoreState: {
     currentProject: null as { id: string; path: string } | null,
+  },
+  scratchStoreState: {
+    currentScratch: null as { id: string; path: string } | null,
   },
   preferencesState: { reduceAnimations: false },
   terminalInputState: { hybridInputEnabled: true } as { hybridInputEnabled: boolean },
@@ -291,6 +295,16 @@ vi.mock("@/store", () => {
   };
 });
 
+// Mocked at its leaf path, mirroring the component's import (#11068). The panel
+// pulls `useScratchStore` from `@/store/scratchStore` rather than the `@/store`
+// barrel precisely so barrel-mocking suites like this one don't have to list it.
+vi.mock("@/store/scratchStore", () => {
+  const store = (selector?: (state: typeof scratchStoreState) => unknown) =>
+    selector ? selector(scratchStoreState) : scratchStoreState;
+  store.getState = () => scratchStoreState;
+  return { useScratchStore: store };
+});
+
 vi.mock("@/store/macroFocusStore", () => {
   const state = { focusedRegion: null, setRegionRef: vi.fn(), setVisibility: vi.fn() };
   const store = (selector?: (s: typeof state) => unknown) => (selector ? selector(state) : state);
@@ -399,6 +413,7 @@ function resetState() {
   agentSettingsState.settings = { agents: {} };
 
   projectStoreState.currentProject = null;
+  scratchStoreState.currentScratch = null;
   preferencesState.reduceAnimations = false;
   terminalInputState.hybridInputEnabled = true;
   mockTerminalSubmit.mockReset();
@@ -1092,6 +1107,66 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
     );
   });
 
+  // #11068: the same cold-resume handoff, but the active workspace is a scratch
+  // (so `currentProject` is null). Every hop — peek, panel-open report, atomic
+  // take — must key on the scratch id; before the fix they all keyed on null and
+  // the assistant refused to launch at all.
+  it("peeks, reports, and takes under the scratch id when a scratch is the active workspace", async () => {
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.terminalId = null;
+    helpPanelState.hibernateSessions = {};
+    helpPanelState.setHibernateSession = vi.fn(
+      (workspaceId: string, entry: { sessionId: string; cwd: string; agentId: string }) => {
+        helpPanelState.hibernateSessions[workspaceId] = entry;
+      }
+    );
+    helpPanelState.clearHibernateSession = vi.fn((workspaceId: string) => {
+      delete helpPanelState.hibernateSessions[workspaceId];
+    });
+    projectStoreState.currentProject = null;
+    scratchStoreState.currentScratch = { id: "scratch-1", path: "/scratches/scratch-1" };
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockProvisionSession.mockResolvedValue({
+      sessionId: "fresh-session",
+      sessionPath: "/tmp/help/scratch-1",
+      token: "tok",
+      mcpUrl: "http://localhost:1234",
+      windowId: 1,
+    });
+    mockBuildResumeLatestCommand.mockReturnValue("claude resume --last");
+    panelStoreState.addPanel = vi.fn().mockResolvedValue("resumed-term-1");
+    mockPeekPendingHibernation.mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "abc-123",
+      cwd: "/scratches/scratch-1",
+      panelWasOpen: true,
+    });
+    mockTakePendingHibernation.mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "abc-123",
+      cwd: "/scratches/scratch-1",
+    });
+
+    await act(async () => {
+      render(<HelpPanel width={380} />);
+    });
+    await flushAsyncWork();
+
+    expect(mockPeekPendingHibernation).toHaveBeenCalledWith("scratch-1");
+    expect(mockTakePendingHibernation).toHaveBeenCalledWith("scratch-1");
+    expect(mockReportPanelOpen).toHaveBeenCalledWith("scratch-1", expect.any(Boolean));
+    // Provisioning treats the scratch as the workspace — same opaque id/path.
+    expect(mockProvisionSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: "scratch-1",
+        projectPath: "/scratches/scratch-1",
+      })
+    );
+    expect(panelStoreState.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ command: "claude --resume abc-123", launchAgentId: "claude" })
+    );
+  });
+
   it("does NOT auto-resume on app restart (panelWasOpen:false)", async () => {
     // A prior-session token reloaded from disk lacks the in-memory open flag, so
     // main reports panelWasOpen:false. App restart must never silently spin up a
@@ -1414,6 +1489,114 @@ describe("HelpPanel — idle hibernation timer", () => {
       });
       expect(panelStoreState.removePanel).toHaveBeenCalledWith("t1");
       expect(helpPanelState.clearTerminal).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // #11068: a scratch workspace clears `currentProject`, so before the fix the
+  // hibernate slot was keyed on `null` and the captured session was silently
+  // dropped — the conversation could never be resumed.
+  it("keys the hibernate slot on the scratch id when a scratch is the active workspace", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      helpPanelState.isOpen = false;
+      helpPanelState.terminalId = "t1";
+      helpPanelState.agentId = "claude";
+      helpPanelState.sessionId = "live-session";
+      panelStoreState.panelsById = {
+        t1: {
+          id: "t1",
+          kind: "terminal",
+          spawnStatus: "ready",
+          cwd: "/scratches/scratch-1",
+          agentState: "idle",
+        },
+      };
+      projectStoreState.currentProject = null;
+      scratchStoreState.currentScratch = { id: "scratch-1", path: "/scratches/scratch-1" };
+      mockGracefulKill.mockResolvedValue("resume-token-scratch");
+
+      await act(async () => {
+        render(<HelpPanel width={380} />);
+      });
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+      });
+
+      expect(mockGracefulKill).toHaveBeenCalledWith("t1");
+      expect(helpPanelState.setHibernateSession).toHaveBeenCalledWith("scratch-1", {
+        sessionId: "resume-token-scratch",
+        cwd: "/scratches/scratch-1",
+        agentId: "claude",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // #11068 follow-up: arming with a null workspace used to be possible (the
+  // armed-identity tuple is only terminal+agent, so a later arm with the SAME
+  // tuple early-returns). The timer would then fire, tear the PTY down, and skip
+  // every `if (projectId)` persistence branch — destroying the conversation
+  // instead of hibernating it. Now we refuse to arm until a workspace is known.
+  it("does not arm — and so cannot destroy the session — while the active workspace is null", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      helpPanelState.isOpen = false;
+      helpPanelState.terminalId = "t1";
+      helpPanelState.agentId = "claude";
+      helpPanelState.sessionId = "live-session";
+      panelStoreState.panelsById = {
+        t1: {
+          id: "t1",
+          kind: "terminal",
+          spawnStatus: "ready",
+          cwd: "/scratches/scratch-1",
+          agentState: "idle",
+        },
+      };
+      // Panel closed with a live terminal, but no workspace pointer yet.
+      projectStoreState.currentProject = null;
+      scratchStoreState.currentScratch = null;
+      mockGracefulKill.mockResolvedValue("resume-token-scratch");
+
+      let view: ReturnType<typeof render> | undefined;
+      await act(async () => {
+        view = render(<HelpPanel width={380} />);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+      });
+
+      // Nothing armed: the session is left intact rather than killed unsaved.
+      expect(mockGracefulKill).not.toHaveBeenCalled();
+      expect(panelStoreState.removePanel).not.toHaveBeenCalled();
+
+      // The workspace resolves (same terminal + agent — the tuple that used to
+      // early-return past a sticky null arm). Hibernation must now key on it.
+      scratchStoreState.currentScratch = { id: "scratch-1", path: "/scratches/scratch-1" };
+      await act(async () => {
+        view!.rerender(<HelpPanel width={380} />);
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+      });
+
+      expect(mockGracefulKill).toHaveBeenCalledWith("t1");
+      expect(helpPanelState.setHibernateSession).toHaveBeenCalledWith("scratch-1", {
+        sessionId: "resume-token-scratch",
+        cwd: "/scratches/scratch-1",
+        agentId: "claude",
+      });
     } finally {
       vi.useRealTimers();
     }
