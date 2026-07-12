@@ -230,7 +230,7 @@ describe("ProjectStore repository stats (issue #11078)", () => {
       expect(stats?.issueCount).toBe(1);
     });
 
-    it("ignores a same-provider result that resolved out of order behind a newer one", () => {
+    it("ignores a result that resolved out of order behind a newer one", () => {
       store.saveRepoStats(projectPath, {
         commitCount: 412,
         forge: { issueCount: 7, prCount: 3, providerId: PROVIDER },
@@ -246,6 +246,71 @@ describe("ProjectStore repository stats (issue #11078)", () => {
       const stats = store.getProjectById(projectId)?.lastKnownStats;
       expect(stats?.issueCount).toBe(7);
       expect(stats?.lastUpdated).toBe(6000);
+    });
+
+    it("orders against the newest observation seen, not just the newest one written", () => {
+      // The no-restamp policy means a poll that merely *confirms* the current
+      // counts writes nothing — so the stored timestamp lags the newest thing
+      // we've actually seen. Without a separate high-water mark, a delayed older
+      // result sails past the stored value and overwrites good counts.
+      store.saveRepoStats(projectPath, {
+        commitCount: 412,
+        forge: { issueCount: 7, prCount: 3, providerId: PROVIDER },
+        lastUpdated: 100,
+      });
+
+      // A later poll confirms the same counts at t=200 — nothing is written, so
+      // the row's timestamp stays at 100...
+      store.saveRepoStats(projectPath, {
+        commitCount: 412,
+        forge: { issueCount: 7, prCount: 3, providerId: PROVIDER },
+        lastUpdated: 200,
+      });
+      expect(store.getProjectById(projectId)?.lastKnownStats?.lastUpdated).toBe(100);
+
+      // ...but a straggler that observed different counts back at t=150 must
+      // still lose to the t=200 observation.
+      store.saveRepoStats(projectPath, {
+        forge: { issueCount: 99, prCount: 99, providerId: PROVIDER },
+        lastUpdated: 150,
+      });
+
+      expect(store.getProjectById(projectId)?.lastKnownStats?.issueCount).toBe(7);
+    });
+
+    it("rejects a forge snapshot carrying counts a provider should never emit", () => {
+      store.saveRepoStats(projectPath, {
+        commitCount: 412,
+        forge: { issueCount: 7, prCount: 3, providerId: PROVIDER },
+        lastUpdated: 5000,
+      });
+
+      // Written raw, these would round-trip back as null on read and silently
+      // destroy the good counts above.
+      store.saveRepoStats(projectPath, {
+        forge: { issueCount: -1, prCount: 3, providerId: PROVIDER },
+        lastUpdated: 6000,
+      });
+      store.saveRepoStats(projectPath, {
+        forge: { issueCount: 4, prCount: Number.NaN, providerId: PROVIDER },
+        lastUpdated: 7000,
+      });
+
+      const stats = store.getProjectById(projectId)?.lastKnownStats;
+      expect(stats?.issueCount).toBe(7);
+      expect(stats?.prCount).toBe(3);
+    });
+
+    it("still accepts a forge snapshot whose counts are legitimately unknown", () => {
+      store.saveRepoStats(projectPath, {
+        commitCount: 412,
+        forge: { issueCount: null, prCount: null, providerId: null },
+        lastUpdated: 5000,
+      });
+
+      const stats = store.getProjectById(projectId)?.lastKnownStats;
+      expect(stats?.issueCount).toBeNull();
+      expect(stats?.providerId).toBeNull();
     });
   });
 

@@ -220,16 +220,26 @@ export function parseNumstat(diffOutput: string, gitRoot: string): Map<string, D
  * transient git error. Every call site already supplies its own fallback.
  */
 export async function getCommitCount(cwd: string): Promise<number> {
+  const git = await createHardenedGit(cwd);
   try {
-    const git = await createHardenedGit(cwd);
     const raw = await git.raw(["rev-list", "--count", "HEAD"]);
     const count = parseInt(raw.trim(), 10);
-    // An unborn HEAD prints nothing, which `parseInt` reports as NaN.
-    if (!Number.isInteger(count) || count < 0) {
-      throw new Error(`Unparseable commit count: ${JSON.stringify(raw)}`);
-    }
-    return count;
+    if (Number.isInteger(count) && count >= 0) return count;
+    throw new Error(`Unparseable commit count: ${JSON.stringify(raw)}`);
   } catch (error) {
+    // `rev-list HEAD` fails on an unborn HEAD — a repository created but not yet
+    // committed to. That is a real, reliable zero, not a failure: report it as
+    // such so callers can persist it (a repo whose count never persists never
+    // seeds its toolbar). If the repo itself doesn't answer, the failure is
+    // genuine and propagates — callers supply their own fallback, and reporting
+    // a fabricated 0 here would let a transient git error overwrite a good
+    // stored count (issue #11078).
+    const isRepo = await git
+      .raw(["rev-parse", "--git-dir"])
+      .then(() => true)
+      .catch(() => false);
+    if (isRepo) return 0;
+
     logWarn("Failed to get commit count", { cwd, error: (error as Error).message });
     throw error;
   }

@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import type { ForgeRateLimitKind, ForgeRepositoryStats } from "@shared/types/ipc/forge";
 import type { ProjectRepoStats } from "@shared/types/project";
 import { projectClient } from "@/clients";
@@ -242,8 +242,26 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
 
       hasAppliedResultRef.current = true;
 
+      // A provider-less snapshot — null forge counts and no fetch time — is what
+      // main returns when it could not resolve a provider for the repo. When
+      // *this* side has a resolved provider, the two disagree only transiently
+      // (main's forge plugin is still activating), so the snapshot carries no
+      // observation: treat it as preserve-worthy rather than letting its nulls
+      // erase counts we are already showing. Without this, a seeded switch-back
+      // paints real numbers and then a single mid-activation poll knocks them
+      // straight back to em-dashes (issue #11078). With no provider resolved
+      // here either, the repo genuinely has none and the commits-only pill is
+      // the correct rendering — so this stays false and the nulls apply.
+      const providerLessWhileResolved =
+        providerIdRef.current !== null &&
+        repoStats.lastUpdated === undefined &&
+        repoStats.error === undefined &&
+        repoStats.issueCount === null &&
+        repoStats.prCount === null;
+
       // Only preserve counts when data is stale or errored (not on successful fresh fetch)
-      const shouldPreserve = repoStats.stale === true || repoStats.error !== undefined;
+      const shouldPreserve =
+        repoStats.stale === true || repoStats.error !== undefined || providerLessWhileResolved;
 
       if (!shouldPreserve) {
         // Fresh successful data — record the confirmed counts so a later
@@ -433,26 +451,18 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
     providerIdRef.current = providerId;
   }, [providerId]);
 
-  // Pre-paint seed from the project record (issue #11078). The project row is
-  // already resident — main writes the counts on a clean poll and ships them
-  // with boot hydration and the project-switch broadcast — so this needs no IPC
-  // and lands before the browser paints. That matters: `ForgeStatsToolbarButton`
-  // renders nothing at all while the provider is resolving, so its first real
-  // paint is the one that must already carry numbers. The `fetchFn` seed below
-  // is the authoritative fallback (it reads the project through main and is
-  // guarded by the fetch epoch) for the case where the store's project update
-  // and the switch reset land in the other order.
-  //
-  // Gated on the provider being resolved: the seed's forge counts are only
-  // reusable against a known provider, and there is nothing on screen to shift
-  // until resolution completes anyway.
-  const persistedStats = useProjectStore((s) => s.currentProject?.lastKnownStats ?? null);
-  const currentProjectPath = useProjectStore((s) => s.currentProject?.path ?? null);
-  useLayoutEffect(() => {
-    if (providerLoading || !persistedStats || !currentProjectPath) return;
-    if (hasAppliedResultRef.current) return;
-    seedFromPersistedStats(persistedStats, currentProjectPath, providerId);
-  }, [providerLoading, providerId, persistedStats, currentProjectPath, seedFromPersistedStats]);
+  // The seed deliberately lives in `fetchFn` (below) rather than in a
+  // render-time effect. A layout effect could paint it one IPC round-trip
+  // sooner, but it would have to read the project and the resolved provider off
+  // the renderer's own stores — and neither is trustworthy at that moment:
+  // `useResolvedForgeProvider` resets its state in a passive effect, so on the
+  // render where the project id flips it still reports the *previous* project's
+  // provider, and `onProjectSwitch` fires from an IPC event whose ordering
+  // against the project store's own update is not guaranteed. Both orderings
+  // can seed the outgoing project's counts into the incoming project — exactly
+  // the class of bug #10761 exists to prevent. `fetchFn` reads the project
+  // through main and is guarded by the fetch epoch, so it is the one place that
+  // can seed safely.
 
   // Whether the one corrective refetch for the current provider resolution
   // has fired — see the effect below `usePollingLifecycle`. Declared here

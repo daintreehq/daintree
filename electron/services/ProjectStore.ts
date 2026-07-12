@@ -119,6 +119,14 @@ function rowToProject(row: ProjectRow): Project {
 }
 
 export class ProjectStore {
+  /**
+   * Newest forge observation seen per project id this session (issue #11078).
+   * Ordering guard for `saveRepoStats` — see the comment there for why the
+   * persisted timestamp cannot serve as the high-water mark by itself.
+   * Process-local: a restart leaves no in-flight requests to order against.
+   */
+  private readonly repoStatsHighWater = new Map<string, number>();
+
   private projectsConfigDir: string;
   private globalConfigDir: string;
   private userDataDir: string;
@@ -539,19 +547,33 @@ export class ProjectStore {
     }
 
     if (update.forge) {
-      // Discard a result that resolved out of order behind a newer one. Only
-      // guards the forge columns: the commit count above is local git, has no
-      // provider timestamp to compare, and its freshest read always wins.
-      const storedAt = readPersistedCount(row.statsLastUpdated);
+      const { issueCount, prCount, providerId } = update.forge;
       const incomingAt = readPersistedCount(update.lastUpdated);
-      const outOfOrder =
-        storedAt !== null &&
-        incomingAt !== null &&
-        incomingAt < storedAt &&
-        row.statsProviderId === update.forge.providerId;
 
-      if (!outOfOrder) {
-        const { issueCount, prCount, providerId } = update.forge;
+      // Forge counts come from plugin code. A provider returning `-1`, `1.5` or
+      // `NaN` on an otherwise clean result would be written straight through and
+      // then read back as `null`, silently destroying the good counts already
+      // stored. Reject the whole forge snapshot rather than persist part of it.
+      const forgeIsValid =
+        (issueCount === null || readPersistedCount(issueCount) !== null) &&
+        (prCount === null || readPersistedCount(prCount) !== null);
+
+      // Discard a result that resolved out of order behind a newer one. The
+      // stored timestamp can't serve as the high-water mark on its own: the
+      // no-restamp policy below means a poll that merely *confirms* the current
+      // counts leaves it untouched, so a delayed older observation could still
+      // sail past it. Track the newest observation seen this session separately.
+      // Process-local by design — a restart leaves no in-flight requests to
+      // order against. Compared across providers too: a genuine provider change
+      // always arrives on a fresh fetch, so it is never the older one.
+      const highWater = Math.max(
+        this.repoStatsHighWater.get(row.id) ?? 0,
+        readPersistedCount(row.statsLastUpdated) ?? 0
+      );
+      const outOfOrder = incomingAt !== null && incomingAt < highWater;
+
+      if (forgeIsValid && !outOfOrder) {
+        if (incomingAt !== null) this.repoStatsHighWater.set(row.id, incomingAt);
         const changed =
           issueCount !== row.statsIssueCount ||
           prCount !== row.statsPrCount ||

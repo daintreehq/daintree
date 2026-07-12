@@ -431,7 +431,14 @@ async function handleForgeGetRepoStats(payload: {
   // is a fallback, not an observation — its forge counts never replace what is
   // stored, though a reliable commit count still may (local git doesn't go
   // stale just because the network did).
-  const cleanForge = fresh && !snapshot.counts.error;
+  //
+  // Deliberately broader than `fresh` (which gates the broadcast on
+  // `source === "network"`): a clean `memory-cache` hit is data the provider
+  // stands behind and the renderer already renders as fresh, and `source` is
+  // optional on the contract — a provider that omits it would otherwise never
+  // persist anything. Only an explicit disk fallback is excluded, since that is
+  // the provider serving its own last-known values back to us.
+  const cleanForge = !snapshot.counts.stale && !snapshot.counts.error && snapshot.source !== "disk";
   await persistRepoStats(cwd, {
     ...(commitReliable ? { commitCount } : {}),
     ...(cleanForge
@@ -488,15 +495,21 @@ async function handleForgeGetFirstPageCache(payload: {
     // count is a local-git fact — so without this the bootstrap payload carried
     // no commit count at all and the renderer seeded a hardcoded 0, leaving the
     // commit pill to shift even when the issue/PR pills hydrated cleanly.
-    // Computed only once a usable snapshot exists, so a cache miss stays free.
-    const { count: commitCount } = await readCommitCount(payload.cwd);
+    //
+    // Only when the snapshot actually carries counts: a first-page entry whose
+    // stats expired has nothing to blend into, and this is the cold-start path
+    // where a needless `rev-list` traversal of a large repo is exactly what we
+    // cannot afford.
+    const stats = snapshot.counts
+      ? { ...snapshot.counts, commitCount: (await readCommitCount(payload.cwd)).count }
+      : undefined;
     return {
       providerId: namespaceId,
       projectPath: path.resolve(payload.cwd),
       issues: snapshot.issues,
       prs: snapshot.prs,
       lastUpdated: snapshot.lastUpdated,
-      stats: snapshot.counts ? { ...snapshot.counts, commitCount } : undefined,
+      stats,
     };
   } catch {
     return null;
