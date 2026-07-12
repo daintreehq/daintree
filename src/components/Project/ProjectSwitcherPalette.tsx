@@ -751,13 +751,17 @@ function ScratchSection({
               {scratches.map((scratch) => {
                 const isRenaming = editor?.kind === "rename" && editor.scratchId === scratch.id;
                 if (isRenaming) {
+                  // Both the seed and the no-op comparison use the name frozen when
+                  // editing began. Against the live name, an untouched editor would
+                  // resubmit the old name and undo a rename that landed by push.
+                  const originalName = editor.name;
                   return (
                     <ScratchNameEditor
                       key={scratch.id}
-                      initialValue={scratch.name}
+                      initialValue={originalName}
                       ariaLabel="Scratch name"
                       testId="scratch-rename-input"
-                      onCommit={(name) => handleRenameCommit(scratch.id, scratch.name, name)}
+                      onCommit={(name) => handleRenameCommit(scratch.id, originalName, name)}
                       onCancel={closeEditor}
                     />
                   );

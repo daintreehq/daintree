@@ -774,31 +774,41 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       // An empty name is forwarded as undefined so main applies its own
       // `defaultScratchName` — same behavior as before the naming affordance.
       const requestedName = name?.trim() ? name.trim() : undefined;
-      const create = async () => {
-        const created = await createScratchAction(requestedName);
-        await switchScratchAction(created.id);
+      // Resume at the step that failed. Retrying the whole thing after the
+      // scratch already exists would create a second one and orphan its folder.
+      let createdId: string | null = null;
+      const run = async () => {
+        if (!createdId) {
+          createdId = (await createScratchAction(requestedName)).id;
+        }
+        await switchScratchAction(createdId);
+      };
+      const fail = (error: unknown, retry: () => Promise<void>) => {
+        const created = createdId !== null;
+        notify({
+          type: "error",
+          title: created ? "Couldn't open scratch" : "Couldn't create scratch",
+          message: formatErrorMessage(
+            error,
+            created
+              ? "Created the scratch workspace but couldn't switch to it"
+              : "Couldn't create scratch workspace"
+          ),
+          actions: [{ label: "Try again", variant: "primary", onClick: retry }],
+          context: { eventKind: "recovery" },
+        });
       };
       try {
-        await create();
+        await run();
       } catch (error) {
         const retry = async () => {
           try {
-            await create();
+            await run();
           } catch (retryError) {
-            notify({
-              type: "error",
-              title: "Couldn't create scratch",
-              message: formatErrorMessage(retryError, "Couldn't create scratch workspace"),
-              actions: [{ label: "Try again", variant: "primary", onClick: retry }],
-            });
+            fail(retryError, retry);
           }
         };
-        notify({
-          type: "error",
-          title: "Couldn't create scratch",
-          message: formatErrorMessage(error, "Couldn't create scratch workspace"),
-          actions: [{ label: "Try again", variant: "primary", onClick: retry }],
-        });
+        fail(error, retry);
       }
     },
     [close, createScratchAction, switchScratchAction]
@@ -823,7 +833,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
               title: "Couldn't rename scratch",
               message: formatErrorMessage(retryError, "Couldn't rename scratch workspace"),
               actions: [{ label: "Try again", variant: "primary", onClick: retry }],
-              context: { eventKind: "uiFeedback" },
+              context: { eventKind: "recovery" },
             });
           }
         };
@@ -832,7 +842,9 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
           title: "Couldn't rename scratch",
           message: formatErrorMessage(error, "Couldn't rename scratch workspace"),
           actions: [{ label: "Try again", variant: "primary", onClick: retry }],
-          context: { eventKind: "uiFeedback" },
+          // Not `uiFeedback`: its passive policy routes to the inbox, where this
+          // closure-backed "Try again" can never be clicked.
+          context: { eventKind: "recovery" },
         });
       }
     },

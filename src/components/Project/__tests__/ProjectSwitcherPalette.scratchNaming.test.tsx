@@ -49,7 +49,14 @@ vi.mock("@/store/uiStore", () => ({
   useUIStore: () => 0,
 }));
 
-vi.mock("@/components/ui/AppPaletteDialog", () => {
+// Faithful on one point that matters here: the real AppPaletteDialog closes the
+// palette from a DOCUMENT-level Escape backstop. Reproducing that listener is what
+// makes the "Escape cancels the edit without closing the palette" test meaningful —
+// with a passive container mock it would pass even if the editor stopped guarding
+// Escape at all.
+vi.mock("@/components/ui/AppPaletteDialog", async () => {
+  const { useEffect } = await vi.importActual<typeof import("react")>("react");
+
   const Header = ({ children }: { children: React.ReactNode }) => (
     <div data-testid="palette-header">{children}</div>
   );
@@ -70,16 +77,28 @@ vi.mock("@/components/ui/AppPaletteDialog", () => {
     isOpen,
     children,
     ariaLabel,
+    onClose,
   }: {
     isOpen: boolean;
     children: React.ReactNode;
     ariaLabel: string;
-  }) =>
-    isOpen ? (
+    onClose?: () => void;
+  }) => {
+    useEffect(() => {
+      if (!isOpen) return;
+      const backstop = (e: KeyboardEvent) => {
+        if (e.key === "Escape") onClose?.();
+      };
+      document.addEventListener("keydown", backstop);
+      return () => document.removeEventListener("keydown", backstop);
+    }, [isOpen, onClose]);
+
+    return isOpen ? (
       <div role="dialog" aria-modal="true" aria-label={ariaLabel}>
         {children}
       </div>
     ) : null;
+  };
   Dialog.Header = Header;
   Dialog.Input = Input;
   Dialog.Body = Body;
@@ -147,8 +166,8 @@ function makeScratch(overrides: Partial<SearchableScratch> = {}): SearchableScra
   };
 }
 
-function renderPalette(overrides: Record<string, unknown> = {}) {
-  const props = {
+function baseProps() {
+  return {
     isOpen: true,
     mode: "modal" as const,
     query: "",
@@ -164,8 +183,11 @@ function renderPalette(overrides: Record<string, unknown> = {}) {
     onRenameScratch: vi.fn(),
     onSelectScratch: vi.fn(),
     onRemoveScratch: vi.fn(),
-    ...overrides,
   };
+}
+
+function renderPalette(overrides: Record<string, unknown> = {}) {
+  const props = { ...baseProps(), ...overrides };
   render(<ProjectSwitcherPalette {...props} />);
   expandScratchSection();
   return props;
@@ -196,11 +218,19 @@ describe("scratch create naming", () => {
   });
 
   it("prefills the name main would otherwise assign", () => {
-    renderPalette();
-    fireEvent.click(screen.getByTestId("scratch-create-button"));
+    // Frozen: computing the expected value from a second `new Date()` would flake
+    // whenever the click straddled a minute boundary.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 4, 17, 8, 5));
+    try {
+      renderPalette();
+      fireEvent.click(screen.getByTestId("scratch-create-button"));
 
-    const input = screen.getByTestId<HTMLInputElement>("scratch-create-input");
-    expect(input.value).toBe(defaultScratchName(new Date()));
+      const input = screen.getByTestId<HTMLInputElement>("scratch-create-input");
+      expect(input.value).toBe(defaultScratchName(new Date()));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("creates with the typed name on Enter", () => {
@@ -387,5 +417,49 @@ describe("scratch rename", () => {
     });
 
     expect(screen.queryByText("Rename scratch")).toBeNull();
+  });
+
+  it("drops the editor when the scratch being renamed is deleted underneath it", () => {
+    const scratches = [
+      makeScratch({ id: "a", name: "Alpha" }),
+      makeScratch({ id: "b", name: "Beta" }),
+    ];
+    const props = { ...baseProps(), scratchResults: scratches };
+    const { rerender } = render(<ProjectSwitcherPalette {...props} />);
+    expandScratchSection();
+
+    act(() => {
+      fireEvent.click(screen.getAllByText("Rename scratch")[0]!);
+    });
+    expect(screen.getByTestId("scratch-rename-input")).toBeTruthy();
+
+    // A scratch:removed push drops the row out from under the open editor.
+    rerender(<ProjectSwitcherPalette {...props} scratchResults={[scratches[1]!]} />);
+
+    expect(screen.queryByTestId("scratch-rename-input")).toBeNull();
+    expect(props.onRenameScratch).not.toHaveBeenCalled();
+  });
+
+  it("keeps an untouched editor from undoing a rename that landed by push", () => {
+    const scratch = makeScratch({ id: "a", name: "Original" });
+    const props = { ...baseProps(), scratchResults: [scratch] };
+    const { rerender } = render(<ProjectSwitcherPalette {...props} />);
+    expandScratchSection();
+
+    act(() => {
+      fireEvent.click(screen.getByText("Rename scratch"));
+    });
+
+    // Another window renames it while this editor sits open and untouched.
+    rerender(
+      <ProjectSwitcherPalette
+        {...props}
+        scratchResults={[{ ...scratch, name: "Renamed elsewhere" }]}
+      />
+    );
+    fireEvent.keyDown(screen.getByTestId("scratch-rename-input"), { key: "Enter" });
+
+    // Committing the stale value would resurrect "Original".
+    expect(props.onRenameScratch).not.toHaveBeenCalled();
   });
 });

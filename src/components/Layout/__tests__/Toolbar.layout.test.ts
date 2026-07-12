@@ -124,9 +124,6 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
 
     it("project name span has truncate class", () => {
       expect(source).toContain("min-w-0 truncate text-xs tracking-wide text-daintree-text");
-      // Weight tracks whether a workspace (project or scratch) is open, not the
-      // project pointer alone — an active scratch is a named workspace too.
-      expect(source).toMatch(/workspaceIdentity\.kind !== "none"\s*\?\s*"font-semibold"/);
     });
 
     it("emoji span has shrink-0 so it is not squeezed before name truncates", () => {

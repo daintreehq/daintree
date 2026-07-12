@@ -2,7 +2,9 @@ import { describe, it, expect } from "vitest";
 import { defaultScratchName } from "../scratchName";
 
 describe("defaultScratchName", () => {
-  it("renders the date's own local fields, not UTC", () => {
+  // Named for what it can actually prove: on a UTC CI runner a getUTC* implementation
+  // would be indistinguishable from a local-time one, so this asserts field mapping.
+  it("maps each rendered field to the date's corresponding getter", () => {
     const date = new Date(2026, 0, 5, 9, 7);
     const name = defaultScratchName(date);
     const match = /^Scratch (\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/.exec(name);
