@@ -9,51 +9,49 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { useProjectStoreMock, notifyMock, projectState, projectStatsState, scratchState } =
-  vi.hoisted(() => {
-    const projectStatsState = {
-      stats: {} as Record<
-        string,
-        { activeAgentCount: number; waitingAgentCount: number; processCount: number }
-      >,
-    };
+const { useProjectStoreMock, notifyMock, projectStatsState, scratchState } = vi.hoisted(() => {
+  const projectStatsState = {
+    stats: {} as Record<
+      string,
+      { activeAgentCount: number; waitingAgentCount: number; processCount: number }
+    >,
+  };
 
-    const projectState = {
-      projects: [],
-      currentProject: null as { id: string } | null,
-      switchProject: vi.fn().mockResolvedValue(undefined),
-      reopenProject: vi.fn().mockResolvedValue(undefined),
-      loadProjects: vi.fn().mockResolvedValue(undefined),
-      addProject: vi.fn().mockResolvedValue(undefined),
-      closeProject: vi.fn().mockResolvedValue({ processesKilled: 0 }),
-      closeActiveProject: vi.fn().mockResolvedValue({ processesKilled: 0 }),
-      removeProject: vi.fn().mockResolvedValue(undefined),
-      locateProject: vi.fn().mockResolvedValue(undefined),
-    };
+  const projectState = {
+    projects: [],
+    currentProject: null as { id: string } | null,
+    switchProject: vi.fn().mockResolvedValue(undefined),
+    reopenProject: vi.fn().mockResolvedValue(undefined),
+    loadProjects: vi.fn().mockResolvedValue(undefined),
+    addProject: vi.fn().mockResolvedValue(undefined),
+    closeProject: vi.fn().mockResolvedValue({ processesKilled: 0 }),
+    closeActiveProject: vi.fn().mockResolvedValue({ processesKilled: 0 }),
+    removeProject: vi.fn().mockResolvedValue(undefined),
+    locateProject: vi.fn().mockResolvedValue(undefined),
+  };
 
-    const useProjectStoreMock = Object.assign(
-      vi.fn((selector: (state: typeof projectState) => unknown) => selector(projectState)),
-      { getState: () => projectState }
-    );
+  const useProjectStoreMock = Object.assign(
+    vi.fn((selector: (state: typeof projectState) => unknown) => selector(projectState)),
+    { getState: () => projectState }
+  );
 
-    const scratchState = {
-      scratches: [],
-      currentScratch: null,
-      loadScratches: vi.fn().mockResolvedValue(undefined),
-      createScratch: vi.fn(),
-      switchScratch: vi.fn(),
-      removeScratch: vi.fn().mockResolvedValue(undefined),
-      renameScratch: vi.fn(),
-    };
+  const scratchState = {
+    scratches: [],
+    currentScratch: null,
+    loadScratches: vi.fn().mockResolvedValue(undefined),
+    createScratch: vi.fn(),
+    switchScratch: vi.fn(),
+    removeScratch: vi.fn().mockResolvedValue(undefined),
+    renameScratch: vi.fn(),
+  };
 
-    return {
-      useProjectStoreMock,
-      notifyMock: vi.fn().mockReturnValue(""),
-      projectState,
-      projectStatsState,
-      scratchState,
-    };
-  });
+  return {
+    useProjectStoreMock,
+    notifyMock: vi.fn().mockReturnValue(""),
+    projectStatsState,
+    scratchState,
+  };
+});
 
 vi.mock("@/clients", () => ({
   projectClient: {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { defaultScratchName } from "../scratchName";
+import { defaultScratchName } from "../scratchName.js";
 
 describe("defaultScratchName", () => {
   // Named for what it can actually prove: on a UTC CI runner a getUTC* implementation
