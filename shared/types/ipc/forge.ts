@@ -174,8 +174,13 @@ export interface ForgeFirstPageCachePayload {
   prs: StatsPage<PR>;
   /** Wall-clock timestamp (ms) when the entry was written. */
   lastUpdated: number;
-  /** Cached counts for cold-start hydration even when page items expired. */
-  stats?: { issueCount: number; prCount: number; lastUpdated: number };
+  /**
+   * Cached counts for cold-start hydration even when page items expired.
+   * `commitCount` is blended in host-side (local git), not reported by the
+   * provider — without it the renderer seeded a hardcoded 0 and the commit pill
+   * shifted even when the issue/PR pills hydrated cleanly (issue #11078).
+   */
+  stats?: { commitCount: number; issueCount: number; prCount: number; lastUpdated: number };
 }
 
 /**

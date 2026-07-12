@@ -1,6 +1,7 @@
 // eager-import-allow: reads/writes the project list via sync fs during startup
 import type {
   Project,
+  ProjectRepoStats,
   ProjectState,
   ProjectSettings,
   ProjectStatus,
@@ -45,6 +46,54 @@ import { getWritesSuppressed } from "./diskPressureState.js";
 
 export const DEFAULT_PROJECT_EMOJI = "🌲";
 
+/**
+ * Read a persisted count back, rejecting anything a corrupt row could hold.
+ * `Number.isFinite` alone lets `1.5` and `-1` through; a count is a
+ * non-negative integer or it is unknown.
+ */
+function readPersistedCount(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+/**
+ * Project the persisted stats columns onto {@link ProjectRepoStats} (issue
+ * #11078). The commit count anchors the snapshot: without it there is nothing
+ * to seed the toolbar with, so the whole field stays absent. Forge counts are
+ * independently optional — a project with no provider persists commits alone.
+ */
+function rowToRepoStats(row: ProjectRow): ProjectRepoStats | null {
+  const commitCount = readPersistedCount(row.statsCommitCount);
+  if (commitCount === null) return null;
+  return {
+    commitCount,
+    issueCount: readPersistedCount(row.statsIssueCount),
+    prCount: readPersistedCount(row.statsPrCount),
+    providerId: typeof row.statsProviderId === "string" ? row.statsProviderId : null,
+    lastUpdated: readPersistedCount(row.statsLastUpdated),
+  };
+}
+
+/**
+ * Inverse of {@link rowToRepoStats}, for the insert paths that rebuild a row
+ * from a `Project` (relocation). Without this the last-known counts would be
+ * dropped on the floor and the toolbar would shift once after every relocate.
+ */
+function repoStatsToColumns(stats: ProjectRepoStats | undefined): {
+  statsCommitCount: number | null;
+  statsIssueCount: number | null;
+  statsPrCount: number | null;
+  statsProviderId: string | null;
+  statsLastUpdated: number | null;
+} {
+  return {
+    statsCommitCount: stats ? readPersistedCount(stats.commitCount) : null,
+    statsIssueCount: stats ? readPersistedCount(stats.issueCount) : null,
+    statsPrCount: stats ? readPersistedCount(stats.prCount) : null,
+    statsProviderId: stats?.providerId ?? null,
+    statsLastUpdated: stats ? readPersistedCount(stats.lastUpdated) : null,
+  };
+}
+
 function rowToProject(row: ProjectRow): Project {
   const project: Project = {
     id: row.id,
@@ -64,10 +113,20 @@ function rowToProject(row: ProjectRow): Project {
     typeof row.frecencyScore === "number" ? row.frecencyScore : FRECENCY_COLD_START;
   project.lastAccessedAt = typeof row.lastAccessedAt === "number" ? row.lastAccessedAt : 0;
   if (typeof row.autoParkedAt === "number") project.autoParkedAt = row.autoParkedAt;
+  const lastKnownStats = rowToRepoStats(row);
+  if (lastKnownStats) project.lastKnownStats = lastKnownStats;
   return project;
 }
 
 export class ProjectStore {
+  /**
+   * Newest forge observation seen per project id this session (issue #11078).
+   * Ordering guard for `saveRepoStats` — see the comment there for why the
+   * persisted timestamp cannot serve as the high-water mark by itself.
+   * Process-local: a restart leaves no in-flight requests to order against.
+   */
+  private readonly repoStatsHighWater = new Map<string, number>();
+
   private projectsConfigDir: string;
   private globalConfigDir: string;
   private userDataDir: string;
@@ -435,6 +494,107 @@ export class ProjectStore {
     return rowToProject(row);
   }
 
+  /**
+   * Persist the last-known repository counts for a project (issue #11078), so a
+   * switch-back or a cold start can seed the toolbar from real numbers instead
+   * of em-dashes that resize once a poll lands.
+   *
+   * The two count families have different owners and are updated independently:
+   *
+   * - `commitCount` is a local-git fact. Pass it whenever git actually answered.
+   *   Omit it when the lookup failed — persisting a fallback zero over a good
+   *   count is exactly the corruption this signature exists to prevent.
+   * - `forge` carries the provider-reported counts. Pass it ONLY for a clean
+   *   provider result. Omitting it preserves whatever is already stored; the
+   *   commit-only path fires during transient provider resolution failures
+   *   (plugin activating, temporarily disabled), and nulling the forge columns
+   *   there would throw away good counts over a blip.
+   *
+   * A no-op when nothing material changed — the caller polls every ~30s, and a
+   * provider that re-stamps `lastUpdated` on an unchanged probe must not turn
+   * that into a write per poll.
+   */
+  saveRepoStats(
+    projectPath: string,
+    update: {
+      commitCount?: number;
+      forge?: { issueCount: number | null; prCount: number | null; providerId: string | null };
+      lastUpdated?: number;
+    }
+  ): void {
+    // Honour the same disk-pressure backpressure as every other cache write —
+    // last-known counts are a nicety, never worth a write under pressure.
+    if (getWritesSuppressed()) return;
+
+    const db = getSharedDb();
+    const normalizedPath = path.normalize(projectPath).normalize("NFC");
+    const row = db.select().from(projectsTable).where(eq(projectsTable.path, normalizedPath)).get();
+    // Stats are keyed to a registered project. A worktree path, or a directory
+    // the user never added, has no row to hold them.
+    if (!row) return;
+
+    const set: Partial<{
+      statsCommitCount: number;
+      statsIssueCount: number | null;
+      statsPrCount: number | null;
+      statsProviderId: string | null;
+      statsLastUpdated: number | null;
+    }> = {};
+
+    const nextCommitCount = readPersistedCount(update.commitCount);
+    if (nextCommitCount !== null && nextCommitCount !== row.statsCommitCount) {
+      set.statsCommitCount = nextCommitCount;
+    }
+
+    if (update.forge) {
+      const { issueCount, prCount, providerId } = update.forge;
+      const incomingAt = readPersistedCount(update.lastUpdated);
+
+      // Forge counts come from plugin code. A provider returning `-1`, `1.5` or
+      // `NaN` on an otherwise clean result would be written straight through and
+      // then read back as `null`, silently destroying the good counts already
+      // stored. Reject the whole forge snapshot rather than persist part of it.
+      const forgeIsValid =
+        (issueCount === null || readPersistedCount(issueCount) !== null) &&
+        (prCount === null || readPersistedCount(prCount) !== null);
+
+      // Discard a result that resolved out of order behind a newer one. The
+      // stored timestamp can't serve as the high-water mark on its own: the
+      // no-restamp policy below means a poll that merely *confirms* the current
+      // counts leaves it untouched, so a delayed older observation could still
+      // sail past it. Track the newest observation seen this session separately.
+      // Process-local by design — a restart leaves no in-flight requests to
+      // order against. Compared across providers too: a genuine provider change
+      // always arrives on a fresh fetch, so it is never the older one.
+      const highWater = Math.max(
+        this.repoStatsHighWater.get(row.id) ?? 0,
+        readPersistedCount(row.statsLastUpdated) ?? 0
+      );
+      const outOfOrder = incomingAt !== null && incomingAt < highWater;
+
+      if (forgeIsValid && !outOfOrder) {
+        if (incomingAt !== null) this.repoStatsHighWater.set(row.id, incomingAt);
+        const changed =
+          issueCount !== row.statsIssueCount ||
+          prCount !== row.statsPrCount ||
+          providerId !== row.statsProviderId;
+        // Only a genuine count change advances the stored timestamp. Writing on
+        // a re-stamp alone would mean a SQLite UPDATE on every poll of every
+        // open project, forever, for a value nothing reads as fresh — the seed
+        // is always applied as stale and revalidated behind.
+        if (changed) {
+          set.statsIssueCount = issueCount;
+          set.statsPrCount = prCount;
+          set.statsProviderId = providerId;
+          set.statsLastUpdated = incomingAt;
+        }
+      }
+    }
+
+    if (Object.keys(set).length === 0) return;
+    db.update(projectsTable).set(set).where(eq(projectsTable.id, row.id)).run();
+  }
+
   updateProjectStatus(
     projectId: string,
     status: ProjectStatus,
@@ -622,6 +782,7 @@ export class ProjectStore {
           pinned: updatedProject.pinned ? 1 : 0,
           frecencyScore: updatedProject.frecencyScore ?? FRECENCY_COLD_START,
           lastAccessedAt: updatedProject.lastAccessedAt ?? 0,
+          ...repoStatsToColumns(updatedProject.lastKnownStats),
         })
         .run();
       this.settingsManager.migrateEnvForProject(projectId, newProjectId);
@@ -643,6 +804,7 @@ export class ProjectStore {
           pinned: oldProject.pinned ? 1 : 0,
           frecencyScore: oldProject.frecencyScore ?? FRECENCY_COLD_START,
           lastAccessedAt: oldProject.lastAccessedAt ?? 0,
+          ...repoStatsToColumns(oldProject.lastKnownStats),
         })
         .run();
       if (newStateDir && existsSync(newStateDir)) {

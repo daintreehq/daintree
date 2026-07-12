@@ -22,6 +22,36 @@ import type { NotificationSettings } from "./ipc/api.js";
  */
 export type ProjectStatus = "active" | "background" | "closed" | "missing";
 
+/**
+ * Last-known repository counts persisted on the project row so the toolbar can
+ * render real numbers the instant a project is switched back to, instead of
+ * em-dashes that widen into values once a poll lands (issue #11078).
+ *
+ * Durable facts only — no `loading`/`stale`/`error`/rate-limit/cadence fields.
+ * Those describe a single poll, not the repository, and a resurrected error is
+ * exactly the failure mode the switch-back cache was built to avoid (#10761).
+ *
+ * Written by main on a clean poll only; the renderer treats it as a stale seed
+ * and always revalidates behind it.
+ */
+export interface ProjectRepoStats {
+  /** Commit count on the checked-out branch (host-computed, local git). */
+  commitCount: number;
+  /** Open issues, or `null` when no forge provider reported them. */
+  issueCount: number | null;
+  /** Open pull requests, or `null` when no forge provider reported them. */
+  prCount: number | null;
+  /**
+   * Provider that reported {@link issueCount}/{@link prCount}, or `null` when
+   * only the local commit count is known. Forge counts are reusable only when
+   * this still matches the project's resolved provider — a repo that now
+   * resolves elsewhere must not show the old provider's numbers.
+   */
+  providerId: string | null;
+  /** Epoch ms when these counts were last observed to change. */
+  lastUpdated: number | null;
+}
+
 /** Project (Git repository) managed by Daintree */
 export interface Project {
   /** Unique identifier (UUID or path hash) */
@@ -55,6 +85,12 @@ export interface Project {
    * memory" label. Cleared when the project is reopened.
    */
   autoParkedAt?: number;
+  /**
+   * Last-known repository counts, persisted so switch-back seeds the toolbar
+   * immediately instead of shifting its pill widths (issue #11078). Main owns
+   * the write; absent until the project's first clean stats poll.
+   */
+  lastKnownStats?: ProjectRepoStats;
 }
 
 /** Panel snapshot for state preservation. */

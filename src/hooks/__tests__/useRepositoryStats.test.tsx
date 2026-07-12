@@ -42,6 +42,10 @@ vi.mock("@/clients/forgeClient", () => ({
   },
 }));
 
+// The hook reads only `currentProject.id` from the store — to resolve the forge
+// provider and gate polling. The persisted counts it seeds from (#11078) come
+// off the project returned by `projectClient.getCurrent()`, which is main's
+// authoritative row, so seed tests drive `getCurrentMock` rather than this.
 vi.mock("@/store/projectStore", () => ({
   useProjectStore: (selector: (s: { currentProject: { id: string } | null }) => unknown) =>
     selector({ currentProject: { id: "test-project" } }),
@@ -1708,7 +1712,7 @@ describe("useRepositoryStats", () => {
         lastUpdated,
         issues: { items: [], endCursor: null, hasNextPage: false },
         prs: { items: [], endCursor: null, hasNextPage: false },
-        stats: { issueCount: 12, prCount: 7, lastUpdated },
+        stats: { commitCount: 250, issueCount: 12, prCount: 7, lastUpdated },
       });
 
       const { result } = renderHook(() => useRepositoryStats());
@@ -1720,6 +1724,10 @@ describe("useRepositoryStats", () => {
         expect(result.current.stats?.stale).toBe(true);
         expect(result.current.lastUpdated).toBe(lastUpdated);
       });
+      // The host now blends the local-git count into the bootstrap payload. This
+      // used to be hardcoded to 0, so the commit pill shifted on every cold
+      // start even while the issue/PR pills hydrated cleanly (issue #11078).
+      expect(result.current.stats?.commitCount).toBe(250);
     });
 
     it("does not overwrite fresher network stats with bootstrap cache", async () => {
@@ -2692,6 +2700,314 @@ describe("useRepositoryStats", () => {
 
       expect(getRepoStatsMock).toHaveBeenCalledTimes(1);
       expect(getRepoStatsMock.mock.calls[0]?.[1]).toBe(true);
+    });
+  });
+
+  describe("persisted project-record seed (issue #11078)", () => {
+    const persisted = {
+      commitCount: 412,
+      issueCount: 7,
+      prCount: 3,
+      providerId: PROVIDER_ID,
+      lastUpdated: 1000,
+    };
+
+    beforeEach(() => {
+      getCurrentMock.mockResolvedValue({
+        id: "test-project",
+        path: "/repo/a",
+        lastKnownStats: persisted,
+      });
+      onSwitchMock.mockReturnValue(() => {});
+    });
+
+    it("renders the persisted counts before the first poll resolves, without a skeleton", async () => {
+      const deferred = createDeferred<ForgeRepositoryStats>();
+      getRepoStatsMock.mockReturnValue(deferred.promise);
+
+      const { result } = renderHook(() => useRepositoryStats());
+
+      // The whole point of the issue: real numbers are on screen while the
+      // network poll is still in flight, so the pills never resize from an
+      // em-dash placeholder.
+      await waitFor(() => {
+        expect(result.current.stats?.commitCount).toBe(412);
+      });
+      expect(result.current.stats?.issueCount).toBe(7);
+      expect(result.current.stats?.prCount).toBe(3);
+      expect(result.current.loading).toBe(false);
+      expect(result.current.freshnessLevel).toBe("stale-disk");
+      expect(result.current.error).toBeNull();
+
+      // ...and the refresh behind it still reconciles.
+      await act(async () => {
+        deferred.resolve({
+          commitCount: 413,
+          issueCount: 9,
+          prCount: 4,
+          loading: false,
+          stale: false,
+          lastUpdated: Date.now(),
+        });
+        await Promise.resolve();
+      });
+
+      await waitFor(() => {
+        expect(result.current.stats?.issueCount).toBe(9);
+        expect(result.current.freshnessLevel).toBe("fresh");
+      });
+    });
+
+    it("falls back to the record once the in-memory cache is past its freshness window", async () => {
+      // Land a fresh result whose fetch time is already outside the 90s window,
+      // so the switch-back cache holds an entry that is present but no longer
+      // reusable — the case the module cache alone cannot cover, and the reason
+      // the record exists. Its counts differ from the record's, so whichever
+      // one seeds is unambiguous.
+      getRepoStatsMock.mockResolvedValue({
+        commitCount: 999,
+        issueCount: 42,
+        prCount: 8,
+        loading: false,
+        stale: false,
+        lastUpdated: Date.now() - FRESH_THRESHOLD_MS - 1_000,
+      });
+
+      const first = renderHook(() => useRepositoryStats());
+      await waitFor(() => {
+        expect(first.result.current.stats?.issueCount).toBe(42);
+      });
+      first.unmount();
+
+      // Remount: the cached entry is too old to reuse, so the record must seed.
+      const pending = createDeferred<ForgeRepositoryStats>();
+      getRepoStatsMock.mockReturnValue(pending.promise);
+
+      const second = renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(second.result.current.stats?.issueCount).toBe(7);
+      });
+      expect(second.result.current.stats?.commitCount).toBe(412);
+      expect(second.result.current.freshnessLevel).toBe("stale-disk");
+      // A background revalidation still runs — the seed is not a substitute.
+      expect(getRepoStatsMock).toHaveBeenCalledTimes(2);
+
+      await act(async () => {
+        pending.resolve({
+          commitCount: 412,
+          issueCount: 7,
+          prCount: 3,
+          loading: false,
+          stale: false,
+          lastUpdated: Date.now(),
+        });
+        await Promise.resolve();
+      });
+    });
+
+    it("reuses the commit count but not the forge counts when the provider no longer matches", async () => {
+      // The repo now resolves to a different provider: its issue/PR numbers are
+      // not ours to show (#10761). The commit count is local git and survives.
+      getCurrentMock.mockResolvedValue({
+        id: "test-project",
+        path: "/repo/a",
+        lastKnownStats: { ...persisted, providerId: "other.forge.provider" },
+      });
+      const deferred = createDeferred<ForgeRepositoryStats>();
+      getRepoStatsMock.mockReturnValue(deferred.promise);
+
+      const { result } = renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(result.current.stats?.commitCount).toBe(412);
+      });
+      expect(result.current.stats?.issueCount).toBeNull();
+      expect(result.current.stats?.prCount).toBeNull();
+
+      await act(async () => {
+        deferred.resolve({
+          commitCount: 412,
+          issueCount: 1,
+          prCount: 1,
+          loading: false,
+          stale: false,
+          lastUpdated: Date.now(),
+        });
+        await Promise.resolve();
+      });
+    });
+
+    it("never resurrects a previous error through the seed", async () => {
+      // Drive a real failure first, so "no error" on the remount is a fact about
+      // the seed rather than a fresh-mount default.
+      getRepoStatsMock.mockRejectedValue(new Error("Bad credentials"));
+
+      const first = renderHook(() => useRepositoryStats());
+      await waitFor(() => {
+        expect(first.result.current.error).toBe("Bad credentials");
+      });
+      first.unmount();
+
+      const pending = createDeferred<ForgeRepositoryStats>();
+      getRepoStatsMock.mockReturnValue(pending.promise);
+
+      const second = renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(second.result.current.stats?.issueCount).toBe(7);
+      });
+      // The record carries counts, never a failure — the previous error is gone.
+      expect(second.result.current.error).toBeNull();
+      expect(second.result.current.errorSeverity).toBeNull();
+      expect(second.result.current.isTokenError).toBe(false);
+
+      await act(async () => {
+        pending.resolve({
+          commitCount: 412,
+          issueCount: 7,
+          prCount: 3,
+          loading: false,
+          stale: false,
+          lastUpdated: Date.now(),
+        });
+        await Promise.resolve();
+      });
+    });
+
+    it("holds the seeded counts through a failed poll instead of flashing dashes", async () => {
+      // `applyStatsResult` only records preserved counts on a *fresh* result, and
+      // the seed is stale by construction — so the seed has to prime the
+      // preservation ref itself, or the first failed poll erases what it painted.
+      const deferred = createDeferred<ForgeRepositoryStats>();
+      getRepoStatsMock.mockReturnValue(deferred.promise);
+
+      const { result } = renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(result.current.stats?.issueCount).toBe(7);
+      });
+
+      await act(async () => {
+        deferred.resolve({
+          commitCount: 412,
+          issueCount: null,
+          prCount: null,
+          loading: false,
+          stale: true,
+          error: "Network unreachable",
+          lastUpdated: 1000,
+        });
+        await Promise.resolve();
+      });
+
+      await waitFor(() => {
+        expect(result.current.error).toBe("Network unreachable");
+      });
+      expect(result.current.stats?.issueCount).toBe(7);
+      expect(result.current.stats?.prCount).toBe(3);
+    });
+
+    it("does not let a recently-dated stale result suppress the reactivation refresh", async () => {
+      // #10765 skips the network on a reactivation when the last result is still
+      // inside the freshness window. That skip must key off a *genuinely fresh*
+      // result: a stale one (a seed, or a disk fallback like this) carries the
+      // fetch time of the poll that produced it, which can easily look recent —
+      // and skipping on that basis strands the toolbar on counts it never
+      // reconciles.
+      getRepoStatsMock.mockResolvedValue({
+        commitCount: 412,
+        issueCount: 7,
+        prCount: 3,
+        loading: false,
+        stale: true,
+        lastUpdated: Date.now(),
+      });
+
+      const { result } = renderHook(() => useRepositoryStats());
+      await waitFor(() => {
+        expect(result.current.isStale).toBe(true);
+      });
+      const afterFirstPoll = getRepoStatsMock.mock.calls.length;
+
+      // Reactivate (tab focus). Nothing fresh has landed, so the network must run.
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"));
+        await Promise.resolve();
+      });
+
+      await waitFor(() => {
+        expect(getRepoStatsMock.mock.calls.length).toBeGreaterThan(afterFirstPoll);
+      });
+    });
+
+    it("prefers a fresh in-memory switch-back entry over the persisted record", async () => {
+      // The module cache is the fresh tier; the record is the stale fallback. A
+      // hit on the former must win outright — not be downgraded to `stale-disk`,
+      // and not be replaced by the record's older numbers.
+      getRepoStatsMock.mockResolvedValue({
+        commitCount: 999,
+        issueCount: 42,
+        prCount: 8,
+        loading: false,
+        stale: false,
+        lastUpdated: Date.now(),
+      });
+
+      const first = renderHook(() => useRepositoryStats());
+      await waitFor(() => {
+        expect(first.result.current.stats?.issueCount).toBe(42);
+      });
+      first.unmount();
+
+      // Remount with the network parked, so only a restore can supply values —
+      // whichever tier wins is the one under test, not the poll.
+      const pending = createDeferred<ForgeRepositoryStats>();
+      getRepoStatsMock.mockReturnValue(pending.promise);
+
+      const second = renderHook(() => useRepositoryStats());
+      await waitFor(() => {
+        expect(second.result.current.stats).not.toBeNull();
+      });
+
+      expect(second.result.current.stats?.issueCount).toBe(42);
+      expect(second.result.current.stats?.commitCount).toBe(999);
+      expect(second.result.current.freshnessLevel).toBe("fresh");
+
+      await act(async () => {
+        pending.resolve({
+          commitCount: 999,
+          issueCount: 42,
+          prCount: 8,
+          loading: false,
+          stale: false,
+          lastUpdated: Date.now(),
+        });
+        await Promise.resolve();
+      });
+    });
+
+    it("holds the seeded counts when the provider is still activating in main", async () => {
+      // Main returns a provider-less snapshot (null forge counts, no fetch time)
+      // while its plugin activates, even though this side already resolved a
+      // provider. Applying those nulls verbatim would knock the freshly-seeded
+      // pills straight back to em-dashes — the exact shift this issue is about.
+      getRepoStatsMock.mockResolvedValue({
+        commitCount: 412,
+        issueCount: null,
+        prCount: null,
+        loading: false,
+      });
+
+      const { result } = renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(getRepoStatsMock).toHaveBeenCalled();
+      });
+      await waitFor(() => {
+        expect(result.current.stats?.issueCount).toBe(7);
+      });
+      expect(result.current.stats?.prCount).toBe(3);
     });
   });
 });

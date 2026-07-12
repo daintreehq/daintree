@@ -20,6 +20,18 @@ export const projects = sqliteTable(
     // "Suspended to free memory" label in the project switcher. Cleared when the
     // project is reopened (`setCurrentProject`).
     autoParkedAt: integer("auto_parked_at"),
+    // Last-known repository counts (issue #11078), so switch-back can seed the
+    // toolbar pills from real numbers instead of em-dashes that resize once a
+    // poll lands. All nullable: absent until the project's first clean stats
+    // poll. `statsCommitCount` is local-git and survives on its own, so a
+    // project with no forge provider still holds its commit pill;
+    // `statsProviderId` scopes the forge counts to the provider that reported
+    // them, and `statsLastUpdated` records when they last changed.
+    statsCommitCount: integer("stats_commit_count"),
+    statsIssueCount: integer("stats_issue_count"),
+    statsPrCount: integer("stats_pr_count"),
+    statsProviderId: text("stats_provider_id"),
+    statsLastUpdated: integer("stats_last_updated"),
   },
   (table) => [
     // Equality lookup for getProjectByPath().

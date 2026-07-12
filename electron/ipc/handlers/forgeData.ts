@@ -8,6 +8,7 @@ import { resolveForCwd } from "./forgeResolution.js";
 import { auditForgeCall, summarizeForgeArgs } from "../../services/forge/forgeAuditService.js";
 import { getForgeProviderImpl } from "../../services/forgeProviderRegistry.js";
 import { getCommitCount } from "../../utils/git.js";
+import { logWarn } from "../../utils/logger.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { normalizeProviderId } from "../../../shared/utils/forgeProviderIds.js";
 import type {
@@ -55,6 +56,65 @@ function requireCwd(value: unknown): string {
     throw new Error("Invalid working directory");
   }
   return value;
+}
+
+/**
+ * The project store is imported lazily: its module-scope singleton reads
+ * `app.getPath()` on construction, so a static import here would drag Electron
+ * into every consumer of this module (and every test that mocks only the pieces
+ * of `electron` it actually uses).
+ */
+type ProjectStoreModule = typeof import("../../services/ProjectStore.js");
+const loadProjectStore = (): Promise<ProjectStoreModule> =>
+  import("../../services/ProjectStore.js");
+
+/**
+ * Read the local commit count, falling back to the project's last-known value
+ * and finally to zero (issue #11078).
+ *
+ * `reliable` marks whether git actually answered. A failed lookup must never be
+ * persisted: it is indistinguishable from an empty repository at the column
+ * level, so writing its fallback would silently overwrite a good count with a
+ * zero and make the commit pill shift on the next switch-back — the exact bug
+ * this is here to fix. The fallback still feeds the *returned* stats so the
+ * toolbar keeps rendering a number through a transient git failure.
+ */
+async function readCommitCount(cwd: string): Promise<{ count: number; reliable: boolean }> {
+  try {
+    return { count: await getCommitCount(cwd), reliable: true };
+  } catch {
+    try {
+      const { projectStore } = await loadProjectStore();
+      const project = await projectStore.getProjectByPath(cwd);
+      return { count: project?.lastKnownStats?.commitCount ?? 0, reliable: false };
+    } catch {
+      return { count: 0, reliable: false };
+    }
+  }
+}
+
+/**
+ * Persist the counts behind a poll so the next switch-back seeds the toolbar
+ * from real numbers (issue #11078). Best-effort: a persistence failure must
+ * never turn a successful forge poll into a renderer-visible error.
+ *
+ * Omitting `forge` preserves the stored issue/PR counts — see
+ * `ProjectStore.saveRepoStats` for why the commit-only path must not null them
+ * out.
+ */
+async function persistRepoStats(
+  cwd: string,
+  update: Parameters<ProjectStoreModule["projectStore"]["saveRepoStats"]>[1]
+): Promise<void> {
+  try {
+    const { projectStore } = await loadProjectStore();
+    projectStore.saveRepoStats(cwd, update);
+  } catch (error) {
+    logWarn("[forgeData] Failed to persist repository stats", {
+      cwd,
+      error: formatErrorMessage(error, "unknown"),
+    });
+  }
 }
 
 /** Blend provider-reported forge counts with the host-computed commit count. */
@@ -334,6 +394,9 @@ async function handleForgeGetRepoStats(payload: {
   // the path is gone; without this guard each poll runs `getCommitCount` ->
   // `createHardenedGit` against the dead path and emits a WARN log. Return a
   // commits-only zero snapshot — the same shape as the no-provider fallback.
+  // Nothing is persisted here: a dead path yields no observation, and writing
+  // this zero would overwrite the counts that let the toolbar hold its pill
+  // widths if the directory comes back (issue #11078).
   if (!existsSync(cwd)) {
     return buildForgeRepositoryStats(0, { issueCount: null, prCount: null });
   }
@@ -345,8 +408,12 @@ async function handleForgeGetRepoStats(payload: {
     // or not yet activated): the toolbar still shows the local commit count,
     // so return a commit-only snapshot instead of failing the whole surface.
     // Forge counts stay null — the renderer renders the commits-only pill.
-    const commitCount = await getCommitCount(cwd).catch(() => 0);
-    return buildForgeRepositoryStats(commitCount, { issueCount: null, prCount: null });
+    const { count, reliable } = await readCommitCount(cwd);
+    // Commit-only update: `forge` is omitted, so the stored issue/PR counts
+    // survive. This branch also covers a provider that is merely mid-activation
+    // — nulling its counts here would discard good data over a blip.
+    if (reliable) await persistRepoStats(cwd, { commitCount: count });
+    return buildForgeRepositoryStats(count, { issueCount: null, prCount: null });
   }
   const { impl, repoRef, namespaceId } = resolved;
   if (!impl.repoStats) {
@@ -355,10 +422,37 @@ async function handleForgeGetRepoStats(payload: {
   const snapshot = await impl.repoStats.getRepoStats(repoRef, {
     bypassCache: payload.bypassCache === true,
   });
-  const commitCount = await getCommitCount(cwd).catch(() => 0);
+  const { count: commitCount, reliable: commitReliable } = await readCommitCount(cwd);
   const stats = buildForgeRepositoryStats(commitCount, snapshot.counts);
 
   const fresh = snapshot.source === "network" && !snapshot.counts.stale;
+
+  // Persist the counts behind this poll (issue #11078). A stale/errored result
+  // is a fallback, not an observation — its forge counts never replace what is
+  // stored, though a reliable commit count still may (local git doesn't go
+  // stale just because the network did).
+  //
+  // Deliberately broader than `fresh` (which gates the broadcast on
+  // `source === "network"`): a clean `memory-cache` hit is data the provider
+  // stands behind and the renderer already renders as fresh, and `source` is
+  // optional on the contract — a provider that omits it would otherwise never
+  // persist anything. Only an explicit disk fallback is excluded, since that is
+  // the provider serving its own last-known values back to us.
+  const cleanForge = !snapshot.counts.stale && !snapshot.counts.error && snapshot.source !== "disk";
+  await persistRepoStats(cwd, {
+    ...(commitReliable ? { commitCount } : {}),
+    ...(cleanForge
+      ? {
+          forge: {
+            issueCount: snapshot.counts.issueCount,
+            prCount: snapshot.counts.prCount,
+            providerId: namespaceId,
+          },
+          lastUpdated: snapshot.counts.lastUpdated ?? Date.now(),
+        }
+      : {}),
+  });
+
   if (snapshot.issues && snapshot.prs && fresh) {
     const push: ForgeRepoStatsAndPagePayload = {
       providerId: namespaceId,
@@ -396,13 +490,26 @@ async function handleForgeGetFirstPageCache(payload: {
     const { impl, repoRef, namespaceId } = await resolveForCwd(payload.cwd);
     const snapshot = await impl.repoStats?.getFirstPageCache?.(repoRef);
     if (!snapshot) return null;
+    // Blend in the host-computed commit count, exactly as the live-poll sibling
+    // does (issue #11078). The provider deliberately doesn't report it — commit
+    // count is a local-git fact — so without this the bootstrap payload carried
+    // no commit count at all and the renderer seeded a hardcoded 0, leaving the
+    // commit pill to shift even when the issue/PR pills hydrated cleanly.
+    //
+    // Only when the snapshot actually carries counts: a first-page entry whose
+    // stats expired has nothing to blend into, and this is the cold-start path
+    // where a needless `rev-list` traversal of a large repo is exactly what we
+    // cannot afford.
+    const stats = snapshot.counts
+      ? { ...snapshot.counts, commitCount: (await readCommitCount(payload.cwd)).count }
+      : undefined;
     return {
       providerId: namespaceId,
       projectPath: path.resolve(payload.cwd),
       issues: snapshot.issues,
       prs: snapshot.prs,
       lastUpdated: snapshot.lastUpdated,
-      stats: snapshot.counts,
+      stats,
     };
   } catch {
     return null;

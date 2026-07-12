@@ -85,6 +85,7 @@ export type { BrowserHistory } from "./browser.js";
 export type {
   ProjectStatus,
   Project,
+  ProjectRepoStats,
   TerminalSnapshot,
   PanelSnapshot,
   TerminalLayout,
