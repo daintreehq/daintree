@@ -497,17 +497,17 @@ describe("ProcessMemoryMonitor", () => {
 
     beforeEach(() => {
       mockActions = {
-        clearCaches: vi.fn().mockResolvedValue(undefined),
         destroyHiddenWebviews: vi.fn().mockResolvedValue(undefined),
         hibernateIdleProjects: vi.fn().mockResolvedValue(undefined),
+        evictCachedProjectViews: vi.fn().mockResolvedValue(undefined),
       };
     });
 
     async function advancePolls(n: number): Promise<void> {
       for (let i = 0; i < n; i++) {
-        vi.advanceTimersByTime(30_000);
+        await vi.advanceTimersByTimeAsync(30_000);
       }
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(RECLAIM_SETTLE_MS);
     }
 
     it("triggers mitigation when sum exceeds 25% of RAM even though no process alone exceeds its threshold", async () => {
@@ -525,7 +525,7 @@ describe("ProcessMemoryMonitor", () => {
 
       await advancePolls(WARMUP_INTERVALS + 1);
 
-      expect(mockActions.clearCaches).toHaveBeenCalledTimes(1);
+      expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(1);
       // No per-process threshold warnings should have fired (each Tab is below 768 MB).
       expect(logWarn).not.toHaveBeenCalledWith(
         "process-memory-threshold-exceeded",
@@ -545,7 +545,7 @@ describe("ProcessMemoryMonitor", () => {
 
       await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2 + 1);
 
-      expect(mockActions.clearCaches).not.toHaveBeenCalled();
+      expect(mockActions.destroyHiddenWebviews).not.toHaveBeenCalled();
       expect(mockActions.hibernateIdleProjects).not.toHaveBeenCalled();
     });
 
@@ -561,7 +561,7 @@ describe("ProcessMemoryMonitor", () => {
 
       await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2 + 1);
 
-      expect(mockActions.clearCaches).not.toHaveBeenCalled();
+      expect(mockActions.destroyHiddenWebviews).not.toHaveBeenCalled();
     });
 
     it("escalates aggregate-only pressure to tier 2 after sustained polls", async () => {
@@ -620,9 +620,9 @@ describe("ProcessMemoryMonitor", () => {
 
     beforeEach(() => {
       mockActions = {
-        clearCaches: vi.fn().mockResolvedValue(undefined),
         destroyHiddenWebviews: vi.fn().mockResolvedValue(undefined),
         hibernateIdleProjects: vi.fn().mockResolvedValue(undefined),
+        evictCachedProjectViews: vi.fn().mockResolvedValue(undefined),
       };
       originalGetSystemMemoryInfo = (process as { getSystemMemoryInfo?: unknown })
         .getSystemMemoryInfo;
@@ -639,9 +639,8 @@ describe("ProcessMemoryMonitor", () => {
 
     async function advancePolls(n: number): Promise<void> {
       for (let i = 0; i < n; i++) {
-        vi.advanceTimersByTime(30_000);
+        await vi.advanceTimersByTimeAsync(30_000);
       }
-      await vi.advanceTimersByTimeAsync(0);
     }
 
     function stubSystemMemoryInfo(freeKb: number, purgeableKb = 0): void {
@@ -665,7 +664,7 @@ describe("ProcessMemoryMonitor", () => {
       stop = startAppMetricsMonitor(mockActions);
       await advancePolls(WARMUP_INTERVALS + 1);
 
-      expect(mockActions.clearCaches).toHaveBeenCalledTimes(1);
+      expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(1);
     });
 
     it("does NOT trigger mitigation when free + purgeable stays above threshold", async () => {
@@ -676,7 +675,7 @@ describe("ProcessMemoryMonitor", () => {
       stop = startAppMetricsMonitor(mockActions);
       await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2 + 1);
 
-      expect(mockActions.clearCaches).not.toHaveBeenCalled();
+      expect(mockActions.destroyHiddenWebviews).not.toHaveBeenCalled();
     });
 
     it("counts purgeable toward available on macOS — free alone below threshold but purgeable rescues", async () => {
@@ -688,7 +687,7 @@ describe("ProcessMemoryMonitor", () => {
       stop = startAppMetricsMonitor(mockActions);
       await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2 + 1);
 
-      expect(mockActions.clearCaches).not.toHaveBeenCalled();
+      expect(mockActions.destroyHiddenWebviews).not.toHaveBeenCalled();
     });
 
     it("skips the signal when getSystemMemoryInfo is unavailable", async () => {
@@ -700,7 +699,38 @@ describe("ProcessMemoryMonitor", () => {
       await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2 + 1);
 
       // No throw, no mitigation triggered.
-      expect(mockActions.clearCaches).not.toHaveBeenCalled();
+      expect(mockActions.destroyHiddenWebviews).not.toHaveBeenCalled();
+    });
+
+    it("does not treat 1116 MB available as critical on a 64 GB machine", async () => {
+      vi.spyOn(os, "totalmem").mockReturnValue(64 * 1024 * 1024 * 1024);
+      stubSystemMemoryInfo(1116 * 1024);
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 100 * 1024, 100)]);
+
+      stop = startAppMetricsMonitor(mockActions);
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2 + 1);
+
+      expect(mockActions.destroyHiddenWebviews).not.toHaveBeenCalled();
+      expect(mockActions.hibernateIdleProjects).not.toHaveBeenCalled();
+    });
+
+    it("escalates sustained system-only pressure and evicts cached views", async () => {
+      stubSystemMemoryInfo(500 * 1024);
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 100 * 1024, 100)]);
+      vi.mocked(mockActions.destroyHiddenWebviews).mockImplementation(async (tier) => {
+        if (tier === 1) {
+          mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 10 * 1024, 100)]);
+        }
+      });
+
+      stop = startAppMetricsMonitor(mockActions);
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
+      await vi.advanceTimersByTimeAsync(RECLAIM_SETTLE_MS);
+
+      expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(1);
+      expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(2);
+      expect(mockActions.evictCachedProjectViews).toHaveBeenCalledTimes(1);
+      expect(mockActions.hibernateIdleProjects).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -709,13 +739,12 @@ describe("ProcessMemoryMonitor", () => {
 
     beforeEach(() => {
       mockActions = {
-        clearCaches: vi.fn().mockResolvedValue(undefined),
         destroyHiddenWebviews: vi.fn().mockResolvedValue(undefined),
         hibernateIdleProjects: vi.fn().mockResolvedValue(undefined),
       };
     });
 
-    // Helper that mocks getAppMetrics to return `beforeMb` until clearCaches
+    // Helper that mocks getAppMetrics to return `beforeMb` until tier 1
     // is called, then returns `afterMb`. Lets each test express the
     // closed-loop reclamation delta directly.
     function arrangeClosedLoopMetrics(opts: {
@@ -729,8 +758,8 @@ describe("ProcessMemoryMonitor", () => {
         const mb = postMitigation ? afterMb : beforeMb;
         return [makeMetric("Browser", mb * 1024, pid, mb * 1024)];
       });
-      mockActions.clearCaches = vi.fn().mockImplementation(async () => {
-        postMitigation = true;
+      mockActions.destroyHiddenWebviews = vi.fn().mockImplementation(async (tier) => {
+        if (tier === 1) postMitigation = true;
       });
     }
 
@@ -739,10 +768,8 @@ describe("ProcessMemoryMonitor", () => {
     // decision run before assertions.
     async function advancePolls(n: number): Promise<void> {
       for (let i = 0; i < n; i++) {
-        vi.advanceTimersByTime(30_000);
+        await vi.advanceTimersByTimeAsync(30_000);
       }
-      // Flush microtasks so the IIFE starts and reaches the settle await,
-      // then advance through the settle delay (also flushes microtasks).
       await vi.advanceTimersByTimeAsync(RECLAIM_SETTLE_MS);
     }
 
@@ -753,23 +780,23 @@ describe("ProcessMemoryMonitor", () => {
       // No crash, no mitigation called
     });
 
-    it("does not call clearCaches during warmup period", async () => {
+    it("does not reclaim hidden views during warmup period", async () => {
       mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
       stop = startAppMetricsMonitor(mockActions);
 
       await advancePolls(WARMUP_INTERVALS);
 
-      expect(mockActions.clearCaches).not.toHaveBeenCalled();
+      expect(mockActions.destroyHiddenWebviews).not.toHaveBeenCalled();
     });
 
-    it("calls clearCaches on first pressure poll after warmup", async () => {
+    it("reclaims hidden views on first pressure poll after warmup", async () => {
       mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
       stop = startAppMetricsMonitor(mockActions);
 
       // Advance past warmup
       await advancePolls(WARMUP_INTERVALS + 1);
 
-      expect(mockActions.clearCaches).toHaveBeenCalledTimes(1);
+      expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(1);
     });
 
     it("does not escalate to tier 2 when tier 1 reclaims above the minimum", async () => {
@@ -781,7 +808,7 @@ describe("ProcessMemoryMonitor", () => {
 
       await advancePolls(WARMUP_INTERVALS + 1);
 
-      expect(mockActions.clearCaches).toHaveBeenCalledTimes(1);
+      expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(1);
       expect(mockActions.hibernateIdleProjects).not.toHaveBeenCalled();
       expect(mockActions.destroyHiddenWebviews).not.toHaveBeenCalledWith(2);
     });
@@ -791,7 +818,7 @@ describe("ProcessMemoryMonitor", () => {
       arrangeClosedLoopMetrics({ beforeMb: 350, afterMb: 340 });
       stop = startAppMetricsMonitor(mockActions);
 
-      await advancePolls(WARMUP_INTERVALS + 1);
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
 
       expect(mockActions.hibernateIdleProjects).toHaveBeenCalledTimes(1);
       expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(2);
@@ -854,8 +881,8 @@ describe("ProcessMemoryMonitor", () => {
       arrangeClosedLoopMetrics({ beforeMb: 350, afterMb: 345 });
       stop = startAppMetricsMonitor(mockActions);
 
-      // Trigger tier 2 on the first post-warmup pressure poll.
-      await advancePolls(WARMUP_INTERVALS + 1);
+      // Trigger tier 2 after sustained post-warmup pressure.
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
       expect(mockActions.hibernateIdleProjects).toHaveBeenCalledTimes(1);
 
       // Continue pressure — should not trigger again within cooldown.
@@ -868,7 +895,7 @@ describe("ProcessMemoryMonitor", () => {
       stop = startAppMetricsMonitor(mockActions);
 
       // Trigger tier 2.
-      await advancePolls(WARMUP_INTERVALS + 1);
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
       expect(mockActions.hibernateIdleProjects).toHaveBeenCalledTimes(1);
 
       // Advance past cooldown (pressure remains, delta remains insufficient).
@@ -882,7 +909,7 @@ describe("ProcessMemoryMonitor", () => {
       arrangeClosedLoopMetrics({ beforeMb: 350, afterMb: 345 });
       stop = startAppMetricsMonitor(mockActions);
 
-      await advancePolls(WARMUP_INTERVALS + 1);
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
 
       expect(logInfo).toHaveBeenCalledWith("memory-pressure-tier1-mitigation", expect.any(Object));
       expect(logInfo).toHaveBeenCalledWith("memory-pressure-tier2-mitigation", expect.any(Object));
@@ -897,7 +924,7 @@ describe("ProcessMemoryMonitor", () => {
       mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
       stop = startAppMetricsMonitor(actionsWithTrim);
 
-      await advancePolls(WARMUP_INTERVALS + 1);
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
 
       expect(trimPtyHostState).toHaveBeenCalledTimes(1);
     });
@@ -910,7 +937,7 @@ describe("ProcessMemoryMonitor", () => {
         ...mockActions,
         trimPtyHostState,
       };
-      // Default mockActions has clearCaches as a no-op resolver; reclaim
+      // Default mockActions leaves the metrics unchanged; reclaim
       // delta stays at 0 so tier 2 should still fire here.
       mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
       stop = startAppMetricsMonitor(actionsWithTrim);
@@ -918,7 +945,7 @@ describe("ProcessMemoryMonitor", () => {
       await advancePolls(WARMUP_INTERVALS + 1);
 
       expect(trimPtyHostState).toHaveBeenCalled();
-      expect(actionsWithTrim.hibernateIdleProjects).toHaveBeenCalledTimes(1);
+      expect(actionsWithTrim.destroyHiddenWebviews).toHaveBeenCalledWith(1);
     });
 
     it("calls destroyHiddenWebviews(1) on tier 1 mitigation", async () => {
@@ -930,12 +957,24 @@ describe("ProcessMemoryMonitor", () => {
       expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(1);
     });
 
-    it("calls destroyHiddenWebviews(2) on tier 2 mitigation", async () => {
-      // Zero reclamation + pressure remains → tier 2 fires immediately.
+    it("does not repeat tier 1 on every poll during one pressure episode", async () => {
       mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
       stop = startAppMetricsMonitor(mockActions);
 
-      await advancePolls(WARMUP_INTERVALS + 1);
+      await advancePolls(WARMUP_INTERVALS + 6);
+
+      const tier1Calls = vi
+        .mocked(mockActions.destroyHiddenWebviews)
+        .mock.calls.filter(([tier]) => tier === 1);
+      expect(tier1Calls).toHaveLength(1);
+    });
+
+    it("calls destroyHiddenWebviews(2) on tier 2 mitigation", async () => {
+      // Zero reclamation + sustained pressure → tier 2 fires.
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
 
       expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(2);
     });
@@ -952,7 +991,7 @@ describe("ProcessMemoryMonitor", () => {
       mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
       stop = startAppMetricsMonitor(mockActions);
 
-      await advancePolls(WARMUP_INTERVALS + 1);
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
 
       const destroyIdx = callOrder.lastIndexOf("destroyHiddenWebviews");
       const hibernateIdx = callOrder.indexOf("hibernateIdleProjects");
@@ -965,7 +1004,7 @@ describe("ProcessMemoryMonitor", () => {
 
       await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2 + 5);
 
-      expect(mockActions.clearCaches).not.toHaveBeenCalled();
+      expect(mockActions.destroyHiddenWebviews).not.toHaveBeenCalled();
       expect(mockActions.hibernateIdleProjects).not.toHaveBeenCalled();
     });
 
@@ -976,7 +1015,7 @@ describe("ProcessMemoryMonitor", () => {
       arrangeClosedLoopMetrics({ beforeMb: 400, afterMb: 400 - MIN_RECLAIMED_MB });
       stop = startAppMetricsMonitor(mockActions);
 
-      await advancePolls(WARMUP_INTERVALS + 1);
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
 
       expect(mockActions.hibernateIdleProjects).not.toHaveBeenCalled();
     });
@@ -986,19 +1025,20 @@ describe("ProcessMemoryMonitor", () => {
       // not deltaMb=beforeMb, so the AND gate falls through to escalation.
       // Without `afterMb = beforeMb` inside the catch, the large derived
       // delta would suppress tier 2 even with pressureRemains=true.
-      let cleared = false;
+      let throwNextSample = false;
       mockGetAppMetrics.mockImplementation(() => {
-        if (cleared) {
+        if (throwNextSample) {
+          throwNextSample = false;
           throw new Error("getAppMetrics unavailable");
         }
         return [makeMetric("Browser", 350 * 1024, 100)];
       });
-      mockActions.clearCaches = vi.fn().mockImplementation(async () => {
-        cleared = true;
+      mockActions.destroyHiddenWebviews = vi.fn().mockImplementation(async (tier) => {
+        if (tier === 1) throwNextSample = true;
       });
       stop = startAppMetricsMonitor(mockActions);
 
-      await advancePolls(WARMUP_INTERVALS + 1);
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
 
       expect(mockActions.hibernateIdleProjects).toHaveBeenCalledTimes(1);
       expect(logInfo).toHaveBeenCalledWith(
@@ -1024,7 +1064,7 @@ describe("ProcessMemoryMonitor", () => {
 
       stop = startAppMetricsMonitor(mockActions);
 
-      await advancePolls(WARMUP_INTERVALS + 1);
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
       // First cycle: tier-2 attempted, destroyHiddenWebviews(2) called,
       // hibernate throws. Cooldown should still be consumed.
       expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(2);
@@ -1097,7 +1137,6 @@ describe("ProcessMemoryMonitor", () => {
     it("startAppMetricsMonitor invokes actions.sampleBlinkMemory once per poll", () => {
       const sampleBlinkMemory = vi.fn();
       const actions: MemoryPressureActions = {
-        clearCaches: vi.fn().mockResolvedValue(undefined),
         destroyHiddenWebviews: vi.fn().mockResolvedValue(undefined),
         hibernateIdleProjects: vi.fn().mockResolvedValue(undefined),
         sampleBlinkMemory,
@@ -1120,7 +1159,6 @@ describe("ProcessMemoryMonitor", () => {
         throw new Error("renderer port closed");
       });
       const actions: MemoryPressureActions = {
-        clearCaches: vi.fn().mockResolvedValue(undefined),
         destroyHiddenWebviews: vi.fn().mockResolvedValue(undefined),
         hibernateIdleProjects: vi.fn().mockResolvedValue(undefined),
         sampleBlinkMemory,
@@ -1140,7 +1178,6 @@ describe("ProcessMemoryMonitor", () => {
 
     it("works without sampleBlinkMemory (optional field, backwards compat)", () => {
       const actions: MemoryPressureActions = {
-        clearCaches: vi.fn().mockResolvedValue(undefined),
         destroyHiddenWebviews: vi.fn().mockResolvedValue(undefined),
         hibernateIdleProjects: vi.fn().mockResolvedValue(undefined),
       };
@@ -1336,7 +1373,6 @@ describe("ProcessMemoryMonitor", () => {
     it("startAppMetricsMonitor invokes actions.sampleRendererElu once per poll", () => {
       const sampleRendererElu = vi.fn();
       const actions: MemoryPressureActions = {
-        clearCaches: vi.fn().mockResolvedValue(undefined),
         destroyHiddenWebviews: vi.fn().mockResolvedValue(undefined),
         hibernateIdleProjects: vi.fn().mockResolvedValue(undefined),
         sampleRendererElu,
@@ -1356,7 +1392,6 @@ describe("ProcessMemoryMonitor", () => {
         throw new Error("renderer port closed");
       });
       const actions: MemoryPressureActions = {
-        clearCaches: vi.fn().mockResolvedValue(undefined),
         destroyHiddenWebviews: vi.fn().mockResolvedValue(undefined),
         hibernateIdleProjects: vi.fn().mockResolvedValue(undefined),
         sampleRendererElu,
@@ -1687,7 +1722,6 @@ describe("ProcessMemoryMonitor", () => {
 
     it("works without sampleRendererElu (optional, backwards compat)", () => {
       const actions: MemoryPressureActions = {
-        clearCaches: vi.fn().mockResolvedValue(undefined),
         destroyHiddenWebviews: vi.fn().mockResolvedValue(undefined),
         hibernateIdleProjects: vi.fn().mockResolvedValue(undefined),
       };

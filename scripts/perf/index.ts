@@ -154,6 +154,27 @@ function playwrightBulkIssueWorktrees(): Runner {
   };
 }
 
+function playwrightMemoryPressureResponsiveness(): Runner {
+  return async (rest) => {
+    const buildExitCode = await npmScript("build:e2e:bench");
+    if (buildExitCode !== 0) return buildExitCode;
+    return spawnNode(
+      [
+        resolveBin(
+          ["node_modules/@playwright/test/cli.js", "node_modules/playwright/cli.js"],
+          "playwright"
+        ),
+        "test",
+        "--project=full-resilience",
+        "--workers=1",
+        "e2e/full/resilience/memory-pressure-responsiveness-perf.spec.ts",
+        ...rest,
+      ],
+      { RUN_PERF_MEMORY_PRESSURE: "1" }
+    );
+  };
+}
+
 const REGISTRY: Record<string, Command> = {
   smoke: { summary: "Fast local smoke matrix (run on demand)", runner: harness("smoke") },
   ci: { summary: "CI validation matrix (scheduled + manual dispatch)", runner: harness("ci") },
@@ -182,6 +203,10 @@ const REGISTRY: Record<string, Command> = {
   "memory-compare": {
     summary: "Diff two memory-bench result files into a delta table",
     runner: tsxScript("memory-bench-compare.ts"),
+  },
+  "memory-pressure": {
+    summary: "Renderer responsiveness during sustained synthetic memory pressure",
+    runner: playwrightMemoryPressureResponsiveness(),
   },
   analyze: {
     summary: "Bundle-size visualizer build (ANALYZE=true vite build)",

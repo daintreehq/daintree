@@ -50,27 +50,13 @@ import {
   endWindowRecreating,
   isWindowRecreating,
 } from "../lifecycle/windowRecreationState.js";
+import { readAvailableSystemMemoryMb } from "../utils/systemMemory.js";
 
 const CRASH_LOOP_WINDOW_MS = 60_000;
 const CRASH_LOOP_THRESHOLD = 3;
 
 function getAvailableMemoryMb(): number | null {
-  try {
-    const getInfo = (
-      process as {
-        getSystemMemoryInfo?: () => { free: number; purgeable?: number; total: number };
-      }
-    ).getSystemMemoryInfo;
-    if (typeof getInfo !== "function") return null;
-    const info = getInfo.call(process);
-    const freeKb = typeof info.free === "number" ? info.free : 0;
-    const purgeableKb = typeof info.purgeable === "number" ? info.purgeable : 0;
-    const availableKb = freeKb + purgeableKb;
-    if (availableKb <= 0) return null;
-    return availableKb / 1024;
-  } catch {
-    return null;
-  }
+  return readAvailableSystemMemoryMb();
 }
 
 let windowIpcHandlersRegistered = false;

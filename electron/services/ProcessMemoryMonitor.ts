@@ -9,6 +9,8 @@ import { setAlignedInterval } from "../utils/setAlignedInterval.js";
 import { refreshAppMetricsSnapshot } from "../utils/appMetricsSnapshot.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
 import { getWritesSuppressed } from "./diskPressureState.js";
+import { getIsE2EFaultMode } from "../setup/runtimeFlags.js";
+import { getSystemMemoryThresholds, readAvailableSystemMemoryMb } from "../utils/systemMemory.js";
 
 const POLL_INTERVAL_MS = 30_000;
 const SNAPSHOT_COOLDOWN_MS = 5 * 60 * 1000;
@@ -29,12 +31,6 @@ const UTILITY_MEMORY_FRACTION = 500 / 8192;
 // where several processes individually stay below their own limits.
 const AGGREGATE_MEMORY_FRACTION = 0.25;
 
-// System-wide available-memory floor. Triggers pressure when free + purgeable
-// drops below this fraction of total RAM regardless of how Daintree's own
-// processes are doing — catches the case where the OS is starved by non-
-// Daintree workloads, swap exhaustion, or shrinking purgeable caches on macOS.
-const SYSTEM_LOW_MEMORY_FRACTION = 0.1;
-
 const SNAPSHOT_THRESHOLD_MB = 600;
 
 const MONITORED_TYPES = new Set(["Browser", "Tab", "Utility"]);
@@ -48,6 +44,7 @@ const TREND_WARN_MB_PER_HOUR = 5;
 export const WARMUP_INTERVALS = 5;
 export const PRESSURE_COUNT_TIER2 = 3;
 export const MITIGATION_COOLDOWN_MS = 10 * 60 * 1000;
+export const TIER1_MITIGATION_COOLDOWN_MS = 5 * 60 * 1000;
 
 /**
  * Settle window between applying a tier 1 mitigation step and re-sampling
@@ -279,9 +276,9 @@ export function getEluHighStreaks(): ReadonlyMap<number, number> {
 }
 
 export interface MemoryPressureActions {
-  clearCaches: () => Promise<void>;
   destroyHiddenWebviews: (tier: 1 | 2) => Promise<void>;
   hibernateIdleProjects: () => Promise<void>;
+  evictCachedProjectViews?: () => Promise<void> | void;
   trimPtyHostState?: () => void;
   /**
    * Optional Blink memory sampler. If wired, called once per poll BEFORE
@@ -318,26 +315,13 @@ function getProcessMemoryMb(proc: Electron.ProcessMetric): number {
  * ProjectViewManager.getAvailableMemoryMb so the two memory floors stay in
  * sync.
  */
-function readAvailableMemoryMb(): number | null {
-  try {
-    const getInfo = (
-      process as {
-        getSystemMemoryInfo?: () => { free: number; purgeable?: number; total: number };
-      }
-    ).getSystemMemoryInfo;
-    if (typeof getInfo !== "function") return null;
-    const info = getInfo.call(process);
-    const freeKb = typeof info.free === "number" ? info.free : 0;
-    const purgeableKb = typeof info.purgeable === "number" ? info.purgeable : 0;
-    const availableKb = freeKb + purgeableKb;
-    if (availableKb <= 0) return null;
-    return availableKb / 1024;
-  } catch {
-    return null;
-  }
-}
-
-let currentAppMetricsPollIntervalMs = POLL_INTERVAL_MS;
+const e2ePollIntervalMs = getIsE2EFaultMode()
+  ? Number(process.env.DAINTREE_E2E_APP_METRICS_POLL_INTERVAL_MS)
+  : Number.NaN;
+let currentAppMetricsPollIntervalMs =
+  Number.isFinite(e2ePollIntervalMs) && e2ePollIntervalMs >= 250
+    ? e2ePollIntervalMs
+    : POLL_INTERVAL_MS;
 let rearmAppMetricsTimer: (() => void) | null = null;
 let appMetricsPollFn: (() => void) | null = null;
 
@@ -362,7 +346,7 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
     Utility: totalMemMb * UTILITY_MEMORY_FRACTION,
   };
   const aggregateWarnThresholdMb = totalMemMb * AGGREGATE_MEMORY_FRACTION;
-  const systemLowMemoryThresholdMb = totalMemMb * SYSTEM_LOW_MEMORY_FRACTION;
+  const systemLowMemoryThresholdMb = getSystemMemoryThresholds(totalMemMb).criticalMb;
 
   const snapshotCooldowns = new Map<number, number>();
   // trendState is module-level (see getTrendSnapshot) so diagnostics can read
@@ -373,6 +357,8 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
   let removeWakeListener: (() => void) | null = null;
   let pollCount = 0;
   let consecutivePressureCount = 0;
+  let lastTier1At = 0;
+  let lastTier1ReclaimMb = 0;
   let lastTier2At = 0;
   let mitigationInFlight = false;
   const thresholdExceededPids = new Set<number>();
@@ -505,14 +491,13 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
         hasPressure = true;
       }
 
-      // System-wide signal: trigger pressure when free + purgeable drops below
-      // SYSTEM_LOW_MEMORY_FRACTION of total RAM. Catches OS-level starvation
-      // (heavy non-Daintree workloads, swap exhaustion, shrinking purgeable
-      // caches) that the per-process and aggregate checks cannot see. Null
-      // return means the Chromium API is unavailable (tests / sandboxed forks)
-      // and the signal is skipped.
-      const availableMb = readAvailableMemoryMb();
-      if (availableMb !== null && availableMb < systemLowMemoryThresholdMb) {
+      // System-wide signal uses a RAM-relative floor capped at 1 GB. The cap
+      // avoids treating the large natural file-cache footprint of 64–128 GB
+      // macOS machines as critical pressure while retaining proportional
+      // thresholds on constrained machines.
+      const availableMb = readAvailableSystemMemoryMb();
+      const systemPressureActive = availableMb !== null && availableMb < systemLowMemoryThresholdMb;
+      if (systemPressureActive) {
         hasPressure = true;
       }
 
@@ -538,10 +523,19 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
         consecutivePressureCount++;
       } else {
         consecutivePressureCount = 0;
+        lastTier1At = 0;
+        lastTier1ReclaimMb = 0;
         return;
       }
 
       if (mitigationInFlight) return;
+
+      const now = Date.now();
+      const shouldRunTier1 = lastTier1At === 0 || now - lastTier1At >= TIER1_MITIGATION_COOLDOWN_MS;
+      const shouldCheckTier2 =
+        consecutivePressureCount >= PRESSURE_COUNT_TIER2 &&
+        now - lastTier2At >= MITIGATION_COOLDOWN_MS;
+      if (!shouldRunTier1 && !shouldCheckTier2) return;
 
       mitigationInFlight = true;
       void (async () => {
@@ -560,25 +554,28 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
             // err on the side of escalating if pressure persists.
           }
 
-          logInfo("memory-pressure-tier1-mitigation", {
-            pollCount,
-            consecutivePressureCount,
-            beforeMb: Math.round(beforeMb),
-          });
+          if (shouldRunTier1) {
+            lastTier1At = Date.now();
+            logInfo("memory-pressure-tier1-mitigation", {
+              pollCount,
+              consecutivePressureCount,
+              beforeMb: Math.round(beforeMb),
+            });
 
-          await actions.clearCaches();
-          await actions.destroyHiddenWebviews(1);
+            await actions.destroyHiddenWebviews(1);
 
-          try {
-            actions.trimPtyHostState?.();
-          } catch {
-            /* non-critical */
+            try {
+              actions.trimPtyHostState?.();
+            } catch {
+              /* non-critical */
+            }
+
+            await new Promise<void>((resolve) => setTimeout(resolve, RECLAIM_SETTLE_MS));
           }
-
-          await new Promise<void>((resolve) => setTimeout(resolve, RECLAIM_SETTLE_MS));
 
           let afterMb = 0;
           let pressureRemains = false;
+          let systemPressureRemains = false;
           let resampleFailed = false;
           try {
             for (const proc of refreshAppMetricsSnapshot()) {
@@ -599,6 +596,11 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
             if (afterMb > aggregateWarnThresholdMb) {
               pressureRemains = true;
             }
+            const availableAfterMb = readAvailableSystemMemoryMb();
+            if (availableAfterMb !== null && availableAfterMb < systemLowMemoryThresholdMb) {
+              pressureRemains = true;
+              systemPressureRemains = true;
+            }
           } catch {
             // Re-sample failed — assume pressure persists and treat reclaim
             // as zero so the gate falls through to escalation. Without
@@ -607,22 +609,27 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
             // *suppressing* escalation, which is the opposite of the
             // safe-side intent.
             pressureRemains = true;
+            systemPressureRemains = systemPressureActive;
             resampleFailed = true;
             afterMb = beforeMb;
           }
 
           const deltaMb = resampleFailed ? 0 : Math.max(0, beforeMb - afterMb);
-          logInfo("memory-pressure-tier1-reclaim", {
-            beforeMb: Math.round(beforeMb),
-            afterMb: Math.round(afterMb),
-            deltaMb: Math.round(deltaMb),
-            pressureRemains,
-            resampleFailed,
-          });
+          if (shouldRunTier1) {
+            lastTier1ReclaimMb = deltaMb;
+            logInfo("memory-pressure-tier1-reclaim", {
+              beforeMb: Math.round(beforeMb),
+              afterMb: Math.round(afterMb),
+              deltaMb: Math.round(deltaMb),
+              pressureRemains,
+              resampleFailed,
+            });
+          }
 
           if (
+            shouldCheckTier2 &&
             pressureRemains &&
-            deltaMb < MIN_RECLAIMED_MB &&
+            (systemPressureRemains || lastTier1ReclaimMb < MIN_RECLAIMED_MB) &&
             Date.now() - lastTier2At >= MITIGATION_COOLDOWN_MS
           ) {
             // Stamp the cooldown BEFORE the tier-2 actions so a thrown
@@ -636,6 +643,7 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
               deltaMb: Math.round(deltaMb),
             });
             await actions.destroyHiddenWebviews(2);
+            await actions.evictCachedProjectViews?.();
             await actions.hibernateIdleProjects();
           }
         } catch (err) {
@@ -668,6 +676,8 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
       thresholdExceededPids.clear();
       trendWarnedPids.clear();
       consecutivePressureCount = 0;
+      lastTier1At = 0;
+      lastTier1ReclaimMb = 0;
       lastTier2At = 0;
       mitigationInFlight = false;
     });
