@@ -6,6 +6,7 @@ import type { Scratch } from "@shared/types";
 // keeps this store decoupled from those mocks.
 import { scratchClient } from "@/clients/scratchClient";
 import { getViewWorkspaceId } from "./viewWorkspaceId";
+import { logError } from "@/utils/logger";
 
 /**
  * Renderer-side Zustand store for Scratch (one-off agent workspace) state.
@@ -144,7 +145,9 @@ if (typeof window !== "undefined" && window.electron?.scratch) {
     });
     window.electron.scratch.onRemoved((scratchId) => {
       useScratchStore.getState().removeScratchLocal(scratchId);
-      void closePanelsForRemovedScratch(scratchId);
+      void closePanelsForRemovedScratch(scratchId).catch((error: unknown) => {
+        logError("[ScratchStore] Failed to close panels for removed scratch", error);
+      });
     });
     window.electron.scratch.onSwitch((payload) => {
       if (!payload) return;
