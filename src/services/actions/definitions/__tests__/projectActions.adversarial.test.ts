@@ -60,7 +60,7 @@ beforeEach(() => {
 
 describe("projectActions adversarial", () => {
   describe("MRU cycle fallbacks", () => {
-    function mockMruState() {
+    function mockMruState(currentProject: { id: string } | null = { id: "p-current" }) {
       const switchProject = vi.fn().mockResolvedValue(undefined);
       const reopenProject = vi.fn().mockResolvedValue(undefined);
       const projects: Project[] = [
@@ -70,7 +70,7 @@ describe("projectActions adversarial", () => {
       ];
 
       projectStoreMock.getState.mockReturnValue({
-        currentProject: { id: "p-current" },
+        currentProject,
         projects,
         switchProject,
         reopenProject,
@@ -98,6 +98,24 @@ describe("projectActions adversarial", () => {
 
       expect(switchProject).toHaveBeenCalledWith("p-older");
       expect(reopenProject).not.toHaveBeenCalled();
+    });
+
+    it("project.mruCycleOlder returns to the MRU head when a scratch cleared the current project", async () => {
+      const { switchProject } = mockMruState(null);
+
+      const { run } = setupActions();
+      await run("project.mruCycleOlder");
+
+      expect(switchProject).toHaveBeenCalledWith("p-current");
+    });
+
+    it("project.mruCycleNewer wraps to the MRU tail when a scratch cleared the current project", async () => {
+      const { switchProject } = mockMruState(null);
+
+      const { run } = setupActions();
+      await run("project.mruCycleNewer");
+
+      expect(switchProject).toHaveBeenCalledWith("p-older");
     });
   });
 

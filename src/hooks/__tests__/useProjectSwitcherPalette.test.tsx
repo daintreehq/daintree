@@ -338,6 +338,36 @@ describe("useProjectSwitcherPalette", () => {
       expect(result.current.results[1]!.id).toBe("project-2");
     });
 
+    it("defaults to the MRU head when a scratch is active (no project is active)", async () => {
+      // A scratch clears `currentProject` without touching any project's
+      // `lastOpened`, and the departed project reconciles to "background". The
+      // preselected row must be the pre-scratch project itself, not the row
+      // after it — there is no active row to skip past (#11085).
+      const scratchProjects = multipleProjects.map((project) => ({
+        ...project,
+        status: "background" as const,
+      }));
+      // Supplied out of MRU order so the assertion proves the computed sort,
+      // not the fixture's array position.
+      projectState.projects = [scratchProjects[2]!, scratchProjects[0]!, scratchProjects[1]!];
+      projectState.currentProject = null;
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(multipleProjects.map((p) => p.id)));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open();
+      });
+
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(3);
+      });
+
+      const freshest = [...scratchProjects].sort((a, b) => b.lastOpened - a.lastOpened)[0]!;
+      expect(result.current.results.some((project) => project.isActive)).toBe(false);
+      expect(result.current.results[result.current.selectedIndex]?.id).toBe(freshest.id);
+    });
+
     it("sorts by lastOpened, ignoring frecencyScore", async () => {
       const projectsWithMismatchedScores = [
         {

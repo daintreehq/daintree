@@ -452,11 +452,14 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         setDropdownIsOpen(true);
       }
       setQuery("");
-      // Preselect row 2 (the MRU switch target) against the list the palette is
-      // about to render. `mode` state hasn't committed yet, so `results` still
-      // describes the mode we're leaving — build the destination list instead.
+      // Preselect the MRU switch target — the first row that isn't the project
+      // we're already in — against the list the palette is about to render.
+      // `mode` state hasn't committed yet, so `results` still describes the mode
+      // we're leaving; build the destination list instead. From a scratch there
+      // is no active row, so this lands on row 1 (the project used just before
+      // the scratch) rather than skipping past it (#11085).
       const initialResults = buildResults(sortedProjects, nextMode, "", false);
-      const initial = initialResults[initialResults.length >= 2 ? 1 : 0];
+      const initial = initialResults.find((project) => !project.isActive) ?? initialResults[0];
       setSelectedProjectId(initial?.id ?? null);
     },
     [sortedProjects]
