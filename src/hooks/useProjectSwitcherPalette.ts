@@ -6,7 +6,9 @@ import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { usePaletteStore } from "@/store/paletteStore";
 import { notify } from "@/lib/notify";
+import { closeAndAnnounce } from "@/lib/accessibility";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
+import { logError } from "@/utils/logger";
 import type { Project, Scratch } from "@shared/types";
 import type { ProjectStatusMap } from "@shared/types/ipc/project";
 import { projectClient, scratchClient } from "@/clients";
@@ -23,6 +25,19 @@ export interface SearchableScratch {
   lastOpened: number;
   isActive: boolean;
 }
+
+/**
+ * Frozen targets for a pending "delete all scratches" confirm.
+ *
+ * Deliberately excludes the live fields (`isActive`, `lastOpened`): the run needs
+ * only the ids it agreed to delete plus the names it may have to name in a failure
+ * summary. Re-deriving from the reactive `scratches` array mid-run would shrink the
+ * list as each removal lands, and would silently enrol a scratch created after the
+ * user read the count (lesson #4729).
+ */
+export type DeleteAllScratchesSnapshot = ReadonlyArray<
+  Readonly<Pick<SearchableScratch, "id" | "name">>
+>;
 
 export interface SearchableProject {
   id: string;
@@ -145,6 +160,17 @@ export interface UseProjectSwitcherPaletteReturn {
   selectScratch: (scratch: SearchableScratch) => Promise<void>;
   /** Remove a scratch (deletes folder + DB row). Used by context menu. */
   removeScratchAction: (scratchId: string) => Promise<void>;
+  /**
+   * Targets of a pending "delete all scratches" confirmation, frozen when the
+   * user opened it, or null when no confirm is open.
+   */
+  deleteAllScratchesConfirm: DeleteAllScratchesSnapshot | null;
+  /** Open the bulk-delete confirmation. A no-op when there are no scratches. */
+  requestDeleteAllScratches: () => void;
+  dismissDeleteAllScratchesConfirm: () => void;
+  /** Delete every scratch in the frozen snapshot. Emits one summary notification. */
+  confirmDeleteAllScratches: () => Promise<void>;
+  isDeletingAllScratches: boolean;
   /** Rename a scratch in place. Leaves the palette open. A blank name is a no-op. */
   renameScratch: (scratchId: string, name: string) => Promise<void>;
   /**
@@ -238,6 +264,12 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     project: Project;
   } | null>(null);
   const [isDeletingOriginalScratch, setIsDeletingOriginalScratch] = useState(false);
+  const [deleteAllScratchesConfirm, setDeleteAllScratchesConfirm] =
+    useState<DeleteAllScratchesSnapshot | null>(null);
+  const [isDeletingAllScratches, setIsDeletingAllScratches] = useState(false);
+  // Rapid double-Enter on the confirm button lands twice before React re-renders
+  // the disabled state, so the gate has to be synchronous (lesson #4024).
+  const isDeletingAllScratchesRef = useRef(false);
   const prefetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prefetchInFlightRef = useRef<Set<string>>(new Set());
   const prefetchLastAtRef = useRef<Map<string, number>>(new Map());
@@ -888,6 +920,118 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     [removeScratchActionStore]
   );
 
+  const requestDeleteAllScratches = useCallback(() => {
+    if (isDeletingAllScratchesRef.current || deleteAllScratchesConfirm) return;
+    if (scratchResults.length === 0) return;
+    setDeleteAllScratchesConfirm(
+      scratchResults.map((scratch) => ({ id: scratch.id, name: scratch.name }))
+    );
+  }, [scratchResults, deleteAllScratchesConfirm]);
+
+  const dismissDeleteAllScratchesConfirm = useCallback(() => {
+    if (isDeletingAllScratchesRef.current) return;
+    setDeleteAllScratchesConfirm(null);
+  }, []);
+
+  // A `scratch:removed` push from another window can empty the list under an open
+  // dialog. Drop it only once every target is gone — a partially-stale snapshot
+  // still has work to do, and shrinking it here would rewrite the count the user
+  // already read. Skipped while our own run is in flight, or the last successful
+  // removal would tear the dialog down before the summary lands.
+  useEffect(() => {
+    if (!deleteAllScratchesConfirm || isDeletingAllScratchesRef.current) return;
+    const liveIds = new Set(scratches.map((scratch: Scratch) => scratch.id));
+    if (deleteAllScratchesConfirm.some((target) => liveIds.has(target.id))) return;
+    setDeleteAllScratchesConfirm(null);
+  }, [deleteAllScratchesConfirm, scratches]);
+
+  const confirmDeleteAllScratches = useCallback(async () => {
+    if (isDeletingAllScratchesRef.current) return;
+    const targets = deleteAllScratchesConfirm;
+    if (!targets || targets.length === 0) {
+      setDeleteAllScratchesConfirm(null);
+      return;
+    }
+
+    isDeletingAllScratchesRef.current = true;
+    setIsDeletingAllScratches(true);
+
+    const total = targets.length;
+    const noun = total === 1 ? "scratch workspace" : "scratch workspaces";
+
+    try {
+      // Fanned out rather than awaited in sequence: `scratch:remove` has no rate
+      // limiter and each scratch owns a disjoint folder, so there is nothing to
+      // serialize. `allSettled` also guarantees one bad target can't strand the rest.
+      const settled = await Promise.allSettled(
+        targets.map((target) => removeScratchActionStore(target.id))
+      );
+
+      const failures: { name: string; reason: string }[] = [];
+      settled.forEach((outcome, index) => {
+        if (outcome.status !== "rejected") return;
+        const target = targets[index]!;
+        failures.push({
+          name: target.name,
+          reason: formatErrorMessage(outcome.reason, "Deletion failed"),
+        });
+        logError(`[ProjectSwitcher] Failed to delete scratch ${target.id}`, outcome.reason);
+      });
+
+      const successCount = total - failures.length;
+      const firstFailure = failures[0];
+
+      // Close before announcing: VoiceOver drops live-region updates raised from
+      // outside a focused `aria-modal` subtree (lesson #9434).
+      const close = () => setDeleteAllScratchesConfirm(null);
+
+      if (failures.length === 0) {
+        const title = `Deleted ${total} ${noun}`;
+        closeAndAnnounce(close, title);
+        // Transient: the section emptying in front of the user is the real
+        // confirmation — this is a one-shot receipt, not an inbox entry.
+        notify({
+          type: "success",
+          title,
+          message:
+            total === 1
+              ? "Its terminals were closed and its folder was deleted."
+              : "Their terminals were closed and their folders were deleted.",
+          transient: true,
+          priority: "high",
+          context: { eventKind: "uiFeedback" },
+        });
+      } else if (successCount === 0) {
+        const title = total === 1 ? "Couldn't delete scratch" : "Couldn't delete scratches";
+        closeAndAnnounce(close, title, "assertive");
+        // No recovery action: the scratch rows survived the failure and are
+        // themselves the retry surface.
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+        notify({
+          type: "error",
+          title,
+          message: firstFailure
+            ? `${firstFailure.name}: ${firstFailure.reason}`
+            : `All ${total} deletions failed.`,
+        });
+      } else {
+        const title = `Deleted ${successCount} of ${total} ${noun}`;
+        closeAndAnnounce(close, title);
+        notify({
+          type: "warning",
+          title,
+          message:
+            failures.length === 1 && firstFailure
+              ? `${firstFailure.name} failed: ${firstFailure.reason}`
+              : `${failures.length} couldn't be deleted.`,
+        });
+      }
+    } finally {
+      isDeletingAllScratchesRef.current = false;
+      setIsDeletingAllScratches(false);
+    }
+  }, [deleteAllScratchesConfirm, removeScratchActionStore]);
+
   const saveAsProject = useCallback(
     async (scratchId: string) => {
       const scratch = scratchResults.find((s) => s.id === scratchId);
@@ -1025,6 +1169,11 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     createScratch,
     selectScratch,
     removeScratchAction,
+    deleteAllScratchesConfirm,
+    requestDeleteAllScratches,
+    dismissDeleteAllScratchesConfirm,
+    confirmDeleteAllScratches,
+    isDeletingAllScratches,
     renameScratch,
     saveAsProject,
     saveAsProjectConfirm,

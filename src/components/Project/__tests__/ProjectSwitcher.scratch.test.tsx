@@ -30,6 +30,11 @@ vi.mock("@/hooks/useKeybinding", () => ({
 
 const openDropdown = vi.fn();
 
+// Mutable so a spec can model a bulk-delete confirm being open across a render.
+const paletteState: { deleteAllScratchesConfirm: { id: string; name: string }[] | null } = {
+  deleteAllScratchesConfirm: null,
+};
+
 vi.mock("@/hooks", async () => {
   const deferred = await vi.importActual<typeof import("@/hooks/useDeferredLoading")>(
     "@/hooks/useDeferredLoading"
@@ -70,6 +75,11 @@ vi.mock("@/hooks", async () => {
       createScratch: vi.fn(),
       selectScratch: vi.fn(),
       removeScratchAction: vi.fn(),
+      deleteAllScratchesConfirm: paletteState.deleteAllScratchesConfirm,
+      requestDeleteAllScratches: vi.fn(),
+      dismissDeleteAllScratchesConfirm: vi.fn(),
+      confirmDeleteAllScratches: vi.fn(),
+      isDeletingAllScratches: false,
       renameScratch: vi.fn(),
     }),
   };
@@ -152,6 +162,7 @@ beforeEach(() => {
   projectStoreState.projects = [];
   projectStoreState.currentProject = null;
   scratchStoreState.currentScratch = null;
+  paletteState.deleteAllScratchesConfirm = null;
 });
 
 describe("ProjectSwitcher with an active scratch", () => {
@@ -201,6 +212,18 @@ describe("ProjectSwitcher with an active scratch", () => {
     render(<ProjectSwitcher />);
 
     expect(screen.getByText("Open Project...")).toBeTruthy();
+  });
+
+  it("keeps the palette mounted while a bulk scratch delete is still running", () => {
+    // Deleting the last scratch nulls `currentScratch` mid-run. With no projects to
+    // fall back on, the empty-state branch would take over and unmount the palette —
+    // taking the confirm dialog, still spinning on the delete, with it.
+    paletteState.deleteAllScratchesConfirm = [{ id: "scratch-1", name: "Spike" }];
+
+    render(<ProjectSwitcher />);
+
+    expect(screen.queryByText("Open Project...")).toBeNull();
+    expect(screen.getByText("Select Project...")).toBeTruthy();
   });
 
   it("prefers an open project over a lingering scratch pointer", () => {

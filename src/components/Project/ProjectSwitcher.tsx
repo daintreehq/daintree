@@ -167,8 +167,14 @@ export function ProjectSwitcher() {
     />
   );
 
+  // Deleting the last scratch clears `currentScratch`, so a zero-project user
+  // would drop straight to the bare "Open Project…" branch below — unmounting the
+  // palette, and with it the confirm dialog still spinning on the delete. Hold the
+  // palette open until the run resolves.
+  const hasPendingBulkScratchDelete = Boolean(projectSwitcher.deleteAllScratchesConfirm);
+
   if (!currentProject && !currentScratch) {
-    if (projects.length > 0) {
+    if (projects.length > 0 || hasPendingBulkScratchDelete) {
       return (
         <>
           {stopDialog}
@@ -207,6 +213,11 @@ export function ProjectSwitcher() {
             onCreateScratch={(name) => void projectSwitcher.createScratch(name)}
             onSelectScratch={(scratch) => void projectSwitcher.selectScratch(scratch)}
             onRemoveScratch={(scratchId) => void projectSwitcher.removeScratchAction(scratchId)}
+            onRequestDeleteAllScratches={projectSwitcher.requestDeleteAllScratches}
+            deleteAllScratchesConfirm={projectSwitcher.deleteAllScratchesConfirm}
+            onDismissDeleteAllScratchesConfirm={projectSwitcher.dismissDeleteAllScratchesConfirm}
+            onConfirmDeleteAllScratches={() => void projectSwitcher.confirmDeleteAllScratches()}
+            isDeletingAllScratches={projectSwitcher.isDeletingAllScratches}
             onRenameScratch={(scratchId, name) =>
               void projectSwitcher.renameScratch(scratchId, name)
             }
@@ -283,6 +294,11 @@ export function ProjectSwitcher() {
         onCreateScratch={(name) => void projectSwitcher.createScratch(name)}
         onSelectScratch={(scratch) => void projectSwitcher.selectScratch(scratch)}
         onRemoveScratch={(scratchId) => void projectSwitcher.removeScratchAction(scratchId)}
+        onRequestDeleteAllScratches={projectSwitcher.requestDeleteAllScratches}
+        deleteAllScratchesConfirm={projectSwitcher.deleteAllScratchesConfirm}
+        onDismissDeleteAllScratchesConfirm={projectSwitcher.dismissDeleteAllScratchesConfirm}
+        onConfirmDeleteAllScratches={() => void projectSwitcher.confirmDeleteAllScratches()}
+        isDeletingAllScratches={projectSwitcher.isDeletingAllScratches}
         onRenameScratch={(scratchId, name) => void projectSwitcher.renameScratch(scratchId, name)}
         onDropdownCloseAutoFocus={suppressTooltipDuringFocusRestore}
       >
