@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { Scratch } from "@shared/types";
 
 vi.mock("@/clients/scratchClient", () => ({
   scratchClient: {
@@ -100,10 +101,14 @@ describe("scratchStore — panel teardown on scratch removal", () => {
   it("clears the current scratch pointer regardless of which view received the removal", async () => {
     await loadStoreForView("project-abc");
     const { useScratchStore } = await import("../scratchStore");
-    useScratchStore.setState({
-      currentScratch: { id: "scratch-1", name: "s", path: "/tmp/s" } as never,
-      scratches: [{ id: "scratch-1", name: "s", path: "/tmp/s" } as never],
-    });
+    const scratch: Scratch = {
+      id: "scratch-1",
+      name: "s",
+      path: "/tmp/s",
+      createdAt: 0,
+      lastOpened: 0,
+    };
+    useScratchStore.setState({ currentScratch: scratch, scratches: [scratch] });
 
     onRemoved?.("scratch-1");
 

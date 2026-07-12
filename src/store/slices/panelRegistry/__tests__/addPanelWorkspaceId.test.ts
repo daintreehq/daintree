@@ -7,6 +7,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { terminalClient, projectClient } from "@/clients";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -75,22 +76,20 @@ beforeEach(() => {
 
 const { usePanelStore } = await import("../../../panelStore");
 
+const spawnMock = vi.mocked(terminalClient.spawn);
+const getSettingsMock = vi.mocked(projectClient.getSettings);
+
 /** Seed the view identity main stamps onto every WebContentsView at creation. */
 function setViewWorkspaceId(id: string | undefined): void {
-  (
-    window as unknown as { __DAINTREE_INITIAL_PROJECT__?: { id: string } }
-  ).__DAINTREE_INITIAL_PROJECT__ = id ? { id } : undefined;
+  window.__DAINTREE_INITIAL_PROJECT__ = id ? { id } : undefined;
 }
 
 async function drainMicrotasks(iterations = 100): Promise<void> {
   for (let i = 0; i < iterations; i++) await Promise.resolve();
 }
 
-async function getSpawnArgs(): Promise<Record<string, unknown> | undefined> {
-  const { terminalClient } = (await import("@/clients")) as unknown as {
-    terminalClient: { spawn: ReturnType<typeof vi.fn> };
-  };
-  return terminalClient.spawn.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+function spawnedProjectId(): string | undefined {
+  return spawnMock.mock.calls[0]?.[0]?.projectId;
 }
 
 describe("addPanel workspace ownership (#11079)", () => {
@@ -99,13 +98,9 @@ describe("addPanel workspace ownership (#11079)", () => {
     const { reset } = usePanelStore.getState();
     await reset();
 
-    const { terminalClient, projectClient } = (await import("@/clients")) as unknown as {
-      terminalClient: { spawn: ReturnType<typeof vi.fn> };
-      projectClient: { getSettings: ReturnType<typeof vi.fn> };
-    };
-    terminalClient.spawn.mockReset();
-    terminalClient.spawn.mockImplementation(async ({ id }: { id?: string }) => id ?? "spawn-id");
-    projectClient.getSettings.mockClear();
+    spawnMock.mockReset();
+    spawnMock.mockImplementation(async ({ id }) => id ?? "spawn-id");
+    getSettingsMock.mockClear();
   });
 
   it("stamps the scratch id on a terminal spawned in a scratch view", async () => {
@@ -115,7 +110,7 @@ describe("addPanel workspace ownership (#11079)", () => {
     await usePanelStore.getState().addPanel({ requestedId: "term-1", bypassLimits: true });
     await drainMicrotasks();
 
-    expect((await getSpawnArgs())?.projectId).toBe("scratch-uuid");
+    expect(spawnedProjectId()).toBe("scratch-uuid");
   });
 
   it("does not fetch project settings for a scratch workspace", async () => {
@@ -125,10 +120,7 @@ describe("addPanel workspace ownership (#11079)", () => {
     await usePanelStore.getState().addPanel({ requestedId: "term-2", bypassLimits: true });
     await drainMicrotasks();
 
-    const { projectClient } = (await import("@/clients")) as unknown as {
-      projectClient: { getSettings: ReturnType<typeof vi.fn> };
-    };
-    expect(projectClient.getSettings).not.toHaveBeenCalled();
+    expect(getSettingsMock).not.toHaveBeenCalled();
   });
 
   it("prefers the current project over the view id when a project is active", async () => {
@@ -140,12 +132,8 @@ describe("addPanel workspace ownership (#11079)", () => {
     await usePanelStore.getState().addPanel({ requestedId: "term-3", bypassLimits: true });
     await drainMicrotasks();
 
-    expect((await getSpawnArgs())?.projectId).toBe("project-abc");
-
-    const { projectClient } = (await import("@/clients")) as unknown as {
-      projectClient: { getSettings: ReturnType<typeof vi.fn> };
-    };
-    expect(projectClient.getSettings).toHaveBeenCalledWith("project-abc");
+    expect(spawnedProjectId()).toBe("project-abc");
+    expect(getSettingsMock).toHaveBeenCalledWith("project-abc");
   });
 
   it("leaves the terminal unowned when the view has no workspace identity", async () => {
@@ -155,6 +143,6 @@ describe("addPanel workspace ownership (#11079)", () => {
     await usePanelStore.getState().addPanel({ requestedId: "term-4", bypassLimits: true });
     await drainMicrotasks();
 
-    expect((await getSpawnArgs())?.projectId).toBeUndefined();
+    expect(spawnedProjectId()).toBeUndefined();
   });
 });
