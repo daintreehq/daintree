@@ -106,6 +106,18 @@ export class HibernationManager {
     ) {
       return;
     }
+    // Never arm without a workspace to key the entry on. `_fireHibernate` would
+    // tear the session down (kill the PTY, revoke, clear the terminal) and then
+    // skip every `if (projectId)` persistence branch — destroying the
+    // conversation instead of hibernating it. Bailing here keeps the session
+    // alive until a workspace is known; because we return BEFORE touching
+    // `_hibernateArmedFor`, an arm already captured against a real workspace
+    // survives a transient null and keeps its own countdown (the anti-bleed
+    // capture below). Reachable when the active workspace pointer is
+    // transiently null — e.g. the scratch pointer being cleared out from under
+    // a closed panel (#11068).
+    const workspaceId = inputs.currentProject?.id ?? null;
+    if (!workspaceId) return;
     this.clearTimer();
     // Capture the workspace at arm time so a workspace switch between panel
     // close and hibernate fire doesn't write workspace A's session into
@@ -116,7 +128,7 @@ export class HibernationManager {
     this._hibernateArmedFor = {
       terminalId,
       agentId: useHelpPanelStore.getState().agentId,
-      projectId: inputs.currentProject?.id ?? null,
+      projectId: workspaceId,
     };
     const initialTerminalId = terminalId;
     const initialAgentId = this._hibernateArmedFor.agentId;

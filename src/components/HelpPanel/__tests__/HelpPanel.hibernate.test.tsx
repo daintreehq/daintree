@@ -1540,6 +1540,68 @@ describe("HelpPanel — idle hibernation timer", () => {
     }
   });
 
+  // #11068 follow-up: arming with a null workspace used to be possible (the
+  // armed-identity tuple is only terminal+agent, so a later arm with the SAME
+  // tuple early-returns). The timer would then fire, tear the PTY down, and skip
+  // every `if (projectId)` persistence branch — destroying the conversation
+  // instead of hibernating it. Now we refuse to arm until a workspace is known.
+  it("does not arm — and so cannot destroy the session — while the active workspace is null", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      helpPanelState.isOpen = false;
+      helpPanelState.terminalId = "t1";
+      helpPanelState.agentId = "claude";
+      helpPanelState.sessionId = "live-session";
+      panelStoreState.panelsById = {
+        t1: {
+          id: "t1",
+          kind: "terminal",
+          spawnStatus: "ready",
+          cwd: "/scratches/scratch-1",
+          agentState: "idle",
+        },
+      };
+      // Panel closed with a live terminal, but no workspace pointer yet.
+      projectStoreState.currentProject = null;
+      scratchStoreState.currentScratch = null;
+      mockGracefulKill.mockResolvedValue("resume-token-scratch");
+
+      let view: ReturnType<typeof render> | undefined;
+      await act(async () => {
+        view = render(<HelpPanel width={380} />);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+      });
+
+      // Nothing armed: the session is left intact rather than killed unsaved.
+      expect(mockGracefulKill).not.toHaveBeenCalled();
+      expect(panelStoreState.removePanel).not.toHaveBeenCalled();
+
+      // The workspace resolves (same terminal + agent — the tuple that used to
+      // early-return past a sticky null arm). Hibernation must now key on it.
+      scratchStoreState.currentScratch = { id: "scratch-1", path: "/scratches/scratch-1" };
+      await act(async () => {
+        view!.rerender(<HelpPanel width={380} />);
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+      });
+
+      expect(mockGracefulKill).toHaveBeenCalledWith("t1");
+      expect(helpPanelState.setHibernateSession).toHaveBeenCalledWith("scratch-1", {
+        sessionId: "resume-token-scratch",
+        cwd: "/scratches/scratch-1",
+        agentId: "claude",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not call gracefulKill while the agent is working — defers via the busy re-check", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
