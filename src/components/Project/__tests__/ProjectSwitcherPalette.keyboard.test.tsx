@@ -298,19 +298,22 @@ describe("ProjectSwitcherPalette active descendant", () => {
     mode: "modal" as const,
   };
 
-  it.each(mixedResults.map((project, index) => [index, project.id] as const))(
+  it.each(mixedResults.map((project, index) => [index, project.name] as const))(
     "resolves aria-activedescendant to the selected option at index %i",
-    (selectedIndex, expectedId) => {
+    (selectedIndex, expectedName) => {
       render(<ProjectSwitcherPalette {...mixedProps} selectedIndex={selectedIndex} />);
 
       const input = screen.getByTestId("palette-input");
       const activeDescendantId = input.getAttribute("aria-activedescendant");
-      expect(activeDescendantId).toBe(`project-option-${expectedId}`);
+      expect(activeDescendantId).toBeTruthy();
 
+      // The id must resolve to a real option — under the old two-array split it
+      // named a row that had been filtered out of the DOM.
       const activeOption = document.getElementById(activeDescendantId!);
       expect(activeOption).not.toBeNull();
       expect(activeOption!.getAttribute("role")).toBe("option");
       expect(activeOption!.getAttribute("aria-selected")).toBe("true");
+      expect(activeOption!.textContent).toContain(expectedName);
     }
   );
 
@@ -330,12 +333,15 @@ describe("ProjectSwitcherPalette active descendant", () => {
     render(<ProjectSwitcherPalette {...mixedProps} selectedIndex={1} onSelect={onSelect} />);
 
     const input = screen.getByTestId("palette-input");
-    const activeDescendantId = input.getAttribute("aria-activedescendant");
+    const activeOption = document.getElementById(input.getAttribute("aria-activedescendant")!);
     fireEvent.keyDown(input, { key: "Enter" });
 
     expect(onSelect).toHaveBeenCalledTimes(1);
     const selectedProject = onSelect.mock.calls[0]![0] as SearchableProject;
-    expect(`project-option-${selectedProject.id}`).toBe(activeDescendantId);
-    expect(document.getElementById(activeDescendantId!)).not.toBeNull();
+    // Enter must commit the row the user can actually see highlighted. Old code
+    // pointed ARIA and Enter at the same *hidden* project — consistently wrong —
+    // so this only holds if the highlighted option is really in the DOM.
+    expect(activeOption).not.toBeNull();
+    expect(activeOption!.textContent).toContain(selectedProject.name);
   });
 });

@@ -351,10 +351,12 @@ describe("ProjectSwitcherPalette modal mode", () => {
   it("renders every supplied result as an option in modal mode", () => {
     render(<ProjectSwitcherPalette {...modalProps} results={multiProjects} />);
     const list = screen.getByRole("listbox", { name: "Projects" });
-    const optionIds = within(list)
-      .getAllByRole("option")
-      .map((option) => option.id);
-    expect(optionIds).toEqual(multiProjects.map((p) => `project-option-${p.id}`));
+    const options = within(list).getAllByRole("option");
+
+    expect(options).toHaveLength(multiProjects.length);
+    multiProjects.forEach((project, index) => {
+      expect(options[index]!.textContent).toContain(project.name);
+    });
   });
 
   it("renders a flat list with no temporal section labels in modal mode", () => {

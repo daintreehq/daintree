@@ -1419,25 +1419,111 @@ describe("useProjectSwitcherPalette", () => {
       expect(projectState.reopenProject).not.toHaveBeenCalledWith("closed");
     });
 
-    it("preselects row 2 of the destination list when reopening in a different mode", async () => {
+    it("preselects against the destination list, not the mode being left", async () => {
+      // Only the current project survives modal scope here, so the row-2 rule
+      // MUST resolve against the destination list: counting all projects (or
+      // the outgoing mode's list) would preselect a row modal doesn't have.
+      projectState.projects = [interleaved[0]!, interleaved[1]!];
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(["current", "closed"]));
+
       const { result } = renderHook(() => useProjectSwitcherPalette());
 
       act(() => {
         result.current.open("dropdown");
       });
       await waitFor(() => {
-        expect(result.current.results).toHaveLength(interleaved.length);
+        expect(result.current.results).toHaveLength(2);
       });
-      expect(result.current.results[result.current.selectedIndex]!.id).toBe("closed");
+      // Dropdown lists both, so row 2 is the closed project.
+      expect(result.current.selectedIndex).toBe(1);
+      expect(result.current.results[1]!.id).toBe("closed");
 
       act(() => {
         result.current.open("modal");
       });
       await waitFor(() => {
-        expect(result.current.results).toHaveLength(2);
+        expect(result.current.results).toHaveLength(1);
       });
-      // Same row-2 rule, but resolved against the scoped list this time.
-      expect(result.current.results[result.current.selectedIndex]!.id).toBe("background");
+      // Modal has a single row — the only valid selection is it.
+      expect(result.current.selectedIndex).toBe(0);
+      expect(result.current.results[0]!.id).toBe("current");
+    });
+
+    it("keeps a switchable project past the unscoped window inside modal browse", async () => {
+      // Enough recent idle projects to fill the results cap on their own. The
+      // background project is the stalest of all, so scoping BEFORE the cap is
+      // the only way it survives — capping first would slice it away.
+      const idle = Array.from({ length: 20 }, (_, i) => ({
+        id: `idle-${i}`,
+        name: `Idle ${i}`,
+        path: `/repo/idle-${i}`,
+        emoji: "🌿",
+        lastOpened: 1000 - i,
+        frecencyScore: 1.0,
+        status: "closed" as const,
+      }));
+      const stale = {
+        id: "stale-background",
+        name: "Stale Background",
+        path: "/repo/stale",
+        emoji: "🌴",
+        lastOpened: 1,
+        frecencyScore: 1.0,
+        status: "background" as const,
+      };
+
+      projectState.projects = [...idle, stale];
+      projectState.currentProject = null;
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats([...idle.map((p) => p.id), stale.id]));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open("modal");
+      });
+
+      await waitFor(() => {
+        expect(result.current.results.map((p) => p.id)).toEqual(["stale-background"]);
+      });
+    });
+
+    it("keeps the highlight on the selected project when a row above it disappears", async () => {
+      const withThreeVisible = [
+        interleaved[0]!,
+        { ...interleaved[2]!, id: "bg-a", name: "Background A", lastOpened: 250 },
+        { ...interleaved[2]!, id: "bg-b", name: "Background B", lastOpened: 150 },
+        { ...interleaved[2]!, id: "bg-c", name: "Background C", lastOpened: 50 },
+      ];
+      projectState.projects = withThreeVisible;
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(withThreeVisible.map((p) => p.id)));
+
+      const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open("modal");
+      });
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(4);
+      });
+
+      // Land on a MIDDLE row: bg-b at index 2.
+      act(() => {
+        result.current.selectNext();
+      });
+      expect(result.current.results[result.current.selectedIndex]!.id).toBe("bg-b");
+
+      // A row ABOVE the selection goes away — every later row shifts up one.
+      act(() => {
+        projectState.projects = withThreeVisible.filter((p) => p.id !== "bg-a");
+        rerender();
+      });
+
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(3);
+      });
+      // The highlight tracks the project, not the slot it used to occupy.
+      expect(result.current.results[result.current.selectedIndex]!.id).toBe("bg-b");
+      expect(result.current.selectedIndex).toBeLessThan(result.current.results.length);
     });
 
     it("still finds a scoped-out project by search", async () => {
