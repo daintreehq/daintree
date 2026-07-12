@@ -18,7 +18,12 @@ import {
   CONVERT_PR_TO_DRAFT_MUTATION,
   MARK_PR_READY_FOR_REVIEW_MUTATION,
 } from "./GitHubQueries.js";
-import { clearGitHubCaches, clearPRCaches, issueTooltipCache } from "./GitHubCaches.js";
+import {
+  clearGitHubCaches,
+  clearPRCaches,
+  invalidateRepoIssueCachesForAssignment,
+  issueTooltipCache,
+} from "./GitHubCaches.js";
 import {
   isoToMs,
   restToForgeIssue,
@@ -292,6 +297,7 @@ export async function assignIssueImpl(
       `Failed to assign issue #${issueNumber} to ${username}: HTTP ${response.status}${text ? ` — ${text.slice(0, 200)}` : ""}`
     );
   }
+  invalidateRepoIssueCachesForAssignment(repo.owner, repo.repo, issueNumber);
 }
 
 export async function unassignIssueImpl(
@@ -321,6 +327,7 @@ export async function unassignIssueImpl(
       `Failed to unassign issue #${issueNumber} from ${username}: HTTP ${response.status}${text ? ` — ${text.slice(0, 200)}` : ""}`
     );
   }
+  invalidateRepoIssueCachesForAssignment(repo.owner, repo.repo, issueNumber);
 }
 
 export async function createPRImpl(repo: RepoRef, input: CreatePRInput): Promise<PR> {

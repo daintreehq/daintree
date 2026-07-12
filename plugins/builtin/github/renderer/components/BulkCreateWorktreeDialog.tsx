@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { cn } from "@/lib/utils";
 import { worktreeClient, forgeClient, agentSettingsClient, systemClient } from "@/clients";
-import { mutateCacheEntries } from "@/lib/forgeResourceCache";
+import { patchIssueAssigneeCache } from "@/lib/forgeResourceCache";
 import { logError } from "@/utils/logger";
 import { resolveIssuePrequeries } from "./bulkCreatePrequery";
 import { notify } from "@/lib/notify";
@@ -706,27 +706,15 @@ export function BulkCreateWorktreeDialog({
                       // open issues dropdown reflects the assignment immediately
                       // instead of waiting for the next SWR revalidate (#10667).
                       // Mirrors the single-create flow (#10529). The dedup guard
-                      // inside the transform makes a re-assign a no-op, and the
+                      // inside the helper makes a re-assign a no-op, and the
                       // forge refresh remains the correctness backstop.
                       try {
-                        mutateCacheEntries(rootPath, "issue", (entry) => {
-                          let changed = false;
-                          const items = entry.items.map((item) => {
-                            // `assignees` exists only on Issue, so this `in` check
-                            // narrows the Issue|PR union and skips non-issue slots.
-                            if (!("assignees" in item) || item.number !== itemNumber) return item;
-                            if (item.assignees.some((a) => a.login === username)) return item;
-                            changed = true;
-                            return {
-                              ...item,
-                              assignees: [
-                                ...item.assignees,
-                                { login: username, avatarUrl: assignAvatarUrl, rawData: null },
-                              ],
-                            };
-                          });
-                          return changed ? { ...entry, items } : null;
-                        });
+                        patchIssueAssigneeCache(
+                          rootPath,
+                          itemNumber,
+                          { login: username, avatarUrl: assignAvatarUrl },
+                          true
+                        );
                       } catch (cacheErr) {
                         // A cache-layer throw must not masquerade as an assignment
                         // failure: the server-side assign already succeeded here.

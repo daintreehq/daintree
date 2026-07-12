@@ -17,6 +17,8 @@ import {
   prListCache,
   getRepoListEpoch,
   invalidateRepoListCachesForCountChange,
+  invalidateRepoIssueCachesForAssignment,
+  issueTooltipCache,
   MAX_REVIEW_THREAD_PAGES,
   REVIEW_THREADS_PER_PAGE,
 } from "../GitHubCaches.js";
@@ -277,6 +279,79 @@ describe("invalidateRepoListCachesForCountChange (count-as-cache-buster)", () =>
     const before = getRepoListEpoch("issue", "unrelated", "repo");
     invalidateRepoListCachesForCountChange("owner", "repo", { issues: true, prs: true });
     expect(getRepoListEpoch("issue", "unrelated", "repo")).toBe(before);
+  });
+
+  describe("invalidateRepoIssueCachesForAssignment (#11087)", () => {
+    // An assignment changes an issue's assignees without moving the open count,
+    // so the count fingerprint can't detect it and every cached issue page for
+    // the repo now carries a stale assignee list.
+    it("drops every cached issue variant for the repo so no read can serve the pre-assignment page", () => {
+      seedLists();
+
+      invalidateRepoIssueCachesForAssignment("owner", "repo", 42);
+
+      expect(forgeIssueListCache.get("issue:owner/repo:open::created:")).toBeUndefined();
+      expect(forgeIssueListCache.get("issue:owner/repo:closed::updated:cursor123")).toBeUndefined();
+      expect(issueListCache.get("issue:owner/repo:open::created:")).toBeUndefined();
+      expect(issueListCache.get("issue:owner/repo:all:search-term:created:")).toBeUndefined();
+    });
+
+    it("drops the stats-and-page snapshot so the next poll cannot broadcast stale rows over the renderer's patch", () => {
+      seedLists();
+
+      invalidateRepoIssueCachesForAssignment("owner", "repo", 42);
+
+      expect(repoStatsAndPageSnapshotCache.get("owner/repo")).toBeUndefined();
+    });
+
+    it("bumps the issue epoch so a list query already in flight cannot write its pre-assignment page back", () => {
+      const issueBefore = getRepoListEpoch("issue", "owner", "repo");
+
+      invalidateRepoIssueCachesForAssignment("owner", "repo", 42);
+
+      expect(getRepoListEpoch("issue", "owner", "repo")).toBe(issueBefore + 1);
+    });
+
+    it("leaves PR pages and their epoch alone — an assignment says nothing about PRs", () => {
+      seedLists();
+      const prBefore = getRepoListEpoch("pr", "owner", "repo");
+
+      invalidateRepoIssueCachesForAssignment("owner", "repo", 42);
+
+      expect(forgePRListCache.get("pr:owner/repo:open::created:")).toBe(forgePage);
+      expect(prListCache.get("pr:owner/repo:open::created:")).toBe(legacyPage);
+      expect(getRepoListEpoch("pr", "owner", "repo")).toBe(prBefore);
+    });
+
+    it("leaves other repos untouched", () => {
+      seedLists();
+
+      invalidateRepoIssueCachesForAssignment("owner", "repo", 42);
+
+      expect(forgeIssueListCache.get("issue:other/repo:open::created:")).toBe(forgePage);
+      expect(issueListCache.get("issue:other/repo:open::created:")).toBe(legacyPage);
+      expect(repoStatsAndPageSnapshotCache.get("other/repo")).toBeDefined();
+    });
+
+    it("drops the mutated issue's tooltip — it renders assignees too — but not a sibling's", () => {
+      issueTooltipCache.clear();
+      const tooltip = {
+        number: 42,
+        title: "t",
+        body: "",
+        state: "open",
+        url: "u",
+        assignees: [],
+        labels: [],
+      } as unknown as Parameters<typeof issueTooltipCache.set>[1];
+      issueTooltipCache.set("owner/repo:42", tooltip);
+      issueTooltipCache.set("owner/repo:99", tooltip);
+
+      invalidateRepoIssueCachesForAssignment("owner", "repo", 42);
+
+      expect(issueTooltipCache.get("owner/repo:42")).toBeUndefined();
+      expect(issueTooltipCache.get("owner/repo:99")).toBe(tooltip);
+    });
   });
 });
 

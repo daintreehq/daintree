@@ -11,7 +11,7 @@ import { worktreeClient, forgeClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { notify } from "@/lib/notify";
-import { mutateCacheEntries } from "@/lib/forgeResourceCache";
+import { patchIssueAssigneeCache } from "@/lib/forgeResourceCache";
 import { systemClient } from "@/clients/systemClient";
 import { useRecipeStore } from "@/store/recipeStore";
 import { notifyRecipeSpawnFailures } from "@/utils/recipeNotify";
@@ -643,37 +643,16 @@ export function NewWorktreeDialog({
             const assignUsername = snapCurrentUser;
             // Optimistically patch every cached issue-list slot so the open
             // issues dropdown reflects the assignment immediately instead of
-            // waiting ~30s for the next SWR revalidate (#10529). Provider-
-            // agnostic: only touches the renderer cache through the forge
-            // abstraction. The forge refresh remains the correctness backstop.
+            // waiting out the renderer TTL (#10529). Provider-agnostic: only
+            // touches the renderer cache through the forge abstraction. The
+            // forge refresh remains the correctness backstop.
             const patchAssigneeCache = (assigned: boolean): void => {
-              mutateCacheEntries(rootPath, "issue", (entry) => {
-                let changed = false;
-                const items = entry.items.map((item) => {
-                  // `assignees` exists only on Issue, so this `in` check narrows
-                  // the Issue|PR union safely and skips any non-issue slot.
-                  if (!("assignees" in item) || item.number !== assignIssueNumber) return item;
-                  const hasUser = item.assignees.some((a) => a.login === assignUsername);
-                  if (assigned) {
-                    if (hasUser) return item;
-                    changed = true;
-                    return {
-                      ...item,
-                      assignees: [
-                        ...item.assignees,
-                        { login: assignUsername, avatarUrl: snapCurrentUserAvatar, rawData: null },
-                      ],
-                    };
-                  }
-                  if (!hasUser) return item;
-                  changed = true;
-                  return {
-                    ...item,
-                    assignees: item.assignees.filter((a) => a.login !== assignUsername),
-                  };
-                });
-                return changed ? { ...entry, items } : null;
-              });
+              patchIssueAssigneeCache(
+                rootPath,
+                assignIssueNumber,
+                { login: assignUsername, avatarUrl: snapCurrentUserAvatar },
+                assigned
+              );
             };
             // A cache-layer throw must not masquerade as an assignment failure:
             // the server-side assign already succeeded by this point.
@@ -689,7 +668,13 @@ export function NewWorktreeDialog({
               void forgeClient
                 .unassignIssue(rootPath, assignIssueNumber, assignUsername)
                 .then(() => {
-                  patchAssigneeCache(false);
+                  // Same isolation as the forward patch — the unassign already
+                  // succeeded, so a cache throw must not report a failed undo.
+                  try {
+                    patchAssigneeCache(false);
+                  } catch (cacheErr) {
+                    logError("Failed to patch issue cache after undo", cacheErr);
+                  }
                 })
                 .catch((err: unknown) => {
                   // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok

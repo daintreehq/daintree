@@ -29,6 +29,27 @@ vi.mock("@/clients", () => ({ forgeClient: forgeClientMock }));
 vi.mock("@/store/projectStore", () => ({ useProjectStore: projectStoreMock }));
 
 import { registerForgeActions } from "../forgeActions";
+import {
+  buildCacheKey,
+  getCache,
+  setCache,
+  _resetForTests as resetForgeResourceCache,
+} from "@/lib/forgeResourceCache";
+import type { Issue } from "@shared/types/forge";
+
+const makeIssue = (n: number, assignees: string[]): Issue => ({
+  number: n,
+  title: `Issue #${n}`,
+  body: "",
+  state: "open",
+  rawState: "open",
+  url: `https://fake.test/${n}`,
+  assignees: assignees.map((login) => ({ login, avatarUrl: undefined, rawData: null })),
+  labels: [],
+  createdAt: 0,
+  updatedAt: 0,
+  rawData: null,
+});
 
 function setupActions() {
   const actions: ActionRegistry = new Map();
@@ -157,6 +178,92 @@ describe("forge.* navigation adversarial", () => {
     await expect(
       runAction("forge.assignIssue", { issueNumber: 7, username: "bob" })
     ).rejects.toThrow("No active worktree");
+  });
+
+  describe("optimistic issue-cache patching (#11087)", () => {
+    const seedIssueSlot = (projectPath: string, issue: Issue): string => {
+      const key = buildCacheKey(projectPath, "issue", "open", "created");
+      setCache(key, { items: [issue], nextCursor: null, hasMore: false, timestamp: 1 });
+      return key;
+    };
+
+    const assigneesOn = (key: string, issueNumber: number): string[] | undefined => {
+      const item = getCache(key)?.items.find((i) => i.number === issueNumber);
+      return item && "assignees" in item ? item.assignees.map((a) => a.login) : undefined;
+    };
+
+    beforeEach(() => {
+      resetForgeResourceCache();
+    });
+
+    it("assignIssue adds the username to the cached issue so the dropdown reflects it at once", async () => {
+      const key = seedIssueSlot("/repo", makeIssue(42, []));
+
+      await runAction("forge.assignIssue", { cwd: "/repo", issueNumber: 42, username: "bob" });
+
+      expect(assigneesOn(key, 42)).toEqual(["bob"]);
+    });
+
+    it("unassignIssue removes the username — the Quick Create Undo path", async () => {
+      const key = seedIssueSlot("/repo", makeIssue(42, ["bob"]));
+
+      await runAction("forge.unassignIssue", { cwd: "/repo", issueNumber: 42, username: "bob" });
+
+      expect(assigneesOn(key, 42)).toEqual([]);
+    });
+
+    it("leaves the cache untouched when the forge rejects the assign", async () => {
+      const key = seedIssueSlot("/repo", makeIssue(42, []));
+      forgeClientMock.assignIssue.mockRejectedValueOnce(new Error("HTTP 403"));
+
+      await expect(
+        runAction("forge.assignIssue", { cwd: "/repo", issueNumber: 42, username: "bob" })
+      ).rejects.toThrow("HTTP 403");
+
+      expect(assigneesOn(key, 42)).toEqual([]);
+    });
+
+    it("leaves the cache untouched when the forge rejects the unassign", async () => {
+      const key = seedIssueSlot("/repo", makeIssue(42, ["bob"]));
+      forgeClientMock.unassignIssue.mockRejectedValueOnce(new Error("HTTP 500"));
+
+      await expect(
+        runAction("forge.unassignIssue", { cwd: "/repo", issueNumber: 42, username: "bob" })
+      ).rejects.toThrow("HTTP 500");
+
+      expect(assigneesOn(key, 42)).toEqual(["bob"]);
+    });
+
+    it("patches the project the caller named, not some other cached project", async () => {
+      const target = seedIssueSlot("/repo", makeIssue(42, []));
+      const other = seedIssueSlot("/other-repo", makeIssue(42, []));
+
+      await runAction("forge.assignIssue", { cwd: "/repo", issueNumber: 42, username: "bob" });
+
+      expect(assigneesOn(target, 42)).toEqual(["bob"]);
+      expect(assigneesOn(other, 42)).toEqual([]);
+    });
+
+    it("still completes the forge mutation when the cwd matches no cached slot", async () => {
+      // `cwd` defaulted to a worktree path: the cache keys on the project root,
+      // so the patch no-ops. That must not fail the action.
+      const key = seedIssueSlot("/repo", makeIssue(42, []));
+
+      await expect(
+        runAction(
+          "forge.assignIssue",
+          { issueNumber: 42, username: "bob" },
+          { activeWorktreePath: "/repo/.worktrees/feature" }
+        )
+      ).resolves.not.toThrow();
+
+      expect(forgeClientMock.assignIssue).toHaveBeenCalledWith(
+        "/repo/.worktrees/feature",
+        42,
+        "bob"
+      );
+      expect(assigneesOn(key, 42)).toEqual([]);
+    });
   });
 
   it("approvePR forwards cwd, prNumber, and optional body positionally", async () => {

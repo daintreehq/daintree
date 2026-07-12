@@ -1,4 +1,4 @@
-import type { Issue, PR } from "@shared/types/forge";
+import type { ForgeUser, Issue, PR } from "@shared/types/forge";
 import { TtlCache } from "@/utils/ttlCache";
 
 /**
@@ -132,6 +132,56 @@ export function markCountStale(projectPath: string, type: "issue" | "pr", openCo
     if (!keyRemainder.startsWith("open:")) return null;
     if (entry.stale || entry.countAtWrite == null || entry.countAtWrite === openCount) return null;
     return { ...entry, stale: true };
+  });
+}
+
+/**
+ * Optimistically add or remove an assignee on every cached issue slot for a
+ * project, so the toolbar dropdown reflects an assignment the moment it lands
+ * instead of waiting out the 45s TTL (#11087). Call it after the forge mutation
+ * succeeds — the forge refresh remains the correctness backstop.
+ *
+ * Marks touched entries `stale` rather than trusting the patched rows: an
+ * assignment never moves the open count, so `planWarmRevalidate` would
+ * otherwise downgrade the next open-time revalidate to a cached read and let
+ * the backend's own 60s list cache serve the pre-assignment page straight back
+ * over this patch. `stale` forces that revalidate to bypass. `timestamp` is
+ * restamped for the same reason — a stats page broadcast only seeds over an
+ * entry it is newer than. `freshBypassAt` is deliberately NOT stamped: this
+ * content is optimistic, not something the forge just handed us.
+ */
+export function patchIssueAssigneeCache(
+  projectPath: string,
+  issueNumber: number,
+  user: Pick<ForgeUser, "login" | "avatarUrl">,
+  assigned: boolean
+): void {
+  mutateCacheEntries(projectPath, "issue", (entry) => {
+    let changed = false;
+    const items = entry.items.map((item) => {
+      // `assignees` exists only on Issue, so this `in` check narrows the
+      // Issue|PR union safely and skips any non-issue slot.
+      if (!("assignees" in item) || item.number !== issueNumber) return item;
+      const hasUser = item.assignees.some((a) => a.login === user.login);
+      if (assigned) {
+        if (hasUser) return item;
+        changed = true;
+        return {
+          ...item,
+          assignees: [
+            ...item.assignees,
+            { login: user.login, avatarUrl: user.avatarUrl, rawData: null },
+          ],
+        };
+      }
+      if (!hasUser) return item;
+      changed = true;
+      return {
+        ...item,
+        assignees: item.assignees.filter((a) => a.login !== user.login),
+      };
+    });
+    return changed ? { ...entry, items, timestamp: Date.now(), stale: true } : null;
   });
 }
 

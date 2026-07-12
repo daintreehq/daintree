@@ -4,6 +4,35 @@ import { defineAction } from "../defineAction";
 import { z } from "zod";
 import { forgeClient } from "@/clients";
 import { useProjectStore } from "@/store/projectStore";
+import { patchIssueAssigneeCache } from "@/lib/forgeResourceCache";
+import { logError } from "@/utils/logger";
+
+/**
+ * Optimistically reflect an assign/unassign in the cached issue lists so the
+ * toolbar dropdown updates immediately (#11087). Best-effort by design: the
+ * forge mutation has already succeeded by the time this runs, so a cache-layer
+ * throw must never surface as a failed action.
+ *
+ * Keyed on the resolved `cwd`. The cache keys on the project root, so this
+ * no-ops when the caller let `cwd` default to a worktree path — never wrong,
+ * just ineffective. The Quick Create Undo path (the one that matters here)
+ * passes the project root explicitly.
+ *
+ * No avatar is available: these actions take an arbitrary username, not the
+ * viewer. A login-only assignee is valid — the next forge refresh fills it in.
+ */
+function patchAssigneeCache(
+  projectPath: string,
+  issueNumber: number,
+  username: string,
+  assigned: boolean
+): void {
+  try {
+    patchIssueAssigneeCache(projectPath, issueNumber, { login: username }, assigned);
+  } catch (err) {
+    logError("Failed to patch issue cache after assignment change", err);
+  }
+}
 
 const ForgeListOptionsSchema = z.object({
   cwd: z
@@ -239,6 +268,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         const resolvedCwd = cwd ?? ctx.activeWorktreePath;
         if (!resolvedCwd) throw new Error("No active worktree");
         await forgeClient.assignIssue(resolvedCwd, issueNumber, username);
+        patchAssigneeCache(resolvedCwd, issueNumber, username, true);
       },
     })
   );
@@ -264,6 +294,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         const resolvedCwd = cwd ?? ctx.activeWorktreePath;
         if (!resolvedCwd) throw new Error("No active worktree");
         await forgeClient.unassignIssue(resolvedCwd, issueNumber, username);
+        patchAssigneeCache(resolvedCwd, issueNumber, username, false);
       },
     })
   );
