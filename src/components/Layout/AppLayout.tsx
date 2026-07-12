@@ -39,7 +39,7 @@ import { useLayoutState, useOverlayOpen } from "@/hooks";
 import { useKeepMounted } from "@/hooks/useKeepMounted";
 import type { UseProjectSwitcherPaletteReturn } from "@/hooks";
 import {
-  repaintAssistantAfterTransition,
+  createAssistantRevealCoordinator,
   suppressSidebarResizes,
   getSidebarAffectedTerminalIds,
 } from "@/lib/sidebarToggle";
@@ -183,6 +183,20 @@ export function AppLayout({
   // already cover the in-flight window.
   const [assistantInert, setAssistantInert] = useState(!showAssistant);
 
+  // #11070: the assistant's post-transition reveal repaint is a durable
+  // obligation, not a one-shot. On a cold first open the slide settles while the
+  // session is still provisioning (no terminalId yet), so the coordinator retains
+  // the repaint and discharges it once the terminal binds and attaches. Owned
+  // here because the obligation's lifetime is exactly this DOM's lifetime; the
+  // factory is pure, so Strict Mode's double-invoke of the initializer is free.
+  const [assistantReveal] = useState(createAssistantRevealCoordinator);
+  useEffect(() => assistantReveal.start(), [assistantReveal]);
+  // Cancel on the visibility STATE change, not at the hide slide's end: a
+  // terminal that binds mid-slide-out must not repaint into a hidden pane.
+  useEffect(() => {
+    assistantReveal.setVisible(showAssistant);
+  }, [assistantReveal, showAssistant]);
+
   // Issue #9864: the sidebar wrapper carries overflowClipMargin: 6px so the
   // resize handle's overhang paints outside the contain boundary. But
   // overflow-clip-margin is a discrete (non-animatable) property — when the
@@ -269,11 +283,11 @@ export function AppLayout({
   const handleAssistantTransitionEnd = useCallback(
     (event: React.TransitionEvent<HTMLDivElement>) => {
       if (event.propertyName === "transform" && event.target === event.currentTarget) {
-        repaintAssistantAfterTransition();
+        assistantReveal.settleAfterTransition(showAssistant);
         if (!showAssistant) setAssistantInert(true);
       }
     },
-    [showAssistant]
+    [showAssistant, assistantReveal]
   );
 
   useEffect(() => {
@@ -617,7 +631,12 @@ export function AppLayout({
         reduceAnimations || layout.performanceMode || isAssistantResizing || mql?.matches === true;
       if (showAssistant) {
         setAssistantInert(false);
-        if (noTransition) repaintAssistantAfterTransition();
+        // A drag-resize also strips the transition, but a drag is NOT a reveal:
+        // the reveal repaint's reconcileGeometryFresh is lock-exempt, so settling
+        // here would assert geometry mid-drag — at a width the cursor has already
+        // moved past — against the very lock that keeps the handle tracking 1:1.
+        // The drag owns its own geometry and runs its resize pass on release.
+        if (noTransition && !isAssistantResizing) assistantReveal.settleAfterTransition(true);
       } else if (noTransition) {
         setAssistantInert(true);
       }
@@ -625,7 +644,13 @@ export function AppLayout({
     settle();
     mql?.addEventListener("change", settle);
     return () => mql?.removeEventListener("change", settle);
-  }, [showAssistant, reduceAnimations, layout.performanceMode, isAssistantResizing]);
+  }, [
+    showAssistant,
+    reduceAnimations,
+    layout.performanceMode,
+    isAssistantResizing,
+    assistantReveal,
+  ]);
 
   // Clear macro focus on mouse interaction. A click inside the currently-
   // focused region must NOT clear the claim — otherwise a click within the
