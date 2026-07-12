@@ -602,7 +602,12 @@ export const ForgeStatsToolbarButton = memo(
         const cacheKey = buildCacheKey(currentProject.path, type, "open", "created");
 
         const cached = getCache(cacheKey);
-        if (cached && Date.now() - cached.timestamp < PREFETCH_FRESHNESS_MS) return;
+        // A `stale` entry is the one case a recent timestamp doesn't vouch for:
+        // an optimistic assignee patch restamps it (#11087) and the count poll
+        // marks diverged rows — both need the warm-up the freshness shortcut
+        // would skip, leaving the fetch on the click path.
+        if (cached && !cached.stale && Date.now() - cached.timestamp < PREFETCH_FRESHNESS_MS)
+          return;
 
         // Hover prefetch primes the list cache silently. The count badge stays
         // fresh via the 30s background poll and the click-time refresh —
@@ -613,11 +618,20 @@ export const ForgeStatsToolbarButton = memo(
         // hover with zero GraphQL; only a cold slot spends a query — the same
         // query the click would have made anyway. This is what makes firing on
         // every hover quota-safe. `bypassCache: true` stays reserved for
-        // explicit intent (dropdown open / manual refresh).
+        // explicit intent (dropdown open / manual refresh) — and for a `stale`
+        // entry, which needs it for correctness, not freshness: a cache-first
+        // read joins any list query already in flight (the main-process
+        // singleflight only skips the join when bypassing), so a hover landing
+        // right after an assign could be handed the page that request fetched
+        // BEFORE the assign — and the write below, being newer than the
+        // optimistic patch, would commit those rows and clear `stale`. The
+        // extra query is not extra spend: an assign invalidates the backend's
+        // issue pages, so a cache-first read would have missed and queried too.
+        const bypassCache = cached?.stale === true;
         const fetchOptions = {
           state: "open" as const,
           sort: "created",
-          bypassCache: false,
+          bypassCache,
         };
         const request =
           type === "issue"

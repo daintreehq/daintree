@@ -258,6 +258,21 @@ export function invalidateRepoListCachesForCountChange(
   repo: string,
   changed: { issues: boolean; prs: boolean }
 ): void {
+  invalidateRepoListCaches(owner, repo, changed);
+}
+
+/**
+ * The invalidation core shared by the count-as-cache-buster above and by issue
+ * mutations. Any caller that can prove a repo's cached pages for a type are out
+ * of date drops them, bumps the type's epoch so an in-flight query can't write
+ * a pre-change page back, and drops the combined stats-and-page snapshot (it
+ * embeds both first pages, so a change to either invalidates it).
+ */
+function invalidateRepoListCaches(
+  owner: string,
+  repo: string,
+  changed: { issues: boolean; prs: boolean }
+): void {
   if (!changed.issues && !changed.prs) return;
   if (changed.issues) {
     const prefix = `issue:${owner}/${repo}:`;
@@ -272,6 +287,30 @@ export function invalidateRepoListCachesForCountChange(
     bumpRepoListEpoch("pr", owner, repo);
   }
   repoStatsAndPageSnapshotCache.invalidate(`${owner}/${repo}`);
+}
+
+/**
+ * An assign/unassign changes an issue's assignees without moving the open
+ * count, so the count poll's fingerprint can't detect it (#11087) and every
+ * cached issue page for the repo now carries a stale assignee list. Drop them
+ * so the renderer's next read — including a revalidate the count fingerprint
+ * downgraded to a cached one — cannot be served the pre-mutation page, and so
+ * the next stats poll can't broadcast the stale snapshot back over the
+ * renderer's optimistic patch. The tooltip renders assignees too, so the
+ * mutated issue's entry goes with them (matching the legacy assign path).
+ *
+ * Issue-scoped on purpose: an assignment tells us nothing about PR pages, and
+ * evicting them would double the refetch volume on active repos. Deliberately
+ * narrower than `clearGitHubCaches()`, which also drops unrelated repos, the
+ * repo/health caches, and the persistent caches.
+ */
+export function invalidateRepoIssueCachesForAssignment(
+  owner: string,
+  repo: string,
+  issueNumber: number
+): void {
+  invalidateRepoListCaches(owner, repo, { issues: true, prs: false });
+  issueTooltipCache.invalidate(`${owner}/${repo}:${issueNumber}`);
 }
 
 export interface PRRequiredStatusEntry {

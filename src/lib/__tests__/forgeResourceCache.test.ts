@@ -7,8 +7,10 @@ import {
   getGeneration,
   markCountStale,
   mutateCacheEntries,
+  patchIssueAssigneeCache,
   _resetForTests,
 } from "../forgeResourceCache";
+import type { ForgeResourceCacheEntry } from "../forgeResourceCache";
 import type { Issue } from "@shared/types/forge";
 
 const makeIssue = (n: number): Issue => ({
@@ -320,6 +322,203 @@ describe("forgeResourceCache", () => {
       expect(getCache(issueKey)?.stale).toBe(true);
       expect(getCache(prKey)?.stale).toBeUndefined();
       expect(getCache(otherProjectKey)?.stale).toBeUndefined();
+    });
+  });
+
+  describe("patchIssueAssigneeCache (optimistic assign/unassign)", () => {
+    const viewer = { login: "octocat", avatarUrl: "https://fake.test/octocat.png" };
+
+    const seedSlot = (
+      filter: string,
+      sort: string,
+      items: Issue[],
+      overrides: Partial<ForgeResourceCacheEntry> = {}
+    ): string => {
+      const key = buildCacheKey("/proj", "issue", filter, sort);
+      setCache(key, { ...entry(items), ...overrides });
+      return key;
+    };
+
+    const withAssignee = (n: number, login: string): Issue => ({
+      ...makeIssue(n),
+      assignees: [{ login, avatarUrl: undefined, rawData: null }],
+    });
+
+    const loginsOn = (key: string, issueNumber: number): string[] | undefined => {
+      const item = getCache(key)?.items.find((i) => i.number === issueNumber);
+      return item && "assignees" in item ? item.assignees.map((a) => a.login) : undefined;
+    };
+
+    it("adds the user to the target issue across every filter/sort slot", () => {
+      const openCreated = seedSlot("open", "created", [makeIssue(1), makeIssue(2)]);
+      const openUpdated = seedSlot("open", "updated", [makeIssue(1)]);
+
+      patchIssueAssigneeCache("/proj", 1, viewer, true);
+
+      expect(loginsOn(openCreated, 1)).toEqual([viewer.login]);
+      expect(loginsOn(openUpdated, 1)).toEqual([viewer.login]);
+      // Sibling rows in the same slot are untouched.
+      expect(loginsOn(openCreated, 2)).toEqual([]);
+    });
+
+    it("carries the avatar onto the optimistic assignee, and tolerates not having one", () => {
+      const withAvatar = seedSlot("open", "created", [makeIssue(1)]);
+      patchIssueAssigneeCache("/proj", 1, viewer, true);
+      const added = getCache(withAvatar)?.items[0];
+      expect(added && "assignees" in added ? added.assignees[0]?.avatarUrl : null).toBe(
+        viewer.avatarUrl
+      );
+
+      _resetForTests();
+      const noAvatar = seedSlot("open", "created", [makeIssue(1)]);
+      patchIssueAssigneeCache("/proj", 1, { login: "someone-else" }, true);
+      const addedBare = getCache(noAvatar)?.items[0];
+      expect(addedBare && "assignees" in addedBare ? addedBare.assignees[0] : null).toMatchObject({
+        login: "someone-else",
+        avatarUrl: undefined,
+      });
+    });
+
+    it("removes the user on unassign, leaving co-assignees in place", () => {
+      const key = seedSlot("open", "created", [
+        {
+          ...makeIssue(1),
+          assignees: [
+            { login: "someone-else", avatarUrl: undefined, rawData: null },
+            { login: viewer.login, avatarUrl: undefined, rawData: null },
+          ],
+        },
+      ]);
+
+      patchIssueAssigneeCache("/proj", 1, viewer, false);
+
+      expect(loginsOn(key, 1)).toEqual(["someone-else"]);
+    });
+
+    it("marks the patched entry stale so the next revalidate cannot be downgraded to a cached read", () => {
+      // An assignment never moves the open count, so `countAtWrite` still
+      // matches and `planWarmRevalidate` would otherwise honor the backend's
+      // own list cache and serve the pre-assignment page straight back.
+      const key = seedSlot("open", "created", [makeIssue(1)], { countAtWrite: 5 });
+
+      patchIssueAssigneeCache("/proj", 1, viewer, true);
+
+      expect(getCache(key)?.stale).toBe(true);
+      expect(getCache(key)?.countAtWrite).toBe(5);
+    });
+
+    it("advances the entry timestamp so an older stats broadcast cannot seed over the patch", () => {
+      const key = seedSlot("open", "created", [makeIssue(1)], { timestamp: 1 });
+      const before = getCache(key)?.timestamp ?? 0;
+
+      patchIssueAssigneeCache("/proj", 1, viewer, true);
+
+      expect(getCache(key)?.timestamp).toBeGreaterThan(before);
+    });
+
+    it("does not claim a fresh bypass — the rows are optimistic, not forge-fetched", () => {
+      const key = seedSlot("open", "created", [makeIssue(1)]);
+
+      patchIssueAssigneeCache("/proj", 1, viewer, true);
+
+      expect(getCache(key)?.freshBypassAt).toBeUndefined();
+    });
+
+    it("preserves the entry's pagination metadata", () => {
+      const key = buildCacheKey("/proj", "issue", "open", "created");
+      setCache(key, {
+        items: [makeIssue(1)],
+        nextCursor: "cursor-abc",
+        hasMore: true,
+        timestamp: 1,
+      });
+
+      patchIssueAssigneeCache("/proj", 1, viewer, true);
+
+      expect(getCache(key)).toMatchObject({ nextCursor: "cursor-abc", hasMore: true });
+    });
+
+    it("re-assigning an already-assigned user is a no-op that does not bump the generation", () => {
+      const key = seedSlot("open", "created", [withAssignee(1, viewer.login)]);
+      const genBefore = getGeneration(key);
+
+      patchIssueAssigneeCache("/proj", 1, viewer, true);
+
+      expect(loginsOn(key, 1)).toEqual([viewer.login]);
+      expect(getGeneration(key)).toBe(genBefore);
+      expect(getCache(key)?.stale).toBeUndefined();
+    });
+
+    it("unassigning a user who is not assigned is a no-op that does not bump the generation", () => {
+      const key = seedSlot("open", "created", [makeIssue(1)]);
+      const genBefore = getGeneration(key);
+
+      patchIssueAssigneeCache("/proj", 1, viewer, false);
+
+      expect(getGeneration(key)).toBe(genBefore);
+      expect(getCache(key)?.stale).toBeUndefined();
+    });
+
+    it("bumps the generation of a changed slot so an in-flight fetch cannot commit over it", () => {
+      const key = seedSlot("open", "created", [makeIssue(1)]);
+      const genBefore = getGeneration(key);
+
+      patchIssueAssigneeCache("/proj", 1, viewer, true);
+
+      expect(getGeneration(key)).toBe(genBefore + 1);
+    });
+
+    it("leaves other projects, other resource types, and other issues untouched", () => {
+      const target = seedSlot("open", "created", [makeIssue(1)]);
+      const otherIssueSlot = buildCacheKey("/other", "issue", "open", "created");
+      const prSlot = buildCacheKey("/proj", "pr", "open", "created");
+      setCache(otherIssueSlot, entry([makeIssue(1)]));
+      setCache(prSlot, entry([makeIssue(1)]));
+
+      patchIssueAssigneeCache("/proj", 1, viewer, true);
+
+      expect(loginsOn(target, 1)).toEqual([viewer.login]);
+      expect(loginsOn(otherIssueSlot, 1)).toEqual([]);
+      expect(loginsOn(prSlot, 1)).toEqual([]);
+      expect(getCache(prSlot)?.stale).toBeUndefined();
+    });
+
+    it("is a no-op when the issue is not in any cached page", () => {
+      const key = seedSlot("open", "created", [makeIssue(1)]);
+      const genBefore = getGeneration(key);
+
+      patchIssueAssigneeCache("/proj", 999, viewer, true);
+
+      expect(loginsOn(key, 1)).toEqual([]);
+      expect(getGeneration(key)).toBe(genBefore);
+    });
+
+    it("matches the cached assignee case-insensitively — forge logins are", () => {
+      // The server would unassign "ada" when handed "Ada"; the cache must not
+      // keep a row the forge already dropped.
+      const key = seedSlot("open", "created", [withAssignee(1, "ada")]);
+
+      patchIssueAssigneeCache("/proj", 1, { login: "Ada" }, false);
+
+      expect(loginsOn(key, 1)).toEqual([]);
+    });
+
+    it("does not double-add a user whose cached login differs only by case", () => {
+      const key = seedSlot("open", "created", [withAssignee(1, "Ada")]);
+      const genBefore = getGeneration(key);
+
+      patchIssueAssigneeCache("/proj", 1, { login: "ada" }, true);
+
+      expect(loginsOn(key, 1)).toEqual(["Ada"]);
+      expect(getGeneration(key)).toBe(genBefore);
+    });
+
+    it("stores the trimmed login — main trims before it reaches the forge", () => {
+      const key = seedSlot("open", "created", [makeIssue(1)]);
+
+      patchIssueAssigneeCache("/proj", 1, { login: "  ada  " }, true);
+
+      expect(loginsOn(key, 1)).toEqual(["ada"]);
     });
   });
 

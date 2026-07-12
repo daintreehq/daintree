@@ -56,6 +56,28 @@ vi.mock("@/store/slices/panelRegistry", () => selectorMock);
   { electron: { git: { getStagingStatus: gitGetStagingStatusMock } } };
 
 import { registerWorkflowActions } from "../workflowActions";
+import {
+  buildCacheKey,
+  getCache,
+  getGeneration,
+  setCache,
+  _resetForTests as resetForgeResourceCache,
+} from "@/lib/forgeResourceCache";
+import type { Issue } from "@shared/types/forge";
+
+const makeCacheIssue = (n: number, assignees: string[]): Issue => ({
+  number: n,
+  title: `Issue #${n}`,
+  body: "",
+  state: "open",
+  rawState: "open",
+  url: `https://fake.test/${n}`,
+  assignees: assignees.map((login) => ({ login, avatarUrl: undefined, rawData: null })),
+  labels: [],
+  createdAt: 0,
+  updatedAt: 0,
+  rawData: null,
+});
 
 interface MockCallbacks {
   onLaunchAgent: ReturnType<typeof vi.fn>;
@@ -1131,6 +1153,141 @@ describe("worktree.createWithRecipe — issue assignment", () => {
     expect(result.worktreeId).toBe("wt-new");
     expect(result.assignedToSelf).toBe(false);
     expect(result.assignmentError).toBe("IPC unavailable");
+  });
+});
+
+describe("self-assign patches the issues dropdown cache (#11087)", () => {
+  const seedIssueSlot = (issue: Issue, filter = "open", sort = "created"): string => {
+    const key = buildCacheKey("/repo", "issue", filter, sort);
+    setCache(key, { items: [issue], nextCursor: null, hasMore: false, timestamp: 1 });
+    return key;
+  };
+
+  const assigneesOn = (key: string, issueNumber: number) => {
+    const item = getCache(key)?.items.find((i) => i.number === issueNumber);
+    return item && "assignees" in item ? item.assignees : undefined;
+  };
+
+  beforeEach(() => {
+    resetForgeResourceCache();
+    forgeClientMock.getIssue.mockResolvedValue({ number: 6609, title: "t", url: "u" });
+  });
+
+  it("worktree.createWithRecipe — the palette path — adds the viewer to every cached slot", async () => {
+    setGithubUser("ada");
+    const openSlot = seedIssueSlot(makeCacheIssue(6625, []));
+    const updatedSlot = seedIssueSlot(makeCacheIssue(6625, []), "open", "updated");
+
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+    await def.run(
+      { branchName: "feature/foo", issueNumber: 6625, assignToSelf: true },
+      {} as never
+    );
+
+    expect(assigneesOn(openSlot, 6625)?.map((a) => a.login)).toEqual(["ada"]);
+    expect(assigneesOn(updatedSlot, 6625)?.map((a) => a.login)).toEqual(["ada"]);
+  });
+
+  it("workflow.startWorkOnIssue adds the viewer to the cached issue", async () => {
+    setGithubUser("ada");
+    const key = seedIssueSlot(makeCacheIssue(6609, []));
+
+    const def = setupActions(makeCallbacks())("workflow.startWorkOnIssue");
+    await def.run({ issueNumber: 6609, agentId: "claude", assignToSelf: true }, {} as never);
+
+    expect(assigneesOn(key, 6609)?.map((a) => a.login)).toEqual(["ada"]);
+  });
+
+  it("the optimistic assignee carries the avatar the forge reported for the viewer", async () => {
+    forgeClientMock.getCurrentUser.mockResolvedValue({
+      login: "ada",
+      avatarUrl: "https://fake.test/ada.png",
+    });
+    const key = seedIssueSlot(makeCacheIssue(6625, []));
+
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+    await def.run(
+      { branchName: "feature/foo", issueNumber: 6625, assignToSelf: true },
+      {} as never
+    );
+
+    expect(assigneesOn(key, 6625)?.[0]?.avatarUrl).toBe("https://fake.test/ada.png");
+  });
+
+  it("marks the slot stale so the next revalidate refetches instead of trusting the backend's cached page", async () => {
+    setGithubUser("ada");
+    const key = buildCacheKey("/repo", "issue", "open", "created");
+    setCache(key, {
+      items: [makeCacheIssue(6625, [])],
+      nextCursor: null,
+      hasMore: false,
+      timestamp: 1,
+      countAtWrite: 3,
+    });
+
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+    await def.run(
+      { branchName: "feature/foo", issueNumber: 6625, assignToSelf: true },
+      {} as never
+    );
+
+    expect(getCache(key)?.stale).toBe(true);
+  });
+
+  it("a failed assign leaves the cache untouched", async () => {
+    setGithubUser("ada");
+    forgeClientMock.assignIssue.mockRejectedValue(new Error("403 Forbidden"));
+    const key = seedIssueSlot(makeCacheIssue(6625, []));
+
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+    const result = (await def.run(
+      { branchName: "feature/foo", issueNumber: 6625, assignToSelf: true },
+      {} as never
+    )) as Record<string, unknown>;
+
+    expect(result.assignedToSelf).toBe(false);
+    expect(assigneesOn(key, 6625)).toEqual([]);
+  });
+
+  it("does not touch an issue that is already assigned to the viewer", async () => {
+    setGithubUser("ada");
+    const key = seedIssueSlot(makeCacheIssue(6625, ["ada"]));
+    const genBefore = getGeneration(key);
+
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+    await def.run(
+      { branchName: "feature/foo", issueNumber: 6625, assignToSelf: true },
+      {} as never
+    );
+
+    expect(assigneesOn(key, 6625)?.map((a) => a.login)).toEqual(["ada"]);
+    expect(getGeneration(key)).toBe(genBefore);
+  });
+
+  it("a cache-layer throw does not turn a successful assign into an assignmentError", async () => {
+    setGithubUser("ada");
+    // Simulate a corrupt cached row: reading `assignees` blows up inside the
+    // patch. The server-side assign has already succeeded by then, so the
+    // action must still report success.
+    const corrupt = makeCacheIssue(6625, []);
+    Object.defineProperty(corrupt, "assignees", {
+      enumerable: true,
+      get() {
+        throw new Error("corrupt cache entry");
+      },
+    });
+    seedIssueSlot(corrupt);
+
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+    const result = (await def.run(
+      { branchName: "feature/foo", issueNumber: 6625, assignToSelf: true },
+      {} as never
+    )) as Record<string, unknown>;
+
+    expect(forgeClientMock.assignIssue).toHaveBeenCalledWith("/repo", 6625, "ada");
+    expect(result.assignedToSelf).toBe(true);
+    expect(result.assignedUsername).toBe("ada");
+    expect(result.assignmentError).toBeNull();
   });
 });
 

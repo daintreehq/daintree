@@ -1238,6 +1238,141 @@ describe("useRepositoryStats", () => {
       });
     });
 
+    it("does not seed over an optimistically-patched (stale) cache entry, even with a newer fetchedAt", async () => {
+      // `fetchedAt` is stamped when the push is BUILT, not when its pages left
+      // the forge — so a stats query already in flight when a self-assign lands
+      // broadcasts pre-assignment rows under a newer timestamp. Seeding that
+      // would drop the optimistic assignee and clear the `stale` mark that
+      // forces the next dropdown open to revalidate fresh (#11087).
+      const project = { id: "p", path: "/repo/optimistic" };
+      getCurrentMock.mockResolvedValue(project);
+      onSwitchMock.mockReturnValue(() => {});
+      getRepoStatsMock.mockResolvedValue({
+        commitCount: 1,
+        issueCount: 1,
+        prCount: 0,
+        loading: false,
+        stale: false,
+        lastUpdated: 1000,
+      });
+
+      let pushHandler: ((payload: unknown) => void) | undefined;
+      onRepoStatsAndPageUpdatedMock.mockImplementation((cb: (p: unknown) => void) => {
+        pushHandler = cb;
+        return () => {};
+      });
+
+      const issuesKey = buildCacheKey(project.path, "issue", "open", "created");
+      const patchedIssue: Issue = {
+        number: 7,
+        title: "Patched",
+        body: "",
+        state: "open",
+        rawState: "open",
+        url: "u",
+        assignees: [{ login: "ada", avatarUrl: undefined, rawData: null }],
+        labels: [],
+        createdAt: 0,
+        updatedAt: 0,
+        rawData: null,
+      };
+      setCache(issuesKey, {
+        items: [patchedIssue],
+        nextCursor: null,
+        hasMore: false,
+        timestamp: 1,
+        stale: true,
+      });
+
+      renderHook(() => useRepositoryStats());
+      await waitFor(() => {
+        expect(getCurrentMock).toHaveBeenCalled();
+      });
+
+      const pushedStats: ForgeRepositoryStats = {
+        commitCount: 2,
+        issueCount: 1,
+        prCount: 0,
+        loading: false,
+        stale: false,
+        lastUpdated: 2000,
+      };
+      await act(async () => {
+        // A far-newer fetchedAt carrying the pre-assignment page (no assignees).
+        pushHandler?.(makePushPayload(project.path, pushedStats, Date.now() + 10_000));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      const cached = getCache(issuesKey);
+      expect(cached?.stale).toBe(true);
+      expect(cached?.items).toHaveLength(1);
+      expect(cached?.items[0]).toMatchObject({ number: 7 });
+    });
+
+    it("still seeds a non-stale entry when the push is newer", async () => {
+      const project = { id: "p", path: "/repo/seedable" };
+      getCurrentMock.mockResolvedValue(project);
+      onSwitchMock.mockReturnValue(() => {});
+      getRepoStatsMock.mockResolvedValue({
+        commitCount: 1,
+        issueCount: 0,
+        prCount: 0,
+        loading: false,
+        stale: false,
+        lastUpdated: 1000,
+      });
+
+      let pushHandler: ((payload: unknown) => void) | undefined;
+      onRepoStatsAndPageUpdatedMock.mockImplementation((cb: (p: unknown) => void) => {
+        pushHandler = cb;
+        return () => {};
+      });
+
+      const issuesKey = buildCacheKey(project.path, "issue", "open", "created");
+      const oldRow: Issue = {
+        number: 7,
+        title: "Old",
+        body: "",
+        state: "open",
+        rawState: "open",
+        url: "u",
+        assignees: [],
+        labels: [],
+        createdAt: 0,
+        updatedAt: 0,
+        rawData: null,
+      };
+      setCache(issuesKey, {
+        items: [oldRow],
+        nextCursor: null,
+        hasMore: false,
+        timestamp: 1,
+      });
+
+      renderHook(() => useRepositoryStats());
+      await waitFor(() => {
+        expect(getCurrentMock).toHaveBeenCalled();
+      });
+
+      const pushedStats: ForgeRepositoryStats = {
+        commitCount: 2,
+        issueCount: 0,
+        prCount: 0,
+        loading: false,
+        stale: false,
+        lastUpdated: 2000,
+      };
+      await act(async () => {
+        pushHandler?.(makePushPayload(project.path, pushedStats, Date.now() + 10_000));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // The push carries an empty page — a non-stale entry is replaced by it.
+      expect(getCache(issuesKey)?.items).toEqual([]);
+    });
+
     it("ignores a push payload whose fetchedAt is older than the last applied result", async () => {
       const project = { id: "p", path: "/repo/stale" };
       getCurrentMock.mockResolvedValue(project);
