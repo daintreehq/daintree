@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 
 // Hoisted mutable state so each mock reads its slice at call time and a test can
 // reshape the stores before rendering.
@@ -8,8 +8,12 @@ const h = vi.hoisted(() => ({
   panelIds: [] as string[],
   panelsById: {} as Record<string, unknown>,
   recipes: { currentProjectId: null as string | null, isLoading: false },
+  dispatch: vi.fn(() => Promise.resolve()),
 }));
 
+vi.mock("@/services/ActionService", () => ({
+  actionService: { dispatch: h.dispatch },
+}));
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: (sel: (s: typeof h) => unknown) => sel(h),
 }));
@@ -79,6 +83,7 @@ describe("ContentGridEmptyState — workspace capabilities", () => {
     h.panelsById = {};
     h.recipes.currentProjectId = null;
     h.recipes.isLoading = false;
+    h.dispatch.mockClear();
   });
 
   describe("an active scratch", () => {
@@ -171,6 +176,18 @@ describe("ContentGridEmptyState — workspace capabilities", () => {
       expect(screen.queryByTestId("recipe-runner")).toBeNull();
     });
 
+    // Isolates the project-binding conjunct: a settled store that hasn't bound a
+    // project yet must stay quiet even in full project context, or the cold-start
+    // flash returns.
+    it("withholds recipes until the store has bound a project", () => {
+      h.recipes.currentProjectId = null;
+      h.recipes.isLoading = false;
+
+      render(<ContentGridEmptyState {...PROJECT_PROPS} />);
+
+      expect(screen.queryByTestId("recipe-runner")).toBeNull();
+    });
+
     it("shows the project pulse", () => {
       render(<ContentGridEmptyState {...PROJECT_PROPS} />);
 
@@ -214,23 +231,44 @@ describe("ContentGridEmptyState — workspace capabilities", () => {
       );
 
       expect(screen.getByText("Open a project folder")).toBeTruthy();
+      expect(screen.queryByText("Select a worktree")).toBeNull();
     });
 
-    // Issue #8645 — before the worktree snapshot lands, both copy variants would
-    // be a guess, so the canvas stays silent rather than flashing the wrong one.
-    it("stays silent until the worktree snapshot has initialized", () => {
+    it("dispatches the add-project action from the open-folder button", () => {
       render(
         <ContentGridEmptyState
           hasLaunchTarget={false}
           hasProjectContext
           hasWorktrees={false}
-          isWorktreeInitialized={false}
+          isWorktreeInitialized
           showProjectPulse={false}
         />
       );
 
-      expect(screen.queryByText("Open a project folder")).toBeNull();
-      expect(screen.queryByText("Select a worktree")).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: /open folder/i }));
+
+      expect(h.dispatch).toHaveBeenCalledWith("project.add", undefined, { source: "user" });
     });
+
+    // Issue #8645 — before the worktree snapshot lands, either copy variant would
+    // be a guess, so the canvas stays silent rather than flashing the wrong one.
+    // Both branches are checked: `hasWorktrees` alone must not decide it.
+    it.each([true, false])(
+      "stays silent until the worktree snapshot has initialized (hasWorktrees=%s)",
+      (hasWorktrees) => {
+        render(
+          <ContentGridEmptyState
+            hasLaunchTarget={false}
+            hasProjectContext
+            hasWorktrees={hasWorktrees}
+            isWorktreeInitialized={false}
+            showProjectPulse={false}
+          />
+        );
+
+        expect(screen.queryByText("Open a project folder")).toBeNull();
+        expect(screen.queryByText("Select a worktree")).toBeNull();
+      }
+    );
   });
 });

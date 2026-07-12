@@ -113,15 +113,13 @@ describe("ContentGrid EmptyState — initialization gate (issue #8645)", () => {
 
   it("does not render bare <p> with text-daintree-text/60 in the no-worktree branch", async () => {
     const content = await readFile(EMPTY_STATE_PATH, "utf-8");
-    // The old bare <p> with diluted text color is gone — replaced by EmptyState
-    const lines = content.split("\n");
-    const noWorktreeSection = lines.filter(
-      (line) => !line.includes("hasLaunchTarget") || line.includes("!hasLaunchTarget")
-    );
-    const hasOldPattern = noWorktreeSection.some(
-      (line) =>
-        line.includes("<p") && line.includes("text-daintree-text/60") && line.includes("max-w-md")
-    );
+    // The old bare <p> with diluted text color is gone — replaced by EmptyState.
+    const hasOldPattern = content
+      .split("\n")
+      .some(
+        (line) =>
+          line.includes("<p") && line.includes("text-daintree-text/60") && line.includes("max-w-md")
+      );
     expect(hasOldPattern).toBe(false);
   });
 });

@@ -4,6 +4,7 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useProjectStore } from "@/store";
 import { useScratchStore } from "@/store/scratchStore";
 import { useHomeDir } from "@/hooks/app/useHomeDir";
+import { resolveWorkspaceCwd } from "@/utils/workspaceCwd";
 
 export function useActiveWorktreeSync() {
   const { worktrees, isInitialized } = useWorktrees();
@@ -67,13 +68,16 @@ export function useActiveWorktreeSync() {
       });
   }, [activeWorktreeId, currentProject?.id, worktrees]);
 
-  // A scratch is an active workspace with no worktree (#11076) — without it in
-  // the chain, `terminal.new` lands in the home dir instead of the scratch.
+  // Before the snapshot is authoritative the worktree is withheld from the
+  // chain — a stale selection would spawn terminals in the wrong tree.
   const defaultTerminalCwd = useMemo(
     () =>
-      isInitialized
-        ? (activeWorktree?.path ?? currentProject?.path ?? currentScratch?.path ?? homeDir ?? "")
-        : (currentProject?.path ?? currentScratch?.path ?? homeDir ?? ""),
+      resolveWorkspaceCwd({
+        worktreePath: isInitialized ? activeWorktree?.path : null,
+        projectPath: currentProject?.path,
+        scratchPath: currentScratch?.path,
+        homeDir,
+      }),
     [activeWorktree, currentProject, currentScratch, homeDir, isInitialized]
   );
 

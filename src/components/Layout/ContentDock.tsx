@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { usePanelStore, useProjectStore, useWorktreeSelectionStore } from "@/store";
 import { useScratchStore } from "@/store/scratchStore";
+import { resolveWorkspaceCwd } from "@/utils/workspaceCwd";
 import {
   isDockPanel,
   isFilePanel,
@@ -236,11 +237,14 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   const { worktrees } = useWorktrees();
 
   const activeWorktree = activeWorktreeId ? worktrees.find((w) => w.id === activeWorktreeId) : null;
-  // Include the scratch (#11076): this cwd is passed down as an explicit launch
-  // option, and `""` is not nullish — an empty string would win over
-  // `useAgentLauncher`'s own scratch fallback and strand dock launches in the
-  // home dir.
-  const cwd = activeWorktree?.path ?? currentProject?.path ?? currentScratch?.path ?? "";
+  // This cwd rides down as an explicit launch option, and `""` is not nullish —
+  // it would win over any fallback further down the chain, so it has to resolve
+  // the whole workspace here (#11076).
+  const cwd = resolveWorkspaceCwd({
+    worktreePath: activeWorktree?.path,
+    projectPath: currentProject?.path,
+    scratchPath: currentScratch?.path,
+  });
 
   const { sorted: launchAgents, pinnedCount } = useMemo(() => {
     const baseIds = getAgentIds();

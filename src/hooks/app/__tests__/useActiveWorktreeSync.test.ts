@@ -125,4 +125,60 @@ describe("useActiveWorktreeSync defaultTerminalCwd", () => {
 
     expect(cwdOf()).toBe("/scratches/s1");
   });
+
+  // Issue #4254 — a selection that predates the authoritative snapshot must not
+  // decide the cwd, or terminals spawn in a worktree that may not be current.
+  it("withholds a matching worktree until the snapshot is authoritative", () => {
+    mocks.projectState.currentProject = { id: "p1", path: "/repo" };
+    mocks.useWorktrees.mockReturnValue({ worktrees: [worktree], isInitialized: false });
+
+    expect(cwdOf()).toBe("/repo");
+  });
+
+  it("falls back to the home dir before initialization when no workspace is active", () => {
+    mocks.selectionState.activeWorktreeId = null;
+    mocks.useWorktrees.mockReturnValue({ worktrees: [], isInitialized: false });
+
+    expect(cwdOf()).toBe("/home/user");
+  });
+
+  describe("recomputes when its inputs change", () => {
+    it("adopts the worktree once the snapshot becomes authoritative", () => {
+      mocks.projectState.currentProject = { id: "p1", path: "/repo" };
+      mocks.useWorktrees.mockReturnValue({ worktrees: [worktree], isInitialized: false });
+
+      const { result, rerender } = renderHook(() => useActiveWorktreeSync());
+      expect(result.current.defaultTerminalCwd).toBe("/repo");
+
+      mocks.useWorktrees.mockReturnValue({ worktrees: [worktree], isInitialized: true });
+      rerender();
+
+      expect(result.current.defaultTerminalCwd).toBe(worktree.path);
+    });
+
+    it("adopts the home dir once it resolves", () => {
+      mocks.selectionState.activeWorktreeId = null;
+      mocks.homeDir.homeDir = null;
+
+      const { result, rerender } = renderHook(() => useActiveWorktreeSync());
+      expect(result.current.defaultTerminalCwd).toBe("");
+
+      mocks.homeDir.homeDir = "/home/user";
+      rerender();
+
+      expect(result.current.defaultTerminalCwd).toBe("/home/user");
+    });
+
+    it("adopts a scratch the moment one becomes active", () => {
+      mocks.selectionState.activeWorktreeId = null;
+
+      const { result, rerender } = renderHook(() => useActiveWorktreeSync());
+      expect(result.current.defaultTerminalCwd).toBe("/home/user");
+
+      mocks.scratchState.currentScratch = { id: "s1", path: "/scratches/s1" };
+      rerender();
+
+      expect(result.current.defaultTerminalCwd).toBe("/scratches/s1");
+    });
+  });
 });

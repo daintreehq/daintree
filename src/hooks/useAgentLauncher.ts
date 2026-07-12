@@ -13,6 +13,7 @@ import { systemClient } from "@/clients";
 import { useHomeDir } from "@/hooks/app/useHomeDir";
 import { logError, logWarn } from "@/utils/logger";
 import { markRendererPerformance } from "@/utils/performance";
+import { resolveWorkspaceCwd } from "@/utils/workspaceCwd";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
@@ -320,11 +321,12 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
 
         const cwd =
           launchOptions?.cwd ??
-          targetWorktree?.path ??
-          currentScratch?.path ??
-          currentProject?.path ??
-          homeDir ??
-          "";
+          resolveWorkspaceCwd({
+            worktreePath: targetWorktree?.path,
+            projectPath: currentProject?.path,
+            scratchPath: currentScratch?.path,
+            homeDir,
+          });
 
         // Handle browser pane specially
         if (agentId === "browser") {

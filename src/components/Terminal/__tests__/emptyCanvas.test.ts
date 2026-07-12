@@ -16,10 +16,7 @@ describe("resolveEmptyCanvas", () => {
   it("hands an empty scratch the launcher, not the welcome screen", () => {
     // #11076: switching to a scratch nulls the project pointer, which used to
     // read as "no workspace" and offer to open a folder the user already had.
-    const canvas = resolveEmptyCanvas(null, scratch);
-
-    expect(canvas.kind).toBe("scratch");
-    expect(canvas).toEqual({ kind: "scratch", scratch });
+    expect(resolveEmptyCanvas(null, scratch)).toEqual({ kind: "scratch", scratch });
   });
 
   it("leaves a project's empty canvas to the grid's own context", () => {
