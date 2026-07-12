@@ -101,21 +101,25 @@ describe("projectActions adversarial", () => {
     });
 
     it("project.mruCycleOlder returns to the MRU head when a scratch cleared the current project", async () => {
-      const { switchProject } = mockMruState(null);
+      const { switchProject, reopenProject } = mockMruState(null);
 
       const { run } = setupActions();
       await run("project.mruCycleOlder");
 
+      expect(switchProject).toHaveBeenCalledTimes(1);
       expect(switchProject).toHaveBeenCalledWith("p-current");
+      expect(reopenProject).not.toHaveBeenCalled();
     });
 
     it("project.mruCycleNewer wraps to the MRU tail when a scratch cleared the current project", async () => {
-      const { switchProject } = mockMruState(null);
+      const { switchProject, reopenProject } = mockMruState(null);
 
       const { run } = setupActions();
       await run("project.mruCycleNewer");
 
+      expect(switchProject).toHaveBeenCalledTimes(1);
       expect(switchProject).toHaveBeenCalledWith("p-older");
+      expect(reopenProject).not.toHaveBeenCalled();
     });
   });
 

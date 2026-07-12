@@ -394,8 +394,8 @@ describe("useProjectMruSwitcher", () => {
     beforeEach(() => {
       // Switching to a scratch clears `currentProject` but leaves every
       // project's `lastOpened` untouched, so the pre-scratch project is still
-      // the MRU head. Realistic post-switch statuses: the departed project is
-      // reconciled to "background" (#11085).
+      // the MRU head. Statuses here are the post-reconciliation snapshot, once
+      // main has repaired the departed row to "background" (#11085).
       projectState.currentProject = null;
       projectState.projects = [
         {
@@ -424,6 +424,7 @@ describe("useProjectMruSwitcher", () => {
         keyDown("Equal");
       });
 
+      expect(reopenProjectMock).toHaveBeenCalledTimes(1);
       expect(reopenProjectMock).toHaveBeenCalledWith("p-prev");
       expect(switchProjectMock).not.toHaveBeenCalled();
     });
@@ -435,7 +436,41 @@ describe("useProjectMruSwitcher", () => {
         keyDown("Equal", { shiftKey: true });
       });
 
+      expect(reopenProjectMock).toHaveBeenCalledTimes(1);
       expect(reopenProjectMock).toHaveBeenCalledWith("p-older");
+      expect(switchProjectMock).not.toHaveBeenCalled();
+    });
+
+    it("still targets the pre-scratch project before main reconciles its status", () => {
+      // The immediate post-switch snapshot: the departed row is still "active"
+      // because the scratch switch never demoted or broadcast it.
+      projectState.projects = [
+        {
+          id: "p-prev",
+          path: "/p-prev",
+          name: "Previous",
+          emoji: "tree",
+          lastOpened: 500,
+          status: "active",
+        },
+        {
+          id: "p-older",
+          path: "/p-older",
+          name: "Older",
+          emoji: "carrot",
+          lastOpened: 300,
+          status: "background",
+        },
+      ];
+      renderHook(() => useProjectMruSwitcher());
+
+      act(() => {
+        keyDown("Equal");
+      });
+
+      expect(switchProjectMock).toHaveBeenCalledTimes(1);
+      expect(switchProjectMock).toHaveBeenCalledWith("p-prev");
+      expect(reopenProjectMock).not.toHaveBeenCalled();
     });
 
     it("no-ops when no projects exist at all", () => {

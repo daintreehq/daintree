@@ -338,18 +338,26 @@ describe("useProjectSwitcherPalette", () => {
       expect(result.current.results[1]!.id).toBe("project-2");
     });
 
-    it("defaults to the MRU head when a scratch is active (no project is active)", async () => {
-      // A scratch clears `currentProject` without touching any project's
-      // `lastOpened`, and the departed project reconciles to "background". The
-      // preselected row must be the pre-scratch project itself, not the row
-      // after it — there is no active row to skip past (#11085).
-      const scratchProjects = multipleProjects.map((project) => ({
-        ...project,
-        status: "background" as const,
-      }));
-      // Supplied out of MRU order so the assertion proves the computed sort,
-      // not the fixture's array position.
-      projectState.projects = [scratchProjects[2]!, scratchProjects[0]!, scratchProjects[1]!];
+    /**
+     * The state the renderer actually holds on the first palette open from a
+     * scratch: the scratch switch cleared `currentProject` but never demoted or
+     * broadcast the row it left, so the pre-scratch project is still "active"
+     * with no process of its own. Main repairs that to "background" on its next
+     * read — which lands only after the palette's async reload (#11085).
+     */
+    function scratchWorkspaceProjects() {
+      // Supplied out of MRU order so assertions prove the computed sort, not the
+      // fixture's array position.
+      return [
+        { ...multipleProjects[2]!, status: "background" as const },
+        { ...multipleProjects[0]!, status: "active" as const },
+        { ...multipleProjects[1]!, status: "background" as const },
+      ];
+    }
+
+    it("keeps the pre-scratch project browsable and preselected on the first open", async () => {
+      const scratchProjects = scratchWorkspaceProjects();
+      projectState.projects = scratchProjects;
       projectState.currentProject = null;
       getBulkStatsMock.mockResolvedValue(emptyBulkStats(multipleProjects.map((p) => p.id)));
 
@@ -365,7 +373,58 @@ describe("useProjectSwitcherPalette", () => {
 
       const freshest = [...scratchProjects].sort((a, b) => b.lastOpened - a.lastOpened)[0]!;
       expect(result.current.results.some((project) => project.isActive)).toBe(false);
+      // The stale-"active" row must survive the modal-browse scope filter, not
+      // get dropped for being neither active nor background.
+      expect(result.current.results.map((project) => project.id)).toContain(freshest.id);
       expect(result.current.results[result.current.selectedIndex]?.id).toBe(freshest.id);
+    });
+
+    it("preselects the pre-scratch project in dropdown mode too", async () => {
+      const scratchProjects = scratchWorkspaceProjects();
+      projectState.projects = scratchProjects;
+      projectState.currentProject = null;
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(multipleProjects.map((p) => p.id)));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open("dropdown");
+      });
+
+      await waitFor(() => {
+        expect(result.current.isOpen).toBe(true);
+      });
+
+      const freshest = [...scratchProjects].sort((a, b) => b.lastOpened - a.lastOpened)[0]!;
+      expect(result.current.results[result.current.selectedIndex]?.id).toBe(freshest.id);
+    });
+
+    it("preselects the freshest switchable project when the active one isn't the MRU head", async () => {
+      // Reachable when the active project's `lastOpened` write was suppressed or
+      // another window bumped a different project. The preselect must be the MRU
+      // switch target — the freshest row that isn't the one we're already in —
+      // never the active row itself, which Enter would no-op on.
+      projectState.projects = [
+        { ...multipleProjects[1]!, lastOpened: 300, status: "background" as const },
+        { ...multipleProjects[0]!, lastOpened: 100, status: "active" as const },
+        { ...multipleProjects[2]!, lastOpened: 50, status: "background" as const },
+      ];
+      projectState.currentProject = { id: multipleProjects[0]!.id };
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(multipleProjects.map((p) => p.id)));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open();
+      });
+
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(3);
+      });
+
+      const selected = result.current.results[result.current.selectedIndex];
+      expect(selected?.isActive).toBe(false);
+      expect(selected?.id).toBe(multipleProjects[1]!.id);
     });
 
     it("sorts by lastOpened, ignoring frecencyScore", async () => {
