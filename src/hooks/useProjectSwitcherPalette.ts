@@ -988,15 +988,18 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       if (failures.length === 0) {
         const title = `Deleted ${total} ${noun}`;
         closeAndAnnounce(close, title);
+        // Reports the terminals, not the folders: main tombstones the row and then
+        // treats `fs.rm` as best-effort, swallowing a failure and leaving cleanup to
+        // a later sweep (`ScratchStore.removeScratch`). A resolved call therefore
+        // proves the workspace is gone from the app, not that the directory is gone
+        // from disk — claiming the latter would be a lie on a locked folder.
+        //
         // Transient: the section emptying in front of the user is the real
         // confirmation — this is a one-shot receipt, not an inbox entry.
         notify({
           type: "success",
           title,
-          message:
-            total === 1
-              ? "Its terminals were closed and its folder was deleted."
-              : "Their terminals were closed and their folders were deleted.",
+          message: total === 1 ? "Its terminals were closed." : "Their terminals were closed.",
           transient: true,
           priority: "high",
           context: { eventKind: "uiFeedback" },

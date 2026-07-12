@@ -45,10 +45,11 @@ const {
     );
 
     // `scratches` is typed (not inferred as never[]) so the bulk-delete specs can
-    // seed it and mutate it mid-run to model `scratch:removed` pushes.
+    // seed it and mutate it mid-run to model `scratch:removed` pushes. Same for
+    // `currentScratch`, which decides which row the palette marks active.
     const scratchState = {
       scratches: [] as Scratch[],
-      currentScratch: null,
+      currentScratch: null as Scratch | null,
       loadScratches: vi.fn().mockResolvedValue(undefined),
       createScratch: vi.fn(),
       switchScratch: vi.fn(),
@@ -141,6 +142,7 @@ function lastRetryAction(): () => Promise<void> {
 beforeEach(() => {
   vi.clearAllMocks();
   scratchState.scratches = [];
+  scratchState.currentScratch = null;
   scratchState.createScratch.mockResolvedValue({ id: "scratch-1" });
   scratchState.switchScratch.mockResolvedValue(undefined);
   scratchState.renameScratch.mockResolvedValue(undefined);
@@ -148,7 +150,13 @@ beforeEach(() => {
   closeAndAnnounceSpy.mockImplementation(realCloseAndAnnounce);
 });
 
-/** Seeds N scratches into the mocked store, newest first. */
+/**
+ * Seeds N scratches into the mocked store and marks the first one ACTIVE.
+ *
+ * The active scratch is deliberately part of every bulk fixture: it is the one the
+ * user is standing in, and "delete all" has to take it too. With an all-inactive
+ * fixture, an implementation that quietly skipped `isActive` would look correct.
+ */
 function seedScratches(count: number): Scratch[] {
   scratchState.scratches = Array.from({ length: count }, (_, i) => ({
     id: `scratch-${i + 1}`,
@@ -157,7 +165,29 @@ function seedScratches(count: number): Scratch[] {
     createdAt: 1_000 + i,
     lastOpened: 1_000 + i,
   }));
+  scratchState.currentScratch = scratchState.scratches[0] ?? null;
   return scratchState.scratches;
+}
+
+/** Every id `removeScratch` was actually asked to delete. */
+function deletedIds(): string[] {
+  return scratchState.removeScratch.mock.calls.map((call) => call[0] as string);
+}
+
+/** A removal that stays pending until the test releases it. */
+function deferRemovals(): { release: () => void } {
+  const resolvers: (() => void)[] = [];
+  scratchState.removeScratch.mockImplementation(
+    () =>
+      new Promise<void>((resolve) => {
+        resolvers.push(resolve);
+      })
+  );
+  return {
+    release: () => {
+      for (const resolve of resolvers) resolve();
+    },
+  };
 }
 
 /** The payload of the most recent notify() call. */
@@ -314,12 +344,86 @@ describe("renameScratch", () => {
 });
 
 describe("deleteAllScratches", () => {
-  it("does not open a confirmation when there is nothing to delete", () => {
+  it("opens a confirmation only when there is something to delete", () => {
+    const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => result.current.requestDeleteAllScratches());
+    // Paired with the seeded case: on its own this would still pass if
+    // `requestDeleteAllScratches` were a permanent no-op.
+    expect(result.current.deleteAllScratchesConfirm).toBeNull();
+
+    seedScratches(2);
+    rerender();
+    act(() => result.current.requestDeleteAllScratches());
+
+    expect(result.current.deleteAllScratchesConfirm).toHaveLength(2);
+  });
+
+  it("enrols the active scratch along with the rest", async () => {
+    const seeded = seedScratches(3);
+    const activeId = scratchState.currentScratch!.id;
     const { result } = renderHook(() => useProjectSwitcherPalette());
 
     act(() => result.current.requestDeleteAllScratches());
+    expect(result.current.deleteAllScratchesConfirm?.map((t) => t.id)).toContain(activeId);
+
+    await act(async () => {
+      await result.current.confirmDeleteAllScratches();
+    });
+
+    // "Delete all" that spared the workspace you're standing in would be a lie.
+    expect(deletedIds()).toContain(activeId);
+    expect(deletedIds()).toHaveLength(seeded.length);
+  });
+
+  it("dismisses the confirmation without deleting anything", () => {
+    seedScratches(2);
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => result.current.requestDeleteAllScratches());
+    expect(result.current.deleteAllScratchesConfirm).not.toBeNull();
+
+    act(() => result.current.dismissDeleteAllScratchesConfirm());
 
     expect(result.current.deleteAllScratchesConfirm).toBeNull();
+    expect(scratchState.removeScratch).not.toHaveBeenCalled();
+  });
+
+  it("holds the dialog open and the summary back until every removal settles", async () => {
+    const seeded = seedScratches(3);
+    const { release } = deferRemovals();
+    const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => result.current.requestDeleteAllScratches());
+
+    let run!: Promise<void>;
+    act(() => {
+      run = result.current.confirmDeleteAllScratches();
+    });
+
+    // Every target is in flight at once — a sequential await loop would show one.
+    expect(deletedIds()).toHaveLength(seeded.length);
+    expect(result.current.isDeletingAllScratches).toBe(true);
+    expect(notifyMock).not.toHaveBeenCalled();
+
+    // The `scratch:removed` pushes land while the run is still going, draining the
+    // live list out from under the open dialog. The dialog must ride it out: without
+    // the in-flight guard on the stale-snapshot effect, this tears it down early and
+    // the user loses the outcome.
+    scratchState.scratches = [];
+    rerender();
+
+    expect(result.current.deleteAllScratchesConfirm).toHaveLength(seeded.length);
+    expect(notifyMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      release();
+      await run;
+    });
+
+    expect(result.current.deleteAllScratchesConfirm).toBeNull();
+    expect(result.current.isDeletingAllScratches).toBe(false);
+    expect(notifyMock).toHaveBeenCalledTimes(1);
   });
 
   it("freezes the targets at confirm-open so a later arrival is never enrolled", async () => {
@@ -382,6 +486,9 @@ describe("deleteAllScratches", () => {
       await result.current.confirmDeleteAllScratches();
     });
 
+    // Tied to the actual deletions: a summary that reported success without ever
+    // calling the store would otherwise pass.
+    expect([...deletedIds()].sort()).toEqual(seeded.map((s) => s.id).sort());
     // One summary, not one toast per scratch — the per-item error path in
     // `removeScratchAction` must not be reused for the fan-out.
     expect(notifyMock).toHaveBeenCalledTimes(1);
@@ -390,10 +497,11 @@ describe("deleteAllScratches", () => {
     expect(payload.title).toContain(String(seeded.length));
   });
 
-  it("reports a partial run as a warning naming the survivor count", async () => {
-    const seeded = seedScratches(3);
+  it("reports a partial run as a warning counting the successes against the total", async () => {
+    const seeded = seedScratches(4);
+    const doomed = new Set([seeded[0]!.id, seeded[1]!.id]);
     scratchState.removeScratch.mockImplementation((id: string) =>
-      id === seeded[0]!.id ? Promise.reject(new Error("EBUSY")) : Promise.resolve(undefined)
+      doomed.has(id) ? Promise.reject(new Error("EBUSY")) : Promise.resolve(undefined)
     );
     const { result } = renderHook(() => useProjectSwitcherPalette());
 
@@ -406,8 +514,29 @@ describe("deleteAllScratches", () => {
     const payload = lastNotification();
     // Warning, not error: burying the two successes in red would misreport the run.
     expect(payload.type).toBe("warning");
-    expect(payload.title).toContain(String(seeded.length - 1));
+    // Both numbers, in order — a title that merely mentioned the failure count
+    // ("2 couldn't be deleted") would satisfy a bare contains-"2" check.
+    const numbers = (payload.title.match(/\d+/g) ?? []).map(Number);
+    expect(numbers).toEqual([seeded.length - doomed.size, seeded.length]);
+    // Several failed, so the summary reports the count rather than naming one.
+    expect(payload.message).toContain(String(doomed.size));
+  });
+
+  it("names the single casualty when only one target fails", async () => {
+    const seeded = seedScratches(3);
+    scratchState.removeScratch.mockImplementation((id: string) =>
+      id === seeded[0]!.id ? Promise.reject(new Error("EBUSY")) : Promise.resolve(undefined)
+    );
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => result.current.requestDeleteAllScratches());
+    await act(async () => {
+      await result.current.confirmDeleteAllScratches();
+    });
+
+    const payload = lastNotification();
     expect(payload.message).toContain(seeded[0]!.name);
+    expect(payload.message).toContain("EBUSY");
   });
 
   it("reports a total failure as an error naming the reason", async () => {
@@ -460,6 +589,30 @@ describe("deleteAllScratches", () => {
 
     expect(closeAndAnnounceSpy).toHaveBeenCalledTimes(1);
     expect(announceMock).not.toHaveBeenCalled();
+  });
+
+  it("hands closeAndAnnounce a callback that really is the dialog close", async () => {
+    seedScratches(2);
+    // Inert helper: the dialog can only close if the hook handed over a closer that
+    // does it. Without this, `closeAndAnnounce(() => {}, title)` followed by a
+    // separate close would satisfy the routing spec above while announcing first —
+    // exactly the ordering #9434 exists to prevent.
+    closeAndAnnounceSpy.mockImplementation(() => {});
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => result.current.requestDeleteAllScratches());
+    await act(async () => {
+      await result.current.confirmDeleteAllScratches();
+    });
+
+    expect(result.current.deleteAllScratchesConfirm).not.toBeNull();
+
+    const [closeFn, message] = closeAndAnnounceSpy.mock.calls[0] as [() => void, string];
+    expect(message).toBe(lastNotification().title);
+
+    act(() => closeFn());
+
+    expect(result.current.deleteAllScratchesConfirm).toBeNull();
   });
 
   it("announces the summary and clears the dialog on success", async () => {

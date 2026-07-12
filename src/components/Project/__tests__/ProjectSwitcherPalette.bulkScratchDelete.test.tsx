@@ -137,10 +137,12 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
       >
         <h2 data-testid="confirm-title">{title}</h2>
         <div data-testid="confirm-body">{children}</div>
-        <button type="button" onClick={onConfirm}>
+        {/* Addressed by role, not by label: pinning the locator to the exact copy
+            would make every interaction spec fail on a wording change. */}
+        <button type="button" data-testid="confirm-accept" onClick={onConfirm}>
           {confirmLabel}
         </button>
-        <button type="button" onClick={onClose}>
+        <button type="button" data-testid="confirm-cancel" onClick={onClose}>
           {cancelLabel}
         </button>
       </div>
@@ -205,8 +207,8 @@ function baseProps() {
 
 function renderPalette(overrides: Record<string, unknown> = {}) {
   const props = { ...baseProps(), ...overrides };
-  render(<ProjectSwitcherPalette {...props} />);
-  return props;
+  const view = render(<ProjectSwitcherPalette {...props} />);
+  return { props, view };
 }
 
 /**
@@ -222,60 +224,63 @@ function scratchHeader(): HTMLElement {
   return header;
 }
 
+/**
+ * The header menu's only item. Queried by role rather than by its label so the
+ * specs assert behavior instead of re-stating the copy they'd break on.
+ */
 function deleteAllItem(): HTMLElement | null {
-  return screen.queryByRole("menuitem", { name: /delete all scratch workspaces/i });
+  return screen.queryByRole("menuitem");
 }
 
 function snapshotOf(count: number): DeleteAllScratchesSnapshot {
   return Array.from({ length: count }, (_, i) => ({ id: `scratch-${i}`, name: `Spike ${i}` }));
 }
 
+/** The count the dialog is actually showing, pulled back out of its title. */
+function confirmedCount(): number {
+  const title = screen.getByTestId("confirm-title").textContent ?? "";
+  const match = /(\d+)/.exec(title);
+  if (!match) throw new Error(`No count in confirm title: ${title}`);
+  return Number(match[1]);
+}
+
+/** The noun the dialog uses for that count — the thing plural agreement is about. */
+function confirmedNoun(): string {
+  const title = screen.getByTestId("confirm-title").textContent ?? "";
+  return /workspaces/i.test(title) ? "plural" : "singular";
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe("Scratch section header context menu", () => {
-  it("offers the bulk delete once scratches exist", () => {
-    renderPalette({ scratchResults: [makeScratch(1), makeScratch(2)] });
+
+// The action has to survive BOTH surfaces. The two hosts forward props through
+// separate branches (DropdownContent vs ModalContent), so a modal-only suite stays
+// green while the dropdown — the one most users actually reach — loses the action.
+describe.each(["modal", "dropdown"] as const)("Scratch section header menu (%s)", (mode) => {
+  it("offers the bulk delete once scratches exist, and not before", () => {
+    const { view } = renderPalette({ mode, scratchResults: [] });
 
     fireEvent.contextMenu(scratchHeader());
-
-    expect(deleteAllItem()).not.toBeNull();
-  });
-
-  it("offers nothing to delete when the section is empty", () => {
-    renderPalette({ scratchResults: [] });
-
-    fireEvent.contextMenu(scratchHeader());
-
-    // "Delete all" of nothing is a confirm dialog reading "Delete 0 scratch
-    // workspaces?" — the action has to be absent, not merely inert.
+    // Paired with the positive case below so this can't pass by the action simply
+    // never existing — "absent when empty" is only meaningful next to "present when not".
     expect(deleteAllItem()).toBeNull();
-  });
 
-  it("does not collapse the section when the menu is opened", () => {
-    renderPalette({ scratchResults: [makeScratch(1)] });
-    const header = scratchHeader();
+    view.rerender(
+      <ProjectSwitcherPalette
+        {...baseProps()}
+        mode={mode}
+        scratchResults={[makeScratch(1), makeScratch(2)]}
+      />
+    );
+    fireEvent.contextMenu(scratchHeader());
 
-    fireEvent.contextMenu(header);
-
-    // The trigger is the collapse toggle. If the right-click also reached its
-    // onClick, the section would snap shut under the menu it just opened.
-    expect(header.getAttribute("aria-expanded")).toBe("true");
     expect(deleteAllItem()).not.toBeNull();
-  });
-
-  it("still collapses the section on an ordinary click", () => {
-    renderPalette({ scratchResults: [makeScratch(1)] });
-    const header = scratchHeader();
-
-    fireEvent.click(header);
-
-    expect(header.getAttribute("aria-expanded")).toBe("false");
   });
 
   it("asks the host to open the confirmation when the item is chosen", () => {
-    const props = renderPalette({ scratchResults: [makeScratch(1), makeScratch(2)] });
+    const { props } = renderPalette({ mode, scratchResults: [makeScratch(1), makeScratch(2)] });
 
     fireEvent.contextMenu(scratchHeader());
     const item = deleteAllItem();
@@ -287,52 +292,106 @@ describe("Scratch section header context menu", () => {
     expect(props.onRemoveScratch).not.toHaveBeenCalled();
   });
 
-  it("hides the bulk delete when the host wires no handler", () => {
-    renderPalette({
+  it("hides the bulk delete when the host wires no handler, but shows it when wired", () => {
+    const { view } = renderPalette({
+      mode,
       scratchResults: [makeScratch(1)],
       onRequestDeleteAllScratches: undefined,
     });
 
     fireEvent.contextMenu(scratchHeader());
-
     expect(deleteAllItem()).toBeNull();
+
+    view.rerender(
+      <ProjectSwitcherPalette
+        {...baseProps()}
+        mode={mode}
+        scratchResults={[makeScratch(1)]}
+        onRequestDeleteAllScratches={vi.fn()}
+      />
+    );
+    fireEvent.contextMenu(scratchHeader());
+
+    expect(deleteAllItem()).not.toBeNull();
+  });
+});
+
+describe("Scratch section header collapse toggle", () => {
+  it("opens the menu without collapsing the section", () => {
+    renderPalette({ scratchResults: [makeScratch(1)] });
+    const header = scratchHeader();
+
+    fireEvent.contextMenu(header);
+
+    // The trigger IS the collapse toggle. If the right-click also reached its
+    // onClick, the section would snap shut under the menu it just opened.
+    expect(header.getAttribute("aria-expanded")).toBe("true");
+    expect(deleteAllItem()).not.toBeNull();
+  });
+
+  it("still collapses on an ordinary click, with the menu left intact", () => {
+    renderPalette({ scratchResults: [makeScratch(1)] });
+    const header = scratchHeader();
+
+    fireEvent.click(header);
+    expect(header.getAttribute("aria-expanded")).toBe("false");
+
+    // Non-regression, but only if the menu it now shares the button with survives:
+    // asserting the collapse alone would still pass with the whole feature reverted.
+    fireEvent.contextMenu(header);
+    expect(deleteAllItem()).not.toBeNull();
   });
 });
 
 describe("Bulk delete confirmation", () => {
   it("counts the frozen snapshot, not the live scratch list", () => {
-    // The list has already shrunk to one as removals land; the dialog must keep
+    // The rows have already drained away as removals land; the dialog must keep
     // naming the three the user actually agreed to.
     renderPalette({
       scratchResults: [makeScratch(1)],
       deleteAllScratchesConfirm: snapshotOf(3),
     });
 
-    expect(screen.getByTestId("confirm-title").textContent).toContain("3");
+    expect(confirmedCount()).toBe(3);
   });
 
-  it("agrees in number with a single target", () => {
-    renderPalette({
+  it("agrees in number with the count it is showing", () => {
+    const { view } = renderPalette({
       scratchResults: [makeScratch(1)],
       deleteAllScratchesConfirm: snapshotOf(1),
     });
 
-    const title = screen.getByTestId("confirm-title").textContent ?? "";
-    expect(title).toMatch(/1 scratch workspace\?/);
-    expect(title).not.toMatch(/workspaces/);
+    expect(confirmedCount()).toBe(1);
+    expect(confirmedNoun()).toBe("singular");
+
+    view.rerender(
+      <ProjectSwitcherPalette
+        {...baseProps()}
+        scratchResults={[makeScratch(1)]}
+        deleteAllScratchesConfirm={snapshotOf(4)}
+      />
+    );
+
+    expect(confirmedCount()).toBe(4);
+    expect(confirmedNoun()).toBe("plural");
   });
 
-  it("pluralizes for several targets", () => {
-    renderPalette({
+  it("opens only once a confirm is pending, and closes when it clears", () => {
+    const { view } = renderPalette({
       scratchResults: [makeScratch(1)],
-      deleteAllScratchesConfirm: snapshotOf(4),
+      deleteAllScratchesConfirm: snapshotOf(2),
     });
+    expect(screen.queryByTestId("confirm-dialog")).not.toBeNull();
 
-    expect(screen.getByTestId("confirm-title").textContent).toMatch(/4 scratch workspaces\?/);
-  });
-
-  it("stays closed when nothing is pending", () => {
-    renderPalette({ scratchResults: [makeScratch(1)], deleteAllScratchesConfirm: null });
+    // Rerendered to null rather than asserted on a fresh render: a spec that only
+    // checks the empty case passes with the dialog deleted outright.
+    view.rerender(
+      <ProjectSwitcherPalette
+        {...baseProps()}
+        scratchResults={[makeScratch(1)]}
+        deleteAllScratchesConfirm={null}
+      />
+    );
 
     expect(screen.queryByTestId("confirm-dialog")).toBeNull();
   });
@@ -345,29 +404,30 @@ describe("Bulk delete confirmation", () => {
 
     const dialog = screen.getByTestId("confirm-dialog");
     expect(dialog.getAttribute("data-variant")).toBe("destructive");
-    // D1, not D2: scratches are local throwaway workspaces, so the count carries
-    // the consent — a typed-name gate here would be friction without a payoff.
+    // D1, not D2: scratches are local throwaway workspaces, so the count carries the
+    // consent — a typed-name gate here would be friction without a payoff.
     expect(dialog.getAttribute("data-typed-name-target")).toBe("");
   });
 
   it("runs the deletion when confirmed", () => {
-    const props = renderPalette({
+    const { props } = renderPalette({
       scratchResults: [makeScratch(1)],
       deleteAllScratchesConfirm: snapshotOf(2),
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /^delete scratch workspaces$/i }));
+    fireEvent.click(screen.getByTestId("confirm-accept"));
 
     expect(props.onConfirmDeleteAllScratches).toHaveBeenCalledTimes(1);
+    expect(props.onDismissDeleteAllScratchesConfirm).not.toHaveBeenCalled();
   });
 
   it("dismisses without deleting when cancelled", () => {
-    const props = renderPalette({
+    const { props } = renderPalette({
       scratchResults: [makeScratch(1)],
       deleteAllScratchesConfirm: snapshotOf(2),
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+    fireEvent.click(screen.getByTestId("confirm-cancel"));
 
     expect(props.onDismissDeleteAllScratchesConfirm).toHaveBeenCalledTimes(1);
     expect(props.onConfirmDeleteAllScratches).not.toHaveBeenCalled();

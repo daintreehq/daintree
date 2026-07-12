@@ -112,8 +112,22 @@ vi.mock("@/store/scratchStore", () => ({
 
 vi.mock("@/components/ui/ConfirmDialog", () => ({ ConfirmDialog: () => null }));
 
+// A sentinel, not a passthrough: it marks its own presence and surfaces the pending
+// confirm it was handed, so a spec can prove the palette is genuinely mounted with
+// the bulk-delete state — not merely that some button with the right label rendered.
 vi.mock("@/components/Project/ProjectSwitcherPalette", () => ({
-  ProjectSwitcherPalette: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  ProjectSwitcherPalette: ({
+    children,
+    deleteAllScratchesConfirm,
+  }: {
+    children: React.ReactNode;
+    deleteAllScratchesConfirm?: unknown;
+  }) => (
+    <div data-testid="project-switcher-palette">
+      {children}
+      {deleteAllScratchesConfirm ? <div data-testid="bulk-scratch-confirm" /> : null}
+    </div>
+  ),
 }));
 
 vi.mock("@/components/ui/button", () => ({
@@ -214,16 +228,29 @@ describe("ProjectSwitcher with an active scratch", () => {
     expect(screen.getByText("Open Project...")).toBeTruthy();
   });
 
-  it("keeps the palette mounted while a bulk scratch delete is still running", () => {
+  it("keeps the palette and its pending confirm mounted through a bulk scratch delete", () => {
     // Deleting the last scratch nulls `currentScratch` mid-run. With no projects to
     // fall back on, the empty-state branch would take over and unmount the palette —
     // taking the confirm dialog, still spinning on the delete, with it.
+    scratchStoreState.currentScratch = makeScratch(uniqueName("Doomed"));
+    const { rerender } = render(<ProjectSwitcher />);
+
+    // The run starts, then the last removal lands and clears the active pointer.
     paletteState.deleteAllScratchesConfirm = [{ id: "scratch-1", name: "Spike" }];
+    scratchStoreState.currentScratch = null;
+    rerender(<ProjectSwitcher />);
+
+    expect(screen.getByTestId("project-switcher-palette")).toBeTruthy();
+    expect(screen.getByTestId("bulk-scratch-confirm")).toBeTruthy();
+  });
+
+  it("drops back to the empty state once the bulk delete resolves", () => {
+    // The other half of the guard: it must not pin the palette open forever.
+    paletteState.deleteAllScratchesConfirm = null;
 
     render(<ProjectSwitcher />);
 
-    expect(screen.queryByText("Open Project...")).toBeNull();
-    expect(screen.getByText("Select Project...")).toBeTruthy();
+    expect(screen.queryByTestId("project-switcher-palette")).toBeNull();
   });
 
   it("prefers an open project over a lingering scratch pointer", () => {
