@@ -30,6 +30,10 @@ vi.mock("@/hooks/useKeybinding", () => ({
   useKeybindingDisplay: () => "⌘P",
 }));
 
+const paletteState = vi.hoisted(() => ({
+  nonActiveAgentCounts: { activeAgentCount: 0, waitingAgentCount: 0 },
+}));
+
 vi.mock("@/hooks", async () => {
   const deferred = await vi.importActual<typeof import("@/hooks/useDeferredLoading")>(
     "@/hooks/useDeferredLoading"
@@ -40,6 +44,7 @@ vi.mock("@/hooks", async () => {
       isOpen: false,
       mode: "dropdown",
       query: "",
+      // Presentation-scoped and deliberately empty: the badge must not read it.
       results: [],
       selectedIndex: 0,
       open: vi.fn(),
@@ -65,6 +70,7 @@ vi.mock("@/hooks", async () => {
       confirmRemoveProject: vi.fn(),
       isRemovingProject: false,
       backgroundWaitingCount: 0,
+      nonActiveAgentCounts: paletteState.nonActiveAgentCounts,
     }),
   };
 });
@@ -329,5 +335,50 @@ describe("ProjectSwitcher loading affordance", () => {
     const trigger = getByRole("button");
     expect(trigger.querySelector(".animate-spin")).toBeNull();
     expect(trigger.querySelector(".lucide-chevrons-up-down")).not.toBeNull();
+  });
+});
+
+// The badge counts agents on OTHER projects, so it must read the hook's
+// uncapped totals — not `results`, which modal browse scopes for presentation
+// and can legitimately drop a project whose process count hasn't landed yet
+// (agent counts and process counts arrive from separate stats calls).
+describe("ProjectSwitcher background-agent badge", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    setStore({
+      projects: [makeProject()],
+      currentProject: makeProject(),
+      isLoading: false,
+    });
+    paletteState.nonActiveAgentCounts = { activeAgentCount: 0, waitingAgentCount: 0 };
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("counts agents on projects that are absent from results", () => {
+    paletteState.nonActiveAgentCounts = { activeAgentCount: 0, waitingAgentCount: 2 };
+    const { getByRole } = render(<ProjectSwitcher />);
+    expect(getByRole("status").getAttribute("aria-label")).toContain("2 background agents waiting");
+  });
+
+  it("prefers waiting agents over working ones", () => {
+    paletteState.nonActiveAgentCounts = { activeAgentCount: 5, waitingAgentCount: 1 };
+    const { getByRole } = render(<ProjectSwitcher />);
+    const label = getByRole("status").getAttribute("aria-label");
+    expect(label).toContain("1 background agent waiting");
+    expect(label).not.toContain("working");
+  });
+
+  it("falls back to working agents when none are waiting", () => {
+    paletteState.nonActiveAgentCounts = { activeAgentCount: 3, waitingAgentCount: 0 };
+    const { getByRole } = render(<ProjectSwitcher />);
+    expect(getByRole("status").getAttribute("aria-label")).toContain("3 background agents working");
+  });
+
+  it("renders no badge when no other project has agents", () => {
+    const { queryByRole } = render(<ProjectSwitcher />);
+    expect(queryByRole("status")).toBeNull();
   });
 });

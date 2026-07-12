@@ -1,6 +1,24 @@
 // @vitest-environment jsdom
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ProjectStatus } from "@shared/types";
+
+/**
+ * `status` is widened to the full union so a describe can pin a fixture to any
+ * lifecycle state — inferring it from the default fixture would freeze the
+ * shared array at that one literal.
+ */
+type ProjectFixture = {
+  id: string;
+  name: string;
+  path: string;
+  emoji: string;
+  lastOpened: number;
+  status: ProjectStatus;
+  color?: string;
+  frecencyScore?: number;
+  pinned?: boolean;
+};
 
 const {
   getBulkStatsMock,
@@ -28,19 +46,25 @@ const {
     projectStatsState.stats = stats;
   });
 
+  // Modal browse lists only projects the user can switch to right now, so a
+  // fixture that is not `currentProject` needs a reason to be listed —
+  // "background" is the realistic one. A "closed"/idle non-current project is
+  // correctly absent from `results` (#11071).
+  const defaultProjects: ProjectFixture[] = [
+    {
+      id: "project-1",
+      name: "Project One",
+      path: "/repo/one",
+      emoji: "🌲",
+      color: "#00aa00",
+      lastOpened: 123,
+      frecencyScore: 3.0,
+      status: "background",
+    },
+  ];
+
   const projectState = {
-    projects: [
-      {
-        id: "project-1",
-        name: "Project One",
-        path: "/repo/one",
-        emoji: "🌲",
-        color: "#00aa00",
-        lastOpened: 123,
-        frecencyScore: 3.0,
-        status: "active" as const,
-      },
-    ],
+    projects: defaultProjects,
     currentProject: null as { id: string } | null,
     switchProject: vi.fn().mockResolvedValue(undefined),
     reopenProject: vi.fn().mockResolvedValue(undefined),
@@ -222,7 +246,7 @@ describe("useProjectSwitcherPalette", () => {
         color: "#00bb00",
         lastOpened: 200,
         frecencyScore: 7.0,
-        status: "active" as const,
+        status: "background" as const,
       },
       {
         id: "project-3",
@@ -232,7 +256,7 @@ describe("useProjectSwitcherPalette", () => {
         color: "#00cc00",
         lastOpened: 100,
         frecencyScore: 3.0,
-        status: "active" as const,
+        status: "background" as const,
       },
     ];
 
@@ -324,7 +348,7 @@ describe("useProjectSwitcherPalette", () => {
           color: "#00aa00",
           lastOpened: 100,
           frecencyScore: 50.0,
-          status: "active" as const,
+          status: "background" as const,
         },
         {
           id: "project-b",
@@ -334,7 +358,7 @@ describe("useProjectSwitcherPalette", () => {
           color: "#00bb00",
           lastOpened: 300,
           frecencyScore: 1.0,
-          status: "active" as const,
+          status: "background" as const,
         },
       ];
 
@@ -379,7 +403,7 @@ describe("useProjectSwitcherPalette", () => {
       color: "#00bb00",
       lastOpened: 200,
       frecencyScore: 5.0,
-      status: "active" as const,
+      status: "background" as const,
     };
 
     beforeEach(() => {
@@ -596,7 +620,7 @@ describe("useProjectSwitcherPalette", () => {
           color: "#00aa00",
           lastOpened: 123,
           frecencyScore: 3.0,
-          status: "active" as const,
+          status: "background" as const,
         },
       ];
       projectState.currentProject = null;
@@ -727,7 +751,7 @@ describe("useProjectSwitcherPalette", () => {
         color: "#00aa00",
         lastOpened: 1000 - i,
         frecencyScore: 1.0,
-        status: "active" as const,
+        status: "background" as const,
       };
     }
 
@@ -836,7 +860,7 @@ describe("useProjectSwitcherPalette", () => {
         color: "#00aa00",
         lastOpened: 300,
         frecencyScore: 10.0,
-        status: "active" as const,
+        status: "background" as const,
       },
       {
         id: "project-2",
@@ -846,7 +870,7 @@ describe("useProjectSwitcherPalette", () => {
         color: "#00bb00",
         lastOpened: 200,
         frecencyScore: 7.0,
-        status: "active" as const,
+        status: "background" as const,
       },
       {
         id: "project-3",
@@ -856,7 +880,7 @@ describe("useProjectSwitcherPalette", () => {
         color: "#00cc00",
         lastOpened: 100,
         frecencyScore: 3.0,
-        status: "active" as const,
+        status: "background" as const,
       },
     ];
 
@@ -953,7 +977,7 @@ describe("useProjectSwitcherPalette", () => {
         color: "#00bb00",
         lastOpened: 200,
         frecencyScore: 7.0,
-        status: "active" as const,
+        status: "background" as const,
       },
       {
         id: "project-3",
@@ -963,7 +987,7 @@ describe("useProjectSwitcherPalette", () => {
         color: "#00cc00",
         lastOpened: 100,
         frecencyScore: 3.0,
-        status: "active" as const,
+        status: "background" as const,
       },
     ];
 
@@ -1074,7 +1098,7 @@ describe("useProjectSwitcherPalette", () => {
           color: "#00cc00",
           lastOpened: 100,
           frecencyScore: 3.0,
-          status: "active" as const,
+          status: "background" as const,
         },
         {
           id: "project-2",
@@ -1094,7 +1118,7 @@ describe("useProjectSwitcherPalette", () => {
           color: "#00bb00",
           lastOpened: 200,
           frecencyScore: 7.0,
-          status: "active" as const,
+          status: "background" as const,
         },
       ];
 
@@ -1279,6 +1303,268 @@ describe("useProjectSwitcherPalette", () => {
       } finally {
         window.removeEventListener("unhandledrejection", unhandled);
       }
+    });
+  });
+
+  // #11071: modal browse used to render a narrower list than the one
+  // selectedIndex walked, so arrowing could land on a project that was never
+  // on screen — no highlight, and Enter switched to an off-screen project.
+  // `results` is now the single array the palette scopes, renders and indexes.
+  describe("modal browse scope — issue #11071", () => {
+    // MRU order interleaves a closed project between the two the modal shows,
+    // which is exactly the arrangement that stranded the selection.
+    const interleaved = [
+      {
+        id: "current",
+        name: "Current Project",
+        path: "/repo/current",
+        emoji: "🌲",
+        color: "#00aa00",
+        lastOpened: 300,
+        frecencyScore: 10.0,
+        status: "active" as const,
+      },
+      {
+        id: "closed",
+        name: "Closed Project",
+        path: "/repo/closed",
+        emoji: "🌿",
+        color: "#00bb00",
+        lastOpened: 200,
+        frecencyScore: 7.0,
+        status: "closed" as const,
+      },
+      {
+        id: "background",
+        name: "Background Project",
+        path: "/repo/background",
+        emoji: "🌴",
+        color: "#00cc00",
+        lastOpened: 100,
+        frecencyScore: 3.0,
+        status: "background" as const,
+      },
+    ];
+
+    beforeEach(() => {
+      projectState.projects = interleaved;
+      projectState.currentProject = { id: "current" };
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(interleaved.map((p) => p.id)));
+    });
+
+    async function openModal() {
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+      act(() => {
+        result.current.open("modal");
+      });
+      await waitFor(() => {
+        expect(result.current.isOpen).toBe(true);
+      });
+      return result;
+    }
+
+    it("omits an idle project from modal browse even when it is more recent", async () => {
+      const result = await openModal();
+
+      await waitFor(() => {
+        expect(result.current.results.map((p) => p.id)).toEqual(["current", "background"]);
+      });
+    });
+
+    it("lands every arrow step on a project that is actually in results", async () => {
+      const result = await openModal();
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(2);
+      });
+
+      // One full cycle in each direction: every stop must be a rendered row.
+      const visited: string[] = [];
+      for (let step = 0; step < result.current.results.length * 2; step++) {
+        const selected = result.current.results[result.current.selectedIndex];
+        expect(selected).toBeDefined();
+        visited.push(selected!.id);
+        act(() => {
+          result.current.selectNext();
+        });
+      }
+      for (let step = 0; step < result.current.results.length; step++) {
+        act(() => {
+          result.current.selectPrevious();
+        });
+        expect(result.current.results[result.current.selectedIndex]).toBeDefined();
+      }
+
+      expect(visited).not.toContain("closed");
+    });
+
+    it("confirmSelection switches to the highlighted project, never a scoped-out one", async () => {
+      const result = await openModal();
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(2);
+      });
+
+      // Row 2 is the MRU switch target — under the old unscoped index this was
+      // the closed project sitting at results[1].
+      const highlighted = result.current.results[result.current.selectedIndex]!;
+      expect(highlighted.id).toBe("background");
+
+      act(() => {
+        result.current.confirmSelection();
+      });
+
+      await waitFor(() => {
+        expect(projectState.reopenProject).toHaveBeenCalledWith("background");
+      });
+      expect(projectState.switchProject).not.toHaveBeenCalledWith("closed");
+      expect(projectState.reopenProject).not.toHaveBeenCalledWith("closed");
+    });
+
+    it("preselects against the destination list, not the mode being left", async () => {
+      // Only the current project survives modal scope here, so the row-2 rule
+      // MUST resolve against the destination list: counting all projects (or
+      // the outgoing mode's list) would preselect a row modal doesn't have.
+      projectState.projects = [interleaved[0]!, interleaved[1]!];
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(["current", "closed"]));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open("dropdown");
+      });
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(2);
+      });
+      // Dropdown lists both, so row 2 is the closed project.
+      expect(result.current.selectedIndex).toBe(1);
+      expect(result.current.results[1]!.id).toBe("closed");
+
+      act(() => {
+        result.current.open("modal");
+      });
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(1);
+      });
+      // Modal has a single row — the only valid selection is it.
+      expect(result.current.selectedIndex).toBe(0);
+      expect(result.current.results[0]!.id).toBe("current");
+    });
+
+    it("keeps a switchable project past the unscoped window inside modal browse", async () => {
+      // Enough recent idle projects to fill the results cap on their own. The
+      // background project is the stalest of all, so scoping BEFORE the cap is
+      // the only way it survives — capping first would slice it away.
+      const idle = Array.from({ length: 20 }, (_, i) => ({
+        id: `idle-${i}`,
+        name: `Idle ${i}`,
+        path: `/repo/idle-${i}`,
+        emoji: "🌿",
+        lastOpened: 1000 - i,
+        frecencyScore: 1.0,
+        status: "closed" as const,
+      }));
+      const stale = {
+        id: "stale-background",
+        name: "Stale Background",
+        path: "/repo/stale",
+        emoji: "🌴",
+        lastOpened: 1,
+        frecencyScore: 1.0,
+        status: "background" as const,
+      };
+
+      projectState.projects = [...idle, stale];
+      projectState.currentProject = null;
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats([...idle.map((p) => p.id), stale.id]));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open("modal");
+      });
+
+      await waitFor(() => {
+        expect(result.current.results.map((p) => p.id)).toEqual(["stale-background"]);
+      });
+    });
+
+    it("keeps the highlight on the selected project when a row above it disappears", async () => {
+      const withThreeVisible = [
+        interleaved[0]!,
+        { ...interleaved[2]!, id: "bg-a", name: "Background A", lastOpened: 250 },
+        { ...interleaved[2]!, id: "bg-b", name: "Background B", lastOpened: 150 },
+        { ...interleaved[2]!, id: "bg-c", name: "Background C", lastOpened: 50 },
+      ];
+      projectState.projects = withThreeVisible;
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(withThreeVisible.map((p) => p.id)));
+
+      const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open("modal");
+      });
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(4);
+      });
+
+      // Land on a MIDDLE row: bg-b at index 2.
+      act(() => {
+        result.current.selectNext();
+      });
+      expect(result.current.results[result.current.selectedIndex]!.id).toBe("bg-b");
+
+      // A row ABOVE the selection goes away — every later row shifts up one.
+      act(() => {
+        projectState.projects = withThreeVisible.filter((p) => p.id !== "bg-a");
+        rerender();
+      });
+
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(3);
+      });
+      // The highlight tracks the project, not the slot it used to occupy.
+      expect(result.current.results[result.current.selectedIndex]!.id).toBe("bg-b");
+      expect(result.current.selectedIndex).toBeLessThan(result.current.results.length);
+    });
+
+    it("still finds a scoped-out project by search", async () => {
+      const result = await openModal();
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(2);
+      });
+
+      act(() => {
+        result.current.setQuery("Closed");
+      });
+
+      await waitFor(() => {
+        expect(result.current.results.map((p) => p.id)).toContain("closed");
+      });
+    });
+
+    it("keeps a scoped-out project's agents in the badge totals", async () => {
+      // Agent counts and process counts arrive from separate ProjectStatsService
+      // calls, so a waiting agent can land before its process count does. The
+      // badge reads uncapped, unscoped totals so it can't blink off just
+      // because modal browse drops that project for a beat.
+      getBulkStatsMock.mockResolvedValue({
+        ...emptyBulkStats(interleaved.map((p) => p.id)),
+        closed: {
+          processCount: 0,
+          terminalCount: 0,
+          estimatedMemoryMB: 0,
+          terminalTypes: {},
+          processIds: [],
+          activeAgentCount: 0,
+          waitingAgentCount: 2,
+        },
+      });
+
+      const result = await openModal();
+
+      await waitFor(() => {
+        expect(result.current.nonActiveAgentCounts.waitingAgentCount).toBe(2);
+      });
+      expect(result.current.results.map((p) => p.id)).not.toContain("closed");
     });
   });
 });

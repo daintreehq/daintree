@@ -451,26 +451,18 @@ function ProjectListContent({
     ].filter((s): s is TemporalSection => s !== null);
   }, [results, isSearching, mode]);
 
-  const displayResults = useMemo(() => {
-    if (mode === "modal" && !isSearching) {
-      return results.filter((p) => p.isActive || p.isBackground || p.processCount > 0);
-    }
-    return results;
-  }, [results, mode, isSearching]);
-
-  const resultIndexMap = useMemo(() => {
-    const map = new Map<string, number>();
-    results.forEach((p, i) => map.set(p.id, i));
-    return map;
-  }, [results]);
+  // `results` is already scoped by the hook to exactly the rows this mode
+  // renders, so it doubles as the arrow-key domain. Never re-filter it here:
+  // a second, narrower array is what stranded the highlight and let Enter
+  // commit an off-screen project (#11071).
+  const selectedProjectId = results[selectedIndex]?.id;
 
   const renderItem = (project: SearchableProject) => {
-    const index = resultIndexMap.get(project.id) ?? 0;
     return (
       <div key={project.id} role="presentation">
         <ProjectListItem
           project={project}
-          isSelected={index === selectedIndex}
+          isSelected={project.id === selectedProjectId}
           onSelect={onSelect}
           onStopProject={onStopProject}
           onCloseProject={onCloseProject}
@@ -489,7 +481,7 @@ function ProjectListContent({
   return (
     <>
       <div ref={listRef} id="project-list" role="listbox" aria-label="Projects">
-        {displayResults.length === 0 ? (
+        {results.length === 0 ? (
           <div className="p-2">
             <div className="px-3 py-8 text-center text-daintree-text/50 text-sm">
               {query.trim() ? (
@@ -528,7 +520,7 @@ function ProjectListContent({
             );
           })
         ) : (
-          <div className="p-2">{displayResults.map((project) => renderItem(project))}</div>
+          <div className="p-2">{results.map((project) => renderItem(project))}</div>
         )}
       </div>
     </>
