@@ -62,6 +62,11 @@ export function suppressSidebarResizes(): void {
 // obligation stays ARMED: a later binding (or the next show settle) retries it,
 // which is strictly better than dropping the repaint the way #11070 did.
 const ASSISTANT_ATTACH_SETTLE_TIMEOUT_MS = 2500;
+// A timed-out attach waiter is deregistered, so a single wait would silently
+// abandon a terminal that attaches a moment after the deadline. Re-arm the wait
+// a bounded number of times (~7.5s total) — long enough to cover a slow cold
+// agent spawn, short enough that a genuinely dead binding stops costing frames.
+const ASSISTANT_ATTACH_WAIT_ATTEMPTS = 3;
 
 /**
  * Owns the Assistant terminal's post-transition reveal repaint as a durable
@@ -140,18 +145,34 @@ export function createAssistantRevealCoordinator(): AssistantRevealCoordinator {
     if (inFlight && inFlight.id === id && inFlight.generation === stamp) return;
     inFlight = { id, generation: stamp };
 
+    const isStale = (): boolean => stamp !== generation || !visible;
+
     void (async () => {
       try {
-        try {
-          await terminalInstanceService.waitForAttachSettled(id, {
-            timeoutMs: ASSISTANT_ATTACH_SETTLE_TIMEOUT_MS,
-          });
-        } catch {
-          // Never attached in time. Leave `pending` armed — the next store
-          // binding or show settle picks the obligation back up.
-          return;
+        // waitForAttachSettled resolves IMMEDIATELY when the terminal is already
+        // attached (the warm open, every time after the first) and otherwise
+        // parks on the attach notification. It REJECTS on timeout, and a
+        // timed-out waiter is deregistered — so a terminal that attaches just
+        // after the deadline would never wake us again, and with the sidebar
+        // still open no further settle or store edge is coming. That is #11070
+        // with a longer fuse, so the wait is retried rather than abandoned.
+        let attached = false;
+        for (let attempt = 0; attempt < ASSISTANT_ATTACH_WAIT_ATTEMPTS; attempt++) {
+          if (isStale()) return;
+          try {
+            await terminalInstanceService.waitForAttachSettled(id, {
+              timeoutMs: ASSISTANT_ATTACH_SETTLE_TIMEOUT_MS,
+            });
+            attached = true;
+            break;
+          } catch {
+            // Timed out — fall through and re-arm the wait (it resolves at once
+            // if the attach landed in the gap).
+          }
         }
-        if (stamp !== generation || !visible) return;
+        // Out of patience. Leave `pending` armed so a later re-bind or a fresh
+        // show settle can still pick the obligation up.
+        if (!attached || isStale()) return;
 
         // repaintForReveal, NOT revealTerminal: the assistant pane keeps the
         // `isVisible` gate on the WebGL reattach (a transform-hidden pane must
@@ -161,7 +182,7 @@ export function createAssistantRevealCoordinator(): AssistantRevealCoordinator {
         const painted = await revealUntilStable(
           id,
           (target) => terminalInstanceService.repaintForReveal(target),
-          () => stamp !== generation || !visible || isDocumentHidden(),
+          () => isStale() || isDocumentHidden(),
           "[assistantReveal]"
         );
         if (painted && stamp === generation) pending = false;
@@ -174,7 +195,7 @@ export function createAssistantRevealCoordinator(): AssistantRevealCoordinator {
   return {
     start() {
       unsubscribe?.();
-      const dispose = useHelpPanelStore.subscribe((state, prev) => {
+      const offStore = useHelpPanelStore.subscribe((state, prev) => {
         // sessionId as well as terminalId: a reserved id is finalized in place
         // when provisioning resolves, so the id alone can be edge-less on the
         // retry path after an attach-wait timeout.
@@ -184,6 +205,18 @@ export function createAssistantRevealCoordinator(): AssistantRevealCoordinator {
         generation++;
         discharge(state.terminalId);
       });
+      // Hand the obligation off when this project view is cached (backgrounded).
+      // A cached WebContentsView does not reliably fire a DOM visibilitychange,
+      // so isDocumentHidden alone would let the frame loop keep repainting into
+      // an unpresented view — and, worse, still be running when the switch-back
+      // fires repaintActiveWorktreeTerminals, whose sweep already owns the
+      // assistant terminal (#9637). Two geometry reconciles racing one live
+      // terminal is exactly the corruption #10863 fixed, so this side yields.
+      const offViewCached = window.electron?.app?.onViewCached?.(() => cancel());
+      const dispose = (): void => {
+        offStore();
+        offViewCached?.();
+      };
       unsubscribe = dispose;
       return () => {
         if (unsubscribe !== dispose) return;
@@ -204,22 +237,25 @@ export function createAssistantRevealCoordinator(): AssistantRevealCoordinator {
         cancel();
         return;
       }
-      const assistantTerminalId = useHelpPanelStore.getState().terminalId;
-      // The happy path — the terminal was already bound and paintable when the
-      // slide settled (every open after the first). One pass, obligation over.
-      if (assistantTerminalId && terminalInstanceService.repaintForReveal(assistantTerminalId)) {
-        cancel();
-        return;
-      }
-      // Either no terminal yet, or the host had no renderable box. Retain the
-      // obligation instead of dropping the repaint (#11070).
+      // Every settle opens a FRESH obligation that supersedes the last.
       generation++;
       pending = true;
       inFlight = null;
-      // Already bound but not yet paintable: no store edge is coming, so drive
-      // the retry from here rather than waiting for a subscription that will
-      // never fire.
-      if (assistantTerminalId) discharge(assistantTerminalId);
+
+      const assistantTerminalId = useHelpPanelStore.getState().terminalId;
+      // No terminal yet (the cold first open — the #11070 case). Hold the
+      // obligation; the help-store subscription discharges it once one binds.
+      if (!assistantTerminalId) return;
+
+      // Bound already: drive the discharge from here, because no null→bound
+      // store edge is coming to trigger it. Everything routes through the same
+      // attach-gated, confirm-painted path — a bare synchronous repaintForReveal
+      // would be a weaker pass than the loop (it has no isAttaching guard, so it
+      // can report a paint that the terminal's own post-attach fit then
+      // supersedes) and banking it would retire the obligation on one unstuck
+      // paint. The warm case costs nothing extra: waitForAttachSettled resolves
+      // immediately for an already-attached terminal.
+      discharge(assistantTerminalId);
     },
   };
 }

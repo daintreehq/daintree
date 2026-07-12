@@ -192,6 +192,7 @@ describe("suppressSidebarResizes", () => {
 describe("createAssistantRevealCoordinator — issue #11070", () => {
   let rafQueue: FrameRequestCallback[] = [];
   let dispose: (() => void) | null = null;
+  let onViewCachedHandlers: Array<() => void> = [];
 
   // Frames are queued, never run inline: a synchronous rAF stub collapses the
   // frame separation the confirm-paint pass and the generation guards rely on.
@@ -217,32 +218,49 @@ describe("createAssistantRevealCoordinator — issue #11070", () => {
     helpPanelStoreMock.reset();
     rafQueue = [];
     dispose = null;
+    onViewCachedHandlers = [];
     repaintForRevealMock.mockReturnValue(true);
     waitForAttachSettledMock.mockResolvedValue(undefined);
     vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback): number => {
       rafQueue.push(cb);
       return rafQueue.length;
     });
+    (window as unknown as Record<string, unknown>).electron = {
+      app: {
+        onViewCached: (cb: () => void) => {
+          onViewCachedHandlers.push(cb);
+          return () => {
+            onViewCachedHandlers = onViewCachedHandlers.filter((h) => h !== cb);
+          };
+        },
+      },
+    };
   });
 
   afterEach(() => {
     dispose?.();
+    delete (window as unknown as Record<string, unknown>).electron;
     vi.unstubAllGlobals();
   });
 
-  it("fires one corrective repaint when the terminal is already bound and paintable", () => {
+  it("repaints the warm assistant terminal that is already bound at settle time", async () => {
     helpPanelStoreMock.emit({ terminalId: "assistant-1" });
     const coordinator = start();
 
     coordinator.settleAfterTransition(true);
+    await pump();
 
-    expect(repaintForRevealMock).toHaveBeenCalledTimes(1);
+    // The attach gate is not skipped even on the warm path — it resolves at once
+    // for an already-attached terminal, and going through it keeps a mid-attach
+    // paint from retiring the obligation early.
+    expect(waitForAttachSettledMock).toHaveBeenCalledWith("assistant-1", {
+      timeoutMs: expect.any(Number),
+    });
+    expect(repaintForRevealMock).toHaveBeenCalledTimes(REVEAL_CONFIRM_PAINTS);
     expect(repaintForRevealMock).toHaveBeenCalledWith("assistant-1");
-    // Already paintable — the obligation is discharged inline, no attach wait.
-    expect(waitForAttachSettledMock).not.toHaveBeenCalled();
   });
 
-  it("does not clear the resize lock — the suppression timer owns the unlock", () => {
+  it("does not clear the resize lock — the suppression timer owns the unlock", async () => {
     // reconcileGeometryFresh inside repaintForReveal is lock-exempt, so the
     // corrective resize lands while the lock stays armed. Clearing it here would
     // defeat the dead-man TTL that gates the ResizeObserver debounce tail.
@@ -250,6 +268,7 @@ describe("createAssistantRevealCoordinator — issue #11070", () => {
     const coordinator = start();
 
     coordinator.settleAfterTransition(true);
+    await pump();
 
     expect(lockResizeMock).not.toHaveBeenCalled();
   });
@@ -336,14 +355,67 @@ describe("createAssistantRevealCoordinator — issue #11070", () => {
     const coordinator = start();
 
     coordinator.settleAfterTransition(true);
-    expect(repaintForRevealMock).toHaveBeenCalledTimes(1);
-
     await pump();
 
     expect(waitForAttachSettledMock).toHaveBeenCalledWith("assistant-1", {
       timeoutMs: expect.any(Number),
     });
-    expect(repaintForRevealMock.mock.calls.length).toBeGreaterThan(1);
+    // One unpaintable frame, then the confirm paints.
+    expect(repaintForRevealMock).toHaveBeenCalledTimes(1 + REVEAL_CONFIRM_PAINTS);
+  });
+
+  it("re-arms the attach wait when it times out, so a late attach still discharges", async () => {
+    // A timed-out waiter is deregistered — a single wait would silently abandon a
+    // terminal that attaches just after the deadline, with the sidebar still open
+    // and no further store edge coming. That is #11070 with a longer fuse.
+    waitForAttachSettledMock
+      .mockRejectedValueOnce(new Error("attach settle timeout"))
+      .mockResolvedValue(undefined);
+    helpPanelStoreMock.emit({ terminalId: "assistant-1" });
+    const coordinator = start();
+
+    coordinator.settleAfterTransition(true);
+    await pump();
+
+    expect(waitForAttachSettledMock.mock.calls.length).toBeGreaterThan(1);
+    expect(repaintForRevealMock).toHaveBeenCalledWith("assistant-1");
+  });
+
+  it("gives up the attach wait after a bounded number of attempts", async () => {
+    waitForAttachSettledMock.mockRejectedValue(new Error("attach settle timeout"));
+    helpPanelStoreMock.emit({ terminalId: "assistant-1" });
+    const coordinator = start();
+
+    coordinator.settleAfterTransition(true);
+    await pump();
+
+    // Bounded — a dead binding must not spin forever.
+    expect(waitForAttachSettledMock.mock.calls.length).toBeLessThan(10);
+    expect(repaintForRevealMock).not.toHaveBeenCalled();
+  });
+
+  it("yields the obligation when the project view is cached", async () => {
+    // The switch-back sweep (repaintActiveWorktreeTerminals) already owns the
+    // assistant terminal (#9637). Two geometry reconciles racing one live
+    // terminal is the #10863 corruption — this side yields.
+    let settleAttach: () => void = () => {};
+    waitForAttachSettledMock.mockReturnValue(
+      new Promise<void>((resolve) => {
+        settleAttach = resolve;
+      })
+    );
+    const coordinator = start();
+
+    coordinator.settleAfterTransition(true);
+    helpPanelStoreMock.emit({ terminalId: "assistant-1" });
+    await pump(2);
+
+    expect(onViewCachedHandlers.length).toBe(1);
+    onViewCachedHandlers[0]?.();
+    settleAttach();
+    await pump();
+
+    expect(repaintForRevealMock).not.toHaveBeenCalled();
   });
 
   it("cancels the obligation when the assistant is hidden before the terminal binds", async () => {
@@ -389,8 +461,10 @@ describe("createAssistantRevealCoordinator — issue #11070", () => {
     expect(repaintForRevealMock).not.toHaveBeenCalled();
   });
 
-  it("keeps the obligation armed when the attach wait times out, and retries on the next binding", async () => {
-    waitForAttachSettledMock.mockRejectedValueOnce(new Error("attach settle timeout"));
+  it("keeps the obligation armed when the attach wait is exhausted, and retries on the next binding", async () => {
+    // Every attach attempt times out, so the discharge gives up — but it must
+    // give up WITHOUT retiring the obligation, or the repaint is dropped again.
+    waitForAttachSettledMock.mockRejectedValue(new Error("attach settle timeout"));
     const coordinator = start();
 
     coordinator.settleAfterTransition(true);
@@ -401,6 +475,7 @@ describe("createAssistantRevealCoordinator — issue #11070", () => {
 
     // The reserved id is finalized in place once provisioning resolves — the
     // session edge picks the still-armed obligation back up.
+    waitForAttachSettledMock.mockReset();
     waitForAttachSettledMock.mockResolvedValue(undefined);
     helpPanelStoreMock.emit({ terminalId: "assistant-1", sessionId: "s-1" });
     await pump();
