@@ -697,7 +697,13 @@ export class WorkspaceHostProcess extends EventEmitter {
 
     this.child.on("exit", (code) => {
       this.flushHostOutputBuffers();
-      logWarn(`[WorkspaceHost:${this.serviceName}] Exited with code ${code}`);
+      // A disposed host exiting is the cooperative path, not a crash — every
+      // eviction ends here, so warning on it would read as a fault.
+      if (this.isDisposed) {
+        logInfo(`[WorkspaceHost:${this.serviceName}] Exited with code ${code} after dispose`);
+      } else {
+        logWarn(`[WorkspaceHost:${this.serviceName}] Exited with code ${code}`);
+      }
 
       if (this.healthCheckInterval) {
         clearInterval(this.healthCheckInterval);

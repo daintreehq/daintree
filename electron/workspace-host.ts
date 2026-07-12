@@ -393,8 +393,14 @@ let isShuttingDown = false;
  * where Electron's `UtilityProcess.kill()` blocks the main thread for up to 2s
  * on macOS (`base::EnsureProcessTerminated`) and swallows user input.
  *
- * `setImmediate` gives the synchronous abort handlers one turn to settle; the OS
- * reclaims whatever asynchronous cleanup has not finished by then.
+ * Exit is bounded rather than immediate. Closing the port stops new work and
+ * releases the handle that would otherwise keep this process alive forever, so
+ * once the loop drains the process ends on its own. The unref'd deadline does
+ * not hold it open, but still fires if a handle `dispose` cannot reach — the
+ * persistent copytree worker, an in-flight `.daintree` copy — keeps the loop
+ * alive, so exit is guaranteed either way. The budget stays under the parent's
+ * 1s force-kill backstop, and lets a short write tail finish instead of being
+ * truncated the way the old SIGKILL-after-3s teardown truncated it.
  */
 function shutdown(): void {
   if (isShuttingDown) return;
@@ -406,7 +412,13 @@ function shutdown(): void {
   } catch (err) {
     console.warn("[WorkspaceHost] Error during shutdown:", err);
   } finally {
-    setImmediate(() => process.exit(0));
+    try {
+      port.close();
+    } catch {
+      // Already closed — the exit below is what matters.
+    }
+    const deadline = setTimeout(() => process.exit(0), 750);
+    deadline.unref?.();
   }
 }
 
