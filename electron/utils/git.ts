@@ -211,14 +211,27 @@ export function parseNumstat(diffOutput: string, gitRoot: string): Map<string, D
   return stats;
 }
 
+/**
+ * Commit count on the checked-out branch.
+ *
+ * Throws on failure rather than reporting `0`. A swallowed failure is
+ * indistinguishable from a genuinely empty repository, and callers that persist
+ * the result (issue #11078) would overwrite a good count with a zero after a
+ * transient git error. Every call site already supplies its own fallback.
+ */
 export async function getCommitCount(cwd: string): Promise<number> {
   try {
     const git = await createHardenedGit(cwd);
-    const count = await git.raw(["rev-list", "--count", "HEAD"]);
-    return parseInt(count.trim(), 10);
+    const raw = await git.raw(["rev-list", "--count", "HEAD"]);
+    const count = parseInt(raw.trim(), 10);
+    // An unborn HEAD prints nothing, which `parseInt` reports as NaN.
+    if (!Number.isInteger(count) || count < 0) {
+      throw new Error(`Unparseable commit count: ${JSON.stringify(raw)}`);
+    }
+    return count;
   } catch (error) {
     logWarn("Failed to get commit count", { cwd, error: (error as Error).message });
-    return 0;
+    throw error;
   }
 }
 

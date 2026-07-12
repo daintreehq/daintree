@@ -937,7 +937,14 @@ export const useProjectStore = create<ProjectState>()(
         name: "project-storage",
         storage: createSafeJSONStorage(),
         partialize: (state) => ({
-          projects: state.projects,
+          // `lastKnownStats` is main-owned (issue #11078): it is written to the
+          // SQLite project row on a clean stats poll and arrives here via boot
+          // hydration and the project-switch broadcast. Persisting it locally
+          // too would make this blob a second durable writer — and a lossy one,
+          // since every `WebContentsView` serializes the whole `projects` array
+          // from its own copy, so a view holding a stale snapshot would clobber
+          // a newer one. Strip it and let main stay authoritative.
+          projects: state.projects.map(({ lastKnownStats: _lastKnownStats, ...rest }) => rest),
         }),
         merge: (persistedState, currentState) => {
           const persisted = persistedState as { projects?: unknown } | undefined;
