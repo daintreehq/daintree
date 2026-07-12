@@ -30,3 +30,28 @@ export function activeWorkspaceIdentity(
   }
   return { kind: "none", name: "Open project", ariaLabel: "Open project" };
 }
+
+/**
+ * How the toolbar pill's git-branch chip should render.
+ *
+ * - `hidden` — not mounted at all. A scratch workspace is never a git repo, so a
+ *   faded chip would only reserve blank width beside the name (issue #11084).
+ * - `reserved` — mounted but transparent, holding the chip's width. A project's
+ *   branch can arrive late (a view first-paints before its project binds) or never
+ *   (detached HEAD); collapsing the pill then would shift the titlebar's no-drag
+ *   region, which is why the placeholder exists.
+ * - `visible` — mounted and showing the branch.
+ */
+export type BranchChipState = "hidden" | "reserved" | "visible";
+
+export function branchChipState(
+  kind: ActiveWorkspaceIdentity["kind"],
+  branchName: string | null | undefined
+): BranchChipState {
+  if (kind === "scratch") return "hidden";
+  // `branchName` rides the worktree selection, which closing a project does not
+  // clear — so it can outlive `currentProject`. Requiring a project keeps a closed
+  // project's branch from lingering beside the "Open project" empty state.
+  if (kind !== "project" || !branchName) return "reserved";
+  return "visible";
+}

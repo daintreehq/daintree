@@ -70,7 +70,7 @@ import type { UseProjectSwitcherPaletteReturn } from "@/hooks";
 import type { SearchableProject } from "@/hooks/useProjectSwitcherPalette";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
-import { activeWorkspaceIdentity } from "@/lib/workspaceIdentity";
+import { activeWorkspaceIdentity, branchChipState } from "@/lib/workspaceIdentity";
 import { usePreferencesStore, useToolbarPreferencesStore, useVoiceRecordingStore } from "@/store";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
@@ -1423,6 +1423,7 @@ export function Toolbar({
 
   const activeSearchableProject = projectSwitcher.activeProject;
   const truncatedBranchName = branchName ? middleTruncate(branchName, 24) : undefined;
+  const chipState = branchChipState(workspaceIdentity.kind, branchName);
   const { copy: copyPillPath } = useCopyWithFeedback({ announcement: "Path copied" });
   const handleCopyProjectPath = useCallback(() => {
     if (!currentProject) return;
@@ -1469,17 +1470,21 @@ export function Toolbar({
           >
             {workspaceIdentity.name}
           </span>
-          <span
-            className={cn(
-              "toolbar-project-chip shrink-0 inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 font-mono tabular-nums",
-              !branchName && "opacity-0"
-            )}
-            aria-label={branchName ? `Current branch ${branchName}` : undefined}
-            aria-hidden={branchName ? undefined : true}
-          >
-            <GitBranch className="toolbar-project-chip-icon h-3 w-3 shrink-0" />
-            <span className="toolbar-project-chip-label">{truncatedBranchName ?? "main"}</span>
-          </span>
+          {chipState !== "hidden" && (
+            <span
+              className={cn(
+                "toolbar-project-chip shrink-0 inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 font-mono tabular-nums",
+                chipState === "reserved" && "opacity-0"
+              )}
+              aria-label={chipState === "visible" ? `Current branch ${branchName}` : undefined}
+              aria-hidden={chipState === "visible" ? undefined : true}
+            >
+              <GitBranch className="toolbar-project-chip-icon h-3 w-3 shrink-0" />
+              <span className="toolbar-project-chip-label">
+                {chipState === "visible" ? truncatedBranchName : "main"}
+              </span>
+            </span>
+          )}
           <ChevronsUpDown className="toolbar-project-meta h-3 w-3 shrink-0" />
         </button>
       </TooltipTrigger>
