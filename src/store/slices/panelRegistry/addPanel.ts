@@ -37,6 +37,7 @@ import { collectPanelIdForBatch, isHydrationBatchActive } from "./hydrationBatch
 import { addToWorktreeIndex, transferBetweenWorktreeIndex } from "./worktreeIndex";
 import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
 import { computeEnvProvenance } from "@shared/utils/agentLifecycleLedger";
+import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 
 // Lazy accessor to break circular dependency: addPanel -> projectStore -> panelPersistence -> addPanel.
 // Resolved on first call (after app init), then cached.
@@ -369,11 +370,20 @@ export const createAddPanelActions = (
     const shouldBackground = location === "dock" || (location === "grid" && !isInActiveWorktree);
     const runtimeStatus: TerminalRuntimeStatus = shouldBackground ? "background" : "running";
 
-    // Capture project ID synchronously before any async work to avoid race conditions
-    // if the user switches projects during async operations (issue #3690).
+    // Capture the owning workspace synchronously before any async work to avoid race
+    // conditions if the user switches during async operations (issue #3690).
     // resolveProjectStore() is cached after first call, so subsequent calls resolve immediately.
+    //
+    // Two ids, deliberately: `capturedProjectId` is a *registered project* (it keys
+    // project settings, which a scratch has none of), while `capturedWorkspaceId` is
+    // whichever workspace owns this view — project or scratch. The PTY is stamped with
+    // the workspace id so `killByProject(scratchId)` reaches scratch terminals on
+    // delete (#11079); leaving it unset made ownership fall back to PtyClient's global
+    // `activeProjectId`, which is null after a restore into a scratch and last-write-wins
+    // across windows.
     const projectStore = await resolveProjectStore();
     const capturedProjectId = projectStore.getState().currentProject?.id;
+    const capturedWorkspaceId = capturedProjectId ?? getViewWorkspaceId() ?? undefined;
 
     const isReconnect = !!options.existingId;
     const isAgent = Boolean(launchAgentId);
@@ -675,7 +685,7 @@ export const createAddPanelActions = (
     const launchGeneration = agentLifecycleLedger.recordLaunch(id, {
       launchAgentId,
       cwd: options.cwd,
-      projectId: capturedProjectId,
+      projectId: capturedWorkspaceId,
       worktreeId: options.worktreeId,
       worktreeSource:
         options.worktreeId !== undefined ? (options.worktreeIdSource ?? "explicit") : undefined,
@@ -906,7 +916,7 @@ export const createAddPanelActions = (
           const spawnRows = attachedDims?.rows ?? overlayDims?.rows ?? 24;
           await terminalClient.spawn({
             id,
-            projectId: capturedProjectId,
+            projectId: capturedWorkspaceId,
             cwd: options.cwd,
             shell: options.shell,
             cols: spawnCols,

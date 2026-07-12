@@ -342,25 +342,51 @@ describe("terminal spawn handler - projectId resolution", () => {
     expect(spawnArgs.projectId).toBe("project-b-id");
   });
 
-  it("falls back to current project when explicit projectId references deleted project", async () => {
+  // A scratch id is a legitimate owner that resolves to no Project. Retargeting it to
+  // whatever is globally current would hand the terminal to the wrong workspace — and
+  // let that workspace's delete kill it — so an explicit id is preserved as-is (#11079).
+  it("preserves an explicit workspace id that resolves to no project, without retargeting", async () => {
     mockGetProjectById.mockReturnValue(null);
+    mockGetCurrentProject.mockReturnValue(projectB);
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
     registerTerminalLifecycleHandlers(deps);
 
     const handler = getSpawnHandler();
     await handler({} as Electron.IpcMainInvokeEvent, {
-      projectId: "deleted-project-id",
+      projectId: "scratch-uuid",
+      cwd: "/tmp/scratches/scratch-uuid",
       cols: 80,
       rows: 24,
     });
 
     expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(spawnArgs.projectId).toBe("project-b-id");
+    expect(spawnArgs.projectId).toBe("scratch-uuid");
+    // and must not inherit the current project's identity or working directory
+    expect(spawnArgs.projectId).not.toBe(projectB.id);
+    expect(spawnArgs.cwd).not.toBe(projectB.path);
   });
 
-  it("handles deleted projectId with no current project gracefully", async () => {
+  it("does not fetch project settings for an explicit id that is not a registered project", async () => {
+    mockGetProjectById.mockReturnValue(null);
+    mockGetCurrentProject.mockReturnValue(projectB);
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler({} as Electron.IpcMainInvokeEvent, {
+      projectId: "scratch-uuid",
+      cwd: "/tmp/scratches/scratch-uuid",
+      cols: 80,
+      rows: 24,
+    });
+
+    expect(mockGetProjectSettings).not.toHaveBeenCalled();
+  });
+
+  it("keeps the explicit workspace id when there is no current project either", async () => {
     mockGetProjectById.mockReturnValue(null);
     mockGetCurrentProject.mockReturnValue(null);
 
@@ -369,14 +395,14 @@ describe("terminal spawn handler - projectId resolution", () => {
 
     const handler = getSpawnHandler();
     await handler({} as Electron.IpcMainInvokeEvent, {
-      projectId: "deleted-project-id",
+      projectId: "scratch-uuid",
       cols: 80,
       rows: 24,
     });
 
     expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(spawnArgs.projectId).toBeUndefined();
+    expect(spawnArgs.projectId).toBe("scratch-uuid");
   });
 
   it("uses explicit projectId even when current project differs", async () => {
