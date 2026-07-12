@@ -134,6 +134,28 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
       expect(source).toContain("shrink-0 inline-flex items-center gap-1 rounded-full border");
     });
 
+    it("unmounts the branch chip for scratch workspaces — issue #11084", () => {
+      // A scratch workspace has no git repo, so a hidden-but-mounted chip would
+      // reserve blank width between the name and the caret. The gate must be the
+      // workspace kind, not the branch: `!branchName` alone would also collapse
+      // the chip for a detached-HEAD project (see the reservation test below).
+      const chipIndex = source.indexOf("toolbar-project-chip shrink-0");
+      expect(chipIndex).toBeGreaterThan(-1);
+      const beforeChip = source.slice(Math.max(0, chipIndex - 300), chipIndex);
+      expect(beforeChip).toMatch(/workspaceIdentity\.kind !== "scratch"\s*&&\s*\(/);
+    });
+
+    it("keeps the branchless width reservation outside scratch workspaces", () => {
+      // Regression guard for 88e295a07: a project's branch hydrates asynchronously
+      // in secondary windows and is absent entirely on detached HEAD, so the chip
+      // stays mounted-but-transparent instead of collapsing the pill. A gate that
+      // mounts the chip on `branchName` would reintroduce that titlebar shift.
+      const chipIndex = source.indexOf("toolbar-project-chip shrink-0");
+      const chipBlock = source.slice(chipIndex, chipIndex + 400);
+      expect(chipBlock).toMatch(/!branchName\s*&&\s*"opacity-0"/);
+      expect(source).not.toMatch(/\{branchName\s*&&\s*\(?\s*<span[\s\S]{0,120}toolbar-project-chip/);
+    });
+
     it("chevron icons have shrink-0", () => {
       // The chevron carries shrink-0 so it stays visible during truncation. It
       // no longer carries an ml-0.5 nudge — the pill's uniform gap-2 owns the

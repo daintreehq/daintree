@@ -1469,17 +1469,25 @@ export function Toolbar({
           >
             {workspaceIdentity.name}
           </span>
-          <span
-            className={cn(
-              "toolbar-project-chip shrink-0 inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 font-mono tabular-nums",
-              !branchName && "opacity-0"
-            )}
-            aria-label={branchName ? `Current branch ${branchName}` : undefined}
-            aria-hidden={branchName ? undefined : true}
-          >
-            <GitBranch className="toolbar-project-chip-icon h-3 w-3 shrink-0" />
-            <span className="toolbar-project-chip-label">{truncatedBranchName ?? "main"}</span>
-          </span>
+          {/* Scratch workspaces have no git repo, so the chip is unmounted outright
+           * rather than faded — a hidden-but-mounted chip reserves blank pill width
+           * (issue #11084). Projects and the pre-hydration "none" state keep the
+           * transparent placeholder below: their branch can arrive late (secondary
+           * windows hydrate over IPC) or never (detached HEAD), and collapsing the
+           * pill mid-hydration is the titlebar shift 88e295a07 fixed. */}
+          {workspaceIdentity.kind !== "scratch" && (
+            <span
+              className={cn(
+                "toolbar-project-chip shrink-0 inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 font-mono tabular-nums",
+                !branchName && "opacity-0"
+              )}
+              aria-label={branchName ? `Current branch ${branchName}` : undefined}
+              aria-hidden={branchName ? undefined : true}
+            >
+              <GitBranch className="toolbar-project-chip-icon h-3 w-3 shrink-0" />
+              <span className="toolbar-project-chip-label">{truncatedBranchName ?? "main"}</span>
+            </span>
+          )}
           <ChevronsUpDown className="toolbar-project-meta h-3 w-3 shrink-0" />
         </button>
       </TooltipTrigger>
