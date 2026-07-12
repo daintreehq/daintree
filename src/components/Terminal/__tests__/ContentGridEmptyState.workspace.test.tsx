@@ -202,6 +202,21 @@ describe("ContentGridEmptyState — workspace capabilities", () => {
   });
 
   describe("no launch target", () => {
+    // Every launcher-column element hangs off `hasLaunchTarget`. Without this,
+    // the fixtures correlate the conjuncts and dropping that gate from any one
+    // of them would go unnoticed.
+    it("withholds recipes, tips and the pulse even when their own conditions are met", () => {
+      markLaunchedAnAgent();
+      h.recipes.currentProjectId = "project-1";
+
+      render(<ContentGridEmptyState {...PROJECT_PROPS} hasLaunchTarget={false} />);
+
+      expect(screen.queryByTestId("recipe-runner")).toBeNull();
+      expect(screen.queryByTestId("rotating-tip")).toBeNull();
+      expect(screen.queryByTestId("project-pulse")).toBeNull();
+      expect(screen.queryByTestId("resume-session-line")).toBeNull();
+    });
+
     it("withholds the launcher and the identity hero when there is nowhere to launch into", () => {
       render(
         <ContentGridEmptyState
