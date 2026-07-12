@@ -9,6 +9,7 @@ import {
   type ScratchRow,
 } from "./persistence/schema.js";
 import { getScratchDir, getScratchesRoot, isValidScratchId } from "./scratchStorePaths.js";
+import { defaultScratchName } from "../../shared/utils/scratchName.js";
 import { logError } from "../utils/logger.js";
 
 const CURRENT_SCRATCH_KEY = "currentScratchId";
@@ -21,11 +22,6 @@ function rowToScratch(row: ScratchRow): Scratch {
     createdAt: row.createdAt,
     lastOpened: row.lastOpened,
   };
-}
-
-function defaultScratchName(date = new Date()): string {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `Scratch ${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 export class ScratchStore {
@@ -256,7 +252,3 @@ export class ScratchStore {
 }
 
 export const scratchStore = new ScratchStore();
-
-// Test-only helper for asserting the auto-name format. Not part of the public
-// surface but exported for unit tests.
-export const __test = { defaultScratchName };

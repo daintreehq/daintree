@@ -124,7 +124,6 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
 
     it("project name span has truncate class", () => {
       expect(source).toContain("min-w-0 truncate text-xs tracking-wide text-daintree-text");
-      expect(source).toContain('currentProject ? "font-semibold" : "font-medium"');
     });
 
     it("emoji span has shrink-0 so it is not squeezed before name truncates", () => {
@@ -143,8 +142,10 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
       expect(chevronMatches).not.toBeNull();
     });
 
-    it("empty-state pill displays action-verb label, not brand text", () => {
-      expect(source).toContain("Open project");
+    it("pill label comes from the active workspace, never brand text", () => {
+      // The label strings themselves now live in `activeWorkspaceIdentity`; the
+      // empty-state wording is asserted in its own suite.
+      expect(source).toContain("{workspaceIdentity.name}");
       expect(source).not.toContain("Daintree");
     });
 
@@ -152,10 +153,8 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
       expect(source).not.toMatch(/>Beta</);
     });
 
-    it("project switcher button has an accessible aria-label", () => {
-      expect(source).toMatch(
-        /aria-label=\{[\s\S]*currentProject[\s\S]*Open project switcher for \$\{currentProject\.name\}[\s\S]*"Open project"[\s\S]*\}/
-      );
+    it("project switcher button takes its accessible label from the active workspace", () => {
+      expect(source).toContain("aria-label={workspaceIdentity.ariaLabel}");
     });
   });
 

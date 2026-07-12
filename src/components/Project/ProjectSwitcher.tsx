@@ -1,8 +1,10 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { ChevronsUpDown, Plus } from "lucide-react";
+import { ChevronsUpDown, FileText, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { useProjectStore } from "@/store/projectStore";
+import { useScratchStore } from "@/store/scratchStore";
+import { activeWorkspaceIdentity } from "@/lib/workspaceIdentity";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/Spinner";
@@ -33,6 +35,8 @@ const renderIcon = (emoji: string, color?: string, sizeClass = "h-9 w-9 text-lg"
 export function ProjectSwitcher() {
   const projects = useProjectStore((state) => state.projects);
   const currentProject = useProjectStore((state) => state.currentProject);
+  const currentScratch = useScratchStore((state) => state.currentScratch);
+  const workspaceIdentity = activeWorkspaceIdentity(currentProject, currentScratch);
   const isLoading = useProjectStore((state) => state.isLoading);
   const showLoadingSpinner = useDohertyGate(isLoading);
   const projectSwitcher = useProjectSwitcherPalette();
@@ -163,7 +167,7 @@ export function ProjectSwitcher() {
     />
   );
 
-  if (!currentProject) {
+  if (!currentProject && !currentScratch) {
     if (projects.length > 0) {
       return (
         <>
@@ -200,9 +204,12 @@ export function ProjectSwitcher() {
             onConfirmFreeMemory={projectSwitcher.confirmFreeMemory}
             isFreeingMemory={projectSwitcher.isFreeingMemory}
             scratchResults={projectSwitcher.scratchResults}
-            onCreateScratch={() => void projectSwitcher.createScratch()}
+            onCreateScratch={(name) => void projectSwitcher.createScratch(name)}
             onSelectScratch={(scratch) => void projectSwitcher.selectScratch(scratch)}
             onRemoveScratch={(scratchId) => void projectSwitcher.removeScratchAction(scratchId)}
+            onRenameScratch={(scratchId, name) =>
+              void projectSwitcher.renameScratch(scratchId, name)
+            }
           >
             <Button
               variant="outline"
@@ -260,7 +267,7 @@ export function ProjectSwitcher() {
         onFreeMemoryProject={handleFreeMemoryProject}
         onLocateProject={handleLocateProject}
         onTogglePinProject={handleTogglePinProject}
-        onOpenProjectSettings={handleOpenSettings}
+        onOpenProjectSettings={currentProject ? handleOpenSettings : undefined}
         onCopyPath={projectSwitcher.copyPath}
         onHoverProject={projectSwitcher.onHoverProject}
         onHoverProjectEnd={projectSwitcher.onHoverProjectEnd}
@@ -272,6 +279,11 @@ export function ProjectSwitcher() {
         onFreeMemoryConfirmClose={() => projectSwitcher.setFreeMemoryConfirmProject(null)}
         onConfirmFreeMemory={projectSwitcher.confirmFreeMemory}
         isFreeingMemory={projectSwitcher.isFreeingMemory}
+        scratchResults={projectSwitcher.scratchResults}
+        onCreateScratch={(name) => void projectSwitcher.createScratch(name)}
+        onSelectScratch={(scratch) => void projectSwitcher.selectScratch(scratch)}
+        onRemoveScratch={(scratchId) => void projectSwitcher.removeScratchAction(scratchId)}
+        onRenameScratch={(scratchId, name) => void projectSwitcher.renameScratch(scratchId, name)}
         onDropdownCloseAutoFocus={suppressTooltipDuringFocusRestore}
       >
         <Tooltip open={tooltipOpen} onOpenChange={handleTooltipOpenChange}>
@@ -287,20 +299,34 @@ export function ProjectSwitcher() {
                 "active:scale-100"
               )}
               disabled={showLoadingSpinner}
+              aria-label={workspaceIdentity.ariaLabel}
               onClick={handleOpenDropdown}
               onPointerEnter={() => {
                 isRestoringFocusRef.current = false;
               }}
             >
               <div className="flex items-center gap-3 text-left min-w-0">
-                {renderIcon(currentProject.emoji || "🌲", currentProject.color, "h-9 w-9 text-xl")}
+                {currentProject ? (
+                  renderIcon(currentProject.emoji || "🌲", currentProject.color, "h-9 w-9 text-xl")
+                ) : (
+                  <div className="flex h-9 w-9 items-center justify-center rounded-[var(--radius-xl)] bg-tint/[0.04] text-muted-foreground shrink-0">
+                    <FileText className="h-4 w-4" />
+                  </div>
+                )}
 
                 <div className="flex flex-col min-w-0 gap-0.5">
                   <span className="truncate font-semibold text-daintree-text text-sm leading-none">
-                    {currentProject.name}
+                    {workspaceIdentity.name}
                   </span>
-                  <span className="truncate font-mono text-xs text-text-secondary">
-                    {currentProject.path.split(/[/\\]/).pop()}
+                  <span
+                    className={cn(
+                      "truncate text-xs text-text-secondary",
+                      currentProject && "font-mono"
+                    )}
+                  >
+                    {currentProject
+                      ? currentProject.path.split(/[/\\]/).pop()
+                      : "Scratch workspace"}
                   </span>
                 </div>
               </div>

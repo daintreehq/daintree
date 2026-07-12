@@ -136,12 +136,17 @@ export interface UseProjectSwitcherPaletteReturn {
   nonActiveAgentCounts: { activeAgentCount: number; waitingAgentCount: number };
   /** Scratch (one-off agent workspace) view-models, sorted by lastOpened desc. */
   scratchResults: SearchableScratch[];
-  /** Create and immediately switch to a new scratch. Closes the palette on success. */
-  createScratch: () => Promise<void>;
+  /**
+   * Create and immediately switch to a new scratch. Closes the palette on success.
+   * An empty or omitted name falls back to the main-process default.
+   */
+  createScratch: (name?: string) => Promise<void>;
   /** Switch to an existing scratch. Closes the palette on success. */
   selectScratch: (scratch: SearchableScratch) => Promise<void>;
   /** Remove a scratch (deletes folder + DB row). Used by context menu. */
   removeScratchAction: (scratchId: string) => Promise<void>;
+  /** Rename a scratch in place. Leaves the palette open. A blank name is a no-op. */
+  renameScratch: (scratchId: string, name: string) => Promise<void>;
   /**
    * Open the directory picker and save the scratch as a project. On success
    * exposes a follow-up confirmation via {@link saveAsProjectConfirm} so the
@@ -257,6 +262,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const createScratchAction = useScratchStore((state) => state.createScratch);
   const switchScratchAction = useScratchStore((state) => state.switchScratch);
   const removeScratchActionStore = useScratchStore((state) => state.removeScratch);
+  const renameScratchActionStore = useScratchStore((state) => state.renameScratch);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -762,33 +768,88 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     return list;
   }, [scratches, currentScratch?.id]);
 
-  const createScratch = useCallback(async () => {
-    close();
-    try {
-      const created = await createScratchAction();
-      await switchScratchAction(created.id);
-    } catch (error) {
-      const retry = async () => {
-        try {
-          const created = await createScratchAction();
-          await switchScratchAction(created.id);
-        } catch (retryError) {
-          notify({
-            type: "error",
-            title: "Couldn't create scratch",
-            message: formatErrorMessage(retryError, "Couldn't create scratch workspace"),
-            actions: [{ label: "Try again", variant: "primary", onClick: retry }],
-          });
+  const createScratch = useCallback(
+    async (name?: string) => {
+      close();
+      // An empty name is forwarded as undefined so main applies its own
+      // `defaultScratchName` — same behavior as before the naming affordance.
+      const requestedName = name?.trim() ? name.trim() : undefined;
+      // Resume at the step that failed. Retrying the whole thing after the
+      // scratch already exists would create a second one and orphan its folder.
+      let createdId: string | null = null;
+      const run = async () => {
+        if (!createdId) {
+          createdId = (await createScratchAction(requestedName)).id;
         }
+        await switchScratchAction(createdId);
       };
-      notify({
-        type: "error",
-        title: "Couldn't create scratch",
-        message: formatErrorMessage(error, "Couldn't create scratch workspace"),
-        actions: [{ label: "Try again", variant: "primary", onClick: retry }],
-      });
-    }
-  }, [close, createScratchAction, switchScratchAction]);
+      const fail = (error: unknown, retry: () => Promise<void>) => {
+        const created = createdId !== null;
+        notify({
+          type: "error",
+          title: created ? "Couldn't open scratch" : "Couldn't create scratch",
+          message: formatErrorMessage(
+            error,
+            created
+              ? "Created the scratch workspace but couldn't switch to it"
+              : "Couldn't create scratch workspace"
+          ),
+          actions: [{ label: "Try again", variant: "primary", onClick: retry }],
+          context: { eventKind: "recovery" },
+        });
+      };
+      try {
+        await run();
+      } catch (error) {
+        const retry = async () => {
+          try {
+            await run();
+          } catch (retryError) {
+            fail(retryError, retry);
+          }
+        };
+        fail(error, retry);
+      }
+    },
+    [close, createScratchAction, switchScratchAction]
+  );
+
+  const renameScratch = useCallback(
+    async (scratchId: string, name: string) => {
+      const trimmed = name.trim();
+      if (!trimmed) return;
+      const rename = async () => {
+        await renameScratchActionStore(scratchId, trimmed);
+      };
+      try {
+        await rename();
+      } catch (error) {
+        const retry = async () => {
+          try {
+            await rename();
+          } catch (retryError) {
+            notify({
+              type: "error",
+              title: "Couldn't rename scratch",
+              message: formatErrorMessage(retryError, "Couldn't rename scratch workspace"),
+              actions: [{ label: "Try again", variant: "primary", onClick: retry }],
+              context: { eventKind: "recovery" },
+            });
+          }
+        };
+        notify({
+          type: "error",
+          title: "Couldn't rename scratch",
+          message: formatErrorMessage(error, "Couldn't rename scratch workspace"),
+          actions: [{ label: "Try again", variant: "primary", onClick: retry }],
+          // Not `uiFeedback`: its passive policy routes to the inbox, where this
+          // closure-backed "Try again" can never be clicked.
+          context: { eventKind: "recovery" },
+        });
+      }
+    },
+    [renameScratchActionStore]
+  );
 
   const selectScratch = useCallback(
     async (scratch: SearchableScratch) => {
@@ -964,6 +1025,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     createScratch,
     selectScratch,
     removeScratchAction,
+    renameScratch,
     saveAsProject,
     saveAsProjectConfirm,
     dismissSaveAsProjectConfirm,
