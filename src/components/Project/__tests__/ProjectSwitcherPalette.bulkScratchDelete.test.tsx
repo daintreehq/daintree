@@ -254,7 +254,6 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-
 // The action has to survive BOTH surfaces. The two hosts forward props through
 // separate branches (DropdownContent vs ModalContent), so a modal-only suite stays
 // green while the dropdown — the one most users actually reach — loses the action.

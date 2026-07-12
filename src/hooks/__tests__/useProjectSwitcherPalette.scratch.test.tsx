@@ -11,6 +11,21 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Scratch } from "@shared/types";
 
+/**
+ * The slice of a notify() payload these specs read back. Declaring it here lets the
+ * mock be typed at the source, so assertions destructure a real type instead of
+ * casting `any` at every call site.
+ */
+interface NotifyCall {
+  type: string;
+  title: string;
+  message?: string;
+  priority?: string;
+  transient?: boolean;
+  context?: { eventKind?: string };
+  actions?: { label: string; onClick: () => Promise<void> }[];
+}
+
 const {
   useProjectStoreMock,
   notifyMock,
@@ -19,53 +34,56 @@ const {
   announceMock,
   closeAndAnnounceSpy,
 } = vi.hoisted(() => {
-    const projectStatsState = {
-      stats: {} as Record<
-        string,
-        { activeAgentCount: number; waitingAgentCount: number; processCount: number }
-      >,
-    };
+  const projectStatsState = {
+    stats: {} as Record<
+      string,
+      { activeAgentCount: number; waitingAgentCount: number; processCount: number }
+    >,
+  };
 
-    const projectState = {
-      projects: [],
-      currentProject: null as { id: string } | null,
-      switchProject: vi.fn().mockResolvedValue(undefined),
-      reopenProject: vi.fn().mockResolvedValue(undefined),
-      loadProjects: vi.fn().mockResolvedValue(undefined),
-      addProject: vi.fn().mockResolvedValue(undefined),
-      closeProject: vi.fn().mockResolvedValue({ processesKilled: 0 }),
-      closeActiveProject: vi.fn().mockResolvedValue({ processesKilled: 0 }),
-      removeProject: vi.fn().mockResolvedValue(undefined),
-      locateProject: vi.fn().mockResolvedValue(undefined),
-    };
+  const projectState = {
+    projects: [],
+    currentProject: null as { id: string } | null,
+    switchProject: vi.fn().mockResolvedValue(undefined),
+    reopenProject: vi.fn().mockResolvedValue(undefined),
+    loadProjects: vi.fn().mockResolvedValue(undefined),
+    addProject: vi.fn().mockResolvedValue(undefined),
+    closeProject: vi.fn().mockResolvedValue({ processesKilled: 0 }),
+    closeActiveProject: vi.fn().mockResolvedValue({ processesKilled: 0 }),
+    removeProject: vi.fn().mockResolvedValue(undefined),
+    locateProject: vi.fn().mockResolvedValue(undefined),
+  };
 
-    const useProjectStoreMock = Object.assign(
-      vi.fn((selector: (state: typeof projectState) => unknown) => selector(projectState)),
-      { getState: () => projectState }
-    );
+  const useProjectStoreMock = Object.assign(
+    vi.fn((selector: (state: typeof projectState) => unknown) => selector(projectState)),
+    { getState: () => projectState }
+  );
 
-    // `scratches` is typed (not inferred as never[]) so the bulk-delete specs can
-    // seed it and mutate it mid-run to model `scratch:removed` pushes. Same for
-    // `currentScratch`, which decides which row the palette marks active.
-    const scratchState = {
-      scratches: [] as Scratch[],
-      currentScratch: null as Scratch | null,
-      loadScratches: vi.fn().mockResolvedValue(undefined),
-      createScratch: vi.fn(),
-      switchScratch: vi.fn(),
-      removeScratch: vi.fn().mockResolvedValue(undefined),
-      renameScratch: vi.fn(),
-    };
+  // `scratches` is typed (not inferred as never[]) so the bulk-delete specs can
+  // seed it and mutate it mid-run to model `scratch:removed` pushes. Same for
+  // `currentScratch`, which decides which row the palette marks active.
+  const scratchState = {
+    scratches: [] as Scratch[],
+    currentScratch: null as Scratch | null,
+    loadScratches: vi.fn().mockResolvedValue(undefined),
+    createScratch: vi.fn(),
+    switchScratch: vi.fn(),
+    // Typed so `mock.calls` yields real ids — the bulk specs assert on the exact set
+    // of scratches the fan-out asked the store to delete.
+    removeScratch: vi.fn<(scratchId: string) => Promise<void>>().mockResolvedValue(undefined),
+    renameScratch: vi.fn(),
+  };
 
-    return {
-      useProjectStoreMock,
-      notifyMock: vi.fn().mockReturnValue(""),
-      projectStatsState,
-      scratchState,
-      announceMock: vi.fn(),
-      closeAndAnnounceSpy: vi.fn(),
-    };
-  });
+  return {
+    useProjectStoreMock,
+    notifyMock: vi.fn<(payload: NotifyCall) => string>().mockReturnValue(""),
+    projectStatsState,
+    scratchState,
+    announceMock: vi.fn<(message: string, priority?: "polite" | "assertive") => void>(),
+    closeAndAnnounceSpy:
+      vi.fn<(closeFn: () => void, message: string, priority?: "polite" | "assertive") => void>(),
+  };
+});
 
 vi.mock("@/clients", () => ({
   projectClient: {
@@ -131,9 +149,7 @@ import { useProjectSwitcherPalette } from "../useProjectSwitcherPalette";
 
 /** Pulls the "Try again" handler out of the last error notification. */
 function lastRetryAction(): () => Promise<void> {
-  const call = notifyMock.mock.calls.at(-1)?.[0] as
-    | { actions?: { label: string; onClick: () => Promise<void> }[] }
-    | undefined;
+  const call = notifyMock.mock.calls.at(-1)?.[0];
   const action = call?.actions?.find((a) => a.label === "Try again");
   if (!action) throw new Error("expected a Try again action on the error notification");
   return action.onClick;
@@ -171,7 +187,7 @@ function seedScratches(count: number): Scratch[] {
 
 /** Every id `removeScratch` was actually asked to delete. */
 function deletedIds(): string[] {
-  return scratchState.removeScratch.mock.calls.map((call) => call[0] as string);
+  return scratchState.removeScratch.mock.calls.map((call) => call[0]);
 }
 
 /** A removal that stays pending until the test releases it. */
@@ -191,10 +207,8 @@ function deferRemovals(): { release: () => void } {
 }
 
 /** The payload of the most recent notify() call. */
-function lastNotification(): { type: string; title: string; message?: string } {
-  const payload = notifyMock.mock.calls.at(-1)?.[0] as
-    | { type: string; title: string; message?: string }
-    | undefined;
+function lastNotification(): NotifyCall {
+  const payload = notifyMock.mock.calls.at(-1)?.[0];
   if (!payload) throw new Error("expected a notification");
   return payload;
 }
@@ -277,8 +291,7 @@ describe("createScratch", () => {
       await result.current.createScratch("Named");
     });
 
-    const payload = notifyMock.mock.calls.at(-1)?.[0] as { title: string };
-    expect(payload.title).not.toMatch(/couldn't create/i);
+    expect(lastNotification().title).not.toMatch(/couldn't create/i);
   });
 
   it("surfaces create failures as an actionable error, not a passive one", async () => {
@@ -289,11 +302,7 @@ describe("createScratch", () => {
       await result.current.createScratch();
     });
 
-    const payload = notifyMock.mock.calls.at(-1)?.[0] as {
-      type: string;
-      priority?: string;
-      actions?: unknown[];
-    };
+    const payload = lastNotification();
     expect(payload.type).toBe("error");
     // An inbox-only error would hide the recovery action behind the notification
     // centre, where a closure-backed onClick can't be reached.
@@ -455,9 +464,8 @@ describe("deleteAllScratches", () => {
 
     // Order is the palette's lastOpened-desc sort, not the seed order, and the
     // fan-out is parallel — membership is the contract, not sequence.
-    const deletedIds = scratchState.removeScratch.mock.calls.map((call) => call[0] as string);
-    expect([...deletedIds].sort()).toEqual(seeded.map((s) => s.id).sort());
-    expect(deletedIds).not.toContain("scratch-late");
+    expect([...deletedIds()].sort()).toEqual(seeded.map((s) => s.id).sort());
+    expect(deletedIds()).not.toContain("scratch-late");
   });
 
   it("deletes every snapshotted target even when one of them rejects", async () => {
@@ -473,8 +481,7 @@ describe("deleteAllScratches", () => {
     });
 
     // A sequential loop that rethrew would have stopped at the middle target.
-    const deletedIds = scratchState.removeScratch.mock.calls.map((call) => call[0] as string);
-    expect(deletedIds).toEqual(expect.arrayContaining(seeded.map((s) => s.id)));
+    expect(deletedIds()).toEqual(expect.arrayContaining(seeded.map((s) => s.id)));
   });
 
   it("collapses a fully successful run into a single summary notification", async () => {
@@ -607,7 +614,7 @@ describe("deleteAllScratches", () => {
 
     expect(result.current.deleteAllScratchesConfirm).not.toBeNull();
 
-    const [closeFn, message] = closeAndAnnounceSpy.mock.calls[0] as [() => void, string];
+    const [closeFn, message] = closeAndAnnounceSpy.mock.calls[0]!;
     expect(message).toBe(lastNotification().title);
 
     act(() => closeFn());

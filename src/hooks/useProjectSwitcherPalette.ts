@@ -1020,6 +1020,9 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       } else {
         const title = `Deleted ${successCount} of ${total} ${noun}`;
         closeAndAnnounce(close, title);
+        // `priority` is set explicitly: `uiFeedback`'s passive policy would otherwise
+        // route this to the inbox, and a partial failure is precisely the outcome the
+        // user has to see — the survivors are still sitting in the list.
         notify({
           type: "warning",
           title,
@@ -1027,6 +1030,8 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
             failures.length === 1 && firstFailure
               ? `${firstFailure.name} failed: ${firstFailure.reason}`
               : `${failures.length} couldn't be deleted.`,
+          priority: "high",
+          context: { eventKind: "uiFeedback" },
         });
       }
     } finally {
