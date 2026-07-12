@@ -47,7 +47,7 @@ describe("ContentGrid richer project identity (issue #7472)", () => {
 
   it("ContentGridDefault threads project identity props to empty state", async () => {
     const content = await readFile(DEFAULT_PATH, "utf-8");
-    expect(content).toContain("projectName={ctx.projectName}");
+    expect(content).toContain("workspaceName={ctx.projectName}");
     expect(content).toContain("projectEmoji={ctx.projectEmoji}");
     expect(content).toContain("activeWorktreeBranch={ctx.activeWorktreeBranch}");
     expect(content).toContain("activeWorktreePath={ctx.activeWorktreePath}");
@@ -55,7 +55,7 @@ describe("ContentGrid richer project identity (issue #7472)", () => {
 
   it("ContentGridFleetScope threads project identity props to empty state", async () => {
     const content = await readFile(FLEET_PATH, "utf-8");
-    expect(content).toContain("projectName={ctx.projectName}");
+    expect(content).toContain("workspaceName={ctx.projectName}");
     expect(content).toContain("activeWorktreeBranch={ctx.activeWorktreeBranch}");
     expect(content).toContain("activeWorktreePath={ctx.activeWorktreePath}");
   });
@@ -81,22 +81,11 @@ describe("ContentGrid richer project identity (issue #7472)", () => {
 describe("ContentGridEmptyState surfaces recipes pre-agent-launch (issue #8086)", () => {
   it("RecipeRunner is gated on the recipe store binding, not hasEverLaunchedAgent", async () => {
     const content = await readFile(EMPTY_STATE_PATH, "utf-8");
-    // The gate must allow first-run discovery: visible whenever there's an
-    // active worktree, recipes are bound to a project, and the load has
-    // settled (avoiding the in-flight empty-state flash).
-    expect(content).toContain("hasActiveWorktree && recipesProjectId !== null && !recipesLoading");
     // The previous double-gate that hid RecipeRunner until an agent had launched
-    // must no longer apply to RecipeRunner.
-    expect(content).not.toMatch(
-      /hasActiveWorktree && hasEverLaunchedAgent && \(\s*<div[^>]*>\s*<RecipeRunner /
-    );
-  });
-
-  it("RotatingTip stays gated on hasEverLaunchedAgent (teaching content)", async () => {
-    const content = await readFile(EMPTY_STATE_PATH, "utf-8");
-    expect(content).toMatch(
-      /hasActiveWorktree && hasEverLaunchedAgent && \(\s*<div[^>]*>\s*<RotatingTip /
-    );
+    // must no longer apply to RecipeRunner. (That recipes appear on first run,
+    // and wait for the store to settle, is asserted by rendering in
+    // ContentGridEmptyState.workspace.test.tsx.)
+    expect(content).not.toMatch(/hasEverLaunchedAgent && \(\s*<div[^>]*>\s*<RecipeRunner /);
   });
 
   it("subscribes to the recipe store for both projectId and loading state", async () => {

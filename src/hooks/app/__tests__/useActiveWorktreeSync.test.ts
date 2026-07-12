@@ -1,36 +1,128 @@
-import { describe, it, expect } from "vitest";
-import { readFile } from "fs/promises";
-import { resolve } from "path";
+// @vitest-environment jsdom
 
-const HOOK_PATH = resolve(__dirname, "../useActiveWorktreeSync.ts");
+import { renderHook } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useActiveWorktreeSync } from "../useActiveWorktreeSync";
 
-describe("useActiveWorktreeSync homeDir fallback (issue #4254)", () => {
-  it("imports useHomeDir", async () => {
-    const content = await readFile(HOOK_PATH, "utf-8");
-    expect(content).toContain('import { useHomeDir } from "@/hooks/app/useHomeDir"');
+const mocks = vi.hoisted(() => ({
+  useWorktrees: vi.fn(),
+  selectionState: {
+    activeWorktreeId: null as string | null,
+    selectWorktree: vi.fn(),
+  },
+  projectState: {
+    currentProject: null as { id: string; path: string } | null,
+  },
+  scratchState: {
+    currentScratch: null as { id: string; path: string } | null,
+  },
+  homeDir: { homeDir: "/home/user" as string | null },
+}));
+
+vi.mock("@/hooks", () => ({
+  useWorktrees: () => mocks.useWorktrees(),
+}));
+
+vi.mock("@/store/worktreeStore", () => ({
+  useWorktreeSelectionStore: (selector: (state: typeof mocks.selectionState) => unknown): unknown =>
+    selector(mocks.selectionState),
+}));
+
+vi.mock("@/store", () => ({
+  useProjectStore: (selector: (state: typeof mocks.projectState) => unknown): unknown =>
+    selector(mocks.projectState),
+}));
+
+vi.mock("@/store/scratchStore", () => ({
+  useScratchStore: (selector: (state: typeof mocks.scratchState) => unknown): unknown =>
+    selector(mocks.scratchState),
+}));
+
+vi.mock("@/hooks/app/useHomeDir", () => ({
+  useHomeDir: () => mocks.homeDir,
+}));
+
+// The active-worktree sync effect pushes the selection over the worktree port
+// whenever a project and a worktree are both set. jsdom aliases globalThis to
+// window, so stubbing the global satisfies the hook's `window.electron` read
+// without an unsafe cast.
+vi.stubGlobal("electron", {
+  worktreePort: { request: vi.fn(() => Promise.resolve()) },
+});
+
+// `useWorktrees` is mocked, so the hook reads this shape straight through — no
+// cast to the full WorktreeState is needed for the fields under test.
+const worktree = {
+  id: "wt-1",
+  name: "feature",
+  path: "/repo-worktrees/feature",
+  isMainWorktree: false,
+};
+
+const cwdOf = () => renderHook(() => useActiveWorktreeSync()).result.current.defaultTerminalCwd;
+
+/**
+ * The workspace is a project OR a scratch (#11076), and `terminal.new` spawns
+ * into whatever this resolves to — a missed branch strands the terminal in the
+ * home dir rather than the workspace the user is looking at.
+ */
+describe("useActiveWorktreeSync defaultTerminalCwd", () => {
+  beforeEach(() => {
+    mocks.selectionState.activeWorktreeId = worktree.id;
+    mocks.projectState.currentProject = null;
+    mocks.scratchState.currentScratch = null;
+    mocks.homeDir.homeDir = "/home/user";
+    mocks.useWorktrees.mockReturnValue({ worktrees: [worktree], isInitialized: true });
   });
 
-  it("calls useHomeDir inside the hook", async () => {
-    const content = await readFile(HOOK_PATH, "utf-8");
-    expect(content).toContain("const { homeDir } = useHomeDir()");
+  it("prefers the active worktree over every other workspace path", () => {
+    mocks.projectState.currentProject = { id: "p1", path: "/repo" };
+    mocks.scratchState.currentScratch = { id: "s1", path: "/scratches/s1" };
+
+    expect(cwdOf()).toBe(worktree.path);
   });
 
-  it("uses homeDir as fallback before empty string in defaultTerminalCwd", async () => {
-    const content = await readFile(HOOK_PATH, "utf-8");
-    // When initialized: worktree path → project path → homeDir → ""
-    expect(content).toContain('activeWorktree?.path ?? currentProject?.path ?? homeDir ?? ""');
-    // When not initialized: project path → homeDir → "" (skips worktree which hasn't loaded)
-    expect(content).toContain('currentProject?.path ?? homeDir ?? ""');
+  it("falls back to the project when no worktree is selected", () => {
+    mocks.selectionState.activeWorktreeId = null;
+    mocks.projectState.currentProject = { id: "p1", path: "/repo" };
+
+    expect(cwdOf()).toBe("/repo");
   });
 
-  it("gates defaultTerminalCwd on isInitialized to prevent race condition", async () => {
-    const content = await readFile(HOOK_PATH, "utf-8");
-    expect(content).toContain("isInitialized");
-    expect(content).toContain("const { worktrees, isInitialized } = useWorktrees()");
+  it("resolves to the scratch when it is the only active workspace", () => {
+    mocks.selectionState.activeWorktreeId = null;
+    mocks.scratchState.currentScratch = { id: "s1", path: "/scratches/s1" };
+
+    expect(cwdOf()).toBe("/scratches/s1");
   });
 
-  it("includes homeDir and isInitialized in useMemo dependency array", async () => {
-    const content = await readFile(HOOK_PATH, "utf-8");
-    expect(content).toContain("[activeWorktree, currentProject, homeDir, isInitialized]");
+  it("resolves to the scratch before the worktree snapshot has initialized", () => {
+    mocks.selectionState.activeWorktreeId = null;
+    mocks.scratchState.currentScratch = { id: "s1", path: "/scratches/s1" };
+    mocks.useWorktrees.mockReturnValue({ worktrees: [], isInitialized: false });
+
+    expect(cwdOf()).toBe("/scratches/s1");
+  });
+
+  it("prefers the project over the scratch in a transient both-set state", () => {
+    mocks.selectionState.activeWorktreeId = null;
+    mocks.projectState.currentProject = { id: "p1", path: "/repo" };
+    mocks.scratchState.currentScratch = { id: "s1", path: "/scratches/s1" };
+
+    expect(cwdOf()).toBe("/repo");
+  });
+
+  it("falls back to the home dir when no workspace is active", () => {
+    mocks.selectionState.activeWorktreeId = null;
+
+    expect(cwdOf()).toBe("/home/user");
+  });
+
+  it("never yields an empty cwd while a scratch is active but the home dir is unknown", () => {
+    mocks.selectionState.activeWorktreeId = null;
+    mocks.scratchState.currentScratch = { id: "s1", path: "/scratches/s1" };
+    mocks.homeDir.homeDir = null;
+
+    expect(cwdOf()).toBe("/scratches/s1");
   });
 });

@@ -82,6 +82,11 @@ import {
   usePreferencesStore,
   usePluginManagerStore,
 } from "./store";
+// Leaf path, never the "@/store" barrel — the barrel-mocking suites hand-list
+// their hook factories and crash on an undefined destructure.
+import { useScratchStore } from "./store/scratchStore";
+import { ContentGridEmptyState } from "./components/Terminal/ContentGridEmptyState";
+import { resolveEmptyCanvas } from "./components/Terminal/emptyCanvas";
 // Eager side-effect import: auto-discovers every built-in plugin renderer and
 // registers its builtin view slots at module-eval time, before first render.
 // Must stay static — a deferred/idle import races the user, so getBuiltinView
@@ -172,6 +177,7 @@ function AppInner() {
     shouldMountActionPalette,
   } = usePaletteWiring();
   const currentProject = useProjectStore((state) => state.currentProject);
+  const currentScratch = useScratchStore((state) => state.currentScratch);
   const gitInitDialogOpen = useProjectStore((state) => state.gitInitDialogOpen);
   const gitInitDirectoryPath = useProjectStore((state) => state.gitInitDirectoryPath);
   const closeGitInitDialog = useProjectStore((state) => state.closeGitInitDialog);
@@ -205,6 +211,7 @@ function AppInner() {
   );
 
   const { activeWorktree, defaultTerminalCwd } = useActiveWorktreeSync();
+  const emptyCanvas = resolveEmptyCanvas(currentProject, currentScratch);
   useAgentActivityBroadcast();
   const resumeSession = useResumeAgentSession();
 
@@ -488,7 +495,9 @@ function AppInner() {
                   <ErrorBoundary
                     variant="section"
                     componentName="ContentGrid"
-                    resetKeys={[currentProject?.id].filter((k): k is string => k != null)}
+                    resetKeys={[currentProject?.id ?? currentScratch?.id].filter(
+                      (k): k is string => k != null
+                    )}
                   >
                     <Profiler id="content-grid" onRender={onContentGridRender}>
                       <ContentGrid
@@ -496,11 +505,30 @@ function AppInner() {
                         agentAvailability={availability}
                         defaultCwd={defaultTerminalCwd}
                         emptyContent={
-                          currentProject === null ? (
+                          // A scratch is a workspace, so its empty canvas gets
+                          // the launcher — not WelcomeScreen, whose CTAs all
+                          // acquire a workspace the user already has (#11076).
+                          // It has no worktree, branch, recipes or project
+                          // settings, so those affordances stay off. `project`
+                          // falls through to the grid's own context-driven
+                          // empty state.
+                          emptyCanvas.kind === "project" ? undefined : emptyCanvas.kind ===
+                            "scratch" ? (
+                            <ContentGridEmptyState
+                              hasLaunchTarget
+                              hasProjectContext={false}
+                              hasWorktrees={false}
+                              isWorktreeInitialized={false}
+                              workspaceName={emptyCanvas.scratch.name}
+                              activeWorktreePath={emptyCanvas.scratch.path}
+                              showProjectPulse={false}
+                              defaultCwd={emptyCanvas.scratch.path}
+                            />
+                          ) : (
                             <Suspense fallback={null}>
                               <LazyWelcomeScreen gettingStarted={gettingStarted} />
                             </Suspense>
-                          ) : undefined
+                          )
                         }
                       />
                     </Profiler>

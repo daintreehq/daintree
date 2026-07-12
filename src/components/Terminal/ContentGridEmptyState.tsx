@@ -17,8 +17,15 @@ import { LauncherQuickActions } from "./LauncherQuickActions";
 
 const PATH_TRUNCATE_LENGTH = 52;
 
+// The active workspace is a project OR a scratch (#11076). `hasLaunchTarget`
+// gates the launcher column on having somewhere to launch INTO — a scratch has
+// no worktree but is a perfectly good target. `hasProjectContext` gates the
+// affordances only a real project can honour: the settings gear (there is no
+// scratch settings tab) and the tip catalog (it talks about worktrees and the
+// project file tree).
 export function ContentGridEmptyState({
-  hasActiveWorktree,
+  hasLaunchTarget,
+  hasProjectContext,
   hasWorktrees,
   isWorktreeInitialized,
   activeWorktreeName,
@@ -27,13 +34,14 @@ export function ContentGridEmptyState({
   activeWorktreeIsDetached,
   activeWorktreeHead,
   activeWorktreePath,
-  projectName,
+  workspaceName,
   projectEmoji,
   showProjectPulse,
   projectIconSvg,
   defaultCwd,
 }: {
-  hasActiveWorktree: boolean;
+  hasLaunchTarget: boolean;
+  hasProjectContext: boolean;
   hasWorktrees: boolean;
   isWorktreeInitialized: boolean;
   activeWorktreeName?: string | null;
@@ -42,7 +50,7 @@ export function ContentGridEmptyState({
   activeWorktreeIsDetached?: boolean;
   activeWorktreeHead?: string | null;
   activeWorktreePath?: string | null;
-  projectName?: string | null;
+  workspaceName?: string | null;
   projectEmoji?: string | null;
   showProjectPulse: boolean;
   projectIconSvg?: string;
@@ -73,7 +81,7 @@ export function ContentGridEmptyState({
   const pathLabel = activeWorktreePath
     ? middleTruncate(formatPath(activeWorktreePath, homeDir), PATH_TRUNCATE_LENGTH)
     : null;
-  const hasProjectIdentity = Boolean(projectName);
+  const hasWorkspaceIdentity = Boolean(workspaceName);
 
   const handleOpenProjectSettings = () => {
     window.dispatchEvent(
@@ -109,10 +117,10 @@ export function ContentGridEmptyState({
       <div className="relative h-full w-full overflow-y-auto">
         <div className="flex min-h-full flex-col items-center justify-center p-8">
           <div className="max-w-3xl w-full flex flex-col items-center">
-            {hasActiveWorktree && (
+            {hasLaunchTarget && (
               <div className="mb-6 flex flex-col items-center text-center">
                 <div className="mb-4">{identityMark}</div>
-                {hasProjectIdentity ? (
+                {hasWorkspaceIdentity ? (
                   <div className="flex flex-col items-center gap-1.5 min-w-0 max-w-full">
                     {/* The name stays centered under the mark; the gear is
                         pulled out of flow (absolute, just past the name) so its
@@ -126,16 +134,18 @@ export function ContentGridEmptyState({
                             {projectEmoji}
                           </span>
                         ) : null}
-                        {projectName}
+                        {workspaceName}
                       </h3>
-                      <button
-                        type="button"
-                        onClick={handleOpenProjectSettings}
-                        className="absolute left-full top-1/2 ml-1.5 -translate-y-1/2 shrink-0 rounded-full p-1 text-daintree-text/50 opacity-0 transition-opacity hover:bg-overlay-subtle hover:text-daintree-text group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
-                        aria-label="Project settings"
-                      >
-                        <Settings className="h-3.5 w-3.5" />
-                      </button>
+                      {hasProjectContext && (
+                        <button
+                          type="button"
+                          onClick={handleOpenProjectSettings}
+                          className="absolute left-full top-1/2 ml-1.5 -translate-y-1/2 shrink-0 rounded-full p-1 text-daintree-text/50 opacity-0 transition-opacity hover:bg-overlay-subtle hover:text-daintree-text group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
+                          aria-label="Project settings"
+                        >
+                          <Settings className="h-3.5 w-3.5" />
+                        </button>
+                      )}
                     </div>
                     {(branchLabel || pathLabel) && (
                       <div className="flex flex-col items-center gap-0.5 text-daintree-text/60 max-w-full min-w-0 font-mono">
@@ -164,8 +174,8 @@ export function ContentGridEmptyState({
               </div>
             )}
 
-            {!hasActiveWorktree && !isWorktreeInitialized && null}
-            {!hasActiveWorktree && isWorktreeInitialized && hasWorktrees && (
+            {!hasLaunchTarget && !isWorktreeInitialized && null}
+            {!hasLaunchTarget && isWorktreeInitialized && hasWorktrees && (
               <EmptyState
                 variant="zero-data"
                 scale="canvas"
@@ -174,7 +184,7 @@ export function ContentGridEmptyState({
                 description="Choose a worktree from the sidebar to open it in the canvas"
               />
             )}
-            {!hasActiveWorktree && isWorktreeInitialized && !hasWorktrees && (
+            {!hasLaunchTarget && isWorktreeInitialized && !hasWorktrees && (
               <EmptyState
                 variant="zero-data"
                 scale="canvas"
@@ -195,31 +205,31 @@ export function ContentGridEmptyState({
               />
             )}
 
-            {hasActiveWorktree && recipesProjectId !== null && !recipesLoading && (
+            {hasLaunchTarget && recipesProjectId !== null && !recipesLoading && (
               <div className="mb-3 w-full flex justify-center">
                 <RecipeRunner activeWorktreeId={activeWorktreeId} defaultCwd={defaultCwd} />
               </div>
             )}
 
-            {hasActiveWorktree && (
+            {hasLaunchTarget && (
               <div className="mb-3 w-full flex justify-center">
                 <ResumeSessionLine />
               </div>
             )}
 
-            {hasActiveWorktree && (
+            {hasLaunchTarget && (
               <div className="mb-6 w-full flex justify-center">
                 <LauncherQuickActions />
               </div>
             )}
 
-            {showProjectPulse && hasActiveWorktree && activeWorktreeId && (
+            {showProjectPulse && hasLaunchTarget && activeWorktreeId && (
               <div className="w-full flex justify-center">
                 <ProjectPulseStrip worktreeId={activeWorktreeId} />
               </div>
             )}
 
-            {hasActiveWorktree && hasEverLaunchedAgent && (
+            {hasLaunchTarget && hasProjectContext && hasEverLaunchedAgent && (
               <div className="flex flex-col items-center gap-4 mt-6">
                 <RotatingTip />
               </div>

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { useWorktrees } from "@/hooks";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useProjectStore } from "@/store";
+import { useScratchStore } from "@/store/scratchStore";
 import { useHomeDir } from "@/hooks/app/useHomeDir";
 
 export function useActiveWorktreeSync() {
@@ -9,6 +10,7 @@ export function useActiveWorktreeSync() {
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
   const selectWorktree = useWorktreeSelectionStore((s) => s.selectWorktree);
   const currentProject = useProjectStore((s) => s.currentProject);
+  const currentScratch = useScratchStore((s) => s.currentScratch);
   const { homeDir } = useHomeDir();
 
   const lastSyncedActiveRef = useRef<{ projectId: string | null; worktreeId: string | null }>({
@@ -65,12 +67,14 @@ export function useActiveWorktreeSync() {
       });
   }, [activeWorktreeId, currentProject?.id, worktrees]);
 
+  // A scratch is an active workspace with no worktree (#11076) — without it in
+  // the chain, `terminal.new` lands in the home dir instead of the scratch.
   const defaultTerminalCwd = useMemo(
     () =>
       isInitialized
-        ? (activeWorktree?.path ?? currentProject?.path ?? homeDir ?? "")
-        : (currentProject?.path ?? homeDir ?? ""),
-    [activeWorktree, currentProject, homeDir, isInitialized]
+        ? (activeWorktree?.path ?? currentProject?.path ?? currentScratch?.path ?? homeDir ?? "")
+        : (currentProject?.path ?? currentScratch?.path ?? homeDir ?? ""),
+    [activeWorktree, currentProject, currentScratch, homeDir, isInitialized]
   );
 
   return { activeWorktree, defaultTerminalCwd };

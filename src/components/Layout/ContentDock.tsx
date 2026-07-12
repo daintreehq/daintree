@@ -7,6 +7,7 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { usePanelStore, useProjectStore, useWorktreeSelectionStore } from "@/store";
+import { useScratchStore } from "@/store/scratchStore";
 import {
   isDockPanel,
   isFilePanel,
@@ -121,6 +122,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   const getTabGroups = usePanelStore((state) => state.getTabGroups);
   const getTabGroupPanels = usePanelStore((state) => state.getTabGroupPanels);
   const currentProject = useProjectStore((s) => s.currentProject);
+  const currentScratch = useScratchStore((s) => s.currentScratch);
   const helpTerminalId = useHelpPanelStore((s) => s.terminalId);
   const agentSettings = useAgentSettingsStore((s) => s.settings);
   const agentAvailability = useCliAvailabilityStore((s) => s.availability);
@@ -234,7 +236,11 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   const { worktrees } = useWorktrees();
 
   const activeWorktree = activeWorktreeId ? worktrees.find((w) => w.id === activeWorktreeId) : null;
-  const cwd = activeWorktree?.path ?? currentProject?.path ?? "";
+  // Include the scratch (#11076): this cwd is passed down as an explicit launch
+  // option, and `""` is not nullish — an empty string would win over
+  // `useAgentLauncher`'s own scratch fallback and strand dock launches in the
+  // home dir.
+  const cwd = activeWorktree?.path ?? currentProject?.path ?? currentScratch?.path ?? "";
 
   const { sorted: launchAgents, pinnedCount } = useMemo(() => {
     const baseIds = getAgentIds();
