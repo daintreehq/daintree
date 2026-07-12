@@ -41,6 +41,7 @@ import { useOverlayClaim } from "@/hooks";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { defaultScratchName } from "@shared/utils/scratchName";
 import type {
+  DeleteAllScratchesSnapshot,
   ProjectSwitcherMode,
   SearchableProject,
   SearchableScratch,
@@ -106,6 +107,16 @@ export interface ProjectSwitcherPaletteProps {
   onSelectScratch?: (scratch: SearchableScratch) => void;
   /** Callback to remove a scratch. */
   onRemoveScratch?: (scratchId: string) => void;
+  /** Opens the "delete every scratch" confirmation from the section header's context menu. */
+  onRequestDeleteAllScratches?: () => void;
+  /**
+   * Targets of a pending bulk-delete confirmation, frozen when it opened.
+   * Surfaced as a top-level ConfirmDialog above the palette.
+   */
+  deleteAllScratchesConfirm?: DeleteAllScratchesSnapshot | null;
+  onDismissDeleteAllScratchesConfirm?: () => void;
+  onConfirmDeleteAllScratches?: () => void;
+  isDeletingAllScratches?: boolean;
   /** Callback to rename a scratch in place. */
   onRenameScratch?: (scratchId: string, name: string) => void;
   /** Callback to save a scratch as a regular project (copy + register). */
@@ -645,6 +656,7 @@ interface ScratchSectionProps {
   onCreate?: (name?: string) => void;
   onSelect?: (scratch: SearchableScratch) => void;
   onRemove?: (scratchId: string) => void;
+  onDeleteAll?: () => void;
   onRename?: (scratchId: string, name: string) => void;
   onSaveAsProject?: (scratchId: string) => void;
 }
@@ -662,6 +674,7 @@ function ScratchSection({
   onCreate,
   onSelect,
   onRemove,
+  onDeleteAll,
   onRename,
   onSaveAsProject,
 }: ScratchSectionProps) {
@@ -721,25 +734,44 @@ function ScratchSection({
 
   return (
     <div className="px-2 py-1.5">
-      <button
-        type="button"
-        onClick={() => setCollapsed((v) => !v)}
-        className="w-full flex items-center justify-between px-3 py-1 text-[10px] font-medium tracking-wider uppercase text-daintree-text/40 select-none hover:text-daintree-text/60 transition-colors"
-        aria-expanded={!collapsed}
-        aria-controls="scratch-section-list"
-      >
-        <span className="flex items-center gap-1.5">
-          {collapsed ? (
-            <ChevronRight className="w-3 h-3" aria-hidden="true" />
-          ) : (
-            <ChevronDown className="w-3 h-3" aria-hidden="true" />
-          )}
-          Scratch
-        </span>
-        {scratches.length > 0 && (
-          <span className="text-[10px] tabular-nums">{scratches.length}</span>
+      {/*
+       * The trigger stays mounted at zero scratches — only the menu content is
+       * conditional. Swapping the button in and out of a ContextMenu as the last
+       * scratch is deleted would remount the node Radix is restoring focus to.
+       * A `contextmenu` gesture (and Shift+F10) never dispatches `click`, so the
+       * collapse toggle below is safe to leave as-is.
+       */}
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <button
+            type="button"
+            onClick={() => setCollapsed((v) => !v)}
+            className="w-full flex items-center justify-between px-3 py-1 text-[10px] font-medium tracking-wider uppercase text-daintree-text/40 select-none hover:text-daintree-text/60 transition-colors"
+            aria-expanded={!collapsed}
+            aria-controls="scratch-section-list"
+          >
+            <span className="flex items-center gap-1.5">
+              {collapsed ? (
+                <ChevronRight className="w-3 h-3" aria-hidden="true" />
+              ) : (
+                <ChevronDown className="w-3 h-3" aria-hidden="true" />
+              )}
+              Scratch
+            </span>
+            {scratches.length > 0 && (
+              <span className="text-[10px] tabular-nums">{scratches.length}</span>
+            )}
+          </button>
+        </ContextMenuTrigger>
+        {onDeleteAll && scratches.length > 0 && (
+          <ContextMenuContent>
+            <ContextMenuItem destructive onSelect={onDeleteAll}>
+              <Trash2 className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+              Delete all scratch workspaces
+            </ContextMenuItem>
+          </ContextMenuContent>
         )}
-      </button>
+      </ContextMenu>
       {!collapsed && (
         <div id="scratch-section-list" className="mt-1">
           {scratches.length === 0 ? (
@@ -934,6 +966,7 @@ interface ProjectPaletteInnerProps {
   onCreateScratch?: (name?: string) => void;
   onSelectScratch?: (scratch: SearchableScratch) => void;
   onRemoveScratch?: (scratchId: string) => void;
+  onRequestDeleteAllScratches?: () => void;
   onRenameScratch?: (scratchId: string, name: string) => void;
   onSaveAsProject?: (scratchId: string) => void;
 }
@@ -967,6 +1000,7 @@ function ProjectPaletteInner({
   onCreateScratch,
   onSelectScratch,
   onRemoveScratch,
+  onRequestDeleteAllScratches,
   onRenameScratch,
   onSaveAsProject,
 }: ProjectPaletteInnerProps) {
@@ -1096,6 +1130,7 @@ function ProjectPaletteInner({
               onCreate={onCreateScratch}
               onSelect={onSelectScratch}
               onRemove={onRemoveScratch}
+              onDeleteAll={onRequestDeleteAllScratches}
               onRename={onRenameScratch}
               onSaveAsProject={onSaveAsProject}
             />
@@ -1216,6 +1251,7 @@ function ModalContent({
         onCreateScratch={innerProps.onCreateScratch}
         onSelectScratch={innerProps.onSelectScratch}
         onRemoveScratch={innerProps.onRemoveScratch}
+        onRequestDeleteAllScratches={innerProps.onRequestDeleteAllScratches}
         onRenameScratch={innerProps.onRenameScratch}
         onSaveAsProject={innerProps.onSaveAsProject}
       />
@@ -1321,6 +1357,7 @@ function DropdownContent({
           onCreateScratch={innerProps.onCreateScratch}
           onSelectScratch={innerProps.onSelectScratch}
           onRemoveScratch={innerProps.onRemoveScratch}
+          onRequestDeleteAllScratches={innerProps.onRequestDeleteAllScratches}
           onRenameScratch={innerProps.onRenameScratch}
           onSaveAsProject={innerProps.onSaveAsProject}
         />
@@ -1368,6 +1405,11 @@ export function ProjectSwitcherPalette({
   onCreateScratch,
   onSelectScratch,
   onRemoveScratch,
+  onRequestDeleteAllScratches,
+  deleteAllScratchesConfirm,
+  onDismissDeleteAllScratchesConfirm,
+  onConfirmDeleteAllScratches,
+  isDeletingAllScratches = false,
   onRenameScratch,
   onSaveAsProject,
   saveAsProjectConfirm,
@@ -1413,6 +1455,7 @@ export function ProjectSwitcherPalette({
         onCreateScratch={onCreateScratch}
         onSelectScratch={onSelectScratch}
         onRemoveScratch={onRemoveScratch}
+        onRequestDeleteAllScratches={onRequestDeleteAllScratches}
         onRenameScratch={onRenameScratch}
         onSaveAsProject={onSaveAsProject}
       >
@@ -1447,6 +1490,7 @@ export function ProjectSwitcherPalette({
         onCreateScratch={onCreateScratch}
         onSelectScratch={onSelectScratch}
         onRemoveScratch={onRemoveScratch}
+        onRequestDeleteAllScratches={onRequestDeleteAllScratches}
         onRenameScratch={onRenameScratch}
         onSaveAsProject={onSaveAsProject}
       />
@@ -1560,6 +1604,34 @@ export function ProjectSwitcherPalette({
           </div>
         </ConfirmDialog>
       )}
+      {deleteAllScratchesConfirm &&
+        onDismissDeleteAllScratchesConfirm &&
+        onConfirmDeleteAllScratches && (
+          <ConfirmDialog
+            isOpen={true}
+            onClose={isDeletingAllScratches ? undefined : onDismissDeleteAllScratchesConfirm}
+            // Counted off the frozen snapshot, never the live list: the rows
+            // disappear as the run lands, and the dialog must keep naming the
+            // number the user actually agreed to.
+            title={
+              deleteAllScratchesConfirm.length === 1
+                ? "Delete 1 scratch workspace?"
+                : `Delete ${deleteAllScratchesConfirm.length} scratch workspaces?`
+            }
+            zIndex="nested"
+            confirmLabel="Delete scratch workspaces"
+            cancelLabel="Cancel"
+            onConfirm={onConfirmDeleteAllScratches}
+            isConfirmLoading={isDeletingAllScratches}
+            variant="destructive"
+          >
+            <div className="text-sm text-daintree-text/70">
+              {deleteAllScratchesConfirm.length === 1
+                ? "Its terminals will be closed and its folder deleted from disk."
+                : "Their terminals will be closed and their folders deleted from disk."}
+            </div>
+          </ConfirmDialog>
+        )}
       {saveAsProjectConfirm && onDismissSaveAsProjectConfirm && onConfirmDeleteOriginalScratch && (
         <ConfirmDialog
           isOpen={true}

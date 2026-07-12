@@ -71,6 +71,11 @@ vi.mock("@/hooks", async () => {
       isRemovingProject: false,
       backgroundWaitingCount: 0,
       nonActiveAgentCounts: paletteState.nonActiveAgentCounts,
+      deleteAllScratchesConfirm: null,
+      requestDeleteAllScratches: vi.fn(),
+      dismissDeleteAllScratchesConfirm: vi.fn(),
+      confirmDeleteAllScratches: vi.fn(),
+      isDeletingAllScratches: false,
     }),
   };
 });
