@@ -460,10 +460,13 @@ export function ModalHostLayer({
                 );
               }}
               scratchResults={projectSwitcherPalette.scratchResults}
-              onCreateScratch={() => void projectSwitcherPalette.createScratch()}
+              onCreateScratch={(name) => void projectSwitcherPalette.createScratch(name)}
               onSelectScratch={(scratch) => void projectSwitcherPalette.selectScratch(scratch)}
               onRemoveScratch={(scratchId) =>
                 void projectSwitcherPalette.removeScratchAction(scratchId)
+              }
+              onRenameScratch={(scratchId, name) =>
+                void projectSwitcherPalette.renameScratch(scratchId, name)
               }
               onSaveAsProject={(scratchId) => void projectSwitcherPalette.saveAsProject(scratchId)}
               saveAsProjectConfirm={projectSwitcherPalette.saveAsProjectConfirm}

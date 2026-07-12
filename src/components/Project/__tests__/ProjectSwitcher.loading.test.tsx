@@ -93,6 +93,13 @@ vi.mock("@/store/projectStore", () => ({
   useProjectStore: <T,>(selector: (s: ProjectStoreState) => T) => selector(projectStoreState),
 }));
 
+// No active scratch: these cases cover the no-workspace empty states, which only
+// render when both pointers are null.
+vi.mock("@/store/scratchStore", () => ({
+  useScratchStore: <T,>(selector: (s: { currentScratch: null }) => T) =>
+    selector({ currentScratch: null }),
+}));
+
 vi.mock("@/components/ui/ConfirmDialog", () => ({
   ConfirmDialog: () => null,
 }));

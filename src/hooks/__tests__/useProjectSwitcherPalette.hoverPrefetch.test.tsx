@@ -113,19 +113,24 @@ vi.mock("@/store/projectSettingsStore", () => ({
   ),
 }));
 
-vi.mock("@/store/scratchStore", () => ({
-  useScratchStore: vi.fn((selector?: (state: unknown) => unknown) => {
-    const state = {
-      scratches: [],
-      currentScratch: null,
-      loadScratches: vi.fn().mockResolvedValue(undefined),
-      createScratch: vi.fn().mockResolvedValue({ id: "s1" }),
-      switchScratch: vi.fn().mockResolvedValue(undefined),
-      removeScratch: vi.fn().mockResolvedValue(undefined),
-    };
-    return selector ? selector(state) : state;
-  }),
-}));
+// Hoisted so every selector call returns stable action identities. A fresh state
+// object per call would churn the hook's effect deps on every render.
+vi.mock("@/store/scratchStore", () => {
+  const state = {
+    scratches: [],
+    currentScratch: null,
+    loadScratches: vi.fn().mockResolvedValue(undefined),
+    createScratch: vi.fn().mockResolvedValue({ id: "s1" }),
+    switchScratch: vi.fn().mockResolvedValue(undefined),
+    removeScratch: vi.fn().mockResolvedValue(undefined),
+    renameScratch: vi.fn().mockResolvedValue(undefined),
+  };
+  return {
+    useScratchStore: vi.fn((selector?: (s: unknown) => unknown) =>
+      selector ? selector(state) : state
+    ),
+  };
+});
 
 vi.mock("@/lib/notify", () => ({
   notify: notifyMock,

@@ -10,6 +10,7 @@ import {
   FolderOpen,
   FolderPlus,
   FolderUp,
+  Pencil,
   Pin,
   PinOff,
   Plus,
@@ -35,6 +36,10 @@ import { formatTimeAgo } from "@/utils/timeAgo";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { useModifierKeys } from "@/hooks/useModifierKeys";
 import { useOverlayClaim } from "@/hooks";
+// Leaf import, not the `@/hooks` barrel: several palette suites mock that barrel
+// and would throw on an export they don't list.
+import { useEscapeStack } from "@/hooks/useEscapeStack";
+import { defaultScratchName } from "@shared/utils/scratchName";
 import type {
   ProjectSwitcherMode,
   SearchableProject,
@@ -95,12 +100,14 @@ export interface ProjectSwitcherPaletteProps {
   isFreeingMemory?: boolean;
   /** Scratch (one-off agent workspace) results — rendered in their own collapsible section. */
   scratchResults?: SearchableScratch[];
-  /** Callback to create and switch to a new scratch. */
-  onCreateScratch?: () => void;
+  /** Callback to create and switch to a new scratch. A blank name takes the default. */
+  onCreateScratch?: (name?: string) => void;
   /** Callback to switch to an existing scratch. */
   onSelectScratch?: (scratch: SearchableScratch) => void;
   /** Callback to remove a scratch. */
   onRemoveScratch?: (scratchId: string) => void;
+  /** Callback to rename a scratch in place. */
+  onRenameScratch?: (scratchId: string, name: string) => void;
   /** Callback to save a scratch as a regular project (copy + register). */
   onSaveAsProject?: (scratchId: string) => void;
   /**
@@ -544,11 +551,101 @@ export function formatScratchCleanupCountdown(lastOpened: number, now: number): 
   return `Auto-cleanup in ${daysLeft} days`;
 }
 
+interface ScratchNameEditorProps {
+  initialValue: string;
+  ariaLabel: string;
+  onCommit: (name: string) => void;
+  onCancel: () => void;
+  testId: string;
+}
+
+/**
+ * Inline name field for creating or renaming a scratch. Lives inside
+ * `AppPaletteDialog`, whose document-level Escape backstop would otherwise close
+ * the whole switcher — so Escape is both consumed here and claimed on the escape
+ * stack. Enter is stopped for the same reason: the palette's own Enter handler
+ * lives on the search input, but the backstop listens on document.
+ */
+function ScratchNameEditor({
+  initialValue,
+  ariaLabel,
+  onCommit,
+  onCancel,
+  testId,
+}: ScratchNameEditorProps) {
+  const [value, setValue] = useState(initialValue);
+  const inputRef = useRef<HTMLInputElement>(null);
+  // Committing on blur would fire on Escape's focus restore too, resurrecting the
+  // cancelled edit; explicit Enter is the only commit path.
+  const committedRef = useRef(false);
+
+  useEscapeStack(true, () => {
+    if (committedRef.current) return;
+    onCancel();
+  });
+
+  useEffect(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    input.focus();
+    input.select();
+  }, []);
+
+  const commit = useCallback(() => {
+    committedRef.current = true;
+    onCommit(value);
+  }, [onCommit, value]);
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.nativeEvent.isComposing) return;
+      if (e.key === "Enter") {
+        e.preventDefault();
+        e.stopPropagation();
+        commit();
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        onCancel();
+      }
+    },
+    [commit, onCancel]
+  );
+
+  return (
+    <div className="w-full flex items-center gap-3 px-3 py-2 mt-1 rounded-[var(--radius-md)]">
+      <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] bg-tint/[0.04] text-muted-foreground shrink-0">
+        <FileText className="h-4 w-4" />
+      </div>
+      <input
+        ref={inputRef}
+        data-scratch-name-input=""
+        data-testid={testId}
+        type="text"
+        value={value}
+        aria-label={ariaLabel}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={handleKeyDown}
+        onBlur={onCancel}
+        className="flex-1 min-w-0 bg-overlay-soft border border-[var(--border-overlay)] rounded-[var(--radius-md)] px-2 py-1 text-sm text-daintree-text outline-hidden focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
+      />
+    </div>
+  );
+}
+
+type ScratchEditorState =
+  | { kind: "create" }
+  | { kind: "rename"; scratchId: string; name: string }
+  | null;
+
 interface ScratchSectionProps {
   scratches: SearchableScratch[];
-  onCreate?: () => void;
+  onCreate?: (name?: string) => void;
   onSelect?: (scratch: SearchableScratch) => void;
   onRemove?: (scratchId: string) => void;
+  onRename?: (scratchId: string, name: string) => void;
   onSaveAsProject?: (scratchId: string) => void;
 }
 
@@ -565,9 +662,15 @@ function ScratchSection({
   onCreate,
   onSelect,
   onRemove,
+  onRename,
   onSaveAsProject,
 }: ScratchSectionProps) {
   const [collapsed, setCollapsed] = useState<boolean>(scratches.length === 0);
+  const [editor, setEditor] = useState<ScratchEditorState>(null);
+  // Radix restores focus to the context-menu trigger on close, but for a rename
+  // that trigger has been swapped out for the editor — the restore would steal
+  // focus from the input and blur-cancel the edit before it began.
+  const suppressMenuFocusRestoreRef = useRef(false);
   const previousScratchCountRef = useRef(scratches.length);
   // `now` is captured per-render so the countdown updates whenever the
   // surrounding component re-renders. Refresh is naturally driven by store
@@ -585,6 +688,36 @@ function ScratchSection({
       setCollapsed(false);
     }
   }, [scratches.length]);
+
+  // A rename target can vanish under the editor via a scratch:removed push.
+  useEffect(() => {
+    if (editor?.kind !== "rename") return;
+    if (!scratches.some((s) => s.id === editor.scratchId)) {
+      setEditor(null);
+    }
+  }, [editor, scratches]);
+
+  const closeEditor = useCallback(() => setEditor(null), []);
+
+  const handleCreateCommit = useCallback(
+    (name: string) => {
+      setEditor(null);
+      onCreate?.(name);
+    },
+    [onCreate]
+  );
+
+  const handleRenameCommit = useCallback(
+    (scratchId: string, previousName: string, name: string) => {
+      setEditor(null);
+      const trimmed = name.trim();
+      if (!trimmed || trimmed === previousName) return;
+      onRename?.(scratchId, trimmed);
+    },
+    [onRename]
+  );
+
+  const isCreating = editor?.kind === "create";
 
   return (
     <div className="px-2 py-1.5">
@@ -616,8 +749,22 @@ function ScratchSection({
           ) : (
             <div role="listbox" aria-label="Scratch workspaces">
               {scratches.map((scratch) => {
+                const isRenaming = editor?.kind === "rename" && editor.scratchId === scratch.id;
+                if (isRenaming) {
+                  return (
+                    <ScratchNameEditor
+                      key={scratch.id}
+                      initialValue={scratch.name}
+                      ariaLabel="Scratch name"
+                      testId="scratch-rename-input"
+                      onCommit={(name) => handleRenameCommit(scratch.id, scratch.name, name)}
+                      onCancel={closeEditor}
+                    />
+                  );
+                }
+
                 const countdown = formatScratchCleanupCountdown(scratch.lastOpened, now);
-                const hasContextActions = Boolean(onRemove || onSaveAsProject);
+                const hasContextActions = Boolean(onRemove || onSaveAsProject || onRename);
                 return (
                   <ContextMenu key={scratch.id}>
                     <ContextMenuTrigger asChild>
@@ -651,14 +798,35 @@ function ScratchSection({
                       </button>
                     </ContextMenuTrigger>
                     {hasContextActions && (
-                      <ContextMenuContent>
+                      <ContextMenuContent
+                        onCloseAutoFocus={(e) => {
+                          if (!suppressMenuFocusRestoreRef.current) return;
+                          suppressMenuFocusRestoreRef.current = false;
+                          e.preventDefault();
+                        }}
+                      >
+                        {onRename && (
+                          <ContextMenuItem
+                            onSelect={() => {
+                              suppressMenuFocusRestoreRef.current = true;
+                              setEditor({
+                                kind: "rename",
+                                scratchId: scratch.id,
+                                name: scratch.name,
+                              });
+                            }}
+                          >
+                            <Pencil className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                            Rename scratch
+                          </ContextMenuItem>
+                        )}
                         {onSaveAsProject && (
                           <ContextMenuItem onSelect={() => onSaveAsProject(scratch.id)}>
                             <FolderUp className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                             Save as project…
                           </ContextMenuItem>
                         )}
-                        {onSaveAsProject && onRemove && <ContextMenuSeparator />}
+                        {(onSaveAsProject || onRename) && onRemove && <ContextMenuSeparator />}
                         {onRemove && (
                           <ContextMenuItem destructive onSelect={() => onRemove(scratch.id)}>
                             <Trash2 className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
@@ -672,21 +840,30 @@ function ScratchSection({
               })}
             </div>
           )}
-          {onCreate && (
-            <button
-              type="button"
-              onClick={onCreate}
-              className="w-full flex items-center gap-3 px-3 py-2 mt-1 rounded-[var(--radius-md)] text-left transition-colors hover:bg-overlay-subtle"
-              data-testid="scratch-create-button"
-            >
-              <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] border border-dashed border-muted-foreground/30 bg-muted/20 text-muted-foreground">
-                <Plus className="h-4 w-4" />
-              </div>
-              <span className="font-medium text-sm text-muted-foreground">
-                New scratch workspace
-              </span>
-            </button>
-          )}
+          {onCreate &&
+            (isCreating ? (
+              <ScratchNameEditor
+                initialValue={defaultScratchName(new Date())}
+                ariaLabel="Name for the new scratch workspace"
+                testId="scratch-create-input"
+                onCommit={handleCreateCommit}
+                onCancel={closeEditor}
+              />
+            ) : (
+              <button
+                type="button"
+                onClick={() => setEditor({ kind: "create" })}
+                className="w-full flex items-center gap-3 px-3 py-2 mt-1 rounded-[var(--radius-md)] text-left transition-colors hover:bg-overlay-subtle"
+                data-testid="scratch-create-button"
+              >
+                <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] border border-dashed border-muted-foreground/30 bg-muted/20 text-muted-foreground">
+                  <Plus className="h-4 w-4" />
+                </div>
+                <span className="font-medium text-sm text-muted-foreground">
+                  New scratch workspace
+                </span>
+              </button>
+            ))}
         </div>
       )}
     </div>
@@ -750,9 +927,10 @@ interface ProjectPaletteInnerProps {
   onHoverProject?: (projectId: string, pointerType: string) => void;
   onHoverProjectEnd?: (pointerType: string) => void;
   scratchResults?: SearchableScratch[];
-  onCreateScratch?: () => void;
+  onCreateScratch?: (name?: string) => void;
   onSelectScratch?: (scratch: SearchableScratch) => void;
   onRemoveScratch?: (scratchId: string) => void;
+  onRenameScratch?: (scratchId: string, name: string) => void;
   onSaveAsProject?: (scratchId: string) => void;
 }
 
@@ -785,6 +963,7 @@ function ProjectPaletteInner({
   onCreateScratch,
   onSelectScratch,
   onRemoveScratch,
+  onRenameScratch,
   onSaveAsProject,
 }: ProjectPaletteInnerProps) {
   const projectSwitcherShortcut = useEffectiveCombo("project.switcherPalette");
@@ -913,6 +1092,7 @@ function ProjectPaletteInner({
               onCreate={onCreateScratch}
               onSelect={onSelectScratch}
               onRemove={onRemoveScratch}
+              onRename={onRenameScratch}
               onSaveAsProject={onSaveAsProject}
             />
           </>
@@ -1032,6 +1212,7 @@ function ModalContent({
         onCreateScratch={innerProps.onCreateScratch}
         onSelectScratch={innerProps.onSelectScratch}
         onRemoveScratch={innerProps.onRemoveScratch}
+        onRenameScratch={innerProps.onRenameScratch}
         onSaveAsProject={innerProps.onSaveAsProject}
       />
     </AppPaletteDialog>
@@ -1091,6 +1272,15 @@ function DropdownContent({
           inputRef.current?.focus();
         }}
         onCloseAutoFocus={() => onDropdownCloseAutoFocus?.()}
+        onEscapeKeyDown={(event) => {
+          // Radix dismisses on a document-capture listener, which beats the
+          // scratch-name input's own handler. While that input owns focus,
+          // Escape means "cancel the edit", not "close the switcher".
+          const active = document.activeElement;
+          if (active instanceof HTMLElement && active.hasAttribute("data-scratch-name-input")) {
+            event.preventDefault();
+          }
+        }}
         onInteractOutside={(event) => {
           const target = event.target;
           if (target instanceof HTMLElement && target.closest('[role="menu"]')) {
@@ -1127,6 +1317,7 @@ function DropdownContent({
           onCreateScratch={innerProps.onCreateScratch}
           onSelectScratch={innerProps.onSelectScratch}
           onRemoveScratch={innerProps.onRemoveScratch}
+          onRenameScratch={innerProps.onRenameScratch}
           onSaveAsProject={innerProps.onSaveAsProject}
         />
       </PopoverContent>
@@ -1173,6 +1364,7 @@ export function ProjectSwitcherPalette({
   onCreateScratch,
   onSelectScratch,
   onRemoveScratch,
+  onRenameScratch,
   onSaveAsProject,
   saveAsProjectConfirm,
   onDismissSaveAsProjectConfirm,
@@ -1217,6 +1409,7 @@ export function ProjectSwitcherPalette({
         onCreateScratch={onCreateScratch}
         onSelectScratch={onSelectScratch}
         onRemoveScratch={onRemoveScratch}
+        onRenameScratch={onRenameScratch}
         onSaveAsProject={onSaveAsProject}
       >
         {children}
@@ -1250,6 +1443,7 @@ export function ProjectSwitcherPalette({
         onCreateScratch={onCreateScratch}
         onSelectScratch={onSelectScratch}
         onRemoveScratch={onRemoveScratch}
+        onRenameScratch={onRenameScratch}
         onSaveAsProject={onSaveAsProject}
       />
     );
