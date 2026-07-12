@@ -25,11 +25,7 @@ export default defineConfig(({ mode }) => {
       hookTimeout: 30000,
       // Run integration tests sequentially to avoid rate limiting
       pool: "forks",
-      poolOptions: {
-        forks: {
-          singleFork: true,
-        },
-      },
+      maxWorkers: 1,
       env: {
         NODE_ENV: "test",
         // Pass through API keys from environment (only if defined)

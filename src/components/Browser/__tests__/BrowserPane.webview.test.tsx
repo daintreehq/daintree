@@ -145,8 +145,9 @@ vi.mock("@/hooks/useFindInPage", () => ({
   }),
 }));
 
-const { browserToolbarPropsSpy } = vi.hoisted(() => ({
+const { browserToolbarPropsSpy, contentPanelPropsSpy } = vi.hoisted(() => ({
   browserToolbarPropsSpy: vi.fn(),
+  contentPanelPropsSpy: vi.fn(),
 }));
 vi.mock("@/components/Browser/BrowserToolbar", () => ({
   BrowserToolbar: (props: Record<string, unknown>) => {
@@ -163,18 +164,19 @@ vi.mock("@/lib/notify", () => ({
 }));
 
 vi.mock("@/components/Panel", () => ({
-  ContentPanel: ({
-    children,
-    toolbar,
-  }: {
+  ContentPanel: (props: {
     children: React.ReactNode;
     toolbar?: React.ReactNode;
-  }) => (
-    <div data-testid="content-panel">
-      {toolbar}
-      {children}
-    </div>
-  ),
+    [key: string]: unknown;
+  }) => {
+    contentPanelPropsSpy(props);
+    return (
+      <div data-testid="content-panel">
+        {props.toolbar}
+        {props.children}
+      </div>
+    );
+  },
 }));
 
 function emitWebviewEvent(
@@ -289,6 +291,14 @@ describe("BrowserPane webview lifecycle regression", () => {
     const { container } = render(<BrowserPane {...baseProps} />);
     const webview = getWebviewElement(container);
     expect(webview.hasAttribute("allowpopups")).toBe(true);
+  });
+
+  it("forwards the single-panel dock restore control", () => {
+    render(<BrowserPane {...baseProps} location="dock" showRestoreControl />);
+
+    expect(contentPanelPropsSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ showRestoreControl: true })
+    );
   });
 
   describe("per-project session partition (#9965)", () => {

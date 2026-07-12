@@ -21,7 +21,10 @@ export default defineConfig({
     // worker_thread on Linux. Forks give each worker its own process, sidestep
     // that, and the headline speedup is the 4-way sharding in ci.yml — not the
     // pool. minWorkers is left unset so workers track CPU count (the old
-    // minWorkers:3 forced 3 workers even on the 2-core CI runners).
+    // minWorkers:3 forced 3 workers even on the 2-core CI runners). Cap the
+    // upper bound because high-core hosts can otherwise overwhelm Vitest's RPC
+    // teardown and turn an all-passing run into an EnvironmentTeardownError.
+    maxWorkers: 8,
     maxConcurrency: 10,
     include: [
       "electron/**/*.{test,spec}.{js,ts}",
