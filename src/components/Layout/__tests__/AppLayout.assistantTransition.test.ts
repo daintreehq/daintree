@@ -148,8 +148,14 @@ describe("AppLayout assistant off-canvas slide — issue #10693", () => {
     expect(settle![1]).toContain("layout.performanceMode");
     expect(settle![1]).toContain("isAssistantResizing");
     expect(settle![1]).toContain("mql?.matches === true");
-    // This path only ever runs on a show, so it settles the obligation as shown.
-    expect(settle![1]).toContain("assistantReveal.settleAfterTransition(true)");
+    // This path only ever runs on a show, so it settles the obligation as shown —
+    // but NOT during a drag-resize. A drag also strips the transition, and the
+    // reveal repaint's reconcileGeometryFresh is lock-exempt, so settling there
+    // would assert geometry mid-drag against the lock that keeps the handle
+    // tracking the cursor 1:1. The drag owns its own geometry.
+    expect(settle![1]).toContain(
+      "if (noTransition && !isAssistantResizing) assistantReveal.settleAfterTransition(true)"
+    );
     // The media query is subscribed so an OS reduced-motion flip mid-slide still
     // parks the wrapper inert (the read alone would not re-run).
     expect(source).toContain('mql?.addEventListener("change", settle)');

@@ -195,7 +195,7 @@ export function createAssistantRevealCoordinator(): AssistantRevealCoordinator {
   return {
     start() {
       unsubscribe?.();
-      const offStore = useHelpPanelStore.subscribe((state, prev) => {
+      const dispose = useHelpPanelStore.subscribe((state, prev) => {
         // sessionId as well as terminalId: a reserved id is finalized in place
         // when provisioning resolves, so the id alone can be edge-less on the
         // retry path after an attach-wait timeout.
@@ -205,18 +205,15 @@ export function createAssistantRevealCoordinator(): AssistantRevealCoordinator {
         generation++;
         discharge(state.terminalId);
       });
-      // Hand the obligation off when this project view is cached (backgrounded).
-      // A cached WebContentsView does not reliably fire a DOM visibilitychange,
-      // so isDocumentHidden alone would let the frame loop keep repainting into
-      // an unpresented view — and, worse, still be running when the switch-back
-      // fires repaintActiveWorktreeTerminals, whose sweep already owns the
-      // assistant terminal (#9637). Two geometry reconciles racing one live
-      // terminal is exactly the corruption #10863 fixed, so this side yields.
-      const offViewCached = window.electron?.app?.onViewCached?.(() => cancel());
-      const dispose = (): void => {
-        offStore();
-        offViewCached?.();
-      };
+      // Deliberately NOT cancelled on app:view-cached. Yielding the obligation to
+      // the switch-back sweep looks tempting, but that sweep only covers the
+      // assistant once BOTH its terminalId and its registered panel exist
+      // (collectActiveWorktreeTerminalTargets) — so a view cached while the
+      // session is still provisioning would hand the repaint to an owner that
+      // never takes it, and #11070 returns. A discharge that lands in a
+      // backgrounded view is merely wasted (repaintForReveal still gates on
+      // DOM-truth dims, and with no opts it keeps the isVisible WebGL gate,
+      // #10671), and the switch-back sweep repaints the terminal again anyway.
       unsubscribe = dispose;
       return () => {
         if (unsubscribe !== dispose) return;

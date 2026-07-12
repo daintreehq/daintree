@@ -631,7 +631,12 @@ export function AppLayout({
         reduceAnimations || layout.performanceMode || isAssistantResizing || mql?.matches === true;
       if (showAssistant) {
         setAssistantInert(false);
-        if (noTransition) assistantReveal.settleAfterTransition(true);
+        // A drag-resize also strips the transition, but a drag is NOT a reveal:
+        // the reveal repaint's reconcileGeometryFresh is lock-exempt, so settling
+        // here would assert geometry mid-drag — at a width the cursor has already
+        // moved past — against the very lock that keeps the handle tracking 1:1.
+        // The drag owns its own geometry and runs its resize pass on release.
+        if (noTransition && !isAssistantResizing) assistantReveal.settleAfterTransition(true);
       } else if (noTransition) {
         setAssistantInert(true);
       }
