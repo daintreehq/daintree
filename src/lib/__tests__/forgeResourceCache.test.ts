@@ -365,7 +365,7 @@ describe("forgeResourceCache", () => {
       const withAvatar = seedSlot("open", "created", [makeIssue(1)]);
       patchIssueAssigneeCache("/proj", 1, viewer, true);
       const added = getCache(withAvatar)?.items[0];
-      expect(added && "assignees" in added ? added.assignees[0].avatarUrl : null).toBe(
+      expect(added && "assignees" in added ? added.assignees[0]?.avatarUrl : null).toBe(
         viewer.avatarUrl
       );
 

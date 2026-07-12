@@ -1263,7 +1263,7 @@ describe("useRepositoryStats", () => {
       });
 
       const issuesKey = buildCacheKey(project.path, "issue", "open", "created");
-      const patchedIssue = {
+      const patchedIssue: Issue = {
         number: 7,
         title: "Patched",
         body: "",
@@ -1330,22 +1330,21 @@ describe("useRepositoryStats", () => {
       });
 
       const issuesKey = buildCacheKey(project.path, "issue", "open", "created");
+      const oldRow: Issue = {
+        number: 7,
+        title: "Old",
+        body: "",
+        state: "open",
+        rawState: "open",
+        url: "u",
+        assignees: [],
+        labels: [],
+        createdAt: 0,
+        updatedAt: 0,
+        rawData: null,
+      };
       setCache(issuesKey, {
-        items: [
-          {
-            number: 7,
-            title: "Old",
-            body: "",
-            state: "open",
-            rawState: "open",
-            url: "u",
-            assignees: [],
-            labels: [],
-            createdAt: 0,
-            updatedAt: 0,
-            rawData: null,
-          },
-        ],
+        items: [oldRow],
         nextCursor: null,
         hasMore: false,
         timestamp: 1,
