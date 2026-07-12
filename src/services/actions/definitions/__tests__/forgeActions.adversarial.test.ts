@@ -244,10 +244,28 @@ describe("forge.* navigation adversarial", () => {
       expect(assigneesOn(other, 42)).toEqual([]);
     });
 
-    it("still completes the forge mutation when the cwd matches no cached slot", async () => {
-      // `cwd` defaulted to a worktree path: the cache keys on the project root,
-      // so the patch no-ops. That must not fail the action.
+    it("patches the project root when cwd defaults to a linked worktree path", async () => {
+      // The forge call targets the worktree, but the cache keys on the project
+      // root — patching the worktree path would silently match no slot.
+      setCurrentProject({ path: "/repo" });
       const key = seedIssueSlot("/repo", makeIssue(42, []));
+
+      await runAction(
+        "forge.assignIssue",
+        { issueNumber: 42, username: "bob" },
+        { activeWorktreePath: "/repo/.worktrees/feature" }
+      );
+
+      expect(forgeClientMock.assignIssue).toHaveBeenCalledWith(
+        "/repo/.worktrees/feature",
+        42,
+        "bob"
+      );
+      expect(assigneesOn(key, 42)).toEqual(["bob"]);
+    });
+
+    it("completes the mutation even when no project is open to patch", async () => {
+      setCurrentProject(null);
 
       await expect(
         runAction(
@@ -257,12 +275,7 @@ describe("forge.* navigation adversarial", () => {
         )
       ).resolves.not.toThrow();
 
-      expect(forgeClientMock.assignIssue).toHaveBeenCalledWith(
-        "/repo/.worktrees/feature",
-        42,
-        "bob"
-      );
-      expect(assigneesOn(key, 42)).toEqual([]);
+      expect(forgeClientMock.assignIssue).toHaveBeenCalled();
     });
   });
 

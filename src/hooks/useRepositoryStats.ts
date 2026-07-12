@@ -841,7 +841,20 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
           // stamped — this payload can carry a re-stamped main-process
           // snapshot (probe-unchanged path), so it must never satisfy the
           // "just fetched from GitHub, skip the open revalidate" gate.
-          if (!existingIssues || existingIssues.timestamp < payload.fetchedAt) {
+          //
+          // A `stale` entry is never seeded over. `fetchedAt` is stamped when
+          // the push is built, not when its pages left the forge, so it does
+          // NOT prove the payload's content is newer than what the entry holds
+          // — and a stale entry holds exactly the content the push can't know
+          // about: an optimistic assignee patch (#11087) or a row set the count
+          // poll already disproved. Seeding here would drop the rows and clear
+          // the `stale` mark that forces the next open to revalidate fresh.
+          // The entry keeps rendering its rows either way; the next open-time
+          // bypass is what refreshes it.
+          if (
+            !existingIssues ||
+            (!existingIssues.stale && existingIssues.timestamp < payload.fetchedAt)
+          ) {
             setCache(issuesKey, {
               items: payload.issues.items,
               nextCursor: payload.issues.endCursor,
@@ -850,7 +863,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
               countAtWrite: payload.issues.totalCount,
             });
           }
-          if (!existingPRs || existingPRs.timestamp < payload.fetchedAt) {
+          if (!existingPRs || (!existingPRs.stale && existingPRs.timestamp < payload.fetchedAt)) {
             setCache(prsKey, {
               items: payload.prs.items,
               nextCursor: payload.prs.endCursor,

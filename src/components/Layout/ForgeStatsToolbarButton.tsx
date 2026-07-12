@@ -602,7 +602,12 @@ export const ForgeStatsToolbarButton = memo(
         const cacheKey = buildCacheKey(currentProject.path, type, "open", "created");
 
         const cached = getCache(cacheKey);
-        if (cached && Date.now() - cached.timestamp < PREFETCH_FRESHNESS_MS) return;
+        // A `stale` entry is the one case a recent timestamp doesn't vouch for:
+        // an optimistic assignee patch restamps it (#11087) and the count poll
+        // marks diverged rows — both need the warm-up the freshness shortcut
+        // would skip, leaving the fetch on the click path.
+        if (cached && !cached.stale && Date.now() - cached.timestamp < PREFETCH_FRESHNESS_MS)
+          return;
 
         // Hover prefetch primes the list cache silently. The count badge stays
         // fresh via the 30s background poll and the click-time refresh —

@@ -492,6 +492,34 @@ describe("forgeResourceCache", () => {
       expect(loginsOn(key, 1)).toEqual([]);
       expect(getGeneration(key)).toBe(genBefore);
     });
+
+    it("matches the cached assignee case-insensitively — forge logins are", () => {
+      // The server would unassign "ada" when handed "Ada"; the cache must not
+      // keep a row the forge already dropped.
+      const key = seedSlot("open", "created", [withAssignee(1, "ada")]);
+
+      patchIssueAssigneeCache("/proj", 1, { login: "Ada" }, false);
+
+      expect(loginsOn(key, 1)).toEqual([]);
+    });
+
+    it("does not double-add a user whose cached login differs only by case", () => {
+      const key = seedSlot("open", "created", [withAssignee(1, "Ada")]);
+      const genBefore = getGeneration(key);
+
+      patchIssueAssigneeCache("/proj", 1, { login: "ada" }, true);
+
+      expect(loginsOn(key, 1)).toEqual(["Ada"]);
+      expect(getGeneration(key)).toBe(genBefore);
+    });
+
+    it("stores the trimmed login — main trims before it reaches the forge", () => {
+      const key = seedSlot("open", "created", [makeIssue(1)]);
+
+      patchIssueAssigneeCache("/proj", 1, { login: "  ada  " }, true);
+
+      expect(loginsOn(key, 1)).toEqual(["ada"]);
+    });
   });
 
   describe("_resetForTests", () => {

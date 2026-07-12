@@ -156,29 +156,34 @@ export function patchIssueAssigneeCache(
   user: Pick<ForgeUser, "login" | "avatarUrl">,
   assigned: boolean
 ): void {
+  // Forge logins are case-insensitive, and the main process trims the username
+  // before it reaches the provider — so match the identity the server actually
+  // acted on rather than the raw string, or an "Ada" unassign would leave a
+  // cached "ada" behind. The row is still added under the caller's spelling.
+  const login = user.login.trim();
+  const matchLogin = login.toLowerCase();
+  const isUser = (a: ForgeUser): boolean => a.login.trim().toLowerCase() === matchLogin;
+
   mutateCacheEntries(projectPath, "issue", (entry) => {
     let changed = false;
     const items = entry.items.map((item) => {
       // `assignees` exists only on Issue, so this `in` check narrows the
       // Issue|PR union safely and skips any non-issue slot.
       if (!("assignees" in item) || item.number !== issueNumber) return item;
-      const hasUser = item.assignees.some((a) => a.login === user.login);
+      const hasUser = item.assignees.some(isUser);
       if (assigned) {
         if (hasUser) return item;
         changed = true;
         return {
           ...item,
-          assignees: [
-            ...item.assignees,
-            { login: user.login, avatarUrl: user.avatarUrl, rawData: null },
-          ],
+          assignees: [...item.assignees, { login, avatarUrl: user.avatarUrl, rawData: null }],
         };
       }
       if (!hasUser) return item;
       changed = true;
       return {
         ...item,
-        assignees: item.assignees.filter((a) => a.login !== user.login),
+        assignees: item.assignees.filter((a) => !isUser(a)),
       };
     });
     return changed ? { ...entry, items, timestamp: Date.now(), stale: true } : null;
