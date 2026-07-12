@@ -150,7 +150,9 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
       expect(chipBlock).toMatch(/chipState === "reserved"\s*&&\s*"opacity-0"/);
       // The chip must never mount straight off the branch: that collapses the pill
       // for a branchless project too, which is the titlebar shift 88e295a07 fixed.
-      expect(source).not.toMatch(/\{branchName\s*&&\s*\(?\s*<span[\s\S]{0,120}toolbar-project-chip/);
+      expect(source).not.toMatch(
+        /\{branchName\s*&&\s*\(?\s*<span[\s\S]{0,120}toolbar-project-chip/
+      );
     });
 
     it("chevron icons have shrink-0", () => {
