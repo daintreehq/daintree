@@ -378,6 +378,38 @@ const workspaceService = new WorkspaceService(sendEvent);
 // `docs/architecture/forge-provider-abstraction.md` for the rationale.
 const forgeBridge = initForgeBridge(sendEvent);
 
+let isShuttingDown = false;
+
+/**
+ * Idempotent teardown shared by both shutdown triggers — the parent's `dispose`
+ * message and SIGTERM.
+ *
+ * The explicit `process.exit(0)` is load-bearing (#11069). Disposing the
+ * services alone never ends the process: the `port.on("message")` listener, the
+ * persistent copytree worker, and in-flight parcel-watcher unsubscribes all keep
+ * the event loop alive, and merely installing a SIGTERM handler suppresses
+ * Node's default terminate-on-SIGTERM. A host that outlives `dispose` defeats
+ * the point of "free memory" and strands the parent's backstop on a live child,
+ * where Electron's `UtilityProcess.kill()` blocks the main thread for up to 2s
+ * on macOS (`base::EnsureProcessTerminated`) and swallows user input.
+ *
+ * `setImmediate` gives the synchronous abort handlers one turn to settle; the OS
+ * reclaims whatever asynchronous cleanup has not finished by then.
+ */
+function shutdown(): void {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  try {
+    shutdownController.abort();
+    workspaceService.dispose();
+    forgeBridge.dispose();
+  } catch (err) {
+    console.warn("[WorkspaceHost] Error during shutdown:", err);
+  } finally {
+    setImmediate(() => process.exit(0));
+  }
+}
+
 // Handle requests from Main
 port.on("message", async (rawMsg: any) => {
   idleHeapCompactor.noteActivity();
@@ -582,14 +614,10 @@ port.on("message", async (rawMsg: any) => {
         sendEvent({ type: "pong" });
         break;
 
+      // Aborts in-flight git work and rejects pending forge calls (so awaiting
+      // paths fail fast instead of hanging on the 30s timeout), then exits.
       case "dispose":
-        shutdownController.abort();
-        workspaceService.dispose();
-        // Reject any pending forge calls so awaiting code paths fail fast
-        // instead of waiting on the 30s timeout. Late `forge:rpc-result`
-        // messages after this are still safe — `handleResult` drops unknown
-        // ids — but eagerly clearing the pending map prevents shutdown delays.
-        forgeBridge.dispose();
+        shutdown();
         break;
 
       case "set-log-level-overrides": {
@@ -832,9 +860,7 @@ port.on("message", async (rawMsg: any) => {
 // Graceful shutdown on SIGTERM (macOS/Linux; Windows uses TerminateProcess so this won't fire)
 process.on("SIGTERM", () => {
   console.log("[WorkspaceHost] SIGTERM received, shutting down");
-  shutdownController.abort();
-  workspaceService.dispose();
-  forgeBridge.dispose();
+  shutdown();
 });
 
 // Signal ready

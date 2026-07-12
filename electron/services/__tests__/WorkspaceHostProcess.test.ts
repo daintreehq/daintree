@@ -607,6 +607,110 @@ describe("WorkspaceHostProcess BrokerError contract", () => {
     });
   });
 
+  // #11069 — the dispose backstop used to call Electron's `UtilityProcess.kill()`,
+  // whose `base::EnsureProcessTerminated` blocks the calling thread (main) for up
+  // to 2s on macOS while it waits for the child to die. Against a host that traps
+  // SIGTERM without exiting that wait ran to the full timeout, freezing window
+  // input routing and dropping clicks a second after "Free memory".
+  describe("dispose force-kill backstop (#11069)", () => {
+    async function disposeWedgedHost() {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+      const { WorkspaceHostProcess } = await loadModule();
+      const host = new WorkspaceHostProcess("/tmp/project", {
+        maxRestartAttempts: 3,
+        healthCheckIntervalMs: 30000,
+      } as any);
+      host.waitForReady().catch(() => {});
+
+      const child = mockChildren[0] as MockUtilityChild;
+      child.emit("message", { type: "ready" });
+
+      return { host, child, killSpy };
+    }
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("signals a wedged host with a non-blocking SIGKILL instead of the main-thread-blocking child.kill()", async () => {
+      const { host, child, killSpy } = await disposeWedgedHost();
+
+      host.dispose();
+      expect(child.postMessage).toHaveBeenCalledWith({ type: "dispose" });
+      // Cooperative window: nothing is signalled while the host still has a
+      // chance to exit on its own.
+      expect(killSpy).not.toHaveBeenCalled();
+
+      // The host never exits — the backstop fires.
+      vi.runOnlyPendingTimers();
+
+      expect(killSpy).toHaveBeenCalledWith(child.pid, "SIGKILL");
+      expect(child.kill).not.toHaveBeenCalled();
+    });
+
+    it("leaves the child reference to the exit event, which alone proves the process died", async () => {
+      const { host, child, killSpy } = await disposeWedgedHost();
+
+      host.dispose();
+      vi.runOnlyPendingTimers();
+      expect(killSpy).toHaveBeenCalledTimes(1);
+
+      // Signalling is a request, not proof of death: the wrapper must still be
+      // holding the child so the `exit` handler can run its teardown.
+      expect((host as any).child).toBe(child);
+      child.emit("exit", 0);
+      expect((host as any).child).toBeNull();
+    });
+
+    it("retires the backstop when the host exits cooperatively, signalling nothing", async () => {
+      const { host, child, killSpy } = await disposeWedgedHost();
+
+      host.dispose();
+      // The host honours the dispose message and exits before the deadline.
+      child.emit("exit", 0);
+      vi.runOnlyPendingTimers();
+
+      expect(killSpy).not.toHaveBeenCalled();
+      expect(child.kill).not.toHaveBeenCalled();
+      expect((host as any).disposeTimer).toBeNull();
+    });
+
+    it("does not restart a host that exits after dispose", async () => {
+      const { host, child } = await disposeWedgedHost();
+
+      host.dispose();
+      child.emit("exit", 0);
+      vi.runOnlyPendingTimers();
+
+      expect(forkMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("swallows the ESRCH race where the child exits between the pid read and the signal", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const esrch = Object.assign(new Error("kill ESRCH"), { code: "ESRCH" });
+      vi.spyOn(process, "kill").mockImplementation(() => {
+        throw esrch;
+      });
+
+      const { WorkspaceHostProcess } = await loadModule();
+      const host = new WorkspaceHostProcess("/tmp/project", {
+        maxRestartAttempts: 3,
+        healthCheckIntervalMs: 30000,
+      } as any);
+      host.waitForReady().catch(() => {});
+      (mockChildren[0] as MockUtilityChild).emit("message", { type: "ready" });
+
+      host.dispose();
+      expect(() => vi.runOnlyPendingTimers()).not.toThrow();
+
+      const warnings = warnSpy.mock.calls.map((c) => String(c[0]));
+      expect(warnings.some((w) => w.includes("Failed to kill host during dispose"))).toBe(false);
+    });
+  });
+
   it("restart delay has random jitter (full-jitter parity with PtyHostLifecycle)", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setImmediate", "Date"] });
     // Mock Math.random to control jitter
