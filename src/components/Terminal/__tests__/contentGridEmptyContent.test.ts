@@ -5,7 +5,6 @@ import { resolve } from "path";
 const GRID_PATH = resolve(__dirname, "../ContentGrid.tsx");
 const CONTEXT_PATH = resolve(__dirname, "../useContentGridContext.tsx");
 const DEFAULT_PATH = resolve(__dirname, "../ContentGridDefault.tsx");
-const FLEET_PATH = resolve(__dirname, "../ContentGridFleetScope.tsx");
 const EMPTY_STATE_PATH = resolve(__dirname, "../ContentGridEmptyState.tsx");
 
 describe("ContentGrid emptyContent prop (issue #4254)", () => {
@@ -45,20 +44,10 @@ describe("ContentGrid richer project identity (issue #7472)", () => {
     expect(content).toContain("activeWorktreePath: activeWorktree?.path ?? null");
   });
 
-  it("ContentGridDefault threads project identity props to empty state", async () => {
-    const content = await readFile(DEFAULT_PATH, "utf-8");
-    expect(content).toContain("projectName={ctx.projectName}");
-    expect(content).toContain("projectEmoji={ctx.projectEmoji}");
-    expect(content).toContain("activeWorktreeBranch={ctx.activeWorktreeBranch}");
-    expect(content).toContain("activeWorktreePath={ctx.activeWorktreePath}");
-  });
-
-  it("ContentGridFleetScope threads project identity props to empty state", async () => {
-    const content = await readFile(FLEET_PATH, "utf-8");
-    expect(content).toContain("projectName={ctx.projectName}");
-    expect(content).toContain("activeWorktreeBranch={ctx.activeWorktreeBranch}");
-    expect(content).toContain("activeWorktreePath={ctx.activeWorktreePath}");
-  });
+  // Both grids thread the workspace identity into the empty state; that the
+  // empty state then renders name, branch and path is asserted by rendering in
+  // ContentGridEmptyState.workspace.test.tsx rather than by matching prop
+  // spelling here (a rename would otherwise force a tautological edit).
 
   it("ContentGridEmptyState formats path via shared utilities and useHomeDir", async () => {
     const content = await readFile(EMPTY_STATE_PATH, "utf-8");
@@ -79,25 +68,9 @@ describe("ContentGrid richer project identity (issue #7472)", () => {
 });
 
 describe("ContentGridEmptyState surfaces recipes pre-agent-launch (issue #8086)", () => {
-  it("RecipeRunner is gated on the recipe store binding, not hasEverLaunchedAgent", async () => {
-    const content = await readFile(EMPTY_STATE_PATH, "utf-8");
-    // The gate must allow first-run discovery: visible whenever there's an
-    // active worktree, recipes are bound to a project, and the load has
-    // settled (avoiding the in-flight empty-state flash).
-    expect(content).toContain("hasActiveWorktree && recipesProjectId !== null && !recipesLoading");
-    // The previous double-gate that hid RecipeRunner until an agent had launched
-    // must no longer apply to RecipeRunner.
-    expect(content).not.toMatch(
-      /hasActiveWorktree && hasEverLaunchedAgent && \(\s*<div[^>]*>\s*<RecipeRunner /
-    );
-  });
-
-  it("RotatingTip stays gated on hasEverLaunchedAgent (teaching content)", async () => {
-    const content = await readFile(EMPTY_STATE_PATH, "utf-8");
-    expect(content).toMatch(
-      /hasActiveWorktree && hasEverLaunchedAgent && \(\s*<div[^>]*>\s*<RotatingTip /
-    );
-  });
+  // That RecipeRunner appears on first run (not gated on hasEverLaunchedAgent),
+  // waits for the store to settle, and waits for a bound project is asserted by
+  // rendering in ContentGridEmptyState.workspace.test.tsx.
 
   it("subscribes to the recipe store for both projectId and loading state", async () => {
     const content = await readFile(EMPTY_STATE_PATH, "utf-8");

@@ -12,7 +12,10 @@ const mocks = vi.hoisted(() => ({
     selectWorktree: vi.fn(),
   },
   projectState: {
-    currentProject: { id: "project-1", path: "/repo" },
+    currentProject: { id: "project-1", path: "/repo" } as { id: string; path: string } | null,
+  },
+  scratchState: {
+    currentScratch: null as { id: string; path: string } | null,
   },
 }));
 
@@ -28,6 +31,11 @@ vi.mock("@/store/worktreeStore", () => ({
 vi.mock("@/store", () => ({
   useProjectStore: (selector: (state: typeof mocks.projectState) => unknown): unknown =>
     selector(mocks.projectState),
+}));
+
+vi.mock("@/store/scratchStore", () => ({
+  useScratchStore: (selector: (state: typeof mocks.scratchState) => unknown): unknown =>
+    selector(mocks.scratchState),
 }));
 
 vi.mock("@/hooks/app/useHomeDir", () => ({
@@ -53,6 +61,8 @@ describe("useActiveWorktreeSync initialization", () => {
     mocks.selectionState.activeWorktreeId = null;
     mocks.selectionState.selectWorktree.mockReset();
     mocks.useWorktrees.mockReset();
+    mocks.projectState.currentProject = { id: "project-1", path: "/repo" };
+    mocks.scratchState.currentScratch = null;
   });
 
   it("waits for the authoritative snapshot before selecting a fallback worktree", () => {

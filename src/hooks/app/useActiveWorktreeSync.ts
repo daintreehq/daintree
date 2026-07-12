@@ -2,13 +2,16 @@ import { useEffect, useMemo, useRef } from "react";
 import { useWorktrees } from "@/hooks";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useProjectStore } from "@/store";
+import { useScratchStore } from "@/store/scratchStore";
 import { useHomeDir } from "@/hooks/app/useHomeDir";
+import { resolveWorkspaceCwd } from "@/utils/workspaceCwd";
 
 export function useActiveWorktreeSync() {
   const { worktrees, isInitialized } = useWorktrees();
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
   const selectWorktree = useWorktreeSelectionStore((s) => s.selectWorktree);
   const currentProject = useProjectStore((s) => s.currentProject);
+  const currentScratch = useScratchStore((s) => s.currentScratch);
   const { homeDir } = useHomeDir();
 
   const lastSyncedActiveRef = useRef<{ projectId: string | null; worktreeId: string | null }>({
@@ -65,12 +68,17 @@ export function useActiveWorktreeSync() {
       });
   }, [activeWorktreeId, currentProject?.id, worktrees]);
 
+  // Before the snapshot is authoritative the worktree is withheld from the
+  // chain — a stale selection would spawn terminals in the wrong tree.
   const defaultTerminalCwd = useMemo(
     () =>
-      isInitialized
-        ? (activeWorktree?.path ?? currentProject?.path ?? homeDir ?? "")
-        : (currentProject?.path ?? homeDir ?? ""),
-    [activeWorktree, currentProject, homeDir, isInitialized]
+      resolveWorkspaceCwd({
+        worktreePath: isInitialized ? activeWorktree?.path : null,
+        projectPath: currentProject?.path,
+        scratchPath: currentScratch?.path,
+        homeDir,
+      }),
+    [activeWorktree, currentProject, currentScratch, homeDir, isInitialized]
   );
 
   return { activeWorktree, defaultTerminalCwd };

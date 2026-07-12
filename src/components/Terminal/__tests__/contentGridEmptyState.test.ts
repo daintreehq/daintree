@@ -37,17 +37,11 @@ describe("ContentGrid EmptyState — RecipeRunner integration", () => {
     const content = await readFile(EMPTY_STATE_PATH, "utf-8");
     expect(content).toContain("hasEverLaunchedAgent");
     expect(content).toContain("usePanelStore");
-    expect(content).toContain("hasActiveWorktree && hasEverLaunchedAgent");
   });
 
-  it("gates RotatingTip on hasEverLaunchedAgent — teaching content waits until after first launch", async () => {
-    // Issue #6752 — first-run users (no agent ever launched) shouldn't see
-    // shortcut-carousel teaching content. Returning users still see the
-    // count-biased rotation polished by issue #6756.
-    const content = await readFile(EMPTY_STATE_PATH, "utf-8");
-    expect(content).toContain("<RotatingTip />");
-    expect(content).toMatch(/hasActiveWorktree && hasEverLaunchedAgent &&[\s\S]*?<RotatingTip \/>/);
-  });
+  // The gating behaviour these once asserted against the source text now lives in
+  // ContentGridEmptyState.workspace.test.tsx, which renders the component: tips
+  // wait for the first launch (#6752) and are withheld from scratches entirely.
 });
 
 describe("ContentGrid EmptyState — recipe-forward launcher composition", () => {
@@ -64,8 +58,6 @@ describe("ContentGrid EmptyState — recipe-forward launcher composition", () =>
     const content = await readFile(EMPTY_STATE_PATH, "utf-8");
     expect(content).toContain("<ProjectPulseStrip");
     expect(content).not.toContain("<ProjectPulseCard");
-    // Still honors the user's Settings hide toggle.
-    expect(content).toContain("showProjectPulse && hasActiveWorktree && activeWorktreeId");
   });
 
   it("drops the three-row ResumeSessionsCard entirely", async () => {
@@ -75,7 +67,7 @@ describe("ContentGrid EmptyState — recipe-forward launcher composition", () =>
 });
 
 describe("ContentGrid EmptyState — quiet no-worktree variants (issue #6935)", () => {
-  it("accepts a hasWorktrees prop alongside hasActiveWorktree", async () => {
+  it("accepts a hasWorktrees prop alongside the launch-target gate", async () => {
     const content = await readFile(EMPTY_STATE_PATH, "utf-8");
     expect(content).toContain("hasWorktrees: boolean");
     expect(content).toMatch(/hasWorktrees,\s*\n/);
@@ -106,12 +98,8 @@ describe("ContentGrid EmptyState — quiet no-worktree variants (issue #6935)", 
     expect(content).toContain('"project.add"');
   });
 
-  it("gates the project-icon hero on hasActiveWorktree so empty states stay silent", async () => {
-    const content = await readFile(EMPTY_STATE_PATH, "utf-8");
-    expect(content).toMatch(
-      /\{hasActiveWorktree && \(\s*\n\s*<div className="mb-6 flex flex-col items-center text-center"/
-    );
-  });
+  // The identity hero is gated on having a launch target — asserted by rendering
+  // in ContentGridEmptyState.workspace.test.tsx rather than by matching source.
 });
 
 describe("ContentGrid EmptyState — initialization gate (issue #8645)", () => {
@@ -120,24 +108,18 @@ describe("ContentGrid EmptyState — initialization gate (issue #8645)", () => {
     expect(content).toContain("isWorktreeInitialized: boolean");
   });
 
-  it("guards no-worktree branch on isWorktreeInitialized to prevent cold-start copy flash", async () => {
-    const content = await readFile(EMPTY_STATE_PATH, "utf-8");
-    expect(content).toContain("!hasActiveWorktree && !isWorktreeInitialized");
-    expect(content).toContain("!hasActiveWorktree && isWorktreeInitialized && hasWorktrees");
-    expect(content).toContain("!hasActiveWorktree && isWorktreeInitialized && !hasWorktrees");
-  });
+  // The cold-start flash guard (silent until initialized, then the right copy
+  // variant) is asserted by rendering in ContentGridEmptyState.workspace.test.tsx.
 
   it("does not render bare <p> with text-daintree-text/60 in the no-worktree branch", async () => {
     const content = await readFile(EMPTY_STATE_PATH, "utf-8");
-    // The old bare <p> with diluted text color is gone — replaced by EmptyState
-    const lines = content.split("\n");
-    const noWorktreeSection = lines.filter(
-      (line) => !line.includes("hasActiveWorktree") || line.includes("!hasActiveWorktree")
-    );
-    const hasOldPattern = noWorktreeSection.some(
-      (line) =>
-        line.includes("<p") && line.includes("text-daintree-text/60") && line.includes("max-w-md")
-    );
+    // The old bare <p> with diluted text color is gone — replaced by EmptyState.
+    const hasOldPattern = content
+      .split("\n")
+      .some(
+        (line) =>
+          line.includes("<p") && line.includes("text-daintree-text/60") && line.includes("max-w-md")
+      );
     expect(hasOldPattern).toBe(false);
   });
 });
