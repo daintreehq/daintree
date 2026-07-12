@@ -393,14 +393,17 @@ let isShuttingDown = false;
  * where Electron's `UtilityProcess.kill()` blocks the main thread for up to 2s
  * on macOS (`base::EnsureProcessTerminated`) and swallows user input.
  *
- * Exit is bounded rather than immediate. Closing the port stops new work and
- * releases the handle that would otherwise keep this process alive forever, so
- * once the loop drains the process ends on its own. The unref'd deadline does
- * not hold it open, but still fires if a handle `dispose` cannot reach — the
- * persistent copytree worker, an in-flight `.daintree` copy — keeps the loop
- * alive, so exit is guaranteed either way. The budget stays under the parent's
- * 1s force-kill backstop, and lets a short write tail finish instead of being
- * truncated the way the old SIGKILL-after-3s teardown truncated it.
+ * Exit runs on a short deadline rather than the next turn. Electron's ParentPort
+ * exposes no `close()`, so its listener keeps this event loop alive and the
+ * process never drains on its own — the deadline below IS the exit. It is
+ * unref'd purely so it cannot hold the process open in the case where the loop
+ * does drain; while the port keeps the loop alive it still fires.
+ *
+ * The delay is a best-effort window for a short in-flight write tail (the
+ * `.daintree` copy), NOT a guarantee — the parent force-kills at 1s regardless,
+ * and this clock only starts after IPC delivery plus the synchronous dispose
+ * above, so it is budgeted well under that. Exiting on the very next turn would
+ * truncate tails that the old SIGKILL-after-~3s teardown let finish.
  */
 function shutdown(): void {
   if (isShuttingDown) return;
@@ -412,12 +415,7 @@ function shutdown(): void {
   } catch (err) {
     console.warn("[WorkspaceHost] Error during shutdown:", err);
   } finally {
-    try {
-      port.close();
-    } catch {
-      // Already closed — the exit below is what matters.
-    }
-    const deadline = setTimeout(() => process.exit(0), 750);
+    const deadline = setTimeout(() => process.exit(0), 500);
     deadline.unref?.();
   }
 }
