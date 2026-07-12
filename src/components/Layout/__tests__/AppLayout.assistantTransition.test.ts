@@ -20,7 +20,7 @@ describe("AppLayout assistant off-canvas slide — issue #10693", () => {
   it("imports both the arm and repaint helpers from sidebarToggle", () => {
     expect(source).toContain('from "@/lib/sidebarToggle"');
     expect(source).toMatch(
-      /import \{[^}]*repaintAssistantAfterTransition[^}]*\} from "@\/lib\/sidebarToggle"/
+      /import \{[^}]*createAssistantRevealCoordinator[^}]*\} from "@\/lib\/sidebarToggle"/
     );
     expect(source).toMatch(
       /import \{[^}]*suppressSidebarResizes[^}]*\} from "@\/lib\/sidebarToggle"/
@@ -45,9 +45,30 @@ describe("AppLayout assistant off-canvas slide — issue #10693", () => {
     // Filters on transform (the property the wrapper now animates), not width.
     expect(handler![1]).toContain('event.propertyName === "transform"');
     expect(handler![1]).toContain("event.target === event.currentTarget");
-    expect(handler![1]).toContain("repaintAssistantAfterTransition()");
+    // #11070: the settle carries the show/hide direction, so a hide-settle cancels
+    // the reveal obligation instead of arming one against a parked pane.
+    expect(handler![1]).toContain("assistantReveal.settleAfterTransition(showAssistant)");
     // Inert is only set on a hide (slide-out), never on reveal.
     expect(handler![1]).toContain("if (!showAssistant) setAssistantInert(true)");
+  });
+
+  // Issue #11070: on a cold first open the slide settles while the assistant
+  // session is still provisioning, so there is no terminalId to repaint. The
+  // repaint must survive as an obligation the coordinator discharges once the
+  // terminal binds — not be dropped on the floor.
+  it("owns a reveal coordinator whose lifetime is the layout's", () => {
+    expect(source).toMatch(
+      /const \[assistantReveal\] = useState\(createAssistantRevealCoordinator\)/
+    );
+    // Subscription installed via effect (never at module scope) and disposed with
+    // the component.
+    expect(source).toContain("useEffect(() => assistantReveal.start(), [assistantReveal])");
+  });
+
+  it("cancels the obligation on the hide STATE change, not at the hide slide's end", () => {
+    // A terminal that binds while the panel is sliding away must not repaint into
+    // a hidden pane, so visibility is tracked as it flips — ahead of transitionend.
+    expect(source).toMatch(/assistantReveal\.setVisible\(showAssistant\)/);
   });
 
   it("tracks the parked-inert state for the off-canvas wrapper", () => {
@@ -127,6 +148,8 @@ describe("AppLayout assistant off-canvas slide — issue #10693", () => {
     expect(settle![1]).toContain("layout.performanceMode");
     expect(settle![1]).toContain("isAssistantResizing");
     expect(settle![1]).toContain("mql?.matches === true");
+    // This path only ever runs on a show, so it settles the obligation as shown.
+    expect(settle![1]).toContain("assistantReveal.settleAfterTransition(true)");
     // The media query is subscribed so an OS reduced-motion flip mid-slide still
     // parks the wrapper inert (the read alone would not re-run).
     expect(source).toContain('mql?.addEventListener("change", settle)');
