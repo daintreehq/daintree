@@ -329,7 +329,7 @@ describe("ProjectSwitcherPalette active descendant", () => {
   });
 
   it("Enter selects the project the active descendant points at", () => {
-    const onSelect = vi.fn();
+    const onSelect = vi.fn<(project: SearchableProject) => void>();
     render(<ProjectSwitcherPalette {...mixedProps} selectedIndex={1} onSelect={onSelect} />);
 
     const input = screen.getByTestId("palette-input");
@@ -337,7 +337,7 @@ describe("ProjectSwitcherPalette active descendant", () => {
     fireEvent.keyDown(input, { key: "Enter" });
 
     expect(onSelect).toHaveBeenCalledTimes(1);
-    const selectedProject = onSelect.mock.calls[0]![0] as SearchableProject;
+    const selectedProject = onSelect.mock.calls[0]![0];
     // Enter must commit the row the user can actually see highlighted. Old code
     // pointed ARIA and Enter at the same *hidden* project — consistently wrong —
     // so this only holds if the highlighted option is really in the DOM.
