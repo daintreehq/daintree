@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 
 const originalScrollIntoView = Element.prototype.scrollIntoView;
 beforeAll(() => {
@@ -344,29 +344,30 @@ describe("ProjectSwitcherPalette modal mode", () => {
     }),
   ];
 
-  it("shows only active/open projects in modal mode (no closed projects)", () => {
+  // Scoping modal browse to switchable projects is the hook's job
+  // (useProjectSwitcherPalette's `results` memo). The component renders what
+  // it is handed, verbatim — re-filtering here is what stranded the keyboard
+  // selection on a row that was never in the DOM (#11071).
+  it("renders every supplied result as an option in modal mode", () => {
     render(<ProjectSwitcherPalette {...modalProps} results={multiProjects} />);
-    expect(screen.getByText("Active Project")).toBeTruthy();
-    expect(screen.getByText("Background Project")).toBeTruthy();
-    expect(screen.queryByText("Pinned Project")).toBeNull();
-    expect(screen.queryByText("Recent Project")).toBeNull();
-    expect(screen.queryByText("Old Project")).toBeNull();
+    const list = screen.getByRole("listbox", { name: "Projects" });
+    const optionIds = within(list)
+      .getAllByRole("option")
+      .map((option) => option.id);
+    expect(optionIds).toEqual(multiProjects.map((p) => `project-option-${p.id}`));
   });
 
   it("renders a flat list with no temporal section labels in modal mode", () => {
-    render(<ProjectSwitcherPalette {...modalProps} results={multiProjects} />);
+    const scopedModalResults = multiProjects.filter((p) => p.isActive || p.isBackground);
+    render(<ProjectSwitcherPalette {...modalProps} results={scopedModalResults} />);
     expect(screen.queryByText("Pinned")).toBeNull();
     expect(screen.queryByText("Today")).toBeNull();
     expect(screen.queryByText("This Week")).toBeNull();
     expect(screen.queryByText("Older")).toBeNull();
   });
 
-  it("shows 'No active projects' when no projects are active/open in modal mode", () => {
-    const closedProjects = [
-      makeProject({ id: "closed1", name: "Closed 1" }),
-      makeProject({ id: "closed2", name: "Closed 2" }),
-    ];
-    render(<ProjectSwitcherPalette {...modalProps} results={closedProjects} />);
+  it("shows 'No active projects' when modal mode has no results", () => {
+    render(<ProjectSwitcherPalette {...modalProps} results={[]} />);
     expect(screen.getByText("No active projects")).toBeTruthy();
   });
 

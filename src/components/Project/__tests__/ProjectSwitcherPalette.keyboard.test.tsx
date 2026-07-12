@@ -270,3 +270,72 @@ describe("ProjectSwitcherPalette keyboard navigation", () => {
     expect(footer.textContent).toContain("Switch");
   });
 });
+
+// #11071: the palette used to render a narrower list than the one selectedIndex
+// walked, so arrowing onto a row the modal had filtered out left
+// aria-activedescendant pointing at an id with no DOM node — no highlight, and
+// Enter committed an off-screen project. `results` is now the single array the
+// hook scopes, renders, and indexes.
+describe("ProjectSwitcherPalette active descendant", () => {
+  // Deliberately mixed: under the old component-side filter, "closed" would be
+  // dropped from the DOM while still occupying index 1 of `results`.
+  const mixedResults = [
+    makeProject({ id: "active", name: "Active", isActive: true }),
+    makeProject({ id: "closed", name: "Closed" }),
+    makeProject({ id: "background", name: "Background", isBackground: true }),
+  ];
+
+  const mixedProps = {
+    isOpen: true,
+    query: "",
+    results: mixedResults,
+    selectedIndex: 0,
+    onQueryChange: vi.fn(),
+    onSelectPrevious: vi.fn(),
+    onSelectNext: vi.fn(),
+    onSelect: vi.fn(),
+    onClose: vi.fn(),
+    mode: "modal" as const,
+  };
+
+  it.each(mixedResults.map((project, index) => [index, project.id] as const))(
+    "resolves aria-activedescendant to the selected option at index %i",
+    (selectedIndex, expectedId) => {
+      render(<ProjectSwitcherPalette {...mixedProps} selectedIndex={selectedIndex} />);
+
+      const input = screen.getByTestId("palette-input");
+      const activeDescendantId = input.getAttribute("aria-activedescendant");
+      expect(activeDescendantId).toBe(`project-option-${expectedId}`);
+
+      const activeOption = document.getElementById(activeDescendantId!);
+      expect(activeOption).not.toBeNull();
+      expect(activeOption!.getAttribute("role")).toBe("option");
+      expect(activeOption!.getAttribute("aria-selected")).toBe("true");
+    }
+  );
+
+  it("marks exactly one option selected for every index", () => {
+    for (const [index] of mixedResults.entries()) {
+      const { unmount } = render(<ProjectSwitcherPalette {...mixedProps} selectedIndex={index} />);
+      const selected = screen
+        .getAllByRole("option")
+        .filter((option) => option.getAttribute("aria-selected") === "true");
+      expect(selected).toHaveLength(1);
+      unmount();
+    }
+  });
+
+  it("Enter selects the project the active descendant points at", () => {
+    const onSelect = vi.fn();
+    render(<ProjectSwitcherPalette {...mixedProps} selectedIndex={1} onSelect={onSelect} />);
+
+    const input = screen.getByTestId("palette-input");
+    const activeDescendantId = input.getAttribute("aria-activedescendant");
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    const selectedProject = onSelect.mock.calls[0]![0] as SearchableProject;
+    expect(`project-option-${selectedProject.id}`).toBe(activeDescendantId);
+    expect(document.getElementById(activeDescendantId!)).not.toBeNull();
+  });
+});

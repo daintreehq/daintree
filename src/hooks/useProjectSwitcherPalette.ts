@@ -49,6 +49,12 @@ export interface UseProjectSwitcherPaletteReturn {
   isOpen: boolean;
   mode: ProjectSwitcherMode;
   query: string;
+  /**
+   * The projects the palette renders, in render order — and the only array
+   * `selectedIndex` may be read against. In modal browse this is scoped to the
+   * projects the user can switch between right now; the dropdown and every
+   * search list the full set.
+   */
   results: SearchableProject[];
   /** True while `deferredQuery` has not yet caught up to `query` — the results shown are from the previous query. */
   isFiltering: boolean;
@@ -60,6 +66,10 @@ export interface UseProjectSwitcherPaletteReturn {
    * by the current `query`.
    */
   activeProject: SearchableProject | null;
+  /**
+   * Index into {@link results}. Always in range whenever `results` is
+   * non-empty, so `results[selectedIndex]` is guaranteed to be a rendered row.
+   */
   selectedIndex: number;
   open: (mode?: ProjectSwitcherMode) => void;
   close: () => void;
@@ -116,6 +126,14 @@ export interface UseProjectSwitcherPaletteReturn {
   confirmFreeMemory: () => Promise<void>;
   isFreeingMemory: boolean;
   backgroundWaitingCount: number;
+  /**
+   * Agent totals across every non-active project, uncapped and independent of
+   * `mode`/`query`. Kept off `results` on purpose: that array is scoped for
+   * presentation, and a project whose agent counts have landed before its
+   * process count (the two arrive from separate `ProjectStatsService` calls)
+   * would otherwise drop out of the toolbar badge for a beat.
+   */
+  nonActiveAgentCounts: { activeAgentCount: number; waitingAgentCount: number };
   /** Scratch (one-off agent workspace) view-models, sorted by lastOpened desc. */
   scratchResults: SearchableScratch[];
   /** Create and immediately switch to a new scratch. Closes the palette on success. */
@@ -144,6 +162,32 @@ export interface UseProjectSwitcherPaletteReturn {
 const MAX_RESULTS = 15;
 
 /**
+ * Modal browse lists only the projects the user can switch between right now.
+ * Deliberately not named "switchable": the active project matches too, and
+ * `selectProject` is a no-op for it.
+ */
+function isVisibleInModalBrowse(project: SearchableProject): boolean {
+  return project.isActive || project.isBackground || project.processCount > 0;
+}
+
+/**
+ * Builds the palette's one array — the rows that render AND the rows the
+ * arrow keys walk. Rank (when searching), then scope, then cap: the cap
+ * belongs to the eligible set, so a background project sitting past the first
+ * 15 unscoped rows still surfaces in modal browse.
+ */
+function buildResults(
+  sortedProjects: SearchableProject[],
+  mode: ProjectSwitcherMode,
+  query: string
+): SearchableProject[] {
+  const trimmed = query.trim();
+  const ranked = trimmed ? rankProjectMatches(query, sortedProjects) : sortedProjects;
+  const scoped = mode === "modal" && !trimmed ? ranked.filter(isVisibleInModalBrowse) : ranked;
+  return scoped.slice(0, MAX_RESULTS);
+}
+
+/**
  * Trailing-edge debounce window for the project hover prefetch. Matches the
  * GitHub-stats toolbar pattern (#6282) — long enough to filter cursor
  * traversal across the list, short enough to feel "instant" on intentional
@@ -168,7 +212,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
   const isFiltering = query !== deferredQuery;
-  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [selectedIndexState, setSelectedIndex] = useState(0);
   const [stopConfirmProjectId, setStopConfirmProjectId] = useState<string | null>(null);
   const [isStoppingProject, setIsStoppingProject] = useState(false);
   const [removeConfirmProject, setRemoveConfirmProject] = useState<SearchableProject | null>(null);
@@ -280,6 +324,17 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     [searchableProjects]
   );
 
+  const nonActiveAgentCounts = useMemo(() => {
+    let activeAgentCount = 0;
+    let waitingAgentCount = 0;
+    for (const project of searchableProjects) {
+      if (project.isActive) continue;
+      activeAgentCount += project.activeAgentCount;
+      waitingAgentCount += project.waitingAgentCount;
+    }
+    return { activeAgentCount, waitingAgentCount };
+  }, [searchableProjects]);
+
   const sortedProjects = useMemo<SearchableProject[]>(() => {
     return [...searchableProjects].sort((a, b) => {
       if (a.lastOpened !== b.lastOpened) {
@@ -289,13 +344,22 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     });
   }, [searchableProjects]);
 
-  const results = useMemo<SearchableProject[]>(() => {
-    if (!deferredQuery.trim()) {
-      return sortedProjects.slice(0, MAX_RESULTS);
-    }
+  // Clearing the box reverts to browse immediately rather than holding the
+  // deferred search for a commit — otherwise modal browse would flash the
+  // unscoped search results on the way back to an empty query.
+  const resultsQuery = query.trim() ? deferredQuery : "";
 
-    return rankProjectMatches(deferredQuery, sortedProjects).slice(0, MAX_RESULTS);
-  }, [deferredQuery, sortedProjects]);
+  const results = useMemo<SearchableProject[]>(
+    () => buildResults(sortedProjects, mode, resultsQuery),
+    [sortedProjects, mode, resultsQuery]
+  );
+
+  // `selectedIndex` state can outrun `results` for a commit when a stats push
+  // shrinks the list, and the resync effect below only lands after paint.
+  // Clamping on read keeps every consumer — highlight, aria-activedescendant,
+  // Enter — pointed at a row that is actually on screen.
+  const selectedIndex =
+    results.length === 0 ? 0 : Math.min(Math.max(selectedIndexState, 0), results.length - 1);
 
   // Decoupled from `results` so the toolbar pill keeps the active project's
   // pin/process state even when search filters exclude it or it sits outside
@@ -326,7 +390,6 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
 
   useEffect(() => {
     if (results.length === 0) return;
-    if (selectedIndex < 0 || selectedIndex >= results.length) return;
     selectedProjectIdRef.current = results[selectedIndex]!.id;
   }, [results, selectedIndex]);
 
@@ -363,9 +426,13 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       }
       setQuery("");
       selectedProjectIdRef.current = null;
-      setSelectedIndex(searchableProjects.length >= 2 ? 1 : 0);
+      // Preselect row 2 (the MRU switch target) against the list the palette is
+      // about to render. `mode` state hasn't committed yet, so `results` still
+      // describes the mode we're leaving — build the destination list instead.
+      const initialResults = buildResults(sortedProjects, nextMode, "");
+      setSelectedIndex(initialResults.length >= 2 ? 1 : 0);
     },
-    [searchableProjects.length]
+    [sortedProjects]
   );
 
   const close = useCallback(() => {
@@ -382,27 +449,25 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     (nextMode: ProjectSwitcherMode = "modal") => {
       const currentlyOpen = nextMode === "modal" ? modalIsOpen : dropdownIsOpen;
       if (currentlyOpen) {
-        setSelectedIndex((prev) => {
-          if (results.length <= 1) return prev;
-          const next = prev + 1;
-          return next >= results.length ? 0 : next;
-        });
+        if (results.length <= 1) return;
+        const next = selectedIndex + 1;
+        setSelectedIndex(next >= results.length ? 0 : next);
       } else {
         open(nextMode);
       }
     },
-    [modalIsOpen, dropdownIsOpen, open, results]
+    [modalIsOpen, dropdownIsOpen, open, results.length, selectedIndex]
   );
 
   const selectPrevious = useCallback(() => {
     if (results.length === 0) return;
-    setSelectedIndex((prev) => (prev <= 0 ? results.length - 1 : prev - 1));
-  }, [results.length]);
+    setSelectedIndex(selectedIndex <= 0 ? results.length - 1 : selectedIndex - 1);
+  }, [results.length, selectedIndex]);
 
   const selectNext = useCallback(() => {
     if (results.length === 0) return;
-    setSelectedIndex((prev) => (prev >= results.length - 1 ? 0 : prev + 1));
-  }, [results.length]);
+    setSelectedIndex(selectedIndex >= results.length - 1 ? 0 : selectedIndex + 1);
+  }, [results.length, selectedIndex]);
 
   const selectProject = useCallback(
     async (project: SearchableProject) => {
@@ -483,9 +548,8 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   useEffect(() => () => clearPendingPrefetchTimer(), [clearPendingPrefetchTimer]);
 
   const confirmSelection = useCallback(() => {
-    if (results.length > 0 && selectedIndex >= 0 && selectedIndex < results.length) {
-      selectProject(results[selectedIndex]!);
-    }
+    if (results.length === 0) return;
+    selectProject(results[selectedIndex]!);
   }, [results, selectedIndex, selectProject]);
 
   const addProject = useCallback(async () => {
@@ -898,6 +962,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     confirmFreeMemory,
     isFreeingMemory,
     backgroundWaitingCount,
+    nonActiveAgentCounts,
     scratchResults,
     createScratch,
     selectScratch,

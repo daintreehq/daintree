@@ -131,15 +131,20 @@ export function ProjectSwitcher() {
     [projectSwitcher]
   );
 
+  // Reads the uncapped, unscoped agent totals rather than `results` — that
+  // array is scoped for presentation (modal browse drops projects whose
+  // process count hasn't landed yet), which would blink the badge off.
   const badgeStatus = useMemo(() => {
-    const bgProjects = projectSwitcher.results.filter((p) => !p.isActive);
-    const totalWaiting = bgProjects.reduce((sum, p) => sum + p.waitingAgentCount, 0);
-    const totalActive = bgProjects.reduce((sum, p) => sum + p.activeAgentCount, 0);
+    const { activeAgentCount, waitingAgentCount } = projectSwitcher.nonActiveAgentCounts;
 
-    if (totalWaiting > 0) return { color: "bg-state-waiting", pulse: false, count: totalWaiting };
-    if (totalActive > 0) return { color: "bg-activity-active", pulse: true, count: totalActive };
+    if (waitingAgentCount > 0) {
+      return { color: "bg-state-waiting", pulse: false, count: waitingAgentCount };
+    }
+    if (activeAgentCount > 0) {
+      return { color: "bg-activity-active", pulse: true, count: activeAgentCount };
+    }
     return null;
-  }, [projectSwitcher.results]);
+  }, [projectSwitcher.nonActiveAgentCounts]);
 
   const stopDialog = (
     <ConfirmDialog
