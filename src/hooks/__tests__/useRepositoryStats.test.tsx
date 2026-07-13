@@ -619,6 +619,46 @@ describe("useRepositoryStats", () => {
       expect(getRepoStatsMock).toHaveBeenCalledTimes(2);
     });
 
+    it("keeps a cached view's unchanged commit count visible while switch-back revalidates", async () => {
+      const project = { id: "a", path: "/repo/a" };
+      const delayedCurrent = createDeferred<typeof project>();
+      getCurrentMock.mockResolvedValueOnce(project);
+      let switchHandler:
+        | ((payload?: { project: typeof project; switchId: string }) => void)
+        | undefined;
+      onSwitchMock.mockImplementation((cb: typeof switchHandler) => {
+        switchHandler = cb;
+        return () => {};
+      });
+
+      const stats = freshStats({
+        commitCount: 19_488,
+        issueCount: 5,
+        prCount: 1,
+        lastUpdated: Date.now(),
+      });
+      getRepoStatsMock.mockResolvedValue(stats);
+
+      const { result } = renderHook(() => useRepositoryStats());
+      await waitFor(() => expect(result.current.stats?.commitCount).toBe(19_488));
+
+      getCurrentMock.mockImplementationOnce(() => delayedCurrent.promise);
+      act(() => {
+        switchHandler?.({ project, switchId: "switch-back-a" });
+      });
+
+      expect(result.current.stats?.commitCount).toBe(19_488);
+      expect(result.current.loading).toBe(false);
+
+      await act(async () => {
+        delayedCurrent.resolve(project);
+        await delayedCurrent.promise;
+      });
+
+      expect(result.current.stats?.commitCount).toBe(19_488);
+      expect(getRepoStatsMock).toHaveBeenCalledTimes(1);
+    });
+
     it("skips the network even when both project-switch and visibility reactivations fire (#10765)", async () => {
       // Production per-view reality: reactivating a backgrounded WebContentsView
       // fires BOTH onProjectSwitch and visibilitychange, each a reactivation
