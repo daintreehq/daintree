@@ -205,48 +205,72 @@ export function attemptRecovery(dbPath: string): DatabaseRecovery | null {
   const corruptSuffix = `.corrupt-${timestamp}`;
   const backupPath = dbPath + ".backup";
 
-  // Quarantine corrupt DB and associated WAL/SHM files. Only the main file's
+  // Quarantine the corrupt DB and its WAL/SHM sidecars. Only the main file's
   // path is reported — it is the one a user would inspect or hand to support.
   let quarantinedPath: string | undefined;
-  try {
-    for (const suffix of ["", "-wal", "-shm"]) {
-      const filePath = dbPath + suffix;
-      if (fs.existsSync(filePath)) {
-        fs.renameSync(filePath, filePath + corruptSuffix);
-        if (suffix === "") quarantinedPath = filePath + corruptSuffix;
+  for (const suffix of ["", "-wal", "-shm"]) {
+    const filePath = dbPath + suffix;
+    if (!fs.existsSync(filePath)) continue;
+    try {
+      fs.renameSync(filePath, filePath + corruptSuffix);
+      if (suffix === "") quarantinedPath = filePath + corruptSuffix;
+    } catch (error) {
+      if (suffix === "") {
+        // Nothing moved — the corrupt DB is still in place and will be reopened.
+        // Claiming a restore or a reset here would report something that never
+        // happened, so report nothing at all.
+        console.error("[DB] Failed to quarantine the corrupt database:", error);
+        return null;
+      }
+      // A stale WAL/SHM left beside the replacement database can be replayed
+      // into it. If it will not move aside, delete it — losing an orphaned
+      // sidecar beats corrupting the database we are about to restore.
+      console.warn(`[DB] Could not quarantine ${filePath}, removing it instead:`, error);
+      try {
+        fs.unlinkSync(filePath);
+      } catch (unlinkError) {
+        console.error(`[DB] Could not remove ${filePath} either:`, unlinkError);
       }
     }
-  } catch (error) {
-    console.error("[DB] Failed to quarantine the corrupt database:", error);
-    // Nothing moved yet — the corrupt DB is still in place and will be reopened.
-    // Reporting a restore or a reset here would claim something that never
-    // happened, so report nothing. Once the main file HAS moved we are committed
-    // and must fall through: the user ends up on a different database either way.
-    if (!quarantinedPath) return null;
   }
 
+  // Past this point the corrupt DB is gone, so the app WILL come up on a
+  // different database — the user has to be told either way.
   try {
-    // Restore from backup if available
     if (fs.existsSync(backupPath)) {
-      // Verify backup integrity before restoring
-      if (probeDb(backupPath)) {
+      // probeDbFile, not probeDb: restoring overwrites the database the app is
+      // about to open, so a backup we merely failed to READ must not be copied
+      // over it and then reported as a successful restore.
+      const verdict = probeDbFile(backupPath);
+      if (verdict === "ok") {
         fs.copyFileSync(backupPath, dbPath);
         console.log("[DB] Restored database from backup");
         return { kind: "restored-from-backup", quarantinedPath };
       }
-      console.error("[DB] Backup is also corrupt, cannot restore");
-      // Quarantine the corrupt backup too
-      fs.renameSync(backupPath, backupPath + corruptSuffix);
-      return { kind: "reset-to-fresh", quarantinedPath };
+      console.error(`[DB] Backup cannot be restored (${verdict}) — starting fresh`);
+    } else {
+      console.warn("[DB] No backup available for recovery — fresh database will be created");
     }
-
-    console.warn("[DB] No backup available for recovery — fresh database will be created");
-    return { kind: "reset-to-fresh", quarantinedPath };
   } catch (error) {
     console.error("[DB] Restore from backup failed:", error);
-    // The corrupt DB is already quarantined, so openDb creates a fresh one. That
-    // is a reset the user lost data to — it must be reported, not swallowed.
-    return { kind: "reset-to-fresh", quarantinedPath };
+  }
+
+  // Starting fresh. DatabaseMaintenanceService will back the new (empty) database
+  // up over `backupPath` on its first idle tick, so any surviving backup has to
+  // move out of the way first — otherwise recovery itself destroys the last copy
+  // of the user's data, which is the very failure this whole change exists to
+  // prevent. Preserve it rather than delete it: it may still be salvageable.
+  preserveStaleBackup(backupPath, corruptSuffix);
+  return { kind: "reset-to-fresh", quarantinedPath };
+}
+
+function preserveStaleBackup(backupPath: string, corruptSuffix: string): void {
+  try {
+    if (fs.existsSync(backupPath)) {
+      fs.renameSync(backupPath, backupPath + corruptSuffix);
+    }
+  } catch (error) {
+    console.error("[DB] Could not move the unusable backup aside:", error);
   }
 }
 

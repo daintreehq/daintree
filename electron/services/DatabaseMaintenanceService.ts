@@ -16,6 +16,16 @@ import type { DatabaseRecovery } from "../../shared/types/ipc/app.js";
 
 const TICK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const IDLE_THRESHOLD_S = 60; // 60 seconds of system idle
+// Shutdown has a 10s hard timeout, but a wedged DB worker only fails its request
+// after 30s (dbWorkerClient's REQUEST_TIMEOUT_MS) — so the wait for an in-flight
+// check has to be bounded well inside both. Timing out is safe: the candidate
+// probe in runBackup() still refuses to promote an unverified copy.
+const QUICK_CHECK_DRAIN_TIMEOUT_MS = 2000;
+// Verification failures are not proof the database is bad (a faulty write can
+// mangle only the copy), so a single one re-checks the live DB rather than
+// latching. Repeated ones mean something is durably wrong — stop rewriting the
+// backup and keep the last good one.
+const MAX_BACKUP_VERIFY_FAILURES = 3;
 
 class DatabaseMaintenanceService {
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -26,12 +36,12 @@ class DatabaseMaintenanceService {
   private deferredQuickCheckPending = false;
   private deferredQuickCheckInFlight: Promise<boolean> | null = null;
   private pendingRecovery: DatabaseRecovery | null = null;
-  // Latched once corruption is confirmed — either by the deferred quick_check on
-  // the live DB or by a candidate backup failing its probe. Both mean the source
-  // pages are bad, so every later backup would overwrite the last good one with
-  // garbage. Recovery cannot run mid-session (the DB is open), so the safe move
-  // is to stop backing up and preserve what we have until the next boot's probe.
-  private backupBlockedByCorruption = false;
+  // Latched when the live database is confirmed corrupt, or when candidates keep
+  // failing verification. Recovery cannot run mid-session (the DB is open), so
+  // the safe move is to stop backing up entirely and preserve the last good
+  // backup for the next boot's probe to restore from.
+  private backupsSuspended = false;
+  private consecutiveVerifyFailures = 0;
 
   initialize(wasCleanExit = false): void {
     if (this.initialized) return;
@@ -127,13 +137,18 @@ class DatabaseMaintenanceService {
     }
 
     // Let an outstanding integrity check finish first — if it is about to report
-    // corruption, the final backup must not run at all.
+    // corruption, the final backup must not run at all. Bounded: a wedged worker
+    // would otherwise hold this for the client's 30s request timeout, blowing
+    // past shutdown's own 10s cap. Giving up early is safe — the candidate probe
+    // below still refuses to promote an unverified copy.
     if (this.deferredQuickCheckInFlight) {
-      try {
-        await this.deferredQuickCheckInFlight;
-      } catch {
-        // ignore — quick_check errors already logged
-      }
+      await Promise.race([
+        this.deferredQuickCheckInFlight.catch(() => undefined),
+        new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, QUICK_CHECK_DRAIN_TIMEOUT_MS);
+          timer.unref?.();
+        }),
+      ]);
     }
 
     // Wait for any in-flight backup from a tick before proceeding
@@ -149,7 +164,7 @@ class DatabaseMaintenanceService {
     // shutdown.ts may still need it for project state saves afterward).
     // A DB already known to be corrupt is never backed up: the existing backup
     // is the only good copy left and the next boot's probe will restore from it.
-    if (this.backupBlockedByCorruption) {
+    if (this.backupsSuspended) {
       console.warn(
         "[DatabaseMaintenance] Skipping final backup — database corruption was detected this session"
       );
@@ -180,7 +195,7 @@ class DatabaseMaintenanceService {
     void runDbWork({ op: "checkpoint", mode: "PASSIVE" }, () => this.checkpoint("PASSIVE"));
 
     // Confirmed corruption: never overwrite the last good backup with it.
-    if (this.backupBlockedByCorruption) return;
+    if (this.backupsSuspended) return;
 
     // Gate the backup on the deferred integrity check, but only while one is
     // actually outstanding. Once the DB has passed (or on unclean-exit boots,
@@ -189,7 +204,7 @@ class DatabaseMaintenanceService {
     const quickCheck = this.runDeferredQuickCheck();
     if (quickCheck) {
       void quickCheck.then((ok) => {
-        if (ok && !this.disposed && !this.backupBlockedByCorruption) {
+        if (ok && !this.disposed && !this.backupsSuspended) {
           this.backupPromise = this.runBackup();
         }
       });
@@ -208,7 +223,7 @@ class DatabaseMaintenanceService {
    * set for a later idle tick to retry. That case still allows the backup: the
    * candidate probe in runBackup() is the real guard against promoting a corrupt
    * copy, and it catches on main exactly what the worker could not check here.
-   * Only confirmed corruption stops backups, via `backupBlockedByCorruption`.
+   * Only confirmed corruption stops backups, via `backupsSuspended`.
    */
   private runDeferredQuickCheck(): Promise<boolean> | null {
     if (this.deferredQuickCheckInFlight) return this.deferredQuickCheckInFlight;
@@ -228,7 +243,7 @@ class DatabaseMaintenanceService {
           );
           return true;
         }
-        this.backupBlockedByCorruption = true;
+        this.backupsSuspended = true;
         console.error(
           `[DatabaseMaintenance] Deferred quick_check reported corruption in ${getDbPath()} — backups suspended to preserve the existing backup:`,
           result
@@ -304,29 +319,48 @@ class DatabaseMaintenanceService {
 
       if (verdict !== "ok") {
         this.discardTempBackup(tmpPath);
-        if (verdict === "corrupt") {
-          // Proven bad pages — the source DB is damaged, so every later backup
-          // would be too. Keep what we have and let the next boot recover.
-          this.backupBlockedByCorruption = true;
-          console.error(
-            `[DatabaseMaintenance] New backup failed its integrity check — the database is corrupt. Keeping the existing backup at ${backupPath} and suspending backups`
-          );
-        } else {
-          // Could not verify it. No evidence the DB is bad, so don't suspend
-          // backups — just refuse to promote an unverified copy, and retry.
-          console.warn(
-            `[DatabaseMaintenance] Could not verify the new backup — discarding it and keeping the existing backup at ${backupPath}; will retry`
-          );
-        }
+        this.onBackupVerifyFailed(verdict, backupPath);
         return;
       }
 
       fs.renameSync(tmpPath, backupPath);
+      this.consecutiveVerifyFailures = 0;
     } catch (error) {
       console.warn("[DatabaseMaintenance] Backup failed:", error);
       this.discardTempBackup(tmpPath);
     } finally {
       this.backupPromise = null;
+    }
+  }
+
+  /**
+   * A candidate that failed verification tells us the COPY is unusable — not, on
+   * its own, that the live database is. A faulty write can mangle only the temp
+   * file. So re-run the full check against the live DB and let THAT decide
+   * whether to stop backing up, rather than condemning a healthy database on
+   * indirect evidence. Repeated failures give up regardless: something is
+   * durably wrong, and rewriting the backup from a suspect source is not worth
+   * the risk to the last good copy.
+   */
+  private onBackupVerifyFailed(verdict: DbProbeResult, backupPath: string): void {
+    this.consecutiveVerifyFailures += 1;
+
+    if (verdict === "corrupt") {
+      this.deferredQuickCheckPending = true;
+      console.error(
+        `[DatabaseMaintenance] New backup failed its integrity check — discarding it, keeping the existing backup at ${backupPath}, and re-checking the live database`
+      );
+    } else {
+      console.warn(
+        `[DatabaseMaintenance] Could not verify the new backup — discarding it and keeping the existing backup at ${backupPath}; will retry`
+      );
+    }
+
+    if (this.consecutiveVerifyFailures >= MAX_BACKUP_VERIFY_FAILURES) {
+      this.backupsSuspended = true;
+      console.error(
+        `[DatabaseMaintenance] ${this.consecutiveVerifyFailures} backups in a row failed verification — suspending backups to preserve the existing backup at ${backupPath}`
+      );
     }
   }
 

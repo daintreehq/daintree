@@ -201,8 +201,8 @@ describe("DatabaseMaintenanceService adversarial", () => {
   });
 
   it("CORRUPT_CANDIDATE_SURVIVES_FAILED_TEMP_CLEANUP", async () => {
-    // The candidate probes dirty AND the temp file cannot be removed. The latch
-    // must still hold: a failed unlink is not a reason to promote the bad copy.
+    // The candidate probes dirty AND the temp file cannot be removed. A failed
+    // unlink is not a reason to promote the bad copy over the good backup.
     mockDbModule.probeDbFile.mockReturnValue("corrupt");
     vi.mocked(fs.existsSync).mockReturnValue(true);
     vi.mocked(fs.unlinkSync).mockImplementation(() => {
@@ -219,13 +219,13 @@ describe("DatabaseMaintenanceService adversarial", () => {
     expect(vi.mocked(fs.renameSync)).not.toHaveBeenCalled();
 
     await service.dispose();
-    expect(mockSqlite.backup).toHaveBeenCalledTimes(1);
     expect(vi.mocked(fs.renameSync)).not.toHaveBeenCalled();
   });
 
   it("CORRUPT_CANDIDATE_NEVER_REPLACES_GOOD_BACKUP", async () => {
-    // The live DB is fine at boot, but the copy sqlite.backup() produces probes
-    // dirty — promoting it would destroy the only good backup we have.
+    // Every candidate sqlite.backup() produces probes dirty. However many ticks
+    // pass and however shutdown lands, the good backup must never be renamed
+    // over — that file is the user's last copy of their data.
     mockDbModule.probeDbFile.mockReturnValue("corrupt");
     vi.mocked(fs.existsSync).mockReturnValue(true);
 
@@ -233,17 +233,15 @@ describe("DatabaseMaintenanceService adversarial", () => {
     service.initialize();
     service.startMaintenance();
 
-    vi.advanceTimersByTime(5 * 60 * 1000);
-    await drainMicrotasks();
+    for (let i = 0; i < 6; i++) {
+      vi.advanceTimersByTime(5 * 60 * 1000);
+      await drainMicrotasks();
+    }
 
-    expect(mockSqlite.backup).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(fs.renameSync)).not.toHaveBeenCalled();
     expect(vi.mocked(fs.unlinkSync)).toHaveBeenCalledWith("/fake/daintree.db.backup.tmp");
+    expect(vi.mocked(fs.renameSync)).not.toHaveBeenCalled();
 
-    // The latch holds through shutdown: the final backup is skipped rather than
-    // given a second chance to clobber the good backup.
     await service.dispose();
-    expect(mockSqlite.backup).toHaveBeenCalledTimes(1);
     expect(vi.mocked(fs.renameSync)).not.toHaveBeenCalled();
     expect(mockSqlite.pragma.mock.calls.at(-1)).toEqual(["wal_checkpoint(TRUNCATE)"]);
   });

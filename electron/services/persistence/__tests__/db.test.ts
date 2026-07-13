@@ -270,7 +270,36 @@ describe("attemptRecovery", () => {
 
     expect(result).toMatchObject({ kind: "reset-to-fresh" });
     expect(fs.existsSync(dbPath)).toBe(false);
+    // A stale WAL left at its live name can be replayed into the replacement DB.
+    // If it won't move aside it has to go.
+    expect(fs.existsSync(dbPath + "-wal")).toBe(false);
     renameSpy.mockRestore();
+  });
+
+  it("moves a surviving backup aside when it cannot be restored", () => {
+    const dbPath = path.join(tmpDir, "daintree.db");
+    const backupPath = dbPath + ".backup";
+    fs.writeFileSync(dbPath, "corrupt");
+    fs.writeFileSync(backupPath, "the user's real data");
+
+    // The backup can't be read — not proven corrupt, just unverifiable.
+    mockPragma.mockImplementation(() => {
+      throw Object.assign(new Error("io error"), { code: "SQLITE_IOERR_SHORT_READ" });
+    });
+
+    const result = attemptRecovery(dbPath);
+
+    // It must NOT be copied over the DB and announced as a successful restore...
+    expect(result).toMatchObject({ kind: "reset-to-fresh" });
+    // ...and it must not be left sitting at backupPath either: the app now comes
+    // up on an empty database, and the first idle backup would copy that empty
+    // DB straight over the user's last good data. Preserve it, don't destroy it.
+    expect(fs.existsSync(backupPath)).toBe(false);
+    const preserved = fs
+      .readdirSync(tmpDir)
+      .find((f) => f.startsWith("daintree.db.backup.corrupt-"));
+    expect(preserved).toBeDefined();
+    expect(fs.readFileSync(path.join(tmpDir, preserved!), "utf8")).toBe("the user's real data");
   });
 });
 

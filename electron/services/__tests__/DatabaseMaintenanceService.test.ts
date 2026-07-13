@@ -187,6 +187,24 @@ describe("DatabaseMaintenanceService", () => {
     void service.dispose();
   });
 
+  it("hands a recovery back so a discarded boot payload does not lose it", () => {
+    mockDbModule.probeDb.mockReturnValue(false);
+    mockDbModule.attemptRecovery.mockReturnValue(RESTORED_RECOVERY);
+
+    const service = new DatabaseMaintenanceService();
+    service.initialize();
+
+    // The real round trip app:boot performs when a pending crash means the
+    // renderer will throw its payload away: consume, hand back, consume again.
+    const consumed = service.consumeRecovery();
+    expect(consumed).toEqual(RESTORED_RECOVERY);
+    service.restoreRecovery(consumed!);
+
+    expect(service.consumeRecovery()).toEqual(RESTORED_RECOVERY);
+    expect(service.consumeRecovery()).toBeNull();
+    void service.dispose();
+  });
+
   it("reports no recovery when the boot probe found a healthy database", () => {
     const service = new DatabaseMaintenanceService();
     service.initialize();
@@ -486,9 +504,10 @@ describe("DatabaseMaintenanceService", () => {
     expect(mockSqlite.pragma).toHaveBeenCalledWith("wal_checkpoint(TRUNCATE)");
   });
 
-  it("discards a candidate backup that probes corrupt, and suspends backups", async () => {
-    // The candidate written by sqlite.backup() probes dirty — its source pages
-    // are corrupt, so promoting it would destroy the only good backup.
+  it("never promotes a candidate that probes corrupt, and re-checks the live DB", async () => {
+    // The candidate written by sqlite.backup() probes dirty. Promoting it would
+    // destroy the only good backup — but a bad COPY is not by itself proof the
+    // live DB is bad, so the service re-checks the source rather than assuming.
     mockDbModule.probeDbFile.mockReturnValue("corrupt");
     vi.mocked(fs.existsSync).mockReturnValue(true);
 
@@ -503,13 +522,76 @@ describe("DatabaseMaintenanceService", () => {
     expect(vi.mocked(fs.renameSync)).not.toHaveBeenCalled();
     expect(vi.mocked(fs.unlinkSync)).toHaveBeenCalledWith("/fake/daintree.db.backup.tmp");
 
-    // ...and the corruption latch stops every later backup too.
+    // The bad candidate arms a full check of the live database, which the next
+    // idle tick runs — the source is interrogated directly rather than condemned
+    // on the evidence of one bad copy.
+    expect(quickCheckOps()).toHaveLength(0);
+    vi.advanceTimersByTime(TICK);
+    await drainMicrotasks();
+    expect(quickCheckOps()).toHaveLength(1);
+
+    await service.dispose();
+    expect(vi.mocked(fs.renameSync)).not.toHaveBeenCalled();
+  });
+
+  it("suspends backups once the live DB confirms the corruption a bad candidate hinted at", async () => {
+    mockDbModule.probeDbFile.mockReturnValue("corrupt");
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    mockRunDbWork.mockImplementation((op: unknown, fallback: () => unknown) =>
+      (op as { op: string }).op === "quickCheck"
+        ? Promise.resolve("*** in database main *** Page 4 is never used")
+        : Promise.resolve(fallback())
+    );
+
+    const service = new DatabaseMaintenanceService();
+    service.initialize();
+    service.startMaintenance();
+
+    // Tick 1 writes a bad candidate and arms the live re-check.
+    vi.advanceTimersByTime(TICK);
+    await drainMicrotasks();
+    expect(mockSqlite.backup).toHaveBeenCalledTimes(1);
+
+    // Tick 2 runs that check; it reports corruption, so backups stop for good.
+    vi.advanceTimersByTime(TICK);
+    await drainMicrotasks();
+    expect(mockSqlite.backup).toHaveBeenCalledTimes(1);
+
     vi.advanceTimersByTime(TICK);
     await drainMicrotasks();
     expect(mockSqlite.backup).toHaveBeenCalledTimes(1);
 
     await service.dispose();
     expect(mockSqlite.backup).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(fs.renameSync)).not.toHaveBeenCalled();
+  });
+
+  it("gives up after repeated verification failures even if the live DB looks fine", async () => {
+    // The live check keeps passing but every candidate comes out bad. Something
+    // is durably wrong; stop rewriting the backup from a suspect source rather
+    // than looping forever on a full copy + scan every idle tick.
+    mockDbModule.probeDbFile.mockReturnValue("corrupt");
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    mockRunDbWork.mockImplementation((op: unknown, fallback: () => unknown) =>
+      (op as { op: string }).op === "quickCheck"
+        ? Promise.resolve("ok")
+        : Promise.resolve(fallback())
+    );
+
+    const service = new DatabaseMaintenanceService();
+    service.initialize();
+    service.startMaintenance();
+
+    for (let i = 0; i < 6; i++) {
+      vi.advanceTimersByTime(TICK);
+      await drainMicrotasks();
+    }
+
+    expect(vi.mocked(fs.renameSync)).not.toHaveBeenCalled();
+    // Bounded: it stopped trying rather than copying the DB on every tick forever.
+    expect(mockSqlite.backup.mock.calls.length).toBeLessThanOrEqual(3);
+
+    await service.dispose();
     expect(vi.mocked(fs.renameSync)).not.toHaveBeenCalled();
   });
 
