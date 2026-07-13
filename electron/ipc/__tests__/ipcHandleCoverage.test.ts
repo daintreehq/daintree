@@ -68,6 +68,11 @@ const EXTRA_HANDLER_FILES = [
   path.join("electron", "window", "createWindow.ts"),
   path.join("electron", "services", "WindowsStoreNotifierService.ts"),
   path.join("electron", "services", "AutoUpdaterService.ts"),
+  // UPDATE_GET_LATEST alone lives here rather than in AutoUpdaterService: that
+  // service initializes from the deferred queue, which drains on the renderer's
+  // own first-interactive signal — too late to answer the renderer's mount-time
+  // pull. Registered eagerly, reading through the service ref.
+  path.join("electron", "window", "globalServicesInit.ts"),
 ];
 
 async function walk(dir: string): Promise<string[]> {

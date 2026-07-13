@@ -286,12 +286,17 @@ vi.mock("electron", () => ({
   app: { exit: vi.fn(), getPath: vi.fn((name: string) => `/tmp/${name}`) },
   dialog: { showErrorBox: vi.fn() },
   session: { defaultSession: { clearCache: vi.fn(), clearStorageData: vi.fn() } },
+  // The update-state pull is registered eagerly here (not from its deferred
+  // task), so init touches ipcMain directly.
+  ipcMain: { handle: vi.fn() },
 }));
 
 import { initGlobalServices } from "../globalServicesInit.js";
 import { getGlobalServicesInitialized, setGlobalServicesInitialized } from "../serviceRefs.js";
 import type { WindowRegistry } from "../WindowRegistry.js";
-import { app } from "electron";
+import { app, ipcMain } from "electron";
+import type { Mock } from "vitest";
+import { CHANNELS } from "../../ipc/channels.js";
 import { store } from "../../store.js";
 
 describe("initGlobalServices task ordering", () => {
@@ -326,6 +331,26 @@ describe("initGlobalServices task ordering", () => {
 
   afterEach(() => {
     setGlobalServicesInitialized(false);
+  });
+
+  // The deferred queue drains on the renderer's own first-interactive signal, so
+  // `useUpdateListener` mounts and pulls BEFORE the auto-updater task runs. A
+  // handler registered from that task would reject the very call it exists to
+  // answer (issue #11111), so this one is registered eagerly and reads the
+  // service through its ref.
+  it("answers the update-state pull before the auto-updater task has run", async () => {
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+
+    const registration = (ipcMain.handle as unknown as Mock).mock.calls.find(
+      ([channel]) => channel === CHANNELS.UPDATE_GET_LATEST
+    );
+    expect(registration).toBeDefined();
+
+    // Deferred tasks are captured, not run — so the service ref is still unset,
+    // which is the honest answer: no check has run, nothing is pending.
+    const handler = registration![1] as () => unknown;
+    expect(handler()).toBeNull();
   });
 
   it("registers tasks in grouped order: cheap wires, then telemetry, then heavy dynamic-import tasks", async () => {

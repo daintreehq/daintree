@@ -207,7 +207,14 @@ class AutoUpdaterService {
 
   // Backs UPDATE_GET_LATEST. Returns a copy so a renderer round-trip can never
   // alias the service's own state.
+  //
+  // Answers null for the whole install window. The shutdown chain runs for
+  // multiple seconds before the updater takes the process, and the updater keeps
+  // emitting during it — a download that lands in there would otherwise
+  // repopulate the snapshot and offer a view created mid-shutdown a "Restart to
+  // update" for a payload that is already being installed.
   getLatestUpdate(): LatestUpdateState | null {
+    if (this.installInFlight) return null;
     return this.latestUpdate ? { ...this.latestUpdate } : null;
   }
 
@@ -429,6 +436,21 @@ class AutoUpdaterService {
     return null;
   }
 
+  // Pruning is best-effort and must never throw. This runs inside
+  // `update-available`, an EventEmitter listener: a throw there is turned into an
+  // updater `error` event, which this service classifies as permanent and
+  // therefore does NOT retry — an unwritable store would abort the update check
+  // outright. Fail open instead; a record we couldn't delete is re-evaluated on
+  // the next poll anyway.
+  private forgetDismissRecord(): void {
+    try {
+      store.delete("dismissedUpdateVersion");
+      store.delete("dismissedUpdateAt");
+    } catch (err) {
+      console.error("[MAIN] Failed to clear the dismissed-update record:", err);
+    }
+  }
+
   // True only while the user's dismissal of THIS version is still in force.
   // Prunes corrupt and expired records as it goes, so a bad write can't
   // permanently mute updates.
@@ -443,8 +465,7 @@ class AutoUpdaterService {
       // Corrupt record (e.g., NaN/Infinity from a future writer or hand-edited
       // config) — clear it and fall through so the user still sees updates.
       if (typeof dismissedVersion === "string" || typeof dismissedAt === "number") {
-        store.delete("dismissedUpdateVersion");
-        store.delete("dismissedUpdateAt");
+        this.forgetDismissRecord();
       }
       return false;
     }
@@ -465,8 +486,7 @@ class AutoUpdaterService {
     const elapsed = Date.now() - dismissedAt;
     if (elapsed < 0 || elapsed >= DISMISS_COOLDOWN_MS) {
       // Cooldown expired (or clock skew) — clear stale record and broadcast.
-      store.delete("dismissedUpdateVersion");
-      store.delete("dismissedUpdateAt");
+      this.forgetDismissRecord();
       return false;
     }
 
@@ -662,16 +682,12 @@ class AutoUpdaterService {
         }
       });
 
-      // Replay of the one-shot UPDATE_AVAILABLE / UPDATE_DOWNLOADED broadcasts
-      // for renderers that mounted after they fired — a second project view, a
-      // new window, or a view rebuilt after LRU eviction.
-      //
-      // Registered here in the unconditional block rather than alongside the
-      // packaged-only updater handlers, so that on builds where the updater
-      // never activates (dev, Windows Store, Flatpak/Snap, local `--dir`
-      // packages) the renderer's hydrate call resolves to a clean `null` instead
-      // of rejecting on an unregistered channel. Mirrors STORE_UPDATE_GET_LATEST.
-      ipcMain.handle(CHANNELS.UPDATE_GET_LATEST, () => this.getLatestUpdate());
+      // NB: UPDATE_GET_LATEST is deliberately NOT registered here. Every handler
+      // in this method runs from a deferred init task, and that queue drains on
+      // the renderer's own first-interactive signal — so `useUpdateListener` has
+      // already mounted and pulled by the time we get here. It is registered
+      // eagerly in `globalServicesInit`, which reads `getLatestUpdate()` through
+      // the service ref.
 
       this.channelHandlersRegistered = true;
     }
@@ -793,6 +809,14 @@ class AutoUpdaterService {
         this.resetRetryState();
         this.clearCheckingMenuTimeout();
         if (this.menuState !== "ready") this.setMenuState("idle");
+        // The feed no longer offers the version we were mid-download on (a
+        // withdrawn or replaced release). Drop it, or every window opened from
+        // here on would be told it's "downloading" an update that is never
+        // coming. A finished download survives: that installer is on disk and
+        // still installable regardless of what the feed now says.
+        if (this.latestUpdate && !this.latestUpdate.downloaded) {
+          this.latestUpdate = null;
+        }
         if (this.isManualCheck) {
           this.isManualCheck = false;
           broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
@@ -1068,13 +1092,10 @@ class AutoUpdaterService {
       // Handler may not have been registered
     }
 
-    try {
-      ipcMain.removeHandler(CHANNELS.UPDATE_GET_LATEST);
-    } catch {
-      // Handler may not have been registered
-    }
-
     this.updateDownloaded = false;
+    // The UPDATE_GET_LATEST handler outlives this service (it's registered
+    // eagerly and reads through the ref, which shutdown nulls out), so there is
+    // no handler to remove — only the state it reports.
     this.latestUpdate = null;
     // Reset last: every guard above reads it to decide what an in-flight install
     // still needs. By this point those decisions are made, and the flag must not

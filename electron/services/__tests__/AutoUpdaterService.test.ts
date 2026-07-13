@@ -2733,10 +2733,12 @@ describe("AutoUpdaterService", () => {
       return (ipcMainMock.handle as Mock).mock.calls.find((args) => args[0] === channel)![1] as T;
     }
 
+    // The IPC handler is registered eagerly in globalServicesInit (the deferred
+    // queue that starts this service drains too late to answer the renderer's
+    // first pull), so it reads this method through the service ref. Exercise the
+    // method — it is the whole of the logic.
     function getLatest(): { version: string; downloaded: boolean } | null {
-      return grabHandler<() => { version: string; downloaded: boolean } | null>(
-        CHANNELS.UPDATE_GET_LATEST
-      )();
+      return autoUpdaterService.getLatestUpdate();
     }
 
     function handlers() {
@@ -2904,13 +2906,57 @@ describe("AutoUpdaterService", () => {
       expect(getLatest()).toEqual({ version: "2.0.0", downloaded: true });
     });
 
-    it("answers with null rather than rejecting on builds where the updater never activates", () => {
+    it("answers with null on builds where the updater never activates", () => {
       appMock.isPackaged = false;
 
       autoUpdaterService.initialize();
 
-      // Registered outside the packaged-only block on purpose: the renderer
-      // hydrates unconditionally, and an unregistered channel would reject.
+      expect(getLatest()).toBeNull();
+    });
+
+    it("withdraws an in-progress version once the feed stops offering it", () => {
+      autoUpdaterService.initialize();
+      const { available } = handlers();
+      const notAvailable = (autoUpdaterMock.on as Mock).mock.calls.find(
+        (args) => args[0] === "update-not-available"
+      )![1] as (info: unknown) => void;
+      available({ version: "2.0.0" });
+
+      // Release pulled before the download finished.
+      notAvailable({});
+
+      // Otherwise every window opened from here on claims 2.0.0 is downloading.
+      expect(getLatest()).toBeNull();
+    });
+
+    it("keeps a staged installer even after the feed stops offering it", () => {
+      autoUpdaterService.initialize();
+      const { available, downloaded } = handlers();
+      const notAvailable = (autoUpdaterMock.on as Mock).mock.calls.find(
+        (args) => args[0] === "update-not-available"
+      )![1] as (info: unknown) => void;
+      available({ version: "2.0.0" });
+      downloaded({ version: "2.0.0" });
+
+      notAvailable({});
+
+      // The installer is on disk and still installable, whatever the feed says.
+      expect(getLatest()).toEqual({ version: "2.0.0", downloaded: true });
+    });
+
+    it("stays silent for the whole install window, even if a download lands inside it", () => {
+      autoUpdaterService.initialize();
+      const { available, downloaded } = handlers();
+      available({ version: "2.0.0" });
+      downloaded({ version: "2.0.0" });
+      grabHandler<(event: unknown) => void>(CHANNELS.UPDATE_QUIT_AND_INSTALL)(TRUSTED_SENDER);
+
+      // The shutdown chain runs for seconds before the updater takes the
+      // process, and the updater keeps emitting throughout. A view created in
+      // that window must not be offered a restart for an update already
+      // installing.
+      downloaded({ version: "2.1.0" });
+
       expect(getLatest()).toBeNull();
     });
 
@@ -2924,11 +2970,31 @@ describe("AutoUpdaterService", () => {
       expect(getLatest()).toEqual({ version: "2.0.0", downloaded: false });
     });
 
-    it("stops answering after dispose", () => {
+    it("reports nothing pending once disposed", () => {
       autoUpdaterService.initialize();
+      handlers().available({ version: "2.0.0" });
+
       autoUpdaterService.dispose();
 
-      expect(ipcMainMock.removeHandler).toHaveBeenCalledWith(CHANNELS.UPDATE_GET_LATEST);
+      expect(getLatest()).toBeNull();
+    });
+
+    it("survives an unwritable store rather than aborting the check", () => {
+      autoUpdaterService.initialize();
+      const { available } = handlers();
+      primeStore({
+        dismissedUpdateVersion: "2.0.0",
+        dismissedUpdateAt: Date.now() - 48 * 60 * 60 * 1000,
+      });
+      storeMock.delete.mockImplementation(() => {
+        throw new Error("EACCES");
+      });
+
+      // Pruning the expired record throws. It runs inside an EventEmitter
+      // listener, so an escaping throw becomes an updater `error` — which this
+      // service classifies as permanent and never retries, killing the check.
+      expect(() => available({ version: "2.0.0" })).not.toThrow();
+      expect(getLatest()).toEqual({ version: "2.0.0", downloaded: false });
     });
   });
 });

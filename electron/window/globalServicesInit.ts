@@ -1,5 +1,5 @@
 // eager-import-allow: reads boot config via store.get synchronously while wiring global services
-import { app, dialog } from "electron";
+import { app, dialog, ipcMain } from "electron";
 import {
   LATEST_SCHEMA_VERSION,
   MigrationRunner,
@@ -90,6 +90,7 @@ import {
   getPtyClient,
   getWorkspaceClientRef,
   setAutoUpdaterServiceRef,
+  getAutoUpdaterServiceRef,
   setAgentNotificationServiceRef,
   setWindowsStoreNotifierServiceRef,
   setGlobalServicesInitialized,
@@ -559,6 +560,21 @@ export async function initGlobalServices(
   });
 
   // Auto-updater
+  //
+  // The update-state pull is registered EAGERLY, unlike every other `update:*`
+  // handler, which the deferred task below registers along with the service.
+  // It has to be: the queue drains on `signalFirstInteractive`, which the
+  // renderer itself sends, so `useUpdateListener` has already mounted and
+  // hydrated by the time the task runs — a handler registered in there would
+  // miss the very call it exists to answer, and reject it. Reading through the
+  // service ref (as the menu does) keeps electron-updater's import deferred:
+  // before the task runs the ref is null, which is the honest answer anyway —
+  // no check has run yet, so nothing is pending.
+  ipcMain.handle(
+    CHANNELS.UPDATE_GET_LATEST,
+    () => getAutoUpdaterServiceRef()?.getLatestUpdate() ?? null
+  );
+
   registerDeferredTask({
     name: "auto-updater",
     run: async () => {
