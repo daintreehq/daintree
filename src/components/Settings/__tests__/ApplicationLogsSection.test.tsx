@@ -87,10 +87,11 @@ describe("ApplicationLogsSection — clear confirmation", () => {
     await waitFor(() => expect(mockNotify).toHaveBeenCalledTimes(1));
     const payload = mockNotify.mock.calls[0]?.[0];
     expect(payload?.type).toBe("error");
-    // An unset priority routes as a toast; a passive eventKind would silently
-    // demote this to inbox-only and strip the onClick recovery.
-    expect(payload?.priority).toBeUndefined();
-    expect(payload?.context).toBeUndefined();
+    // Must carry an explicit priority: its eventKind policy is passive, so an
+    // unset priority resolves to "low" — inbox-only, and the inbox keeps only
+    // actions with an actionId, silently dropping the onClick recovery below.
+    expect(payload?.priority).toBeDefined();
+    expect(payload?.priority).not.toBe("low");
 
     // Recovery must reopen the confirmation, not re-dispatch the destructive action.
     const retry = payload?.actions?.[0];

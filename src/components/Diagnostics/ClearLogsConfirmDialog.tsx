@@ -31,9 +31,14 @@ export function ClearLogsConfirmDialog({ isOpen, onOpenChange }: ClearLogsConfir
         type: "error",
         title: "Couldn't clear logs",
         message: "Your logs are unchanged. The log service may be busy — try again in a moment.",
+        // Explicit priority is load-bearing: uiFeedback is a passive policy, and
+        // letting it resolve would demote this to "low" — inbox-only, with the
+        // onClick recovery stripped (only actionId actions survive the inbox).
+        priority: "high",
         // Reopens the confirmation rather than re-dispatching: a toast that fires
         // a destructive action on click would bypass this gate.
         actions: [{ label: "Try again", variant: "primary", onClick: () => onOpenChange(true) }],
+        context: { eventKind: "uiFeedback" },
       });
     } finally {
       setIsClearing(false);
