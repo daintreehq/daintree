@@ -7,6 +7,8 @@ import { EventsActions, LogsActions } from "../DiagnosticsActions";
 type NotifyPayload = {
   type: string;
   title: string;
+  priority?: string;
+  context?: { eventKind?: string };
   actions?: { label: string; onClick: () => void }[];
 };
 
@@ -107,8 +109,7 @@ vi.stubGlobal(
 );
 
 describe("LogsActions — clear confirmation", () => {
-  const clearDispatches = () =>
-    mockDispatch.mock.calls.filter((call) => call[0] === "logs.clear");
+  const clearDispatches = () => mockDispatch.mock.calls.filter((call) => call[0] === "logs.clear");
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -156,12 +157,18 @@ describe("LogsActions — clear confirmation", () => {
     fireEvent.click(within(dialog).getByText("Clear logs"));
 
     await waitFor(() => expect(mockNotify).toHaveBeenCalledTimes(1));
-    const payload = mockNotify.mock.calls[0][0];
-    expect(payload.type).toBe("error");
+    const payload = mockNotify.mock.calls[0]?.[0];
+    expect(payload?.type).toBe("error");
+    // An unset priority routes as a toast; a passive eventKind would silently
+    // demote this to inbox-only and strip the onClick recovery.
+    expect(payload?.priority).toBeUndefined();
+    expect(payload?.context).toBeUndefined();
 
     // Recovery must reopen the confirmation, not re-dispatch the destructive action.
+    const retry = payload?.actions?.[0];
+    expect(retry).toBeDefined();
     const dispatchesBefore = clearDispatches().length;
-    act(() => payload.actions?.[0].onClick());
+    act(() => retry?.onClick());
     expect(clearDispatches()).toHaveLength(dispatchesBefore);
     expect(await screen.findByRole("alertdialog")).toBeTruthy();
   });

@@ -68,10 +68,13 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     palette: { mode: "hidden" },
     scope: "renderer",
     dangerRationale:
-      "Empties the log view and the in-memory buffer that diagnostic reports are built from. The log file on disk keeps a copy.",
+      "Empties the log view and the in-memory buffer that diagnostic reports are built from. Doesn't delete the log file on disk.",
     run: async () => {
-      useLogsStore.getState().clearLogs();
+      // Buffer first: clearing the renderer store up front would leave the view
+      // wiped even when the IPC rejects, so a failed clear could still cost the
+      // logs it reported keeping.
       await logsClient.clear();
+      useLogsStore.getState().clearLogs();
     },
   }));
 

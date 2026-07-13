@@ -1,5 +1,4 @@
 // @vitest-environment jsdom
-import React from "react";
 import { render, screen, fireEvent, waitFor, within, act } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { ApplicationLogsSection } from "../TroubleshootingTab";
@@ -7,6 +6,8 @@ import { ApplicationLogsSection } from "../TroubleshootingTab";
 type NotifyPayload = {
   type: string;
   title: string;
+  priority?: string;
+  context?: { eventKind?: string };
   actions?: { label: string; onClick: () => void }[];
 };
 
@@ -84,12 +85,18 @@ describe("ApplicationLogsSection — clear confirmation", () => {
     fireEvent.click(within(dialog).getByText("Clear logs"));
 
     await waitFor(() => expect(mockNotify).toHaveBeenCalledTimes(1));
-    const payload = mockNotify.mock.calls[0][0];
-    expect(payload.type).toBe("error");
+    const payload = mockNotify.mock.calls[0]?.[0];
+    expect(payload?.type).toBe("error");
+    // An unset priority routes as a toast; a passive eventKind would silently
+    // demote this to inbox-only and strip the onClick recovery.
+    expect(payload?.priority).toBeUndefined();
+    expect(payload?.context).toBeUndefined();
 
     // Recovery must reopen the confirmation, not re-dispatch the destructive action.
+    const retry = payload?.actions?.[0];
+    expect(retry).toBeDefined();
     const dispatchesBefore = clearDispatches().length;
-    act(() => payload.actions?.[0].onClick());
+    act(() => retry?.onClick());
     expect(clearDispatches()).toHaveLength(dispatchesBefore);
     expect(await screen.findByRole("alertdialog")).toBeTruthy();
   });

@@ -25,13 +25,7 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import {
-  CLEAR_LOGS_CONFIRM_LABEL,
-  CLEAR_LOGS_DESCRIPTION,
-  CLEAR_LOGS_TITLE,
-  notifyClearLogsFailed,
-} from "@/lib/clearLogsCopy";
+import { ClearLogsConfirmDialog } from "@/components/Diagnostics/ClearLogsConfirmDialog";
 
 const PROFILE_UPDATE_INTERVAL_MS = 250;
 
@@ -297,27 +291,6 @@ function HardwareAccelerationSection() {
 
 export function ApplicationLogsSection() {
   const [showClearDialog, setShowClearDialog] = useState(false);
-  const [isClearing, setIsClearing] = useState(false);
-
-  const handleConfirmClear = useCallback(async () => {
-    setIsClearing(true);
-    try {
-      const result = await actionService.dispatch("logs.clear", undefined, {
-        source: "user",
-      });
-      if (!result.ok) {
-        throw new Error(result.error.message);
-      }
-    } catch (error) {
-      logError("Failed to clear logs", error);
-      // "Try again" reopens the confirm rather than re-dispatching: a toast that
-      // fires a destructive action directly would bypass the D1 gate.
-      notifyClearLogsFailed(() => setShowClearDialog(true));
-    } finally {
-      setIsClearing(false);
-      setShowClearDialog(false);
-    }
-  }, []);
 
   return (
     <SettingsSection
@@ -329,7 +302,9 @@ export function ApplicationLogsSection() {
         <Button
           variant="outline"
           size="sm"
-          onClick={() => void actionService.dispatch("logs.openFile", undefined, { source: "user" })}
+          onClick={() =>
+            void actionService.dispatch("logs.openFile", undefined, { source: "user" })
+          }
           className="text-daintree-text border-daintree-border hover:bg-daintree-border hover:text-daintree-text"
         >
           <FileText />
@@ -345,16 +320,7 @@ export function ApplicationLogsSection() {
           Clear Logs
         </Button>
       </div>
-      <ConfirmDialog
-        isOpen={showClearDialog}
-        onClose={() => setShowClearDialog(false)}
-        title={CLEAR_LOGS_TITLE}
-        description={CLEAR_LOGS_DESCRIPTION}
-        confirmLabel={CLEAR_LOGS_CONFIRM_LABEL}
-        variant="destructive"
-        isConfirmLoading={isClearing}
-        onConfirm={handleConfirmClear}
-      />
+      <ClearLogsConfirmDialog isOpen={showClearDialog} onOpenChange={setShowClearDialog} />
     </SettingsSection>
   );
 }
