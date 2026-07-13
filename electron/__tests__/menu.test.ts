@@ -183,7 +183,8 @@ vi.mock("../../shared/config/distribution.js", async (importOriginal) => ({
   isWindowsStoreBuild: isWindowsStoreBuildMock,
 }));
 
-import { createApplicationMenu, handleDirectoryOpen } from "../menu.js";
+import { createApplicationMenu, handleDirectoryOpen, buildAboutPanelOptions } from "../menu.js";
+import { getBuildChannelLabel } from "../../shared/config/distribution.js";
 import { webContents, app, Menu } from "electron";
 
 function findMenuItem(
@@ -197,13 +198,36 @@ function findMenuItem(
 }
 
 describe("About panel build channel (#11121)", () => {
-  it("passes the raw version as applicationVersion and leaves the build-version slot blank for stable builds", () => {
-    // Captured at module import: app.getVersion() is mocked to "1.0.0" (no
-    // prerelease suffix → stable channel), so the build-version slot that used
-    // to hardcode "Beta" is now empty and the real version flows through.
+  it("wires setAboutPanelOptions at import with the real running version", () => {
+    // Captured at module import: app.getVersion() is mocked to "1.0.0", proving
+    // the About options are actually applied (not dead code) and the raw
+    // version flows through as applicationVersion.
     expect(aboutPanelCapture.options).toBeDefined();
     expect(aboutPanelCapture.options?.applicationVersion).toBe("1.0.0");
     expect(aboutPanelCapture.options?.version).toBe("");
+  });
+
+  describe("buildAboutPanelOptions", () => {
+    it("passes the raw version through and leaves the build-version slot blank for stable builds", () => {
+      const options = buildAboutPanelOptions("1.0.0");
+      expect(options.applicationVersion).toBe("1.0.0");
+      // Stable → no channel label → empty slot (no more hardcoded "Beta").
+      expect(options.version).toBe("");
+    });
+
+    it("surfaces the channel label in the build-version slot for prerelease builds", () => {
+      // Compare against the shared helper rather than duplicating label strings.
+      for (const version of [
+        "0.25.0-nightly.20260713120000.abc1234",
+        "1.0.0-beta.1",
+        "1.0.0-rc.2",
+      ]) {
+        const options = buildAboutPanelOptions(version);
+        expect(options.applicationVersion).toBe(version);
+        expect(options.version).toBe(getBuildChannelLabel(version));
+        expect(options.version).toBeTruthy();
+      }
+    });
   });
 });
 

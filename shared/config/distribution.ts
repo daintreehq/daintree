@@ -63,8 +63,14 @@ export type BuildChannel = "stable" | "nightly" | "beta" | "rc";
  * The nightly workflow strips any existing suffix before stamping
  * `-nightly.*`, so combined tags never occur in the real pipeline; precedence
  * (`nightly > rc > beta`) only matters for manually stamped builds and is kept
- * deterministic regardless. Anything without a recognized suffix — including a
- * plain `1.0.0` stable release — is `"stable"`.
+ * deterministic regardless.
+ *
+ * Anything without a recognized suffix — a plain `1.0.0` stable release, but
+ * also an unsupported prerelease like `-alpha` — falls back to `"stable"`. The
+ * pipeline only ever ships stable/nightly/beta/rc, and the full version string
+ * is always shown alongside this label, so an unknown suffix is never hidden.
+ * Introducing a new channel means extending this union, `BUILD_CHANNEL_LABELS`,
+ * the release pipeline, and the tests together.
  */
 export function getBuildChannel(version: string): BuildChannel {
   if (version.includes("-nightly")) return "nightly";

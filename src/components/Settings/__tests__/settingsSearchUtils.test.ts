@@ -98,8 +98,14 @@ describe("filterSettings", () => {
   it("no longer surfaces the About entry for a 'beta' search (#11121)", () => {
     // The stale "beta" keyword was removed from the general-about metadata so
     // stable builds don't advertise a Beta identity through settings search.
-    const results = filterSettings(SETTINGS_SEARCH_INDEX, "beta");
-    expect(results.some((r) => r.id === "general-about")).toBe(false);
+    expect(
+      filterSettings(SETTINGS_SEARCH_INDEX, "beta").some((r) => r.id === "general-about")
+    ).toBe(false);
+    // Control: the About entry is still discoverable by its real keywords, so
+    // the assertion above can't pass vacuously by the entry dropping out entirely.
+    expect(
+      filterSettings(SETTINGS_SEARCH_INDEX, "about").some((r) => r.id === "general-about")
+    ).toBe(true);
   });
 
   it("matches the forge access-token entry for a github token query", () => {

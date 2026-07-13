@@ -30,13 +30,17 @@ import { isWindowsStoreBuild, getBuildChannelLabel } from "../shared/config/dist
 // prerelease builds (Nightly/Beta/RC) and stays blank for stable releases —
 // an empty string suppresses the secondary line rather than falling back to
 // CFBundleVersion (which would duplicate the version on macOS).
-app.setAboutPanelOptions({
-  applicationName: PRODUCT_NAME,
-  applicationVersion: app.getVersion(),
-  version: getBuildChannelLabel(app.getVersion()) ?? "",
-  copyright: `© ${new Date().getFullYear()} ${PRODUCT_COPYRIGHT_ORG}`,
-  website: PRODUCT_WEBSITE,
-});
+export function buildAboutPanelOptions(version: string): Electron.AboutPanelOptionsOptions {
+  return {
+    applicationName: PRODUCT_NAME,
+    applicationVersion: version,
+    version: getBuildChannelLabel(version) ?? "",
+    copyright: `© ${new Date().getFullYear()} ${PRODUCT_COPYRIGHT_ORG}`,
+    website: PRODUCT_WEBSITE,
+  };
+}
+
+app.setAboutPanelOptions(buildAboutPanelOptions(app.getVersion()));
 
 function convertShortcutToAccelerator(shortcut: string): string {
   return shortcut.replace("Cmd/Ctrl", "CommandOrControl");
