@@ -417,6 +417,77 @@ describe("NotificationService", () => {
       expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(2);
     });
 
+    it("one owner reporting zero does not clear another owner's count", () => {
+      // This is the renderer's real focus/unmount path: useWindowNotifications
+      // pushes { waitingCount: 0 } for its own view. Under the old global
+      // `currentState` that zero wiped every other window's title and the badge.
+      const win1 = createWindowMock(false, [11]);
+      const win2 = createWindowMock(false, [21]);
+      notificationService.initialize(createRegistryMock([win1, win2]) as never);
+
+      notificationService.updateNotifications(11, { waitingCount: 2 });
+      notificationService.updateNotifications(21, { waitingCount: 3 });
+      notificationService.updateNotifications(11, { waitingCount: 0 });
+      vi.advanceTimersByTime(301);
+
+      expect(win1.setTitle).toHaveBeenLastCalledWith("Daintree");
+      expect(win2.setTitle).toHaveBeenLastCalledWith("(3) Daintree");
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(3);
+    });
+
+    it("drops an owner that no longer resolves to a live window", () => {
+      const win = createWindowMock(false, [11, 12]);
+      const registry = createRegistryMock([win]);
+      notificationService.initialize(registry as never);
+
+      notificationService.updateNotifications(11, { waitingCount: 1 });
+      notificationService.updateNotifications(12, { waitingCount: 2 });
+      vi.advanceTimersByTime(301);
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(3);
+
+      // The view was evicted: WindowRegistry unindexes it before closing its
+      // webContents, so it stops resolving. Its count must not linger.
+      win.ownerIds = [11];
+
+      notificationService.updateNotifications(11, { waitingCount: 1 });
+      vi.advanceTimersByTime(301);
+
+      expect(win.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(1);
+    });
+
+    it("drops owners whose window is destroyed", () => {
+      const win = createWindowMock(false, [11]);
+      notificationService.initialize(createRegistryMock([win]) as never);
+
+      notificationService.updateNotifications(11, { waitingCount: 4 });
+      vi.advanceTimersByTime(301);
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(4);
+
+      win.isDestroyed.mockReturnValue(true);
+      notificationService.updateNotifications(11, { waitingCount: 4 });
+      vi.advanceTimersByTime(301);
+
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(0);
+    });
+
+    it("dispose forgets every owner's state", () => {
+      const win = createWindowMock(false, [11, 12]);
+      notificationService.initialize(createRegistryMock([win]) as never);
+
+      notificationService.updateNotifications(11, { waitingCount: 2 });
+      vi.advanceTimersByTime(301);
+
+      notificationService.dispose();
+      notificationService.initialize(createRegistryMock([win]) as never);
+
+      notificationService.updateNotifications(12, { waitingCount: 3 });
+      vi.advanceTimersByTime(301);
+
+      // 3, never 5 — owner 11's pre-dispose count must not survive.
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(3);
+    });
+
     it("removeOwner drops that owner's count from the badge and title", () => {
       const win = createWindowMock(false, [11, 12]);
       notificationService.initialize(createRegistryMock([win]) as never);
@@ -538,6 +609,36 @@ describe("NotificationService", () => {
       electronMock.notificationInstances.at(-1)!.trigger("click");
 
       expect(ownerSend(21)).not.toHaveBeenCalled();
+      expect(sendToRendererMock).toHaveBeenCalledWith(
+        primary,
+        "notification:watch-navigate",
+        context
+      );
+    });
+
+    it("falls back to the primary window when the send to the owner throws", () => {
+      const primary = createWindowMock(true, [11]);
+      const secondary = createWindowMock(false, [21]);
+      notificationService.initialize(createRegistryMock([primary, secondary]) as never);
+
+      // Alive at the guard, torn down by the time we send.
+      electronMock.webContentsById.set(21, {
+        id: 21,
+        isDestroyed: () => false,
+        send: vi.fn(() => {
+          throw new Error("render frame was disposed");
+        }),
+      });
+
+      notificationService.showWatchNotification(
+        "Agent waiting",
+        "Needs input",
+        context,
+        "notification:watch-navigate",
+        { ownerWebContentsId: 21 }
+      );
+      electronMock.notificationInstances.at(-1)!.trigger("click");
+
       expect(sendToRendererMock).toHaveBeenCalledWith(
         primary,
         "notification:watch-navigate",

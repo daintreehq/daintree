@@ -59,7 +59,11 @@ export function registerNotificationHandlers(deps: HandlerDependencies): () => v
   const trackedOwners = new Map<number, Electron.WebContents>();
 
   const purgeOwner = (ownerId: number): void => {
-    trackedOwners.delete(ownerId);
+    // Short-circuit: the webContents "destroyed" listener and the owning
+    // window's cleanup both fire for the same owner on window close, and the
+    // window's DisposableStore keeps a purge for every view it ever hosted.
+    if (!trackedOwners.delete(ownerId)) return;
+
     notificationService.removeOwner(ownerId);
     void getAgentNotificationService()
       .then((svc) => svc.removeOwner(ownerId))

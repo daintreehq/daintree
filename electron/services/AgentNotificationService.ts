@@ -149,8 +149,16 @@ class AgentNotificationService {
     }
 
     for (const [panelId, ownerId] of [...this.lastOwnerByPanel]) {
-      if (ownerId === ownerWebContentsId) {
+      if (ownerId !== ownerWebContentsId) continue;
+      // Hand the hint to a surviving watcher rather than dropping it: with the
+      // same project open in two windows, the dead renderer may not have been
+      // the panel's only owner, and orphaning it here would send the click to
+      // the primary window instead of the window that still shows the panel.
+      const survivor = this.firstOwnerOf(panelId);
+      if (survivor === undefined) {
         this.lastOwnerByPanel.delete(panelId);
+      } else {
+        this.lastOwnerByPanel.set(panelId, survivor);
       }
     }
   }
@@ -168,6 +176,13 @@ class AgentNotificationService {
     return this.ownersByPanel.has(terminalId);
   }
 
+  private firstOwnerOf(panelId: string): NotificationOwnerId | undefined {
+    for (const ownerId of this.ownersByPanel.get(panelId) ?? []) {
+      return ownerId;
+    }
+    return undefined;
+  }
+
   /**
    * The renderer a notification for this panel should navigate. Prefers a live
    * watcher; falls back to the last one that watched it, which is what survives
@@ -175,11 +190,20 @@ class AgentNotificationService {
    */
   private resolveOwner(terminalId?: string): NotificationOwnerId | undefined {
     if (!terminalId) return undefined;
-    const owners = this.ownersByPanel.get(terminalId);
-    for (const ownerId of owners ?? []) {
-      return ownerId;
-    }
-    return this.lastOwnerByPanel.get(terminalId);
+    return this.firstOwnerOf(terminalId) ?? this.lastOwnerByPanel.get(terminalId);
+  }
+
+  /**
+   * Owner for a notification that is about to be shown. Re-resolving at emit
+   * time matters because an owner captured when the event arrived can be
+   * destroyed during the burst/debounce window, while a sibling window that
+   * watches the same panel is still alive and is the right click target.
+   */
+  private emitOwner(
+    terminalId?: string,
+    capturedOwnerId?: NotificationOwnerId
+  ): NotificationOwnerId | undefined {
+    return this.resolveOwner(terminalId) ?? capturedOwnerId;
   }
 
   private forgetPanelOwnership(terminalId: string): void {
@@ -247,7 +271,23 @@ class AgentNotificationService {
       }
     });
 
-    this.unsubscribers.push(unsubStateChanged, unsubSpawned, unsubDetected, unsubExited);
+    // A killed terminal never emits agent:exited (TerminalExitHandler suppresses
+    // it for `wasKilled`), so without this the routing hint for every killed
+    // agent would sit in the map for the rest of the session.
+    const unsubKilled = events.on("agent:killed", (payload) => {
+      if (payload.terminalId) {
+        this.agentSpawnTimestamps.delete(payload.terminalId);
+        this.forgetPanelOwnership(payload.terminalId);
+      }
+    });
+
+    this.unsubscribers.push(
+      unsubStateChanged,
+      unsubSpawned,
+      unsubDetected,
+      unsubExited,
+      unsubKilled
+    );
   }
 
   private isWithinBootGrace(): boolean {
@@ -551,6 +591,8 @@ class AgentNotificationService {
     const first = dedupedItems[0];
     this.playNotificationSound(first.soundEnabled, first.soundFile);
 
+    const ownerWebContentsId = this.emitOwner(first.terminalId, first.ownerWebContentsId);
+
     if (dedupedItems.length === 1) {
       const label = this.getLabel(first.agentId, first.worktreeId);
       const context = this.makeContext(first.terminalId, first.agentId, first.worktreeId);
@@ -559,7 +601,7 @@ class AgentNotificationService {
         describeWaiting(label, first.waitingReason),
         context,
         CHANNELS.NOTIFICATION_WATCH_NAVIGATE,
-        { silent: true, ownerWebContentsId: first.ownerWebContentsId }
+        { silent: true, ownerWebContentsId }
       );
     } else {
       const context = this.makeContext(first.terminalId, first.agentId, first.worktreeId);
@@ -576,7 +618,7 @@ class AgentNotificationService {
         describeWaitingMany(dedupedItems.length, uniformReason ?? undefined),
         context,
         CHANNELS.NOTIFICATION_WATCH_NAVIGATE,
-        { silent: true, ownerWebContentsId: first.ownerWebContentsId }
+        { silent: true, ownerWebContentsId }
       );
     }
   }
@@ -651,9 +693,13 @@ class AgentNotificationService {
       // destroyed since. A docked terminal that was never watched has no known
       // owner — the click then falls back to the primary window, which is
       // explicit and no worse than today's dead click.
+      // Take the worktree from the terminal as it is NOW, not as it was when the
+      // timer was armed: the body below already uses the fresh title, and a panel
+      // dragged to another worktree during the wait would otherwise navigate to
+      // the worktree it used to live in. The agent id can't change for a terminal.
       const navigation = {
         channel: CHANNELS.NOTIFICATION_WATCH_NAVIGATE,
-        context: this.makeContext(terminalId, agentId, worktreeId),
+        context: this.makeContext(terminalId, agentId, currentTerminal.worktreeId ?? worktreeId),
       };
       const ownerWebContentsId = this.resolveOwner(terminalId);
 
@@ -826,7 +872,7 @@ class AgentNotificationService {
       item.body,
       context,
       CHANNELS.NOTIFICATION_WATCH_NAVIGATE,
-      { silent: true, ownerWebContentsId: item.ownerWebContentsId }
+      { silent: true, ownerWebContentsId: this.emitOwner(item.terminalId, item.ownerWebContentsId) }
     );
 
     if (this.notificationQueue.length > 0) {

@@ -59,11 +59,20 @@ import { agentNotificationService } from "../AgentNotificationService.js";
 const OWNER = 101;
 
 /** Escalation now carries a click target; the owner decides which window it focuses. */
-const escalationOptions = (ownerWebContentsId: number | undefined = OWNER) =>
+const escalationOptions = (ownerWebContentsId: number) =>
   expect.objectContaining({
     ownerWebContentsId,
     navigation: expect.objectContaining({ channel: "notification:watch-navigate" }),
   });
+
+/** Options of the last showNativeNotification call — read them, don't match a default. */
+function lastEscalationOptions(): {
+  ownerWebContentsId?: number;
+  navigation?: { channel: string; context: { panelId: string; worktreeId?: string } };
+} {
+  const calls = notificationServiceMock.showNativeNotification.mock.calls;
+  return calls.at(-1)?.[2] ?? {};
+}
 
 const DEFAULT_NOTIFICATION_SETTINGS = {
   completedEnabled: false,
@@ -368,7 +377,7 @@ describe("AgentNotificationService", () => {
       expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
         "Agent still waiting",
         expect.stringContaining("has been waiting"),
-        escalationOptions()
+        escalationOptions(OWNER)
       );
     });
 
@@ -384,7 +393,7 @@ describe("AgentNotificationService", () => {
       expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
         "Agent still waiting",
         expect.stringContaining("is blocked by an error"),
-        escalationOptions()
+        escalationOptions(OWNER)
       );
     });
 
@@ -400,7 +409,7 @@ describe("AgentNotificationService", () => {
       expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
         "Agent still waiting",
         expect.stringContaining("has been waiting for input"),
-        escalationOptions()
+        escalationOptions(OWNER)
       );
     });
 
@@ -416,7 +425,7 @@ describe("AgentNotificationService", () => {
       expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
         "Agent still waiting",
         expect.stringContaining("has been waiting for input"),
-        escalationOptions()
+        escalationOptions(OWNER)
       );
     });
 
@@ -518,7 +527,7 @@ describe("AgentNotificationService", () => {
       expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
         "Agent still waiting",
         "My Custom Agent has been waiting for input",
-        escalationOptions()
+        escalationOptions(OWNER)
       );
     });
 
@@ -850,7 +859,7 @@ describe("AgentNotificationService", () => {
       expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
         "Agents still waiting",
         "3 agents have been waiting for input",
-        escalationOptions()
+        escalationOptions(OWNER)
       );
     });
 
@@ -1913,14 +1922,67 @@ describe("AgentNotificationService", () => {
       );
     });
 
-    it("removeOwner is idempotent", () => {
-      agentNotificationService.syncWatchedPanels(OWNER, ["term-1"]);
+    it("removeOwner is idempotent and does not disturb the surviving owner", () => {
+      mockStore({ waitingEnabled: true });
 
-      expect(() => {
-        agentNotificationService.removeOwner(OWNER);
-        agentNotificationService.removeOwner(OWNER);
-        agentNotificationService.removeOwner(999);
-      }).not.toThrow();
+      agentNotificationService.syncWatchedPanels(OWNER, ["term-1"]);
+      agentNotificationService.syncWatchedPanels(OWNER_B, ["term-2"]);
+
+      agentNotificationService.removeOwner(OWNER);
+      agentNotificationService.removeOwner(OWNER);
+      agentNotificationService.removeOwner(999);
+
+      // A implementation that cleared everything on removeOwner would pass a
+      // not.toThrow() check — assert B's watch actually still fires.
+      events.emit("agent:state-changed", makePayloadFor("term-2", "agent-2", "waiting"));
+      vi.advanceTimersByTime(200);
+
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
+        "Agent waiting",
+        expect.any(String),
+        expect.objectContaining({ panelId: "term-2" }),
+        "notification:watch-navigate",
+        { silent: true, ownerWebContentsId: OWNER_B }
+      );
+    });
+
+    it("hands the routing hint to a surviving owner when the sticky one dies", () => {
+      mockStore({ waitingEnabled: true });
+
+      // Same project in two windows: both watch term-1, so B becomes the most
+      // recent (sticky) owner. B's window then closes.
+      agentNotificationService.syncWatchedPanels(OWNER, ["term-1"]);
+      agentNotificationService.syncWatchedPanels(OWNER_B, ["term-1"]);
+      agentNotificationService.removeOwner(OWNER_B);
+
+      events.emit("agent:state-changed", makePayload("waiting"));
+      // A's renderer does its one-shot unwatch, so only the sticky hint remains.
+      agentNotificationService.syncWatchedPanels(OWNER, []);
+      vi.advanceTimersByTime(180_000);
+
+      // Dropping B's hint outright would orphan the panel and send the click to
+      // the primary window, even though A still shows it.
+      expect(lastEscalationOptions().ownerWebContentsId).toBe(OWNER);
+    });
+
+    it("re-resolves the owner at emit time when the captured one dies mid-burst", () => {
+      mockStore({ waitingEnabled: true });
+
+      agentNotificationService.syncWatchedPanels(OWNER, ["term-1"]);
+      agentNotificationService.syncWatchedPanels(OWNER_B, ["term-1"]);
+
+      events.emit("agent:state-changed", makePayload("waiting"));
+      // The owner captured when the event arrived dies inside the burst window.
+      agentNotificationService.removeOwner(OWNER_B);
+      vi.advanceTimersByTime(200);
+
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
+        "Agent waiting",
+        expect.any(String),
+        expect.objectContaining({ panelId: "term-1" }),
+        "notification:watch-navigate",
+        { silent: true, ownerWebContentsId: OWNER }
+      );
     });
 
     it("escalates to the owner that watched the panel, even after the one-shot unwatch", () => {
@@ -1947,20 +2009,50 @@ describe("AgentNotificationService", () => {
       );
     });
 
-    it("escalation for a never-watched docked terminal has no owner and falls back", () => {
-      mockStore({ waitingEnabled: true });
+    it("escalation for a never-watched docked terminal has no owner", () => {
+      // term-9 is docked but no renderer ever watched it, so main genuinely
+      // cannot know which window owns it — the click falls back to primary.
+      mockStore(
+        { waitingEnabled: true },
+        {
+          terminals: [
+            ...DEFAULT_APP_STATE.terminals,
+            {
+              id: "term-9",
+              kind: "terminal",
+              agentId: "agent-9",
+              title: "Unwatched Agent",
+              location: "dock",
+              worktreeId: "wt-1",
+            },
+          ],
+        }
+      );
 
-      // Nothing watched at all — escalation still fires for docked terminals.
-      agentNotificationService.syncWatchedPanels(OWNER, []);
-
-      events.emit("agent:state-changed", makePayload("waiting"));
+      events.emit("agent:state-changed", makePayloadFor("term-9", "agent-9", "waiting"));
       vi.advanceTimersByTime(180_000);
 
-      expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
-        "Agent still waiting",
-        expect.any(String),
-        escalationOptions(undefined)
+      const options = lastEscalationOptions();
+      expect(options.ownerWebContentsId).toBeUndefined();
+      expect(options.navigation?.context.panelId).toBe("term-9");
+    });
+
+    it("escalation navigates to the worktree the panel is in now, not where it started", () => {
+      mockStore({ waitingEnabled: true });
+      agentNotificationService.syncWatchedPanels(OWNER, ["term-1"]);
+
+      events.emit("agent:state-changed", makePayload("waiting"));
+
+      // The panel is dragged to another worktree while the escalation timer runs.
+      mockStore(
+        { waitingEnabled: true },
+        {
+          terminals: [{ ...DEFAULT_APP_STATE.terminals[0], worktreeId: "wt-moved" }],
+        }
       );
+      vi.advanceTimersByTime(180_000);
+
+      expect(lastEscalationOptions().navigation?.context.worktreeId).toBe("wt-moved");
     });
   });
 });

@@ -174,7 +174,7 @@ class NotificationService {
     const countsByWindow = new Map<number, number>();
     for (const [ownerId, state] of [...this.statesByOwner]) {
       const ctx = this.registry.getByWebContentsId(ownerId);
-      if (!ctx) {
+      if (!ctx || ctx.browserWindow.isDestroyed()) {
         this.statesByOwner.delete(ownerId);
         continue;
       }
@@ -282,44 +282,61 @@ class NotificationService {
    * to be showing, so a panel in a cached view would never receive it — send
    * straight to the owning webContents instead. The primary window is the
    * explicit last resort for a notification whose owner is gone.
+   *
+   * Known limit: if the owning view is cached (its project isn't the one the
+   * window is showing), the panel is focused in that renderer's store but the
+   * project is not switched to — making a background project visible from main
+   * means driving the full renderer-owned project-switch path, which persists
+   * outgoing layout state. Still strictly better than before, when the click
+   * went to the primary window's active view and matched no panel at all.
    */
   private routeNavigation(
     navigateChannel: string,
     context: WatchNotificationContext,
     ownerWebContentsId?: NotificationOwnerId
   ): void {
-    const ownerWebContents =
-      ownerWebContentsId === undefined
-        ? null
-        : (webContentsModule.fromId(ownerWebContentsId) ?? null);
+    if (this.sendToOwner(navigateChannel, context, ownerWebContentsId)) return;
 
-    if (ownerWebContents && !ownerWebContents.isDestroyed()) {
-      const ownerWindow = getWindowForWebContents(ownerWebContents);
-      if (ownerWindow && !ownerWindow.isDestroyed()) {
-        if (ownerWindow.isMinimized()) {
-          ownerWindow.restore();
-        }
-        ownerWindow.show();
-        ownerWindow.focus();
-      }
-
-      try {
-        ownerWebContents.send(navigateChannel, context);
-      } catch {
-        // Renderer torn down between the guard and the send.
-      }
-      return;
-    }
-
+    // The owner is gone, or died between the guard and the send. Falling back to
+    // the primary window is a guess — it delivers to whichever view that window
+    // is showing — but a click that does nothing at all is worse.
     const fallbackWindow = this.registry?.getPrimary()?.browserWindow;
     if (!fallbackWindow || fallbackWindow.isDestroyed()) return;
 
-    if (fallbackWindow.isMinimized()) {
-      fallbackWindow.restore();
-    }
-    fallbackWindow.show();
-    fallbackWindow.focus();
+    this.revealWindow(fallbackWindow);
     sendToRenderer(fallbackWindow, navigateChannel, context);
+  }
+
+  /** False when the owner could not be reached, so the caller falls back. */
+  private sendToOwner(
+    navigateChannel: string,
+    context: WatchNotificationContext,
+    ownerWebContentsId?: NotificationOwnerId
+  ): boolean {
+    if (ownerWebContentsId === undefined) return false;
+
+    const ownerWebContents = webContentsModule.fromId(ownerWebContentsId);
+    if (!ownerWebContents || ownerWebContents.isDestroyed()) return false;
+
+    const ownerWindow = getWindowForWebContents(ownerWebContents);
+    if (ownerWindow && !ownerWindow.isDestroyed()) {
+      this.revealWindow(ownerWindow);
+    }
+
+    try {
+      ownerWebContents.send(navigateChannel, context);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private revealWindow(browserWindow: import("electron").BrowserWindow): void {
+    if (browserWindow.isMinimized()) {
+      browserWindow.restore();
+    }
+    browserWindow.show();
+    browserWindow.focus();
   }
 
   dispose(): void {
