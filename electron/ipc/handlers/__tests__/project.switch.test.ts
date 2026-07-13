@@ -1274,7 +1274,10 @@ describe("project:switch outgoing project is the sender's, not the global (#1110
       switchTo: async () => {
         mockGetProjectForWebContents.mockReturnValue("p3");
         projectStoreMock.getCurrentProjectId.mockReturnValue("p3");
-        return { view: { webContents: { id: 210, isDestroyed: () => false, send: vi.fn() } }, isNew: false };
+        return {
+          view: { webContents: { id: 210, isDestroyed: () => false, send: vi.fn() } },
+          isNew: false,
+        };
       },
     });
 
