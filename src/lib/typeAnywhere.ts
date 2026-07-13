@@ -1,4 +1,4 @@
-import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
+import type { PanelInstance } from "@shared/types/panel";
 import { isAgentFleetActionEligible } from "@/store/fleetEligibility";
 
 /**
@@ -198,6 +198,7 @@ export function resolveRescueTarget(ctx: RescueContext): string | null {
     return isRoutable(ctx.lastTypedTerminalId) ? ctx.lastTypedTerminalId : null;
   }
 
-  const candidates = ctx.panelIds.filter((id) => isPtyPanel(ctx.panelsById[id]) && isRoutable(id));
+  // `isRoutable` already requires a live agent PTY panel — no separate kind check.
+  const candidates = ctx.panelIds.filter(isRoutable);
   return candidates.length === 1 ? (candidates[0] ?? null) : null;
 }

@@ -7,7 +7,7 @@ const pingTerminal = vi.fn();
 const setFocused = vi.fn();
 const exitMaximize = vi.fn();
 const setPreferredTerminalFocusTarget = vi.fn();
-const focusPanelInput = vi.fn(() => true);
+const focusPanelInput = vi.fn<(id: string) => boolean>(() => true);
 
 let panelState: {
   panelsById: Record<string, PanelInstance>;
