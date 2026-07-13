@@ -190,6 +190,37 @@ describe("FilePane open-in-editor failure feedback (#11114)", () => {
     expect(notifyMock).not.toHaveBeenCalled();
   });
 
+  it("collapses a double-click into a single editor launch", async () => {
+    let resolveDispatch: (value: unknown) => void = () => {};
+    dispatchMock.mockReturnValue(
+      new Promise((resolve) => {
+        resolveDispatch = resolve;
+      })
+    );
+
+    const { container } = renderFilePane();
+    const button = Array.from(container.querySelectorAll("button")).find(
+      (b) => b.getAttribute("aria-label") === "Open in editor"
+    )!;
+
+    act(() => {
+      button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    // Without a synchronous guard the second click starts a second OS launch,
+    // whose late failure could then paper over the first launch's success.
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveDispatch({ ok: true, result: undefined });
+    });
+
+    // The guard released — the button is usable again, not latched.
+    await clickOpenInEditor(container);
+    expect(dispatchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("drops a stale failure when the pane switched files mid-flight", async () => {
     let resolveDispatch: (value: unknown) => void = () => {};
     dispatchMock.mockReturnValue(
@@ -225,6 +256,16 @@ describe("FilePane open-in-editor failure feedback (#11114)", () => {
 
     // The old file's failure must not be reported against the new one.
     expect(container.querySelector('[role="alert"]')).toBeNull();
+
+    // ...and the switch must have released the in-flight guard, or the button
+    // would be permanently dead on the new file.
+    dispatchMock.mockResolvedValue({ ok: true, result: undefined });
+    await clickOpenInEditor(container);
+    expect(dispatchMock).toHaveBeenLastCalledWith(
+      "file.openInEditor",
+      { path: "/repo/src/other.ts" },
+      { source: "user" }
+    );
   });
 
   it("clears the error once a retry succeeds", async () => {
