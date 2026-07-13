@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PtyPool, destroyPty } from "../PtyPool.js";
+import { computePoolEnvHash } from "../pty/ptyPoolEnvHash.js";
 import type { IPty } from "node-pty";
 
 const spawnMock = vi.fn();
@@ -94,6 +95,8 @@ describe("PtyPool", () => {
   const originalCi = process.env.CI;
   const originalLang = process.env.LANG;
   const originalLcAll = process.env.LC_ALL;
+  const originalNoColor = process.env.NO_COLOR;
+  const originalForceColor = process.env.FORCE_COLOR;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -103,6 +106,11 @@ describe("PtyPool", () => {
     process.env.CI = "true";
     delete process.env.LANG;
     delete process.env.LC_ALL;
+    // buildSpawnEnv inherits from process.env and now yields to NO_COLOR
+    // (#11118), so a host shell exporting either colour variable would decide
+    // the spawn-env assertions instead of the code under test.
+    delete process.env.NO_COLOR;
+    delete process.env.FORCE_COLOR;
   });
 
   afterEach(() => {
@@ -113,6 +121,10 @@ describe("PtyPool", () => {
     else delete process.env.LANG;
     if (originalLcAll !== undefined) process.env.LC_ALL = originalLcAll;
     else delete process.env.LC_ALL;
+    if (originalNoColor !== undefined) process.env.NO_COLOR = originalNoColor;
+    else delete process.env.NO_COLOR;
+    if (originalForceColor !== undefined) process.env.FORCE_COLOR = originalForceColor;
+    else delete process.env.FORCE_COLOR;
   });
 
   it("falls back to default pool size when configured pool size is invalid", () => {
@@ -274,6 +286,59 @@ describe("PtyPool", () => {
     expect(spawnOptions.env?.LANG).toBe("en_US.UTF-8");
     expect(spawnOptions.env?.LC_ALL).toBeUndefined();
     pool.dispose();
+  });
+
+  it.each([
+    ["a non-empty NO_COLOR", "1"],
+    ["an empty NO_COLOR", ""],
+  ])("does not inject FORCE_COLOR into a warm shell when the host exports %s", async (_, value) => {
+    process.env.NO_COLOR = value;
+    spawnMock.mockReturnValue(createFakeProcess(402));
+    const pool = new PtyPool({ poolSize: 1, defaultCwd: "/repo" });
+
+    await pool.warmPool();
+
+    const spawnOptions = spawnMock.mock.calls[0]?.[2] as { env?: Record<string, string> };
+    expect(spawnOptions.env?.FORCE_COLOR).toBeUndefined();
+    expect(spawnOptions.env?.NO_COLOR).toBe(value);
+    // COLORTERM only selects depth once colour is on — it never forces it.
+    expect(spawnOptions.env?.COLORTERM).toBe("truecolor");
+    expect(spawnOptions.env?.TERM).toBe("xterm-256color");
+    pool.dispose();
+  });
+
+  it("does not inject FORCE_COLOR into a warm shell when the caller sets NO_COLOR", async () => {
+    spawnMock.mockReturnValue(createFakeProcess(403));
+    const pool = new PtyPool({ poolSize: 1, defaultCwd: "/repo" });
+
+    pool.warmForKey("/repo", { NO_COLOR: "1" }, computePoolEnvHash({ NO_COLOR: "1" }));
+    await flushMicrotasks();
+
+    const spawnOptions = spawnMock.mock.calls[0]?.[2] as { env?: Record<string, string> };
+    expect(spawnOptions.env?.FORCE_COLOR).toBeUndefined();
+    expect(spawnOptions.env?.NO_COLOR).toBe("1");
+    pool.dispose();
+  });
+
+  it("preserves an explicit caller FORCE_COLOR rather than rewriting it", async () => {
+    spawnMock.mockReturnValue(createFakeProcess(404));
+    const pool = new PtyPool({ poolSize: 1, defaultCwd: "/repo" });
+
+    pool.warmForKey("/repo", { FORCE_COLOR: "0" }, computePoolEnvHash({ FORCE_COLOR: "0" }));
+    await flushMicrotasks();
+
+    const spawnOptions = spawnMock.mock.calls[0]?.[2] as { env?: Record<string, string> };
+    expect(spawnOptions.env?.FORCE_COLOR).toBe("0");
+    pool.dispose();
+  });
+
+  it("keys NO_COLOR callers to their own pool slot", () => {
+    // The pooled half of the NO_COLOR fix only holds because a caller-supplied
+    // NO_COLOR changes the env hash: without this, a shell warmed with
+    // FORCE_COLOR=3 could be acquired by a caller that opted out of colour.
+    expect(computePoolEnvHash({ NO_COLOR: "1" })).not.toBe(computePoolEnvHash(undefined));
+    expect(computePoolEnvHash({ NO_COLOR: "" })).not.toBe(computePoolEnvHash(undefined));
+    expect(computePoolEnvHash({ NO_COLOR: "1" })).not.toBe(computePoolEnvHash({ NO_COLOR: "" }));
   });
 
   it("filters secrets out of caller env before baking into the pool entry", async () => {
