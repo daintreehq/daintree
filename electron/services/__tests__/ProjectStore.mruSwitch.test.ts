@@ -240,4 +240,47 @@ describe("ProjectStore.setCurrentProject MRU lastOpened bump", () => {
     expect(alphaRow?.status).toBe("background");
     expect(alphaRow?.lastOpened).toBe(tAlpha);
   });
+
+  it("backgrounds the explicitly-named departing project, not the global pointer (#11101)", async () => {
+    // Multi-window: Alpha is globally current (window A still displays it) while
+    // window B, displaying Beta, is the one switching to Gamma.
+    db.update(schema.projects)
+      .set({ status: "active" })
+      .where(eq(schema.projects.id, betaId))
+      .run();
+
+    await store.setCurrentProject(gammaId, betaId);
+
+    const alphaRow = db.select().from(schema.projects).where(eq(schema.projects.id, alphaId)).get();
+    const betaRow = db.select().from(schema.projects).where(eq(schema.projects.id, betaId)).get();
+    const gammaRow = db.select().from(schema.projects).where(eq(schema.projects.id, gammaId)).get();
+
+    // Beta is the project that actually departed a window, so it takes the
+    // background flip and the departing MRU bump.
+    expect(betaRow?.status).toBe("background");
+    expect(betaRow!.lastOpened).toBeGreaterThan(tGamma);
+    expect(betaRow!.lastOpened).toBeLessThan(gammaRow!.lastOpened!);
+
+    // Alpha is untouched — window A is still showing it.
+    expect(alphaRow?.status).toBe("active");
+    expect(alphaRow?.lastOpened).toBe(tAlpha);
+
+    expect(gammaRow?.status).toBe("active");
+    expect(store.getCurrentProjectId()).toBe(gammaId);
+  });
+
+  it("backgrounds nothing when the departing project is explicitly null", async () => {
+    // A welcome view has no project to depart. `undefined` would infer Alpha
+    // from the global pointer and background a project another window is showing.
+    await store.setCurrentProject(gammaId, null);
+
+    const alphaRow = db.select().from(schema.projects).where(eq(schema.projects.id, alphaId)).get();
+    const gammaRow = db.select().from(schema.projects).where(eq(schema.projects.id, gammaId)).get();
+
+    expect(alphaRow?.status).toBe("active");
+    expect(alphaRow?.lastOpened).toBe(tAlpha);
+
+    expect(gammaRow?.status).toBe("active");
+    expect(store.getCurrentProjectId()).toBe(gammaId);
+  });
 });

@@ -843,13 +843,27 @@ export class ProjectStore {
     return this.getProjectById(currentId);
   }
 
-  async setCurrentProject(projectId: string): Promise<void> {
+  /**
+   * `outgoingProjectId` names the project the switching window was actually
+   * displaying — the one to background and MRU-bump. Three distinct meanings:
+   *   - omitted/`undefined`: infer from the global pointer (single-window and
+   *     legacy callers, where the two always agree).
+   *   - a string: background exactly that project. Multi-window callers pass
+   *     their own view's project; the global pointer names whichever window
+   *     switched most recently, which is a different question (#11101).
+   *   - `null`: the window had no project displayed (welcome view), so no row
+   *     is backgrounded — only the pointer moves and the incoming row activates.
+   * `?? this.getCurrentProjectId()` would collapse that `null` back into an
+   * unrelated window's project, which is the bug this parameter exists to fix.
+   */
+  async setCurrentProject(projectId: string, outgoingProjectId?: string | null): Promise<void> {
     const project = this.getProjectById(projectId);
     if (!project) {
       throw new Error(`Project not found: ${projectId}`);
     }
 
-    const previousProjectId = this.getCurrentProjectId();
+    const previousProjectId =
+      outgoingProjectId === undefined ? this.getCurrentProjectId() : outgoingProjectId;
     const db = getSharedDb();
 
     const now = Date.now();
