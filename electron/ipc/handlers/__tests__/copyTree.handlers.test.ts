@@ -11,24 +11,49 @@ const clipboardMock = vi.hoisted(() => ({
 }));
 
 const projectStoreMock = vi.hoisted(() => ({
-  getCurrentProjectId: vi.fn(() => null),
-  getProjectSettings: vi.fn(),
+  getCurrentProjectId: vi.fn<() => string | null>(() => null),
+  getProjectById: vi.fn<(projectId: string) => { id: string; status: string } | null>(() => null),
+  getProjectSettings: vi.fn<(projectId: string) => Promise<unknown>>(),
+}));
+
+/** Structural stand-in for ProjectViewManager — only the binding lookup is read. */
+interface TestProjectViewManager {
+  getProjectIdForWebContents: (webContentsId: number) => string | null;
+}
+
+const browserWindowMock = vi.hoisted(() => ({
+  fromWebContents: vi.fn<() => { id: number; isDestroyed: () => boolean } | null>(() => null),
+  getAllWindows: vi.fn(() => []),
+}));
+
+// windowRef holds the process-global ProjectViewManager that typedHandleWithContext
+// reads to populate ctx.projectId. Mocked so a test can point it at the WRONG
+// project and prove the handlers resolve settings from the sender's window instead.
+const windowRefMock = vi.hoisted(() => ({
+  getProjectViewManager: vi.fn<() => TestProjectViewManager | null>(() => null),
 }));
 
 vi.mock("electron", () => ({
   ipcMain: ipcMainMock,
   clipboard: clipboardMock,
-  BrowserWindow: {
-    fromWebContents: vi.fn(() => null),
-    getAllWindows: vi.fn(() => []),
-  },
+  BrowserWindow: browserWindowMock,
 }));
 
 vi.mock("../../../services/ProjectStore.js", () => ({
   projectStore: projectStoreMock,
 }));
 
+vi.mock("../../../window/windowRef.js", () => ({
+  getProjectViewManager: windowRefMock.getProjectViewManager,
+  setProjectViewManager: vi.fn(),
+  getWindowRegistry: vi.fn(() => null),
+  setWindowRegistry: vi.fn(),
+  getMainWindow: vi.fn(() => null),
+  setMainWindow: vi.fn(),
+}));
+
 import { CHANNELS } from "../../channels.js";
+import { _resetRateLimitQueuesForTest } from "../../utils.js";
 import {
   registerCopyTreeHandlers,
   mergeCopyTreeOptions,
@@ -50,6 +75,13 @@ function getInvokeHandler(channel: string): (...args: unknown[]) => Promise<unkn
 describe("copyTree handlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // clearAllMocks resets call history but keeps implementations/return values,
+    // so restore the no-window / no-PVM baseline each test.
+    browserWindowMock.fromWebContents.mockReturnValue(null);
+    windowRefMock.getProjectViewManager.mockReturnValue(null);
+    projectStoreMock.getCurrentProjectId.mockReturnValue(null);
+    projectStoreMock.getProjectById.mockReturnValue(null);
+    projectStoreMock.getProjectSettings.mockReset();
     registerCopyTreeHandlers({
       mainWindow: {
         isDestroyed: () => false,
@@ -225,6 +257,143 @@ describe("copyTree handlers", () => {
         projectSettingsFixture.copyTreeSettings.maxContextSize
       );
       expect(mergedOptions.always).toEqual(projectSettingsFixture.copyTreeSettings.alwaysInclude);
+    });
+  });
+
+  describe("project-scoped settings resolution", () => {
+    const SENDER_WINDOW_ID = 42;
+    const SENDER_PROJECT = "proj-sender";
+    const GLOBAL_PROJECT = "proj-global";
+
+    // copyTree channels share one rate-limit bucket, and earlier tests in this
+    // file exhaust it. Clear the bucket instead of advancing fake timers: each
+    // vi.useFakeTimers() re-seeds from the real clock, so a fixed advance keeps
+    // landing every call in the same window rather than moving past it.
+    beforeEach(() => {
+      _resetRateLimitQueuesForTest();
+    });
+
+    const senderSettings = {
+      excludedPaths: ["sender-only/**"],
+      copyTreeSettings: { maxContextSize: 1111, alwaysInclude: ["SENDER.md"] },
+    };
+    const globalSettings = {
+      excludedPaths: ["global-only/**"],
+      copyTreeSettings: { maxContextSize: 2222, alwaysInclude: ["GLOBAL.md"] },
+    };
+
+    function makePvm(boundProjectId: string | null): TestProjectViewManager {
+      return { getProjectIdForWebContents: vi.fn(() => boundProjectId) };
+    }
+
+    // Aim every process-global "current project" source at GLOBAL_PROJECT, so a
+    // handler that reads any of them (the #11103 bug, or a naive ctx.projectId
+    // fix — ctx.projectId is derived from the windowRef global) resolves the
+    // wrong project and fails the assertions.
+    function aimGlobalSourcesAtGlobalProject() {
+      windowRefMock.getProjectViewManager.mockReturnValue(makePvm(GLOBAL_PROJECT));
+      projectStoreMock.getCurrentProjectId.mockReturnValue(GLOBAL_PROJECT);
+    }
+
+    function registerWithScope(options: {
+      windowScopedPvm?: TestProjectViewManager;
+      depsPvm?: TestProjectViewManager;
+      withSenderWindow?: boolean;
+    }) {
+      const testConfig = vi.fn().mockResolvedValue({
+        includedFiles: 1,
+        includedSize: 1,
+        excluded: { byTruncation: 0, bySize: 0, byPattern: 0 },
+      });
+
+      if (options.withSenderWindow !== false) {
+        browserWindowMock.fromWebContents.mockReturnValue({
+          id: SENDER_WINDOW_ID,
+          isDestroyed: () => false,
+        });
+      }
+
+      projectStoreMock.getProjectById.mockImplementation((projectId) => ({
+        id: projectId,
+        status: "active",
+      }));
+      projectStoreMock.getProjectSettings.mockImplementation(async (projectId) =>
+        projectId === SENDER_PROJECT ? senderSettings : globalSettings
+      );
+
+      ipcMainMock.handle.mockClear();
+      registerCopyTreeHandlers({
+        mainWindow: {
+          isDestroyed: () => false,
+          webContents: { isDestroyed: () => false, send: vi.fn() },
+        },
+        ptyClient: { hasTerminal: vi.fn(() => false), write: vi.fn() },
+        worktreeService: {
+          getAllStatesAsync: vi.fn().mockResolvedValue([{ id: "wt-1", path: "/wt-1" }]),
+          testConfig,
+        },
+        windowRegistry: options.windowScopedPvm
+          ? {
+              getByWindowId: (windowId: number) =>
+                windowId === SENDER_WINDOW_ID
+                  ? { services: { projectViewManager: options.windowScopedPvm } }
+                  : undefined,
+            }
+          : undefined,
+        projectViewManager: options.depsPvm,
+      } as never);
+
+      return testConfig;
+    }
+
+    async function invokeTestConfig() {
+      const handler = getInvokeHandler(CHANNELS.COPYTREE_TEST_CONFIG);
+      await handler(mockEvent, { worktreeId: "wt-1", options: {} });
+    }
+
+    it("merges the sender window's project settings, not the globally current project's", async () => {
+      aimGlobalSourcesAtGlobalProject();
+      const testConfig = registerWithScope({
+        windowScopedPvm: makePvm(SENDER_PROJECT),
+        depsPvm: makePvm(GLOBAL_PROJECT),
+      });
+
+      await invokeTestConfig();
+
+      const [, mergedOptions] = testConfig.mock.calls[0];
+      expect(mergedOptions.maxTotalSize).toBe(senderSettings.copyTreeSettings.maxContextSize);
+      expect(mergedOptions.maxTotalSize).not.toBe(globalSettings.copyTreeSettings.maxContextSize);
+      expect(mergedOptions.always).toEqual(senderSettings.copyTreeSettings.alwaysInclude);
+      expect(mergedOptions.exclude).toEqual(senderSettings.excludedPaths);
+      expect(mergedOptions.exclude).not.toContain(globalSettings.excludedPaths[0]);
+      expect(projectStoreMock.getProjectSettings).toHaveBeenCalledWith(SENDER_PROJECT);
+      expect(projectStoreMock.getCurrentProjectId).not.toHaveBeenCalled();
+    });
+
+    it("applies no project settings when the sender's view is unbound", async () => {
+      aimGlobalSourcesAtGlobalProject();
+      const testConfig = registerWithScope({ windowScopedPvm: makePvm(null) });
+
+      await invokeTestConfig();
+
+      // An unbound view must not inherit the global current project's settings,
+      // so nothing back-fills the empty runtime options.
+      const [, mergedOptions] = testConfig.mock.calls[0];
+      expect(mergedOptions).toEqual({});
+      expect(projectStoreMock.getProjectSettings).not.toHaveBeenCalled();
+      expect(projectStoreMock.getCurrentProjectId).not.toHaveBeenCalled();
+    });
+
+    it("falls back to the current project when no project-scoped view manager exists", async () => {
+      projectStoreMock.getCurrentProjectId.mockReturnValue(GLOBAL_PROJECT);
+      const testConfig = registerWithScope({ withSenderWindow: false });
+
+      await invokeTestConfig();
+
+      const [, mergedOptions] = testConfig.mock.calls[0];
+      expect(mergedOptions.maxTotalSize).toBe(globalSettings.copyTreeSettings.maxContextSize);
+      expect(mergedOptions.always).toEqual(globalSettings.copyTreeSettings.alwaysInclude);
+      expect(projectStoreMock.getProjectSettings).toHaveBeenCalledWith(GLOBAL_PROJECT);
     });
   });
 });
