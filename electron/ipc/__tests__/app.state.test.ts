@@ -99,9 +99,13 @@ vi.mock("../../services/TelemetryService.js", () => ({
 }));
 
 const consumeDatabaseRecovery = vi.hoisted(() => vi.fn(() => null as unknown));
+const restoreDatabaseRecovery = vi.hoisted(() => vi.fn());
 
 vi.mock("../../services/DatabaseMaintenanceService.js", () => ({
-  getDatabaseMaintenanceService: () => ({ consumeRecovery: consumeDatabaseRecovery }),
+  getDatabaseMaintenanceService: () => ({
+    consumeRecovery: consumeDatabaseRecovery,
+    restoreRecovery: restoreDatabaseRecovery,
+  }),
 }));
 
 vi.mock("../../window/deferredInitQueue.js", () => ({
@@ -618,6 +622,23 @@ describe("app:boot handler", () => {
 
     expect(result.databaseRecovery).toEqual(recovery);
     expect(consumeDatabaseRecovery).toHaveBeenCalledTimes(1);
+    expect(restoreDatabaseRecovery).not.toHaveBeenCalled();
+  });
+
+  it("hands the database recovery back when a pending crash will discard this payload", async () => {
+    // useAppBootstrap throws the boot payload away and re-runs app:hydrate once
+    // the crash gate resolves. An unclean exit is also exactly how the DB gets
+    // corrupted, so consuming the one-shot here would lose the notification in
+    // the very scenario it exists for.
+    const recovery = { kind: "restored-from-backup", quarantinedPath: "/u/daintree.db.corrupt-x" };
+    consumeDatabaseRecovery.mockReturnValueOnce(recovery);
+    crashService.getPendingCrash.mockReturnValue({ terminals: [], timestamp: 1 });
+
+    const result = (await invokeBoot()) as Record<string, unknown>;
+
+    expect(result.crashPending).not.toBeNull();
+    expect(result.databaseRecovery).toBeNull();
+    expect(restoreDatabaseRecovery).toHaveBeenCalledWith(recovery);
   });
 
   it("surfaces the boot-time database recovery even on the prefetch cache-hit path", async () => {

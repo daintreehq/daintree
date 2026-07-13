@@ -39,7 +39,14 @@ vi.mock("drizzle-orm/better-sqlite3", () => ({
   drizzle: vi.fn(() => ({})),
 }));
 
-import { openDb, probeDb, attemptRecovery, closeSharedDb, withDiskRecovery } from "../db.js";
+import {
+  openDb,
+  probeDb,
+  probeDbFile,
+  attemptRecovery,
+  closeSharedDb,
+  withDiskRecovery,
+} from "../db.js";
 
 describe("probeDb", () => {
   let tmpDir: string;
@@ -239,6 +246,99 @@ describe("attemptRecovery", () => {
     expect(attemptRecovery(dbPath)).toBeNull();
     expect(fs.existsSync(dbPath)).toBe(true);
     renameSpy.mockRestore();
+  });
+
+  it("still reports a reset when the DB moved but a later quarantine step failed", () => {
+    const dbPath = path.join(tmpDir, "daintree.db");
+    fs.writeFileSync(dbPath, "corrupt");
+    fs.writeFileSync(dbPath + "-wal", "wal");
+
+    // The main DB is quarantined, then the WAL rename fails. The DB is already
+    // gone, so a fresh one WILL be created — staying silent here would lose the
+    // user's data with no notification, which is the whole bug being fixed.
+    const realRename = fs.renameSync.bind(fs);
+    let calls = 0;
+    const renameSpy = vi
+      .spyOn(fs, "renameSync")
+      .mockImplementation((from: fs.PathLike, to: fs.PathLike) => {
+        calls += 1;
+        if (calls === 1) return realRename(from, to);
+        throw Object.assign(new Error("rename failed"), { code: "EPERM" });
+      });
+
+    const result = attemptRecovery(dbPath);
+
+    expect(result).toMatchObject({ kind: "reset-to-fresh" });
+    expect(fs.existsSync(dbPath)).toBe(false);
+    renameSpy.mockRestore();
+  });
+});
+
+describe("probeDbFile", () => {
+  let tmpDir: string;
+  let dbPath: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-db-probe-"));
+    dbPath = path.join(tmpDir, "candidate.db");
+    fs.writeFileSync(dbPath, "dummy");
+    vi.clearAllMocks();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    mockDatabaseConstructor.mockImplementation(() => ({}));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it("opens the candidate read-only and refuses to create a missing one", () => {
+    mockPragma.mockReturnValue("ok");
+
+    expect(probeDbFile(dbPath)).toBe("ok");
+    expect(mockDatabaseConstructor).toHaveBeenCalledWith(dbPath, {
+      readonly: true,
+      fileMustExist: true,
+    });
+    expect(mockClose).toHaveBeenCalled();
+  });
+
+  it("reports a failed quick_check as corrupt", () => {
+    mockPragma.mockReturnValue("*** in database main ***\nPage 48: btreeInitPage() error");
+
+    expect(probeDbFile(dbPath)).toBe("corrupt");
+    expect(mockClose).toHaveBeenCalled();
+  });
+
+  it("reports SQLITE_CORRUPT and SQLITE_NOTADB as corrupt", () => {
+    for (const code of ["SQLITE_CORRUPT_VTAB", "SQLITE_NOTADB"]) {
+      mockPragma.mockImplementation(() => {
+        throw Object.assign(new Error("bad"), { code });
+      });
+      expect(probeDbFile(dbPath)).toBe("corrupt");
+    }
+  });
+
+  // The whole point of this function. probeDb is fail-open — it returns TRUE for
+  // both of these, which is right at boot (don't quarantine a DB over a transient
+  // EACCES) and catastrophic when promoting a backup (an unverifiable candidate
+  // would overwrite the only good copy). Neither may ever come back "ok".
+  it("reports an unreadable candidate as unknown, never as ok", () => {
+    mockPragma.mockImplementation(() => {
+      throw Object.assign(new Error("permission denied"), { code: "SQLITE_IOERR_SHORT_READ" });
+    });
+
+    expect(probeDbFile(dbPath)).toBe("unknown");
+    expect(probeDb(dbPath)).toBe(true); // ...whereas the fail-open probe says fine
+    expect(mockClose).toHaveBeenCalled();
+  });
+
+  it("reports a missing candidate as unknown, never as ok", () => {
+    const absent = path.join(tmpDir, "absent.db");
+
+    expect(probeDbFile(absent)).toBe("unknown");
+    expect(probeDb(absent)).toBe(true); // ...whereas the fail-open probe says fine
+    expect(mockDatabaseConstructor).not.toHaveBeenCalled();
   });
 });
 

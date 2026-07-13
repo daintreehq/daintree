@@ -26,6 +26,7 @@ const mockDbModule = vi.hoisted(() => ({
   getBackupPath: vi.fn().mockReturnValue("/fake/daintree.db.backup"),
   getSharedSqlite: vi.fn().mockReturnValue(mockSqlite),
   probeDb: vi.fn().mockReturnValue(true),
+  probeDbFile: vi.fn().mockReturnValue("ok"),
   attemptRecovery: vi.fn().mockReturnValue({
     kind: "restored-from-backup",
     quarantinedPath: "/fake/daintree.db.corrupt-2026-01-01",
@@ -107,6 +108,7 @@ describe("DatabaseMaintenanceService", () => {
     mockDbModule.getBackupPath.mockReturnValue("/fake/daintree.db.backup");
     mockDbModule.getSharedSqlite.mockReturnValue(mockSqlite);
     mockDbModule.probeDb.mockReturnValue(true);
+    mockDbModule.probeDbFile.mockReturnValue("ok");
     mockDbModule.attemptRecovery.mockReturnValue(RESTORED_RECOVERY);
     mockSqlite.backup.mockResolvedValue(undefined);
     mockPowerMonitor.getSystemIdleTime.mockReturnValue(120);
@@ -168,6 +170,20 @@ describe("DatabaseMaintenanceService", () => {
     expect(service.consumeRecovery()).toEqual(RESTORED_RECOVERY);
     // One-shot: the notification must not re-fire on a later hydrate.
     expect(service.consumeRecovery()).toBeNull();
+    void service.dispose();
+  });
+
+  it("stashes a reset-to-fresh outcome, not just a restore", () => {
+    const reset = { kind: "reset-to-fresh" as const, quarantinedPath: "/fake/x.corrupt" };
+    mockDbModule.probeDb.mockReturnValue(false);
+    mockDbModule.attemptRecovery.mockReturnValue(reset);
+
+    const service = new DatabaseMaintenanceService();
+    service.initialize();
+
+    // The reset is the branch that actually loses the user's projects — dropping
+    // it while stashing restores would silently swallow the worse outcome.
+    expect(service.consumeRecovery()).toEqual(reset);
     void service.dispose();
   });
 
@@ -470,12 +486,10 @@ describe("DatabaseMaintenanceService", () => {
     expect(mockSqlite.pragma).toHaveBeenCalledWith("wal_checkpoint(TRUNCATE)");
   });
 
-  it("discards a candidate backup that fails its integrity probe", async () => {
+  it("discards a candidate backup that probes corrupt, and suspends backups", async () => {
     // The candidate written by sqlite.backup() probes dirty — its source pages
     // are corrupt, so promoting it would destroy the only good backup.
-    mockDbModule.probeDb.mockImplementation(
-      (path: string) => path !== "/fake/daintree.db.backup.tmp"
-    );
+    mockDbModule.probeDbFile.mockReturnValue("corrupt");
     vi.mocked(fs.existsSync).mockReturnValue(true);
 
     const service = new DatabaseMaintenanceService();
@@ -499,7 +513,13 @@ describe("DatabaseMaintenanceService", () => {
     expect(vi.mocked(fs.renameSync)).not.toHaveBeenCalled();
   });
 
-  it("probes the candidate backup on the worker before promoting it", async () => {
+  it("discards an unverifiable candidate without suspending backups", async () => {
+    // "unknown" is not evidence the DB is bad — it only means this copy could not
+    // be checked. Refuse to promote it, but keep trying: treating it as
+    // corruption would strand the user on an increasingly stale backup.
+    mockDbModule.probeDbFile.mockReturnValueOnce("unknown");
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+
     const service = new DatabaseMaintenanceService();
     service.initialize();
     service.startMaintenance();
@@ -507,21 +527,95 @@ describe("DatabaseMaintenanceService", () => {
     vi.advanceTimersByTime(TICK);
     await drainMicrotasks();
 
-    expect(mockRunDbWork).toHaveBeenCalledWith(
-      { op: "probePath", dbPath: "/fake/daintree.db.backup.tmp" },
-      expect.any(Function)
-    );
-    // The probe must precede the rename that replaces the last good backup.
-    const probeCall = mockRunDbWork.mock.calls.findIndex(
-      ([op]) => (op as { op: string }).op === "probePath"
-    );
-    expect(probeCall).toBeGreaterThanOrEqual(0);
+    expect(vi.mocked(fs.renameSync)).not.toHaveBeenCalled();
+    expect(vi.mocked(fs.unlinkSync)).toHaveBeenCalledWith("/fake/daintree.db.backup.tmp");
+
+    // The next tick probes "ok" and promotes normally — backups are not latched off.
+    vi.advanceTimersByTime(TICK);
+    await drainMicrotasks();
+
+    expect(mockSqlite.backup).toHaveBeenCalledTimes(2);
     expect(vi.mocked(fs.renameSync)).toHaveBeenCalledWith(
       "/fake/daintree.db.backup.tmp",
       "/fake/daintree.db.backup"
     );
+    await service.dispose();
+  });
+
+  it("does not rename until the candidate probe has actually returned", async () => {
+    const probe = createDeferred<string>();
+    mockRunDbWork.mockImplementation((op: unknown, fallback: () => unknown) =>
+      (op as { op: string }).op === "probePath" ? probe.promise : Promise.resolve(fallback())
+    );
+
+    const service = new DatabaseMaintenanceService();
+    service.initialize();
+    service.startMaintenance();
+
+    vi.advanceTimersByTime(TICK);
+    await drainMicrotasks();
+
+    // The candidate is written but its verdict is still outstanding. Renaming it
+    // over the good backup now is exactly the bug — the probe must gate it.
+    expect(mockSqlite.backup).toHaveBeenCalledTimes(1);
+    expect(mockRunDbWork).toHaveBeenCalledWith(
+      { op: "probePath", dbPath: "/fake/daintree.db.backup.tmp" },
+      expect.any(Function)
+    );
+    expect(vi.mocked(fs.renameSync)).not.toHaveBeenCalled();
+
+    probe.resolve("ok");
+    await drainMicrotasks();
+
+    expect(vi.mocked(fs.renameSync)).toHaveBeenCalledWith(
+      "/fake/daintree.db.backup.tmp",
+      "/fake/daintree.db.backup"
+    );
+    await service.dispose();
+  });
+
+  it("waits for an in-flight quick_check before running the final backup", async () => {
+    const quickCheck = createDeferred<string>();
+    mockRunDbWork.mockImplementation((op: unknown, fallback: () => unknown) =>
+      (op as { op: string }).op === "quickCheck" ? quickCheck.promise : Promise.resolve(fallback())
+    );
+
+    const service = new DatabaseMaintenanceService();
+    service.initialize(true);
+    service.startMaintenance();
+
+    vi.advanceTimersByTime(TICK);
+    await drainMicrotasks();
+    expect(mockSqlite.backup).not.toHaveBeenCalled();
+
+    // Shutdown lands while the check is still running — and it comes back corrupt.
+    const disposePromise = service.dispose();
+    quickCheck.resolve("*** in database main *** Page 4 is never used");
+    await disposePromise;
+
+    // dispose() must not have raced ahead and backed the corrupt database up.
+    expect(mockSqlite.backup).not.toHaveBeenCalled();
+    expect(vi.mocked(fs.renameSync)).not.toHaveBeenCalled();
+    expect(mockSqlite.pragma).toHaveBeenCalledWith("wal_checkpoint(TRUNCATE)");
+  });
+
+  it("probes the final backup on main rather than spawning a worker at shutdown", async () => {
+    const service = new DatabaseMaintenanceService();
+    service.initialize();
+    service.startMaintenance();
 
     await service.dispose();
+
+    // shutdown.ts drains the DB worker before disposing us, so routing this probe
+    // through runDbWork would spawn a fresh worker purely to tear it down.
+    expect(mockDbModule.probeDbFile).toHaveBeenCalledWith("/fake/daintree.db.backup.tmp");
+    expect(
+      mockRunDbWork.mock.calls.filter(([op]) => (op as { op: string }).op === "probePath")
+    ).toHaveLength(0);
+    expect(vi.mocked(fs.renameSync)).toHaveBeenCalledWith(
+      "/fake/daintree.db.backup.tmp",
+      "/fake/daintree.db.backup"
+    );
   });
 
   it("does not schedule a deferred quick_check when the boot probe already ran the full scan", () => {

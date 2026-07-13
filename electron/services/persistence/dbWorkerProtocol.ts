@@ -2,6 +2,15 @@ export interface DbWorkerData {
   dbPath: string;
 }
 
+/**
+ * Verdict on a SQLite file's integrity. "unknown" (could not be verified — the
+ * file is missing, locked, or unreadable) is deliberately distinct from
+ * "corrupt" (quick_check proved it bad): a caller about to overwrite the last
+ * known-good backup must treat both as "do not promote", but only "corrupt" is
+ * evidence that the source database itself is damaged.
+ */
+export type DbProbeResult = "ok" | "corrupt" | "unknown";
+
 export type DbWorkerOp =
   | { op: "checkpoint"; mode: "PASSIVE" | "TRUNCATE" }
   | { op: "quickCheck" }

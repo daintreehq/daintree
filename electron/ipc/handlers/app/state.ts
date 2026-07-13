@@ -506,8 +506,19 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       typeof (rawAppTheme.customSchemes as unknown) !== "string"
         ? (rawAppTheme as import("../../../../shared/types/appTheme.js").AppThemeConfig)
         : undefined;
+    // `useAppBootstrap` throws this whole payload away and re-runs `app:hydrate`
+    // once the crash gate resolves (`hadPendingCrash ? null : bootResult`), so a
+    // destructive one-shot consumed above would never reach the user. An unclean
+    // exit is also exactly how the database gets corrupted — hand the recovery
+    // back so the live hydrate that follows delivers it.
+    const droppedRecovery = crashPending !== null ? hydrate.databaseRecovery : null;
+    if (droppedRecovery) {
+      getDatabaseMaintenanceService().restoreRecovery(droppedRecovery);
+    }
+
     return {
       ...hydrate,
+      databaseRecovery: droppedRecovery ? null : hydrate.databaseRecovery,
       crashPending,
       crashConfig: crashService.getConfig(),
       appTheme,

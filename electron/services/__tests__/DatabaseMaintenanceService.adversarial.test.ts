@@ -21,6 +21,7 @@ const mockDbModule = vi.hoisted(() => ({
   getBackupPath: vi.fn().mockReturnValue("/fake/daintree.db.backup"),
   getSharedSqlite: vi.fn().mockReturnValue(mockSqlite),
   probeDb: vi.fn().mockReturnValue(true),
+  probeDbFile: vi.fn().mockReturnValue("ok"),
   attemptRecovery: vi.fn().mockReturnValue({
     kind: "restored-from-backup",
     quarantinedPath: "/fake/daintree.db.corrupt-2026-01-01",
@@ -99,6 +100,7 @@ describe("DatabaseMaintenanceService adversarial", () => {
     mockDbModule.getBackupPath.mockReturnValue("/fake/daintree.db.backup");
     mockDbModule.getSharedSqlite.mockReturnValue(mockSqlite);
     mockDbModule.probeDb.mockReturnValue(true);
+    mockDbModule.probeDbFile.mockReturnValue("ok");
     mockSqlite.backup.mockResolvedValue(undefined);
     mockSqlite.pragma.mockReset();
     mockPowerMonitor.getSystemIdleTime.mockReturnValue(120);
@@ -198,12 +200,33 @@ describe("DatabaseMaintenanceService adversarial", () => {
     await expect(service.dispose()).resolves.toBeUndefined();
   });
 
+  it("CORRUPT_CANDIDATE_SURVIVES_FAILED_TEMP_CLEANUP", async () => {
+    // The candidate probes dirty AND the temp file cannot be removed. The latch
+    // must still hold: a failed unlink is not a reason to promote the bad copy.
+    mockDbModule.probeDbFile.mockReturnValue("corrupt");
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.unlinkSync).mockImplementation(() => {
+      throw Object.assign(new Error("unlink failed"), { code: "EPERM" });
+    });
+
+    const service = new DatabaseMaintenanceService();
+    service.initialize();
+    service.startMaintenance();
+
+    vi.advanceTimersByTime(5 * 60 * 1000);
+    await drainMicrotasks();
+
+    expect(vi.mocked(fs.renameSync)).not.toHaveBeenCalled();
+
+    await service.dispose();
+    expect(mockSqlite.backup).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(fs.renameSync)).not.toHaveBeenCalled();
+  });
+
   it("CORRUPT_CANDIDATE_NEVER_REPLACES_GOOD_BACKUP", async () => {
     // The live DB is fine at boot, but the copy sqlite.backup() produces probes
     // dirty — promoting it would destroy the only good backup we have.
-    mockDbModule.probeDb.mockImplementation(
-      (path: string) => path !== "/fake/daintree.db.backup.tmp"
-    );
+    mockDbModule.probeDbFile.mockReturnValue("corrupt");
     vi.mocked(fs.existsSync).mockReturnValue(true);
 
     const service = new DatabaseMaintenanceService();

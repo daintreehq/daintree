@@ -273,7 +273,7 @@ describe("dbMaintenanceWorker (real worker thread)", () => {
 
     const w = spawn();
     const response = await request(w, { op: "probePath", dbPath: candidatePath });
-    expect(response).toMatchObject({ ok: true, result: true });
+    expect(response).toMatchObject({ ok: true, result: "ok" });
 
     // The probe's handle must be closed — a lingering one would block the
     // rename that promotes this file over the live backup on Windows.
@@ -281,23 +281,36 @@ describe("dbMaintenanceWorker (real worker thread)", () => {
     expect(fs.existsSync(path.join(tmpDir, "promoted.db"))).toBe(true);
   });
 
-  it("reports a non-SQLite candidate as failing its probe", async () => {
+  it("reports a non-SQLite candidate as corrupt", async () => {
     const candidatePath = path.join(tmpDir, "garbage.db");
     fs.writeFileSync(candidatePath, "this is not a sqlite database");
 
     const w = spawn();
     const response = await request(w, { op: "probePath", dbPath: candidatePath });
-    expect(response).toMatchObject({ ok: true, result: false });
+    expect(response).toMatchObject({ ok: true, result: "corrupt" });
   });
 
-  it("rejects a probe of a missing path rather than reporting it clean", async () => {
+  it("reports a missing candidate as unverifiable, never as clean", async () => {
     const w = spawn();
     const response = await request(w, {
       op: "probePath",
       dbPath: path.join(tmpDir, "does-not-exist.db"),
     });
-    // Not a corruption verdict — the client falls back to probing on main.
-    expect(response.ok).toBe(false);
+    // "unknown", not "ok" — an unverifiable file must never be promoted over the
+    // good backup, but it is also not evidence that the live DB is corrupt.
+    expect(response).toMatchObject({ ok: true, result: "unknown" });
+  });
+
+  it("leaves the live database usable after probing an unrelated path", async () => {
+    const candidatePath = path.join(tmpDir, "candidate.db");
+    fs.writeFileSync(candidatePath, "not a database");
+
+    const w = spawn();
+    await request(w, { op: "probePath", dbPath: candidatePath });
+
+    // A corrupt candidate must not poison the worker's own connection.
+    const after = await request(w, { op: "quickCheck" });
+    expect(after).toMatchObject({ ok: true, result: "ok" });
   });
 
   it("responds to close and exits without terminate()", async () => {

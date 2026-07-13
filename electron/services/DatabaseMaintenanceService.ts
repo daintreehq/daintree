@@ -6,10 +6,12 @@ import {
   getBackupPath,
   getSharedSqlite,
   probeDb,
+  probeDbFile,
   attemptRecovery,
 } from "./persistence/db.js";
 import { runDbWork } from "./persistence/dbWorkerClient.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
+import type { DbProbeResult } from "./persistence/dbWorkerProtocol.js";
 import type { DatabaseRecovery } from "../../shared/types/ipc/app.js";
 
 const TICK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
@@ -78,6 +80,17 @@ class DatabaseMaintenanceService {
     return recovery;
   }
 
+  /**
+   * Hand a consumed recovery back when its payload is about to be thrown away.
+   * `app:boot` is fired before the crash-recovery gate resolves, and the renderer
+   * discards that payload and re-hydrates whenever a crash was pending — which is
+   * precisely the boot where the database gets corrupted, so without this the
+   * notification would be lost exactly when it matters most.
+   */
+  restoreRecovery(recovery: DatabaseRecovery): void {
+    this.pendingRecovery ??= recovery;
+  }
+
   startMaintenance(): void {
     // Defensive: dispose() may run before startMaintenance() drains from the
     // deferred queue (window closed before first-interactive). The timer/listener
@@ -113,6 +126,16 @@ class DatabaseMaintenanceService {
       this.removeSuspendListener = null;
     }
 
+    // Let an outstanding integrity check finish first — if it is about to report
+    // corruption, the final backup must not run at all.
+    if (this.deferredQuickCheckInFlight) {
+      try {
+        await this.deferredQuickCheckInFlight;
+      } catch {
+        // ignore — quick_check errors already logged
+      }
+    }
+
     // Wait for any in-flight backup from a tick before proceeding
     if (this.backupPromise) {
       try {
@@ -131,7 +154,7 @@ class DatabaseMaintenanceService {
         "[DatabaseMaintenance] Skipping final backup — database corruption was detected this session"
       );
     } else {
-      await this.runBackup();
+      await this.runBackup(true);
     }
     this.optimize();
     this.checkpoint("TRUNCATE");
@@ -246,7 +269,13 @@ class DatabaseMaintenanceService {
     }
   }
 
-  private async runBackup(): Promise<void> {
+  /**
+   * `probeOnMain` is set by dispose(): shutdown.ts drains the DB worker before
+   * it calls us, so going through runDbWork there would spawn a fresh worker
+   * purely to tear it down. Probe directly instead — dispose() already accepts
+   * synchronous optimize + TRUNCATE on main.
+   */
+  private async runBackup(probeOnMain = false): Promise<void> {
     if (this.backupPromise && !this.disposed) {
       // Another backup is already in flight from a tick — skip
       return this.backupPromise;
@@ -262,20 +291,33 @@ class DatabaseMaintenanceService {
       await sqlite.backup(tmpPath);
 
       // sqlite.backup() copies pages verbatim and never validates them, so a
-      // corrupt source yields a corrupt copy with no error. Probe the candidate
-      // before it replaces the last known-good backup. On the shutdown path the
-      // DB worker is already gone, so this runs its fallback on main — the same
-      // tradeoff dispose() already makes for optimize + TRUNCATE.
-      const intact = await runDbWork<boolean>({ op: "probePath", dbPath: tmpPath }, () =>
-        probeDb(tmpPath)
-      );
+      // corrupt source yields a corrupt copy with no error at all. Probe the
+      // candidate before it replaces the last known-good backup. Note this uses
+      // probeDbFile, NOT probeDb: probeDb is fail-open on unreadable files, and
+      // promoting an unverifiable candidate over the only good backup is exactly
+      // the destruction this guards against.
+      const verdict = probeOnMain
+        ? probeDbFile(tmpPath)
+        : await runDbWork<DbProbeResult>({ op: "probePath", dbPath: tmpPath }, () =>
+            probeDbFile(tmpPath)
+          );
 
-      if (!intact) {
-        this.backupBlockedByCorruption = true;
-        console.error(
-          `[DatabaseMaintenance] Backup failed its integrity check — discarding it and keeping the existing backup at ${backupPath}`
-        );
+      if (verdict !== "ok") {
         this.discardTempBackup(tmpPath);
+        if (verdict === "corrupt") {
+          // Proven bad pages — the source DB is damaged, so every later backup
+          // would be too. Keep what we have and let the next boot recover.
+          this.backupBlockedByCorruption = true;
+          console.error(
+            `[DatabaseMaintenance] New backup failed its integrity check — the database is corrupt. Keeping the existing backup at ${backupPath} and suspending backups`
+          );
+        } else {
+          // Could not verify it. No evidence the DB is bad, so don't suspend
+          // backups — just refuse to promote an unverified copy, and retry.
+          console.warn(
+            `[DatabaseMaintenance] Could not verify the new backup — discarding it and keeping the existing backup at ${backupPath}; will retry`
+          );
+        }
         return;
       }
 
