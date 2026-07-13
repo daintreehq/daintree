@@ -13,6 +13,7 @@
 
 import { app } from "electron";
 import { SHUTDOWN_DEADLINE_MS } from "./shutdownConfig.js";
+import { clearSafetyBeltTimer } from "./signalShutdownState.js";
 
 export type ShutdownOutcome = "clean" | "dirty";
 export type ShutdownInitiator = "app-quit" | "update-install";
@@ -65,6 +66,26 @@ export function startShutdown(
   const run: ActiveShutdown = { initiator, phase: "cleaning" };
   active = run;
 
+  // Absolute deadline. Every budget inside the chain is bounded, but this is the
+  // structural guarantee that the terminal action ALWAYS runs: without it, one
+  // unbounded await anywhere in the chain would hang the run in "cleaning" and
+  // make the app unquittable. Resolves (never rejects) so it cannot itself strand
+  // the handoff.
+  //
+  // Armed BEFORE the runner starts: the chain does synchronous work (the eager
+  // backup snapshot, the compile-cache flush) before its first await, and a
+  // deadline armed after that would start late — eating into the margin the signal
+  // safety-belt is sized against.
+  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<ShutdownOutcome>((resolve) => {
+    deadlineTimer = setTimeout(() => {
+      console.error(
+        `[MAIN] Shutdown exceeded its ${SHUTDOWN_DEADLINE_MS}ms deadline — forcing the terminal action`
+      );
+      resolve("dirty");
+    }, SHUTDOWN_DEADLINE_MS);
+  });
+
   // Start the chain. `runner` is an async function, so a throw in its synchronous
   // prefix surfaces as a rejection — but wrap it anyway: a synchronous throw here
   // would leave `active` stuck in "cleaning" forever, and a shutdown stuck in
@@ -84,23 +105,14 @@ export function startShutdown(
     return "dirty" as ShutdownOutcome;
   });
 
-  // Absolute deadline. Every budget inside the chain is bounded, but this is the
-  // structural guarantee that the terminal action ALWAYS runs: without it, one
-  // unbounded await anywhere in the chain would hang the run in "cleaning" and
-  // make the app unquittable. Resolves (never rejects) so it cannot itself strand
-  // the handoff.
-  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<ShutdownOutcome>((resolve) => {
-    deadlineTimer = setTimeout(() => {
-      console.error(
-        `[MAIN] Shutdown exceeded its ${SHUTDOWN_DEADLINE_MS}ms deadline — forcing the terminal action`
-      );
-      resolve("dirty");
-    }, SHUTDOWN_DEADLINE_MS);
-  });
-
   void Promise.race([settled, deadline]).then((outcome) => {
     clearTimeout(deadlineTimer);
+    // Defuse the signal safety-belt at handoff. The chain clears it on its own
+    // way out, but a DEADLINE-forced handoff means the chain is still wedged and
+    // never reached that line — leaving an armed belt that would app.exit(1) a few
+    // seconds later, straight through the updater's install window and killing the
+    // very update we just spent the whole cleanup preparing for.
+    clearSafetyBeltTimer();
     // Flip to "handoff" BEFORE invoking the terminal action, in the same
     // synchronous turn: onSettled issues quitAndInstall(), and Squirrel's
     // app.quit() behind it must be allowed through the before-quit listener.

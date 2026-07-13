@@ -1411,6 +1411,11 @@ describe("registerShutdownHandler", () => {
         await vi.advanceTimersByTimeAsync(SHUTDOWN_DEADLINE_MS);
 
         expect(onSettled).toHaveBeenCalledWith("dirty");
+        // A deadline-forced handoff never reaches the chain's own
+        // clearSafetyBeltTimer(), so the coordinator must defuse the belt itself —
+        // otherwise it fires seconds later and app.exit(1)s straight through the
+        // updater's install window.
+        expect(signalShutdownMock.clearSafetyBeltTimer).toHaveBeenCalled();
       } finally {
         consoleSpy.mockRestore();
         vi.useRealTimers();
