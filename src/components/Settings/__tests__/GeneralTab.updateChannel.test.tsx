@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import { StrictMode } from "react";
+import { render, screen, fireEvent, waitFor, cleanup, act } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import type { CliAvailability, AgentSettings, HibernationConfig } from "@shared/types";
 import { useDistributionStore } from "@/store/distributionStore";
 
 vi.mock("@/lib/utils", () => ({ cn: (...args: unknown[]) => args.filter(Boolean).join(" ") }));
@@ -66,25 +66,19 @@ vi.mock("@/services/ActionService", () => ({
 function setupDispatchMock() {
   mockDispatch.mockImplementation(async (actionId: string) => {
     if (actionId === "cliAvailability.get") {
-      return { ok: true, result: { claude: "ready" } as CliAvailability };
+      return { ok: true, result: { claude: "ready" } };
     }
     if (actionId === "agentSettings.get") {
-      return {
-        ok: true,
-        result: { agents: { claude: { pinned: true } } } as unknown as AgentSettings,
-      };
+      return { ok: true, result: { agents: { claude: { pinned: true } } } };
     }
     if (actionId === "hibernation.getConfig") {
-      return {
-        ok: true,
-        result: { enabled: false, inactiveThresholdHours: 24 } as HibernationConfig,
-      };
+      return { ok: true, result: { enabled: false, inactiveThresholdHours: 24 } };
     }
     return { ok: true, result: undefined };
   });
 }
 
-/** A promise whose settlement this test controls, so we can observe the in-flight state. */
+/** A promise whose settlement this test controls, so the in-flight state stays observable. */
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -92,48 +86,64 @@ function deferred<T>() {
     resolve = res;
     reject = rej;
   });
-  // Keep the rejection from tripping an unhandled-rejection warning before the component attaches.
+  // An independent handler, so a rejection we settle late doesn't trip an unhandled-rejection
+  // warning. The component attaches its own catch to the same promise and still observes it.
   promise.catch(() => {});
   return { promise, resolve, reject };
 }
 
-type GetChannel = () => Promise<"stable" | "nightly">;
+type Channel = "stable" | "nightly";
+type GetChannel = () => Promise<Channel>;
 
 function setupElectron(getChannel: GetChannel, lastCheck: number | null = null) {
-  const setChannel = vi.fn<(ch: "stable" | "nightly") => Promise<"stable" | "nightly">>((ch) =>
-    Promise.resolve(ch)
-  );
-  (window as unknown as { electron: unknown }).electron = {
-    update: {
-      getChannel: vi.fn(getChannel),
-      setChannel,
-      getLastCheck: vi.fn(() => Promise.resolve(lastCheck)),
+  const setChannel = vi.fn<(ch: Channel) => Promise<Channel>>((ch) => Promise.resolve(ch));
+  const getChannelMock = vi.fn(getChannel);
+  Object.assign(window, {
+    electron: {
+      update: {
+        getChannel: getChannelMock,
+        setChannel,
+        getLastCheck: vi.fn(() => Promise.resolve(lastCheck)),
+      },
     },
-  };
-  return { setChannel };
+  });
+  return { getChannel: getChannelMock, setChannel };
 }
 
-function electronUpdate() {
-  return (
-    window as unknown as {
-      electron: { update: { getChannel: { mock: { calls: unknown[] } } } };
-    }
-  ).electron.update;
+function channelButtons() {
+  return {
+    stable: screen.queryByRole("button", { name: "stable" }),
+    nightly: screen.queryByRole("button", { name: "nightly" }),
+  };
+}
+
+const NIGHTLY_WARNING = /Nightly builds may contain unstable features/;
+/** The banner must name the thing that failed — matched semantically, not by exact prose. */
+const BANNER_MESSAGE = /update channel/i;
+
+function props() {
+  return {
+    appVersion: "1.0.0",
+    onNavigateToAgents: vi.fn(),
+    activeSubtab: "overview",
+    onSubtabChange: vi.fn(),
+  };
 }
 
 async function renderGeneralTab() {
   const { GeneralTab } = await import("../GeneralTab");
-  return render(
-    <GeneralTab
-      appVersion="1.0.0"
-      onNavigateToAgents={vi.fn()}
-      activeSubtab="overview"
-      onSubtabChange={vi.fn()}
-    />
-  );
+  return render(<GeneralTab {...props()} />);
 }
 
-const BANNER_TEXT = "Couldn't load the update channel";
+/** Mirrors the real root (src/main.tsx), where StrictMode double-invokes mount effects. */
+async function renderGeneralTabStrict() {
+  const { GeneralTab } = await import("../GeneralTab");
+  return render(
+    <StrictMode>
+      <GeneralTab {...props()} />
+    </StrictMode>
+  );
+}
 
 describe("GeneralTab — update channel load failure (issue #11119)", () => {
   beforeEach(() => {
@@ -143,45 +153,63 @@ describe("GeneralTab — update channel load failure (issue #11119)", () => {
   });
 
   afterEach(() => {
+    // Unmount before restoring the real store, or the last test's reset re-renders a live
+    // component outside act() and kicks off another channel load.
+    cleanup();
     useDistributionStore.setState({ isWindowsStore: false });
   });
 
-  it("never selects a channel when the load fails", async () => {
-    setupElectron(() => Promise.reject(new Error("ipc down")));
+  it("never fabricates a channel when the load fails", async () => {
+    const error = new Error("ipc down");
+    const { setChannel } = setupElectron(() => Promise.reject(error));
 
     await renderGeneralTab();
 
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain(BANNER_TEXT);
+    expect(alert.textContent).toMatch(BANNER_MESSAGE);
 
-    // The whole point of #11119: a failed load must not manufacture a "stable" selection.
-    expect(screen.queryByRole("button", { name: "stable" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "nightly" })).toBeNull();
-    expect(screen.queryByText(/Nightly builds may contain unstable features/)).toBeNull();
-    expect(mockLogError).toHaveBeenCalledWith("Failed to get update channel", expect.anything());
+    // The heart of #11119: a failed load must not manufacture a selection. If it fabricated
+    // "stable", the buttons would render (enabled, with stable selected) instead of the banner.
+    const { stable, nightly } = channelButtons();
+    expect(stable).toBeNull();
+    expect(nightly).toBeNull();
+    expect(screen.queryByText(NIGHTLY_WARNING)).toBeNull();
+
+    // ...and nothing on the load path may ever write the channel back to main.
+    expect(setChannel).not.toHaveBeenCalled();
+    expect(mockLogError).toHaveBeenCalledWith(expect.any(String), error);
   });
 
   it("shows the real channel and no banner when the load succeeds", async () => {
-    setupElectron(() => Promise.resolve("nightly"));
+    const { setChannel } = setupElectron(() => Promise.resolve("nightly"));
 
     await renderGeneralTab();
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "nightly" }).hasAttribute("disabled")).toBe(false);
     });
-    expect(screen.getByText(/Nightly builds may contain unstable features/)).toBeTruthy();
+    // The nightly warning is the semantic proof that the REAL channel landed, not a fabricated one.
+    expect(screen.getByText(NIGHTLY_WARNING)).toBeTruthy();
     expect(screen.queryByRole("alert")).toBeNull();
+    expect(setChannel).not.toHaveBeenCalled();
   });
 
-  it("keeps the channel buttons disabled while the load is still in flight", async () => {
-    const pending = deferred<"stable" | "nightly">();
-    setupElectron(() => pending.promise);
+  it("leaves the channel unknown and un-settable while the load is in flight", async () => {
+    const pending = deferred<Channel>();
+    const { setChannel } = setupElectron(() => pending.promise);
 
     await renderGeneralTab();
 
     const stable = await screen.findByRole("button", { name: "stable" });
+    const nightly = screen.getByRole("button", { name: "nightly" });
     expect(stable.hasAttribute("disabled")).toBe(true);
+    expect(nightly.hasAttribute("disabled")).toBe(true);
     expect(screen.queryByRole("alert")).toBeNull();
+
+    // A disabled button is a real browser gate, but prove the invariant, not the markup.
+    fireEvent.click(stable);
+    fireEvent.click(nightly);
+    expect(setChannel).not.toHaveBeenCalled();
 
     await act(async () => {
       pending.resolve("stable");
@@ -190,6 +218,7 @@ describe("GeneralTab — update channel load failure (issue #11119)", () => {
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "stable" }).hasAttribute("disabled")).toBe(false);
     });
+    expect(setChannel).not.toHaveBeenCalled();
   });
 
   it("keeps the independently-loaded last-checked line visible when the channel fails", async () => {
@@ -203,59 +232,78 @@ describe("GeneralTab — update channel load failure (issue #11119)", () => {
     });
   });
 
-  it("retry refetches and shows the recovered channel", async () => {
-    const getChannel = vi
-      .fn<GetChannel>()
-      .mockRejectedValueOnce(new Error("ipc down"))
-      .mockResolvedValueOnce("nightly");
-    setupElectron(getChannel);
+  it("retry refetches and recovers the real channel", async () => {
+    const { getChannel, setChannel } = setupElectron(
+      vi
+        .fn<GetChannel>()
+        .mockRejectedValueOnce(new Error("ipc down"))
+        .mockResolvedValueOnce("nightly")
+    );
 
     await renderGeneralTab();
 
-    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    const callsBeforeRetry = getChannel.mock.calls.length;
+    fireEvent.click(retry);
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "nightly" }).hasAttribute("disabled")).toBe(false);
+      expect(screen.getByText(NIGHTLY_WARNING)).toBeTruthy();
     });
+    // Both controls come back live, and the recovered value is the real one — not a fallback.
+    const { stable, nightly } = channelButtons();
+    expect(stable?.hasAttribute("disabled")).toBe(false);
+    expect(nightly?.hasAttribute("disabled")).toBe(false);
     expect(screen.queryByRole("alert")).toBeNull();
-    expect(getChannel).toHaveBeenCalledTimes(2);
+    expect(getChannel.mock.calls.length).toBe(callsBeforeRetry + 1);
+    expect(setChannel).not.toHaveBeenCalled();
   });
 
-  it("shows the banner again when the retry also fails", async () => {
-    const second = deferred<"stable" | "nightly">();
-    const getChannel = vi
-      .fn<GetChannel>()
-      .mockRejectedValueOnce(new Error("ipc down"))
-      .mockImplementationOnce(() => second.promise);
-    setupElectron(getChannel);
+  it("holds the channel unknown across a retry that also fails", async () => {
+    const firstError = new Error("ipc down");
+    const secondError = new Error("still down");
+    const second = deferred<Channel>();
+    const { setChannel } = setupElectron(
+      vi
+        .fn<GetChannel>()
+        .mockRejectedValueOnce(firstError)
+        .mockImplementationOnce(() => second.promise)
+    );
 
     await renderGeneralTab();
 
     fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
 
-    // The retry clears the error and returns to the loading (disabled) state...
+    // The retry clears the error and returns to the loading state. This window is where a
+    // fabricated "stable" from the FIRST failure would surface as enabled/selected buttons.
     await waitFor(() => {
       expect(screen.queryByRole("alert")).toBeNull();
     });
+    const { stable, nightly } = channelButtons();
+    expect(stable?.hasAttribute("disabled")).toBe(true);
+    expect(nightly?.hasAttribute("disabled")).toBe(true);
+    expect(screen.queryByText(NIGHTLY_WARNING)).toBeNull();
 
     await act(async () => {
-      second.reject(new Error("still down"));
+      second.reject(secondError);
     });
 
-    // ...and a second failure must surface the banner again, still retryable.
+    // A second failure surfaces the banner again, still retryable, still no channel written.
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain(BANNER_TEXT);
+    expect(alert.textContent).toMatch(BANNER_MESSAGE);
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
-    expect(getChannel).toHaveBeenCalledTimes(2);
-    expect(mockLogError).toHaveBeenCalledTimes(2);
+    expect(setChannel).not.toHaveBeenCalled();
+
+    // Each attempt logged its OWN error — a repeat of the first would also reach a bare count of 2.
+    expect(mockLogError).toHaveBeenCalledWith(expect.any(String), firstError);
+    expect(mockLogError).toHaveBeenCalledWith(expect.any(String), secondError);
   });
 
   it("discards an in-flight channel rejection when Windows Store hydration lands", async () => {
-    const pending = deferred<"stable" | "nightly">();
+    const staleError = new Error("ipc down");
+    const pending = deferred<Channel>();
     setupElectron(() => pending.promise);
 
     await renderGeneralTab();
-    expect(electronUpdate().getChannel.mock.calls).toHaveLength(1);
 
     // isWindowsStore hydrates asynchronously and can flip false -> true after mount.
     await act(async () => {
@@ -268,15 +316,84 @@ describe("GeneralTab — update channel load failure (issue #11119)", () => {
     expect(screen.queryByTestId("section-Update channel")).toBeNull();
 
     await act(async () => {
-      pending.reject(new Error("ipc down"));
+      pending.reject(staleError);
     });
 
-    // The superseded attempt owns no UI: it must neither raise the banner nor log.
+    // The superseded attempt owns no UI: it must not log. (Matched on the error INSTANCE, so
+    // rewording the log message can't make this pass vacuously.)
+    expect(mockLogError).not.toHaveBeenCalledWith(expect.anything(), staleError);
     expect(screen.queryByRole("alert")).toBeNull();
-    expect(screen.queryByRole("button", { name: "stable" })).toBeNull();
-    expect(mockLogError).not.toHaveBeenCalledWith(
-      "Failed to get update channel",
-      expect.anything()
+  });
+});
+
+// The Store branch hides the channel UI, so it cannot prove a stale write was DISCARDED rather
+// than merely hidden. StrictMode's mount double-invoke supersedes an attempt while the channel
+// UI is still on screen, which makes the cancellation guard observable.
+describe("GeneralTab — superseded channel loads under StrictMode (issue #11119)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupDispatchMock();
+    useDistributionStore.setState({ isWindowsStore: false });
+  });
+
+  afterEach(() => {
+    cleanup();
+    useDistributionStore.setState({ isWindowsStore: false });
+  });
+
+  it("ignores a rejection from a superseded mount attempt", async () => {
+    const staleError = new Error("stale ipc failure");
+    const stale = deferred<Channel>();
+    const { getChannel } = setupElectron(
+      vi
+        .fn<GetChannel>()
+        .mockImplementationOnce(() => stale.promise)
+        .mockImplementationOnce(() => Promise.resolve("nightly"))
     );
+
+    await renderGeneralTabStrict();
+
+    // Precondition: StrictMode really did double-invoke, so attempt #1 is the superseded one.
+    await waitFor(() => {
+      expect(getChannel.mock.calls.length).toBe(2);
+    });
+    await waitFor(() => {
+      expect(screen.getByText(NIGHTLY_WARNING)).toBeTruthy();
+    });
+
+    await act(async () => {
+      stale.reject(staleError);
+    });
+
+    // The live channel survives: the dead attempt must not raise a banner over a loaded value.
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByText(NIGHTLY_WARNING)).toBeTruthy();
+    expect(mockLogError).not.toHaveBeenCalledWith(expect.anything(), staleError);
+  });
+
+  it("ignores a late resolution from a superseded mount attempt", async () => {
+    const stale = deferred<Channel>();
+    const { getChannel } = setupElectron(
+      vi
+        .fn<GetChannel>()
+        .mockImplementationOnce(() => stale.promise)
+        .mockImplementationOnce(() => Promise.resolve("nightly"))
+    );
+
+    await renderGeneralTabStrict();
+
+    await waitFor(() => {
+      expect(getChannel.mock.calls.length).toBe(2);
+    });
+    await waitFor(() => {
+      expect(screen.getByText(NIGHTLY_WARNING)).toBeTruthy();
+    });
+
+    await act(async () => {
+      stale.resolve("stable");
+    });
+
+    // A slow superseded attempt must not overwrite the live one with an outdated channel.
+    expect(screen.getByText(NIGHTLY_WARNING)).toBeTruthy();
   });
 });

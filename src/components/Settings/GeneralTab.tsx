@@ -179,7 +179,7 @@ export function GeneralTab({
       })
       .catch((error) => {
         // Never fall back to a channel here: an unknown channel must stay unknown,
-        // or a nightly user sees "stable" selected and silently gets moved to it.
+        // or a nightly user sees "stable" selected as though it were authoritative.
         if (cancelled) return;
         setUpdateChannelLoadFailed(true);
         logError("Failed to get update channel", error);
