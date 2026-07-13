@@ -54,6 +54,7 @@ vi.mock("electron", () => ({
 vi.mock("../../../window/webContentsRegistry.js", () => ({
   getWindowForWebContents: getWindowForWebContentsMock,
   getAppWebContents: getAppWebContentsMock,
+  getProjectForWebContents: vi.fn(() => null),
 }));
 
 import { CHANNELS } from "../../channels.js";

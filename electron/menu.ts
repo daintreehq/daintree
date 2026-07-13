@@ -9,7 +9,7 @@ import { isAssistantOnlyAgentId } from "../shared/config/agentIds.js";
 import type { CliAvailabilityService } from "./services/CliAvailabilityService.js";
 import { isAgentInstalled } from "../shared/utils/agentAvailability.js";
 import * as CliInstallService from "./services/CliInstallService.js";
-import { getWindowRegistry, getProjectViewManager } from "./window/windowRef.js";
+import { getWindowRegistry } from "./window/windowRef.js";
 import {
   getPtyClient,
   getWorkspaceClientRef,
@@ -607,8 +607,11 @@ export async function handleDirectoryOpen(
   try {
     const project = await projectStore.addProject(directoryPath);
 
-    // Use ProjectViewManager for multi-view switching when available
-    const pvm = getProjectViewManager();
+    // Use the target window's own ProjectViewManager for multi-view switching
+    // when available. The process-global manager points at the last-created
+    // window, so opening a directory from an older window's menu would switch
+    // the wrong window's view (#11100).
+    const pvm = getWindowRegistry()?.getByWindowId(targetWindow.id)?.services.projectViewManager;
     if (pvm) {
       const { view, isNew } = await pvm.switchTo(project.id, project.path);
       // Capture the outgoing project id before the pointer flips so we can

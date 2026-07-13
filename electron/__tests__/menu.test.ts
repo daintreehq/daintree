@@ -84,11 +84,24 @@ vi.mock("electron", () => ({
   },
 }));
 
+const projectStoreMock = vi.hoisted(() => ({
+  getAllProjects: vi.fn(() => []),
+  getCurrentProjectId: vi.fn<() => string | null>(() => null),
+  addProject: vi.fn<(path: string) => Promise<{ id: string; path: string }>>(),
+  setCurrentProject: vi.fn<(id: string) => Promise<void>>(async () => {}),
+  getProjectById: vi.fn<(id: string) => { id: string; path: string } | null>(() => null),
+}));
+
 vi.mock("../services/ProjectStore.js", () => ({
-  projectStore: {
-    getAllProjects: vi.fn(() => []),
-    getCurrentProjectId: vi.fn(() => null),
-  },
+  projectStore: projectStoreMock,
+}));
+
+vi.mock("../ipc/projectSwitchBroadcast.js", () => ({
+  broadcastProjectSwitchUpdates: vi.fn(),
+}));
+
+vi.mock("../window/portDistribution.js", () => ({
+  distributePortsToView: vi.fn(),
 }));
 
 vi.mock("../ipc/channels.js", () => ({
@@ -108,10 +121,12 @@ vi.mock("../window/windowServices.js", () => ({
   getWorktreePortBrokerRef: vi.fn(),
 }));
 
-vi.mock("../window/windowRef.js", () => ({
-  getWindowRegistry: vi.fn(() => null),
-  getProjectViewManager: vi.fn(() => null),
+const windowRefMock = vi.hoisted(() => ({
+  getWindowRegistry: vi.fn<() => unknown>(() => null),
+  getProjectViewManager: vi.fn<() => unknown>(() => null),
 }));
+
+vi.mock("../window/windowRef.js", () => windowRefMock);
 
 const autoUpdaterServiceMock = vi.hoisted(() => {
   let menuState: "idle" | "checking" | "ready" = "idle";
@@ -150,7 +165,7 @@ vi.mock("../../shared/config/distribution.js", () => ({
   isWindowsStoreBuild: isWindowsStoreBuildMock,
 }));
 
-import { createApplicationMenu } from "../menu.js";
+import { createApplicationMenu, handleDirectoryOpen } from "../menu.js";
 import { webContents, app, Menu } from "electron";
 
 function findMenuItem(
@@ -691,5 +706,48 @@ describe("update menu lifecycle", () => {
 
       expect(() => dispatchUpdate("checking")).not.toThrow();
     });
+  });
+});
+
+// #11100: handleDirectoryOpen reached for the process-global ProjectViewManager,
+// which every new window overwrites. Opening a directory from an older window's
+// menu therefore switched the newest window's view instead of the one the user
+// clicked in.
+describe("handleDirectoryOpen window targeting", () => {
+  const PROJECT = { id: "project-a", path: "/repos/alpha" };
+
+  function createManager() {
+    return {
+      switchTo: vi.fn(async () => ({
+        view: { webContents: { isDestroyed: () => false, send: vi.fn() } },
+        isNew: true,
+      })),
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    projectStoreMock.addProject.mockResolvedValue(PROJECT);
+    projectStoreMock.getProjectById.mockReturnValue(PROJECT);
+    projectStoreMock.getCurrentProjectId.mockReturnValue(null);
+  });
+
+  it("switches the view of the window the menu action came from, not the newest window", async () => {
+    const targetManager = createManager();
+    const newestManager = createManager();
+
+    // The user clicked in window 7; window 9 was created most recently, so it
+    // owns the global slot.
+    windowRefMock.getWindowRegistry.mockReturnValue({
+      getByWindowId: (id: number) =>
+        id === 7 ? { services: { projectViewManager: targetManager } } : undefined,
+    });
+    windowRefMock.getProjectViewManager.mockReturnValue(newestManager);
+
+    const targetWindow = { id: 7, isDestroyed: () => false } as unknown as Electron.BrowserWindow;
+    await handleDirectoryOpen(PROJECT.path, targetWindow);
+
+    expect(targetManager.switchTo).toHaveBeenCalledWith(PROJECT.id, PROJECT.path);
+    expect(newestManager.switchTo).not.toHaveBeenCalled();
   });
 });

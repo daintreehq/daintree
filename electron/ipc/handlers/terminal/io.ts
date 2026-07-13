@@ -321,12 +321,19 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
     const win = ctx.senderWindow;
     const wctx = win ? deps.windowRegistry?.getByWindowId(win.id) : undefined;
     if (!win || !wctx) return null;
-    // Ownership gate: the terminal must exist and belong to the sender's
-    // project. The host's per-window project filter already starves a foreign
-    // dedicated port of bytes; this refuses to mint one in the first place.
+    // Ownership gate: the terminal's owner must EQUAL the sender's project.
+    // Null is an identity here, not a wildcard — the two must still match, so
+    // an unbound window (Cmd+N, project picker) still gets a port for its own
+    // projectless default terminal, but a null-context sender cannot reach a
+    // project-owned terminal. Nothing downstream re-checks this: the pty-host's
+    // per-window filter skips windows whose project is null, so a foreign port
+    // minted here would be fed for real (#11100).
+    //
+    // A refusal costs the renderer only its dedicated parse-worker port, not
+    // the terminal — LiveWorkerIngest falls back to the shared ingest path.
     const info = await ptyClient.getTerminalAsync(id);
     if (!info) return null;
-    if (info.projectId != null && ctx.projectId != null && info.projectId !== ctx.projectId) {
+    if ((info.projectId ?? null) !== ctx.projectId) {
       return null;
     }
     return distributeTerminalWorkerPortToView(win, wctx, ctx.event.sender, ptyClient, id);

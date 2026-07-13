@@ -116,6 +116,7 @@ vi.mock("../../window/webContentsRegistry.js", () => ({
   getWindowForWebContents: vi.fn(() => null),
   getAppWebContents: vi.fn(() => null),
   getAllAppWebContents: vi.fn(() => []),
+  getProjectForWebContents: vi.fn(() => null),
 }));
 
 vi.mock("../../ipc/utils.js", async (importOriginal) => {

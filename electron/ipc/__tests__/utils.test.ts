@@ -10,6 +10,11 @@ const browserWindowGetAllWindowsMock = vi.hoisted(() => vi.fn(() => [] as unknow
 const isCachedViewWebContentsMock = vi.hoisted(() => vi.fn((_id: number) => false));
 const getWebContentsForProjectMock = vi.hoisted(() => vi.fn((_projectId: string) => [] as never[]));
 const hasRegisteredProjectViewsMock = vi.hoisted(() => vi.fn(() => false));
+const getProjectForWebContentsMock = vi.hoisted(() =>
+  vi.fn<(id: number) => string | null>(() => null)
+);
+const getProjectViewManagerMock = vi.hoisted(() => vi.fn<() => unknown>(() => null));
+const isPerformanceCaptureEnabledMock = vi.hoisted(() => vi.fn<() => boolean>(() => false));
 
 vi.mock("electron", () => ({
   ipcMain: ipcMainMock,
@@ -40,11 +45,25 @@ vi.mock("../../window/webContentsRegistry.js", () => ({
   isCachedViewWebContents: isCachedViewWebContentsMock,
   getWebContentsForProject: getWebContentsForProjectMock,
   hasRegisteredProjectViews: hasRegisteredProjectViewsMock,
+  getProjectForWebContents: getProjectForWebContentsMock,
 }));
 
+// Kept as an adversarial fixture: the multi-window suite below points this at
+// a manager that only knows the last-created window, so any regression back to
+// resolving `ctx.projectId` through the process-global manager fails loudly.
 vi.mock("../../window/windowRef.js", () => ({
-  getProjectViewManager: vi.fn(() => null),
+  getProjectViewManager: getProjectViewManagerMock,
 }));
+
+vi.mock("../../utils/performance.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../utils/performance.js")>();
+  return {
+    ...actual,
+    isPerformanceCaptureEnabled: isPerformanceCaptureEnabledMock,
+    markPerformance: vi.fn(),
+    sampleIpcTiming: vi.fn(),
+  };
+});
 
 import {
   sendToRenderer,
@@ -1053,5 +1072,129 @@ describe("restore quota", () => {
     _resetRateLimitQueuesForTest();
 
     expect(consumeRestoreQuota()).toBe(false);
+  });
+});
+
+// #11100: `ctx.projectId` used to be resolved through the process-global
+// ProjectViewManager, which every new window overwrites. Each manager only
+// knows its own window's views, so every window except the last-created one
+// resolved to null. These specs pin sender identity — not global state — as
+// the authority.
+describe("typedHandleWithContext multi-window project resolution", () => {
+  const WINDOW_A = { id: 1 };
+  const WINDOW_B = { id: 2 };
+  const SENDER_A = 101;
+  const SENDER_B = 202;
+
+  // The registry map spans every window; the manager map does not. Model both
+  // so a regression to the manager can be observed rather than assumed.
+  let viewToProject: Map<number, string>;
+
+  function invokeFrom(
+    registered: (...args: unknown[]) => unknown,
+    senderId: number
+  ): Promise<unknown> {
+    return Promise.resolve(registered({ sender: { id: senderId } }));
+  }
+
+  function lastRegisteredHandler(): (...args: unknown[]) => unknown {
+    const calls = ipcMainMock.handle.mock.calls as [string, (...args: unknown[]) => unknown][];
+    return calls[calls.length - 1][1];
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetIpcGuardForTesting();
+    markIpcSecurityReady();
+
+    viewToProject = new Map([
+      [SENDER_A, "project-a"],
+      [SENDER_B, "project-b"],
+    ]);
+    getProjectForWebContentsMock.mockImplementation((id) => viewToProject.get(id) ?? null);
+    browserWindowFromWebContentsMock.mockImplementation((wc: { id: number }) =>
+      wc.id === SENDER_A ? WINDOW_A : WINDOW_B
+    );
+
+    // The process-global manager points at window B — the last window created.
+    // It has never heard of window A's view, which is exactly why the old
+    // lookup returned null for it.
+    getProjectViewManagerMock.mockReturnValue({
+      getProjectIdForWebContents: (id: number) => (id === SENDER_B ? "project-b" : null),
+    });
+    isPerformanceCaptureEnabledMock.mockReturnValue(false);
+  });
+
+  it.each([
+    ["capture disabled", false],
+    ["capture enabled", true],
+  ])(
+    "each window resolves its own project while the global manager knows only the newest (%s)",
+    async (_label, captureEnabled) => {
+      isPerformanceCaptureEnabledMock.mockReturnValue(captureEnabled);
+
+      const seen: { projectId: string | null; webContentsId: number }[] = [];
+      const handler = vi.fn((ctx: { projectId: string | null; webContentsId: number }) => {
+        seen.push({ projectId: ctx.projectId, webContentsId: ctx.webContentsId });
+        return { ok: true };
+      });
+      typedHandleWithContext("project:get:all" as never, handler as never);
+      const registered = lastRegisteredHandler();
+
+      await invokeFrom(registered, SENDER_A);
+      await invokeFrom(registered, SENDER_B);
+
+      expect(seen).toEqual([
+        { projectId: "project-a", webContentsId: SENDER_A },
+        { projectId: "project-b", webContentsId: SENDER_B },
+      ]);
+    }
+  );
+
+  it("resolution does not depend on which manager the global slot holds", async () => {
+    const handler = vi.fn((ctx: { projectId: string | null }) => ({ projectId: ctx.projectId }));
+    typedHandleWithContext("project:get:all" as never, handler as never);
+    const registered = lastRegisteredHandler();
+
+    const before = await invokeFrom(registered, SENDER_A);
+
+    // Focus/creation churn flips the global slot; sender A must be unmoved.
+    getProjectViewManagerMock.mockReturnValue({
+      getProjectIdForWebContents: (id: number) => (id === SENDER_A ? "project-a" : null),
+    });
+    const afterFlip = await invokeFrom(registered, SENDER_A);
+
+    getProjectViewManagerMock.mockReturnValue(null);
+    const afterClear = await invokeFrom(registered, SENDER_A);
+
+    expect(before).toEqual({ projectId: "project-a" });
+    expect(afterFlip).toEqual(before);
+    expect(afterClear).toEqual(before);
+  });
+
+  it("closing window B leaves window A's context intact", async () => {
+    const handler = vi.fn((ctx: { projectId: string | null }) => ({ projectId: ctx.projectId }));
+    typedHandleWithContext("project:get:all" as never, handler as never);
+    const registered = lastRegisteredHandler();
+
+    // Window B closes: its view is unregistered (id-scoped) and main.ts nulls
+    // the global manager slot. Window A is untouched by both.
+    viewToProject.delete(SENDER_B);
+    getProjectViewManagerMock.mockReturnValue(null);
+
+    await expect(invokeFrom(registered, SENDER_A)).resolves.toEqual({ projectId: "project-a" });
+    await expect(invokeFrom(registered, SENDER_B)).resolves.toEqual({ projectId: null });
+  });
+
+  it("an unbound window with no registered view resolves a null project", async () => {
+    const handler = vi.fn((ctx: { projectId: string | null }) => ({ projectId: ctx.projectId }));
+    typedHandleWithContext("project:get:all" as never, handler as never);
+    const registered = lastRegisteredHandler();
+
+    // Cmd+N windows sit on the project picker and are deliberately never
+    // registered as project views. Null means "unknown", not "unauthorized" —
+    // handlers that fail closed on it break these windows.
+    const UNBOUND_SENDER = 303;
+    await expect(invokeFrom(registered, UNBOUND_SENDER)).resolves.toEqual({ projectId: null });
   });
 });
