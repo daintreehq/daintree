@@ -148,6 +148,7 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
   const accentColorOverride = useAppThemeStore((s) => s.accentColorOverride);
   const setAccentColorOverride = useAppThemeStore((s) => s.setAccentColorOverride);
   const setRecentSchemeIds = useAppThemeStore((s) => s.setRecentSchemeIds);
+  const recentSchemeIds = useAppThemeStore((s) => s.recentSchemeIds);
   const [importWarnings, setImportWarnings] = useState<AppThemeValidationWarning[]>([]);
   const [importMessage, setImportMessage] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<SaveError | null>(null);
@@ -173,7 +174,7 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
   // would be the fix if that ever bites.
   const confirmedRef = useRef({
     selectedSchemeId,
-    recentSchemeIds: useAppThemeStore.getState().recentSchemeIds,
+    recentSchemeIds,
     followSystem,
     preferredDarkSchemeId,
     preferredLightSchemeId,

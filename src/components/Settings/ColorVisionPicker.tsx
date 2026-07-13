@@ -27,6 +27,9 @@ const COLOR_VISION_OPTIONS: Array<{ id: ColorVisionMode; label: string; descript
   },
 ];
 
+const isColorVisionMode = (value: string): value is ColorVisionMode =>
+  COLOR_VISION_OPTIONS.some((option) => option.id === value);
+
 const SWATCH_TOKENS = [
   { label: "Success", var: "--theme-status-success" },
   { label: "Danger", var: "--theme-status-danger" },
@@ -108,7 +111,9 @@ export function ColorVisionPicker() {
     <div>
       <Select
         value={colorVisionMode}
-        onValueChange={(v) => void handleChange(v as ColorVisionMode)}
+        onValueChange={(value) => {
+          if (isColorVisionMode(value)) void handleChange(value);
+        }}
       >
         <SelectTrigger aria-label="Color vision mode">
           <SelectValue />

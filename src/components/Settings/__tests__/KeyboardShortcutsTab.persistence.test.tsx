@@ -18,16 +18,28 @@ Object.defineProperty(window, "matchMedia", {
 });
 
 // ...nor ResizeObserver, which the dialog's scroll-shadow hook observes with.
-globalThis.ResizeObserver ??= class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-} as unknown as typeof ResizeObserver;
+class ResizeObserverStub implements ResizeObserver {
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+}
+globalThis.ResizeObserver ??= ResizeObserverStub;
 
 // vi.mock factories are hoisted above the module body, so every mutable handle a
 // factory touches has to be created inside vi.hoisted or it is still in TDZ.
+//
+// `dispatch` is typed at the source rather than cast at each read: casting
+// `.mock.calls` would add no-unsafe-type-assertion warnings, which the lint
+// ratchet scores per rule.
 const { dispatch, notify, overrides, loadOverrides, CAPTURED_COMBO } = vi.hoisted(() => ({
-  dispatch: vi.fn(),
+  dispatch:
+    vi.fn<
+      (
+        actionId: string,
+        args?: { actionId: string; combo?: string[] },
+        opts?: { source?: string; confirmed?: boolean }
+      ) => Promise<{ ok: boolean }>
+    >(),
   notify: vi.fn(),
   overrides: new Set<string>(),
   loadOverrides: vi.fn().mockResolvedValue(undefined),
@@ -158,10 +170,10 @@ describe("KeyboardShortcutsTab — failed shortcut save", () => {
     await clickText("Capture combo");
     await act(async () => screen.getByRole("button", { name: "Retry" }).click());
 
-    const [action, args] = dispatch.mock.calls.at(-1) as [string, { combo: string[] }];
-    expect(action).toBe("keybinding.setOverride");
+    const lastCall = dispatch.mock.calls.at(-1);
+    expect(lastCall?.[0]).toBe("keybinding.setOverride");
     // The captured combo survived the failure — Retry re-sends it, not a default.
-    expect(args.combo).toEqual([CAPTURED_COMBO]);
+    expect(lastCall?.[1]?.combo).toEqual([CAPTURED_COMBO]);
     expect(screen.queryByTestId("shortcut-capture")).toBeNull();
     expect(screen.queryByRole("alert")).toBeNull();
   });
@@ -174,8 +186,7 @@ describe("KeyboardShortcutsTab — failed shortcut save", () => {
     await clickText("Capture unbind");
     await act(async () => screen.getByRole("button", { name: "Retry" }).click());
 
-    const [, args] = dispatch.mock.calls.at(-1) as [string, { combo: string[] }];
-    expect(args.combo).toEqual([]);
+    expect(dispatch.mock.calls.at(-1)?.[1]?.combo).toEqual([]);
   });
 
   it("keeps the raw dispatch error out of the UI", async () => {
@@ -239,9 +250,9 @@ describe("KeyboardShortcutsTab — failed shortcut reset", () => {
     dispatch.mockResolvedValue(SUCCESS);
     await act(async () => screen.getByRole("button", { name: "Retry" }).click());
 
-    const [action, args] = dispatch.mock.calls.at(-1) as [string, { actionId: string }];
-    expect(action).toBe("keybinding.removeOverride");
-    expect(args.actionId).toBe("app.save");
+    const lastCall = dispatch.mock.calls.at(-1);
+    expect(lastCall?.[0]).toBe("keybinding.removeOverride");
+    expect(lastCall?.[1]?.actionId).toBe("app.save");
     expect(screen.queryByRole("alert")).toBeNull();
   });
 });
