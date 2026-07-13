@@ -47,12 +47,13 @@ const RAW_HANDLE_ALLOWLIST = new Set<string>([
   // service constructor (outside ipc/handlers/) so the file currently uses
   // raw `ipcMain.handle`. `UPDATE_DISMISS_TOAST` additionally validates the
   // sender origin (matches `recovery.ts` / `plugin.ts` pattern) which the
-  // typed-handle adapter doesn't expose. Migration: move the five settings
+  // typed-handle adapter doesn't expose. Migration: move the six settings
   // channels to `typedHandle` and add a `DEAD_CHANNEL_ALLOWLIST`-only entry
   // for `UPDATE_DISMISS_TOAST` (already present in channelDrift.test.ts).
   "CHANNELS.UPDATE_GET_CHANNEL",
   "CHANNELS.UPDATE_SET_CHANNEL",
   "CHANNELS.UPDATE_GET_LAST_CHECK",
+  "CHANNELS.UPDATE_GET_LATEST",
   "CHANNELS.UPDATE_DISMISS_TOAST",
   "CHANNELS.UPDATE_QUIT_AND_INSTALL",
   "CHANNELS.UPDATE_CHECK_FOR_UPDATES",

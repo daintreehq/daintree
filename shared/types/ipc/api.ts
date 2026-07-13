@@ -1178,6 +1178,15 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     setChannel(channel: "stable" | "nightly"): Promise<"stable" | "nightly">;
     notifyDismiss(version: string): Promise<void>;
     getLastCheck(): Promise<number | null>;
+    /**
+     * Hydrate-time getter for the update the user should currently be told
+     * about, so a renderer created after the one-shot `onUpdateAvailable` /
+     * `onUpdateDownloaded` broadcast (a second project view, a new window, a
+     * view rebuilt after LRU eviction) still learns an update is pending.
+     * `null` on builds where the updater never activates, and for a version the
+     * user has dismissed within the cooldown.
+     */
+    getLatest(): Promise<{ version: string; downloaded: boolean } | null>;
   };
   storeUpdate: {
     /** Subscribe to Store-build update notifications. Renderer hook short-circuits unless `isWindowsStore`. */
