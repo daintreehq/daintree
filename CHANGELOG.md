@@ -1,5 +1,53 @@
 # Changelog
 
+## [0.25.0] - 2026-07-13
+
+Scratch workspaces become a first-class place to work — nameable, with a real first-run launcher and bulk cleanup — alongside a generalized agent-completion system that adds Codex's $ Skills/Apps/Plugins picker. Rounding it out: browser panels dock properly, dock and maximize interactions settle, and memory-pressure recovery is markedly more robust.
+
+### Features
+
+**Scratch workspaces**
+
+- Name a Scratch workspace instead of the default timestamp, and see that name in the toolbar pill and project switcher (#11075)
+- Fresh Scratch workspaces now open a proper first-run launcher instead of the onboarding Welcome screen (#11076)
+- Delete every scratch at once from the switcher's Scratch section (#11086)
+
+**Completions**
+
+- Agent completion discovery is now declarative per agent, and Codex's $ trigger surfaces its Skills, Apps, and Plugins in the picker with category badges and trigger-neutral ranking (#11043)
+
+**Other**
+
+- Open the diff viewer directly from a file in Changed Files (#11041)
+- New agent.listAvailable action lets external agents discover the effective agent registry, and agent.launch now reports spawn status
+
+### Performance
+
+- Launching a recipe fanout admits as a single spawn batch, worktree pickup / diff tokenizing / palette hot paths are faster, PTY output analysis is throttled, and recipe startup is bounded (#11038, #11039, #11044)
+
+### Bug Fixes
+
+**Dock & panels**
+
+- Browser panels can now be docked without vanishing (#11053)
+- The dock rejects panel kinds it can never render (#11054)
+- The drag placeholder is clamped to dock-chip height (#11055), and chips snap into place on drop instead of reflow-animating (#11063)
+- Opening a new terminal while maximized returns to the grid (#11060), and a maximized tab group keeps the dock popover open (#11065)
+- Stuck MCP focus-suppression leases expire so dock launches recover
+
+**Scratch & project switching**
+
+- Deleting a scratch now kills its agent terminals instead of leaving them running (#11079)
+- The switcher no longer reserves blank branch space for scratches (#11084), and previous-project navigation works from a scratch (#11085)
+- Project-switcher selection no longer vanishes for a step when arrowing past visible rows (#11071)
+- Repository counts persist across switch-back so the toolbar pills don't reload and shift (#11078)
+
+**Memory & other**
+
+- 'Free memory' no longer blocks the Electron main thread and drops clicks (#11069), and memory-pressure recovery and renderer responsiveness are hardened (#10498, #10660)
+- A restarted agent resumes its own pane's session
+- The issues dropdown refreshes as soon as a self-assign lands (#11087)
+
 ## [0.24.0] - 2026-07-10
 
 The diff viewer grows into a full multi-file review workspace, worktree sidebar updates land far faster, and recipe fanout cold-spawns in a single batch — plus fixes for GitHub panels reading "not connected", stale diff content, stranded tooltips, and a swallowed first click on inactive macOS windows.
