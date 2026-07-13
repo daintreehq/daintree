@@ -59,7 +59,12 @@ const CONTAINER = { width: 665, height: 360 };
 
 interface Pane {
   managed: ManagedTerminal;
-  terminal: { cols: number; rows: number; resize: ReturnType<typeof vi.fn> };
+  terminal: {
+    cols: number;
+    rows: number;
+    resize: ReturnType<typeof vi.fn>;
+    buffer: { active: { baseY: number; viewportY: number; length: number } };
+  };
   fitAddon: FitAddon;
 }
 
