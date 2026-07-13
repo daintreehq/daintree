@@ -1,0 +1,253 @@
+// @vitest-environment jsdom
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, act, within } from "@testing-library/react";
+
+// jsdom ships no matchMedia; InlineStatusBanner reads it to honour reduced motion.
+Object.defineProperty(window, "matchMedia", {
+  writable: true,
+  value: (query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  }),
+});
+
+// ...nor ResizeObserver, which the dialog's scroll-shadow hook observes with.
+globalThis.ResizeObserver ??= class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+} as unknown as typeof ResizeObserver;
+
+// vi.mock factories are hoisted above the module body, so every mutable handle a
+// factory touches has to be created inside vi.hoisted or it is still in TDZ.
+const { dispatch, notify, overrides, loadOverrides, CAPTURED_COMBO } = vi.hoisted(() => ({
+  dispatch: vi.fn(),
+  notify: vi.fn(),
+  overrides: new Set<string>(),
+  loadOverrides: vi.fn().mockResolvedValue(undefined),
+  CAPTURED_COMBO: "Cmd+Shift+J",
+}));
+
+vi.mock("@/services/ActionService", () => ({
+  actionService: { dispatch },
+}));
+
+vi.mock("@/lib/notify", () => ({ notify }));
+
+// Stands in for the real capture widget: reports a known combo, so a test can
+// prove the *captured* value survives a failed save rather than only that a
+// callback fired.
+vi.mock("@/components/KeyboardShortcuts", () => ({
+  SettingsShortcutCapture: ({
+    onCapture,
+    onCancel,
+  }: {
+    onCapture: (combo: string) => void;
+    onCancel: () => void;
+  }) => (
+    <div data-testid="shortcut-capture">
+      <button type="button" onClick={() => onCapture(CAPTURED_COMBO)}>
+        Capture combo
+      </button>
+      <button type="button" onClick={() => onCapture("")}>
+        Capture unbind
+      </button>
+      <button type="button" onClick={onCancel}>
+        Cancel capture
+      </button>
+    </div>
+  ),
+}));
+
+vi.mock("@/components/Settings/KeybindingProfileActions", () => ({
+  KeybindingProfileActions: () => null,
+}));
+
+vi.mock("@/services/KeybindingService", () => ({
+  keybindingService: {
+    getAllBindingsWithEffectiveCombos: () => [
+      {
+        actionId: "app.save",
+        description: "Save file",
+        category: "File",
+        scope: "global",
+        effectiveCombo: "Cmd+S",
+      },
+    ],
+    hasOverride: (actionId: string) => overrides.has(actionId),
+    formatComboForDisplay: (combo: string) => combo,
+    loadOverrides,
+    subscribe: () => () => {},
+  },
+}));
+
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { KeyboardShortcutsTab } from "../KeyboardShortcutsTab";
+
+function deferred<T = void>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+const FAILURE = { ok: false as const, error: { code: "IPC_FAILED", message: "raw ipc detail" } };
+const SUCCESS = { ok: true as const, result: undefined };
+
+const row = () => screen.getByTestId("shortcut-row");
+const clickText = async (label: string) =>
+  act(async () => {
+    screen.getByText(label).click();
+  });
+
+async function renderTab() {
+  // The per-row reset button is a tooltip trigger, so it needs Radix's provider —
+  // in the app that comes from the Settings dialog's tree.
+  render(
+    <TooltipProvider>
+      <KeyboardShortcutsTab />
+    </TooltipProvider>
+  );
+  // Flush the mount-time loadOverrides().then(loadBindings) chain.
+  await act(async () => {
+    await Promise.resolve();
+  });
+}
+
+const openEditor = () => clickText("Edit");
+
+beforeEach(() => {
+  dispatch.mockReset();
+  notify.mockClear();
+  loadOverrides.mockClear();
+  overrides.clear();
+});
+
+describe("KeyboardShortcutsTab — failed shortcut save", () => {
+  it("keeps the editor open and reports the failure instead of closing as if it saved", async () => {
+    dispatch.mockResolvedValue(FAILURE);
+
+    await renderTab();
+    await openEditor();
+    await clickText("Capture combo");
+
+    // The editor must still be mounted — closing here is exactly the bug: the
+    // user would see the old binding with no sign the capture was discarded.
+    expect(screen.getByTestId("shortcut-capture")).toBeTruthy();
+    expect(within(row()).getByRole("alert")).toBeTruthy();
+  });
+
+  it("retries with the combo the user captured, then closes the editor once it lands", async () => {
+    dispatch.mockResolvedValueOnce(FAILURE).mockResolvedValueOnce(SUCCESS);
+
+    await renderTab();
+    await openEditor();
+    await clickText("Capture combo");
+    await act(async () => screen.getByRole("button", { name: "Retry" }).click());
+
+    const [action, args] = dispatch.mock.calls.at(-1) as [string, { combo: string[] }];
+    expect(action).toBe("keybinding.setOverride");
+    // The captured combo survived the failure — Retry re-sends it, not a default.
+    expect(args.combo).toEqual([CAPTURED_COMBO]);
+    expect(screen.queryByTestId("shortcut-capture")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("preserves an unbind (empty combo) across a retry rather than resending a key", async () => {
+    dispatch.mockResolvedValueOnce(FAILURE).mockResolvedValueOnce(SUCCESS);
+
+    await renderTab();
+    await openEditor();
+    await clickText("Capture unbind");
+    await act(async () => screen.getByRole("button", { name: "Retry" }).click());
+
+    const [, args] = dispatch.mock.calls.at(-1) as [string, { combo: string[] }];
+    expect(args.combo).toEqual([]);
+  });
+
+  it("keeps the raw dispatch error out of the UI", async () => {
+    dispatch.mockResolvedValue(FAILURE);
+
+    await renderTab();
+    await openEditor();
+    await clickText("Capture combo");
+
+    expect(screen.queryByText(/raw ipc detail/)).toBeNull();
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("discards the error when the user cancels the editor", async () => {
+    dispatch.mockResolvedValue(FAILURE);
+
+    await renderTab();
+    await openEditor();
+    await clickText("Capture combo");
+    expect(screen.getByRole("alert")).toBeTruthy();
+
+    await clickText("Cancel capture");
+
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByTestId("shortcut-capture")).toBeNull();
+  });
+});
+
+describe("KeyboardShortcutsTab — failed shortcut reset", () => {
+  it("reports the failure on the row and leaves the custom binding in place", async () => {
+    overrides.add("app.save");
+    dispatch.mockResolvedValue(FAILURE);
+
+    await renderTab();
+    await act(async () => screen.getByLabelText("Reset to default").click());
+
+    expect(within(row()).getByRole("alert")).toBeTruthy();
+    // Retry re-issues the reset for that row.
+    dispatch.mockResolvedValue(SUCCESS);
+    await act(async () => screen.getByRole("button", { name: "Retry" }).click());
+
+    const [action, args] = dispatch.mock.calls.at(-1) as [string, { actionId: string }];
+    expect(action).toBe("keybinding.removeOverride");
+    expect(args.actionId).toBe("app.save");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
+describe("KeyboardShortcutsTab — failed reset all", () => {
+  it("holds the dialog open with an inline error and never reloads the overrides", async () => {
+    dispatch.mockResolvedValue(FAILURE);
+
+    await renderTab();
+    await clickText("Reset all");
+    await act(async () => screen.getByRole("button", { name: "Reset shortcuts" }).click());
+
+    // Dialog stays up, explains itself, and its own confirm button is the retry.
+    expect(screen.getByRole("button", { name: "Reset shortcuts" })).toBeTruthy();
+    expect(screen.getByRole("alert")).toBeTruthy();
+    // Only the mount-time load — a failed reset must not re-read overrides, which
+    // would redraw the list as though the reset had happened.
+    expect(loadOverrides).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes the dialog and reloads overrides only once the reset actually lands", async () => {
+    const pending = deferred<typeof SUCCESS>();
+    dispatch.mockReturnValue(pending.promise);
+
+    await renderTab();
+    await clickText("Reset all");
+    await act(async () => screen.getByRole("button", { name: "Reset shortcuts" }).click());
+
+    await act(async () => {
+      pending.resolve(SUCCESS);
+      await pending.promise;
+    });
+
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(loadOverrides).toHaveBeenCalledTimes(2); // mount + successful reset
+  });
+});

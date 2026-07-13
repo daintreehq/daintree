@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { AlertCircle } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -8,6 +9,7 @@ import {
 } from "@/components/ui/select";
 import { useAppThemeStore } from "@/store/appThemeStore";
 import { appThemeClient } from "@/clients/appThemeClient";
+import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import type { ColorVisionMode } from "@shared/types";
 import { logError } from "@/utils/logger";
 
@@ -71,19 +73,40 @@ export function ColorVisionPicker() {
   const colorVisionMode = useAppThemeStore((s) => s.colorVisionMode);
   const setColorVisionMode = useAppThemeStore((s) => s.setColorVisionMode);
 
-  const handleChange = async (value: string) => {
-    const mode = value as ColorVisionMode;
+  // The mode last known to be on disk. Seeded from the hydrated store on mount
+  // and advanced only when a write lands, so a rollback always restores durable
+  // truth rather than an earlier optimistic value that never persisted.
+  const confirmedModeRef = useRef(colorVisionMode);
+  // Only the newest change may reconcile the field: an older rejection arriving
+  // after a newer write succeeded must not drag the UI back.
+  const epochRef = useRef(0);
+  const [failedMode, setFailedMode] = useState<ColorVisionMode | null>(null);
+
+  const handleChange = async (mode: ColorVisionMode) => {
+    const epoch = ++epochRef.current;
     setColorVisionMode(mode);
+
     try {
       await appThemeClient.setColorVisionMode(mode);
+      confirmedModeRef.current = mode;
+      if (epoch === epochRef.current) setFailedMode(null);
     } catch (error) {
       logError("Failed to persist color vision mode", error);
+      if (epoch !== epochRef.current) return;
+      // Going back through the store setter (not a raw setState) re-runs the
+      // documentElement filter swap, so the rendered colors match the mode the
+      // app will actually boot with.
+      setColorVisionMode(confirmedModeRef.current);
+      setFailedMode(mode);
     }
   };
 
   return (
     <div>
-      <Select value={colorVisionMode} onValueChange={(v) => void handleChange(v)}>
+      <Select
+        value={colorVisionMode}
+        onValueChange={(v) => void handleChange(v as ColorVisionMode)}
+      >
         <SelectTrigger aria-label="Color vision mode">
           <SelectValue />
         </SelectTrigger>
@@ -95,6 +118,18 @@ export function ColorVisionPicker() {
           ))}
         </SelectContent>
       </Select>
+      {failedMode && (
+        <InlineStatusBanner
+          className="mt-2 rounded-[var(--radius-md)]"
+          severity="error"
+          icon={AlertCircle}
+          title="Couldn't save color vision mode"
+          description="The mode was restored to the last saved one, so it won't be lost on restart."
+          action={{ id: "retry", label: "Retry", onClick: () => void handleChange(failedMode) }}
+          onClose={() => setFailedMode(null)}
+          closeAriaLabel="Dismiss color vision error"
+        />
+      )}
       <SwatchPreview />
     </div>
   );

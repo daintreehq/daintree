@@ -1,11 +1,12 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
-import { Search, X, RotateCcw } from "lucide-react";
+import { Search, X, RotateCcw, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { keybindingService, type RegisteredKeybindingConfig } from "@/services/KeybindingService";
 import { formatShortcutForTooltip } from "@/lib/platform";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { KeybindingProfileActions } from "./KeybindingProfileActions";
 import { SettingsShortcutCapture } from "@/components/KeyboardShortcuts";
@@ -15,16 +16,69 @@ interface ShortcutBinding extends RegisteredKeybindingConfig {
   isOverridden: boolean;
 }
 
+// KeybindingService writes to disk before it touches its in-memory maps, so a
+// failed dispatch leaves no optimistic state to undo — the binding on screen is
+// still the durable one. What a failure must do is refuse to *look* like a
+// success: hold the editor open and offer the retry, rather than closing and
+// reloading as if the edit had landed.
+type ShortcutError =
+  | { kind: "save"; actionId: string; combo: string }
+  | { kind: "reset"; actionId: string }
+  | { kind: "reset-all" };
+
+type RowError = Extract<ShortcutError, { actionId: string }>;
+
 interface ShortcutRowProps {
   binding: ShortcutBinding;
   isEditing: boolean;
+  error: RowError | null;
   onEdit: () => void;
   onSave: (combo: string) => void;
   onCancel: () => void;
   onReset: () => void;
+  onRetry: () => void;
+  onDismissError: () => void;
 }
 
-function ShortcutRow({ binding, isEditing, onEdit, onSave, onCancel, onReset }: ShortcutRowProps) {
+function ShortcutRowError({
+  error,
+  onRetry,
+  onDismissError,
+}: {
+  error: RowError;
+  onRetry: () => void;
+  onDismissError: () => void;
+}) {
+  const isSave = error.kind === "save";
+  return (
+    <InlineStatusBanner
+      className="mt-2 rounded-[var(--radius-md)]"
+      severity="error"
+      icon={AlertCircle}
+      title={isSave ? "Couldn't save shortcut" : "Couldn't reset shortcut"}
+      description={
+        isSave
+          ? "The shortcut still has its previous binding. Retry to save the one you captured."
+          : "The shortcut keeps its custom binding for now."
+      }
+      action={{ id: "retry", label: "Retry", onClick: onRetry }}
+      onClose={onDismissError}
+      closeAriaLabel="Dismiss shortcut error"
+    />
+  );
+}
+
+function ShortcutRow({
+  binding,
+  isEditing,
+  error,
+  onEdit,
+  onSave,
+  onCancel,
+  onReset,
+  onRetry,
+  onDismissError,
+}: ShortcutRowProps) {
   const handleCapture = (combo: string) => {
     onSave(combo);
   };
@@ -43,52 +97,59 @@ function ShortcutRow({ binding, isEditing, onEdit, onSave, onCancel, onReset }: 
           excludeActionId={binding.actionId}
           scope={binding.scope}
         />
+        {error && (
+          <ShortcutRowError error={error} onRetry={onRetry} onDismissError={onDismissError} />
+        )}
       </div>
     );
   }
 
   return (
-    <div
-      data-testid="shortcut-row"
-      className="flex items-center justify-between py-2 border-b border-daintree-border/50 group/row"
-    >
-      <span className="text-sm text-daintree-text">{binding.description || binding.actionId}</span>
-      <div className="flex items-center gap-2">
-        {binding.effectiveCombo ? (
-          <span
-            className={cn(
-              "px-2 py-0.5 text-xs font-mono rounded",
-              binding.isOverridden
-                ? "bg-status-info/15 text-status-info"
-                : "bg-daintree-border text-daintree-text"
-            )}
+    <div data-testid="shortcut-row" className="py-2 border-b border-daintree-border/50">
+      <div className="flex items-center justify-between group/row">
+        <span className="text-sm text-daintree-text">
+          {binding.description || binding.actionId}
+        </span>
+        <div className="flex items-center gap-2">
+          {binding.effectiveCombo ? (
+            <span
+              className={cn(
+                "px-2 py-0.5 text-xs font-mono rounded",
+                binding.isOverridden
+                  ? "bg-status-info/15 text-status-info"
+                  : "bg-daintree-border text-daintree-text"
+              )}
+            >
+              {keybindingService.formatComboForDisplay(binding.effectiveCombo)}
+            </span>
+          ) : (
+            <span className="text-xs text-daintree-text/60 italic">unbound</span>
+          )}
+          <button
+            onClick={onEdit}
+            className="px-2 py-0.5 text-xs text-daintree-text/60 hover:text-daintree-text opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 focus-visible:opacity-100 transition-opacity"
           >
-            {keybindingService.formatComboForDisplay(binding.effectiveCombo)}
-          </span>
-        ) : (
-          <span className="text-xs text-daintree-text/60 italic">unbound</span>
-        )}
-        <button
-          onClick={onEdit}
-          className="px-2 py-0.5 text-xs text-daintree-text/60 hover:text-daintree-text opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 focus-visible:opacity-100 transition-opacity"
-        >
-          Edit
-        </button>
-        {binding.isOverridden && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                onClick={onReset}
-                className="p-0.5 text-daintree-text/60 hover:text-daintree-text opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 focus-visible:opacity-100 transition-opacity"
-                aria-label="Reset to default"
-              >
-                <RotateCcw className="w-3 h-3" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">Reset to default</TooltipContent>
-          </Tooltip>
-        )}
+            Edit
+          </button>
+          {binding.isOverridden && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={onReset}
+                  className="p-0.5 text-daintree-text/60 hover:text-daintree-text opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 focus-visible:opacity-100 transition-opacity"
+                  aria-label="Reset to default"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Reset to default</TooltipContent>
+            </Tooltip>
+          )}
+        </div>
       </div>
+      {error && (
+        <ShortcutRowError error={error} onRetry={onRetry} onDismissError={onDismissError} />
+      )}
     </div>
   );
 }
@@ -101,6 +162,9 @@ export function KeyboardShortcutsTab() {
   const [, setUpdateKey] = useState(0);
   const [isResetDialogOpen, setIsResetDialogOpen] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
+  // One error at a time across the whole tab, so a stale banner can never sit
+  // under a row the user has since moved on from.
+  const [shortcutError, setShortcutError] = useState<ShortcutError | null>(null);
 
   const loadBindings = useCallback(() => {
     const allBindings = keybindingService.getAllBindingsWithEffectiveCombos();
@@ -156,7 +220,12 @@ export function KeyboardShortcutsTab() {
     );
     if (!result.ok) {
       logError("Failed to save keybinding override", undefined, { error: result.error });
+      // Hold the editor open on the failing row. Closing here would show the old
+      // binding with no hint that the capture was thrown away.
+      setShortcutError({ kind: "save", actionId, combo });
+      return;
     }
+    setShortcutError(null);
     setEditingActionId(null);
     loadBindings();
   };
@@ -169,18 +238,24 @@ export function KeyboardShortcutsTab() {
     );
     if (!result.ok) {
       logError("Failed to reset keybinding override", undefined, { error: result.error });
+      setShortcutError({ kind: "reset", actionId });
+      return;
     }
+    setShortcutError(null);
     loadBindings();
   };
 
   const handleOpenResetDialog = () => {
     setEditingActionId(null);
+    setShortcutError(null);
     setIsResetDialogOpen(true);
   };
 
   const handleConfirmReset = async () => {
     if (isResetting) return;
     setIsResetting(true);
+    // Clear first so a second failure remounts the banner and is announced again.
+    setShortcutError(null);
     try {
       const result = await actionService.dispatch("keybinding.resetAll", undefined, {
         source: "user",
@@ -188,6 +263,8 @@ export function KeyboardShortcutsTab() {
       });
       if (!result.ok) {
         logError("Failed to reset all keybinding overrides", undefined, { error: result.error });
+        // Stay open: the dialog's own "Reset shortcuts" button is the retry.
+        setShortcutError({ kind: "reset-all" });
         return;
       }
       await keybindingService.loadOverrides();
@@ -200,7 +277,21 @@ export function KeyboardShortcutsTab() {
 
   const handleCancelReset = () => {
     if (isResetting) return;
+    setShortcutError(null);
     setIsResetDialogOpen(false);
+  };
+
+  const handleCancelEdit = () => {
+    setShortcutError(null);
+    setEditingActionId(null);
+  };
+
+  const handleRetryRow = (error: RowError) => {
+    if (error.kind === "save") {
+      void handleSaveShortcut(error.actionId, error.combo);
+      return;
+    }
+    void handleResetShortcut(error.actionId);
   };
 
   const hasOverrides = bindings.some((b) => b.isOverridden);
@@ -281,17 +372,31 @@ export function KeyboardShortcutsTab() {
               {category}
             </h4>
             <div className="space-y-0">
-              {categoryBindings.map((binding) => (
-                <ShortcutRow
-                  key={binding.actionId}
-                  binding={binding}
-                  isEditing={editingActionId === binding.actionId}
-                  onEdit={() => setEditingActionId(binding.actionId)}
-                  onSave={(combo) => handleSaveShortcut(binding.actionId, combo)}
-                  onCancel={() => setEditingActionId(null)}
-                  onReset={() => handleResetShortcut(binding.actionId)}
-                />
-              ))}
+              {categoryBindings.map((binding) => {
+                const rowError =
+                  shortcutError !== null &&
+                  shortcutError.kind !== "reset-all" &&
+                  shortcutError.actionId === binding.actionId
+                    ? shortcutError
+                    : null;
+                return (
+                  <ShortcutRow
+                    key={binding.actionId}
+                    binding={binding}
+                    isEditing={editingActionId === binding.actionId}
+                    error={rowError}
+                    onEdit={() => {
+                      setShortcutError(null);
+                      setEditingActionId(binding.actionId);
+                    }}
+                    onSave={(combo) => handleSaveShortcut(binding.actionId, combo)}
+                    onCancel={handleCancelEdit}
+                    onReset={() => handleResetShortcut(binding.actionId)}
+                    onRetry={() => rowError && handleRetryRow(rowError)}
+                    onDismissError={() => setShortcutError(null)}
+                  />
+                );
+              })}
             </div>
           </div>
         ))}
@@ -351,7 +456,17 @@ export function KeyboardShortcutsTab() {
         onConfirm={handleConfirmReset}
         isConfirmLoading={isResetting}
         variant="destructive"
-      />
+      >
+        {shortcutError?.kind === "reset-all" && (
+          <InlineStatusBanner
+            className="rounded-[var(--radius-md)]"
+            severity="error"
+            icon={AlertCircle}
+            title="Couldn't reset shortcuts"
+            description="Your customized shortcuts are still in place. Reset shortcuts to try again."
+          />
+        )}
+      </ConfirmDialog>
     </div>
   );
 }
