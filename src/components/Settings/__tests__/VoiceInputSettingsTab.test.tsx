@@ -352,6 +352,60 @@ describe("VoiceInputSettingsTab", () => {
       await waitFor(() => expect(screen.getByText(/Microphone denied/)).toBeTruthy());
     });
 
+    it("does not blame permission when the machine simply has no microphone", async () => {
+      // NotFoundError is a device problem, not a refusal — calling it "denied"
+      // would send the user to the privacy settings for a mic they don't have.
+      const getUserMedia = vi
+        .fn()
+        .mockRejectedValue(new DOMException("No device", "NotFoundError"));
+      stubWindowsNavigator(getUserMedia);
+
+      await renderWithMic({
+        requestMicPermission: vi.fn().mockResolvedValue(true),
+        checkMicPermission: vi.fn().mockResolvedValue("not-determined"),
+      });
+
+      await waitFor(() => expect(getUserMedia).toHaveBeenCalled());
+      // Let the handler settle fully before asserting the absence of a denial.
+      await waitFor(() => expect(screen.getByText(/not yet requested/)).toBeTruthy());
+      expect(screen.queryByText(/Microphone denied/)).toBeNull();
+    });
+
+    it("still probes when the OS reports an unsettled 'unknown' status", async () => {
+      // unknown is as unsettled as not-determined — treating it as an answer
+      // would dead-end the button exactly like the bug being fixed here.
+      const track = { stop: vi.fn() };
+      const getUserMedia = vi.fn().mockResolvedValue({ getTracks: () => [track] });
+      stubWindowsNavigator(getUserMedia);
+
+      await renderWithMic({
+        requestMicPermission: vi.fn().mockResolvedValue(true),
+        checkMicPermission: vi
+          .fn()
+          .mockResolvedValueOnce("not-determined")
+          .mockResolvedValue("unknown"),
+      });
+
+      await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(screen.getByText(/access granted/)).toBeTruthy());
+    });
+
+    it("keeps a successful capture when the status re-check fails transiently", async () => {
+      const track = { stop: vi.fn() };
+      const getUserMedia = vi.fn().mockResolvedValue({ getTracks: () => [track] });
+      stubWindowsNavigator(getUserMedia);
+
+      await renderWithMic({
+        requestMicPermission: vi.fn().mockResolvedValue(true),
+        checkMicPermission: vi
+          .fn()
+          .mockResolvedValueOnce("not-determined")
+          .mockRejectedValue(new Error("IPC dropped")),
+      });
+
+      await waitFor(() => expect(screen.getByText(/access granted/)).toBeTruthy());
+    });
+
     it("skips capture when the native preflight denies, as it does on macOS", async () => {
       const getUserMedia = vi.fn();
       stubWindowsNavigator(getUserMedia);
@@ -368,6 +422,36 @@ describe("VoiceInputSettingsTab", () => {
 
       await waitFor(() => expect(screen.getByText(/Microphone denied/)).toBeTruthy());
       expect(getUserMedia).not.toHaveBeenCalled();
+    });
+
+    it("trusts a native refusal even when the OS status has not caught up", async () => {
+      // Only macOS can return false, and it is authoritative — don't reopen the
+      // mic just because getMediaAccessStatus is still lagging on not-determined.
+      const getUserMedia = vi.fn();
+      stubWindowsNavigator(getUserMedia);
+
+      await renderWithMic({
+        requestMicPermission: vi.fn().mockResolvedValue(false),
+        checkMicPermission: vi.fn().mockResolvedValue("not-determined"),
+      });
+
+      await waitFor(() => expect(screen.getByText(/Microphone denied/)).toBeTruthy());
+      expect(getUserMedia).not.toHaveBeenCalled();
+    });
+
+    it("falls through to the capture gate when the preflight IPC fails", async () => {
+      // A broken preflight must not block the only real gate on Windows.
+      const track = { stop: vi.fn() };
+      const getUserMedia = vi.fn().mockResolvedValue({ getTracks: () => [track] });
+      stubWindowsNavigator(getUserMedia);
+
+      await renderWithMic({
+        requestMicPermission: vi.fn().mockRejectedValue(new Error("IPC dropped")),
+        checkMicPermission: vi.fn().mockResolvedValue("not-determined"),
+      });
+
+      await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(screen.getByText(/access granted/)).toBeTruthy());
     });
   });
 });

@@ -566,7 +566,7 @@ class VoiceRecordingService {
     }
 
     if (micStatus === "not-determined") {
-      logDebug(`${LOG_PREFIX} Requesting OS microphone permission`);
+      logDebug(`${LOG_PREFIX} Running native microphone permission preflight`);
       // Only macOS can answer this natively; Windows/Linux resolve `true` to mean
       // "clear to attempt capture", so a `false` here is a genuine macOS denial.
       let canAttemptCapture: boolean;
@@ -587,7 +587,7 @@ class VoiceRecordingService {
       if (this.isStartRequestStale(startRequestId)) {
         return;
       }
-      logDebug(`${LOG_PREFIX} OS microphone permission result`, { canAttemptCapture });
+      logDebug(`${LOG_PREFIX} Native microphone preflight result`, { canAttemptCapture });
       if (!canAttemptCapture) {
         const message = "Microphone permission denied. Enable it in System Settings and try again.";
         useVoiceRecordingStore

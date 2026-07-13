@@ -110,17 +110,28 @@ const DEFAULT_SETTINGS: VoiceInputSettings = {
 
 type ApiKeyValidation = "idle" | "testing" | "valid" | "invalid";
 
+type ConclusiveMicStatus = "granted" | "denied" | "restricted";
+
+/** Only these settle the question; not-determined and unknown leave it open. */
+function isConclusive(status: MicPermissionStatus | undefined): status is ConclusiveMicStatus {
+  return status === "granted" || status === "denied" || status === "restricted";
+}
+
 /**
  * Opens the mic just long enough to settle permission, then releases it. This is
  * the only way to request access on platforms without a native request API.
+ *
+ * A refusal is the only outcome that means "denied" — a missing or busy device
+ * fails too, and reporting that as a permission problem would send the user to
+ * the privacy settings for a mic they don't have.
  */
-async function probeMicCapture(): Promise<boolean> {
+async function probeMicCapture(): Promise<"granted" | "denied" | "unavailable"> {
   let stream: MediaStream | undefined;
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-    return true;
-  } catch {
-    return false;
+    return "granted";
+  } catch (err) {
+    return err instanceof DOMException && err.name === "NotAllowedError" ? "denied" : "unavailable";
   } finally {
     stream?.getTracks().forEach((track) => track.stop());
   }
@@ -178,29 +189,51 @@ export function VoiceInputSettingsTab() {
     });
   };
 
+  // Best-effort: a transient IPC failure is inconclusive, not an answer.
+  const readMicPermission = async (): Promise<MicPermissionStatus | undefined> => {
+    try {
+      return await window.electron?.voiceInput?.checkMicPermission();
+    } catch {
+      return undefined;
+    }
+  };
+
+  // Same: a failed preflight must not block the capture gate behind it.
+  const runNativePreflight = async (): Promise<boolean | undefined> => {
+    try {
+      return await window.electron?.voiceInput?.requestMicPermission();
+    } catch {
+      return undefined;
+    }
+  };
+
   const handleRequestMicPermission = async () => {
     setIsRequestingMic(true);
     try {
       // macOS settles this natively. Windows/Linux have no main-process request
       // API — a `true` there only means "clear to attempt capture", so the OS
-      // status stays not-determined and getUserMedia below is the actual request.
-      const canAttemptCapture = await window.electron?.voiceInput?.requestMicPermission();
-      let status = await window.electron?.voiceInput?.checkMicPermission();
+      // status stays unsettled and the capture probe below is the actual request.
+      const canAttemptCapture = await runNativePreflight();
 
-      if (canAttemptCapture && (!status || status === "not-determined")) {
-        const captured = await probeMicCapture();
-        const rechecked = await window.electron?.voiceInput?.checkMicPermission();
-        // Windows can keep reporting not-determined even after capture succeeds;
-        // trust what the attempt actually proved over an inconclusive status.
-        status =
-          rechecked && rechecked !== "not-determined"
-            ? rechecked
-            : captured
-              ? "granted"
-              : "denied";
+      const status = await readMicPermission();
+      if (isConclusive(status)) {
+        setMicPermission(status);
+        return;
+      }
+      if (canAttemptCapture === false) {
+        // Only macOS answers authoritatively, and it just refused — the OS status
+        // simply hasn't caught up yet.
+        setMicPermission("denied");
+        return;
       }
 
-      if (status) setMicPermission(status);
+      const probed = await probeMicCapture();
+      const rechecked = await readMicPermission();
+      // The OS can keep reporting not-determined (or unknown) even after capture
+      // succeeds; trust what the attempt actually proved over an unsettled status.
+      if (isConclusive(rechecked)) setMicPermission(rechecked);
+      else if (probed !== "unavailable") setMicPermission(probed);
+      else if (rechecked) setMicPermission(rechecked);
     } catch {
       // Non-fatal — the row keeps its last known status.
     } finally {
