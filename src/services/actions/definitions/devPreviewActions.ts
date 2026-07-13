@@ -199,7 +199,11 @@ export function registerDevPreviewActions(
         }
       } catch (error) {
         logError("Failed to promote dev preview to portal", error);
+        // Roll the half-created tab back, then rethrow: swallowing here made
+        // dispatch() resolve {ok:true} on a failed promotion, so the caller had
+        // nothing to surface and the user saw nothing at all (#11114).
         usePortalStore.getState().closeTab(tabId);
+        throw error;
       }
     },
   }));

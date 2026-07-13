@@ -309,7 +309,16 @@ export function BrowserPane({
   // timing it out would silently destroy that recovery surface (#11114).
   useEffect(() => {
     if (blockedNav?.phase !== "blocked") return;
-    const timer = setTimeout(() => setBlockedNav(null), 10_000);
+    const noticeId = blockedNav.noticeId;
+    const timer = setTimeout(() => {
+      // An already-queued timer callback can still run after the user clicks
+      // (clearTimeout in the cleanup can't cancel a callback the event loop has
+      // picked up). Clearing unconditionally here would null the notice that is
+      // mid-attempt, and the failure would then find no notice to attach to.
+      setBlockedNav((prev) =>
+        prev?.noticeId === noticeId && prev.phase === "blocked" ? null : prev
+      );
+    }, 10_000);
     return () => clearTimeout(timer);
   }, [blockedNav]);
 
@@ -1100,12 +1109,13 @@ export function BrowserPane({
                     <button
                       type="button"
                       disabled={blockedNav.phase === "opening"}
+                      aria-busy={blockedNav.phase === "opening" || undefined}
                       onClick={() =>
                         void handleOpenBlockedExternal(blockedNav.noticeId, blockedNav.url)
                       }
                       className="shrink-0 px-2 py-0.5 rounded text-xs bg-status-warning/20 hover:bg-status-warning/30 text-daintree-text/90 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                     >
-                      Open in external browser
+                      {blockedNav.phase === "opening" ? "Opening…" : "Open in external browser"}
                     </button>
                   )}
                   <button

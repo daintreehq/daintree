@@ -72,9 +72,9 @@ beforeEach(() => {
       mintBrowserToken: vi.fn().mockResolvedValue({ bootstrapUrl: "https://bootstrap.example" }),
     },
   };
-  vi.spyOn(actionService, "dispatch").mockResolvedValue({ ok: true } as Awaited<
-    ReturnType<typeof actionService.dispatch>
-  >);
+  // `{ok:true}` alone isn't a valid ActionDispatchSuccess — it needs `result`.
+  // The cast that used to hide that is exactly the class of mistake #11114 is about.
+  vi.spyOn(actionService, "dispatch").mockResolvedValue({ ok: true, result: undefined });
 });
 
 // #11114: dispatch() resolves {ok:false} rather than rejecting, so the old
@@ -138,8 +138,10 @@ describe("useDevPreviewNavigation — promote-to-portal failures (#11114)", () =
       inFlight.push(result.current.handlePromoteToPortal());
     });
 
-    // The synchronous isPromotingRef guard swallows the second click.
+    // The synchronous isPromotingRef guard swallows the second click...
     expect(dispatchMock()).toHaveBeenCalledTimes(1);
+    // ...and the pane reports the attempt as pending while it runs.
+    expect(result.current.isPromotingToPortal).toBe(true);
 
     await act(async () => {
       resolveDispatch(succeeded());
@@ -147,6 +149,49 @@ describe("useDevPreviewNavigation — promote-to-portal failures (#11114)", () =
     });
 
     expect(result.current.isPromotingToPortal).toBe(false);
+
+    // The guard genuinely released — a later click dispatches again.
+    await act(async () => {
+      await result.current.handlePromoteToPortal();
+    });
+    expect(dispatchMock()).toHaveBeenCalledTimes(2);
+  });
+
+  it("drops a stale result when the pane's project changed mid-flight", async () => {
+    let resolveDispatch!: (value: DispatchResult) => void;
+    dispatchMock().mockReturnValue(
+      new Promise<DispatchResult>((resolve) => {
+        resolveDispatch = resolve;
+      })
+    );
+
+    const { result, rerender } = renderHook(
+      (props: { currentProjectId: string }) =>
+        useDevPreviewNavigation(baseParams({ currentProjectId: props.currentProjectId })),
+      { initialProps: { currentProjectId: "proj-1" } }
+    );
+
+    act(() => {
+      void result.current.handlePromoteToPortal();
+    });
+
+    // The pane switches project while the promotion is still in flight.
+    rerender({ currentProjectId: "proj-2" });
+
+    await act(async () => {
+      resolveDispatch(failed("Promotion failed for the old project"));
+    });
+
+    // The obsolete failure belongs to proj-1 and must not surface against proj-2,
+    // and it must not leave the new context's guard stuck.
+    expect(result.current.promoteToPortalError).toBeNull();
+    expect(result.current.isPromotingToPortal).toBe(false);
+
+    dispatchMock().mockResolvedValue(succeeded());
+    await act(async () => {
+      await result.current.handlePromoteToPortal();
+    });
+    expect(dispatchMock()).toHaveBeenCalledTimes(2);
   });
 
   it("allows a retry after a failure, and a successful retry clears the error", async () => {

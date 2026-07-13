@@ -379,17 +379,24 @@ export function FilePane({
   const [openInEditorError, setOpenInEditorError] = useState<string | null>(null);
   const [isOpeningInEditor, setIsOpeningInEditor] = useState(false);
   const openInEditorAttemptRef = useRef(0);
+  // Synchronous re-entry guard: state can't stop a double-click in one tick.
+  // Without it a second launch could land after the first succeeded and report
+  // "Couldn't open in editor" over a file the editor did in fact open.
+  const openInEditorInFlightRef = useRef(false);
 
-  // A result that lands after the pane switched files belongs to the old file:
-  // drop it, and clear any banner the old file left behind.
+  // A result that lands after the pane switched files (or panels) belongs to the
+  // old file: drop it, and clear any banner the old file left behind.
   useEffect(() => {
     openInEditorAttemptRef.current += 1;
+    openInEditorInFlightRef.current = false;
     setOpenInEditorError(null);
     setIsOpeningInEditor(false);
-  }, [filePath]);
+  }, [id, filePath]);
 
   const handleOpenInEditor = useCallback(async () => {
     if (!filePath) return;
+    if (openInEditorInFlightRef.current) return;
+    openInEditorInFlightRef.current = true;
     const attempt = ++openInEditorAttemptRef.current;
     setIsOpeningInEditor(true);
     const result = await actionService.dispatch(
@@ -397,7 +404,10 @@ export function FilePane({
       { path: filePath },
       { source: "user" }
     );
+    // A newer attempt (or a file/panel switch) already reset the guard and owns
+    // the banner — an obsolete completion must not unlock it or overwrite state.
     if (openInEditorAttemptRef.current !== attempt) return;
+    openInEditorInFlightRef.current = false;
     setIsOpeningInEditor(false);
     if (result.ok) {
       setOpenInEditorError(null);

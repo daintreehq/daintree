@@ -1959,6 +1959,13 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         retry!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       });
 
+      // Retry must re-run the action, not merely dismiss the banner.
+      expect(dispatchSpy).toHaveBeenCalledTimes(2);
+      expect(dispatchSpy).toHaveBeenLastCalledWith(
+        "devPreview.promoteToPortal",
+        expect.objectContaining({ panelId: "dev-preview-panel-1" }),
+        { source: "user" }
+      );
       expect(container.textContent).not.toContain(message);
     });
   });

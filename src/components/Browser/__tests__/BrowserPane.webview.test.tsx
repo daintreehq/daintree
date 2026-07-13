@@ -963,14 +963,31 @@ describe("BrowserPane webview lifecycle regression", () => {
         );
       }
 
-      it("clears the notice when the external open succeeds", async () => {
+      // Deferred on purpose: the old code cleared the notice synchronously, so a
+      // test that only checks the end state would pass on the pre-fix build. The
+      // load-bearing assertion is that the notice SURVIVES until the result lands.
+      it("holds the notice open until the external open resolves, then clears it", async () => {
+        let resolveOpen: (value: unknown) => void = () => {};
+        actionDispatchMock.mockReturnValue(
+          new Promise((resolve) => {
+            resolveOpen = resolve;
+          })
+        );
         const { container } = render(<BrowserPane {...baseProps} />);
         blockNavigation(container, "https://oauth.provider.com/auth");
 
-        await act(async () => {
+        act(() => {
           findButton(container, "Open in external browser")!.dispatchEvent(
             new MouseEvent("click", { bubbles: true })
           );
+        });
+
+        // Still pending: the notice must not be torn down before we know the outcome.
+        expect(container.textContent).toContain("oauth.provider.com");
+        expect(findButton(container, "Opening…")?.hasAttribute("disabled")).toBe(true);
+
+        await act(async () => {
+          resolveOpen({ ok: true, result: undefined });
         });
 
         expect(container.textContent).not.toContain("oauth.provider.com");
@@ -1017,6 +1034,37 @@ describe("BrowserPane webview lifecycle regression", () => {
         expect(findButton(container, "Retry")).toBeDefined();
       });
 
+      // The auto-dismiss timer is armed while the notice is "blocked". Its callback
+      // can still be picked up by the event loop after the user clicks — cleanup
+      // can't cancel a callback already in flight — so the callback itself has to
+      // re-check ownership. Otherwise it nulls the notice mid-attempt and the
+      // failure below has nothing left to attach to.
+      it("does not let a queued auto-dismiss timer destroy a notice that is mid-attempt", async () => {
+        let resolveOpen: (value: unknown) => void = () => {};
+        actionDispatchMock.mockReturnValue(
+          new Promise((resolve) => {
+            resolveOpen = resolve;
+          })
+        );
+        const { container } = render(<BrowserPane {...baseProps} />);
+        blockNavigation(container, "https://oauth.provider.com/auth");
+
+        act(() => {
+          findButton(container, "Open in external browser")!.dispatchEvent(
+            new MouseEvent("click", { bubbles: true })
+          );
+          // Fires the timer armed by the "blocked" render, in the same batch.
+          vi.advanceTimersByTime(10_000);
+        });
+
+        await act(async () => {
+          resolveOpen(OPEN_FAILED);
+        });
+
+        expect(container.textContent).toContain(OPEN_FAILED.error.message);
+        expect(findButton(container, "Retry")).toBeDefined();
+      });
+
       it("retries the same URL from the error banner and clears the notice once it succeeds", async () => {
         actionDispatchMock.mockResolvedValue(OPEN_FAILED);
         const { container } = render(<BrowserPane {...baseProps} />);
@@ -1056,6 +1104,10 @@ describe("BrowserPane webview lifecycle regression", () => {
             new MouseEvent("click", { bubbles: true })
           );
         });
+
+        // The first notice is still alive and mid-attempt (the old code had
+        // already destroyed it here, which is what made its result harmless).
+        expect(container.textContent).toContain("first.com");
 
         // A second navigation is blocked while the first open is still in flight.
         blockNavigation(container, "https://second.com/auth");

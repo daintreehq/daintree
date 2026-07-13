@@ -47,10 +47,14 @@ vi.mock("@/clients/filesClient", () => ({
 }));
 // dispatch() resolves an ActionDispatchResult union and never rejects; callers
 // branch on `.ok`, so the mock must honour that shape rather than resolve void.
-const { dispatchMock } = vi.hoisted(() => ({ dispatchMock: vi.fn() }));
+const { dispatchMock, notifyMock } = vi.hoisted(() => ({
+  dispatchMock: vi.fn(),
+  notifyMock: vi.fn(),
+}));
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: dispatchMock },
 }));
+vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 vi.mock("@/components/Markdown/MarkdownViewer", () => ({ MarkdownViewer: () => null }));
 vi.mock("@/components/FileViewer/CodeViewer", () => ({ CodeViewer: () => null }));
 
@@ -182,6 +186,45 @@ describe("FilePane open-in-editor failure feedback (#11114)", () => {
     const alert = container.querySelector('[role="alert"]');
     expect(alert).not.toBeNull();
     expect(alert!.textContent).toContain(message);
+    // Tier 3 is pane-local — the failure must not also fire a global toast.
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  it("drops a stale failure when the pane switched files mid-flight", async () => {
+    let resolveDispatch: (value: unknown) => void = () => {};
+    dispatchMock.mockReturnValue(
+      new Promise((resolve) => {
+        resolveDispatch = resolve;
+      })
+    );
+
+    const { container, rerender } = renderFilePane();
+    await clickOpenInEditor(container);
+
+    // The pane is repointed at another file while the open is still in flight.
+    panelsById["file-1"] = { id: "file-1", kind: "file", filePath: "/repo/src/other.ts" };
+    rerender(
+      <TooltipProvider>
+        <FilePane
+          id="file-1"
+          title="other.ts"
+          isFocused={false}
+          location="grid"
+          onFocus={() => {}}
+          onClose={() => {}}
+        />
+      </TooltipProvider>
+    );
+
+    await act(async () => {
+      resolveDispatch({
+        ok: false,
+        error: { code: "EXECUTION_ERROR", message: "Stale failure for index.ts" },
+      });
+    });
+
+    // The old file's failure must not be reported against the new one.
+    expect(container.querySelector('[role="alert"]')).toBeNull();
   });
 
   it("clears the error once a retry succeeds", async () => {
@@ -201,7 +244,13 @@ describe("FilePane open-in-editor failure feedback (#11114)", () => {
       retry!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
 
+    // Retry must re-run the action against the same file, not merely dismiss.
     expect(dispatchMock).toHaveBeenCalledTimes(2);
+    expect(dispatchMock).toHaveBeenLastCalledWith(
+      "file.openInEditor",
+      { path: "/repo/src/index.ts" },
+      { source: "user" }
+    );
     expect(container.querySelector('[role="alert"]')).toBeNull();
   });
 });
