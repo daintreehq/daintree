@@ -972,7 +972,7 @@ function TerminalPaneComponent({
     const focusTarget = getTerminalFocusTarget({
       preferredTarget: preferredTerminalFocusTarget,
       hasHybridInputSurface: showHybridInputBar,
-      isInputDisabled: isBackendDisconnected || isBackendRecovering || isInputLocked,
+      isInputDisabled: isHybridInputDisabled,
       hybridInputEnabled,
     });
 
@@ -1004,9 +1004,7 @@ function TerminalPaneComponent({
     showHybridInputBar,
     hybridInputEnabled,
     preferredTerminalFocusTarget,
-    isBackendDisconnected,
-    isBackendRecovering,
-    isInputLocked,
+    isHybridInputDisabled,
   ]);
 
   useEffect(() => {
@@ -1022,16 +1020,19 @@ function TerminalPaneComponent({
         isInputDisabled: isHybridInputDisabled,
         hybridInputEnabled,
       });
-      if (focusTarget === "hybridInput" && inputBarRef.current?.focusWithCursorAtEnd()) {
-        return true;
+      if (focusTarget === "hybridInput") {
+        // The bar is rendered but its editor may still be lazy-loading. Decline
+        // rather than falling through to xterm: focusing xterm flips the stored
+        // preferred target, so a transient miss would silently and permanently
+        // move the user off the input bar.
+        return inputBarRef.current?.focusWithCursorAtEnd() ?? false;
       }
-      // Registration is not liveness: a prewarmed terminal is in the instance
-      // map before its xterm is opened, and focus() would no-op on it. Report
-      // the miss so callers (macro-grid Enter) keep their own focus rather than
-      // handing off to a pane that cannot receive it.
-      if (!terminalInstanceService.get(id)?.isOpened) return false;
+      // Verify rather than predict. Neither map membership nor `isOpened` is
+      // liveness — an instance is registered before its xterm opens, and the
+      // flag stays true after a detach — so the only trustworthy signal is
+      // whether focus actually landed inside this pane.
       terminalInstanceService.focus(id);
-      return true;
+      return containerRef.current?.contains(document.activeElement) ?? false;
     });
   }, [id, showHybridInputBar, isHybridInputDisabled, hybridInputEnabled]);
 
@@ -1465,8 +1466,7 @@ function TerminalPaneComponent({
                         const focusTarget = getTerminalFocusTarget({
                           preferredTarget: usePanelStore.getState().preferredTerminalFocusTarget,
                           hasHybridInputSurface: showHybridInputBar,
-                          isInputDisabled:
-                            isBackendDisconnected || isBackendRecovering || isInputLocked,
+                          isInputDisabled: isHybridInputDisabled,
                           hybridInputEnabled,
                         });
                         if (focusTarget === "hybridInput") {

@@ -211,17 +211,29 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   const titleInputRef = useRef<HTMLInputElement>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   // Compose, never replace: TerminalPane forwards its own ref here and observes
-  // the same node for resize/visibility.
-  const setRootRef = useCallback(
-    (node: HTMLDivElement | null) => {
+  // the same node for resize/visibility. A callback ref may return a React 19
+  // cleanup, and React then skips the usual `null` call — so that cleanup has to
+  // be propagated or the caller's teardown never runs.
+  const externalRef: React.Ref<HTMLDivElement> = ref;
+  const setRootRef = useCallback<React.RefCallback<HTMLDivElement>>(
+    (node) => {
       rootRef.current = node;
-      if (typeof ref === "function") {
-        ref(node);
-      } else if (ref) {
-        ref.current = node;
+      if (typeof externalRef === "function") {
+        const cleanup = externalRef(node);
+        if (typeof cleanup === "function") {
+          return () => {
+            rootRef.current = null;
+            cleanup();
+          };
+        }
+        return undefined;
       }
+      if (externalRef) {
+        externalRef.current = node;
+      }
+      return undefined;
     },
-    [ref]
+    [externalRef]
   );
   const titleEditing = useTitleEditing();
   const editingStartedAt = titleEditing.editingStartedAt;

@@ -148,6 +148,22 @@ describe("ContentPanel focus target (#11109)", () => {
     expect(ref.current).toBe(panelRoot(container, "p-1"));
   });
 
+  it("runs a callback ref's React 19 cleanup on unmount", () => {
+    // React skips the usual `null` call when a ref callback returns a cleanup,
+    // so a composed ref that swallows the cleanup leaks the caller's teardown.
+    const teardown = vi.fn<() => void>();
+    const { container, unmount } = renderPanel("p-1", "browser", {
+      ref: (node) => (node ? teardown : undefined),
+    });
+
+    expect(panelRoot(container, "p-1")).toBeTruthy();
+    expect(teardown).not.toHaveBeenCalled();
+
+    unmount();
+
+    expect(teardown).toHaveBeenCalledTimes(1);
+  });
+
   it("releases the registry entry on unmount", () => {
     const { unmount } = renderPanel("p-1", "browser");
     unmount();
