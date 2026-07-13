@@ -4,9 +4,8 @@ import { GRID_RESIZE_COALESCE_MS } from "../../types";
 import { makeSurface } from "./fakePaintPlane";
 
 // Phase 1 watch-list: "cross-surface resize-pass coordination". One logical
-// pass spans every surface: shards of the same pass never cancel each other,
-// while a NEW pass cancels stale chunked work on every surface — including
-// surfaces that have no ids in the new pass.
+// pass can span every surface, while scoped passes must not discard pending
+// fresh-measurement obligations on surfaces outside their id set.
 function makeCompositor() {
   const a = makeSurface("a");
   const b = makeSurface("b");
@@ -48,7 +47,7 @@ describe("PaintFabricCompositor resize coordination", () => {
     expect(b.cancelActiveResizePass).not.toHaveBeenCalled();
   });
 
-  it("a new pass cancels stale chunked work on surfaces outside the pass", async () => {
+  it("a scoped pass preserves active work on surfaces outside the pass", async () => {
     const { compositor, a, b } = makeCompositor();
     await compositor.getOrCreate("t1-b", undefined, {});
     await compositor.getOrCreate("t2-a", undefined, {});
@@ -56,13 +55,14 @@ describe("PaintFabricCompositor resize coordination", () => {
     // Pass 1 hits only surface b; its chunked work is now in flight.
     compositor.runResizePass(["t1-b"]);
     expect(b.runResizePass).toHaveBeenCalledWith(["t1-b"]);
-    expect(a.cancelActiveResizePass).toHaveBeenCalledTimes(1);
+    expect(a.cancelActiveResizePass).not.toHaveBeenCalled();
 
-    // Pass 2 hits only surface a → surface b's stale pass must be cancelled
-    // even though b has no ids in the new pass.
+    // Pass 2 is independently scoped to surface a. Surface b's pending work is
+    // still valid and remains owned until it completes or is explicitly
+    // cancelled.
     compositor.runResizePass(["t2-a"]);
     expect(a.runResizePass).toHaveBeenCalledWith(["t2-a"]);
-    expect(b.cancelActiveResizePass).toHaveBeenCalledTimes(1);
+    expect(b.cancelActiveResizePass).not.toHaveBeenCalled();
   });
 
   it("an empty pass is a no-op and cancels nothing", () => {

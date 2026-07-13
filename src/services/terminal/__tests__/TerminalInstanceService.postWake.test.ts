@@ -63,14 +63,26 @@ interface PostWakeInstance {
     isConnected: boolean;
     checkVisibility: ReturnType<typeof vi.fn>;
   };
-  fitAddon: { fit: ReturnType<typeof vi.fn> };
-  terminal: { cols: number; rows: number };
-  agentId?: string;
+  fitAddon: {
+    fit: ReturnType<typeof vi.fn>;
+    proposeDimensions: ReturnType<typeof vi.fn>;
+  };
+  terminal: {
+    cols: number;
+    rows: number;
+    buffer: { active: { viewportY: number; baseY: number } };
+    resize: ReturnType<typeof vi.fn>;
+    scrollToBottom: ReturnType<typeof vi.fn>;
+  };
+  runtimeAgentId?: string;
+  isUserScrolledBack: boolean;
 }
 
 type PostWakeTestService = {
   instances: Map<string, PostWakeInstance>;
   handlePostWake: (id: string) => void;
+  maybeReflowTerminal: (managed: PostWakeInstance) => void;
+  resizeController: { lockResize: (id: string, locked: boolean) => void };
 };
 
 function makeInstance(overrides: Partial<PostWakeInstance> = {}): PostWakeInstance {
@@ -83,8 +95,21 @@ function makeInstance(overrides: Partial<PostWakeInstance> = {}): PostWakeInstan
       isConnected: true,
       checkVisibility: vi.fn(() => true),
     },
-    fitAddon: { fit: vi.fn() },
-    terminal: { cols: 120, rows: 30 },
+    fitAddon: {
+      fit: vi.fn(),
+      proposeDimensions: vi.fn(() => ({ cols: 120, rows: 30 })),
+    },
+    terminal: {
+      cols: 80,
+      rows: 24,
+      buffer: { active: { viewportY: 0, baseY: 0 } },
+      resize: vi.fn(function (this: { cols: number; rows: number }, cols: number, rows: number) {
+        this.cols = cols;
+        this.rows = rows;
+      }),
+      scrollToBottom: vi.fn(),
+    },
+    isUserScrolledBack: false,
     ...overrides,
   };
 }
@@ -113,25 +138,50 @@ describe("TerminalInstanceService post-wake handling", () => {
     }
   });
 
-  it("calls fit() first and returns early when fit succeeds", () => {
+  it("applies a fresh fit proposal immediately for a default terminal", () => {
     const id = "term-post-wake";
     if (!service) throw new Error("Service not initialized");
 
-    const instance = makeInstance({ terminal: { cols: 120, rows: 30 } });
+    const instance = makeInstance();
     service.instances.set(id, instance);
 
     service.handlePostWake(id);
 
-    // fit() was called on the addon
-    expect(instance.fitAddon.fit).toHaveBeenCalledTimes(1);
-
-    // fit() succeeded so sendPtyResize was called with the terminal's current dimensions
+    expect(instance.fitAddon.proposeDimensions).toHaveBeenCalledTimes(2);
+    expect(instance.fitAddon.fit).not.toHaveBeenCalled();
+    expect(instance.terminal.resize).toHaveBeenCalledWith(120, 30);
     expect(mockTerminalClient.resize).toHaveBeenCalledTimes(1);
     expect(mockTerminalClient.resize).toHaveBeenCalledWith(id, 120, 30);
 
     // No delayed timers
     vi.advanceTimersByTime(600);
     expect(mockTerminalClient.resize).toHaveBeenCalledTimes(1);
+  });
+
+  it("fresh-measures a settled terminal and delays both xterm and PTY until commit", () => {
+    const id = "term-post-wake-settled";
+    if (!service) throw new Error("Service not initialized");
+    const instance = makeInstance({ runtimeAgentId: "codex" });
+    service.instances.set(id, instance);
+    const reflow = vi.spyOn(service, "maybeReflowTerminal");
+
+    service.handlePostWake(id);
+
+    expect(instance.fitAddon.proposeDimensions).toHaveBeenCalledTimes(2);
+    expect(instance.fitAddon.fit).not.toHaveBeenCalled();
+    expect(instance.terminal.resize).not.toHaveBeenCalled();
+    expect(mockTerminalClient.resize).not.toHaveBeenCalled();
+    expect(reflow).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(499);
+    expect(instance.terminal.resize).not.toHaveBeenCalled();
+    expect(mockTerminalClient.resize).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1);
+    expect(instance.terminal.resize).toHaveBeenCalledTimes(1);
+    expect(instance.terminal.resize).toHaveBeenCalledWith(120, 30);
+    expect(mockTerminalClient.resize).toHaveBeenCalledTimes(1);
+    expect(mockTerminalClient.resize).toHaveBeenCalledWith(id, 120, 30);
   });
 
   it("falls back to forceImmediateResize when fit() returns null (offscreen)", () => {
@@ -179,6 +229,19 @@ describe("TerminalInstanceService post-wake handling", () => {
     service.handlePostWake(id);
     vi.advanceTimersByTime(200);
 
+    expect(mockTerminalClient.resize).not.toHaveBeenCalled();
+  });
+
+  it("does not mutate xterm or the PTY when post-wake runs under a resize lock", () => {
+    const id = "term-post-wake-locked";
+    if (!service) throw new Error("Service not initialized");
+    const instance = makeInstance();
+    service.instances.set(id, instance);
+    service.resizeController.lockResize(id, true);
+
+    service.handlePostWake(id);
+
+    expect(instance.terminal.resize).not.toHaveBeenCalled();
     expect(mockTerminalClient.resize).not.toHaveBeenCalled();
   });
 });

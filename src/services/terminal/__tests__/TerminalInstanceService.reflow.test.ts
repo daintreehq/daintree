@@ -53,6 +53,7 @@ type ReflowTestService = {
   instances: Map<string, ManagedTerminal>;
   maybeReflowTerminal: (managed: ManagedTerminal) => void;
   resetRenderer: (id: string) => void;
+  handleBackendRecovery: () => void;
   resizeController: { fit: (id: string) => unknown };
   getSynchronizedOutputMode: (id: string) => boolean | null;
   webGLManager: { repairAtlasForReactivation: (id: string) => boolean };
@@ -418,6 +419,25 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
     expect(siblingTerm.refresh).not.toHaveBeenCalled();
     expect(paddingHistory(sibling).length).toBe(0);
     expect(sibling.lastReflowAt).toBe(0);
+  });
+
+  it("routes backend recovery redraws through the resize controller", () => {
+    const write = vi.fn();
+    const managed = makeManaged({
+      terminal: {
+        element: document.createElement("div"),
+        modes: { synchronizedOutputMode: false },
+        write,
+      } as unknown as ManagedTerminal["terminal"],
+    });
+    service.instances.set("t1", managed);
+    const resetRenderer = vi.spyOn(service, "resetRenderer").mockImplementation(() => undefined);
+
+    service.handleBackendRecovery();
+
+    expect(resetRenderer).toHaveBeenCalledWith("t1");
+    expect(managed.fitAddon.fit).not.toHaveBeenCalled();
+    expect(write).toHaveBeenCalledTimes(2);
   });
 });
 

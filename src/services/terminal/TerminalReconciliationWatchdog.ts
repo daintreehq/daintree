@@ -70,6 +70,8 @@ export interface ReconciliationWatchdogDeps {
   hasInFlightWake: (id: string) => boolean;
   /** Wake requested but not started yet (retry-scheduled or rate-limit coalesced). */
   hasPendingWake: (id: string) => boolean;
+  /** Layout or queued resize work owns this terminal's grid until the final resize lands. */
+  isResizeTransitioning: (id: string) => boolean;
   isWebGLActive: (id: string) => boolean;
   shouldHaveWebGL: (managed: ManagedTerminal) => boolean;
   ensureWebGL: (id: string, managed: ManagedTerminal) => void;
@@ -197,9 +199,10 @@ export class TerminalReconciliationWatchdog {
     let heavyBudget = WATCHDOG_MAX_HEAVY_REPAIRS_PER_TICK;
     const now = Date.now();
     for (const { id, managed } of onScreen) {
-      this.diagnoseGeometryDivergence(id, managed);
+      const resizeTransitioning = this.deps.isResizeTransitioning(id);
+      if (!resizeTransitioning) this.diagnoseGeometryDivergence(id, managed);
       if (now - (managed.lastWatchdogRepairAt ?? 0) < WATCHDOG_REPAIR_COOLDOWN_MS) continue;
-      heavyBudget -= this.reconcile(id, managed, now, heavyBudget);
+      heavyBudget -= this.reconcile(id, managed, now, heavyBudget, resizeTransitioning);
     }
   }
 
@@ -250,7 +253,8 @@ export class TerminalReconciliationWatchdog {
     id: string,
     managed: ManagedTerminal,
     now: number,
-    heavyBudget: number
+    heavyBudget: number,
+    resizeTransitioning: boolean
   ): number {
     if (!managed.isVisible) {
       if (heavyBudget <= 0) return 0;
@@ -371,7 +375,7 @@ export class TerminalReconciliationWatchdog {
     // A streaming-deferred tick keeps the obligation armed WITHOUT issuing the
     // repair (no cooldown stamp, no heavy budget) and falls through to the
     // cheaper layers below.
-    if (managed.revealPendingRepair && !inSynchronizedBlock) {
+    if (managed.revealPendingRepair && !inSynchronizedBlock && !resizeTransitioning) {
       if (
         managed.revealPendingGeneration !== undefined &&
         managed.revealPendingGeneration > managed.attachGeneration
@@ -415,7 +419,7 @@ export class TerminalReconciliationWatchdog {
     // IS the proof the pane converged wrong, and the watchdog ticks until it
     // matches. Bounded by the heavy-repair budget (== REVEAL_CONCURRENCY) so a
     // grid that all diverges at once never lands as a single long task.
-    if (!inSynchronizedBlock) {
+    if (!inSynchronizedBlock && !resizeTransitioning) {
       const proposal = managed.fitAddon.proposeDimensions?.();
       if (proposal && proposal.cols > 1 && proposal.rows > 1) {
         const diverged =

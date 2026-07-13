@@ -19,6 +19,9 @@ export const config: AgentConfig = {
     args: ["--version"],
     npmPackage: "@daintreehq/daintree-assistant",
   },
+  capabilities: {
+    resizeStrategy: "settled",
+  },
   supports: {
     // The assistant connects over MCP via env vars it reads itself
     // (`DAINTREE_MCP_URL`, `DAINTREE_MCP_TOKEN`, `DAINTREE_PROJECT_ID`,

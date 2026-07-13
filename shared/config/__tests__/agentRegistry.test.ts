@@ -74,6 +74,21 @@ describe("agentRegistry", () => {
       }
     });
 
+    it("requires every built-in agent to declare its resize policy", () => {
+      for (const id of BUILT_IN_AGENT_IDS) {
+        expect(
+          getAgentConfig(id)?.capabilities?.resizeStrategy,
+          `${id} must choose a resize strategy explicitly`
+        ).toBeDefined();
+      }
+    });
+
+    it("settles sticky inline assistants before changing their terminal grid", () => {
+      for (const id of ["codex", "daintree-assistant"]) {
+        expect(getAgentConfig(id)?.capabilities?.resizeStrategy).toBe("settled");
+      }
+    });
+
     it("returns agent config for built-in agents", () => {
       const claude = getAgentConfig("claude");
       expect(claude).toBeDefined();

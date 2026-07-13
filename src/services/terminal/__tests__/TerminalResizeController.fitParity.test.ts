@@ -202,6 +202,7 @@ function makeWatchdogDeps(instances: Map<string, ManagedTerminal>): Reconciliati
     resumeFlush: vi.fn(),
     hasInFlightWake: vi.fn(() => false),
     hasPendingWake: vi.fn(() => false),
+    isResizeTransitioning: vi.fn(() => false),
     isWebGLActive: vi.fn(() => true),
     shouldHaveWebGL: vi.fn(() => false),
     ensureWebGL: vi.fn(),
@@ -279,6 +280,30 @@ describe("TerminalResizeController ↔ FitAddon column parity (#11095)", () => {
 
     expect(managed.geometryRepairAttempts).toBe(0);
     expect(deps.reconcileRevealGeometry).not.toHaveBeenCalled();
+    expect(managed.lastWatchdogRepairAt).toBeUndefined();
+  });
+
+  it("keeps the watchdog out of geometry while a controller resize is pending", () => {
+    const { managed, terminal, fitAddon } = buildPane();
+    managed.isFocused = false;
+    terminal.buffer.active.length = 500;
+    const controller = makeController(managed);
+
+    controller.resize("t1", CONTAINER.width, CONTAINER.height);
+    expect(controller.hasPendingResize("t1")).toBe(true);
+
+    const instances = new Map<string, ManagedTerminal>([["t1", managed]]);
+    const deps = makeWatchdogDeps(instances);
+    deps.isResizeTransitioning = (id) =>
+      controller.isResizeLocked(id) || controller.hasPendingResize(id);
+    watchdog = new TerminalReconciliationWatchdog(deps);
+    const proposeDimensions = vi.spyOn(fitAddon, "proposeDimensions");
+
+    watchdog.tick();
+
+    expect(proposeDimensions).not.toHaveBeenCalled();
+    expect(deps.reconcileRevealGeometry).not.toHaveBeenCalled();
+    expect(managed.geometryRepairAttempts).toBeUndefined();
     expect(managed.lastWatchdogRepairAt).toBeUndefined();
   });
 
