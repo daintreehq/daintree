@@ -178,7 +178,12 @@ export function FleetArmingRibbon(): ReactElement | null {
         (target.tagName === "INPUT" ||
           target.tagName === "TEXTAREA" ||
           target.isContentEditable ||
-          target.closest(".xterm") !== null)
+          target.closest(".xterm") !== null ||
+          // A modal owns the keyboard while it is open. Without this, Enter on a
+          // webview dialog's Cancel button was swallowed here (capture phase, so
+          // it beats the button's native activation) and confirmed the fleet
+          // action instead of cancelling the dialog (issue #11106).
+          target.closest('[aria-modal="true"]') !== null)
       ) {
         return;
       }

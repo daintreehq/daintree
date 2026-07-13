@@ -109,10 +109,13 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
   );
 
   // Text inputs have no native Enter action outside a <form>, so the prompt
-  // owns its own submit.
+  // owns its own submit. keyCode 229 is Chromium's "Process" signal on the first
+  // keydown of an IME composition, before isComposing is set — submitting there
+  // would send a half-composed value.
   const handleInputKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
       if (e.key !== "Enter") return;
+      if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
       e.preventDefault();
       handleOk();
     },

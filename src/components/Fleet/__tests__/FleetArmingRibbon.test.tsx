@@ -676,6 +676,37 @@ describe("FleetArmingRibbon", () => {
     dispatchSpy.mockRestore();
   });
 
+  // This listener is capture-phase, so without a modal guard it beat a focused
+  // dialog button to the Enter and confirmed a destructive fleet action instead
+  // of activating that button (issue #11106).
+  it("ignores Enter that a modal dialog owns", async () => {
+    useFleetArmingStore.getState().armIds(["a", "b", "c"]);
+    useFleetPendingActionStore.setState({
+      pending: { kind: "kill", targetCount: 3, sessionLossCount: 0 },
+    });
+    const actionServiceModule = await import("@/services/ActionService");
+    const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
+    render(<FleetArmingRibbon />);
+
+    const modal = document.createElement("div");
+    modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-modal", "true");
+    const cancel = document.createElement("button");
+    cancel.textContent = "Cancel";
+    modal.appendChild(cancel);
+    document.body.appendChild(modal);
+
+    try {
+      cancel.focus();
+      fireEvent.keyDown(cancel, { key: "Enter" });
+
+      expect(dispatchSpy.mock.calls.find((c) => c[0] === "fleet.kill")).toBeUndefined();
+    } finally {
+      modal.remove();
+      dispatchSpy.mockRestore();
+    }
+  });
+
   describe("Selection menu", () => {
     function findMenuItem(label: RegExp | string): HTMLElement {
       const items = screen.getAllByRole("menuitem");

@@ -134,6 +134,44 @@ describe("restoreFocusTo", () => {
     expect(document.activeElement).toBe(successor);
   });
 
+  // Being connected isn't enough to accept focus — .focus() on a disabled
+  // element is a silent no-op, which would otherwise drop focus to <body>.
+  it("falls through a connected candidate that refuses focus", () => {
+    const disabled = addButton("disabled");
+    disabled.disabled = true;
+    const successor = addButton("successor");
+
+    restoreFocusTo(disabled, successor);
+
+    expect(document.activeElement).toBe(successor);
+  });
+
+  it("falls back to the app shell when every candidate refuses focus", () => {
+    const shellButton = addButton("shell", root);
+    const disabled = addButton("disabled");
+    disabled.disabled = true;
+
+    restoreFocusTo(disabled);
+
+    expect(document.activeElement).toBe(shellButton);
+  });
+
+  // A focus target may delegate inward — an Electron <webview> hands focus to the
+  // guest page behind its shadow root, and the document reports the host element.
+  it("accepts a candidate that delegates focus to a descendant", () => {
+    const host = document.createElement("div");
+    const inner = document.createElement("button");
+    inner.textContent = "inner";
+    host.appendChild(inner);
+    document.body.appendChild(host);
+    host.focus = () => inner.focus();
+
+    restoreFocusTo(host);
+
+    expect(document.activeElement).toBe(inner);
+    host.remove();
+  });
+
   // Focus falling to <body> strands keyboard users with nothing to tab from.
   it("falls back to the app shell's first tabbable element when no candidate survives", () => {
     const shellButton = addButton("shell", root);

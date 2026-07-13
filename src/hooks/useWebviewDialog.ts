@@ -27,6 +27,15 @@ export function useWebviewDialog(
   const restoreFocus = useCallback(() => {
     const previous = previousActiveElementRef.current;
     previousActiveElementRef.current = null;
+
+    // Only restore if this dialog still owned focus. Tearing down the overlay
+    // detaches whatever it had focused, which leaves activeElement on <body> —
+    // that's the signal restoration is needed. Anything else connected means
+    // focus already moved on (another pane, another dialog, a click elsewhere)
+    // and dragging it back to our opener would steal it.
+    const active = document.activeElement;
+    if (active && active !== document.body && document.contains(active)) return;
+
     // Falls back to the webview so the guest page gets keyboard input back when
     // whatever opened the dialog is gone (guest crash, panel teardown).
     restoreFocusTo(previous, webviewElementRef.current);
