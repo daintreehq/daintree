@@ -39,6 +39,7 @@ import {
   listCommits,
   invalidateWorktreeCache,
   __clearPerFileDiffStatCacheForTesting,
+  __clearLastCommitLogCacheForTesting,
 } from "../git.js";
 import { createHardenedGit } from "../hardenedGit.js";
 import { promises as fs } from "fs";
@@ -145,6 +146,48 @@ describe("getWorktreeChangesWithStats", () => {
     await expect(getWorktreeChangesWithStats("/valid/worktree", true)).rejects.not.toThrow(
       WorktreeRemovedError
     );
+  });
+});
+
+describe("getWorktreeChangesWithStats last commit metadata", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    __clearLastCommitLogCacheForTesting();
+    (fs.access as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    (fs.stat as ReturnType<typeof vi.fn>).mockResolvedValue({ mtimeMs: 1000, size: 512 });
+    mockGit.status.mockResolvedValue({
+      modified: [],
+      created: [],
+      deleted: [],
+      renamed: [],
+      staged: [],
+      conflicted: [],
+      not_added: [],
+      tracking: null,
+    });
+    mockGit.diff.mockResolvedValue("");
+  });
+
+  it("uses the committer timestamp when author and committer dates differ", async () => {
+    const cwd = `/commit-metadata/${Math.random()}`;
+    const committerUnixSeconds = 1_700_000_000;
+    const authorUnixSeconds = committerUnixSeconds - 86_400;
+    mockGit.raw.mockImplementation((args: string[]) => {
+      if (args[0] === "rev-parse") return Promise.resolve(`head-oid\n${cwd}`);
+      if (args.includes("--format=%ct%x09%an%x09%ae%x09%s")) {
+        return Promise.resolve(`${committerUnixSeconds}\tAda\tada@example.com\tShip activity`);
+      }
+      if (args[0] === "log") {
+        return Promise.resolve(`${authorUnixSeconds}\tAda\tada@example.com\tShip activity`);
+      }
+      return Promise.resolve("");
+    });
+
+    const result = await getWorktreeChangesWithStats(cwd, true);
+
+    expect(result.lastCommitTimestampMs).toBe(committerUnixSeconds * 1000);
+    expect(result.lastCommitMessage).toBe("Ship activity");
+    expect(result.lastCommitAuthor).toEqual({ name: "Ada", email: "ada@example.com" });
   });
 });
 

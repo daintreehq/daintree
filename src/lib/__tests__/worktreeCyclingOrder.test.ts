@@ -267,6 +267,28 @@ describe("getVisibleWorktreesForCycling", () => {
     expect(ids[0]).toBe("wt-newer");
   });
 
+  it("ignores a future activity time when resolving the unmarked main fallback", () => {
+    const now = Date.now();
+    setWorktrees([
+      createSnapshot({
+        id: "wt-future",
+        name: "future",
+        branch: "feature/future",
+        lastActivityTimestamp: now + 60 * 60 * 1000,
+      }),
+      createSnapshot({
+        id: "wt-valid",
+        name: "valid",
+        branch: "feature/valid",
+        lastActivityTimestamp: now - 1000,
+      }),
+    ]);
+    useWorktreeFilterStore.setState({ orderBy: "alpha" });
+
+    const ids = getVisibleWorktreesForCycling().map((w) => w.id);
+    expect(ids[0]).toBe("wt-valid");
+  });
+
   it("walks manual order with pins promoted to the top", () => {
     useWorktreeFilterStore.setState({
       groupByType: false,

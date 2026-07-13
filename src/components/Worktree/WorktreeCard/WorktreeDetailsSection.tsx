@@ -7,7 +7,7 @@ import { useAnimate, useReducedMotion } from "framer-motion";
 import { DURATION_200 } from "@/lib/animationUtils";
 import { cn } from "@/lib/utils";
 import { WorktreeDetails } from "../WorktreeDetails";
-import { CommitChip } from "./CommitChip";
+import { WorktreeActivityChip } from "./WorktreeActivityChip";
 import { Spinner } from "@/components/ui/Spinner";
 import { useForgeAuthorAvatar } from "@/hooks/useForgeAuthorAvatar";
 import {
@@ -433,16 +433,13 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                     </span>
                   )}
 
-                {worktree.worktreeChanges?.lastCommitTimestampMs != null &&
-                  Number.isFinite(worktree.worktreeChanges.lastCommitTimestampMs) && (
-                    <CommitChip
-                      lastCommitTimestampMs={worktree.worktreeChanges.lastCommitTimestampMs}
-                      author={worktree.worktreeChanges.lastCommitAuthor}
-                      commitMessage={worktree.worktreeChanges.lastCommitMessage}
-                      forgeAvatarUrl={forgeAuthorAvatarUrl}
-                      lastActivityTimestamp={worktree.lastActivityTimestamp}
-                    />
-                  )}
+                <WorktreeActivityChip
+                  lastCommitTimestampMs={worktree.worktreeChanges?.lastCommitTimestampMs}
+                  author={worktree.worktreeChanges?.lastCommitAuthor}
+                  commitMessage={worktree.worktreeChanges?.lastCommitMessage}
+                  forgeAvatarUrl={forgeAuthorAvatarUrl}
+                  lastActivityTimestamp={worktree.lastActivityTimestamp}
+                />
               </div>
 
               {showReviewHubButton && (

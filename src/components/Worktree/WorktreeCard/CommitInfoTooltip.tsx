@@ -1,9 +1,10 @@
 import { ActivityLight } from "../ActivityLight";
+import { isValidPastTimestamp } from "@/utils/timestamps";
 import { CommitAuthorAvatar, type CommitAuthor } from "./CommitAuthorAvatar";
 
 export interface CommitInfoTooltipProps {
   /** Timestamp of the last commit. */
-  lastCommitTimestampMs: number;
+  lastCommitTimestampMs?: number | null;
   /** Commit author. When absent the header shows the time only. */
   author?: CommitAuthor | null;
   /** Commit subject/body, shown beneath the header. */
@@ -42,34 +43,47 @@ export function CommitInfoTooltip({
   lastActivityTimestamp,
 }: CommitInfoTooltipProps) {
   const now = Date.now();
-  const committed = relativeTimePhrase(now - lastCommitTimestampMs);
-  const committedAbsolute = new Date(lastCommitTimestampMs).toLocaleString();
-  const hasActivity = lastActivityTimestamp != null && Number.isFinite(lastActivityTimestamp);
+  const hasCommit = isValidPastTimestamp(lastCommitTimestampMs, now);
+  const hasActivity = isValidPastTimestamp(lastActivityTimestamp, now);
+  if (!hasCommit && !hasActivity) return null;
+
+  const committed = hasCommit ? relativeTimePhrase(now - lastCommitTimestampMs) : null;
+  const committedAbsolute = hasCommit ? new Date(lastCommitTimestampMs).toLocaleString() : null;
+  const activityPhrase = hasActivity ? relativeTimePhrase(now - lastActivityTimestamp) : null;
+  const activityAbsolute = hasActivity ? new Date(lastActivityTimestamp).toLocaleString() : null;
+  const activityMatchesCommit =
+    hasCommit && hasActivity && lastActivityTimestamp === lastCommitTimestampMs;
 
   return (
     <div className="flex w-[252px] flex-col">
-      <div className="flex items-center gap-2.5">
-        {author && <CommitAuthorAvatar author={author} forgeAvatarUrl={forgeAvatarUrl} size={32} />}
-        <div className="flex min-w-0 flex-col">
-          <span className="truncate text-xs font-semibold text-daintree-text">
-            {author ? author.name : "Last commit"}
-          </span>
-          <span className="text-[11px] text-text-muted" title={committedAbsolute}>
-            Committed {committed}
-          </span>
+      {hasCommit && (
+        <div className="flex items-center gap-2.5">
+          {author && (
+            <CommitAuthorAvatar author={author} forgeAvatarUrl={forgeAvatarUrl} size={32} />
+          )}
+          <div className="flex min-w-0 flex-col">
+            <span className="truncate text-xs font-semibold text-daintree-text">
+              {author ? author.name : "Last commit"}
+            </span>
+            <span className="text-[11px] text-text-muted" title={committedAbsolute!}>
+              Committed {committed}
+            </span>
+          </div>
         </div>
-      </div>
+      )}
 
-      {commitMessage && (
+      {hasCommit && commitMessage && (
         <p className="mt-2.5 line-clamp-4 whitespace-pre-line border-t border-border-divider pt-2.5 text-xs leading-relaxed text-text-secondary">
           {commitMessage}
         </p>
       )}
 
-      {hasActivity && (
-        <div className="mt-2.5 flex items-center gap-1.5 border-t border-border-divider pt-2.5 text-[11px] text-text-muted">
-          <ActivityLight lastActivityTimestamp={lastActivityTimestamp} className="h-1.5 w-1.5" />
-          <span>Last active {relativeTimePhrase(now - lastActivityTimestamp!)}</span>
+      {hasActivity && !activityMatchesCommit && (
+        <div className={hasCommit ? "mt-2.5 border-t border-border-divider pt-2.5" : undefined}>
+          <div className="flex items-center gap-1.5 text-[11px] text-text-muted">
+            <ActivityLight lastActivityTimestamp={lastActivityTimestamp} className="h-1.5 w-1.5" />
+            <span title={activityAbsolute!}>Last active {activityPhrase}</span>
+          </div>
         </div>
       )}
     </div>

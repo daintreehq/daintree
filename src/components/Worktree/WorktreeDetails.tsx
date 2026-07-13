@@ -3,6 +3,7 @@ import type { WorktreeState } from "../../types";
 import type { ErrorRecord, RetryAction } from "../../store/errorStore";
 import { ErrorBanner } from "../Errors/ErrorBanner";
 import { FileChangeList, type FileChangeListHandle } from "./FileChangeList";
+import { ActivityLight } from "./ActivityLight";
 import { LiveTimeAgo } from "./LiveTimeAgo";
 import { CommitAuthorAvatar } from "./WorktreeCard/CommitAuthorAvatar";
 import { CommitInfoTooltip } from "./WorktreeCard/CommitInfoTooltip";
@@ -12,6 +13,7 @@ import { parseNoteWithLinks, formatPath, type TextSegment } from "../../utils/te
 import { actionService } from "@/services/ActionService";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { isValidPastTimestamp } from "@/utils/timestamps";
 
 const MAX_VISIBLE_FILES = 100;
 
@@ -59,34 +61,38 @@ export function WorktreeDetails({
   const { copied: pathCopied, copy: copyPath } = useCopyWithFeedback();
   const fileChangeListRef = useRef<FileChangeListHandle>(null);
 
-  // "Last active" footer line. Prefers the worktree's activity timestamp, but
-  // falls back to the last-commit time so a worktree with no in-session
-  // activity still reports something meaningful.
   const lastCommitAuthor = worktree.worktreeChanges?.lastCommitAuthor ?? null;
   const lastCommitTs = worktree.worktreeChanges?.lastCommitTimestampMs;
-  const hasCommit = lastCommitTs != null && Number.isFinite(lastCommitTs);
-  const activityTime =
-    lastActivityTimestamp != null && Number.isFinite(lastActivityTimestamp)
-      ? lastActivityTimestamp
-      : hasCommit
-        ? lastCommitTs!
-        : null;
-  const showLastActive = showTime && activityTime != null;
+  const now = Date.now();
+  const hasCommit = isValidPastTimestamp(lastCommitTs, now);
+  const activityTime = isValidPastTimestamp(lastActivityTimestamp, now)
+    ? lastActivityTimestamp
+    : hasCommit
+      ? lastCommitTs
+      : null;
+  const showLastActive = showTime && activityTime !== null;
+  const activityAuthor = hasCommit && activityTime === lastCommitTs ? lastCommitAuthor : null;
 
   const lastActiveLine = (
-    <div className="flex items-center gap-2 text-xs">
-      {lastCommitAuthor && (
-        <CommitAuthorAvatar author={lastCommitAuthor} forgeAvatarUrl={forgeAvatarUrl} size={20} />
+    <div
+      className="flex items-center gap-2 text-xs"
+      role="group"
+      aria-label="Last activity"
+      tabIndex={0}
+    >
+      <ActivityLight lastActivityTimestamp={activityTime} className="h-1.5 w-1.5 shrink-0" />
+      {activityAuthor && (
+        <CommitAuthorAvatar author={activityAuthor} forgeAvatarUrl={forgeAvatarUrl} size={20} />
       )}
       <div className="flex min-w-0 items-center gap-1.5">
         <span className="shrink-0 font-medium text-text-secondary">Last active</span>
-        <LiveTimeAgo timestamp={activityTime} className="shrink-0 text-text-muted" />
-        {lastCommitAuthor && (
+        <LiveTimeAgo timestamp={activityTime} className="shrink-0 text-text-muted" noTooltip />
+        {activityAuthor && (
           <>
             <span className="shrink-0 text-text-muted" aria-hidden="true">
               ·
             </span>
-            <span className="min-w-0 truncate text-text-muted">{lastCommitAuthor.name}</span>
+            <span className="min-w-0 truncate text-text-muted">{activityAuthor.name}</span>
           </>
         )}
       </div>
@@ -271,23 +277,20 @@ export function WorktreeDetails({
           </Tooltip>
         </div>
 
-        {showLastActive &&
-          (hasCommit ? (
-            <Tooltip autoDismiss={false}>
-              <TooltipTrigger asChild>{lastActiveLine}</TooltipTrigger>
-              <TooltipContent side="bottom" className="p-3">
-                <CommitInfoTooltip
-                  lastCommitTimestampMs={lastCommitTs!}
-                  author={lastCommitAuthor}
-                  commitMessage={rawLastCommitMsg}
-                  forgeAvatarUrl={forgeAvatarUrl}
-                  lastActivityTimestamp={lastActivityTimestamp}
-                />
-              </TooltipContent>
-            </Tooltip>
-          ) : (
-            lastActiveLine
-          ))}
+        {showLastActive && (
+          <Tooltip autoDismiss={false}>
+            <TooltipTrigger asChild>{lastActiveLine}</TooltipTrigger>
+            <TooltipContent side="bottom" className="p-3">
+              <CommitInfoTooltip
+                lastCommitTimestampMs={lastCommitTs}
+                author={lastCommitAuthor}
+                commitMessage={rawLastCommitMsg}
+                forgeAvatarUrl={forgeAvatarUrl}
+                lastActivityTimestamp={activityTime}
+              />
+            </TooltipContent>
+          </Tooltip>
+        )}
       </div>
     </div>
   );

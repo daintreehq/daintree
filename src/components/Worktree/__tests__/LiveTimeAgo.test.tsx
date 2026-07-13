@@ -35,6 +35,21 @@ describe("LiveTimeAgo", () => {
     expect(container.firstChild).toBeNull();
   });
 
+  it.each([Number.NaN, Infinity, 0, -1])(
+    "renders nothing for invalid timestamp %s",
+    (timestamp) => {
+      const { container } = renderTimeAgo({ timestamp });
+      expect(container.firstChild).toBeNull();
+    }
+  );
+
+  it("renders nothing for a future timestamp", () => {
+    const now = 1_700_000_000_000;
+    vi.setSystemTime(now);
+    const { container } = renderTimeAgo({ timestamp: now + 1 });
+    expect(container.firstChild).toBeNull();
+  });
+
   it.each([
     ["just now", 2_000, "now"],
     ["seconds", 12_000, "12s"],

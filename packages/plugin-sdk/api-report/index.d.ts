@@ -2066,6 +2066,7 @@ interface PluginWorktreeSnapshot {
      */
     readonly linked: PluginWorktreeLinked | null;
     readonly mood?: "stable" | "active" | "stale" | "error";
+    /** Most recent valid dirty-file modification time or HEAD committer time (milliseconds since epoch) */
     readonly lastActivityTimestamp?: number | null;
     readonly createdAt?: number;
     /**

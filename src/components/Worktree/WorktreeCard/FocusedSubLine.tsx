@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import { isValidPastTimestamp } from "@/utils/timestamps";
 import { LiveTimeAgo } from "../LiveTimeAgo";
 
 export interface FocusedSubLineProps {
@@ -15,10 +16,7 @@ export function FocusedSubLine({
   statusLabel,
 }: FocusedSubLineProps) {
   const showChanges = typeof changedFileCount === "number" && changedFileCount > 0;
-  const hasTimestamp =
-    typeof lastActivityTimestamp === "number" &&
-    Number.isFinite(lastActivityTimestamp) &&
-    lastActivityTimestamp > 0;
+  const hasTimestamp = isValidPastTimestamp(lastActivityTimestamp);
   const hasLabel = typeof statusLabel === "string" && statusLabel.trim().length > 0;
   const hasContent = showChanges || hasTimestamp || hasLabel;
   const isVisible = open && hasContent;

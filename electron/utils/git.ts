@@ -655,7 +655,7 @@ export async function getWorktreeChangesWithStats(
       const logOutput =
         cachedLog !== undefined
           ? cachedLog
-          : await git.raw(["log", "-1", "--format=%at%x09%an%x09%ae%x09%s"]).catch(() => "");
+          : await git.raw(["log", "-1", "--format=%ct%x09%an%x09%ae%x09%s"]).catch(() => "");
       if (headOid && cachedLog === undefined) {
         LAST_COMMIT_LOG_CACHE.set(headOid, logOutput);
       }

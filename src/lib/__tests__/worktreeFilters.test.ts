@@ -642,6 +642,22 @@ describe("matchesFilters", () => {
       expect(matchesFilters(worktree, filters, meta, false)).toBe(false);
     });
 
+    it("does not treat a future timestamp as recent activity", () => {
+      const worktree = createMockWorktree({
+        lastActivityTimestamp: Date.now() + 60 * 60 * 1000,
+      });
+      const filters = createEmptyFilters();
+      filters.activityFilters.add("last7d");
+      expect(matchesFilters(worktree, filters, createEmptyMeta(), false)).toBe(false);
+    });
+
+    it("does not treat a non-finite timestamp as recent activity", () => {
+      const worktree = createMockWorktree({ lastActivityTimestamp: Number.POSITIVE_INFINITY });
+      const filters = createEmptyFilters();
+      filters.activityFilters.add("last7d");
+      expect(matchesFilters(worktree, filters, createEmptyMeta(), false)).toBe(false);
+    });
+
     it("matches last1h filter", () => {
       const now = Date.now();
       const worktree = createMockWorktree({
@@ -695,6 +711,21 @@ describe("sortWorktrees", () => {
     ];
     const sorted = sortWorktrees(worktrees, "recent");
     expect(sorted.map((w) => w.id)).toEqual(["2", "3", "1"]);
+  });
+
+  it("does not let invalid activity timestamps outrank real activity", () => {
+    const now = Date.now();
+    const worktrees = [
+      createMockWorktree({
+        id: "future",
+        name: "future",
+        lastActivityTimestamp: now + 60 * 60 * 1000,
+      }),
+      createMockWorktree({ id: "infinite", name: "infinite", lastActivityTimestamp: Infinity }),
+      createMockWorktree({ id: "valid", name: "valid", lastActivityTimestamp: now - 1000 }),
+    ];
+    const sorted = sortWorktrees(worktrees, "recent");
+    expect(sorted[0]!.id).toBe("valid");
   });
 
   it("sorts by creation date (most recent first)", () => {

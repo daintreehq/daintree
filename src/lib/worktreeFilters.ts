@@ -12,6 +12,7 @@ import type {
 } from "@/store/worktreeFilterStore";
 import type { ChipState } from "@/components/Worktree/utils/computeChipState";
 import type { DevPreviewSessionState, DevPreviewSessionStatus } from "@shared/types/ipc/devPreview";
+import { isValidPastTimestamp } from "@/utils/timestamps";
 
 export interface DerivedWorktreeMeta {
   terminalCount: number;
@@ -237,8 +238,10 @@ export function matchesFilters(
   // Activity filters (OR within category)
   if (filters.activityFilters.size > 0) {
     const now = Date.now();
-    const lastActivity = worktree.lastActivityTimestamp ?? 0;
+    const lastActivity = worktree.lastActivityTimestamp;
     let hasMatch = false;
+
+    if (!isValidPastTimestamp(lastActivity, now)) return false;
 
     if (filters.activityFilters.has("last15m") && now - lastActivity < 15 * 60 * 1000)
       hasMatch = true;
@@ -276,6 +279,7 @@ export function sortWorktrees<T extends Worktree | WorktreeState>(
 ): T[] {
   const pinnedIndex = new Map(pinnedWorktrees.map((id, i) => [id, i]));
   const manualIndex = new Map(manualOrder.map((id, i) => [id, i]));
+  const now = Date.now();
 
   return [...worktrees].sort((a, b) => {
     // Main worktree always first
@@ -303,8 +307,14 @@ export function sortWorktrees<T extends Worktree | WorktreeState>(
         return compareWorktreeNames(a.name, b.name);
       }
       case "recent": {
-        const timeA = Math.max(a.lastActivityTimestamp ?? 0, a.createdAt ?? 0);
-        const timeB = Math.max(b.lastActivityTimestamp ?? 0, b.createdAt ?? 0);
+        const activityA = isValidPastTimestamp(a.lastActivityTimestamp, now)
+          ? a.lastActivityTimestamp
+          : 0;
+        const activityB = isValidPastTimestamp(b.lastActivityTimestamp, now)
+          ? b.lastActivityTimestamp
+          : 0;
+        const timeA = Math.max(activityA, a.createdAt ?? 0);
+        const timeB = Math.max(activityB, b.createdAt ?? 0);
         if (timeA !== timeB) return timeB - timeA;
         return compareWorktreeNames(a.name, b.name);
       }
@@ -599,13 +609,11 @@ export function computeChipCounts(
   }
 
   for (const w of activityBase) {
-    const lastActivity = w.lastActivityTimestamp ?? 0;
-    if (lastActivity > 0) {
-      const elapsed = now - lastActivity;
-      if (elapsed < 0) continue;
-      for (const key of ACTIVITY_KEYS) {
-        if (elapsed < ACTIVITY_WINDOW_MS[key]) counts.activity[key]++;
-      }
+    const lastActivity = w.lastActivityTimestamp;
+    if (!isValidPastTimestamp(lastActivity, now)) continue;
+    const elapsed = now - lastActivity;
+    for (const key of ACTIVITY_KEYS) {
+      if (elapsed < ACTIVITY_WINDOW_MS[key]) counts.activity[key]++;
     }
   }
 

@@ -56,6 +56,19 @@ import { BaseDivergence } from "../BaseDivergence.js";
 import type { WatcherController } from "../WatcherController.js";
 import type { AdaptivePollingStrategy } from "../../services/worktree/index.js";
 import type { NoteFileReader } from "../../services/worktree/index.js";
+import type { WorktreeChanges } from "../../../shared/types/git.js";
+
+function makeChanges(overrides: Partial<WorktreeChanges> = {}): WorktreeChanges {
+  return {
+    worktreeId: "/test/worktree",
+    rootPath: "/test/worktree",
+    changes: [],
+    changedFileCount: 0,
+    tracking: null,
+    lastCommitMessage: "Last commit",
+    ...overrides,
+  };
+}
 
 function makeHost(overrides: Partial<GitStatusPassHost> = {}): GitStatusPassHost {
   const state = {
@@ -254,6 +267,216 @@ describe("GitStatusPass", () => {
     expect(hashOf([b, a])).toBe(hash);
     expect(hashOf([a])).not.toBe(hash);
     expect(hashOf([a, { ...b, insertions: 6 }])).not.toBe(hash);
+    expect(hashOf([a, { ...b, mtimeMs: 10 }])).not.toBe(hashOf([a, { ...b, mtimeMs: 20 }]));
+  });
+
+  it("uses the actual latest dirty-file mtime on initial load instead of observation time", async () => {
+    const fileMtime = Date.now() - 120_000;
+    const commitTime = fileMtime - 60_000;
+    mockGetWorktreeChangesWithStats.mockResolvedValue(
+      makeChanges({
+        changes: [
+          {
+            path: "/test/worktree/src/app.ts",
+            status: "modified",
+            insertions: 1,
+            deletions: 0,
+            mtimeMs: fileMtime,
+          },
+        ],
+        changedFileCount: 1,
+        latestFileMtime: fileMtime,
+        lastCommitTimestampMs: commitTime,
+      })
+    );
+    const { pass } = makePass();
+
+    await pass.run(false);
+
+    expect(pass.lastActivityTimestamp).toBe(fileMtime);
+  });
+
+  it("uses the newer commit when it is more recent than dirty-file mtimes", async () => {
+    const commitTime = Date.now() - 30_000;
+    const fileMtime = commitTime - 60_000;
+    mockGetWorktreeChangesWithStats.mockResolvedValue(
+      makeChanges({
+        changes: [
+          {
+            path: "/test/worktree/src/app.ts",
+            status: "modified",
+            insertions: 1,
+            deletions: 0,
+            mtimeMs: fileMtime,
+          },
+        ],
+        changedFileCount: 1,
+        latestFileMtime: fileMtime,
+        lastCommitTimestampMs: commitTime,
+      })
+    );
+    const { pass } = makePass();
+
+    await pass.run(false);
+
+    expect(pass.lastActivityTimestamp).toBe(commitTime);
+  });
+
+  it("detects and emits an mtime-only dirty-file edit", async () => {
+    const firstMtime = Date.now() - 120_000;
+    const secondMtime = firstMtime + 60_000;
+    const fileChange = {
+      path: "/test/worktree/src/app.ts",
+      status: "modified" as const,
+      insertions: 1,
+      deletions: 0,
+    };
+    mockGetWorktreeChangesWithStats
+      .mockResolvedValueOnce(
+        makeChanges({
+          changes: [{ ...fileChange, mtimeMs: firstMtime }],
+          changedFileCount: 1,
+          latestFileMtime: firstMtime,
+        })
+      )
+      .mockResolvedValueOnce(
+        makeChanges({
+          changes: [{ ...fileChange, mtimeMs: secondMtime }],
+          changedFileCount: 1,
+          latestFileMtime: secondMtime,
+        })
+      );
+    const { pass, host } = makePass();
+    await pass.run(false);
+    vi.mocked(host.emitUpdate).mockClear();
+
+    await pass.run(false);
+
+    expect(pass.lastActivityTimestamp).toBe(secondMtime);
+    expect(host.emitUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it("advances and emits activity for a clean-to-clean commit", async () => {
+    const firstCommitTime = Date.now() - 120_000;
+    const secondCommitTime = firstCommitTime + 60_000;
+    mockGetWorktreeChangesWithStats
+      .mockResolvedValueOnce(makeChanges({ lastCommitTimestampMs: firstCommitTime }))
+      .mockResolvedValueOnce(
+        makeChanges({
+          lastCommitTimestampMs: secondCommitTime,
+          lastCommitMessage: "New commit",
+        })
+      );
+    const { pass, host } = makePass();
+    await pass.run(false);
+    vi.mocked(host.emitUpdate).mockClear();
+
+    await pass.run(false);
+
+    expect(pass.lastActivityTimestamp).toBe(secondCommitTime);
+    expect(host.emitUpdate).toHaveBeenCalledTimes(1);
+    expect(host.summary).toBe("✅ New commit");
+  });
+
+  it("uses dirty-file mtime in a repository with no commits", async () => {
+    const fileMtime = Date.now() - 30_000;
+    mockGetWorktreeChangesWithStats.mockResolvedValue(
+      makeChanges({
+        changes: [
+          {
+            path: "/test/worktree/README.md",
+            status: "untracked",
+            insertions: 1,
+            deletions: 0,
+            mtimeMs: fileMtime,
+          },
+        ],
+        changedFileCount: 1,
+        latestFileMtime: fileMtime,
+        lastCommitTimestampMs: undefined,
+        lastCommitMessage: undefined,
+      })
+    );
+    const { pass } = makePass();
+
+    await pass.run(false);
+
+    expect(pass.lastActivityTimestamp).toBe(fileMtime);
+  });
+
+  it("ignores future and invalid timestamps while preserving valid observed events", async () => {
+    const now = Date.now();
+    const validFileMtime = now - 90_000;
+    const validCommitTime = now - 120_000;
+    mockGetWorktreeChangesWithStats.mockResolvedValueOnce(
+      makeChanges({
+        changes: [
+          {
+            path: "/test/worktree/src/valid.ts",
+            status: "modified",
+            insertions: 1,
+            deletions: 0,
+            mtimeMs: validFileMtime,
+          },
+          {
+            path: "/test/worktree/src/future.ts",
+            status: "modified",
+            insertions: 1,
+            deletions: 0,
+            mtimeMs: now + 60_000,
+          },
+        ],
+        changedFileCount: 2,
+        latestFileMtime: now + 60_000,
+        lastCommitTimestampMs: validCommitTime,
+      })
+    );
+    const { pass } = makePass();
+
+    await pass.run(false);
+
+    expect(pass.lastActivityTimestamp).toBe(validFileMtime);
+  });
+
+  it("returns no activity when every source timestamp is invalid or in the future", async () => {
+    const now = Date.now();
+    mockGetWorktreeChangesWithStats.mockResolvedValue(
+      makeChanges({
+        changes: [
+          {
+            path: "/test/worktree/src/app.ts",
+            status: "modified",
+            insertions: 1,
+            deletions: 0,
+            mtimeMs: Number.NaN,
+          },
+        ],
+        changedFileCount: 1,
+        latestFileMtime: Number.POSITIVE_INFINITY,
+        lastCommitTimestampMs: now + 60_000,
+      })
+    );
+    const { pass } = makePass();
+
+    await pass.run(false);
+
+    expect(pass.lastActivityTimestamp).toBeNull();
+  });
+
+  it("ignores stale file metadata on a clean worktree", async () => {
+    const commitTime = Date.now() - 120_000;
+    mockGetWorktreeChangesWithStats.mockResolvedValue(
+      makeChanges({
+        changedFileCount: 0,
+        latestFileMtime: Date.now() - 30_000,
+        lastCommitTimestampMs: commitTime,
+      })
+    );
+    const { pass } = makePass();
+
+    await pass.run(false);
+
+    expect(pass.lastActivityTimestamp).toBe(commitTime);
   });
 
   it("is a no-op single-flight guard while a pass is already in flight", async () => {
