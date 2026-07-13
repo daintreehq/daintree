@@ -23,6 +23,7 @@ const ungrouped: GetPanelGroupInfo = () => undefined;
 
 const baseOptions = {
   activeWorktreeId: "wt-1",
+  maximizedId: null,
   maximizeTarget: null,
   getPanelGroupInfo: ungrouped,
 };
@@ -75,10 +76,36 @@ describe("isRenderedGridPanel", () => {
   });
 
   it("rejects every pane except the maximized one", () => {
-    const maximized = { ...baseOptions, maximizeTarget: { type: "panel", id: "b" } as const };
+    const maximized = {
+      ...baseOptions,
+      maximizedId: "b",
+      maximizeTarget: { type: "panel", id: "b" } as const,
+    };
 
     expect(isRenderedGridPanel(panel("a"), maximized)).toBe(false);
     expect(isRenderedGridPanel(panel("b"), maximized)).toBe(true);
+  });
+
+  it("follows maximizedId, not maximizeTarget, when the two disagree", () => {
+    // ContentGrid renders the pane named by `maximizedId`. Layout undo restores
+    // that half without the target, so a predicate keyed on the target would
+    // reject the pane actually on screen and elect the hidden one instead.
+    const desynced = {
+      ...baseOptions,
+      maximizedId: "b",
+      maximizeTarget: { type: "panel", id: "a" } as const,
+    };
+
+    expect(isRenderedGridPanel(panel("b"), desynced)).toBe(true);
+    expect(isRenderedGridPanel(panel("a"), desynced)).toBe(false);
+  });
+
+  it("does not filter at all when only one half of the maximize pair is set", () => {
+    // ContentGrid maximizes only when both are set; anything else is a normal grid.
+    const halfSet = { ...baseOptions, maximizedId: "b", maximizeTarget: null };
+
+    expect(isRenderedGridPanel(panel("a"), halfSet)).toBe(true);
+    expect(isRenderedGridPanel(panel("b"), halfSet)).toBe(true);
   });
 
   it("accepts the active tab of a maximized group and nothing else", () => {
@@ -87,6 +114,7 @@ describe("isRenderedGridPanel", () => {
     const maximized = {
       ...baseOptions,
       getPanelGroupInfo,
+      maximizedId: "b",
       maximizeTarget: { type: "group", id: "g-1" } as const,
     };
 
@@ -136,6 +164,7 @@ describe("pickDockCloseFocusId", () => {
   it("prefers the maximized pane over an earlier pane hidden behind it", () => {
     const id = pickDockCloseFocusId({
       ...baseOptions,
+      maximizedId: "grid-2",
       maximizeTarget: { type: "panel", id: "grid-2" },
       panels: [panel("grid-1"), panel("grid-2")],
       previousFocusedId: null,

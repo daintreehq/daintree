@@ -119,6 +119,15 @@ type ApplyEditorValue = (
 
 const EMPTY_STALE_KEYS: ReadonlySet<string> = new Set<string>();
 
+/**
+ * Whether the editor holds the caret, judged by the DOM rather than by
+ * `view.hasFocus` — CodeMirror reports false there whenever the window is
+ * blurred, even though the editor is still `document.activeElement`.
+ */
+function editorOwnsDomFocus(view: EditorView): boolean {
+  return view.contentDOM.contains(document.activeElement);
+}
+
 const hybridInputE2EControllers = new Map<string, HybridInputE2EController>();
 
 function installHybridInputE2EBridge(): void {
@@ -605,13 +614,18 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           if (!view) return false;
           // Already holding the keyboard: callers want focus, not a caret move.
           // Re-running the cursor dispatch would drag the caret to the end of the
-          // draft from wherever the user just clicked (#11133).
-          if (view.hasFocus) return true;
+          // draft from wherever the user just clicked (#11133). Ownership is read
+          // from the DOM rather than `view.hasFocus`, which reports false whenever
+          // the window itself is blurred even though the editor still holds the
+          // caret — a background state change would otherwise move it.
+          if (editorOwnsDomFocus(view)) return true;
           const gen = focusGenerationRef.current;
           requestAnimationFrame(() => {
             if (focusGenerationRef.current !== gen) return;
             if (editorViewRef.current !== view) return;
             if (usePanelStore.getState().preferredTerminalFocusTarget !== "hybridInput") return;
+            // The user can click into the draft between the call and this frame.
+            if (editorOwnsDomFocus(view)) return;
             view.dispatch({
               selection: EditorSelection.cursor(view.state.doc.length),
               scrollIntoView: true,

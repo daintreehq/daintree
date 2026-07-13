@@ -35,6 +35,7 @@ export function isRenderedGridPanel(
   panel: CarrierPanel,
   options: {
     activeWorktreeId: string | null;
+    maximizedId: string | null;
     maximizeTarget: MaximizeTarget;
     getPanelGroupInfo: GetPanelGroupInfo;
   }
@@ -44,10 +45,15 @@ export function isRenderedGridPanel(
   const group = options.getPanelGroupInfo(panel.id);
   if (group && group.activeTabId !== null && group.activeTabId !== panel.id) return false;
 
-  const target = options.maximizeTarget;
-  if (target?.type === "panel") return target.id === panel.id;
-  if (target?.type === "group") return group?.groupId === target.id;
-  return true;
+  // Mirror ContentGrid's own branching rather than paraphrasing it. It maximizes
+  // only when BOTH halves are set, and for a panel target it renders the pane
+  // named by `maximizedId` — not by `maximizeTarget.id`. The two can drift
+  // (layout undo restores `maximizedId` alone), and a predicate that trusted the
+  // target would then reject the very pane on screen and elect a hidden one.
+  const { maximizedId, maximizeTarget } = options;
+  if (!maximizedId || !maximizeTarget) return true;
+  if (maximizeTarget.type === "group") return group?.groupId === maximizeTarget.id;
+  return maximizedId === panel.id;
 }
 
 /**
@@ -63,6 +69,7 @@ export function pickDockCloseFocusId(options: {
   panels: CarrierPanel[];
   activeWorktreeId: string | null;
   previousFocusedId: string | null;
+  maximizedId: string | null;
   maximizeTarget: MaximizeTarget;
   getPanelGroupInfo: GetPanelGroupInfo;
 }): string | null {

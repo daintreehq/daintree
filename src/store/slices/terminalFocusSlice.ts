@@ -639,6 +639,7 @@ export const createTerminalFocusSlice =
             panels: getTerminals(),
             activeWorktreeId: getActiveWorktreeId(),
             previousFocusedId: state.previousFocusedId,
+            maximizedId: state.maximizedId,
             maximizeTarget: state.maximizeTarget,
             getPanelGroupInfo,
           });

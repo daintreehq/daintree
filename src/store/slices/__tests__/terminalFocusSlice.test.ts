@@ -2000,6 +2000,7 @@ describe("TerminalFocusSlice - closeDockTerminal focus reconciliation (#11133)",
     // `previousFocusedId` with the other dock pane, so the fallback cannot lean
     // on it here — picking the first grid pane would focus one nothing renders.
     state.previousFocusedId = "dock-2";
+    state.maximizedId = "grid-2";
     state.maximizeTarget = { type: "panel", id: "grid-2" };
 
     state.closeDockTerminal("dock-1");
