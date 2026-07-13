@@ -14,6 +14,7 @@ import {
   type DragHandleContextValue,
 } from "@/components/DragDrop/DragHandleContext";
 import { DockPanelContext, type DockPanelContextValue } from "./dockPanelPortalContext";
+import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 
 // Stable "no drag handle" value. The portaled dock panel body is ALWAYS wrapped
 // in a DragHandleProvider (so the provider element type never toggles and the
@@ -103,9 +104,12 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
   const deleteTabGroup = usePanelStore((s) => s.deleteTabGroup);
   const setActiveTab = usePanelStore((s) => s.setActiveTab);
 
-  const handlePopoverClose = useCallback(() => {
-    closeDockTerminal();
-  }, [closeDockTerminal]);
+  const handlePopoverClose = useCallback(
+    (panelId: string) => {
+      closeDockTerminal(panelId);
+    },
+    [closeDockTerminal]
+  );
 
   useEffect(() => {
     if (!activeDockTerminalId) return;
@@ -113,7 +117,7 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
     // Harden against transient states where the panel exists in the canonical
     // store but hasn't yet landed in the filtered dockTerminals view (#7278).
     if (usePanelStore.getState().panelsById[activeDockTerminalId]) return;
-    closeDockTerminal();
+    closeDockTerminal(activeDockTerminalId);
   }, [activeDockTerminalId, dockTerminals, closeDockTerminal]);
 
   // Handler for adding a new tab to a single panel (creates a tab group)
@@ -224,14 +228,28 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
   const moveToDestination = useCallback((panelId: string, destination: HTMLElement | null) => {
     const wrapper = wrappersRef.current.get(panelId);
     if (!wrapper) return;
+    const isParking = destination === null;
     const dest = destination ?? offscreenContainerRef.current;
-    if (!dest || wrapper.parentElement === dest) return;
+    if (!dest) return;
 
     // Capture focus so we can restore it on the appendChild fallback path
     // (moveBefore preserves focus itself; appendChild does not) and to work
     // around the Cr148 quirk where moving a focused field drops it.
     const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const hadFocus = !!active && wrapper.contains(active);
+
+    // Parking a focused pane must drop its focus. The parking container is
+    // aria-hidden with `content-visibility: hidden`, so anything focused inside
+    // it is invisible to the user while still eating every keystroke — and
+    // restoring focus into it (as this used to do unconditionally) is exactly
+    // the "typing into a pane that isn't there" bug (#11133). The store's dock
+    // close reconciles `focusedId` onto a visible pane, whose own focus effect
+    // then claims the keyboard.
+    if (isParking && hadFocus && active) {
+      active.blur();
+    }
+
+    if (wrapper.parentElement === dest) return;
 
     if (wrapper.isConnected && dest.isConnected && typeof dest.moveBefore === "function") {
       try {
@@ -243,8 +261,22 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
       dest.appendChild(wrapper);
     }
 
+    if (isParking) return;
+
     if (hadFocus && active && active.isConnected && document.activeElement !== active) {
       active.focus();
+      return;
+    }
+
+    // A pane revealed into its popover may already be the focused pane — the
+    // store set `focusedId` before this wrapper had anywhere visible to live,
+    // so its own focus effect ran against a parked, unfocusable subtree and
+    // came up empty. Now that the pane is on screen, ask it again.
+    if (
+      !wrapper.contains(document.activeElement) &&
+      usePanelStore.getState().focusedId === panelId
+    ) {
+      focusPanelInput(panelId);
     }
   }, []);
 
@@ -335,7 +367,7 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
               >
                 <DockedPanel
                   terminal={terminal}
-                  onPopoverClose={handlePopoverClose}
+                  onPopoverClose={() => handlePopoverClose(terminal.id)}
                   onAddTab={
                     // Dock tab groups are PTY-only (ContentDock resolves groups
                     // through isPtyPanel), so only PTY panels get the add-tab

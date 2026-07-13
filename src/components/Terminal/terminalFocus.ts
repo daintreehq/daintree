@@ -43,6 +43,35 @@ export function getTerminalFocusTarget(options: {
   return "xterm";
 }
 
+export type PaneFocusAction = "preserve" | "hybridInput" | "xterm";
+
+/**
+ * Resolve what a focused pane should do with DOM focus, given the target
+ * `getTerminalFocusTarget` picked and the live selection/focus state of its
+ * xterm.
+ *
+ * The selection rule is about ownership, not about the selection itself: an
+ * xterm that holds keyboard focus *and* a selection keeps both, because
+ * handing focus to the input bar mid-selection is a yank the user didn't ask
+ * for. A selection in an xterm that does NOT hold keyboard focus is inert —
+ * the pane is being focused from elsewhere, so declining to move focus would
+ * strand the keyboard on the pane the user just left (#11133). Focus does not
+ * clear an xterm selection either way: `SelectionService` reacts to input and
+ * buffer events, never to DOM blur.
+ *
+ * `preserve` therefore means "focus is already where it belongs" — callers
+ * treat it as a completed handoff, not a failure.
+ */
+export function resolvePaneFocusAction(options: {
+  focusTarget: TerminalFocusTarget;
+  hasSelection: boolean;
+  xtermOwnsDomFocus: boolean;
+}): PaneFocusAction {
+  if (options.focusTarget !== "hybridInput") return "xterm";
+  if (options.hasSelection && options.xtermOwnsDomFocus) return "preserve";
+  return "hybridInput";
+}
+
 /**
  * Whether a pointerdown on the xterm area of an *unfocused* grid pane should
  * be swallowed before xterm sees it. Prevents stray clicks from poking at

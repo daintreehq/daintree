@@ -83,6 +83,7 @@ const LazyHybridInputBar = lazy(() =>
 import {
   getTerminalFocusTarget,
   isLikelyAtSynthesizedPointer,
+  resolvePaneFocusAction,
   shouldShowHybridInputBar,
   shouldSuppressUnfocusedClick,
 } from "./terminalFocus";
@@ -95,6 +96,23 @@ import type { TerminalRuntimeIdentity } from "@shared/types/panel";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 
 export type {};
+
+/**
+ * Live selection/focus state of a pane's xterm, for `resolvePaneFocusAction`.
+ * Ownership is measured against `hostElement` — the xterm host specifically,
+ * not the pane container, which also holds the input bar and toolbar.
+ */
+function readXtermSelectionState(id: string): {
+  hasSelection: boolean;
+  xtermOwnsDomFocus: boolean;
+} {
+  const managed = terminalInstanceService.get(id);
+  if (!managed) return { hasSelection: false, xtermOwnsDomFocus: false };
+  return {
+    hasSelection: managed.terminal.hasSelection(),
+    xtermOwnsDomFocus: managed.hostElement.contains(document.activeElement),
+  };
+}
 
 export interface BannerSlotProps {
   visible: boolean;
@@ -969,24 +987,24 @@ function TerminalPaneComponent({
 
     if (!isFocused) return;
 
-    const focusTarget = getTerminalFocusTarget({
-      preferredTarget: preferredTerminalFocusTarget,
-      hasHybridInputSurface: showHybridInputBar,
-      isInputDisabled: isHybridInputDisabled,
-      hybridInputEnabled,
+    // Read selection and focus ownership synchronously, before any handoff.
+    // Deciding up front (rather than inside the deferred RAF) also keeps focus
+    // from briefly landing on the ContentPanel container, which made screen
+    // readers announce the container instead of the input bar.
+    const action = resolvePaneFocusAction({
+      focusTarget: getTerminalFocusTarget({
+        preferredTarget: preferredTerminalFocusTarget,
+        hasHybridInputSurface: showHybridInputBar,
+        isInputDisabled: isHybridInputDisabled,
+        hybridInputEnabled,
+      }),
+      ...readXtermSelectionState(id),
     });
 
-    if (focusTarget === "hybridInput") {
-      // xterm v6 clears selection on blur, so read selection state
-      // synchronously here — before any focus handoff. Don't steal focus from
-      // xterm when the user has an active text selection. Checking up front
-      // (rather than inside a deferred double-RAF) also avoids focus briefly
-      // landing on the ContentPanel container, which made screen readers
-      // announce the container instead of the input bar. A RAF then defers the
-      // handoff until the pane has painted; focus never lands on the container.
-      const managed = terminalInstanceService.get(id);
-      if (managed?.terminal.hasSelection()) return;
+    if (action === "preserve") return;
 
+    if (action === "hybridInput") {
+      // A RAF defers the handoff until the pane has painted.
       const rafId = requestAnimationFrame(() => {
         inputBarRef.current?.focusWithCursorAtEnd();
       });
@@ -1014,13 +1032,19 @@ function TerminalPaneComponent({
     // forcing the input; that's what the old model did, and tab switching
     // would otherwise yank focus out of xterm against the user's intent.
     return registerPanelFocusHandler(id, () => {
-      const focusTarget = getTerminalFocusTarget({
-        preferredTarget: usePanelStore.getState().preferredTerminalFocusTarget,
-        hasHybridInputSurface: showHybridInputBar,
-        isInputDisabled: isHybridInputDisabled,
-        hybridInputEnabled,
+      const action = resolvePaneFocusAction({
+        focusTarget: getTerminalFocusTarget({
+          preferredTarget: usePanelStore.getState().preferredTerminalFocusTarget,
+          hasHybridInputSurface: showHybridInputBar,
+          isInputDisabled: isHybridInputDisabled,
+          hybridInputEnabled,
+        }),
+        ...readXtermSelectionState(id),
       });
-      if (focusTarget === "hybridInput") {
+      // An xterm that already owns the keyboard while holding a selection is a
+      // completed handoff — the pane has focus, just not on the input bar.
+      if (action === "preserve") return true;
+      if (action === "hybridInput") {
         // The bar is rendered but its editor may still be lazy-loading. Decline
         // rather than falling through to xterm: focusing xterm flips the stored
         // preferred target, so a transient miss would silently and permanently

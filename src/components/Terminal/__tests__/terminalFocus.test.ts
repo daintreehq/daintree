@@ -2,9 +2,72 @@ import { describe, it, expect } from "vitest";
 import {
   getTerminalFocusTarget,
   isLikelyAtSynthesizedPointer,
+  resolvePaneFocusAction,
   shouldShowHybridInputBar,
   shouldSuppressUnfocusedClick,
 } from "../terminalFocus";
+
+/**
+ * The selection guard used to be unconditional: any selection in the pane's
+ * xterm cancelled the focus handoff outright. That stranded the keyboard on the
+ * pane the user had just left whenever the destination happened to be holding an
+ * old selection — highlight on one pane, keystrokes into another (#11133).
+ */
+describe("resolvePaneFocusAction", () => {
+  it("keeps focus in xterm when it holds both the selection and the keyboard", () => {
+    expect(
+      resolvePaneFocusAction({
+        focusTarget: "hybridInput",
+        hasSelection: true,
+        xtermOwnsDomFocus: true,
+      })
+    ).toBe("preserve");
+  });
+
+  it("hands off to the input bar when the selection sits in an unfocused xterm", () => {
+    // The pane is being focused from somewhere else, so this xterm is already
+    // blurred — its selection is inert and cannot be disturbed by the handoff.
+    expect(
+      resolvePaneFocusAction({
+        focusTarget: "hybridInput",
+        hasSelection: true,
+        xtermOwnsDomFocus: false,
+      })
+    ).toBe("hybridInput");
+  });
+
+  it("hands off to the input bar when xterm has focus but no selection", () => {
+    expect(
+      resolvePaneFocusAction({
+        focusTarget: "hybridInput",
+        hasSelection: false,
+        xtermOwnsDomFocus: true,
+      })
+    ).toBe("hybridInput");
+  });
+
+  it("hands off to the input bar when the pane holds neither", () => {
+    expect(
+      resolvePaneFocusAction({
+        focusTarget: "hybridInput",
+        hasSelection: false,
+        xtermOwnsDomFocus: false,
+      })
+    ).toBe("hybridInput");
+  });
+
+  it("never preserves when the resolved target is xterm itself", () => {
+    // A selection is not a reason to skip focusing xterm — that would leave the
+    // keyboard wherever it was.
+    for (const hasSelection of [true, false]) {
+      for (const xtermOwnsDomFocus of [true, false]) {
+        expect(
+          resolvePaneFocusAction({ focusTarget: "xterm", hasSelection, xtermOwnsDomFocus })
+        ).toBe("xterm");
+      }
+    }
+  });
+});
 
 describe("shouldShowHybridInputBar", () => {
   it("shows for agent terminals when enabled", () => {

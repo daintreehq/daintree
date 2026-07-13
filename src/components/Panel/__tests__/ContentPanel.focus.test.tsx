@@ -70,25 +70,39 @@ import { focusPanelInput } from "../panelFocusRegistry";
 
 type PanelKind = "terminal" | "browser" | "dev-preview" | "review" | "file";
 
-function renderPanel(
-  id: string,
-  kind: PanelKind = "browser",
-  extra?: { tabIndex?: number; ref?: React.Ref<HTMLDivElement> }
-) {
-  return render(
+interface RenderExtras {
+  tabIndex?: number;
+  ref?: React.Ref<HTMLDivElement>;
+  isFocused?: boolean;
+  children?: React.ReactNode;
+}
+
+function panelElement(id: string, kind: PanelKind, extra?: RenderExtras) {
+  return (
     <ContentPanel
       id={id}
       title={`Panel ${id}`}
       kind={kind}
-      isFocused={false}
+      isFocused={extra?.isFocused ?? false}
       onFocus={() => {}}
       onClose={() => {}}
       tabIndex={extra?.tabIndex}
       ref={extra?.ref}
     >
-      <div data-testid="panel-body" />
+      {extra?.children ?? <div data-testid="panel-body" />}
     </ContentPanel>
   );
+}
+
+function renderPanel(id: string, kind: PanelKind = "browser", extra?: RenderExtras) {
+  const view = render(panelElement(id, kind, extra));
+  return {
+    ...view,
+    focus: (isFocused: boolean) =>
+      act(() => {
+        view.rerender(panelElement(id, kind, { ...extra, isFocused }));
+      }),
+  };
 }
 
 function panelRoot(container: HTMLElement, id: string): HTMLElement {
@@ -169,5 +183,79 @@ describe("ContentPanel focus target (#11109)", () => {
     unmount();
 
     expect(focusPanelInput("p-1")).toBe(false);
+  });
+});
+
+/**
+ * The registry alone only covers macro-grid Enter and in-group tab switches.
+ * Arrow navigation, Cmd+1..9, focusNext/Previous and agent-state cycling all
+ * just write `focusedId` — so becoming the focused pane has to move DOM focus
+ * on its own, or the pane paints as selected while keystrokes keep landing in
+ * whatever held the keyboard before.
+ */
+describe("ContentPanel reactive focus (#11133)", () => {
+  afterEach(cleanup);
+
+  it.each<PanelKind>(["browser", "dev-preview", "review", "file"])(
+    "claims DOM focus for a %s panel that becomes focused without the registry",
+    (kind) => {
+      const outside = document.createElement("button");
+      document.body.appendChild(outside);
+      outside.focus();
+
+      const { container, focus } = renderPanel("p-1", kind);
+      expect(document.activeElement).toBe(outside);
+
+      focus(true);
+
+      expect(document.activeElement).toBe(panelRoot(container, "p-1"));
+      outside.remove();
+    }
+  );
+
+  it("leaves focus on the panel's own input rather than yanking it to the root", () => {
+    // FilePane's search box lives inside the root. Becoming the focused pane
+    // must not pull the caret out of the field the user is typing in.
+    const { container, focus } = renderPanel("p-1", "file", {
+      children: <input data-testid="search" />,
+    });
+    const search = container.querySelector<HTMLInputElement>('[data-testid="search"]')!;
+    act(() => search.focus());
+
+    focus(true);
+
+    expect(document.activeElement).toBe(search);
+  });
+
+  it("reports a handoff as accepted when the panel already owns the keyboard", () => {
+    const { container } = renderPanel("p-1", "file", {
+      children: <input data-testid="search" />,
+    });
+    const search = container.querySelector<HTMLInputElement>('[data-testid="search"]')!;
+    act(() => search.focus());
+
+    let accepted = false;
+    act(() => {
+      accepted = focusPanelInput("p-1");
+    });
+
+    // The pane has focus — that is the outcome the caller asked for, so the
+    // handoff completed even though nothing moved.
+    expect(accepted).toBe(true);
+    expect(document.activeElement).toBe(search);
+  });
+
+  it("does not reactively claim focus for PTY kinds", () => {
+    // TerminalPane routes PTY focus to xterm or the hybrid input bar. A second
+    // claimant here would land focus on the container instead.
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    outside.focus();
+
+    const { focus } = renderPanel("t-1", "terminal");
+    focus(true);
+
+    expect(document.activeElement).toBe(outside);
+    outside.remove();
   });
 });

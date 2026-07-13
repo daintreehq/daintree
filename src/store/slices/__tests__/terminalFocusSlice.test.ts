@@ -1855,3 +1855,124 @@ describe("TerminalFocusSlice - boot focus (issue #9933)", () => {
     expect(state.pingSeq).toBe(0);
   });
 });
+
+/**
+ * Closing the dock popover used to clear `activeDockTerminalId` and nothing
+ * else. If the dismissed pane held focus, `focusedId` kept pointing at it while
+ * its DOM subtree was parked in an aria-hidden container — the pane the user
+ * could no longer see went on eating every keystroke (#11133).
+ */
+describe("TerminalFocusSlice - closeDockTerminal focus reconciliation (#11133)", () => {
+  const makePanel = (
+    id: string,
+    location: "grid" | "dock",
+    worktreeId: string | undefined = "worktree-1"
+  ): PtyPanelData =>
+    ({
+      id,
+      title: id,
+      kind: "terminal",
+      type: "terminal",
+      cwd: "/test",
+      location,
+      agentState: "idle",
+      isVisible: true,
+      cols: 80,
+      rows: 24,
+      worktreeId,
+    }) as PtyPanelData;
+
+  let panels: PtyPanelData[];
+  let state: TerminalFocusSlice;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    panels = [
+      makePanel("grid-1", "grid"),
+      makePanel("grid-2", "grid"),
+      makePanel("dock-1", "dock"),
+      makePanel("dock-2", "dock"),
+    ];
+    const getTerminals = vi.fn(() => panels);
+    const getState = vi.fn((): TerminalFocusSlice => state);
+    const setState = vi.fn(
+      (
+        updater:
+          | Partial<TerminalFocusSlice>
+          | ((s: TerminalFocusSlice) => Partial<TerminalFocusSlice>)
+      ) => {
+        const currentState = getState();
+        const updates = typeof updater === "function" ? updater(currentState) : updater;
+        state = { ...currentState, ...updates };
+      }
+    );
+    state = createTerminalFocusSlice(getTerminals, mockGetActiveWorktreeId, mockStampLastActive)(
+      setState as never,
+      getState as never,
+      {} as never
+    );
+    state.activeDockTerminalId = "dock-1";
+    state.focusedId = "dock-1";
+    state.previousFocusedId = "grid-2";
+  });
+
+  it("hands focus back to the pane the user opened the dock from", () => {
+    state.closeDockTerminal("dock-1");
+
+    expect(state.activeDockTerminalId).toBeNull();
+    expect(state.focusedId).toBe("grid-2");
+    // Automatic hand-back, not a user navigation — there is no pane to bounce
+    // back to, so the alternate pointer must not survive.
+    expect(state.previousFocusedId).toBeNull();
+  });
+
+  it("falls back to a visible grid pane when the previous pane is gone", () => {
+    state.previousFocusedId = "deleted-panel";
+
+    state.closeDockTerminal("dock-1");
+
+    expect(state.focusedId).toBe("grid-1");
+  });
+
+  it("never hands focus to another dock pane", () => {
+    state.previousFocusedId = "dock-2";
+
+    state.closeDockTerminal("dock-1");
+
+    expect(state.focusedId).toBe("grid-1");
+  });
+
+  it("clears focus when the worktree has no visible grid pane left", () => {
+    panels = [makePanel("dock-1", "dock"), makePanel("dock-2", "dock")];
+    state.previousFocusedId = null;
+
+    state.closeDockTerminal("dock-1");
+
+    expect(state.focusedId).toBeNull();
+    expect(state.activeDockTerminalId).toBeNull();
+  });
+
+  it("leaves focus alone when the dismissed pane never held it", () => {
+    state.focusedId = "grid-1";
+    state.previousFocusedId = "grid-2";
+
+    state.closeDockTerminal("dock-1");
+
+    expect(state.activeDockTerminalId).toBeNull();
+    expect(state.focusedId).toBe("grid-1");
+    expect(state.previousFocusedId).toBe("grid-2");
+  });
+
+  it("ignores a stale close for a pane the dock has already moved on from", () => {
+    // Dock popovers open and close from several places at once (chip click,
+    // drag start, Escape, the phantom-panel watchdog). A late close for the
+    // pane that *was* open must not tear focus out of the one that just won it.
+    state.activeDockTerminalId = "dock-2";
+    state.focusedId = "dock-2";
+
+    state.closeDockTerminal("dock-1");
+
+    expect(state.activeDockTerminalId).toBe("dock-2");
+    expect(state.focusedId).toBe("dock-2");
+  });
+});

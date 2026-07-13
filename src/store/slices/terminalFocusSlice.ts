@@ -4,6 +4,7 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isRuntimeAgentTerminal } from "@/utils/terminalType";
 import { isTerminalVisible } from "@/lib/terminalVisibility";
+import { isVisibleGridPanel, pickDockCloseFocusId } from "@/store/panelFocusFallback";
 import type { TerminalFocusTarget } from "@/components/Terminal/terminalFocus";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 
@@ -184,7 +185,8 @@ export interface TerminalFocusSlice {
 
   // Dock terminal activation
   openDockTerminal: (id: string) => void;
-  closeDockTerminal: () => void;
+  /** `expectedId` names the pane being dismissed; a stale close is ignored. */
+  closeDockTerminal: (expectedId: string) => void;
   activateTerminal: (id: string | null) => void;
 
   // Agent state navigation
@@ -613,7 +615,35 @@ export const createTerminalFocusSlice =
         stampLastActive(id);
       },
 
-      closeDockTerminal: () => set({ activeDockTerminalId: null }),
+      closeDockTerminal: (expectedId) =>
+        set((state) => {
+          // A close is always *for* a pane. Dock popovers open and close from
+          // several places (chip click, drag start, Escape, the phantom-panel
+          // watchdog), and a stale close firing after another pane has already
+          // opened would otherwise tear focus out of the pane that just won it.
+          if (state.activeDockTerminalId !== expectedId) return state;
+
+          if (state.focusedId !== expectedId) {
+            return { activeDockTerminalId: null };
+          }
+
+          // The pane being hidden owns the keyboard. Leaving `focusedId` on it
+          // parks focus in a pane the user can no longer see, and every
+          // keystroke keeps flowing into it (#11133).
+          const nextFocusedId = pickDockCloseFocusId({
+            panels: getTerminals(),
+            activeWorktreeId: getActiveWorktreeId(),
+            previousFocusedId: state.previousFocusedId,
+          });
+
+          return {
+            activeDockTerminalId: null,
+            focusedId: nextFocusedId,
+            // The round-trip pointer only means something between two panes the
+            // user chose. This hand-back is automatic, so it has no alternate.
+            previousFocusedId: null,
+          };
+        }),
 
       activateTerminal: (id) => {
         if (!id) {
@@ -793,21 +823,15 @@ export const createTerminalFocusSlice =
 
           if (state.focusedId === removedId) {
             const activeWorktreeId = getActiveWorktreeId();
-            const gridTerminals = remainingTerminals.filter(
-              (t) =>
-                (t.location === "grid" || !t.location) &&
-                (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
+            const gridTerminals = remainingTerminals.filter((t) =>
+              isVisibleGridPanel(t, activeWorktreeId)
             );
 
             if (gridTerminals.length > 0) {
               const boundedIndex = Math.max(0, removedIndex);
               const precedingCount = remainingTerminals
                 .slice(0, boundedIndex)
-                .filter(
-                  (t) =>
-                    (t.location === "grid" || !t.location) &&
-                    (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
-                ).length;
+                .filter((t) => isVisibleGridPanel(t, activeWorktreeId)).length;
               const nextIndex = Math.min(precedingCount, gridTerminals.length - 1);
               updates.focusedId = gridTerminals[nextIndex]?.id || null;
             } else {
