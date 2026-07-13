@@ -134,7 +134,9 @@ describe("ContentPanel focus target (#11109)", () => {
   it("keeps the panel root out of the Tab sequence when no tabIndex is given", () => {
     const { container } = renderPanel("p-1", "browser");
 
-    expect(panelRoot(container, "p-1").getAttribute("tabindex")).toBe("-1");
+    // Negative, not specifically -1: the invariant is "script-focusable but not
+    // Tab-reachable". The focus-handoff tests above prove the focusability half.
+    expect(panelRoot(container, "p-1").tabIndex).toBeLessThan(0);
   });
 
   it("still forwards the root element to a caller's ref", () => {

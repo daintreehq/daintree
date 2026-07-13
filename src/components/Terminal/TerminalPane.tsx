@@ -480,6 +480,12 @@ function TerminalPaneComponent({
   const isBackendDisconnected = backendStatus === "disconnected";
   const isBackendRecovering = backendStatus === "recovering";
 
+  // Single source of truth for "the hybrid editor cannot take input": it gates
+  // both the bar's `disabled` prop and focus-target resolution. Resolving focus
+  // against a narrower condition would route Enter to a disabled editor.
+  const isHybridInputDisabled =
+    isBackendDisconnected || isBackendRecovering || isInputLocked || isRestarting;
+
   const isHibernated = useIsHibernated(id);
 
   // Pre-audio confirmation cue. Subscribes to both fields so a target swap
@@ -1013,28 +1019,21 @@ function TerminalPaneComponent({
       const focusTarget = getTerminalFocusTarget({
         preferredTarget: usePanelStore.getState().preferredTerminalFocusTarget,
         hasHybridInputSurface: showHybridInputBar,
-        isInputDisabled: isBackendDisconnected || isBackendRecovering || isInputLocked,
+        isInputDisabled: isHybridInputDisabled,
         hybridInputEnabled,
       });
-      if (focusTarget === "hybridInput" && inputBarRef.current) {
-        inputBarRef.current.focusWithCursorAtEnd();
+      if (focusTarget === "hybridInput" && inputBarRef.current?.focusWithCursorAtEnd()) {
         return true;
       }
-      // No live xterm means nothing can take focus — report the miss so callers
-      // (macro-grid Enter) keep their own focus rather than handing off to a
-      // pane that cannot receive it.
-      if (!terminalInstanceService.get(id)) return false;
+      // Registration is not liveness: a prewarmed terminal is in the instance
+      // map before its xterm is opened, and focus() would no-op on it. Report
+      // the miss so callers (macro-grid Enter) keep their own focus rather than
+      // handing off to a pane that cannot receive it.
+      if (!terminalInstanceService.get(id)?.isOpened) return false;
       terminalInstanceService.focus(id);
       return true;
     });
-  }, [
-    id,
-    showHybridInputBar,
-    isBackendDisconnected,
-    isBackendRecovering,
-    isInputLocked,
-    hybridInputEnabled,
-  ]);
+  }, [id, showHybridInputBar, isHybridInputDisabled, hybridInputEnabled]);
 
   // Sync agent state to terminal service for scroll management
   useEffect(() => {
@@ -1523,9 +1522,7 @@ function TerminalPaneComponent({
                 <LazyHybridInputBar
                   ref={inputBarRef}
                   terminalId={id}
-                  disabled={
-                    isBackendDisconnected || isBackendRecovering || isInputLocked || isRestarting
-                  }
+                  disabled={isHybridInputDisabled}
                   cwd={cwd}
                   agentId={effectiveAgentId}
                   agentHasLifecycleEvent={stateChangeTrigger !== undefined}

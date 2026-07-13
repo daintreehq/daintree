@@ -60,7 +60,8 @@ import { useHostReparent } from "./hooks/useHostReparent";
 
 export interface HybridInputBarHandle {
   focus: () => void;
-  focusWithCursorAtEnd: () => void;
+  /** Returns whether an editor was mounted to take the focus. */
+  focusWithCursorAtEnd: () => boolean;
   cancelPendingFocus: () => void;
 }
 
@@ -598,7 +599,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         focus: focusEditor,
         focusWithCursorAtEnd: () => {
           const view = editorViewRef.current;
-          if (!view) return;
+          // No mounted editor (lazy CodeMirror still loading) means nothing can
+          // take focus — say so rather than let the caller assume it landed.
+          if (!view) return false;
           const gen = focusGenerationRef.current;
           requestAnimationFrame(() => {
             if (focusGenerationRef.current !== gen) return;
@@ -610,6 +613,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             });
             view.focus();
           });
+          return true;
         },
         cancelPendingFocus: () => {
           focusGenerationRef.current += 1;

@@ -241,7 +241,7 @@ test.describe.serial("Core: Focus Management", () => {
     let browserPanel: ReturnType<typeof getFirstGridPanel>;
     let browserId: string | null = null;
 
-    await test.step("Open a browser panel and confirm it holds panel focus", async () => {
+    await test.step("Open a browser panel and make it the focused panel", async () => {
       before = await getGridPanelCount(window);
       await openBrowser(window);
       await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
@@ -249,6 +249,13 @@ test.describe.serial("Core: Focus Management", () => {
       browserPanel = window.locator(SEL.panel.gridPanel).last();
       browserId = await browserPanel.getAttribute("data-panel-id");
       expect(browserId).toBeTruthy();
+
+      // Click the panel's title bar (top-left, clear of the embedded web view)
+      // rather than relying on new panels being auto-focused: it pins
+      // `focusedId` AND puts document.activeElement inside the panel, so
+      // getFocusedPanelId resolves without depending on the multi-panel
+      // `.terminal-selected` fallback.
+      await browserPanel.click({ force: true, position: { x: 12, y: 8 } });
       await expect.poll(() => getFocusedPanelId(window), { timeout: T_MEDIUM }).toBe(browserId);
     });
 

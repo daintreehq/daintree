@@ -31,7 +31,6 @@ import { computeGridSelectedAgentIds } from "./contentGridAgentFilter";
 import { buildFleetPanels } from "./contentGridFleetPanels";
 import { useDndPlaceholder, useIsDragging, GRID_PLACEHOLDER_ID } from "@/components/DragDrop";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
-import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 import {
   subscribeOptimisticClose,
   getClosingIdsSnapshot,
@@ -82,7 +81,7 @@ import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { sortAgentsByToolbarPin } from "@/lib/agentMenuOrder";
-import { getMaximizedGroupFocusTarget } from "./contentGridFocus";
+import { getMaximizedGroupFocusTarget, enterFocusedPanel } from "./contentGridFocus";
 import { setGridLayoutSnapshot } from "./gridLayoutSnapshot";
 import { actionService } from "@/services/ActionService";
 
@@ -542,13 +541,9 @@ export function useContentGridContext({
       if (e.key === "Enter" && focusedId) {
         e.preventDefault();
         e.stopPropagation();
-        // Every panel kind registers a focus handler, so Enter enters browser,
-        // review, dev-preview and file panes as well as terminals. Release the
-        // macro region only once a live target has taken focus — otherwise the
-        // grid would stop handling arrows with focus left nowhere.
-        if (focusPanelInput(focusedId)) {
-          useMacroFocusStore.getState().clearFocus();
-        }
+        // Every panel kind registers a focus handler, so this enters browser,
+        // review, dev-preview, file and plugin panes as well as terminals.
+        enterFocusedPanel(focusedId);
         return;
       }
     },
