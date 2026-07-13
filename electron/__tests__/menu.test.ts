@@ -128,6 +128,11 @@ const windowRefMock = vi.hoisted(() => ({
 
 vi.mock("../window/windowRef.js", () => windowRefMock);
 
+const toggleWindowFullscreenMock = vi.hoisted(() => vi.fn<(win: unknown) => boolean>(() => true));
+vi.mock("../window/fullscreen.js", () => ({
+  toggleWindowFullscreen: toggleWindowFullscreenMock,
+}));
+
 const autoUpdaterServiceMock = vi.hoisted(() => {
   let menuState: "idle" | "checking" | "ready" = "idle";
   return {
@@ -304,6 +309,53 @@ describe("createApplicationMenu", () => {
         actionId: "project.cloneRepo",
         args: undefined,
       });
+    });
+  });
+
+  describe("File menu Project Settings item", () => {
+    afterEach(() => {
+      // mockReturnValue survives vi.clearAllMocks(), so restore the default or an
+      // active project leaks into every later test in this file.
+      projectStoreMock.getCurrentProjectId.mockReturnValue(null);
+    });
+
+    function rebuildWithProject(projectId: string | null): Electron.MenuItemConstructorOptions {
+      projectStoreMock.getCurrentProjectId.mockReturnValue(projectId);
+      createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
+      const item = findMenuItem(capturedTemplate, "File", "Project Settings…");
+      expect(item).toBeDefined();
+      return item!;
+    }
+
+    it("sends the project-settings action, not the app-settings one", () => {
+      const item = rebuildWithProject("project-1");
+      item.click!(
+        {} as Electron.MenuItem,
+        mockBrowserWindow as unknown as Electron.BaseWindow,
+        {} as Electron.KeyboardEvent
+      );
+      expect(mockWebContents.send).toHaveBeenCalledWith("menu-action", {
+        actionId: "project.settings.open",
+        args: undefined,
+      });
+    });
+
+    it("is enabled only while a project is active", () => {
+      expect(rebuildWithProject("project-1").enabled).toBe(true);
+      expect(rebuildWithProject(null).enabled).toBe(false);
+    });
+  });
+
+  describe("View menu Toggle Full Screen item", () => {
+    it("delegates to the shared platform-aware fullscreen helper", () => {
+      const item = findMenuItem(capturedTemplate, "View", "Toggle Full Screen");
+      expect(item).toBeDefined();
+      item!.click!(
+        {} as Electron.MenuItem,
+        mockBrowserWindow as unknown as Electron.BaseWindow,
+        {} as Electron.KeyboardEvent
+      );
+      expect(toggleWindowFullscreenMock).toHaveBeenCalledWith(mockBrowserWindow);
     });
   });
 
@@ -579,7 +631,7 @@ describe("update menu lifecycle", () => {
       expect(settings).toBeDefined();
       expect(settings!.accelerator).toBe("CommandOrControl+,");
 
-      expect(items.some((i) => i.label === "Project Settings")).toBe(true);
+      expect(items.some((i) => i.label === "Project Settings…")).toBe(true);
     });
 
     it("on linux: File menu ends with separator + Exit (role: quit) and exposes Settings... with CommandOrControl+,", () => {
