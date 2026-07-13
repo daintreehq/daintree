@@ -1604,7 +1604,15 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onError(callback: (error: VoiceInputError) => void): () => void;
     onStatus(callback: (status: VoiceInputStatus) => void): () => void;
     checkMicPermission(): Promise<MicPermissionStatus>;
+    /**
+     * Native permission preflight. Resolves to whether the renderer may proceed
+     * to getUserMedia — NOT to whether the OS granted access. Only macOS can
+     * answer authoritatively (a `false` there is a real denial); Windows and
+     * Linux have no main-process request API and always resolve `true`, because
+     * getUserMedia is the real gate on those platforms.
+     */
     requestMicPermission(): Promise<boolean>;
+    /** Best-effort: opens the OS microphone settings. Failures are logged, never surfaced. */
     openMicSettings(): Promise<void>;
     validateApiKey(apiKey: string): Promise<{ valid: boolean; error?: string }>;
     /** Run a whole-passage AI cleanup pass over the dictated text after recording stops. */

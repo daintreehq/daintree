@@ -567,9 +567,11 @@ class VoiceRecordingService {
 
     if (micStatus === "not-determined") {
       logDebug(`${LOG_PREFIX} Requesting OS microphone permission`);
-      let granted: boolean;
+      // Only macOS can answer this natively; Windows/Linux resolve `true` to mean
+      // "clear to attempt capture", so a `false` here is a genuine macOS denial.
+      let canAttemptCapture: boolean;
       try {
-        granted = await window.electron.voiceInput.requestMicPermission();
+        canAttemptCapture = await window.electron.voiceInput.requestMicPermission();
       } catch (err) {
         logError(`${LOG_PREFIX} requestMicPermission IPC rejected`, err);
         if (!this.isStartRequestStale(startRequestId)) {
@@ -585,8 +587,8 @@ class VoiceRecordingService {
       if (this.isStartRequestStale(startRequestId)) {
         return;
       }
-      logDebug(`${LOG_PREFIX} OS microphone permission result`, { granted });
-      if (!granted) {
+      logDebug(`${LOG_PREFIX} OS microphone permission result`, { canAttemptCapture });
+      if (!canAttemptCapture) {
         const message = "Microphone permission denied. Enable it in System Settings and try again.";
         useVoiceRecordingStore
           .getState()
@@ -597,7 +599,9 @@ class VoiceRecordingService {
       }
     }
 
-    // Acquire microphone stream — permission should be granted at this point.
+    // Acquire microphone stream. On macOS the preflight above already settled
+    // permission; on Windows/Linux this call IS the permission gate, so a denial
+    // arrives here as NotAllowedError rather than from the preflight.
     logDebug(`${LOG_PREFIX} Requesting microphone access`);
     let stream: MediaStream;
     try {

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import { VoiceInputSettingsTab } from "../VoiceInputSettingsTab";
 
 const mockNotify = vi.fn();
@@ -268,6 +268,106 @@ describe("VoiceInputSettingsTab", () => {
       expect(screen.getByText(/not used for model training/)).toBeTruthy();
       expect(screen.getByText(/abuse-monitoring logs for up to 30 days/)).toBeTruthy();
       expect(screen.queryByText(/stored locally in plain text/)).toBeNull();
+    });
+  });
+
+  describe("microphone permission request on Windows", () => {
+    const originalNavigator = globalThis.navigator;
+
+    const stubWindowsNavigator = (getUserMedia: ReturnType<typeof vi.fn>) => {
+      Object.defineProperty(globalThis, "navigator", {
+        value: {
+          userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+          mediaDevices: { getUserMedia },
+        },
+        writable: true,
+        configurable: true,
+      });
+    };
+
+    const renderWithMic = async (api: Partial<typeof window.electron.voiceInput>) => {
+      window.electron = {
+        voiceInput: createVoiceInputApi({
+          getSettings: vi.fn().mockResolvedValue({
+            enabled: true,
+            openaiApiKey: "sk-test",
+            language: "en",
+            customDictionary: [],
+            transcriptionModel: "gpt-realtime-whisper",
+            correctionEnabled: false,
+            correctionModel: "gpt-5-mini",
+            correctionCustomInstructions: "",
+            paragraphingStrategy: "spoken-command",
+            resolveFileLinks: true,
+            deviceId: "",
+          }),
+          ...api,
+        }),
+      } as unknown as typeof window.electron;
+
+      render(<VoiceInputSettingsTab />);
+      const button = await screen.findByRole("button", { name: /Request/ });
+      fireEvent.click(button);
+    };
+
+    afterEach(() => {
+      Object.defineProperty(globalThis, "navigator", {
+        value: originalNavigator,
+        writable: true,
+        configurable: true,
+      });
+    });
+
+    it("reaches getUserMedia, since Windows has no native request API", async () => {
+      // The preflight only clears the way on Windows — without this capture
+      // attempt the Request button can never actually prompt for the mic.
+      const track = { stop: vi.fn() };
+      const getUserMedia = vi.fn().mockResolvedValue({ getTracks: () => [track] });
+      stubWindowsNavigator(getUserMedia);
+
+      const requestMicPermission = vi.fn().mockResolvedValue(true);
+      await renderWithMic({
+        requestMicPermission,
+        checkMicPermission: vi.fn().mockResolvedValue("not-determined"),
+      });
+
+      await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(1));
+      expect(requestMicPermission).toHaveBeenCalledTimes(1);
+      // The probe must never hold the mic open past the request.
+      expect(track.stop).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(screen.getByText(/access granted/)).toBeTruthy());
+    });
+
+    it("reports a denial when the capture attempt is refused", async () => {
+      const getUserMedia = vi
+        .fn()
+        .mockRejectedValue(new DOMException("Permission denied", "NotAllowedError"));
+      stubWindowsNavigator(getUserMedia);
+
+      await renderWithMic({
+        requestMicPermission: vi.fn().mockResolvedValue(true),
+        checkMicPermission: vi.fn().mockResolvedValue("not-determined"),
+      });
+
+      await waitFor(() => expect(screen.getByText(/Microphone denied/)).toBeTruthy());
+    });
+
+    it("skips capture when the native preflight denies, as it does on macOS", async () => {
+      const getUserMedia = vi.fn();
+      stubWindowsNavigator(getUserMedia);
+
+      await renderWithMic({
+        requestMicPermission: vi.fn().mockResolvedValue(false),
+        // not-determined on mount is what surfaces the Request button at all; the
+        // native prompt settles it to denied by the time the handler re-checks.
+        checkMicPermission: vi
+          .fn()
+          .mockResolvedValueOnce("not-determined")
+          .mockResolvedValue("denied"),
+      });
+
+      await waitFor(() => expect(screen.getByText(/Microphone denied/)).toBeTruthy());
+      expect(getUserMedia).not.toHaveBeenCalled();
     });
   });
 });

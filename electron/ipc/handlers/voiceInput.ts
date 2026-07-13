@@ -175,12 +175,21 @@ function checkMicPermission(): MicPermissionStatus {
   return "unknown";
 }
 
+/**
+ * Native permission preflight. The boolean means "the renderer may proceed to
+ * getUserMedia" — NOT "the OS confirmed access".
+ *
+ * macOS is the only platform with a main-process request API
+ * (askForMediaAccess), so it is the only one that can answer authoritatively;
+ * a `false` there is a real denial. Windows and Linux have no such API —
+ * getUserMedia is the actual gate — so they must return `true` to let the
+ * renderer reach it. Returning `false` here dead-ends voice input on Windows.
+ */
 async function requestMicPermission(): Promise<boolean> {
   if (process.platform === "darwin") {
     return systemPreferences.askForMediaAccess("microphone");
   }
-  // On Windows/Linux, permission is requested via getUserMedia in the renderer
-  return false;
+  return true;
 }
 
 function openMicSettings(): void {
@@ -196,13 +205,18 @@ function openMicSettings(): void {
   } else if (process.platform === "win32") {
     void openExternalUrl("ms-settings:privacy-microphone").catch(logOpenFailure);
   } else {
-    // Linux: try gnome-control-center, fall back silently
+    // Linux: try gnome-control-center, fall back silently. A missing binary
+    // surfaces as an async "error" event, not a throw — without this listener it
+    // becomes an uncaughtException and takes the app into fatal recovery.
     try {
-      spawn("gnome-control-center", ["sound"], { detached: true, stdio: "ignore" }).unref();
-    } catch (err) {
-      logDebug("[VoiceInput] Failed to open mic settings", {
-        error: (err as Error)?.message ?? String(err),
+      const child = spawn("gnome-control-center", ["sound"], {
+        detached: true,
+        stdio: "ignore",
       });
+      child.on("error", logOpenFailure);
+      child.unref();
+    } catch (err) {
+      logOpenFailure(err);
     }
   }
 }

@@ -110,6 +110,22 @@ const DEFAULT_SETTINGS: VoiceInputSettings = {
 
 type ApiKeyValidation = "idle" | "testing" | "valid" | "invalid";
 
+/**
+ * Opens the mic just long enough to settle permission, then releases it. This is
+ * the only way to request access on platforms without a native request API.
+ */
+async function probeMicCapture(): Promise<boolean> {
+  let stream: MediaStream | undefined;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    return true;
+  } catch {
+    return false;
+  } finally {
+    stream?.getTracks().forEach((track) => track.stop());
+  }
+}
+
 export function VoiceInputSettingsTab() {
   const [settings, setSettings] = useState<VoiceInputSettings>(DEFAULT_SETTINGS);
   const [micPermission, setMicPermission] = useState<MicPermissionStatus>("unknown");
@@ -165,11 +181,28 @@ export function VoiceInputSettingsTab() {
   const handleRequestMicPermission = async () => {
     setIsRequestingMic(true);
     try {
-      await window.electron?.voiceInput?.requestMicPermission();
-      const status = await window.electron?.voiceInput?.checkMicPermission();
+      // macOS settles this natively. Windows/Linux have no main-process request
+      // API — a `true` there only means "clear to attempt capture", so the OS
+      // status stays not-determined and getUserMedia below is the actual request.
+      const canAttemptCapture = await window.electron?.voiceInput?.requestMicPermission();
+      let status = await window.electron?.voiceInput?.checkMicPermission();
+
+      if (canAttemptCapture && (!status || status === "not-determined")) {
+        const captured = await probeMicCapture();
+        const rechecked = await window.electron?.voiceInput?.checkMicPermission();
+        // Windows can keep reporting not-determined even after capture succeeds;
+        // trust what the attempt actually proved over an inconclusive status.
+        status =
+          rechecked && rechecked !== "not-determined"
+            ? rechecked
+            : captured
+              ? "granted"
+              : "denied";
+      }
+
       if (status) setMicPermission(status);
     } catch {
-      // ignore
+      // Non-fatal — the row keeps its last known status.
     } finally {
       setIsRequestingMic(false);
     }
