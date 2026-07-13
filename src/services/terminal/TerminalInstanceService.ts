@@ -43,7 +43,6 @@ import {
 } from "./TerminalListenerInstaller";
 import { reduceScrollback, restoreScrollback } from "./TerminalScrollbackController";
 import { DEFAULT_TERMINAL_FONT_FAMILY, onTerminalFontArrivedLate } from "@/config/terminalFont";
-import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { isPtyPanel } from "@shared/types/panel";
 import { applyXtermReflowFastpath } from "@shared/utils/xtermReflowFastpath";
 import { usePanelStore } from "@/store/panelStore";
@@ -311,6 +310,10 @@ class TerminalInstanceService {
       // stalled-byte flush guard is therefore never blocked by one.
       hasInFlightWake: () => false,
       hasPendingWake: () => false,
+      isResizeTransitioning: (id) =>
+        this.resizeController.isResizeLocked(id) ||
+        this.resizeController.hasPendingResize(id) ||
+        this.resizePassScheduler.isResizePending(id),
       isWebGLActive: (id) => this.webGLManager.isActive(id),
       shouldHaveWebGL: (managed) => this.webGLPolicy.shouldHaveActiveWebGL(managed),
       ensureWebGL: (id, managed) => this.webGLManager.ensureContext(id, managed),
@@ -906,7 +909,6 @@ class TerminalInstanceService {
     const terminalOptions = {
       ...options,
       rescaleOverlappingGlyphs: true,
-      reflowCursorLine: true,
       linkHandler: {
         activate: (event: MouseEvent, text: string) => openLink(text, event),
         hover: (_event: MouseEvent, text: string, range: IBufferRange) => {
@@ -1667,15 +1669,13 @@ class TerminalInstanceService {
   }
 
   /**
-   * Cancel a panel's pending resize job and debounce timer *without* applying
-   * it. Used on optimistic close: `flushResize` would force-drain queued
-   * output and reflow scrollback synchronously inside the close click, but the
-   * pending job still has to be cleared so no stale resize fires after the
-   * panel is detached or restored from trash.
+   * Cancel all pending panel resize work *without* applying it. Used on
+   * optimistic close: `flushResize` would force-drain queued output and reflow
+   * scrollback synchronously inside the close click, but stale debounce, idle,
+   * or settled work must not fire after detach or trash restore.
    */
   cancelPendingResize(id: string): void {
-    const managed = this.instances.get(id);
-    if (managed) this.resizeController.clearResizeJob(managed);
+    this.resizeController.cancelPendingResize(id);
   }
 
   sendPtyResize(id: string, cols: number, rows: number): void {
@@ -1916,24 +1916,6 @@ class TerminalInstanceService {
     // are handled by the ResizeObserver-driven applyResize path.
     if (managed.isAltBuffer) return;
 
-    // Settled-strategy agents require atomic xterm+PTY resize (deferred 500ms).
-    // fit() would immediately resize xterm.js while PTY lags, breaking atomicity.
-    // Skip fit() for settled agents and use sendPtyResize which preserves the contract.
-    if (this.getResizeStrategyForTerminal(managed) === "settled") {
-      const cols = managed.latestCols;
-      const rows = managed.latestRows;
-      if (Number.isInteger(cols) && Number.isInteger(rows) && cols > 0 && rows > 0) {
-        this.resizeController.sendPtyResize(id, cols, rows);
-      }
-      // Clear throttle so the next write — or the 3s heartbeat — triggers an
-      // immediate reflow. We don't call maybeReflowTerminal() inline here
-      // because the deferred PTY resize above hasn't landed yet; reflowing
-      // mid-resize would jitter against the pending dimension change. The
-      // heartbeat and focus paths cover any IO unpause within 3s.
-      managed.lastReflowAt = 0;
-      return;
-    }
-
     // Re-measure container dimensions after wake so latestCols/latestRows
     // reflect the current window size rather than pre-hibernation cache.
     // fit() already guards against offscreen/small terminals (returns null).
@@ -1944,18 +1926,22 @@ class TerminalInstanceService {
     // CLI mid-paint — the assistant's boot splash is the canonical victim.
     // Defer to the reconciliation watchdog via the reveal-pending obligation;
     // a no-drift fit falls through (its resize is a no-op and the PTY
-    // re-assert is dedupe-safe). Alt-buffer and settled-strategy panes never
-    // reach here (early returns above).
+    // re-assert is dedupe-safe). Alt-buffer panes never reach here.
     if (this.deferGridChangeForStream(managed, this.proposalDivergesFromGrid(managed))) {
       // Deferred to the watchdog — skip the fit.
     } else {
       const fitResult = this.resizeController.fit(id);
       if (!fitResult) {
-        // Fallback: fit() returned null (terminal offscreen or container too
-        // small). PTY-only — it never re-wraps the xterm buffer, so it stays
-        // safe for a streaming pane too.
+        // Fallback: fit() returned null (terminal offscreen, too small, or
+        // resize-locked). PTY-only and lock-aware — it never re-wraps xterm or
+        // bypasses an in-flight layout transition.
         this.resizeController.forceImmediateResize(id);
       }
+    }
+
+    if (this.resizeController.hasPendingResize(id)) {
+      managed.lastReflowAt = 0;
+      return;
     }
 
     // Kick the IO unpause path for standard terminals that just woke up —
@@ -1964,12 +1950,6 @@ class TerminalInstanceService {
     // first so this runs unconditionally.
     managed.lastReflowAt = 0;
     this.maybeReflowTerminal(managed);
-  }
-
-  private getResizeStrategyForTerminal(managed: ManagedTerminal): "default" | "settled" {
-    if (!managed.runtimeAgentId) return "default";
-    const config = getEffectiveAgentConfig(managed.runtimeAgentId);
-    return config?.capabilities?.resizeStrategy ?? "default";
   }
 
   private handleBufferModeChange(id: string, isAltBuffer: boolean): void {
@@ -2298,8 +2278,6 @@ class TerminalInstanceService {
         managed.terminal.write("\x1b[!p");
 
         this.resetRenderer(id);
-
-        managed.fitAddon?.fit();
 
         const timestamp = new Date().toLocaleTimeString();
         managed.terminal.write(

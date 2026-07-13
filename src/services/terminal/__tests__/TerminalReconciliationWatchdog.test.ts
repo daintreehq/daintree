@@ -129,6 +129,7 @@ function makeDeps(
     resumeFlush: vi.fn(),
     hasInFlightWake: vi.fn(() => false),
     hasPendingWake: vi.fn(() => false),
+    isResizeTransitioning: vi.fn(() => false),
     isWebGLActive: vi.fn(() => true),
     shouldHaveWebGL: vi.fn(() => false),
     ensureWebGL: vi.fn(),
@@ -557,6 +558,81 @@ describe("TerminalReconciliationWatchdog", () => {
   });
 
   describe("geometry convergence (#10632)", () => {
+    it("defers geometry diagnosis and repair during a coordinated resize, then repairs once stable", () => {
+      const managed = makeManaged({ isAltBuffer: true });
+      setRenderPaused(managed, false);
+      (managed.terminal as unknown as { cols: number; rows: number }).cols = 137;
+      (managed.terminal as unknown as { cols: number; rows: number }).rows = 40;
+      const proposeDimensions = vi.fn(() => ({ cols: 100, rows: 40 }));
+      (
+        managed.fitAddon as unknown as {
+          proposeDimensions: () => { cols: number; rows: number };
+        }
+      ).proposeDimensions = proposeDimensions;
+      managed.geometryRepairAttempts = 1;
+      managed.geometryRepairGeneration = managed.attachGeneration;
+      instances.set("t1", managed);
+      let resizeTransitioning = true;
+      const deps = makeDeps(instances, {
+        isResizeTransitioning: vi.fn(() => resizeTransitioning),
+      });
+      watchdog = new TerminalReconciliationWatchdog(deps);
+
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(proposeDimensions).not.toHaveBeenCalled();
+      expect(deps.reconcileRevealGeometry).not.toHaveBeenCalled();
+      expect(managed.geometryRepairAttempts).toBe(1);
+      expect(managed.lastWatchdogRepairAt).toBeUndefined();
+      expect(
+        vi
+          .mocked(logWarn)
+          .mock.calls.some((call) => String(call[0]).includes("geometry divergence"))
+      ).toBe(false);
+
+      resizeTransitioning = false;
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.reconcileRevealGeometry).toHaveBeenCalledTimes(1);
+      expect(managed.geometryRepairAttempts).toBe(2);
+    });
+
+    it("keeps a reveal repair pending while resize coordination owns the grid", () => {
+      const managed = makeManaged({ isAltBuffer: true });
+      managed.revealPendingRepair = true;
+      managed.revealPendingGeneration = managed.attachGeneration;
+      setGrid(managed, { cols: 100, rows: 40 }, { cols: 100, rows: 40 });
+      instances.set("t1", managed);
+      let resizeTransitioning = true;
+      const deps = makeDeps(instances, {
+        isResizeTransitioning: vi.fn(() => resizeTransitioning),
+      });
+      watchdog = new TerminalReconciliationWatchdog(deps);
+
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.reconcileRevealGeometry).not.toHaveBeenCalled();
+      expect(managed.revealPendingRepair).toBe(true);
+      expect(managed.lastWatchdogRepairAt).toBeUndefined();
+
+      resizeTransitioning = false;
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.reconcileRevealGeometry).toHaveBeenCalledWith("t1");
+      expect(managed.revealPendingRepair).toBe(false);
+    });
+
+    it("still runs non-geometry recovery during a coordinated resize", () => {
+      const managed = makeManaged({ isAltBuffer: false });
+      setRenderPaused(managed, true);
+      setGrid(managed, { cols: 137, rows: 40 }, { cols: 100, rows: 40 });
+      instances.set("t1", managed);
+      const deps = makeDeps(instances, {
+        isResizeTransitioning: vi.fn(() => true),
+      });
+      watchdog = new TerminalReconciliationWatchdog(deps);
+
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.reconcileRevealGeometry).not.toHaveBeenCalled();
+      expect(deps.forceReflow).toHaveBeenCalledWith(managed.terminal.element);
+    });
+
     it("reconciles an on-screen agent TUI whose grid disagrees with the container (garbled wrapping)", () => {
       // The exact switch-back failure: while backgrounded the container narrowed
       // (137 → 100 cols) but the alt-buffer agent's xterm grid stayed at the old

@@ -52,7 +52,10 @@ vi.mock("@/clients", () => ({
 
 vi.mock("../TerminalAddonManager", () => ({
   setupTerminalAddons: vi.fn(() => ({
-    fitAddon: { fit: vi.fn() },
+    fitAddon: {
+      fit: vi.fn(),
+      proposeDimensions: vi.fn(() => ({ cols: 80, rows: 24 })),
+    },
     serializeAddon: { serialize: vi.fn() },
     imageAddon: { dispose: vi.fn() },
     searchAddon: {},
@@ -101,7 +104,7 @@ describe("TerminalInstanceService - repairFontGrid (#9776)", () => {
     expect(typeof registeredLateArrivalCallback).toBe("function");
   });
 
-  it("calls fit on every non-hibernated instance", async () => {
+  it("remeasures every non-hibernated instance", async () => {
     const { terminalInstanceService } = await import("../TerminalInstanceService");
     stubMatchMedia();
 
@@ -120,8 +123,8 @@ describe("TerminalInstanceService - repairFontGrid (#9776)", () => {
       undefined
     );
 
-    const f1 = vi.spyOn(m1.fitAddon, "fit");
-    const f2 = vi.spyOn(m2.fitAddon, "fit");
+    const f1 = vi.spyOn(m1.fitAddon, "proposeDimensions");
+    const f2 = vi.spyOn(m2.fitAddon, "proposeDimensions");
 
     terminalInstanceService.repairFontGrid();
 
@@ -201,7 +204,7 @@ describe("TerminalInstanceService - repairFontGrid (#9776)", () => {
     terminalInstanceService.destroy("repair-default");
   });
 
-  it("resets lastWidth/lastHeight so the next resize is not deduped", async () => {
+  it("refreshes the cached host dimensions while repairing the grid", async () => {
     const { terminalInstanceService } = await import("../TerminalInstanceService");
     stubMatchMedia();
 
@@ -217,8 +220,8 @@ describe("TerminalInstanceService - repairFontGrid (#9776)", () => {
 
     terminalInstanceService.repairFontGrid();
 
-    expect(managed.lastWidth).toBe(0);
-    expect(managed.lastHeight).toBe(0);
+    expect(managed.lastWidth).toBe(800);
+    expect(managed.lastHeight).toBe(600);
 
     terminalInstanceService.destroy("repair-dims");
   });
@@ -236,7 +239,7 @@ describe("TerminalInstanceService - repairFontGrid (#9776)", () => {
       () => TerminalRefreshTier.FOCUSED,
       undefined
     );
-    const fit = vi.spyOn(managed.fitAddon, "fit");
+    const fit = vi.spyOn(managed.fitAddon, "proposeDimensions");
 
     registeredLateArrivalCallback?.();
 

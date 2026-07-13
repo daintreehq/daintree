@@ -844,21 +844,15 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     }, GRID_RESIZE_COALESCE_MS);
   }
 
-  // One logical pass spans every surface: surfaces receiving ids supersede
-  // their own in-flight pass (the service's per-instance abort), and surfaces
-  // with no ids in this pass get an explicit cancel so their stale chunked
-  // work cannot keep reflowing a survivor set the fabric has already moved
-  // past. Shards of the same logical pass are dispatched together and never
-  // cancel each other.
+  // One logical pass may span several surfaces, but callers are allowed to
+  // request a scoped subset (for example a two-pane divider). Dispatch each
+  // shard without cancelling absent surfaces: their pending ids are still
+  // fresh-measurement obligations and must survive an unrelated narrower
+  // pass. Call cancelActiveResizePass() explicitly when all active surface
+  // work is genuinely invalid.
   runResizePass(ids: string[]): void {
     if (ids.length === 0) return;
     const groups = this.groupBySurface(ids);
-    if (this.registry.surfaceCount() > 1) {
-      const inPass = new Set(groups.map((group) => group.plane));
-      for (const plane of this.planes()) {
-        if (!inPass.has(plane)) plane.cancelActiveResizePass();
-      }
-    }
     groups.forEach(({ plane, ids: group }) => plane.runResizePass(group));
   }
 

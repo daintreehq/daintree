@@ -397,6 +397,7 @@ export interface AgentConfig {
     scrollback?: number;
     blockAltScreen?: boolean;
     blockMouseReporting?: boolean;
+    /** Use `settled` for sticky cursor-relative TUIs that should receive one stable final grid. */
     resizeStrategy?: "default" | "settled";
     /** CLI flag to disable alt-screen and use inline rendering (e.g., "--no-alt-screen") */
     inlineModeFlag?: string;

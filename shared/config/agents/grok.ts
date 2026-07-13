@@ -72,6 +72,7 @@ export const config: AgentConfig = {
   contextWindow: 200_000,
   capabilities: {
     scrollback: 10000,
+    resizeStrategy: "default",
     // Rust TUI that takes over the alternate screen. We keep it ON the alt
     // screen by default: forcing it inline (--no-alt-screen) renders every frame
     // into the normal-buffer scrollback, so scrolling up shows garbled overdrawn

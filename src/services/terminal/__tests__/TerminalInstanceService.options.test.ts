@@ -35,7 +35,10 @@ vi.mock("@/clients", () => ({
 
 vi.mock("../TerminalAddonManager", () => ({
   setupTerminalAddons: vi.fn(() => ({
-    fitAddon: { fit: vi.fn() },
+    fitAddon: {
+      fit: vi.fn(),
+      proposeDimensions: vi.fn(() => ({ cols: 80, rows: 24 })),
+    },
     serializeAddon: { serialize: vi.fn() },
     imageAddon: { dispose: vi.fn() },
     searchAddon: {},
@@ -91,7 +94,7 @@ describe("TerminalInstanceService - options", () => {
     expect(managed.terminal.options).toEqual(
       expect.objectContaining({
         rescaleOverlappingGlyphs: true,
-        reflowCursorLine: true,
+        reflowCursorLine: false,
       })
     );
 
@@ -121,7 +124,7 @@ describe("TerminalInstanceService - options", () => {
       expect.objectContaining({
         cursorBlink: false,
         rescaleOverlappingGlyphs: true,
-        reflowCursorLine: true,
+        reflowCursorLine: false,
       })
     );
 
@@ -216,7 +219,7 @@ describe("TerminalInstanceService - options", () => {
     );
 
     const refreshSpy = vi.spyOn(managed.terminal, "refresh");
-    const fitSpy = vi.spyOn(managed.fitAddon, "fit");
+    const fitSpy = vi.spyOn(managed.fitAddon, "proposeDimensions");
 
     terminalInstanceService.updateOptions("test-options-theme", {
       theme: { foreground: "#ffffff", background: "#000000" },
@@ -248,7 +251,7 @@ describe("TerminalInstanceService - options", () => {
     );
 
     const refreshSpy = vi.spyOn(managed.terminal, "refresh");
-    const fitSpy = vi.spyOn(managed.fitAddon, "fit");
+    const fitSpy = vi.spyOn(managed.fitAddon, "proposeDimensions");
 
     terminalInstanceService.updateOptions("test-options-font", { fontSize: 16 });
 
@@ -278,7 +281,7 @@ describe("TerminalInstanceService - options", () => {
     );
 
     const refreshSpy = vi.spyOn(managed.terminal, "refresh");
-    const fitSpy = vi.spyOn(managed.fitAddon, "fit");
+    const fitSpy = vi.spyOn(managed.fitAddon, "proposeDimensions");
 
     terminalInstanceService.updateOptions("test-options-both", {
       theme: { foreground: "#ffffff", background: "#000000" },
@@ -357,8 +360,8 @@ describe("TerminalInstanceService - options", () => {
       undefined
     );
 
-    const f1 = vi.spyOn(m1.fitAddon, "fit");
-    const f2 = vi.spyOn(m2.fitAddon, "fit");
+    const f1 = vi.spyOn(m1.fitAddon, "proposeDimensions");
+    const f2 = vi.spyOn(m2.fitAddon, "proposeDimensions");
 
     terminalInstanceService.applyGlobalOptions({ fontSize: 18 });
 

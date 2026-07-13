@@ -26,7 +26,8 @@ export interface TerminalResizePassSchedulerDeps {
 export class TerminalResizePassScheduler {
   private gridResizeTimer: number | undefined;
   private readonly gridResizePendingIds = new Set<string>();
-  private resizePassAbort: AbortController | undefined;
+  private readonly frameResizePendingPasses = new Map<number, ReadonlySet<string>>();
+  private activeResizePass: { controller: AbortController; pendingIds: Set<string> } | undefined;
 
   constructor(private deps: TerminalResizePassSchedulerDeps) {}
 
@@ -83,8 +84,26 @@ export class TerminalResizePassScheduler {
       this.gridResizeTimer = undefined;
       const pendingIds = [...this.gridResizePendingIds];
       this.gridResizePendingIds.clear();
-      requestAnimationFrame(() => this.runResizePass(pendingIds));
+      const framePendingIds = new Set(pendingIds);
+      const frameId = requestAnimationFrame(() => {
+        // Establish active-pass ownership before dropping the frame marker so
+        // observers never see a gap where geometry looks stable.
+        try {
+          this.runResizePass(pendingIds);
+        } finally {
+          this.frameResizePendingPasses.delete(frameId);
+        }
+      });
+      this.frameResizePendingPasses.set(frameId, framePendingIds);
     }, GRID_RESIZE_COALESCE_MS);
+  }
+
+  isResizePending(id: string): boolean {
+    if (this.gridResizePendingIds.has(id)) return true;
+    for (const pendingIds of this.frameResizePendingPasses.values()) {
+      if (pendingIds.has(id)) return true;
+    }
+    return this.activeResizePass?.pendingIds.has(id) ?? false;
   }
 
   /**
@@ -101,28 +120,36 @@ export class TerminalResizePassScheduler {
    * panel resizes first so the pane the user is looking at settles in the
    * first frame; far corners of a large grid settle a beat later, unnoticed.
    *
-   * Each new pass aborts any in-flight one: once a newer pass starts, the
-   * survivor set the old one was resizing is already stale, so its remaining
-   * reflows are cancelled. The trailing-edge debounce in
-   * {@link scheduleBatchResize} coalesces a close/open burst before a pass
-   * starts; this abort handles the case where a burst arrives once a pass is
-   * already running. Fire-and-forget — callers never await it.
+   * Each new pass aborts any in-flight one and carries its unprocessed ids
+   * forward. A pending id is an obligation to re-read that terminal's current
+   * host geometry, not a stale pixel target, so a narrower pass must not strand
+   * survivors from an earlier broader pass. {@link cancelActiveResizePass} is
+   * the explicit path for callers that know the old surface work is invalid.
+   * Fire-and-forget — callers never await it.
    */
   runResizePass(ids: string[]): void {
     if (ids.length === 0) return;
-    // A newer pass supersedes any in-flight one — its survivor set is stale.
-    this.resizePassAbort?.abort();
+    const supersededPass = this.activeResizePass;
+    const pendingIds = [...new Set([...ids, ...(supersededPass?.pendingIds ?? [])])];
+    supersededPass?.controller.abort();
     const controller = new AbortController();
-    this.resizePassAbort = controller;
-    const run = () => this.executeResizePass(ids, controller);
+    const pass = { controller, pendingIds: new Set(pendingIds) };
+    this.activeResizePass = pass;
+    const run = () => this.executeResizePass(pendingIds, pass);
     const task =
       typeof scheduler !== "undefined" && typeof scheduler.postTask === "function"
         ? scheduler.postTask(run, { priority: "user-visible", signal: controller.signal })
         : run();
-    void task.catch((error) => {
-      if (error instanceof Error && error.name === "AbortError") return;
-      logError("terminal resize pass failed", error);
-    });
+    void task
+      .catch((error) => {
+        if (error instanceof Error && error.name === "AbortError") return;
+        logError("terminal resize pass failed", error);
+      })
+      .finally(() => {
+        if (this.activeResizePass === pass) {
+          this.activeResizePass = undefined;
+        }
+      });
   }
 
   /**
@@ -134,12 +161,15 @@ export class TerminalResizePassScheduler {
    * a survivor set that is already stale).
    */
   cancelActiveResizePass(): void {
-    this.resizePassAbort?.abort();
-    this.resizePassAbort = undefined;
+    this.activeResizePass?.controller.abort();
+    this.activeResizePass = undefined;
   }
 
-  private async executeResizePass(ids: string[], controller: AbortController): Promise<void> {
-    const { signal } = controller;
+  private async executeResizePass(
+    ids: string[],
+    pass: { controller: AbortController; pendingIds: Set<string> }
+  ): Promise<void> {
+    const { signal } = pass.controller;
     try {
       const ordered = this.orderFocusedFirst([...new Set(ids)]);
       for (let i = 0; i < ordered.length; i += RESIZE_PASS_CHUNK_SIZE) {
@@ -147,14 +177,18 @@ export class TerminalResizePassScheduler {
         // batchResize re-applies every eligibility guard (instance exists,
         // connected, visible, not resize-locked) and reads fresh geometry —
         // correct here because layout has settled across the yields.
-        this.batchResize(ordered.slice(i, i + RESIZE_PASS_CHUNK_SIZE));
+        const chunk = ordered.slice(i, i + RESIZE_PASS_CHUNK_SIZE);
+        this.batchResize(chunk);
+        if (this.activeResizePass === pass) {
+          for (const id of chunk) pass.pendingIds.delete(id);
+        }
         if (i + RESIZE_PASS_CHUNK_SIZE < ordered.length) {
           await yieldToScheduler();
         }
       }
     } finally {
-      if (this.resizePassAbort === controller) {
-        this.resizePassAbort = undefined;
+      if (this.activeResizePass === pass) {
+        this.activeResizePass = undefined;
       }
     }
   }
@@ -174,7 +208,16 @@ export class TerminalResizePassScheduler {
   // doesn't resume against a torn-down service. Called from
   // `TerminalInstanceService.dispose()`.
   dispose(): void {
-    this.resizePassAbort?.abort();
-    this.resizePassAbort = undefined;
+    if (this.gridResizeTimer !== undefined) {
+      clearTimeout(this.gridResizeTimer);
+      this.gridResizeTimer = undefined;
+    }
+    this.gridResizePendingIds.clear();
+    for (const frameId of this.frameResizePendingPasses.keys()) {
+      cancelAnimationFrame(frameId);
+    }
+    this.frameResizePendingPasses.clear();
+    this.activeResizePass?.controller.abort();
+    this.activeResizePass = undefined;
   }
 }

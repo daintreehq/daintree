@@ -37,7 +37,7 @@ interface XtermCoreRenderDimensions {
  *
  * Uses a narrow structural type instead of `any` and rejects non-finite,
  * zero, or negative values. Returns `null` on any failure so callers can
- * fall back to fitAddon.fit().
+ * fall back to FitAddon's proposed dimensions.
  *
  * Upstream tracking: xtermjs/xterm.js#702 (no public API in 6.0).
  * Replace with a public API when one becomes available.
@@ -159,9 +159,16 @@ export function hasStreamingWrites(managed: ManagedTerminal, now: number): boole
   );
 }
 
+interface SettledResizeRequest {
+  timer: number;
+  cols: number;
+  rows: number;
+  resizeXterm: boolean;
+}
+
 export class TerminalResizeController {
   private resizeLocks = new Map<string, number>();
-  private settledResizeTimers = new Map<string, number>();
+  private settledResizeRequests = new Map<string, SettledResizeRequest>();
   private deps: ResizeControllerDeps;
 
   constructor(deps: ResizeControllerDeps) {
@@ -172,6 +179,11 @@ export class TerminalResizeController {
     if (locked) {
       const ttl = customTtlMs ?? RESIZE_LOCK_TTL_MS;
       this.resizeLocks.set(id, Date.now() + ttl);
+      this.clearSettledTimer(id);
+      const managed = this.deps.getInstance(id);
+      if (managed) {
+        this.clearResizeJob(managed);
+      }
     } else {
       this.resizeLocks.delete(id);
       const managed = this.deps.getInstance(id);
@@ -209,11 +221,22 @@ export class TerminalResizeController {
     }
 
     try {
-      managed.fitAddon.fit();
-      const { cols, rows } = managed.terminal;
+      const proposal = managed.fitAddon.proposeDimensions();
+      if (!proposal || proposal.cols <= 1 || proposal.rows <= 1) {
+        return null;
+      }
+
+      const { cols, rows } = proposal;
+      const buffer = managed.terminal.buffer.active;
+      const wasAtBottom = buffer.viewportY >= buffer.baseY;
+      managed.lastWidth = rect.width;
+      managed.lastHeight = rect.height;
       managed.latestCols = cols;
       managed.latestRows = rows;
-      this.sendPtyResize(id, cols, rows);
+      managed.latestWasAtBottom = wasAtBottom;
+      this.clearResizeJob(managed);
+      this.clearSettledTimer(id);
+      this.applyResize(id, cols, rows);
       return { cols, rows };
     } catch (error) {
       console.warn("Terminal fit failed:", error);
@@ -224,11 +247,23 @@ export class TerminalResizeController {
   flushResize(id: string): void {
     const managed = this.deps.getInstance(id);
     if (!managed) return;
+    if (this.isResizeLocked(id)) return;
 
     if (managed.resizeJob !== undefined || managed.resizeDebounceTimer !== undefined) {
       this.clearResizeJob(managed);
       this.applyResize(id, managed.latestCols, managed.latestRows);
     }
+
+    const pending = this.takeSettledResize(id);
+    if (pending) {
+      this.commitSettledResize(id, pending);
+    }
+  }
+
+  cancelPendingResize(id: string): void {
+    const managed = this.deps.getInstance(id);
+    if (managed) this.clearResizeJob(managed);
+    this.clearSettledTimer(id);
   }
 
   resize(
@@ -275,11 +310,11 @@ export class TerminalResizeController {
       // Background-tier path: a ResizeObserver fired while the host element
       // is inside a content-visibility:hidden container. fitAddon.fit() would
       // read 0x0 from the DOM, so we compute cols/rows from cached cell
-      // metrics instead. sendPtyResize() keeps the settled-strategy timer —
-      // the renderer is live here, so coalescing drag bursts still applies.
+      // metrics instead. Settled agents still coalesce the PTY notification,
+      // but the hidden xterm grid remains untouched until wake reconciliation.
       const dims = this.resizePtyFromCachedCellMetrics(managed, width, height, wasAtBottom);
       if (dims) {
-        this.sendPtyResize(id, dims.cols, dims.rows);
+        this.sendPtyOnlyResize(id, dims.cols, dims.rows);
       }
       return dims;
     }
@@ -302,18 +337,15 @@ export class TerminalResizeController {
           return null;
         }
 
-        managed.fitAddon.fit();
-        const cols = managed.terminal.cols;
-        const rows = managed.terminal.rows;
+        const { cols, rows } = proposal;
         managed.lastWidth = width;
         managed.lastHeight = height;
         managed.latestCols = cols;
         managed.latestRows = rows;
         managed.latestWasAtBottom = wasAtBottom;
-        this.sendPtyResize(id, cols, rows);
-        if (wasAtBottom && !managed.isUserScrolledBack) {
-          managed.terminal.scrollToBottom();
-        }
+        this.clearResizeJob(managed);
+        this.clearSettledTimer(id);
+        this.applyResize(id, cols, rows);
         return { cols, rows };
       }
 
@@ -334,7 +366,7 @@ export class TerminalResizeController {
         // target at the truth, and supersede the stale job.
         managed.latestCols = cols;
         managed.latestRows = rows;
-        if (this.hasPendingResize(id, managed)) {
+        if (this.hasPendingResize(id)) {
           this.clearResizeJob(managed);
           this.sendPtyResize(id, cols, rows);
         }
@@ -346,6 +378,10 @@ export class TerminalResizeController {
       managed.latestCols = cols;
       managed.latestRows = rows;
       managed.latestWasAtBottom = wasAtBottom;
+      // A newer measured target owns geometry immediately, even when its own
+      // debounce/idle work has not fired yet. Do not let an older settled timer
+      // mutate xterm and the PTY in that gap.
+      this.clearSettledTimer(id);
 
       const bufferLineCount = this.getBufferLineCount(id);
 
@@ -391,7 +427,23 @@ export class TerminalResizeController {
       managed.pendingBackgroundResize = { width, height };
       return null;
     }
+    const hadPendingResize = this.hasPendingResize(id);
+    this.cancelPendingResize(id);
     if (isRedundantResize(managed, width, height)) {
+      // A foreground debounce/settled request updates the pixel and grid
+      // caches before it commits. If backgrounding then supplies that same
+      // box, cancelling the queued xterm work must not also discard the PTY
+      // half of the resize. Reassert the cached target directly; this entry
+      // point deliberately never reflows a hidden xterm.
+      if (
+        hadPendingResize &&
+        Number.isInteger(managed.latestCols) &&
+        Number.isInteger(managed.latestRows) &&
+        managed.latestCols > 0 &&
+        managed.latestRows > 0
+      ) {
+        terminalClient.resize(id, managed.latestCols, managed.latestRows);
+      }
       return null;
     }
     const buffer = managed.terminal.buffer.active;
@@ -474,7 +526,7 @@ export class TerminalResizeController {
     // one-shot correction, splitting it across 500ms would leave xterm sized
     // for the new container while the PTY (and any in-flight agent output)
     // still wraps at the pre-background geometry.
-    this.clearSettledTimer(id);
+    this.cancelPendingResize(id);
     this.resizeTerminal(managed, targetCols, targetRows);
     terminalClient.resize(id, targetCols, targetRows);
   }
@@ -559,10 +611,10 @@ export class TerminalResizeController {
     managed.latestCols = cols;
     managed.latestRows = rows;
 
-    // Cancel any pending settled (500ms) resize so this one-shot is the final
-    // word, then apply atomically: resize xterm only when its grid actually
-    // drifted, and always (re)assert the PTY size so the two agree.
-    this.clearSettledTimer(id);
+    // Cancel older queued geometry so this one-shot is the final word, then
+    // apply atomically: resize xterm only when its grid actually drifted, and
+    // always (re)assert the PTY size so the two agree.
+    this.cancelPendingResize(id);
     if (managed.terminal.cols !== cols || managed.terminal.rows !== rows) {
       this.resizeTerminal(managed, cols, rows);
     }
@@ -577,26 +629,36 @@ export class TerminalResizeController {
     if (this.isResizeLocked(id)) {
       return;
     }
-
-    const flushedHeldBytes = this.flushHeldBytesBeforeResize(id);
+    this.cancelPendingResize(id);
 
     if (this.getResizeStrategy(managed) === "settled") {
-      // For settled agents, defer xterm.js resize to fire atomically
-      // with the PTY resize inside the settled timer callback.
-      // This avoids a 500ms mismatch where xterm.js shows new dimensions
-      // while the agent is still rendering at old dimensions.
+      const flushedHeldBytes = this.flushHeldBytesBeforeResize(id);
+      if (!flushedHeldBytes) {
+        // Keep ingest moving at the still-consistent outgoing grid while the
+        // stable target coalesces. commitResize re-checks the queue immediately
+        // before the paired xterm/PTY change.
+        this.deps.dataBuffer.resumeFlush(id);
+      }
       managed.latestCols = cols;
       managed.latestRows = rows;
       this.sendPtyResize(id, cols, rows);
     } else {
-      this.resizeTerminal(managed, cols, rows);
-      this.sendPtyResize(id, cols, rows);
+      this.clearSettledTimer(id);
+      this.commitResize(id, cols, rows);
     }
+  }
+
+  private commitResize(id: string, cols: number, rows: number): void {
+    const managed = this.deps.getInstance(id);
+    if (!managed || this.isResizeLocked(id)) return;
+
+    const flushedHeldBytes = this.flushHeldBytesBeforeResize(id);
+    this.resizeTerminal(managed, cols, rows);
+    terminalClient.resize(id, cols, rows);
 
     if (!flushedHeldBytes) {
       this.deps.dataBuffer.resumeFlush(id);
     }
-
     if (managed.latestWasAtBottom && !managed.isUserScrolledBack) {
       managed.terminal.scrollToBottom();
     }
@@ -607,15 +669,15 @@ export class TerminalResizeController {
    * flushed into xterm (they parse at the outgoing grid inside `resize()`'s
    * flushSync); false when the backlog exceeded
    * {@link RESIZE_FLUSH_SYNC_BUDGET_BYTES} and was left queued — the caller
-   * must `resumeFlush` after the resize so the backlog drains watermarked at
-   * the new grid. The reset only runs on the flush path: `resetForTerminal`
-   * deletes the queue, so resetting a held backlog would drop output.
+   * chooses whether to resume it before or after the geometry commit. The reset
+   * only runs on the flush path: `resetForTerminal` deletes the queue, so
+   * resetting a held backlog would drop output.
    */
   private flushHeldBytesBeforeResize(id: string): boolean {
     const queuedBytes = this.deps.dataBuffer.getQueuedBytes(id);
     if (exceedsResizeFlushSyncBudget(queuedBytes)) {
       logWarn(
-        `[TerminalResizeController] ${id}: ${queuedBytes} held ingest bytes exceed the pre-resize flush budget — draining watermarked at the new grid instead`
+        `[TerminalResizeController] ${id}: ${queuedBytes} held ingest bytes exceed the pre-resize flush budget — leaving the backlog queued for watermarked draining`
       );
       return false;
     }
@@ -630,11 +692,12 @@ export class TerminalResizeController {
    * of the box that armed it, so a later resize that supersedes them must know
    * they exist.
    */
-  private hasPendingResize(id: string, managed: ManagedTerminal): boolean {
+  hasPendingResize(id: string): boolean {
+    const managed = this.deps.getInstance(id);
     return (
-      managed.resizeJob !== undefined ||
-      managed.resizeDebounceTimer !== undefined ||
-      this.settledResizeTimers.has(id)
+      managed?.resizeJob !== undefined ||
+      managed?.resizeDebounceTimer !== undefined ||
+      this.settledResizeRequests.has(id)
     );
   }
 
@@ -659,31 +722,68 @@ export class TerminalResizeController {
       terminalClient.resize(id, cols, rows);
       return;
     }
+    if (this.isResizeLocked(id)) return;
+    this.cancelPendingResize(id);
+    managed.latestCols = cols;
+    managed.latestRows = rows;
 
     if (this.getResizeStrategy(managed) === "settled") {
-      const existing = this.settledResizeTimers.get(id);
-      if (existing !== undefined) clearTimeout(existing);
-
-      const timer = globalThis.setTimeout(() => {
-        this.settledResizeTimers.delete(id);
-
-        const current = this.deps.getInstance(id);
-        if (!current) {
-          return;
-        }
-
-        this.resizeTerminal(current, cols, rows);
-        terminalClient.resize(id, cols, rows);
-      }, SETTLED_RESIZE_DELAY_MS) as unknown as number;
-      this.settledResizeTimers.set(id, timer);
+      this.scheduleSettledResize(id, cols, rows, true);
     } else {
+      this.clearSettledTimer(id);
       terminalClient.resize(id, cols, rows);
     }
+  }
+
+  private sendPtyOnlyResize(id: string, cols: number, rows: number): void {
+    const managed = this.deps.getInstance(id);
+    this.cancelPendingResize(id);
+    if (managed && this.getResizeStrategy(managed) === "settled") {
+      this.scheduleSettledResize(id, cols, rows, false);
+      return;
+    }
+    this.clearSettledTimer(id);
+    terminalClient.resize(id, cols, rows);
+  }
+
+  private scheduleSettledResize(
+    id: string,
+    cols: number,
+    rows: number,
+    resizeXterm: boolean
+  ): void {
+    this.clearSettledTimer(id);
+    const pending: SettledResizeRequest = { timer: 0, cols, rows, resizeXterm };
+    const timer = globalThis.setTimeout(() => {
+      if (this.settledResizeRequests.get(id) !== pending) return;
+      this.settledResizeRequests.delete(id);
+      this.commitSettledResize(id, pending);
+    }, SETTLED_RESIZE_DELAY_MS) as unknown as number;
+    pending.timer = timer;
+    this.settledResizeRequests.set(id, pending);
+  }
+
+  private commitSettledResize(id: string, pending: SettledResizeRequest): void {
+    if (this.isResizeLocked(id)) return;
+    if (pending.resizeXterm) {
+      this.commitResize(id, pending.cols, pending.rows);
+    } else if (this.deps.getInstance(id)) {
+      terminalClient.resize(id, pending.cols, pending.rows);
+    }
+  }
+
+  private takeSettledResize(id: string): SettledResizeRequest | undefined {
+    const pending = this.settledResizeRequests.get(id);
+    if (!pending) return undefined;
+    clearTimeout(pending.timer);
+    this.settledResizeRequests.delete(id);
+    return pending;
   }
 
   forceImmediateResize(id: string): void {
     const managed = this.deps.getInstance(id);
     if (!managed) return;
+    if (this.isResizeLocked(id)) return;
 
     const cols = managed.latestCols;
     const rows = managed.latestRows;
@@ -691,16 +791,12 @@ export class TerminalResizeController {
       return;
     }
 
-    this.clearSettledTimer(id);
+    this.cancelPendingResize(id);
     terminalClient.resize(id, cols, rows);
   }
 
   clearSettledTimer(id: string): void {
-    const timer = this.settledResizeTimers.get(id);
-    if (timer !== undefined) {
-      clearTimeout(timer);
-      this.settledResizeTimers.delete(id);
-    }
+    this.takeSettledResize(id);
   }
 
   private getResizeStrategy(managed: ManagedTerminal): "default" | "settled" {
@@ -721,12 +817,7 @@ export class TerminalResizeController {
             const current = this.deps.getInstance(id);
             if (current) {
               current.resizeJob = undefined;
-              const flushedHeldBytes = this.flushHeldBytesBeforeResize(id);
-              this.resizeTerminal(current, current.latestCols, current.latestRows);
-              this.sendPtyResize(id, current.latestCols, current.latestRows);
-              if (!flushedHeldBytes) {
-                this.deps.dataBuffer.resumeFlush(id);
-              }
+              this.applyResize(id, current.latestCols, current.latestRows);
             }
           },
           { priority: "background", signal: controller.signal }
@@ -740,12 +831,7 @@ export class TerminalResizeController {
         const current = this.deps.getInstance(id);
         if (current) {
           current.resizeDebounceTimer = undefined;
-          const flushedHeldBytes = this.flushHeldBytesBeforeResize(id);
-          this.resizeTerminal(current, current.latestCols, current.latestRows);
-          this.sendPtyResize(id, current.latestCols, current.latestRows);
-          if (!flushedHeldBytes) {
-            this.deps.dataBuffer.resumeFlush(id);
-          }
+          this.applyResize(id, current.latestCols, current.latestRows);
         }
       }, 0) as unknown as number;
       managed.resizeDebounceTimer = timerId;
@@ -764,12 +850,7 @@ export class TerminalResizeController {
         // and we must not write mid-transition. The lock release path will
         // requeue via batchResize when it ends.
         if (this.isResizeLocked(id)) return;
-        const flushedHeldBytes = this.flushHeldBytesBeforeResize(id);
-        this.resizeTerminal(current, cols, rows);
-        this.sendPtyResize(id, cols, rows);
-        if (!flushedHeldBytes) {
-          this.deps.dataBuffer.resumeFlush(id);
-        }
+        this.applyResize(id, cols, rows);
       }
     }, RESIZE_DEBOUNCE_MS) as unknown as number;
     managed.resizeDebounceTimer = timeoutId;

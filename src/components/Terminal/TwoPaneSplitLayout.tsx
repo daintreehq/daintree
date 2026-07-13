@@ -39,6 +39,7 @@ export function TwoPaneSplitLayout({
   const [localRatio, setLocalRatio] = useState<number | null>(null);
   const [isDraggingDivider, setIsDraggingDivider] = useState(false);
   const isDraggingDividerRef = useRef(false);
+  const dragLockedIdsRef = useRef<string[]>([]);
   useEffect(() => {
     isDraggingDividerRef.current = isDraggingDivider;
   }, [isDraggingDivider]);
@@ -238,13 +239,40 @@ export function TwoPaneSplitLayout({
     (dragging: boolean) => {
       setIsDraggingDivider(dragging);
 
-      // Lock/unlock terminal resizing to prevent xterm from reacting to size changes during drag
-      for (const terminal of terminals) {
-        terminalInstanceService.lockResize(terminal.id, dragging);
+      if (dragging) {
+        const ids = terminals.map((terminal) => terminal.id);
+        dragLockedIdsRef.current = ids;
+        for (const id of ids) {
+          terminalInstanceService.lockResize(id, true);
+        }
+      } else {
+        const ids = dragLockedIdsRef.current;
+        // Clear gesture ownership before unlocking so an already-queued re-arm
+        // frame cannot restore the lock after drag end.
+        dragLockedIdsRef.current = [];
+        for (const id of ids) {
+          terminalInstanceService.lockResize(id, false);
+        }
+        if (ids.length > 0) {
+          terminalInstanceService.runResizePass(ids);
+        }
       }
     },
     [terminals]
   );
+
+  useEffect(() => {
+    if (!isDraggingDivider) return;
+    let rafId = 0;
+    const rearm = () => {
+      for (const id of dragLockedIdsRef.current) {
+        terminalInstanceService.lockResize(id, true);
+      }
+      rafId = requestAnimationFrame(rearm);
+    };
+    rafId = requestAnimationFrame(rearm);
+    return () => cancelAnimationFrame(rafId);
+  }, [isDraggingDivider]);
 
   // Cleanup: unlock resize and flush pending ratio on unmount only
   useEffect(() => {
@@ -253,9 +281,10 @@ export function TwoPaneSplitLayout({
       const pendingRatio = localRatioRef.current;
       const worktreeId = activeWorktreeIdRef.current;
 
-      // Unlock resize for all terminals
-      for (const terminal of terminalsRef.current) {
-        terminalInstanceService.lockResize(terminal.id, false);
+      const lockedIds = dragLockedIdsRef.current;
+      dragLockedIdsRef.current = [];
+      for (const id of lockedIds) {
+        terminalInstanceService.lockResize(id, false);
       }
 
       // Flush pending ratio if present
@@ -298,32 +327,22 @@ export function TwoPaneSplitLayout({
   // Track previous drag state to detect drag end
   const wasDraggingRef = useRef(false);
 
-  // Fit terminals after resize, but skip during drag to avoid feedback loops
+  // Resize terminals after non-drag layout changes. Drag end owns its final
+  // pass in handleDragStateChange so pending ownership starts synchronously
+  // with the unlock and the watchdog cannot race the settled geometry.
   useEffect(() => {
     const wasDragging = wasDraggingRef.current;
     wasDraggingRef.current = isDraggingDivider;
 
-    // Don't fit during drag - wait for drag to end
-    if (isDraggingDivider) return;
+    if (isDraggingDivider || wasDragging) return;
 
-    // Use longer delay after drag ends to let layout fully stabilize
-    const delay = wasDragging ? 100 : 50;
-
-    const timeoutId = window.setTimeout(() => {
-      for (const terminal of terminals) {
-        const managed = terminalInstanceService.get(terminal.id);
-        if (managed?.hostElement.isConnected) {
-          terminalInstanceService.fit(terminal.id);
-        }
-      }
-    }, delay);
-
-    return () => clearTimeout(timeoutId);
+    terminalInstanceService.scheduleBatchResize(panelIds);
+    return undefined;
     // `leftWidth`/`rightWidth` are now ratio-derived calc() strings, so they no
     // longer change on container resize — depend on `clampedRatio` (ratio drags,
     // double-click reset) and `containerWidth` (container/sidebar reflow) so
     // terminals still re-fit on both.
-  }, [clampedRatio, containerWidth, terminals, isDraggingDivider]);
+  }, [clampedRatio, containerWidth, panelIds, isDraggingDivider]);
 
   return (
     <>
