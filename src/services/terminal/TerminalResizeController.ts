@@ -2,6 +2,7 @@ import { Terminal } from "@xterm/xterm";
 import { terminalClient } from "@/clients";
 import { TerminalRefreshTier } from "@/types";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
+import { getEffectiveScrollbarWidth } from "@/config/xtermConfig";
 import { logError, logWarn } from "@/utils/logger";
 import type { ManagedTerminal } from "./types";
 import type { TerminalOutputIngestService } from "./TerminalOutputIngestService";
@@ -62,6 +63,26 @@ export function getXtermCellDimensions(
     // Fall through to null — terminal may not be fully initialized
   }
   return null;
+}
+
+/**
+ * Columns a container of `widthPx` can hold — the manual twin of
+ * `FitAddon.proposeDimensions()`.
+ *
+ * The paths below deliberately compute cols/rows from cached cell metrics rather
+ * than calling `proposeDimensions()`, which reads a DOM that may not reflect the
+ * ResizeObserver dimensions yet. That is why the scrollbar gutter has to be
+ * reserved by hand here: FitAddon reserves it, so a raw `width / cellWidth`
+ * settles a couple of columns wider than xterm's own fit, and
+ * `TerminalReconciliationWatchdog` repairs the difference ~3s later — after the
+ * pane has painted, which corrupts cursor-relative inline TUIs (#11095).
+ *
+ * `Math.max(2, …)` matches FitAddon's floor and absorbs a container narrower
+ * than the gutter itself.
+ */
+function colsForWidth(terminal: Terminal, widthPx: number, cellWidth: number): number {
+  const availableWidth = widthPx - getEffectiveScrollbarWidth(terminal.options);
+  return Math.max(2, Math.floor(availableWidth / cellWidth));
 }
 
 export interface ResizeControllerDeps {
@@ -247,7 +268,7 @@ export class TerminalResizeController {
         return { cols, rows };
       }
 
-      const cols = Math.max(2, Math.floor(width / cellDims.width));
+      const cols = colsForWidth(managed.terminal, width, cellDims.width);
       const rows = Math.max(1, Math.floor(height / cellDims.height));
 
       if (managed.terminal.cols === cols && managed.terminal.rows === rows) {
@@ -332,7 +353,7 @@ export class TerminalResizeController {
     if (!cellDims) {
       return null;
     }
-    const cols = Math.max(2, Math.floor(width / cellDims.width));
+    const cols = colsForWidth(managed.terminal, width, cellDims.width);
     const rows = Math.max(1, Math.floor(height / cellDims.height));
     if (managed.latestCols === cols && managed.latestRows === rows) {
       managed.lastWidth = width;
@@ -446,7 +467,7 @@ export class TerminalResizeController {
     } else {
       const cellDims = getXtermCellDimensions(managed.terminal);
       if (!cellDims) return false;
-      cols = Math.max(2, Math.floor(rect.width / cellDims.width));
+      cols = colsForWidth(managed.terminal, rect.width, cellDims.width);
       rows = Math.max(1, Math.floor(rect.height / cellDims.height));
     }
 

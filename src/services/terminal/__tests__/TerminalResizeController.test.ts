@@ -27,11 +27,41 @@ import {
   RESIZE_FLUSH_SYNC_BUDGET_BYTES,
   type ResizeControllerDeps,
 } from "../TerminalResizeController";
+import { TERMINAL_SCROLLBAR_WIDTH } from "@/config/xtermConfig";
+
+/**
+ * The scrollbar gutter the controller reserves before dividing a container width
+ * into columns, mirroring `FitAddon` (#11095). Sourced from the config rather
+ * than hardcoded so a change to the configured width doesn't silently desync the
+ * mock terminal from the production one.
+ */
+const SCROLLBAR_PX = TERMINAL_SCROLLBAR_WIDTH;
+
+/** Cell metrics these tests attach via `_core` (see `getXtermCellDimensions`). */
+const CELL = { width: 10, height: 20 };
+
+/**
+ * Columns the controller should derive for a container of `widthPx`.
+ *
+ * These suites exercise the resize *control flow* — dedup gates, debounce, lock
+ * replay, PTY delivery — so they take the column formula as given and assert
+ * against it. The formula itself is verified against a genuinely independent
+ * oracle (the real `FitAddon`) in `TerminalResizeController.fitParity.test.ts`.
+ */
+const colsFor = (widthPx: number): number =>
+  Math.max(2, Math.floor((widthPx - SCROLLBAR_PX) / CELL.width));
 
 function createManagedTerminal() {
   const terminal = {
     cols: 80,
     rows: 24,
+    // Mirrors getXtermOptions(): a live terminal always has scrollback and a
+    // visible scrollbar, so the controller reserves SCROLLBAR_PX of every
+    // container width before dividing into columns — same as FitAddon (#11095).
+    options: {
+      scrollback: 1000,
+      scrollbar: { width: SCROLLBAR_PX },
+    },
     buffer: {
       active: {
         baseY: 0,
@@ -48,6 +78,7 @@ function createManagedTerminal() {
   } as unknown as {
     cols: number;
     rows: number;
+    options: { scrollback: number; scrollbar: { width: number } };
     buffer: { active: { baseY: number; viewportY: number; length: number } };
     resize: ReturnType<typeof vi.fn>;
     write: ReturnType<typeof vi.fn>;
@@ -144,13 +175,15 @@ describe("TerminalResizeController", () => {
     });
 
     const result = controller.resize("term-1", 1600, 800);
-    expect(result).toEqual({ cols: 160, rows: 40 });
+    expect(result).toEqual({ cols: colsFor(1600), rows: 40 });
     expect(managed.fitAddon.fit).not.toHaveBeenCalled();
     // Buffer reflow is deferred to wake — xterm.resize() must NOT fire while paint is paused.
     expect(managed.terminal.resize).not.toHaveBeenCalled();
-    expect(resizeMock).toHaveBeenCalledWith("term-1", 160, 40);
-    expect(managed.latestCols).toBe(160);
+    expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1600), 40);
+    expect(managed.latestCols).toBe(colsFor(1600));
     expect(managed.latestRows).toBe(40);
+    // The pixel dedup cache still tracks the RAW container width — the scrollbar
+    // is reserved when dividing into columns, never folded into this gate.
     expect(managed.lastWidth).toBe(1600);
     expect(managed.lastHeight).toBe(800);
   });
@@ -241,7 +274,7 @@ describe("TerminalResizeController", () => {
 
     vi.advanceTimersByTime(500);
     expect(resizeMock).toHaveBeenCalledTimes(1);
-    expect(resizeMock).toHaveBeenCalledWith("term-1", 170, 40);
+    expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1700), 40);
   });
 
   it("background-tier resize reflows xterm when the terminal is visible", () => {
@@ -270,10 +303,10 @@ describe("TerminalResizeController", () => {
     });
 
     const result = controller.resize("term-1", 1600, 800, { immediate: true });
-    expect(result).toEqual({ cols: 160, rows: 40 });
+    expect(result).toEqual({ cols: colsFor(1600), rows: 40 });
     // Visible terminal: xterm's grid is reflowed, not deferred to wake.
-    expect(managed.terminal.resize).toHaveBeenCalledWith(160, 40);
-    expect(resizeMock).toHaveBeenCalledWith("term-1", 160, 40);
+    expect(managed.terminal.resize).toHaveBeenCalledWith(colsFor(1600), 40);
+    expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1600), 40);
   });
 
   it("flushes and resets ingest buffers before applying resize", () => {
@@ -1117,7 +1150,8 @@ describe("TerminalResizeController", () => {
 
     it("postTask callback applies resize and clears resizeJob", async () => {
       const managed = createManagedTerminal();
-      attachCellDims(managed); // width:10, height:20 → 1200/10=120 cols, 900/20=45 rows
+      // width:10, height:20 → (1200-15)/10 = 118 cols (scrollbar reserved), 900/20 = 45 rows
+      attachCellDims(managed);
       managed.isFocused = false;
       managed.isVisible = false;
       managed.terminal.buffer.active.length = 300;
@@ -1135,7 +1169,7 @@ describe("TerminalResizeController", () => {
 
       expect(managed.resizeJob).toBeUndefined();
       expect(dataBuffer.flushForTerminal).toHaveBeenCalledWith("term-1");
-      expect(managed.terminal.resize).toHaveBeenCalledWith(120, 45);
+      expect(managed.terminal.resize).toHaveBeenCalledWith(colsFor(1200), 45);
     });
   });
 
@@ -1171,10 +1205,10 @@ describe("TerminalResizeController", () => {
 
       const result = controller.resize("term-1", 1000, 500);
 
-      expect(result).toEqual({ cols: 100, rows: 25 });
+      expect(result).toEqual({ cols: colsFor(1000), rows: 25 });
       expect(managed.fitAddon.fit).not.toHaveBeenCalled();
-      expect(managed.terminal.resize).toHaveBeenCalledWith(100, 25);
-      expect(resizeMock).toHaveBeenCalledWith("term-1", 100, 25);
+      expect(managed.terminal.resize).toHaveBeenCalledWith(colsFor(1000), 25);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1000), 25);
     });
 
     it("falls back to fitAddon.fit() when cell dims are null", () => {
@@ -1305,11 +1339,11 @@ describe("TerminalResizeController", () => {
       const controller = makeController(managed);
       const result = controller.resizePtyOnly("term-1", 1600, 800);
 
-      expect(result).toEqual({ cols: 160, rows: 40 });
+      expect(result).toEqual({ cols: colsFor(1600), rows: 40 });
       expect(managed.terminal.resize).not.toHaveBeenCalled();
       expect(managed.fitAddon.fit).not.toHaveBeenCalled();
-      expect(resizeMock).toHaveBeenCalledWith("term-1", 160, 40);
-      expect(managed.latestCols).toBe(160);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1600), 40);
+      expect(managed.latestCols).toBe(colsFor(1600));
       expect(managed.latestRows).toBe(40);
       expect(managed.lastWidth).toBe(1600);
       expect(managed.lastHeight).toBe(800);
@@ -1357,12 +1391,19 @@ describe("TerminalResizeController", () => {
       controller.resizePtyOnly("term-1", 1600, 800);
       expect(resizeMock).toHaveBeenCalledTimes(1);
 
-      // +5px is under one 10px cell — same cols/rows, but the cache must
-      // track the new pixels so the next delta computes against them.
-      const second = controller.resizePtyOnly("term-1", 1605, 800);
+      // Grow the container to the widest pixel that still yields the same column
+      // count — under one cell, so cols/rows don't move, but the cache must
+      // track the new pixels so the next delta computes against them. Derived
+      // from the gutter rather than hardcoded: now that the scrollbar is
+      // reserved before the division (#11095), a fixed "+5px" would cross a cell
+      // boundary and silently stop testing the dedup path it was written for.
+      const subCellWidth = 1600 + (CELL.width - 1 - ((1600 - SCROLLBAR_PX) % CELL.width));
+      expect(colsFor(subCellWidth)).toBe(colsFor(1600));
+
+      const second = controller.resizePtyOnly("term-1", subCellWidth, 800);
       expect(second).toBeNull();
       expect(resizeMock).toHaveBeenCalledTimes(1);
-      expect(managed.lastWidth).toBe(1605);
+      expect(managed.lastWidth).toBe(subCellWidth);
     });
 
     it("returns null without poisoning the dedup cache when cell dims are unavailable", () => {
@@ -1405,10 +1446,10 @@ describe("TerminalResizeController", () => {
       const controller = makeController(managed);
       const result = controller.resizePtyOnly("term-1", 1600, 800);
 
-      expect(result).toEqual({ cols: 160, rows: 40 });
+      expect(result).toEqual({ cols: colsFor(1600), rows: 40 });
       // Direct delivery — not deferred behind the settled 500ms timer, which
       // would also reflow xterm in a hidden (possibly frozen) renderer.
-      expect(resizeMock).toHaveBeenCalledWith("term-1", 160, 40);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1600), 40);
 
       vi.advanceTimersByTime(500);
       expect(managed.terminal.resize).not.toHaveBeenCalled();
@@ -1432,7 +1473,7 @@ describe("TerminalResizeController", () => {
       expect(resizeMock).not.toHaveBeenCalled();
 
       controller.resizePtyOnly("term-1", 1600, 800);
-      expect(resizeMock).toHaveBeenCalledWith("term-1", 160, 40);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1600), 40);
 
       vi.advanceTimersByTime(500);
       // The stale timer must not fire its 120x30 resize or reflow xterm.
@@ -1648,7 +1689,9 @@ describe("TerminalResizeController", () => {
 
     it("falls back to cell-metric math when no proposable dimensions exist", () => {
       const managed = createManagedTerminal();
-      // host box is 1000x700; cell is 10x20 → 100 cols x 35 rows.
+      // host box is 1000x700; cell is 10x20 → (1000-15)/10 = 98 cols x 35 rows.
+      // The fallback reserves the same scrollbar gutter the primary
+      // proposeDimensions() branch would, so the two agree (#11095).
       managed.fitAddon.proposeDimensions = vi.fn(() => undefined);
       Object.assign(managed.terminal, {
         _core: { _renderService: { dimensions: { css: { cell: { width: 10, height: 20 } } } } },
@@ -1658,8 +1701,8 @@ describe("TerminalResizeController", () => {
       const ok = controller.reconcileGeometryFresh("term-1");
 
       expect(ok).toBe(true);
-      expect(managed.terminal.resize).toHaveBeenCalledWith(100, 35);
-      expect(resizeMock).toHaveBeenCalledWith("term-1", 100, 35);
+      expect(managed.terminal.resize).toHaveBeenCalledWith(colsFor(1000), 35);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1000), 35);
     });
 
     it("returns false (retry next frame) when the box is not measurable yet", () => {
@@ -1753,7 +1796,7 @@ describe("TerminalResizeController", () => {
       controller.lockResize("term-1", false);
 
       // The held geometry is delivered to the PTY once on unlock, stash cleared.
-      expect(resizeMock).toHaveBeenCalledWith("term-1", 160, 40);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1600), 40);
       expect(managed.pendingBackgroundResize).toBeUndefined();
     });
 
