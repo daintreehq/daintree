@@ -82,6 +82,21 @@ describe("project:free-memory handler", () => {
     vi.clearAllMocks();
   });
 
+  /** A WindowRegistry-shaped stub whose windows show the given projects. */
+  function registryShowing(...activeProjectIds: Array<string | null>) {
+    return {
+      all: () =>
+        activeProjectIds.map((id) => ({
+          services: {
+            projectViewManager: {
+              getActiveProjectId: () => id,
+              getOutgoingBridgeProjectId: () => null,
+            },
+          },
+        })),
+    };
+  }
+
   it("rejects freeing memory for the active project", async () => {
     projectStoreMock.getCurrentProjectId.mockReturnValue("project-active");
 
@@ -95,9 +110,66 @@ describe("project:free-memory handler", () => {
 
     const handler = getFreeMemoryHandler(deps);
 
-    await expect(handler(EVENT, "project-active")).rejects.toThrow("Switch to another project");
+    await expect(handler(EVENT, "project-active")).rejects.toThrow("open in a window");
     expect(ptyClient.gracefulKillByProject).not.toHaveBeenCalled();
     expect(worktreeService.evictProject).not.toHaveBeenCalled();
+  });
+
+  it("rejects freeing memory for a project visible in a second, unfocused window (#11102)", async () => {
+    // The DB pointer names a DIFFERENT project — pre-fix, that alone let the
+    // guard through and tore down a renderer the user was looking at.
+    projectStoreMock.getCurrentProjectId.mockReturnValue("project-focused");
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: "project-second-window",
+      name: "Second",
+      status: "active",
+      path: "/p/second",
+    });
+
+    const ptyClient = { gracefulKillByProject: vi.fn(async () => []) };
+    const worktreeService = { evictProject: vi.fn(() => true) };
+    const deps = {
+      mainWindow: {} as unknown,
+      ptyClient,
+      worktreeService,
+      windowRegistry: registryShowing("project-focused", "project-second-window"),
+    } as unknown as HandlerDependencies;
+
+    const handler = getFreeMemoryHandler(deps);
+
+    await expect(handler(EVENT, "project-second-window")).rejects.toThrow("open in a window");
+    // Nothing was reclaimed out from under the visible window.
+    expect(ptyClient.gracefulKillByProject).not.toHaveBeenCalled();
+    expect(evictProjectRendererMock).not.toHaveBeenCalled();
+    expect(worktreeService.evictProject).not.toHaveBeenCalled();
+    expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+  });
+
+  it("still frees memory for a project no window is showing", async () => {
+    projectStoreMock.getCurrentProjectId.mockReturnValue("project-focused");
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: "project-background",
+      name: "Background",
+      status: "active",
+      path: "/p/background",
+    });
+    evictProjectRendererMock.mockReturnValue(1);
+
+    const ptyClient = { gracefulKillByProject: vi.fn(async () => [{ id: "t1" }]) };
+    const worktreeService = { evictProject: vi.fn(() => true) };
+    const deps = {
+      mainWindow: {} as unknown,
+      ptyClient,
+      worktreeService,
+      windowRegistry: registryShowing("project-focused", "project-second-window"),
+    } as unknown as HandlerDependencies;
+
+    const handler = getFreeMemoryHandler(deps);
+    const result = await handler(EVENT, "project-background");
+
+    // The guard must not over-block: a genuinely background project still frees.
+    expect(result.terminalsKilled).toBe(1);
+    expect(result.rendererEvicted).toBe(true);
   });
 
   it("throws when the project does not exist", async () => {

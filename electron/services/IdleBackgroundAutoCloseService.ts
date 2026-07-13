@@ -6,6 +6,7 @@ import type {
 } from "../../shared/types/ipc/idleBackgroundAutoClose.js";
 import type { PtyClient } from "./PtyClient.js";
 import type { ProjectViewManager } from "../window/ProjectViewManager.js";
+import { collectActiveProjectIds } from "../window/activeProjectIds.js";
 import { getPtyClient, getWorkspaceClientRef } from "../window/serviceRefs.js";
 import { store } from "../store.js";
 import { projectStore } from "./ProjectStore.js";
@@ -246,33 +247,11 @@ export class IdleBackgroundAutoCloseService {
    * the active project.
    */
   private collectActiveProjectIds(): Set<string> {
-    const activeIds = new Set<string>();
-    const provider = this.projectViewManagersProvider;
-    if (provider) {
-      let managers: ProjectViewManager[] = [];
-      try {
-        managers = provider();
-      } catch (error) {
-        // windowRegistry may be tearing down — best-effort; fall through to the
-        // DB pointer below so we never auto-close a project we can't verify.
-        logError("idle-background-auto-close-provider-failed", error);
-      }
-      for (const manager of managers) {
-        try {
-          const id = manager.getActiveProjectId();
-          if (id) activeIds.add(id);
-          const outgoing = manager.getOutgoingBridgeProjectId();
-          if (outgoing) activeIds.add(outgoing);
-        } catch (error) {
-          // A disposing ProjectViewManager can throw — isolate per window so one
-          // failure doesn't drop the rest of the active set (#8607).
-          logError("idle-background-auto-close-active-id-failed", error);
-        }
-      }
-    }
-    const dbCurrent = projectStore.getCurrentProjectId();
-    if (dbCurrent) activeIds.add(dbCurrent);
-    return activeIds;
+    return collectActiveProjectIds(
+      this.projectViewManagersProvider,
+      projectStore.getCurrentProjectId(),
+      "idle-background-auto-close"
+    );
   }
 
   private async checkAndClose(): Promise<void> {
