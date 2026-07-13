@@ -89,18 +89,19 @@ describe("distribution config", () => {
       expect(getBuildChannelLabel("0.25.0")).toBeNull();
     });
 
-    it("returns a visible label for every prerelease channel", () => {
-      // Assert the badge-visibility invariant (non-stable → shown), not the
-      // exact display strings, which would just duplicate the label table.
-      for (const version of [
-        "0.25.0-nightly.20260713120000.abc1234",
-        "1.0.0-beta.1",
-        "1.0.0-rc.2",
-      ]) {
+    it("returns a distinct, visible label for every prerelease channel", () => {
+      // Assert the invariants (non-stable → shown, one label per channel), not
+      // the exact display strings, which would just duplicate the label table.
+      const versions = ["0.25.0-nightly.20260713120000.abc1234", "1.0.0-beta.1", "1.0.0-rc.2"];
+      const labels = versions.map((version) => {
         const label = getBuildChannelLabel(version);
         expect(label).toBeTruthy();
         expect(getBuildChannel(version)).not.toBe("stable");
-      }
+        return label;
+      });
+      // Each channel maps to its own label — guards against a table where every
+      // channel collapses to the same string.
+      expect(new Set(labels).size).toBe(versions.length);
     });
   });
 
