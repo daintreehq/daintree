@@ -765,9 +765,6 @@ describe("project:switch concurrent worktree load", () => {
     const pvm = {
       switchTo: vi.fn(opts.switchTo),
       getProjectIdForWebContents: vi.fn(),
-      // A failed switchTo rolls the active project back to the still-visible
-      // one, which is what the failure restore reads.
-      getActiveProjectId: vi.fn(() => previous?.id ?? null),
     };
 
     mockGetWindowForWebContents.mockReturnValue({ id: 7, isDestroyed: () => false });
@@ -1187,9 +1184,6 @@ describe("project:switch outgoing project is the sender's, not the global (#1110
       switchTo: vi.fn(opts.switchTo ?? (async () => ({ view, isNew: false }))),
       getProjectIdForWebContents: vi.fn(),
       setPendingFocusIntent: vi.fn(),
-      // On a failed switch the PVM rolls back to the project still on screen —
-      // for window B, its own p2.
-      getActiveProjectId: vi.fn(() => opts.senderProjectId ?? null),
     };
 
     mockGetWindowForWebContents.mockReturnValue({ id: WINDOW_B, isDestroyed: () => false });
