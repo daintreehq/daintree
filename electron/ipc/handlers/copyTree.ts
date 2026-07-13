@@ -211,24 +211,31 @@ export function mergeCopyTreeOptions(
 }
 
 /**
- * Get CopyTree settings for the project bound to the IPC sender's view.
+ * Resolve which project's CopyTree settings apply to this request: the one bound
+ * to the IPC sender's view. Reading the global current project here made a
+ * generate in window A inherit window B's exclusions whenever B was focused most
+ * recently (#11103).
  *
- * The sender's own window-scoped ProjectViewManager is authoritative: reading
- * the global current project here made a generate in window A inherit window
- * B's exclusions whenever B was focused most recently (#11103).
+ * A view that resolves to no project yields `null` — it must never inherit the
+ * global pointer (#6015). The global is consulted only when project-scoped
+ * resolution is unavailable altogether.
  *
- * A view that resolves to no project gets `undefined` (runtime options only) —
- * it must never inherit the global pointer (#6015). The global is consulted
- * only when project-scoped resolution is unavailable altogether.
+ * Call this SYNCHRONOUSLY, before the handler's first `await`. The sender's view
+ * can be evicted while a later await is in flight, and a binding that vanishes
+ * mid-request would silently drop the project's exclusions from the context.
  */
-async function getCopyTreeProjectSettingsForIpcContext(
-  ctx: IpcContext,
-  deps: HandlerDependencies
-): Promise<Pick<ProjectSettings, "excludedPaths" | "copyTreeSettings"> | undefined> {
+function resolveCopyTreeProjectId(ctx: IpcContext, deps: HandlerDependencies): string | null {
   const scopedProject = resolveScopedProjectForIpcContext(ctx, deps);
-  const projectId =
-    scopedProject === null ? projectStore.getCurrentProjectId() : scopedProject.project?.id;
+  if (scopedProject === null) {
+    return projectStore.getCurrentProjectId();
+  }
+  return scopedProject.project?.id ?? null;
+}
 
+/** Load the CopyTree-relevant settings for a project resolved by `resolveCopyTreeProjectId`. */
+async function loadCopyTreeProjectSettings(
+  projectId: string | null
+): Promise<Pick<ProjectSettings, "excludedPaths" | "copyTreeSettings"> | undefined> {
   if (!projectId) {
     return undefined;
   }
@@ -281,6 +288,10 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       };
     }
 
+    // Capture the sender's project before awaiting: the view can be evicted
+    // while the workspace call is in flight, taking its binding with it.
+    const settingsProjectId = resolveCopyTreeProjectId(ctx, deps);
+
     const states = await deps.worktreeService.getAllStatesAsync(senderWindow?.id);
     const worktree = states.find((wt) => wt.id === validated.worktreeId);
 
@@ -302,7 +313,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     };
 
     // Merge project settings with runtime options
-    const projectSettings = await getCopyTreeProjectSettingsForIpcContext(ctx, deps);
+    const projectSettings = await loadCopyTreeProjectSettings(settingsProjectId);
     const mergedOptions = mergeCopyTreeOptions(projectSettings, validated.options);
 
     return deps.worktreeService.generateContext(worktree.path, mergedOptions, onProgress);
@@ -344,6 +355,10 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       };
     }
 
+    // Capture the sender's project before awaiting: the view can be evicted
+    // while the workspace call is in flight, taking its binding with it.
+    const settingsProjectId = resolveCopyTreeProjectId(ctx, deps);
+
     const states = await deps.worktreeService.getAllStatesAsync(senderWindow?.id);
     const worktree = states.find((wt) => wt.id === validated.worktreeId);
 
@@ -365,7 +380,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     };
 
     // Merge project settings with runtime options
-    const projectSettings = await getCopyTreeProjectSettingsForIpcContext(ctx, deps);
+    const projectSettings = await loadCopyTreeProjectSettings(settingsProjectId);
     const mergedOptions = mergeCopyTreeOptions(projectSettings, validated.options);
 
     const result = await deps.worktreeService.generateContext(
@@ -507,6 +522,10 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       };
     }
 
+    // Capture the sender's project before awaiting: the view can be evicted
+    // while the workspace call is in flight, taking its binding with it.
+    const settingsProjectId = resolveCopyTreeProjectId(ctx, deps);
+
     contextInjectionTracker.beginInjection(validated.terminalId, injectionId);
 
     try {
@@ -539,7 +558,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       };
 
       // Merge project settings with runtime options
-      const projectSettings = await getCopyTreeProjectSettingsForIpcContext(ctx, deps);
+      const projectSettings = await loadCopyTreeProjectSettings(settingsProjectId);
       const mergedOptions = mergeCopyTreeOptions(projectSettings, validated.options || {});
 
       const result = await deps.worktreeService.generateContext(
@@ -703,6 +722,10 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       };
     }
 
+    // Capture the sender's project before awaiting: the view can be evicted
+    // while the workspace call is in flight, taking its binding with it.
+    const settingsProjectId = resolveCopyTreeProjectId(ctx, deps);
+
     const senderWindowTestConfig = ctx.senderWindow;
     const states = await deps.worktreeService.getAllStatesAsync(senderWindowTestConfig?.id);
     const worktree = states.find((wt) => wt.id === validated.worktreeId);
@@ -717,7 +740,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     }
 
     // Merge project settings with runtime options
-    const projectSettings = await getCopyTreeProjectSettingsForIpcContext(ctx, deps);
+    const projectSettings = await loadCopyTreeProjectSettings(settingsProjectId);
     const mergedOptions = mergeCopyTreeOptions(projectSettings, validated.options);
 
     return deps.worktreeService.testConfig(worktree.path, mergedOptions);
