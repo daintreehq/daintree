@@ -48,9 +48,9 @@ export function getVisibleTabbableElements(root: ParentNode): HTMLElement[] {
  * Being connected is not enough to accept focus: a candidate that is `disabled`,
  * `inert`, or hidden makes `.focus()` a silent no-op, which would drop focus to
  * `<body>` — so each attempt is verified and the chain continues on failure.
- * Containment counts as success because a focus target may delegate inward: an
- * Electron `<webview>` hosts the guest page behind a shadow root, and focus
- * inside a shadow tree is reported as the host element.
+ * Strict equality is the right check even for a candidate that delegates focus
+ * into a shadow tree (an Electron `<webview>` hosts the guest page that way):
+ * focus inside a shadow tree is reported at the document level as the host.
  */
 export function restoreFocusTo(...candidates: (HTMLElement | null | undefined)[]): void {
   for (const candidate of candidates) {
@@ -58,8 +58,7 @@ export function restoreFocusTo(...candidates: (HTMLElement | null | undefined)[]
     if (!document.contains(candidate)) continue;
 
     candidate.focus();
-    const active = document.activeElement;
-    if (active === candidate || candidate.contains(active)) return;
+    if (document.activeElement === candidate) return;
   }
 
   const root = document.getElementById("root");

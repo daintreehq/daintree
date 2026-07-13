@@ -168,6 +168,14 @@ export function FleetArmingRibbon(): ReactElement | null {
     if (pending === null) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key !== "Enter") return;
+      // A modal owns the keyboard while it is open. This listener is capture-
+      // phase, so without the guard it beat a focused Cancel button to the Enter
+      // and confirmed the fleet action instead of activating that button
+      // (issue #11106). Tested by existence rather than ancestry because modal
+      // content can be portaled outside the dialog's subtree (Radix menus and
+      // selects mount under <body>). The fleet's own confirmation is an inline
+      // role="status" banner, not a modal, so its Enter stays reachable.
+      if (document.querySelector('[role="dialog"][aria-modal="true"]') !== null) return;
       const rawTarget = e.target;
       const target =
         rawTarget && typeof (rawTarget as HTMLElement).closest === "function"
@@ -178,12 +186,7 @@ export function FleetArmingRibbon(): ReactElement | null {
         (target.tagName === "INPUT" ||
           target.tagName === "TEXTAREA" ||
           target.isContentEditable ||
-          target.closest(".xterm") !== null ||
-          // A modal owns the keyboard while it is open. Without this, Enter on a
-          // webview dialog's Cancel button was swallowed here (capture phase, so
-          // it beats the button's native activation) and confirmed the fleet
-          // action instead of cancelling the dialog (issue #11106).
-          target.closest('[aria-modal="true"]') !== null)
+          target.closest(".xterm") !== null)
       ) {
         return;
       }

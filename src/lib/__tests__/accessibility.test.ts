@@ -156,20 +156,13 @@ describe("restoreFocusTo", () => {
     expect(document.activeElement).toBe(shellButton);
   });
 
-  // A focus target may delegate inward — an Electron <webview> hands focus to the
-  // guest page behind its shadow root, and the document reports the host element.
-  it("accepts a candidate that delegates focus to a descendant", () => {
-    const host = document.createElement("div");
-    const inner = document.createElement("button");
-    inner.textContent = "inner";
-    host.appendChild(inner);
-    document.body.appendChild(host);
-    host.focus = () => inner.focus();
+  it("stops at the first accepting candidate without touching later ones", () => {
+    const accepting = addButton("accepting");
+    const successor = addButton("successor");
 
-    restoreFocusTo(host);
+    restoreFocusTo(accepting, successor);
 
-    expect(document.activeElement).toBe(inner);
-    host.remove();
+    expect(document.activeElement).toBe(accepting);
   });
 
   // Focus falling to <body> strands keyboard users with nothing to tab from.
