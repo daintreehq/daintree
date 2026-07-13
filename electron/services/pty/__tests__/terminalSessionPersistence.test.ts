@@ -97,12 +97,22 @@ describe("terminalSessionPersistence", () => {
     expect(fs.statSync(getHibernatedMarkerPath("term-perm-sync")!).mode & 0o777).toBe(0o600);
   });
 
-  posixIt("tightens a pre-existing world-readable session directory (upgrade case)", async () => {
+  posixIt("tightens a pre-existing world-readable session directory (async path)", async () => {
     const sessionDir = path.join(userDataDir, "terminal-sessions");
     fs.mkdirSync(sessionDir, { recursive: true });
     fs.chmodSync(sessionDir, 0o755);
 
     await persistSessionSnapshotAsync("term-upgrade", "payload");
+
+    expect(fs.statSync(sessionDir).mode & 0o777).toBe(0o700);
+  });
+
+  posixIt("tightens a pre-existing world-readable session directory (sync path)", () => {
+    const sessionDir = path.join(userDataDir, "terminal-sessions");
+    fs.mkdirSync(sessionDir, { recursive: true });
+    fs.chmodSync(sessionDir, 0o755);
+
+    persistSessionSnapshotSync("term-upgrade-sync", "payload");
 
     expect(fs.statSync(sessionDir).mode & 0o777).toBe(0o700);
   });

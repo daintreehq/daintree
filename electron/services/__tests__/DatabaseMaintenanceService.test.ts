@@ -492,16 +492,21 @@ describe("DatabaseMaintenanceService", () => {
       actual.writeFileSync(tmp, "backup-bytes");
       actual.chmodSync(tmp, 0o644);
     });
-    // Let the promotion rename actually run against the real filesystem.
-    vi.mocked(fs.renameSync).mockImplementation(
-      actual.renameSync as unknown as typeof fs.renameSync
-    );
+    // Let the promotion rename actually run, and assert the candidate is ALREADY
+    // 0o600 at rename time — this proves the chmod happens BEFORE promotion, so
+    // the final .backup is never briefly world-readable at its real path.
+    let tmpModeAtRename: number | undefined;
+    vi.mocked(fs.renameSync).mockImplementation(((src: string, dest: string) => {
+      tmpModeAtRename = actual.statSync(src).mode & 0o777;
+      return actual.renameSync(src, dest);
+    }) as unknown as typeof fs.renameSync);
 
     try {
       const service = new DatabaseMaintenanceService();
       // dispose() runs the final backup on main (probeOnMain), no worker needed.
       await service.dispose();
 
+      expect(tmpModeAtRename).toBe(0o600);
       expect(actual.existsSync(backupPath)).toBe(true);
       expect(actual.statSync(backupPath).mode & 0o777).toBe(0o600);
     } finally {

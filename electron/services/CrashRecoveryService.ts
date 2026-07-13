@@ -19,6 +19,7 @@ import {
   resilientAtomicWriteFileSync,
   resilientRenameSync,
   tightenDirPermissionsSync,
+  tightenFilePermissionsSync,
   OWNER_RW_FILE_MODE,
   OWNER_RWX_DIR_MODE,
 } from "../utils/fs.js";
@@ -385,6 +386,10 @@ export class CrashRecoveryService {
     if (!fs.existsSync(this.backupPath)) return;
     try {
       resilientRenameSync(this.backupPath, this.previousBackupPath);
+      // rename preserves the source mode: on the first rotation after an
+      // upgrade, the pre-fix 0o644 current backup would land as `previous`
+      // still world-readable. Tighten the rotated file explicitly.
+      tightenFilePermissionsSync(this.previousBackupPath);
     } catch (err) {
       // Rotation is best-effort; the new write below will still proceed and
       // overwrite the (possibly stale) previous file on the next cycle.
@@ -692,12 +697,19 @@ export class CrashRecoveryService {
     // Idempotency: if a prior consumeMarker run completed the rename but
     // was killed before deleteMarker, the destination is already on disk
     // and the live backup is gone. Reuse the existing crashed-* file.
-    if (fs.existsSync(crashedBackupPath)) return crashedBackupPath;
+    if (fs.existsSync(crashedBackupPath)) {
+      // A pre-fix run may have left this forensic copy world-readable.
+      tightenFilePermissionsSync(crashedBackupPath);
+      return crashedBackupPath;
+    }
 
     if (!fs.existsSync(this.backupPath)) return null;
 
     try {
       resilientRenameSync(this.backupPath, crashedBackupPath);
+      // rename preserves the source mode — tighten in case the live backup was
+      // a legacy 0o644 file from before this change.
+      tightenFilePermissionsSync(crashedBackupPath);
       return crashedBackupPath;
     } catch (renameErr) {
       try {

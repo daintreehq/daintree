@@ -32,6 +32,7 @@ const appMock = vi.hoisted(() => {
 const utilsMock = vi.hoisted(() => ({
   resilientAtomicWriteFileSync: vi.fn(),
   resilientRenameSync: vi.fn(),
+  tightenFilePermissionsSync: vi.fn(),
   tightenDirPermissionsSync: vi.fn(),
   OWNER_RW_FILE_MODE: 0o600,
   OWNER_RWX_DIR_MODE: 0o700,
@@ -469,6 +470,13 @@ describe("CrashRecoveryService", () => {
       expect(onDisk.watchdogKilledAt).toBe(killedAt);
       expect(onDisk.watchdogMissedBeats).toBe(3);
       expect(onDisk.watchdogMainPid).toBe(4242);
+      // The annotation rewrite of the crash log must request owner-only perms.
+      expect(utilsMock.resilientAtomicWriteFileSync).toHaveBeenCalledWith(
+        crashLogPath,
+        expect.any(String),
+        "utf-8",
+        { mode: 0o600 }
+      );
     });
 
     it("surfaces a dev-mode crash with a fresh watchdog flag (otherwise discarded as orphan)", () => {

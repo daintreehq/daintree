@@ -32,6 +32,7 @@ const appMock = vi.hoisted(() => {
 const utilsMock = vi.hoisted(() => ({
   resilientAtomicWriteFileSync: vi.fn(),
   resilientRenameSync: vi.fn(),
+  tightenFilePermissionsSync: vi.fn(),
   tightenDirPermissionsSync: vi.fn(),
   OWNER_RW_FILE_MODE: 0o600,
   OWNER_RWX_DIR_MODE: 0o700,
@@ -270,6 +271,9 @@ describe("CrashRecoveryService", () => {
       expect(markerCalls).toHaveLength(1);
       expect(crashLogCalls[0][2]).toBe("utf-8");
       expect(markerCalls[0][2]).toBe("utf-8");
+      // Both writes must request owner-only permissions.
+      expect(crashLogCalls[0][3]).toEqual({ mode: 0o600 });
+      expect(markerCalls[0][3]).toEqual({ mode: 0o600 });
     });
 
     it("routes takeBackup() through resilientAtomicWriteFileSync", () => {

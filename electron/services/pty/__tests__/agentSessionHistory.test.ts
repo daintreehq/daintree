@@ -83,6 +83,11 @@ describe("agentSessionHistory", () => {
     await pruneAgentSessions(30, userDataDir);
     expect((await fsp.stat(filePath)).mode & 0o777).toBe(0o600);
 
+    // Worktree-filtered clear rewrites the file through a separate branch.
+    await persistAgentSession({ ...base, sessionId: "s2", worktreeId: "wt-2" }, userDataDir);
+    await clearAgentSessions("wt-1", userDataDir);
+    expect((await fsp.stat(filePath)).mode & 0o777).toBe(0o600);
+
     await clearAgentSessions(undefined, userDataDir);
     expect((await fsp.stat(filePath)).mode & 0o777).toBe(0o600);
   });

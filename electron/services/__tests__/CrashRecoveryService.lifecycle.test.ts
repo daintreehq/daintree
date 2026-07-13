@@ -32,6 +32,7 @@ const appMock = vi.hoisted(() => {
 const utilsMock = vi.hoisted(() => ({
   resilientAtomicWriteFileSync: vi.fn(),
   resilientRenameSync: vi.fn(),
+  tightenFilePermissionsSync: vi.fn(),
   tightenDirPermissionsSync: vi.fn(),
   OWNER_RW_FILE_MODE: 0o600,
   OWNER_RWX_DIR_MODE: 0o700,
@@ -92,19 +93,12 @@ describe("CrashRecoveryService", () => {
     storeMock.get.mockReturnValue({ autoRestoreOnCrash: false });
     storeMock.set.mockImplementation(() => {});
     utilsMock.resilientAtomicWriteFileSync.mockImplementation(
-      (fp: string, data: string, enc?: BufferEncoding, opts?: { mode?: number }) => {
+      (fp: string, data: string, enc?: BufferEncoding) => {
         fs.writeFileSync(fp, data, enc ?? "utf-8");
-        // Mirror the real helper: apply the requested mode on POSIX.
-        if (opts?.mode !== undefined && process.platform !== "win32") {
-          fs.chmodSync(fp, opts.mode);
-        }
       }
     );
     utilsMock.resilientRenameSync.mockImplementation((src: string, dest: string) => {
       fs.renameSync(src, dest);
-    });
-    utilsMock.tightenDirPermissionsSync.mockImplementation((dir: string) => {
-      if (process.platform !== "win32") fs.chmodSync(dir, 0o700);
     });
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -135,24 +129,27 @@ describe("CrashRecoveryService", () => {
       expect(svc.getPendingCrash()).toBeNull();
     });
 
-    // chmod is a POSIX no-op on Windows, so the mode-bit assertions only run there.
-    const posixIt = process.platform === "win32" ? it.skip : it;
-
-    posixIt("writes the marker, crash log, and crashes directory owner-only", () => {
+    it("requests owner-only writes and tightens the crashes directory", () => {
       const svc = makeService();
       svc.initialize();
+      utilsMock.resilientAtomicWriteFileSync.mockClear();
+      utilsMock.tightenDirPermissionsSync.mockClear();
+
       svc.recordCrash(new Error("boom"));
 
-      const markerPath = path.join(userData, "running.lock");
       const crashesDir = path.join(userData, "crashes");
-      expect(fs.statSync(markerPath).mode & 0o777).toBe(0o600);
-      expect(fs.statSync(crashesDir).mode & 0o777).toBe(0o700);
+      // The service asks the (separately unit-tested) helper to tighten the dir —
+      // this is what fixes an upgrading install's pre-existing 0755 crashes dir.
+      expect(utilsMock.tightenDirPermissionsSync).toHaveBeenCalledWith(crashesDir);
 
-      const crashLog = fs
-        .readdirSync(crashesDir)
-        .find((name) => name.startsWith("crash-") && name.endsWith(".json"));
-      expect(crashLog).toBeDefined();
-      expect(fs.statSync(path.join(crashesDir, crashLog!)).mode & 0o777).toBe(0o600);
+      // Every crash-recovery write requests 0o600 as its 4th argument. Asserting
+      // the requested mode (not a mock-produced file mode) proves the real service
+      // behavior; the helper's own suite proves the mode is honored on disk.
+      const calls = utilsMock.resilientAtomicWriteFileSync.mock.calls;
+      expect(calls.length).toBeGreaterThan(0);
+      for (const call of calls) {
+        expect(call[3]).toEqual({ mode: 0o600 });
+      }
     });
 
     it("detects crash from orphaned marker on next launch", () => {

@@ -103,10 +103,11 @@ function syncParentDirectorySync(filePath: string): void {
  * target path. If any step fails the temp file is cleaned up best-effort.
  * Accepts strings (encoded with `encoding`) or binary buffers.
  *
- * `mode` (POSIX only) is applied to the temp file before rename so the
- * destination has the right permissions atomically — closing the window
- * where a sensitive file would briefly be world-readable at the umask
- * default. Silently skipped on Windows.
+ * `mode` (POSIX only) is applied both when the temp file is first created and
+ * again before rename, so the file is never observable at the umask default —
+ * not during the write, and not at the destination path. A crash mid-write
+ * therefore can't strand a world-readable temp with sensitive contents.
+ * Silently skipped on Windows.
  */
 export async function resilientAtomicWriteFile(
   filePath: string,
@@ -115,14 +116,17 @@ export async function resilientAtomicWriteFile(
   options?: { mode?: number }
 ): Promise<void> {
   const tempPath = generateTempPath(filePath);
-  const writeOptions =
-    typeof data === "string"
-      ? ({ encoding, flush: true } as Parameters<typeof writeFileSync>[2])
-      : ({ flush: true } as Parameters<typeof writeFileSync>[2]);
+  const applyMode = options?.mode !== undefined && process.platform !== "win32";
+  const baseWriteOptions = typeof data === "string" ? { encoding, flush: true } : { flush: true };
+  const writeOptions = (
+    applyMode ? { ...baseWriteOptions, mode: options!.mode } : baseWriteOptions
+  ) as Parameters<typeof writeFileSync>[2];
   try {
     await stubbornFs.retry.writeFile({ timeout: RETRY_TIMEOUT_MS })(tempPath, data, writeOptions);
-    if (options?.mode !== undefined && process.platform !== "win32") {
-      await fsChmod(tempPath, options.mode);
+    // Re-assert after write: writeFile's mode only applies on creation and is
+    // masked by umask, so chmod guarantees exact bits even if the temp existed.
+    if (applyMode) {
+      await fsChmod(tempPath, options!.mode!);
     }
     await resilientRename(tempPath, filePath);
     await syncParentDirectory(filePath);
@@ -144,10 +148,17 @@ export function resilientAtomicWriteFileSync(
   options?: { mode?: number }
 ): void {
   const tempPath = generateTempPath(filePath);
+  const applyMode = options?.mode !== undefined && process.platform !== "win32";
   try {
-    writeFileSync(tempPath, data, { encoding, flush: true } as Parameters<typeof writeFileSync>[2]);
-    if (options?.mode !== undefined && process.platform !== "win32") {
-      chmodSync(tempPath, options.mode);
+    writeFileSync(tempPath, data, {
+      encoding,
+      flush: true,
+      ...(applyMode ? { mode: options!.mode } : {}),
+    } as Parameters<typeof writeFileSync>[2]);
+    // Re-assert after write: writeFileSync's mode only applies on creation and
+    // is masked by umask, so chmod guarantees exact bits.
+    if (applyMode) {
+      chmodSync(tempPath, options!.mode!);
     }
     resilientRenameSync(tempPath, filePath);
     syncParentDirectorySync(filePath);

@@ -32,6 +32,7 @@ const appMock = vi.hoisted(() => {
 const utilsMock = vi.hoisted(() => ({
   resilientAtomicWriteFileSync: vi.fn(),
   resilientRenameSync: vi.fn(),
+  tightenFilePermissionsSync: vi.fn(),
   tightenDirPermissionsSync: vi.fn(),
   OWNER_RW_FILE_MODE: 0o600,
   OWNER_RWX_DIR_MODE: 0o700,
@@ -300,6 +301,53 @@ describe("CrashRecoveryService", () => {
       expect(rotated.capturedAt).toBe(1_000);
       const fresh = JSON.parse(fs.readFileSync(currentPath, "utf8"));
       expect(fresh.appState.sidebarWidth).toBe(200);
+    });
+
+    it("tightens the rotated previous backup (rename carries the source mode)", () => {
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      const currentPath = path.join(backupDir, "session-state.json");
+      const previousPath = path.join(backupDir, "session-state.previous.json");
+      fs.writeFileSync(currentPath, JSON.stringify({ capturedAt: 1_000, appState: {} }));
+
+      storeMock.get.mockImplementation((key: string) => {
+        if (key === "appState") return { sidebarWidth: 200, terminals: [] };
+        return { autoRestoreOnCrash: false };
+      });
+      windowStatesStoreMock.get.mockReturnValue({});
+
+      const svc = makeService();
+      svc.initialize();
+      utilsMock.tightenFilePermissionsSync.mockClear();
+      svc.takeBackup();
+
+      // rename preserves the source mode, so a pre-fix 0644 current would land as
+      // `previous` world-readable — the service must tighten it explicitly.
+      expect(utilsMock.tightenFilePermissionsSync).toHaveBeenCalledWith(previousPath);
+    });
+
+    it("tightens the crashed backup preserved on consumeMarker", () => {
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(backupDir, "session-state.json"),
+        JSON.stringify({ capturedAt: Date.now(), appState: { terminals: [] } })
+      );
+      const markerSessionStart = Date.now() - 5000;
+      fs.writeFileSync(
+        path.join(userData, "running.lock"),
+        JSON.stringify({
+          sessionStartMs: markerSessionStart,
+          appVersion: "1.0.0",
+          platform: "darwin",
+        })
+      );
+
+      const svc = makeService();
+      svc.initialize();
+
+      const crashedPath = path.join(backupDir, `session-state.crashed-${markerSessionStart}.json`);
+      expect(utilsMock.tightenFilePermissionsSync).toHaveBeenCalledWith(crashedPath);
     });
 
     it("does not rotate when no current backup exists yet", () => {

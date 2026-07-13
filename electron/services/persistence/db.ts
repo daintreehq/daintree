@@ -27,11 +27,13 @@ export function getMigrationsFolder(): string {
   return path.join(app.getAppPath(), "electron/services/persistence/migrations");
 }
 
-// better-sqlite3 12.x exposes no file-mode option, and the -wal/-shm sidecars are
-// each opened independently at the process umask — none inherit the main file's
-// bits. chmod the whole family (best-effort, POSIX-gated, skips missing sidecars)
-// so the database and its journals are owner-only. Doubles as the retroactive fix
-// for installs that predate this change and still hold a 0o644 daintree.db.
+// better-sqlite3 12.x exposes no file-mode option, so the main daintree.db lands
+// at the umask default on creation and must be chmod'd. Bundled SQLite derives
+// the -wal/-shm sidecar mode from the main file's mode, so tightening the main
+// file BEFORE the WAL journal is enabled makes those sidecars owner-only too;
+// we still chmod them here as belt-and-suspenders and to cover any that already
+// exist. Best-effort, POSIX-gated, skips missing sidecars. Doubles as the
+// retroactive fix for installs that predate this change and hold a 0o644 db.
 function tightenDatabaseFilePermissions(dbPath: string): void {
   for (const suffix of ["", "-wal", "-shm"]) {
     tightenFilePermissionsSync(dbPath + suffix);
@@ -110,6 +112,12 @@ export function openDb(
 
   const sqlite = new Database(dbPath);
   try {
+    // Tighten the main file up front — before the WAL journal is enabled and
+    // before migrations run. This makes an upgrading install's pre-existing
+    // 0o644 database owner-only for the whole migration, and lets SQLite create
+    // the -wal/-shm sidecars from the (now 0o600) main file's mode.
+    tightenDatabaseFilePermissions(dbPath);
+
     sqlite.pragma("journal_mode = WAL");
     sqlite.pragma("busy_timeout = 3000");
     sqlite.pragma("synchronous = NORMAL");
@@ -245,6 +253,10 @@ export function attemptRecovery(dbPath: string): DatabaseRecovery | null {
     if (!fs.existsSync(filePath)) continue;
     try {
       fs.renameSync(filePath, filePath + corruptSuffix);
+      // rename preserves the source mode, so an upgrading install's 0o644 db
+      // would keep world-readable (corrupt but still sensitive) contents in the
+      // forensic copy. Tighten the quarantined file explicitly.
+      tightenFilePermissionsSync(filePath + corruptSuffix);
       if (suffix === "") quarantinedPath = filePath + corruptSuffix;
     } catch (error) {
       if (suffix === "") {
@@ -305,6 +317,9 @@ function preserveStaleBackup(backupPath: string, corruptSuffix: string): void {
   try {
     if (fs.existsSync(backupPath)) {
       fs.renameSync(backupPath, backupPath + corruptSuffix);
+      // rename carries the source mode forward; tighten in case a pre-fix
+      // install's backup was world-readable.
+      tightenFilePermissionsSync(backupPath + corruptSuffix);
     }
   } catch (error) {
     console.error("[DB] Could not move the unusable backup aside:", error);

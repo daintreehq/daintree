@@ -94,16 +94,33 @@ describe("openDb (integration)", () => {
     const dbPath = path.join(tmpDir, "perms.db");
     const { sqlite } = openDb(dbPath, migrationsFolder);
     try {
+      // Force a WAL frame so -wal/-shm are guaranteed to materialize (a no-op
+      // migrate could otherwise checkpoint them away and leave the loop vacuous).
+      sqlite.pragma("user_version = 42");
+
       expect(fs.statSync(dbPath).mode & 0o777).toBe(0o600);
-      // WAL mode + the migrate()/backfill writes create -wal and -shm by now.
       for (const suffix of ["-wal", "-shm"]) {
         const sidecar = dbPath + suffix;
-        if (fs.existsSync(sidecar)) {
-          expect(fs.statSync(sidecar).mode & 0o777).toBe(0o600);
-        }
+        expect(fs.existsSync(sidecar)).toBe(true);
+        expect(fs.statSync(sidecar).mode & 0o777).toBe(0o600);
       }
     } finally {
       sqlite.close();
+    }
+  });
+
+  posixIt("pre-creates a fresh database with an exclusive owner-only handle", () => {
+    // The final-mode assertion above would still pass with only the post-open
+    // chmod, so pin the TOCTOU protection: the fresh file is created via an
+    // exclusive 0o600 handle BEFORE better-sqlite3 opens it.
+    const dbPath = path.join(tmpDir, "toctou.db");
+    const openSyncSpy = vi.spyOn(fs, "openSync");
+    const { sqlite } = openDb(dbPath, migrationsFolder);
+    try {
+      expect(openSyncSpy).toHaveBeenCalledWith(dbPath, "wx", 0o600);
+    } finally {
+      sqlite.close();
+      openSyncSpy.mockRestore();
     }
   });
 
