@@ -53,6 +53,7 @@ vi.mock("../../../services/RunCommandDetector.js", () => ({
 const mockGetWindowForWebContents = vi.fn();
 vi.mock("../../../window/webContentsRegistry.js", () => ({
   getWindowForWebContents: (...args: unknown[]) => mockGetWindowForWebContents(...args),
+  getProjectForWebContents: vi.fn(() => null),
 }));
 
 vi.mock("../../../window/portDistribution.js", () => ({

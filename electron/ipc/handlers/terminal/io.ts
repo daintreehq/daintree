@@ -324,6 +324,10 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
     // Ownership gate: the terminal must exist and belong to the sender's
     // project. The host's per-window project filter already starves a foreign
     // dedicated port of bytes; this refuses to mint one in the first place.
+    // Only a *proven* mismatch is rejected: a null id on either side means
+    // "unknown owner", not "unauthorized". Unbound windows (Cmd+N, showing the
+    // project picker) are deliberately not registered as project views yet own
+    // a default terminal, so failing closed on null would break them.
     const info = await ptyClient.getTerminalAsync(id);
     if (!info) return null;
     if (info.projectId != null && ctx.projectId != null && info.projectId !== ctx.projectId) {

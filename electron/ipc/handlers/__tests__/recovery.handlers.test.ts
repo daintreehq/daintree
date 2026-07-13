@@ -41,6 +41,7 @@ vi.mock("../../../window/webContentsRegistry.js", () => ({
   getWindowForWebContents: vi.fn(() => null),
   getAppWebContents: vi.fn(),
   getAllAppWebContents: vi.fn(() => []),
+  getProjectForWebContents: vi.fn(() => null),
 }));
 
 vi.mock("../../../window/windowRef.js", () => ({

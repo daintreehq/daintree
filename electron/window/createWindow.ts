@@ -5,7 +5,8 @@ import {
   registerWebContents,
   registerAppView,
 } from "./webContentsRegistry.js";
-import { getProjectViewManager } from "./windowRef.js";
+import { getWindowRegistry } from "./windowRef.js";
+import type { ProjectViewManager } from "./ProjectViewManager.js";
 import path from "path";
 import { createWindowWithState } from "../windowState.js";
 import { store } from "../store.js";
@@ -57,6 +58,17 @@ const CRASH_LOOP_THRESHOLD = 3;
 
 function getAvailableMemoryMb(): number | null {
   return readAvailableSystemMemoryMb();
+}
+
+/**
+ * This window's own ProjectViewManager. Resolve it at call time and never
+ * hoist it: the window's services are wired after `setupBrowserWindow`
+ * returns, and the manager's active view changes as the user switches
+ * projects. Reaching for the process-global manager here would act on the
+ * last-created window instead of this one (#11100).
+ */
+function getProjectViewManagerFor(win: BrowserWindow): ProjectViewManager | null {
+  return getWindowRegistry()?.getByWindowId(win.id)?.services.projectViewManager ?? null;
 }
 
 let windowIpcHandlersRegistered = false;
@@ -330,7 +342,7 @@ export function setupBrowserWindow(
           unresponsiveDialogOpen = false;
           if (response === 1 && !win.isDestroyed()) {
             console.warn("[MAIN] User triggered force-restart of unresponsive renderer");
-            const activeWc = getProjectViewManager()?.getActiveView()?.webContents;
+            const activeWc = getProjectViewManagerFor(win)?.getActiveView()?.webContents;
             const target = activeWc && !activeWc.isDestroyed() ? activeWc : appWebContents;
             if (!target.isDestroyed()) target.forcefullyCrashRenderer();
           }
@@ -577,7 +589,7 @@ export function setupBrowserWindow(
     }
 
     const availableMb = getAvailableMemoryMb();
-    const lowMemThresholdMb = getProjectViewManager()?.getLowMemoryFreeThresholdMb() ?? null;
+    const lowMemThresholdMb = getProjectViewManagerFor(win)?.getLowMemoryFreeThresholdMb() ?? null;
     const isProbableOom =
       details.reason === "oom" ||
       ((details.reason === "crashed" || details.reason === "killed") &&

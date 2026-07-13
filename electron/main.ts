@@ -360,11 +360,13 @@ if (!gotTheLock) {
         const broker = getWorktreePortBrokerRef();
         const wsClient = getWorkspaceClientRef();
         if (broker && wsClient) {
-          const pvm = getProjectViewManager();
-          const projectId = pvm?.getProjectIdForWebContents(wc.id);
+          // This window's own manager, not the process-global one: the global
+          // points at the last-created window, so an older window's view
+          // reload would broker no port at all (#11100).
+          const projectId = pvm.getProjectIdForWebContents(wc.id);
           if (projectId) {
             // Find the project path from PVM to look up the host
-            const viewEntry = pvm?.getAllViews().find((v) => v.projectId === projectId);
+            const viewEntry = pvm.getAllViews().find((v) => v.projectId === projectId);
             if (viewEntry) {
               const host = wsClient.getHostForProject(viewEntry.projectPath);
               if (host) {

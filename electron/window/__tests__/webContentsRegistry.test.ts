@@ -253,6 +253,27 @@ describe("webContentsRegistry", () => {
     expect(isCachedViewWebContents(wc.id)).toBe(false);
   });
 
+  // #11100: the IPC context reads projects from this map precisely because it
+  // spans windows, unlike a per-window ProjectViewManager. Both properties it
+  // relies on are pinned here: senders resolve independently, and teardown is
+  // scoped to the id that went away.
+  it("resolves each window's project independently and survives another window's teardown", async () => {
+    const { getProjectForWebContents, registerProjectView } = await loadRegistry();
+    const viewA = createWebContents(301);
+    const viewB = createWebContents(302);
+
+    registerProjectView("project-a", viewA as unknown as WebContents);
+    registerProjectView("project-b", viewB as unknown as WebContents);
+
+    expect(getProjectForWebContents(viewA.id)).toBe("project-a");
+    expect(getProjectForWebContents(viewB.id)).toBe("project-b");
+
+    viewB.emitDestroyed();
+
+    expect(getProjectForWebContents(viewB.id)).toBeNull();
+    expect(getProjectForWebContents(viewA.id)).toBe("project-a");
+  });
+
   it("clears the cached mark on unregisterProjectView so a reused id is never silenced", async () => {
     const {
       isCachedViewWebContents,

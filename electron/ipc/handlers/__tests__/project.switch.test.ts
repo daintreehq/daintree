@@ -74,6 +74,7 @@ vi.mock("../../../window/webContentsRegistry.js", () => ({
   // Returning [] keeps the broadcast a no-op in this suite; PROJECT_UPDATED
   // delivery is covered by projectSwitchBroadcast.test.ts.
   getAllAppWebContents: vi.fn(() => []),
+  getProjectForWebContents: vi.fn(() => null),
 }));
 
 vi.mock("../../../window/portDistribution.js", () => ({

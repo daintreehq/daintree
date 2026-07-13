@@ -4,11 +4,11 @@ import {
   getWindowForWebContents,
   getAppWebContents,
   getAllAppWebContents,
+  getProjectForWebContents,
   getWebContentsForProject,
   hasRegisteredProjectViews,
   isCachedViewWebContents,
 } from "../window/webContentsRegistry.js";
-import { getProjectViewManager } from "../window/windowRef.js";
 import type { IpcInvokeMap, IpcEventMap } from "../types/index.js";
 import type { IpcContext } from "./types.js";
 import { ValidationError } from "./validationError.js";
@@ -527,6 +527,27 @@ export function typedHandleValidated<K extends keyof IpcInvokeMap, S extends z.Z
   return typedHandle(channel, wrapped);
 }
 
+/**
+ * Build the per-request {@link IpcContext} from the sender's identity.
+ *
+ * The project must come from `webContentsRegistry`, whose map spans every
+ * window: a `ProjectViewManager` only knows its own window's views, so
+ * resolving through one would return null for every sender outside it
+ * (#11100). `projectId` is legitimately null for senders with no project
+ * binding — an unbound "new window" showing the project picker, or a view
+ * whose project has not been registered yet — so handlers must treat it as
+ * "unknown", never as "unauthorized".
+ */
+function buildIpcContext(event: Electron.IpcMainInvokeEvent): IpcContext {
+  const webContentsId = event.sender.id;
+  return {
+    event,
+    webContentsId,
+    senderWindow: getWindowForWebContents(event.sender),
+    projectId: getProjectForWebContents(webContentsId),
+  };
+}
+
 export function typedHandleWithContext<K extends keyof IpcInvokeMap>(
   channel: K,
   handler: (
@@ -542,20 +563,14 @@ export function typedHandleWithContext<K extends keyof IpcInvokeMap>(
 
   if (!captureEnabled) {
     ipcMain.handle(channel as string, (event, ...args) => {
-      const webContentsId = event.sender.id;
-      const senderWindow = getWindowForWebContents(event.sender);
-      const projectId = getProjectViewManager()?.getProjectIdForWebContents(webContentsId) ?? null;
-      const ctx: IpcContext = { event, webContentsId, senderWindow, projectId };
+      const ctx = buildIpcContext(event);
       return handler(ctx, ...(args as IpcInvokeMap[K]["args"]));
     });
     return () => ipcMain.removeHandler(channel as string);
   }
 
   ipcMain.handle(channel as string, async (event, ...args) => {
-    const webContentsId = event.sender.id;
-    const senderWindow = getWindowForWebContents(event.sender);
-    const projectId = getProjectViewManager()?.getProjectIdForWebContents(webContentsId) ?? null;
-    const ctx: IpcContext = { event, webContentsId, senderWindow, projectId };
+    const ctx = buildIpcContext(event);
 
     const traceId = `${String(channel)}-${Date.now().toString(36)}-${(++requestCounter).toString(36)}`;
     const startedAt = performance.now();
