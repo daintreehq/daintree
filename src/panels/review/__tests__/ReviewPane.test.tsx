@@ -15,11 +15,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // (removePanel) instead of the recoverable trash (trashPanelGroup, the source
 // of Reopen Last Closed). Reproducing the bare wiring is what lets this test
 // catch that.
+//
+// The pane's other seam with this child — handing it the container as its
+// Escape `keyboardScope` — is covered in ReviewPane.focus.test.tsx.
 interface CapturedReviewHubProps {
   isOpen: boolean;
   worktreePath: string;
   onClose: () => void;
-  keyboardScope?: Document | HTMLElement | null;
 }
 
 const reviewHubContentProps: CapturedReviewHubProps[] = [];
@@ -91,14 +93,5 @@ describe("ReviewPane close wiring", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
     const [force] = onClose.mock.calls[0] ?? [];
     expect(force).toBeFalsy();
-  });
-
-  it("scopes the child's Escape listener to the pane's own root element", () => {
-    const onClose = vi.fn<(force?: boolean) => void>();
-    const { container } = render(<ReviewPane id="review-1" worktreeId="wt-1" onClose={onClose} />);
-
-    // A missing scope makes ReviewHubContent fall back to a document-wide
-    // capture listener that swallows Escape across the whole app.
-    expect(lastReviewHubContentProps().keyboardScope).toBe(container.firstChild);
   });
 });
