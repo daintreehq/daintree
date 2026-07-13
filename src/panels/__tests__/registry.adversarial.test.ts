@@ -29,6 +29,9 @@ function mockRegistryImports(options?: { throwBrowserDefaults?: boolean }): void
   vi.doMock("@/components/Browser/BrowserPaneSkeleton", () => ({
     BrowserPaneSkeleton: (() => null) as MinimalComponent,
   }));
+  vi.doMock("../dev-preview/DevPreviewPaneFallback", () => ({
+    DevPreviewPaneFallback: (() => null) as MinimalComponent,
+  }));
   vi.doMock("../review/ReviewPaneSkeleton", () => ({
     ReviewPaneSkeleton: (() => null) as MinimalComponent,
   }));
