@@ -92,21 +92,31 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
     onRespond(false);
   }, [onRespond]);
 
-  const handleKeyDown = useCallback(
+  // Escape only. Enter is deliberately left alone so a focused button runs its
+  // native activation — intercepting it here cancelled the Cancel button's
+  // Enter-to-click and confirmed the guest's dialog instead (issue #11106).
+  const handleEscape = useCallback(
     (e: React.KeyboardEvent) => {
-      if (e.key === "Enter") {
-        e.preventDefault();
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      if (dialog?.type === "alert") {
         handleOk();
-      } else if (e.key === "Escape") {
-        e.preventDefault();
-        if (dialog?.type === "alert") {
-          handleOk();
-        } else {
-          handleCancel();
-        }
+      } else {
+        handleCancel();
       }
     },
     [dialog, handleOk, handleCancel]
+  );
+
+  // Text inputs have no native Enter action outside a <form>, so the prompt
+  // owns its own submit.
+  const handleInputKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      handleOk();
+    },
+    [handleOk]
   );
 
   if (!dialog) return null;
@@ -114,7 +124,7 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
   return (
     <div
       className="absolute inset-0 z-50 flex items-center justify-center bg-scrim-medium"
-      onKeyDown={handleKeyDown}
+      onKeyDown={handleEscape}
     >
       <div
         ref={panelRef}
@@ -137,6 +147,7 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
             type="text"
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
+            onKeyDown={handleInputKeyDown}
             aria-describedby={messageId}
             className="w-full px-3 py-1.5 text-sm bg-daintree-sidebar border border-daintree-border rounded-md text-daintree-text focus:outline-hidden focus:ring-1 focus:ring-daintree-accent/50 mb-4"
           />

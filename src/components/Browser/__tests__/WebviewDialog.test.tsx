@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, render } from "@testing-library/react";
+import { act, fireEvent, render } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { WebviewDialog, type WebviewDialogRequest } from "../WebviewDialog";
 
@@ -18,6 +18,22 @@ const basePrompt: WebviewDialogRequest = {
   message: "Enter a value",
   defaultValue: "default",
 };
+
+const baseConfirm: WebviewDialogRequest = {
+  dialogId: "dlg-3",
+  panelId: "browser-panel-1",
+  type: "confirm",
+  message: "Are you sure?",
+  defaultValue: "",
+};
+
+function getButton(container: HTMLElement, label: string): HTMLButtonElement {
+  const match = Array.from(container.querySelectorAll("button")).find(
+    (btn) => btn.textContent === label
+  );
+  if (!match) throw new Error(`No "${label}" button rendered`);
+  return match;
+}
 
 describe("WebviewDialog accessibility", () => {
   it("inner panel has dialog role, aria-modal, and is focusable", () => {
@@ -131,5 +147,85 @@ describe("WebviewDialog accessibility", () => {
       const tabindex = region.getAttribute("tabindex");
       expect(tabindex === null || Number(tabindex) < 0).toBe(true);
     }
+  });
+});
+
+// jsdom doesn't implement a button's native Enter-to-click activation, so the
+// assertable contract for the buttons is that the overlay leaves Enter alone —
+// neither cancelling it nor synthesising a response of its own. Chromium then
+// turns that keydown into the click these tests exercise separately.
+describe("WebviewDialog keyboard handling", () => {
+  it("leaves Enter on Cancel to native activation instead of confirming", () => {
+    const onRespond = vi.fn();
+    const { container } = render(<WebviewDialog dialog={baseConfirm} onRespond={onRespond} />);
+    const cancel = getButton(container, "Cancel");
+    cancel.focus();
+
+    const notPrevented = fireEvent.keyDown(cancel, { key: "Enter" });
+
+    // The regression in #11106: the overlay confirmed the guest's dialog here.
+    expect(onRespond).not.toHaveBeenCalled();
+    expect(notPrevented).toBe(true);
+
+    fireEvent.click(cancel);
+    expect(onRespond).toHaveBeenCalledExactlyOnceWith(false);
+  });
+
+  it("leaves Enter on OK to native activation, which confirms", () => {
+    const onRespond = vi.fn();
+    const { container } = render(<WebviewDialog dialog={baseConfirm} onRespond={onRespond} />);
+    const ok = getButton(container, "OK");
+    ok.focus();
+
+    const notPrevented = fireEvent.keyDown(ok, { key: "Enter" });
+
+    expect(onRespond).not.toHaveBeenCalled();
+    expect(notPrevented).toBe(true);
+
+    fireEvent.click(ok);
+    expect(onRespond).toHaveBeenCalledExactlyOnceWith(true);
+  });
+
+  it("submits the edited value on Enter in the prompt input", () => {
+    const onRespond = vi.fn();
+    const { container } = render(<WebviewDialog dialog={basePrompt} onRespond={onRespond} />);
+    const input = container.querySelector<HTMLInputElement>('input[type="text"]')!;
+
+    fireEvent.change(input, { target: { value: "edited" } });
+    const notPrevented = fireEvent.keyDown(input, { key: "Enter" });
+
+    // A text input has no native Enter action outside a <form>, so the overlay
+    // must consume this one.
+    expect(notPrevented).toBe(false);
+    expect(onRespond).toHaveBeenCalledExactlyOnceWith(true, "edited");
+  });
+
+  it("cancels a prompt on Escape from the input", () => {
+    const onRespond = vi.fn();
+    const { container } = render(<WebviewDialog dialog={basePrompt} onRespond={onRespond} />);
+    const input = container.querySelector<HTMLInputElement>('input[type="text"]')!;
+
+    fireEvent.keyDown(input, { key: "Escape" });
+
+    expect(onRespond).toHaveBeenCalledExactlyOnceWith(false);
+  });
+
+  it("cancels a confirm on Escape from the Cancel button", () => {
+    const onRespond = vi.fn();
+    const { container } = render(<WebviewDialog dialog={baseConfirm} onRespond={onRespond} />);
+
+    fireEvent.keyDown(getButton(container, "Cancel"), { key: "Escape" });
+
+    expect(onRespond).toHaveBeenCalledExactlyOnceWith(false);
+  });
+
+  // An alert has no Cancel — dismissing it is the only response the guest can get.
+  it("acknowledges an alert on Escape", () => {
+    const onRespond = vi.fn();
+    const { container } = render(<WebviewDialog dialog={baseAlert} onRespond={onRespond} />);
+
+    fireEvent.keyDown(getButton(container, "OK"), { key: "Escape" });
+
+    expect(onRespond).toHaveBeenCalledExactlyOnceWith(true);
   });
 });

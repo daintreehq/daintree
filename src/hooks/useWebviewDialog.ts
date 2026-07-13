@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useLayoutEffect, useCallback, useRef } from "react";
 import type { WebviewDialogRequest } from "@/components/Browser/WebviewDialog";
+import { restoreFocusTo } from "@/lib/accessibility";
 import { logError, logWarn } from "@/utils/logger";
 import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -11,6 +12,55 @@ export function useWebviewDialog(
   kind?: string
 ) {
   const [dialogQueue, setDialogQueue] = useState<WebviewDialogRequest[]>([]);
+
+  const previousActiveElementRef = useRef<HTMLElement | null>(null);
+  const hadDialogRef = useRef(false);
+  const webviewElementRef = useRef(webviewElement);
+  const hasDialog = dialogQueue.length > 0;
+
+  // Declared before the queue-transition effect below so a commit that swaps the
+  // webview and drains the queue together restores to the current node.
+  useLayoutEffect(() => {
+    webviewElementRef.current = webviewElement;
+  }, [webviewElement]);
+
+  const restoreFocus = useCallback(() => {
+    const previous = previousActiveElementRef.current;
+    previousActiveElementRef.current = null;
+    // Falls back to the webview so the guest page gets keyboard input back when
+    // whatever opened the dialog is gone (guest crash, panel teardown).
+    restoreFocusTo(previous, webviewElementRef.current);
+  }, []);
+
+  // A queue of dialogs is one modal session: capture on the empty -> non-empty
+  // edge and restore on non-empty -> empty, so advancing between queued dialogs
+  // neither recaptures (which would record the previous dialog's own OK button)
+  // nor restores early. Layout effect so the capture reads document.activeElement
+  // before WebviewDialog's rAF-deferred autofocus moves it into the overlay.
+  useLayoutEffect(() => {
+    if (hasDialog === hadDialogRef.current) return;
+    hadDialogRef.current = hasDialog;
+
+    if (hasDialog) {
+      const active = document.activeElement;
+      previousActiveElementRef.current =
+        active instanceof HTMLElement && active !== document.body ? active : null;
+    } else {
+      restoreFocus();
+    }
+  }, [hasDialog, restoreFocus]);
+
+  // Unmounting while a dialog is open skips the non-empty -> empty edge entirely,
+  // stranding focus on a control that no longer exists. Kept separate from
+  // `hasDialog` (a captured null is legitimate when focus was on <body>, so the
+  // captured element can't double as the "restore armed" flag).
+  useEffect(() => {
+    return () => {
+      if (!hadDialogRef.current) return;
+      hadDialogRef.current = false;
+      restoreFocus();
+    };
+  }, [restoreFocus]);
 
   // Register panel with main process when webview is ready
   useEffect(() => {

@@ -36,6 +36,33 @@ export function getVisibleTabbableElements(root: ParentNode): HTMLElement[] {
 }
 
 /**
+ * Hand focus to the first candidate that is still connected to the document,
+ * falling back to the app shell's first tabbable element so focus never drops
+ * silently to `<body>` (which strands keyboard users).
+ *
+ * Candidates are tried in preference order — typically the element focused
+ * before an overlay opened, then a logical successor for when that element has
+ * since been unmounted. `<body>` never counts as a candidate: it is what
+ * `document.activeElement` reports when nothing is focused at all.
+ *
+ * Deliberately does not verify that `.focus()` actually moved focus. An Electron
+ * `<webview>` is a custom element hosting the guest page behind a shadow root,
+ * so a false-negative check would yank focus into the app shell — worse than
+ * leaving it where it landed.
+ */
+export function restoreFocusTo(...candidates: (HTMLElement | null | undefined)[]): void {
+  for (const candidate of candidates) {
+    if (!candidate || candidate === document.body) continue;
+    if (!document.contains(candidate)) continue;
+    candidate.focus();
+    return;
+  }
+
+  const root = document.getElementById("root");
+  getVisibleTabbableElements(root ?? document.body)[0]?.focus();
+}
+
+/**
  * Close a modal/dialog/popover, then announce a result to assistive tech.
  *
  * macOS VoiceOver drops `aria-live` updates that originate outside the focused
