@@ -703,6 +703,28 @@ describe("IdleTerminalNotificationService", () => {
       expect(notifiedProjectIds()).toEqual(["background-proj"]);
     });
 
+    it("does not nudge about a project brought on-screen during the pty-host await", async () => {
+      seedTwoIdleProjects();
+
+      // Nothing on-screen when the check starts...
+      const pvm = makePvm(null);
+      const service = serviceWith([pvm]);
+
+      // ...but the user switches to it while the terminal snapshot is in flight.
+      ptyManagerMock.getAllTerminalsAsync.mockImplementation(async () => {
+        pvm.getActiveProjectId.mockReturnValue("second-window-proj");
+        return [
+          makeTerminal({ id: "t1", projectId: "second-window-proj" }),
+          makeTerminal({ id: "t2", projectId: "background-proj" }),
+        ];
+      });
+
+      await runCheck(service);
+
+      // Only a post-await collection can see the switch.
+      expect(notifiedProjectIds()).toEqual(["background-proj"]);
+    });
+
     it("still nudges when no provider is wired, using the DB pointer alone", async () => {
       seedTwoIdleProjects();
       const service = makeService(); // provider never injected

@@ -368,7 +368,6 @@ export class IdleTerminalNotificationService {
       }
     }
 
-    const activeIds = this.collectActiveProjectIds();
     const projects = projectStore.getAllProjects();
     if (projects.length === 0) {
       if (notifiedChanged) store.set("idleTerminalNotifiedAt", notifiedAt);
@@ -380,6 +379,11 @@ export class IdleTerminalNotificationService {
       return;
     }
     const allTerminals = await this.ptyClient.getAllTerminalsAsync();
+
+    // Collected AFTER the pty-host round-trip, not before: the loop below runs
+    // synchronously from here, so sampling visibility any earlier would let a
+    // project brought on-screen during that await be nudged anyway.
+    const activeIds = this.collectActiveProjectIds();
 
     const clearNotified = (pid: string): void => {
       if (notifiedAt[pid] !== undefined) {

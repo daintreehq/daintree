@@ -16,6 +16,14 @@ import { AppError } from "../../../utils/errorTypes.js";
 import { pruneWindowStateForPath } from "../../../windowState.js";
 
 /**
+ * Rejection copy for a close attempt against a project that is on-screen in
+ * some window. Deliberately doesn't say "another window": the same guard covers
+ * the invoking window, a second window, and the outgoing paint-gate bridge.
+ */
+const PROJECT_VISIBLE_MESSAGE =
+  "Cannot close a project that's open in a window. Switch that window to another project first.";
+
+/**
  * Validate, register, and broadcast a project for the given absolute path.
  * Extracted from `handleProjectAdd` so other handlers (e.g. scratch
  * Save-as-Project) can register a path as a project without going through IPC.
@@ -157,26 +165,20 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
     const killTerminals = options?.killTerminals ?? false;
     console.log(`[IPC] project:close: ${projectId} (killTerminals: ${killTerminals})`);
 
-    // Kept separate from the visibility check below: this is the persisted
-    // pointer, only used for the `clearCurrentProject()` bookkeeping further
-    // down. It is NOT a "is this project on-screen" signal.
-    const storeActiveProjectId = projectStore.getCurrentProjectId();
-
-    // Check EVERY window's foreground project, not just the DB pointer — that
-    // tracks the last-focused window only, so a project on-screen in a second
-    // window would otherwise be closed out from under the user (#11102).
-    if (!killTerminals) {
-      const activeIds = collectActiveProjectIds(
+    // Is the project on-screen in ANY window? The DB pointer tracks the
+    // last-focused window only, so a project visible in a second window would
+    // otherwise be closed out from under the user (#11102). Re-evaluated rather
+    // than snapshotted: the checks below straddle awaits the user can switch
+    // projects during.
+    const isVisibleAnywhere = (): boolean =>
+      collectActiveProjectIds(
         projectViewManagersFrom(deps.windowRegistry),
-        storeActiveProjectId,
+        projectStore.getCurrentProjectId(),
         "project-close"
-      );
-      if (activeIds.has(projectId)) {
-        throw new Error(
-          "Cannot close a project that's open in a window. " +
-            "Switch that window to another project first."
-        );
-      }
+      ).has(projectId);
+
+    if (!killTerminals && isVisibleAnywhere()) {
+      throw new Error(PROJECT_VISIBLE_MESSAGE);
     }
 
     const project = projectStore.getProjectById(projectId);
@@ -196,7 +198,12 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
 
         await projectStore.clearProjectState(projectId);
 
-        if (projectId === storeActiveProjectId) {
+        // Read the pointer fresh, not from a snapshot taken before the awaits
+        // above: another window can switch projects while the kill is in
+        // flight, and clearing on a stale read would wipe a DIFFERENT
+        // project's pointer. This is pointer bookkeeping, not a visibility
+        // check — it must stay keyed on the DB pointer.
+        if (projectId === projectStore.getCurrentProjectId()) {
           projectStore.clearCurrentProject();
         }
         projectStore.updateProjectStatus(projectId, "closed");
@@ -211,6 +218,19 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
           terminalsKilled,
         };
       } else {
+        // Re-check after the awaited stats call: the user can bring the project
+        // on-screen in any window while it's in flight, and backgrounding it +
+        // pausing its workspace host would then hit a visible project. Thrown as
+        // an AppError so the catch below rethrows it as-is instead of relabelling
+        // a guard rejection as an INTERNAL failure.
+        if (isVisibleAnywhere()) {
+          throw new AppError({
+            code: "VALIDATION",
+            message: PROJECT_VISIBLE_MESSAGE,
+            context: { projectId },
+          });
+        }
+
         projectStore.updateProjectStatus(projectId, "background");
         if (deps.worktreeService) {
           deps.worktreeService.pauseProject(project.path);
@@ -226,6 +246,10 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
         };
       }
     } catch (error) {
+      // A guard rejection (the project went visible mid-close) is a precondition
+      // failure, not a crash — rethrow it rather than relabelling it INTERNAL.
+      if (error instanceof AppError) throw error;
+
       console.error(`[IPC] project:close: Failed to close project ${projectId}:`, error);
       throw new AppError({
         code: "INTERNAL",

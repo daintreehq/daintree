@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import os from "os";
 
 vi.mock("electron", () => ({
@@ -229,6 +229,100 @@ describe("project:close handler", () => {
       await expect(
         handler(EVENT, "project-background", { killTerminals: false })
       ).resolves.toBeTruthy();
+    });
+
+    it("rejects a non-kill close when the project goes visible during the stats await", async () => {
+      projectStoreMock.getCurrentProjectId.mockReturnValue("project-focused");
+      projectStoreMock.getProjectById.mockReturnValue({
+        id: "project-late",
+        name: "Late",
+        status: "active",
+        path: "/test/project-late",
+      } as ReturnType<typeof projectStoreMock.getProjectById>);
+
+      // No window shows it when the handler starts...
+      let shownInSecondWindow: string | null = null;
+      const registry = {
+        all: () => [
+          {
+            services: {
+              projectViewManager: {
+                getActiveProjectId: () => shownInSecondWindow,
+                getOutgoingBridgeProjectId: () => null,
+              },
+            },
+          },
+        ],
+      };
+
+      const ptyClient = {
+        // ...but the user switches to it while the stats round-trip is in flight.
+        getProjectStats: vi.fn(async () => {
+          shownInSecondWindow = "project-late";
+          return { terminalCount: 1, processIds: [1], terminalTypes: { terminal: 1 } };
+        }),
+        killByProject: vi.fn(async () => 1),
+        onProjectSwitch: vi.fn(),
+        setActiveProject: vi.fn(),
+      };
+
+      const deps = {
+        mainWindow: {} as unknown,
+        ptyClient,
+        worktreeService: { pauseProject: vi.fn() },
+      } as unknown as HandlerDependencies;
+      (deps as unknown as { windowRegistry: unknown }).windowRegistry = registry;
+
+      const handler = getCloseHandler(deps);
+
+      await expect(handler(EVENT, "project-late", { killTerminals: false })).rejects.toThrow(
+        "open in a window"
+      );
+      // The entry guard passed, so only the post-await recheck can have caught
+      // this — and it must have caught it BEFORE backgrounding/pausing.
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+      expect(
+        (deps as unknown as { worktreeService: { pauseProject: Mock } }).worktreeService
+          .pauseProject
+      ).not.toHaveBeenCalled();
+    });
+
+    it("does not clear a pointer that moved to another project during the kill", async () => {
+      // Pointer names the project being closed when the handler starts...
+      let pointer: string | null = "project-doomed";
+      projectStoreMock.getCurrentProjectId.mockImplementation(() => pointer);
+      projectStoreMock.getProjectById.mockReturnValue({
+        id: "project-doomed",
+        name: "Doomed",
+        status: "active",
+        path: "/test/project-doomed",
+      } as ReturnType<typeof projectStoreMock.getProjectById>);
+
+      const ptyClient = {
+        getProjectStats: vi.fn(async () => ({
+          terminalCount: 1,
+          processIds: [1],
+          terminalTypes: { terminal: 1 },
+        })),
+        // ...but another window switches away while the kill is in flight.
+        killByProject: vi.fn(async () => {
+          pointer = "project-other";
+          return 1;
+        }),
+        onProjectSwitch: vi.fn(),
+        setActiveProject: vi.fn(),
+      };
+
+      const deps = {
+        mainWindow: {} as unknown,
+        ptyClient,
+      } as unknown as HandlerDependencies;
+
+      const handler = getCloseHandler(deps);
+      await handler(EVENT, "project-doomed", { killTerminals: true });
+
+      // Clearing on the stale snapshot would have wiped project-other's pointer.
+      expect(projectStoreMock.clearCurrentProject).not.toHaveBeenCalled();
     });
 
     it("still allows an explicit kill-terminals close of a visible project", async () => {
