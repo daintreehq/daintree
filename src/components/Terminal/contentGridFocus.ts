@@ -1,4 +1,23 @@
 import type { PanelInstance } from "@shared/types/panel";
+import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
+import { useMacroFocusStore } from "@/store/macroFocusStore";
+
+/**
+ * Hand the grid's macro focus down into the focused panel, whatever its kind.
+ *
+ * The macro region is released only once a live target has actually taken
+ * focus. A panel whose focus target is not mounted (lazy view still loading,
+ * terminal with no opened xterm) declines the handoff, and keeping the region
+ * armed is what stops Enter from stranding the user: DOM focus would still sit
+ * on the grid region, but with `focusedRegion` cleared the arrow keys would no
+ * longer be handled and the grid would go dead.
+ */
+export function enterFocusedPanel(focusedId: string | null): boolean {
+  if (!focusedId) return false;
+  if (!focusPanelInput(focusedId)) return false;
+  useMacroFocusStore.getState().clearFocus();
+  return true;
+}
 
 interface MaximizedGroupFocusArgs {
   focusedId: string | null;

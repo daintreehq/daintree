@@ -1,8 +1,9 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { GitPullRequest } from "lucide-react";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { ReviewHubContent } from "@/components/Worktree/ReviewHub/ReviewHubContent";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { registerPanelFocusHandler } from "@/components/Panel/panelFocusRegistry";
 
 export interface ReviewPaneProps {
   id: string;
@@ -11,13 +12,23 @@ export interface ReviewPaneProps {
 
 const noop = () => {};
 
-export function ReviewPane({ worktreeId }: ReviewPaneProps) {
+export function ReviewPane({ id, worktreeId }: ReviewPaneProps) {
   // Callback ref via useState so React re-renders once the container element
   // commits to the DOM. A plain useRef would freeze `current` at `null` for
   // the lifetime of the first render and `keyboardScope` would never receive
   // the element — `ReviewHubContent` would fall back to a document-scoped
   // Escape listener that swallows the key across the whole app.
   const [containerEl, setContainerEl] = useState<HTMLDivElement | null>(null);
+
+  // Review renders no ContentPanel, so it registers its own focus target
+  // instead of inheriting ContentPanel's.
+  useEffect(() => {
+    if (!containerEl) return undefined;
+    return registerPanelFocusHandler(id, () => {
+      containerEl.focus({ preventScroll: true });
+      return document.activeElement === containerEl;
+    });
+  }, [id, containerEl]);
 
   // Resolve worktree path fresh from the worktree store so renames/moves are
   // reflected without restarting the panel. Missing worktreeId yields an empty
@@ -31,7 +42,11 @@ export function ReviewPane({ worktreeId }: ReviewPaneProps) {
 
   if (!worktreePath) {
     return (
-      <div ref={setContainerEl} className="flex h-full w-full items-center justify-center">
+      <div
+        ref={setContainerEl}
+        tabIndex={-1}
+        className="flex h-full w-full items-center justify-center"
+      >
         <EmptyState
           variant="zero-data"
           scale="canvas"
@@ -44,7 +59,7 @@ export function ReviewPane({ worktreeId }: ReviewPaneProps) {
   }
 
   return (
-    <div ref={setContainerEl} className="flex h-full w-full flex-col bg-daintree-bg">
+    <div ref={setContainerEl} tabIndex={-1} className="flex h-full w-full flex-col bg-daintree-bg">
       <ReviewHubContent
         isOpen={true}
         worktreePath={worktreePath}

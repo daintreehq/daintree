@@ -23,6 +23,7 @@ import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { registerPanelFocusHandler } from "./panelFocusRegistry";
 import { useWorktreeColorMap } from "@/hooks/useWorktreeColorMap";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
@@ -208,6 +209,32 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
 ) {
   const isDragging = useIsDragging();
   const titleInputRef = useRef<HTMLInputElement>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  // Compose, never replace: TerminalPane forwards its own ref here and observes
+  // the same node for resize/visibility. A callback ref may return a React 19
+  // cleanup, and React then skips the usual `null` call — so that cleanup has to
+  // be propagated or the caller's teardown never runs.
+  const externalRef: React.Ref<HTMLDivElement> = ref;
+  const setRootRef = useCallback<React.RefCallback<HTMLDivElement>>(
+    (node) => {
+      rootRef.current = node;
+      if (typeof externalRef === "function") {
+        const cleanup = externalRef(node);
+        if (typeof cleanup === "function") {
+          return () => {
+            rootRef.current = null;
+            cleanup();
+          };
+        }
+        return undefined;
+      }
+      if (externalRef) {
+        externalRef.current = node;
+      }
+      return undefined;
+    },
+    [externalRef]
+  );
   const titleEditing = useTitleEditing();
   const editingStartedAt = titleEditing.editingStartedAt;
 
@@ -227,6 +254,20 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   const isFleetDimmed = useFleetArmingStore(
     (s) => isPtyKind && s.previewArmedIds.size > 0 && !s.previewArmedIds.has(id)
   );
+
+  // Non-PTY panels have no input surface of their own, so the panel root is the
+  // focus target that macro-grid Enter and tab switches hand off to. PTY kinds
+  // are skipped: TerminalPane owns their registry entry and routes focus to
+  // xterm or the hybrid input bar, and two owners would race for one panel id.
+  useEffect(() => {
+    if (isPtyKind) return undefined;
+    return registerPanelFocusHandler(id, () => {
+      const node = rootRef.current;
+      if (!node) return false;
+      node.focus({ preventScroll: true });
+      return document.activeElement === node;
+    });
+  }, [id, isPtyKind]);
 
   // One-shot ring pulse when this pane becomes the new primary on fleet
   // exit. Listens for the CustomEvent dispatched from FleetArmingRibbon's
@@ -449,7 +490,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   return (
     <TerminalContextMenu terminalId={id} forceLocation={location}>
       <div
-        ref={ref}
+        ref={setRootRef}
         data-panel-id={id}
         data-panel-location={location}
         data-detected-process-id={detectedProcessId || undefined}
@@ -504,7 +545,10 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
         )}
         onClick={handleClick}
         onKeyDown={onKeyDown}
-        tabIndex={tabIndex}
+        // -1 keeps the root out of the Tab sequence while making it a valid
+        // script-focus target; a plain div with no tabindex silently ignores
+        // .focus(). TerminalPane passes 0 explicitly and keeps it.
+        tabIndex={tabIndex ?? -1}
         role={role}
         aria-label={ariaLabel}
         aria-selected={ariaSelected}
