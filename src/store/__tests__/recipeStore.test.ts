@@ -69,6 +69,7 @@ vi.mock("@/clients", () => ({
 const beginSpawnBatchMock = vi.fn(() => Symbol("spawn-batch"));
 const flushSpawnBatchMock = vi.fn();
 const setFocusedMock = vi.fn();
+const exitMaximizeMock = vi.fn();
 
 const panelStoreState: {
   panelIds: string[];
@@ -77,6 +78,7 @@ const panelStoreState: {
   beginSpawnBatch: typeof beginSpawnBatchMock;
   flushSpawnBatch: typeof flushSpawnBatchMock;
   setFocused: typeof setFocusedMock;
+  exitMaximize: typeof exitMaximizeMock;
 } = {
   panelIds: [],
   panelsById: {},
@@ -84,6 +86,7 @@ const panelStoreState: {
   beginSpawnBatch: beginSpawnBatchMock,
   flushSpawnBatch: flushSpawnBatchMock,
   setFocused: setFocusedMock,
+  exitMaximize: exitMaximizeMock,
 };
 
 vi.mock("../panelStore", () => ({
@@ -794,6 +797,36 @@ describe("recipeStore", () => {
       ).toBe(true);
     });
 
+    it("forwards a shared bulk admission to a single-terminal recipe", async () => {
+      addTerminalMock.mockResolvedValue("terminal-1");
+      useRecipeStore.setState({
+        recipes: [
+          {
+            id: "recipe-1",
+            name: "Test Recipe",
+            projectId: "project-1",
+            terminals: [{ type: "terminal", title: "Shell", command: "a", env: {} }],
+            createdAt: Date.now(),
+          },
+        ],
+        isLoading: false,
+        currentProjectId: "project-1",
+      });
+
+      await useRecipeStore
+        .getState()
+        .runRecipeWithResults("recipe-1", "/tmp/worktree", "worktree-1", undefined, {
+          spawnBatch: { id: "00000000-0000-4000-8000-000000000010", size: 10 },
+        });
+
+      expect(addTerminalMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          spawnBatchId: "00000000-0000-4000-8000-000000000010",
+          spawnBatchSize: 10,
+        })
+      );
+    });
+
     it("focuses the last spawned grid panel after the batch flush", async () => {
       let callIndex = 0;
       addTerminalMock.mockImplementation(() => Promise.resolve(`terminal-${++callIndex}`));
@@ -821,6 +854,61 @@ describe("recipeStore", () => {
 
       expect(setFocusedMock).toHaveBeenCalledTimes(1);
       expect(setFocusedMock).toHaveBeenCalledWith("terminal-2");
+    });
+
+    function seedSingleTerminalRecipe() {
+      useRecipeStore.setState({
+        recipes: [
+          {
+            id: "recipe-1",
+            name: "Test Recipe",
+            projectId: "project-1",
+            terminals: [{ type: "terminal", title: "Shell 1", command: "a", env: {} }],
+            createdAt: Date.now(),
+          },
+        ],
+        isLoading: false,
+        currentProjectId: "project-1",
+      });
+    }
+
+    it("leaves fullscreen when the spawned grid panel takes focus (#11060)", async () => {
+      addTerminalMock.mockResolvedValue("terminal-1");
+      panelStoreState.panelsById = { "terminal-1": { location: "grid" } };
+      seedSingleTerminalRecipe();
+
+      await useRecipeStore
+        .getState()
+        .runRecipeWithResults("recipe-1", "/tmp/worktree", "worktree-1");
+
+      expect(exitMaximizeMock).toHaveBeenCalledTimes(1);
+      expect(setFocusedMock).toHaveBeenCalledWith("terminal-1");
+    });
+
+    it("stays fullscreen when the spawned panel committed to the dock (#11060)", async () => {
+      addTerminalMock.mockResolvedValue("terminal-docked");
+      panelStoreState.panelsById = { "terminal-docked": { location: "dock" } };
+      seedSingleTerminalRecipe();
+
+      await useRecipeStore
+        .getState()
+        .runRecipeWithResults("recipe-1", "/tmp/worktree", "worktree-1");
+
+      expect(exitMaximizeMock).not.toHaveBeenCalled();
+    });
+
+    it("stays fullscreen when the spawned panel is gone by the time focus is restored (#11060)", async () => {
+      // addPanel resolved an id, but the panel was removed during its async tail.
+      // A panel that no longer exists must not drag the user out of fullscreen.
+      addTerminalMock.mockResolvedValue("terminal-vanished");
+      panelStoreState.panelsById = {};
+      seedSingleTerminalRecipe();
+
+      await useRecipeStore
+        .getState()
+        .runRecipeWithResults("recipe-1", "/tmp/worktree", "worktree-1");
+
+      expect(exitMaximizeMock).not.toHaveBeenCalled();
     });
 
     it("does not steal focus when focusPolicy is preserve", async () => {

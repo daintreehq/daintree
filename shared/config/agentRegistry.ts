@@ -1,4 +1,5 @@
 import type { PrerequisiteSpec } from "../types/ipc/system.js";
+import type { CompletionSourceConfig } from "../types/completionSources.js";
 
 export interface AgentHelpConfig {
   args: string[];
@@ -563,6 +564,14 @@ export interface AgentConfig {
    * (base URL, model aliases, timeout) but leaves API-key fields blank.
    */
   providerTemplates?: AgentProviderTemplate[];
+  /**
+   * Declarative input-bar completion sources. The Main-process discovery engine
+   * (`electron/services/completions/`) resolves these path templates, scans them
+   * with the named parser, and merges/dedupes generically — replacing the
+   * per-`agentId` branching in the former `SlashCommandService`. Omit for agents
+   * with no discoverable completions. See {@link CompletionSourceConfig}.
+   */
+  completionSources?: readonly CompletionSourceConfig[];
 }
 
 import { config as claudeConfig } from "./agents/claude.js";

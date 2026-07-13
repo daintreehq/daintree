@@ -7,7 +7,7 @@
 - **Deps & native modules:** `npm install` (dev) / `npm ci` (CI); `postinstall` rebuilds `node-pty` for Electron. Native-module errors → `npm run rebuild`.
 - **Code style:** Minimal comments, no decorative headers, high signal-to-noise.
 - **Markdown style:** Never hard-wrap prose — every paragraph/list item/table row is ONE physical line (soft wrap is the renderer's job). Applies to all `.md`. Code blocks and ASCII diagrams keep internal breaks.
-- **Codex MCP:** `mcp__codex__codex` always takes `model: "gpt-5.5"` — the only valid value (ignore the MCP definition's examples). Include file paths so Codex can read the code.
+- **Codex MCP:** `mcp__codex__codex` takes `model: "gpt-5.6-sol"` unless you're aware of a newer model. Include file paths so Codex can read the code.
 - **GitHub:** Public repo `daintreehq/daintree`. Use the `gh` CLI for ALL GitHub ops — HTTP fetches fail on auth.
 - **Branching:** Gitflow. All PRs target `develop`, NEVER `main` (release merges only).
 - **Tracked configs:** `.daintree/recipes/*.json` (recipes = saved parameterized agent-launch configs) are intentionally tracked — never remove or gitignore.

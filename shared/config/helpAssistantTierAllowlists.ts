@@ -47,6 +47,7 @@ export const WORKBENCH_TIER_TOOLS = [
 
   "agent.getState",
   "agent.listToolbar",
+  "agent.listAvailable",
   "agentSessionHistory.list",
 
   "agentSettings.get",

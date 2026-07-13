@@ -1,12 +1,6 @@
 import { useCallback, useLayoutEffect, useState, type Dispatch, type SetStateAction } from "react";
 import type { EditorView } from "@codemirror/view";
-import type {
-  AtFileContext,
-  SlashCommandContext,
-  AtDiffContext,
-  AtTerminalContext,
-  AtSelectionContext,
-} from "../hybridInputParsing";
+import type { ActiveCompletionContext } from "../hybridInputParsing";
 import { useResizeObserverRaf } from "@/hooks/useResizeObserverRaf";
 
 interface UseAutocompletePositioningParams {
@@ -14,12 +8,7 @@ interface UseAutocompletePositioningParams {
   inputShellRef: React.RefObject<HTMLDivElement | null>;
   menuRef: React.RefObject<HTMLDivElement | null>;
   isAutocompleteOpen: boolean;
-  activeMode: "command" | "file" | "diff" | "terminal" | "selection" | null;
-  atContext: AtFileContext | null;
-  slashContext: SlashCommandContext | null;
-  diffContext: AtDiffContext | null;
-  terminalContext: AtTerminalContext | null;
-  selectionContext: AtSelectionContext | null;
+  activeCompletionContext: ActiveCompletionContext | null;
   setMenuLeftPx: Dispatch<SetStateAction<number>>;
 }
 
@@ -28,12 +17,7 @@ export function useAutocompletePositioning({
   inputShellRef,
   menuRef,
   isAutocompleteOpen,
-  activeMode,
-  atContext,
-  slashContext,
-  diffContext,
-  terminalContext,
-  selectionContext,
+  activeCompletionContext,
   setMenuLeftPx,
 }: UseAutocompletePositioningParams) {
   const [inputShellEl, setInputShellEl] = useState<HTMLDivElement | null>(null);
@@ -66,19 +50,8 @@ export function useAutocompletePositioning({
     const shell = inputShellRef.current;
     if (!view || !shell || !isAutocompleteOpen) return;
 
-    const anchorIndex =
-      activeMode === "terminal"
-        ? terminalContext?.atStart
-        : activeMode === "selection"
-          ? selectionContext?.atStart
-          : activeMode === "diff"
-            ? diffContext?.atStart
-            : activeMode === "file"
-              ? atContext?.atStart
-              : activeMode === "command"
-                ? (slashContext?.start ?? 0)
-                : null;
-    if (anchorIndex === null || anchorIndex === undefined) return;
+    const anchorIndex = activeCompletionContext?.start;
+    if (anchorIndex === undefined) return;
 
     const shellRect = shell.getBoundingClientRect();
     const coords = view.coordsAtPos(anchorIndex);
@@ -96,13 +69,8 @@ export function useAutocompletePositioning({
     inputShellRef,
     menuRef,
     setMenuLeftPx,
-    activeMode,
-    atContext?.atStart,
-    diffContext?.atStart,
-    terminalContext?.atStart,
-    selectionContext?.atStart,
     isAutocompleteOpen,
-    slashContext?.start,
+    activeCompletionContext?.start,
   ]);
 
   useResizeObserverRaf(inputShellEl, () => compute());

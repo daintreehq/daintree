@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import type { ForgeRateLimitKind, ForgeRepositoryStats } from "@shared/types/ipc/forge";
+import type { ProjectRepoStats } from "@shared/types/project";
 import { projectClient } from "@/clients";
 import { forgeClient } from "@/clients/forgeClient";
 import { isTokenRelatedError } from "@/lib/forgeErrors";
@@ -166,6 +167,14 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
   // closures (push subscribers). Used to skip stale stat pushes whose
   // `fetchedAt` is older than what we've already applied.
   const lastUpdatedRef = useRef<number | null>(null);
+  // Fetch time of the last *genuinely fresh* result — the subset of
+  // `lastUpdatedRef` that excludes stale seeds (persisted counts, disk
+  // bootstrap). The reactivation skip below reads this rather than
+  // `lastUpdatedRef`: a seed carries the fetch time of the poll that originally
+  // produced it, which can be recent enough to look fresh, and skipping the
+  // revalidation on that basis would leave the toolbar on seeded counts it
+  // never reconciles (issue #11078).
+  const freshLastUpdatedRef = useRef<number | null>(null);
   // Adaptive visible-poll cadence (ms) suggested by the provider's activity
   // probe (issue #9741): ~60s while changes are landing, growing toward ~5min
   // on an idle repo. Read synchronously by `calculateNextInterval` when the
@@ -233,8 +242,26 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
 
       hasAppliedResultRef.current = true;
 
+      // A provider-less snapshot — null forge counts and no fetch time — is what
+      // main returns when it could not resolve a provider for the repo. When
+      // *this* side has a resolved provider, the two disagree only transiently
+      // (main's forge plugin is still activating), so the snapshot carries no
+      // observation: treat it as preserve-worthy rather than letting its nulls
+      // erase counts we are already showing. Without this, a seeded switch-back
+      // paints real numbers and then a single mid-activation poll knocks them
+      // straight back to em-dashes (issue #11078). With no provider resolved
+      // here either, the repo genuinely has none and the commits-only pill is
+      // the correct rendering — so this stays false and the nulls apply.
+      const providerLessWhileResolved =
+        providerIdRef.current !== null &&
+        repoStats.lastUpdated === undefined &&
+        repoStats.error === undefined &&
+        repoStats.issueCount === null &&
+        repoStats.prCount === null;
+
       // Only preserve counts when data is stale or errored (not on successful fresh fetch)
-      const shouldPreserve = repoStats.stale === true || repoStats.error !== undefined;
+      const shouldPreserve =
+        repoStats.stale === true || repoStats.error !== undefined || providerLessWhileResolved;
 
       if (!shouldPreserve) {
         // Fresh successful data — record the confirmed counts so a later
@@ -291,6 +318,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       const nextLastUpdated = repoStats.lastUpdated ?? null;
       lastUpdatedRef.current = nextLastUpdated;
       setLastUpdated(nextLastUpdated);
+      if (!shouldPreserve) freshLastUpdatedRef.current = nextLastUpdated;
 
       // Seed the switch-back reuse cache on genuine fresh success only
       // (issue #10761). `shouldPreserve` covers stale/errored results, and a
@@ -355,6 +383,56 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
     [recordPollFailure, resetPollFailures]
   );
 
+  // Seed the toolbar from the counts persisted on the project record
+  // (issue #11078). Applied as `stale: true` so the pills render real numbers —
+  // holding their widths instead of resizing from em-dashes — while the poll
+  // behind this revalidates. Deliberately does NOT write the switch-back cache:
+  // that cache is the fresh tier, and a seed is not an observation.
+  // `resolvedProviderId` is passed rather than read off `providerIdRef`: that
+  // ref is synced in a passive effect, which runs *after* the layout effect
+  // below, so on the render where the provider first resolves the ref still
+  // holds the previous value and every forge count would be discarded as a
+  // mismatch.
+  const seedFromPersistedStats = useCallback(
+    (persisted: ProjectRepoStats, projectPath: string, resolvedProviderId: string | null) => {
+      if (!mountedRef.current || hasAppliedResultRef.current) return;
+
+      // Forge counts belong to the provider that reported them (#10761) — a
+      // project that now resolves elsewhere must not show the old provider's
+      // numbers. The commit count is local git, so it survives a provider
+      // change and seeds regardless.
+      const providerMatches = persisted.providerId === resolvedProviderId;
+      const issueCount = providerMatches ? persisted.issueCount : null;
+      const prCount = providerMatches ? persisted.prCount : null;
+
+      // `applyStatsResult` records `lastKnownCountsRef` only for a fresh result,
+      // and this seed is stale by construction. Seed the preservation ref by
+      // hand: without it the first failed poll behind the seed arrives with null
+      // counts, finds nothing preserved, and erases the numbers just painted.
+      if (issueCount !== null) lastKnownCountsRef.current.issueCount = issueCount;
+      if (prCount !== null) lastKnownCountsRef.current.prCount = prCount;
+
+      applyStatsResult(
+        {
+          commitCount: persisted.commitCount,
+          issueCount,
+          prCount,
+          loading: false,
+          stale: true,
+          // Carry the fetch time only when the forge counts came with it. On a
+          // provider mismatch there is no forge observation behind this seed,
+          // and a dated result would suppress the corrective refetch below,
+          // which is gated on `lastUpdated` still being null.
+          ...(providerMatches && persisted.lastUpdated !== null
+            ? { lastUpdated: persisted.lastUpdated }
+            : {}),
+        },
+        { projectPath }
+      );
+    },
+    [applyStatsResult]
+  );
+
   // Worker instances suppress automatic background polling to conserve the
   // provider's API quota (#10123) — on-demand `refresh()` stays functional.
   const isWorkerInstance = window.__DAINTREE_INSTANCE_ROLE__?.role === "worker";
@@ -372,6 +450,19 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
   useEffect(() => {
     providerIdRef.current = providerId;
   }, [providerId]);
+
+  // The seed deliberately lives in `fetchFn` (below) rather than in a
+  // render-time effect. A layout effect could paint it one IPC round-trip
+  // sooner, but it would have to read the project and the resolved provider off
+  // the renderer's own stores — and neither is trustworthy at that moment:
+  // `useResolvedForgeProvider` resets its state in a passive effect, so on the
+  // render where the project id flips it still reports the *previous* project's
+  // provider, and `onProjectSwitch` fires from an IPC event whose ordering
+  // against the project store's own update is not guaranteed. Both orderings
+  // can seed the outgoing project's counts into the incoming project — exactly
+  // the class of bug #10761 exists to prevent. `fetchFn` reads the project
+  // through main and is guarded by the fetch epoch, so it is the one place that
+  // can seed safely.
 
   // Whether the one corrective refetch for the current provider resolution
   // has fired — see the effect below `usePollingLifecycle`. Declared here
@@ -419,6 +510,13 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
             Date.now() - cached.lastUpdated < FRESH_THRESHOLD_MS
           ) {
             applyStatsResult(cached.stats, { projectPath: project.path });
+          } else if (project.lastKnownStats) {
+            // Past the freshness window, or the module cache never had this
+            // project (a fresh V8 context after view eviction, or a restart),
+            // fall back to the counts persisted on the project record
+            // (issue #11078). Seeded as stale, so the poll below still runs and
+            // reconciles — the pills just hold their widths while it does.
+            seedFromPersistedStats(project.lastKnownStats, project.path, providerIdRef.current);
           }
         }
 
@@ -436,11 +534,17 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
         // switch-back restore (which repopulates `lastUpdatedRef`) and before
         // `setIsValidating(true)` so a skipped reactivation never flashes a
         // validating affordance.
+        // Reads `freshLastUpdatedRef`, not `lastUpdatedRef`: only a genuinely
+        // fresh result earns the skip. A stale seed (persisted counts, disk
+        // bootstrap) carries the fetch time of the poll that produced it, which
+        // can still fall inside the freshness window — skipping on that basis
+        // would strand the toolbar on seeded counts it never reconciles
+        // (issue #11078).
         if (
           reason === "reactivate" &&
           !force &&
-          lastUpdatedRef.current !== null &&
-          Date.now() - lastUpdatedRef.current < FRESH_THRESHOLD_MS
+          freshLastUpdatedRef.current !== null &&
+          Date.now() - freshLastUpdatedRef.current < FRESH_THRESHOLD_MS
         ) {
           return;
         }
@@ -544,6 +648,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       setStats(null);
       setIsStale(false);
       lastUpdatedRef.current = null;
+      freshLastUpdatedRef.current = null;
       setLastUpdated(null);
       // Drop the previous project's probe cadence so the new project starts at
       // the fixed active interval until its first poll reports one (issue #9741).
@@ -629,7 +734,11 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
         // yet — the network poll will replace these with fresh data.
         if (cached.stats && !hasAppliedResultRef.current) {
           const bootstrapStats: ForgeRepositoryStats = {
-            commitCount: 0,
+            // Host-blended local-git count (issue #11078). This was hardcoded to
+            // 0 because the bootstrap payload never carried one, so the commit
+            // pill shifted on every cold start even when the issue/PR pills
+            // hydrated cleanly.
+            commitCount: cached.stats.commitCount,
             issueCount: cached.stats.issueCount,
             prCount: cached.stats.prCount,
             loading: false,
@@ -732,7 +841,20 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
           // stamped — this payload can carry a re-stamped main-process
           // snapshot (probe-unchanged path), so it must never satisfy the
           // "just fetched from GitHub, skip the open revalidate" gate.
-          if (!existingIssues || existingIssues.timestamp < payload.fetchedAt) {
+          //
+          // A `stale` entry is never seeded over. `fetchedAt` is stamped when
+          // the push is built, not when its pages left the forge, so it does
+          // NOT prove the payload's content is newer than what the entry holds
+          // — and a stale entry holds exactly the content the push can't know
+          // about: an optimistic assignee patch (#11087) or a row set the count
+          // poll already disproved. Seeding here would drop the rows and clear
+          // the `stale` mark that forces the next open to revalidate fresh.
+          // The entry keeps rendering its rows either way; the next open-time
+          // bypass is what refreshes it.
+          if (
+            !existingIssues ||
+            (!existingIssues.stale && existingIssues.timestamp < payload.fetchedAt)
+          ) {
             setCache(issuesKey, {
               items: payload.issues.items,
               nextCursor: payload.issues.endCursor,
@@ -741,7 +863,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
               countAtWrite: payload.issues.totalCount,
             });
           }
-          if (!existingPRs || existingPRs.timestamp < payload.fetchedAt) {
+          if (!existingPRs || (!existingPRs.stale && existingPRs.timestamp < payload.fetchedAt)) {
             setCache(prsKey, {
               items: payload.prs.items,
               nextCursor: payload.prs.endCursor,

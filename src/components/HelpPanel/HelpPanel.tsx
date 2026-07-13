@@ -44,6 +44,10 @@ import {
   useTerminalInputStore,
 } from "@/store";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
+// Leaf import, not the `@/store` barrel: the barrel is mocked wholesale (with a
+// hand-listed hook set) across the HelpPanel/controller suites, so pulling a new
+// hook through it would crash every one of them on an undefined destructure.
+import { useScratchStore } from "@/store/scratchStore";
 import { getAgentConfig, getAssistantSupportedAgentIds } from "@/config/agents";
 import { buildResumeLatestCommand } from "@shared/types/agentSettings";
 import { isAgentInstalled } from "../../../shared/utils/agentAvailability";
@@ -225,7 +229,28 @@ export function HelpPanel({
   const cliAvailability = useCliAvailabilityStore((s) => s.availability);
   const cliHasRealData = useCliAvailabilityStore((s) => s.hasRealData);
   const currentProject = useProjectStore((s) => s.currentProject);
+  const currentScratch = useScratchStore((s) => s.currentScratch);
   const hybridInputEnabled = useTerminalInputStore((s) => s.hybridInputEnabled);
+
+  // The assistant launches into the active *workspace*, which is a project OR a
+  // scratch (#11068). The two pointers are mutually exclusive by design — a
+  // scratch switch clears `currentProject`, a project switch clears
+  // `currentScratch` — so the fallback never has to disambiguate a both-set
+  // state; project-first only guards against a transient inconsistency.
+  // Everything downstream (provisioning, hibernation, `ctx.projectId` in main)
+  // treats this id as an opaque workspace key, so a scratch id flows through
+  // unchanged. Memoized on the primitive id/path so the identity is stable
+  // across renders — `syncInputs` below patches controller state, which can
+  // re-render this component, and an inline object would churn the effect.
+  const activeWorkspaceId = currentProject?.id ?? currentScratch?.id ?? null;
+  const activeWorkspacePath = currentProject?.path ?? currentScratch?.path ?? null;
+  const activeWorkspace = useMemo(
+    () =>
+      activeWorkspaceId && activeWorkspacePath
+        ? { id: activeWorkspaceId, path: activeWorkspacePath }
+        : null,
+    [activeWorkspaceId, activeWorkspacePath]
+  );
 
   // The ActionContext pinned to this session at launch (#8772). Fetched once
   // per session id — the binding is fixed at provision time and only changes
@@ -310,29 +335,28 @@ export function HelpPanel({
   }, [cliHasRealData, cliAvailability]);
   const supportedInstalledAgentIdsKey = supportedInstalledAgentIds.join(",");
 
-  // A conversation the eviction/crash path captured for this project but never
+  // A conversation the eviction/crash path captured for this workspace but never
   // resumed. On LRU eviction (or renderer crash) main kills the assistant PTY
   // via HelpSessionService.revokeByWebContentsId — grid PTYs survive in the
   // pty-host, the assistant doesn't — and stashes a resume token in its
   // pending-hibernation store. When the idle empty state is about to show, peek
   // that store so we can offer "Resume assistant" instead of a fresh "Start
-  // assistant", making a project switch-back read as a recoverable pause rather
+  // assistant", making a workspace switch-back read as a recoverable pause rather
   // than a crash. The peek is non-consuming: the launch flow still consumes the
-  // entry via takePendingHibernation. We stamp the entry with its projectId so a
-  // mid-flight A→B switch can't show project A's Resume CTA over project B.
+  // entry via takePendingHibernation. We stamp the entry with its workspace id so
+  // a mid-flight A→B switch can't show workspace A's Resume CTA over workspace B.
   const [resumablePending, setResumablePending] = useState<{
-    projectId: string;
+    workspaceId: string;
     agentId: string;
   } | null>(null);
-  const currentProjectId = currentProject?.id ?? null;
   useEffect(() => {
-    if (!isOpen || terminalId || !currentProjectId) {
+    if (!isOpen || terminalId || !activeWorkspaceId) {
       setResumablePending(null);
       return;
     }
     // Optional-chained like the `onViewRevealed` subscription below: a missing
     // binding degrades to the normal "Start assistant" CTA rather than throwing.
-    const peek = window.electron.help.peekPendingHibernation?.(currentProjectId);
+    const peek = window.electron.help.peekPendingHibernation?.(activeWorkspaceId);
     if (!peek) {
       setResumablePending(null);
       return;
@@ -353,7 +377,7 @@ export function HelpPanel({
           supportedInstalledAgentIds.includes(pendingAgentId) &&
           buildResumeLatestCommand(pendingAgentId) !== undefined;
         setResumablePending(
-          canResume ? { projectId: currentProjectId, agentId: pendingAgentId } : null
+          canResume ? { workspaceId: activeWorkspaceId, agentId: pendingAgentId } : null
         );
       })
       .catch((err) => {
@@ -366,27 +390,27 @@ export function HelpPanel({
   }, [
     isOpen,
     terminalId,
-    currentProjectId,
+    activeWorkspaceId,
     supportedInstalledAgentIdsKey,
     supportedInstalledAgentIds,
   ]);
 
-  // Cross-project bleed guard: an A→B switch re-runs the peek effect, but B's
-  // peek resolves asynchronously, so only trust a pending entry whose projectId
-  // matches the project currently in view.
+  // Cross-workspace bleed guard: an A→B switch re-runs the peek effect, but B's
+  // peek resolves asynchronously, so only trust a pending entry whose workspace
+  // id matches the workspace currently in view.
   const resumableAgentId =
-    resumablePending && resumablePending.projectId === currentProjectId
+    resumablePending && resumablePending.workspaceId === activeWorkspaceId
       ? resumablePending.agentId
       : null;
 
-  // #10815: report this project's panel open-state to main on every change so
+  // #10815: report this workspace's panel open-state to main on every change so
   // an LRU eviction / crash capture can stamp `panelWasOpen` onto the resume
   // token. Fire-and-forget — a slow or missing binding must never block the UI.
   useEffect(() => {
-    if (!currentProjectId) return;
-    const reported = window.electron.help.reportPanelOpen?.(currentProjectId, isOpen);
+    if (!activeWorkspaceId) return;
+    const reported = window.electron.help.reportPanelOpen?.(activeWorkspaceId, isOpen);
     if (reported) safeFireAndForget(reported, { context: "HelpPanel.reportPanelOpen" });
-  }, [isOpen, currentProjectId]);
+  }, [isOpen, activeWorkspaceId]);
 
   // #10815: cold switch-back auto-resume — driven by the reliable pull-on-mount
   // peek, NOT a racy main→renderer push. The lazy HelpPanel mounts behind
@@ -405,7 +429,7 @@ export function HelpPanel({
   //
   // Gated on `isReadyToLaunch` so we don't arm — or even peek — until the
   // controller can actually accept the launch (#10815). A true cold restore
-  // renders with project state still hydrating (`isReadyToLaunch === false`);
+  // renders with workspace state still hydrating (`isReadyToLaunch === false`);
   // arming then would set `autoResumeAgentId`, and the fire-effect would call
   // `launch()` against a not-ready controller, which rejects and burns the
   // one-shot intent — silently losing the resume in exactly the target scenario.
@@ -416,16 +440,16 @@ export function HelpPanel({
   const [autoResumeAgentId, setAutoResumeAgentId] = useState<string | null>(null);
   const coldResumeArmedRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!currentProjectId || terminalId || !isReadyToLaunch) return;
-    if (coldResumeArmedRef.current === currentProjectId) return;
-    const peek = window.electron.help.peekPendingHibernation?.(currentProjectId);
+    if (!activeWorkspaceId || terminalId || !isReadyToLaunch) return;
+    if (coldResumeArmedRef.current === activeWorkspaceId) return;
+    const peek = window.electron.help.peekPendingHibernation?.(activeWorkspaceId);
     if (!peek) return;
     let cancelled = false;
     void peek
       .then((pending) => {
-        if (cancelled || coldResumeArmedRef.current === currentProjectId) return;
+        if (cancelled || coldResumeArmedRef.current === activeWorkspaceId) return;
         if (!pending?.panelWasOpen || !pending.agentId) return;
-        coldResumeArmedRef.current = currentProjectId;
+        coldResumeArmedRef.current = activeWorkspaceId;
         setOpen(true);
         setAutoResumeAgentId(pending.agentId);
       })
@@ -435,7 +459,7 @@ export function HelpPanel({
     return () => {
       cancelled = true;
     };
-  }, [currentProjectId, terminalId, isReadyToLaunch, setOpen]);
+  }, [activeWorkspaceId, terminalId, isReadyToLaunch, setOpen]);
 
   // Fire the captured resume once the panel has opened. The `!terminalId` guard
   // covers two cases: a DevTools reload that still holds a live session, and the
@@ -474,7 +498,8 @@ export function HelpPanel({
     controller.syncInputs({
       isOpen,
       isReadyToLaunch,
-      currentProject: currentProject ? { id: currentProject.id, path: currentProject.path } : null,
+      // Legacy field name — carries the active workspace, project or scratch.
+      currentProject: activeWorkspace,
       terminalId,
       preferredAgentId,
       supportedInstalledAgentIds,
@@ -485,7 +510,7 @@ export function HelpPanel({
     controller,
     isOpen,
     isReadyToLaunch,
-    currentProject,
+    activeWorkspace,
     terminalId,
     preferredAgentId,
     supportedInstalledAgentIdsKey,

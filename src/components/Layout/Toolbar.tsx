@@ -20,6 +20,7 @@ import {
   MonitorPlay,
   Ellipsis,
   GitBranch,
+  FileText,
   Pin,
   PinOff,
   Clipboard,
@@ -68,6 +69,8 @@ import {
 import type { UseProjectSwitcherPaletteReturn } from "@/hooks";
 import type { SearchableProject } from "@/hooks/useProjectSwitcherPalette";
 import { useProjectStore } from "@/store/projectStore";
+import { useScratchStore } from "@/store/scratchStore";
+import { activeWorkspaceIdentity, branchChipState } from "@/lib/workspaceIdentity";
 import { usePreferencesStore, useToolbarPreferencesStore, useVoiceRecordingStore } from "@/store";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
@@ -486,6 +489,8 @@ export function Toolbar({
   projectSwitcherPalette,
 }: ToolbarProps) {
   const currentProject = useProjectStore((state) => state.currentProject);
+  const currentScratch = useScratchStore((state) => state.currentScratch);
+  const workspaceIdentity = activeWorkspaceIdentity(currentProject, currentScratch);
   const loadProjects = useProjectStore((state) => state.loadProjects);
   const getCurrentProject = useProjectStore((state) => state.getCurrentProject);
   const { entry: forgeProviderEntry } = useResolvedForgeProvider(currentProject?.id ?? null);
@@ -1418,6 +1423,7 @@ export function Toolbar({
 
   const activeSearchableProject = projectSwitcher.activeProject;
   const truncatedBranchName = branchName ? middleTruncate(branchName, 24) : undefined;
+  const chipState = branchChipState(workspaceIdentity.kind, branchName);
   const { copy: copyPillPath } = useCopyWithFeedback({ announcement: "Path copied" });
   const handleCopyProjectPath = useCallback(() => {
     if (!currentProject) return;
@@ -1435,41 +1441,50 @@ export function Toolbar({
           data-toolbar-item=""
           className="toolbar-project-pill app-no-drag pointer-events-auto flex h-9 min-w-0 max-w-full items-center justify-center gap-2 overflow-hidden border px-3 outline-hidden focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
           data-testid="project-switcher-trigger"
-          aria-label={
-            currentProject ? `Open project switcher for ${currentProject.name}` : "Open project"
-          }
-          role={currentProject ? "combobox" : undefined}
-          aria-haspopup={currentProject ? "listbox" : undefined}
-          aria-expanded={currentProject ? isDropdownOpen : undefined}
+          aria-label={workspaceIdentity.ariaLabel}
+          role={workspaceIdentity.kind !== "none" ? "combobox" : undefined}
+          aria-haspopup={workspaceIdentity.kind !== "none" ? "listbox" : undefined}
+          aria-expanded={workspaceIdentity.kind !== "none" ? isDropdownOpen : undefined}
           onClick={() => projectSwitcher.open("dropdown")}
           onPointerEnter={clearPillTooltipFocusSuppression}
         >
-          <span
-            className={cn("text-base leading-none shrink-0", !currentProject && "opacity-0")}
-            aria-label={currentProject ? "Project emoji" : undefined}
-            aria-hidden={currentProject ? undefined : true}
-          >
-            {currentProject?.emoji ?? "•"}
-          </span>
+          {workspaceIdentity.kind === "scratch" ? (
+            <FileText
+              className="h-4 w-4 leading-none shrink-0 text-text-secondary"
+              aria-hidden="true"
+            />
+          ) : (
+            <span
+              className={cn("text-base leading-none shrink-0", !currentProject && "opacity-0")}
+              aria-label={currentProject ? "Project emoji" : undefined}
+              aria-hidden={currentProject ? undefined : true}
+            >
+              {currentProject?.emoji ?? "•"}
+            </span>
+          )}
           <span
             className={cn(
               "min-w-0 truncate text-xs tracking-wide text-daintree-text",
-              currentProject ? "font-semibold" : "font-medium"
+              workspaceIdentity.kind !== "none" ? "font-semibold" : "font-medium"
             )}
           >
-            {currentProject?.name ?? "Open project"}
+            {workspaceIdentity.name}
           </span>
-          <span
-            className={cn(
-              "toolbar-project-chip shrink-0 inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 font-mono tabular-nums",
-              !branchName && "opacity-0"
-            )}
-            aria-label={branchName ? `Current branch ${branchName}` : undefined}
-            aria-hidden={branchName ? undefined : true}
-          >
-            <GitBranch className="toolbar-project-chip-icon h-3 w-3 shrink-0" />
-            <span className="toolbar-project-chip-label">{truncatedBranchName ?? "main"}</span>
-          </span>
+          {chipState !== "hidden" && (
+            <span
+              className={cn(
+                "toolbar-project-chip shrink-0 inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 font-mono tabular-nums",
+                chipState === "reserved" && "opacity-0"
+              )}
+              aria-label={chipState === "visible" ? `Current branch ${branchName}` : undefined}
+              aria-hidden={chipState === "visible" ? undefined : true}
+            >
+              <GitBranch className="toolbar-project-chip-icon h-3 w-3 shrink-0" />
+              <span className="toolbar-project-chip-label">
+                {chipState === "visible" ? truncatedBranchName : "main"}
+              </span>
+            </span>
+          )}
           <ChevronsUpDown className="toolbar-project-meta h-3 w-3 shrink-0" />
         </button>
       </TooltipTrigger>
@@ -1525,8 +1540,10 @@ export function Toolbar({
           className="app-no-drag flex items-center justify-center min-w-0 max-w-full pointer-events-none justify-self-center"
         >
           <Tooltip
-            open={currentProject ? pillTooltipOpen : false}
-            onOpenChange={currentProject ? handlePillTooltipOpenChange : undefined}
+            open={workspaceIdentity.kind !== "none" ? pillTooltipOpen : false}
+            onOpenChange={
+              workspaceIdentity.kind !== "none" ? handlePillTooltipOpenChange : undefined
+            }
           >
             <ContextMenu>
               {shouldMountProjectSwitcherDropdown ? (
@@ -1567,10 +1584,22 @@ export function Toolbar({
                     onConfirmFreeMemory={projectSwitcher.confirmFreeMemory}
                     isFreeingMemory={projectSwitcher.isFreeingMemory}
                     scratchResults={projectSwitcher.scratchResults}
-                    onCreateScratch={() => void projectSwitcher.createScratch()}
+                    onCreateScratch={(name) => void projectSwitcher.createScratch(name)}
                     onSelectScratch={(scratch) => void projectSwitcher.selectScratch(scratch)}
                     onRemoveScratch={(scratchId) =>
                       void projectSwitcher.removeScratchAction(scratchId)
+                    }
+                    onRequestDeleteAllScratches={projectSwitcher.requestDeleteAllScratches}
+                    deleteAllScratchesConfirm={projectSwitcher.deleteAllScratchesConfirm}
+                    onDismissDeleteAllScratchesConfirm={
+                      projectSwitcher.dismissDeleteAllScratchesConfirm
+                    }
+                    onConfirmDeleteAllScratches={() =>
+                      void projectSwitcher.confirmDeleteAllScratches()
+                    }
+                    isDeletingAllScratches={projectSwitcher.isDeletingAllScratches}
+                    onRenameScratch={(scratchId, name) =>
+                      void projectSwitcher.renameScratch(scratchId, name)
                     }
                     onSaveAsProject={(scratchId) => void projectSwitcher.saveAsProject(scratchId)}
                     saveAsProjectConfirm={projectSwitcher.saveAsProjectConfirm}
@@ -1641,6 +1670,14 @@ export function Toolbar({
                   <div className="text-text-muted font-mono text-[11px] truncate">
                     {currentProject.path}
                   </div>
+                </div>
+              </TooltipContent>
+            )}
+            {!currentProject && currentScratch && (
+              <TooltipContent side="bottom" className="max-w-[28rem]">
+                <div className="flex flex-col gap-0.5">
+                  <div className="text-xs font-medium">{currentScratch.name}</div>
+                  <div className="text-text-muted text-[11px]">Scratch workspace</div>
                 </div>
               </TooltipContent>
             )}

@@ -136,4 +136,96 @@ export const config: AgentConfig = {
       installUrl: "https://github.com/openai/codex",
     },
   ],
+  completionSources: [
+    {
+      id: "builtin",
+      trigger: "/",
+      sourcePrecedence: 0,
+      discovery: { method: "static", catalog: "builtin-slash-commands" },
+    },
+    {
+      // Codex Plugins, invoked as `$name` (e.g. `$github`). Discovered from the
+      // local registry: enabled `[plugins."name@market"]` tables in
+      // `config.toml` intersected with the manifests under `plugins/cache/*`.
+      // Lower precedence than `skills` so a user's own `$name` skill wins a
+      // label collision. Plugin-BUNDLED skills (`$github:gh-fix-ci`) and Apps
+      // are out of scope: bundled skills are a separate namespace-qualified
+      // surface, and Apps are resolved server-side with no local manifest.
+      id: "plugins",
+      trigger: "$",
+      sourcePrecedence: 10,
+      discovery: {
+        method: "registry",
+        parser: "codex-plugin-registry",
+        derive: {
+          labelPrefix: "$",
+          kind: "plugin",
+          idNamespace: "plugin",
+          fallbackDescription: "Plugin",
+        },
+        locations: [
+          {
+            id: "user:codex-plugins",
+            scope: "user",
+            base: {
+              type: "env",
+              name: "CODEX_HOME",
+              fallback: { type: "homeRelative", segments: [".codex"] },
+            },
+            segments: [],
+            locationPrecedence: 0,
+          },
+        ],
+      },
+    },
+    {
+      // Codex Skills, invoked as `$name`. Custom prompts (`~/.codex/prompts`,
+      // `/prompts:`) and `.codex/commands` were retired — neither exists in
+      // current Codex.
+      id: "skills",
+      trigger: "$",
+      sourcePrecedence: 20,
+      discovery: {
+        method: "directory",
+        parser: "skill-dir",
+        derive: {
+          labelPrefix: "$",
+          kind: "skill",
+          idNamespace: "skill",
+          fallbackDescription: "Skill",
+        },
+        locations: [
+          {
+            id: "builtin:system-skills",
+            scope: "built-in",
+            base: {
+              type: "env",
+              name: "CODEX_HOME",
+              fallback: { type: "homeRelative", segments: [".codex"] },
+            },
+            segments: ["skills", ".system"],
+            locationPrecedence: 0,
+          },
+          {
+            id: "user:codex-skills",
+            scope: "user",
+            base: {
+              type: "env",
+              name: "CODEX_HOME",
+              fallback: { type: "homeRelative", segments: [".codex"] },
+            },
+            segments: ["skills"],
+            locationPrecedence: 0,
+          },
+          {
+            id: "project:agents-skills",
+            scope: "project",
+            base: { type: "projectRoot" },
+            segments: [".agents", "skills"],
+            locationPrecedence: 0,
+          },
+        ],
+      },
+    },
+  ],
 };

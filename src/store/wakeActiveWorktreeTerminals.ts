@@ -1,4 +1,5 @@
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { isDocumentHidden, revealUntilStable } from "@/services/terminal/revealUntilStable";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -156,78 +157,9 @@ async function wakeActiveWorktreeTerminalsInner(): Promise<void> {
   await Promise.all(workers);
 }
 
-// Upper bound on frames a single terminal will keep retrying its reveal before
-// the sweep gives up on it. A warm project-view return that's settling its
-// layout needs only a couple of frames; the ceiling just stops a pane that's
-// genuinely offscreen/unmeasurable from spinning forever (~10 frames ≈ 160ms).
-const MAX_REVEAL_FRAMES = 10;
 // At most this many terminals repaint on any one frame so a large grid never
 // produces a single long task on the reveal frame.
 const REVEAL_CONCURRENCY = 2;
-// Paint each pane on two SEPARATE frames once it's paintable. The first paint
-// can land in the frame before the compositor swaps the now-foreground project
-// view in — or before xterm's own IntersectionObserver re-fires as the view
-// un-occludes and momentarily re-pauses the renderer — so it doesn't visually
-// stick. The second, a frame later once those observers have settled, is the
-// one the user actually sees. This double pass is what turns the previously
-// intermittent reveal into a reliable one.
-const REVEAL_CONFIRM_PAINTS = 2;
-
-// rAF is paused for a backgrounded/occluded WebContentsView, so its callback can
-// never fire there. Race it against a timeout so a worker awaiting a frame can't
-// hang the reveal sweep forever (and later resume stale to interleave with the
-// next reveal). In the normal foreground case the real frame (~16ms) always wins
-// well before the fallback.
-const NEXT_FRAME_FALLBACK_MS = 250;
-
-function nextFrame(): Promise<void> {
-  if (typeof requestAnimationFrame !== "function") return Promise.resolve();
-  return new Promise((resolve) => {
-    let settled = false;
-    const done = (): void => {
-      if (settled) return;
-      settled = true;
-      resolve();
-    };
-    requestAnimationFrame(done);
-    if (typeof setTimeout === "function") setTimeout(done, NEXT_FRAME_FALLBACK_MS);
-  });
-}
-
-function isDocumentHidden(): boolean {
-  return typeof document !== "undefined" && document.visibilityState === "hidden";
-}
-
-/**
- * Drive a single terminal's reveal to a stable result: retry frame-by-frame
- * until it reports paintable, then paint it {@link REVEAL_CONFIRM_PAINTS} times
- * across separate frames to defeat the compositor/observer present-race that
- * otherwise leaves the first paint un-stuck. Bounded by {@link MAX_REVEAL_FRAMES}.
- */
-async function revealUntilStable(id: string, isAborted: () => boolean): Promise<void> {
-  let painted = 0;
-  for (let frame = 0; frame < MAX_REVEAL_FRAMES && painted < REVEAL_CONFIRM_PAINTS; frame++) {
-    // The view may have been switched away (detached → hidden) since the sweep
-    // started or during a frame yield. Stop before touching a hidden view — the
-    // switch-back starts a fresh sweep. The caller latches the same flag for the
-    // worker pool, so a single hidden event abandons the WHOLE sweep, not just
-    // this terminal.
-    if (isAborted()) return;
-    let paintable: boolean;
-    try {
-      paintable = await terminalInstanceService.revealTerminal(id);
-    } catch (error) {
-      // One broken terminal must not abort the sweep — the next visible
-      // terminal still needs its post-reveal reveal/repaint.
-      logWarn("[repaintActiveWorktreeTerminals] reveal failed", { id, error });
-      return;
-    }
-    if (paintable) painted++;
-    // Yield a frame between attempts: lets layout/compositor settle before a
-    // retry, and spaces the confirm paint out from the first.
-    await nextFrame();
-  }
-}
 
 /**
  * Re-run the terminal reveal across every grid agent terminal AFTER the project
@@ -287,7 +219,19 @@ export async function repaintActiveWorktreeTerminals(): Promise<void> {
       while (cursor < targets.length) {
         if (aborted) return;
         const id = targets[cursor++];
-        if (id) await revealUntilStable(id, () => aborted);
+        // revealTerminal (not repaintForReveal): this sweep also has to OPEN
+        // panes the occluded warm wake could not, and it trusts DOM-truth
+        // visibility for the WebGL reattach because the foreground view is
+        // confirmed presented. The assistant sidebar-transition owner
+        // deliberately uses the other pass — see revealUntilStable's RevealAttempt.
+        if (id) {
+          await revealUntilStable(
+            id,
+            (target) => terminalInstanceService.revealTerminal(target),
+            () => aborted,
+            "[repaintActiveWorktreeTerminals]"
+          );
+        }
       }
     };
     const workerCount = Math.min(REVEAL_CONCURRENCY, targets.length);

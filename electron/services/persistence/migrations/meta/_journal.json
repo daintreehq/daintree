@@ -50,6 +50,13 @@
       "when": 1782980261485,
       "tag": "0006_daffy_kid_colt",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1783900000000,
+      "tag": "0007_add_project_stats",
+      "breakpoints": true
     }
   ]
 }

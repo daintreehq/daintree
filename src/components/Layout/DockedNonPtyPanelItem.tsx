@@ -5,7 +5,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import { cn } from "@/lib/utils";
 import { usePanelStore, useFocusStore } from "@/store";
-import type { FilePanelData } from "@shared/types/panel";
+import type { BrowserPanelData, FilePanelData } from "@shared/types/panel";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
@@ -19,18 +19,21 @@ import {
 } from "./dockPopoverGuard";
 import { DockPopoverChildProvider } from "@/components/ui/DockPopoverChildContext";
 
-interface DockedFilePanelItemProps {
-  panel: FilePanelData;
+interface DockedNonPtyPanelItemProps {
+  panel: FilePanelData | BrowserPanelData;
+  /** Chip label, derived per-kind by the caller (file name, browser host). */
+  displayTitle: string;
 }
 
 /**
- * Dock chip for a file viewer panel. Mirrors DockedTerminalItem's popover +
- * stable-wrapper relocation flow, minus everything PTY: no renderer policies,
- * no xterm fit, no agent state. The panel's React subtree lives in
- * DockPanelOffscreenContainer and is moved (not remounted) into this popover,
- * so scroll position and view mode survive open/close.
+ * Dock chip for a non-PTY content panel (file viewer, browser). Mirrors
+ * DockedTerminalItem's popover + stable-wrapper relocation flow, minus
+ * everything PTY: no renderer policies, no xterm fit, no agent state. The
+ * panel's React subtree lives in DockPanelOffscreenContainer and is moved (not
+ * remounted) into this popover — a webview's guest survives the move too — so
+ * scroll position, view mode, and page state survive open/close.
  */
-export function DockedFilePanelItem({ panel }: DockedFilePanelItemProps) {
+export function DockedNonPtyPanelItem({ panel, displayTitle }: DockedNonPtyPanelItemProps) {
   // Pointer/touch drag listeners only — dnd-kit's keyboard handler would
   // preventDefault() this button's activation click (see DockedTerminalItem).
   const dragHandle = useDragHandle();
@@ -104,11 +107,6 @@ export function DockedFilePanelItem({ panel }: DockedFilePanelItemProps) {
   }, [panel.id, moveTerminalToGrid, closeDockTerminal]);
 
   const chrome = useMemo(() => deriveTerminalChrome({ kind: panel.kind }), [panel.kind]);
-
-  // File name beats the generic kind title in the chip, mirroring the pane's
-  // own title layering (a user-locked rename still wins).
-  const fileName = panel.filePath?.split(/[/\\]/).filter(Boolean).pop();
-  const displayTitle = panel.titleMode === "user" ? panel.title : (fileName ?? panel.title);
 
   const { height: popoverHeight, isResizing, handleProps } = useDockPopoverResize();
 

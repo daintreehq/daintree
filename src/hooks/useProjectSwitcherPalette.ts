@@ -6,7 +6,9 @@ import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { usePaletteStore } from "@/store/paletteStore";
 import { notify } from "@/lib/notify";
+import { closeAndAnnounce } from "@/lib/accessibility";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
+import { logError } from "@/utils/logger";
 import type { Project, Scratch } from "@shared/types";
 import type { ProjectStatusMap } from "@shared/types/ipc/project";
 import { projectClient, scratchClient } from "@/clients";
@@ -23,6 +25,19 @@ export interface SearchableScratch {
   lastOpened: number;
   isActive: boolean;
 }
+
+/**
+ * Frozen targets for a pending "delete all scratches" confirm.
+ *
+ * Deliberately excludes the live fields (`isActive`, `lastOpened`): the run needs
+ * only the ids it agreed to delete plus the names it may have to name in a failure
+ * summary. Re-deriving from the reactive `scratches` array mid-run would shrink the
+ * list as each removal lands, and would silently enrol a scratch created after the
+ * user read the count (lesson #4729).
+ */
+export type DeleteAllScratchesSnapshot = ReadonlyArray<
+  Readonly<Pick<SearchableScratch, "id" | "name">>
+>;
 
 export interface SearchableProject {
   id: string;
@@ -49,6 +64,12 @@ export interface UseProjectSwitcherPaletteReturn {
   isOpen: boolean;
   mode: ProjectSwitcherMode;
   query: string;
+  /**
+   * The projects the palette renders, in render order — and the only array
+   * `selectedIndex` may be read against. In modal browse this is scoped to the
+   * projects the user can switch between right now; the dropdown and every
+   * search list the full set.
+   */
   results: SearchableProject[];
   /** True while `deferredQuery` has not yet caught up to `query` — the results shown are from the previous query. */
   isFiltering: boolean;
@@ -60,6 +81,10 @@ export interface UseProjectSwitcherPaletteReturn {
    * by the current `query`.
    */
   activeProject: SearchableProject | null;
+  /**
+   * Index into {@link results}. Always in range whenever `results` is
+   * non-empty, so `results[selectedIndex]` is guaranteed to be a rendered row.
+   */
   selectedIndex: number;
   open: (mode?: ProjectSwitcherMode) => void;
   close: () => void;
@@ -116,14 +141,38 @@ export interface UseProjectSwitcherPaletteReturn {
   confirmFreeMemory: () => Promise<void>;
   isFreeingMemory: boolean;
   backgroundWaitingCount: number;
+  /**
+   * Agent totals across every non-active project, uncapped and independent of
+   * `mode`/`query`. Kept off `results` on purpose: that array is scoped for
+   * presentation, and a project whose agent counts have landed before its
+   * process count (the two arrive from separate `ProjectStatsService` calls)
+   * would otherwise drop out of the toolbar badge for a beat.
+   */
+  nonActiveAgentCounts: { activeAgentCount: number; waitingAgentCount: number };
   /** Scratch (one-off agent workspace) view-models, sorted by lastOpened desc. */
   scratchResults: SearchableScratch[];
-  /** Create and immediately switch to a new scratch. Closes the palette on success. */
-  createScratch: () => Promise<void>;
+  /**
+   * Create and immediately switch to a new scratch. Closes the palette on success.
+   * An empty or omitted name falls back to the main-process default.
+   */
+  createScratch: (name?: string) => Promise<void>;
   /** Switch to an existing scratch. Closes the palette on success. */
   selectScratch: (scratch: SearchableScratch) => Promise<void>;
   /** Remove a scratch (deletes folder + DB row). Used by context menu. */
   removeScratchAction: (scratchId: string) => Promise<void>;
+  /**
+   * Targets of a pending "delete all scratches" confirmation, frozen when the
+   * user opened it, or null when no confirm is open.
+   */
+  deleteAllScratchesConfirm: DeleteAllScratchesSnapshot | null;
+  /** Open the bulk-delete confirmation. A no-op when there are no scratches. */
+  requestDeleteAllScratches: () => void;
+  dismissDeleteAllScratchesConfirm: () => void;
+  /** Delete every scratch in the frozen snapshot. Emits one summary notification. */
+  confirmDeleteAllScratches: () => Promise<void>;
+  isDeletingAllScratches: boolean;
+  /** Rename a scratch in place. Leaves the palette open. A blank name is a no-op. */
+  renameScratch: (scratchId: string, name: string) => Promise<void>;
   /**
    * Open the directory picker and save the scratch as a project. On success
    * exposes a follow-up confirmation via {@link saveAsProjectConfirm} so the
@@ -142,6 +191,37 @@ export interface UseProjectSwitcherPaletteReturn {
 }
 
 const MAX_RESULTS = 15;
+
+/**
+ * Modal browse lists only the projects the user can switch between right now.
+ * Deliberately not named "switchable": the active project matches too, and
+ * `selectProject` is a no-op for it.
+ */
+function isVisibleInModalBrowse(project: SearchableProject): boolean {
+  return project.isActive || project.isBackground || project.processCount > 0;
+}
+
+/**
+ * Builds the palette's one array — the rows that render AND the rows the
+ * arrow keys walk. Rank (when searching), then scope, then cap: the cap
+ * belongs to the eligible set, so a background project sitting past the first
+ * 15 unscoped rows still surfaces in modal browse.
+ *
+ * `isSearching` tracks the live query while `rankQuery` is the deferred one:
+ * the moment the user types, browse scope lifts, even though the ranking is
+ * still catching up. Deriving both from the deferred query would flash
+ * "No projects match" over a scoped-empty list on the first keystroke.
+ */
+function buildResults(
+  sortedProjects: SearchableProject[],
+  mode: ProjectSwitcherMode,
+  rankQuery: string,
+  isSearching: boolean
+): SearchableProject[] {
+  const ranked = rankQuery.trim() ? rankProjectMatches(rankQuery, sortedProjects) : sortedProjects;
+  const scoped = mode === "modal" && !isSearching ? ranked.filter(isVisibleInModalBrowse) : ranked;
+  return scoped.slice(0, MAX_RESULTS);
+}
 
 /**
  * Trailing-edge debounce window for the project hover prefetch. Matches the
@@ -167,8 +247,11 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const isOpen = mode === "modal" ? modalIsOpen : dropdownIsOpen;
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
-  const isFiltering = query !== deferredQuery;
-  const [selectedIndex, setSelectedIndex] = useState(0);
+  const isSearching = query.trim().length > 0;
+  // Only stale while a search is still catching up. Clearing the box restores
+  // browse in the same commit, so that transition is never "filtering".
+  const isFiltering = isSearching && query !== deferredQuery;
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [stopConfirmProjectId, setStopConfirmProjectId] = useState<string | null>(null);
   const [isStoppingProject, setIsStoppingProject] = useState(false);
   const [removeConfirmProject, setRemoveConfirmProject] = useState<SearchableProject | null>(null);
@@ -181,8 +264,12 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     project: Project;
   } | null>(null);
   const [isDeletingOriginalScratch, setIsDeletingOriginalScratch] = useState(false);
-  const selectedProjectIdRef = useRef<string | null>(null);
-
+  const [deleteAllScratchesConfirm, setDeleteAllScratchesConfirm] =
+    useState<DeleteAllScratchesSnapshot | null>(null);
+  const [isDeletingAllScratches, setIsDeletingAllScratches] = useState(false);
+  // Rapid double-Enter on the confirm button lands twice before React re-renders
+  // the disabled state, so the gate has to be synchronous (lesson #4024).
+  const isDeletingAllScratchesRef = useRef(false);
   const prefetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prefetchInFlightRef = useRef<Set<string>>(new Set());
   const prefetchLastAtRef = useRef<Map<string, number>>(new Map());
@@ -207,6 +294,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const createScratchAction = useScratchStore((state) => state.createScratch);
   const switchScratchAction = useScratchStore((state) => state.switchScratch);
   const removeScratchActionStore = useScratchStore((state) => state.removeScratch);
+  const renameScratchActionStore = useScratchStore((state) => state.renameScratch);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -242,7 +330,16 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       const isActive = p.id === currentProject?.id;
       const isMissing = p.status === "missing";
       const hasProcesses = (stats?.processCount ?? 0) > 0;
-      const isBackground = p.status === "background" || (!isActive && !isMissing && hasProcesses);
+      // A scratch switch clears the project pointer without demoting or
+      // broadcasting the row it left, so the pre-scratch project reaches us still
+      // marked "active" while nothing is active. Untreated it is neither active
+      // nor background, and `isVisibleInModalBrowse` drops it from the list until
+      // the async reload lands — main makes the same repair on its next read once
+      // the canonical pointer is null (#11085). View-relative by design: a project
+      // another window owns isn't this view's either.
+      const isStaleActive = !isActive && p.status === "active";
+      const isBackground =
+        p.status === "background" || isStaleActive || (!isActive && !isMissing && hasProcesses);
 
       return {
         id: p.id,
@@ -280,6 +377,17 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     [searchableProjects]
   );
 
+  const nonActiveAgentCounts = useMemo(() => {
+    let activeAgentCount = 0;
+    let waitingAgentCount = 0;
+    for (const project of searchableProjects) {
+      if (project.isActive) continue;
+      activeAgentCount += project.activeAgentCount;
+      waitingAgentCount += project.waitingAgentCount;
+    }
+    return { activeAgentCount, waitingAgentCount };
+  }, [searchableProjects]);
+
   const sortedProjects = useMemo<SearchableProject[]>(() => {
     return [...searchableProjects].sort((a, b) => {
       if (a.lastOpened !== b.lastOpened) {
@@ -289,13 +397,29 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     });
   }, [searchableProjects]);
 
-  const results = useMemo<SearchableProject[]>(() => {
-    if (!deferredQuery.trim()) {
-      return sortedProjects.slice(0, MAX_RESULTS);
-    }
+  // Clearing the box reverts to browse immediately rather than holding the
+  // deferred ranking for a commit — otherwise browse would flash the stale
+  // search ranking on the way back to an empty query.
+  const resultsQuery = isSearching ? deferredQuery : "";
 
-    return rankProjectMatches(deferredQuery, sortedProjects).slice(0, MAX_RESULTS);
-  }, [deferredQuery, sortedProjects]);
+  const results = useMemo<SearchableProject[]>(
+    () => buildResults(sortedProjects, mode, resultsQuery, isSearching),
+    [sortedProjects, mode, resultsQuery, isSearching]
+  );
+
+  // The selected PROJECT is the state; its index is derived. Tracking an index
+  // instead would let it outlive the row it pointed at — a list that shrinks
+  // under an open palette (a project closing, a stats push) would leave the
+  // index addressing a different project than the user selected, and Enter
+  // would commit that one (#11071). Deriving means the highlight follows the
+  // project across reorders and never addresses a row that isn't rendered.
+  const selectedIndex = useMemo(() => {
+    if (results.length === 0) return 0;
+    const index = selectedProjectId
+      ? results.findIndex((project) => project.id === selectedProjectId)
+      : -1;
+    return index >= 0 ? index : 0;
+  }, [results, selectedProjectId]);
 
   // Decoupled from `results` so the toolbar pill keeps the active project's
   // pin/process state even when search filters exclude it or it sits outside
@@ -305,35 +429,10 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     [searchableProjects]
   );
 
-  useEffect(() => {
-    if (results.length === 0) {
-      selectedProjectIdRef.current = null;
-      setSelectedIndex(0);
-      return;
-    }
-
-    const selectedId = selectedProjectIdRef.current;
-    if (selectedId) {
-      const nextIndex = results.findIndex((project) => project.id === selectedId);
-      if (nextIndex >= 0) {
-        setSelectedIndex((prev) => (prev === nextIndex ? prev : nextIndex));
-        return;
-      }
-    }
-
-    setSelectedIndex((prev) => Math.min(prev, results.length - 1));
-  }, [results]);
-
-  useEffect(() => {
-    if (results.length === 0) return;
-    if (selectedIndex < 0 || selectedIndex >= results.length) return;
-    selectedProjectIdRef.current = results[selectedIndex]!.id;
-  }, [results, selectedIndex]);
-
+  // A new query re-ranks the list, so fall back to the top match.
   useEffect(() => {
     if (query) {
-      selectedProjectIdRef.current = null;
-      setSelectedIndex(0);
+      setSelectedProjectId(null);
     }
   }, [query]);
 
@@ -362,10 +461,17 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         setDropdownIsOpen(true);
       }
       setQuery("");
-      selectedProjectIdRef.current = null;
-      setSelectedIndex(searchableProjects.length >= 2 ? 1 : 0);
+      // Preselect the MRU switch target — the first row that isn't the project
+      // we're already in — against the list the palette is about to render.
+      // `mode` state hasn't committed yet, so `results` still describes the mode
+      // we're leaving; build the destination list instead. From a scratch there
+      // is no active row, so this lands on row 1 (the project used just before
+      // the scratch) rather than skipping past it (#11085).
+      const initialResults = buildResults(sortedProjects, nextMode, "", false);
+      const initial = initialResults.find((project) => !project.isActive) ?? initialResults[0];
+      setSelectedProjectId(initial?.id ?? null);
     },
-    [searchableProjects.length]
+    [sortedProjects]
   );
 
   const close = useCallback(() => {
@@ -375,34 +481,40 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       setDropdownIsOpen(false);
     }
     setQuery("");
-    setSelectedIndex(0);
+    setSelectedProjectId(null);
   }, [mode]);
+
+  // Steps the selection by `delta` rows, wrapping. Resolves the current row
+  // from the id inside the updater so two calls batched into one tick compose
+  // (the second sees where the first landed) instead of collapsing into one.
+  const step = useCallback(
+    (delta: number) => {
+      if (results.length === 0) return;
+      setSelectedProjectId((previousId) => {
+        const current = previousId ? results.findIndex((project) => project.id === previousId) : -1;
+        const from = current >= 0 ? current : 0;
+        const next = (from + delta + results.length) % results.length;
+        return results[next]!.id;
+      });
+    },
+    [results]
+  );
 
   const toggle = useCallback(
     (nextMode: ProjectSwitcherMode = "modal") => {
       const currentlyOpen = nextMode === "modal" ? modalIsOpen : dropdownIsOpen;
       if (currentlyOpen) {
-        setSelectedIndex((prev) => {
-          if (results.length <= 1) return prev;
-          const next = prev + 1;
-          return next >= results.length ? 0 : next;
-        });
+        step(1);
       } else {
         open(nextMode);
       }
     },
-    [modalIsOpen, dropdownIsOpen, open, results]
+    [modalIsOpen, dropdownIsOpen, open, step]
   );
 
-  const selectPrevious = useCallback(() => {
-    if (results.length === 0) return;
-    setSelectedIndex((prev) => (prev <= 0 ? results.length - 1 : prev - 1));
-  }, [results.length]);
+  const selectPrevious = useCallback(() => step(-1), [step]);
 
-  const selectNext = useCallback(() => {
-    if (results.length === 0) return;
-    setSelectedIndex((prev) => (prev >= results.length - 1 ? 0 : prev + 1));
-  }, [results.length]);
+  const selectNext = useCallback(() => step(1), [step]);
 
   const selectProject = useCallback(
     async (project: SearchableProject) => {
@@ -483,9 +595,8 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   useEffect(() => () => clearPendingPrefetchTimer(), [clearPendingPrefetchTimer]);
 
   const confirmSelection = useCallback(() => {
-    if (results.length > 0 && selectedIndex >= 0 && selectedIndex < results.length) {
-      selectProject(results[selectedIndex]!);
-    }
+    if (results.length === 0) return;
+    selectProject(results[selectedIndex]!);
   }, [results, selectedIndex, selectProject]);
 
   const addProject = useCallback(async () => {
@@ -701,33 +812,88 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     return list;
   }, [scratches, currentScratch?.id]);
 
-  const createScratch = useCallback(async () => {
-    close();
-    try {
-      const created = await createScratchAction();
-      await switchScratchAction(created.id);
-    } catch (error) {
-      const retry = async () => {
-        try {
-          const created = await createScratchAction();
-          await switchScratchAction(created.id);
-        } catch (retryError) {
-          notify({
-            type: "error",
-            title: "Couldn't create scratch",
-            message: formatErrorMessage(retryError, "Couldn't create scratch workspace"),
-            actions: [{ label: "Try again", variant: "primary", onClick: retry }],
-          });
+  const createScratch = useCallback(
+    async (name?: string) => {
+      close();
+      // An empty name is forwarded as undefined so main applies its own
+      // `defaultScratchName` — same behavior as before the naming affordance.
+      const requestedName = name?.trim() ? name.trim() : undefined;
+      // Resume at the step that failed. Retrying the whole thing after the
+      // scratch already exists would create a second one and orphan its folder.
+      let createdId: string | null = null;
+      const run = async () => {
+        if (!createdId) {
+          createdId = (await createScratchAction(requestedName)).id;
         }
+        await switchScratchAction(createdId);
       };
-      notify({
-        type: "error",
-        title: "Couldn't create scratch",
-        message: formatErrorMessage(error, "Couldn't create scratch workspace"),
-        actions: [{ label: "Try again", variant: "primary", onClick: retry }],
-      });
-    }
-  }, [close, createScratchAction, switchScratchAction]);
+      const fail = (error: unknown, retry: () => Promise<void>) => {
+        const created = createdId !== null;
+        notify({
+          type: "error",
+          title: created ? "Couldn't open scratch" : "Couldn't create scratch",
+          message: formatErrorMessage(
+            error,
+            created
+              ? "Created the scratch workspace but couldn't switch to it"
+              : "Couldn't create scratch workspace"
+          ),
+          actions: [{ label: "Try again", variant: "primary", onClick: retry }],
+          context: { eventKind: "recovery" },
+        });
+      };
+      try {
+        await run();
+      } catch (error) {
+        const retry = async () => {
+          try {
+            await run();
+          } catch (retryError) {
+            fail(retryError, retry);
+          }
+        };
+        fail(error, retry);
+      }
+    },
+    [close, createScratchAction, switchScratchAction]
+  );
+
+  const renameScratch = useCallback(
+    async (scratchId: string, name: string) => {
+      const trimmed = name.trim();
+      if (!trimmed) return;
+      const rename = async () => {
+        await renameScratchActionStore(scratchId, trimmed);
+      };
+      try {
+        await rename();
+      } catch (error) {
+        const retry = async () => {
+          try {
+            await rename();
+          } catch (retryError) {
+            notify({
+              type: "error",
+              title: "Couldn't rename scratch",
+              message: formatErrorMessage(retryError, "Couldn't rename scratch workspace"),
+              actions: [{ label: "Try again", variant: "primary", onClick: retry }],
+              context: { eventKind: "recovery" },
+            });
+          }
+        };
+        notify({
+          type: "error",
+          title: "Couldn't rename scratch",
+          message: formatErrorMessage(error, "Couldn't rename scratch workspace"),
+          actions: [{ label: "Try again", variant: "primary", onClick: retry }],
+          // Not `uiFeedback`: its passive policy routes to the inbox, where this
+          // closure-backed "Try again" can never be clicked.
+          context: { eventKind: "recovery" },
+        });
+      }
+    },
+    [renameScratchActionStore]
+  );
 
   const selectScratch = useCallback(
     async (scratch: SearchableScratch) => {
@@ -765,6 +931,126 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     },
     [removeScratchActionStore]
   );
+
+  const requestDeleteAllScratches = useCallback(() => {
+    if (isDeletingAllScratchesRef.current || deleteAllScratchesConfirm) return;
+    if (scratchResults.length === 0) return;
+    setDeleteAllScratchesConfirm(
+      scratchResults.map((scratch) => ({ id: scratch.id, name: scratch.name }))
+    );
+  }, [scratchResults, deleteAllScratchesConfirm]);
+
+  const dismissDeleteAllScratchesConfirm = useCallback(() => {
+    if (isDeletingAllScratchesRef.current) return;
+    setDeleteAllScratchesConfirm(null);
+  }, []);
+
+  // A `scratch:removed` push from another window can empty the list under an open
+  // dialog. Drop it only once every target is gone — a partially-stale snapshot
+  // still has work to do, and shrinking it here would rewrite the count the user
+  // already read. Skipped while our own run is in flight, or the last successful
+  // removal would tear the dialog down before the summary lands.
+  useEffect(() => {
+    if (!deleteAllScratchesConfirm || isDeletingAllScratchesRef.current) return;
+    const liveIds = new Set(scratches.map((scratch: Scratch) => scratch.id));
+    if (deleteAllScratchesConfirm.some((target) => liveIds.has(target.id))) return;
+    setDeleteAllScratchesConfirm(null);
+  }, [deleteAllScratchesConfirm, scratches]);
+
+  const confirmDeleteAllScratches = useCallback(async () => {
+    if (isDeletingAllScratchesRef.current) return;
+    const targets = deleteAllScratchesConfirm;
+    if (!targets || targets.length === 0) {
+      setDeleteAllScratchesConfirm(null);
+      return;
+    }
+
+    isDeletingAllScratchesRef.current = true;
+    setIsDeletingAllScratches(true);
+
+    const total = targets.length;
+    const noun = total === 1 ? "scratch workspace" : "scratch workspaces";
+
+    try {
+      // Fanned out rather than awaited in sequence: `scratch:remove` has no rate
+      // limiter and each scratch owns a disjoint folder, so there is nothing to
+      // serialize. `allSettled` also guarantees one bad target can't strand the rest.
+      const settled = await Promise.allSettled(
+        targets.map((target) => removeScratchActionStore(target.id))
+      );
+
+      const failures: { name: string; reason: string }[] = [];
+      settled.forEach((outcome, index) => {
+        if (outcome.status !== "rejected") return;
+        const target = targets[index]!;
+        failures.push({
+          name: target.name,
+          reason: formatErrorMessage(outcome.reason, "Deletion failed"),
+        });
+        logError(`[ProjectSwitcher] Failed to delete scratch ${target.id}`, outcome.reason);
+      });
+
+      const successCount = total - failures.length;
+      const firstFailure = failures[0];
+
+      // Close before announcing: VoiceOver drops live-region updates raised from
+      // outside a focused `aria-modal` subtree (lesson #9434).
+      const close = () => setDeleteAllScratchesConfirm(null);
+
+      if (failures.length === 0) {
+        const title = `Deleted ${total} ${noun}`;
+        closeAndAnnounce(close, title);
+        // Reports the terminals, not the folders: main tombstones the row and then
+        // treats `fs.rm` as best-effort, swallowing a failure and leaving cleanup to
+        // a later sweep (`ScratchStore.removeScratch`). A resolved call therefore
+        // proves the workspace is gone from the app, not that the directory is gone
+        // from disk — claiming the latter would be a lie on a locked folder.
+        //
+        // Transient: the section emptying in front of the user is the real
+        // confirmation — this is a one-shot receipt, not an inbox entry.
+        notify({
+          type: "success",
+          title,
+          message: total === 1 ? "Its terminals were closed." : "Their terminals were closed.",
+          transient: true,
+          priority: "high",
+          context: { eventKind: "uiFeedback" },
+        });
+      } else if (successCount === 0) {
+        const title = total === 1 ? "Couldn't delete scratch" : "Couldn't delete scratches";
+        closeAndAnnounce(close, title, "assertive");
+        // No recovery action: the scratch rows survived the failure and are
+        // themselves the retry surface.
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+        notify({
+          type: "error",
+          title,
+          message: firstFailure
+            ? `${firstFailure.name}: ${firstFailure.reason}`
+            : `All ${total} deletions failed.`,
+        });
+      } else {
+        const title = `Deleted ${successCount} of ${total} ${noun}`;
+        closeAndAnnounce(close, title);
+        // `priority` is set explicitly: `uiFeedback`'s passive policy would otherwise
+        // route this to the inbox, and a partial failure is precisely the outcome the
+        // user has to see — the survivors are still sitting in the list.
+        notify({
+          type: "warning",
+          title,
+          message:
+            failures.length === 1 && firstFailure
+              ? `${firstFailure.name} failed: ${firstFailure.reason}`
+              : `${failures.length} couldn't be deleted.`,
+          priority: "high",
+          context: { eventKind: "uiFeedback" },
+        });
+      }
+    } finally {
+      isDeletingAllScratchesRef.current = false;
+      setIsDeletingAllScratches(false);
+    }
+  }, [deleteAllScratchesConfirm, removeScratchActionStore]);
 
   const saveAsProject = useCallback(
     async (scratchId: string) => {
@@ -898,10 +1184,17 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     confirmFreeMemory,
     isFreeingMemory,
     backgroundWaitingCount,
+    nonActiveAgentCounts,
     scratchResults,
     createScratch,
     selectScratch,
     removeScratchAction,
+    deleteAllScratchesConfirm,
+    requestDeleteAllScratches,
+    dismissDeleteAllScratchesConfirm,
+    confirmDeleteAllScratches,
+    isDeletingAllScratches,
+    renameScratch,
     saveAsProject,
     saveAsProjectConfirm,
     dismissSaveAsProjectConfirm,

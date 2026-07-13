@@ -1137,6 +1137,16 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     : isGroupedByType
       ? "Sorting disabled while grouped by type"
       : null;
+  // Filter scope + sort-disabled status, rendered inside the search bar strip
+  // so the feedback sits with the controls that produced it. Visual-only —
+  // screen readers are served by the debounced announcer effects below, not a
+  // live region, so the persistent sort-disabled text isn't re-announced on
+  // every keystroke (#9665).
+  const scopeText = showScope ? `${filteredCount} of ${totalCount} worktrees` : null;
+  const filterStatusText =
+    scopeText && dragDisabledReason
+      ? `${scopeText} · ${dragDisabledReason}`
+      : (scopeText ?? dragDisabledReason);
 
   // Announce the filtered worktree count to screen readers, debounced so rapid
   // typing in the search box doesn't flood the AT speech queue. Routed through
@@ -1613,25 +1623,13 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         </div>
       </div>
 
-      {/* Filter scope and sort-disabled status. Visual-only — screen readers
-          are served by the debounced announcer effects above, not a live region
-          here, so the persistent sort-disabled text isn't re-announced on every
-          keystroke (#9665). */}
-      {(showScope || dragDisabledReason) && (
-        <div className="px-4 shrink-0 text-xs text-daintree-text/50 leading-5">
-          {showScope && (
-            <span>
-              {filteredCount} of {totalCount} worktrees
-            </span>
-          )}
-          {showScope && dragDisabledReason && <span> · </span>}
-          {dragDisabledReason && <span>{dragDisabledReason}</span>}
-        </div>
-      )}
-
       {/* Inline search bar — only when there are non-main worktrees */}
       {hasNonMainWorktrees && (
-        <WorktreeSidebarSearchBar inputRef={searchInputRef} chipCounts={chipCounts} />
+        <WorktreeSidebarSearchBar
+          inputRef={searchInputRef}
+          chipCounts={chipCounts}
+          statusText={filterStatusText}
+        />
       )}
 
       {errorBanner}

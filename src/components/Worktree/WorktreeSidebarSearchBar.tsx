@@ -15,6 +15,13 @@ interface WorktreeSidebarSearchBarProps {
    * onto the elevated overview dialog.
    */
   variant?: "sidebar" | "modal";
+  /**
+   * Filter scope / sort status ("1 of 2 worktrees · Sorting disabled while
+   * searching") rendered under the field, sharing a row with "Clear all".
+   * Visual-only — screen readers are served by the caller's debounced
+   * announcer effects, not a live region here (#9665).
+   */
+  statusText?: string | null;
 }
 
 // The visible filter updates instantly via `liveQuery`; only the persisted
@@ -33,6 +40,7 @@ export function WorktreeSidebarSearchBar({
   inputRef,
   chipCounts,
   variant = "sidebar",
+  statusText,
 }: WorktreeSidebarSearchBarProps) {
   const query = useWorktreeFilterStore((state) => state.query);
   const liveQuery = useWorktreeFilterStore((state) => state.liveQuery);
@@ -217,15 +225,22 @@ export function WorktreeSidebarSearchBar({
           onOpenChange={setIsPopoverOpen}
         />
       </div>
-      {showClearAll && (
-        <div className="flex justify-end pt-1">
-          <button
-            type="button"
-            onClick={handleClearAll}
-            className="text-[11px] text-daintree-text/50 hover:text-daintree-text transition-colors"
-          >
-            Clear all
-          </button>
+      {(statusText || showClearAll) && (
+        <div className="flex items-center gap-2 pt-1">
+          {statusText && (
+            <span className="min-w-0 flex-1 truncate text-[11px] text-daintree-text/50">
+              {statusText}
+            </span>
+          )}
+          {showClearAll && (
+            <button
+              type="button"
+              onClick={handleClearAll}
+              className="ml-auto shrink-0 text-[11px] text-daintree-text/50 hover:text-daintree-text transition-colors"
+            >
+              Clear all
+            </button>
+          )}
         </div>
       )}
     </div>

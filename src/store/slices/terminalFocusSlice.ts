@@ -134,6 +134,20 @@ export interface TerminalFocusSlice {
    * `preMaximizeLayout` so the next maximize can reuse the snapshot.
    */
   clearMaximize: () => void;
+  /**
+   * Leave fullscreen and return to the grid, unconditionally. Preserves
+   * `preMaximizeLayout` so the column count restores exactly as a manual
+   * unmaximize would — the sibling of `clearMaximize`: the user is going back to
+   * the grid, not losing the panel.
+   *
+   * Prefer this over `toggleMaximize` wherever the exit is not a user toggle of a
+   * known target. `toggleMaximize` only unmaximizes when it can resolve the
+   * target (a group target needs `getPanelGroup(maximizedId)` to still return
+   * that group); if the group has dissolved it falls through and *maximizes*
+   * instead. That misfire is harmless for a hotkey but not for the panel-creation
+   * paths, which must always end up in the grid (#11060).
+   */
+  exitMaximize: () => void;
   clearPreMaximizeLayout: () => void;
   focusNext: () => void;
   focusPrevious: () => void;
@@ -440,6 +454,14 @@ export const createTerminalFocusSlice =
           preMaximizeLayout: null,
         }),
 
+      exitMaximize: () => {
+        if (!get().maximizedId && !get().maximizeTarget) return;
+        set({
+          maximizedId: null,
+          maximizeTarget: null,
+        });
+      },
+
       focusNext: () => {
         const terminals = getTerminals();
         const activeWorktreeId = getActiveWorktreeId();
@@ -497,24 +519,26 @@ export const createTerminalFocusSlice =
       focusOrMaximizeByIndex: (index, findByIndex, getPanelGroup) => {
         const targetId = findByIndex(index);
         if (!targetId) return;
-        const { focusedId, maximizedId, maximizeTarget, toggleMaximize, activateTerminal } = get();
+        const {
+          focusedId,
+          maximizedId,
+          maximizeTarget,
+          toggleMaximize,
+          exitMaximize,
+          activateTerminal,
+        } = get();
 
         if (maximizedId) {
           // A panel/group is fullscreen. The cell actually *shown* is the
-          // maximized one — which may differ from focusedId, since a panel
-          // opened while fullscreen becomes focused in the background without
-          // ever being displayed. Anchor on the maximized cell (not focus) so
-          // that background panel is revealed in the grid on first press and
-          // only goes fullscreen on a second press.
+          // maximized one — which may differ from focusedId when a panel was
+          // focused in the background without being displayed. Anchor on the
+          // maximized cell (not focus) so re-pressing the shown cell just
+          // restores the grid, while any other index also focuses that panel.
           const targetIsMaximizedCell =
             maximizedId === targetId ||
             (maximizeTarget?.type === "group" &&
               getPanelGroup?.(targetId)?.id === maximizeTarget.id);
-          // Exit fullscreen. Unmaximize via toggleMaximize (not clearMaximize)
-          // to preserve preMaximizeLayout, so the column count restores exactly
-          // as a manual unmaximize would. Re-pressing the shown cell just
-          // restores; any other index also focuses that panel in the grid.
-          toggleMaximize(maximizedId, undefined, undefined, getPanelGroup);
+          exitMaximize();
           if (!targetIsMaximizedCell) {
             activateTerminal(targetId);
           }

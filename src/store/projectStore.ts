@@ -15,6 +15,7 @@ import { useTerminalInputStore } from "./terminalInputStore";
 import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { isClientAppError } from "@/utils/clientAppError";
+import { getViewWorkspaceId } from "./viewWorkspaceId";
 import {
   clearPanelStoreForSwitchThroughAccessor,
   clearFleetArmingThroughAccessor,
@@ -217,20 +218,7 @@ function cancelProjectReadRequests(): void {
 }
 
 function getLocationProjectId(): string | null {
-  if (typeof window === "undefined") return null;
-
-  // Prefer the id seeded by preload via additionalArguments (#9162). The
-  // `?projectId=` query string fallback covers the initial-window load
-  // (createWindow.ts still passes it) and any test/shell view without the
-  // bootstrap global.
-  const seeded = window.__DAINTREE_INITIAL_PROJECT__?.id;
-  if (seeded) return seeded;
-
-  try {
-    return new URL(window.location.href).searchParams.get("projectId");
-  } catch {
-    return null;
-  }
+  return getViewWorkspaceId();
 }
 
 function getProjectForCurrentLocation(projects: Project[]): Project | null {
@@ -937,7 +925,14 @@ export const useProjectStore = create<ProjectState>()(
         name: "project-storage",
         storage: createSafeJSONStorage(),
         partialize: (state) => ({
-          projects: state.projects,
+          // `lastKnownStats` is main-owned (issue #11078): it is written to the
+          // SQLite project row on a clean stats poll and arrives here via boot
+          // hydration and the project-switch broadcast. Persisting it locally
+          // too would make this blob a second durable writer — and a lossy one,
+          // since every `WebContentsView` serializes the whole `projects` array
+          // from its own copy, so a view holding a stale snapshot would clobber
+          // a newer one. Strip it and let main stay authoritative.
+          projects: state.projects.map(({ lastKnownStats: _lastKnownStats, ...rest }) => rest),
         }),
         merge: (persistedState, currentState) => {
           const persisted = persistedState as { projects?: unknown } | undefined;

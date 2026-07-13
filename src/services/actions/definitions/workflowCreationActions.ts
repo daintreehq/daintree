@@ -11,6 +11,8 @@ import { usePreferencesStore } from "@/store/preferencesStore";
 import { TerminalSpawnSourceSchema, AddPanelFocusPolicySchema } from "./schemas";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { notifyRecipeSpawnFailures } from "@/utils/recipeNotify";
+import { patchIssueAssigneeCache } from "@/lib/forgeResourceCache";
+import { logError } from "@/utils/logger";
 import { partialSuccessError, slugifyForBranch } from "./workflowHelpers";
 
 export function registerWorkflowCreationActions(
@@ -268,6 +270,18 @@ export function registerWorkflowCreationActions(
               } catch (err) {
                 assignmentError = formatErrorMessage(err, "Failed to assign issue");
               }
+              if (assignedToSelf) {
+                // Optimistically patch the cached issue lists so the toolbar
+                // dropdown shows the assignment immediately (#11087). Sits
+                // outside the assign try/catch: the server-side assign already
+                // succeeded, so a cache-layer throw must not masquerade as an
+                // assignment failure.
+                try {
+                  patchIssueAssigneeCache(rootPath, issueNumber, user, true);
+                } catch (cacheErr) {
+                  logError("Failed to patch issue cache after self-assign", cacheErr);
+                }
+              }
             } else {
               assignmentError = "No forge viewer available";
             }
@@ -488,18 +502,18 @@ export function registerWorkflowCreationActions(
         }
 
         let terminalId: string | null;
+        let launchSpawnStatus: "missing-cli" | undefined;
         try {
-          terminalId =
-            (
-              await callbacks.onLaunchAgent(agentId, {
-                location: "grid",
-                cwd: worktreePath,
-                worktreeId,
-                activateDockOnCreate: false,
-                spawnedBy,
-                focusPolicy,
-              })
-            )?.terminalId ?? null;
+          const launchResult = await callbacks.onLaunchAgent(agentId, {
+            location: "grid",
+            cwd: worktreePath,
+            worktreeId,
+            activateDockOnCreate: false,
+            spawnedBy,
+            focusPolicy,
+          });
+          terminalId = launchResult?.terminalId ?? null;
+          launchSpawnStatus = launchResult?.spawnStatus;
         } catch (err) {
           throw partialSuccessError(
             `Agent '${agentId}' failed to launch in new worktree: ${formatErrorMessage(err, "unknown error")}`,
@@ -539,6 +553,30 @@ export function registerWorkflowCreationActions(
             contextInjected: false,
           });
         }
+        // A missing CLI opens a setup-diagnostic panel with a real id but no PTY.
+        // Injecting context into it (or reporting a launched agent) would be a
+        // lie, so surface it as a partial result the caller can act on instead.
+        if (launchSpawnStatus === "missing-cli") {
+          throw partialSuccessError(
+            `Agent '${agentId}' CLI is not available — Daintree opened a setup diagnostic instead of starting the agent`,
+            {
+              issueNumber: issue.number,
+              issueTitle: issue.title,
+              issueUrl: issue.url,
+              worktreeId,
+              worktreePath,
+              branch: availableBranch,
+              terminalId: null,
+              recipeLaunched,
+              spawnedTerminalCount,
+              failedTerminalCount,
+              assignedToSelf: false,
+              assignedUsername: null,
+              assignmentError: null,
+              contextInjected: false,
+            }
+          );
+        }
 
         const shouldInject = injectContext ?? true;
         let contextInjected = false;
@@ -564,6 +602,16 @@ export function registerWorkflowCreationActions(
                 assignedUsername = user.login;
               } catch (err) {
                 assignmentError = formatErrorMessage(err, "Failed to assign issue");
+              }
+              if (assignedToSelf) {
+                // See worktree.createWithRecipe: optimistic dropdown patch
+                // (#11087), isolated so a cache throw can't be reported as an
+                // assignment failure.
+                try {
+                  patchIssueAssigneeCache(rootPath, issue.number, user, true);
+                } catch (cacheErr) {
+                  logError("Failed to patch issue cache after self-assign", cacheErr);
+                }
               }
             } else {
               assignmentError = "No forge viewer available";

@@ -156,6 +156,7 @@ const mockAddPanel = vi.fn();
 const mockBeginSpawnBatch = vi.fn(() => Symbol("test-spawn-batch"));
 const mockFlushSpawnBatch = vi.fn();
 const mockSetFocused = vi.fn();
+const mockExitMaximize = vi.fn();
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: {
     getState: () => ({
@@ -165,6 +166,7 @@ vi.mock("@/store/panelStore", () => ({
       beginSpawnBatch: () => mockBeginSpawnBatch(),
       flushSpawnBatch: (token: unknown) => mockFlushSpawnBatch(token),
       setFocused: (id: string) => mockSetFocused(id),
+      exitMaximize: () => mockExitMaximize(),
     }),
   },
 }));
@@ -954,6 +956,12 @@ describe("BulkCreateWorktreeDialog", () => {
     expect(screen.getByText(/6 of 6 created/)).toBeTruthy();
     expect(screen.queryByText(/0 of/)).toBeNull();
     expect(screen.queryByText(/failed/)).toBeNull();
+    const spawnBatches = mockRunRecipeWithResults.mock.calls.map(
+      (call) => (call[4] as { spawnBatch?: { id: string; size: number } })?.spawnBatch
+    );
+    expect(spawnBatches.every(Boolean)).toBe(true);
+    expect(new Set(spawnBatches.map((batch) => batch?.id)).size).toBe(1);
+    expect(spawnBatches.every((batch) => batch?.size === spawnBatches.length)).toBe(true);
   });
 
   it("done-phase counts match UI after recipe verification with mixed outcomes", async () => {

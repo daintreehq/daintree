@@ -1,4 +1,6 @@
 import type { TabGroup } from "@shared/types";
+import type { PanelKind } from "@shared/types/panel";
+import { panelKindIsDockable } from "@shared/config/panelKindRegistry";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
@@ -93,6 +95,41 @@ export function resolveContainerId(containerId: string): "grid" | "dock" | null 
   if (containerId === "grid-container") return "grid";
   if (containerId === "dock-container") return "dock";
   return null;
+}
+
+/**
+ * True when a drop targets the dock but the dragged panel's kind can't be
+ * rendered there (#11054). The dock filters its contents by `isDockPanel`, so a
+ * non-dockable kind committed into the dock strands invisibly. Callers reject
+ * the drop and let it snap back. An undefined kind is a legacy PTY panel, which
+ * is always dockable — matches the `kind ?? "terminal"` convention used across
+ * the dockability guards.
+ */
+export function isNonDockableDockDrop(
+  targetContainer: "grid" | "dock" | null,
+  kind: PanelKind | undefined
+): boolean {
+  return targetContainer === "dock" && !panelKindIsDockable(kind ?? "terminal");
+}
+
+/** Minimal dnd-kit droppable shape the dock collision filter reads. */
+interface DockCollisionCandidate {
+  data: { current?: { container?: string; sortable?: { containerId?: string } } | null };
+}
+
+/**
+ * Drop the dock droppable and its chip sortables from a collision-detection
+ * candidate set, so a drag whose kind can't live in the dock never resolves the
+ * dock as a hover/drop target — otherwise the dock's `SortableContext` reflows
+ * during hover before the drop is rejected (#11054). Preserves the order of the
+ * remaining candidates.
+ */
+export function filterOutDockDroppables<T extends DockCollisionCandidate>(containers: T[]): T[] {
+  return containers.filter(
+    (c) =>
+      c.data.current?.container !== "dock" &&
+      c.data.current?.sortable?.containerId !== "dock-container"
+  );
 }
 
 /** Filter terminals to those in a given container and worktree, preserving panelIds order. */

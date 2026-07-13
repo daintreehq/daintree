@@ -51,7 +51,7 @@ function claimRecipeSpawnBatchAdmission(
 ): Promise<void> | null {
   const batchId = options.spawnBatchId;
   const batchSize = options.spawnBatchSize;
-  if (!batchId || !batchSize || batchSize > MAX_TERMINALS_PER_RECIPE) return null;
+  if (!batchId || !batchSize || batchSize > MAX_TERMINALS_PER_RECIPE_ADMISSION_BATCH) return null;
 
   const existing = recipeSpawnBatchAdmissions.get(batchId);
   if (existing) {
@@ -152,7 +152,7 @@ import type { WorkspaceClient } from "../../../services/WorkspaceClient.js";
 import { getDefaultShell } from "../../../services/pty/terminalShell.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { quoteCommandArg } from "../../../../shared/utils/shellEscape.js";
-import { MAX_TERMINALS_PER_RECIPE } from "../../../../shared/utils/recipeSanitizer.js";
+import { MAX_TERMINALS_PER_RECIPE_ADMISSION_BATCH } from "../../../../shared/utils/recipeSanitizer.js";
 import { buildCommandLaunchShell } from "./commandLaunch.js";
 
 export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): () => void {
@@ -187,20 +187,21 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
 
     const id = validatedOptions.id || crypto.randomUUID();
 
-    // Prefer explicit projectId from renderer (captured at action time) over global state.
-    // Falls back to global state for backward compatibility (e.g., agent/workflow spawns).
-    let resolvedProject = validatedOptions.projectId
-      ? projectStore.getProjectById(validatedOptions.projectId)
-      : null;
-    if (!resolvedProject) {
-      if (validatedOptions.projectId) {
-        console.warn(
-          `[TerminalSpawn] Explicit projectId ${validatedOptions.projectId.slice(0, 8)} not found, falling back to current project`
-        );
-      }
-      resolvedProject = projectStore.getCurrentProject();
-    }
-    const projectId = resolvedProject?.id;
+    // The renderer's explicit id identifies the terminal's owning *workspace*, which
+    // is not always a registered project — a scratch id is opaque here and resolves to
+    // no Project. Keep it as the ownership stamp anyway: retargeting an unresolvable id
+    // to whatever is globally current would hand the terminal to the wrong workspace,
+    // and leaving it unset made ownership fall back to PtyClient's global
+    // `activeProjectId`, so deleting a scratch never killed its terminals (#11079).
+    // Only a caller that sent no id at all falls back to the current project.
+    const explicitWorkspaceId = validatedOptions.projectId;
+    const resolvedProject = explicitWorkspaceId
+      ? projectStore.getProjectById(explicitWorkspaceId)
+      : projectStore.getCurrentProject();
+
+    // Ownership is the explicit id; project-only enrichment below (settings, shell
+    // overrides, project-path cwd fallback) stays gated on a resolved Project.
+    const projectId = explicitWorkspaceId ?? resolvedProject?.id;
     const projectPath = resolvedProject?.path;
 
     // Fetch project-level terminal overrides when there's no agent launch
@@ -210,8 +211,8 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     let projectShell: string | undefined;
     let projectArgs: string[] | undefined;
     let projectCwd: string | undefined;
-    if (projectId && !launchAgentId) {
-      const projSettings = await projectStore.getProjectSettings(projectId);
+    if (resolvedProject && !launchAgentId) {
+      const projSettings = await projectStore.getProjectSettings(resolvedProject.id);
       const ts = projSettings.terminalSettings;
       if (ts) {
         if (!validatedOptions.shell && ts.shell) {
@@ -454,13 +455,13 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           "Daintree Assistant session token is invalid or already displaced; refusing to spawn"
         );
       }
-    } else if (launchAgentId === "claude" && safeCommand.length > 0 && projectId) {
+    } else if (launchAgentId === "claude" && safeCommand.length > 0 && resolvedProject) {
       // Daintree MCP injection for normal Claude Code agent launches.
       // Mints a per-pane bearer token, writes a managed --mcp-config JSON under
       // userData, and injects the flag into the command + the token into env.
       // Token is revoked and the file deleted on PTY exit (see registerTerminalEventHandlers).
       try {
-        const projSettings = await projectStore.getProjectSettings(projectId);
+        const projSettings = await projectStore.getProjectSettings(resolvedProject.id);
         const tier = resolveDaintreeMcpTier(projSettings);
         if (tier !== "off") {
           const mcpServerService = await getMcpServerService();
@@ -487,7 +488,11 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           mcpErr
         );
       }
-    } else if (launchAgentId === "daintree-assistant" && safeCommand.length > 0 && projectId) {
+    } else if (
+      launchAgentId === "daintree-assistant" &&
+      safeCommand.length > 0 &&
+      resolvedProject
+    ) {
       // Daintree Assistant reads its MCP connection details straight from PTY
       // env (`mcpInjection: "env-only"`) — no .mcp.json, no CLI flags. Mint a
       // per-pane bearer via the same `preparePaneConfig` path Claude uses so
@@ -498,7 +503,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // DAINTREE_PROJECT_ID is injected downstream by `injectDaintreeMetadata`
       // in the pty-host, so it is intentionally not set here.
       try {
-        const projSettings = await projectStore.getProjectSettings(projectId);
+        const projSettings = await projectStore.getProjectSettings(resolvedProject.id);
         const tier = resolveDaintreeMcpTier(projSettings);
         if (tier !== "off") {
           const mcpServerService = await getMcpServerService();

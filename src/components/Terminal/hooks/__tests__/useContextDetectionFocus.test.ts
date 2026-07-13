@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
 import { useRef } from "react";
 import type { ViewUpdate } from "@codemirror/view";
+import type { CompletionTrigger } from "@shared/types";
 import { useContextDetection } from "../useContextDetection";
 
 interface LatestRefShape {
@@ -17,27 +18,26 @@ function makeUpdate(opts: {
   hasFocus: boolean;
   docChanged?: boolean;
   selectionSet?: boolean;
+  text?: string;
+  caret?: number;
 }): ViewUpdate {
+  const text = opts.text ?? "";
   return {
     focusChanged: opts.focusChanged,
     docChanged: opts.docChanged ?? false,
     selectionSet: opts.selectionSet ?? false,
     transactions: [],
     state: {
-      doc: { toString: () => "", length: 0 },
-      selection: { main: { head: 0 } },
+      doc: { toString: () => text, length: text.length },
+      selection: { main: { head: opts.caret ?? 0 } },
     },
     view: { hasFocus: opts.hasFocus },
   } as unknown as ViewUpdate;
 }
 
-function setupHook() {
+function setupHook(activeTriggers: CompletionTrigger[] = ["/", "$", "@"]) {
   const setIsEditorFocused = vi.fn();
-  const setAtContext = vi.fn();
-  const setSlashContext = vi.fn();
-  const setDiffContext = vi.fn();
-  const setTerminalContext = vi.fn();
-  const setSelectionContext = vi.fn();
+  const setActiveCompletionContext = vi.fn();
   const applyDocChange = vi.fn(() => false);
   const consumeExternalValueFlag = vi.fn(() => false);
 
@@ -49,18 +49,15 @@ function setupHook() {
     });
     return useContextDetection({
       latestRef,
+      activeTriggers: new Set(activeTriggers),
       applyDocChange,
       consumeExternalValueFlag,
-      setAtContext,
-      setSlashContext,
-      setDiffContext,
-      setTerminalContext,
-      setSelectionContext,
+      setActiveCompletionContext,
       setIsEditorFocused,
     });
   });
 
-  return { result, setIsEditorFocused };
+  return { result, setIsEditorFocused, setActiveCompletionContext };
 }
 
 describe("useContextDetection focus tracking", () => {
@@ -82,5 +79,28 @@ describe("useContextDetection focus tracking", () => {
       makeUpdate({ focusChanged: false, hasFocus: true, docChanged: true })
     );
     expect(setIsEditorFocused).not.toHaveBeenCalled();
+  });
+});
+
+describe("useContextDetection trigger detection", () => {
+  it("opens a $ context when $ is an active trigger", () => {
+    const { result, setActiveCompletionContext } = setupHook(["/", "$", "@"]);
+    result.current.handleUpdateRef.current(
+      makeUpdate({ focusChanged: false, hasFocus: true, docChanged: true, text: "$neo", caret: 4 })
+    );
+    expect(setActiveCompletionContext).toHaveBeenCalledWith(
+      expect.objectContaining({ triggerChar: "$", start: 0, query: "neo" })
+    );
+  });
+
+  it("does not open a $ context when $ is not an active trigger", () => {
+    const { result, setActiveCompletionContext } = setupHook(["/", "@"]);
+    result.current.handleUpdateRef.current(
+      makeUpdate({ focusChanged: false, hasFocus: true, docChanged: true, text: "$neo", caret: 4 })
+    );
+    // Only the initial null (no context) may be emitted — never a $ context.
+    for (const call of setActiveCompletionContext.mock.calls) {
+      expect(call[0]).toBeNull();
+    }
   });
 });

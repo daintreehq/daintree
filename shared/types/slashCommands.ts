@@ -1,15 +1,35 @@
 import type { BuiltInAgentId } from "../config/agentIds.js";
+import type { CompletionKind, CompletionTrigger } from "./completionSources.js";
 
 export type SlashCommandScope = "built-in" | "global" | "user" | "project";
 
 export interface SlashCommand {
   id: string;
-  label: string; // e.g. "/compact"
+  label: string; // display token, e.g. "/compact" or "Plugin Creator"
   description: string;
   scope: SlashCommandScope;
   agentId: BuiltInAgentId;
   sourcePath?: string;
-  kind?: "command" | "skill";
+  kind?: CompletionKind;
+  /**
+   * The canonical token inserted when the command is chosen (e.g. `/compact`,
+   * `$plugin-creator`). Distinct from `label` (display) so a capability whose
+   * name differs from its token can be expressed. Optional: absent when the
+   * label *is* the token (built-ins), where consumers fall back to `label`.
+   */
+  insertText?: string;
+  /**
+   * Extra search-only tokens matched during ranking but never displayed or
+   * inserted. Mirrors `searchAliases` on the panel-kind registry.
+   */
+  aliases?: readonly string[];
+  /**
+   * Which trigger opens this completion (`/`, `$`, `@`). Stamped by the
+   * discovery engine; absent on the renderer's built-in fallback, where it is
+   * treated as `"/"`. The renderer filters the slash menu to `trigger === "/"`
+   * so an agent's `$` capabilities never leak into the `/` list.
+   */
+  trigger?: CompletionTrigger;
 }
 
 export interface SlashCommandListRequest {
@@ -298,13 +318,11 @@ const BUILTIN_SLASH_COMMANDS: readonly BuiltinSlashCommandEntry[] = [
     supportedAgents: ["gemini"],
   },
 
-  // Codex-only
-  {
-    id: "approvals",
-    label: "/approvals",
-    description: "Set approval policy (auto/ask/never)",
-    supportedAgents: ["codex"],
-  },
+  // Codex-only.
+  // Refreshed against installed Codex v0.144.1: `/approvals` is a deprecated
+  // alias of the already-shared `/permissions`, so it is dropped here; `/mention`
+  // and `/logout` remain (both present in the installed binary). Skills/apps/
+  // plugins and the newer session controls were added below.
   {
     id: "logout",
     label: "/logout",
@@ -321,6 +339,90 @@ const BUILTIN_SLASH_COMMANDS: readonly BuiltinSlashCommandEntry[] = [
     id: "status",
     label: "/status",
     description: "Show active config and usage",
+    supportedAgents: ["codex"],
+  },
+  {
+    id: "apps",
+    label: "/apps",
+    description: "Manage connectors and integrations",
+    supportedAgents: ["codex"],
+  },
+  {
+    id: "plugins",
+    label: "/plugins",
+    description: "Manage installed plugins",
+    supportedAgents: ["codex"],
+  },
+  {
+    id: "skills",
+    label: "/skills",
+    description: "Browse and manage skills",
+    supportedAgents: ["codex"],
+  },
+  {
+    id: "fast",
+    label: "/fast",
+    description: "Toggle fast response mode",
+    supportedAgents: ["codex"],
+  },
+  {
+    id: "plan",
+    label: "/plan",
+    description: "Draft a plan before acting",
+    supportedAgents: ["codex"],
+  },
+  {
+    id: "goal",
+    label: "/goal",
+    description: "Set the session goal",
+    supportedAgents: ["codex"],
+  },
+  {
+    id: "personality",
+    label: "/personality",
+    description: "Adjust the assistant's personality",
+    supportedAgents: ["codex"],
+  },
+  {
+    id: "memories",
+    label: "/memories",
+    description: "Manage saved memories",
+    supportedAgents: ["codex"],
+  },
+  {
+    id: "agent",
+    label: "/agent",
+    description: "Configure agent behavior",
+    supportedAgents: ["codex"],
+  },
+  {
+    id: "feedback",
+    label: "/feedback",
+    description: "Send feedback to OpenAI",
+    supportedAgents: ["codex"],
+  },
+  {
+    id: "raw",
+    label: "/raw",
+    description: "Toggle raw output mode",
+    supportedAgents: ["codex"],
+  },
+  {
+    id: "stop",
+    label: "/stop",
+    description: "Stop the current task",
+    supportedAgents: ["codex"],
+  },
+  {
+    id: "approve",
+    label: "/approve",
+    description: "Approve the pending action",
+    supportedAgents: ["codex"],
+  },
+  {
+    id: "sandbox-add-read-dir",
+    label: "/sandbox-add-read-dir",
+    description: "Grant read access to a directory",
     supportedAgents: ["codex"],
   },
 ];

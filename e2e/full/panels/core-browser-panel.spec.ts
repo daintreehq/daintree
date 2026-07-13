@@ -269,6 +269,69 @@ test.describe.serial("Core: Browser Panel", () => {
     });
   });
 
+  test.describe.serial("Dock lifecycle (#11053)", () => {
+    test.beforeAll(async () => {
+      // Start from a clean grid so membership counts are deterministic. No
+      // earlier test docks a panel, so the dock starts empty too.
+      const { window } = ctx;
+      let count = await getGridPanelCount(window);
+      while (count > 0) {
+        const panel = window.locator(SEL.panel.gridPanel).first();
+        await panel.locator(SEL.panel.close).first().click({ force: true });
+        await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(count - 1);
+        count -= 1;
+      }
+    });
+
+    test("browser panel moves to the dock, previews from the chip with state intact, and restores to the grid", async () => {
+      const { window } = ctx;
+      const gridBrowsers = window
+        .locator(SEL.panel.gridPanel)
+        .filter({ has: window.locator(SEL.browser.addressBar) });
+
+      // Open a browser and navigate it to a known page.
+      await openBrowser(window);
+      await expect(gridBrowsers).toHaveCount(1, { timeout: T_LONG });
+      const addressBar = gridBrowsers.locator(SEL.browser.addressBar);
+      await addressBar.click();
+      await addressBar.fill(`http://127.0.0.1:${port}/page-a`);
+      await window.keyboard.press("Enter");
+      await window.waitForTimeout(T_SETTLE);
+      await expect(addressBar).toHaveValue(/page-a/, { timeout: T_LONG });
+
+      // Move it to the dock. The grid browser leaves, but the panel is not lost
+      // — before #11053 it vanished with no dock render path.
+      await gridBrowsers.locator(SEL.panel.minimize).click();
+      await expect(gridBrowsers).toHaveCount(0, { timeout: T_MEDIUM });
+
+      // A single dock chip appears; clicking opens the popover with the live
+      // browser relocated into it via the offscreen container's moveBefore, and
+      // its navigation state survives the relocation (address bar still page-a).
+      // (This asserts URL/history survival, not full guest-DOM preservation.)
+      const chip = window.locator("[data-dock-item]");
+      await expect(chip).toHaveCount(1, { timeout: T_MEDIUM });
+      await chip.click();
+      const dockedAddressBar = window.locator(
+        '[data-dock-portal-target] [data-testid="browser-address-bar"]'
+      );
+      await expect(dockedAddressBar).toBeVisible({ timeout: T_LONG });
+      await expect(dockedAddressBar).toHaveValue(/page-a/, { timeout: T_MEDIUM });
+
+      // A single docked panel exposes the inline "Move to grid" control.
+      await expect(
+        window.locator('[data-dock-portal-target] [data-testid="panel-move-to-grid"]')
+      ).toBeVisible({ timeout: T_SHORT });
+
+      // Double-click restores the panel to the grid with its URL intact.
+      await chip.dblclick();
+      await expect(gridBrowsers).toHaveCount(1, { timeout: T_MEDIUM });
+      await expect(chip).toHaveCount(0, { timeout: T_MEDIUM });
+      await expect(gridBrowsers.locator(SEL.browser.addressBar)).toHaveValue(/page-a/, {
+        timeout: T_MEDIUM,
+      });
+    });
+  });
+
   // Find-in-page tests skipped: webview crashes in E2E after Console Capture cleanup.
   // The feature works in manual testing — investigate webview lifecycle in E2E context.
   test.describe.skip("Find in Page", () => {

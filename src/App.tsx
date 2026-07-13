@@ -64,7 +64,6 @@ import { useAppBootstrap } from "./hooks/app/useAppBootstrap";
 import { usePaletteWiring } from "./hooks/app/usePaletteWiring";
 
 import {
-  LazyWelcomeScreen,
   LazyModalHostLayer,
   preloadSettingsDialog,
   LazyDiagnosticsReviewDialogHost,
@@ -82,6 +81,7 @@ import {
   usePreferencesStore,
   usePluginManagerStore,
 } from "./store";
+import { useEmptyCanvasContent } from "./hooks/app/useEmptyCanvasContent";
 // Eager side-effect import: auto-discovers every built-in plugin renderer and
 // registers its builtin view slots at module-eval time, before first render.
 // Must stay static — a deferred/idle import races the user, so getBuiltinView
@@ -263,6 +263,8 @@ function AppInner() {
     pluginDeepLink,
     gettingStarted,
   } = useAppBootstrap();
+
+  const { emptyContent, workspaceId } = useEmptyCanvasContent(gettingStarted);
 
   const {
     gitPushResetKey,
@@ -488,20 +490,14 @@ function AppInner() {
                   <ErrorBoundary
                     variant="section"
                     componentName="ContentGrid"
-                    resetKeys={[currentProject?.id].filter((k): k is string => k != null)}
+                    resetKeys={[workspaceId].filter((k): k is string => k != null)}
                   >
                     <Profiler id="content-grid" onRender={onContentGridRender}>
                       <ContentGrid
                         className="h-full w-full"
                         agentAvailability={availability}
                         defaultCwd={defaultTerminalCwd}
-                        emptyContent={
-                          currentProject === null ? (
-                            <Suspense fallback={null}>
-                              <LazyWelcomeScreen gettingStarted={gettingStarted} />
-                            </Suspense>
-                          ) : undefined
-                        }
+                        emptyContent={emptyContent}
                       />
                     </Profiler>
                   </ErrorBoundary>

@@ -13,18 +13,47 @@ import { useProjectStore } from "@/store/projectStore";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { AGENT_REGISTRY, getAgentDisplayTitle } from "@/config/agents";
-import { agentSettingsClient, cliAvailabilityClient } from "@/clients";
-import { isAssistantOnlyAgentId, LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
+import { agentCapabilitiesClient, agentSettingsClient, cliAvailabilityClient } from "@/clients";
+import { userAgentRegistryClient } from "@/clients/userAgentRegistryClient";
+import {
+  isAssistantOnlyAgentId,
+  isBuiltInAgentId,
+  LAUNCHABLE_AGENT_IDS,
+} from "@shared/config/agentIds";
 import { isAgentToolbarVisible } from "@shared/utils/agentPinned";
-import { isAgentInstalled } from "@shared/utils/agentAvailability";
+import { isAgentInstalled, isAgentLaunchable } from "@shared/utils/agentAvailability";
 import type { ActionId } from "@shared/types/actions";
 import { isPtyPanel, type TerminalSpawnSource } from "@shared/types/panel";
 export function registerAgentActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
+  const readAgentDiscoveryState = async () => {
+    // These are the same normalized renderer stores the toolbar reads. Fall back to
+    // cache-aware IPC clients only before hydration; neither path exposes settings
+    // details beyond the narrow fields each discovery action selects below.
+    const [{ useAgentSettingsStore }, { useCliAvailabilityStore }] = await Promise.all([
+      import("@/store/agentSettingsStore"),
+      import("@/store/cliAvailabilityStore"),
+    ]);
+    const storeSettings = useAgentSettingsStore.getState().settings;
+    const settings = storeSettings ?? (await agentSettingsClient.get());
+    const availabilityStore = useCliAvailabilityStore.getState();
+    const availability = availabilityStore.hasRealData
+      ? availabilityStore.availability
+      : await cliAvailabilityClient.get();
+    // `hasRealData` flips true the moment the localStorage cache hydrates, where
+    // absent agents are synthesized as "missing" — only `isInitialized` proves a
+    // live CLI probe has actually completed this session. listAvailable uses this
+    // so it never certifies a never-probed agent as "missing"; listToolbar keeps
+    // reading `availability` directly because it must mirror the live toolbar,
+    // which renders from the same hydrating store.
+    const availabilityLive = availabilityStore.isInitialized === true;
+    return { settings, availability, availabilityLive };
+  };
+
   actions.set("agent.launch", () => ({
     id: "agent.launch",
     title: "Launch Agent",
     description:
-      "Launch an AI agent in a new terminal. Returns terminalId and location. Fire up to 4 in parallel per message.",
+      "Launch an AI agent in a new terminal. Returns terminalId and location. If Daintree opens a setup diagnostic instead of a PTY, the result also carries spawnStatus: missing-cli. Fire up to 4 in parallel per message.",
     category: "agent",
     kind: "command",
     danger: "safe",
@@ -59,6 +88,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       .object({
         terminalId: z.string(),
         location: LaunchLocationSchema,
+        spawnStatus: z.literal("missing-cli").optional(),
       })
       .nullable(),
     mcpOutputSchema: true,
@@ -122,7 +152,11 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         name,
       });
       if (!result) return null;
-      return { terminalId: result.terminalId, location: result.location };
+      return {
+        terminalId: result.terminalId,
+        location: result.location,
+        ...(result.spawnStatus ? { spawnStatus: result.spawnStatus } : {}),
+      };
     },
   }));
 
@@ -512,26 +546,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       ),
     }),
     run: async () => {
-      // Mirror the toolbar's own resolution sources so `visible` stays in
-      // lockstep with what actually renders. The toolbar reads the normalized
-      // in-memory agent-settings store (initial pins seeded, legacy pins
-      // migrated — see agentSettingsStore) rather than the raw persisted
-      // settings, and the live CLI-availability store. Fall back to the
-      // cache-aware clients only when a store hasn't hydrated yet.
-      //
-      // Imported lazily so this module's static graph stays free of the store
-      // singletons — eager-importing them breaks unrelated action tests that
-      // only partially mock the agent-config graph the stores pull in.
-      const [{ useAgentSettingsStore }, { useCliAvailabilityStore }] = await Promise.all([
-        import("@/store/agentSettingsStore"),
-        import("@/store/cliAvailabilityStore"),
-      ]);
-      const storeSettings = useAgentSettingsStore.getState().settings;
-      const settings = storeSettings ?? (await agentSettingsClient.get());
-      const availabilityStore = useCliAvailabilityStore.getState();
-      const availability = availabilityStore.hasRealData
-        ? availabilityStore.availability
-        : await cliAvailabilityClient.get();
+      const { settings, availability } = await readAgentDiscoveryState();
       return {
         agents: LAUNCHABLE_AGENT_IDS.map((id) => {
           const entry = settings.agents?.[id];
@@ -546,6 +561,86 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
             ...(typeof entry?.pinned === "boolean" ? { pinned: entry.pinned } : {}),
             installed: isAgentInstalled(state),
             visible: isAgentToolbarVisible(entry, state),
+          };
+        }),
+      };
+    },
+  }));
+
+  actions.set("agent.listAvailable", () => ({
+    id: "agent.listAvailable",
+    title: "List Available Agents",
+    description:
+      "List every registered direct-agent candidate in Daintree's current effective registry, including built-in, user-defined, and plugin agents. Returns { complete, availabilityComplete, agents: [{ id, displayName, source, availability?, installed?, launchable?, pinned?, toolbarVisible? }] }. Registry membership comes from the authoritative main process; `complete` marks a full (never-truncated) read of the current effective registry — plugin agents still initializing at call time appear on a later call. `launchable` is true only for ready/unauthenticated agents and is omitted with availability (and `availabilityComplete` is false) until a live CLI probe has finished this session — never inferred from the still-hydrating cache. Built-in rows include tri-state explicit pin intent and resolved main-toolbar visibility; user/plugin rows omit toolbar fields because they are not toolbar entries.",
+    category: "agent",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    mcpVisibility: "discoverable",
+    resultSchema: z.object({
+      complete: z.literal(true),
+      availabilityComplete: z.boolean(),
+      agents: z.array(
+        z.object({
+          id: z.string(),
+          displayName: z.string(),
+          source: z.enum(["built-in", "user", "plugin"]),
+          launchable: z.boolean().optional(),
+          availability: z
+            .enum(["missing", "installed", "ready", "blocked", "unauthenticated"])
+            .optional(),
+          installed: z.boolean().optional(),
+          pinned: z.boolean().optional(),
+          toolbarVisible: z.boolean().optional(),
+        })
+      ),
+    }),
+    mcpOutputSchema: true,
+    run: async () => {
+      const [{ settings, availability, availabilityLive }, registry, userRegistry] =
+        await Promise.all([
+          readAgentDiscoveryState(),
+          agentCapabilitiesClient.getRegistry(),
+          userAgentRegistryClient.get(),
+        ]);
+      const registryIds = [
+        ...LAUNCHABLE_AGENT_IDS.filter((id) => Object.hasOwn(registry, id)),
+        ...Object.keys(registry)
+          .filter((id) => !isBuiltInAgentId(id) && !isAssistantOnlyAgentId(id))
+          .sort(),
+      ];
+      return {
+        complete: true as const,
+        // Only certify completeness once a live probe has run: a hydrating cache
+        // synthesizes "missing" for unprobed agents, which would otherwise pass
+        // the own-key check and mislabel a never-checked agent as uninstalled.
+        availabilityComplete:
+          availabilityLive && registryIds.every((id) => Object.hasOwn(availability, id)),
+        agents: registryIds.map((id) => {
+          // `rawState` mirrors what the toolbar renders (used for toolbarVisible);
+          // `probedState` is the authoritative probe result we're willing to
+          // report as availability/installed/launchable — undefined until live.
+          const rawState = availability[id];
+          const probedState = availabilityLive ? rawState : undefined;
+          const builtIn = isBuiltInAgentId(id);
+          const entry = builtIn ? settings.agents?.[id] : undefined;
+          return {
+            id,
+            displayName: registry[id]?.name ?? id,
+            source: builtIn
+              ? ("built-in" as const)
+              : Object.prototype.hasOwnProperty.call(userRegistry, id)
+                ? ("user" as const)
+                : ("plugin" as const),
+            ...(probedState
+              ? {
+                  availability: probedState,
+                  installed: isAgentInstalled(probedState),
+                  launchable: isAgentLaunchable(probedState),
+                }
+              : {}),
+            ...(builtIn && typeof entry?.pinned === "boolean" ? { pinned: entry.pinned } : {}),
+            ...(builtIn ? { toolbarVisible: isAgentToolbarVisible(entry, rawState) } : {}),
           };
         }),
       };

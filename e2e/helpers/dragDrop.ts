@@ -32,8 +32,7 @@ export async function keyboardReorderElement(
  * Dock chips are sortable through the global `DndProvider`, which — unlike
  * `DockedTabGroup`'s own `DndContext` (PointerSensor/TouchSensor only) —
  * registers a `KeyboardSensor`. A single arrow step avoids the autoscroll-driven
- * source unmount that long keyboard drags can hit (#8478), and keeps the drag
- * short enough for framer-motion's FLIP to settle before assertions (#9029).
+ * source unmount that long keyboard drags can hit (#8478).
  */
 export async function keyboardReorderDockChip(
   page: Page,

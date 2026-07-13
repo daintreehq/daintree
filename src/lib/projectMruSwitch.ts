@@ -12,9 +12,16 @@ export function getProjectMruSwitchTarget(
   currentProjectId: string | null | undefined,
   direction: ProjectMruCycleDirection
 ): Project | null {
-  if (!currentProjectId) return null;
-
   const sorted = getMruProjects(projects);
+
+  // A scratch workspace clears `currentProject` without touching any project's
+  // `lastOpened`, so the project used just before the scratch is still the MRU
+  // head. With nothing to excise, the same circular walk over the full list
+  // lands "older" on it and "newer" on the tail.
+  if (!currentProjectId) {
+    return (direction === "older" ? sorted[0] : sorted.at(-1)) ?? null;
+  }
+
   const current = sorted.find((project) => project.id === currentProjectId);
   if (!current) return null;
 

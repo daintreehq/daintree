@@ -8,7 +8,7 @@
 import { getAgentConfig } from "@/config/agents";
 import { actionService } from "@/services/ActionService";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
-import { usePanelStore, useProjectStore } from "@/store";
+import { usePanelStore } from "@/store";
 import { logError } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import type { ActionContext } from "@shared/types/actions";
@@ -23,7 +23,12 @@ import {
   asStringRecord,
 } from "./HelpSessionProvisioner";
 import { HelpVersionGate, checkAssistantVersion } from "./HelpVersionGate";
-import { LaunchNotifications, notifyLaunchFailed } from "./LaunchNotifications";
+import {
+  LaunchNotifications,
+  notifyLaunchFailed,
+  LAUNCH_BLOCKED_LOADING,
+  LAUNCH_BLOCKED_NO_WORKSPACE,
+} from "./LaunchNotifications";
 import { McpActivityTracker } from "./McpActivityTracker";
 import { HibernationManager } from "./HibernationManager";
 
@@ -202,6 +207,17 @@ export interface HelpSessionSnapshot {
   outcomeAlert: import("@shared/types/ipc/mcpServer").TurnOutcomeAlertClass | null;
 }
 
+/**
+ * The workspace the assistant launches into — an opaque `{ id, path }` pair,
+ * NOT necessarily a `Project` (#11068). A scratch workspace is a valid
+ * assistant workspace: `ProjectViewManager` keys its WebContents map on the
+ * scratch id exactly as it does a project id, so main's `ctx.projectId` is the
+ * scratch id while a scratch is active, and provisioning/hibernation validate
+ * the id as an opaque string rather than a projects-table key. Nothing
+ * downstream of acquisition branches on which kind it is, so the flattened
+ * shape is deliberate — the legacy `currentProject` field name is kept to avoid
+ * a rename with no behavior change.
+ */
 export interface HelpProjectRef {
   id: string;
   path: string;
@@ -210,6 +226,7 @@ export interface HelpProjectRef {
 export interface HelpSessionInputs {
   isOpen: boolean;
   isReadyToLaunch: boolean;
+  /** Active workspace (project OR scratch) — see `HelpProjectRef`. */
   currentProject: HelpProjectRef | null;
   terminalId: string | null;
   preferredAgentId: string | null;
@@ -664,8 +681,11 @@ export class HelpSessionController {
    * path (`handleTerminalPanelMissing`).
    */
   private _applyStopSuppression(): void {
-    const projectId = useProjectStore.getState().currentProject?.id ?? null;
-    this._hibernationManager.clearAndSuppress(projectId);
+    // Read the workspace from the synced inputs, not the project store: in a
+    // scratch workspace `currentProject` is null by design, and a live-store
+    // read would leave the scratch's hibernate entry behind (#11068).
+    const workspaceId = this._lastInputs?.currentProject?.id ?? null;
+    this._hibernationManager.clearAndSuppress(workspaceId);
     this._hasAutoLaunched = true;
     this._patch({
       phase: "idle",
@@ -708,12 +728,17 @@ export class HelpSessionController {
   launch(options: HelpLaunchOptions): void {
     const inputs = this._lastInputs;
     const launchAgentId = options.agentId;
-    if (!inputs?.isReadyToLaunch || !inputs?.currentProject) {
+    if (!inputs?.isReadyToLaunch || !inputs.currentProject) {
       // A resume-only auto-resume is silent best-effort recovery — the renderer
       // re-fires once state is ready (#10815), so dropping it here must not raise
       // a scary "still loading" error. Every other caller surfaces it.
       if (!options.resumeOnly) {
-        notifyLaunchFailed(launchAgentId, "Project state is still loading. Try again.");
+        // Only say "loading" when state really is still hydrating. Ready-but-no-
+        // workspace is a different condition and used to lie about it (#11068).
+        notifyLaunchFailed(
+          launchAgentId,
+          inputs?.isReadyToLaunch ? LAUNCH_BLOCKED_NO_WORKSPACE : LAUNCH_BLOCKED_LOADING
+        );
       }
       return;
     }
@@ -759,13 +784,12 @@ export class HelpSessionController {
         });
       }
       // Discarding the current conversation invalidates any persisted
-      // hibernate entry for this project — leaving it would resume the
-      // just-discarded chat on next open.
+      // hibernate entry for this workspace — leaving it would resume the
+      // just-discarded chat on next open. Use the workspace already captured
+      // for this launch: in a scratch the project store is null by design, and
+      // a live read would strand the scratch's entry (#11068).
       if (reservedId) {
-        const projectIdForReset = useProjectStore.getState().currentProject?.id ?? null;
-        if (projectIdForReset) {
-          useHelpPanelStore.getState().clearHibernateSession(projectIdForReset);
-        }
+        useHelpPanelStore.getState().clearHibernateSession(launchProject.id);
         this._patch({ showResumeBanner: false });
       }
     }

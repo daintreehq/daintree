@@ -652,6 +652,101 @@ describe("HelpSessionController — launch error routing", () => {
     ctrl.stop();
   });
 
+  // #11068: the guard used to say "Project state is still loading" for BOTH the
+  // genuinely-hydrating case and the no-workspace case. In a scratch it was
+  // simply false — and it's the reason the assistant couldn't launch there at all.
+  it("blocks with no-workspace copy — not 'still loading' — when ready but no workspace is active", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl["_lastInputs"] = {
+      isOpen: true,
+      isReadyToLaunch: true,
+      currentProject: null,
+      terminalId: null,
+      preferredAgentId: "claude",
+      supportedInstalledAgentIds: ["claude"],
+      autoLaunchEnabled: true,
+      visibilityEpoch: 0,
+    };
+
+    ctrl.launch({ agentId: "claude" });
+
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "error",
+        message: expect.stringContaining("No project or scratch workspace is active"),
+      })
+    );
+    expect(provisionMock()).not.toHaveBeenCalled();
+    ctrl.stop();
+  });
+
+  it("blocks with loading copy while inputs are still hydrating", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl["_lastInputs"] = {
+      isOpen: true,
+      isReadyToLaunch: false,
+      currentProject: null,
+      terminalId: null,
+      preferredAgentId: "claude",
+      supportedInstalledAgentIds: ["claude"],
+      autoLaunchEnabled: true,
+      visibilityEpoch: 0,
+    };
+
+    ctrl.launch({ agentId: "claude" });
+
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "error",
+        message: expect.stringContaining("still loading"),
+      })
+    );
+    expect(provisionMock()).not.toHaveBeenCalled();
+    ctrl.stop();
+  });
+
+  // A scratch's `{ id, path }` is an opaque workspace ref — it must provision
+  // exactly like a project's, with no branching on workspace kind (#11068).
+  it("launches into an active scratch workspace, provisioning with the scratch id and path", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl["_lastInputs"] = {
+      isOpen: true,
+      isReadyToLaunch: true,
+      currentProject: { id: "scratch-1", path: "/scratches/scratch-1" },
+      terminalId: null,
+      preferredAgentId: "claude",
+      supportedInstalledAgentIds: ["claude"],
+      autoLaunchEnabled: true,
+      visibilityEpoch: 0,
+    };
+    (
+      window.electron.help as unknown as { takePendingHibernation: ReturnType<typeof vi.fn> }
+    ).takePendingHibernation = vi.fn().mockResolvedValue(null);
+    provisionMock().mockResolvedValueOnce({
+      sessionId: "sess-s1",
+      sessionPath: "/s/s1",
+      token: "tok",
+      mcpUrl: null,
+      windowId: 1,
+    });
+
+    ctrl.launch({ agentId: "claude" });
+
+    await vi.waitFor(() => {
+      expect(provisionMock()).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projectId: "scratch-1",
+          projectPath: "/scratches/scratch-1",
+        })
+      );
+    });
+    expect(notify).not.toHaveBeenCalled();
+    ctrl.stop();
+  });
+
   it("revokes the session and surfaces an error when auto-launch throws after provisioning", async () => {
     const ctrl = new HelpSessionController();
     ctrl.start();

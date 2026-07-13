@@ -490,21 +490,34 @@ export class WorkspaceHostProcess extends EventEmitter {
     if (this.child) {
       this.send({ type: "dispose" });
       // Unref'd so the pending backstop never holds the Electron event loop
-      // alive after app.quit when the host has already cooperated.
+      // alive after app.quit when the host has already cooperated. Cleared by
+      // the `exit` handler, so a host that exits on the dispose message above
+      // never reaches the signal below.
       this.disposeTimer = setTimeout(() => {
         this.disposeTimer = null;
-        if (this.child) {
-          try {
-            this.child.kill();
-          } catch (error) {
+        const pid = this.child?.pid;
+        if (!pid) return;
+        // Deliberately NOT `child.kill()` (#11069): Electron's
+        // `UtilityProcess.kill()` runs `Process::Terminate` +
+        // `base::EnsureProcessTerminated`, which on macOS blocks the calling
+        // thread — main — for up to 2s waiting for the child to die, freezing
+        // window input routing. A raw SIGKILL is non-blocking and cannot be
+        // trapped by the child. Matches the health watchdog's force-kill.
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch (error) {
+          // ESRCH — the child exited between the pid read and the signal.
+          const code =
+            typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
+          if (code !== "ESRCH") {
             console.warn(
               `[WorkspaceHost:${this.serviceName}] Failed to kill host during dispose:`,
               error
             );
-          } finally {
-            this.child = null;
           }
         }
+        // `this.child` stays set — the `exit` event is the authority on process
+        // death and nulls it. Clearing it here would strand that handler.
       }, 1000);
       this.disposeTimer.unref?.();
     }
@@ -684,7 +697,13 @@ export class WorkspaceHostProcess extends EventEmitter {
 
     this.child.on("exit", (code) => {
       this.flushHostOutputBuffers();
-      logWarn(`[WorkspaceHost:${this.serviceName}] Exited with code ${code}`);
+      // A disposed host exiting is the cooperative path, not a crash — every
+      // eviction ends here, so warning on it would read as a fault.
+      if (this.isDisposed) {
+        logInfo(`[WorkspaceHost:${this.serviceName}] Exited with code ${code} after dispose`);
+      } else {
+        logWarn(`[WorkspaceHost:${this.serviceName}] Exited with code ${code}`);
+      }
 
       if (this.healthCheckInterval) {
         clearInterval(this.healthCheckInterval);
@@ -693,6 +712,12 @@ export class WorkspaceHostProcess extends EventEmitter {
       if (this.handshakeTimeout) {
         clearTimeout(this.handshakeTimeout);
         this.handshakeTimeout = null;
+      }
+      // The host cooperated with `dispose` — retire the force-kill backstop so
+      // it cannot signal a pid the OS may have already recycled.
+      if (this.disposeTimer) {
+        clearTimeout(this.disposeTimer);
+        this.disposeTimer = null;
       }
       this.isWaitingForHandshake = false;
       this.missedHeartbeats = 0;

@@ -97,6 +97,7 @@ export function BrowserPane({
   onTitleChange,
   onMinimize,
   onRestore,
+  showRestoreControl,
   isMultiPanelGrid,
   tabs,
   onTabClick,
@@ -855,6 +856,7 @@ export function BrowserPane({
       onTitleChange={onTitleChange}
       onMinimize={onMinimize}
       onRestore={onRestore}
+      showRestoreControl={showRestoreControl}
       toolbar={browserToolbar}
       tabs={tabs}
       onTabClick={onTabClick}

@@ -434,6 +434,44 @@ describe("ActivityMonitor", () => {
       monitor.dispose();
     });
 
+    it("coalesces viewport extraction during a byte stream but still observes redraws", () => {
+      const onStateChange = vi.fn();
+      let visible = "waiting";
+      const getVisibleContentSnapshot = vi.fn(() => createVisibleContentSnapshot(visible));
+      const monitor = new ActivityMonitor(
+        "agent-simple-active-snapshot-cache",
+        1000,
+        onStateChange,
+        {
+          agentId: "claude",
+          getVisibleLines: () => [visible],
+          getVisibleContentSnapshot,
+          initialState: "idle",
+          skipInitialStateEmit: true,
+        }
+      );
+
+      monitor.startPolling();
+      vi.advanceTimersByTime(100);
+      getVisibleContentSnapshot.mockClear();
+
+      for (let i = 0; i < 10; i += 1) {
+        visible = `stream ${i}`;
+        monitor.onData(visible);
+        vi.advanceTimersByTime(50);
+      }
+
+      const streamCaptures = getVisibleContentSnapshot.mock.calls.length;
+      expect(streamCaptures).toBeGreaterThan(0);
+      expect(streamCaptures).toBeLessThan(10);
+
+      visible = "asynchronous redraw";
+      vi.advanceTimersByTime(50);
+      expect(getVisibleContentSnapshot).toHaveBeenCalledTimes(streamCaptures + 1);
+
+      monitor.dispose();
+    });
+
     it("keeps Enter immediate in simple agent mode", () => {
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("agent-simple-enter", 1000, onStateChange, {

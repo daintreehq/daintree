@@ -5,6 +5,8 @@ import type { Scratch } from "@shared/types";
 // The barrel is mocked in many test setups; importing from the leaf module
 // keeps this store decoupled from those mocks.
 import { scratchClient } from "@/clients/scratchClient";
+import { getViewWorkspaceId } from "./viewWorkspaceId";
+import { logError } from "@/utils/logger";
 
 /**
  * Renderer-side Zustand store for Scratch (one-off agent workspace) state.
@@ -101,6 +103,29 @@ export const useScratchStore = create<ScratchStoreState>((set, get) => ({
     })),
 }));
 
+/**
+ * Deleting a scratch must leave the app in an empty state, not a grid of dead
+ * agent panels: the exit listener deliberately *preserves* agent terminals after
+ * their PTY exits (so a finished agent stays reviewable), so killing the PTYs is
+ * not enough — nothing else ever removes the panels (#11079). `removePanel` also
+ * kills each PTY by id, which backstops any terminal the workspace-scoped kill in
+ * `scratch:remove` missed.
+ *
+ * Keyed on the view's own workspace id, never on `currentScratch`: the removal is
+ * broadcast to *every* view (cached ones included) and `currentScratch` is
+ * replicated into all of them, so matching on it would wipe a sibling project
+ * view's live panels.
+ */
+async function closePanelsForRemovedScratch(scratchId: string): Promise<void> {
+  if (!scratchId || getViewWorkspaceId() !== scratchId) return;
+
+  const { usePanelStore } = await import("@/store/panelStore");
+  const state = usePanelStore.getState();
+  for (const panelId of [...state.panelIds]) {
+    state.removePanel(panelId);
+  }
+}
+
 // HMR-safe: register push-event listeners exactly once. Subsequent module
 // reloads in dev hit the early-return so we don't accumulate listeners.
 type ListenerState = { registered: boolean };
@@ -120,6 +145,9 @@ if (typeof window !== "undefined" && window.electron?.scratch) {
     });
     window.electron.scratch.onRemoved((scratchId) => {
       useScratchStore.getState().removeScratchLocal(scratchId);
+      void closePanelsForRemovedScratch(scratchId).catch((error: unknown) => {
+        logError("[ScratchStore] Failed to close panels for removed scratch", error);
+      });
     });
     window.electron.scratch.onSwitch((payload) => {
       if (!payload) return;

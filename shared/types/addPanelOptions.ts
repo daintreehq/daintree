@@ -52,9 +52,9 @@ export interface AddPanelOptionsBase {
   focusPolicy?: AddPanelFocusPolicy;
   /** Bypass rate limiter during session restore (consumes main-process quota) */
   restore?: boolean;
-  /** Opaque admission group shared by PTY panels from one bounded recipe run. */
+  /** Opaque admission group shared by PTY panels from one bounded recipe operation. */
   spawnBatchId?: string;
-  /** Number of PTY panels declared by the bounded recipe run. */
+  /** Total PTY panels declared by that recipe operation, potentially across worktrees. */
   spawnBatchSize?: number;
   /** Bypass panel limit checks (used during hydration/state restoration) */
   bypassLimits?: boolean;
@@ -85,6 +85,18 @@ export interface AddPanelOptionsBase {
    * Ignored during hydration batches.
    */
   activateDockOnCreate?: boolean;
+  /**
+   * Keep the current fullscreen view when this panel lands in the grid and takes
+   * focus. Only for callers that immediately fold the new panel into the group
+   * that is *already* maximized — the tab-strip "+" adds the panel first and
+   * groups it second, so at commit time it isn't a member yet and would
+   * otherwise look like a plain new grid cell (#11060).
+   *
+   * Not a background-spawn switch: a caller that simply doesn't want to disturb
+   * the user wants `focusPolicy: "preserve"`, which suppresses focus and leaves
+   * maximize untouched on its own.
+   */
+  preserveMaximize?: boolean;
   // --- PTY-related fields (optional on all types, only used by PTY panel kinds) ---
   shell?: string;
   command?: string;

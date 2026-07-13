@@ -10,6 +10,7 @@ import { logError } from "@/utils/logger";
 import { actionService } from "@/services/ActionService";
 import type { ActionSource, AgentAvailabilityState } from "@shared/types";
 import { isAgentBlocked, isAgentLaunchable } from "@shared/utils/agentAvailability";
+import { panelKindIsDockable } from "@shared/config/panelKindRegistry";
 
 // Cap the "Recently launched" band so it stays a quick-reach shortcut rather
 // than a second full agent list above the fixed Pinned/Other groups.
@@ -173,16 +174,24 @@ export function DockLaunchMenuItems({
         </>
       )}
 
+      {/* The dock launcher creates panels directly in the dock, so it must only
+          offer kinds the dock can render (#11054) — otherwise the panel is
+          redirected to the grid on create (`addPanel`) and the menu item lies
+          about where it lands. Gate on the same `panelKindIsDockable` predicate
+          the store guards use, so #11053 (making browser dockable) flips this
+          on without touching a second allowlist. Terminal is always dockable. */}
       <C.Label>Launch panel</C.Label>
       <C.Item onSelect={() => onLaunchAgent("terminal")}>
         <SquareTerminal className="w-3.5 h-3.5 mr-2" />
         Terminal
       </C.Item>
-      <C.Item onSelect={() => onLaunchAgent("browser")}>
-        <Globe className="w-3.5 h-3.5 mr-2 text-status-info" />
-        Browser
-      </C.Item>
-      {hasDevPreview && (
+      {panelKindIsDockable("browser") && (
+        <C.Item onSelect={() => onLaunchAgent("browser")}>
+          <Globe className="w-3.5 h-3.5 mr-2 text-status-info" />
+          Browser
+        </C.Item>
+      )}
+      {hasDevPreview && panelKindIsDockable("dev-preview") && (
         <C.Item onSelect={() => onLaunchAgent("dev-preview")}>
           <MonitorPlay className="w-3.5 h-3.5 mr-2 text-status-success" />
           Dev preview

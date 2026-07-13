@@ -126,6 +126,32 @@ vi.mock("@/utils/safeFireAndForget", () => ({
 }));
 
 import { HelpSessionController } from "../HelpSessionController";
+import type { HelpSessionInputs } from "../HelpSessionController";
+
+/**
+ * Prime the controller's synced inputs with an active workspace. The controller
+ * reads the workspace it acts on from these inputs — never the live project
+ * store — because a scratch workspace leaves `currentProject` null by design
+ * (#11068). Tests that expect workspace-scoped side effects (clearing the
+ * hibernate slot, etc.) must therefore push inputs, not just seed the store.
+ */
+function syncWorkspaceInputs(
+  ctrl: HelpSessionController,
+  workspace: { id: string; path: string },
+  overrides: Partial<HelpSessionInputs> = {}
+): void {
+  ctrl.syncInputs({
+    isOpen: true,
+    isReadyToLaunch: true,
+    currentProject: workspace,
+    terminalId: "term-1",
+    preferredAgentId: null,
+    supportedInstalledAgentIds: ["claude"],
+    autoLaunchEnabled: false,
+    visibilityEpoch: 0,
+    ...overrides,
+  });
+}
 
 function resetState() {
   helpPanelState.isOpen = false;
@@ -523,20 +549,25 @@ describe("HelpSessionController — syncInputs", () => {
 });
 
 describe("HelpSessionController — endSession (Stop assistant, #10989)", () => {
-  function bindLiveSession() {
+  function bindLiveSession(
+    ctrl: HelpSessionController,
+    workspace = { id: "proj-1", path: "/repo" }
+  ) {
     helpPanelState.terminalId = "term-1";
     helpPanelState.agentId = "claude";
     helpPanelState.sessionId = "sess-bound";
-    projectStoreState.currentProject = { id: "proj-1", path: "/repo" };
     panelStoreState.panelsById = {
       "term-1": { id: "term-1", kind: "terminal", cwd: "/help" },
     };
+    // Deliberately leaves `projectStoreState.currentProject` null: the workspace
+    // reaches the controller through synced inputs only (#11068).
+    syncWorkspaceInputs(ctrl, workspace);
   }
 
   it("tears the bound session down without relaunching", () => {
     const ctrl = new HelpSessionController();
     ctrl["_patch"]({ phase: "live" });
-    bindLiveSession();
+    bindLiveSession(ctrl);
 
     ctrl.endSession();
 
@@ -555,9 +586,23 @@ describe("HelpSessionController — endSession (Stop assistant, #10989)", () => 
     expect(ctrl.getSnapshot().phase).toBe("idle");
   });
 
+  // #11068: in a scratch workspace `currentProject` is null by design. Stop must
+  // still drop the hibernate slot — keyed on the scratch id — or the discarded
+  // conversation resurrects on the next open.
+  it("drops the hibernate slot under the scratch id when a scratch is the active workspace", () => {
+    const ctrl = new HelpSessionController();
+    ctrl["_patch"]({ phase: "live" });
+    bindLiveSession(ctrl, { id: "scratch-1", path: "/scratches/scratch-1" });
+    expect(projectStoreState.currentProject).toBeNull();
+
+    ctrl.endSession();
+
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("scratch-1");
+  });
+
   it("revokes the bearer before killing the PTY (revoke-before-kill, #7522)", () => {
     const ctrl = new HelpSessionController();
-    bindLiveSession();
+    bindLiveSession(ctrl);
 
     ctrl.endSession();
 
@@ -610,7 +655,7 @@ describe("HelpSessionController — endSession (Stop assistant, #10989)", () => 
   it("suppresses an immediate consented auto-relaunch in the same open cycle", () => {
     const ctrl = new HelpSessionController();
     ctrl.start();
-    bindLiveSession();
+    bindLiveSession(ctrl);
 
     ctrl.endSession();
     expect(ctrl["_hasAutoLaunched"]).toBe(true);
@@ -637,7 +682,7 @@ describe("HelpSessionController — endSession (Stop assistant, #10989)", () => 
   it("re-arms auto-launch after the panel closes and reopens", () => {
     const ctrl = new HelpSessionController();
     ctrl.start();
-    bindLiveSession();
+    bindLiveSession(ctrl);
     ctrl.endSession();
     expect(ctrl["_hasAutoLaunched"]).toBe(true);
     helpPanelState.terminalId = null;
@@ -660,18 +705,22 @@ describe("HelpSessionController — endSession (Stop assistant, #10989)", () => 
 });
 
 describe("HelpSessionController — terminal PTY exit slides the sidebar out (#10989)", () => {
-  function bindLiveSession() {
+  function bindLiveSession(
+    ctrl: HelpSessionController,
+    workspace = { id: "proj-1", path: "/repo" }
+  ) {
     helpPanelState.isOpen = true;
     helpPanelState.terminalId = "term-1";
     helpPanelState.agentId = "claude";
     helpPanelState.sessionId = "sess-bound";
-    projectStoreState.currentProject = { id: "proj-1", path: "/repo" };
+    // Workspace reaches the controller via synced inputs, not the project store.
+    syncWorkspaceInputs(ctrl, workspace);
   }
 
   it("tears the session down and slides the sidebar out when the PTY exits on its own", () => {
     const ctrl = new HelpSessionController();
     ctrl["_patch"]({ phase: "live" });
-    bindLiveSession();
+    bindLiveSession(ctrl);
 
     // removeOnExit already removed the panel; the renderer reports the bound
     // terminal as no longer existing.
@@ -689,7 +738,7 @@ describe("HelpSessionController — terminal PTY exit slides the sidebar out (#1
     const ctrl = new HelpSessionController();
     ctrl.start();
     ctrl["_patch"]({ phase: "live" });
-    bindLiveSession();
+    bindLiveSession(ctrl);
 
     ctrl.handleTerminalPanelMissing({ terminalId: "term-1", terminalExists: false });
     // The stop consumes this open cycle's auto-launch budget so the assistant
@@ -703,7 +752,7 @@ describe("HelpSessionController — terminal PTY exit slides the sidebar out (#1
     // `_fireHibernate` sets this phase before its gracefulKill; the PTY onExit
     // then removes the panel and fires this handler mid-teardown.
     ctrl["_patch"]({ phase: "hibernating" });
-    bindLiveSession();
+    bindLiveSession(ctrl);
 
     ctrl.handleTerminalPanelMissing({ terminalId: "term-1", terminalExists: false });
 
@@ -717,7 +766,7 @@ describe("HelpSessionController — terminal PTY exit slides the sidebar out (#1
   it("is a no-op while a +New-session terminal is reserved but not yet committed", () => {
     const ctrl = new HelpSessionController();
     ctrl["_patch"]({ phase: "live" });
-    bindLiveSession();
+    bindLiveSession(ctrl);
     ctrl["_pendingNewTerminalId"] = "term-1";
 
     ctrl.handleTerminalPanelMissing({ terminalId: "term-1", terminalExists: false });
@@ -729,7 +778,7 @@ describe("HelpSessionController — terminal PTY exit slides the sidebar out (#1
   it("does not close the panel when the missing terminal is a stale, unbound id", () => {
     const ctrl = new HelpSessionController();
     ctrl["_patch"]({ phase: "live" });
-    bindLiveSession();
+    bindLiveSession(ctrl);
 
     // A different terminal than the one currently bound in the store.
     ctrl.handleTerminalPanelMissing({ terminalId: "term-stale", terminalExists: false });
@@ -740,21 +789,25 @@ describe("HelpSessionController — terminal PTY exit slides the sidebar out (#1
 });
 
 describe("HelpSessionController — handleAgentExited (agent /exit inside a live shell, #10989)", () => {
-  function bindLiveSession() {
+  function bindLiveSession(
+    ctrl: HelpSessionController,
+    workspace = { id: "proj-1", path: "/repo" }
+  ) {
     helpPanelState.isOpen = true;
     helpPanelState.terminalId = "term-1";
     helpPanelState.agentId = "claude";
     helpPanelState.sessionId = "sess-bound";
-    projectStoreState.currentProject = { id: "proj-1", path: "/repo" };
     panelStoreState.panelsById = {
       "term-1": { id: "term-1", kind: "terminal", cwd: "/help" },
     };
+    // Workspace reaches the controller via synced inputs, not the project store.
+    syncWorkspaceInputs(ctrl, workspace);
   }
 
   it("kills the shell PTY, revokes, and slides the sidebar out on a settled agent exit", () => {
     const ctrl = new HelpSessionController();
     ctrl["_patch"]({ phase: "live" });
-    bindLiveSession();
+    bindLiveSession(ctrl);
 
     ctrl.handleAgentExited("term-1");
 
@@ -772,7 +825,7 @@ describe("HelpSessionController — handleAgentExited (agent /exit inside a live
   it("revokes the bearer before killing the shell PTY (revoke-before-kill, #7522)", () => {
     const ctrl = new HelpSessionController();
     ctrl["_patch"]({ phase: "live" });
-    bindLiveSession();
+    bindLiveSession(ctrl);
 
     ctrl.handleAgentExited("term-1");
 
@@ -788,7 +841,7 @@ describe("HelpSessionController — handleAgentExited (agent /exit inside a live
   it("ignores an exit signal for a terminal that is no longer the bound one", () => {
     const ctrl = new HelpSessionController();
     ctrl["_patch"]({ phase: "live" });
-    bindLiveSession();
+    bindLiveSession(ctrl);
 
     // A +New session / replace already moved the store on to a different id.
     ctrl.handleAgentExited("term-stale");
@@ -801,7 +854,7 @@ describe("HelpSessionController — handleAgentExited (agent /exit inside a live
   it("defers to an in-flight hibernate rather than double-driving the teardown", () => {
     const ctrl = new HelpSessionController();
     ctrl["_patch"]({ phase: "hibernating" });
-    bindLiveSession();
+    bindLiveSession(ctrl);
 
     ctrl.handleAgentExited("term-1");
 

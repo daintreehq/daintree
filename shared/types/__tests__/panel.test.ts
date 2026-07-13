@@ -3,6 +3,7 @@ import {
   isBuiltInPanelKind,
   isBrowserPanel,
   isDevPreviewPanel,
+  isDockPanel,
   isGridPanelLocation,
   isPtyPanel,
   type PanelInstance,
@@ -96,5 +97,17 @@ describe("panel variant guards", () => {
     expect(isPtyPanel(legacy)).toBe(true);
     expect(isBrowserPanel(legacy)).toBe(false);
     expect(isDevPreviewPanel(legacy)).toBe(false);
+  });
+
+  it("isDockPanel admits PTY, file, and browser panels but not dev-preview/review", () => {
+    // The dock render path only surfaces panels isDockPanel recognizes; browser
+    // must be admitted or it vanishes when moved to the dock (#11053).
+    const filePanel = { id: "p4", kind: "file", title: "t", location: "dock" } as PanelInstance;
+    const reviewPanel = { id: "p5", kind: "review", title: "t", location: "grid" } as PanelInstance;
+    expect(isDockPanel(ptyPanel)).toBe(true);
+    expect(isDockPanel(browserPanel)).toBe(true);
+    expect(isDockPanel(filePanel)).toBe(true);
+    expect(isDockPanel(devPreviewPanel)).toBe(false);
+    expect(isDockPanel(reviewPanel)).toBe(false);
   });
 });

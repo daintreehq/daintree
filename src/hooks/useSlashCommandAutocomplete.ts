@@ -1,14 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AutocompleteItem } from "@/components/Terminal/AutocompleteMenu";
 import { slashCommandsClient } from "@/clients";
-import { rankSlashCommands } from "@/lib/slashCommandMatch";
+import { toSlashAutocompleteItems } from "@/hooks/slashAutocompleteItems";
 
 import { getBuiltinSlashCommands, type SlashCommand } from "@shared/types";
+import type { CompletionTrigger } from "@shared/types";
+import { getAgentConfig } from "@/config/agents";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 
 export interface UseSlashCommandAutocompleteArgs {
   query: string;
   enabled: boolean;
+  /** Which trigger's completions to surface — `/` commands or `$` capabilities. */
+  trigger: CompletionTrigger;
   agentId?: BuiltInAgentId;
   projectPath?: string;
 }
@@ -16,6 +20,7 @@ export interface UseSlashCommandAutocompleteArgs {
 export function useSlashCommandAutocomplete({
   query,
   enabled,
+  trigger,
   agentId,
   projectPath,
 }: UseSlashCommandAutocompleteArgs): {
@@ -37,7 +42,9 @@ export function useSlashCommandAutocomplete({
   }, [initial]);
 
   useEffect(() => {
-    if (agentId !== "claude" && agentId !== "gemini" && agentId !== "codex") return;
+    // Data-driven: fetch for any agent that declares completion sources, rather
+    // than a hard-coded agent-id allowlist.
+    if (!agentId || !getAgentConfig(agentId)?.completionSources?.length) return;
     if (!window.electron?.slashCommands?.list) return;
 
     const requestId = ++requestIdRef.current;
@@ -58,19 +65,10 @@ export function useSlashCommandAutocomplete({
       });
   }, [agentId, projectPath]);
 
-  const items = useMemo((): AutocompleteItem[] => {
-    if (!enabled) return [];
-
-    const ranked = rankSlashCommands(commands, query);
-    const agentCommands = ranked.map((cmd) => ({
-      key: cmd.id,
-      label: cmd.label,
-      value: cmd.label,
-      description: cmd.description,
-    }));
-
-    return agentCommands;
-  }, [commands, enabled, query]);
+  const items = useMemo(
+    (): AutocompleteItem[] => (enabled ? toSlashAutocompleteItems(commands, query, trigger) : []),
+    [commands, enabled, query, trigger]
+  );
 
   return { items, isLoading };
 }

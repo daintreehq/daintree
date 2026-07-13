@@ -505,6 +505,10 @@ export class ProjectViewManager {
     EvictionController.maybeEvictUnderPressure(this);
   }
 
+  reclaimCachedViewsUnderPressure(): void {
+    EvictionController.evictStaleViews(this, "pressure", true);
+  }
+
   /**
    * Set the soft paint-gate timeout (ms). Does NOT retime an in-flight
    * gate — the value is captured at gate creation. Called by

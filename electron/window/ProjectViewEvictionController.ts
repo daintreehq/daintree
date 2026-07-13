@@ -11,6 +11,7 @@ import { cleanupEntry, sumGuestMemoryKb } from "./ProjectViewLifecycleController
 import { hasActiveAgent } from "./ProjectViewAgentStateCache.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { EvictionReason, ViewEntry } from "./ProjectViewManagerTypes.js";
+import { readAvailableSystemMemoryMb } from "../utils/systemMemory.js";
 
 /**
  * Evict a cached view whose renderer is already gone (OS memory eviction or
@@ -44,7 +45,11 @@ export function evictDeadView(
   });
 }
 
-export function evictStaleViews(host: ProjectViewManager, reason: EvictionReason): void {
+export function evictStaleViews(
+  host: ProjectViewManager,
+  reason: EvictionReason,
+  forcePressure = false
+): void {
   // Override the user-configured cap when system memory is low so we can
   // reclaim Chromium renderers (~100–500 MB each) before the OS hits
   // compressed-RAM throttling. The override is per-pass — `maxCachedViews`
@@ -52,9 +57,10 @@ export function evictStaleViews(host: ProjectViewManager, reason: EvictionReason
   // effect on the next eviction.
   const availableMb = getAvailableMemoryMb();
   const lowMemoryOverride =
-    host.lowMemoryFreeThresholdMb != null &&
-    availableMb != null &&
-    availableMb < host.lowMemoryFreeThresholdMb;
+    forcePressure ||
+    (host.lowMemoryFreeThresholdMb != null &&
+      availableMb != null &&
+      availableMb < host.lowMemoryFreeThresholdMb);
   const effectiveMax = lowMemoryOverride ? 1 : host.maxCachedViews;
   const effectiveReason: EvictionReason = lowMemoryOverride ? "pressure" : reason;
 
@@ -239,20 +245,5 @@ export function maybeEvictUnderPressure(host: ProjectViewManager): void {
  * when the Chromium API is unavailable (e.g., under test mocks).
  */
 export function getAvailableMemoryMb(): number | null {
-  try {
-    const getInfo = (
-      process as {
-        getSystemMemoryInfo?: () => { free: number; purgeable?: number; total: number };
-      }
-    ).getSystemMemoryInfo;
-    if (typeof getInfo !== "function") return null;
-    const info = getInfo.call(process);
-    const freeKb = typeof info.free === "number" ? info.free : 0;
-    const purgeableKb = typeof info.purgeable === "number" ? info.purgeable : 0;
-    const availableKb = freeKb + purgeableKb;
-    if (availableKb <= 0) return null;
-    return availableKb / 1024;
-  } catch {
-    return null;
-  }
+  return readAvailableSystemMemoryMb();
 }

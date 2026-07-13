@@ -9,6 +9,7 @@ const {
   mockGetCliAvailabilityState,
   mockGetAgentSettingsState,
   mockGetProjectState,
+  mockGetScratchState,
   mockLogError,
 } = vi.hoisted(() => ({
   mockDispatch: vi.fn().mockResolvedValue({ ok: true }),
@@ -18,6 +19,7 @@ const {
   mockGetCliAvailabilityState: vi.fn(),
   mockGetAgentSettingsState: vi.fn(),
   mockGetProjectState: vi.fn(),
+  mockGetScratchState: vi.fn(),
   mockLogError: vi.fn(),
 }));
 
@@ -43,6 +45,12 @@ vi.mock("@/store/agentSettingsStore", () => ({
 
 vi.mock("@/store/projectStore", () => ({
   useProjectStore: { getState: () => mockGetProjectState() },
+}));
+
+// Leaf-path mock, mirroring the projectStore one — the action reads the scratch
+// pointer as its workspace fallback (#11068).
+vi.mock("@/store/scratchStore", () => ({
+  useScratchStore: { getState: () => mockGetScratchState() },
 }));
 
 vi.mock("@/utils/logger", () => ({
@@ -115,7 +123,9 @@ describe("help.launchAgent", () => {
     });
     mockGetProjectState.mockReturnValue({
       currentProject: { id: "proj-default", path: "/repo" },
+      isBootstrapped: true,
     });
+    mockGetScratchState.mockReturnValue({ currentScratch: null });
     action = extractHelpLaunchAgent();
   });
 
@@ -380,11 +390,92 @@ describe("help.launchAgent", () => {
     );
   });
 
-  it("does not launch until a current project is active", async () => {
+  // #11068: switching to a scratch clears `currentProject` by design, so the
+  // action must fall back to the scratch pointer instead of reporting that
+  // project state is "still loading" and refusing to launch.
+  it("provisions against the active scratch when no project is active", async () => {
     (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
       "/mock/help"
     );
-    mockGetProjectState.mockReturnValue({ currentProject: null });
+    mockGetProjectState.mockReturnValue({ currentProject: null, isBootstrapped: true });
+    mockGetScratchState.mockReturnValue({
+      currentScratch: { id: "scratch-1", path: "/scratches/scratch-1" },
+    });
+    (window.electron.help.provisionSession as ReturnType<typeof vi.fn>).mockResolvedValue({
+      sessionId: "sess-s1",
+      sessionPath: "/sessions/sess-s1",
+      token: "tok-s1",
+      tier: "action",
+      mcpUrl: null,
+      windowId: 3,
+    });
+    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "term-1" } });
+
+    await action.run(undefined, stubCtx);
+
+    expect(window.electron.help.provisionSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: "scratch-1",
+        projectPath: "/scratches/scratch-1",
+        agentId: "claude",
+      })
+    );
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({
+        env: expect.objectContaining({ DAINTREE_PROJECT_ID: "scratch-1" }),
+      }),
+      { source: "user" }
+    );
+    expect(mockNotify).not.toHaveBeenCalled();
+  });
+
+  it("runs the assistant in the scratch root when a scratch is the active workspace", async () => {
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
+      "/mock/help"
+    );
+    mockGetProjectState.mockReturnValue({ currentProject: null, isBootstrapped: true });
+    mockGetScratchState.mockReturnValue({
+      currentScratch: { id: "scratch-1", path: "/scratches/scratch-1" },
+    });
+
+    await action.run({ agentId: "daintree-assistant" }, stubCtx);
+
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({
+        agentId: "daintree-assistant",
+        cwd: "/scratches/scratch-1",
+      }),
+      { source: "user" }
+    );
+  });
+
+  it("prefers the project over a stale scratch pointer when both are somehow set", async () => {
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
+      "/mock/help"
+    );
+    mockGetProjectState.mockReturnValue({
+      currentProject: { id: "proj-1", path: "/repo" },
+      isBootstrapped: true,
+    });
+    mockGetScratchState.mockReturnValue({
+      currentScratch: { id: "scratch-1", path: "/scratches/scratch-1" },
+    });
+
+    await action.run(undefined, stubCtx);
+
+    expect(window.electron.help.provisionSession).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId: "proj-1", projectPath: "/repo" })
+    );
+  });
+
+  it("reports no active workspace — not 'still loading' — when project state has settled empty", async () => {
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
+      "/mock/help"
+    );
+    mockGetProjectState.mockReturnValue({ currentProject: null, isBootstrapped: true });
+    mockGetScratchState.mockReturnValue({ currentScratch: null });
     mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "term-1" } });
 
     await action.run(undefined, stubCtx);
@@ -394,7 +485,25 @@ describe("help.launchAgent", () => {
     expect(mockNotify).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "error",
-        title: "Daintree Assistant",
+        message: expect.stringContaining("No project or scratch workspace is active"),
+      })
+    );
+  });
+
+  it("still reports loading when project state has not bootstrapped yet", async () => {
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
+      "/mock/help"
+    );
+    mockGetProjectState.mockReturnValue({ currentProject: null, isBootstrapped: false });
+    mockGetScratchState.mockReturnValue({ currentScratch: null });
+
+    await action.run(undefined, stubCtx);
+
+    expect(window.electron.help.provisionSession).not.toHaveBeenCalled();
+    expect(mockNotify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "error",
+        message: expect.stringContaining("still loading"),
       })
     );
   });

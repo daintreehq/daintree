@@ -1,6 +1,7 @@
 import { appClient, terminalClient, worktreeClient, projectClient, systemClient } from "@/clients";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useProjectStore } from "@/store/projectStore";
+import { useScratchStore } from "@/store/scratchStore";
 import { suppressMruRecording } from "@/store/worktreeStore";
 import { useLayoutConfigStore } from "@/store";
 import type {
@@ -213,6 +214,16 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
         : [...baseProjects, currentProject];
       return { projects, currentProject, isBootstrapped: bootstrapped };
     });
+
+    // The active scratch persists in main but doesn't ride the hydrate payload,
+    // so without this the toolbar and sidebar show "Open project" after a relaunch
+    // into a scratch. Fire-and-forget: nothing on the boot path blocks on it.
+    void useScratchStore
+      .getState()
+      .loadScratches()
+      .catch(() => {
+        // The switcher reloads scratches whenever it opens; a boot miss self-heals.
+      });
 
     terminalInstanceService.setGPUHardwareAvailable(gpuWebGLHardware ?? true);
 

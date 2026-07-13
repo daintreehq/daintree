@@ -44,6 +44,7 @@ import {
 } from "@/utils/agentRuntimeSettings";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { transferBetweenWorktreeIndex } from "./worktreeIndex";
+import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 
 // Lazy accessor to break circular dependency: restart -> projectStore -> panelPersistence -> core.
 let _cachedProjectStore: typeof import("@/store/projectStore").useProjectStore | null = null;
@@ -351,6 +352,15 @@ export const createRestartActions = (
     let nextAgentPresetId = currentTerminal.agentPresetId;
     let nextAgentPresetColor = currentTerminal.agentPresetColor;
     let nextOriginalPresetId = currentTerminal.originalPresetId;
+    // The resume-vs-fresh command choice is deferred until after the kill:
+    // the graceful shutdown during the kill is what captures the live session
+    // id, so choosing beforehand would always miss it. These carry the
+    // precomputed pieces across the teardown — all are re-synced inside the
+    // `isAgent` block below before the post-kill selection reads them.
+    let resumeFlags = nextAgentLaunchFlags;
+    let consumedSessionId: string | undefined;
+    let freshCommand = commandToRun;
+    let freshLaunchFlags = nextAgentLaunchFlags;
 
     const loadAgentRuntimeSettings = async (): Promise<LoadedAgentRuntimeSettings | undefined> => {
       if (!effectiveAgentId || runtimeSettingsLoaded) return loadedRuntimeSettings;
@@ -421,7 +431,7 @@ export const createRestartActions = (
       // rebuild) reconciles only captured flags; `resumeFlags` additionally
       // injects the tokens into an empty snapshot so a session launched before
       // either feature honours the current resolution.
-      let resumeFlags = nextAgentLaunchFlags;
+      resumeFlags = nextAgentLaunchFlags;
       if (runtimeForEnv) {
         const effectiveBypass = resolveEffectiveBypass(
           runtimeForEnv.settings.effectiveEntry,
@@ -448,34 +458,20 @@ export const createRestartActions = (
           if (injectedFromEmpty.length > 0) resumeFlags = injectedFromEmpty;
         }
       }
-      const sessionId = currentTerminal.agentSessionId;
-      if (sessionId) {
-        const resumeCmd = buildResumeCommand(effectiveAgentId, sessionId, resumeFlags);
-        if (resumeCmd) {
-          commandToRun = resumeCmd;
-        }
-      } else if (allowResumeLatest) {
-        // No captured session ID — graceful-shutdown pattern match missed or
-        // timed out. Try the agent's resume-latest fallback (e.g. claude
-        // --continue, codex resume --last, gemini -r latest) before falling
-        // through to a fresh launch so the user keeps their prior CWD-scoped
-        // conversation. Suppressed by moveToNewWorktreeAndTransfer because the
-        // new CWD would resume a stale or unrelated session.
-        const resumeLatestCmd = buildResumeLatestCommand(effectiveAgentId, resumeFlags);
-        if (resumeLatestCmd) {
-          commandToRun = resumeLatestCmd;
-          usedResumeLatest = true;
-        }
-      }
-
-      if (commandToRun === currentTerminal.command) {
-        const persistedFlags = nextAgentLaunchFlags;
+      // Only the fresh-launch command (the no-resume outcome) can be derived
+      // up front, while the settings IPCs are already loaded. Whether it
+      // actually spawns is decided post-kill, once the graceful shutdown has
+      // had its chance to capture the live session id.
+      freshCommand = commandToRun;
+      freshLaunchFlags = nextAgentLaunchFlags;
+      {
+        const persistedFlags = freshLaunchFlags;
         let hasPersistedFlags = Boolean(persistedFlags && persistedFlags.length > 0);
         const agentConfig = getAgentConfig(effectiveAgentId);
         const baseCommand = agentConfig?.command || effectiveAgentId;
         const runtimeSettings = runtimeForEnv ?? (await loadAgentRuntimeSettings());
         if (!hasPersistedFlags && runtimeSettings) {
-          nextAgentLaunchFlags = buildAgentLaunchFlagsForRuntimeSettings(
+          freshLaunchFlags = buildAgentLaunchFlagsForRuntimeSettings(
             runtimeSettings.settings.effectiveEntry,
             effectiveAgentId,
             runtimeSettings.settings.preset,
@@ -485,16 +481,16 @@ export const createRestartActions = (
               globalUseAltScreen: runtimeSettings.globalUseAltScreen,
             }
           );
-          hasPersistedFlags = nextAgentLaunchFlags.length > 0;
+          hasPersistedFlags = freshLaunchFlags.length > 0;
         }
 
         if (hasPersistedFlags && effectiveAgentId !== "gemini") {
           // Sync fast path: non-Gemini agents have no runtime-dynamic flag
           // injection, so the persisted flags are the complete command.
-          commandToRun = buildLaunchCommandFromFlags(
+          freshCommand = buildLaunchCommandFromFlags(
             baseCommand,
             effectiveAgentId,
-            nextAgentLaunchFlags as string[]
+            freshLaunchFlags as string[]
           );
         } else {
           // Async path: either Gemini (needs clipboard directory re-injection)
@@ -506,14 +502,14 @@ export const createRestartActions = (
             if (hasPersistedFlags) {
               const entry = runtimeSettings?.entry;
               const shareClipboardDirectory = entry?.shareClipboardDirectory as boolean | undefined;
-              commandToRun = buildLaunchCommandFromFlags(
+              freshCommand = buildLaunchCommandFromFlags(
                 baseCommand,
                 effectiveAgentId,
-                nextAgentLaunchFlags as string[],
+                freshLaunchFlags as string[],
                 { clipboardDirectory, shareClipboardDirectory }
               );
             } else if (runtimeSettings) {
-              commandToRun = generateAgentCommand(
+              freshCommand = generateAgentCommand(
                 baseCommand,
                 runtimeSettings.settings.effectiveEntry,
                 effectiveAgentId,
@@ -538,16 +534,6 @@ export const createRestartActions = (
       }
     }
 
-    const spawnCommand = commandToRun;
-    // Track session ID for restore-on-failure; resume command is transient,
-    // so keep the original command as the durable stored command. Same for
-    // the resume-latest fallback (e.g. `claude --continue`) — re-storing that
-    // as durable would re-resume on every subsequent restart instead of
-    // launching fresh.
-    const consumedSessionId = currentTerminal.agentSessionId;
-    const durableCommand =
-      consumedSessionId || usedResumeLatest ? currentTerminal.command : spawnCommand;
-
     try {
       // CAPTURE LIVE DIMENSIONS before destroying the frontend
       const managedInstance = terminalInstanceService.get(id);
@@ -570,18 +556,98 @@ export const createRestartActions = (
       terminalInstanceService.suppressNextExit(id, 10000);
 
       // Capture project ID before async work to avoid race conditions (issue #3690).
+      // The respawn keeps the panel's workspace ownership (project or scratch) so a
+      // restarted scratch terminal is still killed with its scratch (#11079); project
+      // settings stay keyed on the registered project id.
       const projectStore = await resolveProjectStore();
       const capturedProjectId = projectStore.getState().currentProject?.id;
+      const capturedWorkspaceId = capturedProjectId ?? getViewWorkspaceId() ?? undefined;
 
-      // Parallelize the kill IPC with the env-fetch IPCs (#9164): they have
-      // no ordering dependency, so awaiting them serially adds a needless
-      // round-trip to the restart hot path.
-      const [, restartEnv] = await Promise.all([
-        terminalClient.kill(id).catch((error: unknown) => {
-          logWarn("[TerminalStore] kill failed during restart; continuing", { id, error });
-        }),
+      // Agent terminals kill via gracefulKill: Main already routes every
+      // agent kill through the graceful-shutdown quit-and-capture flow, but
+      // only the gracefulKill channel returns the captured session id — the
+      // bare kill channel discards it. Parallelized with the env-fetch IPCs
+      // (#9164): they have no ordering dependency, so awaiting them serially
+      // adds a needless round-trip to the restart hot path.
+      const [capturedSessionId, restartEnv] = await Promise.all([
+        (async (): Promise<string | null> => {
+          // A failed spawn (`wasFailed`) has no live process to quit — bare
+          // kill keeps PtyManager's missing-terminal cleanup (session-file
+          // delete), which the graceful channel skips on a registry miss.
+          if (isAgent && !wasFailed) {
+            try {
+              return await terminalClient.gracefulKill(id);
+            } catch (error) {
+              logWarn("[TerminalStore] gracefulKill failed during restart; falling back to kill", {
+                id,
+                error,
+              });
+            }
+          }
+          await terminalClient.kill(id).catch((error: unknown) => {
+            logWarn("[TerminalStore] kill failed during restart; continuing", { id, error });
+          });
+          return null;
+        })(),
         buildRestartEnv(capturedProjectId, runtimeForEnv?.settings.env, "restart"),
       ]);
+
+      // Choose the spawn command now that the live session id (if any) is in
+      // hand: an exact resume of THIS pane's session wins; the agent's
+      // resume-latest fallback covers a missed capture (#8787); otherwise the
+      // fresh-launch command derived above. Resume-latest alone is what used
+      // to restart panes into the wrong conversation: it resolves to the most
+      // recently active session in scope (`codex resume --last`,
+      // `claude --continue`), which with several terminals of the same agent
+      // is often another pane's session.
+      if (isAgent && effectiveAgentId) {
+        // Captured beats stored: a stored id dates from a resume launch and
+        // goes stale the moment the CLI rotates session ids mid-run. Two
+        // gates on the capture:
+        //   - identity: the graceful shutdown quits whatever agent is LIVE
+        //     (detected), so a pane whose detected identity diverged from its
+        //     launch identity (e.g. a Claude pane hosting a hand-started
+        //     Codex) would otherwise build `claude --resume <codex-id>`.
+        //   - fresh intent: `allowResumeLatest: false` (the worktree-move
+        //     flow) discards the capture too — it re-seeds context by
+        //     injecting the old buffer, and resuming would make that
+        //     injection land in an already-loaded conversation. A stored id
+        //     still resumes in that case (pre-existing contract the
+        //     update-cwd flow relies on).
+        const captureTrusted =
+          allowResumeLatest &&
+          (currentTerminal.detectedAgentId === undefined ||
+            currentTerminal.detectedAgentId === effectiveAgentId);
+        const sessionId =
+          (captureTrusted ? capturedSessionId : null) ?? currentTerminal.agentSessionId;
+        if (sessionId) {
+          // An exact candidate never degrades to resume-latest: if its
+          // command can't be built, the safe outcome is a fresh launch, not
+          // "most recent session in scope".
+          const resumeCmd = buildResumeCommand(effectiveAgentId, sessionId, resumeFlags);
+          if (resumeCmd) {
+            commandToRun = resumeCmd;
+            consumedSessionId = sessionId;
+          }
+        } else if (allowResumeLatest) {
+          const resumeLatestCmd = buildResumeLatestCommand(effectiveAgentId, resumeFlags);
+          if (resumeLatestCmd) {
+            commandToRun = resumeLatestCmd;
+            usedResumeLatest = true;
+          }
+        }
+        if (!consumedSessionId && !usedResumeLatest) {
+          commandToRun = freshCommand;
+          nextAgentLaunchFlags = freshLaunchFlags;
+        }
+      }
+
+      const spawnCommand = commandToRun;
+      // Resume commands are transient: keep the original command as the
+      // durable stored command so a later restart doesn't replay a consumed
+      // session id or re-run resume-latest instead of launching fresh.
+      const durableCommand =
+        consumedSessionId || usedResumeLatest ? currentTerminal.command : spawnCommand;
 
       // Update terminal in store: increment restartKey, reset agent state, update location
       set((state) => {
@@ -634,7 +700,7 @@ export const createRestartActions = (
       agentLifecycleLedger.recordLaunch(id, {
         launchAgentId: isAgent ? currentTerminal.launchAgentId : undefined,
         cwd: currentTerminal.cwd,
-        projectId: capturedProjectId,
+        projectId: capturedWorkspaceId,
         worktreeId: currentTerminal.worktreeId,
         worktreeSource: currentTerminal.worktreeId !== undefined ? "explicit" : undefined,
         agentModelId: isAgent ? currentTerminal.agentModelId : undefined,
@@ -648,7 +714,7 @@ export const createRestartActions = (
 
       await terminalClient.spawn({
         id,
-        projectId: capturedProjectId,
+        projectId: capturedWorkspaceId,
         cwd: currentTerminal.cwd,
         cols: spawnCols,
         rows: spawnRows,
@@ -1149,6 +1215,7 @@ export const createRestartActions = (
 
       const projectStore = await resolveProjectStore();
       const capturedProjectId = projectStore.getState().currentProject?.id;
+      const capturedWorkspaceId = capturedProjectId ?? getViewWorkspaceId() ?? undefined;
 
       const restartEnv = await buildRestartEnv(capturedProjectId, runtimeSettings.env, "fallback");
 
@@ -1157,7 +1224,7 @@ export const createRestartActions = (
       agentLifecycleLedger.recordLaunch(id, {
         launchAgentId: terminal.launchAgentId,
         cwd: terminal.cwd,
-        projectId: capturedProjectId,
+        projectId: capturedWorkspaceId,
         worktreeId: terminal.worktreeId,
         worktreeSource: terminal.worktreeId !== undefined ? "explicit" : undefined,
         agentModelId: terminal.agentModelId,
@@ -1171,7 +1238,7 @@ export const createRestartActions = (
 
       await terminalClient.spawn({
         id,
-        projectId: capturedProjectId,
+        projectId: capturedWorkspaceId,
         cwd: terminal.cwd,
         cols: spawnCols,
         rows: spawnRows,

@@ -7,16 +7,22 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { usePanelStore, useProjectStore, useWorktreeSelectionStore } from "@/store";
+import { useScratchStore } from "@/store/scratchStore";
+import { resolveWorkspaceCwd } from "@/utils/workspaceCwd";
 import {
   isDockPanel,
+  isFilePanel,
   isPtyPanel,
+  type BrowserPanelData,
   type DockPanelData,
+  type FilePanelData,
   type PanelInstance,
 } from "@shared/types/panel";
+import { extractHostPort } from "@/components/Browser/browserUtils";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import type { TrashedTerminal } from "@/store/slices";
 import { DockedTerminalItem } from "./DockedTerminalItem";
-import { DockedFilePanelItem } from "./DockedFilePanelItem";
+import { DockedNonPtyPanelItem } from "./DockedNonPtyPanelItem";
 import { DockedTabGroup } from "./DockedTabGroup";
 import { TrashContainer } from "./TrashContainer";
 import { WaitingContainer } from "./WaitingContainer";
@@ -33,7 +39,9 @@ import {
   SortableDockPlaceholder,
   DOCK_PLACEHOLDER_ID,
   useIsWorktreeSortDragging,
+  useDndPlaceholder,
 } from "@/components/DragDrop";
+import { panelKindIsDockable } from "@shared/config/panelKindRegistry";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { useHorizontalScrollControls } from "@/hooks";
 import { useProjectSettings } from "@/hooks/useProjectSettings";
@@ -87,6 +95,26 @@ interface ContentDockProps {
   density?: DockDensity;
 }
 
+// File name beats the generic kind title in the chip, mirroring FilePane's own
+// title layering (a user-locked rename still wins).
+function fileChipTitle(panel: FilePanelData): string {
+  const fileName = panel.filePath?.split(/[/\\]/).filter(Boolean).pop();
+  return panel.titleMode === "user" ? panel.title : (fileName ?? panel.title);
+}
+
+// Host beats the generic "Browser" title in the chip, mirroring BrowserPane's
+// displayTitle (a page-supplied title still wins; a user-locked rename always
+// wins). Falls back to the kind title when there's no host to show (e.g.
+// about:blank, whose URL.host is empty) so the chip is never blank.
+function browserChipTitle(panel: BrowserPanelData): string {
+  if (panel.titleMode === "user") return panel.title;
+  if (panel.title && panel.title !== "Browser") return panel.title;
+  const currentUrl = panel.browserHistory?.present || panel.browserUrl || "";
+  const host = currentUrl ? extractHostPort(currentUrl) : "";
+  // Ultimate fallback so the chip is never blank (e.g. empty title + no URL).
+  return host || panel.title || "Browser";
+}
+
 export function ContentDock({ density = "normal" }: ContentDockProps) {
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
 
@@ -95,6 +123,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   const getTabGroups = usePanelStore((state) => state.getTabGroups);
   const getTabGroupPanels = usePanelStore((state) => state.getTabGroupPanels);
   const currentProject = useProjectStore((s) => s.currentProject);
+  const currentScratch = useScratchStore((s) => s.currentScratch);
   const helpTerminalId = useHelpPanelStore((s) => s.terminalId);
   const agentSettings = useAgentSettingsStore((s) => s.settings);
   const agentAvailability = useCliAvailabilityStore((s) => s.availability);
@@ -208,7 +237,14 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   const { worktrees } = useWorktrees();
 
   const activeWorktree = activeWorktreeId ? worktrees.find((w) => w.id === activeWorktreeId) : null;
-  const cwd = activeWorktree?.path ?? currentProject?.path ?? "";
+  // This cwd rides down as an explicit launch option, and `""` is not nullish —
+  // it would win over any fallback further down the chain, so it has to resolve
+  // the whole workspace here (#11076).
+  const cwd = resolveWorkspaceCwd({
+    worktreePath: activeWorktree?.path,
+    projectPath: currentProject?.path,
+    scratchPath: currentScratch?.path,
+  });
 
   const { sorted: launchAgents, pinnedCount } = useMemo(() => {
     const baseIds = getAgentIds();
@@ -359,6 +395,15 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   // Worktree-card sort drags cannot drop here — signal rejection with cursor-no-drop.
   const isWorktreeSortDragging = useIsWorktreeSortDragging();
 
+  // A panel whose kind the dock can't render can't drop here either (#11054).
+  // Read the active drag from the placeholder context and gate on the same
+  // dockability predicate the store guards use, so the reject cue matches what
+  // `cancelDrop`/`collisionDetection` actually enforce.
+  const { activeTerminal } = useDndPlaceholder();
+  const isDraggingNonDockable =
+    activeTerminal !== null && !panelKindIsDockable(activeTerminal.kind ?? "terminal");
+  const isDockDropRejected = isWorktreeSortDragging || isDraggingNonDockable;
+
   // Sync droppable ref with scroll container ref using stable callback
   // This prevents ResizeObserver thrashing that causes infinite update loops
   const combinedRef = useCallback(
@@ -484,9 +529,9 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
               onFocusCapture={handleDockFocusCapture}
               className={cn(
                 "flex items-center gap-[var(--dock-gap)] overflow-x-auto overscroll-x-none flex-1 min-h-[var(--dock-item-height)] no-scrollbar scroll-smooth scroll-px-4 px-1 transition-[color,background-color,box-shadow]",
-                isWorktreeSortDragging && "cursor-no-drop",
+                isDockDropRejected && "cursor-no-drop",
                 isOver &&
-                  !isWorktreeSortDragging &&
+                  !isDockDropRejected &&
                   "cursor-copy bg-overlay-soft ring-2 ring-border-default ring-inset rounded-[var(--radius-md)]"
               )}
             >
@@ -507,8 +552,16 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
                           <SortableDockItem key={group.id} terminal={terminal} sourceIndex={index}>
                             {isPtyPanel(terminal) ? (
                               <DockedTerminalItem terminal={terminal} />
+                            ) : isFilePanel(terminal) ? (
+                              <DockedNonPtyPanelItem
+                                panel={terminal}
+                                displayTitle={fileChipTitle(terminal)}
+                              />
                             ) : (
-                              <DockedFilePanelItem panel={terminal} />
+                              <DockedNonPtyPanelItem
+                                panel={terminal}
+                                displayTitle={browserChipTitle(terminal)}
+                              />
                             )}
                           </SortableDockItem>
                         );

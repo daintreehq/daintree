@@ -9,8 +9,7 @@ interface LatestRefShape {
   disabled: boolean;
   isAutocompleteOpen: boolean;
   autocompleteItems: { key: string }[];
-  isResultsStale: boolean;
-  activeMode: "command" | "file" | "diff" | "terminal" | "selection" | null;
+  staleItemKeys: ReadonlySet<string>;
   selectedIndex: number;
   value: string;
   terminalId: string;
@@ -25,14 +24,10 @@ interface UseEditorDomHandlersParams {
   handledEnterRef: React.MutableRefObject<boolean>;
   lastEnterKeydownNewlineRef: React.MutableRefObject<boolean>;
   submitAfterCompositionRef: React.MutableRefObject<boolean>;
-  applyAutocompleteSelection: (action: "insert" | "execute") => boolean;
+  applyAutocompleteSelection: (mode: "enter" | "complete") => boolean;
   sendFromEditor: () => void;
   rootRef: React.RefObject<HTMLDivElement | null>;
-  setAtContext: (value: null) => void;
-  setSlashContext: (value: null) => void;
-  setDiffContext: (value: null) => void;
-  setTerminalContext: (value: null) => void;
-  setSelectionContext: (value: null) => void;
+  setActiveCompletionContext: (value: null) => void;
 }
 
 export function useEditorDomHandlers({
@@ -45,11 +40,7 @@ export function useEditorDomHandlers({
   applyAutocompleteSelection,
   sendFromEditor,
   rootRef,
-  setAtContext,
-  setSlashContext,
-  setDiffContext,
-  setTerminalContext,
-  setSelectionContext,
+  setActiveCompletionContext,
 }: UseEditorDomHandlersParams) {
   "use no memo";
   const sendFromEditorRef = useRef(sendFromEditor);
@@ -88,14 +79,12 @@ export function useEditorDomHandlers({
             return true;
           }
           if (lastEnterKeydownNewlineRef.current) return false;
-          if (
-            latest.isAutocompleteOpen &&
-            !latest.isResultsStale &&
-            latest.autocompleteItems[latest.selectedIndex]
-          ) {
+          const enterItem = latest.isAutocompleteOpen
+            ? latest.autocompleteItems[latest.selectedIndex]
+            : undefined;
+          if (enterItem && !latest.staleItemKeys.has(enterItem.key)) {
             event.preventDefault();
-            const action = latest.activeMode === "command" ? "execute" : "insert";
-            applyAutocompleteSelectionRef.current(action);
+            applyAutocompleteSelectionRef.current("enter");
             return true;
           }
           event.preventDefault();
@@ -152,11 +141,7 @@ export function useEditorDomHandlers({
           const root = rootRef.current;
           if (root && nextTarget && root.contains(nextTarget)) return false;
           if (latestRef.current?.isExpanded) return false;
-          setAtContext(null);
-          setSlashContext(null);
-          setDiffContext(null);
-          setTerminalContext(null);
-          setSelectionContext(null);
+          setActiveCompletionContext(null);
           lastEnterKeydownNewlineRef.current = false;
           handledEnterRef.current = false;
           submitAfterCompositionRef.current = false;

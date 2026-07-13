@@ -239,6 +239,65 @@ describe("optimistic panel spawn (#5789)", () => {
     }
   });
 
+  it("realizes a declared recipe batch two terminals at a time", async () => {
+    const { terminalClient } = (await import("@/clients")) as unknown as {
+      terminalClient: { spawn: ReturnType<typeof vi.fn> };
+    };
+    const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+    const waitForAttachSettledMock = vi.mocked(terminalInstanceService.waitForAttachSettled);
+    const releases: Array<() => void> = [];
+    const attachGates = Array.from(
+      { length: 4 },
+      () =>
+        new Promise<void>((resolve) => {
+          releases.push(resolve);
+        })
+    );
+
+    terminalClient.spawn.mockImplementation(async ({ id }: { id?: string }) => id ?? "batched");
+    waitForAttachSettledMock.mockImplementation((id: string) => {
+      const index = Number(id.slice("recipe-".length));
+      return attachGates[index]!;
+    });
+
+    const { addPanel } = usePanelStore.getState();
+    const launches = Array.from({ length: 4 }, (_, i) =>
+      addPanel({
+        kind: "terminal",
+        launchAgentId: "claude",
+        command: "claude",
+        requestedId: `recipe-${i}`,
+        cwd: "/",
+        bypassLimits: true,
+        spawnBatchId: "recipe-batch",
+        spawnBatchSize: 4,
+      })
+    );
+
+    await Promise.all(launches);
+    await drainMicrotasks();
+    expect(terminalClient.spawn).toHaveBeenCalledTimes(2);
+
+    releases[0]!();
+    await drainMicrotasks();
+    expect(terminalClient.spawn).toHaveBeenCalledTimes(3);
+
+    releases[1]!();
+    await drainMicrotasks();
+    expect(terminalClient.spawn).toHaveBeenCalledTimes(4);
+
+    releases[2]!();
+    releases[3]!();
+    await drainMicrotasks();
+
+    const state = usePanelStore.getState();
+    for (let i = 0; i < 4; i++) {
+      expect((state.panelsById[`recipe-${i}`] as PtyPanelData | undefined)?.spawnStatus).toBe(
+        "ready"
+      );
+    }
+  });
+
   it("does not stamp eagerAttach on dock launches", async () => {
     const { addPanel } = usePanelStore.getState();
     const id = await addPanel({

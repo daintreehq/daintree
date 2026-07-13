@@ -342,22 +342,29 @@ describe("openDb (integration)", () => {
     seed.close();
 
     // The final migration's effect must be absent before the upgrade for the test
-    // to mean anything — the seed `projects` table was created without indexes, and
-    // the final migration (0006) adds projects_path_idx + projects_frecency_last_opened_idx.
+    // to mean anything — the seed `projects` table was created without them, and
+    // the final migration (0007) adds the stats_* columns (#11078).
     const preCheck = new Database(dbPath, { readonly: true });
-    const seededIndexes = (
-      preCheck.prepare("PRAGMA index_list(projects)").all() as Array<{ name: string }>
-    ).map((i) => i.name);
+    const seededColumns = (preCheck.prepare("PRAGMA table_info(projects)").all() as ColInfo[]).map(
+      (c) => c.name
+    );
     preCheck.close();
-    expect(seededIndexes).not.toContain("projects_frecency_last_opened_idx");
+    expect(seededColumns).not.toContain("stats_commit_count");
 
     const { sqlite } = openDb(dbPath, migrationsFolder);
     try {
-      const projectIndexes = (
-        sqlite.prepare("PRAGMA index_list(projects)").all() as Array<{ name: string }>
-      ).map((i) => i.name);
-      expect(projectIndexes).toContain("projects_path_idx");
-      expect(projectIndexes).toContain("projects_frecency_last_opened_idx");
+      const projectColumns = (sqlite.pragma("table_info(projects)") as ColInfo[]).map(
+        (c) => c.name
+      );
+      expect(projectColumns).toEqual(
+        expect.arrayContaining([
+          "stats_commit_count",
+          "stats_issue_count",
+          "stats_pr_count",
+          "stats_provider_id",
+          "stats_last_updated",
+        ])
+      );
 
       // The skipped migration is now recorded — total equals the full journal.
       const migrations = sqlite.prepare("SELECT id FROM __drizzle_migrations").all();

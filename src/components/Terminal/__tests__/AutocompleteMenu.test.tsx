@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from "react";
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 
 vi.mock("@/components/ui/ScrollShadow", () => ({
   ScrollShadow: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
@@ -68,8 +68,8 @@ describe("AutocompleteMenu", () => {
 
   it("renders listbox with options when items are present", () => {
     const items: AutocompleteItem[] = [
-      { key: "a", label: "alpha", value: "alpha" },
-      { key: "b", label: "beta", value: "beta" },
+      { key: "a", label: "alpha", insertText: "alpha" },
+      { key: "b", label: "beta", insertText: "beta" },
     ];
 
     render(
@@ -91,7 +91,7 @@ describe("AutocompleteMenu", () => {
     render(
       <AutocompleteMenu
         isOpen={true}
-        items={[{ key: "a", label: "alpha", value: "alpha" }]}
+        items={[{ key: "a", label: "alpha", insertText: "alpha" }]}
         selectedIndex={0}
         onSelect={noop}
         title="Commands"
@@ -104,15 +104,15 @@ describe("AutocompleteMenu", () => {
     expect(screen.getByText("↵ run · ⇥ complete")).toBeTruthy();
   });
 
-  it("marks the listbox busy while results are stale or loading", () => {
-    const items: AutocompleteItem[] = [{ key: "a", label: "alpha", value: "alpha" }];
+  it("marks the listbox busy while any row is stale or results are loading", () => {
+    const items: AutocompleteItem[] = [{ key: "a", label: "alpha", insertText: "alpha" }];
 
     const { rerender } = render(
       <AutocompleteMenu
         isOpen={true}
         items={items}
         selectedIndex={0}
-        isStale={true}
+        staleKeys={new Set(["a"])}
         onSelect={noop}
         emptyMessage="No matches"
       />
@@ -124,7 +124,7 @@ describe("AutocompleteMenu", () => {
         isOpen={true}
         items={items}
         selectedIndex={0}
-        isStale={false}
+        staleKeys={new Set()}
         isLoading={true}
         onSelect={noop}
         emptyMessage="No matches"
@@ -137,7 +137,7 @@ describe("AutocompleteMenu", () => {
         isOpen={true}
         items={items}
         selectedIndex={0}
-        isStale={false}
+        staleKeys={new Set()}
         isLoading={false}
         onSelect={noop}
         emptyMessage="No matches"
@@ -146,15 +146,108 @@ describe("AutocompleteMenu", () => {
     expect(screen.getByRole("listbox").getAttribute("aria-busy")).toBeNull();
   });
 
+  it("marks only stale rows disabled and ignores clicks on them", () => {
+    const onSelect = vi.fn();
+    const items: AutocompleteItem[] = [
+      { key: "fresh", label: "fresh", insertText: "fresh" },
+      { key: "stale", label: "stale", insertText: "stale" },
+    ];
+
+    render(
+      <AutocompleteMenu
+        isOpen={true}
+        items={items}
+        selectedIndex={0}
+        staleKeys={new Set(["stale"])}
+        onSelect={onSelect}
+        emptyMessage="No matches"
+      />
+    );
+
+    const options = screen.getAllByRole("option");
+    const freshRow = options.find((o) => within(o).queryByText("fresh"))!;
+    const staleRow = options.find((o) => within(o).queryByText("stale"))!;
+    // Only the stale row is flagged disabled to assistive tech.
+    expect(staleRow.getAttribute("aria-disabled")).toBe("true");
+    expect(freshRow.getAttribute("aria-disabled")).toBeNull();
+
+    // A click on a stale row is a no-op; a fresh row selects that exact item.
+    staleRow.click();
+    expect(onSelect).not.toHaveBeenCalled();
+    freshRow.click();
+    expect(onSelect).toHaveBeenCalledWith(items[0]);
+  });
+
+  it("renders a neutral, screen-reader-labeled badge for skill, app, and plugin items", () => {
+    const items: AutocompleteItem[] = [
+      { key: "s", label: "/commit", insertText: "/commit", category: "skill" },
+      { key: "a", label: "/connect", insertText: "/connect", category: "app" },
+      { key: "p", label: "/gh", insertText: "/gh", category: "plugin" },
+      { key: "c", label: "/help", insertText: "/help", category: "command" },
+    ];
+
+    render(
+      <AutocompleteMenu
+        isOpen={true}
+        items={items}
+        selectedIndex={0}
+        onSelect={noop}
+        emptyMessage="No matches"
+      />
+    );
+
+    const options = screen.getAllByRole("option");
+    const rowFor = (text: string) => options.find((o) => within(o).queryByText(text))!;
+
+    // Each notable kind: visible badge hidden from AT, paired with an sr-only label.
+    for (const [text, badge] of [
+      ["/commit", "Skill"],
+      ["/connect", "App"],
+      ["/gh", "Plugin"],
+    ] as const) {
+      const row = rowFor(text);
+      expect(within(row).getByText(badge, { selector: "[aria-hidden='true']" })).toBeTruthy();
+      expect(within(row).getByText(`Category: ${badge}`)).toBeTruthy();
+    }
+
+    // Command row carries no badge — plain by design.
+    const commandRow = rowFor("/help");
+    expect(
+      within(commandRow).queryByText("Skill", { selector: "[aria-hidden='true']" })
+    ).toBeNull();
+    expect(within(commandRow).queryByText(/Category:/)).toBeNull();
+  });
+
+  it("displays the label, not the insert token, when they differ", () => {
+    const items: AutocompleteItem[] = [
+      { key: "p", label: "Plugin Creator", insertText: "$plugin-creator", category: "plugin" },
+    ];
+
+    render(
+      <AutocompleteMenu
+        isOpen={true}
+        items={items}
+        selectedIndex={0}
+        onSelect={noop}
+        emptyMessage="No matches"
+      />
+    );
+
+    const option = screen.getByRole("option");
+    expect(within(option).getByText("Plugin Creator")).toBeTruthy();
+    // The raw insert token must never surface in the row — the label is shown, not the token.
+    expect(option.textContent).not.toContain("$plugin-creator");
+  });
+
   it("scrolls the keyboard-selected option into view as selection moves", () => {
     const scrollSpy = vi.fn();
     const original = Element.prototype.scrollIntoView;
     Element.prototype.scrollIntoView = scrollSpy;
     try {
       const items: AutocompleteItem[] = [
-        { key: "a", label: "alpha", value: "alpha" },
-        { key: "b", label: "beta", value: "beta" },
-        { key: "c", label: "gamma", value: "gamma" },
+        { key: "a", label: "alpha", insertText: "alpha" },
+        { key: "b", label: "beta", insertText: "beta" },
+        { key: "c", label: "gamma", insertText: "gamma" },
       ];
 
       const { rerender } = render(

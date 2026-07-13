@@ -26,6 +26,7 @@ import {
 } from "../../shared/types/resourceProfile.js";
 import type { WhySlowResourceReason, WhySlowResourceSnapshot } from "../../shared/types/whySlow.js";
 import { ACTIVE_AGENT_STATES, type AgentState } from "../../shared/types/agent.js";
+import { getSystemMemoryThresholds, readAvailableSystemMemoryMb } from "../utils/systemMemory.js";
 
 /** Map an additive pressure score to a profile. Efficiency latches at ≥ 3; a
  *  zero score (no pressure signals) unlocks performance; anything else is
@@ -123,14 +124,6 @@ const FLEET_COUNT_CRITICAL = 24;
 const FLEET_AGENTS_PER_GB_HIGH = FLEET_COUNT_HIGH / 16;
 const FLEET_AGENTS_PER_GB_VERY_HIGH = FLEET_COUNT_VERY_HIGH / 16;
 const FLEET_AGENTS_PER_GB_CRITICAL = FLEET_COUNT_CRITICAL / 16;
-
-// System-available memory thresholds expressed as fractions of total RAM so
-// devices with very different physical memory behave consistently. On macOS
-// "available" = free + purgeable; elsewhere it's free alone. The score scales
-// alongside the app-private signal to catch the case where the OS as a whole
-// is starved by other processes even when this app's footprint is modest.
-const SYS_AVAILABLE_HIGH_FRACTION = 0.2;
-const SYS_AVAILABLE_LOW_FRACTION = 0.1;
 
 // Terminal-workload signal: summed RSS of every live terminal's descendant
 // tree (agent CLIs, dev servers, language servers, test runners) from the
@@ -233,8 +226,9 @@ export class ResourceProfileService {
     const totalRamMb = os.totalmem() / 1024 / 1024;
     this.memoryThresholdHighMb = totalRamMb * HIGH_FRACTION;
     this.memoryThresholdLowMb = totalRamMb * LOW_FRACTION;
-    this.sysMemThresholdHighMb = totalRamMb * SYS_AVAILABLE_HIGH_FRACTION;
-    this.sysMemThresholdLowMb = totalRamMb * SYS_AVAILABLE_LOW_FRACTION;
+    const systemMemoryThresholds = getSystemMemoryThresholds(totalRamMb);
+    this.sysMemThresholdHighMb = systemMemoryThresholds.warningMb;
+    this.sysMemThresholdLowMb = systemMemoryThresholds.criticalMb;
     this.terminalWorkloadHighMb = totalRamMb * TERMINAL_WORKLOAD_HIGH_FRACTION;
     this.terminalWorkloadLowMb = totalRamMb * TERMINAL_WORKLOAD_LOW_FRACTION;
     const totalRamGb = totalRamMb / 1024;
@@ -765,22 +759,7 @@ export class ResourceProfileService {
    * null when the Chromium API is unavailable (e.g., under test mocks).
    */
   private getAvailableSystemMemoryMb(): number | null {
-    try {
-      const getInfo = (
-        process as {
-          getSystemMemoryInfo?: () => { free: number; purgeable?: number; total: number };
-        }
-      ).getSystemMemoryInfo;
-      if (typeof getInfo !== "function") return null;
-      const info = getInfo.call(process);
-      const freeKb = typeof info.free === "number" ? info.free : 0;
-      const purgeableKb = typeof info.purgeable === "number" ? info.purgeable : 0;
-      const availableKb = freeKb + purgeableKb;
-      if (availableKb <= 0) return null;
-      return availableKb / 1024;
-    } catch {
-      return null;
-    }
+    return readAvailableSystemMemoryMb();
   }
 
   stop(): void {
@@ -980,7 +959,7 @@ export class ResourceProfileService {
     if (sysAvailMb !== null) {
       let sysScore = 0;
       if (sysAvailMb < this.sysMemThresholdLowMb) {
-        sysScore = 2;
+        sysScore = 3;
       } else if (sysAvailMb < this.sysMemThresholdHighMb) {
         sysScore = 1;
       }

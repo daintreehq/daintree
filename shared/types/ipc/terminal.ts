@@ -38,9 +38,9 @@ export interface TerminalSpawnOptions {
   command?: string;
   /** Whether to restore previous session content (default: true). Set to false on restart. */
   restore?: boolean;
-  /** Opaque ID shared by the PTY spawns from one bounded recipe run. */
+  /** Opaque ID shared by PTY spawns from one bounded, user-confirmed recipe operation. */
   spawnBatchId?: string;
-  /** Number of PTY spawns declared by the bounded recipe run. */
+  /** Total PTY spawns declared by that recipe operation, potentially across worktrees. */
   spawnBatchSize?: number;
   /** Whether to kill the PTY when the frontend disconnects (no terminal registry entry) */
   isEphemeral?: boolean;

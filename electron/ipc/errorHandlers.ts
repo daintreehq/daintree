@@ -335,6 +335,13 @@ class ErrorService {
               cwd: args.cwd,
               cols: normalizeTerminalDimension(args.cols, 80),
               rows: normalizeTerminalDimension(args.rows, 30),
+              // Carry the original workspace owner through the retry. Dropping it
+              // makes PtyClient.spawn fall back to its global active-workspace id,
+              // which can hand the respawned terminal to whichever workspace another
+              // window switched to last — and let that workspace's delete kill it.
+              ...(typeof args.projectId === "string" && args.projectId
+                ? { projectId: args.projectId }
+                : {}),
             },
             signal
           );

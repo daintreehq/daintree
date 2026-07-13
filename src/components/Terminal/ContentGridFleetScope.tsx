@@ -73,7 +73,8 @@ export function ContentGridFleetScope({
           {ctx.fleetPanels.length === 0 ? (
             <div className="col-span-full row-span-full">
               <ContentGridEmptyState
-                hasActiveWorktree={ctx.hasActiveWorktree}
+                hasLaunchTarget={ctx.hasActiveWorktree}
+                hasProjectContext={ctx.projectName !== null}
                 hasWorktrees={ctx.worktreeMap.size > 0}
                 isWorktreeInitialized={ctx.isWorktreeInitialized}
                 activeWorktreeName={ctx.activeWorktreeName}
@@ -82,7 +83,7 @@ export function ContentGridFleetScope({
                 activeWorktreeIsDetached={ctx.activeWorktreeIsDetached}
                 activeWorktreeHead={ctx.activeWorktreeHead}
                 activeWorktreePath={ctx.activeWorktreePath}
-                projectName={ctx.projectName}
+                workspaceName={ctx.projectName}
                 projectEmoji={ctx.projectEmoji}
                 showProjectPulse={ctx.showProjectPulse}
                 projectIconSvg={ctx.projectIconSvg}

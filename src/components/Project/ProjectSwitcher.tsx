@@ -1,8 +1,10 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { ChevronsUpDown, Plus } from "lucide-react";
+import { ChevronsUpDown, FileText, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { useProjectStore } from "@/store/projectStore";
+import { useScratchStore } from "@/store/scratchStore";
+import { activeWorkspaceIdentity } from "@/lib/workspaceIdentity";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/Spinner";
@@ -33,6 +35,8 @@ const renderIcon = (emoji: string, color?: string, sizeClass = "h-9 w-9 text-lg"
 export function ProjectSwitcher() {
   const projects = useProjectStore((state) => state.projects);
   const currentProject = useProjectStore((state) => state.currentProject);
+  const currentScratch = useScratchStore((state) => state.currentScratch);
+  const workspaceIdentity = activeWorkspaceIdentity(currentProject, currentScratch);
   const isLoading = useProjectStore((state) => state.isLoading);
   const showLoadingSpinner = useDohertyGate(isLoading);
   const projectSwitcher = useProjectSwitcherPalette();
@@ -131,15 +135,20 @@ export function ProjectSwitcher() {
     [projectSwitcher]
   );
 
+  // Reads the uncapped, unscoped agent totals rather than `results` — that
+  // array is scoped for presentation (modal browse drops projects whose
+  // process count hasn't landed yet), which would blink the badge off.
   const badgeStatus = useMemo(() => {
-    const bgProjects = projectSwitcher.results.filter((p) => !p.isActive);
-    const totalWaiting = bgProjects.reduce((sum, p) => sum + p.waitingAgentCount, 0);
-    const totalActive = bgProjects.reduce((sum, p) => sum + p.activeAgentCount, 0);
+    const { activeAgentCount, waitingAgentCount } = projectSwitcher.nonActiveAgentCounts;
 
-    if (totalWaiting > 0) return { color: "bg-state-waiting", pulse: false, count: totalWaiting };
-    if (totalActive > 0) return { color: "bg-activity-active", pulse: true, count: totalActive };
+    if (waitingAgentCount > 0) {
+      return { color: "bg-state-waiting", pulse: false, count: waitingAgentCount };
+    }
+    if (activeAgentCount > 0) {
+      return { color: "bg-activity-active", pulse: true, count: activeAgentCount };
+    }
     return null;
-  }, [projectSwitcher.results]);
+  }, [projectSwitcher.nonActiveAgentCounts]);
 
   const stopDialog = (
     <ConfirmDialog
@@ -158,8 +167,14 @@ export function ProjectSwitcher() {
     />
   );
 
-  if (!currentProject) {
-    if (projects.length > 0) {
+  // Deleting the last scratch clears `currentScratch`, so a zero-project user
+  // would drop straight to the bare "Open Project…" branch below — unmounting the
+  // palette, and with it the confirm dialog still spinning on the delete. Hold the
+  // palette open until the run resolves.
+  const hasPendingBulkScratchDelete = Boolean(projectSwitcher.deleteAllScratchesConfirm);
+
+  if (!currentProject && !currentScratch) {
+    if (projects.length > 0 || hasPendingBulkScratchDelete) {
       return (
         <>
           {stopDialog}
@@ -195,9 +210,17 @@ export function ProjectSwitcher() {
             onConfirmFreeMemory={projectSwitcher.confirmFreeMemory}
             isFreeingMemory={projectSwitcher.isFreeingMemory}
             scratchResults={projectSwitcher.scratchResults}
-            onCreateScratch={() => void projectSwitcher.createScratch()}
+            onCreateScratch={(name) => void projectSwitcher.createScratch(name)}
             onSelectScratch={(scratch) => void projectSwitcher.selectScratch(scratch)}
             onRemoveScratch={(scratchId) => void projectSwitcher.removeScratchAction(scratchId)}
+            onRequestDeleteAllScratches={projectSwitcher.requestDeleteAllScratches}
+            deleteAllScratchesConfirm={projectSwitcher.deleteAllScratchesConfirm}
+            onDismissDeleteAllScratchesConfirm={projectSwitcher.dismissDeleteAllScratchesConfirm}
+            onConfirmDeleteAllScratches={() => void projectSwitcher.confirmDeleteAllScratches()}
+            isDeletingAllScratches={projectSwitcher.isDeletingAllScratches}
+            onRenameScratch={(scratchId, name) =>
+              void projectSwitcher.renameScratch(scratchId, name)
+            }
           >
             <Button
               variant="outline"
@@ -255,7 +278,7 @@ export function ProjectSwitcher() {
         onFreeMemoryProject={handleFreeMemoryProject}
         onLocateProject={handleLocateProject}
         onTogglePinProject={handleTogglePinProject}
-        onOpenProjectSettings={handleOpenSettings}
+        onOpenProjectSettings={currentProject ? handleOpenSettings : undefined}
         onCopyPath={projectSwitcher.copyPath}
         onHoverProject={projectSwitcher.onHoverProject}
         onHoverProjectEnd={projectSwitcher.onHoverProjectEnd}
@@ -267,6 +290,16 @@ export function ProjectSwitcher() {
         onFreeMemoryConfirmClose={() => projectSwitcher.setFreeMemoryConfirmProject(null)}
         onConfirmFreeMemory={projectSwitcher.confirmFreeMemory}
         isFreeingMemory={projectSwitcher.isFreeingMemory}
+        scratchResults={projectSwitcher.scratchResults}
+        onCreateScratch={(name) => void projectSwitcher.createScratch(name)}
+        onSelectScratch={(scratch) => void projectSwitcher.selectScratch(scratch)}
+        onRemoveScratch={(scratchId) => void projectSwitcher.removeScratchAction(scratchId)}
+        onRequestDeleteAllScratches={projectSwitcher.requestDeleteAllScratches}
+        deleteAllScratchesConfirm={projectSwitcher.deleteAllScratchesConfirm}
+        onDismissDeleteAllScratchesConfirm={projectSwitcher.dismissDeleteAllScratchesConfirm}
+        onConfirmDeleteAllScratches={() => void projectSwitcher.confirmDeleteAllScratches()}
+        isDeletingAllScratches={projectSwitcher.isDeletingAllScratches}
+        onRenameScratch={(scratchId, name) => void projectSwitcher.renameScratch(scratchId, name)}
         onDropdownCloseAutoFocus={suppressTooltipDuringFocusRestore}
       >
         <Tooltip open={tooltipOpen} onOpenChange={handleTooltipOpenChange}>
@@ -282,20 +315,34 @@ export function ProjectSwitcher() {
                 "active:scale-100"
               )}
               disabled={showLoadingSpinner}
+              aria-label={workspaceIdentity.ariaLabel}
               onClick={handleOpenDropdown}
               onPointerEnter={() => {
                 isRestoringFocusRef.current = false;
               }}
             >
               <div className="flex items-center gap-3 text-left min-w-0">
-                {renderIcon(currentProject.emoji || "🌲", currentProject.color, "h-9 w-9 text-xl")}
+                {currentProject ? (
+                  renderIcon(currentProject.emoji || "🌲", currentProject.color, "h-9 w-9 text-xl")
+                ) : (
+                  <div className="flex h-9 w-9 items-center justify-center rounded-[var(--radius-xl)] bg-tint/[0.04] text-muted-foreground shrink-0">
+                    <FileText className="h-4 w-4" />
+                  </div>
+                )}
 
                 <div className="flex flex-col min-w-0 gap-0.5">
                   <span className="truncate font-semibold text-daintree-text text-sm leading-none">
-                    {currentProject.name}
+                    {workspaceIdentity.name}
                   </span>
-                  <span className="truncate font-mono text-xs text-text-secondary">
-                    {currentProject.path.split(/[/\\]/).pop()}
+                  <span
+                    className={cn(
+                      "truncate text-xs text-text-secondary",
+                      currentProject && "font-mono"
+                    )}
+                  >
+                    {currentProject
+                      ? currentProject.path.split(/[/\\]/).pop()
+                      : "Scratch workspace"}
                   </span>
                 </div>
               </div>

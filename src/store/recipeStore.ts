@@ -55,6 +55,8 @@ export interface RecipeRunOptions {
   spawnedBy?: TerminalSpawnSource;
   focusPolicy?: AddPanelFocusPolicy;
   terminalIndices?: number[];
+  /** Shared admission batch for one user-confirmed recipe operation spanning worktrees. */
+  spawnBatch?: { id: string; size: number };
   /**
    * The action dispatch source that triggered this run. When `"agent"`, a
    * lower per-run terminal cap ({@link MAX_AGENT_RECIPE_TERMINALS}) is applied
@@ -793,8 +795,18 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     const ptySpawnCount = spawnIndices.filter(
       (index) => recipe.terminals[index]?.type !== "dev-preview"
     ).length;
+    const requestedSpawnBatch = options?.spawnBatch;
     const spawnBatch =
-      ptySpawnCount > 1 ? { spawnBatchId: crypto.randomUUID(), spawnBatchSize: ptySpawnCount } : {};
+      requestedSpawnBatch &&
+      requestedSpawnBatch.size >= ptySpawnCount &&
+      requestedSpawnBatch.size > 1
+        ? {
+            spawnBatchId: requestedSpawnBatch.id,
+            spawnBatchSize: requestedSpawnBatch.size,
+          }
+        : ptySpawnCount > 1
+          ? { spawnBatchId: crypto.randomUUID(), spawnBatchSize: ptySpawnCount }
+          : {};
     try {
       const settled = await Promise.allSettled(
         spawnIndices.map(async (index) => {
@@ -970,7 +982,18 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     // Restore the per-panel focus the batch suppressed: focus the last spawned
     // grid panel, matching the prior serial behaviour (last `addPanel` won).
     if (!suppressFocus && results.spawned.length > 0) {
-      terminalStore.setFocused(results.spawned[results.spawned.length - 1]!.terminalId);
+      const focusId = results.spawned[results.spawned.length - 1]!.terminalId;
+      // The batch suppressed addPanel's maximize exit along with its focus set,
+      // so apply it here too — the agents the user just launched have to be
+      // visible, not stranded behind a fullscreen cell (#11060). Read the panel
+      // back fresh (`terminalStore` is a pre-spawn snapshot) and require it to
+      // still be a live grid panel: it can be removed during addPanel's async
+      // tail, and a missing panel must not drop the user out of fullscreen.
+      const committed = usePanelStore.getState().panelsById[focusId];
+      if (committed !== undefined && committed.location !== "dock") {
+        terminalStore.exitMaximize();
+      }
+      terminalStore.setFocused(focusId);
     }
 
     // Record this run in the durable history (#9949). Fire-and-forget AFTER the
