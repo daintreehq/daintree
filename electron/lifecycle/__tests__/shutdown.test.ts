@@ -236,6 +236,7 @@ const deferredInitQueueMock = vi.hoisted(() => ({
 vi.mock("../../window/deferredInitQueue.js", () => deferredInitQueueMock);
 
 import type { ShutdownDeps } from "../shutdown.js";
+import { CLEANUP_TIMEOUT_MS } from "../shutdownConfig.js";
 
 function makeDeps(overrides?: Partial<ShutdownDeps>): ShutdownDeps {
   return {
@@ -380,7 +381,13 @@ describe("registerShutdownHandler", () => {
     const event = makeEvent();
     await beforeQuitCb(event);
 
+    // haltDeferredQueue runs in the chain's synchronous prefix; the drain sits
+    // behind the chain's dynamic import of ipc/utils, so wait for it rather than
+    // counting microtasks. The invariant under test is the ORDER, not the timing.
     expect(deferredInitQueueMock.haltDeferredQueue).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(drainRateLimitQueues).toHaveBeenCalled();
+    });
     const haltOrder = deferredInitQueueMock.haltDeferredQueue.mock.invocationCallOrder[0];
     const drainOrder = vi.mocked(drainRateLimitQueues).mock.invocationCallOrder[0];
     expect(haltOrder).toBeLessThan(drainOrder);
@@ -1179,6 +1186,183 @@ describe("registerShutdownHandler", () => {
       const record = persistAgentSessionMock.mock.calls[0][0] as Record<string, unknown>;
       expect(record.sessionId).toBe("sess-1");
       expect(record.branch).toBeUndefined();
+    });
+  });
+
+  // Issue #11104. On macOS, quitAndInstall() reaches native Squirrel.Mac, which
+  // closes every window before Electron emits `before-quit` — so the update path
+  // could never reach this chain and silently skipped journaling, the DB
+  // checkpoint, audit flushes and subprocess teardown, hand-copying three
+  // clean-exit markers instead. The chain is now reachable without `before-quit`.
+  describe("update-install shutdown (issue #11104)", () => {
+    beforeEach(() => {
+      // clearAllMocks() resets call records, NOT implementations — a mcpServer.stop
+      // wedged by an earlier test would otherwise hang every test after it.
+      mcpServerMock.stop.mockReturnValue(Promise.resolve());
+    });
+
+    async function setupCoordinated(overrides?: Partial<ShutdownDeps>) {
+      const { registerShutdownHandler } = await import("../shutdown.js");
+      const coordinator = await import("../shutdownCoordinator.js");
+      const deps = makeDeps(overrides);
+      registerShutdownHandler(deps);
+      const beforeQuitCb = appMock.on.mock.calls.find(
+        (args: string[]) => args[0] === "before-quit"
+      )![1] as (event: { preventDefault: () => void }) => Promise<void>;
+      return { deps, beforeQuitCb, coordinator };
+    }
+
+    it("runs the full cleanup chain for an update install without any before-quit", async () => {
+      const { coordinator } = await setupCoordinated();
+      const onReadyToInstall = vi.fn();
+
+      const status = coordinator.requestGracefulShutdownForUpdate(onReadyToInstall);
+      expect(status).toBe("started");
+
+      await vi.waitFor(() => expect(onReadyToInstall).toHaveBeenCalled());
+
+      // The work the update path used to lose entirely.
+      expect(closeSharedDbMock.closeSharedDb).toHaveBeenCalled();
+      expect(dbMaintenanceMock.dispose).toHaveBeenCalled();
+      expect(mcpServerMock.stop).toHaveBeenCalled();
+      expect(closeTelemetryMock).toHaveBeenCalled();
+      // The install decides how the process ends — the chain must not exit itself.
+      expect(appMock.exit).not.toHaveBeenCalled();
+    });
+
+    it("hands off with a clean outcome and writes the markers the update path used to hand-copy", async () => {
+      const { coordinator } = await setupCoordinated();
+      const onReadyToInstall = vi.fn();
+
+      coordinator.requestGracefulShutdownForUpdate(onReadyToInstall);
+      await vi.waitFor(() => expect(onReadyToInstall).toHaveBeenCalled());
+
+      expect(onReadyToInstall).toHaveBeenCalledWith("clean");
+      expect(crashRecoveryMock.cleanupOnExit).toHaveBeenCalledTimes(1);
+      expect(crashLoopGuardMock.markCleanExit).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not install before the cleanup chain settles", async () => {
+      let releaseCleanup: () => void = () => {};
+      mcpServerMock.stop.mockReturnValue(
+        new Promise<void>((resolve) => {
+          releaseCleanup = resolve;
+        })
+      );
+
+      const { coordinator } = await setupCoordinated();
+      const onReadyToInstall = vi.fn();
+      coordinator.requestGracefulShutdownForUpdate(onReadyToInstall);
+
+      // Chain is wedged mid-cleanup: nothing may be installed or marked clean yet.
+      await vi.waitFor(() => expect(mcpServerMock.stop).toHaveBeenCalled());
+      expect(onReadyToInstall).not.toHaveBeenCalled();
+      expect(crashRecoveryMock.cleanupOnExit).not.toHaveBeenCalled();
+
+      releaseCleanup();
+      await vi.waitFor(() => expect(onReadyToInstall).toHaveBeenCalled());
+      expect(crashRecoveryMock.cleanupOnExit).toHaveBeenCalledTimes(1);
+      // Markers must land before the installer takes the process (lesson #7158).
+      expect(crashRecoveryMock.cleanupOnExit.mock.invocationCallOrder[0]).toBeLessThan(
+        onReadyToInstall.mock.invocationCallOrder[0]
+      );
+    });
+
+    it("still installs on a dirty outcome but leaves the crash marker intact", async () => {
+      vi.useFakeTimers();
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      mcpServerMock.stop.mockReturnValue(new Promise(() => {}));
+
+      try {
+        const { coordinator } = await setupCoordinated();
+        const onReadyToInstall = vi.fn();
+        coordinator.requestGracefulShutdownForUpdate(onReadyToInstall);
+
+        await vi.advanceTimersByTimeAsync(CLEANUP_TIMEOUT_MS);
+        await vi.runAllTimersAsync();
+
+        // The user asked to update — a timed-out cleanup must not swallow that.
+        expect(onReadyToInstall).toHaveBeenCalledWith("dirty");
+        // But it must not claim a clean exit it never achieved.
+        expect(crashRecoveryMock.cleanupOnExit).not.toHaveBeenCalled();
+        expect(crashLoopGuardMock.markCleanExit).not.toHaveBeenCalled();
+      } finally {
+        consoleSpy.mockRestore();
+        vi.useRealTimers();
+      }
+    });
+
+    it("prevents a quit that lands while the update cleanup is still running", async () => {
+      let releaseCleanup: () => void = () => {};
+      mcpServerMock.stop.mockReturnValue(
+        new Promise<void>((resolve) => {
+          releaseCleanup = resolve;
+        })
+      );
+
+      const { beforeQuitCb, coordinator } = await setupCoordinated();
+      coordinator.requestGracefulShutdownForUpdate(vi.fn());
+      await vi.waitFor(() => expect(mcpServerMock.stop).toHaveBeenCalled());
+
+      // A Cmd+Q here would otherwise close the windows and kill the process out
+      // from under the in-flight chain — losing the very work it is doing.
+      const event = makeEvent();
+      await beforeQuitCb(event);
+      expect(event.preventDefault).toHaveBeenCalled();
+
+      releaseCleanup();
+    });
+
+    it("allows the quit that Squirrel issues once the install has been handed off", async () => {
+      const { beforeQuitCb, coordinator } = await setupCoordinated();
+      const onReadyToInstall = vi.fn();
+      coordinator.requestGracefulShutdownForUpdate(onReadyToInstall);
+      await vi.waitFor(() => expect(onReadyToInstall).toHaveBeenCalled());
+
+      // quitAndInstall() closes the windows and calls app.quit() behind our back.
+      // Blocking that quit would strand every install behind the force-exit watchdog.
+      const event = makeEvent();
+      await beforeQuitCb(event);
+      expect(event.preventDefault).not.toHaveBeenCalled();
+    });
+
+    it("refuses an update install once a normal quit already owns the shutdown", async () => {
+      const { beforeQuitCb, coordinator } = await setupCoordinated();
+      await beforeQuitCb(makeEvent());
+
+      // Attaching a second terminal action here would race quitAndInstall()
+      // against the app.exit() the quit path already owns.
+      const onReadyToInstall = vi.fn();
+      expect(coordinator.requestGracefulShutdownForUpdate(onReadyToInstall)).toBe(
+        "already-shutting-down"
+      );
+
+      await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalledWith(0));
+      expect(onReadyToInstall).not.toHaveBeenCalled();
+    });
+
+    it("runs the cleanup chain once when a second install request races the first", async () => {
+      const { coordinator } = await setupCoordinated();
+      const first = vi.fn();
+      const second = vi.fn();
+
+      expect(coordinator.requestGracefulShutdownForUpdate(first)).toBe("started");
+      expect(coordinator.requestGracefulShutdownForUpdate(second)).toBe("already-shutting-down");
+
+      await vi.waitFor(() => expect(first).toHaveBeenCalled());
+      expect(second).not.toHaveBeenCalled();
+      expect(closeSharedDbMock.closeSharedDb).toHaveBeenCalledTimes(1);
+    });
+
+    it("reports unavailable — and cleans up nothing — when no shutdown handler is registered", async () => {
+      const coordinator = await import("../shutdownCoordinator.js");
+
+      const onReadyToInstall = vi.fn();
+      expect(coordinator.requestGracefulShutdownForUpdate(onReadyToInstall)).toBe("unavailable");
+
+      expect(onReadyToInstall).not.toHaveBeenCalled();
+      expect(closeSharedDbMock.closeSharedDb).not.toHaveBeenCalled();
+      expect(crashRecoveryMock.cleanupOnExit).not.toHaveBeenCalled();
     });
   });
 });

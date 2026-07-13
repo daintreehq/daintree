@@ -60,9 +60,36 @@ const storeMock = vi.hoisted(() => ({
   delete: vi.fn(),
 }));
 
+// Issue #11104: AutoUpdaterService no longer writes the clean-exit markers itself
+// — the shared shutdown chain does, and only once it has actually settled clean.
+// These stay mocked so the tests below can prove the duplicated writes are GONE.
 const cleanupOnExitMock = vi.hoisted(() => vi.fn());
 const markCleanExitMock = vi.hoisted(() => vi.fn());
 const markCleanLaunchMock = vi.hoisted(() => vi.fn());
+
+// The shutdown coordinator (issue #11104). The install path now runs the full
+// graceful-shutdown chain BEFORE handing off to the updater, so these tests drive
+// the handoff explicitly: `requestGracefulShutdownForUpdate` captures the
+// continuation, and `settleShutdown(outcome)` plays it back as the real chain would.
+const shutdownCoordinatorMock = vi.hoisted(() => {
+  type Outcome = "clean" | "dirty";
+  const requestGracefulShutdownForUpdate = vi.fn<
+    (cb: (outcome: Outcome) => void) => "started" | "already-shutting-down" | "unavailable"
+  >(() => "started");
+  return {
+    requestGracefulShutdownForUpdate,
+    settleShutdown: (outcome: Outcome = "clean") => {
+      const calls = requestGracefulShutdownForUpdate.mock.calls;
+      const last = calls[calls.length - 1];
+      if (!last) throw new Error("No coordinated shutdown was requested");
+      last[0](outcome);
+    },
+  };
+});
+
+vi.mock("../../lifecycle/shutdownCoordinator.js", () => ({
+  requestGracefulShutdownForUpdate: shutdownCoordinatorMock.requestGracefulShutdownForUpdate,
+}));
 
 const fsMock = vi.hoisted(() => ({
   existsSync: vi.fn((_p: unknown) => false),
@@ -362,53 +389,81 @@ describe("AutoUpdaterService", () => {
       )![1];
     });
 
-    it("calls cleanupOnExit before quitAndInstall when update is downloaded", () => {
+    it("requests a coordinated shutdown instead of installing immediately", () => {
       downloadedHandler({ version: "2.0.0" });
 
       quitAndInstallHandler(TRUSTED_SENDER);
 
-      expect(cleanupOnExitMock).toHaveBeenCalledTimes(1);
-      expect(cleanupOnExitMock.mock.invocationCallOrder[0]).toBeLessThan(
-        autoUpdaterMock.quitAndInstall.mock.invocationCallOrder[0] || Infinity
-      );
+      // The whole point of #11104: the graceful chain runs FIRST. Nothing may
+      // reach the updater until the coordinator says the chain has settled.
+      expect(shutdownCoordinatorMock.requestGracefulShutdownForUpdate).toHaveBeenCalledTimes(1);
+      expect(autoUpdaterMock.quitAndInstall).not.toHaveBeenCalled();
     });
 
-    it("defers quitAndInstall via setImmediate", () => {
+    it("installs once the coordinated shutdown settles clean", () => {
       downloadedHandler({ version: "2.0.0" });
 
       quitAndInstallHandler(TRUSTED_SENDER);
+      shutdownCoordinatorMock.settleShutdown("clean");
 
-      expect(autoUpdaterMock.quitAndInstall).not.toHaveBeenCalled();
-      vi.advanceTimersToNextTimer();
       expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
     });
 
-    it("disarms autoInstallOnAppQuit before quitAndInstall", () => {
+    it("still installs when the cleanup chain settles dirty", () => {
+      downloadedHandler({ version: "2.0.0" });
+
+      quitAndInstallHandler(TRUSTED_SENDER);
+      shutdownCoordinatorMock.settleShutdown("dirty");
+
+      // A timed-out or failed cleanup must not swallow the update the user asked
+      // for — the dirty marker it leaves behind is what protects their data.
+      expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
+    });
+
+    it("never writes the clean-exit markers itself — the shutdown chain owns them", () => {
+      downloadedHandler({ version: "2.0.0" });
+
+      quitAndInstallHandler(TRUSTED_SENDER);
+      shutdownCoordinatorMock.settleShutdown("clean");
+
+      // Before #11104 these three were hand-copied here (and in the menu path),
+      // written eagerly at click time for work that hadn't happened yet.
+      expect(cleanupOnExitMock).not.toHaveBeenCalled();
+      expect(markCleanExitMock).not.toHaveBeenCalled();
+      expect(markCleanLaunchMock).not.toHaveBeenCalled();
+    });
+
+    it("disarms autoInstallOnAppQuit for the whole cleanup window, not just the install", () => {
       downloadedHandler({ version: "2.0.0" });
       autoUpdaterMock.autoInstallOnAppQuit = true;
 
       quitAndInstallHandler(TRUSTED_SENDER);
 
+      // Cleanup is now multi-second. A Cmd+Q landing inside that window would
+      // otherwise be a second, concurrent install trigger.
       expect(autoUpdaterMock.autoInstallOnAppQuit).toBe(false);
     });
 
-    it("does not call cleanupOnExit or quitAndInstall when no update is downloaded", () => {
+    it("restores autoInstallOnAppQuit and keeps the update staged when the coordinator declines", () => {
+      downloadedHandler({ version: "2.0.0" });
+      autoUpdaterMock.autoInstallOnAppQuit = true;
+      shutdownCoordinatorMock.requestGracefulShutdownForUpdate.mockReturnValueOnce(
+        "already-shutting-down"
+      );
+
       quitAndInstallHandler(TRUSTED_SENDER);
 
-      expect(cleanupOnExitMock).not.toHaveBeenCalled();
       expect(autoUpdaterMock.quitAndInstall).not.toHaveBeenCalled();
+      expect(autoUpdaterMock.autoInstallOnAppQuit).toBe(true);
+      // The staged update must stay installable rather than be silently consumed.
+      expect(autoUpdaterService.getMenuState()).not.toBe("idle");
     });
 
-    it("still schedules quitAndInstall when cleanupOnExit throws", () => {
-      downloadedHandler({ version: "2.0.0" });
-      cleanupOnExitMock.mockImplementationOnce(() => {
-        throw new Error("cleanup failed");
-      });
-
+    it("does not request a shutdown when no update is downloaded", () => {
       quitAndInstallHandler(TRUSTED_SENDER);
 
-      vi.advanceTimersToNextTimer();
-      expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
+      expect(shutdownCoordinatorMock.requestGracefulShutdownForUpdate).not.toHaveBeenCalled();
+      expect(autoUpdaterMock.quitAndInstall).not.toHaveBeenCalled();
     });
 
     it("rejects untrusted sender frame", () => {
@@ -416,7 +471,7 @@ describe("AutoUpdaterService", () => {
 
       quitAndInstallHandler({ senderFrame: { url: "https://evil.example.com/x.html" } });
 
-      expect(cleanupOnExitMock).not.toHaveBeenCalled();
+      expect(shutdownCoordinatorMock.requestGracefulShutdownForUpdate).not.toHaveBeenCalled();
       expect(autoUpdaterMock.quitAndInstall).not.toHaveBeenCalled();
     });
 
@@ -425,102 +480,18 @@ describe("AutoUpdaterService", () => {
 
       quitAndInstallHandler({});
 
-      expect(cleanupOnExitMock).not.toHaveBeenCalled();
+      expect(shutdownCoordinatorMock.requestGracefulShutdownForUpdate).not.toHaveBeenCalled();
       expect(autoUpdaterMock.quitAndInstall).not.toHaveBeenCalled();
     });
 
-    it("resets updateDownloaded flag to prevent double-IPC", () => {
+    it("coordinates one shutdown and one install on a rapid double-IPC", () => {
       downloadedHandler({ version: "2.0.0" });
 
       quitAndInstallHandler(TRUSTED_SENDER);
       quitAndInstallHandler(TRUSTED_SENDER);
 
-      expect(cleanupOnExitMock).toHaveBeenCalledTimes(1);
-      vi.advanceTimersToNextTimer();
-      expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
-    });
-
-    // Issue #9638: the update relaunch must write the same clean-exit markers
-    // the normal shutdown chain does, so the post-update boot isn't treated as
-    // a crash.
-    it("writes clean-exit markers before the deferred quitAndInstall", () => {
-      downloadedHandler({ version: "2.0.0" });
-
-      quitAndInstallHandler(TRUSTED_SENDER);
-
-      expect(markCleanExitMock).toHaveBeenCalledTimes(1);
-      expect(markCleanLaunchMock).toHaveBeenCalledTimes(1);
-      vi.advanceTimersToNextTimer();
-      expect(markCleanExitMock.mock.invocationCallOrder[0]).toBeLessThan(
-        autoUpdaterMock.quitAndInstall.mock.invocationCallOrder[0]
-      );
-      expect(markCleanLaunchMock.mock.invocationCallOrder[0]).toBeLessThan(
-        autoUpdaterMock.quitAndInstall.mock.invocationCallOrder[0]
-      );
-    });
-
-    it("does not write clean-exit markers when no update is downloaded", () => {
-      quitAndInstallHandler(TRUSTED_SENDER);
-
-      expect(markCleanExitMock).not.toHaveBeenCalled();
-      expect(markCleanLaunchMock).not.toHaveBeenCalled();
-    });
-
-    it("does not write clean-exit markers for an untrusted sender", () => {
-      downloadedHandler({ version: "2.0.0" });
-
-      quitAndInstallHandler({ senderFrame: { url: "https://evil.example.com/x.html" } });
-
-      expect(markCleanExitMock).not.toHaveBeenCalled();
-      expect(markCleanLaunchMock).not.toHaveBeenCalled();
-    });
-
-    it("writes the markers only once on a rapid double-IPC", () => {
-      downloadedHandler({ version: "2.0.0" });
-
-      quitAndInstallHandler(TRUSTED_SENDER);
-      quitAndInstallHandler(TRUSTED_SENDER);
-
-      expect(markCleanExitMock).toHaveBeenCalledTimes(1);
-      expect(markCleanLaunchMock).toHaveBeenCalledTimes(1);
-    });
-
-    it("still writes markCleanLaunch and installs when cleanupOnExit throws", () => {
-      downloadedHandler({ version: "2.0.0" });
-      cleanupOnExitMock.mockImplementationOnce(() => {
-        throw new Error("cleanup failed");
-      });
-
-      quitAndInstallHandler(TRUSTED_SENDER);
-
-      expect(markCleanExitMock).toHaveBeenCalledTimes(1);
-      expect(markCleanLaunchMock).toHaveBeenCalledTimes(1);
-      vi.advanceTimersToNextTimer();
-      expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
-    });
-
-    it("still writes markCleanLaunch and installs when markCleanExit throws", () => {
-      downloadedHandler({ version: "2.0.0" });
-      markCleanExitMock.mockImplementationOnce(() => {
-        throw new Error("markCleanExit failed");
-      });
-
-      quitAndInstallHandler(TRUSTED_SENDER);
-
-      expect(markCleanLaunchMock).toHaveBeenCalledTimes(1);
-      vi.advanceTimersToNextTimer();
-      expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
-    });
-
-    it("still installs when markCleanLaunch throws", () => {
-      downloadedHandler({ version: "2.0.0" });
-      markCleanLaunchMock.mockImplementationOnce(() => {
-        throw new Error("markCleanLaunch failed");
-      });
-
-      quitAndInstallHandler(TRUSTED_SENDER);
-
-      vi.advanceTimersToNextTimer();
+      expect(shutdownCoordinatorMock.requestGracefulShutdownForUpdate).toHaveBeenCalledTimes(1);
+      shutdownCoordinatorMock.settleShutdown("clean");
       expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
     });
   });
@@ -1576,8 +1547,8 @@ describe("AutoUpdaterService", () => {
         (args) => args[0] === CHANNELS.UPDATE_QUIT_AND_INSTALL
       )![1];
       quitHandler(TRUSTED_SENDER);
+      shutdownCoordinatorMock.settleShutdown("clean");
 
-      vi.advanceTimersToNextTimer();
       expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
     });
 
@@ -1953,7 +1924,7 @@ describe("AutoUpdaterService", () => {
       vi.advanceTimersByTime(0);
 
       expect(autoUpdaterMock.quitAndInstall).not.toHaveBeenCalled();
-      expect(cleanupOnExitMock).not.toHaveBeenCalled();
+      expect(shutdownCoordinatorMock.requestGracefulShutdownForUpdate).not.toHaveBeenCalled();
     });
 
     it("returns false when state is checking (no install staged)", () => {
@@ -1965,131 +1936,81 @@ describe("AutoUpdaterService", () => {
       expect(autoUpdaterMock.quitAndInstall).not.toHaveBeenCalled();
     });
 
-    it("calls cleanupOnExit then quitAndInstall when ready, deferred via setImmediate", () => {
+    it("coordinates the shutdown when ready, and installs only once it settles", () => {
       downloadedHandler({ version: "2.0.0" });
 
       const result = autoUpdaterService.quitAndInstallIfReady();
 
       expect(result).toBe(true);
-      expect(cleanupOnExitMock).toHaveBeenCalledTimes(1);
-      // setImmediate is faked by vi.useFakeTimers — it hasn't fired yet.
+      expect(shutdownCoordinatorMock.requestGracefulShutdownForUpdate).toHaveBeenCalledTimes(1);
+      // The chain is still running — the updater must not be touched yet.
       expect(autoUpdaterMock.quitAndInstall).not.toHaveBeenCalled();
 
-      // advanceTimersToNextTimer fires only the queued setImmediate; using
-      // runAllTimers would also drain the 4h periodic interval and recurse.
-      vi.advanceTimersToNextTimer();
+      shutdownCoordinatorMock.settleShutdown("clean");
       expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
     });
 
-    it("still schedules quitAndInstall when cleanupOnExit throws", () => {
+    it("installs on a dirty outcome too", () => {
       downloadedHandler({ version: "2.0.0" });
-      cleanupOnExitMock.mockImplementationOnce(() => {
-        throw new Error("cleanup failed");
-      });
 
       expect(autoUpdaterService.quitAndInstallIfReady()).toBe(true);
-      vi.advanceTimersToNextTimer();
+      shutdownCoordinatorMock.settleShutdown("dirty");
 
       expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
     });
 
-    it("still writes both markers when cleanupOnExit throws", () => {
+    it("never writes the clean-exit markers itself — the shutdown chain owns them", () => {
       downloadedHandler({ version: "2.0.0" });
-      cleanupOnExitMock.mockImplementationOnce(() => {
-        throw new Error("cleanup failed");
-      });
 
       expect(autoUpdaterService.quitAndInstallIfReady()).toBe(true);
+      shutdownCoordinatorMock.settleShutdown("clean");
 
-      expect(markCleanExitMock).toHaveBeenCalledTimes(1);
-      expect(markCleanLaunchMock).toHaveBeenCalledTimes(1);
+      expect(cleanupOnExitMock).not.toHaveBeenCalled();
+      expect(markCleanExitMock).not.toHaveBeenCalled();
+      expect(markCleanLaunchMock).not.toHaveBeenCalled();
     });
 
-    it("a rapid double-call only schedules a single quitAndInstall (idempotency)", () => {
+    it("a rapid double-call coordinates one shutdown and one install (idempotency)", () => {
       downloadedHandler({ version: "2.0.0" });
 
-      // Two calls back-to-back — the second must read idle and bail before
-      // queuing a second setImmediate. Otherwise cleanupOnExit + quitAndInstall
-      // would fire twice on a double-click.
+      // The second call must read idle and bail. Otherwise a double-click would
+      // start two cleanup chains and hand two installs to a non-reentrant updater
+      // (MacUpdater.quitAndInstall has no guard of its own).
       const first = autoUpdaterService.quitAndInstallIfReady();
       const second = autoUpdaterService.quitAndInstallIfReady();
 
       expect(first).toBe(true);
       expect(second).toBe(false);
-      expect(cleanupOnExitMock).toHaveBeenCalledTimes(1);
+      expect(shutdownCoordinatorMock.requestGracefulShutdownForUpdate).toHaveBeenCalledTimes(1);
 
-      vi.advanceTimersToNextTimer();
+      shutdownCoordinatorMock.settleShutdown("clean");
       expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
     });
 
-    it("disarms autoInstallOnAppQuit before calling quitAndInstall", () => {
+    it("disarms autoInstallOnAppQuit for the whole cleanup window", () => {
       downloadedHandler({ version: "2.0.0" });
       autoUpdaterMock.autoInstallOnAppQuit = true;
 
       autoUpdaterService.quitAndInstallIfReady();
 
+      // Disarmed at the START of the window, before the chain runs — not just in
+      // the instant before installing.
       expect(autoUpdaterMock.autoInstallOnAppQuit).toBe(false);
-    });
-
-    // Issue #9638: mirror the shutdown chain's clean-exit markers so an update
-    // relaunch isn't counted as a crash on the next boot.
-    it("writes clean-exit markers before the deferred quitAndInstall when ready", () => {
-      downloadedHandler({ version: "2.0.0" });
-
-      autoUpdaterService.quitAndInstallIfReady();
-
-      expect(markCleanExitMock).toHaveBeenCalledTimes(1);
-      expect(markCleanLaunchMock).toHaveBeenCalledTimes(1);
-      // Markers must commit before the install runs.
       expect(autoUpdaterMock.quitAndInstall).not.toHaveBeenCalled();
-      vi.advanceTimersToNextTimer();
-      expect(markCleanExitMock.mock.invocationCallOrder[0]).toBeLessThan(
-        autoUpdaterMock.quitAndInstall.mock.invocationCallOrder[0]
-      );
-      expect(markCleanLaunchMock.mock.invocationCallOrder[0]).toBeLessThan(
-        autoUpdaterMock.quitAndInstall.mock.invocationCallOrder[0]
-      );
     });
 
-    it("does not write clean-exit markers when state is idle", () => {
-      autoUpdaterService.quitAndInstallIfReady();
-
-      expect(markCleanExitMock).not.toHaveBeenCalled();
-      expect(markCleanLaunchMock).not.toHaveBeenCalled();
-    });
-
-    it("writes the markers only once on a rapid double-call", () => {
+    it("rolls back and keeps the update staged when the coordinator is unavailable", () => {
       downloadedHandler({ version: "2.0.0" });
+      autoUpdaterMock.autoInstallOnAppQuit = true;
+      shutdownCoordinatorMock.requestGracefulShutdownForUpdate.mockReturnValueOnce("unavailable");
 
-      autoUpdaterService.quitAndInstallIfReady();
-      autoUpdaterService.quitAndInstallIfReady();
+      expect(autoUpdaterService.quitAndInstallIfReady()).toBe(false);
 
-      expect(markCleanExitMock).toHaveBeenCalledTimes(1);
-      expect(markCleanLaunchMock).toHaveBeenCalledTimes(1);
-    });
-
-    it("still writes markCleanLaunch and installs when markCleanExit throws", () => {
-      downloadedHandler({ version: "2.0.0" });
-      markCleanExitMock.mockImplementationOnce(() => {
-        throw new Error("markCleanExit failed");
-      });
-
+      expect(autoUpdaterMock.quitAndInstall).not.toHaveBeenCalled();
+      expect(autoUpdaterMock.autoInstallOnAppQuit).toBe(true);
+      // Still installable — a declined request must not consume the staged update.
+      expect(autoUpdaterService.getMenuState()).toBe("ready");
       expect(autoUpdaterService.quitAndInstallIfReady()).toBe(true);
-
-      expect(markCleanLaunchMock).toHaveBeenCalledTimes(1);
-      vi.advanceTimersToNextTimer();
-      expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
-    });
-
-    it("still installs when markCleanLaunch throws", () => {
-      downloadedHandler({ version: "2.0.0" });
-      markCleanLaunchMock.mockImplementationOnce(() => {
-        throw new Error("markCleanLaunch failed");
-      });
-
-      expect(autoUpdaterService.quitAndInstallIfReady()).toBe(true);
-      vi.advanceTimersToNextTimer();
-      expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -2197,7 +2118,7 @@ describe("AutoUpdaterService", () => {
       // IPC handler must reject — updateDownloaded was reset synchronously
       // before the await.
       expect(autoUpdaterMock.quitAndInstall).not.toHaveBeenCalled();
-      expect(cleanupOnExitMock).not.toHaveBeenCalled();
+      expect(shutdownCoordinatorMock.requestGracefulShutdownForUpdate).not.toHaveBeenCalled();
 
       clearResolve();
       return channelPromise;
@@ -2384,11 +2305,11 @@ describe("AutoUpdaterService", () => {
       )![1];
     });
 
-    it("arms a 5s app.exit(0) watchdog on darwin after quitAndInstall fires", () => {
+    it("arms a 5s app.exit(0) watchdog after quitAndInstall fires", () => {
       downloadedHandler({ version: "2.0.0" });
       quitAndInstallHandler(TRUSTED_SENDER);
+      shutdownCoordinatorMock.settleShutdown("clean");
 
-      vi.advanceTimersToNextTimer();
       expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
       expect(appMock.exit).not.toHaveBeenCalled();
 
@@ -2400,28 +2321,34 @@ describe("AutoUpdaterService", () => {
       expect(appMock.exit).toHaveBeenCalledWith(0);
     });
 
-    it("does not arm the watchdog on win32", () => {
-      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    // Issue #11104 widened this from macOS-only. BaseUpdater (win32/linux) only
+    // schedules its app.quit() when install() SUCCEEDS — and the install is now
+    // preceded by the full teardown, so a failed one would leave a process with
+    // no DB, no PTYs and no IPC that never quits. The watchdog is the only thing
+    // between that and a zombie.
+    it.each(["win32", "linux"])("arms the watchdog on %s too", (platform) => {
+      Object.defineProperty(process, "platform", { value: platform, configurable: true });
       downloadedHandler({ version: "2.0.0" });
       quitAndInstallHandler(TRUSTED_SENDER);
+      shutdownCoordinatorMock.settleShutdown("clean");
 
-      vi.advanceTimersToNextTimer();
       expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
-
-      vi.advanceTimersByTime(60_000);
       expect(appMock.exit).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(5_000);
+      expect(appMock.exit).toHaveBeenCalledWith(0);
     });
 
-    it("does not arm the watchdog on linux", () => {
-      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    it("does not arm the watchdog while the cleanup chain is still running", () => {
       downloadedHandler({ version: "2.0.0" });
       quitAndInstallHandler(TRUSTED_SENDER);
 
-      vi.advanceTimersToNextTimer();
-      expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
-
+      // The chain has NOT settled. The two budgets must run strictly in sequence:
+      // arming the 5s force-exit now would kill a cleanup that is still allowed
+      // up to CLEANUP_TIMEOUT_MS to finish.
       vi.advanceTimersByTime(60_000);
       expect(appMock.exit).not.toHaveBeenCalled();
+      expect(autoUpdaterMock.quitAndInstall).not.toHaveBeenCalled();
     });
 
     it("swallows a thrown app.exit so the watchdog callback never escapes", () => {
@@ -2430,18 +2357,17 @@ describe("AutoUpdaterService", () => {
       });
       downloadedHandler({ version: "2.0.0" });
       quitAndInstallHandler(TRUSTED_SENDER);
+      shutdownCoordinatorMock.settleShutdown("clean");
 
-      vi.advanceTimersToNextTimer();
       expect(() => vi.advanceTimersByTime(5_000)).not.toThrow();
       expect(appMock.exit).toHaveBeenCalledTimes(1);
     });
 
-    it("quitAndInstallIfReady also arms the macOS watchdog", () => {
+    it("quitAndInstallIfReady also arms the watchdog", () => {
       downloadedHandler({ version: "2.0.0" });
-      const triggered = autoUpdaterService.quitAndInstallIfReady();
-      expect(triggered).toBe(true);
+      expect(autoUpdaterService.quitAndInstallIfReady()).toBe(true);
+      shutdownCoordinatorMock.settleShutdown("clean");
 
-      vi.advanceTimersToNextTimer();
       expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
       expect(appMock.exit).not.toHaveBeenCalled();
 
@@ -2449,15 +2375,32 @@ describe("AutoUpdaterService", () => {
       expect(appMock.exit).toHaveBeenCalledTimes(1);
     });
 
-    it("dispose() cancels a pending watchdog so app.exit never fires", () => {
+    // The cleanup chain disposes this service as part of its own teardown. On a
+    // chain that hit its hard timeout, that disposal can land AFTER the handoff
+    // already armed the watchdog — disarming the one guarantee against a zombie.
+    it("dispose() during an in-flight install does not disarm the armed watchdog", () => {
       downloadedHandler({ version: "2.0.0" });
       quitAndInstallHandler(TRUSTED_SENDER);
-      vi.advanceTimersToNextTimer();
+      shutdownCoordinatorMock.settleShutdown("dirty");
       expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
 
       autoUpdaterService.dispose();
-      vi.advanceTimersByTime(60_000);
-      expect(appMock.exit).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(5_000);
+      expect(appMock.exit).toHaveBeenCalledWith(0);
+    });
+
+    it("keeps the error listener attached through an in-flight install", () => {
+      downloadedHandler({ version: "2.0.0" });
+      quitAndInstallHandler(TRUSTED_SENDER);
+
+      // The chain disposes this service BEFORE quitAndInstall() runs. Detaching
+      // the "error" listener there would turn a routine install failure into an
+      // uncaught throw — electron-updater dispatches errors through a bare
+      // EventEmitter.emit("error"), which throws when nothing is listening.
+      autoUpdaterService.dispose();
+
+      expect(autoUpdaterMock.off).not.toHaveBeenCalledWith("error", expect.any(Function));
     });
 
     it("still arms the watchdog when autoUpdater.quitAndInstall throws", () => {
@@ -2467,7 +2410,7 @@ describe("AutoUpdaterService", () => {
       downloadedHandler({ version: "2.0.0" });
       quitAndInstallHandler(TRUSTED_SENDER);
 
-      expect(() => vi.advanceTimersToNextTimer()).not.toThrow();
+      expect(() => shutdownCoordinatorMock.settleShutdown("clean")).not.toThrow();
       expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
 
       vi.advanceTimersByTime(5_000);
