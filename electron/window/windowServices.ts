@@ -140,6 +140,20 @@ export async function setupWindowServices(
   const handlerDeps = await initPerWindowServices(win, ctx, windowRegistry);
   const cliAvailabilityService = getCliAvailabilityServiceRef();
 
+  // Publish the ProjectViewManager BEFORE the IPC handlers below go live, and
+  // well before loadRenderer(). Published late, there was a window in which the
+  // renderer could already invoke `project:switch` while the handlers still saw
+  // no manager — the switch then took the legacy (non-PVM) path, which moves the
+  // renderer to another project without binding its webContents to it. The
+  // initial-view registration further down would then bind that renderer to the
+  // project we restored, and every later switch would persist the layout it is
+  // really showing under the stale one (#11101). Publishing here means a switch
+  // that early is handled by the manager, which binds views as it swaps them.
+  if (opts.projectViewManager) {
+    handlerDeps.projectViewManager = opts.projectViewManager;
+    ctx.services.projectViewManager = opts.projectViewManager;
+  }
+
   console.log("[MAIN] Registering IPC handlers...");
 
   // IPC handlers are globally scoped — register only once. PluginService
@@ -567,18 +581,23 @@ export async function setupWindowServices(
   // Register the initial view with ProjectViewManager — only when this window
   // has a project binding (startup restore). Unbound windows (Cmd+N) start
   // with the project picker and get their view registered on project open.
-  if (opts.projectViewManager && opts.initialAppView && restoreProject) {
+  //
+  // Skipped once the manager has already activated a project: a switch can land
+  // while the rest of this boot is still awaiting, and the manager will have
+  // swapped in its own view for it. Registering the restored project on top of
+  // that would point `activeProjectId` and the view map at a project the window
+  // is no longer showing.
+  if (
+    opts.projectViewManager &&
+    opts.initialAppView &&
+    restoreProject &&
+    !opts.projectViewManager.getActiveProjectId()
+  ) {
     opts.projectViewManager.registerInitialView(
       opts.initialAppView,
       restoreProject.id,
       restoreProject.path
     );
-  }
-
-  // Add ProjectViewManager to handler deps for IPC handlers
-  if (opts.projectViewManager) {
-    handlerDeps.projectViewManager = opts.projectViewManager;
-    ctx.services.projectViewManager = opts.projectViewManager;
   }
 
   // Load worktrees — prefer initialProjectPath, else restoreProject for

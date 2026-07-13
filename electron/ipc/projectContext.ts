@@ -13,7 +13,14 @@ function getOpenProjectById(projectId: string): Project | null {
   return project ?? null;
 }
 
-function getProjectIdFromSenderUrl(sender: Electron.WebContents): string | null {
+/**
+ * Project id carried on a view's document URL. Only the initial (startup-restore)
+ * renderer gets a `?projectId=` query string; ProjectViewManager's cold switch
+ * views load a static URL. So this is the sole per-sender identity during the
+ * startup window where the restored view is already live but `registerInitialView`
+ * has not bound it in the project maps yet.
+ */
+export function getProjectIdFromSenderUrl(sender: Electron.WebContents): string | null {
   const senderWithUrl = sender as Electron.WebContents & { getURL?: () => string };
   if (typeof senderWithUrl.getURL !== "function") return null;
 

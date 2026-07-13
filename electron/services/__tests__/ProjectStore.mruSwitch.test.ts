@@ -240,4 +240,49 @@ describe("ProjectStore.setCurrentProject MRU lastOpened bump", () => {
     expect(alphaRow?.status).toBe("background");
     expect(alphaRow?.lastOpened).toBe(tAlpha);
   });
+
+  it("gives the departing MRU bump to the named project, not the global pointer (#11101)", async () => {
+    // Multi-window: Alpha is globally current (window A still displays it) while
+    // window B, displaying Beta, is the one switching to Gamma.
+    //
+    // Only `lastOpened` is asserted here. `status` is NOT a per-window concept —
+    // getAllProjects() reconciles it to a singleton keyed on the global pointer —
+    // so asserting "Alpha stays active" would encode an invariant the store
+    // deliberately does not hold.
+    await store.setCurrentProject(gammaId, betaId);
+
+    const alphaRow = db.select().from(schema.projects).where(eq(schema.projects.id, alphaId)).get();
+    const betaRow = db.select().from(schema.projects).where(eq(schema.projects.id, betaId)).get();
+    const gammaRow = db.select().from(schema.projects).where(eq(schema.projects.id, gammaId)).get();
+
+    // Beta actually departed a window, so it takes the departing bump and
+    // becomes the top Alt+Tab candidate behind the newly-active Gamma.
+    expect(betaRow!.lastOpened).toBeGreaterThan(tGamma);
+    expect(betaRow!.lastOpened).toBeLessThan(gammaRow!.lastOpened!);
+
+    // Alpha departed nothing — bumping it would hand the Alt+Tab head to a
+    // project the user never left, which is what the global read used to do.
+    expect(alphaRow?.lastOpened).toBe(tAlpha);
+
+    expect(gammaRow?.status).toBe("active");
+    expect(store.getCurrentProjectId()).toBe(gammaId);
+
+    const mruExcludingCurrent = getMruProjects(store.getAllProjects()).filter(
+      (p) => p.id !== gammaId
+    );
+    expect(mruExcludingCurrent[0]?.id).toBe(betaId);
+  });
+
+  it("bumps nothing when the departing project is explicitly null", async () => {
+    // A welcome view has no project to depart. `undefined` would infer Alpha from
+    // the global pointer and hand it an MRU boost the user never earned.
+    await store.setCurrentProject(gammaId, null);
+
+    const alphaRow = db.select().from(schema.projects).where(eq(schema.projects.id, alphaId)).get();
+    const gammaRow = db.select().from(schema.projects).where(eq(schema.projects.id, gammaId)).get();
+
+    expect(alphaRow?.lastOpened).toBe(tAlpha);
+    expect(gammaRow?.status).toBe("active");
+    expect(store.getCurrentProjectId()).toBe(gammaId);
+  });
 });
