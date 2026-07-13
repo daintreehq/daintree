@@ -21,12 +21,14 @@ const notificationServiceMock = vi.hoisted(() => ({
   updateNotifications: vi.fn(),
   showNativeNotification: vi.fn(),
   showWatchNotification: vi.fn(),
+  removeOwner: vi.fn(),
 }));
 
 const agentNotificationServiceMock = vi.hoisted(() => ({
   syncWatchedPanels: vi.fn(),
   acknowledgeWaiting: vi.fn(),
   acknowledgeWorkingPulse: vi.fn(),
+  removeOwner: vi.fn(),
 }));
 
 const soundServiceMock = vi.hoisted(() => ({
@@ -67,9 +69,41 @@ function getListener(channel: string): Listener {
   return fn;
 }
 
-function fakeEvent(): Electron.IpcMainInvokeEvent {
-  return { sender: {} as Electron.WebContents } as Electron.IpcMainInvokeEvent;
+/**
+ * A sender stands in for a project view's renderer. Its `id` is the owner key,
+ * and `destroy()` fires the one-shot listener the handlers use to purge it.
+ */
+function createSender(id: number) {
+  const destroyListeners: Array<() => void> = [];
+  return {
+    id,
+    once: vi.fn((event: string, listener: () => void) => {
+      if (event === "destroyed") destroyListeners.push(listener);
+    }),
+    destroy: () => destroyListeners.splice(0).forEach((fn) => fn()),
+  };
 }
+
+type Sender = ReturnType<typeof createSender>;
+
+function fakeEvent(sender: Sender = createSender(1)): Electron.IpcMainInvokeEvent {
+  return { sender: sender as unknown as Electron.WebContents } as Electron.IpcMainInvokeEvent;
+}
+
+/** A window whose `cleanup` store the handlers register an owner purge into. */
+function createWindowRegistryMock() {
+  const disposables: Array<{ dispose: () => void }> = [];
+  return {
+    registry: {
+      getByWebContentsId: vi.fn(() => ({
+        cleanup: { add: (d: { dispose: () => void }) => disposables.push(d) },
+      })),
+    },
+    closeWindow: () => disposables.splice(0).forEach((d) => d.dispose()),
+  };
+}
+
+const drainMicrotasks = () => new Promise((resolve) => setImmediate(resolve));
 
 const defaultSettings = {
   enabled: true,
@@ -180,17 +214,14 @@ describe("notifications IPC adversarial", () => {
   });
 
   it("syncWatched filters non-string entries from the id array", async () => {
-    getListener(CHANNELS.NOTIFICATION_SYNC_WATCHED)(fakeEvent() as Electron.IpcMainEvent, [
-      "a",
-      1,
-      null,
-      "b",
-      { id: "nope" },
-    ]);
+    getListener(CHANNELS.NOTIFICATION_SYNC_WATCHED)(
+      fakeEvent(createSender(7)) as Electron.IpcMainEvent,
+      ["a", 1, null, "b", { id: "nope" }]
+    );
 
     // Listener uses fire-and-forget dynamic import — await microtask drain
-    await new Promise((resolve) => setImmediate(resolve));
-    expect(agentNotificationServiceMock.syncWatchedPanels).toHaveBeenCalledWith(["a", "b"]);
+    await drainMicrotasks();
+    expect(agentNotificationServiceMock.syncWatchedPanels).toHaveBeenCalledWith(7, ["a", "b"]);
   });
 
   it("syncWatched ignores non-array payload", () => {
@@ -232,5 +263,111 @@ describe("notifications IPC adversarial", () => {
     cleanup();
     expect(ipcHandlers.size).toBe(0);
     expect(ipcListeners.size).toBe(0);
+  });
+
+  // #11110 — every handler used to discard `_event`, so main had no idea which
+  // renderer reported what and the last caller overwrote everyone else.
+  describe("owner attribution", () => {
+    it("attributes a badge update to the sending renderer", () => {
+      getListener(CHANNELS.NOTIFICATION_UPDATE)(
+        fakeEvent(createSender(42)) as Electron.IpcMainEvent,
+        { waitingCount: 3 }
+      );
+
+      expect(notificationServiceMock.updateNotifications).toHaveBeenCalledWith(42, {
+        waitingCount: 3,
+      });
+    });
+
+    it("attributes a watch notification to the sending renderer", () => {
+      getListener(CHANNELS.NOTIFICATION_SHOW_WATCH)(
+        fakeEvent(createSender(42)) as Electron.IpcMainEvent,
+        { title: "T", body: "B", panelId: "p-1" }
+      );
+
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
+        "T",
+        "B",
+        expect.objectContaining({ panelId: "p-1" }),
+        CHANNELS.NOTIFICATION_WATCH_NAVIGATE,
+        { ownerWebContentsId: 42 }
+      );
+    });
+
+    it("keeps two renderers' syncs independent", async () => {
+      getListener(CHANNELS.NOTIFICATION_SYNC_WATCHED)(
+        fakeEvent(createSender(1)) as Electron.IpcMainEvent,
+        ["term-1"]
+      );
+      getListener(CHANNELS.NOTIFICATION_SYNC_WATCHED)(
+        fakeEvent(createSender(2)) as Electron.IpcMainEvent,
+        []
+      );
+      await drainMicrotasks();
+
+      expect(agentNotificationServiceMock.syncWatchedPanels).toHaveBeenNthCalledWith(1, 1, [
+        "term-1",
+      ]);
+      expect(agentNotificationServiceMock.syncWatchedPanels).toHaveBeenNthCalledWith(2, 2, []);
+    });
+  });
+
+  describe("owner lifecycle", () => {
+    it("purges an owner from both services when its renderer is destroyed", async () => {
+      const sender = createSender(42);
+      getListener(CHANNELS.NOTIFICATION_UPDATE)(fakeEvent(sender) as Electron.IpcMainEvent, {
+        waitingCount: 3,
+      });
+
+      sender.destroy();
+      await drainMicrotasks();
+
+      expect(notificationServiceMock.removeOwner).toHaveBeenCalledWith(42);
+      expect(agentNotificationServiceMock.removeOwner).toHaveBeenCalledWith(42);
+    });
+
+    it("tracks each owner's destroy listener exactly once", () => {
+      const sender = createSender(42);
+      const event = fakeEvent(sender) as Electron.IpcMainEvent;
+
+      getListener(CHANNELS.NOTIFICATION_UPDATE)(event, { waitingCount: 1 });
+      getListener(CHANNELS.NOTIFICATION_UPDATE)(event, { waitingCount: 2 });
+      getListener(CHANNELS.NOTIFICATION_SYNC_WATCHED)(event, ["term-1"]);
+
+      expect(sender.once).toHaveBeenCalledTimes(1);
+    });
+
+    it("purges the owner when its window tears down", async () => {
+      cleanup();
+      const { registry, closeWindow } = createWindowRegistryMock();
+      cleanup = registerNotificationHandlers({
+        windowRegistry: registry,
+      } as unknown as HandlerDependencies);
+
+      getListener(CHANNELS.NOTIFICATION_UPDATE)(
+        fakeEvent(createSender(42)) as Electron.IpcMainEvent,
+        { waitingCount: 3 }
+      );
+
+      closeWindow();
+      await drainMicrotasks();
+
+      expect(notificationServiceMock.removeOwner).toHaveBeenCalledWith(42);
+      expect(agentNotificationServiceMock.removeOwner).toHaveBeenCalledWith(42);
+    });
+
+    it("does not resurrect a destroyed owner with a sync that lands late", async () => {
+      const sender = createSender(42);
+
+      // The service import is async: destroy the sender before it settles.
+      getListener(CHANNELS.NOTIFICATION_SYNC_WATCHED)(fakeEvent(sender) as Electron.IpcMainEvent, [
+        "term-1",
+      ]);
+      sender.destroy();
+      await drainMicrotasks();
+
+      expect(agentNotificationServiceMock.syncWatchedPanels).not.toHaveBeenCalled();
+      expect(agentNotificationServiceMock.removeOwner).toHaveBeenCalledWith(42);
+    });
   });
 });

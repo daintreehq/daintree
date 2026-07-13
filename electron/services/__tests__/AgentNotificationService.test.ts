@@ -55,6 +55,16 @@ vi.mock("../OsDndService.js", () => ({
 import { events } from "../events.js";
 import { agentNotificationService } from "../AgentNotificationService.js";
 
+/** Stand-in for a project view's webContents id — the renderer that owns the watched panels. */
+const OWNER = 101;
+
+/** Escalation now carries a click target; the owner decides which window it focuses. */
+const escalationOptions = (ownerWebContentsId: number | undefined = OWNER) =>
+  expect.objectContaining({
+    ownerWebContentsId,
+    navigation: expect.objectContaining({ channel: "notification:watch-navigate" }),
+  });
+
 const DEFAULT_NOTIFICATION_SETTINGS = {
   completedEnabled: false,
   waitingEnabled: false,
@@ -121,7 +131,7 @@ describe("AgentNotificationService", () => {
     osDndServiceMock.getState.mockReturnValue(undefined);
     agentNotificationService.initialize();
     // Register the test terminal as watched so gate passes by default
-    agentNotificationService.syncWatchedPanels(["term-1"]);
+    agentNotificationService.syncWatchedPanels(OWNER, ["term-1"]);
   });
 
   afterEach(() => {
@@ -147,7 +157,7 @@ describe("AgentNotificationService", () => {
     mockStore({ completedEnabled: true, waitingEnabled: true });
 
     // Clear watched set — no terminals are watched
-    agentNotificationService.syncWatchedPanels([]);
+    agentNotificationService.syncWatchedPanels(OWNER, []);
 
     events.emit("agent:state-changed", makePayload("completed"));
     vi.advanceTimersByTime(5000);
@@ -191,7 +201,7 @@ describe("AgentNotificationService", () => {
       expect.stringContaining("finished"),
       expect.objectContaining({ panelId: "term-1" }),
       "notification:watch-navigate",
-      true
+      { silent: true, ownerWebContentsId: OWNER }
     );
   });
 
@@ -206,7 +216,7 @@ describe("AgentNotificationService", () => {
       expect.stringContaining("waiting for input"),
       expect.objectContaining({ panelId: "term-1" }),
       "notification:watch-navigate",
-      true
+      { silent: true, ownerWebContentsId: OWNER }
     );
   });
 
@@ -307,7 +317,7 @@ describe("AgentNotificationService", () => {
       expect.stringContaining("waiting for input"),
       expect.objectContaining({ panelId: "term-1" }),
       "notification:watch-navigate",
-      true
+      { silent: true, ownerWebContentsId: OWNER }
     );
   });
 
@@ -334,7 +344,7 @@ describe("AgentNotificationService", () => {
 
     // Simulate one-shot unwatch: renderer removes the terminal from watched set
     // (this happens before the 2s debounce fires)
-    agentNotificationService.syncWatchedPanels([]);
+    agentNotificationService.syncWatchedPanels(OWNER, []);
 
     // Advance past the 2000ms debounce — should still fire because isWatched was captured at event time
     vi.advanceTimersByTime(3000);
@@ -344,7 +354,7 @@ describe("AgentNotificationService", () => {
       expect.stringContaining("finished"),
       expect.objectContaining({ panelId: "term-1" }),
       "notification:watch-navigate",
-      true
+      { silent: true, ownerWebContentsId: OWNER }
     );
   });
 
@@ -357,7 +367,8 @@ describe("AgentNotificationService", () => {
 
       expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
         "Agent still waiting",
-        expect.stringContaining("has been waiting")
+        expect.stringContaining("has been waiting"),
+        escalationOptions()
       );
     });
 
@@ -372,7 +383,8 @@ describe("AgentNotificationService", () => {
 
       expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
         "Agent still waiting",
-        expect.stringContaining("is blocked by an error")
+        expect.stringContaining("is blocked by an error"),
+        escalationOptions()
       );
     });
 
@@ -387,7 +399,8 @@ describe("AgentNotificationService", () => {
 
       expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
         "Agent still waiting",
-        expect.stringContaining("has been waiting for input")
+        expect.stringContaining("has been waiting for input"),
+        escalationOptions()
       );
     });
 
@@ -402,7 +415,8 @@ describe("AgentNotificationService", () => {
 
       expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
         "Agent still waiting",
-        expect.stringContaining("has been waiting for input")
+        expect.stringContaining("has been waiting for input"),
+        escalationOptions()
       );
     });
 
@@ -503,7 +517,8 @@ describe("AgentNotificationService", () => {
 
       expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
         "Agent still waiting",
-        "My Custom Agent has been waiting for input"
+        "My Custom Agent has been waiting for input",
+        escalationOptions()
       );
     });
 
@@ -641,7 +656,7 @@ describe("AgentNotificationService", () => {
     it("coalesces multiple simultaneous waiting events into one notification", () => {
       const appState = makeMultiTerminalAppState(3);
       mockStore({ waitingEnabled: true, soundEnabled: true }, appState);
-      agentNotificationService.syncWatchedPanels(["term-1", "term-2", "term-3"]);
+      agentNotificationService.syncWatchedPanels(OWNER, ["term-1", "term-2", "term-3"]);
 
       events.emit("agent:state-changed", makePayloadFor("term-1", "agent-1", "waiting"));
       events.emit("agent:state-changed", makePayloadFor("term-2", "agent-2", "waiting"));
@@ -654,7 +669,7 @@ describe("AgentNotificationService", () => {
         "3 agents waiting for input",
         expect.any(Object),
         "notification:watch-navigate",
-        true
+        { silent: true, ownerWebContentsId: OWNER }
       );
       expect(soundServiceMock.playFile).toHaveBeenCalledTimes(1);
     });
@@ -671,7 +686,7 @@ describe("AgentNotificationService", () => {
         expect.stringContaining("agent-1 is waiting for input"),
         expect.any(Object),
         "notification:watch-navigate",
-        true
+        { silent: true, ownerWebContentsId: OWNER }
       );
     });
 
@@ -689,7 +704,7 @@ describe("AgentNotificationService", () => {
         expect.stringContaining("agent-1 is waiting for approval"),
         expect.any(Object),
         "notification:watch-navigate",
-        true
+        { silent: true, ownerWebContentsId: OWNER }
       );
     });
 
@@ -707,7 +722,7 @@ describe("AgentNotificationService", () => {
         expect.stringContaining("agent-1 is waiting for input"),
         expect.any(Object),
         "notification:watch-navigate",
-        true
+        { silent: true, ownerWebContentsId: OWNER }
       );
     });
 
@@ -731,14 +746,14 @@ describe("AgentNotificationService", () => {
         expect.stringContaining("is waiting for approval"),
         expect.any(Object),
         "notification:watch-navigate",
-        true
+        { silent: true, ownerWebContentsId: OWNER }
       );
     });
 
     it("uses reason-specific plural copy when every burst member shares the reason", () => {
       const appState = makeMultiTerminalAppState(3);
       mockStore({ waitingEnabled: true, soundEnabled: true }, appState);
-      agentNotificationService.syncWatchedPanels(["term-1", "term-2", "term-3"]);
+      agentNotificationService.syncWatchedPanels(OWNER, ["term-1", "term-2", "term-3"]);
 
       for (const i of [1, 2, 3]) {
         events.emit("agent:state-changed", {
@@ -753,14 +768,14 @@ describe("AgentNotificationService", () => {
         "3 agents waiting for approval",
         expect.any(Object),
         "notification:watch-navigate",
-        true
+        { silent: true, ownerWebContentsId: OWNER }
       );
     });
 
     it("keeps the generic plural copy for mixed-reason bursts", () => {
       const appState = makeMultiTerminalAppState(2);
       mockStore({ waitingEnabled: true, soundEnabled: true }, appState);
-      agentNotificationService.syncWatchedPanels(["term-1", "term-2"]);
+      agentNotificationService.syncWatchedPanels(OWNER, ["term-1", "term-2"]);
 
       events.emit("agent:state-changed", {
         ...makePayloadFor("term-1", "agent-1", "waiting"),
@@ -777,14 +792,14 @@ describe("AgentNotificationService", () => {
         "2 agents waiting for input",
         expect.any(Object),
         "notification:watch-navigate",
-        true
+        { silent: true, ownerWebContentsId: OWNER }
       );
     });
 
     it("produces separate notifications for events in different burst windows", () => {
       const appState = makeMultiTerminalAppState(2);
       mockStore({ waitingEnabled: true }, appState);
-      agentNotificationService.syncWatchedPanels(["term-1", "term-2"]);
+      agentNotificationService.syncWatchedPanels(OWNER, ["term-1", "term-2"]);
 
       events.emit("agent:state-changed", makePayloadFor("term-1", "agent-1", "waiting"));
       vi.advanceTimersByTime(200); // first burst flushes
@@ -798,7 +813,7 @@ describe("AgentNotificationService", () => {
     it("coalesces simultaneous completion debounces into one notification", () => {
       const appState = makeMultiTerminalAppState(3);
       mockStore({ completedEnabled: true, soundEnabled: true }, appState);
-      agentNotificationService.syncWatchedPanels(["term-1", "term-2", "term-3"]);
+      agentNotificationService.syncWatchedPanels(OWNER, ["term-1", "term-2", "term-3"]);
 
       // All 3 agents complete at the same time
       events.emit("agent:state-changed", makePayloadFor("term-1", "agent-1", "completed"));
@@ -814,14 +829,14 @@ describe("AgentNotificationService", () => {
         "3 agents finished their tasks",
         expect.any(Object),
         "notification:watch-navigate",
-        true
+        { silent: true, ownerWebContentsId: OWNER }
       );
     });
 
     it("groups escalation notifications for multiple waiting dock terminals", () => {
       const appState = makeMultiTerminalAppState(3);
       mockStore({ waitingEnabled: true, soundEnabled: true }, appState);
-      agentNotificationService.syncWatchedPanels(["term-1", "term-2", "term-3"]);
+      agentNotificationService.syncWatchedPanels(OWNER, ["term-1", "term-2", "term-3"]);
 
       events.emit("agent:state-changed", makePayloadFor("term-1", "agent-1", "waiting"));
       events.emit("agent:state-changed", makePayloadFor("term-2", "agent-2", "waiting"));
@@ -834,7 +849,8 @@ describe("AgentNotificationService", () => {
       expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
       expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
         "Agents still waiting",
-        "3 agents have been waiting for input"
+        "3 agents have been waiting for input",
+        escalationOptions()
       );
     });
 
@@ -895,7 +911,7 @@ describe("AgentNotificationService", () => {
           ],
         }
       );
-      agentNotificationService.syncWatchedPanels([]);
+      agentNotificationService.syncWatchedPanels(OWNER, []);
 
       events.emit("agent:state-changed", makePayload("working", "idle"));
       vi.advanceTimersByTime(30_000);
@@ -952,7 +968,7 @@ describe("AgentNotificationService", () => {
 
     it("starts pulse for docked terminal with escalation enabled", () => {
       mockStore({ soundEnabled: true, workingPulseEnabled: true });
-      agentNotificationService.syncWatchedPanels([]);
+      agentNotificationService.syncWatchedPanels(OWNER, []);
 
       events.emit("agent:state-changed", makePayload("working", "idle"));
       vi.advanceTimersByTime(10_000);
@@ -1126,7 +1142,7 @@ describe("AgentNotificationService", () => {
         expect.any(String),
         expect.any(Object),
         "notification:watch-navigate",
-        true
+        { silent: true, ownerWebContentsId: OWNER }
       );
     });
 
@@ -1275,7 +1291,7 @@ describe("AgentNotificationService", () => {
         expect.stringContaining("finished"),
         expect.objectContaining({ worktreeId: "wt-B" }),
         "notification:watch-navigate",
-        true
+        { silent: true, ownerWebContentsId: OWNER }
       );
     });
 
@@ -1305,7 +1321,7 @@ describe("AgentNotificationService", () => {
         expect.stringContaining("waiting"),
         expect.objectContaining({ worktreeId: "wt-B" }),
         "notification:watch-navigate",
-        true
+        { silent: true, ownerWebContentsId: OWNER }
       );
     });
 
@@ -1338,7 +1354,7 @@ describe("AgentNotificationService", () => {
         expect.any(String),
         expect.objectContaining({ worktreeId: "wt-fresh" }),
         "notification:watch-navigate",
-        true
+        { silent: true, ownerWebContentsId: OWNER }
       );
     });
 
@@ -1360,7 +1376,7 @@ describe("AgentNotificationService", () => {
         expect.any(String),
         expect.objectContaining({ worktreeId: undefined }),
         "notification:watch-navigate",
-        true
+        { silent: true, ownerWebContentsId: OWNER }
       );
     });
   });
@@ -1478,7 +1494,7 @@ describe("AgentNotificationService", () => {
         ],
       };
       mockStore({ completedEnabled: true }, appState);
-      agentNotificationService.syncWatchedPanels(["term-1", "term-2"]);
+      agentNotificationService.syncWatchedPanels(OWNER, ["term-1", "term-2"]);
 
       events.emit("agent:state-changed", {
         state: "completed" as const,
@@ -1509,7 +1525,7 @@ describe("AgentNotificationService", () => {
         "2 agents finished their tasks",
         expect.any(Object),
         "notification:watch-navigate",
-        true
+        { silent: true, ownerWebContentsId: OWNER }
       );
     });
 
@@ -1536,7 +1552,7 @@ describe("AgentNotificationService", () => {
         ],
       };
       mockStore({ waitingEnabled: true, soundEnabled: true }, appState);
-      agentNotificationService.syncWatchedPanels(["term-1", "term-2"]);
+      agentNotificationService.syncWatchedPanels(OWNER, ["term-1", "term-2"]);
       vi.advanceTimersByTime(10_000);
 
       // Both terminals detect "claude" — each seeds its own grace entry
@@ -1609,7 +1625,7 @@ describe("AgentNotificationService", () => {
         expect.stringContaining("claude"),
         expect.objectContaining({ panelId: "term-1" }),
         "notification:watch-navigate",
-        true
+        { silent: true, ownerWebContentsId: OWNER }
       );
     });
   });
@@ -1677,7 +1693,7 @@ describe("AgentNotificationService", () => {
         expect.any(String),
         expect.any(Object),
         "notification:watch-navigate",
-        true
+        { silent: true, ownerWebContentsId: OWNER }
       );
     });
   });
@@ -1717,7 +1733,7 @@ describe("AgentNotificationService", () => {
 
     it("purges a buffered waiting entry when the same terminal transitions to completed", () => {
       mockStore({ waitingEnabled: true });
-      agentNotificationService.syncWatchedPanels(["term-1"]);
+      agentNotificationService.syncWatchedPanels(OWNER, ["term-1"]);
 
       // Buffer a waiting entry.
       events.emit("agent:state-changed", makePayloadFor("term-1", "agent-1", "waiting"));
@@ -1733,7 +1749,7 @@ describe("AgentNotificationService", () => {
 
     it("purges a buffered waiting entry when the same terminal transitions to exited", () => {
       mockStore({ waitingEnabled: true });
-      agentNotificationService.syncWatchedPanels(["term-1"]);
+      agentNotificationService.syncWatchedPanels(OWNER, ["term-1"]);
 
       events.emit("agent:state-changed", makePayloadFor("term-1", "agent-1", "waiting"));
       events.emit("agent:state-changed", makePayloadFor("term-1", "agent-1", "exited", "waiting"));
@@ -1745,7 +1761,7 @@ describe("AgentNotificationService", () => {
     it("only splices the matching terminal — entries for other terminals are preserved", () => {
       const appState = makeMultiTerminalAppState(2);
       mockStore({ waitingEnabled: true }, appState);
-      agentNotificationService.syncWatchedPanels(["term-1", "term-2"]);
+      agentNotificationService.syncWatchedPanels(OWNER, ["term-1", "term-2"]);
 
       // Both terminals go waiting inside the same burst window.
       events.emit("agent:state-changed", makePayloadFor("term-1", "agent-1", "waiting"));
@@ -1764,7 +1780,7 @@ describe("AgentNotificationService", () => {
         expect.stringContaining("agent-2 is waiting for input"),
         expect.any(Object),
         "notification:watch-navigate",
-        true
+        { silent: true, ownerWebContentsId: OWNER }
       );
     });
 
@@ -1780,7 +1796,7 @@ describe("AgentNotificationService", () => {
       // on the same event tick as the `completed`/`exited` event and
       // uses the event's own `state` field.)
       mockStore({ waitingEnabled: true });
-      agentNotificationService.syncWatchedPanels(["term-1"]);
+      agentNotificationService.syncWatchedPanels(OWNER, ["term-1"]);
 
       events.emit("agent:state-changed", makePayloadFor("term-1", "agent-1", "waiting"));
       events.emit(
@@ -1790,6 +1806,161 @@ describe("AgentNotificationService", () => {
       vi.advanceTimersByTime(300);
 
       expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
+    });
+  });
+
+  // #11110 — watched panels used to be one process-wide Set, so whichever
+  // window synced last erased every other window's watches.
+  describe("per-owner watched panels", () => {
+    const OWNER_B = 202;
+
+    function makePayloadFor(
+      terminalId: string,
+      agentId: string,
+      state: AgentState,
+      previousState: AgentState = "working"
+    ) {
+      return {
+        ...makePayload(state, previousState),
+        terminalId,
+        agentId,
+      };
+    }
+
+    it("one owner's sync does not erase another owner's watches", () => {
+      mockStore({ waitingEnabled: true });
+
+      agentNotificationService.syncWatchedPanels(OWNER, ["term-1"]);
+      agentNotificationService.syncWatchedPanels(OWNER_B, ["term-2"]);
+
+      // Window B stops watching everything — the old code replaced the whole
+      // Set here, silently unwatching term-1 for window A.
+      agentNotificationService.syncWatchedPanels(OWNER_B, []);
+
+      events.emit("agent:state-changed", makePayload("waiting"));
+      vi.advanceTimersByTime(200);
+
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
+        "Agent waiting",
+        expect.any(String),
+        expect.objectContaining({ panelId: "term-1" }),
+        "notification:watch-navigate",
+        { silent: true, ownerWebContentsId: OWNER }
+      );
+    });
+
+    it("routes a notification to the owner that watched the panel", () => {
+      mockStore({ waitingEnabled: true });
+
+      agentNotificationService.syncWatchedPanels(OWNER, ["term-1"]);
+      agentNotificationService.syncWatchedPanels(OWNER_B, ["term-2"]);
+
+      events.emit("agent:state-changed", makePayloadFor("term-2", "agent-2", "waiting"));
+      vi.advanceTimersByTime(200);
+
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
+        "Agent waiting",
+        expect.any(String),
+        expect.objectContaining({ panelId: "term-2" }),
+        "notification:watch-navigate",
+        { silent: true, ownerWebContentsId: OWNER_B }
+      );
+    });
+
+    it("keeps the panel watched when a second owner drops its watch", () => {
+      mockStore({ waitingEnabled: true });
+
+      // Same project open in two windows — both renderers watch the same panel.
+      agentNotificationService.syncWatchedPanels(OWNER, ["term-1"]);
+      agentNotificationService.syncWatchedPanels(OWNER_B, ["term-1"]);
+      agentNotificationService.syncWatchedPanels(OWNER_B, []);
+
+      events.emit("agent:state-changed", makePayload("waiting"));
+      vi.advanceTimersByTime(200);
+
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
+        "Agent waiting",
+        expect.any(String),
+        expect.objectContaining({ panelId: "term-1" }),
+        "notification:watch-navigate",
+        { silent: true, ownerWebContentsId: OWNER }
+      );
+    });
+
+    it("removeOwner drops that owner's watches and leaves the others alone", () => {
+      mockStore({ waitingEnabled: true });
+
+      agentNotificationService.syncWatchedPanels(OWNER, ["term-1"]);
+      agentNotificationService.syncWatchedPanels(OWNER_B, ["term-2"]);
+
+      agentNotificationService.removeOwner(OWNER);
+
+      events.emit("agent:state-changed", makePayload("waiting"));
+      vi.advanceTimersByTime(200);
+
+      // term-1's only watcher is gone — nothing fires for it.
+      expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
+
+      events.emit("agent:state-changed", makePayloadFor("term-2", "agent-2", "waiting"));
+      vi.advanceTimersByTime(200);
+
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
+        "Agent waiting",
+        expect.any(String),
+        expect.objectContaining({ panelId: "term-2" }),
+        "notification:watch-navigate",
+        { silent: true, ownerWebContentsId: OWNER_B }
+      );
+    });
+
+    it("removeOwner is idempotent", () => {
+      agentNotificationService.syncWatchedPanels(OWNER, ["term-1"]);
+
+      expect(() => {
+        agentNotificationService.removeOwner(OWNER);
+        agentNotificationService.removeOwner(OWNER);
+        agentNotificationService.removeOwner(999);
+      }).not.toThrow();
+    });
+
+    it("escalates to the owner that watched the panel, even after the one-shot unwatch", () => {
+      mockStore({ waitingEnabled: true });
+
+      agentNotificationService.syncWatchedPanels(OWNER, ["term-1"]);
+      events.emit("agent:state-changed", makePayload("waiting"));
+
+      // The renderer unwatches immediately once the waiting notification fires,
+      // so the live watch index is empty long before escalation runs.
+      agentNotificationService.syncWatchedPanels(OWNER, []);
+      vi.advanceTimersByTime(180_000);
+
+      expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
+        "Agent still waiting",
+        expect.any(String),
+        expect.objectContaining({
+          ownerWebContentsId: OWNER,
+          navigation: {
+            channel: "notification:watch-navigate",
+            context: expect.objectContaining({ panelId: "term-1" }),
+          },
+        })
+      );
+    });
+
+    it("escalation for a never-watched docked terminal has no owner and falls back", () => {
+      mockStore({ waitingEnabled: true });
+
+      // Nothing watched at all — escalation still fires for docked terminals.
+      agentNotificationService.syncWatchedPanels(OWNER, []);
+
+      events.emit("agent:state-changed", makePayload("waiting"));
+      vi.advanceTimersByTime(180_000);
+
+      expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
+        "Agent still waiting",
+        expect.any(String),
+        escalationOptions(undefined)
+      );
     });
   });
 });
