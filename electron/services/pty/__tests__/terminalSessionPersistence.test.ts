@@ -82,6 +82,31 @@ describe("terminalSessionPersistence", () => {
     warnSpy.mockRestore();
   });
 
+  // chmod is a POSIX no-op on Windows, so the mode-bit assertions only run there.
+  const posixIt = process.platform === "win32" ? it.skip : it;
+
+  posixIt("writes the session directory, snapshots, and marker owner-only", async () => {
+    persistSessionSnapshotSync("term-perm-sync", "sync payload");
+    await persistSessionSnapshotAsync("term-perm-async", "async payload");
+    writeHibernatedMarker("term-perm-sync");
+
+    const sessionDir = path.join(userDataDir, "terminal-sessions");
+    expect(fs.statSync(sessionDir).mode & 0o777).toBe(0o700);
+    expect(fs.statSync(path.join(sessionDir, "term-perm-sync.restore")).mode & 0o777).toBe(0o600);
+    expect(fs.statSync(path.join(sessionDir, "term-perm-async.restore")).mode & 0o777).toBe(0o600);
+    expect(fs.statSync(getHibernatedMarkerPath("term-perm-sync")!).mode & 0o777).toBe(0o600);
+  });
+
+  posixIt("tightens a pre-existing world-readable session directory (upgrade case)", async () => {
+    const sessionDir = path.join(userDataDir, "terminal-sessions");
+    fs.mkdirSync(sessionDir, { recursive: true });
+    fs.chmodSync(sessionDir, 0o755);
+
+    await persistSessionSnapshotAsync("term-upgrade", "payload");
+
+    expect(fs.statSync(sessionDir).mode & 0o777).toBe(0o700);
+  });
+
   it("persists and restores snapshots via the atomic write helpers", async () => {
     persistSessionSnapshotSync("term-rt-sync", "sync payload");
     await persistSessionSnapshotAsync("term-rt-async", "async payload");

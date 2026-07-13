@@ -6,6 +6,7 @@ import { app } from "electron";
 import fs from "node:fs";
 import path from "path";
 import { getWritesSuppressed } from "../diskPressureState.js";
+import { tightenFilePermissionsSync, OWNER_RW_FILE_MODE } from "../../utils/fs.js";
 import * as schema from "./schema.js";
 import type { DatabaseRecovery } from "../../../shared/types/ipc/app.js";
 import type { DbProbeResult } from "./dbWorkerProtocol.js";
@@ -24,6 +25,17 @@ export function getBackupPath(): string {
 
 export function getMigrationsFolder(): string {
   return path.join(app.getAppPath(), "electron/services/persistence/migrations");
+}
+
+// better-sqlite3 12.x exposes no file-mode option, and the -wal/-shm sidecars are
+// each opened independently at the process umask — none inherit the main file's
+// bits. chmod the whole family (best-effort, POSIX-gated, skips missing sidecars)
+// so the database and its journals are owner-only. Doubles as the retroactive fix
+// for installs that predate this change and still hold a 0o644 daintree.db.
+function tightenDatabaseFilePermissions(dbPath: string): void {
+  for (const suffix of ["", "-wal", "-shm"]) {
+    tightenFilePermissionsSync(dbPath + suffix);
+  }
 }
 
 export function getSharedDb(): AppDb {
@@ -81,6 +93,21 @@ export function openDb(
     throw new Error("Cannot open database: disk space is critical");
   }
 
+  // Create a brand-new database owner-only from the very first byte. better-sqlite3
+  // creates the file at the umask default (world-readable) on open, so we win the
+  // race by pre-creating it with an exclusive 0o600 handle before handing the path
+  // to the constructor. Best-effort: EEXIST is the normal existing-DB case, and any
+  // other failure (missing parent, permissions) resurfaces from `new Database`
+  // below — which stays the authority on open errors — while the post-open chmod
+  // still tightens whatever it manages to create. POSIX-only.
+  if (process.platform !== "win32") {
+    try {
+      fs.closeSync(fs.openSync(dbPath, "wx", OWNER_RW_FILE_MODE));
+    } catch {
+      // Intentionally ignored — see comment above.
+    }
+  }
+
   const sqlite = new Database(dbPath);
   try {
     sqlite.pragma("journal_mode = WAL");
@@ -103,6 +130,11 @@ export function openDb(
     sqlite
       .prepare("UPDATE projects SET last_accessed_at = ? WHERE last_accessed_at = 0")
       .run(Date.now());
+
+    // Tighten the whole family once here: migrate()/the backfill above are the
+    // first WAL-mode writes, so -wal/-shm exist by now, and an existing 0o644
+    // daintree.db from a pre-fix install gets corrected in place too.
+    tightenDatabaseFilePermissions(dbPath);
 
     return { sqlite, db };
   } catch (error) {
@@ -244,6 +276,11 @@ export function attemptRecovery(dbPath: string): DatabaseRecovery | null {
       const verdict = probeDbFile(backupPath);
       if (verdict === "ok") {
         fs.copyFileSync(backupPath, dbPath);
+        // copyFileSync's mode propagation is platform/filesystem-dependent, so
+        // tighten the restored database explicitly (openDb will re-tighten the
+        // full family on reopen, but this keeps the restored copy owner-only in
+        // the interim).
+        tightenFilePermissionsSync(dbPath);
         console.log("[DB] Restored database from backup");
         return { kind: "restored-from-backup", quarantinedPath };
       }

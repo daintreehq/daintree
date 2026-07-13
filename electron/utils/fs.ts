@@ -161,6 +161,67 @@ export function resilientAtomicWriteFileSync(
   }
 }
 
+// Owner-only permission bits for persisted runtime data (POSIX). Files land at
+// 0o600 (rw-------), directories at 0o700 (rwx------) so nothing durable is
+// left world-readable at the umask default on shared macOS/Linux machines.
+export const OWNER_RW_FILE_MODE = 0o600;
+export const OWNER_RWX_DIR_MODE = 0o700;
+
+function isMissingPathError(error: unknown): boolean {
+  return (
+    error != null &&
+    typeof error === "object" &&
+    "code" in error &&
+    (error as NodeJS.ErrnoException).code === "ENOENT"
+  );
+}
+
+/**
+ * chmod a file to owner-only read/write (0o600). POSIX-only — a no-op on Windows
+ * (which ignores mode bits) and on missing paths. Best-effort: a chmod failure
+ * warns and returns rather than throwing, so hardening never breaks a boot or a
+ * write path. Use for retroactively tightening files an earlier app version
+ * created at the umask default; new atomic writes should pass `{ mode }` instead.
+ */
+export function tightenFilePermissionsSync(filePath: string): void {
+  if (process.platform === "win32" || !filePath) return;
+  try {
+    chmodSync(filePath, OWNER_RW_FILE_MODE);
+  } catch (error) {
+    if (isMissingPathError(error)) return;
+    console.warn("[fs] Failed to tighten file permissions:", filePath, error);
+  }
+}
+
+/**
+ * chmod a directory to owner-only (0o700), POSIX-only, best-effort.
+ *
+ * `mkdir(dir, { recursive: true, mode })` only applies `mode` to segments it
+ * newly creates — a pre-existing directory (every install upgrading from a
+ * version that wrote it at 0o755) is left untouched. Call this unconditionally
+ * after such an mkdir to tighten the directory in place regardless of age.
+ */
+export function tightenDirPermissionsSync(dirPath: string): void {
+  if (process.platform === "win32" || !dirPath) return;
+  try {
+    chmodSync(dirPath, OWNER_RWX_DIR_MODE);
+  } catch (error) {
+    if (isMissingPathError(error)) return;
+    console.warn("[fs] Failed to tighten directory permissions:", dirPath, error);
+  }
+}
+
+/** Async counterpart to {@link tightenDirPermissionsSync}. */
+export async function tightenDirPermissions(dirPath: string): Promise<void> {
+  if (process.platform === "win32" || !dirPath) return;
+  try {
+    await fsChmod(dirPath, OWNER_RWX_DIR_MODE);
+  } catch (error) {
+    if (isMissingPathError(error)) return;
+    console.warn("[fs] Failed to tighten directory permissions:", dirPath, error);
+  }
+}
+
 // stubborn-fs only provides attempt.unlink (swallows all errors), not retry.unlink.
 // We need retry-and-throw for callers that must know about ENOENT/permission failures.
 const TRANSIENT_CODES = new Set(["EPERM", "EBUSY", "EACCES"]);

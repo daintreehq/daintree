@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockPowerMonitor = vi.hoisted(() => ({
@@ -475,6 +477,36 @@ describe("DatabaseMaintenanceService", () => {
       "/fake/daintree.db.backup"
     );
     await service.dispose();
+  });
+
+  // chmod is a POSIX no-op on Windows, so the mode-bit assertion only runs there.
+  const posixIt = process.platform === "win32" ? it.skip : it;
+
+  posixIt("promotes the backup file owner-only", async () => {
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const realDir = actual.mkdtempSync(path.join(os.tmpdir(), "daintree-dbmaint-perms-"));
+    const backupPath = path.join(realDir, "daintree.db.backup");
+    mockDbModule.getBackupPath.mockReturnValue(backupPath);
+    // sqlite.backup() writes the candidate at the umask default; simulate that.
+    mockSqlite.backup.mockImplementation(async (tmp: string) => {
+      actual.writeFileSync(tmp, "backup-bytes");
+      actual.chmodSync(tmp, 0o644);
+    });
+    // Let the promotion rename actually run against the real filesystem.
+    vi.mocked(fs.renameSync).mockImplementation(
+      actual.renameSync as unknown as typeof fs.renameSync
+    );
+
+    try {
+      const service = new DatabaseMaintenanceService();
+      // dispose() runs the final backup on main (probeOnMain), no worker needed.
+      await service.dispose();
+
+      expect(actual.existsSync(backupPath)).toBe(true);
+      expect(actual.statSync(backupPath).mode & 0o777).toBe(0o600);
+    } finally {
+      actual.rmSync(realDir, { recursive: true, force: true });
+    }
   });
 
   it("suspends all backups once the deferred quick_check reports corruption", async () => {

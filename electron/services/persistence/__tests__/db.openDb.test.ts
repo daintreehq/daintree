@@ -87,6 +87,40 @@ describe("openDb (integration)", () => {
     }
   });
 
+  // chmod is a POSIX no-op on Windows, so the mode-bit assertions only run there.
+  const posixIt = process.platform === "win32" ? it.skip : it;
+
+  posixIt("creates the database and its WAL/SHM sidecars owner-only", () => {
+    const dbPath = path.join(tmpDir, "perms.db");
+    const { sqlite } = openDb(dbPath, migrationsFolder);
+    try {
+      expect(fs.statSync(dbPath).mode & 0o777).toBe(0o600);
+      // WAL mode + the migrate()/backfill writes create -wal and -shm by now.
+      for (const suffix of ["-wal", "-shm"]) {
+        const sidecar = dbPath + suffix;
+        if (fs.existsSync(sidecar)) {
+          expect(fs.statSync(sidecar).mode & 0o777).toBe(0o600);
+        }
+      }
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  posixIt("tightens a pre-existing world-readable database on reopen (upgrade case)", () => {
+    const dbPath = path.join(tmpDir, "legacy.db");
+    openDb(dbPath, migrationsFolder).sqlite.close();
+    // Simulate a database written by a pre-fix app version at the umask default.
+    fs.chmodSync(dbPath, 0o644);
+
+    const reopened = openDb(dbPath, migrationsFolder);
+    try {
+      expect(fs.statSync(dbPath).mode & 0o777).toBe(0o600);
+    } finally {
+      reopened.sqlite.close();
+    }
+  });
+
   it("is idempotent — opening the same DB twice does not throw or duplicate rows", () => {
     const dbPath = path.join(tmpDir, "twice.db");
     const first = openDb(dbPath, migrationsFolder);

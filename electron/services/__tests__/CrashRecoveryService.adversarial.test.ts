@@ -29,6 +29,9 @@ const browserWindowMock = vi.hoisted(() => ({
 const utilsMock = vi.hoisted(() => ({
   resilientAtomicWriteFileSync: vi.fn(),
   resilientRenameSync: vi.fn(),
+  tightenDirPermissionsSync: vi.fn(),
+  OWNER_RW_FILE_MODE: 0o600,
+  OWNER_RWX_DIR_MODE: 0o700,
 }));
 
 vi.mock("../../utils/fs.js", () => utilsMock);

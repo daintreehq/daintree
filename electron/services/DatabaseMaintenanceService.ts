@@ -11,6 +11,7 @@ import {
 } from "./persistence/db.js";
 import { runDbWork } from "./persistence/dbWorkerClient.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
+import { tightenFilePermissionsSync } from "../utils/fs.js";
 import type { DbProbeResult } from "./persistence/dbWorkerProtocol.js";
 import type { DatabaseRecovery } from "../../shared/types/ipc/app.js";
 
@@ -304,6 +305,11 @@ class DatabaseMaintenanceService {
 
     try {
       await sqlite.backup(tmpPath);
+
+      // sqlite.backup() creates the temp copy at the umask default. Tighten it to
+      // owner-only before the rename below so the promoted .backup — a verbatim
+      // copy of the whole database — is never world-readable at its final path.
+      tightenFilePermissionsSync(tmpPath);
 
       // sqlite.backup() copies pages verbatim and never validates them, so a
       // corrupt source yields a corrupt copy with no error at all. Probe the

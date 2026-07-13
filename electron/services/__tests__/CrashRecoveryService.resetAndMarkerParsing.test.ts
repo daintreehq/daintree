@@ -32,6 +32,9 @@ const appMock = vi.hoisted(() => {
 const utilsMock = vi.hoisted(() => ({
   resilientAtomicWriteFileSync: vi.fn(),
   resilientRenameSync: vi.fn(),
+  tightenDirPermissionsSync: vi.fn(),
+  OWNER_RW_FILE_MODE: 0o600,
+  OWNER_RWX_DIR_MODE: 0o700,
 }));
 
 vi.mock("../../utils/fs.js", () => utilsMock);
@@ -244,7 +247,8 @@ describe("CrashRecoveryService", () => {
       expect(utilsMock.resilientAtomicWriteFileSync).toHaveBeenCalledWith(
         markerPath,
         expect.any(String),
-        "utf-8"
+        "utf-8",
+        { mode: 0o600 }
       );
     });
 
@@ -279,7 +283,8 @@ describe("CrashRecoveryService", () => {
       expect(utilsMock.resilientAtomicWriteFileSync).toHaveBeenCalledWith(
         backupPath,
         expect.any(String),
-        "utf-8"
+        "utf-8",
+        { mode: 0o600 }
       );
     });
 

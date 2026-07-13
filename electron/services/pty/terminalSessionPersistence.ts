@@ -1,7 +1,14 @@
 // eager-import-allow: reads/writes terminal session snapshots via sync fs
-import { readFileSync, statSync, writeFileSync, unlinkSync, mkdirSync } from "fs";
+import { readFileSync, statSync, unlinkSync, mkdirSync } from "fs";
 import { mkdir, readdir, stat, unlink } from "node:fs/promises";
-import { resilientAtomicWriteFile, resilientAtomicWriteFileSync } from "../../utils/fs.js";
+import {
+  resilientAtomicWriteFile,
+  resilientAtomicWriteFileSync,
+  tightenDirPermissions,
+  tightenDirPermissionsSync,
+  OWNER_RW_FILE_MODE,
+  OWNER_RWX_DIR_MODE,
+} from "../../utils/fs.js";
 import path from "node:path";
 import type { Terminal as HeadlessTerminalType, IMarker } from "@xterm/headless";
 
@@ -191,8 +198,11 @@ export function persistSessionSnapshotSync(terminalId: string, state: string): v
     return;
   }
 
-  mkdirSync(dir, { recursive: true });
-  resilientAtomicWriteFileSync(sessionPath, SESSION_HEADER + state, "utf8");
+  mkdirSync(dir, { recursive: true, mode: OWNER_RWX_DIR_MODE });
+  tightenDirPermissionsSync(dir);
+  resilientAtomicWriteFileSync(sessionPath, SESSION_HEADER + state, "utf8", {
+    mode: OWNER_RW_FILE_MODE,
+  });
 }
 
 export async function persistSessionSnapshotAsync(
@@ -210,8 +220,11 @@ export async function persistSessionSnapshotAsync(
     return;
   }
 
-  await mkdir(dir, { recursive: true });
-  await resilientAtomicWriteFile(sessionPath, SESSION_HEADER + state, "utf8");
+  await mkdir(dir, { recursive: true, mode: OWNER_RWX_DIR_MODE });
+  await tightenDirPermissions(dir);
+  await resilientAtomicWriteFile(sessionPath, SESSION_HEADER + state, "utf8", {
+    mode: OWNER_RW_FILE_MODE,
+  });
 }
 
 export async function deleteSessionFile(terminalId: string): Promise<void> {
@@ -243,8 +256,9 @@ export function writeHibernatedMarker(terminalId: string): void {
   const dir = getSessionDir();
   if (!dir) return;
   try {
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(markerPath, "", "utf8");
+    mkdirSync(dir, { recursive: true, mode: OWNER_RWX_DIR_MODE });
+    tightenDirPermissionsSync(dir);
+    resilientAtomicWriteFileSync(markerPath, "", "utf8", { mode: OWNER_RW_FILE_MODE });
   } catch {
     // best-effort
   }
