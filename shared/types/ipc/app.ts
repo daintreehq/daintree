@@ -119,6 +119,14 @@ export type SettingsRecovery =
   | { kind: "restored-from-backup"; quarantinedPath?: string }
   | { kind: "reset-to-defaults"; quarantinedPath?: string };
 
+/**
+ * Describes how the SQLite database recovered from corruption at startup.
+ * `quarantinedPath` is absent when the corrupt file could not be preserved.
+ */
+export type DatabaseRecovery =
+  | { kind: "restored-from-backup"; quarantinedPath?: string }
+  | { kind: "reset-to-fresh"; quarantinedPath?: string };
+
 /** Describes a per-project state file that was quarantined due to corruption */
 export interface ProjectStateRecovery {
   quarantinedPath: string;
@@ -205,6 +213,12 @@ export interface HydrateResult {
   lastCrashAt?: number;
   settingsRecovery?: SettingsRecovery | null;
   projectStateRecovery?: ProjectStateRecovery | null;
+  /**
+   * Populated for the first hydrate after a boot where the SQLite database was
+   * found corrupt and either restored from its backup or recreated empty.
+   * One-shot: `DatabaseMaintenanceService.consumeRecovery()` clears it.
+   */
+  databaseRecovery?: DatabaseRecovery | null;
   /**
    * Populated only when the crash-loop state file was corrupt AND the boot
    * also tripped safe mode — the renderer banner gates on `safeMode === true`

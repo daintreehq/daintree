@@ -10,6 +10,7 @@ import {
   filterValidTerminalEntries,
 } from "../../../schemas/ipc.js";
 import { getCrashRecoveryService } from "../../../services/CrashRecoveryService.js";
+import { getDatabaseMaintenanceService } from "../../../services/DatabaseMaintenanceService.js";
 import { USAGE_WINDOW_MS, MAX_USES_PER_ENTRY } from "../../../../shared/utils/actionUsage.js";
 
 export const CRASH_CRITICAL_FIELDS = new Set([
@@ -99,6 +100,9 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
         crashCount: cacheGuard.getCrashCount(),
         lastCrashAt: cacheGuard.getLastCrashTimestamp(),
         settingsRecovery: consumePendingSettingsRecovery(),
+        // Boot-time DB recovery is one-shot and predates the prefetch, so it is
+        // consumed live here — the cached payload always carries a null for it.
+        databaseRecovery: getDatabaseMaintenanceService().consumeRecovery(),
         // Crash-loop quarantine notifications are gated on safe mode; the
         // fast path runs only when safe mode is inactive, so clear the field.
         crashLoopStateRecovery: null,
@@ -440,6 +444,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       crashCount: guard.getCrashCount(),
       lastCrashAt: guard.getLastCrashTimestamp(),
       settingsRecovery: consumePendingSettingsRecovery(),
+      databaseRecovery: getDatabaseMaintenanceService().consumeRecovery(),
       projectStateRecovery: projectStateQuarantinedPath
         ? { quarantinedPath: projectStateQuarantinedPath }
         : null,
@@ -470,7 +475,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
   // Batched cold-start boot payload. Collapses what was three separate renderer
   // round-trips (`crash-recovery:get-pending`, `crash-recovery:get-config`,
   // `app:hydrate`) into one. The destructive one-shot consumers
-  // (`consumePanelFilter`, `consumePendingSettingsRecovery`) and the prefetch
+  // (`consumePanelFilter`, `consumePendingSettingsRecovery`, `consumeRecovery`) and the prefetch
   // fast path remain inside `handleAppHydrate` — boot just appends the crash
   // gate fields onto the same result.
   const handleAppBoot = async (ctx: IpcContext) => {
@@ -501,8 +506,19 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       typeof (rawAppTheme.customSchemes as unknown) !== "string"
         ? (rawAppTheme as import("../../../../shared/types/appTheme.js").AppThemeConfig)
         : undefined;
+    // `useAppBootstrap` throws this whole payload away and re-runs `app:hydrate`
+    // once the crash gate resolves (`hadPendingCrash ? null : bootResult`), so a
+    // destructive one-shot consumed above would never reach the user. An unclean
+    // exit is also exactly how the database gets corrupted — hand the recovery
+    // back so the live hydrate that follows delivers it.
+    const droppedRecovery = crashPending !== null ? hydrate.databaseRecovery : null;
+    if (droppedRecovery) {
+      getDatabaseMaintenanceService().restoreRecovery(droppedRecovery);
+    }
+
     return {
       ...hydrate,
+      databaseRecovery: droppedRecovery ? null : hydrate.databaseRecovery,
       crashPending,
       crashConfig: crashService.getConfig(),
       appTheme,
