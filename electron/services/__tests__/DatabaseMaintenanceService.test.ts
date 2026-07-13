@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockPowerMonitor = vi.hoisted(() => ({
@@ -15,12 +16,20 @@ const mockSqlite = vi.hoisted(() => ({
   backup: vi.fn().mockResolvedValue(undefined),
 }));
 
+const RESTORED_RECOVERY = {
+  kind: "restored-from-backup" as const,
+  quarantinedPath: "/fake/daintree.db.corrupt-2026-01-01",
+};
+
 const mockDbModule = vi.hoisted(() => ({
   getDbPath: vi.fn().mockReturnValue("/fake/daintree.db"),
   getBackupPath: vi.fn().mockReturnValue("/fake/daintree.db.backup"),
   getSharedSqlite: vi.fn().mockReturnValue(mockSqlite),
   probeDb: vi.fn().mockReturnValue(true),
-  attemptRecovery: vi.fn().mockReturnValue(true),
+  attemptRecovery: vi.fn().mockReturnValue({
+    kind: "restored-from-backup",
+    quarantinedPath: "/fake/daintree.db.corrupt-2026-01-01",
+  }),
   closeSharedDb: vi.fn(),
 }));
 
@@ -60,6 +69,32 @@ vi.mock("node:fs", async () => {
 
 import { DatabaseMaintenanceService } from "../DatabaseMaintenanceService.js";
 
+const TICK = 5 * 60 * 1000 + 100;
+
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+}
+
+function createDeferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+/**
+ * A backup now awaits its candidate integrity probe before the rename, so the
+ * chain spans several microtask turns. Drain generously rather than counting.
+ */
+async function drainMicrotasks(): Promise<void> {
+  for (let i = 0; i < 8; i++) await Promise.resolve();
+}
+
+const quickCheckOps = () =>
+  mockRunDbWork.mock.calls.filter(([op]) => (op as { op: string }).op === "quickCheck");
+
 describe("DatabaseMaintenanceService", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -72,8 +107,20 @@ describe("DatabaseMaintenanceService", () => {
     mockDbModule.getBackupPath.mockReturnValue("/fake/daintree.db.backup");
     mockDbModule.getSharedSqlite.mockReturnValue(mockSqlite);
     mockDbModule.probeDb.mockReturnValue(true);
+    mockDbModule.attemptRecovery.mockReturnValue(RESTORED_RECOVERY);
     mockSqlite.backup.mockResolvedValue(undefined);
     mockPowerMonitor.getSystemIdleTime.mockReturnValue(120);
+    mockRunDbWork.mockImplementation((_op: unknown, fallback: () => unknown) =>
+      Promise.resolve(fallback())
+    );
+    // restoreAllMocks strips the mock factory's implementations, so re-arm them.
+    vi.mocked(fs.existsSync).mockReset().mockReturnValue(false);
+    vi.mocked(fs.unlinkSync)
+      .mockReset()
+      .mockImplementation(() => undefined);
+    vi.mocked(fs.renameSync)
+      .mockReset()
+      .mockImplementation(() => undefined);
   });
 
   afterEach(() => {
@@ -94,7 +141,6 @@ describe("DatabaseMaintenanceService", () => {
 
   it("attempts recovery when corruption detected", () => {
     mockDbModule.probeDb.mockReturnValue(false);
-    mockDbModule.attemptRecovery.mockReturnValue(true);
 
     const service = new DatabaseMaintenanceService();
     service.initialize();
@@ -105,10 +151,44 @@ describe("DatabaseMaintenanceService", () => {
 
   it("handles failed recovery gracefully", () => {
     mockDbModule.probeDb.mockReturnValue(false);
-    mockDbModule.attemptRecovery.mockReturnValue(false);
+    mockDbModule.attemptRecovery.mockReturnValue(null);
 
     const service = new DatabaseMaintenanceService();
     expect(() => service.initialize()).not.toThrow();
+    void service.dispose();
+  });
+
+  it("stashes the boot recovery outcome for exactly one consumer", () => {
+    mockDbModule.probeDb.mockReturnValue(false);
+    mockDbModule.attemptRecovery.mockReturnValue(RESTORED_RECOVERY);
+
+    const service = new DatabaseMaintenanceService();
+    service.initialize();
+
+    expect(service.consumeRecovery()).toEqual(RESTORED_RECOVERY);
+    // One-shot: the notification must not re-fire on a later hydrate.
+    expect(service.consumeRecovery()).toBeNull();
+    void service.dispose();
+  });
+
+  it("reports no recovery when the boot probe found a healthy database", () => {
+    const service = new DatabaseMaintenanceService();
+    service.initialize();
+
+    expect(service.consumeRecovery()).toBeNull();
+    void service.dispose();
+  });
+
+  it("reports no recovery when the recovery attempt itself failed", () => {
+    mockDbModule.probeDb.mockReturnValue(false);
+    mockDbModule.attemptRecovery.mockReturnValue(null);
+
+    const service = new DatabaseMaintenanceService();
+    service.initialize();
+
+    // A rename that threw leaves the corrupt DB in place — claiming a restore
+    // or a reset here would tell the user something that never happened.
+    expect(service.consumeRecovery()).toBeNull();
     void service.dispose();
   });
 
@@ -278,9 +358,6 @@ describe("DatabaseMaintenanceService", () => {
     service.initialize(true);
     service.startMaintenance();
 
-    const quickCheckOps = () =>
-      mockRunDbWork.mock.calls.filter(([op]) => (op as { op: string }).op === "quickCheck");
-
     vi.advanceTimersByTime(5 * 60 * 1000 + 100);
     expect(quickCheckOps()).toHaveLength(1);
 
@@ -290,6 +367,161 @@ describe("DatabaseMaintenanceService", () => {
     // The deferred scan must never run on the main connection.
     expect(mockSqlite.pragma).not.toHaveBeenCalledWith("quick_check", { simple: true });
     void service.dispose();
+  });
+
+  it("holds the first backup until the deferred quick_check passes", async () => {
+    const quickCheck = createDeferred<string>();
+    mockRunDbWork.mockImplementation((op: unknown, fallback: () => unknown) =>
+      (op as { op: string }).op === "quickCheck" ? quickCheck.promise : Promise.resolve(fallback())
+    );
+
+    const service = new DatabaseMaintenanceService();
+    service.initialize(true);
+    service.startMaintenance();
+
+    vi.advanceTimersByTime(TICK);
+    await drainMicrotasks();
+
+    // Integrity still unknown — backing up now could copy a corrupt DB.
+    expect(mockSqlite.backup).not.toHaveBeenCalled();
+
+    quickCheck.resolve("ok");
+    await drainMicrotasks();
+
+    expect(mockSqlite.backup).toHaveBeenCalledTimes(1);
+    await service.dispose();
+  });
+
+  it("lifts the backup gate for the rest of the process once the check passes", async () => {
+    mockRunDbWork.mockImplementation((op: unknown, fallback: () => unknown) =>
+      (op as { op: string }).op === "quickCheck"
+        ? Promise.resolve("ok")
+        : Promise.resolve(fallback())
+    );
+
+    const service = new DatabaseMaintenanceService();
+    service.initialize(true);
+    service.startMaintenance();
+
+    vi.advanceTimersByTime(TICK);
+    await drainMicrotasks();
+    expect(mockSqlite.backup).toHaveBeenCalledTimes(1);
+
+    // A passing check clears the pending flag: later ticks back up straight from
+    // the timer callback and never re-run the O(size) scan.
+    vi.advanceTimersByTime(TICK);
+    expect(mockSqlite.backup).toHaveBeenCalledTimes(2);
+    expect(quickCheckOps()).toHaveLength(1);
+
+    await drainMicrotasks();
+    await service.dispose();
+  });
+
+  it("keeps the quick_check pending and retries when the DB worker is unavailable", async () => {
+    // Default mock: the worker is unavailable, so quickCheck's fallback returns
+    // null — the scan never actually ran.
+    const service = new DatabaseMaintenanceService();
+    service.initialize(true);
+    service.startMaintenance();
+
+    vi.advanceTimersByTime(TICK);
+    await drainMicrotasks();
+    expect(quickCheckOps()).toHaveLength(1);
+
+    // A check that never ran must not look like one that passed.
+    vi.advanceTimersByTime(TICK);
+    await drainMicrotasks();
+    expect(quickCheckOps()).toHaveLength(2);
+
+    // The backup still runs — its own candidate probe is what guards the
+    // existing backup, and it catches on main what the worker could not.
+    expect(mockSqlite.backup).toHaveBeenCalled();
+    expect(vi.mocked(fs.renameSync)).toHaveBeenCalledWith(
+      "/fake/daintree.db.backup.tmp",
+      "/fake/daintree.db.backup"
+    );
+    await service.dispose();
+  });
+
+  it("suspends all backups once the deferred quick_check reports corruption", async () => {
+    mockRunDbWork.mockImplementation((op: unknown, fallback: () => unknown) =>
+      (op as { op: string }).op === "quickCheck"
+        ? Promise.resolve("*** in database main *** Page 4 is never used")
+        : Promise.resolve(fallback())
+    );
+
+    const service = new DatabaseMaintenanceService();
+    service.initialize(true);
+    service.startMaintenance();
+
+    vi.advanceTimersByTime(TICK);
+    await drainMicrotasks();
+
+    expect(mockSqlite.backup).not.toHaveBeenCalled();
+
+    // Every later tick stays suspended — the existing backup is the last good copy.
+    vi.advanceTimersByTime(TICK);
+    await drainMicrotasks();
+    expect(mockSqlite.backup).not.toHaveBeenCalled();
+
+    // ...including the final backup at shutdown.
+    await service.dispose();
+    expect(mockSqlite.backup).not.toHaveBeenCalled();
+    expect(mockSqlite.pragma).toHaveBeenCalledWith("wal_checkpoint(TRUNCATE)");
+  });
+
+  it("discards a candidate backup that fails its integrity probe", async () => {
+    // The candidate written by sqlite.backup() probes dirty — its source pages
+    // are corrupt, so promoting it would destroy the only good backup.
+    mockDbModule.probeDb.mockImplementation(
+      (path: string) => path !== "/fake/daintree.db.backup.tmp"
+    );
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+
+    const service = new DatabaseMaintenanceService();
+    service.initialize();
+    service.startMaintenance();
+
+    vi.advanceTimersByTime(TICK);
+    await drainMicrotasks();
+
+    expect(mockSqlite.backup).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(fs.renameSync)).not.toHaveBeenCalled();
+    expect(vi.mocked(fs.unlinkSync)).toHaveBeenCalledWith("/fake/daintree.db.backup.tmp");
+
+    // ...and the corruption latch stops every later backup too.
+    vi.advanceTimersByTime(TICK);
+    await drainMicrotasks();
+    expect(mockSqlite.backup).toHaveBeenCalledTimes(1);
+
+    await service.dispose();
+    expect(mockSqlite.backup).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(fs.renameSync)).not.toHaveBeenCalled();
+  });
+
+  it("probes the candidate backup on the worker before promoting it", async () => {
+    const service = new DatabaseMaintenanceService();
+    service.initialize();
+    service.startMaintenance();
+
+    vi.advanceTimersByTime(TICK);
+    await drainMicrotasks();
+
+    expect(mockRunDbWork).toHaveBeenCalledWith(
+      { op: "probePath", dbPath: "/fake/daintree.db.backup.tmp" },
+      expect.any(Function)
+    );
+    // The probe must precede the rename that replaces the last good backup.
+    const probeCall = mockRunDbWork.mock.calls.findIndex(
+      ([op]) => (op as { op: string }).op === "probePath"
+    );
+    expect(probeCall).toBeGreaterThanOrEqual(0);
+    expect(vi.mocked(fs.renameSync)).toHaveBeenCalledWith(
+      "/fake/daintree.db.backup.tmp",
+      "/fake/daintree.db.backup"
+    );
+
+    await service.dispose();
   });
 
   it("does not schedule a deferred quick_check when the boot probe already ran the full scan", () => {

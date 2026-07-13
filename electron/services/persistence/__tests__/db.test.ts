@@ -172,7 +172,13 @@ describe("attemptRecovery", () => {
 
     const result = attemptRecovery(dbPath);
 
-    expect(result).toBe(true);
+    expect(result).toEqual({
+      kind: "restored-from-backup",
+      quarantinedPath: expect.stringContaining("daintree.db.corrupt-"),
+    });
+    // The reported path is the quarantined DB itself, and it still holds the
+    // original bytes — a user handed this path must find the damaged file there.
+    expect(fs.readFileSync(result!.quarantinedPath!, "utf8")).toBe("corrupt");
     // Backup was copied to dbPath
     expect(fs.readFileSync(dbPath, "utf8")).toBe("valid backup");
     // Original files quarantined
@@ -182,17 +188,20 @@ describe("attemptRecovery", () => {
     expect(files.filter((f) => f.includes(".corrupt-")).length).toBe(3);
   });
 
-  it("returns false when no backup exists", () => {
+  it("resets to a fresh database when no backup exists", () => {
     const dbPath = path.join(tmpDir, "daintree.db");
     fs.writeFileSync(dbPath, "corrupt");
 
     const result = attemptRecovery(dbPath);
 
-    expect(result).toBe(false);
+    expect(result).toEqual({
+      kind: "reset-to-fresh",
+      quarantinedPath: expect.stringContaining("daintree.db.corrupt-"),
+    });
     expect(fs.existsSync(dbPath)).toBe(false);
   });
 
-  it("returns false when backup is also corrupt", () => {
+  it("resets to a fresh database when the backup is also corrupt", () => {
     const dbPath = path.join(tmpDir, "daintree.db");
     const backupPath = dbPath + ".backup";
 
@@ -208,10 +217,28 @@ describe("attemptRecovery", () => {
 
     const result = attemptRecovery(dbPath);
 
-    expect(result).toBe(false);
+    expect(result).toEqual({
+      kind: "reset-to-fresh",
+      quarantinedPath: expect.stringContaining("daintree.db.corrupt-"),
+    });
     // Both quarantined
     expect(fs.existsSync(dbPath)).toBe(false);
     expect(fs.existsSync(backupPath)).toBe(false);
+  });
+
+  it("reports no recovery when quarantining the corrupt DB fails", () => {
+    const dbPath = path.join(tmpDir, "daintree.db");
+    fs.writeFileSync(dbPath, "corrupt");
+
+    const renameSpy = vi.spyOn(fs, "renameSync").mockImplementation(() => {
+      throw Object.assign(new Error("rename failed"), { code: "EPERM" });
+    });
+
+    // The corrupt DB is still in place, so claiming a restore or a reset here
+    // would tell the user something that never happened.
+    expect(attemptRecovery(dbPath)).toBeNull();
+    expect(fs.existsSync(dbPath)).toBe(true);
+    renameSpy.mockRestore();
   });
 });
 

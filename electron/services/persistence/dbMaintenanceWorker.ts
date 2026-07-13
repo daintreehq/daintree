@@ -57,6 +57,34 @@ function getRingStatements(): RingStatements {
   return ringStatements;
 }
 
+// Full quick_check against an arbitrary file on its own short-lived readonly
+// handle. Deliberately duplicates db.ts's probeDb rather than importing it: that
+// module imports Electron's `app` at module scope, which does not exist inside a
+// worker thread. Corruption resolves false; any other open/IO failure throws so
+// the client falls back to probing on main.
+function probePath(dbPath: string): boolean {
+  let candidate: Database.Database | null = null;
+  try {
+    candidate = new Database(dbPath, { readonly: true, fileMustExist: true });
+    return candidate.pragma("quick_check", { simple: true }) === "ok";
+  } catch (error: unknown) {
+    const code = (error as { code?: string }).code;
+    if (
+      typeof code === "string" &&
+      (code.startsWith("SQLITE_CORRUPT") || code === "SQLITE_NOTADB")
+    ) {
+      return false;
+    }
+    throw error;
+  } finally {
+    try {
+      candidate?.close();
+    } catch {
+      // ignore close errors
+    }
+  }
+}
+
 function execute(request: DbWorkerRequest): unknown {
   switch (request.op) {
     case "checkpoint":
@@ -64,6 +92,8 @@ function execute(request: DbWorkerRequest): unknown {
       return null;
     case "quickCheck":
       return sqlite.pragma("quick_check", { simple: true });
+    case "probePath":
+      return probePath(request.dbPath);
     case "ringWriteAll": {
       const { ring, records, maxRecords, fence } = request;
       const { insert, trim, clear } = getRingStatements();

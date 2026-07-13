@@ -21,7 +21,10 @@ const mockDbModule = vi.hoisted(() => ({
   getBackupPath: vi.fn().mockReturnValue("/fake/daintree.db.backup"),
   getSharedSqlite: vi.fn().mockReturnValue(mockSqlite),
   probeDb: vi.fn().mockReturnValue(true),
-  attemptRecovery: vi.fn().mockReturnValue(true),
+  attemptRecovery: vi.fn().mockReturnValue({
+    kind: "restored-from-backup",
+    quarantinedPath: "/fake/daintree.db.corrupt-2026-01-01",
+  }),
 }));
 
 vi.mock("electron", () => ({
@@ -74,6 +77,14 @@ function createDeferred<T>(): DeferredPromise<T> {
 
 async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
+}
+
+/**
+ * A backup now awaits its candidate integrity probe before the rename, so the
+ * chain spans several microtask turns. Drain generously rather than counting.
+ */
+async function drainMicrotasks(): Promise<void> {
+  for (let i = 0; i < 8; i++) await Promise.resolve();
 }
 
 describe("DatabaseMaintenanceService adversarial", () => {
@@ -177,12 +188,41 @@ describe("DatabaseMaintenanceService adversarial", () => {
     service.startMaintenance();
 
     vi.advanceTimersByTime(5 * 60 * 1000);
-    await flushMicrotasks();
+    // The candidate probe (probeDb, mocked clean) sits between the backup and
+    // the rename now, so the rename is one extra microtask turn out.
+    await drainMicrotasks();
 
     expect(console.warn).toHaveBeenCalledWith("[DatabaseMaintenance] Backup failed:", renameError);
     expect(vi.mocked(fs.unlinkSync)).toHaveBeenCalledWith("/fake/daintree.db.backup.tmp");
 
     await expect(service.dispose()).resolves.toBeUndefined();
+  });
+
+  it("CORRUPT_CANDIDATE_NEVER_REPLACES_GOOD_BACKUP", async () => {
+    // The live DB is fine at boot, but the copy sqlite.backup() produces probes
+    // dirty — promoting it would destroy the only good backup we have.
+    mockDbModule.probeDb.mockImplementation(
+      (path: string) => path !== "/fake/daintree.db.backup.tmp"
+    );
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+
+    const service = new DatabaseMaintenanceService();
+    service.initialize();
+    service.startMaintenance();
+
+    vi.advanceTimersByTime(5 * 60 * 1000);
+    await drainMicrotasks();
+
+    expect(mockSqlite.backup).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(fs.renameSync)).not.toHaveBeenCalled();
+    expect(vi.mocked(fs.unlinkSync)).toHaveBeenCalledWith("/fake/daintree.db.backup.tmp");
+
+    // The latch holds through shutdown: the final backup is skipped rather than
+    // given a second chance to clobber the good backup.
+    await service.dispose();
+    expect(mockSqlite.backup).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(fs.renameSync)).not.toHaveBeenCalled();
+    expect(mockSqlite.pragma.mock.calls.at(-1)).toEqual(["wal_checkpoint(TRUNCATE)"]);
   });
 
   it("SUSPEND_DURING_INFLIGHT_BACKUP_ONLY_CHECKPOINTS", async () => {

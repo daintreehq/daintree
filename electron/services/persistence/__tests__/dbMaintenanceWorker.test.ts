@@ -265,6 +265,41 @@ describe("dbMaintenanceWorker (real worker thread)", () => {
     expect(response).toMatchObject({ ok: true, result: "ok" });
   });
 
+  it("probes a healthy file at an arbitrary path, not just its own connection", async () => {
+    const candidatePath = path.join(tmpDir, "candidate.db");
+    const candidate = new Database(candidatePath);
+    candidate.exec(AUDIT_RINGS_DDL);
+    candidate.close();
+
+    const w = spawn();
+    const response = await request(w, { op: "probePath", dbPath: candidatePath });
+    expect(response).toMatchObject({ ok: true, result: true });
+
+    // The probe's handle must be closed — a lingering one would block the
+    // rename that promotes this file over the live backup on Windows.
+    fs.renameSync(candidatePath, path.join(tmpDir, "promoted.db"));
+    expect(fs.existsSync(path.join(tmpDir, "promoted.db"))).toBe(true);
+  });
+
+  it("reports a non-SQLite candidate as failing its probe", async () => {
+    const candidatePath = path.join(tmpDir, "garbage.db");
+    fs.writeFileSync(candidatePath, "this is not a sqlite database");
+
+    const w = spawn();
+    const response = await request(w, { op: "probePath", dbPath: candidatePath });
+    expect(response).toMatchObject({ ok: true, result: false });
+  });
+
+  it("rejects a probe of a missing path rather than reporting it clean", async () => {
+    const w = spawn();
+    const response = await request(w, {
+      op: "probePath",
+      dbPath: path.join(tmpDir, "does-not-exist.db"),
+    });
+    // Not a corruption verdict — the client falls back to probing on main.
+    expect(response.ok).toBe(false);
+  });
+
   it("responds to close and exits without terminate()", async () => {
     const w = spawn();
     const exited = new Promise<number>((resolve) => w.once("exit", resolve));

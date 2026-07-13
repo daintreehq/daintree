@@ -10,6 +10,7 @@ import {
 } from "./persistence/db.js";
 import { runDbWork } from "./persistence/dbWorkerClient.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
+import type { DatabaseRecovery } from "../../shared/types/ipc/app.js";
 
 const TICK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const IDLE_THRESHOLD_S = 60; // 60 seconds of system idle
@@ -21,6 +22,14 @@ class DatabaseMaintenanceService {
   private disposed = false;
   private initialized = false;
   private deferredQuickCheckPending = false;
+  private deferredQuickCheckInFlight: Promise<boolean> | null = null;
+  private pendingRecovery: DatabaseRecovery | null = null;
+  // Latched once corruption is confirmed — either by the deferred quick_check on
+  // the live DB or by a candidate backup failing its probe. Both mean the source
+  // pages are bad, so every later backup would overwrite the last good one with
+  // garbage. Recovery cannot run mid-session (the DB is open), so the safe move
+  // is to stop backing up and preserve what we have until the next boot's probe.
+  private backupBlockedByCorruption = false;
 
   initialize(wasCleanExit = false): void {
     if (this.initialized) return;
@@ -34,11 +43,20 @@ class DatabaseMaintenanceService {
     // full scan immediately so recovery happens before getSharedDb() opens the file.
     if (!probeDb(dbPath, !wasCleanExit)) {
       console.error("[DatabaseMaintenance] Database corruption detected, attempting recovery");
-      const recovered = attemptRecovery(dbPath);
-      if (recovered) {
-        console.log("[DatabaseMaintenance] Recovery successful — restored from backup");
+      const recovery = attemptRecovery(dbPath);
+      if (recovery === null) {
+        console.error(
+          "[DatabaseMaintenance] Recovery failed — corrupt database may still be in place"
+        );
       } else {
-        console.warn("[DatabaseMaintenance] No backup to restore — fresh database will be created");
+        this.pendingRecovery = recovery;
+        if (recovery.kind === "restored-from-backup") {
+          console.log("[DatabaseMaintenance] Recovery successful — restored from backup");
+        } else {
+          console.warn(
+            "[DatabaseMaintenance] No usable backup to restore — fresh database will be created"
+          );
+        }
       }
     } else if (wasCleanExit) {
       // Clean-exit boots skip the O(size) quick_check; run it once from the
@@ -47,6 +65,17 @@ class DatabaseMaintenanceService {
     }
 
     console.log("[DatabaseMaintenance] Initialized (probe complete)");
+  }
+
+  /**
+   * One-shot read of the boot-time recovery outcome, consumed by the first
+   * `app:hydrate` so the renderer can tell the user exactly once. Mirrors
+   * `consumePendingSettingsRecovery()` in store.ts.
+   */
+  consumeRecovery(): DatabaseRecovery | null {
+    const recovery = this.pendingRecovery;
+    this.pendingRecovery = null;
+    return recovery;
   }
 
   startMaintenance(): void {
@@ -94,8 +123,16 @@ class DatabaseMaintenanceService {
     }
 
     // Final backup + TRUNCATE checkpoint (DB is NOT closed here —
-    // shutdown.ts may still need it for project state saves afterward)
-    await this.runBackup();
+    // shutdown.ts may still need it for project state saves afterward).
+    // A DB already known to be corrupt is never backed up: the existing backup
+    // is the only good copy left and the next boot's probe will restore from it.
+    if (this.backupBlockedByCorruption) {
+      console.warn(
+        "[DatabaseMaintenance] Skipping final backup — database corruption was detected this session"
+      );
+    } else {
+      await this.runBackup();
+    }
     this.optimize();
     this.checkpoint("TRUNCATE");
     console.log("[DatabaseMaintenance] Disposed — optimize + checkpoint complete");
@@ -118,25 +155,73 @@ class DatabaseMaintenanceService {
     // would spin a main-thread write on its busy_timeout. The full TRUNCATE
     // runs once, on main, from dispose() at shutdown.
     void runDbWork({ op: "checkpoint", mode: "PASSIVE" }, () => this.checkpoint("PASSIVE"));
-    this.runDeferredQuickCheck();
+
+    // Confirmed corruption: never overwrite the last good backup with it.
+    if (this.backupBlockedByCorruption) return;
+
+    // Gate the backup on the deferred integrity check, but only while one is
+    // actually outstanding. Once the DB has passed (or on unclean-exit boots,
+    // where initialize() already ran the full scan), the backup fires
+    // synchronously from this tick exactly as before — no added latency.
+    const quickCheck = this.runDeferredQuickCheck();
+    if (quickCheck) {
+      void quickCheck.then((ok) => {
+        if (ok && !this.disposed && !this.backupBlockedByCorruption) {
+          this.backupPromise = this.runBackup();
+        }
+      });
+      return;
+    }
+
     this.backupPromise = this.runBackup();
   }
 
-  private runDeferredQuickCheck(): void {
-    if (!this.deferredQuickCheckPending) return;
-    this.deferredQuickCheckPending = false;
-    // Advisory only, and never on main — when the worker is unavailable the
-    // fallback skips the scan rather than stalling the event loop for it.
-    void runDbWork<string | null>({ op: "quickCheck" }, () => null).then((result) => {
-      if (result === null) {
-        console.warn("[DatabaseMaintenance] Deferred quick_check skipped — DB worker unavailable");
-      } else if (result !== "ok") {
+  /**
+   * Runs the deferred full quick_check, at most one at a time. Resolves to
+   * whether the backup may proceed; returns null when no check is outstanding.
+   *
+   * The pending flag only clears on an exact "ok" — a check that never succeeded
+   * must never look like one that did, so a worker-unavailable result leaves it
+   * set for a later idle tick to retry. That case still allows the backup: the
+   * candidate probe in runBackup() is the real guard against promoting a corrupt
+   * copy, and it catches on main exactly what the worker could not check here.
+   * Only confirmed corruption stops backups, via `backupBlockedByCorruption`.
+   */
+  private runDeferredQuickCheck(): Promise<boolean> | null {
+    if (this.deferredQuickCheckInFlight) return this.deferredQuickCheckInFlight;
+    if (!this.deferredQuickCheckPending) return null;
+
+    // Never on main — when the worker is unavailable the fallback skips the scan
+    // rather than stalling the event loop for it.
+    const inFlight = runDbWork<string | null>({ op: "quickCheck" }, () => null)
+      .then((result) => {
+        if (result === "ok") {
+          this.deferredQuickCheckPending = false;
+          return true;
+        }
+        if (result === null) {
+          console.warn(
+            "[DatabaseMaintenance] Deferred quick_check skipped — DB worker unavailable; will retry next idle tick"
+          );
+          return true;
+        }
+        this.backupBlockedByCorruption = true;
         console.error(
-          `[DatabaseMaintenance] Deferred quick_check reported corruption in ${getDbPath()}:`,
+          `[DatabaseMaintenance] Deferred quick_check reported corruption in ${getDbPath()} — backups suspended to preserve the existing backup:`,
           result
         );
-      }
-    });
+        return false;
+      })
+      .catch((error: unknown) => {
+        console.warn("[DatabaseMaintenance] Deferred quick_check failed; will retry:", error);
+        return true;
+      })
+      .finally(() => {
+        this.deferredQuickCheckInFlight = null;
+      });
+
+    this.deferredQuickCheckInFlight = inFlight;
+    return inFlight;
   }
 
   private checkpoint(mode: "PASSIVE" | "TRUNCATE"): void {
@@ -175,16 +260,39 @@ class DatabaseMaintenanceService {
 
     try {
       await sqlite.backup(tmpPath);
+
+      // sqlite.backup() copies pages verbatim and never validates them, so a
+      // corrupt source yields a corrupt copy with no error. Probe the candidate
+      // before it replaces the last known-good backup. On the shutdown path the
+      // DB worker is already gone, so this runs its fallback on main — the same
+      // tradeoff dispose() already makes for optimize + TRUNCATE.
+      const intact = await runDbWork<boolean>({ op: "probePath", dbPath: tmpPath }, () =>
+        probeDb(tmpPath)
+      );
+
+      if (!intact) {
+        this.backupBlockedByCorruption = true;
+        console.error(
+          `[DatabaseMaintenance] Backup failed its integrity check — discarding it and keeping the existing backup at ${backupPath}`
+        );
+        this.discardTempBackup(tmpPath);
+        return;
+      }
+
       fs.renameSync(tmpPath, backupPath);
     } catch (error) {
       console.warn("[DatabaseMaintenance] Backup failed:", error);
-      try {
-        if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
-      } catch {
-        // ignore cleanup failure
-      }
+      this.discardTempBackup(tmpPath);
     } finally {
       this.backupPromise = null;
+    }
+  }
+
+  private discardTempBackup(tmpPath: string): void {
+    try {
+      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    } catch (error) {
+      console.warn(`[DatabaseMaintenance] Failed to remove temp backup ${tmpPath}:`, error);
     }
   }
 }

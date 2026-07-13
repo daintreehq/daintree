@@ -18,7 +18,8 @@ import { inferKind } from "../../shared/utils/inferPanelKind.js";
  * This is the read-only, non-destructive counterpart to `handleAppHydrate` in
  * the IPC handler. It assembles the same shape but:
  *   - never calls destructive one-shot consumers (consumePendingSettingsRecovery,
- *     consumePanelFilter) — those are startup-only
+ *     consumePanelFilter, DatabaseMaintenanceService.consumeRecovery) — those are
+ *     startup-only
  *   - never runs migration writes (saveProjectState) — migration only applies
  *     on first app load, not on project switches
  *   - always returns safeMode: false — safe mode is a startup-only condition
@@ -112,6 +113,7 @@ export async function buildSwitchHydrateResult(projectId: string): Promise<Hydra
     runningUnderRosetta: isRunningUnderRosetta(),
     rosettaWarningDismissed: store.get("rosettaWarningDismissed") === true,
     settingsRecovery: null,
+    databaseRecovery: null,
     projectStateRecovery: projectStateQuarantinedPath
       ? { quarantinedPath: projectStateQuarantinedPath }
       : null,

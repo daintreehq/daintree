@@ -98,6 +98,12 @@ vi.mock("../../services/TelemetryService.js", () => ({
   closeTelemetry: vi.fn(),
 }));
 
+const consumeDatabaseRecovery = vi.hoisted(() => vi.fn(() => null as unknown));
+
+vi.mock("../../services/DatabaseMaintenanceService.js", () => ({
+  getDatabaseMaintenanceService: () => ({ consumeRecovery: consumeDatabaseRecovery }),
+}));
+
 vi.mock("../../window/deferredInitQueue.js", () => ({
   signalFirstInteractive: vi.fn(),
 }));
@@ -602,6 +608,40 @@ describe("app:boot handler", () => {
     expect(result.terminalConfig).toEqual(cachedResult.terminalConfig);
     expect(result.crashPending).toBeNull();
     expect(result.crashConfig).toEqual({ autoRestoreOnCrash: false });
+  });
+
+  it("surfaces the boot-time database recovery on the slow path", async () => {
+    const recovery = { kind: "reset-to-fresh", quarantinedPath: "/u/daintree.db.corrupt-x" };
+    consumeDatabaseRecovery.mockReturnValueOnce(recovery);
+
+    const result = (await invokeBoot()) as Record<string, unknown>;
+
+    expect(result.databaseRecovery).toEqual(recovery);
+    expect(consumeDatabaseRecovery).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces the boot-time database recovery even on the prefetch cache-hit path", async () => {
+    // The prefetch snapshot predates the boot probe and carries no recovery, so
+    // the live one-shot consumer has to run on this path too or the user is
+    // never told their database was rebuilt.
+    const recovery = { kind: "restored-from-backup", quarantinedPath: "/u/daintree.db.corrupt-x" };
+    consumeDatabaseRecovery.mockReturnValueOnce(recovery);
+    vi.mocked(consumePrefetchedHydrateResult).mockReturnValue({
+      appState: { terminals: [], sidebarWidth: 350 },
+      terminalConfig: { scrollbackLines: 3000 },
+      project: null,
+      databaseRecovery: null,
+    } as unknown as ReturnType<typeof consumePrefetchedHydrateResult>);
+    const projectStoreModule = await import("../../services/ProjectStore.js");
+    vi.mocked(projectStoreModule.projectStore.getCurrentProject).mockReturnValue({
+      id: "p1",
+      name: "P",
+      path: "/p",
+    } as unknown as ReturnType<typeof projectStoreModule.projectStore.getCurrentProject>);
+
+    const result = (await invokeBoot()) as Record<string, unknown>;
+
+    expect(result.databaseRecovery).toEqual(recovery);
   });
 
   it("hydrates the project bound to the sending project view instead of the stale global current project", async () => {

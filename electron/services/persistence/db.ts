@@ -7,6 +7,7 @@ import fs from "node:fs";
 import path from "path";
 import { getWritesSuppressed } from "../diskPressureState.js";
 import * as schema from "./schema.js";
+import type { DatabaseRecovery } from "../../../shared/types/ipc/app.js";
 
 export type AppDb = ReturnType<typeof drizzle<typeof schema>>;
 
@@ -156,17 +157,28 @@ export function probeDb(dbPath: string, fullCheck = true): boolean {
   }
 }
 
-export function attemptRecovery(dbPath: string): boolean {
+/**
+ * Quarantine a corrupt database and restore it from the backup when that backup
+ * probes clean, otherwise leave the path empty so `openDb` creates a fresh file.
+ *
+ * Returns what actually happened so callers can tell the user. `null` means the
+ * recovery itself failed (a rename threw) — the corrupt database may still be in
+ * place, so callers must not report a successful restore or reset.
+ */
+export function attemptRecovery(dbPath: string): DatabaseRecovery | null {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
   const corruptSuffix = `.corrupt-${timestamp}`;
   const backupPath = dbPath + ".backup";
 
   try {
-    // Quarantine corrupt DB and associated WAL/SHM files
+    // Quarantine corrupt DB and associated WAL/SHM files. Only the main file's
+    // path is reported — it is the one a user would inspect or hand to support.
+    let quarantinedPath: string | undefined;
     for (const suffix of ["", "-wal", "-shm"]) {
       const filePath = dbPath + suffix;
       if (fs.existsSync(filePath)) {
         fs.renameSync(filePath, filePath + corruptSuffix);
+        if (suffix === "") quarantinedPath = filePath + corruptSuffix;
       }
     }
 
@@ -176,20 +188,20 @@ export function attemptRecovery(dbPath: string): boolean {
       if (probeDb(backupPath)) {
         fs.copyFileSync(backupPath, dbPath);
         console.log("[DB] Restored database from backup");
-        return true;
+        return { kind: "restored-from-backup", quarantinedPath };
       } else {
         console.error("[DB] Backup is also corrupt, cannot restore");
         // Quarantine the corrupt backup too
         fs.renameSync(backupPath, backupPath + corruptSuffix);
-        return false;
+        return { kind: "reset-to-fresh", quarantinedPath };
       }
     }
 
     console.warn("[DB] No backup available for recovery — fresh database will be created");
-    return false;
+    return { kind: "reset-to-fresh", quarantinedPath };
   } catch (error) {
     console.error("[DB] Recovery failed:", error);
-    return false;
+    return null;
   }
 }
 

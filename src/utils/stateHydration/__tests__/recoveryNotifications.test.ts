@@ -2,9 +2,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { HydrateResult } from "@shared/types/ipc/app";
 
 const notifyMock = vi.hoisted(() => vi.fn());
+const showItemInFolderUnconfined = vi.hoisted(() => vi.fn<(path: string) => Promise<void>>());
 
 vi.mock("@/lib/notify", () => ({
   notify: (args: unknown) => notifyMock(args),
+}));
+
+vi.mock("@/clients/systemClient", () => ({
+  systemClient: { showItemInFolderUnconfined },
 }));
 
 const { dispatchRecoveryNotifications, __resetGpuAccelNotifiedForTests } =
@@ -23,6 +28,7 @@ function makeHydrateResult(overrides: Partial<HydrateResult>): HydrateResult {
     gpuAngleFallbackActive: false,
     safeMode: false,
     settingsRecovery: null,
+    databaseRecovery: null,
     projectStateRecovery: null,
     crashLoopStateRecovery: null,
   };
@@ -31,6 +37,8 @@ function makeHydrateResult(overrides: Partial<HydrateResult>): HydrateResult {
 
 beforeEach(() => {
   notifyMock.mockReset();
+  showItemInFolderUnconfined.mockReset();
+  showItemInFolderUnconfined.mockResolvedValue(undefined);
   __resetGpuAccelNotifiedForTests();
 });
 
@@ -38,6 +46,71 @@ describe("dispatchRecoveryNotifications", () => {
   it("does nothing when no recovery flags are set", () => {
     dispatchRecoveryNotifications(makeHydrateResult({}));
     expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  describe("database recovery", () => {
+    const QUARANTINED = "/u/daintree.db.corrupt-2026-01-01";
+
+    it("warns that the database was restored, and auto-dismisses", () => {
+      dispatchRecoveryNotifications(
+        makeHydrateResult({
+          databaseRecovery: { kind: "restored-from-backup", quarantinedPath: QUARANTINED },
+        })
+      );
+
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      const arg = notifyMock.mock.calls[0]![0];
+      expect(arg).toMatchObject({
+        type: "warning",
+        title: "Database restored from backup",
+        priority: "high",
+        duration: 8000,
+        context: { eventKind: "recovery" },
+      });
+      expect(arg.message).toContain(QUARANTINED);
+    });
+
+    it("warns that the database was reset, and stays until dismissed", () => {
+      dispatchRecoveryNotifications(
+        makeHydrateResult({
+          databaseRecovery: { kind: "reset-to-fresh", quarantinedPath: QUARANTINED },
+        })
+      );
+
+      const arg = notifyMock.mock.calls[0]![0];
+      expect(arg).toMatchObject({
+        type: "warning",
+        title: "Database reset",
+        priority: "high",
+        // A reset loses the project list — it must not disappear on its own.
+        duration: 0,
+      });
+      expect(arg.message).toContain(QUARANTINED);
+    });
+
+    it("reveals the quarantined file from the recovery action", () => {
+      dispatchRecoveryNotifications(
+        makeHydrateResult({
+          databaseRecovery: { kind: "reset-to-fresh", quarantinedPath: QUARANTINED },
+        })
+      );
+
+      const { action } = notifyMock.mock.calls[0]![0];
+      expect(action.label).toBe("Show damaged file");
+      action.onClick();
+      expect(showItemInFolderUnconfined).toHaveBeenCalledWith(QUARANTINED);
+    });
+
+    it("omits the reveal action when the corrupt file could not be preserved", () => {
+      dispatchRecoveryNotifications(
+        makeHydrateResult({ databaseRecovery: { kind: "reset-to-fresh" } })
+      );
+
+      const arg = notifyMock.mock.calls[0]![0];
+      // Nothing to reveal — offering the action would open an empty folder.
+      expect(arg.action).toBeUndefined();
+      expect(arg.message).not.toContain("preserved at");
+    });
   });
 
   describe("GPU hardware acceleration", () => {
