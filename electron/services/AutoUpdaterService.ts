@@ -7,9 +7,7 @@ import type { UpdateInfo, ProgressInfo } from "electron-updater";
 import * as semver from "semver";
 import { CHANNELS } from "../ipc/channels.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
-import { getCrashRecoveryService } from "./CrashRecoveryService.js";
-import { getCrashLoopGuard } from "./CrashLoopGuardService.js";
-import { getPanelSuspectLedger } from "./PanelSuspectLedgerService.js";
+import { requestGracefulShutdownForUpdate } from "../lifecycle/shutdownCoordinator.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
 import { trackEvent } from "./TelemetryService.js";
 import { store } from "../store.js";
@@ -91,13 +89,22 @@ const { autoUpdater } = electronUpdater;
 
 const RESUME_CHECK_DELAY_MS = 7_000;
 
-// macOS-only watchdog after `autoUpdater.quitAndInstall()`: if the process is
-// still alive after 5s, Squirrel.Mac's ShipIt likely failed to acquire its
-// staging lock (electron-builder #8997) and the in-flight `app.quit()` will
-// never fire. `app.exit(0)` force-terminates so ShipIt has a clean shot on the
+// Watchdog after `autoUpdater.quitAndInstall()`: if the process is still alive
+// after 5s, the install handoff failed to end it and nothing else will.
+//
+// On macOS that means Squirrel.Mac's ShipIt likely failed to acquire its staging
+// lock (electron-builder #8997) and the in-flight `app.quit()` will never fire.
+// On Windows/Linux, `BaseUpdater.quitAndInstall()` only schedules its `app.quit()`
+// when `install()` SUCCEEDS — a failed install simply returns. That used to be
+// survivable (the app stayed live and showed an "Update failed" toast), but the
+// install is now preceded by the full graceful-shutdown chain: by this point the
+// DB is closed and the PTYs and IPC handlers are torn down, so a non-quitting
+// process is a zombie. Hence the watchdog arms on every platform (issue #11104).
+//
+// `app.exit(0)` force-terminates, which also gives ShipIt a clean shot on the
 // next launch. 5s is the community-recommended floor — 3s is too tight under
-// memory pressure or slow disk. Windows/Linux keep the original setImmediate
-// timing (no force-exit) because their installer paths don't share this mode.
+// memory pressure or slow disk. It only ever fires if the install path failed to
+// quit on its own, so a healthy install never reaches it.
 const QUIT_AND_INSTALL_WATCHDOG_MS = 5_000;
 
 // 400ms Doherty threshold gates the "Checking…" menu label so a fast CDN
@@ -118,6 +125,11 @@ class AutoUpdaterService {
   private initialized = false;
   private channelHandlersRegistered = false;
   private updateDownloaded = false;
+  // Spans the whole install window — from the moment the shutdown coordinator
+  // accepts, through the multi-second cleanup chain, to the updater handoff.
+  // Guards re-entry, and tells dispose() (which the cleanup chain itself invokes)
+  // not to tear down the state the pending handoff still depends on.
+  private installInFlight = false;
   private isManualCheck = false;
   private lastBroadcastVersion: string | null = null;
   private menuState: UpdateMenuState = "idle";
@@ -182,32 +194,79 @@ class AutoUpdaterService {
     };
   }
 
-  // Shared install-trigger for `quitAndInstallIfReady()` and the
-  // UPDATE_QUIT_AND_INSTALL IPC handler. Both call sites need identical
-  // behavior: defer past the menu-close frame via `setImmediate` (Windows
-  // animation timing), then arm a macOS-only watchdog that force-exits if
-  // ShipIt fails to land its `app.quit()`. `quitAndInstall()` is wrapped so
-  // a thrown exception still arms the watchdog (force-exit is still the
-  // right move — ShipIt has its best chance on the next launch), and the
-  // `app.exit(0)` inside the watchdog is wrapped so a shutdown-time throw
-  // doesn't become an unhandled rejection.
+  // The install handoff. Runs ONLY once the graceful-shutdown chain has settled
+  // (see `startQuitAndInstall`), so everything the chain owns — agent session
+  // journaling, the DB checkpoint, audit flushes, subprocess teardown — is
+  // already durable before the updater takes the process.
+  //
+  // Deliberately synchronous. The old `setImmediate` wrapper (which existed to
+  // clear the menu-close frame) would now reopen the very gap this fix closes:
+  // the shutdown coordinator is in its `handoff` phase the moment this is called,
+  // so a `before-quit` arriving in a deferred tick would be let through and quit
+  // the app WITHOUT installing. The multi-tick cleanup chain already provides far
+  // more deferral than a `setImmediate` ever did, and `BaseUpdater.quitAndInstall()`
+  // keeps its own internal `setImmediate` before `app.quit()` on Windows/Linux.
+  //
+  // `quitAndInstall()` is wrapped so a throw still arms the watchdog — force-exit
+  // remains the right move, and it's the only thing standing between a failed
+  // install and a torn-down zombie process. The `app.exit(0)` inside the watchdog
+  // is wrapped so a shutdown-time throw doesn't become an unhandled rejection.
   private executeQuitAndInstall(): void {
-    setImmediate(() => {
+    try {
+      autoUpdater.quitAndInstall();
+    } catch (err) {
+      console.error("[MAIN] autoUpdater.quitAndInstall() threw:", err);
+    }
+    this.watchdogTimeout = setTimeout(() => {
+      this.watchdogTimeout = null;
       try {
-        autoUpdater.quitAndInstall();
+        app.exit(0);
       } catch (err) {
-        console.error("[MAIN] autoUpdater.quitAndInstall() threw:", err);
+        console.error("[MAIN] Quit-and-install watchdog app.exit(0) failed:", err);
       }
-      if (process.platform !== "darwin") return;
-      this.watchdogTimeout = setTimeout(() => {
-        this.watchdogTimeout = null;
-        try {
-          app.exit(0);
-        } catch (err) {
-          console.error("[MAIN] Quit-and-install watchdog app.exit(0) failed:", err);
-        }
-      }, QUIT_AND_INSTALL_WATCHDOG_MS);
-    });
+    }, QUIT_AND_INSTALL_WATCHDOG_MS);
+  }
+
+  // Shared entry point for `quitAndInstallIfReady()` (native menu) and the
+  // UPDATE_QUIT_AND_INSTALL IPC handler (renderer toast).
+  //
+  // Before #11104 both call sites hand-copied three clean-exit markers and then
+  // installed immediately, because on macOS `quitAndInstall()` reaches native
+  // Squirrel.Mac — which closes every window before Electron emits `before-quit`,
+  // so the graceful-shutdown chain never ran. Everything else it does (session
+  // journaling, DB checkpoint, audit flushes) was simply lost on an update.
+  //
+  // Now the install waits for that chain. The markers are gone from here: the
+  // chain writes them itself, and only once it has actually settled clean.
+  private startQuitAndInstall(): boolean {
+    if (this.installInFlight) return false;
+
+    const previousAutoInstall = autoUpdater.autoInstallOnAppQuit;
+    this.installInFlight = true;
+    // Disarm the auto-install-on-quit path for the WHOLE cleanup window, not just
+    // the instant before installing. Cleanup is now multi-second, and a Cmd+Q
+    // landing inside it would otherwise be a second, concurrent install trigger
+    // racing the installer subprocess.
+    autoUpdater.autoInstallOnAppQuit = false;
+
+    const status = requestGracefulShutdownForUpdate(() => this.executeQuitAndInstall());
+    if (status !== "started") {
+      // Either a quit already owns the shutdown (its terminal action will end the
+      // process — attaching ours too would race `app.exit()` against the installer)
+      // or the coordinator has no chain registered. Roll back so the staged update
+      // stays installable rather than being silently consumed.
+      console.warn(`[MAIN] Quit-and-install declined by the shutdown coordinator: ${status}`);
+      this.installInFlight = false;
+      autoUpdater.autoInstallOnAppQuit = previousAutoInstall;
+      return false;
+    }
+
+    // Consume the staged update only once the coordinator has accepted, so a
+    // declined request leaves the menu item and toast still actionable. Flipping
+    // both guards here also means a rapid double-click reads idle and bails.
+    this.updateDownloaded = false;
+    this.setMenuState("idle");
+    return true;
   }
 
   private checkPendingUpdateInstallVersion(): void {
@@ -239,42 +298,7 @@ class AutoUpdaterService {
   quitAndInstallIfReady(): boolean {
     if (isWindowsStoreBuild()) return false;
     if (this.menuState !== "ready" || !this.updateDownloaded) return false;
-    // Flip both guards synchronously so a rapid double-click can't queue two
-    // setImmediate(quitAndInstall) calls — the second invocation reads idle
-    // and bails. Resetting menuState back to idle also gives instant visual
-    // feedback that the click registered.
-    this.updateDownloaded = false;
-    this.setMenuState("idle");
-    try {
-      getCrashRecoveryService().cleanupOnExit();
-    } catch (err) {
-      console.error("[MAIN] Crash recovery cleanup before quit-and-install failed:", err);
-    }
-    // An update relaunch is a clean exit, but quitAndInstall() bypasses the
-    // before-quit cleanup chain (issue #9638), so the two clean-exit markers the
-    // normal shutdown path writes are skipped — leaving cleanExit:false and
-    // firing a false crash-recovery prompt on the post-update boot. Mirror
-    // shutdown.ts: each marker in its own try/catch so one failure can't skip
-    // the next (lesson #7158). markCleanExit/markCleanLaunch are synchronous
-    // writeFileSync, so they commit before the setImmediate-deferred install.
-    try {
-      getCrashLoopGuard().markCleanExit();
-    } catch (err) {
-      console.error("[MAIN] CrashLoopGuard.markCleanExit before quit-and-install failed:", err);
-    }
-    try {
-      getPanelSuspectLedger().markCleanLaunch();
-    } catch (err) {
-      console.error(
-        "[MAIN] PanelSuspectLedger.markCleanLaunch before quit-and-install failed:",
-        err
-      );
-    }
-    // Disarm the before-quit listener so the explicit quitAndInstall() path
-    // and the autoInstallOnAppQuit path don't race the installer subprocess.
-    autoUpdater.autoInstallOnAppQuit = false;
-    this.executeQuitAndInstall();
-    return true;
+    return this.startQuitAndInstall();
   }
 
   // electron-updater 6.3.x doesn't surface a categorized error type, so classify
@@ -660,6 +684,10 @@ class AutoUpdaterService {
 
       this.errorHandler = (err: Error) => {
         console.error("[MAIN] Auto-updater error:", err);
+        // Once the install is underway the service is being torn down around us:
+        // scheduling a retry would arm a timer against a disposed service, and a
+        // toast would target a renderer that is going away. Log and stop.
+        if (this.installInFlight) return;
         const wasManual = this.isManualCheck;
         this.isManualCheck = false;
         this.clearCheckingMenuTimeout();
@@ -737,9 +765,9 @@ class AutoUpdaterService {
       };
       autoUpdater.on("update-downloaded", this.downloadedHandler);
 
-      // Handle quit-and-install request from renderer. Mirrors the guard +
-      // cleanup pattern from quitAndInstallIfReady() and validates the sender
-      // origin synchronously (matches UPDATE_DISMISS_TOAST pattern).
+      // Handle quit-and-install request from renderer. Validates the sender origin
+      // synchronously (matches the UPDATE_DISMISS_TOAST pattern), then delegates to
+      // the same coordinated install path the native menu uses.
       ipcMain.handle(CHANNELS.UPDATE_QUIT_AND_INSTALL, (event) => {
         const senderUrl = event.senderFrame?.url;
         if (!senderUrl || !isTrustedRendererUrl(senderUrl)) return;
@@ -747,31 +775,7 @@ class AutoUpdaterService {
           console.warn("[MAIN] Quit-and-install called before download completed");
           return;
         }
-        this.updateDownloaded = false;
-        this.setMenuState("idle");
-        try {
-          getCrashRecoveryService().cleanupOnExit();
-        } catch (err) {
-          console.error("[MAIN] Crash recovery cleanup before quit-and-install failed:", err);
-        }
-        // Issue #9638: write the clean-exit markers the before-quit chain would
-        // otherwise skip on an update relaunch. Independent try/catch per marker
-        // (lesson #7158); both are synchronous so they commit before the install.
-        try {
-          getCrashLoopGuard().markCleanExit();
-        } catch (err) {
-          console.error("[MAIN] CrashLoopGuard.markCleanExit before quit-and-install failed:", err);
-        }
-        try {
-          getPanelSuspectLedger().markCleanLaunch();
-        } catch (err) {
-          console.error(
-            "[MAIN] PanelSuspectLedger.markCleanLaunch before quit-and-install failed:",
-            err
-          );
-        }
-        autoUpdater.autoInstallOnAppQuit = false;
-        this.executeQuitAndInstall();
+        this.startQuitAndInstall();
       });
 
       // Handle manual check-for-updates request from renderer
@@ -849,7 +853,13 @@ class AutoUpdaterService {
       clearTimeout(this.resumeTimeout);
       this.resumeTimeout = null;
     }
-    if (this.watchdogTimeout) {
+    // The graceful-shutdown chain disposes this service as part of its normal
+    // teardown — which, on the update path, happens WHILE an install is pending.
+    // Never clear the force-exit watchdog in that case: a cleanup chain that hit
+    // its hard timeout keeps running in the background and can reach this line
+    // AFTER the handoff already armed it, disarming the one thing that guarantees
+    // a failed install can't leave a torn-down zombie process (issue #11104).
+    if (this.watchdogTimeout && !this.installInFlight) {
       clearTimeout(this.watchdogTimeout);
       this.watchdogTimeout = null;
     }
@@ -876,6 +886,12 @@ class AutoUpdaterService {
       autoUpdater.off("update-not-available", this.notAvailableHandler);
       this.notAvailableHandler = null;
     }
+    // Detach unconditionally, including during an in-flight install. It's safe:
+    // AppUpdater's own constructor attaches a permanent "error" listener of its
+    // own (it logs), so the emitter is never left listener-less and
+    // `emit("error")` cannot throw for want of a handler. Detaching ours is in
+    // fact the stronger guarantee — it makes it impossible for a late install
+    // error to schedule a retry timer against this now-disposed service.
     if (this.errorHandler) {
       autoUpdater.off("error", this.errorHandler);
       this.errorHandler = null;
@@ -926,6 +942,10 @@ class AutoUpdaterService {
     }
 
     this.updateDownloaded = false;
+    // Reset last: every guard above reads it to decide what an in-flight install
+    // still needs. By this point those decisions are made, and the flag must not
+    // survive a full teardown.
+    this.installInFlight = false;
     this.isManualCheck = false;
     this.lastBroadcastVersion = null;
     this.channelHandlersRegistered = false;
