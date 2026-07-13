@@ -216,14 +216,18 @@ describe("color system contract", () => {
   // to resolve to body text instead of the contrast-validated accent foreground
   // (#11115), and how --color-accent-primary regressed before it (#2687). Uniqueness
   // is the invariant that catches the whole class.
-  it("declares every --color-* exactly once inside @theme inline", () => {
-    const themeBlock = indexCss.match(/@theme\s+inline\s*\{[\s\S]*?\n\}/)?.[0] ?? "";
-    expect(themeBlock, "could not locate the @theme inline block").not.toBe("");
+  it("declares every --color-* exactly once across @theme inline", () => {
+    // Count across EVERY @theme inline block, not just the first — a second block
+    // would reintroduce cross-block shadowing that a single-block scan can't see.
+    const blocks = [...indexCss.matchAll(/@theme\s+inline\s*\{[\s\S]*?\n\}/g)].map((m) => m[0]);
+    expect(blocks.length, "could not locate any @theme inline block").toBeGreaterThan(0);
 
     const counts = new Map<string, number>();
-    for (const [, name] of themeBlock.matchAll(/^\s*(--color-[\w-]+)\s*:/gm)) {
-      if (name === undefined) continue;
-      counts.set(name, (counts.get(name) ?? 0) + 1);
+    for (const block of blocks) {
+      for (const [, name] of block.matchAll(/^\s*(--color-[\w-]+)\s*:/gm)) {
+        if (name === undefined) continue;
+        counts.set(name, (counts.get(name) ?? 0) + 1);
+      }
     }
     expect(counts.size, "no --color-* declarations found — regex is stale").toBeGreaterThan(0);
 

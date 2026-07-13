@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
+import { ACCENT_CONTRAST_PAIR } from "@shared/theme";
 
 // Contrast validation (shared/theme/contrast.ts) checks abstract theme tokens: it
 // guarantees `accent-foreground` clears 4.5:1 on `accent-primary`. It cannot see which
@@ -15,10 +16,10 @@ import ts from "typescript";
 // utility through src/index.css's real variable graph and asserts that anything painting
 // text on a solid accent fill lands on the same terminal token the validator checks.
 //
-// Everything below is derived from the graph, never from a hardcoded class name — so it
-// accepts any spelling that resolves correctly (`text-primary-foreground`,
-// `text-accent-primary-foreground`, a future alias), rejects any that does not, and
-// stays honest if the token wiring is renamed.
+// Nothing here is a hardcoded class name. The tokens come from the validator's own pair,
+// and the classes that reach them are derived from the CSS graph — so the guard accepts
+// any spelling that resolves correctly, rejects any that does not, and breaks loudly if
+// the pair is renamed or its threshold removed.
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(TEST_DIR, "../../..");
@@ -29,22 +30,30 @@ const SCAN_ROOTS = [
   path.join(REPO_ROOT, "plugins/builtin/github/renderer"),
 ];
 
-// The terminal tokens the contrast validator pairs. A utility is an "accent fill" iff it
-// resolves here; a foreground is valid iff it resolves to the foreground counterpart.
-const ACCENT_FILL_TOKEN = "--theme-accent-primary";
-const ACCENT_FOREGROUND_TOKEN = "--theme-accent-foreground";
+// Derived from the validator, not restated. Renaming the pair or dropping it from
+// CONTRAST_PAIRS makes this guard fail rather than silently stop guarding.
+const ACCENT_FILL_TOKEN = `--theme-${ACCENT_CONTRAST_PAIR.background}`;
+const ACCENT_FOREGROUND_TOKEN = `--theme-${ACCENT_CONTRAST_PAIR.foreground}`;
 
-// Utility prefixes that paint a solid fill behind an element's own text.
-const FILL_PREFIXES = ["bg-", "from-"];
-// Utility prefixes that paint text/icon glyphs.
 const FOREGROUND_PREFIXES = ["text-", "fill-", "stroke-"];
+const GRADIENT_STOP_PREFIXES = ["from-", "via-", "to-"];
+// A gradient only paints once a gradient image utility is active; bare `from-*` is inert.
+const GRADIENT_IMAGE = /^bg-(gradient-|linear-|radial|conic)/;
+// `bg-cover`, `bg-center`, `bg-clip-*`, `bg-no-repeat` — background utilities that paint
+// no color, so they never shield a descendant from an ancestor's accent fill.
+const CLASS_CONSTRUCTORS = new Set(["cn", "clsx", "cx", "classNames", "twMerge", "twJoin"]);
+const CVA_CONSTRUCTORS = new Set(["cva", "tv"]);
+// A literal color escapes the token system: it can never be the validated token.
+const LITERAL_COLOR = /^(#[0-9a-f]{3,8}|(rgb|hsl|oklch|oklab|lab|lch|color)a?\()/i;
+const MAX_FEASIBLE_SETS = 512;
 
 // ── CSS variable graph ─────────────────────────────────────────────────
 
 /** Every `--name: value` in index.css, in document order — later wins, as the cascade does. */
 function parseCssVariables(css: string): Map<string, string> {
+  const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, "");
   const declarations = new Map<string, string>();
-  for (const [, name, value] of css.matchAll(/(--[\w-]+)\s*:\s*([^;{}]+);/g)) {
+  for (const [, name, value] of withoutComments.matchAll(/(--[\w-]+)\s*:\s*([^;{}]+);/g)) {
     if (name === undefined || value === undefined) continue;
     declarations.set(name, value.trim());
   }
@@ -53,14 +62,14 @@ function parseCssVariables(css: string): Map<string, string> {
 
 /**
  * Follow a variable through pure `var(--x)` aliases to the name it ultimately points at.
- * Stops at the first variable whose value is not a bare alias (a literal color, a
- * color-mix, or undefined here because a theme supplies it at runtime) and returns that
- * variable's *name* — the semantic destination.
+ * Stops at a `--theme-*` semantic token (the runtime theme supplies its value, and it is
+ * the vocabulary the contrast validator speaks), or at any value that is not a bare alias.
  */
 function resolveToTerminalToken(name: string, declarations: Map<string, string>): string {
   const seen = new Set<string>();
   let current = name;
   while (!seen.has(current)) {
+    if (current.startsWith("--theme-")) return current;
     seen.add(current);
     const value = declarations.get(current);
     if (value === undefined) return current;
@@ -72,193 +81,312 @@ function resolveToTerminalToken(name: string, declarations: Map<string, string>)
 }
 
 type ColorGraph = {
-  /** Terminal token a `--color-*` utility name lands on, e.g. "primary" -> "--theme-accent-primary". */
-  terminalOf: (utilityName: string) => string | null;
+  /** Terminal token for a Tailwind color name, e.g. "primary" -> "--theme-accent-primary". */
+  terminalOfName: (colorName: string) => string | null;
+  /** Terminal token for a raw CSS variable, e.g. "--color-primary" / "--theme-accent-primary". */
+  terminalOfVar: (varName: string) => string;
 };
 
 function buildColorGraph(css: string): ColorGraph {
   const declarations = parseCssVariables(css);
-  const cache = new Map<string, string | null>();
   return {
-    terminalOf(utilityName) {
-      const cached = cache.get(utilityName);
-      if (cached !== undefined) return cached;
-      const varName = `--color-${utilityName}`;
-      const terminal = declarations.has(varName)
-        ? resolveToTerminalToken(varName, declarations)
-        : null;
-      cache.set(utilityName, terminal);
-      return terminal;
+    terminalOfName(colorName) {
+      const varName = `--color-${colorName}`;
+      return declarations.has(varName) ? resolveToTerminalToken(varName, declarations) : null;
+    },
+    terminalOfVar(varName) {
+      return resolveToTerminalToken(varName, declarations);
     },
   };
 }
 
-// ── Utility classification ─────────────────────────────────────────────
+// ── Utility parsing ────────────────────────────────────────────────────
 
-/** Strip variant prefixes (`hover:`, `data-[state=on]:`, …), keeping the base utility. */
-function stripVariants(utility: string): { base: string; variants: string[] } {
+type Util = {
+  raw: string;
+  /** Variant chain (`hover`, `data-[state=on]`, `before`), normalized, order-insensitive. */
+  variants: string[];
+  /** The utility with variants, `!` and any opacity modifier removed. */
+  base: string;
+  /** The `/50` or `/[.5]` modifier, if present. */
+  opacity: string | null;
+};
+
+/** Index of `ch` at bracket/paren depth zero, or -1. */
+function indexAtDepthZero(text: string, ch: string): number {
+  let depth = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === "[" || c === "(") depth++;
+    else if (c === "]" || c === ")") depth--;
+    else if (c === ch && depth === 0) return i;
+  }
+  return -1;
+}
+
+function parseUtil(raw: string): Util {
+  // Tailwind v4 `bg-primary!` and v3 `!bg-primary`.
+  let rest = raw.endsWith("!") ? raw.slice(0, -1) : raw;
+  if (rest.startsWith("!")) rest = rest.slice(1);
+
   const variants: string[] = [];
-  let rest = utility;
-  // Split on ":" that is not inside [...] — data-[state=checked]:bg-x has a ":" free colon only at the end.
   for (;;) {
-    let depth = 0;
-    let cut = -1;
-    for (let i = 0; i < rest.length; i++) {
-      const ch = rest[i];
-      if (ch === "[") depth++;
-      else if (ch === "]") depth--;
-      else if (ch === ":" && depth === 0) {
-        cut = i;
-        break;
-      }
-    }
+    const cut = indexAtDepthZero(rest, ":");
     if (cut === -1) break;
     variants.push(rest.slice(0, cut));
     rest = rest.slice(cut + 1);
   }
-  return { base: rest, variants };
+
+  // A slash inside `[...]` or `(...)` is part of the value (`bg-[url(a/b.png)]`,
+  // `w-[calc(1/2)]`); only a depth-zero slash is an opacity modifier. Variant names can
+  // also carry slashes (`group-hover/icon:`) — already stripped above.
+  const slash = indexAtDepthZero(rest, "/");
+  const base = slash === -1 ? rest : rest.slice(0, slash);
+  const opacity = slash === -1 ? null : rest.slice(slash + 1);
+
+  return { raw, variants, base, opacity };
 }
 
-/** `bg-daintree-accent/10` -> { name: "bg-daintree-accent", hasOpacity: true } */
-function splitOpacity(base: string): { name: string; hasOpacity: boolean } {
-  const slash = base.lastIndexOf("/");
-  // Ignore a "/" inside an arbitrary value: text-[var(--x)]/50 is rare; bracket-aware enough.
-  if (slash === -1 || base.indexOf("]") > slash) return { name: base, hasOpacity: false };
-  return { name: base.slice(0, slash), hasOpacity: true };
-}
-
-/** A pseudo-element variant paints a separate box — not the element's own text surface. */
-function isPseudoElement(variants: string[]): boolean {
-  return variants.some((v) => v === "before" || v === "after");
+/** A pseudo-element paints a separate box — neither the element's fill nor its own text. */
+function isPseudoElement(util: Util): boolean {
+  return util.variants.some((v) => v === "before" || v === "after");
 }
 
 /**
- * Does this utility paint a SOLID accent fill behind its own text?
- * Opacity-modified fills (`bg-daintree-accent/10`) are washes over the surface, not solid
- * accent, and `accent-soft`/`accent-muted` resolve to different terminal tokens — both
- * fall out naturally, the first by the opacity check, the second by the graph.
+ * The terminal token a color-bearing utility resolves to, `"literal"` for a hardcoded
+ * color that escapes the token system, or null when the utility is not a color at all
+ * (`text-sm`, `text-center`, `text-[9px]`, `bg-cover`).
  */
-function isSolidAccentFill(utility: string, graph: ColorGraph): boolean {
-  const { base, variants } = stripVariants(utility);
-  if (isPseudoElement(variants)) return false;
-  const { name, hasOpacity } = splitOpacity(base);
-  if (hasOpacity) return false;
-  const prefix = FILL_PREFIXES.find((p) => name.startsWith(p));
-  if (prefix === undefined) return false;
-  return graph.terminalOf(name.slice(prefix.length)) === ACCENT_FILL_TOKEN;
-}
+function colorTerminal(base: string, prefix: string, graph: ColorGraph): string | null {
+  const value = base.slice(prefix.length);
 
-/** Any background paint at all — a descendant carrying one re-paints, so its text is not on the accent. */
-function isAnyBackground(utility: string): boolean {
-  const { base, variants } = stripVariants(utility);
-  if (isPseudoElement(variants)) return false;
-  const { name } = splitOpacity(base);
-  return name.startsWith("bg-") && name !== "bg-transparent" && !name.startsWith("bg-gradient-");
-}
-
-type Foreground = { utility: string; terminal: string | null };
-
-/**
- * Classify a utility as a text/icon color, if it is one. Returns null for non-color `text-*`
- * utilities (text-xs, text-center, text-[9px]) so sizing/alignment never trips the guard.
- */
-function asForeground(utility: string, graph: ColorGraph): Foreground | null {
-  const { base } = stripVariants(utility);
-  const { name } = splitOpacity(base);
-  const prefix = FOREGROUND_PREFIXES.find((p) => name.startsWith(p));
-  if (prefix === undefined) return null;
-  const value = name.slice(prefix.length);
-
-  // Arbitrary value: text-[var(--color-daintree-bg)] / text-[#0b1220] / text-[9px]
   const arbitrary = /^\[(.+)]$/.exec(value);
   if (arbitrary?.[1] !== undefined) {
-    const inner = arbitrary[1];
-    const varRef = /^var\(\s*--color-([\w-]+)\s*\)$/.exec(inner);
-    if (varRef?.[1] !== undefined) {
-      return { utility, terminal: graph.terminalOf(varRef[1]) };
-    }
-    // A literal color escapes the token system entirely; anything else (a length,
-    // a font-size) is not a color at all.
-    if (/^#[0-9a-f]{3,8}$/i.test(inner) || /^(rgb|hsl|oklch|color)\(/i.test(inner)) {
-      return { utility, terminal: null };
-    }
+    // A type hint is allowed: text-[color:var(--x)].
+    const inner = arbitrary[1].replace(/^color:/, "");
+    const varRef = /^var\(\s*(--[\w-]+)\s*\)$/.exec(inner);
+    if (varRef?.[1] !== undefined) return graph.terminalOfVar(varRef[1]);
+    if (LITERAL_COLOR.test(inner)) return "literal";
     return null;
   }
 
-  // Hardcoded palette colors bypass theming outright.
-  if (value === "white" || value === "black") return { utility, terminal: null };
+  if (value === "white" || value === "black") return "literal";
+  // Inherits or paints nothing — not a determinable foreground of its own.
+  if (value === "transparent" || value === "current" || value === "inherit") return null;
 
-  const terminal = graph.terminalOf(value);
-  // Not a known color token => a sizing/alignment/decoration utility. Ignore.
-  if (terminal === null) return null;
-  return { utility, terminal };
+  return graph.terminalOfName(value);
 }
 
-function isValidAccentForeground(fg: Foreground): boolean {
-  return fg.terminal === ACCENT_FOREGROUND_TOKEN;
+/** A solid, unconditional-in-this-state accent fill behind the element's own text. */
+function accentFills(utils: Util[], graph: ColorGraph): Util[] {
+  const hasGradientImage = utils.some((u) => GRADIENT_IMAGE.test(u.base));
+  return utils.filter((u) => {
+    if (isPseudoElement(u)) return false;
+
+    if (u.base.startsWith("bg-")) {
+      // An opacity-modified fill is a wash over the surface, not solid accent.
+      if (u.opacity !== null) return false;
+      return colorTerminal(u.base, "bg-", graph) === ACCENT_FILL_TOKEN;
+    }
+
+    // Gradient stops only paint when a gradient image utility is active. A stop keeps
+    // showing accent even at reduced alpha, so opacity does not disqualify it.
+    const stop = GRADIENT_STOP_PREFIXES.find((p) => u.base.startsWith(p));
+    if (stop === undefined || !hasGradientImage) return false;
+    return colorTerminal(u.base, stop, graph) === ACCENT_FILL_TOKEN;
+  });
+}
+
+/**
+ * Does this class set repaint its own background, shielding its text from an ancestor's
+ * accent fill? Only an unconditional, fully opaque, actually-colored background does.
+ * A `hover:` background leaves the base state on the accent; an opacity-modified one is
+ * translucent; and `bg-cover` paints no color at all.
+ */
+function shieldsBackground(utils: Util[], graph: ColorGraph): boolean {
+  const hasGradientImage = utils.some((u) => GRADIENT_IMAGE.test(u.base));
+  return utils.some((u) => {
+    if (u.variants.length > 0 || u.opacity !== null) return false;
+    if (u.base.startsWith("bg-")) return colorTerminal(u.base, "bg-", graph) !== null;
+    const stop = GRADIENT_STOP_PREFIXES.find((p) => u.base.startsWith(p));
+    if (stop === undefined || !hasGradientImage) return false;
+    return colorTerminal(u.base, stop, graph) !== null;
+  });
+}
+
+type Foreground = { util: Util; terminal: string };
+
+function foregrounds(utils: Util[], graph: ColorGraph): Foreground[] {
+  const out: Foreground[] = [];
+  for (const util of utils) {
+    if (isPseudoElement(util)) continue;
+    const prefix = FOREGROUND_PREFIXES.find((p) => util.base.startsWith(p));
+    if (prefix === undefined) continue;
+    const terminal = colorTerminal(util.base, prefix, graph);
+    if (terminal === null) continue;
+    out.push({ util, terminal });
+  }
+  return out;
+}
+
+/**
+ * The foreground actually painted while `fillVariants` is the active state. A foreground
+ * applies if its own variant chain is satisfied in that state — a base `text-*` applies
+ * always, a `hover:text-*` only once `hover` is active. The most specific wins, matching
+ * how the cascade resolves them; a later declaration breaks a tie.
+ */
+function effectiveForeground(
+  utils: Util[],
+  fillVariants: string[],
+  graph: ColorGraph
+): Foreground | null {
+  const active = new Set(fillVariants);
+  let best: Foreground | null = null;
+  for (const fg of foregrounds(utils, graph)) {
+    if (!fg.util.variants.every((v) => active.has(v))) continue;
+    if (best === null || fg.util.variants.length >= best.util.variants.length) best = fg;
+  }
+  return best;
+}
+
+/** The 4.5:1 guarantee covers the opaque token; alpha below 1 is no longer guaranteed. */
+function isValidated(fg: Foreground): boolean {
+  return fg.terminal === ACCENT_FOREGROUND_TOKEN && fg.util.opacity === null;
+}
+
+// ── Feasible class sets ────────────────────────────────────────────────
+
+// A className is rarely one string. `cn("a", cond ? "b" : "c", flag && "d")` renders one
+// of several class sets, and only classes that can co-occur may be compared: flattening
+// them into one union would pair an accent fill from one ternary branch with a foreground
+// from the other and report a bug that cannot happen. So expand the expression into the
+// sets that can actually render, and check each independently.
+
+function tokensOf(text: string): string[] {
+  return text.split(/\s+/).filter((t) => t.length > 0);
+}
+
+function crossProduct(groups: string[][][]): string[][] {
+  let acc: string[][] = [[]];
+  for (const group of groups) {
+    const next: string[][] = [];
+    for (const prefix of acc) {
+      for (const suffix of group) next.push([...prefix, ...suffix]);
+    }
+    if (next.length > MAX_FEASIBLE_SETS) {
+      // Degrade to the flat union rather than exploding. Over-approximates (may pair
+      // classes that never co-occur), which can only over-report, never under-report.
+      return [[...new Set(next.flat())]];
+    }
+    acc = next;
+  }
+  return acc;
+}
+
+function feasibleSets(node: ts.Node | undefined): string[][] {
+  if (node === undefined) return [[]];
+
+  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+    return [tokensOf(node.text)];
+  }
+  if (ts.isJsxExpression(node) || ts.isParenthesizedExpression(node)) {
+    return feasibleSets(node.expression);
+  }
+  if (ts.isConditionalExpression(node)) {
+    return [...feasibleSets(node.whenTrue), ...feasibleSets(node.whenFalse)];
+  }
+  if (ts.isBinaryExpression(node)) {
+    const kind = node.operatorToken.kind;
+    // `flag && "cls"` renders the classes or nothing.
+    if (kind === ts.SyntaxKind.AmpersandAmpersandToken) {
+      return [...feasibleSets(node.right), []];
+    }
+    if (
+      kind === ts.SyntaxKind.BarBarToken ||
+      kind === ts.SyntaxKind.QuestionQuestionToken ||
+      kind === ts.SyntaxKind.PlusToken
+    ) {
+      return [...feasibleSets(node.left), ...feasibleSets(node.right)];
+    }
+    return [[]];
+  }
+  if (ts.isTemplateExpression(node)) {
+    const groups: string[][][] = [[tokensOf(node.head.text)]];
+    for (const span of node.templateSpans) {
+      groups.push(feasibleSets(span.expression), [tokensOf(span.literal.text)]);
+    }
+    return crossProduct(groups);
+  }
+  if (ts.isArrayLiteralExpression(node)) {
+    return crossProduct(node.elements.map((e) => feasibleSets(e)));
+  }
+  if (ts.isObjectLiteralExpression(node)) {
+    // clsx's object form: each key is independently present or absent.
+    return crossProduct(
+      node.properties.flatMap((prop) => {
+        if (!ts.isPropertyAssignment(prop)) return [];
+        const name = prop.name;
+        const text = ts.isStringLiteral(name)
+          ? name.text
+          : ts.isIdentifier(name)
+            ? name.text
+            : null;
+        if (text === null) return [];
+        return [[tokensOf(text), []]];
+      })
+    );
+  }
+  if (ts.isCallExpression(node)) {
+    const callee = ts.isIdentifier(node.expression) ? node.expression.text : null;
+    if (callee !== null && CLASS_CONSTRUCTORS.has(callee)) {
+      return crossProduct(node.arguments.map((arg) => feasibleSets(arg)));
+    }
+    return [[]];
+  }
+  // An identifier, member access, or anything else we cannot resolve statically.
+  return [[]];
+}
+
+function parseSets(sets: string[][]): Util[][] {
+  return sets.map((set) => set.map(parseUtil));
 }
 
 // ── Source analysis ────────────────────────────────────────────────────
 
 export type Violation = { file: string; line: number; utility: string; context: string };
 
-function utilitiesOf(text: string): string[] {
-  return text.split(/\s+/).filter((t) => t.length > 0);
-}
-
-// Every node kind that can carry class text. Typed as the union rather than ts.Node so
-// `.text` reads without a cast (the no-unsafe-type-assertion lint ratchet is per-rule).
-type ClassLiteral =
-  | ts.StringLiteral
-  | ts.NoSubstitutionTemplateLiteral
-  | ts.TemplateHead
-  | ts.TemplateMiddle
-  | ts.TemplateTail;
-
-/** Every class-ish string literal inside a node (covers cn(), cva variants, template chunks). */
-function literalsIn(node: ts.Node): ClassLiteral[] {
-  const out: ClassLiteral[] = [];
-  const visit = (n: ts.Node): void => {
-    if (
-      ts.isStringLiteral(n) ||
-      ts.isNoSubstitutionTemplateLiteral(n) ||
-      ts.isTemplateHead(n) ||
-      ts.isTemplateMiddle(n) ||
-      ts.isTemplateTail(n)
-    ) {
-      out.push(n);
-    }
-    ts.forEachChild(n, visit);
-  };
-  visit(node);
-  return out;
-}
-
-function classNameAttrOf(
+function classNameExprOf(
   element: ts.JsxOpeningElement | ts.JsxSelfClosingElement
-): ts.JsxAttribute | null {
+): ts.Node | undefined {
   for (const prop of element.attributes.properties) {
-    if (ts.isJsxAttribute(prop) && prop.name.getText() === "className") return prop;
+    if (ts.isJsxAttribute(prop) && prop.name.getText() === "className") return prop.initializer;
   }
-  return null;
+  return undefined;
 }
 
-/**
- * Utilities on an element's className. Conditional branches are merged deliberately: an
- * element that is accent-filled only when selected still has to be legible when selected.
- */
-function elementUtilities(
-  element: ts.JsxOpeningElement | ts.JsxSelfClosingElement,
-  source: ts.SourceFile
-): { utilities: string[]; line: number } {
-  const attr = classNameAttrOf(element);
-  const line = source.getLineAndCharacterOfPosition(element.getStart(source)).line + 1;
-  if (attr?.initializer === undefined) return { utilities: [], line };
-  const utilities = literalsIn(attr.initializer).flatMap((lit) => utilitiesOf(lit.text));
-  return { utilities, line };
+/** Renders characters of its own — as opposed to rendering only child elements. */
+function rendersText(child: ts.JsxChild): boolean {
+  if (ts.isJsxText(child)) return child.text.trim().length > 0;
+  if (!ts.isJsxExpression(child) || child.expression === undefined) return false;
+  // `{done && <Check />}` renders an element, not text. `{count}` renders text.
+  let hasJsx = false;
+  const look = (n: ts.Node): void => {
+    if (ts.isJsxElement(n) || ts.isJsxSelfClosingElement(n) || ts.isJsxFragment(n)) hasJsx = true;
+    ts.forEachChild(n, look);
+  };
+  look(child.expression);
+  return !hasJsx;
 }
 
-function analyzeSource(fileName: string, sourceText: string, graph: ColorGraph): Violation[] {
+/** A glyph that inherits `currentColor` — an icon component or a raw <svg>. */
+function isGlyph(element: ts.JsxSelfClosingElement): boolean {
+  const tag = element.tagName.getText();
+  return tag === "svg" || /^[A-Z]/.test(tag);
+}
+
+type Analysis = { violations: Violation[]; accentSurfaces: number };
+
+function analyzeSource(fileName: string, sourceText: string, graph: ColorGraph): Analysis {
   const source = ts.createSourceFile(
     fileName,
     sourceText,
@@ -267,58 +395,168 @@ function analyzeSource(fileName: string, sourceText: string, graph: ColorGraph):
     ts.ScriptKind.TSX
   );
   const violations: Violation[] = [];
-  const lineOf = (n: ts.Node): number =>
-    source.getLineAndCharacterOfPosition(n.getStart(source)).line + 1;
+  const seen = new Set<string>();
+  let accentSurfaces = 0;
 
-  const report = (node: ts.Node, fg: Foreground, context: string): void => {
-    violations.push({ file: fileName, line: lineOf(node), utility: fg.utility, context });
+  // One element can carry several accent fills (a gradient's `from-` and `to-` stops are
+  // both accent), and each would otherwise re-report the same offending foreground.
+  const report = (node: ts.Node, utility: string, context: string): void => {
+    const line = source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
+    const key = `${line}:${utility}:${context}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    violations.push({ file: fileName, line, utility, context });
   };
 
-  // Rule A — a single class string that both fills with accent and paints its own text.
-  // Catches cva variant strings and plain className literals.
-  for (const literal of literalsIn(source)) {
-    const utilities = utilitiesOf(literal.text);
-    if (!utilities.some((u) => isSolidAccentFill(u, graph))) continue;
-    for (const utility of utilities) {
-      const fg = asForeground(utility, graph);
-      if (fg !== null && !isValidAccentForeground(fg)) {
-        report(literal, fg, "text painted on an accent fill in the same class string");
+  const utilsOf = (element: ts.JsxOpeningElement | ts.JsxSelfClosingElement): Util[][] =>
+    parseSets(feasibleSets(classNameExprOf(element)));
+
+  // Walk an accent-filled element's subtree. Text inherits the nearest foreground set by
+  // an ancestor, so carry it down; a descendant that repaints its background is off the
+  // accent and ends the descent.
+  const walkSubtree = (
+    children: readonly ts.JsxChild[],
+    fillVariants: string[],
+    inherited: Foreground | null
+  ): void => {
+    for (const child of children) {
+      if (rendersText(child)) {
+        if (inherited === null) {
+          report(
+            child,
+            "(inherited)",
+            "renders text on an accent fill with no accent foreground — inherits body-text color"
+          );
+        }
+        continue;
+      }
+
+      const element = ts.isJsxElement(child)
+        ? child
+        : ts.isJsxSelfClosingElement(child)
+          ? child
+          : null;
+
+      if (element === null) {
+        // A fragment or an expression wrapping elements — keep looking inside it.
+        if (ts.isJsxFragment(child)) walkSubtree(child.children, fillVariants, inherited);
+        else if (ts.isJsxExpression(child) && child.expression !== undefined) {
+          const nested: ts.JsxChild[] = [];
+          const collect = (n: ts.Node): void => {
+            if (ts.isJsxElement(n) || ts.isJsxSelfClosingElement(n) || ts.isJsxFragment(n)) {
+              nested.push(n);
+              return;
+            }
+            ts.forEachChild(n, collect);
+          };
+          collect(child.expression);
+          walkSubtree(nested, fillVariants, inherited);
+        }
+        continue;
+      }
+
+      const opening = ts.isJsxElement(element) ? element.openingElement : element;
+      const sets = utilsOf(opening);
+      if (sets.some((utils) => shieldsBackground(utils, graph))) continue;
+
+      // A descendant's own foreground overrides what it inherits from the accent element.
+      let here = inherited;
+      for (const utils of sets) {
+        const own = effectiveForeground(utils, fillVariants, graph);
+        if (own === null) continue;
+        if (!isValidated(own)) {
+          report(opening, own.util.raw, "text painted on an ancestor's accent fill");
+        }
+        here = own;
+      }
+
+      if (ts.isJsxSelfClosingElement(element)) {
+        if (here === null && isGlyph(element)) {
+          report(
+            opening,
+            "(inherited)",
+            "glyph on an accent fill with no accent foreground — inherits body-text color"
+          );
+        }
+        continue;
+      }
+      walkSubtree(element.children, fillVariants, here);
+    }
+  };
+
+  const checkElement = (element: ts.JsxElement | ts.JsxSelfClosingElement): void => {
+    const opening = ts.isJsxElement(element) ? element.openingElement : element;
+    for (const utils of utilsOf(opening)) {
+      const fills = accentFills(utils, graph);
+      if (fills.length === 0) continue;
+      accentSurfaces++;
+
+      for (const fill of fills) {
+        const own = effectiveForeground(utils, fill.variants, graph);
+        if (own !== null && !isValidated(own)) {
+          report(opening, own.util.raw, "text painted on this element's accent fill");
+        }
+        if (ts.isJsxElement(element)) walkSubtree(element.children, fill.variants, own);
       }
     }
-  }
+  };
 
-  // Rule B — an accent-filled JSX element whose descendants paint the text (the badge/icon
-  // shape: fill on the <div>, color on the child <Check>). Rule A cannot see across
-  // elements, and every check-badge offender in #11115 had exactly this shape.
-  const checkSubtree = (element: ts.JsxElement): void => {
-    const { utilities } = elementUtilities(element.openingElement, source);
-    if (!utilities.some((u) => isSolidAccentFill(u, graph))) return;
+  // cva/tv: the base classes apply to EVERY variant, so a foreground in the base and a
+  // fill in a variant do co-occur. Pair the base with each variant string in turn.
+  const checkCva = (call: ts.CallExpression): void => {
+    const [baseArg, config] = call.arguments;
+    const baseSets = parseSets(feasibleSets(baseArg));
+    const variantLiterals: ts.StringLiteralLike[] = [];
+    if (config !== undefined) {
+      const collect = (n: ts.Node): void => {
+        if (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) variantLiterals.push(n);
+        ts.forEachChild(n, collect);
+      };
+      collect(config);
+    }
 
-    const descend = (node: ts.Node): void => {
-      if (ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node)) {
-        const opening = ts.isJsxElement(node) ? node.openingElement : node;
-        const own = elementUtilities(opening, source).utilities;
-        // A descendant that paints its own background is no longer on the accent.
-        if (own.some(isAnyBackground)) return;
-        for (const utility of own) {
-          const fg = asForeground(utility, graph);
-          if (fg !== null && !isValidAccentForeground(fg)) {
-            report(opening, fg, "text painted on an ancestor's accent fill");
-          }
+    const combos: Array<{ node: ts.Node; utils: Util[] }> = [];
+    for (const base of baseSets) {
+      if (variantLiterals.length === 0) combos.push({ node: call, utils: base });
+      for (const literal of variantLiterals) {
+        combos.push({ node: literal, utils: [...base, ...tokensOf(literal.text).map(parseUtil)] });
+      }
+    }
+
+    for (const { node, utils } of combos) {
+      const fills = accentFills(utils, graph);
+      if (fills.length === 0) continue;
+      accentSurfaces++;
+      for (const fill of fills) {
+        const own = effectiveForeground(utils, fill.variants, graph);
+        if (own !== null && !isValidated(own)) {
+          report(node, own.util.raw, "text painted on an accent fill in a class-variant string");
+        }
+        if (own === null) {
+          report(
+            node,
+            "(inherited)",
+            "accent-filled variant sets no accent foreground — text inherits body-text color"
+          );
         }
       }
-      ts.forEachChild(node, descend);
-    };
-    for (const child of element.children) descend(child);
+    }
   };
 
   const visit = (node: ts.Node): void => {
-    if (ts.isJsxElement(node)) checkSubtree(node);
+    if (ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node)) checkElement(node);
+    if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      CVA_CONSTRUCTORS.has(node.expression.text)
+    ) {
+      checkCva(node);
+    }
     ts.forEachChild(node, visit);
   };
   visit(source);
 
-  return violations;
+  return { violations, accentSurfaces };
 }
 
 // ── File collection ────────────────────────────────────────────────────
@@ -341,88 +579,222 @@ function collectSourceFiles(dir: string): string[] {
 
 const graph = buildColorGraph(fs.readFileSync(INDEX_CSS_PATH, "utf-8"));
 
-describe("accent foreground graph", () => {
+describe("accent color graph", () => {
   // If the wiring is renamed and these resolve nowhere, every scan below would pass
-  // vacuously. Pin the two ends of the graph the whole guard is built on.
-  it("resolves the shadcn and daintree fill aliases to one accent token", () => {
-    expect(graph.terminalOf("primary")).toBe(ACCENT_FILL_TOKEN);
-    expect(graph.terminalOf("daintree-accent")).toBe(ACCENT_FILL_TOKEN);
-    expect(graph.terminalOf("accent-primary")).toBe(ACCENT_FILL_TOKEN);
+  // vacuously. Pin both ends of the graph the whole guard is built on.
+  it("resolves the shadcn and daintree fill aliases to the validated fill token", () => {
+    expect(graph.terminalOfName("primary")).toBe(ACCENT_FILL_TOKEN);
+    expect(graph.terminalOfName("daintree-accent")).toBe(ACCENT_FILL_TOKEN);
+    expect(graph.terminalOfName("accent-primary")).toBe(ACCENT_FILL_TOKEN);
   });
 
-  it("resolves every accent foreground alias to the contrast-validated token", () => {
-    expect(graph.terminalOf("primary-foreground")).toBe(ACCENT_FOREGROUND_TOKEN);
-    expect(graph.terminalOf("accent-primary-foreground")).toBe(ACCENT_FOREGROUND_TOKEN);
-    // Once shadowed by a duplicate shadcn declaration, which silently pointed it at body
-    // text (#11115). It must land on the validated token or not exist at all.
-    const accentForeground = graph.terminalOf("accent-foreground");
+  it("resolves every accent foreground alias to the validated foreground token", () => {
+    expect(graph.terminalOfName("primary-foreground")).toBe(ACCENT_FOREGROUND_TOKEN);
+    expect(graph.terminalOfName("accent-primary-foreground")).toBe(ACCENT_FOREGROUND_TOKEN);
+    // Once shadowed by a duplicate shadcn declaration that silently pointed it at body
+    // text (#11115). It must reach the validated token, or not exist at all.
+    const accentForeground = graph.terminalOfName("accent-foreground");
     if (accentForeground !== null) expect(accentForeground).toBe(ACCENT_FOREGROUND_TOKEN);
   });
 
-  it("does not resolve the unvalidated foregrounds to the accent token", () => {
-    expect(graph.terminalOf("text-inverse")).not.toBe(ACCENT_FOREGROUND_TOKEN);
-    expect(graph.terminalOf("daintree-bg")).not.toBe(ACCENT_FOREGROUND_TOKEN);
+  it("does not resolve the body-text foregrounds to the accent foreground token", () => {
+    expect(graph.terminalOfName("text-inverse")).not.toBe(ACCENT_FOREGROUND_TOKEN);
+    expect(graph.terminalOfName("daintree-bg")).not.toBe(ACCENT_FOREGROUND_TOKEN);
+  });
+});
+
+describe("utility parser", () => {
+  it("splits an opacity modifier only at bracket depth zero", () => {
+    expect(parseUtil("bg-daintree-accent/10")).toMatchObject({
+      base: "bg-daintree-accent",
+      opacity: "10",
+    });
+    expect(parseUtil("text-text-inverse/[.5]")).toMatchObject({
+      base: "text-text-inverse",
+      opacity: "[.5]",
+    });
+    // Slashes inside an arbitrary value belong to the value, not to an opacity modifier.
+    expect(parseUtil("bg-[url(a/b.png)]")).toMatchObject({
+      base: "bg-[url(a/b.png)]",
+      opacity: null,
+    });
+    expect(parseUtil("w-[calc(1/2)]")).toMatchObject({ base: "w-[calc(1/2)]", opacity: null });
+  });
+
+  it("strips variant chains without tripping on colons or slashes inside them", () => {
+    expect(parseUtil("data-[state=checked]:bg-primary")).toMatchObject({
+      variants: ["data-[state=checked]"],
+      base: "bg-primary",
+    });
+    expect(parseUtil("supports-[display:grid]:bg-primary")).toMatchObject({
+      variants: ["supports-[display:grid]"],
+      base: "bg-primary",
+    });
+    // The slash lives in the variant name, not in an opacity modifier.
+    expect(parseUtil("group-hover/icon:text-white")).toMatchObject({
+      variants: ["group-hover/icon"],
+      base: "text-white",
+      opacity: null,
+    });
+    expect(parseUtil("hover:focus:bg-primary")).toMatchObject({ variants: ["hover", "focus"] });
+  });
+
+  it("strips the important modifier in both Tailwind spellings", () => {
+    expect(parseUtil("bg-primary!").base).toBe("bg-primary");
+    expect(parseUtil("!bg-primary").base).toBe("bg-primary");
   });
 });
 
 describe("accent foreground detector", () => {
-  const analyze = (src: string): Violation[] => analyzeSource("fixture.tsx", src, graph);
+  const analyze = (src: string): string[] =>
+    analyzeSource("fixture.tsx", src, graph).violations.map((v) => v.utility);
 
   it("flags an unvalidated foreground in the same class string as an accent fill", () => {
-    const found = analyze(`const x = <button className="bg-daintree-accent text-text-inverse" />;`);
-    expect(found.map((v) => v.utility)).toEqual(["text-text-inverse"]);
+    expect(
+      analyze(`const x = <button className="bg-daintree-accent text-text-inverse" />;`)
+    ).toEqual(["text-text-inverse"]);
   });
 
-  it("flags a cva variant independently of its siblings", () => {
-    const found = analyze(`
-      const v = cva("base", {
-        variants: {
-          variant: {
-            default: "bg-primary text-text-inverse",
-            contrast: "bg-daintree-text text-text-inverse",
-            ghost: "text-text-secondary hover:bg-overlay-soft",
-          },
-        },
-      });
-    `);
-    // Only the accent-filled variant is a violation; the inverse-CTA and ghost variants
-    // are not accent fills at all.
-    expect(found).toHaveLength(1);
-    expect(found[0]?.utility).toBe("text-text-inverse");
+  it("flags a fill and foreground that only meet after composition", () => {
+    // The bypass a per-literal check misses: neither string is a violation alone.
+    expect(
+      analyze(`const x = <button className={cn("text-text-inverse", active && "bg-primary")} />;`)
+    ).toEqual(["text-text-inverse"]);
   });
 
-  it("flags a child icon painted on an ancestor's accent fill", () => {
-    const found = analyze(`
-      const x = (
-        <div className="rounded-full bg-daintree-accent">
-          <Check className="h-2.5 w-2.5 text-daintree-bg" />
-        </div>
-      );
-    `);
-    expect(found.map((v) => v.utility)).toEqual(["text-daintree-bg"]);
+  it("flags a cva base foreground against a fill introduced by a variant", () => {
+    expect(
+      analyze(`
+        const v = cva("text-text-inverse", { variants: { tone: { accent: "bg-primary" } } });
+      `)
+    ).toEqual(["text-text-inverse"]);
   });
 
-  it("flags a child icon reached through a conditional expression", () => {
-    const found = analyze(`
-      const x = (
-        <span className={cn("border", isSelected ? "bg-daintree-accent" : "border-daintree-border")}>
-          {isSelected && <Check className="w-3 h-3 text-text-inverse" />}
-        </span>
-      );
-    `);
-    expect(found.map((v) => v.utility)).toEqual(["text-text-inverse"]);
+  it("does not pair classes from opposite ternary branches", () => {
+    // The accent branch is validated; the neutral branch's dim text never lands on accent.
+    expect(
+      analyze(`
+        const x = (
+          <button
+            className={cn(
+              "px-4",
+              enabled
+                ? "bg-daintree-accent text-accent-primary-foreground"
+                : "bg-daintree-border text-daintree-text/50"
+            )}
+          />
+        );
+      `)
+    ).toEqual([]);
+  });
+
+  it("flags text that inherits body-text color on an accent fill", () => {
+    expect(analyze(`const x = <button className="bg-primary">Save</button>;`)).toEqual([
+      "(inherited)",
+    ]);
+    expect(analyze(`const x = <span className="bg-daintree-accent">{count}</span>;`)).toEqual([
+      "(inherited)",
+    ]);
+  });
+
+  it("flags a glyph that inherits body-text color on an accent fill", () => {
+    expect(analyze(`const x = <div className="bg-daintree-accent"><Check /></div>;`)).toEqual([
+      "(inherited)",
+    ]);
+  });
+
+  it("accepts a decorative accent fill that renders nothing", () => {
+    expect(analyze(`const x = <div className="h-1 w-full bg-daintree-accent" />;`)).toEqual([]);
+  });
+
+  it("flags a child glyph painted on an ancestor's accent fill", () => {
+    expect(
+      analyze(`
+        const x = (
+          <div className="rounded-full bg-daintree-accent">
+            <Check className="h-2.5 w-2.5 text-daintree-bg" />
+          </div>
+        );
+      `)
+    ).toEqual(["text-daintree-bg"]);
+  });
+
+  it("flags a child glyph reached through a conditional expression", () => {
+    expect(
+      analyze(`
+        const x = (
+          <span className={cn("border", isSelected ? "bg-daintree-accent" : "border-daintree-border")}>
+            {isSelected && <Check className="w-3 h-3 text-text-inverse" />}
+          </span>
+        );
+      `)
+    ).toEqual(["text-text-inverse"]);
+  });
+
+  it("accepts a child glyph that supplies the validated foreground itself", () => {
+    expect(
+      analyze(`
+        const x = (
+          <div className="bg-daintree-accent">
+            {done && <Check className="text-accent-primary-foreground" />}
+          </div>
+        );
+      `)
+    ).toEqual([]);
+  });
+
+  it("matches a foreground to the state its fill is in", () => {
+    // The accent only exists on hover, and hover repaints the label — safe.
+    expect(
+      analyze(
+        `const x = <button className="text-daintree-text hover:bg-primary hover:text-primary-foreground" />;`
+      )
+    ).toEqual([]);
+    // Same accent-on-hover, but the label is never repainted — the base text lands on it.
+    expect(
+      analyze(`const x = <button className="text-daintree-text hover:bg-primary">Go</button>;`)
+    ).toEqual(["text-daintree-text"]);
+  });
+
+  it("ignores a pseudo-element's own fill and foreground", () => {
+    expect(
+      analyze(`const x = <div className="after:bg-daintree-accent text-daintree-text" />;`)
+    ).toEqual([]);
+    expect(
+      analyze(
+        `const x = <div className="bg-primary text-primary-foreground before:text-white before:content-['!']" />;`
+      )
+    ).toEqual([]);
   });
 
   it("flags an arbitrary-value foreground that escapes the validated token", () => {
-    const found = analyze(
-      `const x = <span className="bg-daintree-accent text-[var(--color-daintree-bg)]" />;`
-    );
-    expect(found.map((v) => v.utility)).toEqual(["text-[var(--color-daintree-bg)]"]);
+    expect(
+      analyze(`const x = <span className="bg-daintree-accent text-[var(--color-daintree-bg)]" />;`)
+    ).toEqual(["text-[var(--color-daintree-bg)]"]);
+    expect(
+      analyze(
+        `const x = <span className="bg-daintree-accent text-[color:var(--theme-text-primary)]" />;`
+      )
+    ).toEqual(["text-[color:var(--theme-text-primary)]"]);
+    expect(analyze(`const x = <span className="bg-daintree-accent text-[#0b1220]" />;`)).toEqual([
+      "text-[#0b1220]",
+    ]);
   });
 
-  it("flags hardcoded palette colors on an accent fill", () => {
-    const found = analyze(`const x = <button className="bg-primary text-white" />;`);
-    expect(found.map((v) => v.utility)).toEqual(["text-white"]);
+  it("flags hardcoded palette colors and alpha-reduced foregrounds on an accent fill", () => {
+    expect(analyze(`const x = <button className="bg-primary text-white" />;`)).toEqual([
+      "text-white",
+    ]);
+    // The 4.5:1 guarantee covers the opaque token — not a faded copy of it.
+    expect(
+      analyze(`const x = <button className="bg-primary text-primary-foreground/50" />;`)
+    ).toEqual(["text-primary-foreground/50"]);
+  });
+
+  it("resolves an accent fill written as an arbitrary value", () => {
+    expect(
+      analyze(`const x = <button className="bg-[var(--color-accent-primary)] text-white" />;`)
+    ).toEqual(["text-white"]);
   });
 
   it("accepts either validated foreground alias", () => {
@@ -435,63 +807,115 @@ describe("accent foreground detector", () => {
   });
 
   it("ignores non-color text utilities on an accent fill", () => {
-    const found = analyze(
-      `const x = <button className="bg-primary text-accent-primary-foreground text-sm text-center text-[9px]" />;`
-    );
-    expect(found).toEqual([]);
+    expect(
+      analyze(
+        `const x = <button className="bg-primary text-accent-primary-foreground text-sm text-center text-[9px]" />;`
+      )
+    ).toEqual([]);
   });
 
   it("ignores tinted accent washes — the text sits on the surface, not on solid accent", () => {
     expect(
-      analyze(`const x = <div className="bg-daintree-accent/10 text-daintree-text" />;`)
+      analyze(`const x = <div className="bg-daintree-accent/10 text-daintree-text">Hi</div>;`)
     ).toEqual([]);
-    expect(analyze(`const x = <div className="bg-accent-soft text-daintree-text" />;`)).toEqual([]);
-  });
-
-  it("ignores a pseudo-element accent fill — it paints a separate box, not the text surface", () => {
     expect(
-      analyze(`const x = <div className="after:bg-daintree-accent text-daintree-text" />;`)
+      analyze(`const x = <div className="bg-accent-soft text-daintree-text">Hi</div>;`)
     ).toEqual([]);
   });
 
-  it("stops descending at a child that repaints its own background", () => {
-    const found = analyze(`
-      const x = (
-        <div className="bg-daintree-accent">
-          <div className="bg-surface-panel">
-            <span className="text-daintree-text">safe — on the panel, not the accent</span>
-          </div>
-        </div>
-      );
-    `);
-    expect(found).toEqual([]);
+  it("only treats gradient stops as a fill when a gradient is actually painted", () => {
+    expect(
+      analyze(
+        `const x = <button className="bg-gradient-to-b from-primary to-primary/80 text-text-inverse" />;`
+      )
+    ).toEqual(["text-text-inverse"]);
+    // A later accent stop still paints accent under the label.
+    expect(
+      analyze(
+        `const x = <button className="bg-gradient-to-b from-primary/80 to-primary text-white" />;`
+      )
+    ).toEqual(["text-white"]);
+    // `from-*` without a gradient image paints nothing.
+    expect(analyze(`const x = <div className="from-primary text-white">Hi</div>;`)).toEqual([]);
   });
 
-  it("flags a gradient accent fill", () => {
-    const found = analyze(
-      `const x = <button className="bg-gradient-to-b from-primary to-primary/80 text-text-inverse" />;`
-    );
-    expect(found.map((v) => v.utility)).toEqual(["text-text-inverse"]);
+  it("stops descending only at a descendant that truly repaints its background", () => {
+    expect(
+      analyze(`
+        const x = (
+          <div className="bg-daintree-accent">
+            <div className="bg-surface-panel">
+              <span className="text-daintree-text">safe — on the panel, not the accent</span>
+            </div>
+          </div>
+        );
+      `)
+    ).toEqual([]);
+    // A conditional background does not shield the base state.
+    expect(
+      analyze(`
+        const x = (
+          <div className="bg-primary">
+            <span className="hover:bg-surface-panel text-text-inverse">bad before hover</span>
+          </div>
+        );
+      `)
+    ).toEqual(["text-text-inverse"]);
+    // A translucent background does not shield either.
+    expect(
+      analyze(`
+        const x = (
+          <div className="bg-primary">
+            <span className="bg-surface-panel/10 text-text-inverse">still on accent</span>
+          </div>
+        );
+      `)
+    ).toEqual(["text-text-inverse"]);
+    // `bg-cover` paints no color at all.
+    expect(
+      analyze(`
+        const x = (
+          <div className="bg-primary">
+            <span className="bg-cover text-text-inverse">paints no background</span>
+          </div>
+        );
+      `)
+    ).toEqual(["text-text-inverse"]);
   });
 });
 
 describe("accent foreground contract", () => {
-  const files = SCAN_ROOTS.flatMap(collectSourceFiles);
+  const filesByRoot = SCAN_ROOTS.map((root) => ({ root, files: collectSourceFiles(root) }));
+  const files = filesByRoot.flatMap((r) => r.files);
 
-  it("scans a non-trivial number of components", () => {
-    // Guards the whole suite against passing because the walker silently found nothing.
+  it("scans every root", () => {
+    // Without this, a mistyped root would silently shrink the scan and still pass.
+    for (const { root, files: rootFiles } of filesByRoot) {
+      expect(rootFiles.length, `no .tsx files found under ${root}`).toBeGreaterThan(0);
+    }
     expect(files.length).toBeGreaterThan(100);
   });
 
-  it("paints text on a solid accent fill only with the contrast-validated foreground", () => {
-    const violations = files.flatMap((file) =>
-      analyzeSource(path.relative(REPO_ROOT, file), fs.readFileSync(file, "utf-8"), graph)
-    );
+  const results = files.map((file) =>
+    analyzeSource(path.relative(REPO_ROOT, file), fs.readFileSync(file, "utf-8"), graph)
+  );
 
-    const report = violations.map((v) => `${v.file}:${v.line} — ${v.utility} (${v.context})`);
+  it("actually finds accent surfaces to check", () => {
+    // The assertion that makes a vacuous pass impossible: if the walker, the parser, or
+    // the CSS graph silently stopped recognizing accent fills, the contract below would
+    // pass with zero violations while every offender sailed through.
+    const surfaces = results.reduce((sum, r) => sum + r.accentSurfaces, 0);
+    expect(surfaces).toBeGreaterThan(10);
+  });
+
+  it("paints text on a solid accent fill only with the contrast-validated foreground", () => {
+    const report = results
+      .flatMap((r) => r.violations)
+      .map((v) => `${v.file}:${v.line} — ${v.utility} (${v.context})`);
+
     expect(
       report,
-      "Text on a solid accent fill must use a foreground that resolves to " +
+      "Text on a solid accent fill must use a foreground resolving to " +
         `${ACCENT_FOREGROUND_TOKEN} (e.g. text-primary-foreground on bg-primary, ` +
         "text-accent-primary-foreground on bg-daintree-accent). Tokens like text-text-inverse " +
         "and text-daintree-bg are keyed to the theme's body-text polarity, not to the accent, " +
