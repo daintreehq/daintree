@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Check, ExternalLink, FileText, RefreshCw, Search, WrapText } from "lucide-react";
+import { Check, ExternalLink, FileText, RefreshCw, Search, WrapText, XCircle } from "lucide-react";
 import type { FileViewMode } from "@shared/types/panel";
 import { isFilePanel } from "@shared/types/panel";
 import type { FileReadErrorCode } from "@shared/types/ipc/files";
@@ -13,6 +13,7 @@ import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import {
   FILE_READ_ERROR_MESSAGES,
   toFileReadErrorCode,
@@ -372,11 +373,38 @@ export function FilePane({
       .catch((err) => logError("[FilePane] copy path failed", err));
   }, [filePath]);
 
-  const handleOpenInEditor = useCallback(() => {
+  // dispatch() resolves an ActionDispatchResult and never rejects, so a failed
+  // open used to vanish entirely (#11114). Surface it inline on the pane that
+  // owns the button rather than through a global toast.
+  const [openInEditorError, setOpenInEditorError] = useState<string | null>(null);
+  const [isOpeningInEditor, setIsOpeningInEditor] = useState(false);
+  const openInEditorAttemptRef = useRef(0);
+
+  // A result that lands after the pane switched files belongs to the old file:
+  // drop it, and clear any banner the old file left behind.
+  useEffect(() => {
+    openInEditorAttemptRef.current += 1;
+    setOpenInEditorError(null);
+    setIsOpeningInEditor(false);
+  }, [filePath]);
+
+  const handleOpenInEditor = useCallback(async () => {
     if (!filePath) return;
-    actionService
-      .dispatch("file.openInEditor", { path: filePath }, { source: "user" })
-      .catch((err) => logError("[FilePane] openInEditor failed", err));
+    const attempt = ++openInEditorAttemptRef.current;
+    setIsOpeningInEditor(true);
+    const result = await actionService.dispatch(
+      "file.openInEditor",
+      { path: filePath },
+      { source: "user" }
+    );
+    if (openInEditorAttemptRef.current !== attempt) return;
+    setIsOpeningInEditor(false);
+    if (result.ok) {
+      setOpenInEditorError(null);
+      return;
+    }
+    logError("[FilePane] openInEditor failed", result.error);
+    setOpenInEditorError(result.error.message);
   }, [filePath]);
 
   const [pickerQuery, setPickerQuery] = useState("");
@@ -394,64 +422,85 @@ export function FilePane({
   const { spanRef: pathSpanRef, display: fittedPath } = useFittedPath(displayPath);
 
   const toolbar = filePath ? (
-    <div className="flex items-center gap-1.5 px-2 py-1.5 bg-surface border-b border-overlay">
-      {isMarkdown && (
-        <SegmentedToggle<FileViewMode>
-          options={[
-            { value: "source", label: "Source" },
-            { value: "rendered", label: "Rendered" },
-          ]}
-          value={viewMode}
-          onChange={(mode) => setFileViewMode(id, mode)}
-        />
-      )}
-      {/* Path pill — mirrors the browser toolbar's address field. Click copies
+    <>
+      <div className="flex items-center gap-1.5 px-2 py-1.5 bg-surface border-b border-overlay">
+        {isMarkdown && (
+          <SegmentedToggle<FileViewMode>
+            options={[
+              { value: "source", label: "Source" },
+              { value: "rendered", label: "Rendered" },
+            ]}
+            value={viewMode}
+            onChange={(mode) => setFileViewMode(id, mode)}
+          />
+        )}
+        {/* Path pill — mirrors the browser toolbar's address field. Click copies
           the absolute path; the middle collapses to fit the available width
           while the file name always survives. */}
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            onClick={handleCopyPath}
-            aria-label="Copy file path"
-            className="relative flex items-center min-w-0 flex-1 group/path"
-          >
-            {pathCopied ? (
-              <Check className="absolute left-2 w-3.5 h-3.5 text-status-success pointer-events-none" />
-            ) : (
-              <FileText
-                aria-hidden="true"
-                className="absolute left-2 w-3.5 h-3.5 text-daintree-text/40 pointer-events-none"
-              />
-            )}
-            <span
-              ref={pathSpanRef}
-              className="w-full pl-7 pr-2 py-1 text-left text-xs font-mono rounded bg-daintree-bg border border-overlay text-daintree-text/70 truncate transition-colors group-hover/path:border-border-strong group-hover/path:text-daintree-text"
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={handleCopyPath}
+              aria-label="Copy file path"
+              className="relative flex items-center min-w-0 flex-1 group/path"
             >
-              {fittedPath}
-            </span>
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">{pathCopied ? "Copied!" : "Click to copy"}</TooltipContent>
-      </Tooltip>
-      <div className="ml-auto flex items-center gap-1.5 shrink-0">
-        {isMarkdown && viewMode === "source" && (
-          <ToolbarIconButton
-            label="Wrap long lines"
-            pressed={markdownWrapLines}
-            onClick={() => setMarkdownWrapLines(!markdownWrapLines)}
-          >
-            <WrapText className="w-4 h-4" />
+              {pathCopied ? (
+                <Check className="absolute left-2 w-3.5 h-3.5 text-status-success pointer-events-none" />
+              ) : (
+                <FileText
+                  aria-hidden="true"
+                  className="absolute left-2 w-3.5 h-3.5 text-daintree-text/40 pointer-events-none"
+                />
+              )}
+              <span
+                ref={pathSpanRef}
+                className="w-full pl-7 pr-2 py-1 text-left text-xs font-mono rounded bg-daintree-bg border border-overlay text-daintree-text/70 truncate transition-colors group-hover/path:border-border-strong group-hover/path:text-daintree-text"
+              >
+                {fittedPath}
+              </span>
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{pathCopied ? "Copied!" : "Click to copy"}</TooltipContent>
+        </Tooltip>
+        <div className="ml-auto flex items-center gap-1.5 shrink-0">
+          {isMarkdown && viewMode === "source" && (
+            <ToolbarIconButton
+              label="Wrap long lines"
+              pressed={markdownWrapLines}
+              onClick={() => setMarkdownWrapLines(!markdownWrapLines)}
+            >
+              <WrapText className="w-4 h-4" />
+            </ToolbarIconButton>
+          )}
+          <ToolbarIconButton label="Refresh" onClick={() => loadFile(false)}>
+            <RefreshCw className="w-4 h-4" />
           </ToolbarIconButton>
-        )}
-        <ToolbarIconButton label="Refresh" onClick={() => loadFile(false)}>
-          <RefreshCw className="w-4 h-4" />
-        </ToolbarIconButton>
-        <ToolbarIconButton label="Open in editor" onClick={handleOpenInEditor}>
-          <ExternalLink className="w-4 h-4" />
-        </ToolbarIconButton>
+          <ToolbarIconButton label="Open in editor" onClick={() => void handleOpenInEditor()}>
+            <ExternalLink className="w-4 h-4" />
+          </ToolbarIconButton>
+        </div>
       </div>
-    </div>
+      {openInEditorError && (
+        <InlineStatusBanner
+          icon={XCircle}
+          title="Couldn't open in editor"
+          description={openInEditorError}
+          severity="error"
+          action={{
+            id: "retry-open-in-editor",
+            label: "Retry",
+            icon: RefreshCw,
+            variant: "dangerFilled",
+            loading: isOpeningInEditor,
+            onClick: () => void handleOpenInEditor(),
+            ariaLabel: "Retry opening in editor",
+          }}
+          onClose={() => setOpenInEditorError(null)}
+          closeAriaLabel="Dismiss editor error"
+        />
+      )}
+    </>
   ) : undefined;
 
   return (

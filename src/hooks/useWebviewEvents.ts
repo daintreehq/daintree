@@ -34,7 +34,14 @@ export type UseWebviewEventsOptions = {
   setIsLoading: (v: boolean) => void;
   setLoadError: (v: LoadError | null) => void;
   setIsSlowLoad: (v: boolean) => void;
-  setBlockedNav: (v: { url: string; canOpenExternal: boolean } | null) => void;
+  /**
+   * Navigation events only ever *clear* the blocked-navigation notice — the
+   * notice itself is created by the onNavigationBlocked listener. Typing the
+   * parameter as `null` keeps this hook decoupled from the notice's shape
+   * (which carries retry/error state since #11114) while staying assignable
+   * from the owning `useState` setter.
+   */
+  setBlockedNav: (v: null) => void;
   setHistory: React.Dispatch<React.SetStateAction<BrowserHistory>>;
   onRenderProcessGone?: (details: { reason: string; exitCode: number }) => void;
 };

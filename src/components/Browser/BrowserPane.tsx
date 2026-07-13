@@ -174,10 +174,19 @@ export function BrowserPane({
   } | null>(null);
   const crashTimestampsRef = useRef<number[]>([]);
   const crashReloadRef = useRef<() => void>(() => {});
+  // `phase` keeps the notice alive across an external-open attempt: dispatch()
+  // resolves an ActionDispatchResult and never rejects, so the old handler
+  // cleared this — the user's only recovery surface — even when the open had
+  // failed (#11114). `noticeId` identifies which notice an in-flight result
+  // belongs to, so a result for a superseded block can't clobber the current one.
   const [blockedNav, setBlockedNav] = useState<{
+    noticeId: number;
     url: string;
     canOpenExternal: boolean;
+    phase: "blocked" | "opening" | "error";
+    errorMessage: string | null;
   } | null>(null);
+  const blockedNavIdRef = useRef(0);
   const [pendingApproval, setPendingApproval] = useState<{
     url: string;
     hostname: string;
@@ -275,7 +284,13 @@ export function BrowserPane({
         clearTimeout(blockedNavTimerRef.current);
       }
       blockedNavTimerRef.current = setTimeout(() => {
-        setBlockedNav({ url: data.url, canOpenExternal: data.canOpenExternal });
+        setBlockedNav({
+          noticeId: ++blockedNavIdRef.current,
+          url: data.url,
+          canOpenExternal: data.canOpenExternal,
+          phase: "blocked",
+          errorMessage: null,
+        });
         blockedNavTimerRef.current = null;
       }, 150);
     });
@@ -288,12 +303,46 @@ export function BrowserPane({
     };
   }, [id]);
 
-  // Auto-dismiss blocked navigation notification after 10 seconds
+  // Auto-dismiss blocked navigation notification after 10 seconds. Only the
+  // untouched notice expires: once the user asks to open externally, the notice
+  // is carrying an in-flight attempt or a failure they still have to act on, and
+  // timing it out would silently destroy that recovery surface (#11114).
   useEffect(() => {
-    if (!blockedNav) return;
+    if (blockedNav?.phase !== "blocked") return;
     const timer = setTimeout(() => setBlockedNav(null), 10_000);
     return () => clearTimeout(timer);
   }, [blockedNav]);
+
+  // The notice is passed in rather than read off `blockedNav` after the await:
+  // by then the pane may be showing a different block, and the dispatch must
+  // still target the URL the user actually clicked.
+  const handleOpenBlockedExternal = useCallback(
+    async (noticeId: number, url: string) => {
+      // Keep any existing errorMessage so a retry leaves the error banner
+      // mounted (with a spinner) instead of flashing back to the warning row.
+      setBlockedNav((prev) =>
+        prev && prev.noticeId === noticeId ? { ...prev, phase: "opening" } : prev
+      );
+
+      const result = await actionService.dispatch(
+        "browser.openExternal",
+        { terminalId: id, url },
+        { source: "user" }
+      );
+      if (!result.ok) {
+        logError("[BrowserPane] openExternal failed", result.error);
+      }
+
+      setBlockedNav((prev) => {
+        // A newer block, a dismissal, or a navigation replaced the notice while
+        // we were awaiting — it owns the banner now, so leave it untouched.
+        if (!prev || prev.noticeId !== noticeId) return prev;
+        if (result.ok) return null;
+        return { ...prev, phase: "error", errorMessage: result.error.message };
+      });
+    },
+    [id]
+  );
 
   const handleRenderProcessGone = useCallback(
     (details: { reason: string; exitCode: number }) => {
@@ -1015,42 +1064,60 @@ export function BrowserPane({
                 onClose={() => setCrashState("none")}
               />
             )}
-            {blockedNav && (
-              <div
-                aria-live="polite"
-                aria-atomic="true"
-                className="flex items-center gap-2 px-3 py-1.5 text-xs bg-status-warning/10 border-b border-status-warning/20 text-daintree-text/80"
-              >
-                <ExternalLink className="h-3.5 w-3.5 shrink-0 text-status-warning" />
-                <span className="truncate flex-1">
-                  Navigation to external site blocked: {extractHostname(blockedNav.url)}
-                </span>
-                {blockedNav.canOpenExternal && (
+            {blockedNav &&
+              (blockedNav.errorMessage !== null ? (
+                <InlineStatusBanner
+                  icon={XCircle}
+                  title="Couldn't open in external browser"
+                  description={blockedNav.errorMessage}
+                  contextLine={extractHostname(blockedNav.url)}
+                  severity="error"
+                  animated={false}
+                  action={{
+                    id: "retry-open-external",
+                    label: "Retry",
+                    icon: RotateCw,
+                    variant: "dangerFilled",
+                    loading: blockedNav.phase === "opening",
+                    onClick: () =>
+                      void handleOpenBlockedExternal(blockedNav.noticeId, blockedNav.url),
+                    ariaLabel: "Retry opening in external browser",
+                  }}
+                  onClose={() => setBlockedNav(null)}
+                  closeAriaLabel="Dismiss navigation notice"
+                />
+              ) : (
+                <div
+                  aria-live="polite"
+                  aria-atomic="true"
+                  className="flex items-center gap-2 px-3 py-1.5 text-xs bg-status-warning/10 border-b border-status-warning/20 text-daintree-text/80"
+                >
+                  <ExternalLink className="h-3.5 w-3.5 shrink-0 text-status-warning" />
+                  <span className="truncate flex-1">
+                    Navigation to external site blocked: {extractHostname(blockedNav.url)}
+                  </span>
+                  {blockedNav.canOpenExternal && (
+                    <button
+                      type="button"
+                      disabled={blockedNav.phase === "opening"}
+                      onClick={() =>
+                        void handleOpenBlockedExternal(blockedNav.noticeId, blockedNav.url)
+                      }
+                      className="shrink-0 px-2 py-0.5 rounded text-xs bg-status-warning/20 hover:bg-status-warning/30 text-daintree-text/90 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                    >
+                      Open in external browser
+                    </button>
+                  )}
                   <button
                     type="button"
-                    onClick={() => {
-                      void actionService.dispatch(
-                        "browser.openExternal",
-                        { terminalId: id, url: blockedNav.url },
-                        { source: "user" }
-                      );
-                      setBlockedNav(null);
-                    }}
-                    className="shrink-0 px-2 py-0.5 rounded text-xs bg-status-warning/20 hover:bg-status-warning/30 text-daintree-text/90 transition-colors"
+                    onClick={() => setBlockedNav(null)}
+                    className="shrink-0 text-daintree-text/40 hover:text-daintree-text/70 transition-colors"
+                    aria-label="Dismiss navigation notice"
                   >
-                    Open in external browser
+                    ×
                   </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => setBlockedNav(null)}
-                  className="shrink-0 text-daintree-text/40 hover:text-daintree-text/70 transition-colors"
-                  aria-label="Dismiss navigation notice"
-                >
-                  ×
-                </button>
-              </div>
-            )}
+                </div>
+              ))}
             <div className="relative flex-1 min-h-0">
               {isDragging && <div className="absolute inset-0 z-10 bg-transparent" />}
               {showLoadingOverlay && (

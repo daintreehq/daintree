@@ -77,6 +77,111 @@ beforeEach(() => {
   >);
 });
 
+// #11114: dispatch() resolves {ok:false} rather than rejecting, so the old
+// `.finally(() => { isPromotingRef.current = false })` reset the guard but never
+// looked at the result — a failed promotion was indistinguishable from success.
+describe("useDevPreviewNavigation — promote-to-portal failures (#11114)", () => {
+  const dispatchMock = () => vi.mocked(actionService.dispatch);
+
+  // Built as typed values rather than `as`-cast literals: the dispatch result is
+  // a discriminated union, so the compiler can check these for us.
+  type DispatchResult = Awaited<ReturnType<typeof actionService.dispatch>>;
+  const succeeded = (): DispatchResult => ({ ok: true, result: undefined });
+  const failed = (message: string): DispatchResult => ({
+    ok: false,
+    error: { code: "EXECUTION_ERROR", message },
+  });
+
+  it("reports no error and releases the guard when promotion succeeds", async () => {
+    const { result } = renderHook(() => useDevPreviewNavigation(baseParams()));
+
+    await act(async () => {
+      await result.current.handlePromoteToPortal();
+    });
+
+    expect(dispatchMock()).toHaveBeenCalledWith(
+      "devPreview.promoteToPortal",
+      { panelId: PANE_ID, projectId: "proj-1" },
+      { source: "user" }
+    );
+    expect(result.current.promoteToPortalError).toBeNull();
+    expect(result.current.isPromotingToPortal).toBe(false);
+  });
+
+  it("exposes the dispatch error message when promotion fails", async () => {
+    const message = "Portal panel limit reached";
+    dispatchMock().mockResolvedValue(failed(message));
+
+    const { result } = renderHook(() => useDevPreviewNavigation(baseParams()));
+    await act(async () => {
+      await result.current.handlePromoteToPortal();
+    });
+
+    expect(result.current.promoteToPortalError).toBe(message);
+    // The guard must release even on failure, or Retry would be dead.
+    expect(result.current.isPromotingToPortal).toBe(false);
+  });
+
+  it("ignores a second click while a promotion is in flight", async () => {
+    let resolveDispatch!: (value: DispatchResult) => void;
+    dispatchMock().mockReturnValue(
+      new Promise<DispatchResult>((resolve) => {
+        resolveDispatch = resolve;
+      })
+    );
+
+    const { result } = renderHook(() => useDevPreviewNavigation(baseParams()));
+
+    const inFlight: Array<Promise<void>> = [];
+    act(() => {
+      inFlight.push(result.current.handlePromoteToPortal());
+      inFlight.push(result.current.handlePromoteToPortal());
+    });
+
+    // The synchronous isPromotingRef guard swallows the second click.
+    expect(dispatchMock()).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveDispatch(succeeded());
+      await Promise.all(inFlight);
+    });
+
+    expect(result.current.isPromotingToPortal).toBe(false);
+  });
+
+  it("allows a retry after a failure, and a successful retry clears the error", async () => {
+    dispatchMock().mockResolvedValue(failed("Promotion failed"));
+
+    const { result } = renderHook(() => useDevPreviewNavigation(baseParams()));
+    await act(async () => {
+      await result.current.handlePromoteToPortal();
+    });
+    expect(result.current.promoteToPortalError).toBe("Promotion failed");
+
+    dispatchMock().mockResolvedValue(succeeded());
+    await act(async () => {
+      await result.current.handlePromoteToPortal();
+    });
+
+    expect(dispatchMock()).toHaveBeenCalledTimes(2);
+    expect(result.current.promoteToPortalError).toBeNull();
+  });
+
+  it("clearPromoteToPortalError dismisses the error without dispatching", async () => {
+    dispatchMock().mockResolvedValue(failed("Promotion failed"));
+
+    const { result } = renderHook(() => useDevPreviewNavigation(baseParams()));
+    await act(async () => {
+      await result.current.handlePromoteToPortal();
+    });
+
+    act(() => result.current.clearPromoteToPortalError());
+
+    expect(result.current.promoteToPortalError).toBeNull();
+    expect(dispatchMock()).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("useDevPreviewNavigation — history handlers", () => {
   it("handleNavigate pushes a normalized (localhost-only) URL onto history", () => {
     const setHistory = vi.fn();

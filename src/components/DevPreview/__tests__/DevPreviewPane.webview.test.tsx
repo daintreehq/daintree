@@ -1905,6 +1905,64 @@ describe("DevPreviewPane webview lifecycle regression", () => {
     });
   });
 
+  // #11114: the hook now exposes promotion failures; this covers the pane
+  // actually rendering them, which is the half the hook's own tests can't see.
+  describe("promote-to-portal failure banner (#11114)", () => {
+    type DispatchResult = Awaited<ReturnType<typeof actionService.dispatch>>;
+    const succeeded = (): DispatchResult => ({ ok: true, result: undefined });
+    const failed = (message: string): DispatchResult => ({
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message },
+    });
+
+    const getPromoteHandler = () => {
+      const props = browserToolbarPropsSpy.mock.calls.at(-1)?.[0] as {
+        onPromoteToPortal?: () => void;
+      };
+      return props.onPromoteToPortal;
+    };
+
+    it("renders the dispatch failure reason inline, without a global toast", async () => {
+      const message = "Portal is already showing this URL";
+      vi.spyOn(actionService, "dispatch").mockResolvedValue(failed(message));
+
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const promote = getPromoteHandler();
+      expect(promote).toBeDefined();
+
+      await act(async () => {
+        promote!();
+      });
+
+      expect(container.textContent).toContain(message);
+      // Tier 3 is pane-local — the failure must not also fire a toast.
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    it("removes the banner once a retry succeeds", async () => {
+      const message = "Portal promotion failed";
+      const dispatchSpy = vi.spyOn(actionService, "dispatch").mockResolvedValue(failed(message));
+
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      await act(async () => {
+        getPromoteHandler()!();
+      });
+      expect(container.textContent).toContain(message);
+
+      dispatchSpy.mockResolvedValue(succeeded());
+      const retry = Array.from(container.querySelectorAll("button")).find((b) =>
+        b.textContent?.includes("Retry")
+      );
+      expect(retry).toBeDefined();
+
+      await act(async () => {
+        retry!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(container.textContent).not.toContain(message);
+    });
+  });
+
   describe("screenshot capture", () => {
     const getToolbarCapture = () => {
       const props = browserToolbarPropsSpy.mock.calls.at(-1)?.[0] as {
