@@ -3,6 +3,7 @@ import { app, BrowserWindow, dialog, webContents } from "electron";
 import os from "os";
 import { registerIpcHandlers, sendToRenderer } from "../ipc/handlers.js";
 import { getAppWebContents } from "./webContentsRegistry.js";
+import { resolveInitialViewProject } from "./initialViewBinding.js";
 import { distributePortsToView } from "./portDistribution.js";
 import { registerErrorHandlers, flushPendingErrors } from "../ipc/errorHandlers.js";
 import { getWorkspaceClient } from "../services/WorkspaceClient.js";
@@ -567,11 +568,18 @@ export async function setupWindowServices(
   // Register the initial view with ProjectViewManager — only when this window
   // has a project binding (startup restore). Unbound windows (Cmd+N) start
   // with the project picker and get their view registered on project open.
+  // Bind what the renderer is actually showing, which an early legacy switch can
+  // have moved off the restored project (see resolveInitialViewProject).
   if (opts.projectViewManager && opts.initialAppView && restoreProject) {
+    const displayed = resolveInitialViewProject(
+      restoreProject,
+      projectStore.getCurrentProjectId(),
+      (id) => projectStore.getProjectById(id)
+    );
     opts.projectViewManager.registerInitialView(
       opts.initialAppView,
-      restoreProject.id,
-      restoreProject.path
+      displayed.id,
+      displayed.path
     );
   }
 

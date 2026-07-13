@@ -345,11 +345,20 @@ async function activateProjectView(
     // the early load's attachment.
     if (loadWorktrees && deps.worktreeService && windowId !== undefined) {
       const worktreeService = deps.worktreeService;
-      // Restore THIS window's mapping to the project THIS window was showing —
-      // from the captured operation, not the global pointer, which in a second
-      // window names someone else's project and would re-point the mapping at it.
-      const previousPath = outgoingProjectId
-        ? projectStore.getProjectById(outgoingProjectId)?.path
+      // Restore THIS window's mapping to the project THIS window is left
+      // showing — never the global pointer, which in a second window names
+      // someone else's project and would re-point the mapping at it.
+      //
+      // Reading the PVM's active project is safe HERE and only here: a failed
+      // switchTo rolls the field back to the still-visible project, whereas a
+      // successful one has already advanced it to the incoming project (the
+      // ordering trap this operation context exists to avoid). It beats the
+      // captured id when switches queue — the window may have completed an
+      // intermediate switch since this request was captured, so the visible
+      // project is no longer the one we froze.
+      const visibleProjectId = pvm.getActiveProjectId() ?? outgoingProjectId;
+      const previousPath = visibleProjectId
+        ? projectStore.getProjectById(visibleProjectId)?.path
         : undefined;
       void loadWorktrees
         .catch(() => {})
