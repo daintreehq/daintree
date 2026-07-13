@@ -1,4 +1,4 @@
-import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, vi, type Mock } from "vitest";
 
 const storeBacking: Record<string, unknown> = {};
 const storeMock = vi.hoisted(() => ({
@@ -56,6 +56,7 @@ vi.mock("../HibernationService.js", () => ({
 
 import { IdleTerminalNotificationService } from "../IdleTerminalNotificationService.js";
 import type { PtyClient } from "../PtyClient.js";
+import type { ProjectViewManager } from "../../window/ProjectViewManager.js";
 
 /** Construct a service with the PtyClient-shaped mock injected (#10054). */
 function makeService(): IdleTerminalNotificationService {
@@ -602,6 +603,114 @@ describe("IdleTerminalNotificationService", () => {
       const service = makeService();
       service.dismissProject("");
       expect(storeBacking.idleTerminalDismissals).toBeUndefined();
+    });
+  });
+
+  describe("multi-window visibility guard (#11102)", () => {
+    type PvmMock = {
+      getActiveProjectId: Mock<() => string | null>;
+      getOutgoingBridgeProjectId: Mock<() => string | null>;
+    };
+
+    function makePvm(
+      activeProjectId: string | null = null,
+      outgoingBridgeProjectId: string | null = null
+    ): PvmMock {
+      return {
+        getActiveProjectId: vi.fn(() => activeProjectId),
+        getOutgoingBridgeProjectId: vi.fn(() => outgoingBridgeProjectId),
+      };
+    }
+
+    function serviceWith(managers: PvmMock[]): IdleTerminalNotificationService {
+      const service = makeService();
+      service.setProjectViewManagersProvider(() => managers as unknown as ProjectViewManager[]);
+      return service;
+    }
+
+    /**
+     * Two projects whose terminals are equally idle. Only the visibility guard
+     * can distinguish them, so whichever survives into the payload did so on
+     * visibility grounds alone.
+     */
+    function seedTwoIdleProjects(): void {
+      storeBacking.idleTerminalNotify = { enabled: true, thresholdMinutes: 60 };
+      projectStoreMock.getCurrentProjectId.mockReturnValue("focused-proj");
+      projectStoreMock.getAllProjects.mockReturnValue([
+        makeProject("second-window-proj", "Second Window"),
+        makeProject("background-proj", "Background"),
+      ]);
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
+        makeTerminal({ id: "t1", projectId: "second-window-proj" }),
+        makeTerminal({ id: "t2", projectId: "background-proj" }),
+      ]);
+    }
+
+    function notifiedProjectIds(): string[] {
+      const call = broadcastToRendererMock.mock.calls[0];
+      if (!call) return [];
+      return (call[1] as { projects: Array<{ projectId: string }> }).projects.map(
+        (p) => p.projectId
+      );
+    }
+
+    it("does not nudge about a project visible in a second, unfocused window", async () => {
+      seedTwoIdleProjects();
+      const service = serviceWith([makePvm("focused-proj"), makePvm("second-window-proj")]);
+
+      await runCheck(service);
+
+      expect(notifiedProjectIds()).toEqual(["background-proj"]);
+    });
+
+    it("does not nudge about the outgoing paint-gate bridge project", async () => {
+      seedTwoIdleProjects();
+      const service = serviceWith([makePvm("background-proj", "second-window-proj")]);
+
+      await runCheck(service);
+
+      // Both projects are on-screen in that window (one active, one still
+      // painted behind the bridge) — nothing left to notify about.
+      expect(broadcastToRendererMock).not.toHaveBeenCalled();
+    });
+
+    it("preserves the notified throttle of a project visible in another window", async () => {
+      seedTwoIdleProjects();
+      const notifiedAt = Date.now() - 1000;
+      storeBacking.idleTerminalNotifiedAt = { "second-window-proj": notifiedAt };
+
+      const service = serviceWith([makePvm("second-window-proj")]);
+      await runCheck(service);
+
+      // Merely being on-screen isn't engaging with the terminals, so the
+      // throttle must survive — otherwise a switch-away would re-nudge instantly.
+      const stored = storeBacking.idleTerminalNotifiedAt as Record<string, number>;
+      expect(stored["second-window-proj"]).toBe(notifiedAt);
+    });
+
+    it("retains the provider across a stop() so a Settings off→on keeps multi-window awareness", async () => {
+      seedTwoIdleProjects();
+      const service = serviceWith([makePvm("second-window-proj")]);
+
+      service.stop();
+      // stop() clears the PtyClient; start() re-acquires it (#10054). Re-inject
+      // so this test isolates provider retention rather than tripping that guard.
+      service.setPtyClient(ptyManagerMock as unknown as PtyClient);
+      await runCheck(service);
+
+      // The provider is a stateless closure over the window registry, so the
+      // second window's project is still protected after the toggle (#8637).
+      expect(notifiedProjectIds()).toEqual(["background-proj"]);
+    });
+
+    it("still nudges when no provider is wired, using the DB pointer alone", async () => {
+      seedTwoIdleProjects();
+      const service = makeService(); // provider never injected
+
+      await runCheck(service);
+
+      // Neither project is the DB pointer's, so both are fair game.
+      expect(notifiedProjectIds().sort()).toEqual(["background-proj", "second-window-proj"]);
     });
   });
 });

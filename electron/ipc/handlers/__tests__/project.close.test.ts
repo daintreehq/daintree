@@ -140,7 +140,123 @@ describe("project:close handler", () => {
       handler({ senderFrame: { url: "http://localhost:5173" } }, "project-active", {
         killTerminals: false,
       })
-    ).rejects.toThrow("Cannot close the active project");
+    ).rejects.toThrow("open in a window");
+  });
+
+  describe("multi-window visibility guard (#11102)", () => {
+    /** A WindowRegistry-shaped stub whose windows show the given projects. */
+    function registryShowing(...activeProjectIds: Array<string | null>) {
+      return {
+        all: () =>
+          activeProjectIds.map((id) => ({
+            services: {
+              projectViewManager: {
+                getActiveProjectId: () => id,
+                getOutgoingBridgeProjectId: () => null,
+              },
+            },
+          })),
+      };
+    }
+
+    function makePtyClient() {
+      return {
+        getProjectStats: vi.fn(async () => ({
+          terminalCount: 1,
+          processIds: [1],
+          terminalTypes: { terminal: 1 },
+        })),
+        killByProject: vi.fn(async () => 1),
+        onProjectSwitch: vi.fn(),
+        setActiveProject: vi.fn(),
+      };
+    }
+
+    function getCloseHandler(deps: HandlerDependencies) {
+      registerProjectCrudHandlers(deps);
+      const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } })
+        .mock.calls;
+      const closeCall = calls.find((c) => c[0] === CHANNELS.PROJECT_CLOSE);
+      expect(closeCall).toBeTruthy();
+      return closeCall?.[1] as unknown as (
+        event: unknown,
+        projectId: string,
+        options?: { killTerminals?: boolean }
+      ) => Promise<unknown>;
+    }
+
+    const EVENT = { senderFrame: { url: "http://localhost:5173" } };
+
+    it("rejects closing a project visible in a second, unfocused window", async () => {
+      // The DB pointer names a DIFFERENT project — pre-fix, the guard let this
+      // through and closed a project the user was actively looking at.
+      projectStoreMock.getCurrentProjectId.mockReturnValue("project-focused");
+
+      const ptyClient = makePtyClient();
+      const deps = {
+        mainWindow: {} as unknown,
+        ptyClient,
+        windowRegistry: registryShowing("project-focused", "project-second-window"),
+      } as unknown as HandlerDependencies;
+
+      const handler = getCloseHandler(deps);
+
+      await expect(
+        handler(EVENT, "project-second-window", { killTerminals: false })
+      ).rejects.toThrow("open in a window");
+      expect(ptyClient.killByProject).not.toHaveBeenCalled();
+      expect(projectStoreMock.clearProjectState).not.toHaveBeenCalled();
+    });
+
+    it("still closes a project no window is showing", async () => {
+      projectStoreMock.getCurrentProjectId.mockReturnValue("project-focused");
+      projectStoreMock.getProjectById.mockReturnValue({
+        id: "project-background",
+        name: "Background",
+        status: "active",
+        path: "/test/project-background",
+      } as ReturnType<typeof projectStoreMock.getProjectById>);
+
+      const deps = {
+        mainWindow: {} as unknown,
+        ptyClient: makePtyClient(),
+        windowRegistry: registryShowing("project-focused", "project-second-window"),
+      } as unknown as HandlerDependencies;
+
+      const handler = getCloseHandler(deps);
+
+      // The guard must not over-block a genuinely background project.
+      await expect(
+        handler(EVENT, "project-background", { killTerminals: false })
+      ).resolves.toBeTruthy();
+    });
+
+    it("still allows an explicit kill-terminals close of a visible project", async () => {
+      // killTerminals is the deliberate, destructive path — the visibility guard
+      // deliberately does not apply to it.
+      projectStoreMock.getCurrentProjectId.mockReturnValue("project-focused");
+      projectStoreMock.getProjectById.mockReturnValue({
+        id: "project-second-window",
+        name: "Second",
+        status: "active",
+        path: "/test/project-second-window",
+      } as ReturnType<typeof projectStoreMock.getProjectById>);
+
+      const ptyClient = makePtyClient();
+      const deps = {
+        mainWindow: {} as unknown,
+        ptyClient,
+        windowRegistry: registryShowing("project-focused", "project-second-window"),
+      } as unknown as HandlerDependencies;
+
+      const handler = getCloseHandler(deps);
+      await handler(EVENT, "project-second-window", { killTerminals: true });
+
+      expect(ptyClient.killByProject).toHaveBeenCalledWith("project-second-window");
+      // The DB pointer names a different project, so it must NOT be cleared —
+      // that bookkeeping tracks the pointer, not visibility.
+      expect(projectStoreMock.clearCurrentProject).not.toHaveBeenCalled();
+    });
   });
 
   it("backgrounds a non-active project and calls pauseProject", async () => {

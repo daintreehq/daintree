@@ -627,7 +627,17 @@ export async function initGlobalServices(
     run: async () => {
       const { initializeIdleTerminalNotificationService } =
         await import("../services/IdleTerminalNotificationService.js");
-      initializeIdleTerminalNotificationService();
+      // Multi-window active guard — read every window's ProjectViewManager so a
+      // project visible in a non-focused window is never nudged about its
+      // "idle" terminals (#11102). Lazy lambda: windows open/close after this
+      // wires, so re-read on each check.
+      initializeIdleTerminalNotificationService(
+        () =>
+          windowRegistry
+            ?.all()
+            .map((wCtx) => wCtx.services.projectViewManager)
+            .filter((pvm): pvm is ProjectViewManager => pvm !== undefined) ?? []
+      );
     },
   });
 

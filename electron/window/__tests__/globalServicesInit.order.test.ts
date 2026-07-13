@@ -153,6 +153,13 @@ vi.mock("../../services/HibernationService.js", () => ({
   getHibernationService: () => ({ stop: vi.fn(), hibernateUnderMemoryPressure: vi.fn() }),
 }));
 
+const initIdleTerminalNotificationMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../services/IdleTerminalNotificationService.js", () => ({
+  initializeIdleTerminalNotificationService: initIdleTerminalNotificationMock,
+  getIdleTerminalNotificationService: vi.fn(),
+}));
+
 vi.mock("../../services/pty/terminalSessionPersistence.js", () => ({
   evictSessionFiles: vi.fn(async () => ({ deleted: 0, bytesFreed: 0 })),
   SESSION_EVICTION_TTL_MS: 0,
@@ -409,6 +416,40 @@ describe("initGlobalServices task ordering", () => {
     expect(typeof provider).toBe("function");
     // Lazy: re-reads the registry on each call rather than capturing a snapshot.
     expect(provider()).toEqual([]);
+  });
+
+  it("wires a lazy ProjectViewManager provider into IdleTerminalNotificationService (#11102)", async () => {
+    initIdleTerminalNotificationMock.mockClear();
+
+    const contexts: Array<{ services: { projectViewManager?: unknown } }> = [];
+    const fakeRegistry = {
+      all: () => contexts,
+      get size() {
+        return contexts.length;
+      },
+    } as unknown as WindowRegistry;
+
+    await initGlobalServices(fakeRegistry);
+
+    const run = registeredTaskRuns.get("idle-terminal-notification-service");
+    expect(run).toBeDefined();
+    await run!();
+
+    // The provider is passed to the initializer, which wires it BEFORE start()
+    // — so the first check already sees every window's foreground project.
+    expect(initIdleTerminalNotificationMock).toHaveBeenCalledTimes(1);
+    const provider = initIdleTerminalNotificationMock.mock.calls[0][0] as () => unknown[];
+    expect(typeof provider).toBe("function");
+
+    // Lazy: a window that opens after wiring is still seen.
+    expect(provider()).toEqual([]);
+    const pvm = { getActiveProjectId: () => "p1" };
+    contexts.push({ services: { projectViewManager: pvm } });
+    expect(provider()).toEqual([pvm]);
+
+    // Windows without a ProjectViewManager are filtered out.
+    contexts.push({ services: {} });
+    expect(provider()).toEqual([pvm]);
   });
 
   it("registers monitor tasks before resource-profile-service so the profile reads ready data", async () => {

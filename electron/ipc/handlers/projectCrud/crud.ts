@@ -3,6 +3,10 @@ import path from "path";
 import { CHANNELS } from "../../channels.js";
 import { getWindowForWebContents } from "../../../window/webContentsRegistry.js";
 import { projectStore } from "../../../services/ProjectStore.js";
+import {
+  collectActiveProjectIds,
+  projectViewManagersFrom,
+} from "../../../window/activeProjectIds.js";
 import { broadcastToRenderer, typedHandle, typedHandleWithContext } from "../../utils.js";
 import { resolveScopedProjectForIpcContext } from "../../projectContext.js";
 import type { HandlerDependencies } from "../../types.js";
@@ -153,10 +157,26 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
     const killTerminals = options?.killTerminals ?? false;
     console.log(`[IPC] project:close: ${projectId} (killTerminals: ${killTerminals})`);
 
+    // Kept separate from the visibility check below: this is the persisted
+    // pointer, only used for the `clearCurrentProject()` bookkeeping further
+    // down. It is NOT a "is this project on-screen" signal.
     const storeActiveProjectId = projectStore.getCurrentProjectId();
 
-    if (projectId === storeActiveProjectId && !killTerminals) {
-      throw new Error("Cannot close the active project. Switch to another project first.");
+    // Check EVERY window's foreground project, not just the DB pointer — that
+    // tracks the last-focused window only, so a project on-screen in a second
+    // window would otherwise be closed out from under the user (#11102).
+    if (!killTerminals) {
+      const activeIds = collectActiveProjectIds(
+        projectViewManagersFrom(deps.windowRegistry),
+        storeActiveProjectId,
+        "project-close"
+      );
+      if (activeIds.has(projectId)) {
+        throw new Error(
+          "Cannot close a project that's open in a window. " +
+            "Switch that window to another project first."
+        );
+      }
     }
 
     const project = projectStore.getProjectById(projectId);
