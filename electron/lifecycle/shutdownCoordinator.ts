@@ -11,6 +11,9 @@
 // importing it directly would be an import cycle. shutdown.ts registers its
 // chain here as the runner instead.
 
+import { app } from "electron";
+import { SHUTDOWN_DEADLINE_MS } from "./shutdownConfig.js";
+
 export type ShutdownOutcome = "clean" | "dirty";
 export type ShutdownInitiator = "app-quit" | "update-install";
 
@@ -62,18 +65,55 @@ export function startShutdown(
   const run: ActiveShutdown = { initiator, phase: "cleaning" };
   active = run;
 
-  void runner()
-    .catch((err: unknown) => {
-      // The chain handles its own failures and resolves "dirty"; a rejection here
-      // means the chain itself broke. Treat it as dirty rather than stranding the
-      // process with no terminal action.
-      console.error("[MAIN] Shutdown chain rejected unexpectedly:", err);
-      return "dirty" as ShutdownOutcome;
-    })
-    .then((outcome) => {
-      run.phase = "handoff";
+  // Start the chain. `runner` is an async function, so a throw in its synchronous
+  // prefix surfaces as a rejection — but wrap it anyway: a synchronous throw here
+  // would leave `active` stuck in "cleaning" forever, and a shutdown stuck in
+  // "cleaning" is an app that can never be quit (see the before-quit listener).
+  let chain: Promise<ShutdownOutcome>;
+  try {
+    chain = runner();
+  } catch (err) {
+    console.error("[MAIN] Shutdown runner threw synchronously:", err);
+    chain = Promise.resolve("dirty");
+  }
+
+  // The chain reports its own failures as "dirty"; a rejection means the chain
+  // itself broke.
+  const settled = chain.catch((err: unknown) => {
+    console.error("[MAIN] Shutdown chain rejected unexpectedly:", err);
+    return "dirty" as ShutdownOutcome;
+  });
+
+  // Absolute deadline. Every budget inside the chain is bounded, but this is the
+  // structural guarantee that the terminal action ALWAYS runs: without it, one
+  // unbounded await anywhere in the chain would hang the run in "cleaning" and
+  // make the app unquittable. Resolves (never rejects) so it cannot itself strand
+  // the handoff.
+  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<ShutdownOutcome>((resolve) => {
+    deadlineTimer = setTimeout(() => {
+      console.error(
+        `[MAIN] Shutdown exceeded its ${SHUTDOWN_DEADLINE_MS}ms deadline — forcing the terminal action`
+      );
+      resolve("dirty");
+    }, SHUTDOWN_DEADLINE_MS);
+  });
+
+  void Promise.race([settled, deadline]).then((outcome) => {
+    clearTimeout(deadlineTimer);
+    // Flip to "handoff" BEFORE invoking the terminal action, in the same
+    // synchronous turn: onSettled issues quitAndInstall(), and Squirrel's
+    // app.quit() behind it must be allowed through the before-quit listener.
+    run.phase = "handoff";
+    try {
       onSettled(outcome);
-    });
+    } catch (err) {
+      // A terminal action that throws would leave a torn-down process alive with
+      // nothing left to end it. Nothing sane to do but exit.
+      console.error("[MAIN] Shutdown terminal action threw:", err);
+      app.exit(1);
+    }
+  });
 
   return "started";
 }

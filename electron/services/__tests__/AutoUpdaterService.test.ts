@@ -2390,17 +2390,23 @@ describe("AutoUpdaterService", () => {
       expect(appMock.exit).toHaveBeenCalledWith(0);
     });
 
-    it("keeps the error listener attached through an in-flight install", () => {
+    it("does not schedule a retry when the updater errors during an in-flight install", () => {
       downloadedHandler({ version: "2.0.0" });
+      const errorHandler = (autoUpdaterMock.on as Mock).mock.calls.find(
+        (args) => args[0] === "error"
+      )![1];
+      // Flush the jittered launch check first, so the advance below can only
+      // surface a retry — not the startup check that was already pending.
+      vi.advanceTimersByTime(STARTUP_JITTER_MAX_MS);
       quitAndInstallHandler(TRUSTED_SENDER);
+      autoUpdaterMock.checkForUpdatesAndNotify.mockClear();
 
-      // The chain disposes this service BEFORE quitAndInstall() runs. Detaching
-      // the "error" listener there would turn a routine install failure into an
-      // uncaught throw — electron-updater dispatches errors through a bare
-      // EventEmitter.emit("error"), which throws when nothing is listening.
-      autoUpdaterService.dispose();
+      // Teardown is already underway. A retry timer armed now would fire against a
+      // service the cleanup chain is in the middle of disposing.
+      errorHandler(new Error("net::ERR_CONNECTION_RESET"));
+      vi.advanceTimersByTime(60_000);
 
-      expect(autoUpdaterMock.off).not.toHaveBeenCalledWith("error", expect.any(Function));
+      expect(autoUpdaterMock.checkForUpdatesAndNotify).not.toHaveBeenCalled();
     });
 
     it("still arms the watchdog when autoUpdater.quitAndInstall throws", () => {

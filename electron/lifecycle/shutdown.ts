@@ -54,7 +54,7 @@ import { closeTelemetry } from "../services/TelemetryService.js";
 import { isSmokeTest } from "../setup/environment.js";
 import { stopPerformanceTraceIfActive } from "../utils/performanceTrace.js";
 import { isSignalShutdown, clearSafetyBeltTimer } from "./signalShutdownState.js";
-import { CLEANUP_TIMEOUT_MS } from "./shutdownConfig.js";
+import { CLEANUP_TIMEOUT_MS, SHUTDOWN_TAIL_TIMEOUT_MS } from "./shutdownConfig.js";
 import {
   getActiveShutdown,
   setShutdownRunner,
@@ -682,27 +682,55 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
     // rather than a false "everything was saved".
   }
 
-  // Defuse the signal-handler safety-belt the moment the outcome is decided.
-  // closeTelemetry below has a 2500ms internal cap, but clearing first
-  // eliminates the dependency on that cap holding — if a future refactor
-  // extends the telemetry budget, the belt won't be able to fire after the
-  // terminal action and clobber it.
+  // Defuse the signal-handler safety-belt the moment the outcome is decided, so
+  // it can't fire during the tail below and clobber the terminal action.
   clearSafetyBeltTimer();
-  try {
-    await closeTelemetry();
-  } catch (err) {
-    console.warn("[MAIN] closeTelemetry failed:", err);
-  }
-  // Flush the perf trace (if --trace was active) while the GPU/renderer child
-  // processes are still alive. app.exit() bypasses will-quit, so this is the
-  // only reliable point to stop tracing before exit; no-op for normal runs.
-  // Awaited so the trace file isn't truncated, but wrapped: a rejection here
-  // must not strand the caller's terminal action and leave the process hung.
-  try {
-    await stopPerformanceTraceIfActive();
-  } catch (err) {
-    console.warn("[MAIN] stopPerformanceTraceIfActive failed:", err);
-  }
+
+  // The tail runs AFTER the cleanup race, so CLEANUP_TIMEOUT_MS does not cover
+  // it. Bound it: a rejection here is caught, but a promise that simply never
+  // settles would hang this function forever — and a shutdown run that never
+  // settles blocks every subsequent quit (the before-quit listener holds them off
+  // while a chain is cleaning), leaving an app that cannot be quit at all.
+  // `stopPerformanceTraceIfActive` is the live risk: contentTracing.stopRecording()
+  // has no internal cap, so a wedged tracing service would do exactly that.
+  await settleWithin(
+    (async () => {
+      try {
+        await closeTelemetry();
+      } catch (err) {
+        console.warn("[MAIN] closeTelemetry failed:", err);
+      }
+      // Flush the perf trace (if --trace was active) while the GPU/renderer child
+      // processes are still alive. app.exit() bypasses will-quit, so this is the
+      // only reliable point to stop tracing before exit; no-op for normal runs.
+      try {
+        await stopPerformanceTraceIfActive();
+      } catch (err) {
+        console.warn("[MAIN] stopPerformanceTraceIfActive failed:", err);
+      }
+    })(),
+    SHUTDOWN_TAIL_TIMEOUT_MS,
+    "shutdown tail (telemetry + trace flush)"
+  );
 
   return outcome;
+}
+
+// Waits for `work`, abandoning it if it outlives `budgetMs`. Resolves either way —
+// it exists to bound a hang, so it must never introduce one of its own.
+async function settleWithin(work: Promise<void>, budgetMs: number, label: string): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      work,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(() => {
+          console.warn(`[MAIN] ${label} exceeded ${budgetMs}ms — abandoning it and exiting`);
+          resolve();
+        }, budgetMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }

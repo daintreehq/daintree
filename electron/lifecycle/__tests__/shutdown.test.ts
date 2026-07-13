@@ -235,8 +235,20 @@ const deferredInitQueueMock = vi.hoisted(() => ({
 
 vi.mock("../../window/deferredInitQueue.js", () => deferredInitQueueMock);
 
+// Runs in the post-cleanup tail, outside the hard-timeout race. Mocked so a test
+// can wedge it and prove the run still settles (issue #11104).
+const performanceTraceMock = vi.hoisted(() => ({
+  stopPerformanceTraceIfActive: vi.fn(() => Promise.resolve()),
+}));
+
+vi.mock("../../utils/performanceTrace.js", () => performanceTraceMock);
+
 import type { ShutdownDeps } from "../shutdown.js";
-import { CLEANUP_TIMEOUT_MS } from "../shutdownConfig.js";
+import {
+  CLEANUP_TIMEOUT_MS,
+  SHUTDOWN_DEADLINE_MS,
+  SHUTDOWN_TAIL_TIMEOUT_MS,
+} from "../shutdownConfig.js";
 
 function makeDeps(overrides?: Partial<ShutdownDeps>): ShutdownDeps {
   return {
@@ -1196,9 +1208,10 @@ describe("registerShutdownHandler", () => {
   // clean-exit markers instead. The chain is now reachable without `before-quit`.
   describe("update-install shutdown (issue #11104)", () => {
     beforeEach(() => {
-      // clearAllMocks() resets call records, NOT implementations — a mcpServer.stop
-      // wedged by an earlier test would otherwise hang every test after it.
+      // clearAllMocks() resets call records, NOT implementations — anything an
+      // earlier test wedged would otherwise hang every test after it.
       mcpServerMock.stop.mockReturnValue(Promise.resolve());
+      performanceTraceMock.stopPerformanceTraceIfActive.mockReturnValue(Promise.resolve());
     });
 
     async function setupCoordinated(overrides?: Partial<ShutdownDeps>) {
@@ -1352,6 +1365,56 @@ describe("registerShutdownHandler", () => {
       await vi.waitFor(() => expect(first).toHaveBeenCalled());
       expect(second).not.toHaveBeenCalled();
       expect(closeSharedDbMock.closeSharedDb).toHaveBeenCalledTimes(1);
+    });
+
+    // The before-quit listener holds off every quit while a chain is cleaning, so a
+    // chain that never settles would leave the app impossible to quit at all. The
+    // perf-trace flush is the live risk: it runs after the cleanup race (so the
+    // hard timeout doesn't cover it) and contentTracing.stopRecording() has no cap.
+    it("abandons a wedged trace flush at the tail budget and still hands off", async () => {
+      vi.useFakeTimers();
+      const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      performanceTraceMock.stopPerformanceTraceIfActive.mockReturnValue(new Promise(() => {}));
+
+      try {
+        const { coordinator } = await setupCoordinated();
+        const onReadyToInstall = vi.fn();
+        coordinator.requestGracefulShutdownForUpdate(onReadyToInstall);
+
+        // Advance ONLY the tail budget — deliberately short of the coordinator's
+        // absolute deadline, so this proves the tail bound itself and can't pass
+        // on the strength of the outer backstop.
+        await vi.advanceTimersByTimeAsync(SHUTDOWN_TAIL_TIMEOUT_MS);
+
+        expect(onReadyToInstall).toHaveBeenCalled();
+      } finally {
+        performanceTraceMock.stopPerformanceTraceIfActive.mockReturnValue(Promise.resolve());
+        consoleSpy.mockRestore();
+        vi.useRealTimers();
+      }
+    });
+
+    // The backstop behind every other budget. Once a chain is cleaning, the
+    // before-quit listener holds off every quit — so a chain that never settles at
+    // all would leave an app that literally cannot be quit.
+    it("forces the terminal action when the chain never settles at all", async () => {
+      vi.useFakeTimers();
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      try {
+        const coordinator = await import("../shutdownCoordinator.js");
+        coordinator.setShutdownRunner(() => new Promise(() => {}));
+
+        const onSettled = vi.fn();
+        expect(coordinator.startShutdown("app-quit", onSettled)).toBe("started");
+
+        await vi.advanceTimersByTimeAsync(SHUTDOWN_DEADLINE_MS);
+
+        expect(onSettled).toHaveBeenCalledWith("dirty");
+      } finally {
+        consoleSpy.mockRestore();
+        vi.useRealTimers();
+      }
     });
 
     it("reports unavailable — and cleans up nothing — when no shutdown handler is registered", async () => {

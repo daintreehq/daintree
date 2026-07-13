@@ -886,13 +886,13 @@ class AutoUpdaterService {
       autoUpdater.off("update-not-available", this.notAvailableHandler);
       this.notAvailableHandler = null;
     }
-    // Keep the error listener attached across an in-flight install. This disposal
-    // runs INSIDE the cleanup chain, i.e. before quitAndInstall() is called — and
-    // electron-updater dispatches failures through `emit("error", ...)` on a bare
-    // EventEmitter, which THROWS when nothing is listening. Detaching here would
-    // turn a routine "install failed" into an uncaught exception. The handler
-    // short-circuits to a log while installInFlight, so it stays inert.
-    if (this.errorHandler && !this.installInFlight) {
+    // Detach unconditionally, including during an in-flight install. It's safe:
+    // AppUpdater's own constructor attaches a permanent "error" listener of its
+    // own (it logs), so the emitter is never left listener-less and
+    // `emit("error")` cannot throw for want of a handler. Detaching ours is in
+    // fact the stronger guarantee — it makes it impossible for a late install
+    // error to schedule a retry timer against this now-disposed service.
+    if (this.errorHandler) {
       autoUpdater.off("error", this.errorHandler);
       this.errorHandler = null;
     }
