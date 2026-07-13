@@ -321,6 +321,23 @@ export class TerminalResizeController {
       const rows = rowsForHeight(height, cellDims.height);
 
       if (managed.terminal.cols === cols && managed.terminal.rows === rows) {
+        // The grid this box wants is the one xterm is already on, so there is no
+        // reflow to do — but the caches and any queued job may still describe an
+        // OLDER box. `latestCols`/`latestRows` are the deferred-resize target
+        // (applyDeferredResize, forceImmediateResize and flushResize all read
+        // them), and a debounced/idle job captured the geometry of the box that
+        // armed it. A boundary reversal inside the debounce window
+        // (672.1px → 671.9px → 672.1px) queues a 72-column resize and then lands
+        // here with xterm correctly at 73: letting that job fire would drag xterm
+        // AND the PTY down to 72 for a 73-column container — stranding exactly
+        // the column the watchdog then repairs after paint (#11095). Re-point the
+        // target at the truth, and supersede the stale job.
+        managed.latestCols = cols;
+        managed.latestRows = rows;
+        if (this.hasPendingResize(id, managed)) {
+          this.clearResizeJob(managed);
+          this.sendPtyResize(id, cols, rows);
+        }
         return null;
       }
 
@@ -605,6 +622,20 @@ export class TerminalResizeController {
     this.deps.dataBuffer.flushForTerminal(id);
     this.deps.dataBuffer.resetForTerminal(id);
     return true;
+  }
+
+  /**
+   * True while a resize is queued but not yet applied — a debounce timer, an
+   * idle (postTask) job, or a settled-strategy timer. Each carries the geometry
+   * of the box that armed it, so a later resize that supersedes them must know
+   * they exist.
+   */
+  private hasPendingResize(id: string, managed: ManagedTerminal): boolean {
+    return (
+      managed.resizeJob !== undefined ||
+      managed.resizeDebounceTimer !== undefined ||
+      this.settledResizeTimers.has(id)
+    );
   }
 
   clearResizeJob(managed: ManagedTerminal): void {

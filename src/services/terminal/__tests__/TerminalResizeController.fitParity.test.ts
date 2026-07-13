@@ -329,6 +329,42 @@ describe("TerminalResizeController ↔ FitAddon column parity (#11095)", () => {
       expect(terminal.rows).toBe(proposal!.rows);
     });
 
+    it("supersedes a queued resize when the box returns to the grid xterm already has", () => {
+      // Boundary reversal inside the debounce window. The container dips to
+      // 671.9px (queuing a 72-column resize), then comes back to 672.1px before
+      // that job fires — where xterm is still correctly at 73. The stale job must
+      // not be allowed to drag xterm and the PTY down to 72 for a 73-column box.
+      const wide = { width: 672.1, height: 360 };
+      const narrow = { width: 671.9, height: 360 };
+      const cell = { width: 9, height: 18 };
+
+      const { managed, terminal, fitAddon } = buildPane(wide, {}, cell);
+      const controller = makeController(managed);
+
+      // Settle xterm on the wide box first.
+      controller.resize("t1", wide.width, wide.height, { immediate: true });
+      const settled = fitAddon.proposeDimensions();
+      expect(terminal.cols).toBe(settled!.cols);
+
+      // Now take the debounced path (unfocused + a long buffer), so the narrow
+      // box only QUEUES its resize rather than applying it.
+      managed.isFocused = false;
+      terminal.buffer.active.length = 300;
+
+      controller.resize("t1", narrow.width, narrow.height);
+      expect(terminal.cols).toBe(settled!.cols); // still queued, not yet applied
+
+      // Reversal: back to the wide box. The grid is already right, so this
+      // returns null — but it must cancel the queued 72-column job.
+      expect(controller.resize("t1", wide.width, wide.height)).toBeNull();
+
+      vi.advanceTimersByTime(1000);
+
+      expect(terminal.cols).toBe(settled!.cols);
+      expect(managed.latestCols).toBe(settled!.cols);
+      expect(resizeMock).not.toHaveBeenCalledWith("t1", 72, expect.anything());
+    });
+
     it("still dedups a jitter that stays inside the same pixel", () => {
       // The other half of the contract: sub-pixel noise that cannot move
       // FitAddon's truncated box must not churn the PTY.
