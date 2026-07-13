@@ -25,7 +25,7 @@ npm run dev        # Main + Renderer with HMR
 
 A few things worth knowing up front:
 
-- **Node version:** match the version in `.nvmrc` if present, otherwise Node 20+.
+- **Node version:** use the exact version pinned in `.nvmrc` — it's kept in sync with `.node-version` and `package.json`'s `engines.node` floor (`npm run check` enforces this).
 - **Native modules:** `node-pty` must be rebuilt against Electron's ABI. The `postinstall` hook does this for you. If you hit errors, run `npm run rebuild`.
 - **Don't use `--ignore-scripts`** during install — it skips the native rebuild and the app will crash on startup.
 - **`npm ci`** is fine for clean/CI builds. For day-to-day dev, `npm install` is preferred.
