@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { getRuntimePlatform, isWindowsStoreBuild } from "../distribution.js";
+import {
+  getBuildChannel,
+  getBuildChannelLabel,
+  getRuntimePlatform,
+  isWindowsStoreBuild,
+} from "../distribution.js";
 
 type WithStoreFlag = NodeJS.Process & { windowsStore?: boolean };
 
@@ -49,6 +54,44 @@ describe("distribution config", () => {
     it("explicit argument wins over process.windowsStore", () => {
       (process as WithStoreFlag).windowsStore = true;
       expect(isWindowsStoreBuild(false)).toBe(false);
+    });
+  });
+
+  describe("getBuildChannel", () => {
+    it("classifies a plain semantic version as stable", () => {
+      expect(getBuildChannel("0.25.0")).toBe("stable");
+      expect(getBuildChannel("1.0.0")).toBe("stable");
+    });
+
+    it("classifies the nightly stamp format as nightly", () => {
+      expect(getBuildChannel("0.25.0-nightly.20260713120000.abc1234")).toBe("nightly");
+    });
+
+    it("classifies beta and rc prerelease tags", () => {
+      expect(getBuildChannel("1.0.0-beta.1")).toBe("beta");
+      expect(getBuildChannel("1.0.0-rc.2")).toBe("rc");
+    });
+
+    it("applies deterministic precedence for combined tags (nightly > rc > beta)", () => {
+      expect(getBuildChannel("1.0.0-nightly.1-rc.1")).toBe("nightly");
+      expect(getBuildChannel("1.0.0-rc.1-beta.1")).toBe("rc");
+    });
+
+    it("falls back to stable for unrecognized prerelease tags", () => {
+      expect(getBuildChannel("1.0.0-alpha.1")).toBe("stable");
+      expect(getBuildChannel("1.0.0-canary")).toBe("stable");
+    });
+  });
+
+  describe("getBuildChannelLabel", () => {
+    it("returns null for stable so callers render no channel marker", () => {
+      expect(getBuildChannelLabel("1.0.0")).toBeNull();
+    });
+
+    it("returns the human-readable label for each prerelease channel", () => {
+      expect(getBuildChannelLabel("0.25.0-nightly.20260713120000.abc1234")).toBe("Nightly");
+      expect(getBuildChannelLabel("1.0.0-beta.1")).toBe("Beta");
+      expect(getBuildChannelLabel("1.0.0-rc.2")).toBe("RC");
     });
   });
 

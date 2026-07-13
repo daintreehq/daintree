@@ -92,11 +92,11 @@ function setupElectron() {
   };
 }
 
-async function renderGeneralTab() {
+async function renderGeneralTab(appVersion = "1.0.0") {
   const { GeneralTab } = await import("../GeneralTab");
   return render(
     <GeneralTab
-      appVersion="1.0.0"
+      appVersion={appVersion}
       onNavigateToAgents={vi.fn()}
       activeSubtab="overview"
       onSubtabChange={vi.fn()}
@@ -449,4 +449,46 @@ describe("GeneralTab — build architecture line (issue #10501)", () => {
     });
     expect(screen.queryByTestId("about-build-arch")).toBeNull();
   });
+});
+
+describe("GeneralTab — build channel badge (#11121)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupElectron();
+    setupDispatchMock(
+      {
+        claude: "ready",
+        gemini: "missing",
+        codex: "missing",
+        opencode: "missing",
+        cursor: "missing",
+      },
+      { agents: { claude: { pinned: true } } } as unknown as AgentSettings
+    );
+  });
+
+  it("shows no channel badge for a stable build and renders the plain version", async () => {
+    await renderGeneralTab("1.0.0");
+
+    await waitFor(() => {
+      expect(screen.getByText("v1.0.0")).toBeTruthy();
+    });
+    expect(screen.queryByTestId("about-build-channel")).toBeNull();
+  });
+
+  it.each([
+    { version: "0.25.0-nightly.20260713120000.abc1234", label: "Nightly" },
+    { version: "1.0.0-beta.1", label: "Beta" },
+    { version: "1.0.0-rc.2", label: "RC" },
+  ])(
+    "labels a $label prerelease build with its channel and keeps the full version",
+    async ({ version, label }) => {
+      await renderGeneralTab(version);
+
+      const badge = await screen.findByTestId("about-build-channel");
+      expect(badge.textContent).toBe(label);
+      // The full prerelease-tagged version stays visible for traceability.
+      expect(screen.getByText(`v${version}`)).toBeTruthy();
+    }
+  );
 });
