@@ -4,7 +4,11 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isRuntimeAgentTerminal } from "@/utils/terminalType";
 import { isTerminalVisible } from "@/lib/terminalVisibility";
-import { isVisibleGridPanel, pickDockCloseFocusId } from "@/store/panelFocusFallback";
+import {
+  isVisibleGridPanel,
+  pickDockCloseFocusId,
+  type GetPanelGroupInfo,
+} from "@/store/panelFocusFallback";
 import type { TerminalFocusTarget } from "@/components/Terminal/terminalFocus";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 
@@ -213,7 +217,8 @@ export const createTerminalFocusSlice =
   (
     getTerminals: () => CarrierPanel[],
     getActiveWorktreeId: () => string | null,
-    stampLastActive: (id: string) => void
+    stampLastActive: (id: string) => void,
+    getPanelGroupInfo: GetPanelGroupInfo
   ): StateCreator<TerminalFocusSlice, [], [], TerminalFocusSlice> =>
   (set, get) => {
     let pingTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -634,6 +639,8 @@ export const createTerminalFocusSlice =
             panels: getTerminals(),
             activeWorktreeId: getActiveWorktreeId(),
             previousFocusedId: state.previousFocusedId,
+            maximizeTarget: state.maximizeTarget,
+            getPanelGroupInfo,
           });
 
           return {

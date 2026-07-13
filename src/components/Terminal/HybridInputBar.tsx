@@ -603,6 +603,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           // No mounted editor (lazy CodeMirror still loading) means nothing can
           // take focus — say so rather than let the caller assume it landed.
           if (!view) return false;
+          // Already holding the keyboard: callers want focus, not a caret move.
+          // Re-running the cursor dispatch would drag the caret to the end of the
+          // draft from wherever the user just clicked (#11133).
+          if (view.hasFocus) return true;
           const gen = focusGenerationRef.current;
           requestAnimationFrame(() => {
             if (focusGenerationRef.current !== gen) return;

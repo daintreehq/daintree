@@ -6,13 +6,26 @@
  * from inside an aria-hidden parking container.
  */
 import { describe, it, expect } from "vitest";
-import { isVisibleGridPanel, pickDockCloseFocusId } from "../panelFocusFallback";
+import {
+  isVisibleGridPanel,
+  isRenderedGridPanel,
+  pickDockCloseFocusId,
+  type GetPanelGroupInfo,
+} from "../panelFocusFallback";
 
 type Panel = Parameters<typeof isVisibleGridPanel>[0];
 
 function panel(id: string, overrides: Partial<Panel> = {}): Panel {
   return { id, worktreeId: "wt-1", location: "grid", ...overrides } as Panel;
 }
+
+const ungrouped: GetPanelGroupInfo = () => undefined;
+
+const baseOptions = {
+  activeWorktreeId: "wt-1",
+  maximizeTarget: null,
+  getPanelGroupInfo: ungrouped,
+};
 
 describe("isVisibleGridPanel", () => {
   it("accepts a grid panel in the active worktree", () => {
@@ -40,21 +53,64 @@ describe("isVisibleGridPanel", () => {
   });
 });
 
+/**
+ * Grid membership is necessary but not sufficient — a background tab and a pane
+ * behind a maximized one both still read as `location: "grid"`, and focusing
+ * either one recreates #11133 from the other end.
+ */
+describe("isRenderedGridPanel", () => {
+  it("accepts an ordinary grid pane with nothing maximized", () => {
+    expect(isRenderedGridPanel(panel("a"), baseOptions)).toBe(true);
+  });
+
+  it("rejects a background tab of a grid tab group", () => {
+    const grouped: GetPanelGroupInfo = () => ({ groupId: "g-1", activeTabId: "b" });
+
+    expect(isRenderedGridPanel(panel("a"), { ...baseOptions, getPanelGroupInfo: grouped })).toBe(
+      false
+    );
+    expect(isRenderedGridPanel(panel("b"), { ...baseOptions, getPanelGroupInfo: grouped })).toBe(
+      true
+    );
+  });
+
+  it("rejects every pane except the maximized one", () => {
+    const maximized = { ...baseOptions, maximizeTarget: { type: "panel", id: "b" } as const };
+
+    expect(isRenderedGridPanel(panel("a"), maximized)).toBe(false);
+    expect(isRenderedGridPanel(panel("b"), maximized)).toBe(true);
+  });
+
+  it("accepts the active tab of a maximized group and nothing else", () => {
+    const getPanelGroupInfo: GetPanelGroupInfo = (id) =>
+      id === "a" || id === "b" ? { groupId: "g-1", activeTabId: "b" } : undefined;
+    const maximized = {
+      ...baseOptions,
+      getPanelGroupInfo,
+      maximizeTarget: { type: "group", id: "g-1" } as const,
+    };
+
+    expect(isRenderedGridPanel(panel("b"), maximized)).toBe(true);
+    expect(isRenderedGridPanel(panel("a"), maximized)).toBe(false);
+    expect(isRenderedGridPanel(panel("outside"), maximized)).toBe(false);
+  });
+});
+
 describe("pickDockCloseFocusId", () => {
   it("hands the keyboard back to the pane the user came from", () => {
     const id = pickDockCloseFocusId({
+      ...baseOptions,
       panels: [panel("grid-1"), panel("grid-2"), panel("dock-1", { location: "dock" })],
-      activeWorktreeId: "wt-1",
       previousFocusedId: "grid-2",
     });
 
     expect(id).toBe("grid-2");
   });
 
-  it("falls back to the first visible grid pane when the previous one is gone", () => {
+  it("falls back to the first rendered grid pane when the previous one is gone", () => {
     const id = pickDockCloseFocusId({
+      ...baseOptions,
       panels: [panel("grid-1"), panel("grid-2")],
-      activeWorktreeId: "wt-1",
       previousFocusedId: "removed",
     });
 
@@ -62,25 +118,36 @@ describe("pickDockCloseFocusId", () => {
   });
 
   it("never hands focus back to a pane that is itself hidden", () => {
-    // A previous focus pointing at another dock pane, or at a pane in a
-    // worktree the user has since left, is not a place the keyboard can go.
+    // A previous focus pointing at another dock pane, or at a pane in a worktree
+    // the user has since left, is not a place the keyboard can go.
     const id = pickDockCloseFocusId({
+      ...baseOptions,
       panels: [
         panel("dock-2", { location: "dock" }),
         panel("other-wt", { worktreeId: "wt-9" }),
         panel("grid-1"),
       ],
-      activeWorktreeId: "wt-1",
       previousFocusedId: "dock-2",
     });
 
     expect(id).toBe("grid-1");
   });
 
-  it("returns null when the active worktree has no visible grid pane", () => {
+  it("prefers the maximized pane over an earlier pane hidden behind it", () => {
     const id = pickDockCloseFocusId({
+      ...baseOptions,
+      maximizeTarget: { type: "panel", id: "grid-2" },
+      panels: [panel("grid-1"), panel("grid-2")],
+      previousFocusedId: null,
+    });
+
+    expect(id).toBe("grid-2");
+  });
+
+  it("returns null when the active worktree has no rendered grid pane", () => {
+    const id = pickDockCloseFocusId({
+      ...baseOptions,
       panels: [panel("dock-1", { location: "dock" }), panel("other-wt", { worktreeId: "wt-9" })],
-      activeWorktreeId: "wt-1",
       previousFocusedId: "dock-1",
     });
 
