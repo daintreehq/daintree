@@ -2494,8 +2494,8 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
   },
   {
     "category": "logs",
-    "danger": "safe",
-    "dangerRationale": undefined,
+    "danger": "confirm",
+    "dangerRationale": "Empties the log view and the in-memory buffer that diagnostic reports are built from. The log file on disk keeps a copy.",
     "description": "Clear application logs",
     "examples": undefined,
     "id": "logs.clear",

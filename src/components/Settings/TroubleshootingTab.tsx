@@ -25,6 +25,13 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import {
+  CLEAR_LOGS_CONFIRM_LABEL,
+  CLEAR_LOGS_DESCRIPTION,
+  CLEAR_LOGS_TITLE,
+  notifyClearLogsFailed,
+} from "@/lib/clearLogsCopy";
 
 const PROFILE_UPDATE_INTERVAL_MS = 250;
 
@@ -288,6 +295,70 @@ function HardwareAccelerationSection() {
   );
 }
 
+export function ApplicationLogsSection() {
+  const [showClearDialog, setShowClearDialog] = useState(false);
+  const [isClearing, setIsClearing] = useState(false);
+
+  const handleConfirmClear = useCallback(async () => {
+    setIsClearing(true);
+    try {
+      const result = await actionService.dispatch("logs.clear", undefined, {
+        source: "user",
+      });
+      if (!result.ok) {
+        throw new Error(result.error.message);
+      }
+    } catch (error) {
+      logError("Failed to clear logs", error);
+      // "Try again" reopens the confirm rather than re-dispatching: a toast that
+      // fires a destructive action directly would bypass the D1 gate.
+      notifyClearLogsFailed(() => setShowClearDialog(true));
+    } finally {
+      setIsClearing(false);
+      setShowClearDialog(false);
+    }
+  }, []);
+
+  return (
+    <SettingsSection
+      icon={FileText}
+      title="Application logs"
+      description="View internal application logs for debugging purposes."
+    >
+      <div className="flex gap-3">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => void actionService.dispatch("logs.openFile", undefined, { source: "user" })}
+          className="text-daintree-text border-daintree-border hover:bg-daintree-border hover:text-daintree-text"
+        >
+          <FileText />
+          Open Log File
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setShowClearDialog(true)}
+          className="text-status-error border-daintree-border hover:bg-status-error/10 hover:text-status-error/70 hover:border-status-error/20"
+        >
+          <Trash2 />
+          Clear Logs
+        </Button>
+      </div>
+      <ConfirmDialog
+        isOpen={showClearDialog}
+        onClose={() => setShowClearDialog(false)}
+        title={CLEAR_LOGS_TITLE}
+        description={CLEAR_LOGS_DESCRIPTION}
+        confirmLabel={CLEAR_LOGS_CONFIRM_LABEL}
+        variant="destructive"
+        isConfirmLoading={isClearing}
+        onConfirm={handleConfirmClear}
+      />
+    </SettingsSection>
+  );
+}
+
 export function TroubleshootingTab() {
   const [developerMode, setDeveloperMode] = useState(false);
   const [autoOpenDiagnostics, setAutoOpenDiagnostics] = useState(false);
@@ -453,19 +524,6 @@ export function TroubleshootingTab() {
     }
   };
 
-  const handleClearLogs = async () => {
-    try {
-      const result = await actionService.dispatch("logs.clear", undefined, {
-        source: "user",
-      });
-      if (!result.ok) {
-        throw new Error(result.error.message);
-      }
-    } catch (error) {
-      logError("Failed to clear logs", error);
-    }
-  };
-
   return (
     <div className="space-y-6">
       <HardwareAccelerationSection />
@@ -476,34 +534,7 @@ export function TroubleshootingTab() {
 
       <SystemHealthSection />
 
-      <SettingsSection
-        icon={FileText}
-        title="Application logs"
-        description="View internal application logs for debugging purposes."
-      >
-        <div className="flex gap-3">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() =>
-              void actionService.dispatch("logs.openFile", undefined, { source: "user" })
-            }
-            className="text-daintree-text border-daintree-border hover:bg-daintree-border hover:text-daintree-text"
-          >
-            <FileText />
-            Open Log File
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleClearLogs}
-            className="text-status-error border-daintree-border hover:bg-status-error/10 hover:text-status-error/70 hover:border-status-error/20"
-          >
-            <Trash2 />
-            Clear Logs
-          </Button>
-        </div>
-      </SettingsSection>
+      <ApplicationLogsSection />
 
       <SettingsSection
         icon={Bug}

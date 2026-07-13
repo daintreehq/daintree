@@ -187,6 +187,13 @@ The forge action set now exposes issue write operations to MCP agents (#10653) a
 | `keybinding.resetAll` | **confirm** (updated #8247) | yes (`ConfirmDialog` at `KeyboardShortcutsTab.tsx:184`, dispatches with `confirmed:true`) — call-site only; `run()` resets immediately, so the action is `palette: { mode: "hidden" }` to stop a `source:"user"` palette pick from bypassing the dialog (palette-runner audit) | Boolean via dispatch | local-irreversible (all overrides lost) | every override | D1 | Done (#8247); palette-hidden to close the bypass | #8247 |
 | `agentSettings.reset` | **confirm** (updated — palette-runner audit) | none — no user-facing dispatch path; Settings resets via `agentSettingsClient.reset()` directly, and the action is `palette: { mode: "hidden" }` so it cannot be picked-and-run from the command palette | Boolean via dispatch | local-irreversible (omitting `agentId` resets every agent's model/flag overrides; no undo) | every configured agent | D1 | Done — agent/MCP-dispatch gated by `danger:"confirm"`; on `BYPASS_WIRED` (no co-located dialog because there is no UI dispatch site) | — |
 
+### Diagnostics / logs
+
+| Action / call site | Current | UI confirm | Consent in breadcrumb | Reversibility | Blast | Tier | Recommendation | Follow-up |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `logs.clear` | **confirm** (updated #11107) | yes — `ConfirmDialog` at both dispatch sites (`TroubleshootingTab.tsx` `ApplicationLogsSection`, `DiagnosticsActions.tsx` `LogsActions`). Call-site only; `run()` clears immediately, so the action is `palette: { mode: "hidden" }` to stop a `source:"user"` palette pick from bypassing the dialog | Boolean via dispatch | local-irreversible in-app (renderer log view + main `LogBuffer` emptied; no undo). The on-disk log file is written separately by `logger.ts` and is **not** touched — `logs.openFile` still recovers the content | full in-app log history; `DiagnosticsCollector` builds its report from `logBuffer`, so a cleared buffer costs the evidence a bug report would carry | D1 | Done (#11107); palette-hidden to close the bypass. Failure surfaces in the owning surface via an error notify whose "Try again" reopens the confirm rather than re-dispatching | #11107 |
+| `eventInspector.clear` | safe | yes (`ConfirmDialog` at `DiagnosticsActions.tsx` `EventsActions`) | n/a | local-irreversible (captured event records dropped) | captured events | D1 | Confirm already wired; danger tier not yet promoted | TBD |
+
 ### Dev preview
 
 | Action / call site | Current | UI confirm | Consent in breadcrumb | Reversibility | Blast | Tier | Recommendation | Follow-up |

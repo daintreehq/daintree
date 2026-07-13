@@ -60,8 +60,15 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     description: "Clear application logs",
     category: "logs",
     kind: "command",
-    danger: "safe",
+    danger: "confirm",
+    // danger:"confirm" with the confirm wired at the call sites (Troubleshooting
+    // settings, Diagnostics dock), NOT in run() — run() clears immediately.
+    // ActionService doesn't gate user-source dispatch, so a palette pick would
+    // bypass the D1 confirm. Hide from the palette; both buttons stay reachable.
+    palette: { mode: "hidden" },
     scope: "renderer",
+    dangerRationale:
+      "Empties the log view and the in-memory buffer that diagnostic reports are built from. The log file on disk keeps a copy.",
     run: async () => {
       useLogsStore.getState().clearLogs();
       await logsClient.clear();
