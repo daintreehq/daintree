@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils";
 import { DaintreeIcon, Activity } from "@/components/icons";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
+import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import { SettingsSubtabBar } from "./SettingsSubtabBar";
 import type { SettingsSubtabItem } from "./SettingsSubtabBar";
 import { getAgentIds, getAgentConfig } from "@/config/agents";
@@ -143,6 +144,8 @@ export function GeneralTab({
   const [agentSettings, setAgentSettings] = useState<AgentSettings | null>(null);
   const [shortcuts, setShortcuts] = useState<ShortcutCategory[]>([]);
   const [updateChannel, setUpdateChannel] = useState<"stable" | "nightly" | null>(null);
+  const [updateChannelLoadFailed, setUpdateChannelLoadFailed] = useState(false);
+  const [channelRetryNonce, setChannelRetryNonce] = useState(0);
   const [channelSaving, setChannelSaving] = useState(false);
   const [lastUpdateCheck, setLastUpdateCheck] = useState<number | null>(null);
   const [storeUpdateNotificationsEnabled, setStoreUpdateNotificationsEnabled] = useState<
@@ -166,6 +169,7 @@ export function GeneralTab({
   const reduceAnimations = usePreferencesStore((s) => s.reduceAnimations);
 
   useEffect(() => {
+    setUpdateChannelLoadFailed(false);
     if (updatesManagedByStore) return;
     let cancelled = false;
     window.electron.update
@@ -174,13 +178,16 @@ export function GeneralTab({
         if (!cancelled) setUpdateChannel(ch);
       })
       .catch((error) => {
-        if (!cancelled) setUpdateChannel("stable");
+        // Never fall back to a channel here: an unknown channel must stay unknown,
+        // or a nightly user sees "stable" selected and silently gets moved to it.
+        if (cancelled) return;
+        setUpdateChannelLoadFailed(true);
         logError("Failed to get update channel", error);
       });
     return () => {
       cancelled = true;
     };
-  }, [updatesManagedByStore]);
+  }, [updatesManagedByStore, channelRetryNonce]);
 
   useEffect(() => {
     if (updatesManagedByStore) return;
@@ -857,28 +864,37 @@ export function GeneralTab({
               description="Choose between stable releases and nightly builds."
               id="general-update-channel"
             >
-              <div className="flex gap-2">
-                {(["stable", "nightly"] as const).map((ch) => (
-                  <button
-                    key={ch}
-                    disabled={updateChannel === null}
-                    onClick={() => void handleChannelChange(ch)}
-                    className={cn(
-                      "px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-colors capitalize",
-                      updateChannel === ch
-                        ? "bg-overlay-selected border border-border-strong text-daintree-text font-medium"
-                        : "border border-daintree-border hover:bg-tint/5 text-daintree-text/70"
-                    )}
-                  >
-                    {ch}
-                  </button>
-                ))}
-              </div>
-              {updateChannel === "nightly" && (
-                <p className="text-xs text-status-warning/80">
-                  Nightly builds may contain unstable features. You can switch back to stable at any
-                  time.
-                </p>
+              {updateChannelLoadFailed ? (
+                <SettingsLoadErrorBanner
+                  message="Couldn't load the update channel"
+                  onRetry={() => setChannelRetryNonce((n) => n + 1)}
+                />
+              ) : (
+                <>
+                  <div className="flex gap-2">
+                    {(["stable", "nightly"] as const).map((ch) => (
+                      <button
+                        key={ch}
+                        disabled={updateChannel === null}
+                        onClick={() => void handleChannelChange(ch)}
+                        className={cn(
+                          "px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-colors capitalize",
+                          updateChannel === ch
+                            ? "bg-overlay-selected border border-border-strong text-daintree-text font-medium"
+                            : "border border-daintree-border hover:bg-tint/5 text-daintree-text/70"
+                        )}
+                      >
+                        {ch}
+                      </button>
+                    ))}
+                  </div>
+                  {updateChannel === "nightly" && (
+                    <p className="text-xs text-status-warning/80">
+                      Nightly builds may contain unstable features. You can switch back to stable at
+                      any time.
+                    </p>
+                  )}
+                </>
               )}
               {lastUpdateCheck && (
                 <p className="text-xs text-text-secondary">
