@@ -487,9 +487,13 @@ describe("DatabaseMaintenanceService", () => {
     const realDir = actual.mkdtempSync(path.join(os.tmpdir(), "daintree-dbmaint-perms-"));
     const backupPath = path.join(realDir, "daintree.db.backup");
     mockDbModule.getBackupPath.mockReturnValue(backupPath);
-    // sqlite.backup() writes the candidate at the umask default; simulate that.
+    let tmpModeAtBackupStart: number | undefined;
     mockSqlite.backup.mockImplementation(async (tmp: string) => {
+      // The candidate is pre-created owner-only BEFORE the copy runs, so it is
+      // never world-readable during the (potentially slow) page transfer.
+      tmpModeAtBackupStart = actual.statSync(tmp).mode & 0o777;
       actual.writeFileSync(tmp, "backup-bytes");
+      // Simulate a copy that reset perms — the post-backup chmod must recover them.
       actual.chmodSync(tmp, 0o644);
     });
     // Let the promotion rename actually run, and assert the candidate is ALREADY
@@ -506,11 +510,32 @@ describe("DatabaseMaintenanceService", () => {
       // dispose() runs the final backup on main (probeOnMain), no worker needed.
       await service.dispose();
 
+      expect(tmpModeAtBackupStart).toBe(0o600);
       expect(tmpModeAtRename).toBe(0o600);
       expect(actual.existsSync(backupPath)).toBe(true);
       expect(actual.statSync(backupPath).mode & 0o777).toBe(0o600);
     } finally {
       actual.rmSync(realDir, { recursive: true, force: true });
+    }
+  });
+
+  posixIt("tightens a legacy world-readable backup on initialize", () => {
+    const realDir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-dbmaint-legacy-"));
+    const backupPath = path.join(realDir, "daintree.db.backup");
+    try {
+      // A .backup written by a pre-fix version, still world-readable.
+      fs.writeFileSync(backupPath, "legacy backup bytes");
+      fs.chmodSync(backupPath, 0o644);
+      mockDbModule.getBackupPath.mockReturnValue(backupPath);
+      mockDbModule.probeDb.mockReturnValue(true); // healthy → no recovery path
+
+      const service = new DatabaseMaintenanceService();
+      // initialize() alone starts no timers/listeners, so no dispose is needed.
+      service.initialize(true);
+
+      expect(fs.statSync(backupPath).mode & 0o777).toBe(0o600);
+    } finally {
+      fs.rmSync(realDir, { recursive: true, force: true });
     }
   });
 
