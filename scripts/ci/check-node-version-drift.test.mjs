@@ -28,20 +28,20 @@ describe("check-node-version-drift", () => {
     });
 
     it("throws on a partial version", () => {
-      expect(() => parseExactPin("22.13", ".nvmrc")).toThrow(/not an exact semver/);
+      expect(() => parseExactPin("22.13", ".nvmrc")).toThrow(/not an exact x\.y\.z/);
     });
 
     it("throws on a range", () => {
-      expect(() => parseExactPin(">=22.13.0", ".nvmrc")).toThrow(/not an exact semver/);
+      expect(() => parseExactPin(">=22.13.0", ".nvmrc")).toThrow(/not an exact x\.y\.z/);
     });
 
     it("throws on a caret range", () => {
-      expect(() => parseExactPin("^22.13.0", ".nvmrc")).toThrow(/not an exact semver/);
+      expect(() => parseExactPin("^22.13.0", ".nvmrc")).toThrow(/not an exact x\.y\.z/);
     });
 
     it("throws on an lts alias", () => {
       expect(() => parseExactPin("lts/*", ".nvmrc")).toThrow(
-        /single bare version|not an exact semver/
+        /single bare version|not an exact x\.y\.z/
       );
     });
 
@@ -51,6 +51,28 @@ describe("check-node-version-drift", () => {
 
     it("throws on multiple non-empty lines", () => {
       expect(() => parseExactPin("22.13.0\n22.14.0\n", ".nvmrc")).toThrow(/single bare version/);
+    });
+
+    // A drift guard must not let `semver` normalize textually-different pins to
+    // the same value — each of these would otherwise collapse to "22.13.0".
+    it("throws on build metadata (semver would strip it)", () => {
+      expect(() => parseExactPin("22.13.0+local.1\n", ".nvmrc")).toThrow(/not an exact x\.y\.z/);
+    });
+
+    it("throws on a prerelease pin", () => {
+      expect(() => parseExactPin("22.13.0-rc.1\n", ".nvmrc")).toThrow(/not an exact x\.y\.z/);
+    });
+
+    it("throws on a double v prefix (semver.valid tolerates a leading v)", () => {
+      expect(() => parseExactPin("vv22.13.0\n", ".nvmrc")).toThrow(/not an exact x\.y\.z/);
+    });
+
+    it("throws on a leading zero segment", () => {
+      expect(() => parseExactPin("22.013.0\n", ".nvmrc")).toThrow(/not an exact x\.y\.z/);
+    });
+
+    it("throws on a leading byte-order mark (breaks nvm/fnm parsing)", () => {
+      expect(() => parseExactPin("﻿22.13.0\n", ".nvmrc")).toThrow(/byte-order mark/);
     });
 
     it("includes the label in the error message", () => {
@@ -95,6 +117,18 @@ describe("check-node-version-drift", () => {
       expect(() => parseNodeEngineRange('{"engines":{"node":22}}')).toThrow(
         /must be a non-empty string/
       );
+    });
+
+    it("throws when engines.node is whitespace only", () => {
+      expect(() => parseNodeEngineRange('{"engines":{"node":" \\t "}}')).toThrow(
+        /must be a non-empty string/
+      );
+    });
+
+    it("resolves an unbounded floor to 0.0.0 rather than null", () => {
+      // Locks the semver interpretation: ">=0" is satisfiable (min 0.0.0), unlike
+      // "<0.0.0" which is not — the guard must treat these differently.
+      expect(parseNodeEngineRange('{"engines":{"node":">=0"}}').minimum).toBe("0.0.0");
     });
 
     it("throws on an invalid range", () => {

@@ -29,13 +29,21 @@ const PACKAGE_JSON = path.join(root, "package.json");
 
 /**
  * Parse an exact Node version pin from a `.nvmrc` / `.node-version` file.
- * Accepts a single bare version with optional leading `v` and surrounding
+ * Accepts a single bare `x.y.z` with an optional leading `v` and surrounding
  * whitespace (a trailing newline is normal). Rejects ranges, aliases
- * (`lts/*`), inline comments, partial versions, and multi-line content — none
- * of which are byte-portable across nvm/fnm/nodenv/asdf. Returns the
- * normalized `x.y.z` string; throws with `label` context on anything else.
+ * (`lts/*`), inline comments, partial versions, multi-line content, a leading
+ * byte-order mark, prereleases, build metadata (`22.13.0+local`), and a
+ * double `v` — none of which are byte-portable across nvm/fnm/nodenv/asdf, and
+ * all of which `semver` would otherwise normalize away and let two textually
+ * different pins compare as equal, hiding the very drift this guards. Returns
+ * the normalized `x.y.z` string; throws with `label` context on anything else.
  */
 export function parseExactPin(raw, label) {
+  if (raw.charCodeAt(0) === 0xfeff) {
+    throw new Error(
+      `${label}: starts with a byte-order mark — expected a bare ASCII version like "22.13.0"`
+    );
+  }
   const trimmed = raw.trim();
   if (trimmed === "") {
     throw new Error(`${label}: file is empty — expected an exact Node version like "22.13.0"`);
@@ -46,15 +54,18 @@ export function parseExactPin(raw, label) {
         `(no comments, aliases, or extra lines)`
     );
   }
-  const normalized = trimmed.replace(/^v/, "");
-  const valid = semver.valid(normalized);
-  if (!valid) {
+  // Strict `x.y.z` grammar (optional lowercase `v`). Deliberately narrower than
+  // `semver.valid`, which would accept a double `v`, build metadata, or a
+  // prerelease and canonicalize them down to `x.y.z` — masking drift.
+  const match = /^v?(\d+\.\d+\.\d+)$/.exec(trimmed);
+  const normalized = match && semver.valid(match[1]);
+  if (!normalized) {
     throw new Error(
-      `${label}: ${JSON.stringify(trimmed)} is not an exact semver version ` +
-        `(ranges, aliases like "lts/*", and partial versions are not allowed)`
+      `${label}: ${JSON.stringify(trimmed)} is not an exact x.y.z version ` +
+        `(ranges, aliases like "lts/*", prereleases, and build metadata are not allowed)`
     );
   }
-  return valid;
+  return normalized;
 }
 
 /**
