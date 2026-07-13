@@ -6,16 +6,20 @@ import yaml from "js-yaml";
 
 // Regression guard for #11117: online E2E gated the macOS release but not Linux
 // or Windows, so a failing real-agent run could still publish on two of three
-// platforms. Release workflows only fire on a v* tag, so they can never be
-// exercised on a PR — these structural assertions are the only enforcement of
-// the gating contract in CI.
+// platforms. Release workflows only fire on a v* tag or a manual dispatch, so
+// they can never be exercised on a PR — these structural assertions are the
+// only enforcement of the gating contract in CI.
 //
-// The contract under test is behavioural, not cosmetic: every suite that must
-// gate a release (core + online, plus whatever full-* buckets exist) has to sit
-// in the dependency chain of every platform build, on every OS. Suites are
-// resolved from each gate's `with:`/matrix rather than from job names, because
-// a job called `e2e-online-gate` that passes `suite: core` would satisfy a
-// name-shaped assertion while testing the wrong thing.
+// The contract under test is behavioural, not cosmetic. Two things have to hold
+// for a gate to actually gate, and each has a failure mode that looks fine in
+// the YAML:
+//   1. The suite really runs. Suites are resolved from each gate's `with:`/
+//      matrix, not from job names — a job called `e2e-online-gate` passing
+//      `suite: core` would satisfy any name-shaped assertion while testing the
+//      wrong thing.
+//   2. Failure really propagates. A `needs:` edge only blocks while every job
+//      along it keeps its implicit success() check, which ANY status-check
+//      function silently replaces.
 
 const workflowsDir = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -24,10 +28,22 @@ const workflowsDir = path.resolve(
 
 const RELEASE_WORKFLOWS = ["release-macos.yml", "release-linux.yml", "release-windows.yml"];
 
-// The suites whose failure must block a publish, per docs/e2e-testing.md. Named
-// from the release contract, not copied from the workflows — deleting a gate
-// from every OS at once still has to fail this file.
-const RELEASE_BLOCKING_SUITES = ["core", "online"];
+// The suites whose failure must block a publish, per docs/e2e-testing.md. This
+// is the release policy, deliberately spelled out here rather than read back
+// out of the workflows — otherwise deleting a gate from all three OSes at once
+// would keep this file green. Adding a suite to the release gate is a decision,
+// so it should cost an edit here.
+const RELEASE_BLOCKING_SUITES = [
+  "core",
+  "online",
+  "full-terminal",
+  "full-worktree",
+  "full-presets",
+  "full-platform",
+  "full-panels",
+  "full-resilience",
+  "full-plugins",
+];
 
 const E2E_WORKFLOW = "./.github/workflows/e2e.yml";
 
@@ -39,14 +55,16 @@ const needsOf = (job) => {
   return Array.isArray(needs) ? needs : [needs];
 };
 
-// A gate either passes one literal suite or fans a matrix of them out. The
-// matrix form sets `with.suite: ${{ matrix.suite }}`, so the literal list lives
-// on the strategy.
+// A gate either passes one literal suite or fans a matrix of them out. Only
+// credit the matrix when the job actually forwards it: a strategy listing
+// `online` while `with.suite` hardcodes `core` runs core, whatever the matrix
+// says.
 const suitesOf = (job) => {
-  const matrixSuites = job.strategy?.matrix?.suite;
-  if (Array.isArray(matrixSuites)) return matrixSuites;
   const suite = job.with?.suite;
-  return typeof suite === "string" && !suite.includes("${{") ? [suite] : [];
+  if (typeof suite !== "string") return [];
+  const matrixSuites = job.strategy?.matrix?.suite;
+  if (Array.isArray(matrixSuites) && /\bmatrix\.suite\b/.test(suite)) return matrixSuites;
+  return suite.includes("${{") ? [] : [suite];
 };
 
 // Jobs that actually ship bits, found by the action they run rather than by
@@ -56,19 +74,28 @@ const publishersOf = (jobs) =>
     (jobs[id].steps ?? []).some((step) => step.uses?.includes("/publish-daintree"))
   );
 
-// always()/failure()/cancelled() replace the implicit success() check that makes
-// a `needs:` edge blocking. Anywhere on the gated path, they turn a gate into
-// decoration. (An explicit success() is redundant but harmless.)
-const OVERRIDES_SUCCESS = /\b(always|failure|cancelled)\s*\(/;
+// A job with no `if:` is implicitly `if: success()`, which is what makes a
+// `needs:` edge blocking. ANY status-check function replaces that implicit
+// check — including success() itself, which is why this matches all four rather
+// than just the obviously-dangerous three: `if: success() || github.ref_type ==
+// 'tag'` runs on a tag no matter what the gate did.
+const OVERRIDES_SUCCESS = /\b(success|always|failure|cancelled)\s*\(/;
 
-// Every job reachable from `jobId` by walking `needs` edges backwards.
-const upstreamOf = (jobs, jobId) => {
+const overridesSuccess = (job) => job.if !== undefined && OVERRIDES_SUCCESS.test(String(job.if));
+
+// Jobs reachable from `jobId` by `needs:` edges that actually propagate failure
+// — the walk stops at any job that overrides its success check, because a gate
+// failing upstream of one of those never reaches the other side. Reachability
+// alone would happily "prove" a release is gated through a chain of always().
+const blockingUpstreamOf = (jobs, jobId) => {
   const seen = new Set();
+  if (overridesSuccess(jobs[jobId])) return seen;
   const queue = [...needsOf(jobs[jobId])];
   while (queue.length > 0) {
     const next = queue.pop();
     if (seen.has(next) || !jobs[next]) continue;
     seen.add(next);
+    if (overridesSuccess(jobs[next])) continue;
     queue.push(...needsOf(jobs[next]));
   }
   return seen;
@@ -122,35 +149,34 @@ describe("release workflow e2e gating contract (#11117)", () => {
     }
   });
 
+  // The property that actually matters: a failing gate must be able to stop the
+  // publish. Walks only edges that propagate failure, so a chain of always()
+  // between the gate and the publisher reads as ungated — which is what a naive
+  // reachability check would miss, and how `assemble-windows-release` could
+  // quietly become a bypass.
   it.each(workflows)(
-    "$file: every publisher is downstream of every gate",
+    "$file: a failing gate blocks every publisher",
     ({ jobs, gates, publishers }) => {
       for (const publisher of publishers) {
-        const upstream = upstreamOf(jobs, publisher);
+        const blocking = blockingUpstreamOf(jobs, publisher);
         for (const gate of gates) {
-          expect(upstream.has(gate), `${publisher} must be gated by ${gate}`).toBe(true);
+          expect(
+            blocking.has(gate),
+            `${gate} failing must stop ${publisher}, but no chain of success-gated needs connects them`
+          ).toBe(true);
         }
       }
     }
   );
 
-  // A `needs:` edge only blocks while the dependent keeps its implicit success()
-  // check. This is the premise the whole contract rests on: uniformly slapping
-  // `if: always()` on the builds would leave the graph looking perfectly gated
-  // while shipping a failed release.
-  it.each(workflows)(
-    "$file: nothing on the gated path overrides the success check",
-    ({ jobs, builds, publishers }) => {
-      for (const jobId of [...builds, ...publishers]) {
-        const condition = jobs[jobId].if;
-        if (condition === undefined) continue;
-        expect(
-          OVERRIDES_SUCCESS.test(String(condition)),
-          `${jobId} would run past a failed gate: if: ${condition}`
-        ).toBe(false);
-      }
+  it.each(workflows)("$file: no build overrides its success check", ({ jobs, builds }) => {
+    for (const build of builds) {
+      expect(
+        overridesSuccess(jobs[build]),
+        `${build} would run past a failed gate: if: ${jobs[build].if}`
+      ).toBe(false);
     }
-  );
+  });
 
   it.each(workflows)(
     "$file: gates call the shared e2e workflow for this platform",
