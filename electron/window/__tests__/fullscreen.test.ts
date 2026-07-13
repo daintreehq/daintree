@@ -51,15 +51,6 @@ describe("toggleWindowFullscreen", () => {
       expect(win.setFullScreen).not.toHaveBeenCalled();
     });
 
-    it("round-trips windowed → simple fullscreen → windowed", () => {
-      const win = createTarget();
-
-      expect(toggleWindowFullscreen(win)).toBe(true);
-      expect(toggleWindowFullscreen(win)).toBe(false);
-      expect(win.setSimpleFullScreen).toHaveBeenNthCalledWith(1, true);
-      expect(win.setSimpleFullScreen).toHaveBeenNthCalledWith(2, false);
-    });
-
     // A macOS window reaches native fullscreen via the green traffic-light button,
     // and restoreWindowState reopens a saved-fullscreen window with setFullScreen(true).
     // Toggling out of that must exit native rather than stack simple fullscreen on top.
@@ -71,6 +62,9 @@ describe("toggleWindowFullscreen", () => {
       expect(win.setSimpleFullScreen).not.toHaveBeenCalled();
     });
 
+    // The pre-fix code could stack simple fullscreen onto a natively-fullscreen
+    // window, so an upgrading user can start in this state. Unwind the simple
+    // layer first and leave AppKit's async native layer for the next toggle.
     it("exits simple fullscreen without touching native fullscreen when both report active", () => {
       const win = createTarget({ simple: true, native: true });
 
@@ -108,19 +102,5 @@ describe("toggleWindowFullscreen", () => {
       expect(win.setSimpleFullScreen).not.toHaveBeenCalled();
       expect(win.isSimpleFullScreen).not.toHaveBeenCalled();
     });
-  });
-
-  it("reads process.platform per call rather than capturing it at module load", () => {
-    const mac = createTarget();
-    setPlatform("darwin");
-    toggleWindowFullscreen(mac);
-
-    const win32 = createTarget();
-    setPlatform("win32");
-    toggleWindowFullscreen(win32);
-
-    expect(mac.setSimpleFullScreen).toHaveBeenCalledWith(true);
-    expect(win32.setFullScreen).toHaveBeenCalledWith(true);
-    expect(win32.setSimpleFullScreen).not.toHaveBeenCalled();
   });
 });

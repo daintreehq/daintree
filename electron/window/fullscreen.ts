@@ -21,8 +21,11 @@ type FullscreenTarget = Pick<
  * A macOS window can also land in *native* fullscreen — the green traffic-light
  * button puts it there, and `restoreWindowState` reopens a saved-fullscreen
  * window with `setFullScreen(true)`. Exiting that takes priority over entering
- * simple fullscreen, so the two modes are never stacked, and no single call both
- * leaves one mode and enters the other.
+ * simple fullscreen, so a settled window is never left with both modes stacked,
+ * and no single call both leaves one mode and enters the other. macOS only
+ * promises `isFullScreen()` is accurate once `enter-full-screen`/
+ * `leave-full-screen` has fired, so a toggle landing mid-transition can still
+ * read the pre-transition value; exiting simple first keeps that recoverable.
  */
 export function toggleWindowFullscreen(win: FullscreenTarget): boolean {
   if (process.platform !== "darwin") {

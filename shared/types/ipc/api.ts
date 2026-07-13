@@ -1077,7 +1077,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   window: {
     /** Subscribe to fullscreen state changes */
     onFullscreenChange(callback: (isFullscreen: boolean) => void): () => void;
-    /** Toggle fullscreen; resolves to the new state. Simple fullscreen on macOS, native elsewhere. */
+    /**
+     * Toggle fullscreen: simple fullscreen on macOS, native elsewhere. Resolves to the
+     * requested state, which macOS may not have settled yet — subscribe to
+     * onFullscreenChange for the observed one.
+     */
     toggleFullscreen(): Promise<boolean>;
     /** Reload the window via Electron webContents */
     reload(): Promise<void>;

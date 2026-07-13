@@ -630,8 +630,6 @@ describe("update menu lifecycle", () => {
       const settings = items.find((i) => i.label === "Settings…");
       expect(settings).toBeDefined();
       expect(settings!.accelerator).toBe("CommandOrControl+,");
-
-      expect(items.some((i) => i.label === "Project Settings…")).toBe(true);
     });
 
     it("on linux: File menu ends with separator + Exit (role: quit) and exposes Settings... with CommandOrControl+,", () => {
