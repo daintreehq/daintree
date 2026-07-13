@@ -7,6 +7,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { actionService } from "@/services/ActionService";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { ClearLogsConfirmDialog } from "./ClearLogsConfirmDialog";
 
 export function ProblemsActions() {
   const hasActiveErrors = useErrorStore((state) => state.errors.some((e) => !e.dismissed));
@@ -49,48 +50,48 @@ export function ProblemsActions() {
 export function LogsActions() {
   const autoScroll = useLogsStore((state) => state.autoScroll);
   const setAutoScroll = useLogsStore((state) => state.setAutoScroll);
+  const [showClearDialog, setShowClearDialog] = useState(false);
 
   const handleOpenFile = useCallback(async () => {
     await actionService.dispatch("logs.openFile", undefined, { source: "user" });
   }, []);
 
-  const handleClearLogs = useCallback(async () => {
-    await actionService.dispatch("logs.clear", undefined, { source: "user" });
-  }, []);
-
   return (
-    <div className="flex items-center gap-2">
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            variant={autoScroll ? "info" : "subtle"}
-            size="xs"
-            onClick={() => setAutoScroll(!autoScroll)}
-          >
-            Auto-scroll
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">
-          {autoScroll ? "Auto-scroll enabled" : "Auto-scroll disabled"}
-        </TooltipContent>
-      </Tooltip>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button variant="subtle" size="xs" onClick={handleOpenFile}>
-            Open File
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">Open log file</TooltipContent>
-      </Tooltip>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button variant="subtle" size="xs" onClick={handleClearLogs}>
-            Clear
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">Clear logs</TooltipContent>
-      </Tooltip>
-    </div>
+    <>
+      <div className="flex items-center gap-2">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant={autoScroll ? "info" : "subtle"}
+              size="xs"
+              onClick={() => setAutoScroll(!autoScroll)}
+            >
+              Auto-scroll
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {autoScroll ? "Auto-scroll enabled" : "Auto-scroll disabled"}
+          </TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button variant="subtle" size="xs" onClick={handleOpenFile}>
+              Open File
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Open log file</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button variant="subtle" size="xs" onClick={() => setShowClearDialog(true)}>
+              Clear
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Clear logs</TooltipContent>
+        </Tooltip>
+      </div>
+      <ClearLogsConfirmDialog isOpen={showClearDialog} onOpenChange={setShowClearDialog} />
+    </>
   );
 }
 

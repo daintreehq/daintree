@@ -99,6 +99,7 @@ const AUDITED_LEAKY_IDS: readonly string[] = [
   // component call site, so a source:"user" palette pick ran them unconfirmed.
   "keybinding.resetAll",
   "worktree.sessions.endAll",
+  "logs.clear",
 ];
 
 describe("action palette behavior", () => {
@@ -171,6 +172,28 @@ describe("action palette behavior", () => {
     expect(
       unguarded,
       `These audited-leaky actions can again be picked-and-broken from the palette:\n${unguarded.join(
+        "\n"
+      )}`
+    ).toEqual([]);
+  });
+
+  it("audited confirm-tier actions cannot be run from the palette", () => {
+    // These carry danger:"confirm" but gate the confirm at their component call
+    // site — run() clears/kills immediately. ActionService only blocks agent-source
+    // dispatch, so if the palette can still run one, a user-source pick executes it
+    // with no dialog. Computed from the same predicate the palette itself uses.
+    const runnable: string[] = [];
+    let audited = 0;
+    for (const id of AUDITED_LEAKY_IDS) {
+      const def = definitions.get(id);
+      if (!def || def.danger !== "confirm") continue;
+      audited++;
+      if (isPaletteRunnable(def)) runnable.push(id);
+    }
+    expect(audited).toBeGreaterThan(0);
+    expect(
+      runnable,
+      `These confirm-tier actions are reachable from the palette, which bypasses their call-site confirm:\n${runnable.join(
         "\n"
       )}`
     ).toEqual([]);

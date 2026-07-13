@@ -25,6 +25,7 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { ClearLogsConfirmDialog } from "@/components/Diagnostics/ClearLogsConfirmDialog";
 
 const PROFILE_UPDATE_INTERVAL_MS = 250;
 
@@ -288,6 +289,42 @@ function HardwareAccelerationSection() {
   );
 }
 
+export function ApplicationLogsSection() {
+  const [showClearDialog, setShowClearDialog] = useState(false);
+
+  return (
+    <SettingsSection
+      icon={FileText}
+      title="Application logs"
+      description="View internal application logs for debugging purposes."
+    >
+      <div className="flex gap-3">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() =>
+            void actionService.dispatch("logs.openFile", undefined, { source: "user" })
+          }
+          className="text-daintree-text border-daintree-border hover:bg-daintree-border hover:text-daintree-text"
+        >
+          <FileText />
+          Open Log File
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setShowClearDialog(true)}
+          className="text-status-error border-daintree-border hover:bg-status-error/10 hover:text-status-error/70 hover:border-status-error/20"
+        >
+          <Trash2 />
+          Clear Logs
+        </Button>
+      </div>
+      <ClearLogsConfirmDialog isOpen={showClearDialog} onOpenChange={setShowClearDialog} />
+    </SettingsSection>
+  );
+}
+
 export function TroubleshootingTab() {
   const [developerMode, setDeveloperMode] = useState(false);
   const [autoOpenDiagnostics, setAutoOpenDiagnostics] = useState(false);
@@ -453,19 +490,6 @@ export function TroubleshootingTab() {
     }
   };
 
-  const handleClearLogs = async () => {
-    try {
-      const result = await actionService.dispatch("logs.clear", undefined, {
-        source: "user",
-      });
-      if (!result.ok) {
-        throw new Error(result.error.message);
-      }
-    } catch (error) {
-      logError("Failed to clear logs", error);
-    }
-  };
-
   return (
     <div className="space-y-6">
       <HardwareAccelerationSection />
@@ -476,34 +500,7 @@ export function TroubleshootingTab() {
 
       <SystemHealthSection />
 
-      <SettingsSection
-        icon={FileText}
-        title="Application logs"
-        description="View internal application logs for debugging purposes."
-      >
-        <div className="flex gap-3">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() =>
-              void actionService.dispatch("logs.openFile", undefined, { source: "user" })
-            }
-            className="text-daintree-text border-daintree-border hover:bg-daintree-border hover:text-daintree-text"
-          >
-            <FileText />
-            Open Log File
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleClearLogs}
-            className="text-status-error border-daintree-border hover:bg-status-error/10 hover:text-status-error/70 hover:border-status-error/20"
-          >
-            <Trash2 />
-            Clear Logs
-          </Button>
-        </div>
-      </SettingsSection>
+      <ApplicationLogsSection />
 
       <SettingsSection
         icon={Bug}
