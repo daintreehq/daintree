@@ -577,7 +577,9 @@ export function getThemeContrastWarnings(scheme: AppColorScheme): AppThemeValida
   return warnings;
 }
 
-const ACCENT_MIN_CONTRAST = 4.5;
+// The override gate and the validation matrix must enforce the same threshold — a second
+// literal here could silently drift from the pair everything else is derived from.
+const ACCENT_MIN_CONTRAST = ACCENT_CONTRAST_PAIR.minimum;
 const ACCENT_OUTLINE_MIN_CONTRAST = 3.0;
 
 // Structured result describing how an accent override fails its contrast gate, so
