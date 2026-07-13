@@ -27,6 +27,9 @@ const reviewHubContentProps: CapturedReviewHubProps[] = [];
 vi.mock("@/components/Worktree/ReviewHub/ReviewHubContent", () => ({
   ReviewHubContent: (props: CapturedReviewHubProps) => {
     reviewHubContentProps.push(props);
+    // The real child renders nothing when closed. Honour that here too, so a
+    // regression that stops opening the pane can't leave these tests green.
+    if (!props.isOpen) return null;
     return (
       <button data-testid="review-hub-close" onClick={props.onClose}>
         Close
@@ -57,6 +60,10 @@ describe("ReviewPane close wiring", () => {
     const onClose = vi.fn<(force?: boolean) => void>();
     render(<ReviewPane id="review-1" worktreeId="wt-1" onClose={onClose} />);
 
+    // Pin the click as the cause: a pane that closed itself on mount would
+    // otherwise land on the same call count.
+    expect(onClose).not.toHaveBeenCalled();
+
     fireEvent.click(screen.getByTestId("review-hub-close"));
 
     // The call itself is what the no-op regression killed. The argument is the
@@ -70,12 +77,15 @@ describe("ReviewPane close wiring", () => {
     expect(force).toBeFalsy();
   });
 
-  it("closes the panel when Escape falls through the child's nested-state handling", () => {
+  it("forwards a callback that closes the panel when invoked with no argument", () => {
     const onClose = vi.fn<(force?: boolean) => void>();
     render(<ReviewPane id="review-1" worktreeId="wt-1" onClose={onClose} />);
 
-    // ReviewHubContent's Escape handler clears selected files/paths first and
-    // only then calls onClose() with no argument. Drive that final branch.
+    // This is the shape ReviewHubContent's Escape handler uses: after clearing
+    // any selected file or path, its last resort is a bare `onClose()`. Driving
+    // real Escape would mean mounting the child for real (a ~25-mock IPC
+    // surface) to retest key handling this fix doesn't touch and the ReviewHub
+    // suites already cover — so assert the seam, not the child.
     lastReviewHubContentProps().onClose();
 
     expect(onClose).toHaveBeenCalledTimes(1);
