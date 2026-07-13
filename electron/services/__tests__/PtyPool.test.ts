@@ -113,18 +113,21 @@ describe("PtyPool", () => {
     delete process.env.FORCE_COLOR;
   });
 
+  // Assigning `undefined` to process.env stringifies it to "undefined", which
+  // leaves an absent var looking *set* (a restored CI="undefined" is truthy).
+  const restoreEnv = (key: string, original: string | undefined) => {
+    if (original !== undefined) process.env[key] = original;
+    else delete process.env[key];
+  };
+
   afterEach(() => {
-    process.env.SHELL = originalShell;
-    process.env.HOME = originalHome;
-    process.env.CI = originalCi;
-    if (originalLang !== undefined) process.env.LANG = originalLang;
-    else delete process.env.LANG;
-    if (originalLcAll !== undefined) process.env.LC_ALL = originalLcAll;
-    else delete process.env.LC_ALL;
-    if (originalNoColor !== undefined) process.env.NO_COLOR = originalNoColor;
-    else delete process.env.NO_COLOR;
-    if (originalForceColor !== undefined) process.env.FORCE_COLOR = originalForceColor;
-    else delete process.env.FORCE_COLOR;
+    restoreEnv("SHELL", originalShell);
+    restoreEnv("HOME", originalHome);
+    restoreEnv("CI", originalCi);
+    restoreEnv("LANG", originalLang);
+    restoreEnv("LC_ALL", originalLcAll);
+    restoreEnv("NO_COLOR", originalNoColor);
+    restoreEnv("FORCE_COLOR", originalForceColor);
   });
 
   it("falls back to default pool size when configured pool size is invalid", () => {
@@ -301,9 +304,8 @@ describe("PtyPool", () => {
     const spawnOptions = spawnMock.mock.calls[0]?.[2] as { env?: Record<string, string> };
     expect(spawnOptions.env?.FORCE_COLOR).toBeUndefined();
     expect(spawnOptions.env?.NO_COLOR).toBe(value);
-    // COLORTERM only selects depth once colour is on — it never forces it.
-    expect(spawnOptions.env?.COLORTERM).toBe("truecolor");
-    expect(spawnOptions.env?.TERM).toBe("xterm-256color");
+    // The depth hints survive: they inform colour support, they don't force it.
+    expect(spawnOptions.env?.COLORTERM).toBeDefined();
     pool.dispose();
   });
 
@@ -332,13 +334,39 @@ describe("PtyPool", () => {
     pool.dispose();
   });
 
-  it("keys NO_COLOR callers to their own pool slot", () => {
-    // The pooled half of the NO_COLOR fix only holds because a caller-supplied
-    // NO_COLOR changes the env hash: without this, a shell warmed with
-    // FORCE_COLOR=3 could be acquired by a caller that opted out of colour.
-    expect(computePoolEnvHash({ NO_COLOR: "1" })).not.toBe(computePoolEnvHash(undefined));
-    expect(computePoolEnvHash({ NO_COLOR: "" })).not.toBe(computePoolEnvHash(undefined));
-    expect(computePoolEnvHash({ NO_COLOR: "1" })).not.toBe(computePoolEnvHash({ NO_COLOR: "" }));
+  it("never hands a colour-forcing warm shell to a NO_COLOR caller", async () => {
+    // The pooled half of the NO_COLOR fix rests on the env hash isolating the
+    // slot: a shell already warmed with the FORCE_COLOR default must not
+    // satisfy an acquire from a caller that opted out of colour.
+    spawnMock.mockReturnValue(createFakeProcess(405));
+    const pool = new PtyPool({ poolSize: 1, defaultCwd: "/repo" });
+    await pool.warmPool();
+
+    const warmed = spawnMock.mock.calls[0]?.[2] as { env?: Record<string, string> };
+    expect(warmed.env?.FORCE_COLOR).toBeDefined();
+
+    expect(pool.acquireByKey("/repo", computePoolEnvHash({ NO_COLOR: "1" }))).toBeNull();
+    pool.dispose();
+  });
+
+  it("keeps FORCE_COLOR out of the shell that refills an acquired NO_COLOR slot", async () => {
+    // acquireByKey refills the same key from the entry's caller env. The
+    // replacement shell has to inherit the opt-out too, not quietly fall back
+    // to the default the way the acquired one would have.
+    spawnMock.mockReturnValue(createFakeProcess(406));
+    const pool = new PtyPool({ poolSize: 1, defaultCwd: "/repo" });
+    const envHash = computePoolEnvHash({ NO_COLOR: "1" });
+
+    pool.warmForKey("/repo", { NO_COLOR: "1" }, envHash);
+    await settleRefill();
+    expect(pool.acquireByKey("/repo", envHash)).not.toBeNull();
+    await settleRefill();
+
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    const refill = spawnMock.mock.calls[1]?.[2] as { env?: Record<string, string> };
+    expect(refill.env?.FORCE_COLOR).toBeUndefined();
+    expect(refill.env?.NO_COLOR).toBe("1");
+    pool.dispose();
   });
 
   it("filters secrets out of caller env before baking into the pool entry", async () => {

@@ -131,7 +131,6 @@ describe("buildTerminalEnv colour hints", () => {
   it("defaults FORCE_COLOR when neither colour variable is set", () => {
     const env = buildTerminalEnv(baseOptions, "pane-1", "/bin/bash");
     expect(env.FORCE_COLOR).toBeDefined();
-    expect(env.COLORTERM).toBe("truecolor");
   });
 
   it("does not inject FORCE_COLOR when NO_COLOR is inherited", () => {

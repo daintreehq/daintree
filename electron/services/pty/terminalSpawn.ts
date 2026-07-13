@@ -109,8 +109,9 @@ export function buildTerminalEnv(
   // FORCE_COLOR first and short-circuit, so injecting it would override the
   // user's stated preference and make Node print "NO_COLOR is ignored because
   // FORCE_COLOR is set" in every terminal. Presence — not truthiness — is the
-  // test, so `NO_COLOR=` is honoured too. COLORTERM is unaffected: it only
-  // selects depth once colour is already on, and never forces it.
+  // test, so `NO_COLOR=` is honoured too. COLORTERM stays unconditional: it
+  // feeds depth detection behind NO_COLOR's own check, so it cannot resurrect
+  // colour the user opted out of.
   if (mergedEnv.NO_COLOR === undefined) {
     mergedEnv.FORCE_COLOR = mergedEnv.FORCE_COLOR ?? "3";
   }
