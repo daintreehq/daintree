@@ -48,6 +48,36 @@ export function isRescuableKeystroke(e: KeyboardEvent): boolean {
 const EDITABLE_TAGS = new Set(["INPUT", "TEXTAREA", "SELECT"]);
 
 /**
+ * Composite widgets that consume bare printable keys for typeahead / quick-nav
+ * — a focused menu item eats "r" to jump to the first item starting with "r".
+ * Stealing those keys would break menu, listbox and combobox navigation.
+ */
+const TYPEAHEAD_ROLES = [
+  '[role="menu"]',
+  '[role="menubar"]',
+  '[role="listbox"]',
+  '[role="combobox"]',
+  '[role="tree"]',
+  '[role="treegrid"]',
+  '[role="grid"]',
+  '[role="tablist"]',
+].join(",");
+
+/**
+ * The element the keystroke actually landed on.
+ *
+ * `document.activeElement` retargets to the shadow *host* when focus is inside
+ * a shadow root, which would make a focused shadow-DOM input look like nothing
+ * is focused — and the rescue would steal its keystroke. The event's composed
+ * path starts at the true focused node, across shadow boundaries.
+ */
+export function getFocusTarget(e: KeyboardEvent): Element | null {
+  const leaf = e.composedPath()[0];
+  if (leaf instanceof Element) return leaf;
+  return document.activeElement;
+}
+
+/**
  * Is the current focus somewhere that legitimately owns the keystroke?
  *
  * "Useful" is deliberately broad: anything that could plausibly be consuming
@@ -79,6 +109,11 @@ export function hasUsefulFocus(el: Element | null): boolean {
   if (el.closest(".xterm") !== null) return true;
   // The hybrid editor itself, focused but not yet reporting contentEditable.
   if (el.closest("[data-hybrid-input-root]") !== null) return true;
+  // Menus, listboxes and comboboxes use bare letters for typeahead.
+  if (el.closest(TYPEAHEAD_ROLES) !== null) return true;
+  // A custom element with a shadow root may host its own focused input that we
+  // cannot see from here — refuse rather than risk swallowing its keystroke.
+  if (el.shadowRoot !== null) return true;
 
   return false;
 }
@@ -105,8 +140,16 @@ export interface RescueContext {
   panelIds: string[];
   /** `terminalId` of the last agent the user actually typed into, if any. */
   lastTypedTerminalId: string | null;
-  /** Panels that cannot currently accept a draft (locked, restarting, mid-voice-submit). */
-  unavailableTerminalIds: ReadonlySet<string>;
+  /** Panels mid-voice-submit: the editor is read-only and submits asynchronously. */
+  voiceSubmittingIds: ReadonlySet<string>;
+  /**
+   * The global hybrid-input setting. With it off, `shouldShowHybridInputBar`
+   * renders no draft bar for ANY panel — routing a character into a draft
+   * nothing displays would silently eat it, which is the exact bug being fixed.
+   */
+  hybridInputEnabled: boolean;
+  /** False while the PTY backend is disconnected or recovering — every editor is disabled then. */
+  isBackendReady: boolean;
 }
 
 /**
@@ -125,15 +168,30 @@ export interface RescueContext {
  *     with one agent there is nothing to guess between, and this is precisely
  *     the first-use case the feature exists to serve.
  *  4. Zero or multiple candidates with no history: refuse.
+ *
+ * A target is only routable if its draft would actually be *visible and
+ * editable*. Routing into a bar that is switched off, disabled, locked or
+ * restarting would drop the character into an invisible draft — the same
+ * silent loss the rescue exists to prevent, just one layer deeper.
  */
 export function resolveRescueTarget(ctx: RescueContext): string | null {
+  // Both of these disable every agent's editor at once, so there is no target
+  // worth resolving.
+  if (!ctx.hybridInputEnabled) return null;
+  if (!ctx.isBackendReady) return null;
+
   const isRoutable = (id: string): boolean => {
-    if (ctx.unavailableTerminalIds.has(id)) return false;
+    if (ctx.voiceSubmittingIds.has(id)) return false;
     const panel = ctx.panelsById[id];
     // Agent identity + live PTY + grid location. Excludes raw shells (no agent
     // identity — routing a draft there would execute on Enter against a shell),
     // exited panels, and dock/background panels.
-    return isAgentFleetActionEligible(panel);
+    if (!isAgentFleetActionEligible(panel)) return false;
+    // Mirrors `isHybridInputDisabled` in TerminalPane: a locked or restarting
+    // editor is read-only, and focus would fall back to the raw xterm.
+    if (panel.isInputLocked === true) return false;
+    if (panel.isRestarting === true) return false;
+    return true;
   };
 
   if (ctx.lastTypedTerminalId !== null) {

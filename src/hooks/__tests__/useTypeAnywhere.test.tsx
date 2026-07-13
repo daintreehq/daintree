@@ -13,6 +13,7 @@ let panelState: {
   panelsById: Record<string, PanelInstance>;
   panelIds: string[];
   maximizedId: string | null;
+  backendStatus: string;
 };
 let armedIds: Set<string>;
 let screenReaderEnabled: boolean;
@@ -81,7 +82,12 @@ function agentPanel(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanel
 function setPanels(panels: PanelInstance[], maximizedId: string | null = null) {
   const panelsById: Record<string, PanelInstance> = {};
   for (const p of panels) panelsById[p.id] = p;
-  panelState = { panelsById, panelIds: panels.map((p) => p.id), maximizedId };
+  panelState = {
+    panelsById,
+    panelIds: panels.map((p) => p.id),
+    maximizedId,
+    backendStatus: "connected",
+  };
 }
 
 /** Dispatch a keydown as the browser would: at the window, in capture phase. */
@@ -115,6 +121,7 @@ describe("useTypeAnywhere", () => {
       externalDraftRevision: 0,
       lastTypedAgentTarget: null,
       voiceSubmittingPanels: new Set(),
+      hybridInputEnabled: true,
     });
     useTypingLocatorStore.setState({ label: null, revision: 0 });
   });
@@ -214,6 +221,31 @@ describe("useTypeAnywhere", () => {
       expect(draftOf("a1")).toBe("h");
     });
 
+    it("refuses when the hybrid input bar is switched off — the draft would be invisible", () => {
+      // With the setting off no agent renders a draft bar, so a routed character
+      // would land in a store nothing displays: the same silent loss, one layer
+      // deeper. Refusing lets the key fall through untouched instead.
+      useTerminalInputStore.setState({ hybridInputEnabled: false });
+      renderHook(() => useTypeAnywhere());
+
+      const e = press("h");
+
+      expect(e.defaultPrevented).toBe(false);
+      expect(draftOf("a1")).toBe("");
+      expect(setFocused).not.toHaveBeenCalled();
+    });
+
+    it("refuses while the PTY backend is down", () => {
+      setPanels([agentPanel("a1")]);
+      panelState.backendStatus = "recovering";
+      renderHook(() => useTypeAnywhere());
+
+      const e = press("h");
+
+      expect(e.defaultPrevented).toBe(false);
+      expect(draftOf("a1")).toBe("");
+    });
+
     it("refuses when a screen reader is active — single letters are quick-nav keys", () => {
       screenReaderEnabled = true;
       renderHook(() => useTypeAnywhere());
@@ -250,6 +282,29 @@ describe("useTypeAnywhere", () => {
       renderHook(() => useTypeAnywhere());
 
       const e = press("h");
+
+      expect(e.defaultPrevented).toBe(false);
+      expect(draftOf("a1")).toBe("");
+    });
+
+    it("leaves menu typeahead alone", () => {
+      // An open menu consumes bare letters to jump between items. Stealing "h"
+      // would break navigation and silently append it to an agent draft.
+      document.body.innerHTML = `
+        <div role="menu"><div id="mi" role="menuitem" tabindex="-1">Hide</div></div>`;
+      const item = document.getElementById("mi");
+      item?.focus();
+      renderHook(() => useTypeAnywhere());
+
+      const e = new KeyboardEvent("keydown", {
+        key: "h",
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+      });
+      act(() => {
+        item?.dispatchEvent(e);
+      });
 
       expect(e.defaultPrevented).toBe(false);
       expect(draftOf("a1")).toBe("");

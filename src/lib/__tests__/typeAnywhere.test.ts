@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
 import {
   findPanelIdForElement,
+  getFocusTarget,
   hasBlockingOverlay,
   hasUsefulFocus,
   isRescuableKeystroke,
@@ -47,14 +48,19 @@ function agentPanel(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanel
   };
 }
 
-function makeContext(panels: PanelInstance[], overrides: Partial<RescueContext> = {}) {
+function makeContext(
+  panels: PanelInstance[],
+  overrides: Partial<RescueContext> = {}
+): RescueContext {
   const panelsById: Record<string, PanelInstance> = {};
   for (const p of panels) panelsById[p.id] = p;
   return {
     panelsById,
     panelIds: panels.map((p) => p.id),
     lastTypedTerminalId: null,
-    unavailableTerminalIds: new Set<string>(),
+    voiceSubmittingIds: new Set<string>(),
+    hybridInputEnabled: true,
+    isBackendReady: true,
     ...overrides,
   };
 }
@@ -151,6 +157,62 @@ describe("hasUsefulFocus", () => {
     document.body.innerHTML = `<div id="v" tabindex="0" class="file-viewer"></div>`;
     expect(hasUsefulFocus(document.getElementById("v"))).toBe(false);
   });
+
+  it("treats a menu item as useful — menus use bare letters for typeahead", () => {
+    // Typing "r" in an open menu jumps to the first item starting with "r".
+    // Rescuing it would break menu navigation and append "r" to an agent draft.
+    document.body.innerHTML = `
+      <div role="menu"><div id="mi" role="menuitem" tabindex="-1">Rename</div></div>`;
+    expect(hasUsefulFocus(document.getElementById("mi"))).toBe(true);
+  });
+
+  it("treats a listbox option as useful", () => {
+    document.body.innerHTML = `
+      <div role="listbox"><div id="opt" role="option" tabindex="-1">One</div></div>`;
+    expect(hasUsefulFocus(document.getElementById("opt"))).toBe(true);
+  });
+
+  it("treats a shadow host as useful — it may own a focused input we cannot see", () => {
+    const host = document.createElement("div");
+    host.attachShadow({ mode: "open" });
+    document.body.appendChild(host);
+    expect(hasUsefulFocus(host)).toBe(true);
+  });
+});
+
+describe("getFocusTarget", () => {
+  beforeEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("returns the real focused node inside a shadow root, not the host", () => {
+    // `document.activeElement` retargets to the host, which would make a focused
+    // shadow-DOM input look inert and get its keystroke stolen. The composed path
+    // is only live *during* dispatch, which is exactly when the listener reads it.
+    const host = document.createElement("div");
+    const shadow = host.attachShadow({ mode: "open" });
+    const input = document.createElement("input");
+    shadow.appendChild(input);
+    document.body.appendChild(host);
+    input.focus();
+
+    let seen: Element | null = null;
+    const listener = (ev: Event) => {
+      seen = getFocusTarget(ev as KeyboardEvent);
+    };
+    window.addEventListener("keydown", listener, { capture: true });
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true, composed: true }));
+    window.removeEventListener("keydown", listener, { capture: true });
+
+    expect(seen).toBe(input);
+    expect(hasUsefulFocus(seen)).toBe(true);
+  });
+
+  it("falls back to the active element when the path carries no element", () => {
+    // A window-level dispatch puts `window` at the head of the path.
+    const e = new KeyboardEvent("keydown", { key: "a" });
+    expect(getFocusTarget(e)).toBe(document.body);
+  });
 });
 
 describe("hasBlockingOverlay", () => {
@@ -204,8 +266,34 @@ describe("resolveRescueTarget", () => {
     // never chose — the precise harm the issue is about.
     const ctx = makeContext([agentPanel("a1"), agentPanel("a2")], {
       lastTypedTerminalId: "a2",
-      unavailableTerminalIds: new Set(["a2"]),
+      voiceSubmittingIds: new Set(["a2"]),
     });
+    expect(resolveRescueTarget(ctx)).toBeNull();
+  });
+
+  /**
+   * If the draft the character lands in isn't visible and editable, the rescue
+   * has merely moved the silent-loss bug one layer deeper.
+   */
+  it("refuses when the hybrid input bar is switched off globally — no draft would render", () => {
+    const ctx = makeContext([agentPanel("a1")], { hybridInputEnabled: false });
+    expect(resolveRescueTarget(ctx)).toBeNull();
+  });
+
+  it("refuses while the PTY backend is down — every editor is disabled", () => {
+    const ctx = makeContext([agentPanel("a1")], { isBackendReady: false });
+    expect(resolveRescueTarget(ctx)).toBeNull();
+  });
+
+  it("refuses a locked target, and does not fall through to another agent", () => {
+    const ctx = makeContext([agentPanel("a1"), agentPanel("a2", { isInputLocked: true })], {
+      lastTypedTerminalId: "a2",
+    });
+    expect(resolveRescueTarget(ctx)).toBeNull();
+  });
+
+  it("refuses a restarting target", () => {
+    const ctx = makeContext([agentPanel("a1", { isRestarting: true })]);
     expect(resolveRescueTarget(ctx)).toBeNull();
   });
 

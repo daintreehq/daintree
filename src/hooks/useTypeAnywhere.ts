@@ -12,6 +12,7 @@ import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
 import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 import {
   findPanelIdForElement,
+  getFocusTarget,
   hasBlockingOverlay,
   hasUsefulFocus,
   isRescuableKeystroke,
@@ -74,7 +75,9 @@ export function useTypeAnywhere(): void {
       if (hasBlockingOverlay()) return;
       if (usePaletteStore.getState().activePaletteId !== null) return;
 
-      const active = document.activeElement;
+      // Not `document.activeElement`: it retargets to the shadow host, which
+      // would make a focused shadow-DOM input look inert and get its key stolen.
+      const active = getFocusTarget(e);
       const panelStore = usePanelStore.getState();
 
       // --- Locate: focus is in a real terminal that has scrolled away ---
@@ -123,7 +126,9 @@ export function useTypeAnywhere(): void {
         panelsById: panelStore.panelsById,
         panelIds: panelStore.panelIds,
         lastTypedTerminalId,
-        unavailableTerminalIds: inputStore.voiceSubmittingPanels,
+        voiceSubmittingIds: inputStore.voiceSubmittingPanels,
+        hybridInputEnabled: inputStore.hybridInputEnabled,
+        isBackendReady: panelStore.backendStatus === "connected",
       });
       if (targetId === null) return;
 
