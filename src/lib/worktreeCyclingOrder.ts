@@ -21,6 +21,7 @@ import {
 import { parseExactNumber } from "@/lib/parseExactNumber";
 import { isTerminalVisible } from "@/lib/terminalVisibility";
 import { isAgentTerminal } from "@/utils/terminalType";
+import { isValidPastTimestamp } from "@/utils/timestamps";
 
 function normalizeSnapshot(snap: WorktreeSnapshot): WorktreeState {
   return {
@@ -145,6 +146,7 @@ export function getVisibleWorktreesForCycling(
   const devServerSessions = useWorktreeDevServerStore.getState().sessionsByWorktreeId;
 
   const viewState = getCurrentViewStore().getState();
+  const now = Date.now();
   const rawWorktrees = Array.from(viewState.worktrees.values())
     .map(normalizeSnapshot)
     // Pre-sort to match `useWorktrees()` so the fallback main worktree
@@ -153,8 +155,12 @@ export function getVisibleWorktreesForCycling(
     .sort((a, b) => {
       if (a.isMainWorktree && !b.isMainWorktree) return -1;
       if (!a.isMainWorktree && b.isMainWorktree) return 1;
-      const timeA = a.lastActivityTimestamp ?? 0;
-      const timeB = b.lastActivityTimestamp ?? 0;
+      const timeA = isValidPastTimestamp(a.lastActivityTimestamp, now)
+        ? a.lastActivityTimestamp
+        : 0;
+      const timeB = isValidPastTimestamp(b.lastActivityTimestamp, now)
+        ? b.lastActivityTimestamp
+        : 0;
       if (timeA !== timeB) return timeB - timeA;
       return compareWorktreeNames(a.name, b.name);
     });

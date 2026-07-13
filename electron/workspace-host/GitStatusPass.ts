@@ -29,9 +29,35 @@ const PLAN_FILE_CANDIDATES = ["TODO.md", "PLAN.md", "plan.md", "TASKS.md"] as co
 // AbortSignal so the syscall is actually cancelled, not merely abandoned.
 const FS_OP_TIMEOUT_MS = 5_000;
 
-// FNV-1a 32-bit offset basis. Also the digest of an empty change list, which
-// makes it the natural initial value for `previousStateHash` (see below).
+// FNV-1a 32-bit offset basis and initial state for the status digest.
 const FNV_OFFSET_BASIS = 0x811c9dc5;
+
+function isValidActivityTimestamp(value: unknown, now: number): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 && value <= now;
+}
+
+function deriveActivityTimestamp(changes: WorktreeChanges, now: number): number | null {
+  const candidates: number[] = [];
+
+  if (isValidActivityTimestamp(changes.lastCommitTimestampMs, now)) {
+    candidates.push(changes.lastCommitTimestampMs);
+  }
+
+  if (changes.changedFileCount > 0) {
+    if (isValidActivityTimestamp(changes.latestFileMtime, now)) {
+      candidates.push(changes.latestFileMtime);
+    }
+    for (const change of changes.changes) {
+      if (isValidActivityTimestamp(change.mtimeMs, now)) {
+        candidates.push(change.mtimeMs);
+      } else if (isValidActivityTimestamp(change.mtime, now)) {
+        candidates.push(change.mtime);
+      }
+    }
+  }
+
+  return candidates.length > 0 ? Math.max(...candidates) : null;
+}
 
 export interface GitStatusPassHost {
   readonly id: string;
@@ -347,6 +373,8 @@ export class GitStatusPass {
 
       const currentHash = this.calculateStateHash(newChanges);
       const stateChanged = currentHash !== this.previousStateHash;
+      const nextActivityTimestamp = deriveActivityTimestamp(newChanges, Date.now());
+      const activityChanged = nextActivityTimestamp !== this.activityTimestamp;
       const noteChanged =
         noteData?.content !== this.noteContent || noteData?.timestamp !== this.noteTimestamp;
       const planChanged =
@@ -366,6 +394,7 @@ export class GitStatusPass {
 
       const anythingChanged =
         stateChanged ||
+        activityChanged ||
         noteChanged ||
         branchChanged ||
         planChanged ||
@@ -388,21 +417,9 @@ export class GitStatusPass {
         return;
       }
 
-      // True on initial load OR while the tree has stayed clean — the two are
-      // deliberately indistinguishable (legacy ""-hash semantics).
-      const isInitialLoad = this.previousStateHash === FNV_OFFSET_BASIS;
+      const isInitialLoad = !this.host.hasInitialStatus;
       const isNowClean = newChanges.changedFileCount === 0;
-      const hasPendingChanges = newChanges.changedFileCount > 0;
-      const shouldUpdateTimestamp =
-        (stateChanged && !isInitialLoad) || (isInitialLoad && hasPendingChanges);
-
-      if (shouldUpdateTimestamp) {
-        this.activityTimestamp = Date.now();
-      }
-
-      if (isInitialLoad && isNowClean && this.activityTimestamp === null) {
-        this.activityTimestamp = newChanges.lastCommitTimestampMs ?? null;
-      }
+      this.activityTimestamp = nextActivityTimestamp;
 
       if (
         isNowClean ||
@@ -539,10 +556,22 @@ export class GitStatusPass {
   // (~1 in 2^32 per state pair) suppresses the change event until the next
   // non-colliding state or a forced refresh.
   private calculateStateHash(changes: WorktreeChanges): number {
-    const hashInput = changes.changes
-      .map((c) => `${c.path}:${c.status}:${c.insertions ?? 0}:${c.deletions ?? 0}`)
-      .sort()
-      .join("|");
+    const fileState = changes.changes
+      .map(
+        (c) =>
+          `${c.path}:${c.status}:${c.insertions ?? 0}:${c.deletions ?? 0}:${String(c.mtimeMs ?? c.mtime ?? "")}`
+      )
+      .sort();
+    if (changes.changedFileCount > 0 && changes.latestFileMtime !== undefined) {
+      fileState.push(`latest-file-mtime:${String(changes.latestFileMtime)}`);
+    }
+    if (changes.lastCommitTimestampMs !== undefined) {
+      fileState.push(`last-commit-time:${String(changes.lastCommitTimestampMs)}`);
+    }
+    if (changes.lastCommitMessage !== undefined) {
+      fileState.push(`last-commit-message:${changes.lastCommitMessage}`);
+    }
+    const hashInput = fileState.join("|");
     let hash = FNV_OFFSET_BASIS;
     for (let i = 0; i < hashInput.length; i++) {
       hash = Math.imul(hash ^ hashInput.charCodeAt(i), 0x01000193) >>> 0;

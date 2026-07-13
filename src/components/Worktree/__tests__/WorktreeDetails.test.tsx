@@ -31,6 +31,7 @@ vi.mock("../FileDiffModal", () => ({
 
 const noop = () => {};
 const noopAsync = async () => {};
+const TEST_NOW = new Date("2025-06-15T12:00:00Z").getTime();
 
 const baseWorktree: WorktreeState = {
   id: "wt",
@@ -47,11 +48,11 @@ const baseWorktree: WorktreeState = {
     deletions: 0,
     changes: [],
     rootPath: "",
-    lastCommitTimestampMs: Date.now() - 120_000,
+    lastCommitTimestampMs: TEST_NOW - 120_000,
     lastCommitAuthor: { name: "Jane Doe", email: "jane@example.com" },
     lastCommitMessage: "fix: stuff",
   } as WorktreeChanges,
-  lastActivityTimestamp: Date.now() - 120_000,
+  lastActivityTimestamp: TEST_NOW - 120_000,
 };
 
 const baseProps: WorktreeDetailsProps = {
@@ -76,7 +77,7 @@ function renderDetails(overrides: Partial<WorktreeDetailsProps> = {}) {
 describe("WorktreeDetails last-active line", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date("2025-06-15T12:00:00Z").getTime());
+    vi.setSystemTime(TEST_NOW);
   });
 
   afterEach(() => {
@@ -112,6 +113,48 @@ describe("WorktreeDetails last-active line", () => {
     };
     const { container } = renderDetails({ worktree });
     expect(screen.getByText("Last active")).toBeDefined();
+    expect(container.querySelector("img")).toBeNull();
+  });
+
+  it("does not attribute file activity to the last commit author", () => {
+    const worktree: WorktreeState = {
+      ...baseWorktree,
+      lastActivityTimestamp: TEST_NOW - 60_000,
+    };
+    const { container } = renderDetails({ worktree, lastActivityTimestamp: TEST_NOW - 60_000 });
+
+    expect(screen.getByRole("group", { name: "Last activity" }).textContent).toContain("1m");
+    expect(screen.queryByText("Jane Doe")).toBeNull();
+    expect(container.querySelector("img")).toBeNull();
+  });
+
+  it("falls back to the commit time and author when activity is absent", () => {
+    const worktree: WorktreeState = { ...baseWorktree, lastActivityTimestamp: null };
+    const { container } = renderDetails({ worktree, lastActivityTimestamp: null });
+
+    expect(screen.getByRole("group", { name: "Last activity" }).textContent).toContain("2m");
+    expect(screen.getByText("Jane Doe")).toBeDefined();
+    expect(container.querySelector("img")).not.toBeNull();
+  });
+
+  it("renders activity without commit attribution in a repository with no commit", () => {
+    const worktree: WorktreeState = {
+      ...baseWorktree,
+      worktreeChanges: {
+        ...baseWorktree.worktreeChanges,
+        worktreeId: "wt",
+        rootPath: "",
+        changedFileCount: 0,
+        changes: [],
+        lastCommitTimestampMs: undefined,
+        lastCommitAuthor: undefined,
+        lastCommitMessage: undefined,
+      } satisfies WorktreeChanges,
+      lastActivityTimestamp: TEST_NOW - 60_000,
+    };
+    const { container } = renderDetails({ worktree, lastActivityTimestamp: TEST_NOW - 60_000 });
+
+    expect(screen.getByRole("group", { name: "Last activity" }).textContent).toContain("1m");
     expect(container.querySelector("img")).toBeNull();
   });
 });

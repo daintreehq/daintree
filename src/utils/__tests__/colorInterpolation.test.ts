@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { getActivityColor } from "../colorInterpolation";
+import { ACTIVITY_HOLD_DURATION, DECAY_DURATION, getActivityColor } from "../colorInterpolation";
 
 describe("getActivityColor", () => {
   beforeEach(() => {
@@ -19,9 +19,11 @@ describe("getActivityColor", () => {
     expect(getActivityColor(undefined)).toBe("#52525b");
   });
 
-  it("returns idle color for non-finite timestamp", () => {
+  it("returns idle color for invalid timestamps", () => {
     expect(getActivityColor(Infinity)).toBe("#52525b");
     expect(getActivityColor(NaN)).toBe("#52525b");
+    expect(getActivityColor(0)).toBe("#52525b");
+    expect(getActivityColor(-1)).toBe("#52525b");
   });
 
   it("returns 100% accent at t=0 (immediate activity)", () => {
@@ -30,25 +32,31 @@ describe("getActivityColor", () => {
     expect(getActivityColor(now)).toBe("color-mix(in oklab, #22c55e 100%, #52525b)");
   });
 
-  it("clamps future timestamps to 100% accent (elapsed < 0)", () => {
+  it("rejects future timestamps", () => {
     const now = Date.now();
     vi.setSystemTime(now);
-    expect(getActivityColor(now + 5_000)).toBe("color-mix(in oklab, #22c55e 100%, #52525b)");
+    expect(getActivityColor(now + 5_000)).toBe("#52525b");
   });
 
-  it("returns ~50% mix at midpoint (45s)", () => {
+  it("holds the full working colour through the initial window", () => {
     const start = Date.now();
-    vi.setSystemTime(start + 45_000);
+    vi.setSystemTime(start + ACTIVITY_HOLD_DURATION);
+    expect(getActivityColor(start)).toBe("color-mix(in oklab, #22c55e 100%, #52525b)");
+  });
+
+  it("returns an even mix at the midpoint of the fade window", () => {
+    const start = Date.now();
+    vi.setSystemTime(start + (ACTIVITY_HOLD_DURATION + DECAY_DURATION) / 2);
     const result = getActivityColor(start);
     expect(result).toBe("color-mix(in oklab, #22c55e 50%, #52525b)");
   });
 
-  it("returns idle color at or beyond 90 seconds", () => {
+  it("returns idle color at or beyond the idle boundary", () => {
     const start = Date.now();
-    vi.setSystemTime(start + 90_000);
+    vi.setSystemTime(start + DECAY_DURATION);
     expect(getActivityColor(start)).toBe("#52525b");
 
-    vi.setSystemTime(start + 120_000);
+    vi.setSystemTime(start + DECAY_DURATION * 2);
     expect(getActivityColor(start)).toBe("#52525b");
   });
 
@@ -65,7 +73,7 @@ describe("getActivityColor", () => {
     vi.setSystemTime(now);
     expect(getActivityColor(now)).toBe("color-mix(in oklab, #aabbcc 100%, #112233)");
 
-    vi.setSystemTime(now + 120_000);
+    vi.setSystemTime(now + DECAY_DURATION);
     expect(getActivityColor(now)).toBe("#112233");
   });
 });

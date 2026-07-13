@@ -100,6 +100,7 @@ export interface WorktreeSnapshot {
   summary?: string;
   modifiedCount?: number;
   mood?: WorktreeMood;
+  /** Most recent valid dirty-file modification time or HEAD committer time (milliseconds since epoch) */
   lastActivityTimestamp?: number | null;
   createdAt?: number;
   aiNote?: string;

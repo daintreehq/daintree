@@ -359,7 +359,7 @@ describe("WorktreeDetailsSection — reviewState surfaces", () => {
   });
 });
 
-describe("WorktreeDetailsSection commit chip (collapsed row)", () => {
+describe("WorktreeDetailsSection activity chip (collapsed row)", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2025-06-15T12:00:00Z").getTime());
@@ -384,30 +384,30 @@ describe("WorktreeDetailsSection commit chip (collapsed row)", () => {
     };
   }
 
-  it("renders the commit time but never an avatar in the row", () => {
+  it("renders the canonical activity time but never an avatar in the row", () => {
     const { container } = renderSection({ worktree: withCommit({}), hasChanges: false });
     expect(container.textContent).toContain("2m");
-    // The committer's face lives in the hover tooltip, not the row.
     expect(container.querySelector("img")).toBeNull();
-    expect(screen.getByLabelText("Last commit by Jane Doe")).toBeDefined();
+    expect(screen.getByRole("group", { name: "Last activity" })).toBeDefined();
   });
 
-  it("labels the chip generically when the author is absent", () => {
+  it("uses activity-focused accessible naming regardless of commit author", () => {
     renderSection({ worktree: withCommit({ lastCommitAuthor: undefined }), hasChanges: false });
-    expect(screen.getByLabelText("Last commit")).toBeDefined();
+    expect(screen.getByRole("group", { name: "Last activity" })).toBeDefined();
   });
 
-  it("renders the activity dot when lastActivityTimestamp is recent", () => {
+  it("drives both the dot and visible time from a recent activity timestamp", () => {
     renderSection({ worktree: withCommit({}, Date.now()), hasChanges: false });
-    const chip = screen.getByLabelText("Last commit by Jane Doe");
+    const chip = screen.getByRole("group", { name: "Last activity" });
     expect(chip.querySelector("div[aria-hidden='true']")).not.toBeNull();
+    expect(chip.textContent).toBe("now");
   });
 
-  it("omits the activity dot when there is no activity timestamp", () => {
+  it("uses the commit as a defensive activity fallback", () => {
     renderSection({ worktree: withCommit({}, null), hasChanges: false });
-    const chip = screen.getByLabelText("Last commit by Jane Doe");
-    expect(chip.querySelector("div[aria-hidden='true']")).toBeNull();
-    expect(chip.textContent).toContain("2m");
+    const chip = screen.getByRole("group", { name: "Last activity" });
+    expect(chip.querySelector("div[aria-hidden='true']")).not.toBeNull();
+    expect(chip.textContent).toBe("2m");
   });
 
   it("never paints an agent icon in the row, even for an agent committer", () => {
@@ -419,19 +419,29 @@ describe("WorktreeDetailsSection commit chip (collapsed row)", () => {
     expect(container.querySelector("img")).toBeNull();
   });
 
-  it("omits the chip entirely when lastCommitTimestampMs is absent", () => {
+  it("renders activity for a worktree with no commit", () => {
     const worktree: WorktreeState = { ...baseWorktree, lastActivityTimestamp: Date.now() };
     renderSection({ worktree, hasChanges: false });
-    expect(screen.queryByLabelText(/Last commit/)).toBeNull();
+    expect(screen.getByRole("group", { name: "Last activity" }).textContent).toBe("now");
   });
 
-  it("omits the chip when lastCommitTimestampMs is NaN", () => {
+  it("omits the chip when neither activity nor commit timestamp is valid", () => {
     const { container } = renderSection({
       worktree: withCommit({ lastCommitTimestampMs: Number.NaN }),
       hasChanges: false,
     });
-    expect(screen.queryByLabelText(/Last commit/)).toBeNull();
+    expect(screen.queryByRole("group", { name: "Last activity" })).toBeNull();
     expect(container.textContent).not.toContain("NaN");
+  });
+
+  it("falls back to a valid commit when the activity timestamp is invalid", () => {
+    renderSection({ worktree: withCommit({}, Number.NaN), hasChanges: false });
+    expect(screen.getByRole("group", { name: "Last activity" }).textContent).toBe("2m");
+  });
+
+  it("rejects a future activity timestamp and falls back to the commit", () => {
+    renderSection({ worktree: withCommit({}, Date.now() + 60_000), hasChanges: false });
+    expect(screen.getByRole("group", { name: "Last activity" }).textContent).toBe("2m");
   });
 
   it("removes the standalone 'No activity' placeholder", () => {

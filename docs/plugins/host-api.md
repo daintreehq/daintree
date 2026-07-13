@@ -296,6 +296,8 @@ interface PluginWorktreeLinkedPR {
 
 `linked` is a provider-agnostic projection of the worktree's linked forge resources (issue and/or PR), or `null` when none is linked. It replaces the removed GitHub-shaped `issueNumber` / `issueTitle` / `prNumber` / `prUrl` / `prState` / `prTitle` fields — route through `linked.providerId` and the shared `ResourceRef` shape instead.
 
+`lastActivityTimestamp` is the canonical worktree activity time in milliseconds since the Unix epoch: the newer of HEAD's committer time and the newest currently dirty file's modification time. Invalid and future timestamps are ignored, and the field is `null` when neither source has a valid time.
+
 `status` is a changed-file / git-status projection of the worktree, or `null` when the host hasn't polled a status yet:
 
 ```ts

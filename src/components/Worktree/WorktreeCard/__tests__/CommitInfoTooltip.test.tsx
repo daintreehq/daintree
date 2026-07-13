@@ -96,4 +96,54 @@ describe("CommitInfoTooltip", () => {
     );
     expect(screen.getByText("Last active 2 minutes ago")).toBeDefined();
   });
+
+  it("renders activity detail when the repository has no commit", () => {
+    const { container } = render(
+      <CommitInfoTooltip lastActivityTimestamp={Date.now() - 120_000} />
+    );
+
+    expect(screen.getByText("Last active 2 minutes ago")).toBeDefined();
+    expect(screen.queryByText("Last commit")).toBeNull();
+    expect(container.querySelector("img")).toBeNull();
+  });
+
+  it("keeps commit detail when activity comes from a later file change", () => {
+    render(
+      <CommitInfoTooltip
+        lastCommitTimestampMs={Date.now() - 3_600_000}
+        author={human}
+        commitMessage="fix: preserve commit context"
+        lastActivityTimestamp={Date.now() - 120_000}
+      />
+    );
+
+    expect(screen.getByText("Jane Doe")).toBeDefined();
+    expect(screen.getByText("Committed 1 hour ago")).toBeDefined();
+    expect(screen.getByText("fix: preserve commit context")).toBeDefined();
+    expect(screen.getByText("Last active 2 minutes ago")).toBeDefined();
+  });
+
+  it("does not repeat activity detail when the commit is the activity source", () => {
+    const timestamp = Date.now() - 120_000;
+    render(
+      <CommitInfoTooltip
+        lastCommitTimestampMs={timestamp}
+        author={human}
+        lastActivityTimestamp={timestamp}
+      />
+    );
+
+    expect(screen.getByText("Committed 2 minutes ago")).toBeDefined();
+    expect(screen.queryByText(/Last active/)).toBeNull();
+  });
+
+  it("renders nothing when both timestamps are invalid", () => {
+    const { container } = render(
+      <CommitInfoTooltip
+        lastCommitTimestampMs={Number.NaN}
+        lastActivityTimestamp={Date.now() + 1}
+      />
+    );
+    expect(container.firstChild).toBeNull();
+  });
 });
