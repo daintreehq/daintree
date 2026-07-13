@@ -4,6 +4,7 @@ import {
   filterEnvironment,
   injectDaintreeMetadata,
   ensureUtf8Locale,
+  shouldInjectForceColor,
 } from "./EnvironmentFilter.js";
 import { getDefaultShell, getDefaultShellArgs } from "./terminalShell.js";
 import { computePoolEnvHash } from "./ptyPoolEnvHash.js";
@@ -103,17 +104,12 @@ export function buildTerminalEnv(
   );
 
   // Universal colour hints — xterm.js supports truecolor, and most CLIs
-  // (chalk, supports-color, termenv, ink) honour these.
-  //
-  // FORCE_COLOR yields to an inherited NO_COLOR: chalk/supports-color/ink read
-  // FORCE_COLOR first and short-circuit, so injecting it would override the
-  // user's stated preference and make Node print "NO_COLOR is ignored because
-  // FORCE_COLOR is set" in every terminal. Presence — not truthiness — is the
-  // test, so `NO_COLOR=` is honoured too. COLORTERM stays unconditional: it
-  // feeds depth detection behind NO_COLOR's own check, so it cannot resurrect
-  // colour the user opted out of.
-  if (mergedEnv.NO_COLOR === undefined) {
-    mergedEnv.FORCE_COLOR = mergedEnv.FORCE_COLOR ?? "3";
+  // (chalk, supports-color, termenv, ink) honour these. The FORCE_COLOR default
+  // yields to a NO_COLOR the user already set; see `shouldInjectForceColor`.
+  // COLORTERM stays unconditional: it feeds depth detection behind NO_COLOR's
+  // own check, so it cannot resurrect colour the user opted out of.
+  if (shouldInjectForceColor(mergedEnv)) {
+    mergedEnv.FORCE_COLOR = "3";
   }
   mergedEnv.COLORTERM = mergedEnv.COLORTERM ?? "truecolor";
 

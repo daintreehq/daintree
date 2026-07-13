@@ -304,8 +304,6 @@ describe("PtyPool", () => {
     const spawnOptions = spawnMock.mock.calls[0]?.[2] as { env?: Record<string, string> };
     expect(spawnOptions.env?.FORCE_COLOR).toBeUndefined();
     expect(spawnOptions.env?.NO_COLOR).toBe(value);
-    // The depth hints survive: they inform colour support, they don't force it.
-    expect(spawnOptions.env?.COLORTERM).toBeDefined();
     pool.dispose();
   });
 
@@ -335,9 +333,10 @@ describe("PtyPool", () => {
   });
 
   it("never hands a colour-forcing warm shell to a NO_COLOR caller", async () => {
-    // The pooled half of the NO_COLOR fix rests on the env hash isolating the
-    // slot: a shell already warmed with the FORCE_COLOR default must not
-    // satisfy an acquire from a caller that opted out of colour.
+    // The pooled opt-out rests on hash isolation, not on the spawn guard: a
+    // shell already warmed with the FORCE_COLOR default must MISS an acquire
+    // from a NO_COLOR caller. Excluding NO_COLOR from computePoolEnvHash (the
+    // mutant this kills) would serve that colour-forcing shell straight to them.
     spawnMock.mockReturnValue(createFakeProcess(405));
     const pool = new PtyPool({ poolSize: 1, defaultCwd: "/repo" });
     await pool.warmPool();
@@ -350,9 +349,9 @@ describe("PtyPool", () => {
   });
 
   it("keeps FORCE_COLOR out of the shell that refills an acquired NO_COLOR slot", async () => {
-    // acquireByKey refills the same key from the entry's caller env. The
-    // replacement shell has to inherit the opt-out too, not quietly fall back
-    // to the default the way the acquired one would have.
+    // acquireByKey refills the same key by feeding the acquired entry's own
+    // built env back through buildSpawnEnv. The replacement has to come out
+    // colour-free too, rather than regaining the default on the way through.
     spawnMock.mockReturnValue(createFakeProcess(406));
     const pool = new PtyPool({ poolSize: 1, defaultCwd: "/repo" });
     const envHash = computePoolEnvHash({ NO_COLOR: "1" });

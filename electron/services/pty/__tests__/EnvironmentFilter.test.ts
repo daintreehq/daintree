@@ -1,10 +1,51 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import {
   isSensitiveVar,
   filterEnvironment,
   injectDaintreeMetadata,
   ensureUtf8Locale,
+  shouldInjectForceColor,
 } from "../EnvironmentFilter.js";
+
+describe("shouldInjectForceColor", () => {
+  const realPlatform = process.platform;
+  const setPlatform = (platform: NodeJS.Platform) => {
+    Object.defineProperty(process, "platform", { value: platform, configurable: true });
+  };
+
+  afterEach(() => setPlatform(realPlatform));
+
+  it("injects when the env states no colour preference", () => {
+    setPlatform("darwin");
+    expect(shouldInjectForceColor({ TERM: "xterm-256color" })).toBe(true);
+  });
+
+  it("yields to NO_COLOR", () => {
+    setPlatform("darwin");
+    expect(shouldInjectForceColor({ NO_COLOR: "1" })).toBe(false);
+  });
+
+  it("yields to an empty NO_COLOR, which is still present", () => {
+    setPlatform("darwin");
+    expect(shouldInjectForceColor({ NO_COLOR: "" })).toBe(false);
+  });
+
+  it("leaves an explicit FORCE_COLOR for the caller to own", () => {
+    setPlatform("darwin");
+    expect(shouldInjectForceColor({ FORCE_COLOR: "0" })).toBe(false);
+  });
+
+  it("folds case on Windows, where the child resolves env names case-insensitively", () => {
+    setPlatform("win32");
+    expect(shouldInjectForceColor({ no_color: "1" })).toBe(false);
+    expect(shouldInjectForceColor({ Force_Color: "1" })).toBe(false);
+  });
+
+  it("keeps POSIX case-sensitive, where no_color is a different variable", () => {
+    setPlatform("linux");
+    expect(shouldInjectForceColor({ no_color: "1" })).toBe(true);
+  });
+});
 
 describe("isSensitiveVar", () => {
   describe("exact blocklist", () => {

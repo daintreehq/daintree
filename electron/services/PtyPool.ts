@@ -6,6 +6,7 @@ import {
   filterEnvironment,
   filterSensitiveOnly,
   ensureUtf8Locale,
+  shouldInjectForceColor,
 } from "./pty/EnvironmentFilter.js";
 import { POOL_ENV_EMPTY_HASH } from "./pty/ptyPoolEnvHash.js";
 import { isHostPerformanceCaptureEnabled, markHostPerformance } from "../utils/hostPerformance.js";
@@ -804,13 +805,12 @@ export class PtyPool {
     // TUI reliability: ensure rich terminal capabilities for Claude/Gemini CLIs.
     // Mirrors `buildTerminalEnv` so agent CLIs get the same color-rendering
     // hints whether they spawn fresh or come out of the pool — including its
-    // NO_COLOR guard: FORCE_COLOR wins over NO_COLOR downstream, so injecting
-    // the default would override an inherited or caller-supplied opt-out.
-    // A caller-supplied NO_COLOR keys its own pool slot (`computePoolEnvHash`
-    // hashes it), so a warm shell can never cross that boundary.
+    // NO_COLOR opt-out (#11118). A caller-supplied NO_COLOR keys its own pool
+    // slot (`computePoolEnvHash` hashes it), so a shell warmed with the
+    // FORCE_COLOR default can never be handed to a caller that opted out.
     filtered.TERM = "xterm-256color";
-    if (filtered.NO_COLOR === undefined) {
-      filtered.FORCE_COLOR = filtered.FORCE_COLOR ?? "3";
+    if (shouldInjectForceColor(filtered)) {
+      filtered.FORCE_COLOR = "3";
     }
     filtered.COLORTERM = "truecolor";
 
