@@ -8,11 +8,16 @@ import { registerPanelFocusHandler } from "@/components/Panel/panelFocusRegistry
 export interface ReviewPaneProps {
   id: string;
   worktreeId?: string;
+  onClose: (force?: boolean) => void;
 }
 
-const noop = () => {};
+export function ReviewPane({ id, worktreeId, onClose }: ReviewPaneProps) {
+  // ReviewHubContent wires its Close button as `onClick={onClose}`, so React
+  // would hand the MouseEvent straight through as `force` — a truthy object
+  // that routes the panel handler to permanent removal instead of the
+  // recoverable trash. Drop the argument here.
+  const handleContentClose = useCallback(() => onClose(), [onClose]);
 
-export function ReviewPane({ id, worktreeId }: ReviewPaneProps) {
   // Callback ref via useState so React re-renders once the container element
   // commits to the DOM. A plain useRef would freeze `current` at `null` for
   // the lifetime of the first render and `keyboardScope` would never receive
@@ -63,7 +68,7 @@ export function ReviewPane({ id, worktreeId }: ReviewPaneProps) {
       <ReviewHubContent
         isOpen={true}
         worktreePath={worktreePath}
-        onClose={noop}
+        onClose={handleContentClose}
         keyboardScope={containerEl ?? undefined}
       />
     </div>
