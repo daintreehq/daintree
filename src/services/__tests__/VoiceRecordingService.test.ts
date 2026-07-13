@@ -61,7 +61,7 @@ vi.mock("@/store/terminalInputStore", () => {
   const fns = {
     getDraftInput: vi.fn(() => ""),
     setDraftInput: vi.fn(),
-    bumpVoiceDraftRevision: vi.fn(),
+    bumpExternalDraftRevision: vi.fn(),
   };
   const getState = () => fns;
   return { useTerminalInputStore: Object.assign(getState, { getState }) };
@@ -1115,7 +1115,7 @@ describe("VoiceRecordingService — interim delta handling (#9172)", () => {
 
     // The interim path must not mutate the draft store — that's the entire fix.
     expect(inputStore.setDraftInput).not.toHaveBeenCalled();
-    expect(inputStore.bumpVoiceDraftRevision).not.toHaveBeenCalled();
+    expect(inputStore.bumpExternalDraftRevision).not.toHaveBeenCalled();
 
     __state.activeTarget = null;
   });
@@ -1171,7 +1171,7 @@ describe("VoiceRecordingService — interim delta handling (#9172)", () => {
     completeCallback!({ text: "hello world!" });
 
     expect(inputStore.setDraftInput).toHaveBeenCalledTimes(1);
-    expect(inputStore.bumpVoiceDraftRevision).toHaveBeenCalledTimes(1);
+    expect(inputStore.bumpExternalDraftRevision).toHaveBeenCalledTimes(1);
 
     voiceModule.__state.activeTarget = null;
     voiceModule.__state.panelBuffers = {};
@@ -1208,12 +1208,12 @@ describe("VoiceRecordingService — interim delta handling (#9172)", () => {
     // Defeat any cross-test fn-instance reuse (Vitest may keep top-level
     // mock factory closures across re-imports).
     (inputStore.setDraftInput as ReturnType<typeof vi.fn>).mockClear();
-    (inputStore.bumpVoiceDraftRevision as ReturnType<typeof vi.fn>).mockClear();
+    (inputStore.bumpExternalDraftRevision as ReturnType<typeof vi.fn>).mockClear();
 
     completeCallback!({ text: "   " });
 
     expect(inputStore.setDraftInput).not.toHaveBeenCalled();
-    expect(inputStore.bumpVoiceDraftRevision).not.toHaveBeenCalled();
+    expect(inputStore.bumpExternalDraftRevision).not.toHaveBeenCalled();
 
     voiceModule.__state.activeTarget = null;
     voiceModule.__state.panelBuffers = {};

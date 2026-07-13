@@ -23,6 +23,13 @@ interface UseContextDetectionParams {
   consumeExternalValueFlag: () => boolean;
   setActiveCompletionContext: Dispatch<SetStateAction<ActiveCompletionContext | null>>;
   setIsEditorFocused?: Dispatch<SetStateAction<boolean>>;
+  /**
+   * Fires once per update in which the user actually *typed* — `input.type`
+   * only, so paste, deletion, history navigation and programmatic writes are
+   * all excluded. Backs the type-anywhere rescue's "last agent typed to"
+   * notion (#11134), which must be typing, not focus.
+   */
+  onUserType?: () => void;
 }
 
 function contextsEqual(
@@ -46,6 +53,7 @@ export function useContextDetection({
   consumeExternalValueFlag,
   setActiveCompletionContext,
   setIsEditorFocused,
+  onUserType,
 }: UseContextDetectionParams) {
   // Route the listener body through a ref updated in an effect. The extension is
   // built once with a stable callback that reads handleUpdateRef at invocation
@@ -73,6 +81,10 @@ export function useContextDetection({
           const latest = latestRef.current;
           if (latest?.isInHistoryMode) {
             latest.resetHistoryIndex(latest.terminalId, latest.projectId);
+          }
+
+          if (update.transactions.some((tr) => tr.isUserEvent("input.type"))) {
+            onUserType?.();
           }
 
           const isUserChange = update.transactions.some(

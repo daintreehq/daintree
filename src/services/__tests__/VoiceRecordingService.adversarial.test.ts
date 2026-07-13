@@ -114,7 +114,7 @@ const runtime = vi.hoisted(() => ({
   terminalInputFns: {
     getDraftInput: vi.fn<(panelId: string, projectId?: string) => string>(),
     setDraftInput: vi.fn<(panelId: string, value: string, projectId?: string) => void>(),
-    bumpVoiceDraftRevision: vi.fn<() => void>(),
+    bumpExternalDraftRevision: vi.fn<() => void>(),
   },
   statusListeners: new Set<VoiceStatusCallback>(),
   errorListeners: new Set<VoiceErrorCallback>(),
@@ -253,7 +253,7 @@ function resetRuntime(): void {
   runtime.terminalInputFns.setDraftInput.mockImplementation((panelId, value) => {
     runtime.drafts[panelId] = value;
   });
-  runtime.terminalInputFns.bumpVoiceDraftRevision.mockImplementation(() => undefined);
+  runtime.terminalInputFns.bumpExternalDraftRevision.mockImplementation(() => undefined);
 
   runtime.voiceInput.getSettings.mockResolvedValue({
     enabled: true,

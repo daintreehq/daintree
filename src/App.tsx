@@ -52,6 +52,8 @@ import {
 import { useResourceProfile } from "./hooks/useResourceProfile";
 import { AppLayout } from "./components/Layout";
 import { ContentGrid } from "./components/Terminal";
+import { TypingLocator } from "./components/Terminal/TypingLocator";
+import { useTypeAnywhere } from "./hooks/useTypeAnywhere";
 
 import { useResumeAgentSession } from "./hooks/useResumeAgentSession";
 import { VoiceRecordingAnnouncer } from "./components/Terminal/VoiceRecordingAnnouncer";
@@ -379,6 +381,9 @@ function AppInner() {
   // Global keybinding handler - provides chord support and priority resolution
   // All keybindings dispatch through ActionService via this centralized handler
   useGlobalKeybindings(electronAvailable);
+  // Registered after the central keybindings so a handled shortcut has already
+  // claimed the event before the rescue considers it (#11134).
+  useTypeAnywhere();
   useGlobalEscapeDispatcher();
 
   // App lifecycle hooks
@@ -493,12 +498,15 @@ function AppInner() {
                     resetKeys={[workspaceId].filter((k): k is string => k != null)}
                   >
                     <Profiler id="content-grid" onRender={onContentGridRender}>
-                      <ContentGrid
-                        className="h-full w-full"
-                        agentAvailability={availability}
-                        defaultCwd={defaultTerminalCwd}
-                        emptyContent={emptyContent}
-                      />
+                      <div className="relative h-full w-full">
+                        <ContentGrid
+                          className="h-full w-full"
+                          agentAvailability={availability}
+                          defaultCwd={defaultTerminalCwd}
+                          emptyContent={emptyContent}
+                        />
+                        <TypingLocator />
+                      </div>
                     </Profiler>
                   </ErrorBoundary>
                 </AppLayout>

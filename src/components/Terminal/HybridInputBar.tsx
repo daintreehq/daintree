@@ -10,6 +10,7 @@ import { useFileAutocomplete } from "@/hooks/useFileAutocomplete";
 import { useSlashCommandAutocomplete } from "@/hooks/useSlashCommandAutocomplete";
 import { useSlashCommandList } from "@/hooks/useSlashCommandList";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
+import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { AutocompleteMenu, type AutocompleteItem } from "./AutocompleteMenu";
 import {
   getDaintreeAtClaim,
@@ -202,7 +203,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const currentProject = useProjectStore((s) => s.currentProject);
     const voiceStatus = useVoiceRecordingStore((s) => s.status);
     const activeVoicePanelId = useVoiceRecordingStore((s) => s.activeTarget?.panelId ?? null);
-    const voiceDraftRevision = useTerminalInputStore((s) => s.voiceDraftRevision);
+    const externalDraftRevision = useTerminalInputStore((s) => s.externalDraftRevision);
     const panelWorktreeId = usePanelStore((s) => s.panelsById[terminalId]?.worktreeId);
     const panelWorktree = useWorktreeStore((s) =>
       panelWorktreeId ? s.worktrees.get(panelWorktreeId) : undefined
@@ -470,7 +471,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     });
 
     useEffect(() => {
-      if (voiceDraftRevision === 0) return;
+      if (externalDraftRevision === 0) return;
       const draft = useTerminalInputStore.getState().getDraftInput(terminalId, currentProject?.id);
       const view = editorViewRef.current;
       if (!view) return;
@@ -485,7 +486,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           scrollIntoView: true,
         });
       }
-    }, [voiceDraftRevision, terminalId, currentProject?.id]);
+    }, [externalDraftRevision, terminalId, currentProject?.id]);
 
     useVoiceDecorations({ terminalId, editorViewRef });
 
@@ -622,6 +623,19 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       [focusEditor]
     );
 
+    // Claim the type-anywhere routing target (#11134) whenever the user really
+    // types here. Agent panels only — `agentId` is absent for the fleet-armed
+    // raw-shell branch of `shouldShowHybridInputBar`, and routing into a shell
+    // is exactly what the rescue must never do. While a broadcast is live the
+    // user typed to a fleet, not to one agent, so claim nothing.
+    const recordTypedTarget = () => {
+      if (agentId === undefined) return;
+      if (useFleetArmingStore.getState().armedIds.size >= 2) return;
+      const workspaceId = getViewWorkspaceId();
+      if (workspaceId === null) return;
+      useTerminalInputStore.getState().recordLastTypedAgentTarget(terminalId, workspaceId);
+    };
+
     const { handleUpdateRef: contextUpdateRef } = useContextDetection({
       latestRef,
       activeTriggers,
@@ -637,6 +651,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         return true;
       },
       setActiveCompletionContext,
+      onUserType: recordTypedTarget,
     });
 
     const {
@@ -782,6 +797,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const barContent = (
       <div
         className="relative group cursor-text px-3.5 pb-2.5 pt-2.5"
+        // Anchors the type-anywhere rescue (#11134): marks this subtree as a
+        // real typing surface, and lets the rescue verify focus actually landed
+        // here rather than trusting a handle's boolean return.
+        data-hybrid-input-root={terminalId}
         style={{ backgroundColor: inputBarColors.background, ...shellVars }}
       >
         <div className="flex items-end gap-2">

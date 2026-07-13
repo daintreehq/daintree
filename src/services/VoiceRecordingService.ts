@@ -134,7 +134,7 @@ class VoiceRecordingService {
               useVoiceRecordingStore.getState().setActiveParagraphStart(panelId, insertStart);
             }
             inputStore.setDraftInput(panelId, base + separator + finalText, projectId);
-            inputStore.bumpVoiceDraftRevision();
+            inputStore.bumpExternalDraftRevision();
           }
         }
         useVoiceRecordingStore.getState().completeSegment(text);
@@ -158,7 +158,7 @@ class VoiceRecordingService {
           const before = draft.slice(0, idx);
           const after = draft.slice(idx + description.length);
           inputStore.setDraftInput(panelId, before + replacement + after, projectId);
-          inputStore.bumpVoiceDraftRevision();
+          inputStore.bumpExternalDraftRevision();
         } else {
           logDebug(`${LOG_PREFIX} File token description not found in draft, discarding`, {
             description,
@@ -184,7 +184,7 @@ class VoiceRecordingService {
 
         // Insert a newline to visually separate paragraphs and reset paragraph state.
         inputStore.setDraftInput(panelId, draft + "\n", projectId);
-        inputStore.bumpVoiceDraftRevision();
+        inputStore.bumpExternalDraftRevision();
 
         voiceState.resetParagraphState(panelId);
       })
@@ -978,7 +978,7 @@ class VoiceRecordingService {
               const base = segmentStart >= 0 ? draft.slice(0, segmentStart) : draft;
               const { separator } = getVoiceInsertMetadata(base);
               inputStore.setDraftInput(panelId, base + separator + remaining, projectId);
-              inputStore.bumpVoiceDraftRevision();
+              inputStore.bumpExternalDraftRevision();
             }
           }
         }
@@ -1058,7 +1058,7 @@ class VoiceRecordingService {
     useVoiceRecordingStore
       .getState()
       .setCorrectionRange(panelId, { from: sessionStart, to: draftBefore.length });
-    inputStore.bumpVoiceDraftRevision();
+    inputStore.bumpExternalDraftRevision();
 
     let correctedText = rawText;
     try {
@@ -1076,7 +1076,7 @@ class VoiceRecordingService {
     // don't clobber it.
     if (this.generation !== stopGeneration) {
       logDebug(`${LOG_PREFIX} Correction result stale (new session), discarding`);
-      inputStore.bumpVoiceDraftRevision();
+      inputStore.bumpExternalDraftRevision();
       return;
     }
 
@@ -1112,7 +1112,7 @@ class VoiceRecordingService {
     // worth suggesting for the custom dictionary (#9749).
     useVoiceRecordingStore.getState().setSessionCorrectedText(panelId, correctedText);
 
-    inputStore.bumpVoiceDraftRevision();
+    inputStore.bumpExternalDraftRevision();
   }
 
   async toggleFocusedPanel(): Promise<void> {
