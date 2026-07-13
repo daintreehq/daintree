@@ -405,6 +405,13 @@ if (!gotTheLock) {
         // one-shot push was dropped on a true cold restore. No push needed here.
       },
     });
+    // Publish to this window's context immediately, not later in
+    // setupWindowServices: the renderer starts loading inside that call, so
+    // anything resolving the manager per-window (crash classification, the
+    // directory-open menu action) would otherwise see no manager for a window
+    // that has one, and fall back to a global or legacy path (#11100).
+    // setupWindowServices reassigns the same instance.
+    ctx.services.projectViewManager = pvm;
     setProjectViewManager(pvm);
 
     // Sync this window's fresh PVM to the live resource profile — the

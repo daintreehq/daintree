@@ -134,16 +134,32 @@ describe("terminal worker ingest port — cross-project ownership", () => {
     expect(distributeTerminalWorkerPortToViewMock).toHaveBeenCalledTimes(2);
   });
 
-  it("allows a terminal with no recorded owner — null means unknown, not unauthorized", async () => {
-    // Terminals spawned by an unbound (Cmd+N) window carry no project id, and
-    // that window's view is deliberately never registered. Both sides of the
-    // gate can be null; only a proven mismatch may be rejected.
+  it("serves an unbound window its own projectless terminal", async () => {
+    // A Cmd+N window sits on the project picker: its view is deliberately never
+    // registered, so its context project is null, and the default terminal it
+    // spawns carries no owner either. Null must match null, or these windows
+    // lose their dedicated port for no reason.
     getProjectForWebContentsMock.mockReturnValue(null);
 
     await expect(requestIngestPort(SENDER_A, "term-unowned")).resolves.toEqual({
       token: "port-token",
     });
     expect(distributeTerminalWorkerPortToViewMock).toHaveBeenCalledOnce();
+  });
+
+  // The two asymmetric cases. Null is an identity, not a wildcard: the pty-host
+  // skips its per-window filter entirely when a window's project is null, so a
+  // port minted for either mismatch would be fed real bytes.
+  it("refuses a null-context sender a project-owned terminal", async () => {
+    getProjectForWebContentsMock.mockReturnValue(null);
+
+    await expect(requestIngestPort(SENDER_A, "term-b")).resolves.toBeNull();
+    expect(distributeTerminalWorkerPortToViewMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a project-bound sender an unowned terminal", async () => {
+    await expect(requestIngestPort(SENDER_A, "term-unowned")).resolves.toBeNull();
+    expect(distributeTerminalWorkerPortToViewMock).not.toHaveBeenCalled();
   });
 
   it("returns null for a terminal that no longer exists", async () => {
