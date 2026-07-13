@@ -44,11 +44,12 @@ describe("scrollbar gutter (#11095)", () => {
       ).toBe(0);
     });
 
-    it("falls back to xterm's own default when no width is configured", () => {
-      // xterm's documented default is 14px — a contract with the library, not
-      // with us. If an upgrade changes it, the FitAddon parity suite fails too.
-      expect(getEffectiveScrollbarWidth({ scrollback: 1000 })).toBe(14);
-    });
+    // The unset-width fallback (xterm's own default) is deliberately NOT asserted
+    // against a literal here — that would just copy the constant back out of the
+    // implementation. The "no configured width" case in
+    // TerminalResizeController.fitParity.test.ts pins it against the real
+    // FitAddon, which is the only oracle that can actually catch us drifting from
+    // xterm's default.
 
     it("honours an explicit zero width rather than treating it as unset", () => {
       // Guards the `??` — an `||` here would silently widen a deliberately

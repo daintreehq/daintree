@@ -68,7 +68,8 @@ function buildPane(
   optionOverrides: {
     scrollback?: number;
     scrollbar?: { width?: number; showScrollbar?: boolean };
-  } = {}
+  } = {},
+  cell: { width: number; height: number } = CELL
 ): Pane {
   // The container FitAddon measures (terminal.element.parentElement) is the same
   // box the ResizeObserver reports to resize() — that equivalence is the whole
@@ -104,7 +105,7 @@ function buildPane(
     ...optionOverrides,
   };
 
-  const cellDims = { css: { cell: { width: CELL.width, height: CELL.height } } };
+  const cellDims = { css: { cell: { width: cell.width, height: cell.height } } };
 
   const terminal = {
     cols: 80,
@@ -258,15 +259,88 @@ describe("TerminalResizeController ↔ FitAddon column parity (#11095)", () => {
 
     controller.resize("t1", CONTAINER.width, CONTAINER.height);
 
+    // Seed a prior repair attempt as a REACH WITNESS. The watchdog zeroes this
+    // only on the converged branch, so observing the reset proves the geometry
+    // check actually ran — without it, this test would still pass if some
+    // unrelated gate (hydration lock, visibility, render-pause) short-circuited
+    // the tick before it ever compared the grids.
+    managed.geometryRepairAttempts = 1;
+
     const instances = new Map<string, ManagedTerminal>([["t1", managed]]);
     const deps = makeWatchdogDeps(instances);
     watchdog = new TerminalReconciliationWatchdog(deps);
 
     vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
 
+    expect(managed.geometryRepairAttempts).toBe(0);
     expect(deps.reconcileRevealGeometry).not.toHaveBeenCalled();
-    expect(managed.geometryRepairAttempts).toBeFalsy();
     expect(managed.lastWatchdogRepairAt).toBeUndefined();
+  });
+
+  describe("fractional layout boxes", () => {
+    // FitAddon reads the container with parseInt(getComputedStyle(...).width),
+    // truncating to whole pixels — while a ResizeObserver contentRect reports the
+    // fractional value a CSS grid/flex track actually produces. Dividing that raw
+    // is a second, subtler way to land off xterm's grid, on both axes.
+    const FRACTIONAL_CONTAINER = { width: 670.25, height: 380.25 };
+    const FRACTIONAL_CELL = { width: 9.1, height: 18.1 };
+
+    it("matches FitAddon on a fractional container with fractional cells", () => {
+      const { managed, terminal, fitAddon } = buildPane(FRACTIONAL_CONTAINER, {}, FRACTIONAL_CELL);
+      const controller = makeController(managed);
+
+      const proposal = fitAddon.proposeDimensions();
+      expect(proposal).toBeDefined();
+
+      const applied = controller.resize(
+        "t1",
+        FRACTIONAL_CONTAINER.width,
+        FRACTIONAL_CONTAINER.height
+      );
+
+      // Both axes: truncation affects rows too, and the watchdog compares both.
+      expect(applied).toEqual({ cols: proposal!.cols, rows: proposal!.rows });
+      expect(terminal.cols).toBe(proposal!.cols);
+      expect(terminal.rows).toBe(proposal!.rows);
+    });
+
+    it("does not let a sub-pixel resize that crosses a pixel boundary go unapplied", () => {
+      // The dedup hole: 671.9 → 672.1 is a 0.2px change, but FitAddon's truncated
+      // width moves 671 → 672, which crosses a cell boundary and changes the grid.
+      // A `< 1px` tolerance would swallow it and strand xterm a column behind the
+      // container until the watchdog repaired it after paint.
+      const before = { width: 671.9, height: 359.9 };
+      const after = { width: 672.1, height: 360.1 };
+      const cell = { width: 9, height: 18 };
+
+      const { managed, terminal, fitAddon } = buildPane(before, {}, cell);
+      const controller = makeController(managed);
+
+      controller.resize("t1", before.width, before.height);
+
+      // Re-measure the same pane at the new box, exactly as a ResizeObserver would.
+      managed.hostElement.style.width = `${after.width}px`;
+      managed.hostElement.style.height = `${after.height}px`;
+      controller.resize("t1", after.width, after.height);
+
+      const proposal = fitAddon.proposeDimensions();
+      expect(proposal).toBeDefined();
+      expect(terminal.cols).toBe(proposal!.cols);
+      expect(terminal.rows).toBe(proposal!.rows);
+    });
+
+    it("still dedups a jitter that stays inside the same pixel", () => {
+      // The other half of the contract: sub-pixel noise that cannot move
+      // FitAddon's truncated box must not churn the PTY.
+      const { managed } = buildPane({ width: 670.1, height: 360.1 });
+      const controller = makeController(managed);
+
+      controller.resize("t1", 670.1, 360.1);
+      resizeMock.mockClear();
+
+      expect(controller.resize("t1", 670.4, 360.4)).toBeNull();
+      expect(resizeMock).not.toHaveBeenCalled();
+    });
   });
 
   it("keeps the PTY-only (backgrounded) path in agreement with FitAddon", () => {
@@ -337,5 +411,26 @@ describe("TerminalResizeController ↔ FitAddon column parity (#11095)", () => {
     // on either side — both floor at 2.
     expect(applied).toEqual({ cols: proposal!.cols, rows: proposal!.rows });
     expect(applied!.cols).toBeGreaterThanOrEqual(2);
+  });
+
+  it("clamps to FitAddon's floor when the container is shorter than one cell", () => {
+    const short = { width: 665, height: 9 };
+    const { managed, fitAddon } = buildPane(short);
+    const controller = makeController(managed);
+
+    const proposal = fitAddon.proposeDimensions();
+    const applied = controller.resize("t1", short.width, short.height);
+
+    expect(applied).toEqual({ cols: proposal!.cols, rows: proposal!.rows });
+    expect(applied!.rows).toBeGreaterThanOrEqual(1);
+  });
+
+  it("rejects a non-finite box instead of caching a garbage grid", () => {
+    const { managed } = buildPane();
+    const controller = makeController(managed);
+
+    expect(controller.resize("t1", Number.NaN, CONTAINER.height)).toBeNull();
+    expect(managed.latestCols).toBe(80); // untouched seed value
+    expect(resizeMock).not.toHaveBeenCalled();
   });
 });

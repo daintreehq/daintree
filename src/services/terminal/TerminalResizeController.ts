@@ -66,14 +66,30 @@ export function getXtermCellDimensions(
 }
 
 /**
+ * A container dimension as `FitAddon` sees it: whole CSS pixels, clamped at zero.
+ *
+ * FitAddon measures through `Math.max(0, parseInt(getComputedStyle(el).width, 10) || 0)`,
+ * which TRUNCATES the fractional pixel a CSS grid or flex track almost always
+ * produces (846.67px → 846). A ResizeObserver `contentRect` and
+ * `getBoundingClientRect()` both report the un-truncated value, so dividing it
+ * raw lands a column — or a row — past xterm's own fit on exactly the sizes our
+ * layout generates. That is the same post-paint watchdog rewrap this fix exists
+ * to remove, one column further out, so normalize to FitAddon's integer view
+ * before dividing OR deduping (#11095).
+ */
+function toFitPx(px: number): number {
+  return Number.isFinite(px) ? Math.max(0, Math.trunc(px)) : 0;
+}
+
+/**
  * Columns a container of `widthPx` can hold — the manual twin of
  * `FitAddon.proposeDimensions()`.
  *
  * The paths below deliberately compute cols/rows from cached cell metrics rather
  * than calling `proposeDimensions()`, which reads a DOM that may not reflect the
- * ResizeObserver dimensions yet. That is why the scrollbar gutter has to be
- * reserved by hand here: FitAddon reserves it, so a raw `width / cellWidth`
- * settles a couple of columns wider than xterm's own fit, and
+ * ResizeObserver dimensions yet. That is why FitAddon's arithmetic has to be
+ * reproduced by hand: it reserves the scrollbar gutter, so a raw
+ * `width / cellWidth` settles a couple of columns wider than xterm's own fit and
  * `TerminalReconciliationWatchdog` repairs the difference ~3s later — after the
  * pane has painted, which corrupts cursor-relative inline TUIs (#11095).
  *
@@ -81,8 +97,35 @@ export function getXtermCellDimensions(
  * than the gutter itself.
  */
 function colsForWidth(terminal: Terminal, widthPx: number, cellWidth: number): number {
-  const availableWidth = widthPx - getEffectiveScrollbarWidth(terminal.options);
+  const availableWidth = toFitPx(widthPx) - getEffectiveScrollbarWidth(terminal.options);
   return Math.max(2, Math.floor(availableWidth / cellWidth));
+}
+
+/**
+ * Rows a container of `heightPx` can hold. The scrollbar is never reserved
+ * against height — FitAddon subtracts it from width alone.
+ */
+function rowsForHeight(heightPx: number, cellHeight: number): number {
+  return Math.max(1, Math.floor(toFitPx(heightPx) / cellHeight));
+}
+
+/**
+ * True when a new pixel box cannot change the grid, so the resize is redundant.
+ *
+ * Deduping on FitAddon's whole-pixel view rather than a `< 1px` tolerance: a
+ * sub-pixel jitter that stays inside one pixel genuinely cannot move the grid,
+ * but one that CROSSES a pixel boundary can (846.9 → 847.1 shifts FitAddon's
+ * truncated width by a pixel, which may cross a cell boundary). The old
+ * tolerance swallowed exactly those, stranding xterm a column behind its
+ * container until the watchdog repaired it after paint — "redundant" and
+ * "stale" are not the same, and only the former is safe to drop (#7762, #11095).
+ * Letting a boundary-crosser through is cheap: when the grid really is
+ * unchanged, the cols/rows dedup downstream returns before anything mutates.
+ */
+function isRedundantResize(managed: ManagedTerminal, width: number, height: number): boolean {
+  return (
+    toFitPx(managed.lastWidth) === toFitPx(width) && toFitPx(managed.lastHeight) === toFitPx(height)
+  );
 }
 
 export interface ResizeControllerDeps {
@@ -201,6 +244,12 @@ export class TerminalResizeController {
       return null;
     }
 
+    // Mirrors resizePtyOnly's guard: a non-finite box would otherwise poison the
+    // pixel cache and deliver a garbage grid to the PTY.
+    if (!Number.isFinite(width) || !Number.isFinite(height)) {
+      return null;
+    }
+
     const currentTier =
       managed.lastAppliedTier ?? managed.getRefreshTier?.() ?? TerminalRefreshTier.FOCUSED;
     // Defer the xterm reflow only when the terminal is genuinely hidden
@@ -215,7 +264,7 @@ export class TerminalResizeController {
     const isBackgroundUnfocused =
       currentTier === TerminalRefreshTier.BACKGROUND && !managed.isFocused && !managed.isVisible;
 
-    if (Math.abs(managed.lastWidth - width) < 1 && Math.abs(managed.lastHeight - height) < 1) {
+    if (isRedundantResize(managed, width, height)) {
       return null;
     }
 
@@ -269,7 +318,7 @@ export class TerminalResizeController {
       }
 
       const cols = colsForWidth(managed.terminal, width, cellDims.width);
-      const rows = Math.max(1, Math.floor(height / cellDims.height));
+      const rows = rowsForHeight(height, cellDims.height);
 
       if (managed.terminal.cols === cols && managed.terminal.rows === rows) {
         return null;
@@ -325,7 +374,7 @@ export class TerminalResizeController {
       managed.pendingBackgroundResize = { width, height };
       return null;
     }
-    if (Math.abs(managed.lastWidth - width) < 1 && Math.abs(managed.lastHeight - height) < 1) {
+    if (isRedundantResize(managed, width, height)) {
       return null;
     }
     const buffer = managed.terminal.buffer.active;
@@ -354,7 +403,7 @@ export class TerminalResizeController {
       return null;
     }
     const cols = colsForWidth(managed.terminal, width, cellDims.width);
-    const rows = Math.max(1, Math.floor(height / cellDims.height));
+    const rows = rowsForHeight(height, cellDims.height);
     if (managed.latestCols === cols && managed.latestRows === rows) {
       managed.lastWidth = width;
       managed.lastHeight = height;
@@ -468,7 +517,7 @@ export class TerminalResizeController {
       const cellDims = getXtermCellDimensions(managed.terminal);
       if (!cellDims) return false;
       cols = colsForWidth(managed.terminal, rect.width, cellDims.width);
-      rows = Math.max(1, Math.floor(rect.height / cellDims.height));
+      rows = rowsForHeight(rect.height, cellDims.height);
     }
 
     // Never re-wrap a main-buffer pane out from under a CLI that is still
