@@ -1,4 +1,5 @@
 import { defineConfig } from "vitest/config";
+import { availableParallelism } from "os";
 import path from "path";
 
 export default defineConfig({
@@ -24,7 +25,11 @@ export default defineConfig({
     // minWorkers:3 forced 3 workers even on the 2-core CI runners). Cap the
     // upper bound because high-core hosts can otherwise overwhelm Vitest's RPC
     // teardown and turn an all-passing run into an EnvironmentTeardownError.
-    maxWorkers: 8,
+    // Take the min with the core count so this only ever *lowers* the worker
+    // count on big machines — a bare `maxWorkers: 8` would instead force 8
+    // fork processes onto the 4-core CI shards, oversubscribing them 2x and
+    // timing out the import-heavy suites.
+    maxWorkers: Math.min(availableParallelism(), 8),
     maxConcurrency: 10,
     include: [
       "electron/**/*.{test,spec}.{js,ts}",
