@@ -74,8 +74,8 @@ export function ColorVisionPicker() {
   const setColorVisionMode = useAppThemeStore((s) => s.setColorVisionMode);
 
   // The mode last known to be on disk. Seeded from the hydrated store on mount
-  // and advanced only when a write lands, so a rollback always restores durable
-  // truth rather than an earlier optimistic value that never persisted.
+  // and advanced only when a write lands, so a rollback restores durable truth
+  // rather than an earlier optimistic value that never persisted.
   const confirmedModeRef = useRef(colorVisionMode);
   // Only the newest change may reconcile the field: an older rejection arriving
   // after a newer write succeeded must not drag the UI back.
@@ -84,6 +84,9 @@ export function ColorVisionPicker() {
 
   const handleChange = async (mode: ColorVisionMode) => {
     const epoch = ++epochRef.current;
+    // A fresh choice retires the previous banner, so its Retry can't linger and
+    // resurrect a superseded mode.
+    setFailedMode(null);
     setColorVisionMode(mode);
 
     try {

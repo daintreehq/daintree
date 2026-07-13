@@ -205,6 +205,30 @@ describe("AppThemePicker — follow-system and preferred schemes", () => {
     expect(screen.getByRole("alert")).toBeTruthy();
   });
 
+  it("keeps an unresolved accent error visible when an unrelated field saves", async () => {
+    act(() => useAppThemeStore.setState({ followSystem: false }));
+    const accentWrite = deferred();
+    client.setAccentColorOverride.mockReturnValue(accentWrite.promise);
+
+    render(<AppThemePicker />);
+    const input = screen.getByTestId("accent-color-override-input");
+    await act(async () => {
+      fireEvent.input(input, { target: { value: "#123456" } });
+      fireEvent.change(input, { target: { value: "#123456" } });
+    });
+    await act(async () => {
+      accentWrite.reject(new Error("nope"));
+      await accentWrite.promise.catch(() => {});
+    });
+    expect(screen.getByRole("alert")).toBeTruthy();
+
+    // A successful write to a DIFFERENT field must not dismiss a failure the
+    // user has not dealt with.
+    await act(async () => screen.getByLabelText("Toggle automatic theme switching").click());
+
+    expect(screen.getByRole("alert")).toBeTruthy();
+  });
+
   it("reverts only the preferred dark scheme, leaving the light one untouched", async () => {
     act(() => useAppThemeStore.setState({ followSystem: true }));
     const write = deferred();
@@ -308,5 +332,77 @@ describe("AppThemePicker — theme selection is three separate durable writes", 
 
     expect(state().selectedSchemeId).toBe(newestId);
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("never writes a superseded selection to disk after the newer one", async () => {
+    // System matching on, so the first selection has to await setFollowSystem
+    // before it can send its scheme. A second selection starts during that await.
+    // If the first is allowed to resume, its setColorScheme lands AFTER the
+    // second's and the app boots into a theme the UI never showed.
+    act(() => useAppThemeStore.setState({ followSystem: true }));
+    const followWrite = deferred();
+    client.setFollowSystem.mockReturnValue(followWrite.promise);
+
+    render(<AppThemePicker />);
+    await selectDarkB(); // stalls awaiting setFollowSystem
+    expect(client.setColorScheme).not.toHaveBeenCalled();
+
+    await selectDarkB(); // supersedes it; follow-system is already off optimistically
+
+    await act(async () => {
+      followWrite.resolve();
+      await followWrite.promise;
+    });
+
+    const written = client.setColorScheme.mock.calls.map(([id]) => id);
+    // The superseded selection must not have appended a later write.
+    expect(written.at(-1)).toBe(state().selectedSchemeId);
+  });
+
+  it("still turns system matching off on disk when a toggle-on is in flight", async () => {
+    // Disk says matching is off. The user turns it ON (write pending), then picks
+    // a theme. If the selection decided from disk alone it would skip its own
+    // turn-off write, the pending toggle-on would land, and the app would boot
+    // following the system — overriding the theme the user just chose.
+    const toggleWrite = deferred();
+    client.setFollowSystem.mockReturnValueOnce(toggleWrite.promise);
+
+    render(<AppThemePicker />);
+    await act(async () => screen.getByLabelText("Toggle automatic theme switching").click());
+    expect(state().followSystem).toBe(true);
+
+    client.setFollowSystem.mockResolvedValue(undefined);
+    await selectDarkB();
+    await act(async () => {
+      toggleWrite.resolve();
+      await toggleWrite.promise;
+    });
+
+    // The selection must have written matching OFF, after the toggle-on.
+    expect(client.setFollowSystem.mock.calls.at(-1)?.[0]).toBe(false);
+    expect(state().followSystem).toBe(false);
+  });
+
+  it("does not undo a follow-system toggle it never made when an unrelated scheme write fails", async () => {
+    // Matching starts off, so this selection does not own the follow-system field.
+    const schemeWrite = deferred();
+    client.setColorScheme.mockReturnValue(schemeWrite.promise);
+
+    render(<AppThemePicker />);
+    await selectDarkB(); // in flight, will fail
+
+    // User turns system matching ON while that write is pending; it saves.
+    await act(async () => screen.getByLabelText("Toggle automatic theme switching").click());
+    expect(state().followSystem).toBe(true);
+
+    await act(async () => {
+      schemeWrite.reject(new Error("nope"));
+      await schemeWrite.promise.catch(() => {});
+    });
+
+    // The scheme rolls back, but the newer follow-system choice — which IS on
+    // disk — must survive.
+    expect(state().selectedSchemeId).toBe("dark-a");
+    expect(state().followSystem).toBe(true);
   });
 });

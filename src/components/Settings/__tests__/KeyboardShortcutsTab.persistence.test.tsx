@@ -65,8 +65,14 @@ vi.mock("@/components/KeyboardShortcuts", () => ({
   ),
 }));
 
+// Exposes the import callback as a button so a test can land an import while a
+// save is still in flight.
 vi.mock("@/components/Settings/KeybindingProfileActions", () => ({
-  KeybindingProfileActions: () => null,
+  KeybindingProfileActions: ({ onImportComplete }: { onImportComplete: () => void }) => (
+    <button type="button" onClick={onImportComplete}>
+      Finish import
+    </button>
+  ),
 }));
 
 vi.mock("@/services/KeybindingService", () => ({
@@ -181,6 +187,28 @@ describe("KeyboardShortcutsTab — failed shortcut save", () => {
 
     expect(screen.queryByText(/raw ipc detail/)).toBeNull();
     expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("does not raise a banner for a save that was superseded by a profile import", async () => {
+    const pending = deferred<typeof FAILURE>();
+    dispatch.mockReturnValue(pending.promise);
+
+    await renderTab();
+    await openEditor();
+    await clickText("Capture combo"); // dispatch in flight
+
+    // A profile import lands while that save is still pending. It replaced every
+    // binding, so the save's failure is about a binding that no longer exists —
+    // and its Retry would overwrite the imported profile with the stale combo.
+    await clickText("Finish import");
+
+    await act(async () => {
+      pending.resolve(FAILURE);
+      await pending.promise;
+    });
+
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
   it("discards the error when the user cancels the editor", async () => {

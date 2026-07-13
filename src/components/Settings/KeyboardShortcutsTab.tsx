@@ -14,6 +14,13 @@ import { SettingsShortcutCapture } from "@/components/KeyboardShortcuts";
 interface ShortcutBinding extends RegisteredKeybindingConfig {
   effectiveCombo: string;
   isOverridden: boolean;
+  /**
+   * One action can be registered more than once under different scopes (e.g.
+   * `fleet.armFocused` is bound both globally and in the worktree grid), so the
+   * action ID alone does not identify a row. Keying editor and error state by
+   * action ID would open both editors at once and render the same alert twice.
+   */
+  rowId: string;
 }
 
 // KeybindingService writes to disk before it touches its in-memory maps, so a
@@ -22,11 +29,11 @@ interface ShortcutBinding extends RegisteredKeybindingConfig {
 // success: hold the editor open and offer the retry, rather than closing and
 // reloading as if the edit had landed.
 type ShortcutError =
-  | { kind: "save"; actionId: string; combo: string }
-  | { kind: "reset"; actionId: string }
+  | { kind: "save"; rowId: string; actionId: string; combo: string }
+  | { kind: "reset"; rowId: string; actionId: string }
   | { kind: "reset-all" };
 
-type RowError = Extract<ShortcutError, { actionId: string }>;
+type RowError = Extract<ShortcutError, { rowId: string }>;
 
 interface ShortcutRowProps {
   binding: ShortcutBinding;
@@ -157,7 +164,7 @@ function ShortcutRow({
 export function KeyboardShortcutsTab() {
   const [searchQuery, setSearchQuery] = useState("");
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const [editingActionId, setEditingActionId] = useState<string | null>(null);
+  const [editingRowId, setEditingRowId] = useState<string | null>(null);
   const [bindings, setBindings] = useState<ShortcutBinding[]>([]);
   const [, setUpdateKey] = useState(0);
   const [isResetDialogOpen, setIsResetDialogOpen] = useState(false);
@@ -169,9 +176,15 @@ export function KeyboardShortcutsTab() {
   const loadBindings = useCallback(() => {
     const allBindings = keybindingService.getAllBindingsWithEffectiveCombos();
     setBindings(
-      allBindings.map((b) => ({
+      allBindings.map((b, index) => ({
         ...b,
         isOverridden: keybindingService.hasOverride(b.actionId),
+        // `combo` is the DEFAULT binding, so this stays stable when an override
+        // changes `effectiveCombo`. The index disambiguates the registry's few
+        // legal exact duplicates (a plugin may register the same action, scope
+        // and combo as a built-in); registration order is what produces the list,
+        // so it does not shift as overrides come and go.
+        rowId: `${b.actionId}::${b.scope}::${b.combo}::${index}`,
       }))
     );
   }, []);
@@ -212,41 +225,61 @@ export function KeyboardShortcutsTab() {
     return groups;
   }, [filteredBindings]);
 
-  const handleSaveShortcut = async (actionId: string, combo: string) => {
+  // An imported profile replaces every binding, which invalidates any edit that
+  // was in flight when it landed: a save resolving afterwards would either raise
+  // a banner about a binding that no longer exists, or let its Retry overwrite
+  // the freshly imported profile with a stale captured combo. Bump the epoch on
+  // import; operations started before it no longer touch the UI.
+  const bindingsEpochRef = useRef(0);
+
+  const handleSaveShortcut = async (rowId: string, actionId: string, combo: string) => {
+    const epoch = bindingsEpochRef.current;
     const result = await actionService.dispatch(
       "keybinding.setOverride",
       { actionId, combo: combo === "" ? [] : [combo] },
       { source: "user" }
     );
+    if (epoch !== bindingsEpochRef.current) return;
+
     if (!result.ok) {
       logError("Failed to save keybinding override", undefined, { error: result.error });
       // Hold the editor open on the failing row. Closing here would show the old
       // binding with no hint that the capture was thrown away.
-      setShortcutError({ kind: "save", actionId, combo });
+      setShortcutError({ kind: "save", rowId, actionId, combo });
       return;
     }
     setShortcutError(null);
-    setEditingActionId(null);
+    setEditingRowId(null);
     loadBindings();
   };
 
-  const handleResetShortcut = async (actionId: string) => {
+  const handleResetShortcut = async (rowId: string, actionId: string) => {
+    const epoch = bindingsEpochRef.current;
     const result = await actionService.dispatch(
       "keybinding.removeOverride",
       { actionId },
       { source: "user" }
     );
+    if (epoch !== bindingsEpochRef.current) return;
+
     if (!result.ok) {
       logError("Failed to reset keybinding override", undefined, { error: result.error });
-      setShortcutError({ kind: "reset", actionId });
+      setShortcutError({ kind: "reset", rowId, actionId });
       return;
     }
     setShortcutError(null);
     loadBindings();
   };
 
+  const handleImportComplete = () => {
+    bindingsEpochRef.current++;
+    setShortcutError(null);
+    setEditingRowId(null);
+    loadBindings();
+  };
+
   const handleOpenResetDialog = () => {
-    setEditingActionId(null);
+    setEditingRowId(null);
     setShortcutError(null);
     setIsResetDialogOpen(true);
   };
@@ -283,15 +316,15 @@ export function KeyboardShortcutsTab() {
 
   const handleCancelEdit = () => {
     setShortcutError(null);
-    setEditingActionId(null);
+    setEditingRowId(null);
   };
 
   const handleRetryRow = (error: RowError) => {
     if (error.kind === "save") {
-      void handleSaveShortcut(error.actionId, error.combo);
+      void handleSaveShortcut(error.rowId, error.actionId, error.combo);
       return;
     }
-    void handleResetShortcut(error.actionId);
+    void handleResetShortcut(error.rowId, error.actionId);
   };
 
   const hasOverrides = bindings.some((b) => b.isOverridden);
@@ -347,7 +380,7 @@ export function KeyboardShortcutsTab() {
             </button>
           )}
         </div>
-        <KeybindingProfileActions onImportComplete={loadBindings} />
+        <KeybindingProfileActions onImportComplete={handleImportComplete} />
         <button
           onClick={handleOpenResetDialog}
           disabled={isResetting}
@@ -376,22 +409,22 @@ export function KeyboardShortcutsTab() {
                 const rowError =
                   shortcutError !== null &&
                   shortcutError.kind !== "reset-all" &&
-                  shortcutError.actionId === binding.actionId
+                  shortcutError.rowId === binding.rowId
                     ? shortcutError
                     : null;
                 return (
                   <ShortcutRow
-                    key={binding.actionId}
+                    key={binding.rowId}
                     binding={binding}
-                    isEditing={editingActionId === binding.actionId}
+                    isEditing={editingRowId === binding.rowId}
                     error={rowError}
                     onEdit={() => {
                       setShortcutError(null);
-                      setEditingActionId(binding.actionId);
+                      setEditingRowId(binding.rowId);
                     }}
-                    onSave={(combo) => handleSaveShortcut(binding.actionId, combo)}
+                    onSave={(combo) => handleSaveShortcut(binding.rowId, binding.actionId, combo)}
                     onCancel={handleCancelEdit}
-                    onReset={() => handleResetShortcut(binding.actionId)}
+                    onReset={() => handleResetShortcut(binding.rowId, binding.actionId)}
                     onRetry={() => rowError && handleRetryRow(rowError)}
                     onDismissError={() => setShortcutError(null)}
                   />

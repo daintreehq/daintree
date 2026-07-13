@@ -128,6 +128,7 @@ interface AppThemePickerProps {
 type EpochKey = "scheme" | "accent" | "followSystem" | "preferredDark" | "preferredLight";
 
 interface SaveError {
+  domain: EpochKey;
   title: string;
   description: string;
   retry: () => void;
@@ -161,6 +162,15 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
   // input previews through `setAccentColorOverride` on every `onInput` tick
   // without persisting, so by the time `onChange` commits, the store already
   // holds the new color and can no longer say what the old one was.
+  //
+  // It is deliberately NOT re-seeded from the store while mounted. The store is
+  // not a truthful picture of disk — the accent preview writes to it without
+  // persisting, and `app.setTheme` (appActions) applies a scheme optimistically
+  // and leaves it applied even when its own save fails. Syncing from it would
+  // record never-persisted values as durable. The cost is that a durable change
+  // made elsewhere while this dialog sits open (an OS appearance switch) is not
+  // picked up as the rollback baseline; reading it back from disk on failure
+  // would be the fix if that ever bites.
   const confirmedRef = useRef({
     selectedSchemeId,
     recentSchemeIds: useAppThemeStore.getState().recentSchemeIds,
@@ -181,6 +191,11 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
     preferredLight: 0,
   });
 
+  // One banner at a time, but tagged with the field that raised it: an unrelated
+  // field succeeding must not clear a failure the user hasn't dealt with.
+  const clearErrorFor = (domain: EpochKey) =>
+    setSaveError((current) => (current?.domain === domain ? null : current));
+
   // Optimistic write, then persist, then revert to the last value known to be on
   // disk if the write is rejected. `apply` goes through the store setters so the
   // rollback re-runs their DOM injection and the rendered theme matches what the
@@ -195,18 +210,22 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
     failure: { title: string; description: string }
   ): Promise<void> => {
     const epoch = ++epochsRef.current[domain];
+    // A fresh intent for this field retires the banner its predecessor left, so a
+    // stale Retry can't sit there waiting to resurrect a superseded value.
+    clearErrorFor(domain);
     apply(next);
 
     try {
       await persist(next);
       writeConfirmed(next);
-      if (epoch === epochsRef.current[domain]) setSaveError(null);
+      if (epoch === epochsRef.current[domain]) clearErrorFor(domain);
     } catch (error) {
       logError(`Failed to persist app theme setting: ${domain}`, error);
       if (epoch !== epochsRef.current[domain]) return;
       apply(readConfirmed());
       setSaveError({
         ...failure,
+        domain,
         retry: () =>
           void persistSetting(domain, next, readConfirmed, writeConfirmed, apply, persist, failure),
       });
@@ -278,9 +297,26 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
   // was already turned off reverts the theme without turning matching back on.
   const handleSelect = async (id: string, origin?: { x: number; y: number }) => {
     const epoch = ++epochsRef.current.scheme;
-    const wasFollowingSystem = followSystem;
+    clearErrorFor("scheme");
 
-    if (wasFollowingSystem) setFollowSystem(false);
+    // Read live rather than closing over the render's value: Retry re-invokes an
+    // older render's handleSelect, and a stale `followSystem` there would either
+    // skip the turn-off or leave the store showing matching that is really off.
+    const storeFollowSystem = useAppThemeStore.getState().followSystem;
+    // Write the turn-off if EITHER source says matching is on: disk may still
+    // have it on (an in-flight toggle-off could yet fail), or the store may have
+    // it on with a toggle-on in flight. The write is idempotent, and issuing it
+    // last is what guarantees disk ends with matching off — otherwise the app
+    // boots following the system and overrides the very theme being saved.
+    const mustDisableFollowSystem = confirmedRef.current.followSystem || storeFollowSystem;
+    // Claim the follow-system field, so a toggle racing this selection cannot
+    // reconcile it behind our back, and so we reconcile it only while we own it.
+    const followEpoch = mustDisableFollowSystem ? ++epochsRef.current.followSystem : null;
+    const ownsScheme = () => epoch === epochsRef.current.scheme;
+    const ownsFollowSystem = () =>
+      followEpoch !== null && followEpoch === epochsRef.current.followSystem;
+
+    if (storeFollowSystem) setFollowSystem(false);
     commitSchemeSelection(id);
     const targetRecents = useAppThemeStore.getState().recentSchemeIds;
     const scheme = resolveAppTheme(id, useAppThemeStore.getState().customSchemes);
@@ -288,7 +324,10 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
 
     const restoreConfirmed = () => {
       const confirmed = confirmedRef.current;
-      setFollowSystem(confirmed.followSystem);
+      // Only put system matching back if this selection is what turned it off.
+      // Otherwise a newer toggle the user made while this write was in flight
+      // would be silently undone.
+      if (ownsFollowSystem()) setFollowSystem(confirmed.followSystem);
       // commitSchemeSelection re-seeds the MRU as a side effect, so the recents
       // list has to be put back after it, not before.
       commitSchemeSelection(confirmed.selectedSchemeId);
@@ -300,17 +339,27 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
     };
 
     try {
-      if (wasFollowingSystem) {
+      if (mustDisableFollowSystem) {
         await appThemeClient.setFollowSystem(false);
         confirmedRef.current.followSystem = false;
+        // Matching is now off on disk, so a banner an earlier failed toggle left
+        // behind is describing a state that no longer exists.
+        clearErrorFor("followSystem");
       }
+      // A newer selection may have overtaken us while we awaited. Sending the
+      // scheme now would land on disk AFTER the newer one and leave the app
+      // booting into a theme the UI never showed — bail instead. Whatever we
+      // already wrote stays written and stays reflected in confirmedRef.
+      if (!ownsScheme()) return;
+
       await appThemeClient.setColorScheme(id);
       confirmedRef.current.selectedSchemeId = id;
     } catch (error) {
       logError("Failed to persist app theme", error);
-      if (epoch !== epochsRef.current.scheme) return;
+      if (!ownsScheme()) return;
       restoreConfirmed();
       setSaveError({
+        domain: "scheme",
         title: "Couldn't save theme",
         description: "The previous theme was restored, so it won't change on restart.",
         retry: () => void handleSelect(id),
@@ -318,7 +367,8 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
       return;
     }
 
-    if (epoch === epochsRef.current.scheme) setSaveError(null);
+    if (!ownsScheme()) return;
+    clearErrorFor("scheme");
 
     // The MRU list drives the theme browser's "recent" row and is invisible from
     // here, so a failure to save it gives the user nothing to see and nothing to
@@ -329,9 +379,7 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
       confirmedRef.current.recentSchemeIds = targetRecents;
     } catch (error) {
       logError("Failed to persist recent app themes", error);
-      if (epoch === epochsRef.current.scheme) {
-        setRecentSchemeIds(confirmedRef.current.recentSchemeIds);
-      }
+      if (ownsScheme()) setRecentSchemeIds(confirmedRef.current.recentSchemeIds);
     }
   };
 
