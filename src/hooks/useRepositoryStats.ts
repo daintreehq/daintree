@@ -224,6 +224,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
   // earlier epoch's result through. Captured locally before the first `await`
   // in `fetchFn` and re-checked after each await.
   const fetchGenerationRef = useRef(0);
+  const statsProjectPathRef = useRef<string | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -241,6 +242,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       if (!mountedRef.current) return;
 
       hasAppliedResultRef.current = true;
+      statsProjectPathRef.current = opts.projectPath;
 
       // A provider-less snapshot — null forge counts and no fetch time — is what
       // main returns when it could not resolve a provider for the repo. When
@@ -490,6 +492,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
             lastUpdatedRef.current = null;
             setLastUpdated(null);
             lastErrorRef.current = null;
+            statsProjectPathRef.current = null;
             resetPollFailures();
           }
           return;
@@ -634,16 +637,23 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
         : 1;
       return IDLE_POLL_INTERVAL * multiplier;
     },
-    onProjectSwitch: () => {
+    onProjectSwitch: (project) => {
       // Advance the fetch epoch unconditionally (even while unmounted) so any
       // in-flight fetch from the previous project is discarded when it resolves
       // instead of applying its stats/error to the newly-switched project
       // (issue #10761). This must precede the mounted-guard early return.
       fetchGenerationRef.current += 1;
       if (!mountedRef.current) return;
+      // PROJECT_ON_SWITCH targets the incoming view. A warm cached view still
+      // owns valid stats for that same project, so keep them visible while the
+      // async revalidation runs instead of shrinking the pills back to dashes.
+      if (project?.path === statsProjectPathRef.current && hasAppliedResultRef.current) {
+        return;
+      }
       // Clear preserved counts on project switch to prevent cross-contamination
       lastKnownCountsRef.current = { issueCount: null, prCount: null };
       hasAppliedResultRef.current = false;
+      statsProjectPathRef.current = null;
 
       setStats(null);
       setIsStale(false);

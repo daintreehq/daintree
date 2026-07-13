@@ -190,7 +190,8 @@ describe("usePollingLifecycle", () => {
     });
 
     it("fans projectClient.onSwitch to all subscribers as onProjectSwitch + refetch", async () => {
-      let captured: (() => void) | undefined;
+      const project = { id: "project-a", path: "/repo/a" };
+      let captured: ((payload?: { project: typeof project; switchId: string }) => void) | undefined;
       onSwitchMock.mockImplementation((cb) => {
         captured = cb;
         return () => {};
@@ -209,13 +210,13 @@ describe("usePollingLifecycle", () => {
       });
 
       await act(async () => {
-        captured?.();
+        captured?.({ project, switchId: "switch-a" });
         await Promise.resolve();
       });
 
       await waitFor(() => {
-        expect(onSwitchA).toHaveBeenCalledTimes(1);
-        expect(onSwitchB).toHaveBeenCalledTimes(1);
+        expect(onSwitchA).toHaveBeenCalledWith(project);
+        expect(onSwitchB).toHaveBeenCalledWith(project);
         expect(fetchA).toHaveBeenCalledTimes(2);
         expect(fetchB).toHaveBeenCalledTimes(2);
       });
