@@ -611,7 +611,7 @@ function InlineChecklist({
             <>
               <div className="flex items-start gap-2.5 px-2 py-1.5 opacity-60">
                 <div className="h-4 w-4 rounded-full bg-daintree-accent border border-daintree-accent flex items-center justify-center shrink-0">
-                  <Check className="h-2.5 w-2.5 text-daintree-bg" />
+                  <Check className="h-2.5 w-2.5 text-accent-primary-foreground" />
                 </div>
                 <Download className="h-3.5 w-3.5 text-daintree-text/40 shrink-0" />
                 <span className="text-xs leading-snug text-daintree-text/40">Install Daintree</span>
@@ -631,7 +631,7 @@ function InlineChecklist({
                           : "border-daintree-text/30"
                       )}
                     >
-                      {done && <Check className="h-2.5 w-2.5 text-daintree-bg" />}
+                      {done && <Check className="h-2.5 w-2.5 text-accent-primary-foreground" />}
                     </div>
                     <Icon
                       className={cn(

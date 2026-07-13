@@ -211,9 +211,26 @@ describe("color system contract", () => {
     expect(indexCss).not.toMatch(/rgba\(0,\s*0,\s*0/);
   });
 
-  it("--color-accent-foreground in @theme inline resolves through shadcn --accent-foreground (preserves hover behavior)", () => {
-    const themeBlock = indexCss.match(/@theme\s+inline\s*\{[\s\S]*?\}/)?.[0] ?? "";
-    expect(themeBlock).toMatch(/--color-accent-foreground:\s*var\(--accent-foreground\)/);
+  // A --color-* declared twice in one @theme inline block silently resolves to the
+  // last one; Tailwind emits no warning. That is how --color-accent-foreground came
+  // to resolve to body text instead of the contrast-validated accent foreground
+  // (#11115), and how --color-accent-primary regressed before it (#2687). Uniqueness
+  // is the invariant that catches the whole class.
+  it("declares every --color-* exactly once inside @theme inline", () => {
+    const themeBlock = indexCss.match(/@theme\s+inline\s*\{[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(themeBlock, "could not locate the @theme inline block").not.toBe("");
+
+    const counts = new Map<string, number>();
+    for (const [, name] of themeBlock.matchAll(/^\s*(--color-[\w-]+)\s*:/gm)) {
+      if (name === undefined) continue;
+      counts.set(name, (counts.get(name) ?? 0) + 1);
+    }
+    expect(counts.size, "no --color-* declarations found — regex is stale").toBeGreaterThan(0);
+
+    const duplicated = [...counts.entries()]
+      .filter(([, count]) => count > 1)
+      .map(([name, count]) => `${name} (x${count})`);
+    expect(duplicated, "duplicate --color-* declarations silently shadow each other").toEqual([]);
   });
 
   it("sets color-scheme: normal on webview elements to prevent dark-mode inheritance", () => {

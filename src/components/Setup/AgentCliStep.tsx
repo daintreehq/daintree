@@ -395,7 +395,7 @@ export function AgentCliStep({
           type="button"
           disabled={isBatchRunning}
           onClick={handleInstallAll}
-          className="flex items-center justify-center gap-2 w-full px-3 py-2 rounded-[var(--radius-md)] bg-daintree-accent text-text-inverse text-sm font-medium hover:bg-daintree-accent/90 transition-colors disabled:opacity-50 disabled:pointer-events-none"
+          className="flex items-center justify-center gap-2 w-full px-3 py-2 rounded-[var(--radius-md)] bg-daintree-accent text-accent-primary-foreground text-sm font-medium hover:bg-daintree-accent/90 transition-colors disabled:opacity-50 disabled:pointer-events-none"
         >
           {isBatchRunning ? (
             <>

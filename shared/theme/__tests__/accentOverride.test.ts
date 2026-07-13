@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { accentOverrideHasLowContrast } from "../contrast.js";
 import {
   applyAccentOverrideToScheme,
   BUILT_IN_APP_SCHEMES,
@@ -72,18 +73,27 @@ describe("computeAccentOverrideTokens", () => {
     expect(softAlpha).toBeLessThan(mutedAlpha);
   });
 
-  it("picks a high-contrast accent-foreground for a very light accent", () => {
-    // A near-white accent must choose a dark foreground for readability.
-    const tokens = computeAccentOverrideTokens("#fafafa", darkScheme);
-    // Candidate order: text-inverse, text-primary, #ffffff, #000000.
-    // On a dark theme, text-inverse is dark, so contrast is very high.
-    // Either way, the winner must NOT be #ffffff.
-    expect(tokens["accent-foreground"]).not.toBe("#ffffff");
-  });
-
-  it("picks a high-contrast accent-foreground for a very dark accent", () => {
-    const tokens = computeAccentOverrideTokens("#050505", lightScheme);
-    expect(tokens["accent-foreground"]).not.toBe("#000000");
+  // Adversarial accents, both polarities (#11115). The old assertions only said the
+  // derived foreground wasn't pure white/black — a 2.4:1 near-miss satisfied that.
+  // Assert the property components actually depend on, through the production
+  // validator (which owns the threshold): whatever accent-foreground is derived, it
+  // never fails foreground-mode against the accent fill it will be painted on.
+  // A `surface`-mode failure is expected and allowed here — a near-white accent IS
+  // hard to see on a light canvas, which is a different finding from illegible
+  // text-on-accent, and is what the theme picker warns about separately.
+  describe.each([
+    ["very light", "#fafafa"],
+    ["very dark", "#050505"],
+    ["mid-luminance (worst case for both polarities)", "#808080"],
+  ])("a %s accent", (_label, accent) => {
+    it.each([
+      ["dark", darkScheme],
+      ["light", lightScheme],
+    ])("derives a foreground that survives the validator on a %s base scheme", (_type, base) => {
+      const scheme = applyAccentOverrideToScheme(base, accent);
+      const failure = accentOverrideHasLowContrast(scheme);
+      expect(failure?.mode, `accent-foreground is illegible on ${accent}`).not.toBe("foreground");
+    });
   });
 
   it("throws on invalid hex input", () => {
