@@ -87,7 +87,7 @@ import {
   shouldSuppressUnfocusedClick,
 } from "./terminalFocus";
 import { decideChromeAction } from "./multiSelectGestures";
-import { registerPanelFocusHandler } from "./terminalFocusRegistry";
+import { registerPanelFocusHandler } from "@/components/Panel/panelFocusRegistry";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import { isPtyPanel } from "@shared/types/panel";
 import type { TerminalRuntimeIdentity } from "@shared/types/panel";
@@ -1016,11 +1016,16 @@ function TerminalPaneComponent({
         isInputDisabled: isBackendDisconnected || isBackendRecovering || isInputLocked,
         hybridInputEnabled,
       });
-      if (focusTarget === "hybridInput") {
-        inputBarRef.current?.focusWithCursorAtEnd();
-      } else {
-        terminalInstanceService.focus(id);
+      if (focusTarget === "hybridInput" && inputBarRef.current) {
+        inputBarRef.current.focusWithCursorAtEnd();
+        return true;
       }
+      // No live xterm means nothing can take focus — report the miss so callers
+      // (macro-grid Enter) keep their own focus rather than handing off to a
+      // pane that cannot receive it.
+      if (!terminalInstanceService.get(id)) return false;
+      terminalInstanceService.focus(id);
+      return true;
     });
   }, [
     id,

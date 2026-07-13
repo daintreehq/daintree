@@ -13,7 +13,7 @@ import type { TabGroup } from "@/types";
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { addTabForPanel } from "./useContentGridContext";
 import { requestPanelClose } from "@/services/terminal/optimisticPanelClose";
-import { focusPanelInput } from "./terminalFocusRegistry";
+import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 import { getGroupAmbientAgentState } from "@/components/Layout/useDockBlockedState";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
