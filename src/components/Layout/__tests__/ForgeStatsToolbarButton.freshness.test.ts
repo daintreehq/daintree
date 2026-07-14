@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import fs from "fs/promises";
 import path from "path";
+import { extractAtRuleBlocks, transitionPropertiesFor } from "./cssBlocks";
 
 /**
  * ForgeStatsToolbarButton — freshness tier wiring (issue #6536, updated #8849).
@@ -73,30 +74,53 @@ describe("ForgeStatsToolbarButton freshness wiring", () => {
     expect(source).toContain("animKey={commitAnimKey}");
   });
 
-  it("ForgeStatPill scopes the transition to opacity, background-color and scale (issue #11168)", async () => {
-    // A bare `transition-opacity` here replaced the base Button cva's
-    // `transition` outright under tailwind-merge (same conflict group), leaving
-    // the hover tint AND the cva's `active:scale-[0.98]` press snap with no
-    // transitioned property. `scale` must stay in the set for the press to read.
-    const pillSource = await fs.readFile(path.resolve(__dirname, "../ForgeStatPill.tsx"), "utf-8");
-    expect(pillSource).toContain("transition-[opacity,background-color,scale]");
-    expect(pillSource).not.toMatch(/\btransition-all\b/);
-  });
-
-  it("ForgeStatPill opts into the reduced-motion rule that drops its press-scale", async () => {
-    // The pill is a Radix tooltip trigger, so it always carries a data-state and
-    // the global reduced-motion button rule in index.css (which excludes
-    // data-state buttons) never reaches it. The opt-in is a two-file contract:
-    // the class on the pill, the @variant rule in toolbar.css. WCAG 2.3.3.
+  it("ForgeStatPill transitions its scale, and drops exactly that under reduced motion (#11168)", async () => {
+    // Two coupled halves, one invariant. The pill must transition `scale` — a
+    // bare `transition-opacity` sat in the same tailwind-merge conflict group as
+    // the base Button cva's `transition` and replaced it outright, leaving both
+    // the hover tint and the cva's `active:scale-[0.98]` press snap with no
+    // transitioned property. And because the pill is a Radix tooltip trigger it
+    // always carries a data-state, so index.css's global reduced-motion control
+    // rule (which excludes [data-state="closed"]) misses it at rest — toolbar.css
+    // must drop the scale interpolation itself. WCAG 2.3.3.
+    //
+    // Asserted as a RELATIONSHIP between the two files, not as literal class
+    // strings: reduced-motion transitions exactly the normal set minus `scale`.
+    // Renaming a property or the opt-in class keeps this green; deleting either
+    // half of the contract turns it red.
     const pillSource = await fs.readFile(path.resolve(__dirname, "../ForgeStatPill.tsx"), "utf-8");
     const toolbarCss = await fs.readFile(
       path.resolve(__dirname, "../../../styles/components/toolbar.css"),
       "utf-8"
     );
-    expect(pillSource).toContain("toolbar-stat-pill");
-    expect(toolbarCss).toMatch(
-      /@variant reduce-motion \{\s*\.toolbar-stat-pill \{\s*transition-property: opacity, background-color;/
+
+    const pillClasses = pillSource.match(/"(toolbar-stat-pill[^"]*)"/)?.[1].split(/\s+/);
+    expect(pillClasses).toBeDefined();
+    expect(pillClasses).not.toContain("transition-all");
+
+    const scoped = pillClasses!.find((token) => /^transition-\[[^\]]+\]$/.test(token));
+    expect(scoped, "pill must scope its transition to an explicit property set").toBeDefined();
+    const normal = new Set(
+      scoped!
+        .slice("transition-[".length, -1)
+        .split(",")
+        .map((property) => property.trim())
     );
+    expect(normal.has("scale"), "scale must be transitioned for the press snap to read").toBe(true);
+
+    // The reduced-motion override must live INSIDE a reduce-motion block and
+    // target a class the pill actually carries.
+    let optIn: Set<string> | null = null;
+    for (const block of extractAtRuleBlocks(toolbarCss, "@variant reduce-motion")) {
+      for (const token of pillClasses!) {
+        optIn = transitionPropertiesFor(block, token);
+        if (optIn) break;
+      }
+      if (optIn) break;
+    }
+    expect(optIn, "no reduce-motion rule targets any of the pill's classes").not.toBeNull();
+    expect(optIn!.has("scale"), "reduced motion must not interpolate the press scale").toBe(false);
+    expect(optIn).toEqual(new Set([...normal].filter((property) => property !== "scale")));
   });
 
   it("Stats pills use stable equal-width hit boxes for titlebar no-drag regions", async () => {
