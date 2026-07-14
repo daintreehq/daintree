@@ -2627,6 +2627,8 @@ function buildElectronApi(): ElectronAPI {
           data: import("../shared/types/ipc/forge.js").ForgeTokenHealthChangedPayload
         ) => void
       ) => _typedOn(CHANNELS.FORGE_TOKEN_HEALTH_CHANGED, callback),
+      onRemoteChanged: (callback: (payload: { projectId: string }) => void) =>
+        _eventBusOn("forge:remote-changed", callback),
       classifyPushError: (payload: { cwd: string; stderr: string }) =>
         _unwrappingInvoke(CHANNELS.FORGE_CLASSIFY_PUSH_ERROR, payload),
       getRepoStats: (payload: { cwd: string; bypassCache?: boolean }) =>

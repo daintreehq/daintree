@@ -1909,6 +1909,13 @@ export interface IpcEventMap {
   // renderer re-pulls via `plugin:list` for the full data.
   "plugin:provenance-changed": Record<string, never>;
 
+  // The project's git remote table changed (main → renderer, #11155) — e.g.
+  // `git remote add origin`. Signal-only and project-scoped: the renderer drops
+  // its cached forge-provider resolution for `projectId` and re-resolves via
+  // `forge:resolve-provider`. No remote URL crosses the bridge (https remotes
+  // can embed credentials).
+  "forge:remote-changed": { projectId: string };
+
   // Background plugin update check found available updates (main → renderer,
   // #10893). Carries the batched set so the renderer can raise one low-priority
   // inbox notification. Broadcast only when at least one update is available.
@@ -2035,6 +2042,8 @@ export type IpcEventBusMap = Pick<
   | "plugin:panel-badges-cleared"
   // Plugin provenance record changed (global broadcast)
   | "plugin:provenance-changed"
+  // Project's git remotes changed — re-resolve the forge provider (global broadcast)
+  | "forge:remote-changed"
   // Background plugin update check found updates (global broadcast)
   | "plugin:bg-update-available"
   // Run history changed (global broadcast)

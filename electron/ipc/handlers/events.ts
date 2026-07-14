@@ -79,6 +79,7 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "plugin:panel-badges-changed": "external",
   "plugin:panel-badges-cleared": "external",
   "plugin:provenance-changed": "external",
+  "forge:remote-changed": "external",
   "plugin:bg-update-available": "external",
   "run-history:update": "external",
   "plugin:deep-link": "external",

@@ -5,6 +5,7 @@ import { broadcastToRenderer } from "../../ipc/utils.js";
 import { notifyError } from "../../ipc/errorHandlers.js";
 import { clearWslGitEntry } from "../../store.js";
 import { gitServiceCache } from "../GitServiceCache.js";
+import { generateProjectId } from "../projectStorePaths.js";
 import { type ProcessEntry, type CopyTreeProgressCallback, sendToEntryWindows } from "./types.js";
 import type { WorkspaceHostEvent, WorktreeSnapshot } from "../../../shared/types/workspace-host.js";
 
@@ -313,6 +314,23 @@ export class WorkspaceHostEventRouter {
         broadcastToRenderer(CHANNELS.FORGE_TOKEN_HEALTH_CHANGED, {
           providerId: event.providerId,
           isUnhealthy: event.isUnhealthy,
+        });
+        break;
+      }
+
+      case "forge-remote-changed": {
+        // The repo gained/changed/lost a remote (#11155). Signal-only: the
+        // renderer drops its cached provider resolution for this project and
+        // re-resolves through main's precedence chain (per-project override →
+        // global default → hostname match), which is the only place that
+        // answer is authoritative. Project-scoped so views on other projects
+        // ignore it. No cache to drop on main's side: `GitService.getRemoteUrl`
+        // re-runs `getRemotes` on every call, and `GitServiceCache` only pools
+        // the client instance, never the URL.
+        const projectId = generateProjectId(entry.projectPath);
+        broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+          name: "forge:remote-changed",
+          payload: { projectId },
         });
         break;
       }

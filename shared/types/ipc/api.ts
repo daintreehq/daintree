@@ -1489,6 +1489,13 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (data: import("./forge.js").ForgeTokenHealthChangedPayload) => void
     ): () => void;
     /**
+     * The project's git remote table changed (#11155) — e.g. `git remote add
+     * origin` in an already-open project. Signal-only: re-resolve the provider
+     * for `projectId` via `resolveProvider`, which is where the precedence
+     * chain (per-project override → global default → hostname match) lives.
+     */
+    onRemoteChanged(callback: (payload: { projectId: string }) => void): () => void;
+    /**
      * Classify a `git push` failure via the resolved forge provider. Returns
      * the provider's canonical `{pluginId}.{contributionId}` id (for routing
      * the push-error banner's settings CTA) plus the provider's classification
