@@ -336,4 +336,74 @@ describe("setSelectedSchemeIdSilent crossfade option", () => {
     // Crossfading is still a silent path — OS-driven changes are not user picks.
     expect(useAppThemeStore.getState().recentSchemeIds).toEqual(["svalbard"]);
   });
+
+  it("does not start a transition when the scheme is already selected", () => {
+    const startViewTransition = vi.fn(() => ({
+      ready: Promise.resolve(),
+      finished: Promise.resolve(),
+    }));
+    (document as unknown as { startViewTransition: unknown }).startViewTransition =
+      startViewTransition;
+
+    // Desync the DOM from state (state is daintree) so a skipped injection is visible —
+    // otherwise the DOM already holds the expected tokens and the test proves nothing.
+    injectSchemeToDOM(bondi, { immediate: true });
+
+    // The OS can re-announce the appearance it already reported. Fading between two
+    // identical snapshots would be pointless — and would abort any in-flight transition.
+    useAppThemeStore.getState().setSelectedSchemeIdSilent("daintree", { crossfade: true });
+
+    expect(startViewTransition).not.toHaveBeenCalled();
+    // Still reconciles, via the plain coalesced path rather than a transition.
+    expect(canvasToken()).toBe(bondi.tokens["surface-canvas"]);
+    flushPendingTheme();
+    expect(canvasToken()).toBe(daintree.tokens["surface-canvas"]);
+  });
+
+  it("drops a crossfade superseded by a hover preview", () => {
+    let captured: (() => void) | null = null;
+    (
+      document as unknown as { startViewTransition: (cb: () => void) => unknown }
+    ).startViewTransition = (cb: () => void) => {
+      captured = cb;
+      return { ready: Promise.resolve(), finished: Promise.resolve() };
+    };
+
+    const svalbard = BUILT_IN_APP_SCHEMES.find((s) => s.id === "svalbard")!;
+
+    // An OS change starts a crossfade, then the user hovers a theme card to preview it.
+    useAppThemeStore.getState().setSelectedSchemeIdSilent("bondi", { crossfade: true });
+    useAppThemeStore.getState().injectTheme(svalbard);
+
+    captured!();
+
+    // A preview never moves selectedSchemeId, so an identity check on it would miss this —
+    // the stale fade would cancel the preview's RAF and repaint bondi over it.
+    flushPendingTheme();
+    expect(canvasToken()).toBe(svalbard.tokens["surface-canvas"]);
+  });
+
+  it("drops a superseded crossfade rather than clobbering the newer scheme", () => {
+    let captured: (() => void) | null = null;
+    (
+      document as unknown as { startViewTransition: (cb: () => void) => unknown }
+    ).startViewTransition = (cb: () => void) => {
+      captured = cb;
+      return { ready: Promise.resolve(), finished: Promise.resolve() };
+    };
+
+    // An OS appearance change starts a crossfade to bondi...
+    useAppThemeStore.getState().setSelectedSchemeIdSilent("bondi", { crossfade: true });
+    // ...but the user deliberately picks svalbard before the transition callback runs.
+    useAppThemeStore.getState().setSelectedSchemeId("svalbard");
+
+    captured!();
+
+    // The stale callback must bail entirely: its `immediate` write would otherwise
+    // cancel svalbard's pending RAF and leave the DOM on bondi while state says svalbard.
+    const svalbard = BUILT_IN_APP_SCHEMES.find((s) => s.id === "svalbard")!;
+    expect(useAppThemeStore.getState().selectedSchemeId).toBe("svalbard");
+    flushPendingTheme();
+    expect(canvasToken()).toBe(svalbard.tokens["surface-canvas"]);
+  });
 });

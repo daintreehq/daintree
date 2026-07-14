@@ -300,12 +300,28 @@ describe("appThemeViewTransition", () => {
       expect(mutate).toHaveBeenCalledTimes(1);
     });
 
-    it("does not animate before the ready promise settles", () => {
-      const { animateSpy } = installViewTransitionMock();
+    it("waits for the ready promise before animating", async () => {
+      let markReady: (() => void) | null = null;
+      const animateSpy = vi.fn();
+      document.documentElement.animate =
+        animateSpy as unknown as typeof document.documentElement.animate;
+      (document as unknown as { startViewTransition: unknown }).startViewTransition = vi.fn(() => ({
+        ready: new Promise<void>((resolve) => {
+          markReady = resolve;
+        }),
+        finished: Promise.resolve(),
+      }));
 
       runThemeCrossfade(() => {});
+      await Promise.resolve();
 
+      // The pseudo-element tree doesn't exist until `ready` — animating early targets nothing.
       expect(animateSpy).not.toHaveBeenCalled();
+
+      markReady!();
+      await Promise.resolve();
+
+      expect(animateSpy).toHaveBeenCalledTimes(1);
     });
 
     it("fades the old root snapshot out rather than wiping it", async () => {
@@ -325,20 +341,20 @@ describe("appThemeViewTransition", () => {
         easing: "ease-out",
         fill: "forwards",
       });
+      // An ambient change should read as briefer than a deliberate pick's wipe.
+      expect(options.duration).toBeLessThan(THEME_WIPE_DURATION);
     });
 
-    it("leaves the new root snapshot untouched (its opacity is the crossfade)", async () => {
+    it("animates the old root snapshot only (its opacity IS the crossfade)", async () => {
       const { animateSpy } = installViewTransitionMock();
 
       runThemeCrossfade(() => {});
       await Promise.resolve();
 
+      // Fading the new snapshot in as well would double-composite the two and dip the
+      // midpoint brightness — the new one is already opaque underneath at z-index 1.
       const targets = animateSpy.mock.calls.map(([, options]) => options.pseudoElement);
-      expect(targets).not.toContain("::view-transition-new(root)");
-    });
-
-    it("is briefer than the deliberate-pick wipe", () => {
-      expect(UI_ENTER_DURATION).toBeLessThan(THEME_WIPE_DURATION);
+      expect(targets).toEqual(["::view-transition-old(root)"]);
     });
 
     it("skips an in-flight ViewTransition before starting a new one", () => {
@@ -374,12 +390,17 @@ describe("appThemeViewTransition", () => {
     it("swallows ready-promise rejections without throwing", async () => {
       const rejected = Promise.reject(new Error("aborted"));
       rejected.catch(() => {});
-      (document as unknown as { startViewTransition: unknown }).startViewTransition = vi.fn(() => ({
+      const startSpy = vi.fn(() => ({
         ready: rejected,
         finished: Promise.resolve(),
       }));
+      (document as unknown as { startViewTransition: unknown }).startViewTransition = startSpy;
+      const mutate = vi.fn();
 
-      expect(() => runThemeCrossfade(() => {})).not.toThrow();
+      // A superseding transition rejects `ready`; the mutation is already committed, so
+      // the abort must stay silent rather than surfacing an unhandled rejection.
+      expect(() => runThemeCrossfade(mutate)).not.toThrow();
+      expect(startSpy).toHaveBeenCalledTimes(1);
       await rejected.catch(() => {});
     });
   });

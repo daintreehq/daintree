@@ -51,6 +51,18 @@ interface AppThemeState {
 let pendingScheme: AppColorScheme | null = null;
 let pendingFrame: number | null = null;
 
+// Monotonic "latest theme intent". A crossfade's DOM write is deferred to a View
+// Transition callback a frame later, by which time a newer write (deliberate pick,
+// hover preview, accent change) may have superseded it. Claiming an intent up front
+// lets that stale callback recognise it lost and bail — critical because its
+// `{ immediate: true }` write would otherwise CANCEL the newer write's pending RAF
+// and strand the DOM out of sync with the store.
+let themeIntentSeq = 0;
+
+function claimThemeIntent(): number {
+  return ++themeIntentSeq;
+}
+
 function applySchemeToDOMNow(scheme: AppColorScheme): void {
   const { colorVisionMode, accentColorOverride } = useAppThemeStore.getState();
   const effective = applyAccentOverrideToScheme(scheme, accentColorOverride);
@@ -67,6 +79,9 @@ function applySchemeToDOMNow(scheme: AppColorScheme): void {
  * mutate callback or during unmount cleanup where synchronous DOM is required.
  */
 function injectSchemeToDOM(scheme: AppColorScheme, opts?: { immediate?: boolean }): void {
+  // Every direct write is itself the latest intent, superseding any deferred one.
+  claimThemeIntent();
+
   if (opts?.immediate) {
     if (pendingFrame !== null) {
       cancelAnimationFrame(pendingFrame);
@@ -138,13 +153,23 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
   },
 
   setSelectedSchemeIdSilent: (id, opts) => {
-    const { customSchemes } = useAppThemeStore.getState();
+    const { customSchemes, selectedSchemeId: previousSchemeId } = useAppThemeStore.getState();
     const scheme = resolveAppTheme(id, customSchemes);
     set({ selectedSchemeId: scheme.id });
-    if (opts?.crossfade) {
-      // `immediate` is required inside a transition callback — the RAF-coalesced
-      // write would land after the API has already snapshotted the new state.
-      runThemeCrossfade(() => injectSchemeToDOM(scheme, { immediate: true }));
+
+    // Only transition on a real change. `nativeTheme` can re-fire for OS changes that
+    // don't move the light/dark bucket, and crossfading there would skipTransition() an
+    // in-flight wipe to animate between two identical snapshots.
+    if (opts?.crossfade && previousSchemeId !== scheme.id) {
+      // Claimed before the transition starts, so anything scheduled after this — including
+      // a second crossfade — outranks it regardless of which callback the browser runs first.
+      const intent = claimThemeIntent();
+      runThemeCrossfade(() => {
+        if (intent !== themeIntentSeq) return;
+        // `immediate` is required inside a transition callback: the RAF-coalesced write
+        // would land after the API has already snapshotted the new state.
+        injectSchemeToDOM(scheme, { immediate: true });
+      });
     } else {
       injectSchemeToDOM(scheme);
     }
