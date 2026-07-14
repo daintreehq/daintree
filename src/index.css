@@ -1659,6 +1659,16 @@ body,
     opacity: 1;
   }
 
+  /* Empty-grid launcher entry stagger — drop the keyframes and snap every
+   * section to its resting state. The sections' `motion-safe:` utilities
+   * already cover the OS preference; this rule is what honours the in-app
+   * reduce-animations toggle, which `motion-safe:` cannot see. */
+  .launcher-section-enter {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+
   /* Fleet polish animations — opacity-only already, but drop the keyframe
    * entirely to keep WCAG 2.3.3 strict compliance. The bar stripe pseudos
    * stay at their static opacity (1); only the dedicated exit overlay is

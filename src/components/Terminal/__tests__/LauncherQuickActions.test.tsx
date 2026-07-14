@@ -64,7 +64,20 @@ vi.mock("@/components/ui/Kbd", () => ({
   KbdChord: ({ shortcut }: { shortcut: string }) => <span data-testid="kbd">{shortcut}</span>,
 }));
 
+import { buttonVariants } from "@/components/ui/button";
 import { LauncherQuickActions } from "../LauncherQuickActions";
+
+/**
+ * The press treatment every shared `Button` inherits, read out of the cva
+ * itself rather than copied: the `ghost` variant contributes no `active:`
+ * classes of its own, so what survives is exactly the base press recipe. The
+ * launcher's raw buttons don't use `Button`, so this is what keeps them from
+ * drifting away from it.
+ */
+const basePressTreatment = () =>
+  buttonVariants({ variant: "ghost" })
+    .split(/\s+/)
+    .filter((token) => token.startsWith("active:"));
 
 beforeEach(() => {
   h.dispatch.mockClear();
@@ -192,5 +205,44 @@ describe("LauncherQuickActions", () => {
     expect(claude.getAttribute("aria-keyshortcuts")).toBe("Meta+Alt+C");
     expect(claude.getAttribute("aria-label")).toBeNull();
     expect(screen.getByTestId("kbd").textContent).toBe("Cmd+Alt+C");
+  });
+
+  // These are hand-rolled buttons, not the shared `Button`, so nothing makes
+  // them inherit its press feedback — without this they drift back to feeling
+  // inert on click while every other button in the app snaps.
+  describe("press feedback", () => {
+    const launcherButtons = () => [
+      screen.getByRole("button", { name: /Claude/i }),
+      screen.getByRole("button", { name: /New terminal/i }),
+      screen.getByRole("button", { name: /Search agents & panels/i }),
+    ];
+
+    it("carries the same press treatment the shared Button owns", () => {
+      const press = basePressTreatment();
+      // Guard: if the shared recipe ever loses its `active:` classes there is
+      // nothing left to enforce, and the loop below would pass vacuously.
+      expect(press.length).toBeGreaterThan(0);
+
+      render(<LauncherQuickActions />);
+
+      for (const button of launcherButtons()) {
+        const classes = button.className.split(/\s+/);
+        for (const token of press) expect(classes).toContain(token);
+      }
+    });
+
+    it("keeps transform out of its transition set, so the press snaps", () => {
+      render(<LauncherQuickActions />);
+
+      for (const button of launcherButtons()) {
+        // A bare `transition`/`transition-all` — or an explicit
+        // `transition-transform` — would ease the scale back over the shared
+        // 150ms instead of snapping it.
+        const widened = button.className
+          .split(/\s+/)
+          .filter((c) => ["transition", "transition-all", "transition-transform"].includes(c));
+        expect(widened).toEqual([]);
+      }
+    });
   });
 });
