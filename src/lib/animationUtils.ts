@@ -128,6 +128,12 @@ export const UI_TOOLTIP_SKIP_DELAY_DURATION = DURATION_300;
 export const UI_ENTER_EASING = EASE_SPRING_CRITICAL;
 export const UI_EXIT_EASING = "cubic-bezier(0.2, 0, 0.7, 0)";
 
+/** Scrim/backdrop fade easing. A dialog backdrop only interpolates opacity, and
+ *  opacity has no perceived mass — the eased and spring curves used for the card
+ *  read as inertia the scrim doesn't have. Shared by `AppDialog` and
+ *  `AppPaletteDialog` so both overlay families dim identically. */
+export const UI_SCRIM_EASING = "linear";
+
 /** Framer-motion-compatible easing tuples. framer-motion 12.x tightened
  *  Transition.ease to its own Easing type and rejects CSS string easings. */
 export const UI_ENTER_EASING_FM: [number, number, number, number] = [0.2, 0, 0, 1];

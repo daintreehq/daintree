@@ -835,3 +835,57 @@ describe("AppDialog co-located live region", () => {
     expect(liveRegions.length).toBeGreaterThan(0);
   });
 });
+
+// WCAG 2.3.3: opacity is not vestibular, movement is. Reduced motion must strip
+// the card's rise/zoom while leaving both fades intact. jsdom evaluates neither
+// Tailwind's output nor the `motion-reduce` media query, so the policy is only
+// observable here as the set of variant utilities the component elects to emit.
+describe("AppDialog reduced-motion policy", () => {
+  beforeEach(() => {
+    mockPrevOpen = false;
+    _resetForTests();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
+  });
+
+  afterEach(() => {
+    _resetForTests();
+  });
+
+  function getCard(): Element {
+    const card = screen.getByTestId("test-dialog").firstElementChild;
+    if (!card) throw new Error("AppDialog rendered no card inside the backdrop");
+    return card;
+  }
+
+  it("keeps the backdrop scrim fading under reduced motion", () => {
+    renderDialog();
+    const backdrop = screen.getByTestId("test-dialog");
+
+    expect(backdrop.className).toContain("transition-opacity");
+    expect(backdrop.className).not.toContain("motion-reduce:transition-none");
+  });
+
+  it("narrows the card to an opacity-only transition under reduced motion", () => {
+    renderDialog();
+
+    expect(getCard().className).toContain("motion-reduce:transition-opacity");
+    expect(getCard().className).not.toContain("motion-reduce:transition-none");
+  });
+
+  it("freezes the card's translate and scale under reduced motion", () => {
+    renderDialog();
+
+    // Tailwind v4 emits `translate`/`scale` as individual properties, so both
+    // need explicit neutralizers — `transform-none` would not cover them.
+    expect(getCard().className).toContain("motion-reduce:translate-none");
+    expect(getCard().className).toContain("motion-reduce:scale-none");
+  });
+
+  it("gives the backdrop an explicit easing rather than the Tailwind default", () => {
+    renderDialog();
+    const backdrop = screen.getByTestId("test-dialog");
+
+    expect(backdrop.style.transitionTimingFunction).not.toBe("");
+  });
+});

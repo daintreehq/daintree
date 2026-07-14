@@ -29,6 +29,7 @@ import {
   UI_EXIT_DURATION,
   UI_ENTER_EASING,
   UI_EXIT_EASING,
+  UI_SCRIM_EASING,
   getUiTransitionDuration,
 } from "@/lib/animationUtils";
 import { X } from "lucide-react";
@@ -372,13 +373,15 @@ export function AppDialog({
         className={cn(
           "fixed inset-0 flex items-center justify-center bg-scrim-medium backdrop-blur-[var(--theme-scrim-blur)] backdrop-saturate-[var(--theme-material-saturation)]",
           zIndex === "nested" ? "z-[var(--z-nested-dialog)]" : "z-[var(--z-modal)]",
+          // Opacity-only, so reduced motion leaves it alone: a scrim fade is not
+          // spatial motion. WCAG 2.3.3.
           "transition-opacity",
-          "motion-reduce:transition-none motion-reduce:duration-0",
           isVisible ? "opacity-100" : "opacity-0"
         )}
         style={{
           right: portalOffset,
           transitionDuration: isVisible ? `${UI_ENTER_DURATION}ms` : `${UI_EXIT_DURATION}ms`,
+          transitionTimingFunction: UI_SCRIM_EASING,
         }}
         onPointerDown={handleBackdropPointerDown}
         onPointerUp={handleBackdropPointerUp}
@@ -401,7 +404,9 @@ export function AppDialog({
             // and `scale` properties, which `transform` in a transition list
             // does NOT cover — list them explicitly or the rise/zoom snaps.
             "transition-[opacity,translate,scale]",
-            "motion-reduce:transition-none motion-reduce:duration-0 motion-reduce:translate-none motion-reduce:scale-none",
+            // Reduced motion keeps the fade and drops only the rise/zoom: opacity
+            // is not vestibular, movement is. WCAG 2.3.3.
+            "motion-reduce:transition-opacity motion-reduce:translate-none motion-reduce:scale-none",
             isVisible
               ? "opacity-100 translate-y-0 scale-100"
               : "opacity-0 translate-y-1 scale-[0.98]",

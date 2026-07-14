@@ -7,7 +7,12 @@ vi.mock("@/components/ui/ScrollShadow", () => ({
   ScrollShadow: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
-vi.mock("@/lib/animationUtils", () => ({
+// Spread the real module rather than hand-listing exports: the palette pulls in
+// more of animationUtils than this test cares about, and a factory that misses a
+// single constant fails every test in the file at render time. Only the timing
+// values that would make the palette animate are overridden.
+vi.mock("@/lib/animationUtils", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/animationUtils")>()),
   UI_ENTER_DURATION: 0,
   UI_EXIT_DURATION: 0,
   UI_ENTER_EASING: "linear",
