@@ -1017,10 +1017,15 @@ body,
   }
 }
 
-/* No will-change: unlike .animate-agent-pulse (dropped on animationend), this
- * class stays on the indicator for the whole checked lifetime. */
+/* The indicator mounts with this class already on it and keeps it for the whole
+ * checked lifetime — unlike .animate-agent-pulse, which is dropped on
+ * animationend. Hence `backwards` rather than `both`: it still pins the opening
+ * frame to `from` (no flash of an opaque checkmark before the animation runs),
+ * but releases the element on completion instead of parking a permanent
+ * scale(1) effect on it. For the same reason there is no will-change — the hint
+ * would outlive the 150ms it could help. */
 .animate-checkbox-check {
-  animation: checkbox-check-in var(--duration-150) var(--ease-out-expo) 1 both;
+  animation: checkbox-check-in var(--duration-150) var(--ease-out-expo) 1 backwards;
 }
 
 /* Organic breathing animation for waiting/loading states

@@ -12,12 +12,68 @@ import { SettingsCheckbox } from "../SettingsCheckbox";
 import { SettingsSwitch } from "../SettingsSwitch";
 import { PresetColorPicker } from "../PresetColorPicker";
 
+// Strip CSS comments without treating a `/*` inside a quoted string as one —
+// index.css opens with `@source not "../.lessons/**/*"`, whose glob contains a
+// literal `/*` ... `*/` pair.
+function stripComments(css: string): string {
+  let out = "";
+  let quote: string | null = null;
+
+  for (let i = 0; i < css.length; i += 1) {
+    const char = css[i];
+
+    if (quote !== null) {
+      out += char;
+      if (char === "\\") out += css[++i] ?? "";
+      else if (char === quote) quote = null;
+    } else if (char === '"' || char === "'") {
+      quote = char;
+      out += char;
+    } else if (char === "/" && css[i + 1] === "*") {
+      const close = css.indexOf("*/", i + 2);
+      i = close === -1 ? css.length : close + 1;
+    } else {
+      out += char;
+    }
+  }
+
+  return out;
+}
+
+// Split a block body into its top-level rules. Nested rules stay bundled inside
+// their parent's declarations, so a rule guarded by a nested at-rule (a media
+// query, say) is never mistaken for one that applies unconditionally.
+function topLevelRules(body: string): Array<{ prelude: string; declarations: string }> {
+  const rules: Array<{ prelude: string; declarations: string }> = [];
+  let depth = 0;
+  let start = 0;
+  let open = 0;
+
+  for (let i = 0; i < body.length; i += 1) {
+    if (body[i] === "{") {
+      if (depth === 0) open = i;
+      depth += 1;
+    } else if (body[i] === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        rules.push({
+          prelude: body.slice(start, open),
+          declarations: body.slice(open + 1, i),
+        });
+        start = i + 1;
+      }
+    }
+  }
+
+  return rules;
+}
+
 // Collect every `animate-*` class that a `@variant reduce-motion` block silences
-// with `animation: none`. Comments are stripped first — index.css documents the
-// variant with a literal `@variant reduce-motion { ... }` inside a comment, which
-// would otherwise be scanned as a real block.
+// outright. Only bare `.animate-x` selector items count: `.animate-x::before`,
+// `.animate-x .child` and `:not(.animate-x)` all kill motion on something other
+// than the element carrying the class, and must not be read as coverage.
 function reduceMotionKilledClasses(css: string): Set<string> {
-  const source = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  const source = stripComments(css);
   const killed = new Set<string>();
   const marker = "@variant reduce-motion";
 
@@ -33,11 +89,15 @@ function reduceMotionKilledClasses(css: string): Set<string> {
       end += 1;
     }
 
-    for (const [, selectors, declarations] of source
-      .slice(open + 1, end - 1)
-      .matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-      if (!/animation:\s*none/.test(declarations)) continue;
-      for (const [, name] of selectors.matchAll(/\.(animate-[\w-]+)/g)) killed.add(name);
+    for (const { prelude, declarations } of topLevelRules(source.slice(open + 1, end - 1))) {
+      // `(?<!-)` rules out a custom property such as `--animation: none`.
+      if (prelude.trimStart().startsWith("@")) continue;
+      if (!/(?<!-)animation:\s*none/.test(declarations)) continue;
+
+      for (const item of prelude.split(",")) {
+        const name = /^\.(animate-[\w-]+)$/.exec(item.trim())?.[1];
+        if (name !== undefined) killed.add(name);
+      }
     }
 
     from = end;
@@ -916,8 +976,9 @@ describe("SettingsCheckbox", () => {
   // carries must be registered in a reduce-motion kill-list, or the check-in
   // animation keeps playing for users who asked for no motion. Reads the classes
   // off the rendered node rather than naming them, so a rename in either file
-  // that isn't mirrored in the other fails here.
-  it("kills the checked indicator's animation under reduce-motion", () => {
+  // that isn't mirrored in the other fails here. This asserts source
+  // registration, not computed style — jsdom applies no stylesheet.
+  it("registers the checked indicator's animate-* classes in the reduce-motion kill-list", () => {
     render(
       <SettingsCheckbox
         label="Test Setting"
