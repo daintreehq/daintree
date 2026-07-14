@@ -11,7 +11,9 @@ import {
   useContext,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
+import { LayoutGroup, m } from "framer-motion";
 import { logError } from "@/utils/logger";
+import { getUiAnimationDuration, EASE_OUT_EXPO_FM } from "@/lib/animationUtils";
 import {
   usePortalStore,
   usePerformanceModeStore,
@@ -638,36 +640,38 @@ function SettingsDialogInner({
             aria-label="Settings sections"
             onKeyDown={handleTablistKeyDown}
           >
-            {getSettingsNavGroups(activeScope).map((group) => (
-              <NavGroup key={group.label} label={group.label}>
-                {group.entries.map((entry) => {
-                  const tabId = entry.id as SettingsTab;
-                  const isLazy = entry.importKind === "lazy";
-                  return (
-                    <NavItem
-                      key={entry.id}
-                      tab={tabId}
-                      icon={entry.icon}
-                      label={entry.label}
-                      activeTab={activeTab}
-                      isSearching={isSearching}
-                      matchCount={matchCounts[tabId]}
-                      modified={modifiedTabs.has(tabId)}
-                      hasError={tabsWithErrors.has(tabId)}
-                      onSelect={handleNavSelect}
-                      onPrefetchImport={isLazy ? entry.importer : undefined}
-                      onPrefetchMount={
-                        isLazy
-                          ? () => {
-                              if (isOpenRef.current) markTabVisited(tabId);
-                            }
-                          : undefined
-                      }
-                    />
-                  );
-                })}
-              </NavGroup>
-            ))}
+            <LayoutGroup id="settings-nav">
+              {getSettingsNavGroups(activeScope).map((group) => (
+                <NavGroup key={group.label} label={group.label}>
+                  {group.entries.map((entry) => {
+                    const tabId = entry.id as SettingsTab;
+                    const isLazy = entry.importKind === "lazy";
+                    return (
+                      <NavItem
+                        key={entry.id}
+                        tab={tabId}
+                        icon={entry.icon}
+                        label={entry.label}
+                        activeTab={activeTab}
+                        isSearching={isSearching}
+                        matchCount={matchCounts[tabId]}
+                        modified={modifiedTabs.has(tabId)}
+                        hasError={tabsWithErrors.has(tabId)}
+                        onSelect={handleNavSelect}
+                        onPrefetchImport={isLazy ? entry.importer : undefined}
+                        onPrefetchMount={
+                          isLazy
+                            ? () => {
+                                if (isOpenRef.current) markTabVisited(tabId);
+                              }
+                            : undefined
+                        }
+                      />
+                    );
+                  })}
+                </NavGroup>
+              ))}
+            </LayoutGroup>
           </ScrollShadow>
 
           <div className="pt-2 mt-2 border-t border-daintree-border px-2">
@@ -1183,7 +1187,7 @@ function SettingsTabScrollEffect({
   return null;
 }
 
-function NavGroup({ label, children }: { label: string; children: React.ReactNode }) {
+export function NavGroup({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div role="none">
       <span
@@ -1218,7 +1222,7 @@ interface NavItemProps {
   onPrefetchMount?: () => void;
 }
 
-function NavItem({
+export function NavItem({
   tab,
   icon,
   label,
@@ -1254,12 +1258,30 @@ function NavItem({
         "relative text-left px-3 py-1.5 rounded-[var(--radius-md)] text-sm transition-colors flex items-center gap-2 w-full",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
         "settings-nav-item",
-        active
-          ? "text-daintree-text before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-[2px] before:rounded-r before:bg-daintree-accent before:content-['']"
-          : "text-text-secondary hover:text-daintree-text"
+        active ? "text-daintree-text" : "text-text-secondary hover:text-daintree-text"
       )}
       data-active={active ? "true" : undefined}
     >
+      {active && (
+        // Shared across every nav item in this scope, so selecting another tab
+        // projects this same node to its new position (transform-only) instead
+        // of unmounting and remounting the marker. Scoping the id keeps a
+        // cross-scope jump (a search hit in the other scope) from sliding the
+        // marker between two unrelated nav trees. A span, not a div: <button>
+        // takes phrasing content only, and `absolute` makes it block anyway.
+        // Duration comes from getUiAnimationDuration() rather than the raw
+        // constant because performance mode has to collapse this to 0 — it
+        // suppresses CSS transitions, but cannot stop motion's JS transform
+        // writes, which are exactly what a projection animation emits.
+        <m.span
+          layoutId={`active-indicator-${scopeForTab(tab)}`}
+          layout="position"
+          className="pointer-events-none absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-r bg-daintree-accent"
+          transition={{ duration: getUiAnimationDuration() / 1000, ease: EASE_OUT_EXPO_FM }}
+          aria-hidden="true"
+          data-settings-nav-indicator="true"
+        />
+      )}
       <span className="relative">
         {icon}
         {(hasError || modified) && (

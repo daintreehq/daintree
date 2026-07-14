@@ -60,8 +60,10 @@
 
 /* Active nav item ELEVATES toward surface-panel-elevated (overlay-raised),
    it does not darken a recessed sidebar. The single load-bearing accent for
-   the active item is the 2px accent marker (a left-edge before: pseudo-element)
-   in SettingsDialog.tsx. The inset ring is polarity-scoped through the token:
+   the active item is the 2px accent marker — a shared left-edge indicator that
+   slides between items, rendered in SettingsDialog.tsx as a layoutId-projected
+   motion node (not a pseudo-element, which motion cannot animate). The inset
+   ring is polarity-scoped through the token:
    dark palettes set --settings-nav-active-shadow to a subtle ring; light
    palettes drop the value so it falls back to `none`, leaving the 2px marker
    as the sole accent cue (S1). Keeping the consumer wired preserves the dark
