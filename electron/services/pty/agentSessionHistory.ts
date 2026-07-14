@@ -2,7 +2,12 @@
 import { readFileSync, statSync } from "fs";
 import { mkdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import { resilientAtomicWriteFile } from "../../utils/fs.js";
+import {
+  resilientAtomicWriteFile,
+  tightenDirPermissions,
+  OWNER_RW_FILE_MODE,
+  OWNER_RWX_DIR_MODE,
+} from "../../utils/fs.js";
 import type {
   AgentSessionRecord,
   AgentSessionRetentionDays,
@@ -218,7 +223,8 @@ export async function persistAgentSession(
 
   await enqueueWrite(async () => {
     const dir = path.dirname(filePath);
-    await mkdir(dir, { recursive: true });
+    await mkdir(dir, { recursive: true, mode: OWNER_RWX_DIR_MODE });
+    await tightenDirPermissions(dir);
 
     const now = Date.now();
     const fullRecord: AgentSessionRecord = { ...record, savedAt: now };
@@ -226,7 +232,9 @@ export async function persistAgentSession(
     const existing = await readSessionHistory(userData);
     const updated = evictRecords([fullRecord, ...existing], now, retentionDaysToMs(retentionDays));
 
-    await resilientAtomicWriteFile(filePath, JSON.stringify(updated, null, 2));
+    await resilientAtomicWriteFile(filePath, JSON.stringify(updated, null, 2), "utf-8", {
+      mode: OWNER_RW_FILE_MODE,
+    });
     refreshCacheAfterWrite(filePath, updated);
   });
 }
@@ -261,7 +269,9 @@ export async function pruneAgentSessions(
   await enqueueWrite(async () => {
     const existing = await readSessionHistory(userData);
     const pruned = evictRecords(existing, Date.now(), retentionDaysToMs(retentionDays));
-    await resilientAtomicWriteFile(filePath, JSON.stringify(pruned, null, 2));
+    await resilientAtomicWriteFile(filePath, JSON.stringify(pruned, null, 2), "utf-8", {
+      mode: OWNER_RW_FILE_MODE,
+    });
     refreshCacheAfterWrite(filePath, pruned);
   });
 }
@@ -275,14 +285,16 @@ export async function clearAgentSessions(worktreeId?: string, userData?: string)
   await enqueueWrite(async () => {
     if (!worktreeId) {
       // Clear all
-      await resilientAtomicWriteFile(filePath, "[]");
+      await resilientAtomicWriteFile(filePath, "[]", "utf-8", { mode: OWNER_RW_FILE_MODE });
       refreshCacheAfterWrite(filePath, []);
       return;
     }
 
     const existing = await readSessionHistory(userData);
     const filtered = existing.filter((r) => r.worktreeId !== worktreeId);
-    await resilientAtomicWriteFile(filePath, JSON.stringify(filtered, null, 2));
+    await resilientAtomicWriteFile(filePath, JSON.stringify(filtered, null, 2), "utf-8", {
+      mode: OWNER_RW_FILE_MODE,
+    });
     refreshCacheAfterWrite(filePath, filtered);
   });
 }

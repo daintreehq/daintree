@@ -65,6 +65,44 @@ describe("agentSessionHistory", () => {
     expect(records).toEqual([]);
   });
 
+  // chmod is a POSIX no-op on Windows, so the mode-bit assertions only run there.
+  const posixIt = process.platform === "win32" ? it.skip : it;
+
+  posixIt("writes the history file owner-only across persist, prune, and clear", async () => {
+    const filePath = getSessionHistoryPath(userDataDir)!;
+    const base = {
+      agentId: "claude",
+      worktreeId: "wt-1",
+      title: null,
+      projectId: null,
+    };
+
+    await persistAgentSession({ ...base, sessionId: "s1" }, userDataDir);
+    expect((await fsp.stat(filePath)).mode & 0o777).toBe(0o600);
+
+    await pruneAgentSessions(30, userDataDir);
+    expect((await fsp.stat(filePath)).mode & 0o777).toBe(0o600);
+
+    // Worktree-filtered clear rewrites the file through a separate branch.
+    await persistAgentSession({ ...base, sessionId: "s2", worktreeId: "wt-2" }, userDataDir);
+    await clearAgentSessions("wt-1", userDataDir);
+    expect((await fsp.stat(filePath)).mode & 0o777).toBe(0o600);
+
+    await clearAgentSessions(undefined, userDataDir);
+    expect((await fsp.stat(filePath)).mode & 0o777).toBe(0o600);
+  });
+
+  posixIt("tightens a pre-existing world-readable parent directory (upgrade case)", async () => {
+    await fsp.chmod(userDataDir, 0o755);
+
+    await persistAgentSession(
+      { agentId: "claude", worktreeId: "wt-1", title: null, projectId: null, sessionId: "s1" },
+      userDataDir
+    );
+
+    expect((await fsp.stat(userDataDir)).mode & 0o777).toBe(0o700);
+  });
+
   it("persists and reads a session record", async () => {
     await persistAgentSession(
       {

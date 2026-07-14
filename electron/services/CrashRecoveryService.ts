@@ -15,7 +15,14 @@ import { store, windowStatesStore } from "../store.js";
 import { isGpuDisabledByFlag } from "./GpuCrashMonitorService.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
 import { getActionBreadcrumbService } from "./ActionBreadcrumbService.js";
-import { resilientAtomicWriteFileSync, resilientRenameSync } from "../utils/fs.js";
+import {
+  resilientAtomicWriteFileSync,
+  resilientRenameSync,
+  tightenDirPermissionsSync,
+  tightenFilePermissionsSync,
+  OWNER_RW_FILE_MODE,
+  OWNER_RWX_DIR_MODE,
+} from "../utils/fs.js";
 import { WATCHDOG_KILL_FLAG_NAME } from "../watchdog-host-core.js";
 
 const MAX_CRASH_LOGS = 10;
@@ -206,9 +213,12 @@ export class CrashRecoveryService {
    * file that exists.
    */
   private writeCrashLog(entry: CrashLogEntry): string {
-    fs.mkdirSync(this.crashesDir, { recursive: true });
+    fs.mkdirSync(this.crashesDir, { recursive: true, mode: OWNER_RWX_DIR_MODE });
+    tightenDirPermissionsSync(this.crashesDir);
     const logPath = path.join(this.crashesDir, `crash-${entry.id}.json`);
-    resilientAtomicWriteFileSync(logPath, JSON.stringify(entry, null, 2), "utf-8");
+    resilientAtomicWriteFileSync(logPath, JSON.stringify(entry, null, 2), "utf-8", {
+      mode: OWNER_RW_FILE_MODE,
+    });
     return logPath;
   }
 
@@ -338,7 +348,8 @@ export class CrashRecoveryService {
   takeBackup(): void {
     try {
       const backupDir = path.join(this.userData, BACKUP_DIR);
-      fs.mkdirSync(backupDir, { recursive: true });
+      fs.mkdirSync(backupDir, { recursive: true, mode: OWNER_RWX_DIR_MODE });
+      tightenDirPermissionsSync(backupDir);
 
       const snapshot = this.captureSessionSnapshot();
 
@@ -362,7 +373,9 @@ export class CrashRecoveryService {
       // the write and the previous file just isn't refreshed this cycle.
       this.rotateBackup();
 
-      resilientAtomicWriteFileSync(this.backupPath, JSON.stringify(snapshot), "utf-8");
+      resilientAtomicWriteFileSync(this.backupPath, JSON.stringify(snapshot), "utf-8", {
+        mode: OWNER_RW_FILE_MODE,
+      });
       this.lastWrittenStateJson = stateJson;
     } catch (err) {
       console.error("[CrashRecovery] Failed to take backup:", err);
@@ -373,6 +386,10 @@ export class CrashRecoveryService {
     if (!fs.existsSync(this.backupPath)) return;
     try {
       resilientRenameSync(this.backupPath, this.previousBackupPath);
+      // rename preserves the source mode: on the first rotation after an
+      // upgrade, the pre-fix 0o644 current backup would land as `previous`
+      // still world-readable. Tighten the rotated file explicitly.
+      tightenFilePermissionsSync(this.previousBackupPath);
     } catch (err) {
       // Rotation is best-effort; the new write below will still proceed and
       // overwrite the (possibly stale) previous file on the next cycle.
@@ -597,7 +614,9 @@ export class CrashRecoveryService {
         // is non-fatal — the in-memory entry is the source of truth.
         if (logPath) {
           try {
-            resilientAtomicWriteFileSync(logPath, JSON.stringify(entry, null, 2), "utf-8");
+            resilientAtomicWriteFileSync(logPath, JSON.stringify(entry, null, 2), "utf-8", {
+              mode: OWNER_RW_FILE_MODE,
+            });
           } catch (err) {
             console.error("[CrashRecovery] Failed to persist watchdog annotation:", err);
           }
@@ -678,17 +697,26 @@ export class CrashRecoveryService {
     // Idempotency: if a prior consumeMarker run completed the rename but
     // was killed before deleteMarker, the destination is already on disk
     // and the live backup is gone. Reuse the existing crashed-* file.
-    if (fs.existsSync(crashedBackupPath)) return crashedBackupPath;
+    if (fs.existsSync(crashedBackupPath)) {
+      // A pre-fix run may have left this forensic copy world-readable.
+      tightenFilePermissionsSync(crashedBackupPath);
+      return crashedBackupPath;
+    }
 
     if (!fs.existsSync(this.backupPath)) return null;
 
     try {
       resilientRenameSync(this.backupPath, crashedBackupPath);
+      // rename preserves the source mode — tighten in case the live backup was
+      // a legacy 0o644 file from before this change.
+      tightenFilePermissionsSync(crashedBackupPath);
       return crashedBackupPath;
     } catch (renameErr) {
       try {
         const content = fs.readFileSync(this.backupPath, "utf-8");
-        resilientAtomicWriteFileSync(crashedBackupPath, content, "utf-8");
+        resilientAtomicWriteFileSync(crashedBackupPath, content, "utf-8", {
+          mode: OWNER_RW_FILE_MODE,
+        });
         try {
           fs.unlinkSync(this.backupPath);
         } catch {
@@ -868,7 +896,9 @@ export class CrashRecoveryService {
           ? path.join(this.crashesDir, `crash-${crashEntry.id}.json`)
           : undefined,
       };
-      resilientAtomicWriteFileSync(this.markerPath, JSON.stringify(marker), "utf-8");
+      resilientAtomicWriteFileSync(this.markerPath, JSON.stringify(marker), "utf-8", {
+        mode: OWNER_RW_FILE_MODE,
+      });
     } catch (err) {
       console.error("[CrashRecovery] Failed to write marker:", err);
     }
@@ -887,7 +917,9 @@ export class CrashRecoveryService {
       const marker = JSON.parse(raw) as MarkerFile;
       if (!isValidMarker(marker)) return;
       mutate(marker);
-      resilientAtomicWriteFileSync(this.markerPath, JSON.stringify(marker), "utf-8");
+      resilientAtomicWriteFileSync(this.markerPath, JSON.stringify(marker), "utf-8", {
+        mode: OWNER_RW_FILE_MODE,
+      });
     } catch (err) {
       console.warn("[CrashRecovery] Failed to mutate marker:", err);
     }

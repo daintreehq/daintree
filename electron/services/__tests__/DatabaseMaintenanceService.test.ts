@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockPowerMonitor = vi.hoisted(() => ({
@@ -475,6 +477,66 @@ describe("DatabaseMaintenanceService", () => {
       "/fake/daintree.db.backup"
     );
     await service.dispose();
+  });
+
+  // chmod is a POSIX no-op on Windows, so the mode-bit assertion only runs there.
+  const posixIt = process.platform === "win32" ? it.skip : it;
+
+  posixIt("promotes the backup file owner-only", async () => {
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const realDir = actual.mkdtempSync(path.join(os.tmpdir(), "daintree-dbmaint-perms-"));
+    const backupPath = path.join(realDir, "daintree.db.backup");
+    mockDbModule.getBackupPath.mockReturnValue(backupPath);
+    let tmpModeAtBackupStart: number | undefined;
+    mockSqlite.backup.mockImplementation(async (tmp: string) => {
+      // The candidate is pre-created owner-only BEFORE the copy runs, so it is
+      // never world-readable during the (potentially slow) page transfer.
+      tmpModeAtBackupStart = actual.statSync(tmp).mode & 0o777;
+      actual.writeFileSync(tmp, "backup-bytes");
+      // Simulate a copy that reset perms — the post-backup chmod must recover them.
+      actual.chmodSync(tmp, 0o644);
+    });
+    // Let the promotion rename actually run, and assert the candidate is ALREADY
+    // 0o600 at rename time — this proves the chmod happens BEFORE promotion, so
+    // the final .backup is never briefly world-readable at its real path.
+    let tmpModeAtRename: number | undefined;
+    vi.mocked(fs.renameSync).mockImplementation(((src: string, dest: string) => {
+      tmpModeAtRename = actual.statSync(src).mode & 0o777;
+      return actual.renameSync(src, dest);
+    }) as unknown as typeof fs.renameSync);
+
+    try {
+      const service = new DatabaseMaintenanceService();
+      // dispose() runs the final backup on main (probeOnMain), no worker needed.
+      await service.dispose();
+
+      expect(tmpModeAtBackupStart).toBe(0o600);
+      expect(tmpModeAtRename).toBe(0o600);
+      expect(actual.existsSync(backupPath)).toBe(true);
+      expect(actual.statSync(backupPath).mode & 0o777).toBe(0o600);
+    } finally {
+      actual.rmSync(realDir, { recursive: true, force: true });
+    }
+  });
+
+  posixIt("tightens a legacy world-readable backup on initialize", () => {
+    const realDir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-dbmaint-legacy-"));
+    const backupPath = path.join(realDir, "daintree.db.backup");
+    try {
+      // A .backup written by a pre-fix version, still world-readable.
+      fs.writeFileSync(backupPath, "legacy backup bytes");
+      fs.chmodSync(backupPath, 0o644);
+      mockDbModule.getBackupPath.mockReturnValue(backupPath);
+      mockDbModule.probeDb.mockReturnValue(true); // healthy → no recovery path
+
+      const service = new DatabaseMaintenanceService();
+      // initialize() alone starts no timers/listeners, so no dispose is needed.
+      service.initialize(true);
+
+      expect(fs.statSync(backupPath).mode & 0o777).toBe(0o600);
+    } finally {
+      fs.rmSync(realDir, { recursive: true, force: true });
+    }
   });
 
   it("suspends all backups once the deferred quick_check reports corruption", async () => {

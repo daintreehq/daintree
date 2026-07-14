@@ -11,6 +11,7 @@ import {
 } from "./persistence/db.js";
 import { runDbWork } from "./persistence/dbWorkerClient.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
+import { tightenFilePermissionsSync, OWNER_RW_FILE_MODE } from "../utils/fs.js";
 import type { DbProbeResult } from "./persistence/dbWorkerProtocol.js";
 import type { DatabaseRecovery } from "../../shared/types/ipc/app.js";
 
@@ -48,6 +49,11 @@ class DatabaseMaintenanceService {
     this.initialized = true;
 
     const dbPath = getDbPath();
+
+    // Retroactively tighten a legacy .backup written by a pre-fix version before
+    // recovery reads or copies it. runBackup rewrites it 0o600 on every tick, but
+    // this closes the boot→first-tick window and the corruption-recovery path.
+    tightenFilePermissionsSync(getBackupPath());
 
     // On clean-exit boots corruption is impossible — skip the O(size) page scan
     // and do a cheap open instead. The full quick_check runs from the idle
@@ -303,7 +309,23 @@ class DatabaseMaintenanceService {
     const tmpPath = backupPath + ".tmp";
 
     try {
+      // Pre-create the candidate owner-only so it is never world-readable during
+      // the (potentially slow) page copy — the temp is a verbatim copy of the
+      // whole database. "w" truncates any stale temp from a crashed run; better-
+      // sqlite3 backs up correctly into a pre-existing empty file. POSIX-only.
+      if (process.platform !== "win32") {
+        try {
+          fs.closeSync(fs.openSync(tmpPath, "w", OWNER_RW_FILE_MODE));
+        } catch {
+          // best-effort; the post-backup chmod below still tightens the result
+        }
+      }
+
       await sqlite.backup(tmpPath);
+
+      // Re-assert owner-only after the copy (exactness + covers the win32/no-
+      // precreate path) before the rename promotes it to the final .backup path.
+      tightenFilePermissionsSync(tmpPath);
 
       // sqlite.backup() copies pages verbatim and never validates them, so a
       // corrupt source yields a corrupt copy with no error at all. Probe the

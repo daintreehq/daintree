@@ -195,6 +195,49 @@ describe("attemptRecovery", () => {
     expect(files.filter((f) => f.includes(".corrupt-")).length).toBe(3);
   });
 
+  // chmod is a POSIX no-op on Windows, so the mode-bit assertions only run there.
+  const posixIt = process.platform === "win32" ? it.skip : it;
+
+  posixIt("tightens the restored database and the quarantined file to owner-only", () => {
+    const dbPath = path.join(tmpDir, "daintree.db");
+    const backupPath = dbPath + ".backup";
+
+    // Simulate a pre-fix install: everything world-readable.
+    fs.writeFileSync(dbPath, "corrupt");
+    fs.writeFileSync(backupPath, "valid backup");
+    fs.chmodSync(dbPath, 0o644);
+    fs.chmodSync(backupPath, 0o644);
+
+    const result = attemptRecovery(dbPath);
+
+    expect(result!.kind).toBe("restored-from-backup");
+    // Restored copy is owner-only despite the 0o644 backup source.
+    expect(fs.statSync(dbPath).mode & 0o777).toBe(0o600);
+    // The quarantined forensic copy is tightened too, not left at 0o644.
+    expect(fs.statSync(result!.quarantinedPath!).mode & 0o777).toBe(0o600);
+  });
+
+  posixIt("tightens a preserved-aside backup to owner-only", () => {
+    const dbPath = path.join(tmpDir, "daintree.db");
+    const backupPath = dbPath + ".backup";
+    fs.writeFileSync(dbPath, "corrupt");
+    fs.writeFileSync(backupPath, "the user's real data");
+    fs.chmodSync(backupPath, 0o644);
+
+    // Unverifiable backup → preserved aside rather than restored.
+    mockPragma.mockImplementation(() => {
+      throw Object.assign(new Error("io error"), { code: "SQLITE_IOERR_SHORT_READ" });
+    });
+
+    attemptRecovery(dbPath);
+
+    const preserved = fs
+      .readdirSync(tmpDir)
+      .find((f) => f.startsWith("daintree.db.backup.corrupt-"));
+    expect(preserved).toBeDefined();
+    expect(fs.statSync(path.join(tmpDir, preserved!)).mode & 0o777).toBe(0o600);
+  });
+
   it("resets to a fresh database when no backup exists", () => {
     const dbPath = path.join(tmpDir, "daintree.db");
     fs.writeFileSync(dbPath, "corrupt");
