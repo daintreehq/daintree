@@ -20,13 +20,20 @@ function makeUpdate(opts: {
   selectionSet?: boolean;
   text?: string;
   caret?: number;
+  /** CM6 user-event names, one per simulated transaction (e.g. "input.type"). */
+  userEvents?: string[];
 }): ViewUpdate {
   const text = opts.text ?? "";
+  // CM6 user events are hierarchical: a transaction tagged "input.type"
+  // satisfies isUserEvent("input") as well as isUserEvent("input.type").
+  const transactions = (opts.userEvents ?? []).map((event) => ({
+    isUserEvent: (probe: string) => event === probe || event.startsWith(`${probe}.`),
+  }));
   return {
     focusChanged: opts.focusChanged,
     docChanged: opts.docChanged ?? false,
     selectionSet: opts.selectionSet ?? false,
-    transactions: [],
+    transactions,
     state: {
       doc: { toString: () => text, length: text.length },
       selection: { main: { head: opts.caret ?? 0 } },
@@ -40,6 +47,7 @@ function setupHook(activeTriggers: CompletionTrigger[] = ["/", "$", "@"]) {
   const setActiveCompletionContext = vi.fn();
   const applyDocChange = vi.fn(() => false);
   const consumeExternalValueFlag = vi.fn(() => false);
+  const onUserType = vi.fn();
 
   const { result } = renderHook(() => {
     const latestRef = useRef<LatestRefShape | null>({
@@ -54,10 +62,11 @@ function setupHook(activeTriggers: CompletionTrigger[] = ["/", "$", "@"]) {
       consumeExternalValueFlag,
       setActiveCompletionContext,
       setIsEditorFocused,
+      onUserType,
     });
   });
 
-  return { result, setIsEditorFocused, setActiveCompletionContext };
+  return { result, setIsEditorFocused, setActiveCompletionContext, onUserType };
 }
 
 describe("useContextDetection focus tracking", () => {
@@ -79,6 +88,71 @@ describe("useContextDetection focus tracking", () => {
       makeUpdate({ focusChanged: false, hasFocus: true, docChanged: true })
     );
     expect(setIsEditorFocused).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * "Last agent typed to" (#11134) must mean *typing*, not focus and not any
+ * document change — otherwise the type-anywhere rescue routes a prompt into an
+ * agent the user merely pasted into, or never touched at all.
+ */
+describe("useContextDetection user-typing signal", () => {
+  it("fires when the user types", () => {
+    const { result, onUserType } = setupHook();
+    result.current.handleUpdateRef.current(
+      makeUpdate({
+        focusChanged: false,
+        hasFocus: true,
+        docChanged: true,
+        text: "a",
+        userEvents: ["input.type"],
+      })
+    );
+    expect(onUserType).toHaveBeenCalledTimes(1);
+  });
+
+  it("fires once even when an update carries several typing transactions", () => {
+    const { result, onUserType } = setupHook();
+    result.current.handleUpdateRef.current(
+      makeUpdate({
+        focusChanged: false,
+        hasFocus: true,
+        docChanged: true,
+        text: "ab",
+        userEvents: ["input.type", "input.type"],
+      })
+    );
+    expect(onUserType).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fire on paste, deletion, or history navigation", () => {
+    const { result, onUserType } = setupHook();
+    for (const event of ["input.paste", "delete.backward", "select.pointer"]) {
+      result.current.handleUpdateRef.current(
+        makeUpdate({
+          focusChanged: false,
+          hasFocus: true,
+          docChanged: true,
+          text: "x",
+          userEvents: [event],
+        })
+      );
+    }
+    expect(onUserType).not.toHaveBeenCalled();
+  });
+
+  it("does not fire on a programmatic doc change with no user event", () => {
+    const { result, onUserType } = setupHook();
+    result.current.handleUpdateRef.current(
+      makeUpdate({ focusChanged: false, hasFocus: true, docChanged: true, text: "x" })
+    );
+    expect(onUserType).not.toHaveBeenCalled();
+  });
+
+  it("does not fire on a focus-only update", () => {
+    const { result, onUserType } = setupHook();
+    result.current.handleUpdateRef.current(makeUpdate({ focusChanged: true, hasFocus: true }));
+    expect(onUserType).not.toHaveBeenCalled();
   });
 });
 

@@ -18,6 +18,8 @@ describe("terminalInputStore", () => {
       pendingDrafts: new Map(),
       pendingDraftRevision: 0,
       stashedEditorStates: new Map(),
+      externalDraftRevision: 0,
+      lastTypedAgentTarget: null,
     });
   });
 
@@ -723,6 +725,81 @@ describe("terminalInputStore", () => {
       );
       // project-b was cleared and not restored
       expect(useTerminalInputStore.getState().getDraftInput("term-3", "project-b")).toBe("");
+    });
+  });
+
+  /**
+   * The routing target for the type-anywhere rescue (#11134). A stale target is
+   * worse than none: routing a prompt into a terminal that has been removed, or
+   * one owned by another view, is exactly the harm the feature exists to fix.
+   */
+  describe("lastTypedAgentTarget", () => {
+    it("records the agent and workspace that were typed into", () => {
+      useTerminalInputStore.getState().recordLastTypedAgentTarget("term-1", "ws-1");
+
+      expect(useTerminalInputStore.getState().lastTypedAgentTarget).toEqual({
+        terminalId: "term-1",
+        workspaceId: "ws-1",
+      });
+    });
+
+    it("moves the target when the user types into a different agent", () => {
+      useTerminalInputStore.getState().recordLastTypedAgentTarget("term-1", "ws-1");
+      useTerminalInputStore.getState().recordLastTypedAgentTarget("term-2", "ws-1");
+
+      expect(useTerminalInputStore.getState().lastTypedAgentTarget?.terminalId).toBe("term-2");
+    });
+
+    it("keeps a referentially stable target when re-recording the same agent", () => {
+      useTerminalInputStore.getState().recordLastTypedAgentTarget("term-1", "ws-1");
+      const first = useTerminalInputStore.getState().lastTypedAgentTarget;
+      useTerminalInputStore.getState().recordLastTypedAgentTarget("term-1", "ws-1");
+
+      // Every keystroke re-records; a fresh object each time would wake every
+      // subscriber for nothing.
+      expect(useTerminalInputStore.getState().lastTypedAgentTarget).toBe(first);
+    });
+
+    it("drops the target when its terminal is removed", () => {
+      useTerminalInputStore.getState().recordLastTypedAgentTarget("term-1", "ws-1");
+      useTerminalInputStore.getState().clearTerminalState("term-1");
+
+      expect(useTerminalInputStore.getState().lastTypedAgentTarget).toBeNull();
+    });
+
+    it("keeps the target when a different terminal is removed", () => {
+      useTerminalInputStore.getState().recordLastTypedAgentTarget("term-1", "ws-1");
+      useTerminalInputStore.getState().clearTerminalState("term-2");
+
+      expect(useTerminalInputStore.getState().lastTypedAgentTarget?.terminalId).toBe("term-1");
+    });
+
+    it("drops the target when a project switch discards its terminal", () => {
+      useTerminalInputStore.getState().recordLastTypedAgentTarget("term-1", "project-a");
+      useTerminalInputStore.getState().resetForProjectSwitch("project-a");
+
+      expect(useTerminalInputStore.getState().lastTypedAgentTarget).toBeNull();
+    });
+
+    it("keeps the target when a project switch preserves its terminal", () => {
+      useTerminalInputStore.getState().recordLastTypedAgentTarget("term-1", "project-a");
+      useTerminalInputStore.getState().resetForProjectSwitch("project-a", new Set(["term-1"]));
+
+      expect(useTerminalInputStore.getState().lastTypedAgentTarget?.terminalId).toBe("term-1");
+    });
+
+    it("keeps a target belonging to another workspace when a project resets", () => {
+      useTerminalInputStore.getState().recordLastTypedAgentTarget("term-1", "project-b");
+      useTerminalInputStore.getState().resetForProjectSwitch("project-a");
+
+      expect(useTerminalInputStore.getState().lastTypedAgentTarget?.terminalId).toBe("term-1");
+    });
+
+    it("drops the target on a full reset", () => {
+      useTerminalInputStore.getState().recordLastTypedAgentTarget("term-1", "ws-1");
+      useTerminalInputStore.getState().clearAllDraftInputs();
+
+      expect(useTerminalInputStore.getState().lastTypedAgentTarget).toBeNull();
     });
   });
 });
