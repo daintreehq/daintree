@@ -398,6 +398,29 @@ export class HelpSessionService {
   }
 
   /**
+   * The assistant PTY currently bound to `projectId`, or null when the project
+   * has no help session backend. ProjectViewManager's eviction policy reads
+   * this synchronously to keep a cached view whose assistant is still running
+   * out of the routine LRU candidate pool (#11157): destroying that view fires
+   * `onViewEvicted` → `revokeByWebContentsId` → `gracefulKill`, which tears
+   * down the whole PTY process tree — every sub-agent and background shell the
+   * assistant spawned dies with it. A grid terminal has no such coupling (its
+   * PTY lives in the pty-host and reconnects on switch-back), which is why the
+   * hard floor is scoped to help sessions rather than `hasActiveAgent()`.
+   *
+   * NOT a liveness signal on its own. The binding is dropped on revoke,
+   * displacement, and unbind, but nothing drops it when the PTY exits under its
+   * own steam — the orphan sweep deliberately skips bound sessions. Callers
+   * using this to protect a resource must cross-check the returned id against a
+   * registry that tracks PTY exits, or a quit assistant would pin its view
+   * forever.
+   */
+  getAssistantTerminalId(projectId: string): string | null {
+    if (!projectId) return null;
+    return this.activeHelpTerminalByProjectId.get(projectId) ?? null;
+  }
+
+  /**
    * Looks up the renderer WebContents id pinned to a help-session bearer at
    * provision time. The MCP server uses this at handshake to pin each
    * transport session to the window that minted it, so a tool call from the

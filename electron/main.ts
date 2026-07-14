@@ -43,6 +43,7 @@ import {
 } from "./window/windowRef.js";
 import { WindowRegistry } from "./window/WindowRegistry.js";
 import { ProjectViewManager } from "./window/ProjectViewManager.js";
+import { helpSessionService } from "./services/HelpSessionService.js";
 import { effectiveCachedProjectViews } from "./utils/cachedProjectViews.js";
 import { setupBrowserWindow } from "./window/createWindow.js";
 import { distributePortsToView } from "./window/portDistribution.js";
@@ -281,6 +282,15 @@ if (!gotTheLock) {
       cachedProjectViews: effectiveCachedProjectViews(
         store.get("terminalConfig")?.cachedProjectViews
       ),
+      // Lets the eviction policy keep a view whose assistant is still running
+      // out of the routine LRU pool (#11157) — evicting it would run the
+      // revoke-and-kill path below and take the assistant's sub-agents and
+      // background shells with it. Injected here rather than imported by
+      // electron/window/ so the eviction controller stays free of the service.
+      // The static import is free: PtyClient already value-imports
+      // HelpSessionService, so it is in the eager graph either way.
+      assistantTerminalIdForProject: (projectId) =>
+        helpSessionService.getAssistantTerminalId(projectId),
       onViewEvicted: (wcId) => {
         // Each cleanup is isolated: if removeDirectPort throws, the worktree
         // port must still close. Partial cleanup leaves a live producer

@@ -8,10 +8,13 @@
 import { getAppMetricsSnapshot } from "../utils/appMetricsSnapshot.js";
 import { logInfo } from "../utils/logger.js";
 import { cleanupEntry, sumGuestMemoryKb } from "./ProjectViewLifecycleController.js";
-import { hasActiveAgent } from "./ProjectViewAgentStateCache.js";
+import { hasActiveAgent, hasLiveAssistantBackend } from "./ProjectViewAgentStateCache.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { EvictionReason, ViewEntry } from "./ProjectViewManagerTypes.js";
 import { readAvailableSystemMemoryMb } from "../utils/systemMemory.js";
+
+/** `[projectId, entry, activeAgent, liveAssistantBackend]` — the last two are carried into the eviction log line. */
+type EvictionCandidate = [string, ViewEntry, boolean, boolean];
 
 /**
  * Evict a cached view whose renderer is already gone (OS memory eviction or
@@ -125,25 +128,48 @@ export function evictStaleViews(
     // in practice; Array.sort stability handles them deterministically.
     .sort(([, a], [, b]) => a.lastUsed - b.lastUsed);
 
-  // Partition: evict views without active agents first, only fall back to
-  // active-agent views when safe candidates are exhausted. This keeps memory
-  // bounded (each WebContentsView is ~400-500MB) without silently killing
-  // agent renderers mid-task.
-  const safeToEvict: Array<[string, ViewEntry, boolean]> = [];
-  const activeAgentFallback: Array<[string, ViewEntry, boolean]> = [];
+  // Partition into three tiers, each LRU-ordered internally.
+  //
+  // Views without active agents go first, then active-agent views — the
+  // long-standing soft guard: it keeps memory bounded (each WebContentsView is
+  // ~400-500MB) without silently killing agent renderers mid-task, but it does
+  // evict them once safe candidates run out.
+  //
+  // A view with a live assistant backend is a HARD floor for routine passes
+  // (#11157). It is not merely expensive to evict, it is destructive:
+  // destroying the view fires `onViewEvicted` → `revokeByWebContentsId` →
+  // `gracefulKill`, which kills the assistant's whole PTY process tree, so
+  // every sub-agent and background shell it spawned dies with no completion
+  // record. Only the transcript's resume id survives. An ordinary grid terminal
+  // has no such coupling — its PTY lives in the pty-host and reconnects on
+  // switch-back — which is why the floor is scoped to assistant backends and
+  // not to `hasActiveAgent()` at large, whose views are safe to evict and whose
+  // projects would otherwise pin the cache for no benefit.
+  //
+  // The floor yields to genuine memory pressure: `lowMemoryOverride` puts these
+  // views back in the pool, but LAST, so every ordinary renderer is reclaimed
+  // before an assistant's work is. Losing the assistant beats an OOM, and the
+  // hibernation capture on that path still preserves the conversation.
+  const safeToEvict: EvictionCandidate[] = [];
+  const activeAgentFallback: EvictionCandidate[] = [];
+  const assistantProtected: EvictionCandidate[] = [];
   for (const [projectId, entry] of evictable) {
     const active = hasActiveAgent(host, projectId);
-    if (active) {
-      activeAgentFallback.push([projectId, entry, true]);
+    if (hasLiveAssistantBackend(host, projectId)) {
+      assistantProtected.push([projectId, entry, active, true]);
+    } else if (active) {
+      activeAgentFallback.push([projectId, entry, true, false]);
     } else {
-      safeToEvict.push([projectId, entry, false]);
+      safeToEvict.push([projectId, entry, false, false]);
     }
   }
 
-  const candidates = [...safeToEvict, ...activeAgentFallback];
+  const candidates = lowMemoryOverride
+    ? [...safeToEvict, ...activeAgentFallback, ...assistantProtected]
+    : [...safeToEvict, ...activeAgentFallback];
 
   while (host.views.size > effectiveMax && candidates.length > 0) {
-    const [projectId, entry, activeAgent] = candidates.shift()!;
+    const [projectId, entry, activeAgent, liveAssistantBackend] = candidates.shift()!;
     const ageMs = Date.now() - entry.lastUsed;
     const memoryKb = memoryFor(entry);
     const guestMemoryKb = guestMemoryFor(entry);
@@ -153,12 +179,26 @@ export function evictStaleViews(
       ageMs,
       activeAgent,
     };
+    if (liveAssistantBackend) ctx.liveAssistantBackend = true;
     if (memoryKb > 0) ctx.memoryKb = memoryKb;
     if (guestMemoryKb > 0) ctx.guestMemoryKb = guestMemoryKb;
     if (availableMb != null) ctx.memoryAvailableMb = availableMb;
     logInfo("projectview.eviction", ctx);
     host.evictionTimestamps.set(projectId, Date.now());
     cleanupEntry(host, projectId);
+  }
+
+  // The cache is deliberately over its cap because protecting a running
+  // assistant outranks the limit. Emit it so the extra resident renderers are
+  // attributable — otherwise this reads as a leak in the memory logs.
+  if (!lowMemoryOverride && host.views.size > effectiveMax && assistantProtected.length > 0) {
+    logInfo("projectview.eviction-skipped", {
+      reason: effectiveReason,
+      viewCount: host.views.size,
+      effectiveMax,
+      overflow: host.views.size - effectiveMax,
+      protectedProjectIds: assistantProtected.map(([projectId]) => projectId),
+    });
   }
 }
 

@@ -134,6 +134,14 @@ export interface ProjectViewManagerOptions {
    * renderer stalled in its wake fan-out can't wedge the reactivation.
    */
   warmPaintGateHardTimeoutMs?: number;
+  /**
+   * Resolve the Daintree Assistant PTY bound to a project, or null when it has
+   * no help session. Injected from the composition root so the eviction policy
+   * can consult HelpSessionService without electron/window/ depending on it
+   * (#11157). Absent — as in tests that don't exercise the assistant — every
+   * project reads as having no backend, which is the pre-#11157 behavior.
+   */
+  assistantTerminalIdForProject?: (projectId: string) => string | null;
 }
 
 export class ProjectViewManager {
@@ -155,6 +163,7 @@ export class ProjectViewManager {
   onViewCached?: (webContentsId: number) => void;
   onViewReady?: (webContents: Electron.WebContents) => void;
   onViewCrashed?: (webContents: Electron.WebContents) => void;
+  assistantTerminalIdForProject?: (projectId: string) => string | null;
   windowRegistry?: import("./WindowRegistry.js").WindowRegistry;
   private switchChain: Promise<void> = Promise.resolve();
   private resizeHandler: (() => void) | null = null;
@@ -196,6 +205,7 @@ export class ProjectViewManager {
     this.onViewCached = opts.onViewCached;
     this.onViewReady = opts.onViewReady;
     this.onViewCrashed = opts.onViewCrashed;
+    this.assistantTerminalIdForProject = opts.assistantTerminalIdForProject;
     this.windowRegistry = opts.windowRegistry;
     if (opts.cachedProjectViews != null) {
       this.maxCachedViews = opts.cachedProjectViews;

@@ -192,6 +192,13 @@ const mockPtyClient = {
   off: vi.fn(),
 };
 
+// Stands in for HelpSessionService's projectId → assistant PTY binding, which
+// main.ts injects as `assistantTerminalIdForProject` (#11157). Tests that never
+// touch it leave it empty, so every project reads as assistant-free.
+const assistantTerminals = new Map<string, string>();
+const assistantTerminalIdForProject = (projectId: string): string | null =>
+  assistantTerminals.get(projectId) ?? null;
+
 import { ProjectViewManager } from "../ProjectViewManager.js";
 import { events } from "../../services/events.js";
 import { logInfo } from "../../utils/logger.js";
@@ -240,6 +247,7 @@ describe("ProjectViewManager — eviction safety", () => {
     mockGetAllTerminals.mockResolvedValue([]);
     mockGetAppMetrics.mockReset();
     mockGetAppMetrics.mockReturnValue([]);
+    assistantTerminals.clear();
     win = createMockWindow();
     manager = new ProjectViewManager(win as never, {
       dirname: "/test",
@@ -248,6 +256,7 @@ describe("ProjectViewManager — eviction safety", () => {
       warmPaintGateTimeoutMs: 0,
       warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
+      assistantTerminalIdForProject,
     });
   });
 
@@ -653,6 +662,249 @@ describe("ProjectViewManager — eviction safety", () => {
       "projectview.eviction",
       expect.objectContaining({ projectId: "proj-b", activeAgent: true })
     );
+  });
+
+  // ── Daintree Assistant backends are a hard floor (issue #11157) ──
+  //
+  // Evicting a view whose assistant is running destroys its WebContents, which
+  // revokes the help session and kills the PTY tree — every sub-agent and
+  // background shell the assistant spawned dies with it. Unlike a grid
+  // terminal, whose PTY lives in the pty-host and reconnects on switch-back,
+  // there is no recovery. So these views leave the routine LRU pool entirely
+  // rather than merely sorting last.
+  describe("live assistant backends (#11157)", () => {
+    function makeManager(cachedProjectViews: number) {
+      return new ProjectViewManager(win as never, {
+        dirname: "/test",
+        paintGateTimeoutMs: 0,
+        paintGateHardTimeoutMs: 0,
+        warmPaintGateTimeoutMs: 0,
+        warmPaintGateHardTimeoutMs: 0,
+        cachedProjectViews,
+        assistantTerminalIdForProject,
+      });
+    }
+
+    const evictedProjectIds = () =>
+      vi
+        .mocked(logInfo)
+        .mock.calls.filter(([event]) => event === "projectview.eviction")
+        .map(([, ctx]) => (ctx as { projectId: string }).projectId);
+
+    it("evicts a newer ordinary view rather than the LRU view whose assistant is idle", async () => {
+      // The assistant is "idle" — it dispatched a sub-agent or a background
+      // shell and is waiting on it. That work is invisible to the agent FSM, so
+      // protection cannot key off ACTIVE_AGENT_STATES: an idle assistant with a
+      // live PTY is exactly the case the issue reports losing.
+      const managerWithLimit = makeManager(2);
+
+      const wcA = createMockWebContents();
+      const viewA = { webContents: wcA, setBounds: vi.fn() };
+      managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+      await managerWithLimit.switchTo("proj-b", "/path/b");
+      await flushImmediates();
+
+      assistantTerminals.set("proj-a", "t-help-a");
+      mockGetAllTerminals.mockResolvedValue([
+        { id: "t-help-a", projectId: "proj-a", agentState: "idle" },
+      ]);
+      await managerWithLimit.initAgentStateCache(mockPtyClient as never);
+
+      const wcB = managerWithLimit.getAllViews().find((v) => v.projectId === "proj-b")?.view
+        .webContents as ReturnType<typeof createMockWebContents> | undefined;
+
+      await managerWithLimit.switchTo("proj-c", "/path/c");
+      await flushImmediates();
+
+      const remaining = managerWithLimit.getAllViews().map((v) => v.projectId);
+      expect(remaining).toContain("proj-a");
+      expect(remaining).not.toContain("proj-b");
+      expect(wcA.close).not.toHaveBeenCalled();
+      expect(wcB?.close).toHaveBeenCalled();
+    });
+
+    it("holds the cache above its limit rather than evict the only remaining assistant-backed views", async () => {
+      // No safe candidate is left. The old policy fell back to evicting a
+      // protected view; the assistant floor lets the cache run over instead.
+      const managerWithLimit = makeManager(2);
+
+      const wcA = createMockWebContents();
+      const viewA = { webContents: wcA, setBounds: vi.fn() };
+      managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+      await managerWithLimit.switchTo("proj-b", "/path/b");
+      await flushImmediates();
+
+      assistantTerminals.set("proj-a", "t-help-a");
+      assistantTerminals.set("proj-b", "t-help-b");
+      mockGetAllTerminals.mockResolvedValue([
+        { id: "t-help-a", projectId: "proj-a", agentState: "working" },
+        { id: "t-help-b", projectId: "proj-b", agentState: "idle" },
+      ]);
+      await managerWithLimit.initAgentStateCache(mockPtyClient as never);
+
+      const wcB = managerWithLimit.getAllViews().find((v) => v.projectId === "proj-b")?.view
+        .webContents as ReturnType<typeof createMockWebContents> | undefined;
+
+      await managerWithLimit.switchTo("proj-c", "/path/c");
+      await flushImmediates();
+
+      expect(
+        managerWithLimit
+          .getAllViews()
+          .map((v) => v.projectId)
+          .sort()
+      ).toEqual(["proj-a", "proj-b", "proj-c"]);
+      expect(wcA.close).not.toHaveBeenCalled();
+      expect(wcB?.close).not.toHaveBeenCalled();
+
+      // The overflow is deliberate — say so, or it reads as a leak in the logs.
+      expect(vi.mocked(logInfo)).toHaveBeenCalledWith(
+        "projectview.eviction-skipped",
+        expect.objectContaining({
+          reason: "lru",
+          viewCount: 3,
+          effectiveMax: 2,
+          overflow: 1,
+          protectedProjectIds: ["proj-a", "proj-b"],
+        })
+      );
+    });
+
+    it("does not protect a view whose assistant PTY has exited", async () => {
+      // HelpSessionService keeps its project→terminal binding until the session
+      // is revoked, displaced, or unbound — an assistant that quit on its own
+      // leaves it behind. Without the terminal-cache cross-check, that stale
+      // binding would pin proj-a's view for the rest of the session.
+      const managerWithLimit = makeManager(2);
+
+      const wcA = createMockWebContents();
+      const viewA = { webContents: wcA, setBounds: vi.fn() };
+      managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+      await managerWithLimit.switchTo("proj-b", "/path/b");
+      await flushImmediates();
+
+      assistantTerminals.set("proj-a", "t-help-a");
+      // Seeded, but the assistant's PTY is gone: the cache knows proj-b's
+      // terminal and nothing else, so t-help-a is dead.
+      mockGetAllTerminals.mockResolvedValue([
+        { id: "t-b", projectId: "proj-b", agentState: "idle" },
+      ]);
+      await managerWithLimit.initAgentStateCache(mockPtyClient as never);
+
+      await managerWithLimit.switchTo("proj-c", "/path/c");
+      await flushImmediates();
+
+      const remaining = managerWithLimit.getAllViews().map((v) => v.projectId);
+      expect(remaining).not.toContain("proj-a");
+      expect(wcA.close).toHaveBeenCalled();
+    });
+
+    it("stops protecting a view once its assistant terminal exits", async () => {
+      // Same staleness, reached the way it happens in practice: the assistant
+      // was live and protected, then its PTY exited mid-session.
+      const managerWithLimit = makeManager(2);
+
+      const wcA = createMockWebContents();
+      const viewA = { webContents: wcA, setBounds: vi.fn() };
+      managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+      await managerWithLimit.switchTo("proj-b", "/path/b");
+      await flushImmediates();
+
+      assistantTerminals.set("proj-a", "t-help-a");
+      mockGetAllTerminals.mockResolvedValue([
+        { id: "t-help-a", projectId: "proj-a", agentState: "working" },
+      ]);
+      await managerWithLimit.initAgentStateCache(mockPtyClient as never);
+
+      // The assistant exits. HelpSessionService's binding survives (nothing
+      // drops it on a self-inflicted exit), but the terminal cache does not.
+      ptyClientHandlers.get("exit")?.("t-help-a");
+
+      await managerWithLimit.switchTo("proj-c", "/path/c");
+      await flushImmediates();
+
+      const remaining = managerWithLimit.getAllViews().map((v) => v.projectId);
+      expect(remaining).not.toContain("proj-a");
+      expect(wcA.close).toHaveBeenCalled();
+    });
+
+    it("reclaims assistant-backed views under memory pressure, but only after ordinary ones", async () => {
+      // The floor yields to a real OOM risk: losing the assistant beats losing
+      // the app, and the revoke path still captures the conversation for
+      // resume. Ordering is the guarantee — every ordinary renderer is
+      // reclaimed first, even though the assistant's view is the LRU.
+      const managerWithLimit = makeManager(3);
+
+      const wcA = createMockWebContents();
+      const viewA = { webContents: wcA, setBounds: vi.fn() };
+      managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+      await managerWithLimit.switchTo("proj-b", "/path/b");
+      await flushImmediates();
+      await managerWithLimit.switchTo("proj-c", "/path/c");
+      await flushImmediates();
+
+      assistantTerminals.set("proj-a", "t-help-a");
+      mockGetAllTerminals.mockResolvedValue([
+        { id: "t-help-a", projectId: "proj-a", agentState: "working" },
+        { id: "t-b", projectId: "proj-b", agentState: "idle" },
+      ]);
+      await managerWithLimit.initAgentStateCache(mockPtyClient as never);
+
+      managerWithLimit.reclaimCachedViewsUnderPressure();
+
+      expect(managerWithLimit.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+      // LRU alone would have taken proj-a first; the floor pushes it last.
+      expect(evictedProjectIds()).toEqual(["proj-b", "proj-a"]);
+      expect(vi.mocked(logInfo)).toHaveBeenCalledWith(
+        "projectview.eviction",
+        expect.objectContaining({
+          projectId: "proj-a",
+          reason: "pressure",
+          liveAssistantBackend: true,
+        })
+      );
+    });
+
+    it("still evicts a crashed cached view that has a live assistant backend", async () => {
+      // The renderer is already gone — there is nothing left to protect, and
+      // holding the entry would leak a dead view. evictDeadView stays
+      // unconditional.
+      const managerWithLimit = makeManager(3);
+
+      const wcA = createMockWebContents();
+      const viewA = { webContents: wcA, setBounds: vi.fn() };
+      managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+      // proj-b's view is created by switchTo, so setupViewHandlers wires its
+      // render-process-gone listener — registerInitialView does not.
+      await managerWithLimit.switchTo("proj-b", "/path/b");
+      await flushImmediates();
+      const wcB = managerWithLimit.getAllViews().find((v) => v.projectId === "proj-b")!.view
+        .webContents as unknown as ReturnType<typeof createMockWebContents>;
+
+      assistantTerminals.set("proj-b", "t-help-b");
+      mockGetAllTerminals.mockResolvedValue([
+        { id: "t-help-b", projectId: "proj-b", agentState: "working" },
+      ]);
+      await managerWithLimit.initAgentStateCache(mockPtyClient as never);
+
+      // Cache proj-b (limit 3 holds all three, so no LRU pass interferes).
+      await managerWithLimit.switchTo("proj-c", "/path/c");
+      await flushImmediates();
+
+      const goneCall = wcB.on.mock.calls.find(([event]) => event === "render-process-gone");
+      expect(goneCall).toBeDefined();
+      goneCall![1]({}, { reason: "crashed", exitCode: 1 });
+      await flushImmediates();
+
+      expect(wcB.close).toHaveBeenCalled();
+      expect(managerWithLimit.getAllViews().map((v) => v.projectId)).not.toContain("proj-b");
+    });
   });
 
   // ── LRU eviction with memory logging (issue #8602) ──
@@ -2105,6 +2357,7 @@ describe("ProjectViewManager — low-memory eviction", () => {
     mockGetAllTerminals.mockResolvedValue([]);
     mockGetAppMetrics.mockReset();
     mockGetAppMetrics.mockReturnValue([]);
+    assistantTerminals.clear();
     win = createMockWindow();
     manager = new ProjectViewManager(win as never, {
       dirname: "/test",
@@ -2113,6 +2366,7 @@ describe("ProjectViewManager — low-memory eviction", () => {
       warmPaintGateTimeoutMs: 0,
       warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
+      assistantTerminalIdForProject,
     });
   });
 

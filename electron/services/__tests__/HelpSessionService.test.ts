@@ -1101,6 +1101,56 @@ describe("HelpSessionService", () => {
     });
   });
 
+  // The project-view eviction guard (#11157) reads this to decide whether
+  // destroying a cached view would kill a running assistant, so the binding
+  // must track the PTY's whole lifetime — not just its spawn.
+  describe("getAssistantTerminalId (#11157)", () => {
+    it("resolves only once a terminal is bound, and only for the owning project", async () => {
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+
+      // Provisioned but not spawned: the bearer exists, the backend does not.
+      expect(service.getAssistantTerminalId("proj-1")).toBeNull();
+
+      expect(service.markTerminalForToken(result.token, "term-1")).toBe(true);
+
+      expect(service.getAssistantTerminalId("proj-1")).toBe("term-1");
+      expect(service.getAssistantTerminalId("proj-2")).toBeNull();
+      expect(service.getAssistantTerminalId("")).toBeNull();
+    });
+
+    it("follows the binding through displacement", async () => {
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+      expect(service.markTerminalForToken(result.token, "term-old")).toBe(true);
+      expect(service.markTerminalForToken(result.token, "term-new")).toBe(true);
+
+      // The displaced PTY is dead; protecting the view on its behalf would pin
+      // a project whose assistant is gone.
+      expect(service.getAssistantTerminalId("proj-1")).toBe("term-new");
+    });
+
+    it("clears on unbind", async () => {
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+      expect(service.markTerminalForToken(result.token, "term-1")).toBe(true);
+
+      service.unbindTerminal("term-1");
+
+      expect(service.getAssistantTerminalId("proj-1")).toBeNull();
+    });
+
+    it("clears on revoke", async () => {
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+      expect(service.markTerminalForToken(result.token, "term-1")).toBe(true);
+
+      await service.revokeSession(result.sessionId);
+
+      expect(service.getAssistantTerminalId("proj-1")).toBeNull();
+    });
+  });
+
   describe("orphan-bearer sweep (#10698)", () => {
     it("revokes an unbound bearer older than the ceiling and tears down its MCP session", async () => {
       const result = await service.provisionSession(provisionInput());
