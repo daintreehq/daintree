@@ -177,6 +177,17 @@ export class GitFileWatcher {
       // pattern git uses for atomic index writes.
       this.watchFile(pathJoin(gitDir, "index"));
 
+      // Watch loose remote-tracking refs under refs/remotes/origin so an
+      // external `git fetch` — from a terminal, or any tool outside Daintree's
+      // own fetch scheduler — that advances origin/<branch> triggers a status
+      // pass. The behind-count then updates, driving the forge-count recheck
+      // (#11151). Non-recursive on purpose: the default branch's ref (e.g.
+      // refs/remotes/origin/main) sits at the top level here, and recursive
+      // fs.watch is unreliable and inotify-limit-prone on Linux. packed-refs
+      // (watched above) covers the post-`git gc` packed case; nested
+      // feature-branch remote refs don't affect the repo-level toolbar counts.
+      this.watchRemoteRefsDir(pathJoin(commonDir, "refs", "remotes", "origin"));
+
       if (this.watchWorktree) {
         // Fire-and-forget: subscribe() schedules the native watcher
         // asynchronously. Startup failures (ENOSPC, EMFILE) route through
@@ -319,6 +330,35 @@ export class GitFileWatcher {
     });
     if (phase === "startup") {
       this.onWatcherFailed?.();
+    }
+  }
+
+  /**
+   * Watch a git-internal directory for *any* change and route it through the
+   * fast debounce. Used for refs/remotes/origin, where the relevant events are
+   * loose-ref writes (and their `.lock` churn) from a fetch rather than a fixed
+   * set of tracked filenames — so unlike `watchFile`, every event in the
+   * directory is a conservative "refs may have moved" signal.
+   */
+  private watchRemoteRefsDir(dirPath: string): void {
+    try {
+      const watcher = fsWatch(dirPath, { persistent: false }, () => {
+        this.handleGitFileChange();
+      });
+
+      watcher.on("error", (error) => {
+        logWarn("Git remote-refs watcher error", {
+          path: dirPath,
+          error: error.message,
+        });
+      });
+
+      this.watchers.push(watcher);
+    } catch {
+      // The directory may not exist yet (no fetch has written loose remote
+      // refs, or they are all packed). Silent fallback: packed-refs watching,
+      // Daintree's own fetch-triggered status refresh, and the timed poll
+      // still cover origin movement.
     }
   }
 

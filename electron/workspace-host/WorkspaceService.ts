@@ -284,13 +284,16 @@ export class WorkspaceService {
   constructor(private readonly sendEvent: (event: WorkspaceHostEvent) => void) {
     this.fetchCoordinator = new RepoFetchCoordinator({
       onFetchSuccess: (worktreeId) => {
-        const monitor = this.monitors.get(worktreeId);
-        if (!monitor || !monitor.isRunning) return;
         // A successful fetch updated remote refs, so the next `rev-list` for
-        // ahead/behind will return fresh counts. Trigger a status refresh
-        // immediately rather than waiting for the next poll tick — but
-        // fire-and-forget; fetch success must never block.
-        monitor.triggerRefreshIfUpdating();
+        // ahead/behind returns fresh counts for *every* worktree sharing this
+        // repo's common dir — not just the one that triggered the fetch. Force
+        // a status refresh across all siblings so a sibling-triggered fetch
+        // still surfaces the main worktree's new behind-count promptly (drives
+        // the forge-count recheck, #11151) instead of waiting for that
+        // worktree's own next poll tick. Fire-and-forget; fetch success must
+        // never block, and a commondir-resolution race during teardown must
+        // not surface as an unhandled rejection.
+        void this.refreshStatusForFetchSiblings(worktreeId).catch(() => {});
       },
       onAuthFailureConfirmed: (commonDir, reason) =>
         this.handleAuthFailureConfirmed(commonDir, reason),
@@ -1497,6 +1500,54 @@ export class WorkspaceService {
       if (monitorCommonDir === triggeringCommonDir) {
         monitor.setFetchState(result.lastFetchedAt, result.authFailed, result.networkFailed);
       }
+    }
+  }
+
+  /**
+   * Force a fresh git-status pass after a real fetch completes (#11151). One
+   * `git fetch origin` advances upstream refs for every linked worktree sharing
+   * the object store, but a fetch triggered by one worktree (e.g. the focused
+   * feature worktree) would only re-poll that worktree — leaving the main
+   * worktree, whose behind-count feeds the forge-count auto-recheck, on a stale
+   * count until its own slower background tier.
+   *
+   * Refreshes the triggering worktree (as the prior single-monitor call did)
+   * plus the main worktree — and *only* those two. Fanning out to every
+   * common-dir sibling would turn one fetch on a many-worktree repo into an
+   * N-way `git status` storm (these passes run outside the poll queue), so the
+   * fan-out is deliberately bounded to the one sibling the toolbar reads from.
+   *
+   * Only invoked from `onFetchSuccess` (a genuine completed fetch), never from
+   * the recency-cache/skip paths, so it can't fan status work out on a no-op.
+   */
+  private async refreshStatusForFetchSiblings(triggeringWorktreeId: string): Promise<void> {
+    const triggering = this.monitors.get(triggeringWorktreeId);
+    if (!triggering || !triggering.isRunning) return;
+    // The triggering worktree's own counts are freshest to it — refresh it
+    // first, matching the single-monitor behaviour this replaced.
+    triggering.triggerRefreshIfUpdating();
+
+    // Find the main worktree; skip when it's the trigger (already refreshed) or
+    // not running.
+    let mainWorktree: WorktreeMonitor | undefined;
+    for (const monitor of this.monitors.values()) {
+      if (monitor.isMainWorktree && monitor !== triggering) {
+        mainWorktree = monitor;
+        break;
+      }
+    }
+    if (!mainWorktree || !mainWorktree.isRunning) return;
+
+    // Only refresh the main worktree if it shares the fetched repo's common dir
+    // (linked worktree of the same repo). Re-check `isRunning` after the awaits:
+    // the monitor can be stopped/removed while the commondir resolutions are
+    // pending.
+    const [triggeringCommonDir, mainCommonDir] = await Promise.all([
+      getGitCommonDir(triggering.path, { logErrors: false }),
+      getGitCommonDir(mainWorktree.path, { logErrors: false }),
+    ]);
+    if (triggeringCommonDir && mainCommonDir === triggeringCommonDir && mainWorktree.isRunning) {
+      mainWorktree.triggerRefreshIfUpdating();
     }
   }
 
