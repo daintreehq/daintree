@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PtyPool, destroyPty } from "../PtyPool.js";
+import { computePoolEnvHash } from "../pty/ptyPoolEnvHash.js";
 import type { IPty } from "node-pty";
 
 const spawnMock = vi.fn();
@@ -94,6 +95,8 @@ describe("PtyPool", () => {
   const originalCi = process.env.CI;
   const originalLang = process.env.LANG;
   const originalLcAll = process.env.LC_ALL;
+  const originalNoColor = process.env.NO_COLOR;
+  const originalForceColor = process.env.FORCE_COLOR;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -103,16 +106,28 @@ describe("PtyPool", () => {
     process.env.CI = "true";
     delete process.env.LANG;
     delete process.env.LC_ALL;
+    // buildSpawnEnv inherits from process.env and now yields to NO_COLOR
+    // (#11118), so a host shell exporting either colour variable would decide
+    // the spawn-env assertions instead of the code under test.
+    delete process.env.NO_COLOR;
+    delete process.env.FORCE_COLOR;
   });
 
+  // Assigning `undefined` to process.env stringifies it to "undefined", which
+  // leaves an absent var looking *set* (a restored CI="undefined" is truthy).
+  const restoreEnv = (key: string, original: string | undefined) => {
+    if (original !== undefined) process.env[key] = original;
+    else delete process.env[key];
+  };
+
   afterEach(() => {
-    process.env.SHELL = originalShell;
-    process.env.HOME = originalHome;
-    process.env.CI = originalCi;
-    if (originalLang !== undefined) process.env.LANG = originalLang;
-    else delete process.env.LANG;
-    if (originalLcAll !== undefined) process.env.LC_ALL = originalLcAll;
-    else delete process.env.LC_ALL;
+    restoreEnv("SHELL", originalShell);
+    restoreEnv("HOME", originalHome);
+    restoreEnv("CI", originalCi);
+    restoreEnv("LANG", originalLang);
+    restoreEnv("LC_ALL", originalLcAll);
+    restoreEnv("NO_COLOR", originalNoColor);
+    restoreEnv("FORCE_COLOR", originalForceColor);
   });
 
   it("falls back to default pool size when configured pool size is invalid", () => {
@@ -273,6 +288,83 @@ describe("PtyPool", () => {
     expect(spawnOptions.env?.FORCE_COLOR).toBe("3");
     expect(spawnOptions.env?.LANG).toBe("en_US.UTF-8");
     expect(spawnOptions.env?.LC_ALL).toBeUndefined();
+    pool.dispose();
+  });
+
+  it.each([
+    ["a non-empty NO_COLOR", "1"],
+    ["an empty NO_COLOR", ""],
+  ])("does not inject FORCE_COLOR into a warm shell when the host exports %s", async (_, value) => {
+    process.env.NO_COLOR = value;
+    spawnMock.mockReturnValue(createFakeProcess(402));
+    const pool = new PtyPool({ poolSize: 1, defaultCwd: "/repo" });
+
+    await pool.warmPool();
+
+    const spawnOptions = spawnMock.mock.calls[0]?.[2] as { env?: Record<string, string> };
+    expect(spawnOptions.env?.FORCE_COLOR).toBeUndefined();
+    expect(spawnOptions.env?.NO_COLOR).toBe(value);
+    pool.dispose();
+  });
+
+  it("does not inject FORCE_COLOR into a warm shell when the caller sets NO_COLOR", async () => {
+    spawnMock.mockReturnValue(createFakeProcess(403));
+    const pool = new PtyPool({ poolSize: 1, defaultCwd: "/repo" });
+
+    pool.warmForKey("/repo", { NO_COLOR: "1" }, computePoolEnvHash({ NO_COLOR: "1" }));
+    await flushMicrotasks();
+
+    const spawnOptions = spawnMock.mock.calls[0]?.[2] as { env?: Record<string, string> };
+    expect(spawnOptions.env?.FORCE_COLOR).toBeUndefined();
+    expect(spawnOptions.env?.NO_COLOR).toBe("1");
+    pool.dispose();
+  });
+
+  it("preserves an explicit caller FORCE_COLOR rather than rewriting it", async () => {
+    spawnMock.mockReturnValue(createFakeProcess(404));
+    const pool = new PtyPool({ poolSize: 1, defaultCwd: "/repo" });
+
+    pool.warmForKey("/repo", { FORCE_COLOR: "0" }, computePoolEnvHash({ FORCE_COLOR: "0" }));
+    await flushMicrotasks();
+
+    const spawnOptions = spawnMock.mock.calls[0]?.[2] as { env?: Record<string, string> };
+    expect(spawnOptions.env?.FORCE_COLOR).toBe("0");
+    pool.dispose();
+  });
+
+  it("never hands a colour-forcing warm shell to a NO_COLOR caller", async () => {
+    // The pooled opt-out rests on hash isolation, not on the spawn guard: a
+    // shell already warmed with the FORCE_COLOR default must MISS an acquire
+    // from a NO_COLOR caller. Excluding NO_COLOR from computePoolEnvHash (the
+    // mutant this kills) would serve that colour-forcing shell straight to them.
+    spawnMock.mockReturnValue(createFakeProcess(405));
+    const pool = new PtyPool({ poolSize: 1, defaultCwd: "/repo" });
+    await pool.warmPool();
+
+    const warmed = spawnMock.mock.calls[0]?.[2] as { env?: Record<string, string> };
+    expect(warmed.env?.FORCE_COLOR).toBeDefined();
+
+    expect(pool.acquireByKey("/repo", computePoolEnvHash({ NO_COLOR: "1" }))).toBeNull();
+    pool.dispose();
+  });
+
+  it("keeps FORCE_COLOR out of the shell that refills an acquired NO_COLOR slot", async () => {
+    // acquireByKey refills the same key by feeding the acquired entry's own
+    // built env back through buildSpawnEnv. The replacement has to come out
+    // colour-free too, rather than regaining the default on the way through.
+    spawnMock.mockReturnValue(createFakeProcess(406));
+    const pool = new PtyPool({ poolSize: 1, defaultCwd: "/repo" });
+    const envHash = computePoolEnvHash({ NO_COLOR: "1" });
+
+    pool.warmForKey("/repo", { NO_COLOR: "1" }, envHash);
+    await settleRefill();
+    expect(pool.acquireByKey("/repo", envHash)).not.toBeNull();
+    await settleRefill();
+
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    const refill = spawnMock.mock.calls[1]?.[2] as { env?: Record<string, string> };
+    expect(refill.env?.FORCE_COLOR).toBeUndefined();
+    expect(refill.env?.NO_COLOR).toBe("1");
     pool.dispose();
   });
 
