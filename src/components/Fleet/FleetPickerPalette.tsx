@@ -42,7 +42,10 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
   const addToFleet = useFleetArmingStore((s) => s.addToFleet);
   const [commitMode, setCommitMode] = useState<CommitMode>("replace");
   const thumbLayoutId = `${useId()}-segmented-thumb`;
-  const thumbTransition = useUiMotionTransition();
+  const uiMotionTransition = useUiMotionTransition();
+  // Closing resets the mode to Replace while the palette is still fading out, which
+  // would otherwise slide the thumb back across a disappearing dialog.
+  const thumbTransition = isOpen ? uiMotionTransition : { ...uiMotionTransition, duration: 0 };
 
   useEffect(() => {
     if (!isOpen) setCommitMode("replace");
@@ -205,7 +208,7 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
 
             <div className="flex flex-nowrap items-center justify-between gap-2 border-t border-daintree-border px-3 py-2">
               <div
-                className="relative isolate flex bg-tint/[0.04] rounded p-0.5 text-[11px]"
+                className="relative isolate flex bg-tint/[0.04] rounded text-[11px]"
                 role="radiogroup"
                 aria-label="Commit mode"
                 data-testid="fleet-picker-cold-start-commit-mode"
@@ -222,7 +225,7 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
                       onClick={() => setCommitMode(mode)}
                       data-testid={`fleet-picker-cold-start-commit-mode-${mode}`}
                       className={cn(
-                        "relative rounded px-2 py-0.5 transition-colors",
+                        "relative rounded px-2 py-1 transition-colors",
                         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]",
                         isActive
                           ? "text-daintree-text"
@@ -236,8 +239,7 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
                           layoutId={thumbLayoutId}
                           layoutCrossfade={false}
                           transition={thumbTransition}
-                          style={{ borderRadius: 4 }}
-                          className="absolute inset-0 z-0 bg-tint/[0.10] pointer-events-none"
+                          className="absolute inset-0 z-0 rounded bg-tint/[0.10] pointer-events-none"
                           aria-hidden="true"
                         />
                       )}

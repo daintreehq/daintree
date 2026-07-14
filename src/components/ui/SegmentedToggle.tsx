@@ -49,7 +49,7 @@ export function SegmentedToggle<T extends string>({
             aria-pressed={isActive}
             className={cn(
               "relative px-2.5 py-1 text-xs font-medium rounded transition-colors",
-              "disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none",
+              "disabled:cursor-not-allowed disabled:pointer-events-none",
               isActive ? "text-daintree-text" : "text-muted-foreground hover:text-daintree-text"
             )}
           >
@@ -60,14 +60,19 @@ export function SegmentedToggle<T extends string>({
                 layoutId={thumbLayoutId}
                 layoutCrossfade={false}
                 transition={thumbTransition}
-                // Inline so framer scale-corrects the corners while the thumb resizes
-                // between segments of different widths; a `rounded` class it cannot read.
-                style={{ borderRadius: 4 }}
-                className="absolute inset-0 z-0 bg-daintree-border pointer-events-none"
+                className={cn(
+                  "absolute inset-0 z-0 rounded bg-daintree-border pointer-events-none",
+                  option.disabled && "opacity-40"
+                )}
                 aria-hidden="true"
               />
             )}
-            <span className="relative z-10">{option.label}</span>
+            {/* Dimming a disabled segment has to happen on its contents, never on the
+                button: opacity below 1 would make the button a stacking context and trap
+                this label beneath a thumb sliding across it from a sibling. */}
+            <span className={cn("relative z-10", option.disabled && "opacity-40")}>
+              {option.label}
+            </span>
           </button>
         );
       })}

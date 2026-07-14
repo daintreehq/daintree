@@ -174,6 +174,26 @@ describe("SegmentedToggle", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
+  it("dims a disabled segment without turning the button into a stacking context", () => {
+    render(
+      <SegmentedToggle
+        options={[
+          { value: "view", label: "View" },
+          { value: "diff", label: "Diff", disabled: true },
+        ]}
+        value="view"
+        onChange={() => {}}
+      />
+    );
+    const disabled = screen.getByRole("button", { name: "Diff" });
+
+    // `opacity` below 1 makes an element a stacking context, which would trap this
+    // label at its own z-index and let a thumb sliding over from a sibling paint on
+    // top of it. The dimming has to sit on the contents, never on the button.
+    expect(disabled.className).not.toMatch(/(^|:)opacity-/);
+    expect(within(disabled).getByText("Diff").className).toMatch(/opacity-/);
+  });
+
   it("keeps the thumb on a segment that is both selected and disabled", () => {
     render(
       <SegmentedToggle
