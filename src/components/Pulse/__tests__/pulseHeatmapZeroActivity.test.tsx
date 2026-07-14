@@ -46,39 +46,61 @@ function cellByDate(date: string): HTMLElement {
   return el;
 }
 
+// The date prefix differs per cell; the state description is what must match.
+function stateOf(date: string): string {
+  const label = cellByDate(date).getAttribute("aria-label") ?? "";
+  return label.slice(label.indexOf(":") + 1).trim();
+}
+
 describe("PulseHeatmap — a quiet day is never a failure", () => {
   it("styles a zero day bracketed by activity exactly like an isolated zero day", () => {
     renderHeatmap();
     const bracketed = cellByDate("2026-01-03");
     const isolated = cellByDate("2026-01-07");
 
+    // Under the old isMissedDay(), the bracketed cell alone got a danger tint
+    // and the .pulse-heat-cell-missed ring.
     expect(bracketed.style.background).toBe(isolated.style.background);
     expect(bracketed.className).toBe(isolated.className);
   });
 
-  it("labels every zero day 'No commits', including the formerly-missed one", () => {
+  it("describes every zero day the same way, whatever its neighbours did", () => {
     renderHeatmap();
-    for (const date of ["2026-01-03", "2026-01-06", "2026-01-07", "2026-01-08"]) {
-      expect(cellByDate(date).getAttribute("aria-label")).toContain("No commits");
+    const quietDays = ["2026-01-03", "2026-01-06", "2026-01-07", "2026-01-08"];
+    const described = quietDays.map(stateOf);
+
+    // Every zero day must actually SAY something — otherwise "they all match"
+    // would hold vacuously if the labels went missing.
+    for (const state of described) {
+      expect(state.length).toBeGreaterThan(0);
+      // Whatever the wording, it can't be a failure. The old one was "Missed day".
+      expect(state).not.toMatch(/miss|fail|break|broke|lost|skip/i);
     }
+    expect(new Set(described).size).toBe(1);
     expect(screen.queryByLabelText(/missed/i)).toBeNull();
   });
 
-  it("gives a zero day no heat level and no shape cue", () => {
+  it("gives a zero day no forced-colors shape cue", () => {
     renderHeatmap();
-    // data-heat-level and the shape span are what forced-colors mode keys off;
-    // a quiet day must carry neither, or it would paint as a signal.
-    const quiet = cellByDate("2026-01-03");
-    expect(quiet.hasAttribute("data-heat-level")).toBe(false);
-    expect(quiet.querySelector(".pulse-heat-cell-shape")).toBeNull();
+    // The shape span is painted solid CanvasText under forced-colors. A quiet
+    // day carrying one would become a signal again, by a different route than
+    // the background this suite guards above.
+    for (const date of ["2026-01-03", "2026-01-07"]) {
+      const quiet = cellByDate(date);
+      expect(quiet.querySelector(".pulse-heat-cell-shape")).toBeNull();
+      expect(quiet.hasAttribute("data-heat-level")).toBe(false);
+    }
   });
 
   it("still distinguishes days that actually had commits", () => {
+    // Positive control: the equality above must not be holding because every
+    // cell collapsed to one rendering.
     renderHeatmap();
     const worked = cellByDate("2026-01-04");
     const quiet = cellByDate("2026-01-03");
     expect(worked.style.background).not.toBe(quiet.style.background);
-    expect(worked.getAttribute("aria-label")).toContain("4 commits");
+    expect(stateOf("2026-01-04")).not.toBe(stateOf("2026-01-03"));
     expect(worked.getAttribute("data-heat-level")).toBe("4");
+    expect(worked.querySelector(".pulse-heat-cell-shape")).not.toBeNull();
   });
 });

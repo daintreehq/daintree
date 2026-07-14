@@ -356,8 +356,8 @@ function PulseHeatmapLegend({
 export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProps) {
   const projectName = useProjectStore((s) => s.currentProject?.name);
   const { health, loading: healthLoading, refresh: refreshHealth } = useProjectHealth();
-  // One source of truth for "can this health back a claim?", shared by the
-  // coach line and the chips so they can't contradict each other.
+  // Filtered once and handed to both the coach line and the chips, so the two
+  // can't contradict each other about whether forge data is usable.
   const usableHealth = getUsableHealth(health);
   const { pulse, isLoading, error, rangeDays, retryCount, fetchPulse, setRangeDays } =
     usePulseStore(
@@ -623,7 +623,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
 
         <PulseHeatmapLegend dayCount={pulse.heatmap.length} descriptionId={heatmapDescriptionId} />
 
-        <p className="text-xs text-daintree-text/80">{getCoachLine(pulse, health)}</p>
+        <p className="text-xs text-daintree-text/80">{getCoachLine(pulse, usableHealth)}</p>
 
         {/* Health section: always renders the wrapper so the 4 sub-variants
             (signals, skeleton, no-remote hint, offline hint) can swap without

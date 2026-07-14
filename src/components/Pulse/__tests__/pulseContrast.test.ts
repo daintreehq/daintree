@@ -7,7 +7,6 @@ const SUMMARY_PATH = resolve(__dirname, "../PulseSummary.tsx");
 const HEATMAP_PATH = resolve(__dirname, "../PulseHeatmap.tsx");
 const INDEX_CSS_PATH = resolve(__dirname, "../../../index.css");
 const PULSE_CSS_PATH = resolve(__dirname, "../../../styles/components/pulse.css");
-const COACH_PATH = resolve(__dirname, "../coachLine.ts");
 const FLAME_PATH = resolve(__dirname, "../StreakFlame.tsx");
 
 // Find a `@media (X)` opening brace and return the slice up to the matching
@@ -395,19 +394,9 @@ describe("Pulse — no surface can express failure (issue #11172)", () => {
     expect(content).not.toMatch(MISSED_DAY_SURFACE);
   });
 
-  it("the coaching line never asks for a commit or leans on a streak", async () => {
-    // The old copy was "One small commit today keeps your streak going." —
-    // obligation triggered by having a streak to lose. Branch coverage for the
-    // replacement lives in projectPulseCoach.test.ts; this guards the card
-    // itself from growing new guilt copy.
-    const content = await readFile(COACH_PATH, "utf-8");
-    const strings = [...content.matchAll(/"([^"\\]{12,})"|`([^`\\$]{12,})`/g)].map(
-      (m) => m[1] ?? m[2] ?? ""
-    );
-    for (const literal of strings) {
-      expect(literal).not.toMatch(/streak|keeps? (your|the)|missed/i);
-    }
-  });
+  // The coach line's own vocabulary is held to a policy in
+  // projectPulseCoach.test.ts, which checks every string the function can
+  // actually return rather than grepping the source for quoted literals.
 
   it("streak flame colors are theme tokens, not hardcoded hexes", async () => {
     const content = await readFile(FLAME_PATH, "utf-8");
