@@ -3,6 +3,7 @@ import { BUILT_IN_APP_SCHEMES, DEFAULT_APP_SCHEME_ID } from "@/config/appColorSc
 import { applyAccentOverrideToScheme, resolveAppTheme, type AppColorScheme } from "@shared/theme";
 import type { ColorVisionMode } from "@shared/types";
 import { applyAppThemeToRoot, applyColorVisionMode } from "@/theme/applyAppTheme";
+import { runThemeCrossfade } from "@/lib/appThemeViewTransition";
 
 const RECENT_SCHEMES_LIMIT = 5;
 
@@ -29,8 +30,13 @@ interface AppThemeState {
    * Like setSelectedSchemeId, but does NOT update recentSchemeIds. Used for
    * OS-driven follow-system changes and startup hydration, where the change
    * does not reflect direct user intent.
+   *
+   * Pass `{ crossfade: true }` when the app has already painted the outgoing
+   * theme (OS appearance switch, first-run auto-select) so the swap fades
+   * rather than cutting. Startup hydration leaves it unset on purpose — there
+   * is no prior theme to fade from, only the placeholder default.
    */
-  setSelectedSchemeIdSilent: (id: string) => void;
+  setSelectedSchemeIdSilent: (id: string, opts?: { crossfade?: boolean }) => void;
   addCustomScheme: (scheme: AppColorScheme) => void;
   removeCustomScheme: (id: string) => void;
   injectTheme: (scheme: AppColorScheme) => void;
@@ -44,6 +50,18 @@ interface AppThemeState {
 
 let pendingScheme: AppColorScheme | null = null;
 let pendingFrame: number | null = null;
+
+// Monotonic "latest theme intent". A crossfade's DOM write is deferred to a View
+// Transition callback a frame later, by which time a newer write (deliberate pick,
+// hover preview, accent change) may have superseded it. Claiming an intent up front
+// lets that stale callback recognise it lost and bail — critical because its
+// `{ immediate: true }` write would otherwise CANCEL the newer write's pending RAF
+// and strand the DOM out of sync with the store.
+let themeIntentSeq = 0;
+
+function claimThemeIntent(): number {
+  return ++themeIntentSeq;
+}
 
 function applySchemeToDOMNow(scheme: AppColorScheme): void {
   const { colorVisionMode, accentColorOverride } = useAppThemeStore.getState();
@@ -61,6 +79,9 @@ function applySchemeToDOMNow(scheme: AppColorScheme): void {
  * mutate callback or during unmount cleanup where synchronous DOM is required.
  */
 function injectSchemeToDOM(scheme: AppColorScheme, opts?: { immediate?: boolean }): void {
+  // Every direct write is itself the latest intent, superseding any deferred one.
+  claimThemeIntent();
+
   if (opts?.immediate) {
     if (pendingFrame !== null) {
       cancelAnimationFrame(pendingFrame);
@@ -131,11 +152,27 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
     }));
   },
 
-  setSelectedSchemeIdSilent: (id) => {
-    const { customSchemes } = useAppThemeStore.getState();
+  setSelectedSchemeIdSilent: (id, opts) => {
+    const { customSchemes, selectedSchemeId: previousSchemeId } = useAppThemeStore.getState();
     const scheme = resolveAppTheme(id, customSchemes);
     set({ selectedSchemeId: scheme.id });
-    injectSchemeToDOM(scheme);
+
+    // Only transition on a real change. `nativeTheme` can re-fire for OS changes that
+    // don't move the light/dark bucket, and crossfading there would skipTransition() an
+    // in-flight wipe to animate between two identical snapshots.
+    if (opts?.crossfade && previousSchemeId !== scheme.id) {
+      // Claimed before the transition starts, so anything scheduled after this — including
+      // a second crossfade — outranks it regardless of which callback the browser runs first.
+      const intent = claimThemeIntent();
+      runThemeCrossfade(() => {
+        if (intent !== themeIntentSeq) return;
+        // `immediate` is required inside a transition callback: the RAF-coalesced write
+        // would land after the API has already snapshotted the new state.
+        injectSchemeToDOM(scheme, { immediate: true });
+      });
+    } else {
+      injectSchemeToDOM(scheme);
+    }
   },
 
   addCustomScheme: (scheme) =>

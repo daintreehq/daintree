@@ -53,6 +53,8 @@ vi.mock("@/clients/appThemeClient", () => ({
 
 vi.mock("@/lib/appThemeViewTransition", () => ({
   runThemeReveal: (_origin: unknown, cb: () => void) => cb(),
+  // The real store imports this — the mock must supply it or the import fails.
+  runThemeCrossfade: (cb: () => void) => cb(),
 }));
 
 // Stub the DOM-writing layer so the real store's setters still run end to end

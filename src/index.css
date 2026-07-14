@@ -2889,9 +2889,12 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   }
 }
 
-/* Horizontal wipe for app theme switches.
-   The old snapshot sits on top and is clipped away via WAAPI clip-path:inset(),
-   revealing the new snapshot underneath. */
+/* App theme switches drive the root snapshots from WAAPI, not CSS: `animation: none`
+   kills the UA's default crossfade so `src/lib/appThemeViewTransition.ts` can animate
+   the old snapshot itself — clipped away for a deliberate pick (runThemeReveal), faded
+   out for a programmatic one (runThemeCrossfade). Either way the old snapshot sits on
+   top and the new one is revealed underneath, so a bare startViewTransition() on the
+   document root animates nothing. */
 ::view-transition-old(root),
 ::view-transition-new(root) {
   animation: none;
