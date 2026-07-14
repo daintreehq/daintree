@@ -13,7 +13,7 @@ import {
 } from "react";
 import { LayoutGroup, m } from "framer-motion";
 import { logError } from "@/utils/logger";
-import { UI_ANIMATION_DURATION, EASE_OUT_EXPO_FM } from "@/lib/animationUtils";
+import { getUiAnimationDuration, EASE_OUT_EXPO_FM } from "@/lib/animationUtils";
 import {
   usePortalStore,
   usePerformanceModeStore,
@@ -1267,12 +1267,17 @@ export function NavItem({
         // projects this same node to its new position (transform-only) instead
         // of unmounting and remounting the marker. Scoping the id keeps a
         // cross-scope jump (a search hit in the other scope) from sliding the
-        // marker between two unrelated nav trees.
-        <m.div
+        // marker between two unrelated nav trees. A span, not a div: <button>
+        // takes phrasing content only, and `absolute` makes it block anyway.
+        // Duration comes from getUiAnimationDuration() rather than the raw
+        // constant because performance mode has to collapse this to 0 — it
+        // suppresses CSS transitions, but cannot stop motion's JS transform
+        // writes, which are exactly what a projection animation emits.
+        <m.span
           layoutId={`active-indicator-${scopeForTab(tab)}`}
           layout="position"
           className="pointer-events-none absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-r bg-daintree-accent"
-          transition={{ duration: UI_ANIMATION_DURATION / 1000, ease: EASE_OUT_EXPO_FM }}
+          transition={{ duration: getUiAnimationDuration() / 1000, ease: EASE_OUT_EXPO_FM }}
           aria-hidden="true"
           data-settings-nav-indicator="true"
         />

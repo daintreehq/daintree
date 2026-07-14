@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import React from "react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { UI_ANIMATION_DURATION, EASE_OUT_EXPO_FM } from "@/lib/animationUtils";
 import { NavGroup, NavItem } from "../SettingsDialog";
@@ -18,22 +18,22 @@ const recorded = vi.hoisted(() => ({ motion: [] as MotionRecord[] }));
 // the indicator is queryable in jsdom, capture the projection props (which
 // framer-motion would otherwise swallow rather than forward to the DOM).
 vi.mock("framer-motion", () => {
-  const MotionDiv = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
+  const MotionSpan = React.forwardRef<HTMLSpanElement, React.HTMLAttributes<HTMLSpanElement>>(
     ({ children, ...props }, ref) => {
       const { layoutId, layout, transition, ...rest } = props as MotionRecord &
-        React.HTMLAttributes<HTMLDivElement>;
+        React.HTMLAttributes<HTMLSpanElement>;
       recorded.motion.push({ layoutId, layout, transition });
       return (
-        <div ref={ref} {...(rest as React.HTMLAttributes<HTMLDivElement>)}>
+        <span ref={ref} {...(rest as React.HTMLAttributes<HTMLSpanElement>)}>
           {children}
-        </div>
+        </span>
       );
     }
   );
-  MotionDiv.displayName = "MotionDiv";
+  MotionSpan.displayName = "MotionSpan";
   return {
     LayoutGroup: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-    m: { div: MotionDiv },
+    m: { span: MotionSpan },
   };
 });
 
@@ -95,6 +95,11 @@ function Nav({
 describe("settings nav active indicator (issue #11164)", () => {
   beforeEach(() => {
     recorded.motion.length = 0;
+    delete document.body.dataset.performanceMode;
+  });
+
+  afterEach(() => {
+    delete document.body.dataset.performanceMode;
   });
 
   it("mounts a single indicator, owned by the active item", () => {
@@ -177,5 +182,16 @@ describe("settings nav active indicator (issue #11164)", () => {
     expect(record.layout).toBe("position");
     expect(record.transition?.duration).toBe(UI_ANIMATION_DURATION / 1000);
     expect(record.transition?.ease).toBe(EASE_OUT_EXPO_FM);
+  });
+
+  it("collapses the slide to zero under performance mode", () => {
+    // Performance mode suppresses CSS transitions, but a projection animation
+    // is JS writing transforms every frame — CSS can't reach it. The duration
+    // has to come from the helper that zeroes out, not the raw tier constant.
+    document.body.dataset.performanceMode = "true";
+
+    render(<Nav activeTab="general" />);
+
+    expect(soleRecord().transition?.duration).toBe(0);
   });
 });
