@@ -90,6 +90,9 @@ const mocks = vi.hoisted(() => {
       managed.isAttaching = false;
       (managed as { keyHandlerInstalled?: boolean }).keyHandlerInstalled = false;
       platform.isMac = true;
+      // vi.clearAllMocks() drops calls but keeps implementations, so a test that
+      // switches to the alt buffer would otherwise leak into the next one.
+      terminalInstanceService.getAltBufferState.mockReturnValue(false);
       Object.assign(appearance, defaultAppearance, { effectiveTheme: {} });
     },
   };
@@ -674,6 +677,30 @@ describe("XtermAdapter lifecycle", () => {
       // to xterm, so a held Option+Left would jump one word and then stall.
       expect(keyHandler(optionArrow("ArrowLeft", { repeat: true }))).toBe(false);
       expect(mocks.writeTerminalInputOrFleet).toHaveBeenCalledWith("term-1", "\x1bb");
+    });
+
+    it("keeps a held Option+Arrow out of the chord state machine", async () => {
+      const keyHandler = await mountAndGetKeyHandler();
+
+      // An auto-repeat must not be able to complete or invalidate a pending
+      // chord the user never re-pressed.
+      keyHandler(optionArrow("ArrowLeft", { repeat: true }));
+
+      expect(keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+      expect(mocks.writeTerminalInputOrFleet).toHaveBeenCalledWith("term-1", "\x1bb");
+    });
+
+    it("leaves Option+Arrow to a full-screen TUI on the alt buffer", async () => {
+      // A TUI decodes xterm's CSI modifier arrow itself; rewriting it would hand
+      // the app a Meta+B/F instead of the Alt+Arrow it bound.
+      mocks.terminalInstanceService.getAltBufferState.mockReturnValue(true);
+      const onInput = vi.fn();
+      const keyHandler = await mountAndGetKeyHandler({ onInput });
+
+      expect(keyHandler(optionArrow("ArrowLeft"))).toBe(true);
+      expect(keyHandler(optionArrow("ArrowRight", { repeat: true }))).toBe(true);
+      expect(mocks.writeTerminalInputOrFleet).not.toHaveBeenCalled();
+      expect(onInput).not.toHaveBeenCalled();
     });
 
     it("leaves Option+Arrow to xterm off macOS, including on repeat", async () => {

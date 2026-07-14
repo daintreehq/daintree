@@ -8,8 +8,10 @@
  * XtermAdapter substitutes those. `macOptionIsMeta` doesn't cover this: it only
  * applies to character keys, never arrows.
  *
- * Pure over the event — the macOS gate lives at the call site, since remapping
- * Alt+Arrow is a Mac convention (VS Code gates its equivalent on `isMac` too).
+ * Pure over the event. The two gates live at the call site: macOS, because
+ * remapping Alt+Arrow is a Mac convention (VS Code gates its equivalent on
+ * `isMac` too), and the normal buffer, because a full-screen TUI decodes the CSI
+ * modifier arrows itself and would only be confused by a Meta+B/F.
  */
 const META_BACKWARD_WORD = "\x1bb";
 const META_FORWARD_WORD = "\x1bf";
