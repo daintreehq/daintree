@@ -73,7 +73,7 @@ export function SettingsCheckbox({
             isError && "border-status-error data-[state=checked]:border-status-error"
           )}
         >
-          <Checkbox.Indicator className="flex items-center justify-center w-full h-full text-text-inverse">
+          <Checkbox.Indicator className="animate-checkbox-check flex items-center justify-center w-full h-full text-text-inverse">
             <CheckIcon className="w-3 h-3 block" data-state="checked" />
             <MinusIcon className="w-3 h-3 hidden" data-state="indeterminate" />
           </Checkbox.Indicator>

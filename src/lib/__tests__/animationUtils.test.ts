@@ -259,6 +259,7 @@ describe("discrete-feedback easing CSS contract", () => {
   // keeps the symmetric literal (terminal-ping, --focus-transition-easing).
   const discreteFeedbackSelectors = [
     ".animate-badge-bump",
+    ".animate-checkbox-check",
     ".animate-action-row-bump",
     ".animate-diagnostics-flash",
     ".animate-upstream-badge-flash",

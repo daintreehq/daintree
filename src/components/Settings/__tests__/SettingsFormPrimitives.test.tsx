@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi } from "vitest";
+import { readFileSync } from "fs";
+import { resolve } from "path";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { SettingsInput } from "../SettingsInput";
 import { SettingsSelect } from "../SettingsSelect";
@@ -9,6 +11,40 @@ import { SettingsChoicebox, type ChoiceboxOption } from "../SettingsChoicebox";
 import { SettingsCheckbox } from "../SettingsCheckbox";
 import { SettingsSwitch } from "../SettingsSwitch";
 import { PresetColorPicker } from "../PresetColorPicker";
+
+// Collect every `animate-*` class that a `@variant reduce-motion` block silences
+// with `animation: none`. Comments are stripped first — index.css documents the
+// variant with a literal `@variant reduce-motion { ... }` inside a comment, which
+// would otherwise be scanned as a real block.
+function reduceMotionKilledClasses(css: string): Set<string> {
+  const source = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  const killed = new Set<string>();
+  const marker = "@variant reduce-motion";
+
+  for (let from = source.indexOf(marker); from !== -1; from = source.indexOf(marker, from)) {
+    const open = source.indexOf("{", from);
+    if (open === -1) break;
+
+    let depth = 1;
+    let end = open + 1;
+    while (end < source.length && depth > 0) {
+      if (source[end] === "{") depth += 1;
+      else if (source[end] === "}") depth -= 1;
+      end += 1;
+    }
+
+    for (const [, selectors, declarations] of source
+      .slice(open + 1, end - 1)
+      .matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      if (!/animation:\s*none/.test(declarations)) continue;
+      for (const [, name] of selectors.matchAll(/\.(animate-[\w-]+)/g)) killed.add(name);
+    }
+
+    from = end;
+  }
+
+  return killed;
+}
 
 describe("SettingsInput", () => {
   it("renders label associated to input", () => {
@@ -874,6 +910,34 @@ describe("SettingsCheckbox", () => {
     const checkbox = screen.getByRole("checkbox");
     const indicator = checkbox.querySelector("svg");
     expect(indicator).toBeTruthy();
+  });
+
+  // Cross-source contract (#11166): whatever animation the checkmark indicator
+  // carries must be registered in a reduce-motion kill-list, or the check-in
+  // animation keeps playing for users who asked for no motion. Reads the classes
+  // off the rendered node rather than naming them, so a rename in either file
+  // that isn't mirrored in the other fails here.
+  it("kills the checked indicator's animation under reduce-motion", () => {
+    render(
+      <SettingsCheckbox
+        label="Test Setting"
+        description="A test description"
+        checked={true}
+        onChange={vi.fn()}
+      />
+    );
+    const indicator = screen.getByRole("checkbox").querySelector("svg")?.parentElement;
+    expect(indicator).toBeTruthy();
+
+    const animationClasses = [...indicator!.classList].filter((name) =>
+      name.startsWith("animate-")
+    );
+    expect(animationClasses.length).toBeGreaterThan(0);
+
+    const killed = reduceMotionKilledClasses(
+      readFileSync(resolve(__dirname, "../../../index.css"), "utf8")
+    );
+    animationClasses.forEach((name) => expect([...killed]).toContain(name));
   });
 
   it("uses error styling when error is present", () => {

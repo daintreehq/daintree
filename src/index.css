@@ -1006,6 +1006,23 @@ body,
   will-change: opacity, transform;
 }
 
+@keyframes checkbox-check-in {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* No will-change: unlike .animate-agent-pulse (dropped on animationend), this
+ * class stays on the indicator for the whole checked lifetime. */
+.animate-checkbox-check {
+  animation: checkbox-check-in var(--duration-150) var(--ease-out-expo) 1 both;
+}
+
 /* Organic breathing animation for waiting/loading states
  * Uses scale + opacity for a more premium feel with asymmetric timing.
  * Matches the 2s timing of other pulse animations.
@@ -1589,6 +1606,7 @@ body,
 @variant reduce-motion {
   .animate-activity-pulse,
   .animate-agent-pulse,
+  .animate-checkbox-check,
   .animate-breathe,
   .animate-spin,
   .animate-spin-slow,
