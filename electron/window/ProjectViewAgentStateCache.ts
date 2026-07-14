@@ -104,30 +104,3 @@ export function hasActiveAgent(host: ProjectViewManager, projectId: string): boo
   }
   return false;
 }
-
-/**
- * Whether `projectId` still has a live Daintree Assistant backend — a help
- * session PTY that HelpSessionService has bound to the project AND that the
- * terminal cache still knows about (#11157).
- *
- * Both halves are load-bearing. HelpSessionService holds its project→terminal
- * binding until the session is revoked, displaced, or unbound; nothing drops it
- * when the assistant's PTY exits on its own, so the binding alone would keep
- * protecting the view of a project whose assistant quit long ago. The terminal
- * cache is the liveness half: `initAgentStateCache` deletes a terminal from
- * `projectByTerminal` on its `exit` event, so a dead assistant stops protecting
- * its view and normal LRU resumes.
- *
- * Agent state is deliberately not consulted. The assistant can dispatch a
- * sub-agent or a background shell and go idle itself while that work runs on,
- * and killing it is exactly the bug this guards against — so a bound, live
- * assistant PTY protects its view whatever the parent's FSM state.
- *
- * Conservative before the first seed resolves: the cache is empty, so this
- * returns false and the view stays evictable, matching hasActiveAgent().
- */
-export function hasLiveAssistantBackend(host: ProjectViewManager, projectId: string): boolean {
-  const terminalId = host.assistantTerminalIdForProject?.(projectId);
-  if (!terminalId) return false;
-  return host.projectByTerminal.get(terminalId) === projectId;
-}

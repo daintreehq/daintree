@@ -135,13 +135,23 @@ export interface ProjectViewManagerOptions {
    */
   warmPaintGateHardTimeoutMs?: number;
   /**
-   * Resolve the Daintree Assistant PTY bound to a project, or null when it has
-   * no help session. Injected from the composition root so the eviction policy
-   * can consult HelpSessionService without electron/window/ depending on it
-   * (#11157). Absent — as in tests that don't exercise the assistant — every
-   * project reads as having no backend, which is the pre-#11157 behavior.
+   * Resolve the Daintree Assistant backend bound to a project — its PTY and the
+   * WebContents its help session pinned — or null when it has no session.
+   * Injected from the composition root so the eviction policy can consult
+   * HelpSessionService without electron/window/ depending on it (#11157).
+   * Absent — as in tests that don't exercise the assistant — every project reads
+   * as having no backend, which is the pre-#11157 behavior.
    */
-  assistantTerminalIdForProject?: (projectId: string) => string | null;
+  assistantBackendForProject?: (projectId: string) => {
+    terminalId: string;
+    webContentsId: number;
+  } | null;
+  /**
+   * Whether a PTY is still running. Paired with `assistantBackendForProject`:
+   * the help-session binding outlives an assistant that exits on its own, so
+   * eviction protection needs a liveness source that tracks exits.
+   */
+  isTerminalLive?: (terminalId: string) => boolean;
 }
 
 export class ProjectViewManager {
@@ -163,7 +173,11 @@ export class ProjectViewManager {
   onViewCached?: (webContentsId: number) => void;
   onViewReady?: (webContents: Electron.WebContents) => void;
   onViewCrashed?: (webContents: Electron.WebContents) => void;
-  assistantTerminalIdForProject?: (projectId: string) => string | null;
+  assistantBackendForProject?: (projectId: string) => {
+    terminalId: string;
+    webContentsId: number;
+  } | null;
+  isTerminalLive?: (terminalId: string) => boolean;
   windowRegistry?: import("./WindowRegistry.js").WindowRegistry;
   private switchChain: Promise<void> = Promise.resolve();
   private resizeHandler: (() => void) | null = null;
@@ -205,7 +219,8 @@ export class ProjectViewManager {
     this.onViewCached = opts.onViewCached;
     this.onViewReady = opts.onViewReady;
     this.onViewCrashed = opts.onViewCrashed;
-    this.assistantTerminalIdForProject = opts.assistantTerminalIdForProject;
+    this.assistantBackendForProject = opts.assistantBackendForProject;
+    this.isTerminalLive = opts.isTerminalLive;
     this.windowRegistry = opts.windowRegistry;
     if (opts.cachedProjectViews != null) {
       this.maxCachedViews = opts.cachedProjectViews;

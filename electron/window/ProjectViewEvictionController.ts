@@ -8,13 +8,49 @@
 import { getAppMetricsSnapshot } from "../utils/appMetricsSnapshot.js";
 import { logInfo } from "../utils/logger.js";
 import { cleanupEntry, sumGuestMemoryKb } from "./ProjectViewLifecycleController.js";
-import { hasActiveAgent, hasLiveAssistantBackend } from "./ProjectViewAgentStateCache.js";
+import { hasActiveAgent } from "./ProjectViewAgentStateCache.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { EvictionReason, ViewEntry } from "./ProjectViewManagerTypes.js";
 import { readAvailableSystemMemoryMb } from "../utils/systemMemory.js";
 
 /** `[projectId, entry, activeAgent, liveAssistantBackend]` — the last two are carried into the eviction log line. */
 type EvictionCandidate = [string, ViewEntry, boolean, boolean];
+
+/**
+ * Whether destroying `entry` would kill a running Daintree Assistant (#11157).
+ *
+ * Three conditions, all load-bearing:
+ *
+ * 1. HelpSessionService has an unrevoked session for the project with a spawned
+ *    PTY bound to it.
+ * 2. That PTY is still alive. The binding alone is NOT liveness — it survives
+ *    an assistant that exits under its own steam (nothing drops it, and the
+ *    orphan sweep skips bound sessions), so without this half a quit assistant
+ *    would pin its view for the rest of the session. `isTerminalLive` is
+ *    PtyClient's main-local spawn registry: written synchronously by `spawn()`
+ *    and dropped on both exit and kill, so it is authoritative from the
+ *    assistant's first instant — no seed to wait for, and no pty-host snapshot
+ *    that a shard timeout could silently truncate.
+ * 3. This is the view the session pinned. `revokeByWebContentsId` only kills
+ *    the session whose pinned WebContents matches the destroyed view, so a
+ *    second window's cached view of the same project kills nothing on eviction
+ *    and stays an ordinary LRU candidate.
+ *
+ * Agent state is deliberately not consulted: the assistant can dispatch a
+ * sub-agent or background shell and go idle while that work runs on, which is
+ * precisely the case the issue reports losing.
+ */
+function hasLiveAssistantBackend(
+  host: ProjectViewManager,
+  projectId: string,
+  entry: ViewEntry
+): boolean {
+  const backend = host.assistantBackendForProject?.(projectId);
+  if (!backend) return false;
+  if (host.isTerminalLive?.(backend.terminalId) !== true) return false;
+  const wc = entry.view.webContents;
+  return !wc.isDestroyed() && wc.id === backend.webContentsId;
+}
 
 /**
  * Evict a cached view whose renderer is already gone (OS memory eviction or
@@ -155,7 +191,7 @@ export function evictStaleViews(
   const assistantProtected: EvictionCandidate[] = [];
   for (const [projectId, entry] of evictable) {
     const active = hasActiveAgent(host, projectId);
-    if (hasLiveAssistantBackend(host, projectId)) {
+    if (hasLiveAssistantBackend(host, projectId, entry)) {
       assistantProtected.push([projectId, entry, active, true]);
     } else if (active) {
       activeAgentFallback.push([projectId, entry, true, false]);

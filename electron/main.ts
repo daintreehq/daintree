@@ -286,11 +286,17 @@ if (!gotTheLock) {
       // out of the routine LRU pool (#11157) — evicting it would run the
       // revoke-and-kill path below and take the assistant's sub-agents and
       // background shells with it. Injected here rather than imported by
-      // electron/window/ so the eviction controller stays free of the service.
+      // electron/window/ so the eviction controller stays free of both services.
       // The static import is free: PtyClient already value-imports
       // HelpSessionService, so it is in the eager graph either way.
-      assistantTerminalIdForProject: (projectId) =>
-        helpSessionService.getAssistantTerminalId(projectId),
+      assistantBackendForProject: (projectId) => helpSessionService.getAssistantBackend(projectId),
+      // The liveness half. PtyClient's spawn registry is main-local and
+      // synchronous — written by spawn() before the host round-trip, dropped on
+      // exit and on kill — so it is authoritative from the assistant's first
+      // instant. The pty-host's terminal snapshot is not a substitute: it is
+      // async, and a shard that times out comes back as an empty list, which
+      // would read as "the assistant is gone" and unprotect a live one.
+      isTerminalLive: (terminalId) => getPtyClient()?.hasTerminal(terminalId) === true,
       onViewEvicted: (wcId) => {
         // Each cleanup is isolated: if removeDirectPort throws, the worktree
         // port must still close. Partial cleanup leaves a live producer

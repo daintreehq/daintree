@@ -1103,20 +1103,26 @@ describe("HelpSessionService", () => {
 
   // The project-view eviction guard (#11157) reads this to decide whether
   // destroying a cached view would kill a running assistant, so the binding
-  // must track the PTY's whole lifetime — not just its spawn.
-  describe("getAssistantTerminalId (#11157)", () => {
+  // must track the PTY's whole lifetime — not just its spawn — and must carry
+  // the pinned WebContents so only the view that would do the killing is
+  // protected.
+  describe("getAssistantBackend (#11157)", () => {
     it("resolves only once a terminal is bound, and only for the owning project", async () => {
       const result = await service.provisionSession(provisionInput());
       if (!result) throw new Error("expected result");
 
       // Provisioned but not spawned: the bearer exists, the backend does not.
-      expect(service.getAssistantTerminalId("proj-1")).toBeNull();
+      expect(service.getAssistantBackend("proj-1")).toBeNull();
 
       expect(service.markTerminalForToken(result.token, "term-1")).toBe(true);
 
-      expect(service.getAssistantTerminalId("proj-1")).toBe("term-1");
-      expect(service.getAssistantTerminalId("proj-2")).toBeNull();
-      expect(service.getAssistantTerminalId("")).toBeNull();
+      // provisionInput() pins the session to WebContents 42.
+      expect(service.getAssistantBackend("proj-1")).toEqual({
+        terminalId: "term-1",
+        webContentsId: 42,
+      });
+      expect(service.getAssistantBackend("proj-2")).toBeNull();
+      expect(service.getAssistantBackend("")).toBeNull();
     });
 
     it("follows the binding through displacement", async () => {
@@ -1127,7 +1133,7 @@ describe("HelpSessionService", () => {
 
       // The displaced PTY is dead; protecting the view on its behalf would pin
       // a project whose assistant is gone.
-      expect(service.getAssistantTerminalId("proj-1")).toBe("term-new");
+      expect(service.getAssistantBackend("proj-1")?.terminalId).toBe("term-new");
     });
 
     it("clears on unbind", async () => {
@@ -1137,7 +1143,7 @@ describe("HelpSessionService", () => {
 
       service.unbindTerminal("term-1");
 
-      expect(service.getAssistantTerminalId("proj-1")).toBeNull();
+      expect(service.getAssistantBackend("proj-1")).toBeNull();
     });
 
     it("clears on revoke", async () => {
@@ -1147,7 +1153,7 @@ describe("HelpSessionService", () => {
 
       await service.revokeSession(result.sessionId);
 
-      expect(service.getAssistantTerminalId("proj-1")).toBeNull();
+      expect(service.getAssistantBackend("proj-1")).toBeNull();
     });
   });
 
