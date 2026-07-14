@@ -71,7 +71,12 @@ export function ForgeStatPill({
             onPointerLeave={onPointerLeave}
             onClick={onClick}
             className={cn(
-              "h-full flex-1 justify-center gap-2 rounded-none px-2 text-daintree-text transition-opacity hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
+              // `scale` is in the set so the base cva's `active:scale-[0.98]
+              // active:duration-[1ms]` press snap has a transitioned property to
+              // act on — a bare `transition-opacity` here replaces the cva's
+              // `transition` outright under tailwind-merge, which left both the
+              // hover tint and the press scale uninterpolated.
+              "toolbar-stat-pill h-full flex-1 justify-center gap-2 rounded-none px-2 text-daintree-text transition-[opacity,background-color,scale] hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
               activityChip != null && "relative",
               className,
               open &&
