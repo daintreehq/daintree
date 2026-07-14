@@ -9,6 +9,7 @@ import {
 } from "../../../window/activeProjectIds.js";
 import { broadcastToRenderer, typedHandle, typedHandleWithContext } from "../../utils.js";
 import { resolveScopedProjectForIpcContext } from "../../projectContext.js";
+import { refreshProjectMenuState } from "../../../projectMenuState.js";
 import type { HandlerDependencies } from "../../types.js";
 import type { Project } from "../../../types/index.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
@@ -100,6 +101,8 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
       pruneWindowStateForPath(removedPath);
     }
     broadcastToRenderer(CHANNELS.PROJECT_REMOVED, projectId);
+    // The row is gone, so a window still bound to it no longer has a project open.
+    refreshProjectMenuState();
   };
   handlers.push(typedHandle(CHANNELS.PROJECT_REMOVE, handleProjectRemove));
 
@@ -207,6 +210,11 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
           projectStore.clearCurrentProject();
         }
         projectStore.updateProjectStatus(projectId, "closed");
+
+        // After the "closed" write, not merely after clearCurrentProject(): the
+        // closing window's ProjectViewManager still points at this project, so
+        // the row's status is what tells the menu resolver it isn't open.
+        refreshProjectMenuState();
 
         console.log(
           `[IPC] project:close: Killed ${terminalsKilled} process(es) ` +

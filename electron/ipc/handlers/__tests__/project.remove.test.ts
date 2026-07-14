@@ -44,6 +44,11 @@ const windowStateMock = vi.hoisted(() => ({
 
 vi.mock("../../../windowState.js", () => windowStateMock);
 
+const refreshProjectMenuStateMock = vi.hoisted(() => vi.fn());
+vi.mock("../../../projectMenuState.js", () => ({
+  refreshProjectMenuState: refreshProjectMenuStateMock,
+}));
+
 import { ipcMain } from "electron";
 import { CHANNELS } from "../../channels.js";
 import { registerProjectCrudHandlers } from "../projectCrud/index.js";
@@ -89,6 +94,9 @@ describe("project:remove handler", () => {
     const killOrder = ptyClient.killByProject.mock.invocationCallOrder[0];
     const removeOrder = projectStoreMock.removeProject.mock.invocationCallOrder[0];
     expect(killOrder).toBeLessThan(removeOrder);
+
+    // The row is gone, so a window still bound to it has no project open (#11136).
+    expect(refreshProjectMenuStateMock).toHaveBeenCalled();
   });
 
   it("still removes the project when killByProject fails", async () => {

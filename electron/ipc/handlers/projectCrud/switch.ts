@@ -11,6 +11,7 @@ import { projectStore } from "../../../services/ProjectStore.js";
 import { scratchStore } from "../../../services/ScratchStore.js";
 import { ProjectSwitchService } from "../../../services/ProjectSwitchService.js";
 import { broadcastProjectSwitchUpdates } from "../../projectSwitchBroadcast.js";
+import { refreshProjectMenuState } from "../../../projectMenuState.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { logInfo } from "../../../utils/logger.js";
 import {
@@ -64,11 +65,19 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
       // Rapid switch-back: a cold-start hydrate of the target must not read
       // its state file while a previous switch's persist is still writing it.
       await awaitPendingOutgoingPersist(projectId);
-      await activateProjectView(deps, operation, pvm, project, {
-        logPrefix: "[ProjectSwitch]",
-        resumeWorkspace: true,
-      });
-      await persistOutgoing;
+      try {
+        await activateProjectView(deps, operation, pvm, project, {
+          logPrefix: "[ProjectSwitch]",
+          resumeWorkspace: true,
+        });
+        await persistOutgoing;
+      } finally {
+        // In `finally`, not after the awaits: once the swap has run, the PVM
+        // binding has moved (or been rolled back), so the gates must converge on
+        // whatever state we actually landed in — including when the outgoing
+        // persist rejects after a visually successful activation.
+        refreshProjectMenuState();
+      }
       return project;
     }
 
@@ -86,7 +95,11 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
       }
       deps.worktreeService.resumeProject(project.path);
     }
-    return await projectSwitchService.switchProject(projectId);
+    try {
+      return await projectSwitchService.switchProject(projectId);
+    } finally {
+      refreshProjectMenuState();
+    }
   };
   handlers.push(typedHandleWithContext(CHANNELS.PROJECT_SWITCH, handleProjectSwitch));
 
@@ -127,12 +140,16 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
 
     if (pvm) {
       await awaitPendingOutgoingPersist(projectId);
-      await activateProjectView(deps, operation, pvm, project, {
-        logPrefix: "[ProjectReopen]",
-        markActive: true,
-        resumeWorkspace: true,
-      });
-      await persistOutgoing;
+      try {
+        await activateProjectView(deps, operation, pvm, project, {
+          logPrefix: "[ProjectReopen]",
+          markActive: true,
+          resumeWorkspace: true,
+        });
+        await persistOutgoing;
+      } finally {
+        refreshProjectMenuState();
+      }
       return project;
     }
 
@@ -140,7 +157,11 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
     if (deps.worktreeService) {
       deps.worktreeService.resumeProject(project.path);
     }
-    return await projectSwitchService.reopenProject(projectId);
+    try {
+      return await projectSwitchService.reopenProject(projectId);
+    } finally {
+      refreshProjectMenuState();
+    }
   };
   handlers.push(typedHandleWithContext(CHANNELS.PROJECT_REOPEN, handleProjectReopen));
 

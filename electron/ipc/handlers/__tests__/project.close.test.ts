@@ -42,6 +42,11 @@ vi.mock("../../../services/ProjectSwitchService.js", () => ({
   },
 }));
 
+const refreshProjectMenuStateMock = vi.hoisted(() => vi.fn());
+vi.mock("../../../projectMenuState.js", () => ({
+  refreshProjectMenuState: refreshProjectMenuStateMock,
+}));
+
 import { ipcMain } from "electron";
 import { CHANNELS } from "../../channels.js";
 import { registerProjectCrudHandlers } from "../projectCrud/index.js";
@@ -102,6 +107,15 @@ describe("project:close handler", () => {
     expect(projectStoreMock.clearProjectState).toHaveBeenCalledWith("project-active");
     expect(projectStoreMock.clearCurrentProject).toHaveBeenCalled();
     expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith("project-active", "closed");
+
+    // The File-menu project gates must drop with the project (#11136), and the
+    // refresh has to run AFTER the "closed" write: the closing window's
+    // ProjectViewManager still points at this project, so the row's status is
+    // what tells the resolver it is no longer open.
+    expect(refreshProjectMenuStateMock).toHaveBeenCalled();
+    expect(refreshProjectMenuStateMock.mock.invocationCallOrder[0]).toBeGreaterThan(
+      projectStoreMock.updateProjectStatus.mock.invocationCallOrder[0]
+    );
   });
 
   it("rejects closing the active project when not killing terminals", async () => {

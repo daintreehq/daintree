@@ -102,6 +102,11 @@ vi.mock("../../projectSwitchBroadcast.js", () => ({
     mockBroadcastProjectSwitchUpdates(previousProjectId, activeProjectId),
 }));
 
+const refreshProjectMenuStateMock = vi.hoisted(() => vi.fn());
+vi.mock("../../../projectMenuState.js", () => ({
+  refreshProjectMenuState: refreshProjectMenuStateMock,
+}));
+
 import { ipcMain } from "electron";
 import { CHANNELS } from "../../channels.js";
 import { distributePortsToView } from "../../../window/portDistribution.js";
@@ -143,6 +148,131 @@ function makeWindowRegistry(contexts: WindowContext[]): WindowRegistry {
     },
   } as unknown as WindowRegistry;
 }
+
+// #11136: the File-menu "Close Project" / "Project Settings…" gates are computed
+// when the menu is built, so every path that opens a project has to refresh them
+// or they stay disabled until something unrelated rebuilds the menu.
+describe("project switch/reopen refreshes the File-menu project gates (#11136)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetWindowForWebContents.mockReturnValue({ id: 1, isDestroyed: () => false });
+    projectStoreMock.setCurrentProject.mockResolvedValue(undefined);
+  });
+
+  function handlerFor(channel: string, deps: HandlerDependencies) {
+    registerProjectCrudHandlers(deps);
+    const call = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls.find(
+      (c) => c[0] === channel
+    );
+    expect(call).toBeDefined();
+    return call![1] as (...args: unknown[]) => Promise<unknown>;
+  }
+
+  function depsWith(pvm: unknown | null): HandlerDependencies {
+    const ctx = makeWindowContext(
+      1,
+      10,
+      pvm ? { projectViewManager: pvm as never } : {} // no PVM ⇒ legacy path
+    );
+    return {
+      mainWindow: { id: 1 } as unknown,
+      windowRegistry: makeWindowRegistry([ctx]),
+      ...(pvm ? { projectViewManager: pvm } : {}),
+    } as unknown as HandlerDependencies;
+  }
+
+  function makePvm() {
+    return {
+      switchTo: vi.fn().mockResolvedValue({
+        view: { webContents: { id: 200, isDestroyed: () => false, send: vi.fn() } },
+        isNew: false,
+      }),
+      getProjectIdForWebContents: vi.fn(),
+      setPendingFocusIntent: vi.fn(),
+    };
+  }
+
+  it("refreshes after a PVM-backed switch", async () => {
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: "proj-new",
+      name: "New",
+      path: "/projects/new",
+    });
+    const handler = handlerFor(CHANNELS.PROJECT_SWITCH, depsWith(makePvm()));
+
+    await handler({ sender: { id: 10 } }, "proj-new");
+
+    expect(refreshProjectMenuStateMock).toHaveBeenCalled();
+  });
+
+  it("refreshes after a legacy (no-PVM) switch", async () => {
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: "proj-new",
+      name: "New",
+      path: "/projects/new",
+    });
+    const handler = handlerFor(CHANNELS.PROJECT_SWITCH, depsWith(null));
+
+    await handler({ sender: { id: 10 } }, "proj-new");
+
+    expect(refreshProjectMenuStateMock).toHaveBeenCalled();
+  });
+
+  it("refreshes after a PVM-backed reopen", async () => {
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: "proj-bg",
+      name: "Backgrounded",
+      path: "/projects/bg",
+      status: "background",
+    });
+    const handler = handlerFor(CHANNELS.PROJECT_REOPEN, depsWith(makePvm()));
+
+    await handler({ sender: { id: 10 } }, "proj-bg");
+
+    expect(refreshProjectMenuStateMock).toHaveBeenCalled();
+  });
+
+  it("refreshes after a legacy (no-PVM) reopen", async () => {
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: "proj-bg",
+      name: "Backgrounded",
+      path: "/projects/bg",
+      status: "background",
+    });
+    const handler = handlerFor(CHANNELS.PROJECT_REOPEN, depsWith(null));
+
+    await handler({ sender: { id: 10 } }, "proj-bg");
+
+    expect(refreshProjectMenuStateMock).toHaveBeenCalled();
+  });
+
+  it("does not refresh when the switch is rejected for an unknown project", async () => {
+    projectStoreMock.getProjectById.mockReturnValue(null);
+    const handler = handlerFor(CHANNELS.PROJECT_SWITCH, depsWith(makePvm()));
+
+    await expect(handler({ sender: { id: 10 } }, "ghost")).rejects.toThrow();
+
+    // Rejected before the swap ran, so nothing moved and there is nothing to converge.
+    expect(refreshProjectMenuStateMock).not.toHaveBeenCalled();
+  });
+
+  it("still refreshes when the swap fails, so a rolled-back binding converges", async () => {
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: "proj-new",
+      name: "New",
+      path: "/projects/new",
+    });
+    const pvm = makePvm();
+    pvm.switchTo.mockRejectedValue(new Error("view failed to load"));
+    const handler = handlerFor(CHANNELS.PROJECT_SWITCH, depsWith(pvm));
+
+    await expect(handler({ sender: { id: 10 } }, "proj-new")).rejects.toThrow();
+
+    // Once the swap has run, the PVM binding has moved or been rolled back — the
+    // gates must reflect where we actually landed, not stay stale.
+    expect(refreshProjectMenuStateMock).toHaveBeenCalled();
+  });
+});
 
 describe("project:switch multi-window PVM routing", () => {
   beforeEach(() => {
