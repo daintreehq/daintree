@@ -242,8 +242,13 @@ describe("ContentGridEmptyState — workspace capabilities", () => {
     it("animates each launcher section rather than the container as one block", () => {
       const container = renderWholeLauncher();
 
-      // Six sections: hero, recipes, resume, quick actions, pulse, tip. An
-      // animation left on the container itself would show up as a seventh.
+      // The whole point of the issue: the launcher must not arrive as one flat
+      // block, so its root carries no entry animation of its own…
+      for (const root of Array.from(container.children)) {
+        expect(classesOf(root).some((c) => /(^|:)animate-in$/.test(c))).toBe(false);
+      }
+      // …and every section that renders arrives on its own: hero, recipes,
+      // resume, quick actions, pulse, tip.
       expect(animatedSections(container)).toHaveLength(6);
     });
 

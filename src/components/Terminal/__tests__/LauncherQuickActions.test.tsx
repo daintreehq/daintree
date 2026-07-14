@@ -68,7 +68,7 @@ import { LauncherQuickActions } from "../LauncherQuickActions";
 import {
   basePressTreatment,
   reduceMotionSelectors,
-  TRANSITION_WIDENERS,
+  transitionWideners,
 } from "./launcherMotionContract";
 
 beforeEach(() => {
@@ -209,17 +209,19 @@ describe("LauncherQuickActions", () => {
       screen.getByRole("button", { name: /Search agents & panels/i }),
     ];
 
-    it("carries the same press treatment the shared Button owns", () => {
+    it("carries exactly the press treatment the shared Button owns", () => {
       const press = basePressTreatment();
       // Guard: if the shared recipe ever loses its `active:` classes there is
-      // nothing left to enforce, and the loop below would pass vacuously.
+      // nothing left to enforce, and the comparison below would pass vacuously.
       expect(press.length).toBeGreaterThan(0);
 
       render(<LauncherQuickActions />);
 
       for (const button of launcherButtons()) {
-        const classes = button.className.split(/\s+/);
-        for (const token of press) expect(classes).toContain(token);
+        // Exact, not superset: a class the shared recipe has dropped must not
+        // linger here either.
+        const pressed = button.className.split(/\s+/).filter((c) => c.startsWith("active:"));
+        expect(new Set(pressed)).toEqual(new Set(press));
       }
     });
 
@@ -227,13 +229,9 @@ describe("LauncherQuickActions", () => {
       render(<LauncherQuickActions />);
 
       for (const button of launcherButtons()) {
-        // A bare `transition`/`transition-all` — or an explicit
-        // `transition-transform` — would ease the scale back over the shared
-        // 150ms instead of snapping it.
-        const widened = button.className
-          .split(/\s+/)
-          .filter((c) => TRANSITION_WIDENERS.includes(c));
-        expect(widened).toEqual([]);
+        // Anything that pulls a transform into the transition set would ease
+        // the scale back over the shared 150ms instead of snapping it.
+        expect(transitionWideners(button.className)).toEqual([]);
       }
     });
 

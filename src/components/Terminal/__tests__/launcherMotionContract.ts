@@ -20,7 +20,13 @@ import { buttonVariants } from "@/components/ui/button";
  * if, and only if, one of its class names is named in this block.
  */
 export const reduceMotionSelectors = (): Set<string> => {
-  const css = readFileSync(resolve(__dirname, "../../../index.css"), "utf-8");
+  // Comments are stripped first, or a class merely *mentioned* in prose would
+  // count as neutralized — which would let this contract pass against a rule
+  // that no longer exists.
+  const css = readFileSync(resolve(__dirname, "../../../index.css"), "utf-8").replace(
+    /\/\*[\s\S]*?\*\//g,
+    ""
+  );
   const classes = new Set<string>();
 
   const MARKER = "@variant reduce-motion";
@@ -29,8 +35,10 @@ export const reduceMotionSelectors = (): Set<string> => {
     for (let k = css.indexOf("{", i); k < css.length; k++) {
       if (css[k] === "{") depth++;
       if (css[k] === "}" && --depth === 0) {
-        for (const [, name] of css.slice(i, k).matchAll(/\.(-?[a-zA-Z][\w-]*)/g)) {
-          classes.add(name);
+        // Selector text only — the chunk preceding each `{`. A class name that
+        // appears inside a declaration value is not a rule, and must not count.
+        for (const [, selectorText] of css.slice(i, k).matchAll(/(?:^|[};])([^{};]*)\{/g)) {
+          for (const [, name] of selectorText.matchAll(/\.(-?[a-zA-Z][\w-]*)/g)) classes.add(name);
         }
         break;
       }
@@ -53,5 +61,21 @@ export const basePressTreatment = (): string[] =>
     .split(/\s+/)
     .filter((token) => token.startsWith("active:"));
 
-/** Class names that widen a transition set to cover the press transform. */
-export const TRANSITION_WIDENERS = ["transition", "transition-all", "transition-transform"];
+/**
+ * Does this class pull a transform property into the element's transition set?
+ *
+ * If it does, the press scale interpolates over the shared 150ms instead of
+ * snapping. Variant prefixes are stripped first, and arbitrary lists are read,
+ * so `md:transition-all` and `transition-[opacity,scale]` are both caught.
+ */
+export const widensTransitionToTransform = (cls: string): boolean => {
+  const utility = cls.slice(cls.lastIndexOf(":") + 1);
+  if (["transition", "transition-all", "transition-transform"].includes(utility)) return true;
+
+  const arbitrary = /^transition-\[(.+)\]$/.exec(utility);
+  return arbitrary ? /\b(transform|scale|translate|rotate|all)\b/.test(arbitrary[1]) : false;
+};
+
+/** The transform-widening classes on an element, if any. */
+export const transitionWideners = (className: string): string[] =>
+  className.split(/\s+/).filter(widensTransitionToTransform);
