@@ -49,14 +49,51 @@ async function soundFiles(): Promise<SoundFilesMap> {
   return cachedSoundFiles;
 }
 
-export function registerNotificationHandlers(_deps: HandlerDependencies): () => void {
+export function registerNotificationHandlers(deps: HandlerDependencies): () => void {
   const cleanups: Array<() => void> = [];
 
+  // Owners are the renderers that reported notification state — identified by
+  // `event.sender.id`, never by a "current window/project" global (the bug this
+  // whole change exists to kill). Each is tracked once so its state can be
+  // purged when it goes away.
+  const trackedOwners = new Map<number, Electron.WebContents>();
+
+  const purgeOwner = (ownerId: number): void => {
+    // Short-circuit: the webContents "destroyed" listener and the owning
+    // window's cleanup both fire for the same owner on window close, and the
+    // window's DisposableStore keeps a purge for every view it ever hosted.
+    if (!trackedOwners.delete(ownerId)) return;
+
+    notificationService.removeOwner(ownerId);
+    void getAgentNotificationService()
+      .then((svc) => svc.removeOwner(ownerId))
+      .catch((err) => console.error("[notifications] removeOwner failed:", err));
+  };
+
+  const trackOwner = (sender: Electron.WebContents): number => {
+    const ownerId = sender.id;
+    if (trackedOwners.has(ownerId)) return ownerId;
+    trackedOwners.set(ownerId, sender);
+
+    // A view's webContents is destroyed when its window closes AND when it is
+    // evicted under memory pressure (eviction closes it). A *deactivated*
+    // (cached, still-alive) view fires nothing — which is exactly right: its
+    // watched panels and waiting count must survive until the user returns.
+    sender.once("destroyed", () => purgeOwner(ownerId));
+
+    // Belt and braces for window teardown, where the view's "destroyed" event
+    // can race the registry's own unwinding.
+    const windowCleanup = deps.windowRegistry?.getByWebContentsId(ownerId)?.cleanup;
+    windowCleanup?.add({ dispose: () => purgeOwner(ownerId) });
+
+    return ownerId;
+  };
+
   const handleNotificationUpdate = (
-    _event: Electron.IpcMainEvent,
+    event: Electron.IpcMainEvent,
     state: NotificationState
   ): void => {
-    notificationService.updateNotifications(state);
+    notificationService.updateNotifications(trackOwner(event.sender), state);
   };
 
   const handleSettingsGet = async (): Promise<NotificationSettings> => {
@@ -138,11 +175,18 @@ export function registerNotificationHandlers(_deps: HandlerDependencies): () => 
     sound.previewFile(soundFile);
   };
 
-  const handleSyncWatched = (_event: Electron.IpcMainEvent, payload: unknown): void => {
+  const handleSyncWatched = (event: Electron.IpcMainEvent, payload: unknown): void => {
     if (!Array.isArray(payload)) return;
     const ids = payload.filter((v): v is string => typeof v === "string");
+    // Pin the sender synchronously: the service import is async, and a view
+    // destroyed while it settles would otherwise have its state resurrected by
+    // the late sync — a leak no destroy event can clean up.
+    const ownerId = trackOwner(event.sender);
     void getAgentNotificationService()
-      .then((svc) => svc.syncWatchedPanels(ids))
+      .then((svc) => {
+        if (!trackedOwners.has(ownerId)) return;
+        svc.syncWatchedPanels(ownerId, ids);
+      })
       .catch((err) => console.error("[notifications] syncWatched failed:", err));
   };
 
@@ -192,7 +236,7 @@ export function registerNotificationHandlers(_deps: HandlerDependencies): () => 
     notificationService.showNativeNotification(p.title, p.body);
   };
 
-  const handleShowWatch = (_event: Electron.IpcMainEvent, payload: unknown): void => {
+  const handleShowWatch = (event: Electron.IpcMainEvent, payload: unknown): void => {
     if (!payload || typeof payload !== "object") return;
     const p = payload as Record<string, unknown>;
     if (typeof p.title !== "string" || typeof p.body !== "string") return;
@@ -204,11 +248,14 @@ export function registerNotificationHandlers(_deps: HandlerDependencies): () => 
       worktreeId: typeof p.worktreeId === "string" ? p.worktreeId : undefined,
     };
 
+    // The renderer that asked for the notification owns the panel it names, so
+    // a click on it belongs back in that same renderer's window.
     notificationService.showWatchNotification(
       p.title,
       p.body,
       context,
-      CHANNELS.NOTIFICATION_WATCH_NAVIGATE
+      CHANNELS.NOTIFICATION_WATCH_NAVIGATE,
+      { ownerWebContentsId: event.sender.id }
     );
   };
 
@@ -242,6 +289,7 @@ export function registerNotificationHandlers(_deps: HandlerDependencies): () => 
       handleWorkingPulseAcknowledge
     );
     ipcMain.removeListener(CHANNELS.NOTIFICATION_SESSION_MUTE_SET, handleSessionMuteSet);
+    trackedOwners.clear();
     cleanups.forEach((c) => c());
   };
 }

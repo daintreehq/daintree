@@ -51,6 +51,9 @@ vi.mock("../OsDndService.js", () => ({
 import { events } from "../events.js";
 import { agentNotificationService } from "../AgentNotificationService.js";
 
+/** Stand-in for a project view's webContents id — the renderer that owns the watched panels. */
+const OWNER = 101;
+
 const BASE_TIME = new Date("2026-01-01T00:00:00.000Z");
 
 const DEFAULT_NOTIFICATION_SETTINGS = {
@@ -158,7 +161,7 @@ describe("AgentNotificationService adversarial", () => {
     vi.clearAllMocks();
     mockStore();
     agentNotificationService.initialize();
-    agentNotificationService.syncWatchedPanels(["term-1"]);
+    agentNotificationService.syncWatchedPanels(OWNER, ["term-1"]);
   });
 
   afterEach(() => {
@@ -179,7 +182,7 @@ describe("AgentNotificationService adversarial", () => {
       "agent-1 is waiting for input",
       expect.objectContaining({ panelId: "term-1" }),
       "notification:watch-navigate",
-      true
+      { silent: true, ownerWebContentsId: OWNER }
     );
     expect(soundServiceMock.playFile).toHaveBeenCalledTimes(1);
   });
@@ -198,7 +201,7 @@ describe("AgentNotificationService adversarial", () => {
       "agent-1 finished its task",
       expect.objectContaining({ panelId: "term-1" }),
       "notification:watch-navigate",
-      true
+      { silent: true, ownerWebContentsId: OWNER }
     );
     expect(soundServiceMock.playFile).toHaveBeenCalledTimes(1);
   });
@@ -268,7 +271,7 @@ describe("AgentNotificationService adversarial", () => {
       "agent-1 is waiting for input",
       expect.objectContaining({ panelId: "term-1" }),
       "notification:watch-navigate",
-      true
+      { silent: true, ownerWebContentsId: OWNER }
     );
     expect(notificationServiceMock.showWatchNotification).toHaveBeenNthCalledWith(
       2,
@@ -276,7 +279,7 @@ describe("AgentNotificationService adversarial", () => {
       "agent-1 finished its task",
       expect.objectContaining({ panelId: "term-1" }),
       "notification:watch-navigate",
-      true
+      { silent: true, ownerWebContentsId: OWNER }
     );
   });
 });
