@@ -1,13 +1,20 @@
-import { useCallback, useEffect, useMemo, useState, type ReactElement } from "react";
+import { useCallback, useEffect, useId, useMemo, useState, type ReactElement } from "react";
+import { m } from "framer-motion";
 import { Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
 import { FleetPickerContent, FleetPickerFooterHint } from "@/components/Fleet/FleetPickerContent";
 import { useFleetPicker } from "@/hooks/useFleetPicker";
+import { useUiMotionTransition } from "@/hooks/useShouldSkipMotion";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { ACTIVE_AGENT_STATES } from "@shared/types/agent";
 
 type CommitMode = "replace" | "append";
+
+const COMMIT_MODES: { mode: CommitMode; label: string }[] = [
+  { mode: "replace", label: "Replace" },
+  { mode: "append", label: "Append" },
+];
 
 export interface FleetPickerPaletteProps {
   isOpen: boolean;
@@ -34,6 +41,8 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
   const armIds = useFleetArmingStore((s) => s.armIds);
   const addToFleet = useFleetArmingStore((s) => s.addToFleet);
   const [commitMode, setCommitMode] = useState<CommitMode>("replace");
+  const thumbLayoutId = `${useId()}-segmented-thumb`;
+  const thumbTransition = useUiMotionTransition();
 
   useEffect(() => {
     if (!isOpen) setCommitMode("replace");
@@ -196,43 +205,46 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
 
             <div className="flex flex-nowrap items-center justify-between gap-2 border-t border-daintree-border px-3 py-2">
               <div
-                className="flex gap-1 text-[11px]"
+                className="relative isolate flex bg-tint/[0.04] rounded p-0.5 text-[11px]"
                 role="radiogroup"
                 aria-label="Commit mode"
                 data-testid="fleet-picker-cold-start-commit-mode"
               >
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={commitMode === "replace"}
-                  onClick={() => setCommitMode("replace")}
-                  data-testid="fleet-picker-cold-start-commit-mode-replace"
-                  className={cn(
-                    "rounded px-2 py-1 transition-colors",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
-                    commitMode === "replace"
-                      ? "bg-tint/[0.14] text-daintree-text"
-                      : "bg-tint/[0.04] text-daintree-text/70 hover:bg-tint/[0.08]"
-                  )}
-                >
-                  Replace
-                </button>
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={commitMode === "append"}
-                  onClick={() => setCommitMode("append")}
-                  data-testid="fleet-picker-cold-start-commit-mode-append"
-                  className={cn(
-                    "rounded px-2 py-1 transition-colors",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
-                    commitMode === "append"
-                      ? "bg-tint/[0.14] text-daintree-text"
-                      : "bg-tint/[0.04] text-daintree-text/70 hover:bg-tint/[0.08]"
-                  )}
-                >
-                  Append
-                </button>
+                {COMMIT_MODES.map(({ mode, label }) => {
+                  const isActive = commitMode === mode;
+
+                  return (
+                    <button
+                      key={mode}
+                      type="button"
+                      role="radio"
+                      aria-checked={isActive}
+                      onClick={() => setCommitMode(mode)}
+                      data-testid={`fleet-picker-cold-start-commit-mode-${mode}`}
+                      className={cn(
+                        "relative rounded px-2 py-0.5 transition-colors",
+                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]",
+                        isActive
+                          ? "text-daintree-text"
+                          : "text-daintree-text/70 hover:bg-tint/[0.04]"
+                      )}
+                    >
+                      {isActive && (
+                        <m.div
+                          data-slot="segmented-thumb"
+                          layout
+                          layoutId={thumbLayoutId}
+                          layoutCrossfade={false}
+                          transition={thumbTransition}
+                          style={{ borderRadius: 4 }}
+                          className="absolute inset-0 z-0 bg-tint/[0.10] pointer-events-none"
+                          aria-hidden="true"
+                        />
+                      )}
+                      <span className="relative z-10">{label}</span>
+                    </button>
+                  );
+                })}
               </div>
               <div className="flex items-center gap-1.5">
                 <button
