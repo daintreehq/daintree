@@ -712,8 +712,17 @@ export default tseslint.config(
   {
     files: [
       "src/components/Fleet/FleetArmingRibbon.tsx",
+      "src/components/Fleet/FleetPickerPalette.tsx",
       "src/components/Layout/DockedTabGroup.tsx",
     ],
+    rules: { "no-restricted-imports": "off" },
+  },
+
+  // Allowlist — framer-motion segmented-control thumb. Both import `m` (the
+  // feature-less component) and the reduced-motion hook, not the animation
+  // features themselves; those still arrive lazily via loadMotionFeatures().
+  {
+    files: ["src/components/ui/SegmentedToggle.tsx", "src/hooks/useShouldSkipMotion.ts"],
     rules: { "no-restricted-imports": "off" },
   },
 

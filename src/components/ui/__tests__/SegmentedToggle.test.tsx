@@ -231,7 +231,9 @@ describe("SegmentedToggle", () => {
   });
 
   it("renders no thumb when the value matches no option", () => {
-    render(<SegmentedToggle options={OPTIONS} value={"gone" as Mode} onChange={() => {}} />);
+    // "blame" is a legal Mode, but it isn't among these options — a controlled value
+    // with nothing to point at must show nothing, not pin the thumb to a stale segment.
+    render(<SegmentedToggle options={OPTIONS} value="blame" onChange={() => {}} />);
 
     expect(thumbs().length).toBe(0);
   });
