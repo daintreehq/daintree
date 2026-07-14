@@ -259,6 +259,7 @@ describe("discrete-feedback easing CSS contract", () => {
   // keeps the symmetric literal (terminal-ping, --focus-transition-easing).
   const discreteFeedbackSelectors = [
     ".animate-badge-bump",
+    ".animate-checkbox-check",
     ".animate-action-row-bump",
     ".animate-diagnostics-flash",
     ".animate-upstream-badge-flash",
@@ -279,7 +280,7 @@ describe("discrete-feedback easing CSS contract", () => {
     css.match(blockRegex(selector))?.[0].match(/\{([\s\S]*?)\}/)?.[1] ?? null;
 
   it("anchors the swap to the source-of-truth token value", () => {
-    // The 10 swaps only matter if --ease-out-expo still resolves to the
+    // The swaps only matter if --ease-out-expo still resolves to the
     // front-loaded curve. Link the CSS token to the TS constant so a silent
     // redefinition can't pass the per-selector reference checks below.
     const match = css.match(/--ease-out-expo\s*:\s*([^;]+);/);

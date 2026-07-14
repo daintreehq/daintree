@@ -1006,6 +1006,28 @@ body,
   will-change: opacity, transform;
 }
 
+@keyframes checkbox-check-in {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* The indicator mounts with this class already on it and keeps it for the whole
+ * checked lifetime — unlike .animate-agent-pulse, which is dropped on
+ * animationend. Hence `backwards` rather than `both`: it still pins the opening
+ * frame to `from` (no flash of an opaque checkmark before the animation runs),
+ * but releases the element on completion instead of parking a permanent
+ * scale(1) effect on it. For the same reason there is no will-change — the hint
+ * would outlive the 150ms it could help. */
+.animate-checkbox-check {
+  animation: checkbox-check-in var(--duration-150) var(--ease-out-expo) 1 backwards;
+}
+
 /* Organic breathing animation for waiting/loading states
  * Uses scale + opacity for a more premium feel with asymmetric timing.
  * Matches the 2s timing of other pulse animations.
@@ -1589,6 +1611,7 @@ body,
 @variant reduce-motion {
   .animate-activity-pulse,
   .animate-agent-pulse,
+  .animate-checkbox-check,
   .animate-breathe,
   .animate-spin,
   .animate-spin-slow,
