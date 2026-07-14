@@ -624,6 +624,16 @@ describe("XtermAdapter lifecycle", () => {
   });
 
   describe("Option+Arrow word navigation (#11154)", () => {
+    beforeEach(() => {
+      // vi.clearAllMocks() keeps implementations and queued `Once` values, so the
+      // chord tests below would otherwise bleed into each other. mockReset drops
+      // both; re-establish the pass-through defaults.
+      vi.mocked(keybindingService.getPendingChord).mockReset().mockReturnValue(null);
+      vi.mocked(keybindingService.resolveKeybinding)
+        .mockReset()
+        .mockReturnValue({ shouldConsume: false });
+    });
+
     async function mountAndGetKeyHandler(props: Parameters<typeof renderAdapter>[0] = {}) {
       renderAdapter(props);
       await waitFor(() => expect(mocks.terminalInstanceService.attach).toHaveBeenCalledTimes(1));
@@ -682,25 +692,44 @@ describe("XtermAdapter lifecycle", () => {
     it("keeps a held Option+Arrow out of the chord state machine", async () => {
       const keyHandler = await mountAndGetKeyHandler();
 
-      // An auto-repeat must not be able to complete or invalidate a pending
-      // chord the user never re-pressed.
-      keyHandler(optionArrow("ArrowLeft", { repeat: true }));
+      // A chord IS pending and would consume the key — an auto-repeat must not
+      // reach it, or a held arrow completes a chord the user never re-pressed.
+      vi.mocked(keybindingService.getPendingChord).mockReturnValue("Cmd+K");
+      vi.mocked(keybindingService.resolveKeybinding).mockReturnValue({ shouldConsume: true });
 
+      expect(keyHandler(optionArrow("ArrowLeft", { repeat: true }))).toBe(false);
+
+      expect(keybindingService.getPendingChord).not.toHaveBeenCalled();
       expect(keybindingService.resolveKeybinding).not.toHaveBeenCalled();
       expect(mocks.writeTerminalInputOrFleet).toHaveBeenCalledWith("term-1", "\x1bb");
     });
 
     it("leaves Option+Arrow to a full-screen TUI on the alt buffer", async () => {
-      // A TUI decodes xterm's CSI modifier arrow itself; rewriting it would hand
-      // the app a Meta+B/F instead of the Alt+Arrow it bound.
-      mocks.terminalInstanceService.getAltBufferState.mockReturnValue(true);
       const onInput = vi.fn();
       const keyHandler = await mountAndGetKeyHandler({ onInput });
 
+      // Flipped after the handler is installed: the handler is installed once, so
+      // reading the buffer mode at install time would silently freeze it.
+      mocks.terminalInstanceService.getAltBufferState.mockReturnValue(true);
+
+      // A TUI decodes xterm's CSI modifier arrow itself; rewriting it would hand
+      // the app a Meta+B/F instead of the Alt+Arrow it bound.
       expect(keyHandler(optionArrow("ArrowLeft"))).toBe(true);
       expect(keyHandler(optionArrow("ArrowRight", { repeat: true }))).toBe(true);
       expect(mocks.writeTerminalInputOrFleet).not.toHaveBeenCalled();
       expect(onInput).not.toHaveBeenCalled();
+
+      // ...and word jump resumes when the TUI exits back to the shell.
+      mocks.terminalInstanceService.getAltBufferState.mockReturnValue(false);
+      expect(keyHandler(optionArrow("ArrowLeft"))).toBe(false);
+      expect(mocks.writeTerminalInputOrFleet).toHaveBeenCalledWith("term-1", "\x1bb");
+    });
+
+    it("leaves Option+Arrow to xterm's composition handling during IME input", async () => {
+      const keyHandler = await mountAndGetKeyHandler();
+
+      expect(keyHandler(optionArrow("ArrowLeft", { isComposing: true }))).toBe(true);
+      expect(mocks.writeTerminalInputOrFleet).not.toHaveBeenCalled();
     });
 
     it("leaves Option+Arrow to xterm off macOS, including on repeat", async () => {
