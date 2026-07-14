@@ -46,9 +46,13 @@ vi.mock("@/clients/forgeClient", () => ({
 // provider and gate polling. The persisted counts it seeds from (#11078) come
 // off the project returned by `projectClient.getCurrent()`, which is main's
 // authoritative row, so seed tests drive `getCurrentMock` rather than this.
+const { currentProjectRef } = vi.hoisted(() => ({
+  currentProjectRef: { current: { id: "test-project" } as { id: string } | null },
+}));
+
 vi.mock("@/store/projectStore", () => ({
   useProjectStore: (selector: (s: { currentProject: { id: string } | null }) => unknown) =>
-    selector({ currentProject: { id: "test-project" } }),
+    selector({ currentProject: currentProjectRef.current }),
 }));
 
 // The hook reads the main worktree's ahead/behind counts off the per-project
@@ -156,6 +160,7 @@ describe("useRepositoryStats", () => {
     // Reset the mocked worktree store so a prior test's main-worktree counts
     // can't leak in as a spurious first-render baseline / delta.
     worktreeStateRef.current = { worktrees: new Map() };
+    currentProjectRef.current = { id: "test-project" };
     useSystemWakeStore.setState({
       wakeEpoch: 0,
       lastSleepDuration: 0,
@@ -2770,7 +2775,7 @@ describe("useRepositoryStats", () => {
       lastUpdated: 1000,
     };
 
-    it("forces a recheck when the main worktree's ahead-count moves", async () => {
+    it("triggers a recheck when the main worktree's ahead-count moves", async () => {
       getCurrentMock.mockResolvedValue({ id: "p", path: "/repo" });
       onSwitchMock.mockReturnValue(() => {});
       getRepoStatsMock.mockResolvedValue(stats);
@@ -2783,11 +2788,14 @@ describe("useRepositoryStats", () => {
       rerender();
 
       await waitFor(() => expect(getRepoStatsMock).toHaveBeenCalledTimes(2), { timeout: 3000 });
-      // The signal-driven recheck bypasses the cache (force = true).
-      expect(getRepoStatsMock).toHaveBeenLastCalledWith("/repo", true);
+      // Plain (unforced) refresh — the cheap conditional-REST path, not the
+      // forced GraphQL page query reserved for explicit user refreshes.
+      const lastCall = getRepoStatsMock.mock.calls.at(-1);
+      expect(lastCall?.[0]).toBe("/repo");
+      expect(lastCall?.[1]).not.toBe(true);
     });
 
-    it("forces a recheck when the behind-count increases", async () => {
+    it("triggers a recheck when the behind-count increases", async () => {
       getCurrentMock.mockResolvedValue({ id: "p", path: "/repo" });
       onSwitchMock.mockReturnValue(() => {});
       getRepoStatsMock.mockResolvedValue(stats);
@@ -2800,7 +2808,11 @@ describe("useRepositoryStats", () => {
       rerender();
 
       await waitFor(() => expect(getRepoStatsMock).toHaveBeenCalledTimes(2), { timeout: 3000 });
-      expect(getRepoStatsMock).toHaveBeenLastCalledWith("/repo", true);
+      // Plain (unforced) refresh — the cheap conditional-REST path, not the
+      // forced GraphQL page query reserved for explicit user refreshes.
+      const lastCall = getRepoStatsMock.mock.calls.at(-1);
+      expect(lastCall?.[0]).toBe("/repo");
+      expect(lastCall?.[1]).not.toBe(true);
     });
 
     it("re-baselines a behind-count decrease without refreshing, then fires on the next increase", async () => {
@@ -2822,7 +2834,11 @@ describe("useRepositoryStats", () => {
       act(() => setMainWorktreeCounts({ ahead: 0, behind: 3 }));
       rerender();
       await waitFor(() => expect(getRepoStatsMock).toHaveBeenCalledTimes(2), { timeout: 3000 });
-      expect(getRepoStatsMock).toHaveBeenLastCalledWith("/repo", true);
+      // Plain (unforced) refresh — the cheap conditional-REST path, not the
+      // forced GraphQL page query reserved for explicit user refreshes.
+      const lastCall = getRepoStatsMock.mock.calls.at(-1);
+      expect(lastCall?.[0]).toBe("/repo");
+      expect(lastCall?.[1]).not.toBe(true);
     });
 
     it("coalesces a burst of signal changes into a single forced recheck", async () => {
@@ -2893,6 +2909,34 @@ describe("useRepositoryStats", () => {
       rerender();
       await wait(1300);
       expect(getRepoStatsMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("re-baselines when the project id flips before the worktree store swaps", async () => {
+      getCurrentMock.mockResolvedValue({ id: "p", path: "/repo" });
+      onSwitchMock.mockReturnValue(() => {});
+      getRepoStatsMock.mockResolvedValue(stats);
+      setMainWorktreeCounts({ ahead: 5, behind: 0, id: "/repo" });
+
+      const { rerender } = renderHook(() => useRepositoryStats());
+      await waitFor(() => expect(getRepoStatsMock).toHaveBeenCalledTimes(1));
+
+      // The project id flips while the store still exposes the outgoing
+      // project's worktree (same id) with different counts — the switch-first,
+      // store-later ordering. The composite scope key changes on the project id
+      // alone, so the ahead 5->9 jump re-baselines instead of firing. (Without
+      // the project id in the scope key, the unchanged worktree id would let it
+      // read as local movement.)
+      act(() => {
+        currentProjectRef.current = { id: "project-b" };
+        setMainWorktreeCounts({ ahead: 9, behind: 0, id: "/repo" });
+      });
+      rerender();
+      // Let any immediate project-switch refetch settle, then confirm the
+      // debounce window produces no signal-driven recheck.
+      await wait(100);
+      const afterSwitch = getRepoStatsMock.mock.calls.length;
+      await wait(1300);
+      expect(getRepoStatsMock.mock.calls.length).toBe(afterSwitch);
     });
   });
 

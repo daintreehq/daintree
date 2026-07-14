@@ -1504,14 +1504,18 @@ export class WorkspaceService {
   }
 
   /**
-   * Force a fresh git-status pass on every monitor sharing the triggering
-   * worktree's `git common-dir` after a real fetch completes (#11151). Linked
-   * worktrees back the same object store, so one `git fetch origin` advances
-   * upstream refs for all of them — but only the triggering monitor was being
-   * refreshed, leaving siblings (notably the main worktree, whose behind-count
-   * feeds the forge-count auto-recheck) on a stale count until their own next
-   * poll. `triggerRefreshIfUpdating()` invalidates the git-status cache and
-   * kicks a forced pass, mirroring the single-monitor call this replaced.
+   * Force a fresh git-status pass after a real fetch completes (#11151). One
+   * `git fetch origin` advances upstream refs for every linked worktree sharing
+   * the object store, but a fetch triggered by one worktree (e.g. the focused
+   * feature worktree) would only re-poll that worktree — leaving the main
+   * worktree, whose behind-count feeds the forge-count auto-recheck, on a stale
+   * count until its own slower background tier.
+   *
+   * Refreshes the triggering worktree (as the prior single-monitor call did)
+   * plus the main worktree — and *only* those two. Fanning out to every
+   * common-dir sibling would turn one fetch on a many-worktree repo into an
+   * N-way `git status` storm (these passes run outside the poll queue), so the
+   * fan-out is deliberately bounded to the one sibling the toolbar reads from.
    *
    * Only invoked from `onFetchSuccess` (a genuine completed fetch), never from
    * the recency-cache/skip paths, so it can't fan status work out on a no-op.
@@ -1519,19 +1523,31 @@ export class WorkspaceService {
   private async refreshStatusForFetchSiblings(triggeringWorktreeId: string): Promise<void> {
     const triggering = this.monitors.get(triggeringWorktreeId);
     if (!triggering || !triggering.isRunning) return;
-    const triggeringCommonDir = await getGitCommonDir(triggering.path, { logErrors: false });
-    if (!triggeringCommonDir) {
-      // Without a commondir we can't identify siblings. Refresh the triggering
-      // monitor alone — its own counts still benefit.
-      triggering.triggerRefreshIfUpdating();
-      return;
-    }
+    // The triggering worktree's own counts are freshest to it — refresh it
+    // first, matching the single-monitor behaviour this replaced.
+    triggering.triggerRefreshIfUpdating();
+
+    // Find the main worktree; skip when it's the trigger (already refreshed) or
+    // not running.
+    let mainWorktree: WorktreeMonitor | undefined;
     for (const monitor of this.monitors.values()) {
-      if (!monitor.isRunning) continue;
-      const monitorCommonDir = await getGitCommonDir(monitor.path, { logErrors: false });
-      if (monitorCommonDir === triggeringCommonDir) {
-        monitor.triggerRefreshIfUpdating();
+      if (monitor.isMainWorktree && monitor !== triggering) {
+        mainWorktree = monitor;
+        break;
       }
+    }
+    if (!mainWorktree || !mainWorktree.isRunning) return;
+
+    // Only refresh the main worktree if it shares the fetched repo's common dir
+    // (linked worktree of the same repo). Re-check `isRunning` after the awaits:
+    // the monitor can be stopped/removed while the commondir resolutions are
+    // pending.
+    const [triggeringCommonDir, mainCommonDir] = await Promise.all([
+      getGitCommonDir(triggering.path, { logErrors: false }),
+      getGitCommonDir(mainWorktree.path, { logErrors: false }),
+    ]);
+    if (triggeringCommonDir && mainCommonDir === triggeringCommonDir && mainWorktree.isRunning) {
+      mainWorktree.triggerRefreshIfUpdating();
     }
   }
 

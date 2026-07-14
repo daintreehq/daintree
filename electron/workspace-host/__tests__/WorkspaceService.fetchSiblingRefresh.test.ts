@@ -161,9 +161,14 @@ describe("WorkspaceService fetch-sibling status refresh (#11151)", () => {
     vi.restoreAllMocks();
   });
 
-  function registerMonitor(id: string): WorktreeMonitor {
+  function registerMonitor(id: string, opts: { isMainWorktree?: boolean } = {}): WorktreeMonitor {
     const monitor = new WorktreeMonitorClass(
-      createTestWorktree({ id, path: id, gitDir: `${id}/.git` }),
+      createTestWorktree({
+        id,
+        path: id,
+        gitDir: `${id}/.git`,
+        isMainWorktree: opts.isMainWorktree ?? false,
+      }),
       {
         basePollingInterval: 10000,
         adaptiveBackoff: false,
@@ -179,54 +184,71 @@ describe("WorkspaceService fetch-sibling status refresh (#11151)", () => {
     return monitor;
   }
 
-  it("forces a status refresh on every running sibling sharing the common dir", async () => {
-    const m1 = registerMonitor("/test/wt-1");
-    const m2 = registerMonitor("/test/wt-2");
-    const other = registerMonitor("/test/other");
-    const s1 = vi.spyOn(m1, "triggerRefreshIfUpdating").mockImplementation(() => {});
-    const s2 = vi.spyOn(m2, "triggerRefreshIfUpdating").mockImplementation(() => {});
-    const sOther = vi.spyOn(other, "triggerRefreshIfUpdating").mockImplementation(() => {});
-    // wt-1 and wt-2 are linked worktrees of one repo; "other" is a separate repo.
-    mockGetGitCommonDir.mockImplementation((path: string) =>
-      path === "/test/other" ? "/test/other/.git" : "/test/shared/.git"
-    );
+  it("refreshes the triggering worktree and the main worktree, but not other siblings", async () => {
+    const feature = registerMonitor("/test/feature");
+    const main = registerMonitor("/test/main", { isMainWorktree: true });
+    const otherFeature = registerMonitor("/test/feature-2");
+    const sFeature = vi.spyOn(feature, "triggerRefreshIfUpdating").mockImplementation(() => {});
+    const sMain = vi.spyOn(main, "triggerRefreshIfUpdating").mockImplementation(() => {});
+    const sOther = vi.spyOn(otherFeature, "triggerRefreshIfUpdating").mockImplementation(() => {});
+    // All three are linked worktrees of the same repo (shared common dir).
+    mockGetGitCommonDir.mockResolvedValue("/test/shared/.git");
 
-    await service["refreshStatusForFetchSiblings"]("/test/wt-1");
+    await service["refreshStatusForFetchSiblings"]("/test/feature");
 
-    expect(s1).toHaveBeenCalledTimes(1);
-    expect(s2).toHaveBeenCalledTimes(1);
+    // Trigger + main refresh; the non-main sibling is deliberately left out so
+    // one fetch can't fan into an N-way status storm on a many-worktree repo.
+    expect(sFeature).toHaveBeenCalledTimes(1);
+    expect(sMain).toHaveBeenCalledTimes(1);
     expect(sOther).not.toHaveBeenCalled();
   });
 
-  it("skips stopped monitors sharing the common dir", async () => {
-    const m1 = registerMonitor("/test/wt-1");
-    const m2 = registerMonitor("/test/wt-2");
-    const s1 = vi.spyOn(m1, "triggerRefreshIfUpdating").mockImplementation(() => {});
-    const s2 = vi.spyOn(m2, "triggerRefreshIfUpdating").mockImplementation(() => {});
+  it("refreshes only the triggering worktree once when it is itself the main worktree", async () => {
+    const main = registerMonitor("/test/main", { isMainWorktree: true });
+    const feature = registerMonitor("/test/feature");
+    const sMain = vi.spyOn(main, "triggerRefreshIfUpdating").mockImplementation(() => {});
+    const sFeature = vi.spyOn(feature, "triggerRefreshIfUpdating").mockImplementation(() => {});
     mockGetGitCommonDir.mockResolvedValue("/test/shared/.git");
-    m2.stop();
 
-    await service["refreshStatusForFetchSiblings"]("/test/wt-1");
+    await service["refreshStatusForFetchSiblings"]("/test/main");
 
-    expect(s1).toHaveBeenCalledTimes(1);
-    expect(s2).not.toHaveBeenCalled();
+    // No double-refresh: the trigger is the main worktree.
+    expect(sMain).toHaveBeenCalledTimes(1);
+    expect(sFeature).not.toHaveBeenCalled();
   });
 
-  it("refreshes only the triggering monitor when the common dir can't be resolved", async () => {
-    const m1 = registerMonitor("/test/wt-1");
-    const m2 = registerMonitor("/test/wt-2");
-    const s1 = vi.spyOn(m1, "triggerRefreshIfUpdating").mockImplementation(() => {});
-    const s2 = vi.spyOn(m2, "triggerRefreshIfUpdating").mockImplementation(() => {});
-    mockGetGitCommonDir.mockResolvedValue(null);
+  it("skips the main worktree when it is stopped", async () => {
+    const feature = registerMonitor("/test/feature");
+    const main = registerMonitor("/test/main", { isMainWorktree: true });
+    const sFeature = vi.spyOn(feature, "triggerRefreshIfUpdating").mockImplementation(() => {});
+    const sMain = vi.spyOn(main, "triggerRefreshIfUpdating").mockImplementation(() => {});
+    mockGetGitCommonDir.mockResolvedValue("/test/shared/.git");
+    main.stop();
 
-    await service["refreshStatusForFetchSiblings"]("/test/wt-1");
+    await service["refreshStatusForFetchSiblings"]("/test/feature");
 
-    expect(s1).toHaveBeenCalledTimes(1);
-    expect(s2).not.toHaveBeenCalled();
+    expect(sFeature).toHaveBeenCalledTimes(1);
+    expect(sMain).not.toHaveBeenCalled();
+  });
+
+  it("skips the main worktree when it does not share the fetched repo's common dir", async () => {
+    const feature = registerMonitor("/test/feature");
+    const main = registerMonitor("/test/main", { isMainWorktree: true });
+    const sFeature = vi.spyOn(feature, "triggerRefreshIfUpdating").mockImplementation(() => {});
+    const sMain = vi.spyOn(main, "triggerRefreshIfUpdating").mockImplementation(() => {});
+    // The main worktree belongs to a different repo than the fetched one.
+    mockGetGitCommonDir.mockImplementation((path: string) =>
+      path === "/test/main" ? "/test/other/.git" : "/test/shared/.git"
+    );
+
+    await service["refreshStatusForFetchSiblings"]("/test/feature");
+
+    expect(sFeature).toHaveBeenCalledTimes(1);
+    expect(sMain).not.toHaveBeenCalled();
   });
 
   it("no-ops without throwing when the triggering monitor is gone", async () => {
-    registerMonitor("/test/wt-1");
+    registerMonitor("/test/main", { isMainWorktree: true });
     mockGetGitCommonDir.mockResolvedValue("/test/shared/.git");
 
     await expect(

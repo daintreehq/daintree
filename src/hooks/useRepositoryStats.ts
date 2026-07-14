@@ -174,6 +174,11 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
   const [rateLimitResetAt, setRateLimitResetAt] = useState<number | null>(null);
   const [rateLimitKind, setRateLimitKind] = useState<ForgeRateLimitKind | null>(null);
   const rateLimitResetAtRef = useRef<number | null>(null);
+  // Live "poller is parked" flag mirroring `onRateLimitChanged`'s `blocked`
+  // calculation. Read at signal-flush time to suppress a forced recheck during
+  // an active park — a boolean, not a `resetAt` timestamp, because the reset
+  // time is nullable even while blocked (a secondary throttle can lack one).
+  const rateLimitBlockedRef = useRef(false);
   // Mirrors the `lastUpdated` state for synchronous reads from event-handler
   // closures (push subscribers). Used to skip stale stat pushes whose
   // `fetchedAt` is older than what we've already applied.
@@ -210,12 +215,13 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
   // Local-git-signal trigger state (#11151). Baselines track the main
   // worktree's ahead/behind counts so a genuine *delta* — not a snapshot
   // identity bump from an unrelated field (mood, note, PR state) — drives the
-  // forced recheck. Keyed on the main worktree's id so a project switch (which
-  // swaps the store's worktrees asynchronously) resets the baselines instead of
-  // reading the incoming project's counts as movement. The debounce timer is a
-  // single shared slot; it is the pending state, always armed to a bounded
-  // flush (never a bare pending flag, #7469).
-  const previousMainWorktreeIdRef = useRef<string | null>(null);
+  // recheck. Keyed on a composite of the current project id and the main
+  // worktree's id so a project switch resets the baselines instead of reading
+  // the incoming project's counts as movement — covering both the project-id
+  // flip and the asynchronous worktree-store swap that can lag behind it. The
+  // debounce timer is a single shared slot; it is the pending state, always
+  // armed to a bounded flush (never a bare pending flag, #7469).
+  const previousGitSignalScopeRef = useRef<string | null>(null);
   const previousAheadCountRef = useRef<number | null>(null);
   const previousBehindCountRef = useRef<number | null>(null);
   const gitSignalDebounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -393,6 +399,9 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       const nextResetAt = repoStats.rateLimitResetAt ?? null;
       const nextKind = repoStats.rateLimitKind ?? null;
       rateLimitResetAtRef.current = nextResetAt;
+      // A stats result carrying a reset time is the provider reporting it is
+      // currently parked; absence means the quota is clear.
+      rateLimitBlockedRef.current = nextResetAt !== null;
       setRateLimitResetAt(nextResetAt);
       setRateLimitKind(nextKind);
 
@@ -1008,6 +1017,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
           : "primary"
         : null;
       rateLimitResetAtRef.current = nextResetAt;
+      rateLimitBlockedRef.current = blocked;
       setRateLimitResetAt(nextResetAt);
       setRateLimitKind(nextKind);
 
@@ -1027,10 +1037,10 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
     return cleanup;
   }, [polling, isWorkerInstance]);
 
-  // Local git signals force a forge-count recheck ahead of the time-based poll
-  // so counts don't lag during merge sprees (#11151). Additive to the /events
-  // probe and the 30s/5min cadence — never a replacement. Two free, already-
-  // computed signals off the main worktree drive it:
+  // Local git signals trigger a forge-count recheck ahead of the time-based
+  // poll so counts don't lag during merge sprees (#11151). Additive to the
+  // /events probe and the 30s/5min cadence — never a replacement. Two free,
+  // already-computed signals off the main worktree drive it:
   //   Signal A — the ahead-count moved: local ref/HEAD movement relative to
   //     upstream (a local merge/commit, or the push that follows). This is a
   //     purer "ref moved" trigger than dirty-file activity, which would fire on
@@ -1039,10 +1049,15 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
   //     landed on the forge website and the next fetch surfaced it. A decrease
   //     is a local catch-up (pull/rebase), not new remote content, so it only
   //     re-baselines.
-  // The forced recheck reuses `polling.refresh({ force: true })` exactly like
-  // wake/focus/rate-limit-clear, so it inherits the cheap REST-count path,
-  // cross-window singleflight, cache/dedup, and backoff instead of re-deriving
-  // them.
+  // The recheck reuses the ordinary `polling.refresh()` (NOT `{ force: true }`):
+  // `force` maps to `bypassCache`, which on GitHub skips the cheap conditional
+  // REST-count pair and runs the ~6-point GraphQL page query reserved for
+  // explicit user refreshes (#10122). An auto-trigger must prefer the cheap
+  // REST path, so it uses the plain refresh — inheriting the same /events 304
+  // probe, cross-window singleflight, cache/dedup, and backoff as a scheduled
+  // poll, just ahead of schedule. (Trade-off: on a deeply-idle repo the plain
+  // refresh can fall inside the provider's adaptive /events backoff window and
+  // no-op; the base poll remains the correctness backstop.)
   const enqueueGitSignalRefresh = useCallback(() => {
     // Single shared debounce slot: the first signal in a burst arms a bounded
     // flush; later signals inside the window are absorbed by this guard rather
@@ -1054,15 +1069,15 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       gitSignalDebounceTimerRef.current = null;
       if (!mountedRef.current) return;
       // Respect the active rate-limit park exactly like `onRateLimitChanged`:
-      // a forced recheck must never bypass backoff. While parked, just
-      // reschedule against the reset time; the rate-limit-clear handler runs
-      // the immediate recovery refresh.
-      const resetAt = rateLimitResetAtRef.current;
-      if (resetAt !== null && resetAt > Date.now()) {
+      // never issue a recheck into an active block. Gate on the `blocked` flag
+      // (not a reset timestamp — the reset time is nullable even while blocked).
+      // While parked, just reschedule; the rate-limit-clear handler runs the
+      // recovery refresh.
+      if (rateLimitBlockedRef.current) {
         polling.scheduleNextPoll();
         return;
       }
-      void polling.refresh({ force: true });
+      void polling.refresh();
     }, LOCAL_GIT_SIGNAL_REFRESH_DEBOUNCE_MS);
   }, [polling]);
 
@@ -1072,12 +1087,15 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
     // wake and rate-limit-clear handlers above.
     if (isWorkerInstance) return;
 
-    // Scope guard: on project switch (and first hydration) the main worktree's
-    // identity changes while the store repopulates asynchronously. Re-baseline
-    // to the new scope's current counts and drop any pending recheck rather
-    // than reading the swap as local movement.
-    if (previousMainWorktreeIdRef.current !== mainWorktreeId) {
-      previousMainWorktreeIdRef.current = mainWorktreeId;
+    // Scope guard: on project switch (and first hydration) the scope key
+    // changes — either the project id flips or the worktree store swaps to the
+    // new project's main worktree (the two can happen a render apart, since the
+    // store repopulates asynchronously). Re-baseline to the new scope's current
+    // counts and drop any pending recheck rather than reading the swap as local
+    // movement.
+    const gitSignalScope = `${currentProjectId ?? ""}::${mainWorktreeId ?? ""}`;
+    if (previousGitSignalScopeRef.current !== gitSignalScope) {
+      previousGitSignalScopeRef.current = gitSignalScope;
       previousAheadCountRef.current = mainWorktreeAheadCount;
       previousBehindCountRef.current = mainWorktreeBehindCount;
       if (gitSignalDebounceTimerRef.current !== null) {
@@ -1109,6 +1127,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       enqueueGitSignalRefresh();
     }
   }, [
+    currentProjectId,
     mainWorktreeId,
     mainWorktreeAheadCount,
     mainWorktreeBehindCount,
