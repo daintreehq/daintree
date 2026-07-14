@@ -852,6 +852,12 @@ describe("AppDialog reduced-motion policy", () => {
     _resetForTests();
   });
 
+  function getCard(): Element {
+    const card = screen.getByTestId("test-dialog").firstElementChild;
+    if (!card) throw new Error("AppDialog rendered no card inside the backdrop");
+    return card;
+  }
+
   it("keeps the backdrop scrim fading under reduced motion", () => {
     renderDialog();
     const backdrop = screen.getByTestId("test-dialog");
@@ -862,20 +868,18 @@ describe("AppDialog reduced-motion policy", () => {
 
   it("narrows the card to an opacity-only transition under reduced motion", () => {
     renderDialog();
-    const card = screen.getByTestId("test-dialog").firstElementChild as HTMLElement;
 
-    expect(card.className).toContain("motion-reduce:transition-opacity");
-    expect(card.className).not.toContain("motion-reduce:transition-none");
+    expect(getCard().className).toContain("motion-reduce:transition-opacity");
+    expect(getCard().className).not.toContain("motion-reduce:transition-none");
   });
 
   it("freezes the card's translate and scale under reduced motion", () => {
     renderDialog();
-    const card = screen.getByTestId("test-dialog").firstElementChild as HTMLElement;
 
     // Tailwind v4 emits `translate`/`scale` as individual properties, so both
     // need explicit neutralizers — `transform-none` would not cover them.
-    expect(card.className).toContain("motion-reduce:translate-none");
-    expect(card.className).toContain("motion-reduce:scale-none");
+    expect(getCard().className).toContain("motion-reduce:translate-none");
+    expect(getCard().className).toContain("motion-reduce:scale-none");
   });
 
   it("gives the backdrop an explicit easing rather than the Tailwind default", () => {

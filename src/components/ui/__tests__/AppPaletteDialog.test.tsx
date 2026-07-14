@@ -279,9 +279,17 @@ describe("AppPaletteDialog reduced-motion policy", () => {
     _resetForTests();
   });
 
+  // The scrim is the panel's parent: unlike AppDialog, the palette puts
+  // `role="dialog"` on the inner panel rather than the backdrop.
+  function getScrim(): HTMLElement {
+    const scrim = screen.getByRole("dialog", { name: "Test palette" }).parentElement;
+    if (!scrim) throw new Error("AppPaletteDialog rendered no scrim around the panel");
+    return scrim;
+  }
+
   it("keeps the scrim fading under reduced motion", () => {
     renderPalette({ isOpen: true });
-    const scrim = screen.getByRole("dialog", { name: "Test palette" }).parentElement as HTMLElement;
+    const scrim = getScrim();
 
     expect(scrim.className).toContain("bg-scrim-medium");
     expect(scrim.className).toContain("transition-opacity");
@@ -290,8 +298,7 @@ describe("AppPaletteDialog reduced-motion policy", () => {
 
   it("gives the scrim an explicit easing rather than the Tailwind default", () => {
     renderPalette({ isOpen: true });
-    const scrim = screen.getByRole("dialog", { name: "Test palette" }).parentElement as HTMLElement;
 
-    expect(scrim.style.transitionTimingFunction).not.toBe("");
+    expect(getScrim().style.transitionTimingFunction).not.toBe("");
   });
 });
