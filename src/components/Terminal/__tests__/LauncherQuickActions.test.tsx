@@ -64,20 +64,12 @@ vi.mock("@/components/ui/Kbd", () => ({
   KbdChord: ({ shortcut }: { shortcut: string }) => <span data-testid="kbd">{shortcut}</span>,
 }));
 
-import { buttonVariants } from "@/components/ui/button";
 import { LauncherQuickActions } from "../LauncherQuickActions";
-
-/**
- * The press treatment every shared `Button` inherits, read out of the cva
- * itself rather than copied: the `ghost` variant contributes no `active:`
- * classes of its own, so what survives is exactly the base press recipe. The
- * launcher's raw buttons don't use `Button`, so this is what keeps them from
- * drifting away from it.
- */
-const basePressTreatment = () =>
-  buttonVariants({ variant: "ghost" })
-    .split(/\s+/)
-    .filter((token) => token.startsWith("active:"));
+import {
+  basePressTreatment,
+  reduceMotionSelectors,
+  TRANSITION_WIDENERS,
+} from "./launcherMotionContract";
 
 beforeEach(() => {
   h.dispatch.mockClear();
@@ -240,8 +232,24 @@ describe("LauncherQuickActions", () => {
         // 150ms instead of snapping it.
         const widened = button.className
           .split(/\s+/)
-          .filter((c) => ["transition", "transition-all", "transition-transform"].includes(c));
+          .filter((c) => TRANSITION_WIDENERS.includes(c));
         expect(widened).toEqual([]);
+      }
+    });
+
+    // `active:scale-*` emits the individual `scale` property, which the app's
+    // `transform: none` reduced-motion button reset cannot neutralize. Without
+    // a class the reduce-motion block actually names, the press scale keeps
+    // animating for users who asked for no motion.
+    it("registers the press scale with the reduce-animations kill switch", () => {
+      const suppressed = reduceMotionSelectors();
+      expect(suppressed.size).toBeGreaterThan(0);
+
+      render(<LauncherQuickActions />);
+
+      for (const button of launcherButtons()) {
+        const covered = button.className.split(/\s+/).filter((c) => suppressed.has(c));
+        expect(covered.length).toBeGreaterThan(0);
       }
     });
   });

@@ -30,8 +30,14 @@ const PATH_TRUNCATE_LENGTH = 52;
 // which is what honours Daintree's own reduce-animations toggle — a `body`
 // attribute no Tailwind variant can reach from here. Performance mode is
 // already killed globally.
+//
+// The duration rides `--tw-animation-duration` rather than `duration-200`, for
+// the same reason the ladder below avoids `delay-*`: `duration-200` also emits
+// `transition-duration`, and with no `transition-property` on these wrappers
+// that lands on CSS's `all` default — an every-property transition nobody asked
+// for. Setting the animation's own slot keeps the transition set empty.
 const SECTION_ENTRY =
-  "launcher-section-enter motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-1 motion-safe:duration-200";
+  "launcher-section-enter motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-1 motion-safe:[--tw-animation-duration:200ms]";
 
 // The stagger ladder. Sequencing IS the signal here, so the per-step delay is a
 // literal ladder rather than one of the shared duration tiers.

@@ -1669,6 +1669,16 @@ body,
     transform: none;
   }
 
+  /* Launcher press controls (recipe cards, quick actions). `active:scale-*`
+   * emits the individual `scale` property, so the `transform: none` button
+   * reset below cannot neutralize it — see the Tailwind v4 trap in
+   * `docs/themes/interaction-state-recipes.md`. That reset also excludes these
+   * recipe cards outright: they are Radix context-menu triggers, so they carry
+   * a `data-state` attribute. Kill the press scale explicitly. */
+  .launcher-press {
+    scale: none !important;
+  }
+
   /* Fleet polish animations — opacity-only already, but drop the keyframe
    * entirely to keep WCAG 2.3.3 strict compliance. The bar stripe pseudos
    * stay at their static opacity (1); only the dedicated exit overlay is

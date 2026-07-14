@@ -27,7 +27,7 @@ function QuickAction({ icon, label, actionId, onClick }: QuickActionProps) {
       type="button"
       onClick={onClick}
       aria-keyshortcuts={ariaKeyshortcuts}
-      className="group inline-flex items-center gap-2 rounded-[var(--radius-md)] border border-border-subtle bg-overlay-subtle px-2.5 py-1.5 text-sm text-daintree-text/80 transition-colors active:scale-[0.98] active:duration-[1ms] hover:bg-overlay-soft hover:border-border-default hover:text-daintree-text focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
+      className="launcher-press group inline-flex items-center gap-2 rounded-[var(--radius-md)] border border-border-subtle bg-overlay-subtle px-2.5 py-1.5 text-sm text-daintree-text/80 transition-colors active:scale-[0.98] active:duration-[1ms] hover:bg-overlay-soft hover:border-border-default hover:text-daintree-text focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
     >
       <span className="shrink-0">{icon}</span>
       <span className="truncate">{label}</span>
@@ -64,7 +64,7 @@ function PaletteSearchButton() {
       type="button"
       onClick={handleClick}
       aria-keyshortcuts={ariaKeyshortcuts}
-      className="flex w-full items-center gap-2.5 rounded-[var(--radius-md)] border border-border-default bg-overlay-soft px-3 py-2.5 text-sm text-daintree-text/70 transition-colors active:scale-[0.98] active:duration-[1ms] hover:bg-overlay-medium hover:text-daintree-text focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
+      className="launcher-press flex w-full items-center gap-2.5 rounded-[var(--radius-md)] border border-border-default bg-overlay-soft px-3 py-2.5 text-sm text-daintree-text/70 transition-colors active:scale-[0.98] active:duration-[1ms] hover:bg-overlay-medium hover:text-daintree-text focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
     >
       <Search className="h-4 w-4 shrink-0 text-daintree-text/55" aria-hidden="true" />
       <span className="min-w-0 flex-1 truncate text-left">Search agents &amp; panels…</span>

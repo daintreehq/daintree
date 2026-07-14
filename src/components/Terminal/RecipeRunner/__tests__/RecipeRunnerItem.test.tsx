@@ -1,8 +1,12 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { buttonVariants } from "@/components/ui/button";
 import { RecipeRunnerItem } from "../RecipeRunnerItem";
+import {
+  basePressTreatment,
+  reduceMotionSelectors,
+  TRANSITION_WIDENERS,
+} from "../../__tests__/launcherMotionContract";
 import type { TerminalRecipe } from "@/types";
 
 const recipe: TerminalRecipe = {
@@ -31,18 +35,6 @@ const renderItem = (mode: "grid" | "list", props?: { disabled?: boolean }) =>
     />
   );
 
-/**
- * The press treatment every shared `Button` inherits, read out of the cva
- * itself rather than copied: the `ghost` variant contributes no `active:`
- * classes of its own, so what survives is exactly the base press recipe. A
- * recipe card is a hand-rolled button, so nothing makes it inherit that — this
- * is what keeps it from drifting back to feeling inert on click.
- */
-const basePressTreatment = () =>
-  buttonVariants({ variant: "ghost" })
-    .split(/\s+/)
-    .filter((token) => token.startsWith("active:"));
-
 describe("RecipeRunnerItem — press feedback", () => {
   it.each(["grid", "list"] as const)(
     "carries the same press treatment the shared Button owns (%s mode)",
@@ -70,9 +62,32 @@ describe("RecipeRunnerItem — press feedback", () => {
       const widened = screen
         .getByRole("option")
         .className.split(/\s+/)
-        .filter((c) => ["transition", "transition-all", "transition-transform"].includes(c));
+        .filter((c) => TRANSITION_WIDENERS.includes(c));
 
       expect(widened).toEqual([]);
+    }
+  );
+
+  // `active:scale-*` emits the individual `scale` property, which the app's
+  // `transform: none` reduced-motion button reset cannot neutralize. A recipe
+  // card is doubly exposed: it is a Radix context-menu trigger, so it carries a
+  // `data-state` attribute, and that reset excludes `[data-state]` buttons
+  // outright. Only a class the reduce-motion block names can stop the scale.
+  it.each(["grid", "list"] as const)(
+    "registers the press scale with the reduce-animations kill switch (%s mode)",
+    (mode) => {
+      const suppressed = reduceMotionSelectors();
+      expect(suppressed.size).toBeGreaterThan(0);
+
+      renderItem(mode);
+      const button = screen.getByRole("option");
+
+      // The exclusion this guards against is only real while the card is a
+      // Radix trigger — assert that premise rather than trusting it.
+      expect(button.getAttribute("data-state")).toBeTruthy();
+
+      const covered = button.className.split(/\s+/).filter((c) => suppressed.has(c));
+      expect(covered.length).toBeGreaterThan(0);
     }
   );
 });

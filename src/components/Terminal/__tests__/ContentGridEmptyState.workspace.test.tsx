@@ -1,33 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import { readFileSync } from "fs";
-import { resolve } from "path";
-
-/**
- * Every class the app's `@variant reduce-motion` blocks neutralize. That block
- * is the only thing that reads the in-app reduce-animations toggle (a `body`
- * attribute), so it is the authority on which animations that toggle can stop.
- */
-const reduceMotionSelectors = (): Set<string> => {
-  const css = readFileSync(resolve(__dirname, "../../../index.css"), "utf-8");
-  const classes = new Set<string>();
-
-  const MARKER = "@variant reduce-motion";
-  for (let i = css.indexOf(MARKER); i !== -1; i = css.indexOf(MARKER, i + 1)) {
-    let depth = 0;
-    for (let k = css.indexOf("{", i); k < css.length; k++) {
-      if (css[k] === "{") depth++;
-      if (css[k] === "}" && --depth === 0) {
-        for (const [, name] of css.slice(i, k).matchAll(/\.(-?[a-zA-Z][\w-]*)/g)) {
-          classes.add(name);
-        }
-        break;
-      }
-    }
-  }
-  return classes;
-};
+import { reduceMotionSelectors } from "./launcherMotionContract";
 
 // Hoisted mutable state so each mock reads its slice at call time and a test can
 // reshape the stores before rendering.
@@ -239,7 +213,7 @@ describe("ContentGridEmptyState — workspace capabilities", () => {
     // Utilities that animate. Each must be gated on `motion-safe:` so the OS
     // reduced-motion preference suppresses it.
     const MOTION_UTILITY =
-      /(^|:)(animate-in|fade-in|slide-in-from-[a-z]+-\d+|duration-\d+|fill-mode-[a-z]+|\[--tw-animation-delay:\d+ms\])$/;
+      /(^|:)(animate-in|fade-in|slide-in-from-[a-z]+-\d+|fill-mode-[a-z]+|\[--tw-animation-(delay|duration):\d+ms\])$/;
 
     const classesOf = (el: Element) => el.className.split(/\s+/).filter(Boolean);
 
@@ -290,6 +264,23 @@ describe("ContentGridEmptyState — workspace capabilities", () => {
       for (const section of animatedSections(container)) {
         if (delayOf(section) === 0) continue;
         expect(classesOf(section).some((c) => /(^|:)fill-mode-backwards$/.test(c))).toBe(true);
+      }
+    });
+
+    // `duration-*` and `delay-*` compile to `transition-duration` /
+    // `transition-delay`, which a keyframe animation never reads — so they
+    // cannot drive this stagger. Worse, these wrappers declare no
+    // `transition-property`, so either one would land on CSS's `all` default
+    // and silently give every section an every-property transition. The entry
+    // rides the animation's own custom properties instead.
+    it("drives the entry from the animation, never leaking into the transition system", () => {
+      const container = renderWholeLauncher();
+
+      for (const section of animatedSections(container)) {
+        const transitionUtilities = classesOf(section).filter((c) =>
+          /(^|:)(duration|delay)-/.test(c)
+        );
+        expect(transitionUtilities).toEqual([]);
       }
     });
 
