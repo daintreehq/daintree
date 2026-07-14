@@ -6,11 +6,13 @@ import { render, waitFor, cleanup } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalRefreshTier } from "@/types";
 import { actionService } from "@/services/ActionService";
+import { keybindingService } from "@/services/KeybindingService";
 import { XtermAdapter } from "../XtermAdapter";
 
 const mocks = vi.hoisted(() => {
   let keyHandler: ((event: KeyboardEvent) => boolean) | null = null;
   let exitHandler: ((exitCode: number) => void) | null = null;
+  const platform = { isMac: true };
 
   const defaultAppearance = {
     fontSize: 14,
@@ -75,6 +77,7 @@ const mocks = vi.hoisted(() => {
   return {
     appearance,
     managed,
+    platform,
     terminalInstanceService,
     writeTerminalInputOrFleet: vi.fn(),
     useTerminalFileTransfer: vi.fn(),
@@ -86,10 +89,16 @@ const mocks = vi.hoisted(() => {
       managed.isInputLocked = false;
       managed.isAttaching = false;
       (managed as { keyHandlerInstalled?: boolean }).keyHandlerInstalled = false;
+      platform.isMac = true;
       Object.assign(appearance, defaultAppearance, { effectiveTheme: {} });
     },
   };
 });
+
+vi.mock("@/lib/platform", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/platform")>()),
+  isMac: () => mocks.platform.isMac,
+}));
 
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: mocks.terminalInstanceService,
@@ -609,5 +618,120 @@ describe("XtermAdapter lifecycle", () => {
     );
     expect(mocks.terminalInstanceService.updateOptions).toHaveBeenCalledTimes(1);
     expect(mocks.terminalInstanceService.detach).not.toHaveBeenCalled();
+  });
+
+  describe("Option+Arrow word navigation (#11154)", () => {
+    async function mountAndGetKeyHandler(props: Parameters<typeof renderAdapter>[0] = {}) {
+      renderAdapter(props);
+      await waitFor(() => expect(mocks.terminalInstanceService.attach).toHaveBeenCalledTimes(1));
+      const keyHandler = mocks.getKeyHandler();
+      expect(keyHandler).toBeTruthy();
+      return keyHandler!;
+    }
+
+    function optionArrow(key: "ArrowLeft" | "ArrowRight", init: KeyboardEventInit = {}) {
+      return new KeyboardEvent("keydown", {
+        key,
+        code: key,
+        altKey: true,
+        bubbles: true,
+        cancelable: true,
+        ...init,
+      });
+    }
+
+    it("writes the backward-word sequence for Option+Left", async () => {
+      const onInput = vi.fn();
+      const keyHandler = await mountAndGetKeyHandler({ onInput });
+
+      const event = optionArrow("ArrowLeft");
+      const preventDefaultSpy = vi.spyOn(event, "preventDefault");
+      const stopPropagationSpy = vi.spyOn(event, "stopPropagation");
+
+      // `false` suppresses xterm's own CSI modifier arrow, which readline ignores.
+      expect(keyHandler(event)).toBe(false);
+      expect(preventDefaultSpy).toHaveBeenCalled();
+      expect(stopPropagationSpy).toHaveBeenCalled();
+      expect(mocks.writeTerminalInputOrFleet).toHaveBeenCalledWith("term-1", "\x1bb");
+      // `return false` bypasses xterm's onData, so input tracking is replicated here.
+      expect(mocks.terminalInstanceService.notifyUserInput).toHaveBeenCalledWith("term-1");
+      expect(onInput).toHaveBeenCalledWith("\x1bb");
+    });
+
+    it("writes the forward-word sequence for Option+Right", async () => {
+      const onInput = vi.fn();
+      const keyHandler = await mountAndGetKeyHandler({ onInput });
+
+      expect(keyHandler(optionArrow("ArrowRight"))).toBe(false);
+      expect(mocks.writeTerminalInputOrFleet).toHaveBeenCalledWith("term-1", "\x1bf");
+      expect(onInput).toHaveBeenCalledWith("\x1bf");
+    });
+
+    it("keeps writing while the key is held", async () => {
+      const keyHandler = await mountAndGetKeyHandler();
+
+      // The shared `event.repeat` early return would otherwise hand repeats back
+      // to xterm, so a held Option+Left would jump one word and then stall.
+      expect(keyHandler(optionArrow("ArrowLeft", { repeat: true }))).toBe(false);
+      expect(mocks.writeTerminalInputOrFleet).toHaveBeenCalledWith("term-1", "\x1bb");
+    });
+
+    it("leaves Option+Arrow to xterm off macOS, including on repeat", async () => {
+      mocks.platform.isMac = false;
+      const onInput = vi.fn();
+      const keyHandler = await mountAndGetKeyHandler({ onInput });
+
+      expect(keyHandler(optionArrow("ArrowLeft"))).toBe(true);
+      expect(keyHandler(optionArrow("ArrowRight", { repeat: true }))).toBe(true);
+      expect(mocks.writeTerminalInputOrFleet).not.toHaveBeenCalled();
+      expect(mocks.terminalInstanceService.notifyUserInput).not.toHaveBeenCalled();
+      expect(onInput).not.toHaveBeenCalled();
+    });
+
+    it("does not claim Option+Arrow combined with another modifier", async () => {
+      const keyHandler = await mountAndGetKeyHandler();
+
+      // Shift+Option extends a selection; Cmd+Option is bound to terminal.focus*.
+      keyHandler(optionArrow("ArrowLeft", { shiftKey: true }));
+      keyHandler(optionArrow("ArrowRight", { ctrlKey: true }));
+      keyHandler(optionArrow("ArrowLeft", { metaKey: true }));
+
+      expect(mocks.writeTerminalInputOrFleet).not.toHaveBeenCalled();
+      expect(mocks.terminalInstanceService.notifyUserInput).not.toHaveBeenCalled();
+    });
+
+    it("leaves unmodified arrows to xterm", async () => {
+      const keyHandler = await mountAndGetKeyHandler();
+
+      const plainArrow = new KeyboardEvent("keydown", {
+        key: "ArrowLeft",
+        code: "ArrowLeft",
+        bubbles: true,
+        cancelable: true,
+      });
+      expect(keyHandler(plainArrow)).toBe(true);
+      expect(mocks.writeTerminalInputOrFleet).not.toHaveBeenCalled();
+    });
+
+    it("swallows Option+Arrow without writing while input is locked", async () => {
+      const onInput = vi.fn();
+      const keyHandler = await mountAndGetKeyHandler({ isInputLocked: true, onInput });
+      mocks.managed.isInputLocked = true;
+
+      expect(keyHandler(optionArrow("ArrowLeft"))).toBe(false);
+      expect(mocks.writeTerminalInputOrFleet).not.toHaveBeenCalled();
+      expect(mocks.terminalInstanceService.notifyUserInput).not.toHaveBeenCalled();
+      expect(onInput).not.toHaveBeenCalled();
+    });
+
+    it("lets a pending chord consume Option+Arrow before word navigation", async () => {
+      const keyHandler = await mountAndGetKeyHandler();
+
+      vi.mocked(keybindingService.getPendingChord).mockReturnValueOnce("Cmd+K");
+      vi.mocked(keybindingService.resolveKeybinding).mockReturnValueOnce({ shouldConsume: true });
+
+      expect(keyHandler(optionArrow("ArrowLeft"))).toBe(false);
+      expect(mocks.writeTerminalInputOrFleet).not.toHaveBeenCalled();
+    });
   });
 });

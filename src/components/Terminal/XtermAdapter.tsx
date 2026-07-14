@@ -2,6 +2,7 @@ import { useCallback, useLayoutEffect, useMemo, useRef, useEffect, useState } fr
 import type { ITerminalOptions } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { cn } from "@/lib/utils";
+import { isMac } from "@/lib/platform";
 import { TerminalRefreshTier } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { writeTerminalInputOrFleet } from "@/services/terminal/fleetInputRouter";
@@ -14,6 +15,7 @@ import { keybindingService } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import { useTerminalFileTransfer } from "./useTerminalFileTransfer";
+import { getOptionWordJumpSequence } from "./terminalWordNavigation";
 
 export interface XtermAdapterProps {
   terminalId: string;
@@ -338,8 +340,15 @@ export function XtermAdapter({
             return true;
           }
 
+          // Resolved here, ahead of the repeat guard, so a held Option+Arrow
+          // keeps jumping. Enter can sit behind that guard because xterm's own
+          // mapping for it already equals the sequence we write; Option+Arrow
+          // can't — xterm would emit the CSI modifier arrow, which readline
+          // ignores, so holding the key would silently stop after one word.
+          const wordJumpSequence = isMac() ? getOptionWordJumpSequence(event) : null;
+
           // Skip repeat events
-          if (event.repeat) {
+          if (event.repeat && !wordJumpSequence) {
             return true;
           }
 
@@ -415,6 +424,20 @@ export function XtermAdapter({
           // Allow critical Ctrl+<key> bindings to reach the TUI
           if (event.ctrlKey && !event.shiftKey && TUI_KEYBINDS.has(event.key)) {
             return true;
+          }
+
+          // Option+Left/Right jump by word. Returning `false` bypasses xterm's
+          // onData, so the listener-installed input tracking is replicated here
+          // the same way the Enter branches do it (#8255).
+          if (wordJumpSequence) {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!managed.isInputLocked) {
+              writeTerminalInputOrFleet(terminalId, wordJumpSequence);
+              terminalInstanceService.notifyUserInput(terminalId);
+              stableOnInput(wordJumpSequence);
+            }
+            return false;
           }
 
           if (
