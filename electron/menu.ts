@@ -22,6 +22,7 @@ import { getAutoUpdaterServiceRef } from "./window/serviceRefs.js";
 import { getPluginMenuItems } from "./services/pluginMenuRegistry.js";
 import { evaluateWhen } from "./services/WhenClauseService.js";
 import { getAppWebContents } from "./window/webContentsRegistry.js";
+import { PROJECT_MENU_ITEM_IDS, resolveProjectIdForApplicationMenu } from "./projectMenuState.js";
 import { PRODUCT_NAME, PRODUCT_WEBSITE, PRODUCT_COPYRIGHT_ORG } from "./utils/productBranding.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
 import { isWindowsStoreBuild, getBuildChannelLabel } from "../shared/config/distribution.js";
@@ -169,6 +170,10 @@ export function createApplicationMenu(
   const terminalPluginItems = buildPluginMenuItems("terminal");
   const helpPluginItems = buildPluginMenuItems("help");
 
+  // Same resolver the live refresh uses, so the cold build and every later
+  // refresh agree on what "a project is open" means.
+  const projectMenuEnabled = resolveProjectIdForApplicationMenu() !== null;
+
   const template: Electron.MenuItemConstructorOptions[] = [
     {
       label: "File",
@@ -228,16 +233,18 @@ export function createApplicationMenu(
             ]
           : []),
         {
+          id: PROJECT_MENU_ITEM_IDS[0],
           label: "Project Settings…",
-          enabled: !!projectStore.getCurrentProjectId(),
+          enabled: projectMenuEnabled,
           click: (_item, browserWindow) =>
             sendAction("project.settings.open", getTargetBrowserWindow(browserWindow)),
         },
         ...(filePluginItems.length > 0 ? [{ type: "separator" as const }, ...filePluginItems] : []),
         { type: "separator" },
         {
+          id: PROJECT_MENU_ITEM_IDS[1],
           label: "Close Project",
-          enabled: !!projectStore.getCurrentProjectId(),
+          enabled: projectMenuEnabled,
           click: (_item, browserWindow) =>
             sendAction("project.closeActive", getTargetBrowserWindow(browserWindow)),
         },

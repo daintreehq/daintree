@@ -98,7 +98,9 @@ const projectStoreMock = vi.hoisted(() => ({
   getCurrentProjectId: vi.fn<() => string | null>(() => null),
   addProject: vi.fn<(path: string) => Promise<{ id: string; path: string }>>(),
   setCurrentProject: vi.fn<(id: string) => Promise<void>>(async () => {}),
-  getProjectById: vi.fn<(id: string) => { id: string; path: string } | null>(() => null),
+  getProjectById: vi.fn<(id: string) => { id: string; path: string; status?: string } | null>(
+    () => null
+  ),
 }));
 
 vi.mock("../services/ProjectStore.js", () => ({
@@ -360,24 +362,35 @@ describe("createApplicationMenu", () => {
     });
   });
 
-  describe("File menu Project Settings item", () => {
+  describe("File menu project-gated items", () => {
     afterEach(() => {
-      // mockReturnValue survives vi.clearAllMocks(), so restore the default or an
+      // mockReturnValue survives vi.clearAllMocks(), so restore the defaults or an
       // active project leaks into every later test in this file.
       projectStoreMock.getCurrentProjectId.mockReturnValue(null);
+      projectStoreMock.getProjectById.mockReturnValue(null);
     });
 
-    function rebuildWithProject(projectId: string | null): Electron.MenuItemConstructorOptions {
+    // No window registry in this suite, so the menu resolver falls back to the
+    // global pointer — but it still validates the row, so the project must exist.
+    function rebuildWithProject(projectId: string | null): void {
       projectStoreMock.getCurrentProjectId.mockReturnValue(projectId);
+      projectStoreMock.getProjectById.mockImplementation((id) =>
+        projectId !== null && id === projectId
+          ? { id: projectId, path: `/tmp/${projectId}`, status: "active" }
+          : null
+      );
       createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
-      const item = findMenuItem(capturedTemplate, "File", "Project Settings…");
+    }
+
+    function fileItem(label: string): Electron.MenuItemConstructorOptions {
+      const item = findMenuItem(capturedTemplate, "File", label);
       expect(item).toBeDefined();
       return item!;
     }
 
     it("sends the project-settings action, not the app-settings one", () => {
-      const item = rebuildWithProject("project-1");
-      item.click!(
+      rebuildWithProject("project-1");
+      fileItem("Project Settings…").click!(
         {} as Electron.MenuItem,
         mockBrowserWindow as unknown as Electron.BaseWindow,
         {} as Electron.KeyboardEvent
@@ -388,9 +401,35 @@ describe("createApplicationMenu", () => {
       });
     });
 
-    it("is enabled only while a project is active", () => {
-      expect(rebuildWithProject("project-1").enabled).toBe(true);
-      expect(rebuildWithProject(null).enabled).toBe(false);
+    it("enables both project items only while a project is open", () => {
+      rebuildWithProject("project-1");
+      expect(fileItem("Project Settings…").enabled).toBe(true);
+      expect(fileItem("Close Project").enabled).toBe(true);
+
+      rebuildWithProject(null);
+      expect(fileItem("Project Settings…").enabled).toBe(false);
+      expect(fileItem("Close Project").enabled).toBe(false);
+    });
+
+    it("disables both items when the pointed-at project row is closed", () => {
+      // The pointer can outlive the open project: the row's status is what
+      // decides, not the id's presence.
+      projectStoreMock.getCurrentProjectId.mockReturnValue("project-1");
+      projectStoreMock.getProjectById.mockReturnValue({
+        id: "project-1",
+        path: "/tmp/project-1",
+        status: "closed",
+      });
+      createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
+
+      expect(fileItem("Project Settings…").enabled).toBe(false);
+      expect(fileItem("Close Project").enabled).toBe(false);
+    });
+
+    it("gives both items stable ids so the live refresh can address them", () => {
+      rebuildWithProject("project-1");
+      expect(fileItem("Project Settings…").id).toBe("file-project-settings");
+      expect(fileItem("Close Project").id).toBe("file-close-project");
     });
   });
 
@@ -820,6 +859,7 @@ describe("handleDirectoryOpen window targeting", () => {
         view: { webContents: { isDestroyed: () => false, send: vi.fn() } },
         isNew: true,
       })),
+      getActiveProjectId: vi.fn<() => string | null>(() => null),
     };
   }
 
@@ -839,6 +879,9 @@ describe("handleDirectoryOpen window targeting", () => {
     windowRefMock.getWindowRegistry.mockReturnValue({
       getByWindowId: (id: number) =>
         id === 7 ? { services: { projectViewManager: targetManager } } : undefined,
+      // handleDirectoryOpen rebuilds the menu, and the rebuild resolves the
+      // project gates against the focused window.
+      getPrimary: () => ({ services: { projectViewManager: targetManager } }),
     });
     windowRefMock.getProjectViewManager.mockReturnValue(newestManager);
 

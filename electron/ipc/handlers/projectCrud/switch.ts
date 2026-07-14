@@ -11,6 +11,7 @@ import { projectStore } from "../../../services/ProjectStore.js";
 import { scratchStore } from "../../../services/ScratchStore.js";
 import { ProjectSwitchService } from "../../../services/ProjectSwitchService.js";
 import { broadcastProjectSwitchUpdates } from "../../projectSwitchBroadcast.js";
+import { refreshProjectMenuState } from "../../../projectMenuState.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { logInfo } from "../../../utils/logger.js";
 import {
@@ -69,6 +70,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
         resumeWorkspace: true,
       });
       await persistOutgoing;
+      refreshProjectMenuState();
       return project;
     }
 
@@ -86,7 +88,9 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
       }
       deps.worktreeService.resumeProject(project.path);
     }
-    return await projectSwitchService.switchProject(projectId);
+    const switched = await projectSwitchService.switchProject(projectId);
+    refreshProjectMenuState();
+    return switched;
   };
   handlers.push(typedHandleWithContext(CHANNELS.PROJECT_SWITCH, handleProjectSwitch));
 
@@ -133,6 +137,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
         resumeWorkspace: true,
       });
       await persistOutgoing;
+      refreshProjectMenuState();
       return project;
     }
 
@@ -140,7 +145,9 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
     if (deps.worktreeService) {
       deps.worktreeService.resumeProject(project.path);
     }
-    return await projectSwitchService.reopenProject(projectId);
+    const reopened = await projectSwitchService.reopenProject(projectId);
+    refreshProjectMenuState();
+    return reopened;
   };
   handlers.push(typedHandleWithContext(CHANNELS.PROJECT_REOPEN, handleProjectReopen));
 

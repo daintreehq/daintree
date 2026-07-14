@@ -27,6 +27,11 @@ vi.mock("../../menu.js", () => ({
   handleDirectoryOpen: vi.fn(() => Promise.resolve()),
 }));
 
+const refreshProjectMenuStateMock = vi.hoisted(() => vi.fn());
+vi.mock("../../projectMenuState.js", () => ({
+  refreshProjectMenuState: refreshProjectMenuStateMock,
+}));
+
 const setSignalShutdownMock = vi.fn();
 const setSafetyBeltTimerMock = vi.fn();
 vi.mock("../signalShutdownState.js", () => ({
@@ -401,6 +406,45 @@ describe("registerAppLifecycleHandlers – window-all-closed", () => {
 
     // Suppressing the quit during OOM recreate is the whole point of #5724.
     expect(appMock.quit).not.toHaveBeenCalled();
+  });
+
+  it("clears the File-menu project gates when the app goes windowless", async () => {
+    // `browser-window-focus` never fires when focus drops to zero windows, so on
+    // macOS (which survives windowless) this is the only signal that can drop the
+    // gates (#11136).
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    registerAppLifecycleHandlers(makeOpts());
+
+    getWindowAllClosedHandler()();
+
+    expect(refreshProjectMenuStateMock).toHaveBeenCalled();
+  });
+
+  it("does not touch the menu gates while a window recreation is in flight", async () => {
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    isWindowRecreatingMock.mockReturnValue(true);
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    registerAppLifecycleHandlers(makeOpts());
+
+    getWindowAllClosedHandler()();
+
+    // The replacement window is about to take focus and refresh them anyway.
+    expect(refreshProjectMenuStateMock).not.toHaveBeenCalled();
+  });
+
+  it("refreshes the File-menu project gates whenever a window takes focus", async () => {
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    registerAppLifecycleHandlers(makeOpts());
+
+    const focusCall = appMock.on.mock.calls.find(
+      ([event]: string[]) => event === "browser-window-focus"
+    );
+    expect(focusCall).toBeDefined();
+    (focusCall![1] as () => void)();
+
+    // The menu is process-global but its gates track the focused window's project.
+    expect(refreshProjectMenuStateMock).toHaveBeenCalled();
   });
 
   it("does not call app.quit on darwin even when no recreation is in flight", async () => {

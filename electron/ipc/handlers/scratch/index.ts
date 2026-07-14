@@ -19,6 +19,7 @@ import { getWindowForWebContents } from "../../../window/webContentsRegistry.js"
 import { distributePortsToView } from "../../../window/portDistribution.js";
 import { scratchStore } from "../../../services/ScratchStore.js";
 import { projectStore } from "../../../services/ProjectStore.js";
+import { refreshProjectMenuState } from "../../../projectMenuState.js";
 import { addProjectByPath } from "../projectCrud/crud.js";
 import { createHardenedGit } from "../../../utils/hardenedGit.js";
 import { logError } from "../../../utils/logger.js";
@@ -110,6 +111,10 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
           // renderer's `getCurrentProject` does not race-restore the previous project.
           const updated = scratchStore.setCurrentScratch(scratchId);
           projectStore.clearCurrentProject();
+
+          // A scratch is not a project: the window's PVM now holds a scratch id
+          // with no project row, so the File-menu project gates must drop.
+          refreshProjectMenuState();
 
           // Tell the PTY host the active workspace changed. PtyClient treats the ID
           // as an opaque string and the path as a working directory, so passing a
