@@ -428,6 +428,11 @@ export class HelpSessionService {
     if (!terminalId) return null;
     for (const record of this.sessionsById.values()) {
       if (record.revoked) continue;
+      // Match on the project too, not just the terminal id: nothing enforces
+      // terminal-id uniqueness across projects, and picking up another
+      // project's record would return the wrong pin — which reads as "this view
+      // isn't the pinned one" and hands the running assistant back to the LRU.
+      if (record.projectId !== projectId) continue;
       if (this.terminalBySessionId.get(record.sessionId) !== terminalId) continue;
       return { terminalId, webContentsId: record.projectViewWebContentsId };
     }

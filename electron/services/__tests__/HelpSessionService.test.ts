@@ -1155,6 +1155,30 @@ describe("HelpSessionService", () => {
 
       expect(service.getAssistantBackend("proj-1")).toBeNull();
     });
+
+    it("returns the owning project's pin when two projects share a terminal id", async () => {
+      // Nothing enforces terminal-id uniqueness across projects. Resolving to
+      // the wrong project's record would return the wrong pin, which the
+      // eviction guard reads as "this isn't the pinned view" — handing a
+      // running assistant back to the LRU.
+      const one = await service.provisionSession({
+        ...provisionInput(),
+        projectId: "proj-1",
+        projectViewWebContentsId: 42,
+      });
+      const two = await service.provisionSession({
+        ...provisionInput(),
+        projectId: "proj-2",
+        projectViewWebContentsId: 77,
+      });
+      if (!one || !two) throw new Error("expected both provisions");
+
+      expect(service.markTerminalForToken(one.token, "shared-term")).toBe(true);
+      expect(service.markTerminalForToken(two.token, "shared-term")).toBe(true);
+
+      expect(service.getAssistantBackend("proj-1")?.webContentsId).toBe(42);
+      expect(service.getAssistantBackend("proj-2")?.webContentsId).toBe(77);
+    });
   });
 
   describe("orphan-bearer sweep (#10698)", () => {
