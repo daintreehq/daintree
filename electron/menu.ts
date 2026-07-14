@@ -10,6 +10,7 @@ import type { CliAvailabilityService } from "./services/CliAvailabilityService.j
 import { isAgentInstalled } from "../shared/utils/agentAvailability.js";
 import * as CliInstallService from "./services/CliInstallService.js";
 import { getWindowRegistry } from "./window/windowRef.js";
+import { toggleWindowFullscreen } from "./window/fullscreen.js";
 import {
   getPtyClient,
   getWorkspaceClientRef,
@@ -219,9 +220,10 @@ export function createApplicationMenu(
             ]
           : []),
         {
-          label: "Project Settings",
+          label: "Project Settings…",
+          enabled: !!projectStore.getCurrentProjectId(),
           click: (_item, browserWindow) =>
-            sendAction("app.settings", getTargetBrowserWindow(browserWindow)),
+            sendAction("project.settings.open", getTargetBrowserWindow(browserWindow)),
         },
         ...(filePluginItems.length > 0 ? [{ type: "separator" as const }, ...filePluginItems] : []),
         { type: "separator" },
@@ -384,9 +386,7 @@ export function createApplicationMenu(
           click: (_item, browserWindow) => {
             const win = getTargetBrowserWindow(browserWindow);
             if (!win) return;
-            // Use simpleFullScreen for pre-Lion behavior that extends into the notch area
-            const isSimpleFullScreen = win.isSimpleFullScreen();
-            win.setSimpleFullScreen(!isSimpleFullScreen);
+            toggleWindowFullscreen(win);
           },
         },
         ...(viewPluginItems.length > 0 ? [{ type: "separator" as const }, ...viewPluginItems] : []),

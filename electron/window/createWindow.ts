@@ -6,6 +6,7 @@ import {
   registerAppView,
 } from "./webContentsRegistry.js";
 import { getWindowRegistry } from "./windowRef.js";
+import { toggleWindowFullscreen } from "./fullscreen.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import path from "path";
 import { createWindowWithState } from "../windowState.js";
@@ -86,9 +87,7 @@ function registerWindowIpcHandlers(onCreateWindow?: (projectPath?: string) => Pr
   ipcMain.handle(CHANNELS.WINDOW_TOGGLE_FULLSCREEN, (event) => {
     const bw = getWindowForWebContents(event.sender);
     if (bw && !bw.isDestroyed()) {
-      const isSimpleFullScreen = bw.isSimpleFullScreen();
-      bw.setSimpleFullScreen(!isSimpleFullScreen);
-      return !isSimpleFullScreen;
+      return toggleWindowFullscreen(bw);
     }
     return false;
   });
