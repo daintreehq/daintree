@@ -48,6 +48,18 @@ const performanceModeState = vi.hoisted(() => ({
   performanceMode: false,
   setPerformanceMode: vi.fn(),
 }));
+const worktreeStoreState = vi.hoisted(() => ({
+  worktrees: new Map([
+    [
+      "wt-1",
+      {
+        id: "wt-1",
+        branch: "feature/e2e",
+        resourceConnectCommand: "ssh e2e-host",
+      },
+    ],
+  ]),
+}));
 
 vi.mock("@/store", () => ({
   useErrorStore: { getState: () => errorStoreState },
@@ -59,6 +71,9 @@ vi.mock("@/store/recipeConflictStore", () => ({
 }));
 vi.mock("@/store/perfMetricsStore", () => ({
   usePerfMetricsStore: { getState: () => perfMetricsState },
+}));
+vi.mock("@/store/createWorktreeStore", () => ({
+  getCurrentViewStore: () => ({ getState: () => worktreeStoreState }),
 }));
 vi.mock("@/services/ActionService", () => ({
   installE2EActionDispatchBridge: installE2EActionDispatchBridgeMock,
@@ -73,6 +88,7 @@ const E2E_GLOBAL_KEYS = [
   "__DAINTREE_E2E_ERROR_STORE__",
   "__DAINTREE_E2E_ADD_ERROR__",
   "__DAINTREE_E2E_CLEAR_ERRORS__",
+  "__DAINTREE_E2E_WORKTREES__",
   "__DAINTREE_E2E_TRIGGER_RECIPE_CONFLICT__",
   "__DAINTREE_E2E_DIAGNOSTICS_STATE__",
   "__DAINTREE_E2E_OPEN_DIAGNOSTICS__",
@@ -126,6 +142,19 @@ describe("useE2EBridges", () => {
     const result = window.__DAINTREE_E2E_ERROR_STORE__?.();
     expect(result).toEqual([
       { id: "err-1", source: "test", message: "boom", fromPreviousSession: false },
+    ]);
+  });
+
+  it("exposes the renderer worktree snapshot via __DAINTREE_E2E_WORKTREES__", () => {
+    window.__DAINTREE_E2E_MODE__ = true;
+    renderHook(() => useE2EBridges());
+
+    expect(window.__DAINTREE_E2E_WORKTREES__?.()).toEqual([
+      {
+        id: "wt-1",
+        branch: "feature/e2e",
+        resourceConnectCommand: "ssh e2e-host",
+      },
     ]);
   });
 

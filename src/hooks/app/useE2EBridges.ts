@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { useErrorStore, useDiagnosticsStore, usePerformanceModeStore } from "@/store";
 import { useRecipeConflictStore } from "@/store/recipeConflictStore";
 import { usePerfMetricsStore } from "@/store/perfMetricsStore";
+import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { installE2EActionDispatchBridge } from "@/services/ActionService";
 import { loadE2ENotificationBackdoor } from "@/lazyPanels";
 
@@ -40,6 +41,12 @@ export function useE2EBridges(): void {
       window.__DAINTREE_E2E_CLEAR_ERRORS__ = () => {
         useErrorStore.getState().reset();
       };
+      window.__DAINTREE_E2E_WORKTREES__ = () =>
+        Array.from(getCurrentViewStore().getState().worktrees.values()).map((worktree) => ({
+          id: worktree.id,
+          branch: worktree.branch,
+          resourceConnectCommand: worktree.resourceConnectCommand,
+        }));
       // Parks a synthetic in-repo recipe stale-write conflict so E2E can exercise
       // the RecipeConflictDialog without racing a real on-disk file mutation. The
       // returned promise resolves with the user's choice; tests don't await it —
@@ -86,6 +93,7 @@ export function useE2EBridges(): void {
       delete window.__DAINTREE_E2E_ERROR_STORE__;
       delete window.__DAINTREE_E2E_ADD_ERROR__;
       delete window.__DAINTREE_E2E_CLEAR_ERRORS__;
+      delete window.__DAINTREE_E2E_WORKTREES__;
       delete window.__DAINTREE_E2E_TRIGGER_RECIPE_CONFLICT__;
       delete window.__DAINTREE_E2E_DIAGNOSTICS_STATE__;
       delete window.__DAINTREE_E2E_OPEN_DIAGNOSTICS__;

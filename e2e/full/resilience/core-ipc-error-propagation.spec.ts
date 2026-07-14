@@ -6,7 +6,6 @@ import { SEL } from "../../helpers/selectors";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { openTerminal } from "../../helpers/panels";
-import { waitForTerminalReady } from "../../helpers/terminal";
 import { T_SHORT, T_MEDIUM } from "../../helpers/timeouts";
 import type { ElectronApplication } from "@playwright/test";
 
@@ -77,6 +76,42 @@ async function emitSpawnResult(
     },
     { id: terminalId, code: errorCode, msg: message }
   );
+}
+
+async function startSpawnResultRecording(window: Page) {
+  await window.evaluate(() => {
+    const state = window as any;
+    state.__DAINTREE_E2E_SPAWN_RESULTS__?.dispose?.();
+    const results: Array<{ id: string; success: boolean }> = [];
+    const dispose = window.electron.terminal.onSpawnResult((id, result) => {
+      results.push({ id, success: result.success });
+    });
+    state.__DAINTREE_E2E_SPAWN_RESULTS__ = { results, dispose };
+  });
+}
+
+async function waitForSuccessfulSpawnResult(window: Page, terminalId: string) {
+  try {
+    await expect
+      .poll(
+        () =>
+          window.evaluate(
+            (id) =>
+              (window as any).__DAINTREE_E2E_SPAWN_RESULTS__?.results?.some(
+                (result: { id: string; success: boolean }) => result.id === id && result.success
+              ) ?? false,
+            terminalId
+          ),
+        { timeout: T_MEDIUM }
+      )
+      .toBe(true);
+  } finally {
+    await window.evaluate(() => {
+      const state = window as any;
+      state.__DAINTREE_E2E_SPAWN_RESULTS__?.dispose?.();
+      delete state.__DAINTREE_E2E_SPAWN_RESULTS__;
+    });
+  }
 }
 
 async function getErrorStoreCount(window: Page): Promise<number> {
@@ -329,6 +364,8 @@ test.describe.serial("Core: IPC Error Propagation", () => {
     deferredFixtureCleanups.push(cleanup);
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, repo, "SpawnErrorTest");
 
+    await startSpawnResultRecording(ctx.window);
+
     // Click open terminal to create a terminal panel
     await openTerminal(ctx.window);
 
@@ -342,9 +379,8 @@ test.describe.serial("Core: IPC Error Propagation", () => {
     expect(terminalId).toBeTruthy();
 
     // Wait for the real spawn-result success before injecting a synthetic
-    // failure. Otherwise Linux CI can deliver the success event after this test
-    // emits the failure, clearing the banner before the overflow menu opens.
-    await waitForTerminalReady(ctx.window, targetPanel, T_MEDIUM);
+    // failure. Otherwise it can arrive afterward and clear the banner.
+    await waitForSuccessfulSpawnResult(ctx.window, terminalId!);
 
     // Send a synthetic spawn error result for this terminal
     await emitSpawnResult(ctx.app, terminalId!, "ENOENT", "spawn /nonexistent ENOENT");
@@ -367,6 +403,7 @@ test.describe.serial("Core: IPC Error Propagation", () => {
     await expect(ctx.window.locator(SEL.panel.gridPanel).first()).toBeVisible({
       timeout: T_SHORT,
     });
+    await startSpawnResultRecording(ctx.window);
     await openTerminal(ctx.window);
 
     const gridPanel = ctx.window.locator(SEL.panel.gridPanel);
@@ -376,7 +413,7 @@ test.describe.serial("Core: IPC Error Propagation", () => {
     const terminalId = await lastPanel.getAttribute("data-panel-id");
     expect(terminalId).toBeTruthy();
 
-    await waitForTerminalReady(ctx.window, lastPanel, T_MEDIUM);
+    await waitForSuccessfulSpawnResult(ctx.window, terminalId!);
 
     await emitSpawnResult(ctx.app, terminalId!, "ENOTDIR", "ENOTDIR: not a directory");
 
