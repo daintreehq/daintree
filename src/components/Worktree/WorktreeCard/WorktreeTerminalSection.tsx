@@ -114,7 +114,7 @@ function TerminalRow({ term, onClick }: TerminalRowProps) {
         <div className="flex items-center gap-2.5 shrink-0">
           {isArmed && armBadge !== undefined && (
             <span
-              className="inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-daintree-accent px-1 text-[9px] font-mono font-semibold text-[var(--color-daintree-bg)] tabular-nums"
+              className="inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-daintree-accent px-1 text-[9px] font-mono font-semibold text-accent-primary-foreground tabular-nums"
               aria-label={`Armed position ${armBadge}`}
             >
               {armBadge}

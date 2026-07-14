@@ -170,7 +170,7 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
             ref={okRef}
             type="button"
             onClick={handleOk}
-            className="px-3 py-1.5 text-xs font-medium text-text-inverse bg-daintree-accent hover:bg-daintree-accent/90 rounded-md transition-colors focus:outline-hidden focus:ring-1 focus:ring-daintree-accent/50"
+            className="px-3 py-1.5 text-xs font-medium text-accent-primary-foreground bg-daintree-accent hover:bg-daintree-accent/90 rounded-md transition-colors focus:outline-hidden focus:ring-1 focus:ring-daintree-accent/50"
           >
             OK
           </button>

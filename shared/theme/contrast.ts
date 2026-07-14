@@ -27,6 +27,16 @@ const DISPLAY_SURFACES: AppThemeTokenKey[] = [
   "surface-panel-elevated",
 ];
 
+// Text painted on a solid accent fill. Exported because it governs more than this
+// module: the component-level guard (accentForeground.contract.test.ts) derives the
+// token names and threshold it enforces from this pair, so a rename or a relaxed
+// minimum here can't silently leave the components behind (#11115).
+export const ACCENT_CONTRAST_PAIR = {
+  foreground: "accent-foreground",
+  background: "accent-primary",
+  minimum: 4.5,
+} as const;
+
 const CONTRAST_PAIRS: Array<{
   foreground: AppThemeTokenKey;
   background: AppThemeTokenKey;
@@ -91,7 +101,7 @@ const CONTRAST_PAIRS: Array<{
   { foreground: "status-info", background: "surface-sidebar", minimum: 3.0 },
   { foreground: "status-info", background: "surface-canvas", minimum: 3.0 },
   { foreground: "status-info", background: "surface-panel-elevated", minimum: 3.0 },
-  { foreground: "accent-foreground", background: "accent-primary", minimum: 4.5 },
+  ACCENT_CONTRAST_PAIR,
   { foreground: "search-highlight-text", background: "search-highlight-background", minimum: 3.0 },
 ];
 
@@ -567,7 +577,9 @@ export function getThemeContrastWarnings(scheme: AppColorScheme): AppThemeValida
   return warnings;
 }
 
-const ACCENT_MIN_CONTRAST = 4.5;
+// The override gate and the validation matrix must enforce the same threshold — a second
+// literal here could silently drift from the pair everything else is derived from.
+const ACCENT_MIN_CONTRAST = ACCENT_CONTRAST_PAIR.minimum;
 const ACCENT_OUTLINE_MIN_CONTRAST = 3.0;
 
 // Structured result describing how an accent override fails its contrast gate, so

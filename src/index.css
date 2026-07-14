@@ -367,8 +367,6 @@
   --color-secondary-foreground: var(--secondary-foreground);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
-  --color-accent: var(--accent);
-  --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
   --color-border: var(--border);
@@ -733,8 +731,6 @@ code.hljs {
   --secondary-foreground: var(--theme-text-primary);
   --muted: var(--theme-surface-panel);
   --muted-foreground: var(--theme-text-secondary);
-  --accent: var(--theme-accent-soft);
-  --accent-foreground: var(--theme-text-primary);
   --destructive: var(--theme-status-danger);
   --destructive-foreground: var(--theme-text-inverse);
   --border: var(--theme-border-default);
