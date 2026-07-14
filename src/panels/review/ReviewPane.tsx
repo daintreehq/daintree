@@ -1,17 +1,18 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { GitPullRequest } from "lucide-react";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { ReviewHubContent } from "@/components/Worktree/ReviewHub/ReviewHubContent";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { registerPanelFocusHandler } from "@/components/Panel/panelFocusRegistry";
+import { usePanelRootFocus } from "@/components/Panel/usePanelRootFocus";
 
 export interface ReviewPaneProps {
   id: string;
   worktreeId?: string;
   onClose: (force?: boolean) => void;
+  isFocused?: boolean;
 }
 
-export function ReviewPane({ id, worktreeId, onClose }: ReviewPaneProps) {
+export function ReviewPane({ id, worktreeId, onClose, isFocused = false }: ReviewPaneProps) {
   // ReviewHubContent wires its Close button as `onClick={onClose}`, so React
   // would hand the MouseEvent straight through as `force` — a truthy object
   // that routes the panel handler to permanent removal instead of the
@@ -25,15 +26,11 @@ export function ReviewPane({ id, worktreeId, onClose }: ReviewPaneProps) {
   // Escape listener that swallows the key across the whole app.
   const [containerEl, setContainerEl] = useState<HTMLDivElement | null>(null);
 
-  // Review renders no ContentPanel, so it registers its own focus target
-  // instead of inheriting ContentPanel's.
-  useEffect(() => {
-    if (!containerEl) return undefined;
-    return registerPanelFocusHandler(id, () => {
-      containerEl.focus({ preventScroll: true });
-      return document.activeElement === containerEl;
-    });
-  }, [id, containerEl]);
+  // Review renders no ContentPanel, so it owns its focus target instead of
+  // inheriting ContentPanel's. The getter changes identity with the element,
+  // which re-arms the reactive focus once the container commits.
+  const getContainer = useCallback(() => containerEl, [containerEl]);
+  usePanelRootFocus({ id, isFocused, getNode: getContainer });
 
   // Resolve worktree path fresh from the worktree store so renames/moves are
   // reflected without restarting the panel. Missing worktreeId yields an empty

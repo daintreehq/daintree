@@ -23,7 +23,7 @@ import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
-import { registerPanelFocusHandler } from "./panelFocusRegistry";
+import { usePanelRootFocus } from "./usePanelRootFocus";
 import { useWorktreeColorMap } from "@/hooks/useWorktreeColorMap";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
@@ -235,6 +235,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     },
     [externalRef]
   );
+  const getRootNode = useCallback(() => rootRef.current, []);
   const titleEditing = useTitleEditing();
   const editingStartedAt = titleEditing.editingStartedAt;
 
@@ -255,19 +256,12 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     (s) => isPtyKind && s.previewArmedIds.size > 0 && !s.previewArmedIds.has(id)
   );
 
-  // Non-PTY panels have no input surface of their own, so the panel root is the
-  // focus target that macro-grid Enter and tab switches hand off to. PTY kinds
-  // are skipped: TerminalPane owns their registry entry and routes focus to
-  // xterm or the hybrid input bar, and two owners would race for one panel id.
-  useEffect(() => {
-    if (isPtyKind) return undefined;
-    return registerPanelFocusHandler(id, () => {
-      const node = rootRef.current;
-      if (!node) return false;
-      node.focus({ preventScroll: true });
-      return document.activeElement === node;
-    });
-  }, [id, isPtyKind]);
+  // The panel root is the focus target for every non-PTY kind — it takes DOM
+  // focus when the panel becomes focused, and yields to whatever child input
+  // the panel owns (FilePane's search box, a plugin's fields). PTY kinds are
+  // skipped: TerminalPane owns their registry entry and routes focus to xterm
+  // or the hybrid input bar, and two owners would race for one panel id.
+  usePanelRootFocus({ id, isFocused, getNode: getRootNode, enabled: !isPtyKind });
 
   // One-shot ring pulse when this pane becomes the new primary on fleet
   // exit. Listens for the CustomEvent dispatched from FleetArmingRibbon's

@@ -1,6 +1,7 @@
 import {
   Suspense,
   lazy,
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -12,7 +13,7 @@ import type { PanelViewProps } from "@shared/types/plugin";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { BrowserPaneSkeleton } from "@/components/Browser/BrowserPaneSkeleton";
 import { ContentFadeIn } from "@/components/ui/ContentFadeIn";
-import { registerPanelFocusHandler } from "@/components/Panel/panelFocusRegistry";
+import { usePanelRootFocus } from "@/components/Panel/usePanelRootFocus";
 import type { PanelComponentProps } from "@/panels/registry";
 import { logWarn } from "@/utils/logger";
 
@@ -148,14 +149,11 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Panel
 
     const rootRef = useRef<HTMLDivElement | null>(null);
     const panelId = props.id;
-    useEffect(() => {
-      return registerPanelFocusHandler(panelId, () => {
-        const node = rootRef.current;
-        if (!node) return false;
-        node.focus({ preventScroll: true });
-        return document.activeElement === node;
-      });
-    }, [panelId]);
+    // Focusing the host root establishes ownership in the parent document; it
+    // does not push focus into the plugin's guest frame. Focus already inside
+    // the host (a plugin input, an iframe) is left where it is.
+    const getRootNode = useCallback(() => rootRef.current, []);
+    usePanelRootFocus({ id: panelId, isFocused: props.isFocused, getNode: getRootNode });
 
     // The dispose controller lives in state because its signal is consumed
     // during render (passed to the plugin view as `disposeSignal`), and refs

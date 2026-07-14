@@ -415,3 +415,78 @@ describe("makePluginViewHost", () => {
     unmount();
   });
 });
+
+/**
+ * The plugin host bypasses ContentPanel, so it owns its focus target. Focusing
+ * the host root claims the keyboard in the parent document; it does not push
+ * focus into the plugin's guest frame, and it must never pull focus out of a
+ * plugin input the user is already typing in (#11133).
+ */
+describe("PluginViewHost reactive focus (#11133)", () => {
+  it("claims DOM focus when the host becomes the focused pane", async () => {
+    const { makePluginViewHost } = await import("../PluginViewHost");
+    const Host = makePluginViewHost(makeConfig());
+
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    outside.focus();
+
+    const { container, rerender } = render(
+      <Host
+        id="panel-1"
+        title="Dashboard"
+        isFocused={false}
+        onFocus={(): void => {}}
+        onClose={(): void => {}}
+      />
+    );
+    expect(document.activeElement).toBe(outside);
+
+    act(() => {
+      rerender(
+        <Host
+          id="panel-1"
+          title="Dashboard"
+          isFocused
+          onFocus={(): void => {}}
+          onClose={(): void => {}}
+        />
+      );
+    });
+
+    expect(document.activeElement).toBe(container.firstElementChild);
+    outside.remove();
+  });
+
+  it("leaves focus inside the plugin's own surface alone", async () => {
+    const { makePluginViewHost } = await import("../PluginViewHost");
+    // The suite resets modules between tests, so the registry must be resolved
+    // from the same module graph as the host — a static import would hold a
+    // stale Map and see none of the host's registrations.
+    const { focusPanelInput } = await import("@/components/Panel/panelFocusRegistry");
+    const Host = makePluginViewHost(makeConfig());
+
+    const { container } = render(
+      <Host
+        id="panel-1"
+        title="Dashboard"
+        isFocused={false}
+        onFocus={(): void => {}}
+        onClose={(): void => {}}
+      />
+    );
+
+    const root = container.firstElementChild as HTMLElement;
+    const guestInput = document.createElement("input");
+    root.appendChild(guestInput);
+    act(() => guestInput.focus());
+
+    let accepted = false;
+    act(() => {
+      accepted = focusPanelInput("panel-1");
+    });
+
+    expect(accepted).toBe(true);
+    expect(document.activeElement).toBe(guestInput);
+  });
+});

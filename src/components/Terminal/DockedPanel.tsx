@@ -47,8 +47,8 @@ export function DockedPanel({
   }, [moveTerminalToGrid, terminal.id, onPopoverClose]);
 
   const handleMinimize = useCallback(() => {
-    closeDockTerminal();
-  }, [closeDockTerminal]);
+    closeDockTerminal(terminal.id);
+  }, [closeDockTerminal, terminal.id]);
 
   const focusedId = usePanelStore((state) => state.focusedId);
   const isFocused = focusedId === terminal.id;

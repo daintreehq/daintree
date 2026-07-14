@@ -78,3 +78,44 @@ describe("ReviewPane focus target (#11109)", () => {
     expect(focusPanelInput("r-1")).toBe(false);
   });
 });
+
+/**
+ * Registration alone only answers macro-grid Enter. Arrow navigation, Cmd+1..9
+ * and the rest just write `focusedId`, so the pane has to claim DOM focus when
+ * it becomes focused or the keyboard stays behind (#11133).
+ */
+describe("ReviewPane reactive focus (#11133)", () => {
+  afterEach(() => {
+    keyboardScopes.length = 0;
+    cleanup();
+  });
+
+  it("claims DOM focus when it becomes the focused pane", () => {
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    outside.focus();
+
+    const { container, rerender } = render(<ReviewPane id="r-1" worktreeId="w-1" />);
+    expect(document.activeElement).toBe(outside);
+
+    act(() => {
+      rerender(<ReviewPane id="r-1" worktreeId="w-1" isFocused />);
+    });
+
+    expect(document.activeElement).toBe(container.firstElementChild);
+    outside.remove();
+  });
+
+  it("leaves focus alone when it already sits inside the pane", () => {
+    const { container } = render(<ReviewPane id="r-1" worktreeId="w-1" isFocused />);
+    const hub = container.querySelector<HTMLElement>('[data-testid="review-hub"]')!;
+    hub.tabIndex = -1;
+    act(() => hub.focus());
+
+    act(() => {
+      expect(focusPanelInput("r-1")).toBe(true);
+    });
+
+    expect(document.activeElement).toBe(hub);
+  });
+});

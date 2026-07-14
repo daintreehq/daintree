@@ -76,8 +76,9 @@ describe("getMaximizedGroupFocusTarget", () => {
     };
 
     expect(getMaximizedGroupFocusTarget({ ...args, openDockPopoverId: "dock-1" })).toBeNull();
-    // `closeDockTerminal` clears only `activeDockTerminalId`, leaving focus on
-    // the closed dock terminal — enforcement resumes and reclaims the group.
+    // `closeDockTerminal` now hands focus back itself (#11133), but this stays
+    // the backstop for focus left on a dock pane by any other route — persisted
+    // state, a crash mid-close — so enforcement still reclaims the group.
     expect(getMaximizedGroupFocusTarget({ ...args, openDockPopoverId: null })).toBe("term-2");
   });
 

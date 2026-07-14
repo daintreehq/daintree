@@ -144,6 +144,10 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
 
   // Derive isOpen from store state - open if ANY panel in this group is active
   const isOpen = panels.some((p) => p.id === activeDockTerminalId);
+  // The pane this group actually has open in the dock — the id every close must
+  // name. Reading it from the store (rather than assuming the active tab) keeps
+  // a close honest even if a tab switch and the dock state ever disagree.
+  const openDockPanelId = isOpen ? activeDockTerminalId : null;
 
   const [tabListEl, setTabListEl] = useState<HTMLDivElement | null>(null);
 
@@ -230,7 +234,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     onDragStart: ({ active }) => {
       if (panels.some((p) => p.id === active.id)) {
         dismissTips();
-        if (isOpen) closeDockTerminal();
+        if (openDockPanelId) closeDockTerminal(openDockPanelId);
       }
     },
   });
@@ -288,13 +292,13 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     (open: boolean) => {
       if (open) {
         openDockTerminal(activeTabId);
-      } else {
+      } else if (openDockPanelId) {
         // Focus-driven dismissals are blocked upstream by onFocusOutside, so a
         // close here is a genuine pointer-outside or Escape and is honored.
-        closeDockTerminal();
+        closeDockTerminal(openDockPanelId);
       }
     },
-    [activeTabId, openDockTerminal, closeDockTerminal]
+    [activeTabId, openDockPanelId, openDockTerminal, closeDockTerminal]
   );
 
   const handleTabClick = useCallback(
@@ -595,8 +599,8 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                 e.stopPropagation();
                 dismissTips();
                 if (e.detail >= 2) return;
-                if (isOpen) {
-                  closeDockTerminal();
+                if (openDockPanelId) {
+                  closeDockTerminal(openDockPanelId);
                 } else {
                   openDockTerminal(activeTabId);
                 }
@@ -605,7 +609,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                 e.preventDefault();
                 e.stopPropagation();
                 const moved = moveTerminalToGrid(activePanel.id);
-                if (moved) closeDockTerminal();
+                if (moved && openDockPanelId) closeDockTerminal(openDockPanelId);
               }}
               aria-label={`${activePanel.title}${displayAgentState ? ` — agent ${getEffectiveStateLabel(displayAgentState)}` : ""} (${panels.length} tabs) - Click to preview, double-click to move to grid, drag to reorder`}
             >

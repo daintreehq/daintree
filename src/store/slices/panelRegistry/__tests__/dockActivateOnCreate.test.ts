@@ -723,7 +723,7 @@ describe("dock watchdog hardening (#7278)", () => {
 
     // Call closeDockTerminal anyway to verify it works (the actual
     // watchdog would not call this).
-    closeDockTerminal();
+    closeDockTerminal(targetId);
     expect(usePanelStore.getState().activeDockTerminalId).toBeNull();
   });
 
@@ -744,7 +744,7 @@ describe("dock watchdog hardening (#7278)", () => {
       !state.activeDockTerminalId || state.panelsById[state.activeDockTerminalId]
     );
     if (!shouldSkipClose) {
-      closeDockTerminal();
+      closeDockTerminal("phantom-id");
     }
     expect(usePanelStore.getState().activeDockTerminalId).toBeNull();
   });

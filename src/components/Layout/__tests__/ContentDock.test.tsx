@@ -23,7 +23,7 @@ describe("ContentDock regression test", () => {
     const content = readFileSync(resolve(__dirname, "../DockPanelOffscreenContainer.tsx"), "utf-8");
 
     expect(content).toContain("activeDockTerminalId");
-    expect(content).toContain("closeDockTerminal()");
+    expect(content).toContain("closeDockTerminal(activeDockTerminalId)");
     expect(content).toContain("!s.trashedTerminals.has(t.id)");
   });
 
@@ -141,11 +141,11 @@ describe("ContentDock regression test", () => {
     const content = readFileSync(resolve(__dirname, "../DockPanelOffscreenContainer.tsx"), "utf-8");
 
     expect(content).toContain("usePanelStore.getState().panelsById[activeDockTerminalId]");
-    // The panelsById guard must appear before closeDockTerminal() inside the
+    // The panelsById guard must appear before the close call inside the
     // same useEffect block.
     const effectStart = content.indexOf("if (!activeDockTerminalId) return;");
     const panelsByIdGuard = content.indexOf("panelsById[activeDockTerminalId]");
-    const closeCall = content.indexOf("closeDockTerminal()", effectStart);
+    const closeCall = content.indexOf("closeDockTerminal(activeDockTerminalId)", effectStart);
 
     expect(effectStart).toBeGreaterThan(0);
     expect(panelsByIdGuard).toBeGreaterThan(effectStart);
