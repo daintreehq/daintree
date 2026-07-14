@@ -1101,6 +1101,86 @@ describe("HelpSessionService", () => {
     });
   });
 
+  // The project-view eviction guard (#11157) reads this to decide whether
+  // destroying a cached view would kill a running assistant, so the binding
+  // must track the PTY's whole lifetime — not just its spawn — and must carry
+  // the pinned WebContents so only the view that would do the killing is
+  // protected.
+  describe("getAssistantBackend (#11157)", () => {
+    it("resolves only once a terminal is bound, and only for the owning project", async () => {
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+
+      // Provisioned but not spawned: the bearer exists, the backend does not.
+      expect(service.getAssistantBackend("proj-1")).toBeNull();
+
+      expect(service.markTerminalForToken(result.token, "term-1")).toBe(true);
+
+      // provisionInput() pins the session to WebContents 42.
+      expect(service.getAssistantBackend("proj-1")).toEqual({
+        terminalId: "term-1",
+        webContentsId: 42,
+      });
+      expect(service.getAssistantBackend("proj-2")).toBeNull();
+      expect(service.getAssistantBackend("")).toBeNull();
+    });
+
+    it("follows the binding through displacement", async () => {
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+      expect(service.markTerminalForToken(result.token, "term-old")).toBe(true);
+      expect(service.markTerminalForToken(result.token, "term-new")).toBe(true);
+
+      // The displaced PTY is dead; protecting the view on its behalf would pin
+      // a project whose assistant is gone.
+      expect(service.getAssistantBackend("proj-1")?.terminalId).toBe("term-new");
+    });
+
+    it("clears on unbind", async () => {
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+      expect(service.markTerminalForToken(result.token, "term-1")).toBe(true);
+
+      service.unbindTerminal("term-1");
+
+      expect(service.getAssistantBackend("proj-1")).toBeNull();
+    });
+
+    it("clears on revoke", async () => {
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+      expect(service.markTerminalForToken(result.token, "term-1")).toBe(true);
+
+      await service.revokeSession(result.sessionId);
+
+      expect(service.getAssistantBackend("proj-1")).toBeNull();
+    });
+
+    it("returns the owning project's pin when two projects share a terminal id", async () => {
+      // Nothing enforces terminal-id uniqueness across projects. Resolving to
+      // the wrong project's record would return the wrong pin, which the
+      // eviction guard reads as "this isn't the pinned view" — handing a
+      // running assistant back to the LRU.
+      const one = await service.provisionSession({
+        ...provisionInput(),
+        projectId: "proj-1",
+        projectViewWebContentsId: 42,
+      });
+      const two = await service.provisionSession({
+        ...provisionInput(),
+        projectId: "proj-2",
+        projectViewWebContentsId: 77,
+      });
+      if (!one || !two) throw new Error("expected both provisions");
+
+      expect(service.markTerminalForToken(one.token, "shared-term")).toBe(true);
+      expect(service.markTerminalForToken(two.token, "shared-term")).toBe(true);
+
+      expect(service.getAssistantBackend("proj-1")?.webContentsId).toBe(42);
+      expect(service.getAssistantBackend("proj-2")?.webContentsId).toBe(77);
+    });
+  });
+
   describe("orphan-bearer sweep (#10698)", () => {
     it("revokes an unbound bearer older than the ceiling and tears down its MCP session", async () => {
       const result = await service.provisionSession(provisionInput());
