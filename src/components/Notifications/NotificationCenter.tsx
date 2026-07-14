@@ -1035,6 +1035,10 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
           role={rowCount > 0 ? "list" : undefined}
           aria-label={rowCount > 0 ? "Notifications" : undefined}
           className="h-full"
+          // The fades occlude the first and last 32px of the scrollport, so keep
+          // scroll-into-view targets (the jump-to-new divider, keyboard-focused
+          // rows) clear of them.
+          scrollClassName="scroll-py-8"
         >
           {/* One stable child: the shadow hook observes firstElementChild, so it
               must outlive the empty-state/section swaps below. */}

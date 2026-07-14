@@ -41,15 +41,25 @@ vi.mock("@/hooks/useWorktreeStore", () => ({
     selector(worktreeStoreMock),
 }));
 
-// The inbox list renders ScrollShadow, which constructs a ResizeObserver; jsdom has none.
-let resizeCallbacks: ResizeObserverCallback[] = [];
+// The inbox list renders ScrollShadow, which constructs a ResizeObserver; jsdom
+// has none. Targets are tracked so a test can only fire a resize for an element
+// the hook actually observes — a real observer left watching a detached node
+// stays silent, and that is the failure the stable list wrapper guards against.
+let resizeObservers: MockResizeObserver[] = [];
 class MockResizeObserver implements ResizeObserver {
-  constructor(callback: ResizeObserverCallback) {
-    resizeCallbacks.push(callback);
+  readonly targets = new Set<Element>();
+  constructor(readonly callback: ResizeObserverCallback) {
+    resizeObservers.push(this);
   }
-  observe() {}
-  unobserve() {}
-  disconnect() {}
+  observe(target: Element) {
+    this.targets.add(target);
+  }
+  unobserve(target: Element) {
+    this.targets.delete(target);
+  }
+  disconnect() {
+    this.targets.clear();
+  }
 }
 vi.stubGlobal("ResizeObserver", MockResizeObserver);
 
@@ -77,7 +87,7 @@ function setEntries(entries: NotificationHistoryEntry[]) {
 }
 
 beforeEach(() => {
-  resizeCallbacks = [];
+  resizeObservers = [];
   useNotificationHistoryStore.getState().clearAll();
   useNotificationSettingsStore.setState({
     enabled: true,
@@ -2588,6 +2598,17 @@ describe("NotificationCenter — scroll shadows", () => {
     );
   }
 
+  // Resize `target` the way a browser would: only observers actually watching a
+  // still-connected `target` hear about it.
+  function resizeContent(target: Element) {
+    act(() => {
+      for (const observer of resizeObservers) {
+        if (!observer.targets.has(target) || !target.isConnected) continue;
+        observer.callback([], observer);
+      }
+    });
+  }
+
   it("cues the content hidden above and below the fold as the list scrolls", () => {
     setEntries([makeEntry({ message: "One" }), makeEntry({ message: "Two" })]);
     const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
@@ -2620,52 +2641,62 @@ describe("NotificationCenter — scroll shadows", () => {
     expect(readCues(scroller)).toEqual([true, false]);
   });
 
-  it("shows no cues when the list fits", () => {
-    setEntries([makeEntry({ message: "Only one" })]);
+  it("cues content that grows past the fold without any scrolling", () => {
+    setEntries([makeEntry({ message: "One" })]);
     const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
 
     const scroller = container.querySelector(".overflow-y-auto") as HTMLElement;
-    setScrollMetrics(scroller, { scrollTop: 0, scrollHeight: 120, clientHeight: 200 });
+    const listBody = scroller.firstElementChild!;
+    expect(readCues(scroller)).toEqual([false, false]);
+
+    // Nobody scrolled — only the ResizeObserver watching the list body can
+    // notice that the content now overflows.
+    setScrollMetrics(scroller, { scrollTop: 0, scrollHeight: 500, clientHeight: 200 });
+    resizeContent(listBody);
+    flushFrames();
+
+    expect(readCues(scroller)).toEqual([false, true]);
+  });
+
+  it("clears the cues when the content shrinks back to fit", () => {
+    setEntries([makeEntry({ message: "One" }), makeEntry({ message: "Two" })]);
+    const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
+
+    const scroller = container.querySelector(".overflow-y-auto") as HTMLElement;
+    const listBody = scroller.firstElementChild!;
+
+    setScrollMetrics(scroller, { scrollTop: 0, scrollHeight: 500, clientHeight: 200 });
     act(() => {
       fireEvent.scroll(scroller);
     });
+    flushFrames();
+    expect(readCues(scroller)).toEqual([false, true]);
+
+    setScrollMetrics(scroller, { scrollTop: 0, scrollHeight: 120, clientHeight: 200 });
+    resizeContent(listBody);
     flushFrames();
 
     expect(readCues(scroller)).toEqual([false, false]);
   });
 
-  it("keeps one resize target across content swaps", () => {
-    setEntries([makeEntry({ message: "One" })]);
-    const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
-
-    const scroller = () => container.querySelector(".overflow-y-auto")!;
-    const target = scroller().firstElementChild;
-    expect(target).not.toBeNull();
-
-    // Switching to a filter with no rows swaps the list body for an empty state.
-    fireEvent.click(screen.getByRole("button", { name: "Archived" }));
-    expect(screen.getByText("No archived notifications")).toBeTruthy();
-
-    // The shadow hook observes firstElementChild once, at mount — if the swap
-    // replaced that node, its ResizeObserver would be left watching a detached
-    // element and the cues would freeze.
-    expect(scroller().firstElementChild).toBe(target);
-  });
-
-  it("recomputes the cues when the observed content resizes", () => {
+  it("keeps observing the list body across content swaps", () => {
     setEntries([makeEntry({ message: "One" })]);
     const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
 
     const scroller = container.querySelector(".overflow-y-auto") as HTMLElement;
-    expect(readCues(scroller)).toEqual([false, false]);
+    const listBody = scroller.firstElementChild!;
 
-    // Content grew past the fold without any scrolling — only the ResizeObserver
-    // can notice.
+    // Switching to a filter with no rows swaps the list body's contents.
+    fireEvent.click(screen.getByRole("button", { name: "Archived" }));
+    expect(screen.getByText("No archived notifications")).toBeTruthy();
+
+    // The hook observes firstElementChild once, at mount. If that node were the
+    // swapped-out section rather than a stable wrapper, its observer would now
+    // be watching a detached element and the cues would never update again.
+    expect(scroller.firstElementChild).toBe(listBody);
+
     setScrollMetrics(scroller, { scrollTop: 0, scrollHeight: 500, clientHeight: 200 });
-    expect(resizeCallbacks.length).toBeGreaterThan(0);
-    act(() => {
-      for (const cb of resizeCallbacks) cb([], {} as ResizeObserver);
-    });
+    resizeContent(listBody);
     flushFrames();
 
     expect(readCues(scroller)).toEqual([false, true]);
