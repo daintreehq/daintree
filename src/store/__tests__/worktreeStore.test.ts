@@ -78,15 +78,29 @@ type MockTerminal = {
   location?: "grid" | "dock" | "trash" | "background";
   hasPty?: boolean;
 };
+type MockTabGroup = {
+  id: string;
+  location: "grid" | "dock";
+  worktreeId?: string;
+  activeTabId: string;
+  panelIds: string[];
+};
+type MockMaximizeTarget = { type: "panel" | "group"; id: string } | null;
+type MockPreMaximizeLayout = {
+  gridCols: number;
+  gridItemCount: number;
+  worktreeId: string | undefined;
+} | null;
 const terminalStoreState = {
   panelsById: {} as Record<string, MockTerminal>,
   panelIds: [] as string[],
+  tabGroups: new Map<string, MockTabGroup>(),
   activeDockTerminalId: null as string | null,
   focusedId: null as string | null,
   mruList: [] as string[],
   maximizedId: null as string | null,
-  maximizeTarget: null as { type: string; id: string } | null,
-  preMaximizeLayout: null as { gridCols: number } | null,
+  maximizeTarget: null as MockMaximizeTarget,
+  preMaximizeLayout: null as MockPreMaximizeLayout,
   recordMru: recordMruMock,
   setFocused: setFocusedMock,
 };
@@ -146,6 +160,7 @@ describe("worktreeStore", () => {
     useWorktreeSelectionStore.getState().reset();
     terminalStoreState.panelsById = {};
     terminalStoreState.panelIds = [];
+    terminalStoreState.tabGroups = new Map();
     terminalStoreState.activeDockTerminalId = null;
     terminalStoreState.focusedId = null;
     terminalStoreState.mruList = [];
@@ -757,7 +772,11 @@ describe("worktreeStore", () => {
       useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-with-maximize" });
       terminalStoreState.maximizedId = "term-maxed";
       terminalStoreState.maximizeTarget = { type: "panel", id: "term-maxed" };
-      terminalStoreState.preMaximizeLayout = { gridCols: 2 };
+      terminalStoreState.preMaximizeLayout = {
+        gridCols: 2,
+        gridItemCount: 2,
+        worktreeId: "wt-with-maximize",
+      };
 
       useWorktreeSelectionStore.getState().enterFleetScope();
 
@@ -775,7 +794,11 @@ describe("worktreeStore", () => {
       useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-pre-scope" });
       const token = useWorktreeSelectionStore.getState().enterFleetScope();
 
-      terminalStoreState.preMaximizeLayout = { gridCols: 3 };
+      terminalStoreState.preMaximizeLayout = {
+        gridCols: 3,
+        gridItemCount: 3,
+        worktreeId: "wt-pre-scope",
+      };
       panelSetStateMock.mockClear();
 
       useWorktreeSelectionStore.getState().exitFleetScope(token);
@@ -915,6 +938,317 @@ describe("worktreeStore", () => {
       expect(wakeMock).toHaveBeenCalledWith("term-armed-remote");
       expect(wakeMock).not.toHaveBeenCalledWith("term-idle-remote");
       armedIdsForFleet = new Set();
+    });
+  });
+
+  describe("per-worktree maximize (#11183)", () => {
+    /** Put `panelId` on screen full-size in whichever worktree is active. */
+    function maximizePanel(panelId: string, layout?: MockPreMaximizeLayout) {
+      terminalStoreState.maximizedId = panelId;
+      terminalStoreState.maximizeTarget = { type: "panel", id: panelId };
+      terminalStoreState.preMaximizeLayout = layout ?? null;
+    }
+    function maximizeGroup(panelId: string, groupId: string) {
+      terminalStoreState.maximizedId = panelId;
+      terminalStoreState.maximizeTarget = { type: "group", id: groupId };
+      terminalStoreState.preMaximizeLayout = null;
+    }
+    function stashedFor(worktreeId: string) {
+      return useWorktreeSelectionStore.getState().maximizeByWorktree.get(worktreeId);
+    }
+    /** Two worktrees, one grid panel each. */
+    function twoWorktrees() {
+      setMockTerminals([
+        { id: "a1", worktreeId: "wt-a", location: "grid" },
+        { id: "a2", worktreeId: "wt-a", location: "grid" },
+        { id: "b1", worktreeId: "wt-b", location: "grid" },
+        { id: "b2", worktreeId: "wt-b", location: "grid" },
+      ]);
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-a" });
+    }
+
+    it("clears the maximize when switching to a worktree that doesn't own the panel", () => {
+      twoWorktrees();
+      maximizePanel("a1");
+
+      useWorktreeSelectionStore.getState().selectWorktree("wt-b");
+
+      // The whole bug: leaving `a1` in the flat fields makes ContentGrid take
+      // its maximize branch and find nothing in wt-b's grid — a blank screen.
+      expect(terminalStoreState.maximizedId).toBeNull();
+      expect(terminalStoreState.maximizeTarget).toBeNull();
+    });
+
+    it("restores each worktree's own maximize across a round trip", () => {
+      twoWorktrees();
+      maximizePanel("a1", { gridCols: 3, gridItemCount: 4, worktreeId: "wt-a" });
+
+      useWorktreeSelectionStore.getState().selectWorktree("wt-b");
+      maximizePanel("b1");
+      useWorktreeSelectionStore.getState().selectWorktree("wt-a");
+
+      expect(terminalStoreState.maximizedId).toBe("a1");
+      expect(terminalStoreState.maximizeTarget).toEqual({ type: "panel", id: "a1" });
+      // The column count captured before wt-a maximized rides along, so
+      // unmaximizing here restores wt-a's layout rather than recomputing it.
+      expect(terminalStoreState.preMaximizeLayout).toMatchObject({
+        gridCols: 3,
+        worktreeId: "wt-a",
+      });
+
+      useWorktreeSelectionStore.getState().selectWorktree("wt-b");
+      expect(terminalStoreState.maximizedId).toBe("b1");
+    });
+
+    it("moves a worktree's maximize out of the map once it is active", () => {
+      twoWorktrees();
+      maximizePanel("a1");
+
+      useWorktreeSelectionStore.getState().selectWorktree("wt-b");
+      expect(stashedFor("wt-a")?.maximizedId).toBe("a1");
+
+      useWorktreeSelectionStore.getState().selectWorktree("wt-a");
+      // A worktree's maximize lives in exactly one place. Now that wt-a is
+      // active again the flat fields own it; a lingering slot would resurrect a
+      // stale maximize the next time wt-a is switched into.
+      expect(stashedFor("wt-a")).toBeUndefined();
+    });
+
+    it("writes all three maximize fields in a single panel-store patch", () => {
+      twoWorktrees();
+      maximizePanel("a1", { gridCols: 2, gridItemCount: 3, worktreeId: "wt-a" });
+      panelSetStateMock.mockClear();
+
+      useWorktreeSelectionStore.getState().selectWorktree("wt-b");
+
+      // Dropping only the id strands the target and the next toggleMaximize
+      // reads it as an unmaximize request (#9935) — the trio must move together.
+      const patch = panelSetStateMock.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+      expect(Object.keys(patch).sort()).toEqual([
+        "maximizeTarget",
+        "maximizedId",
+        "preMaximizeLayout",
+      ]);
+    });
+
+    it("does not round-trip the live maximize when re-activating the current worktree", () => {
+      twoWorktrees();
+      maximizePanel("a1");
+
+      useWorktreeSelectionStore.getState().setActiveWorktree("wt-a");
+
+      expect(terminalStoreState.maximizedId).toBe("a1");
+      expect(stashedFor("wt-a")).toBeUndefined();
+    });
+
+    it("stashes nothing for a worktree that was left unmaximized", () => {
+      twoWorktrees();
+      // `exitMaximize` deliberately preserves preMaximizeLayout, so a worktree
+      // can be left with a layout snapshot and no maximize. That is not a
+      // maximize and must not become one on the way back.
+      terminalStoreState.preMaximizeLayout = { gridCols: 4, gridItemCount: 4, worktreeId: "wt-a" };
+
+      useWorktreeSelectionStore.getState().selectWorktree("wt-b");
+
+      expect(stashedFor("wt-a")).toBeUndefined();
+      expect(terminalStoreState.preMaximizeLayout).toBeNull();
+    });
+
+    it("replaces the map reference on every write so subscribers are notified", () => {
+      twoWorktrees();
+      maximizePanel("a1");
+      const before = useWorktreeSelectionStore.getState().maximizeByWorktree;
+
+      useWorktreeSelectionStore.getState().selectWorktree("wt-b");
+
+      // Zustand 5 only notifies on a new reference — an in-place Map.set() is
+      // invisible to selectors.
+      expect(useWorktreeSelectionStore.getState().maximizeByWorktree).not.toBe(before);
+    });
+
+    it("reset drops every stashed maximize", () => {
+      twoWorktrees();
+      maximizePanel("a1");
+      useWorktreeSelectionStore.getState().selectWorktree("wt-b");
+
+      useWorktreeSelectionStore.getState().reset();
+
+      expect(useWorktreeSelectionStore.getState().maximizeByWorktree.size).toBe(0);
+    });
+
+    describe("stale stashes are never written back", () => {
+      /** Maximize a1 in wt-a, then leave — wt-a's maximize is now stashed. */
+      function stashWtA() {
+        twoWorktrees();
+        maximizePanel("a1");
+        useWorktreeSelectionStore.getState().selectWorktree("wt-b");
+      }
+
+      it.each([
+        ["the panel was trashed", () => (terminalStoreState.panelsById["a1"]!.location = "trash")],
+        ["the panel was docked", () => (terminalStoreState.panelsById["a1"]!.location = "dock")],
+        [
+          "the panel was backgrounded",
+          () => (terminalStoreState.panelsById["a1"]!.location = "background"),
+        ],
+        [
+          "the panel moved to another worktree",
+          () => (terminalStoreState.panelsById["a1"]!.worktreeId = "wt-b"),
+        ],
+        [
+          "the panel is gone entirely",
+          () => setMockTerminals([{ id: "b1", worktreeId: "wt-b", location: "grid" }]),
+        ],
+      ])("clears rather than restoring when %s", (_case, invalidate) => {
+        stashWtA();
+        invalidate();
+
+        useWorktreeSelectionStore.getState().selectWorktree("wt-a");
+
+        // Restoring any of these blanks the grid all over again: none of them
+        // can satisfy ContentGrid's maximize branch.
+        expect(terminalStoreState.maximizedId).toBeNull();
+        expect(terminalStoreState.maximizeTarget).toBeNull();
+        expect(stashedFor("wt-a")).toBeUndefined();
+      });
+
+      it("drops a foreign layout snapshot but keeps the maximize itself", () => {
+        twoWorktrees();
+        maximizePanel("a1", { gridCols: 5, gridItemCount: 2, worktreeId: "wt-b" });
+
+        useWorktreeSelectionStore.getState().selectWorktree("wt-b");
+        useWorktreeSelectionStore.getState().selectWorktree("wt-a");
+
+        expect(terminalStoreState.maximizedId).toBe("a1");
+        expect(terminalStoreState.preMaximizeLayout).toBeNull();
+      });
+    });
+
+    describe("group targets", () => {
+      function groupedWtA(panelIds: string[], location: "grid" | "dock" = "grid") {
+        twoWorktrees();
+        terminalStoreState.tabGroups.set("g1", {
+          id: "g1",
+          location,
+          worktreeId: "wt-a",
+          activeTabId: panelIds[0]!,
+          panelIds,
+        });
+        maximizeGroup("a1", "g1");
+      }
+
+      it("restores a maximized group", () => {
+        groupedWtA(["a1", "a2"]);
+
+        useWorktreeSelectionStore.getState().selectWorktree("wt-b");
+        useWorktreeSelectionStore.getState().selectWorktree("wt-a");
+
+        expect(terminalStoreState.maximizeTarget).toEqual({ type: "group", id: "g1" });
+        expect(terminalStoreState.maximizedId).toBe("a1");
+      });
+
+      it("downgrades to a panel maximize when the group shrank to one member", () => {
+        groupedWtA(["a1", "a2"]);
+        useWorktreeSelectionStore.getState().selectWorktree("wt-b");
+        terminalStoreState.tabGroups.get("g1")!.panelIds = ["a1"];
+
+        useWorktreeSelectionStore.getState().selectWorktree("wt-a");
+
+        // A one-member group renders no tab strip, so the surviving panel is
+        // still shown — just as a plain panel maximize.
+        expect(terminalStoreState.maximizeTarget).toEqual({ type: "panel", id: "a1" });
+      });
+
+      it("clears when the group dissolved while the worktree was inactive", () => {
+        groupedWtA(["a1", "a2"]);
+        useWorktreeSelectionStore.getState().selectWorktree("wt-b");
+        terminalStoreState.tabGroups.delete("g1");
+
+        useWorktreeSelectionStore.getState().selectWorktree("wt-a");
+
+        expect(terminalStoreState.maximizeTarget).toBeNull();
+      });
+
+      it("clears when the group moved to the dock", () => {
+        groupedWtA(["a1", "a2"]);
+        useWorktreeSelectionStore.getState().selectWorktree("wt-b");
+        terminalStoreState.tabGroups.get("g1")!.location = "dock";
+
+        useWorktreeSelectionStore.getState().selectWorktree("wt-a");
+
+        // ContentGrid only ever resolves grid groups — a docked one renders as
+        // an empty group and blanks the screen.
+        expect(terminalStoreState.maximizeTarget).toBeNull();
+      });
+    });
+
+    describe("focus promotions reveal the panel they promoted for", () => {
+      /** wt-b has b1 maximized and stashed; wt-a is active. */
+      function stashWtB() {
+        twoWorktrees();
+        useWorktreeSelectionStore.getState().selectWorktree("wt-b");
+        maximizePanel("b1");
+        useWorktreeSelectionStore.getState().selectWorktree("wt-a");
+      }
+
+      it("does not bury the panel a focus promotion was fired to reveal", () => {
+        stashWtB();
+        // A draft/spawn lands on b2 and focuses it, which promotes wt-b. Its
+        // stashed maximize covers b1 — restoring it would hide b2 behind a
+        // fullscreen b1, defeating the reveal (useTypeAnywhere, panelSpawning,
+        // recipeStore all rely on this).
+        terminalStoreState.focusedId = "b2";
+
+        useWorktreeSelectionStore.getState().selectWorktree("wt-b", { source: "focus" });
+
+        expect(terminalStoreState.maximizedId).toBeNull();
+        expect(stashedFor("wt-b")).toBeUndefined();
+      });
+
+      it("restores when the promotion targets the maximized panel itself", () => {
+        stashWtB();
+        // Navigating straight back to b1 (quick switcher, HelpPanel): the
+        // maximize *is* how b1 gets revealed, so dropping it would silently
+        // destroy the user's maximize.
+        terminalStoreState.focusedId = "b1";
+
+        useWorktreeSelectionStore.getState().selectWorktree("wt-b", { source: "focus" });
+
+        expect(terminalStoreState.maximizedId).toBe("b1");
+      });
+
+      it("restores when the promotion targets a member of the maximized group", () => {
+        twoWorktrees();
+        useWorktreeSelectionStore.getState().selectWorktree("wt-b");
+        terminalStoreState.tabGroups.set("g2", {
+          id: "g2",
+          location: "grid",
+          worktreeId: "wt-b",
+          activeTabId: "b1",
+          panelIds: ["b1", "b2"],
+        });
+        maximizeGroup("b1", "g2");
+        useWorktreeSelectionStore.getState().selectWorktree("wt-a");
+        // b2 is a tab inside the maximized group, so the group shows it.
+        terminalStoreState.focusedId = "b2";
+
+        useWorktreeSelectionStore.getState().selectWorktree("wt-b", { source: "focus" });
+
+        expect(terminalStoreState.maximizeTarget).toEqual({ type: "group", id: "g2" });
+      });
+    });
+
+    it("does not restore a maximize into fleet scope", () => {
+      twoWorktrees();
+      maximizePanel("a1");
+      useWorktreeSelectionStore.getState().selectWorktree("wt-b");
+      useWorktreeSelectionStore.setState({ isFleetScopeActive: true });
+
+      useWorktreeSelectionStore.getState().selectWorktree("wt-a");
+
+      // A maximize shadows the fleet grid — the exact reason enterFleetScope
+      // clears the trio on the way in.
+      expect(terminalStoreState.maximizedId).toBeNull();
     });
   });
 });

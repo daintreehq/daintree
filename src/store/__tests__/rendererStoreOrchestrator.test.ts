@@ -347,6 +347,78 @@ describe("rendererStoreOrchestrator", () => {
     );
   });
 
+  describe("stashed maximize cleanup (#11183)", () => {
+    /** An inactive worktree whose maximized panel is `panelId`. */
+    function stashMaximize(worktreeId: string, panelId: string) {
+      useWorktreeSelectionStore.setState({
+        maximizeByWorktree: new Map([
+          [
+            worktreeId,
+            {
+              maximizedId: panelId,
+              maximizeTarget: { type: "panel" as const, id: panelId },
+              preMaximizeLayout: null,
+            },
+          ],
+        ]),
+      });
+    }
+    function seedPanels(panels: { id: string; worktreeId: string }[]) {
+      usePanelStore.setState({
+        panelsById: Object.fromEntries(
+          panels.map((p) => [
+            p.id,
+            {
+              id: p.id,
+              title: p.id,
+              kind: "terminal" as const,
+              cwd: "/test",
+              cols: 80,
+              rows: 24,
+              location: "grid" as const,
+              worktreeId: p.worktreeId,
+            },
+          ])
+        ),
+        panelIds: panels.map((p) => p.id),
+      });
+    }
+    const stashedIds = () => useWorktreeSelectionStore.getState().maximizeByWorktree;
+
+    it("drops the stash when the maximized panel of an inactive worktree is removed", () => {
+      seedPanels([{ id: "term-1", worktreeId: "wt-1" }]);
+      stashMaximize("wt-1", "term-1");
+
+      usePanelStore.getState().removePanel("term-1");
+
+      expect(stashedIds().has("wt-1")).toBe(false);
+    });
+
+    it("drops the stash when the maximized panel of an inactive worktree is trashed", () => {
+      seedPanels([{ id: "term-1", worktreeId: "wt-1" }]);
+      stashMaximize("wt-1", "term-1");
+
+      usePanelStore.getState().trashPanel("term-1");
+
+      // `trashPanel` flips `location` without shrinking `panelIds`, so the
+      // removal subscriber never sees this — it needs the trash listener.
+      expect(usePanelStore.getState().panelIds).toContain("term-1");
+      expect(stashedIds().has("wt-1")).toBe(false);
+    });
+
+    it("keeps a stash when an unrelated panel in the same worktree is removed", () => {
+      seedPanels([
+        { id: "term-1", worktreeId: "wt-1" },
+        { id: "term-2", worktreeId: "wt-1" },
+      ]);
+      stashMaximize("wt-1", "term-1");
+
+      usePanelStore.getState().removePanel("term-2");
+
+      expect(stashedIds().get("wt-1")?.maximizedId).toBe("term-1");
+    });
+  });
+
   it("records terminal MRU on focus change", () => {
     const recordMruSpy = vi.spyOn(usePanelStore.getState(), "recordMru");
 

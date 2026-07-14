@@ -1,6 +1,6 @@
 import { create, type StateCreator } from "zustand";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
-import { TerminalRefreshTier, isPtyPanel } from "@shared/types/panel";
+import { TerminalRefreshTier, isGridPanelLocation, isPtyPanel } from "@shared/types/panel";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import type { Issue, PR } from "@shared/types/forge";
 import type { FleetScopeToken } from "@shared/types/worktree";
@@ -72,6 +72,22 @@ interface WorktreeSelectionState {
   crossDiffDialog: CrossDiffDialogState;
   _policyGeneration: number;
   lastFocusedTerminalByWorktree: Map<string, string>;
+  /**
+   * Maximize state for every worktree that is *not* the active one (#11183).
+   *
+   * The panel store's `maximizedId`/`maximizeTarget`/`preMaximizeLayout` are
+   * flat singular fields describing what the grid is showing *right now*, so
+   * they can only ever describe one worktree. Left alone across a switch, they
+   * keep pointing at a panel the incoming worktree doesn't own — `ContentGrid`
+   * takes its maximize branch, fails to find the target among the active
+   * worktree's grid panels, and renders nothing.
+   *
+   * Invariant: a worktree's maximize lives in exactly ONE place — the panel
+   * store's flat fields while it is active, this map while it is not. Switching
+   * out writes the outgoing worktree's slot; switching in deletes the incoming
+   * one (restorable or not) and moves it back into the flat fields.
+   */
+  maximizeByWorktree: Map<string, WorktreeMaximizeSnapshot>;
   isFleetScopeActive: boolean;
   _previousActiveWorktreeId: string | null;
   /** Durable selection captured at fleet-scope entry, restored on exit (#9512). */
@@ -111,6 +127,7 @@ interface WorktreeSelectionState {
   closeCrossWorktreeDiff: () => void;
   trackTerminalFocus: (worktreeId: string, terminalId: string) => void;
   clearWorktreeFocusTracking: (worktreeId: string) => void;
+  clearWorktreeMaximizeTracking: (worktreeId: string) => void;
   enterFleetScope: () => FleetScopeToken;
   exitFleetScope: (token: FleetScopeToken) => void;
   reset: () => void;
@@ -260,6 +277,169 @@ function persistActiveWorktree(id: string | null): void {
     });
 }
 
+/** The panel-store fields that together describe one worktree's maximize. */
+type PanelMaximizeFields = Pick<
+  ReturnType<typeof usePanelStore.getState>,
+  "maximizedId" | "maximizeTarget" | "preMaximizeLayout"
+>;
+
+/** What the swap needs to read to decide whether a stashed maximize still holds. */
+type PanelMaximizeLookup = Pick<
+  ReturnType<typeof usePanelStore.getState>,
+  "panelsById" | "tabGroups" | "focusedId"
+>;
+
+/**
+ * A stashed maximize. Both halves of the pair are non-null by construction:
+ * `ContentGrid` only takes its maximize branch when `maximizedId` AND
+ * `maximizeTarget` are set, and a half-populated pair is the stale-target bug
+ * class of #9935. `preMaximizeLayout` rides along so unmaximizing after a
+ * round-trip restores the column count the worktree had before it maximized.
+ */
+export interface WorktreeMaximizeSnapshot {
+  maximizedId: string;
+  maximizeTarget: NonNullable<PanelMaximizeFields["maximizeTarget"]>;
+  preMaximizeLayout: PanelMaximizeFields["preMaximizeLayout"];
+}
+
+const CLEARED_MAXIMIZE: PanelMaximizeFields = {
+  maximizedId: null,
+  maximizeTarget: null,
+  preMaximizeLayout: null,
+};
+
+function captureMaximizeSnapshot(panels: PanelMaximizeFields): WorktreeMaximizeSnapshot | null {
+  const { maximizedId, maximizeTarget, preMaximizeLayout } = panels;
+  if (!maximizedId || !maximizeTarget) return null;
+  return { maximizedId, maximizeTarget, preMaximizeLayout };
+}
+
+/**
+ * Is a stashed maximize still renderable in `worktreeId`? Returns the snapshot
+ * to write back (normalized), or null to clear.
+ *
+ * Runs *before* the flat fields are written, unlike `validateMaximizeTarget`,
+ * which repairs already-live state from a render effect — too late to stop the
+ * grid painting a blank frame. The panel must be a grid panel *of this
+ * worktree*: a docked, backgrounded or trashed panel can't satisfy
+ * `ContentGrid`'s maximize branch either, and a panel that has since moved to
+ * another worktree is no longer ours to show.
+ */
+function resolveMaximizeForWorktree(
+  snapshot: WorktreeMaximizeSnapshot,
+  worktreeId: string,
+  panels: PanelMaximizeLookup
+): WorktreeMaximizeSnapshot | null {
+  const panel = panels.panelsById[snapshot.maximizedId];
+  if (!panel || panel.worktreeId !== worktreeId || !isGridPanelLocation(panel.location)) {
+    return null;
+  }
+
+  // The layout snapshot is stamped with the worktree it was captured in; one
+  // from elsewhere would restore a foreign column count. Drop just that field
+  // rather than the whole maximize — the grid recomputes columns from scratch.
+  const preMaximizeLayout =
+    snapshot.preMaximizeLayout?.worktreeId === worktreeId ? snapshot.preMaximizeLayout : null;
+
+  if (snapshot.maximizeTarget.type === "panel") {
+    if (snapshot.maximizeTarget.id !== snapshot.maximizedId) return null;
+    return { ...snapshot, preMaximizeLayout };
+  }
+
+  const group = panels.tabGroups.get(snapshot.maximizeTarget.id);
+  if (
+    !group ||
+    group.location !== "grid" ||
+    group.worktreeId !== worktreeId ||
+    !group.panelIds.includes(snapshot.maximizedId)
+  ) {
+    return null;
+  }
+  if (group.panelIds.length === 1) {
+    // The group shrank to a single panel while we were away. Downgrade to a
+    // panel maximize rather than dropping the maximize entirely, mirroring
+    // `validateMaximizeTarget`'s repair of the same case on live state.
+    return {
+      maximizedId: snapshot.maximizedId,
+      maximizeTarget: { type: "panel", id: snapshot.maximizedId },
+      preMaximizeLayout,
+    };
+  }
+  return { ...snapshot, preMaximizeLayout };
+}
+
+/** Would this maximize leave `panelId` on screen? */
+function maximizeShowsPanel(
+  snapshot: WorktreeMaximizeSnapshot,
+  panelId: string,
+  panels: PanelMaximizeLookup
+): boolean {
+  if (snapshot.maximizeTarget.type === "panel") {
+    return snapshot.maximizeTarget.id === panelId;
+  }
+  return panels.tabGroups.get(snapshot.maximizeTarget.id)?.panelIds.includes(panelId) ?? false;
+}
+
+/**
+ * Move maximize state across a worktree switch: stash the outgoing worktree's,
+ * restore the incoming worktree's.
+ *
+ * Returns the next map plus the patch to write to the panel store. The caller
+ * writes the worktree store first so any panel-store subscriber woken by the
+ * patch already sees the new `activeWorktreeId`. Both writes land synchronously
+ * in the same tick (React 19 batches them), so the grid never paints a frame
+ * where the trio points at a panel the active worktree can't render.
+ *
+ * Restore is skipped — and the stash dropped — when:
+ *  - the snapshot no longer resolves in the incoming worktree (stale target), or
+ *  - fleet scope is active: a maximize would shadow the fleet grid, which is
+ *    exactly what `enterFleetScope`'s own trio-clear exists to prevent, or
+ *  - the switch is a `"focus"` promotion whose focused panel this maximize would
+ *    bury. A promotion means "reveal this panel" — it is how `useTypeAnywhere`,
+ *    panel spawning and the quick switcher surface a panel living in a worktree
+ *    the user isn't looking at, and those callers' defensive `exitMaximize()`
+ *    only clears the *outgoing* worktree's. Restoring a maximize that does show
+ *    the panel (navigating straight back to it) is still correct.
+ */
+function prepareWorktreeMaximizeSwap(
+  state: WorktreeSelectionState,
+  fromWorktreeId: string | null,
+  toWorktreeId: string | null,
+  source: "user" | "focus"
+): { maximizeByWorktree: Map<string, WorktreeMaximizeSnapshot>; panelPatch: PanelMaximizeFields } {
+  const panels = usePanelStore.getState();
+  const next = new Map(state.maximizeByWorktree);
+
+  if (fromWorktreeId) {
+    const outgoing = captureMaximizeSnapshot(panels);
+    if (outgoing) {
+      next.set(fromWorktreeId, outgoing);
+    } else {
+      next.delete(fromWorktreeId);
+    }
+  }
+
+  let restored: WorktreeMaximizeSnapshot | null = null;
+  if (toWorktreeId) {
+    const stashed = next.get(toWorktreeId);
+    // The incoming worktree becomes active, so its maximize moves back into the
+    // flat fields — drop the slot whether or not it survives validation.
+    next.delete(toWorktreeId);
+    if (stashed && !state.isFleetScopeActive) {
+      const candidate = resolveMaximizeForWorktree(stashed, toWorktreeId, panels);
+      const buriesFocusedPanel =
+        source === "focus" &&
+        (panels.focusedId === null ||
+          !maximizeShowsPanel(candidate ?? stashed, panels.focusedId, panels));
+      if (candidate && !buriesFocusedPanel) {
+        restored = candidate;
+      }
+    }
+  }
+
+  return { maximizeByWorktree: next, panelPatch: restored ?? CLEARED_MAXIMIZE };
+}
+
 const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set, get) => ({
   activeWorktreeId: null,
   restoreWorktreeId: null,
@@ -287,6 +467,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
   crossDiffDialog: { isOpen: false, initialWorktreeId: null },
   _policyGeneration: 0,
   lastFocusedTerminalByWorktree: new Map<string, string>(),
+  maximizeByWorktree: new Map<string, WorktreeMaximizeSnapshot>(),
   isFleetScopeActive: false,
   _previousActiveWorktreeId: null,
   _previousRestoreWorktreeId: null,
@@ -320,11 +501,22 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       updates.restoreWorktreeId = null;
     }
 
+    // An explicit activation is a deliberate selection, so it restores the
+    // incoming worktree's maximize the same way `selectWorktree({source:"user"})`
+    // does. Guarded on an actual change: re-activating the current worktree must
+    // not round-trip its live maximize through the map (#11183).
+    let panelPatch: PanelMaximizeFields | null = null;
     if (previousId !== id) {
       updates.expandedTerminals = new Set<string>();
+      const swap = prepareWorktreeMaximizeSwap(get(), previousId, id, "user");
+      updates.maximizeByWorktree = swap.maximizeByWorktree;
+      panelPatch = swap.panelPatch;
     }
 
     set(updates);
+    if (panelPatch) {
+      usePanelStore.setState(panelPatch);
+    }
     scheduleWorktreeSwitchPaintedMark(previousId ?? null, id ?? null, switchStartedAt);
 
     persistActiveWorktree(id);
@@ -372,14 +564,21 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       fromWorktreeId: previousId ?? null,
       toWorktreeId: id,
     });
+    const maximizeSwap = prepareWorktreeMaximizeSwap(get(), previousId, id, source);
     // Auto-collapse terminals accordion when switching worktrees
     set({
       activeWorktreeId: id,
       focusedWorktreeId: id,
       _policyGeneration: generation,
       expandedTerminals: new Set<string>(),
+      maximizeByWorktree: maximizeSwap.maximizeByWorktree,
       ...(source === "user" ? { restoreWorktreeId: id } : {}),
     });
+    // Hand the incoming worktree's maximize (or a clear) to the panel store in
+    // the same tick as the switch, and before the terminal policy / focus
+    // restore below — a frame in between would render the outgoing worktree's
+    // maximize target against this worktree's grid, i.e. nothing at all (#11183).
+    usePanelStore.setState(maximizeSwap.panelPatch);
     scheduleWorktreeSwitchPaintedMark(previousId ?? null, id, switchStartedAt);
 
     if (source === "user") {
@@ -686,6 +885,13 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       return { lastFocusedTerminalByWorktree: next };
     }),
 
+  clearWorktreeMaximizeTracking: (worktreeId) =>
+    set((state) => {
+      const next = new Map(state.maximizeByWorktree);
+      next.delete(worktreeId);
+      return { maximizeByWorktree: next };
+    }),
+
   enterFleetScope: () => {
     // Idempotent: first pre-scope activeWorktreeId wins so the restoration
     // target isn't corrupted by a double-enter. Return the existing token so
@@ -818,6 +1024,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       quickCreate: { isOpen: false, issue: null, pr: null },
       crossDiffDialog: { isOpen: false, initialWorktreeId: null },
       lastFocusedTerminalByWorktree: new Map<string, string>(),
+      maximizeByWorktree: new Map<string, WorktreeMaximizeSnapshot>(),
       isFleetScopeActive: false,
       _previousActiveWorktreeId: null,
       _previousRestoreWorktreeId: null,
