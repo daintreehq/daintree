@@ -8,12 +8,20 @@ import { getCoachLine, getCoachSignal, getUsableHealth } from "../coachLine";
 // are asserted on the signal so rewording the copy can't redden them; the copy
 // itself is held to a policy, not to exact strings.
 
+function heatLevel(count: number): HeatCell["level"] {
+  if (count >= 4) return 4;
+  if (count === 3) return 3;
+  if (count === 2) return 2;
+  if (count === 1) return 1;
+  return 0;
+}
+
 function cell(daysAgo: number, count: number, isToday = false): HeatCell {
   const date = new Date(Date.UTC(2026, 0, 20) - daysAgo * 86_400_000);
   return {
     date: date.toISOString().slice(0, 10),
     count,
-    level: Math.min(4, count) as HeatCell["level"],
+    level: heatLevel(count),
     ...(isToday ? { isToday: true } : {}),
   };
 }

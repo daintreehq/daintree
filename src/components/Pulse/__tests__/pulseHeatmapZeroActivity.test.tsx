@@ -10,11 +10,19 @@ import { TooltipProvider } from "../../ui/tooltip";
 // an inset ring, and a "Missed day" label. Every quiet day now reads the same,
 // whatever its neighbours did.
 
+function heatLevel(count: number): HeatCell["level"] {
+  if (count >= 4) return 4;
+  if (count === 3) return 3;
+  if (count === 2) return 2;
+  if (count === 1) return 1;
+  return 0;
+}
+
 function cell(day: number, count: number): HeatCell {
   return {
     date: `2026-01-${String(day).padStart(2, "0")}`,
     count,
-    level: Math.min(4, count) as HeatCell["level"],
+    level: heatLevel(count),
   };
 }
 
