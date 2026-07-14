@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalRefreshTier } from "@/types";
 import { actionService } from "@/services/ActionService";
 import { keybindingService } from "@/services/KeybindingService";
+import type { KeybindingResolutionResult } from "@/services/keybindingUtils";
 import { XtermAdapter } from "../XtermAdapter";
 
 const mocks = vi.hoisted(() => {
@@ -624,14 +625,16 @@ describe("XtermAdapter lifecycle", () => {
   });
 
   describe("Option+Arrow word navigation (#11154)", () => {
+    function resolution(shouldConsume: boolean): KeybindingResolutionResult {
+      return { match: undefined, chordPrefix: false, shouldConsume };
+    }
+
     beforeEach(() => {
       // vi.clearAllMocks() keeps implementations and queued `Once` values, so the
       // chord tests below would otherwise bleed into each other. mockReset drops
       // both; re-establish the pass-through defaults.
       vi.mocked(keybindingService.getPendingChord).mockReset().mockReturnValue(null);
-      vi.mocked(keybindingService.resolveKeybinding)
-        .mockReset()
-        .mockReturnValue({ shouldConsume: false });
+      vi.mocked(keybindingService.resolveKeybinding).mockReset().mockReturnValue(resolution(false));
     });
 
     async function mountAndGetKeyHandler(props: Parameters<typeof renderAdapter>[0] = {}) {
@@ -695,7 +698,7 @@ describe("XtermAdapter lifecycle", () => {
       // A chord IS pending and would consume the key — an auto-repeat must not
       // reach it, or a held arrow completes a chord the user never re-pressed.
       vi.mocked(keybindingService.getPendingChord).mockReturnValue("Cmd+K");
-      vi.mocked(keybindingService.resolveKeybinding).mockReturnValue({ shouldConsume: true });
+      vi.mocked(keybindingService.resolveKeybinding).mockReturnValue(resolution(true));
 
       expect(keyHandler(optionArrow("ArrowLeft", { repeat: true }))).toBe(false);
 
@@ -784,7 +787,7 @@ describe("XtermAdapter lifecycle", () => {
       const keyHandler = await mountAndGetKeyHandler();
 
       vi.mocked(keybindingService.getPendingChord).mockReturnValueOnce("Cmd+K");
-      vi.mocked(keybindingService.resolveKeybinding).mockReturnValueOnce({ shouldConsume: true });
+      vi.mocked(keybindingService.resolveKeybinding).mockReturnValueOnce(resolution(true));
 
       expect(keyHandler(optionArrow("ArrowLeft"))).toBe(false);
       expect(mocks.writeTerminalInputOrFleet).not.toHaveBeenCalled();
