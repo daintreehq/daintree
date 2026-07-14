@@ -1513,7 +1513,13 @@ export class WorktreeMonitor {
     if (this._isUpdating) {
       this.watcherController.markPending();
     } else {
-      void this.updateGitStatus(true);
+      // Fire-and-forget, but guarded: GitStatusPass surfaces expected failures
+      // as mood=error and then rethrows, so a detached call would turn a
+      // transient `git status` failure into an unhandled rejection — which the
+      // workspace-host's exit-on-unhandled-rejection guard escalates to a
+      // process exit. The error is already reflected in monitor state, so
+      // swallowing the rethrow here loses nothing (#11151 review).
+      void this.updateGitStatus(true).catch(() => {});
     }
   }
 

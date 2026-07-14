@@ -399,9 +399,11 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       const nextResetAt = repoStats.rateLimitResetAt ?? null;
       const nextKind = repoStats.rateLimitKind ?? null;
       rateLimitResetAtRef.current = nextResetAt;
-      // A stats result carrying a reset time is the provider reporting it is
-      // currently parked; absence means the quota is clear.
-      rateLimitBlockedRef.current = nextResetAt !== null;
+      // A stats result carrying a rate-limit kind or a reset time is the
+      // provider reporting it is currently parked; absence of both means the
+      // quota is clear. (Kind alone can mark an active secondary throttle whose
+      // reset time is unknown.)
+      rateLimitBlockedRef.current = nextKind !== null || nextResetAt !== null;
       setRateLimitResetAt(nextResetAt);
       setRateLimitKind(nextKind);
 
@@ -717,6 +719,10 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       // the fixed active interval until its first poll reports one (issue #9741).
       nextPollIntervalRef.current = null;
       rateLimitResetAtRef.current = null;
+      // Clear the git-signal park flag too — otherwise switching away from a
+      // blocked project would suppress the incoming project's first signal
+      // recheck until its own stats result lands.
+      rateLimitBlockedRef.current = false;
       setRateLimitResetAt(null);
       setRateLimitKind(null);
       // Reset error state too — without this the previous project's failure
@@ -1057,7 +1063,12 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
   // probe, cross-window singleflight, cache/dedup, and backoff as a scheduled
   // poll, just ahead of schedule. (Trade-off: on a deeply-idle repo the plain
   // refresh can fall inside the provider's adaptive /events backoff window and
-  // no-op; the base poll remains the correctness backstop.)
+  // no-op, and `refresh()` re-arms the next poll a full interval out — so a
+  // signal that no-ops can defer the base poll rather than pull it in. The
+  // affected window is a quiet *remote* where the counts it would fetch haven't
+  // moved anyway; the base poll remains the correctness backstop. Fetching
+  // fresh counts through the backoff would need a dedicated count-only
+  // revalidate mode on the provider, deferred as out of scope here.)
   const enqueueGitSignalRefresh = useCallback(() => {
     // Single shared debounce slot: the first signal in a burst arms a bounded
     // flush; later signals inside the window are absorbed by this guard rather
