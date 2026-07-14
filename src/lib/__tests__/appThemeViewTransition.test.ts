@@ -35,6 +35,17 @@ function installViewTransitionMock(): {
   return { startSpy, animateSpy, capturedMutate: () => captured };
 }
 
+type FakeTransition = { ready: Promise<void>; finished: Promise<void> };
+
+/** Cast-free stubs — `document as unknown as {...}` trips the no-unsafe-type-assertion ratchet. */
+function stubStartViewTransition(start: (callback: () => void) => FakeTransition) {
+  Object.assign(document, { startViewTransition: start });
+}
+
+function stubActiveViewTransition(skipTransition: () => void) {
+  Object.assign(document, { activeViewTransition: { skipTransition } });
+}
+
 function setReducedMotion(reduced: boolean) {
   Object.defineProperty(window, "matchMedia", {
     writable: true,
@@ -302,10 +313,8 @@ describe("appThemeViewTransition", () => {
 
     it("waits for the ready promise before animating", async () => {
       let markReady: (() => void) | null = null;
-      const animateSpy = vi.fn();
-      document.documentElement.animate =
-        animateSpy as unknown as typeof document.documentElement.animate;
-      (document as unknown as { startViewTransition: unknown }).startViewTransition = vi.fn(() => ({
+      const { animateSpy } = installViewTransitionMock();
+      stubStartViewTransition(() => ({
         ready: new Promise<void>((resolve) => {
           markReady = resolve;
         }),
@@ -359,9 +368,7 @@ describe("appThemeViewTransition", () => {
 
     it("skips an in-flight ViewTransition before starting a new one", () => {
       const skipTransition = vi.fn();
-      (
-        document as unknown as { activeViewTransition?: { skipTransition: () => void } }
-      ).activeViewTransition = { skipTransition };
+      stubActiveViewTransition(skipTransition);
       const { startSpy } = installViewTransitionMock();
 
       runThemeCrossfade(() => {});
@@ -375,9 +382,7 @@ describe("appThemeViewTransition", () => {
 
     it("does not call skipTransition when a guard skips the transition", () => {
       const skipTransition = vi.fn();
-      (
-        document as unknown as { activeViewTransition?: { skipTransition: () => void } }
-      ).activeViewTransition = { skipTransition };
+      stubActiveViewTransition(skipTransition);
       const { startSpy } = installViewTransitionMock();
       setReducedMotion(true);
 
@@ -394,7 +399,7 @@ describe("appThemeViewTransition", () => {
         ready: rejected,
         finished: Promise.resolve(),
       }));
-      (document as unknown as { startViewTransition: unknown }).startViewTransition = startSpy;
+      stubStartViewTransition(startSpy);
       const mutate = vi.fn();
 
       // A superseding transition rejects `ready`; the mutation is already committed, so

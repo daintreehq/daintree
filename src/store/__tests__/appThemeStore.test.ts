@@ -247,6 +247,26 @@ describe("setSelectedSchemeIdSilent crossfade option", () => {
   const daintree = BUILT_IN_APP_SCHEMES.find((s) => s.id === "daintree")!;
   const bondi = BUILT_IN_APP_SCHEMES.find((s) => s.id === "bondi")!;
 
+  type FakeTransition = { ready: Promise<void>; finished: Promise<void> };
+
+  /** Cast-free — `document as unknown as {...}` trips the no-unsafe-type-assertion ratchet. */
+  function stubStartViewTransition(start: (callback: () => void) => FakeTransition) {
+    Object.assign(document, { startViewTransition: start });
+  }
+
+  /** Stubs the API and hands back the update callback the store deferred to it. */
+  function captureTransitionCallback(): () => () => void {
+    let captured: (() => void) | null = null;
+    stubStartViewTransition((callback) => {
+      captured = callback;
+      return { ready: Promise.resolve(), finished: Promise.resolve() };
+    });
+    return () => {
+      if (!captured) throw new Error("startViewTransition was never called");
+      return captured;
+    };
+  }
+
   beforeEach(() => {
     flushPendingTheme();
     // jsdom ships no matchMedia, and prefersReducedMotion() treats its absence as
@@ -276,7 +296,7 @@ describe("setSelectedSchemeIdSilent crossfade option", () => {
   });
 
   afterEach(() => {
-    delete (document as unknown as { startViewTransition?: unknown }).startViewTransition;
+    Reflect.deleteProperty(document, "startViewTransition");
     delete document.body.dataset.reduceAnimations;
     delete document.body.dataset.performanceMode;
     flushPendingTheme();
@@ -306,13 +326,7 @@ describe("setSelectedSchemeIdSilent crossfade option", () => {
   });
 
   it("routes the DOM write through the transition callback and applies it without a flush", () => {
-    let captured: (() => void) | null = null;
-    (
-      document as unknown as { startViewTransition: (cb: () => void) => unknown }
-    ).startViewTransition = (cb: () => void) => {
-      captured = cb;
-      return { ready: Promise.resolve(), finished: Promise.resolve() };
-    };
+    const transitionCallback = captureTransitionCallback();
 
     useAppThemeStore.getState().setSelectedSchemeIdSilent("bondi", { crossfade: true });
 
@@ -320,7 +334,7 @@ describe("setSelectedSchemeIdSilent crossfade option", () => {
     expect(useAppThemeStore.getState().selectedSchemeId).toBe("bondi");
     expect(canvasToken()).toBe(daintree.tokens["surface-canvas"]);
 
-    captured!();
+    transitionCallback()();
 
     // Applied synchronously inside the callback ({ immediate: true }); a RAF-coalesced
     // write here would be snapshotted by the API before it landed.
@@ -342,8 +356,7 @@ describe("setSelectedSchemeIdSilent crossfade option", () => {
       ready: Promise.resolve(),
       finished: Promise.resolve(),
     }));
-    (document as unknown as { startViewTransition: unknown }).startViewTransition =
-      startViewTransition;
+    stubStartViewTransition(startViewTransition);
 
     // Desync the DOM from state (state is daintree) so a skipped injection is visible —
     // otherwise the DOM already holds the expected tokens and the test proves nothing.
@@ -361,21 +374,14 @@ describe("setSelectedSchemeIdSilent crossfade option", () => {
   });
 
   it("drops a crossfade superseded by a hover preview", () => {
-    let captured: (() => void) | null = null;
-    (
-      document as unknown as { startViewTransition: (cb: () => void) => unknown }
-    ).startViewTransition = (cb: () => void) => {
-      captured = cb;
-      return { ready: Promise.resolve(), finished: Promise.resolve() };
-    };
-
+    const transitionCallback = captureTransitionCallback();
     const svalbard = BUILT_IN_APP_SCHEMES.find((s) => s.id === "svalbard")!;
 
     // An OS change starts a crossfade, then the user hovers a theme card to preview it.
     useAppThemeStore.getState().setSelectedSchemeIdSilent("bondi", { crossfade: true });
     useAppThemeStore.getState().injectTheme(svalbard);
 
-    captured!();
+    transitionCallback()();
 
     // A preview never moves selectedSchemeId, so an identity check on it would miss this —
     // the stale fade would cancel the preview's RAF and repaint bondi over it.
@@ -384,20 +390,14 @@ describe("setSelectedSchemeIdSilent crossfade option", () => {
   });
 
   it("drops a superseded crossfade rather than clobbering the newer scheme", () => {
-    let captured: (() => void) | null = null;
-    (
-      document as unknown as { startViewTransition: (cb: () => void) => unknown }
-    ).startViewTransition = (cb: () => void) => {
-      captured = cb;
-      return { ready: Promise.resolve(), finished: Promise.resolve() };
-    };
+    const transitionCallback = captureTransitionCallback();
 
     // An OS appearance change starts a crossfade to bondi...
     useAppThemeStore.getState().setSelectedSchemeIdSilent("bondi", { crossfade: true });
     // ...but the user deliberately picks svalbard before the transition callback runs.
     useAppThemeStore.getState().setSelectedSchemeId("svalbard");
 
-    captured!();
+    transitionCallback()();
 
     // The stale callback must bail entirely: its `immediate` write would otherwise
     // cancel svalbard's pending RAF and leave the DOM on bondi while state says svalbard.

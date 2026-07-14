@@ -48,14 +48,18 @@ describe("useAppThemeConfig", () => {
     vi.clearAllMocks();
 
     appearanceListener = null;
-    (window as unknown as { electron: unknown }).electron = {
-      appTheme: {
-        onSystemAppearanceChanged: (cb: (payload: { schemeId: string }) => void) => {
-          appearanceListener = cb;
-          return unsubscribe;
+    // Object.assign, not a cast — `window as unknown as {...}` trips the
+    // no-unsafe-type-assertion lint ratchet.
+    Object.assign(window, {
+      electron: {
+        appTheme: {
+          onSystemAppearanceChanged: (cb: (payload: { schemeId: string }) => void) => {
+            appearanceListener = cb;
+            return unsubscribe;
+          },
         },
       },
-    };
+    });
     // Never resolves by default — keeps hydration from racing the IPC assertions.
     bootPromise.mockReturnValue(new Promise(() => {}));
   });

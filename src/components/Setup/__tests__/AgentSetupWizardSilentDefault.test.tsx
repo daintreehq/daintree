@@ -440,16 +440,20 @@ describe("AgentSetupWizard first-run theme auto-select", () => {
   });
 
   function setOsPrefersLight(prefersLight: boolean) {
-    window.matchMedia = ((query: string) => ({
-      matches: prefersLight && query.includes("prefers-color-scheme: light"),
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-      addListener: vi.fn(),
-      removeListener: vi.fn(),
-      dispatchEvent: vi.fn(),
-      media: query,
-      onchange: null,
-    })) as unknown as typeof window.matchMedia;
+    // Object.assign, not a cast — `as unknown as typeof window.matchMedia` trips the
+    // no-unsafe-type-assertion lint ratchet.
+    Object.assign(window, {
+      matchMedia: (query: string) => ({
+        matches: prefersLight && query.includes("prefers-color-scheme: light"),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+        media: query,
+        onchange: null,
+      }),
+    });
   }
 
   it("crossfades into the OS-preferred theme", async () => {
