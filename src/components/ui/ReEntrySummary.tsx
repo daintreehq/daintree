@@ -16,7 +16,7 @@ import {
 import type { ReEntrySummaryState } from "@/hooks/useReEntrySummary";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 
-const AUTO_DISMISS_MS = 8000;
+export const AUTO_DISMISS_MS = 8000;
 
 const SEVERITY_ICON: Record<NotificationHistoryEntry["type"], typeof AlertCircle> = {
   error: AlertCircle,
@@ -40,19 +40,32 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
   });
   const [isPaused, setIsPaused] = useState(false);
   const [isPinned, setIsPinned] = useState(false);
-  const entryCount = entries.length;
+
+  // Identity of the summary being shown. Entry ids are unique and a dismissed
+  // batch is never re-summarized, so this changes exactly when a new summary
+  // arrives — unlike the entry count or the worktree-id list, which collide
+  // when the same worktrees report again and would leave a replacement summary
+  // inheriting the previous one's pin and its already-half-elapsed timer.
+  const entriesKey = entries.map((e) => e.id).join(",");
 
   useEffect(() => {
     if (visible) setIsPinned(false);
-  }, [visible, entryCount]);
+  }, [visible, entriesKey]);
 
-  const rowsKey = rows.map((r) => r.worktreeId).join(",");
+  // Hover pause is transient: clear it once the card is gone. onMouseLeave does
+  // not fire for a node removed out from under the pointer (dismissing while
+  // hovering), and this component instance never unmounts — it just renders
+  // null — so a stuck `isPaused` would silently disable auto-dismiss for every
+  // later summary.
+  useEffect(() => {
+    if (!shouldRender) setIsPaused(false);
+  }, [shouldRender]);
 
   useEffect(() => {
     if (!visible || isPaused || isPinned) return;
     const timer = setTimeout(dismiss, AUTO_DISMISS_MS);
     return () => clearTimeout(timer);
-  }, [visible, dismiss, isPaused, isPinned, rowsKey]);
+  }, [visible, dismiss, isPaused, isPinned, entriesKey]);
 
   // Latch the last visible content so the card keeps rendering the rows it had
   // while it slides out. `useReEntrySummary` returns EMPTY the instant `visible`
@@ -102,7 +115,6 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
           // explicitly or the slide snaps and only the fade animates.
           "transition-[translate,opacity]",
           "motion-reduce:transition-none motion-reduce:duration-0",
-          // Inert while sliding out so a click can't land on a fading card.
           isVisible
             ? "pointer-events-auto translate-x-0 opacity-100"
             : "pointer-events-none translate-x-8 opacity-0",
@@ -112,6 +124,14 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
           transitionDuration: isVisible ? `${UI_ENTER_DURATION}ms` : `${UI_EXIT_DURATION}ms`,
           transitionTimingFunction: isVisible ? UI_ENTER_EASING : UI_EXIT_EASING,
         }}
+        // Real inertness while sliding out: pointer-events alone still lets a
+        // Tab/Enter land on the fading card's buttons. `inert` also blurs the
+        // focused dismiss button for us — aria-hidden would not, and Chromium
+        // blocks aria-hidden over a focused element. Keyed on the incoming
+        // `visible`, not `isVisible`: the latter is also false for the hidden
+        // entry frame, and inert there would drop this role="status" live
+        // region out of the a11y tree exactly as it's inserted.
+        inert={!visible}
         role="status"
         onMouseEnter={() => setIsPaused(true)}
         onMouseLeave={() => setIsPaused(false)}
