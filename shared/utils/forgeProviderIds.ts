@@ -31,7 +31,12 @@ export function makeForgeProviderId<const P extends string, const C extends stri
 /** Canonical id of the built-in GitHub forge provider. */
 export const BUILTIN_GITHUB_PROVIDER_ID = makeForgeProviderId("daintree.github", "github");
 
-export type BuiltInForgeProviderId = typeof BUILTIN_GITHUB_PROVIDER_ID;
+/** Canonical id of the built-in GitLab forge provider. */
+export const BUILTIN_GITLAB_PROVIDER_ID = makeForgeProviderId("daintree.gitlab", "gitlab");
+
+export type BuiltInForgeProviderId =
+  | typeof BUILTIN_GITHUB_PROVIDER_ID
+  | typeof BUILTIN_GITLAB_PROVIDER_ID;
 
 /**
  * Open union — built-in ids autocomplete while still allowing any

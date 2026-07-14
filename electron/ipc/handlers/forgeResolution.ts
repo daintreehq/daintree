@@ -125,3 +125,22 @@ export function getImplForNamespace(namespaceId: string): ForgeProviderImpl {
   }
   return impl;
 }
+
+/**
+ * Impl lookup with the same implicit activation as {@link resolveForCwd}, for
+ * provider-scoped surfaces that address a provider by id instead of a cwd
+ * (credential save, token test). Lazy plugins only bind their impl during
+ * activate(), and connecting a provider for the first time is exactly the
+ * moment nothing else has activated it yet — without this, Save/Test on a
+ * fresh session fails with "not activated" while the user is standing in the
+ * Settings screen that's supposed to activate it.
+ */
+export async function getImplForNamespaceActivating(
+  namespaceId: string
+): Promise<ForgeProviderImpl | undefined> {
+  const existing = getForgeProviderImpl(namespaceId);
+  if (existing) return existing;
+  const pluginService = await getPluginService();
+  await pluginService.activatePluginForForgeProvider(namespaceId);
+  return getForgeProviderImpl(namespaceId);
+}

@@ -15,6 +15,7 @@ import {
   credentialFieldsFor,
   pickPrimaryValue,
 } from "../../services/forge/forgeCredentialUtils.js";
+import { getImplForNamespaceActivating } from "./forgeResolution.js";
 import type { AuthValidation } from "../../../shared/types/forge.js";
 
 /**
@@ -177,9 +178,17 @@ export function registerForgeSettingsHandlers(): () => void {
           return { valid: false, error: "Credential is required" };
         }
 
-        const impl = getForgeProviderImpl(providerId);
+        // Saving a credential is often the FIRST interaction with a lazy
+        // provider (fresh session, no matching project open yet), so the impl
+        // may not be bound — activate implicitly like every other forge IPC
+        // surface (#10523 / d434e770c precedent).
+        await awaitPluginInit();
+        const impl = await getImplForNamespaceActivating(providerId);
         if (!impl) {
-          return { valid: false, error: "Provider not activated. Open it in Settings first." };
+          return {
+            valid: false,
+            error: "Provider isn't available — check it's enabled in Plugins",
+          };
         }
 
         const validation = await auditForgeCall(

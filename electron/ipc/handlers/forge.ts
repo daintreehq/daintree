@@ -3,11 +3,12 @@ import { CHANNELS } from "../channels.js";
 import { openExternalUrl } from "../../utils/openExternal.js";
 import { checkRateLimit, typedHandle } from "../utils.js";
 import { defineIpcNamespace, op } from "../define.js";
+import { getRegisteredForgeProviders } from "../../services/forgeProviderRegistry.js";
 import {
-  getForgeProviderImpl,
-  getRegisteredForgeProviders,
-} from "../../services/forgeProviderRegistry.js";
-import { resolveForCwd, getImplForNamespace } from "./forgeResolution.js";
+  resolveForCwd,
+  getImplForNamespace,
+  getImplForNamespaceActivating,
+} from "./forgeResolution.js";
 import { auditForgeCall, summarizeForgeArgs } from "../../services/forge/forgeAuditService.js";
 import type {
   CreateIssueInput,
@@ -945,11 +946,14 @@ export function registerForgeHandlers(): () => void {
         }
 
         const namespaceId = makeForgeProviderId(entry.pluginId, entry.contribution.id);
-        const impl = getForgeProviderImpl(namespaceId);
+        // Testing a token is often the FIRST interaction with a lazy provider,
+        // so activate implicitly before the impl lookup — mirroring
+        // resolveForCwd (#10523 / d434e770c precedent).
+        const impl = await getImplForNamespaceActivating(namespaceId);
         if (!impl) {
           return {
             valid: false as const,
-            error: `Forge provider "${entry.contribution.id}" not activated`,
+            error: `Forge provider "${entry.contribution.id}" isn't available`,
           };
         }
         return auditForgeCall(

@@ -192,6 +192,14 @@ export interface ForgeProjectHealthPayload extends ProjectHealthSnapshot {
   hasRemote: boolean;
   loading: boolean;
   error?: string;
+  /**
+   * `true` when the resolved provider implements no `projectHealth`
+   * capability. Distinct from an error or a missing remote: the repository
+   * and provider are fine, this provider just has no health signal, so the
+   * pulse card hides the health section instead of hinting at recovery
+   * steps that wouldn't help.
+   */
+  unsupported?: boolean;
 }
 
 /**

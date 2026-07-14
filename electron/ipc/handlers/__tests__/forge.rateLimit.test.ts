@@ -93,6 +93,7 @@ vi.mock("../../../utils/openExternal.js", () => ({
 vi.mock("../forgeResolution.js", () => ({
   resolveForCwd: resolveForCwdMock,
   getImplForNamespace: () => fakeImpl,
+  getImplForNamespaceActivating: () => Promise.resolve(fakeImpl),
 }));
 
 vi.mock("../../../store.js", () => ({

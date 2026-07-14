@@ -63,10 +63,12 @@ vi.mock("../../../services/GitServiceCache.js", () => ({
 }));
 
 // The handlers lazy-import PluginService to gate registry reads behind
-// startup load + activation (the #9285 init-race guard); stub the singleton
-// so tests never construct the real service.
+// startup load + activation (the #9285 init-race guard) and to implicitly
+// activate a lazy provider before the credential impl lookup; stub the
+// singleton so tests never construct the real service.
 const pluginServiceMock = vi.hoisted(() => ({
   waitForInit: vi.fn(() => Promise.resolve()),
+  activatePluginForForgeProvider: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock("../../../services/PluginService.js", () => ({
@@ -541,7 +543,32 @@ describe("registerForgeSettingsHandlers", () => {
     expect(workspaceClientMock.updateForgeCredentials).not.toHaveBeenCalled();
   });
 
-  it("setCredential returns a not-activated error when no impl is registered", async () => {
+  it("setCredential activates a lazy provider before the impl lookup", async () => {
+    registerGiteaProvider();
+    const validateToken = vi.fn().mockResolvedValue({ valid: true });
+    // Impl absent on first lookup; activation binds it for the re-read —
+    // modeling a fresh session where Settings is the provider's first touch.
+    registryMock.getForgeProviderImpl.mockReturnValueOnce(undefined);
+    // `mockImplementationOnce`: `clearAllMocks` in beforeEach does not reset
+    // implementations, so a persistent one would leak the re-bound impl into
+    // later tests.
+    pluginServiceMock.activatePluginForForgeProvider.mockImplementationOnce(() => {
+      registryMock.getForgeProviderImpl.mockReturnValue({ validateToken });
+      return Promise.resolve();
+    });
+    registerForgeSettingsHandlers();
+    const setCredential = findHandler("forge:set-credential");
+
+    const result = (await setCredential(null, "acme.gitea", { token: "x" })) as {
+      valid: boolean;
+    };
+
+    expect(pluginServiceMock.activatePluginForForgeProvider).toHaveBeenCalledWith("acme.gitea");
+    expect(result.valid).toBe(true);
+    expect(validateToken).toHaveBeenCalledWith("x");
+  });
+
+  it("setCredential returns an unavailable error when activation binds no impl", async () => {
     registerGiteaProvider();
     registryMock.getForgeProviderImpl.mockReturnValue(undefined);
     registerForgeSettingsHandlers();
@@ -552,8 +579,9 @@ describe("registerForgeSettingsHandlers", () => {
       error?: string;
     };
 
+    expect(pluginServiceMock.activatePluginForForgeProvider).toHaveBeenCalledWith("acme.gitea");
     expect(result.valid).toBe(false);
-    expect(result.error).toMatch(/not activated/i);
+    expect(result.error).toMatch(/isn't available/i);
     expect(storeMock.set).not.toHaveBeenCalledWith("forgeCredentials", expect.anything());
   });
 
