@@ -37,8 +37,11 @@ export const reduceMotionSelectors = (): Set<string> => {
       if (css[k] === "}" && --depth === 0) {
         // Selector text only — the chunk preceding each `{`. A class name that
         // appears inside a declaration value is not a rule, and must not count.
-        for (const [, selectorText] of css.slice(i, k).matchAll(/(?:^|[};])([^{};]*)\{/g)) {
-          for (const [, name] of selectorText.matchAll(/\.(-?[a-zA-Z][\w-]*)/g)) classes.add(name);
+        for (const rule of css.slice(i, k).matchAll(/(?:^|[};])([^{};]*)\{/g)) {
+          const selectorText = rule[1] ?? "";
+          for (const name of selectorText.matchAll(/\.(-?[a-zA-Z][\w-]*)/g)) {
+            if (name[1]) classes.add(name[1]);
+          }
         }
         break;
       }
@@ -72,8 +75,8 @@ export const widensTransitionToTransform = (cls: string): boolean => {
   const utility = cls.slice(cls.lastIndexOf(":") + 1);
   if (["transition", "transition-all", "transition-transform"].includes(utility)) return true;
 
-  const arbitrary = /^transition-\[(.+)\]$/.exec(utility);
-  return arbitrary ? /\b(transform|scale|translate|rotate|all)\b/.test(arbitrary[1]) : false;
+  const properties = /^transition-\[(.+)\]$/.exec(utility)?.[1];
+  return properties ? /\b(transform|scale|translate|rotate|all)\b/.test(properties) : false;
 };
 
 /** The transform-widening classes on an element, if any. */

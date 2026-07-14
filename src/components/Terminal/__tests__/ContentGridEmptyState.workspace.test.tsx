@@ -256,8 +256,10 @@ describe("ContentGridEmptyState — workspace capabilities", () => {
       const container = renderWholeLauncher();
 
       const delays = animatedSections(container).map(delayOf);
-      const steps = delays.slice(1).map((delay, i) => delay - delays[i]);
+      const steps = delays.slice(1).map((delay, i) => delay - (delays[i] ?? 0));
 
+      // The head of the ladder carries no delay, each step is forward, and the
+      // cadence never varies — without asserting the step's literal size.
       expect(delays[0]).toBe(0);
       expect(steps.every((step) => step > 0)).toBe(true);
       expect(new Set(steps).size).toBe(1);
