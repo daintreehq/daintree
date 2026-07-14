@@ -549,7 +549,7 @@ describe("built-in themes", () => {
   it("LIGHT themes clear the round-2 selection/elevation validation matrix (hard-fail)", () => {
     // Harden phase: the consolidated round-2 matrix (E6) — activity/pr/scrollbar
     // floors, input/placeholder legibility, filter-selected separation, settings
-    // card lift, pulse heat/missed, and the OKLab elevation-direction inversions
+    // card lift, pulse heat, and the OKLab elevation-direction inversions
     // (sidebar selected lift, grid-bg-below-panel, panel→elevated not smallest) —
     // is now a HARD FAILURE for LIGHT themes. Every check is behavioural: it
     // computes a real contrast ratio / OKLab ΔE / luminance relationship from the

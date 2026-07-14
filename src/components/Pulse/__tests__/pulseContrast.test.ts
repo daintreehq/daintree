@@ -7,6 +7,8 @@ const SUMMARY_PATH = resolve(__dirname, "../PulseSummary.tsx");
 const HEATMAP_PATH = resolve(__dirname, "../PulseHeatmap.tsx");
 const INDEX_CSS_PATH = resolve(__dirname, "../../../index.css");
 const PULSE_CSS_PATH = resolve(__dirname, "../../../styles/components/pulse.css");
+const COACH_PATH = resolve(__dirname, "../coachLine.ts");
+const FLAME_PATH = resolve(__dirname, "../StreakFlame.tsx");
 
 // Find a `@media (X)` opening brace and return the slice up to the matching
 // closing brace (or until the next top-level @media / @layer / @theme opens).
@@ -62,7 +64,7 @@ describe("ProjectPulseCard — visual contrast (issue #2645)", () => {
 
   it("coaching line does not use italic styling", async () => {
     const content = await readFile(CARD_PATH, "utf-8");
-    const coachLineMatch = content.match(/getCoachLine\(pulse\).*<\/p>/s);
+    const coachLineMatch = content.match(/getCoachLine\(.*?<\/p>/s);
     expect(coachLineMatch).toBeTruthy();
     const coachLineBlock = coachLineMatch![0];
     expect(coachLineBlock).not.toContain("italic");
@@ -140,7 +142,6 @@ describe("PulseHeatmap — contrast on elevated card (issue #2645)", () => {
     const content = await readFile(HEATMAP_PATH, "utf-8");
     expect(content).toContain("rounded-[2px]");
     expect(content).toContain("var(--pulse-empty-bg");
-    expect(content).toContain("var(--pulse-missed-bg)");
   });
 
   it("most-recent-active ring uses the pulse ring offset token", async () => {
@@ -360,14 +361,6 @@ describe("PulseHeatmap — high-contrast shape cue (issue #9819)", () => {
     );
   });
 
-  it("forced-colors block distinguishes missed-day via a solid CanvasText fill", async () => {
-    const content = await readFile(INDEX_CSS_PATH, "utf-8");
-    const block = mediaBlockSlice(content, "@media (forced-colors: active)");
-    expect(block).toContain(".pulse-heat-cell-missed");
-    // Missed cell must be the more salient signal (filled, not empty).
-    expect(block).toMatch(/\.pulse-heat-cell-missed\s*{[^}]*background:\s*CanvasText/);
-  });
-
   it("prefers-contrast block bumps heat-cell border to 1px theme-text", async () => {
     const content = await readFile(INDEX_CSS_PATH, "utf-8");
     const block = mediaBlockSlice(content, "@media (prefers-contrast: more)");
@@ -386,5 +379,42 @@ describe("PulseHeatmap — high-contrast shape cue (issue #9819)", () => {
     const forcedBlock = mediaBlockSlice(content, "@media (forced-colors: active)");
     const forcedEnd = content.indexOf(forcedBlock) + forcedBlock.length;
     expect(forcedEnd).toBeLessThanOrEqual(contrastStart);
+  });
+});
+
+describe("Pulse — no surface can express failure (issue #11172)", () => {
+  const MISSED_DAY_SURFACE = /pulse-missed-bg|pulse-heat-cell-missed|pulse-heat-missed|Missed day/i;
+
+  it.each([
+    ["PulseHeatmap.tsx", HEATMAP_PATH],
+    ["ProjectPulseCard.tsx", CARD_PATH],
+    ["pulse.css", PULSE_CSS_PATH],
+    ["index.css", INDEX_CSS_PATH],
+  ])("%s carries no missed-day token, class, or label", async (_name, path) => {
+    const content = await readFile(path, "utf-8");
+    expect(content).not.toMatch(MISSED_DAY_SURFACE);
+  });
+
+  it("the coaching line never asks for a commit or leans on a streak", async () => {
+    // The old copy was "One small commit today keeps your streak going." —
+    // obligation triggered by having a streak to lose. Branch coverage for the
+    // replacement lives in projectPulseCoach.test.ts; this guards the card
+    // itself from growing new guilt copy.
+    const content = await readFile(COACH_PATH, "utf-8");
+    const strings = [...content.matchAll(/"([^"\\]{12,})"|`([^`\\$]{12,})`/g)].map(
+      (m) => m[1] ?? m[2] ?? ""
+    );
+    for (const literal of strings) {
+      expect(literal).not.toMatch(/streak|keeps? (your|the)|missed/i);
+    }
+  });
+
+  it("streak flame colors are theme tokens, not hardcoded hexes", async () => {
+    const content = await readFile(FLAME_PATH, "utf-8");
+    // Each tier resolves through var(--pulse-streak-N, …) so a theme can
+    // restyle it; the raw hex survives only as the inline fallback.
+    expect(content).toMatch(/var\(--pulse-streak-1,/);
+    expect(content).toMatch(/var\(--pulse-streak-7,/);
+    expect(content).not.toMatch(/color:\s*"#[0-9A-Fa-f]{6}"/);
   });
 });

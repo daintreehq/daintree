@@ -211,10 +211,19 @@ export const EXTENSION_KEY_REGISTRY = {
   "pulse-heat-high-opacity": OPTIONAL,
   "pulse-heat-low-opacity": OPTIONAL,
   "pulse-heat-medium-opacity": OPTIONAL,
-  "pulse-missed-bg": OPTIONAL,
   "pulse-range-bg": OPTIONAL,
   "pulse-ring-offset": OPTIONAL,
   "pulse-skeleton-gradient": OPTIONAL,
+  // Streak-flame tiers, shortest to longest. The consumer bakes the current
+  // ramp in as a fallback, so a theme that leaves these unset renders the same
+  // flame it always did.
+  "pulse-streak-1": OPTIONAL,
+  "pulse-streak-2": OPTIONAL,
+  "pulse-streak-3": OPTIONAL,
+  "pulse-streak-4": OPTIONAL,
+  "pulse-streak-5": OPTIONAL,
+  "pulse-streak-6": OPTIONAL,
+  "pulse-streak-7": OPTIONAL,
 
   // Settings
   "settings-card-bg": OPTIONAL,

@@ -134,7 +134,6 @@ export const theme: BuiltInThemeSource = {
     "pulse-heat-3": "#377B62",
     "pulse-heat-4": "#4A9E7F",
     "pulse-heat-color": "#4A9E7F",
-    "pulse-missed-bg": "rgba(209,123,114,0.18)",
     "pulse-range-bg": "#161D1B",
     "pulse-ring-offset": "#1A2421",
     "pulse-skeleton-gradient": "linear-gradient(90deg, #23322E 25%, #2C3D38 50%, #23322E 75%)",

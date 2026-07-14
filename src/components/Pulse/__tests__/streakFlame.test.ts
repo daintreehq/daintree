@@ -1,69 +1,81 @@
 import { describe, it, expect } from "vitest";
+import { getStreakColor, getStreakTier } from "../StreakFlame";
 
-describe("getStreakColor — tier boundaries", () => {
-  // Import the pure function directly
-  let getStreakColor: (days: number) => string;
+// The tier hexes are the implementation's source of truth — asserting them here
+// would just copy them. These tests cover what the hexes can't: that the tier
+// boundaries land where they should, that every tier is visually distinct, and
+// that each stop is theme-overridable with its legacy colour as the fallback.
 
-  it("can be imported", async () => {
-    const mod = await import("../StreakFlame");
-    getStreakColor = mod.getStreakColor;
-    expect(typeof getStreakColor).toBe("function");
+const TIER_BOUNDARIES = [8, 15, 30, 60, 120, 240];
+const TOKEN_FORM = /^var\(--pulse-streak-([1-7]), (#[0-9A-Fa-f]{6})\)$/;
+
+function parse(days: number): { level: number; fallback: string } {
+  const match = TOKEN_FORM.exec(getStreakColor(days));
+  if (!match) throw new Error(`getStreakColor(${days}) is not a themeable token`);
+  return { level: Number(match[1]), fallback: match[2]! };
+}
+
+describe("getStreakColor", () => {
+  it("emits a themeable token carrying a hex fallback at every tier", () => {
+    for (const days of [0, 1, 7, 8, 14, 15, 29, 30, 59, 60, 119, 120, 239, 240, 10_000]) {
+      expect(getStreakColor(days)).toMatch(TOKEN_FORM);
+    }
   });
 
-  it("returns amber (#F59E0B) for days 1-7", async () => {
-    const mod = await import("../StreakFlame");
-    expect(mod.getStreakColor(1)).toBe("#F59E0B");
-    expect(mod.getStreakColor(7)).toBe("#F59E0B");
+  it("steps to the next tier exactly at each boundary, not before", () => {
+    for (const boundary of TIER_BOUNDARIES) {
+      const below = parse(boundary - 1);
+      const at = parse(boundary);
+      expect(at.level).toBe(below.level + 1);
+      expect(at.fallback).not.toBe(below.fallback);
+    }
   });
 
-  it("returns orange (#FB923C) for days 8-14", async () => {
-    const mod = await import("../StreakFlame");
-    expect(mod.getStreakColor(8)).toBe("#FB923C");
-    expect(mod.getStreakColor(14)).toBe("#FB923C");
+  it("holds one colour across the whole span of a tier", () => {
+    // 8..14 is a full interior tier: every day in it resolves identically.
+    const span = [8, 9, 12, 14].map((d) => getStreakColor(d));
+    expect(new Set(span).size).toBe(1);
   });
 
-  it("returns orange-red (#F97316) for days 15-29", async () => {
-    const mod = await import("../StreakFlame");
-    expect(mod.getStreakColor(15)).toBe("#F97316");
-    expect(mod.getStreakColor(29)).toBe("#F97316");
+  it("gives every tier a distinct colour", () => {
+    const representatives = [1, 8, 15, 30, 60, 120, 240];
+    const tokens = representatives.map((d) => getStreakColor(d));
+    expect(new Set(tokens).size).toBe(representatives.length);
+    expect(new Set(representatives.map((d) => parse(d).fallback)).size).toBe(
+      representatives.length
+    );
   });
 
-  it("returns red (#EF4444) for days 30-59", async () => {
-    const mod = await import("../StreakFlame");
-    expect(mod.getStreakColor(30)).toBe("#EF4444");
-    expect(mod.getStreakColor(59)).toBe("#EF4444");
+  it("rises monotonically with streak length", () => {
+    const levels = [0, 8, 15, 30, 60, 120, 240, 10_000].map((d) => parse(d).level);
+    for (let i = 1; i < levels.length; i += 1) {
+      expect(levels[i]!).toBeGreaterThanOrEqual(levels[i - 1]!);
+    }
   });
 
-  it("returns deep red (#DC2626) for days 60-119", async () => {
-    const mod = await import("../StreakFlame");
-    expect(mod.getStreakColor(60)).toBe("#DC2626");
-    expect(mod.getStreakColor(119)).toBe("#DC2626");
+  it("clamps a zero or negative streak to the base tier", () => {
+    expect(parse(0).level).toBe(1);
+    expect(parse(-5).level).toBe(1);
+    expect(getStreakColor(0)).toBe(getStreakColor(1));
   });
 
-  it("returns fuchsia (#C026D3) for days 120-239", async () => {
-    const mod = await import("../StreakFlame");
-    expect(mod.getStreakColor(120)).toBe("#C026D3");
-    expect(mod.getStreakColor(239)).toBe("#C026D3");
+  it("keeps 240+ in one open-ended top tier", () => {
+    expect(getStreakColor(10_000)).toBe(getStreakColor(240));
+    expect(parse(240).level).toBe(7);
   });
 
-  it("returns a distinct celebratory hex for days 240+ (issue #9820)", async () => {
-    const mod = await import("../StreakFlame");
-    // The 240+ tier must read at full color fidelity in PulseSummary.Stat —
-    // not borrow --color-accent-primary, which the release chip in the same
-    // region already spends. A plain hex keeps it consistent with the other
-    // six tiers and avoids a second accent in one focus region.
-    const top240 = mod.getStreakColor(240);
-    const top10k = mod.getStreakColor(10000);
-    expect(top240).toMatch(/^#[0-9A-Fa-f]{6}$/);
-    expect(top10k).toBe(top240);
-    expect(top240).not.toContain("var(");
-    expect(top240).not.toBe("var(--color-accent-primary)");
-    expect(top240).not.toBe(mod.getStreakColor(120));
-    expect(top240).not.toBe(mod.getStreakColor(239));
+  it("never borrows the accent token (issue #9820)", () => {
+    // The release chip in the same focus region already spends the accent; a
+    // flame that co-opted it would put two accent signals in one region.
+    for (const days of [1, 8, 15, 30, 60, 120, 240]) {
+      expect(getStreakColor(days)).not.toContain("--color-accent-primary");
+    }
   });
+});
 
-  it("returns amber for 0 days (fallback)", async () => {
-    const mod = await import("../StreakFlame");
-    expect(mod.getStreakColor(0)).toBe("#F59E0B");
+describe("getStreakTier", () => {
+  it("maps each boundary to a successive tier and spans 1..7", () => {
+    const tiers = [0, 8, 15, 30, 60, 120, 240].map(getStreakTier);
+    expect(tiers).toStrictEqual([1, 2, 3, 4, 5, 6, 7]);
   });
 });

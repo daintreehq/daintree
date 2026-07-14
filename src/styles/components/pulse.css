@@ -49,16 +49,6 @@
   background: var(--pulse-empty-bg, var(--theme-surface-panel));
 }
 
-/* Missed-day fill: an opaque danger tint rather than a low-alpha film that
- * washed out to ~1:1 vs the empty cell on light. Themes ship pulse-missed-bg as
- * an opaque hex (P-Heat re-authors these to clear >=3:1); the fallback is full
- * opaque status-danger — the boldest destructive default, which clears >=3:1 vs
- * a near-white empty cell where a partial mix could not (status-danger is mid-L,
- * so a 42% mix over near-white only reaches ~1.8:1). */
-.pulse-heat-missed {
-  background: var(--pulse-missed-bg, var(--theme-status-danger));
-}
-
 /* Forced-colors shape cue: a child element painted with CanvasText whose size
  * scales with the heat level, so the four levels stay distinguishable when the
  * UA strips theme background colors (issue #9819). Display is none by default;
@@ -70,18 +60,6 @@
   margin: auto;
   display: none;
   pointer-events: none;
-}
-
-/* Shape cue for the missed-day cell (P-Heat): a destructive-tier inset ring so
- * the streak-break signal survives colour-vision deficiency and never reads as
- * just another heat level. Inset box-shadow keeps the cell footprint identical
- * to its neighbours (no layout shift) and stacks under the most-recent-active
- * ring. transition-[box-shadow] is already on the cell (Tier-1 150ms). Light-
- * only (P-Heat is a light refinement); dark missed-day cells keep their authored
- * pulse-missed-bg fill verbatim — `.light` is toggled on the root by
- * applyAppThemeToRoot, mirroring the `.light .panel-state-*` precedent. */
-.light .pulse-heat-cell-missed {
-  box-shadow: inset 0 0 0 1.5px var(--theme-status-danger);
 }
 
 .pulse-skeleton-shimmer {

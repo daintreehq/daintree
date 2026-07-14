@@ -1,7 +1,7 @@
 import { useEffect, useCallback, useId, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useShallow } from "zustand/react/shallow";
-import type { PulseRangeDays, ProjectPulse } from "@shared/types";
+import type { PulseRangeDays } from "@shared/types";
 import type { ForgeProjectHealthPayload } from "@shared/types/ipc/forge";
 import { usePulseStore, useProjectStore, PULSE_MAX_RETRIES } from "@/store";
 import { cn } from "@/lib/utils";
@@ -24,6 +24,7 @@ import { Spinner } from "@/components/ui/Spinner";
 import { Activity } from "@/components/icons";
 import { PulseHeatmap, getPulseHeatmapRowWidth, getPulseHeatLevelBackground } from "./PulseHeatmap";
 import { PulseSummary } from "./PulseSummary";
+import { getCoachLine, getUsableHealth } from "./coachLine";
 import { useProjectHealth } from "@/hooks/useProjectHealth";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { systemClient } from "@/clients/systemClient";
@@ -44,27 +45,6 @@ const RANGE_OPTIONS: { value: PulseRangeDays; label: string; srLabel: string }[]
   { value: 120, label: "120d", srLabel: "120 days" },
   { value: 180, label: "180d", srLabel: "180 days" },
 ];
-
-function getCoachLine(pulse: ProjectPulse): string {
-  const sortedCells = [...pulse.heatmap]
-    .filter((cell) => !isNaN(new Date(cell.date).getTime()))
-    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-
-  const today = sortedCells.find((c) => c.isToday) ?? sortedCells.at(-1);
-
-  const last7Days = sortedCells.slice(-7).filter((c) => c.count > 0).length;
-
-  if (today && today.count > 0) {
-    return `${today.count} commit${today.count !== 1 ? "s" : ""} today — nice.`;
-  }
-  if (pulse.currentStreakDays && pulse.currentStreakDays > 0) {
-    return "One small commit today keeps your streak going.";
-  }
-  if (last7Days > 0) {
-    return `Momentum's building: ${last7Days} active day${last7Days !== 1 ? "s" : ""} this week.`;
-  }
-  return "Make a tiny win: ship one small change today.";
-}
 
 function CIStatusIcon({ status }: { status: ForgeProjectHealthPayload["ciStatus"] }) {
   switch (status) {
@@ -376,6 +356,9 @@ function PulseHeatmapLegend({
 export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProps) {
   const projectName = useProjectStore((s) => s.currentProject?.name);
   const { health, loading: healthLoading, refresh: refreshHealth } = useProjectHealth();
+  // One source of truth for "can this health back a claim?", shared by the
+  // coach line and the chips so they can't contradict each other.
+  const usableHealth = getUsableHealth(health);
   const { pulse, isLoading, error, rangeDays, retryCount, fetchPulse, setRangeDays } =
     usePulseStore(
       useShallow((state) => ({
@@ -640,7 +623,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
 
         <PulseHeatmapLegend dayCount={pulse.heatmap.length} descriptionId={heatmapDescriptionId} />
 
-        <p className="text-xs text-daintree-text/80">{getCoachLine(pulse)}</p>
+        <p className="text-xs text-daintree-text/80">{getCoachLine(pulse, health)}</p>
 
         {/* Health section: always renders the wrapper so the 4 sub-variants
             (signals, skeleton, no-remote hint, offline hint) can swap without
@@ -648,8 +631,10 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
             height (h-5 chip + pt-3 padding) so the loaded HealthSignals row
             doesn't push siblings down when it resolves after pulse (#7671). */}
         <div className="border-t border-daintree-border pt-3 min-h-9">
-          {health && !health.error && health.repoUrl ? (
-            <HealthSignals health={health} rangeDays={rangeDays} />
+          {usableHealth ? (
+            // pulse.rangeDays, not the selector's — the chip describes the same
+            // snapshot the coach line above it does.
+            <HealthSignals health={usableHealth} rangeDays={pulse.rangeDays} />
           ) : healthLoading ? (
             <HealthSectionSkeleton />
           ) : health && !health.hasRemote ? (

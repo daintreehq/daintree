@@ -878,11 +878,11 @@ function runCardAboveDialogBody(scheme: AppColorScheme): AppThemeValidationWarni
 
 /**
  * The pulse heatmap composites a single hue at four alpha stops over the empty cell
- * (RC-2 in miniature). Light-only (P-Heat). Two failures this catches: (1) the
- * lowest heat stop is sub-JND against the empty cell, so a worked day is invisible;
- * (2) the missed-day film (a destructive streak-break signal) is sub-3:1 against the
- * empty cell. Requires `pulse-heat-color`; themes that leave it unset fall back at
- * the consumer and are skipped.
+ * (RC-2 in miniature). Light-only (P-Heat). Catches the lowest heat stop landing
+ * sub-JND against the empty cell, which makes a worked day invisible. Requires
+ * `pulse-heat-color`; themes that leave it unset fall back at the consumer and are
+ * skipped. The heatmap has no failure state to audit — a zero-commit day is just the
+ * empty cell (#11172).
  */
 function runPulseHeatSeparation(scheme: AppColorScheme): AppThemeValidationWarning[] {
   if (scheme.type !== "light") return [];
@@ -900,17 +900,6 @@ function runPulseHeatSeparation(scheme: AppColorScheme): AppThemeValidationWarni
       out.push({
         kind: "low-contrast",
         message: `[matrix] ${scheme.id}: pulse heat level-1 (heat-color @${lowOp}) ΔE=${de.toFixed(4)} vs empty cell is below JND (${RAMP_DL_JND_MATRIX}) — a worked day is invisible (P-Heat)`,
-      });
-    }
-  }
-
-  const missed = resolveToHex(extVal(scheme, "pulse-missed-bg"), empty.hex);
-  if (!("skip" in missed)) {
-    const ratio = contrastRatio(missed.hex, empty.hex);
-    if (ratio < 3.0) {
-      out.push({
-        kind: "low-contrast",
-        message: `[matrix] ${scheme.id}: pulse missed-day fill vs empty cell is ${ratio.toFixed(2)}:1; target is 3.0:1 — the streak-break signal is imperceptible (P-Heat)`,
       });
     }
   }
@@ -962,7 +951,7 @@ function runActivityWorkingWaitingSeparation(scheme: AppColorScheme): AppThemeVa
  *   input-text-vs-surface-input (AA) ..... runMatrixContrastPairs
  *   filter-selected separation (JND) ..... runMatrixSeparationPairs
  *   card-vs-dialog-body (light) .......... runCardAboveDialogBody
- *   pulse heat/missed separation ......... runPulseHeatSeparation
+ *   pulse heat separation ................ runPulseHeatSeparation
  *   activity working/waiting separation .. runActivityWorkingWaitingSeparation
  *   sidebar-selected-above-container ..... auditSidebarSelectedLift (oklch)
  *   grid-bg-below-panel (light) .......... auditGridBgBelowPanel (oklch)
