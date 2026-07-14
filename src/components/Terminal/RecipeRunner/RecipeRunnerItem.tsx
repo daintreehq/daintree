@@ -68,7 +68,13 @@ export function RecipeRunnerItem({
               // is inside the recipe group (group-focus-within) — at rest the
               // default-focused first card must NOT glow accent, or the hero
               // recipe reads as a focused input on every empty grid.
-              "group flex flex-col items-start gap-1.5 p-3 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-overlay-subtle disabled:hover:border-border-subtle group-focus-within/recipes:aria-selected:ring-2 group-focus-within/recipes:aria-selected:ring-daintree-accent/60",
+              //
+              // `transition-colors` stays narrow: transform is deliberately out
+              // of the property list, so the press scale snaps instead of easing
+              // over 150ms. A disabled card never enters :active, so the scale
+              // needs no disabled: reset. `launcher-press` is what lets reduced
+              // motion suppress the scale — see the rule in `index.css`.
+              "launcher-press group flex flex-col items-start gap-1.5 p-3 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors active:scale-[0.98] active:duration-[1ms] text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-overlay-subtle disabled:hover:border-border-subtle group-focus-within/recipes:aria-selected:ring-2 group-focus-within/recipes:aria-selected:ring-daintree-accent/60",
               recipe.shadowedBy && "opacity-60"
             )}
           >
@@ -124,7 +130,7 @@ export function RecipeRunnerItem({
           disabled={disabled}
           tabIndex={disabled ? -1 : (tabIndex ?? 0)}
           className={cn(
-            "group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-overlay-subtle disabled:hover:border-border-subtle group-focus-within/recipes:aria-selected:ring-2 group-focus-within/recipes:aria-selected:ring-daintree-accent/60",
+            "launcher-press group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors active:scale-[0.98] active:duration-[1ms] text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-overlay-subtle disabled:hover:border-border-subtle group-focus-within/recipes:aria-selected:ring-2 group-focus-within/recipes:aria-selected:ring-daintree-accent/60",
             recipe.shadowedBy && "opacity-60"
           )}
         >

@@ -4,6 +4,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/button";
 import { ProjectPulseStrip } from "@/components/Pulse";
 import { useHomeDir } from "@/hooks/app/useHomeDir";
+import { cn } from "@/lib/utils";
 import { svgToDataUrl, sanitizeSvg } from "@/lib/svg";
 import { actionService } from "@/services/ActionService";
 import { usePanelStore } from "@/store/panelStore";
@@ -16,6 +17,52 @@ import { ResumeSessionLine } from "./ResumeSessionLine";
 import { LauncherQuickActions } from "./LauncherQuickActions";
 
 const PATH_TRUNCATE_LENGTH = 52;
+
+// Entry motion for each launcher section — the column arrives as a sequence
+// rather than one flat block. Static classes, so the animation plays once when
+// a section enters the DOM and never replays on re-render; a section whose
+// condition flips later (recipes finish loading, the pulse is unhidden) simply
+// runs its own entry then.
+//
+// Two suppressors, both needed, exactly as `ContentFadeIn` does it:
+// `motion-safe:` covers the OS preference, and the `launcher-section-enter`
+// marker registers these sections with the reduce-motion block in `index.css`,
+// which is what honours Daintree's own reduce-animations toggle — a `body`
+// attribute no Tailwind variant can reach from here. Performance mode is
+// already killed globally.
+//
+// The duration is the shared entry tier (`--duration-200`), fed to the
+// animation's own slot rather than via `duration-200`. That utility would also
+// emit `transition-duration`, and with no `transition-property` on these
+// wrappers it lands on CSS's `all` default — an every-property transition
+// nobody asked for. Setting `--tw-animation-duration` keeps the transition set
+// empty, for the same reason the ladder below avoids `delay-*`.
+const SECTION_ENTRY =
+  "launcher-section-enter motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-1 motion-safe:[--tw-animation-duration:var(--duration-200)]";
+
+// The stagger ladder. Sequencing IS the signal here, so the per-step delay is a
+// literal ladder rather than one of the shared duration tiers.
+//
+// NOT `delay-*`: Tailwind's own `delay-*` wins over the animation library's
+// same-named utility and compiles to `transition-delay`, which an `animate-in`
+// keyframe animation never reads — the sections would all arrive at once. The
+// animation's delay slot is the `--tw-animation-delay` custom property, so the
+// ladder sets that directly. (`duration-*` needs no such workaround: it also
+// sets `--tw-duration`, which the animation does read.)
+//
+// Every non-zero delay MUST carry `fill-mode-backwards`. The underlying `enter`
+// animation defaults to `fill-mode: none`, which paints a section fully visible
+// for the length of its delay and then snaps it hidden before fading it in.
+const SECTION_ENTRY_DELAY_1 =
+  "motion-safe:[--tw-animation-delay:30ms] motion-safe:fill-mode-backwards";
+const SECTION_ENTRY_DELAY_2 =
+  "motion-safe:[--tw-animation-delay:60ms] motion-safe:fill-mode-backwards";
+const SECTION_ENTRY_DELAY_3 =
+  "motion-safe:[--tw-animation-delay:90ms] motion-safe:fill-mode-backwards";
+const SECTION_ENTRY_DELAY_4 =
+  "motion-safe:[--tw-animation-delay:120ms] motion-safe:fill-mode-backwards";
+const SECTION_ENTRY_DELAY_5 =
+  "motion-safe:[--tw-animation-delay:150ms] motion-safe:fill-mode-backwards";
 
 // The active workspace is a project OR a scratch (#11076). `hasLaunchTarget`
 // gates the launcher column on having somewhere to launch INTO — a scratch has
@@ -109,8 +156,11 @@ export function ContentGridEmptyState({
     <DaintreeIcon className="h-25 w-25 text-daintree-text/65" aria-hidden="true" />
   );
 
+  // The container no longer fades as one block — each launcher section below
+  // carries its own entry, and the no-launch-target branches keep the entry
+  // fade `EmptyState` already owns.
   return (
-    <div className="relative h-full w-full overflow-hidden animate-in fade-in duration-200">
+    <div className="relative h-full w-full overflow-hidden">
       {/* Content scrolls independently of the fixed watermark so an expanded
           pulse (or a tall recipe list) on a short canvas stays reachable
           instead of being clipped; `min-h-full` keeps it centered when short. */}
@@ -118,7 +168,7 @@ export function ContentGridEmptyState({
         <div className="flex min-h-full flex-col items-center justify-center p-8">
           <div className="max-w-3xl w-full flex flex-col items-center">
             {hasLaunchTarget && (
-              <div className="mb-6 flex flex-col items-center text-center">
+              <div className={cn("mb-6 flex flex-col items-center text-center", SECTION_ENTRY)}>
                 <div className="mb-4">{identityMark}</div>
                 {hasWorkspaceIdentity ? (
                   <div className="flex flex-col items-center gap-1.5 min-w-0 max-w-full">
@@ -206,31 +256,57 @@ export function ContentGridEmptyState({
             )}
 
             {hasLaunchTarget && recipesProjectId !== null && !recipesLoading && (
-              <div className="mb-3 w-full flex justify-center">
+              <div
+                className={cn(
+                  "mb-3 w-full flex justify-center",
+                  SECTION_ENTRY,
+                  SECTION_ENTRY_DELAY_1
+                )}
+              >
                 <RecipeRunner activeWorktreeId={activeWorktreeId} defaultCwd={defaultCwd} />
               </div>
             )}
 
             {hasLaunchTarget && (
-              <div className="mb-3 w-full flex justify-center">
+              <div
+                className={cn(
+                  "mb-3 w-full flex justify-center",
+                  SECTION_ENTRY,
+                  SECTION_ENTRY_DELAY_2
+                )}
+              >
                 <ResumeSessionLine />
               </div>
             )}
 
             {hasLaunchTarget && (
-              <div className="mb-6 w-full flex justify-center">
+              <div
+                className={cn(
+                  "mb-6 w-full flex justify-center",
+                  SECTION_ENTRY,
+                  SECTION_ENTRY_DELAY_3
+                )}
+              >
                 <LauncherQuickActions />
               </div>
             )}
 
             {showProjectPulse && hasLaunchTarget && activeWorktreeId && (
-              <div className="w-full flex justify-center">
+              <div
+                className={cn("w-full flex justify-center", SECTION_ENTRY, SECTION_ENTRY_DELAY_4)}
+              >
                 <ProjectPulseStrip worktreeId={activeWorktreeId} />
               </div>
             )}
 
             {hasLaunchTarget && hasProjectContext && hasEverLaunchedAgent && (
-              <div className="flex flex-col items-center gap-4 mt-6">
+              <div
+                className={cn(
+                  "flex flex-col items-center gap-4 mt-6",
+                  SECTION_ENTRY,
+                  SECTION_ENTRY_DELAY_5
+                )}
+              >
                 <RotatingTip />
               </div>
             )}
