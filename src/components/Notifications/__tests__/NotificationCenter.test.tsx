@@ -2658,6 +2658,22 @@ describe("NotificationCenter — scroll shadows", () => {
     expect(readCues(scroller)).toEqual([false, true]);
   });
 
+  it("cues content pushed past the fold when the list viewport shrinks", () => {
+    setEntries([makeEntry({ message: "One" })]);
+    const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
+
+    const scroller = container.querySelector(".overflow-y-auto") as HTMLElement;
+    expect(readCues(scroller)).toEqual([false, false]);
+
+    // The content never changed — the popover got shorter, so only a resize of
+    // the scrollport itself reveals that the same list now overflows.
+    setScrollMetrics(scroller, { scrollTop: 0, scrollHeight: 300, clientHeight: 100 });
+    resizeContent(scroller);
+    flushFrames();
+
+    expect(readCues(scroller)).toEqual([false, true]);
+  });
+
   it("clears the cues when the content shrinks back to fit", () => {
     setEntries([makeEntry({ message: "One" }), makeEntry({ message: "Two" })]);
     const { container } = render(<NotificationCenter open onClose={vi.fn()} />);

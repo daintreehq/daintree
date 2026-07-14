@@ -330,7 +330,10 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
           setShowJumpPill(entry.boundingClientRect.top > rootBounds.bottom);
         }
       },
-      { root: scrollContainer, threshold: 0 }
+      // Pull the bottom edge in by the height of the scroll fade (h-8 in
+      // ScrollShadow): a divider still under the gradient is washed out, so it
+      // doesn't count as reached and the pill stays up.
+      { root: scrollContainer, rootMargin: "0px 0px -32px 0px", threshold: 0 }
     );
     observer.observe(dividerEl);
     return () => observer.disconnect();
