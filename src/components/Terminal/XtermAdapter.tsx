@@ -2,6 +2,7 @@ import { useCallback, useLayoutEffect, useMemo, useRef, useEffect, useState } fr
 import type { ITerminalOptions } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { cn } from "@/lib/utils";
+import { isMac } from "@/lib/platform";
 import { TerminalRefreshTier } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { writeTerminalInputOrFleet } from "@/services/terminal/fleetInputRouter";
@@ -14,6 +15,7 @@ import { keybindingService } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import { useTerminalFileTransfer } from "./useTerminalFileTransfer";
+import { getOptionWordJumpSequence } from "./terminalWordNavigation";
 
 export interface XtermAdapterProps {
   terminalId: string;
@@ -284,6 +286,21 @@ export function XtermAdapter({
       terminalInstanceService.setVisible(terminalId, true);
 
       if (!managed.keyHandlerInstalled) {
+        const writeWordJump = (event: KeyboardEvent, sequence: string): boolean => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (!managed.isInputLocked) {
+            writeTerminalInputOrFleet(terminalId, sequence);
+            // `return false` bypasses xterm's onData, so the listener-installed
+            // input tracking is replicated here (#8255). The payload stays empty
+            // on purpose: a cursor jump composes no text, and a non-empty one
+            // would count toward the agent's composition total.
+            terminalInstanceService.notifyUserInput(terminalId);
+            stableOnInput(sequence);
+          }
+          return false;
+        };
+
         managed.terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
           // Only process keydown events to avoid double-firing
           if (event.type !== "keydown") {
@@ -338,9 +355,22 @@ export function XtermAdapter({
             return true;
           }
 
-          // Skip repeat events
+          // Only the shell line editor needs the rewrite: it binds ESC b / ESC f
+          // to word motion but not the CSI modifier arrows xterm emits for
+          // Option+Arrow. A full-screen TUI decodes those arrows itself, so on
+          // the alt buffer we leave the key alone rather than handing the app a
+          // Meta+B/F it never asked for.
+          const wordJumpSequence =
+            isMac() && !terminalInstanceService.getAltBufferState(terminalId)
+              ? getOptionWordJumpSequence(event)
+              : null;
+
+          // Skip repeat events. A held Option+Arrow is the exception — word jump
+          // has to keep firing while the key is down — and it resolves here so
+          // auto-repeats never reach the chord resolution below, where they could
+          // complete or invalidate a pending chord the user never re-pressed.
           if (event.repeat) {
-            return true;
+            return wordJumpSequence ? writeWordJump(event, wordJumpSequence) : true;
           }
 
           // Let Shift+F10 and ContextMenu key bubble to DOM for panel context menu
@@ -415,6 +445,10 @@ export function XtermAdapter({
           // Allow critical Ctrl+<key> bindings to reach the TUI
           if (event.ctrlKey && !event.shiftKey && TUI_KEYBINDS.has(event.key)) {
             return true;
+          }
+
+          if (wordJumpSequence) {
+            return writeWordJump(event, wordJumpSequence);
           }
 
           if (
