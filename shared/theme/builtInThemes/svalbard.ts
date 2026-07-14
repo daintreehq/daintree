@@ -174,9 +174,6 @@ export const theme: BuiltInThemeSource = {
     "pulse-heat-3": "#008D94",
     "pulse-heat-4": "#6A499B",
     "pulse-heat-color": "#6A499B",
-    // Opaque so the streak-break signal clears the 3:1 graphical floor — the
-    // missed day stays unambiguous red, never aurora.
-    "pulse-missed-bg": "#C0413E",
     "pulse-range-bg": "#E9F0F5",
     "pulse-ring-offset": "#FFFFFF",
     "pulse-skeleton-gradient": "linear-gradient(90deg, #C2D9E6 25%, #E9F0F5 50%, #C2D9E6 75%)",

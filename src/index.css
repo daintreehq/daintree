@@ -2669,13 +2669,13 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   }
 
   /* Project Pulse heatmap (issue #9819). Theme-authored backgrounds collapse
-   * to Canvas under forced-colors, so the four heat levels + missed-day cell
-   * become indistinguishable. Use a system-paint + size-coded inner square
-   * (GitHub's 2023+ contribution-graph approach) keyed off data-heat-level,
-   * and a solid fill for the missed-day streak-break signal. The shape span
-   * is rendered always (display: none baseline) so theme switches don't
+   * to Canvas under forced-colors, so the four heat levels become
+   * indistinguishable. Use a system-paint + size-coded inner square (GitHub's
+   * 2023+ contribution-graph approach) keyed off data-heat-level. The shape
+   * span is rendered always (display: none baseline) so theme switches don't
    * reflow; the !important on the heat cell background is required to beat
-   * the inline author style set in PulseHeatmap.getCellStyle. */
+   * the inline author style set in PulseHeatmap.getCellStyle. A zero-commit
+   * day carries no shape at all — quiet, never a failure signal. */
   .pulse-heat-cell {
     background: Canvas !important;
   }
@@ -2698,9 +2698,6 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   .pulse-heat-cell[data-heat-level="4"] .pulse-heat-cell-shape {
     width: 90%;
     height: 90%;
-  }
-  .pulse-heat-cell-missed {
-    background: CanvasText !important;
   }
   /* The empty (level 0) legend swatch is a <span>, so it misses both the
      global button ButtonText border above and the shape-span cue (empty cells

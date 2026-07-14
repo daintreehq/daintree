@@ -172,8 +172,6 @@ export const theme: BuiltInThemeSource = {
     "pulse-heat-2": "#6BC9CC",
     "pulse-heat-3": "#0099A2",
     "pulse-heat-4": "#006171",
-    // Opaque so the streak-break signal clears the 3:1 graphical floor.
-    "pulse-missed-bg": "#A83C34",
     "pulse-range-bg": "#F3F1EA",
     "pulse-ring-offset": "#FFFFFF",
     "pulse-skeleton-gradient": "linear-gradient(90deg, #DCD8CA 25%, #F3F1EA 50%, #DCD8CA 75%)",
