@@ -262,3 +262,36 @@ describe("AppPaletteDialog co-located live region", () => {
     expect(liveRegions.length).toBeGreaterThan(0);
   });
 });
+
+// WCAG 2.3.3: the scrim only interpolates opacity, which is not vestibular, so
+// reduced motion must leave its fade intact — only the panel's zoom is spatial.
+// Mirrors the policy asserted in AppDialog.test.tsx; both overlay families dim
+// identically.
+describe("AppPaletteDialog reduced-motion policy", () => {
+  beforeEach(() => {
+    _resetForTests();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
+    usePaletteStore.setState({ activePaletteId: null });
+  });
+
+  afterEach(() => {
+    _resetForTests();
+  });
+
+  it("keeps the scrim fading under reduced motion", () => {
+    renderPalette({ isOpen: true });
+    const scrim = screen.getByRole("dialog", { name: "Test palette" }).parentElement as HTMLElement;
+
+    expect(scrim.className).toContain("bg-scrim-medium");
+    expect(scrim.className).toContain("transition-opacity");
+    expect(scrim.className).not.toContain("motion-reduce:transition-none");
+  });
+
+  it("gives the scrim an explicit easing rather than the Tailwind default", () => {
+    renderPalette({ isOpen: true });
+    const scrim = screen.getByRole("dialog", { name: "Test palette" }).parentElement as HTMLElement;
+
+    expect(scrim.style.transitionTimingFunction).not.toBe("");
+  });
+});
