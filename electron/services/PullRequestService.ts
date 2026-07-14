@@ -204,6 +204,21 @@ class PullRequestService {
   constructor() {
     this.unsubscribers.push(events.on("sys:worktree:update", this.handleWorktreeUpdate.bind(this)));
     this.unsubscribers.push(events.on("sys:worktree:remove", this.handleWorktreeRemove.bind(this)));
+    this.unsubscribers.push(
+      events.on("sys:forge:remote-changed", this.handleForgeRemoteChanged.bind(this))
+    );
+  }
+
+  /**
+   * The repo's remotes changed (#11155) — `WorkspaceService` emits this only
+   * after a `.git/config` write actually altered the remote table. A cached
+   * "no-match" may now resolve, so drop the resolution and re-check. This is
+   * the ONLY worktree-adjacent signal allowed to release the no-match pause:
+   * `handleWorktreeUpdate` must stay inert on it, or #9997's 5s-forever spin
+   * on remote-less repos returns.
+   */
+  private handleForgeRemoteChanged(): void {
+    this.notifyForgeProviderRegistryUpdated();
   }
 
   private handleWorktreeUpdate(state: WorktreeState): void {

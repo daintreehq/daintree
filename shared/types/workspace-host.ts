@@ -720,6 +720,13 @@ export type WorkspaceHostEvent =
       providerId: string;
       isUnhealthy: boolean;
     }
+  // The repo's git remote table changed (#11155) — `git remote add` / `set-url`
+  // / `remove`, detected from a `.git/config` write. Signal-only and repo-level:
+  // the host already applied it to its own monitors, and main derives the
+  // projectId from the emitting host's project path. Carries no remote URL —
+  // https remotes can embed credentials, and the renderer re-resolves through
+  // main's own precedence chain anyway.
+  | { type: "forge-remote-changed" }
   // CopyTree events
   | { type: "copytree:progress"; operationId: string; progress: CopyTreeProgress }
   | {
