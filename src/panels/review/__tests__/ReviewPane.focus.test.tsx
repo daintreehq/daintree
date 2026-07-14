@@ -36,7 +36,7 @@ describe("ReviewPane focus target (#11109)", () => {
   });
 
   it("moves focus to its container and confirms the handoff", () => {
-    const { container } = render(<ReviewPane id="r-1" worktreeId="w-1" />);
+    const { container } = render(<ReviewPane id="r-1" worktreeId="w-1" onClose={vi.fn()} />);
     const root = container.firstElementChild;
 
     let accepted = false;
@@ -51,7 +51,7 @@ describe("ReviewPane focus target (#11109)", () => {
   it("accepts focus in the worktree-unavailable branch too", () => {
     // Both return branches render a container; only wiring the happy path
     // would leave Enter dead on a review pane whose worktree went away.
-    const { container } = render(<ReviewPane id="r-1" />);
+    const { container } = render(<ReviewPane id="r-1" onClose={vi.fn()} />);
     const root = container.firstElementChild;
 
     let accepted = false;
@@ -66,13 +66,13 @@ describe("ReviewPane focus target (#11109)", () => {
   it("still hands its container to ReviewHubContent as the keyboard scope", () => {
     // The container doubles as ReviewHubContent's Escape scope; a document-wide
     // fallback would swallow Escape across the whole app.
-    const { container } = render(<ReviewPane id="r-1" worktreeId="w-1" />);
+    const { container } = render(<ReviewPane id="r-1" worktreeId="w-1" onClose={vi.fn()} />);
 
     expect(keyboardScopes.at(-1)).toBe(container.firstElementChild);
   });
 
   it("releases the registry entry on unmount", () => {
-    const { unmount } = render(<ReviewPane id="r-1" worktreeId="w-1" />);
+    const { unmount } = render(<ReviewPane id="r-1" worktreeId="w-1" onClose={vi.fn()} />);
     unmount();
 
     expect(focusPanelInput("r-1")).toBe(false);
