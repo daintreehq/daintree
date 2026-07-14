@@ -2323,6 +2323,8 @@ function buildElectronApi(): ElectronAPI {
       notifyDismiss: (version: string) => _unwrappingInvoke(CHANNELS.UPDATE_DISMISS_TOAST, version),
 
       getLastCheck: () => _unwrappingInvoke(CHANNELS.UPDATE_GET_LAST_CHECK),
+
+      getLatest: () => _unwrappingInvoke(CHANNELS.UPDATE_GET_LATEST),
     },
 
     // Windows Store update-notification API (parallel to `update`; only active

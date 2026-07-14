@@ -80,6 +80,30 @@ const cleanupProgress = vi.fn();
 const cleanupDownloaded = vi.fn();
 const notifyDismissMock = vi.fn().mockResolvedValue(undefined);
 
+type UpdateStage = { version: string; downloaded: boolean };
+
+const getLatestMock = vi.fn<() => Promise<UpdateStage | null>>();
+
+/**
+ * A getLatest() whose resolution the test controls, so the hydrate response can
+ * be landed deliberately after a live event or after unmount.
+ */
+function deferredGetLatest(): { resolve: (stage: UpdateStage | null) => void } {
+  let resolve!: (stage: UpdateStage | null) => void;
+  const promise = new Promise<UpdateStage | null>((r) => {
+    resolve = r;
+  });
+  getLatestMock.mockReturnValue(promise);
+  return { resolve };
+}
+
+/** Let the hydrate promise's `.then` run. */
+async function flushHydrate(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+  });
+}
+
 let toastCounter = 0;
 
 describe("useUpdateListener", () => {
@@ -124,6 +148,8 @@ describe("useUpdateListener", () => {
       return id;
     });
     notifyDismissMock.mockClear();
+    // Nothing pending is the default; the hydration tests opt in.
+    getLatestMock.mockReset().mockResolvedValue(null);
 
     window.electron = {
       update: {
@@ -142,6 +168,7 @@ describe("useUpdateListener", () => {
         quitAndInstall: vi.fn(),
         checkForUpdates: vi.fn(),
         notifyDismiss: notifyDismissMock,
+        getLatest: getLatestMock,
       },
     } as unknown as typeof window.electron;
   });
@@ -532,5 +559,117 @@ describe("useUpdateListener", () => {
         urgent: true,
       })
     );
+  });
+
+  // The update events are one-shot broadcasts from main. A renderer created
+  // after they fired — a second project view, a new window, a view rebuilt after
+  // LRU eviction — only learns an update is waiting by pulling it (issue #11111).
+  describe("hydration for a renderer that mounted after the broadcast", () => {
+    it("surfaces an update that was already downloading before this view existed", async () => {
+      getLatestMock.mockResolvedValue({ version: "3.0.0", downloaded: false });
+
+      renderHook(() => useUpdateListener());
+      await flushHydrate();
+
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Update available", action: undefined })
+      );
+    });
+
+    it("surfaces a ready-to-install update as actionable", async () => {
+      getLatestMock.mockResolvedValue({ version: "3.0.0", downloaded: true });
+
+      renderHook(() => useUpdateListener());
+      await flushHydrate();
+
+      const payload = notifyMock.mock.calls[0]![0];
+      expect(payload).toEqual(
+        expect.objectContaining({ type: "success", title: "Update ready", urgent: true })
+      );
+      // The whole point of hydrating a ready update: the new window can act on it.
+      expect(payload.action?.label).toBe("Restart to update");
+    });
+
+    it("says nothing when main reports no pending update", async () => {
+      renderHook(() => useUpdateListener());
+      await flushHydrate();
+
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    it("does not pull on Windows Store builds", () => {
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      useDistributionStore.setState({ isWindowsStore: true });
+
+      renderHook(() => useUpdateListener());
+
+      expect(getLatestMock).not.toHaveBeenCalled();
+    });
+
+    it("holds a hydrated update until the quiet period lifts", async () => {
+      getLatestMock.mockResolvedValue({ version: "3.0.0", downloaded: true });
+
+      const { rerender } = renderHook(({ suppress }) => useUpdateListener(suppress), {
+        initialProps: { suppress: true },
+      });
+      await flushHydrate();
+
+      expect(notifyMock).not.toHaveBeenCalled();
+
+      rerender({ suppress: false });
+
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Update ready", urgent: true })
+      );
+    });
+
+    it("never regresses a live ready toast back to downloading", async () => {
+      // The hazard: hydration is in flight when the download finishes. Both
+      // carry the same correlationId, so a late "available" snapshot would
+      // collapse onto the live "Update ready" toast and strip its restart
+      // action — telling the user to keep waiting for an update that is done.
+      const deferred = deferredGetLatest();
+      renderHook(() => useUpdateListener());
+
+      act(() => {
+        capturedDownloaded!({ version: "3.0.0" });
+      });
+      const notifyCallsAfterLiveEvent = notifyMock.mock.calls.length;
+
+      deferred.resolve({ version: "3.0.0", downloaded: false });
+      await flushHydrate();
+
+      expect(notifyMock.mock.calls.length).toBe(notifyCallsAfterLiveEvent);
+      expect(updateNotificationMock).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ title: "Update available" })
+      );
+    });
+
+    it("does not toast twice when a live event beats the hydrate response", async () => {
+      const deferred = deferredGetLatest();
+      renderHook(() => useUpdateListener());
+
+      act(() => {
+        capturedAvailable!({ version: "3.0.0" });
+      });
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+
+      deferred.resolve({ version: "3.0.0", downloaded: false });
+      await flushHydrate();
+
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not toast into a view that has already gone away", async () => {
+      const deferred = deferredGetLatest();
+      const { unmount } = renderHook(() => useUpdateListener());
+
+      unmount();
+      deferred.resolve({ version: "3.0.0", downloaded: true });
+      await flushHydrate();
+
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
   });
 });

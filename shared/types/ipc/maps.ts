@@ -938,6 +938,10 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [];
     result: number | null;
   };
+  "update:get-latest": {
+    args: [];
+    result: { version: string; downloaded: boolean } | null;
+  };
 
   // Windows Store update notification channels
   "store-update:get-latest": {

@@ -113,6 +113,20 @@ const CHECKING_MENU_DELAY_MS = 400;
 
 export type UpdateMenuState = "idle" | "checking" | "ready";
 
+// Renderer-facing snapshot of the update the user should currently be told
+// about. Distinct from `updateDownloaded`, which is the install-authorization
+// guard: this one carries dismissal semantics and exists purely so a renderer
+// that mounts after the one-shot broadcast (new project view, new window, a
+// view restored from LRU eviction) can still pull the current stage.
+export type LatestUpdateState = { version: string; downloaded: boolean };
+
+// Why an `update-available` event was not broadcast. The two reasons need
+// different cache handling: an event deduped within the session is one an
+// as-yet-unopened renderer has still never seen (keep it pullable), whereas a
+// dismissed one was explicitly waved off by the user (a fresh window must not
+// re-nag them with it).
+type UpdateAvailableSuppressionReason = "session-dedup" | "dismiss-cooldown";
+
 class AutoUpdaterService {
   private checkInterval: NodeJS.Timeout | null = null;
   private startupJitterTimeout: NodeJS.Timeout | null = null;
@@ -132,6 +146,10 @@ class AutoUpdaterService {
   private installInFlight = false;
   private isManualCheck = false;
   private lastBroadcastVersion: string | null = null;
+  // Replayable form of the UPDATE_AVAILABLE / UPDATE_DOWNLOADED broadcasts.
+  // Those are one-shot, so a renderer created after they fired never learned an
+  // update was pending; this is what UPDATE_GET_LATEST hands such a renderer.
+  private latestUpdate: LatestUpdateState | null = null;
   private menuState: UpdateMenuState = "idle";
   private checkingMenuTimeout: NodeJS.Timeout | null = null;
   private menuStateListeners: Set<(state: UpdateMenuState) => void> = new Set();
@@ -185,6 +203,19 @@ class AutoUpdaterService {
 
   getMenuState(): UpdateMenuState {
     return this.menuState;
+  }
+
+  // Backs UPDATE_GET_LATEST. Returns a copy so a renderer round-trip can never
+  // alias the service's own state.
+  //
+  // Answers null for the whole install window. The shutdown chain runs for
+  // multiple seconds before the updater takes the process, and the updater keeps
+  // emitting during it — a download that lands in there would otherwise
+  // repopulate the snapshot and offer a view created mid-shutdown a "Restart to
+  // update" for a payload that is already being installed.
+  getLatestUpdate(): LatestUpdateState | null {
+    if (this.installInFlight) return null;
+    return this.latestUpdate ? { ...this.latestUpdate } : null;
   }
 
   onMenuStateChange(cb: (state: UpdateMenuState) => void): () => void {
@@ -265,6 +296,10 @@ class AutoUpdaterService {
     // declined request leaves the menu item and toast still actionable. Flipping
     // both guards here also means a rapid double-click reads idle and bails.
     this.updateDownloaded = false;
+    // Drop it from the pull cache on the same terms: the update is being
+    // installed, so a view created during the (multi-second) shutdown chain must
+    // not be handed a "Restart to update" for it.
+    this.latestUpdate = null;
     this.setMenuState("idle");
     return true;
   }
@@ -374,14 +409,52 @@ class AutoUpdaterService {
     }
   }
 
-  private shouldSuppressUpdateAvailable(version: string): boolean {
+  // Returns null when the event should be broadcast, otherwise WHY it was
+  // withheld. The reason matters: `availableHandler` keeps a deduped version
+  // pullable via UPDATE_GET_LATEST but drops a dismissed one, so a window the
+  // user opens later is told about an update it never saw yet is not re-nagged
+  // about one they already waved off.
+  //
+  // Dismissal is evaluated BEFORE session dedup. Checking dedup first (as this
+  // did when it returned a bare boolean) misclassifies the common
+  // broadcast → user dismisses → next poll refires sequence as "dedup", which
+  // would repopulate the cache with a version the user just dismissed. Both
+  // reasons suppress the broadcast either way, so the reorder changes only the
+  // cache decision, never what the user is shown live.
+  private getUpdateAvailableSuppressionReason(
+    version: string
+  ): UpdateAvailableSuppressionReason | null {
     // Manual checks always bypass suppression so users see a result.
-    if (this.isManualCheck) return false;
+    if (this.isManualCheck) return null;
+
+    if (this.isDismissedWithinCooldown(version)) return "dismiss-cooldown";
 
     // In-session dedup: electron-updater refires `update-available` on every
     // poll for the same pending version. Swallow repeats within this session.
-    if (this.lastBroadcastVersion === version) return true;
+    if (this.lastBroadcastVersion === version) return "session-dedup";
 
+    return null;
+  }
+
+  // Pruning is best-effort and must never throw. This runs inside
+  // `update-available`, an EventEmitter listener: a throw there is turned into an
+  // updater `error` event, which this service classifies as permanent and
+  // therefore does NOT retry — an unwritable store would abort the update check
+  // outright. Fail open instead; a record we couldn't delete is re-evaluated on
+  // the next poll anyway.
+  private forgetDismissRecord(): void {
+    try {
+      store.delete("dismissedUpdateVersion");
+      store.delete("dismissedUpdateAt");
+    } catch (err) {
+      console.error("[MAIN] Failed to clear the dismissed-update record:", err);
+    }
+  }
+
+  // True only while the user's dismissal of THIS version is still in force.
+  // Prunes corrupt and expired records as it goes, so a bad write can't
+  // permanently mute updates.
+  private isDismissedWithinCooldown(version: string): boolean {
     const dismissedVersion = store.get("dismissedUpdateVersion");
     const dismissedAt = store.get("dismissedUpdateAt");
     if (
@@ -392,8 +465,7 @@ class AutoUpdaterService {
       // Corrupt record (e.g., NaN/Infinity from a future writer or hand-edited
       // config) — clear it and fall through so the user still sees updates.
       if (typeof dismissedVersion === "string" || typeof dismissedAt === "number") {
-        store.delete("dismissedUpdateVersion");
-        store.delete("dismissedUpdateAt");
+        this.forgetDismissRecord();
       }
       return false;
     }
@@ -414,13 +486,24 @@ class AutoUpdaterService {
     const elapsed = Date.now() - dismissedAt;
     if (elapsed < 0 || elapsed >= DISMISS_COOLDOWN_MS) {
       // Cooldown expired (or clock skew) — clear stale record and broadcast.
-      store.delete("dismissedUpdateVersion");
-      store.delete("dismissedUpdateAt");
+      this.forgetDismissRecord();
       return false;
     }
 
     // Same version is still within the 24h cooldown.
     return dismissedVersion === version;
+  }
+
+  // Records the Available stage for a late-mounting renderer to pull.
+  //
+  // Never downgrades a completed download: electron-updater refires
+  // `update-available` on every poll for the version it has ALREADY staged, so
+  // a plain assignment here would silently roll the cached stage back from
+  // "ready to install" to "downloading…" on the next 4-hour tick, and any window
+  // opened afterwards would render the wrong (and un-actionable) toast.
+  private cacheAvailableUpdate(version: string): void {
+    if (this.latestUpdate?.downloaded && this.latestUpdate.version === version) return;
+    this.latestUpdate = { version, downloaded: false };
   }
 
   private configureFeedForChannel(channel: "stable" | "nightly"): void {
@@ -441,9 +524,25 @@ class AutoUpdaterService {
     autoUpdater.allowDowngrade = channel === "nightly";
   }
 
+  // `checkForUpdates()`, NOT `checkForUpdatesAndNotify()`. The latter is just
+  // this call plus an un-awaited `.then()` on the download promise that fires
+  // electron-updater's OWN native OS notification on `update-downloaded` — which
+  // lands on top of the in-app "Update ready" toast this app already renders
+  // from the same event (`useUpdateListener`), so the user is told twice. There
+  // is no option to suppress just the native half (`formatDownloadNotification`
+  // only rewrites its text), so the automatic contexts use the plain call, which
+  // is what the manual path (`checkForUpdatesManually`) has always done.
+  //
+  // Nothing else differs — autoDownload gating, error emission, and the returned
+  // UpdateCheckResult are identical, and the wrapper below already treats the
+  // return value opaquely.
+  //
+  // Worth knowing when verifying: the duplicate is invisible on an unsigned dev
+  // build, where Electron 42 silently fails the native notification. It only
+  // surfaces on signed/notarized release builds.
   private runUpdateCheck(context: "Initial" | "Periodic" | "Retry" | "Resume"): void {
     try {
-      const result = autoUpdater.checkForUpdatesAndNotify();
+      const result = autoUpdater.checkForUpdates();
       Promise.resolve(result).catch((err) => {
         console.error(`[MAIN] ${context} update check failed:`, err);
       });
@@ -526,6 +625,9 @@ class AutoUpdaterService {
         autoUpdater.autoInstallOnAppQuit = false;
         this.updateDownloaded = false;
         this.lastBroadcastVersion = null;
+        // The staged payload belongs to the channel being left; a renderer that
+        // mounts before the new channel's first check must not be handed it.
+        this.latestUpdate = null;
         this.resetRetryState();
         this.clearCheckingMenuTimeout();
         this.setMenuState("idle");
@@ -569,7 +671,23 @@ class AutoUpdaterService {
         if (!semver.valid(trimmed)) return;
         store.set("dismissedUpdateVersion", trimmed);
         store.set("dismissedUpdateAt", Date.now());
+        // Withdraw the version from the pull cache the moment it's dismissed,
+        // not just on the next `update-available`. Otherwise a window opened
+        // between the dismissal and the next 4-hour poll would still hydrate the
+        // toast the user just closed. A downloaded update survives: it stays
+        // separately actionable (see the dismiss-cooldown branch in
+        // `availableHandler`).
+        if (this.latestUpdate?.version === trimmed && !this.latestUpdate.downloaded) {
+          this.latestUpdate = null;
+        }
       });
+
+      // NB: UPDATE_GET_LATEST is deliberately NOT registered here. Every handler
+      // in this method runs from a deferred init task, and that queue drains on
+      // the renderer's own first-interactive signal — so `useUpdateListener` has
+      // already mounted and pulled by the time we get here. It is registered
+      // eagerly in `globalServicesInit`, which reads `getLatestUpdate()` through
+      // the service ref.
 
       this.channelHandlersRegistered = true;
     }
@@ -648,7 +766,8 @@ class AutoUpdaterService {
       this.availableHandler = (info: UpdateInfo) => {
         console.log("[MAIN] Update available:", info.version);
         this.downloadGeneration = this.channelGeneration;
-        const suppressed = this.shouldSuppressUpdateAvailable(info.version);
+        // Read the reason before `isManualCheck` is cleared — it feeds the check.
+        const suppressionReason = this.getUpdateAvailableSuppressionReason(info.version);
         this.isManualCheck = false;
         this.recordSuccessfulUpdateCheck();
         // A successful check ends the retry cycle regardless of whether we
@@ -659,7 +778,26 @@ class AutoUpdaterService {
         // completes — let the downloaded handler flip to "ready".
         this.clearCheckingMenuTimeout();
         if (this.menuState !== "ready") this.setMenuState("idle");
-        if (suppressed) return;
+
+        if (suppressionReason === "dismiss-cooldown") {
+          // The user waved this version off. Drop it from the pull cache so a
+          // window opened during the cooldown isn't handed it — but only at the
+          // Available stage. A finished download is a separate, still-actionable
+          // signal that outranks an Available-stage dismissal (the renderer
+          // deliberately raises a fresh "Update ready" toast for it either way).
+          if (this.latestUpdate?.version === info.version && !this.latestUpdate.downloaded) {
+            this.latestUpdate = null;
+          }
+          return;
+        }
+
+        // Cached for BOTH remaining paths, including "session-dedup": a repeat
+        // event carries no news for renderers that are already listening, but a
+        // window opened after the first broadcast never saw it at all, and this
+        // cache is the only way it can find out.
+        this.cacheAvailableUpdate(info.version);
+        if (suppressionReason === "session-dedup") return;
+
         this.lastBroadcastVersion = info.version;
         broadcastToRenderer(CHANNELS.UPDATE_AVAILABLE, { version: info.version });
       };
@@ -671,6 +809,14 @@ class AutoUpdaterService {
         this.resetRetryState();
         this.clearCheckingMenuTimeout();
         if (this.menuState !== "ready") this.setMenuState("idle");
+        // The feed no longer offers the version we were mid-download on (a
+        // withdrawn or replaced release). Drop it, or every window opened from
+        // here on would be told it's "downloading" an update that is never
+        // coming. A finished download survives: that installer is on disk and
+        // still installable regardless of what the feed now says.
+        if (this.latestUpdate && !this.latestUpdate.downloaded) {
+          this.latestUpdate = null;
+        }
         if (this.isManualCheck) {
           this.isManualCheck = false;
           broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
@@ -740,6 +886,11 @@ class AutoUpdaterService {
         // channel and must not re-arm install.
         if (this.channelGeneration !== this.downloadGeneration) return;
         this.updateDownloaded = true;
+        // After the guard, never before: a stale download from the previous
+        // channel is refused install authorization above, so caching it would
+        // hand a late-mounting renderer an actionable "Restart to update" for a
+        // payload this service will not install.
+        this.latestUpdate = { version: info.version, downloaded: true };
         autoUpdater.autoInstallOnAppQuit = true;
         // Persist the staged version so the next boot can detect a silent
         // install failure (issue #9261). Write before broadcasting so a crash
@@ -942,6 +1093,10 @@ class AutoUpdaterService {
     }
 
     this.updateDownloaded = false;
+    // The UPDATE_GET_LATEST handler outlives this service (it's registered
+    // eagerly and reads through the ref, which shutdown nulls out), so there is
+    // no handler to remove — only the state it reports.
+    this.latestUpdate = null;
     // Reset last: every guard above reads it to decide what an in-flight install
     // still needs. By this point those decisions are made, and the flag must not
     // survive a full teardown.
