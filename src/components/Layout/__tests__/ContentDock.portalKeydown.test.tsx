@@ -5,10 +5,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PtyPanelData } from "@shared/types/panel";
 
 // Issue #11156 — a docked terminal's Radix Popover content is portaled to
-// document.body but stays a React descendant of the dock rail, so its keydowns
-// bubble up the fiber tree into the rail's roving-tabindex handler. The chip
-// stub below reproduces exactly that shape: a [data-dock-item] chip plus a
-// portaled input that, like xterm, preventDefaults without stopping propagation.
+// document.body, so it sits outside the dock rail's DOM tree while its keydowns
+// still arrive at the rail's roving-tabindex handler through React. Typing an
+// arrow in a docked terminal roved the rail and yanked focus onto the next chip.
+//
+// This is a handler-level test of that contract, not a replica of the production
+// panel topology (which relocates the panel through DockPanelOffscreenContainer
+// into the popover). It asserts what the rail owes its portaled children: a key
+// whose target is outside the rail's DOM is none of the rail's business.
 //
 // vi.mock factories are hoisted above the module body, so everything they read
 // has to live in vi.hoisted or it is still in TDZ when they run.
@@ -134,7 +138,17 @@ vi.mock("@/components/ui/context-menu", () => ({
   ContextMenuSubTrigger: fixture.passthrough,
 }));
 
-// Stands in for the real Radix Popover trigger + its portaled terminal content.
+// Stands in for the real Radix Popover trigger plus its portaled panel content.
+// Two inputs, because production has two kinds of key-cancelling behaviour and
+// the guard must be blind to both:
+//   - "cancelled": xterm in its default mode stops propagation on keys it
+//     handles. This is the benign case.
+//   - "uncancelled": xterm in screenReaderMode deliberately does NOT cancel
+//     arrows (see CoreBrowserTerminal's keydown handler), and the CodeMirror
+//     input bar preventDefaults without stopping propagation. These are the
+//     events that actually escape into the rail — the real #11156 trigger.
+// A guard keyed on `defaultPrevented` would pass the cancelled case and still
+// let the uncancelled one steal focus, so both are asserted.
 vi.mock("../DockedTerminalItem", () => ({
   DockedTerminalItem: ({ terminal }: { terminal: PtyPanelData }) => (
     <>
@@ -143,10 +157,13 @@ vi.mock("../DockedTerminalItem", () => ({
       </button>
       {terminal.id === fixture.PORTAL_TERMINAL_ID
         ? createPortal(
-            <textarea
-              aria-label="Docked terminal input"
-              onKeyDown={(event) => event.preventDefault()}
-            />,
+            <>
+              <textarea
+                aria-label="Cancelled terminal input"
+                onKeyDown={(event) => event.preventDefault()}
+              />
+              <textarea aria-label="Uncancelled terminal input" />
+            </>,
             document.body
           )
         : null}
@@ -179,8 +196,11 @@ function renderDock() {
     chip.scrollIntoView = vi.fn();
   }
 
-  const terminalInput = screen.getByRole("textbox", { name: "Docked terminal input" });
-  return { rail, chips, terminalInput };
+  const inputs = {
+    cancelled: screen.getByRole("textbox", { name: "Cancelled terminal input" }),
+    uncancelled: screen.getByRole("textbox", { name: "Uncancelled terminal input" }),
+  };
+  return { rail, chips, inputs };
 }
 
 /** Roving tabindex keeps the active chip as the rail's only tab stop. */
@@ -202,31 +222,35 @@ describe("ContentDock — arrow keys from a docked terminal (issue #11156)", () 
     expect(tabStops(chips)).toEqual([-1, 0]);
   });
 
-  it.each(["ArrowLeft", "ArrowRight", "Home", "End"] as const)(
-    "leaves focus and rail tab stops untouched for %s typed into the portaled terminal",
-    (key) => {
-      const { rail, chips, terminalInput } = renderDock();
+  const KEYS = ["ArrowLeft", "ArrowRight", "Home", "End"] as const;
+  const SURFACES = ["cancelled", "uncancelled"] as const;
+
+  it.each(SURFACES.flatMap((surface) => KEYS.map((key) => [surface, key] as const)))(
+    "leaves focus and rail tab stops untouched for %s %s typed into the portaled terminal",
+    (surface, key) => {
+      const { rail, chips, inputs } = renderDock();
+      const input = inputs[surface];
 
       chips[0]!.focus();
       const stopsBefore = tabStops(chips);
 
-      terminalInput.focus();
-      // The terminal is a React descendant of the rail but not a DOM one — that
-      // divergence is the whole bug.
-      expect(rail.contains(terminalInput)).toBe(false);
+      input.focus();
+      // The terminal reaches this handler through the React tree while sitting
+      // outside the rail's DOM tree. That divergence is the whole bug.
+      expect(rail.contains(input)).toBe(false);
 
-      fireEvent.keyDown(terminalInput, { key });
+      fireEvent.keyDown(input, { key });
 
-      expect(document.activeElement).toBe(terminalInput);
+      expect(document.activeElement).toBe(input);
       expect(tabStops(chips)).toEqual(stopsBefore);
     }
   );
 
   it("does not adopt the portaled terminal as the rail's active chip on focus", () => {
-    const { chips, terminalInput } = renderDock();
+    const { chips, inputs } = renderDock();
 
     chips[0]!.focus();
-    terminalInput.focus();
+    inputs.uncancelled.focus();
 
     // Focus events bubble the fiber tree too. The rail must not treat the
     // terminal as one of its chips: ArrowRight from the first chip still lands

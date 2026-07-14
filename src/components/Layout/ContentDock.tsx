@@ -346,14 +346,16 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
 
   const handleDockKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLElement>) => {
-      // Issue #11156 — React synthetic events bubble through the React tree, so
-      // keydowns inside portaled children (a docked terminal's Radix Popover
-      // content, rendered in document.body) still reach this handler. xterm
-      // preventDefaults the keys it handles but never stops propagation, so
-      // arrows typed into a docked terminal would rove the rail and steal focus
-      // off the terminal. The DOM containment check excludes portal content —
-      // it is not a DOM descendant of the rail. Mirrors Toolbar.tsx.
-      if (!scrollContainerRef.current?.contains(e.target as Node)) return;
+      // Issue #11156 — React synthetic events bubble the React tree, so keydowns
+      // from a docked panel's Radix Popover content (portaled to document.body)
+      // still reach this handler. Not every input surface cancels them first:
+      // xterm stops propagation for keys it handles but deliberately does not in
+      // screenReaderMode, and the CodeMirror input bar preventDefaults without
+      // stopping propagation. Either way an arrow typed into a docked terminal
+      // would rove the rail and yank focus off the panel mid-type. Gate on DOM
+      // containment — portal content is not a DOM descendant of the rail — so
+      // key ownership follows the real tree. Mirrors Toolbar.tsx.
+      if (!(e.target instanceof Node) || !scrollContainerRef.current?.contains(e.target)) return;
 
       // dnd-kit's KeyboardSensor owns Space/Enter (lift) and arrows (move)
       // while a drag is active. Early-return so reordering still works.
