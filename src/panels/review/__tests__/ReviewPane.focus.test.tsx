@@ -95,11 +95,13 @@ describe("ReviewPane reactive focus (#11133)", () => {
     document.body.appendChild(outside);
     outside.focus();
 
-    const { container, rerender } = render(<ReviewPane id="r-1" worktreeId="w-1" />);
+    const { container, rerender } = render(
+      <ReviewPane id="r-1" worktreeId="w-1" onClose={vi.fn()} />
+    );
     expect(document.activeElement).toBe(outside);
 
     act(() => {
-      rerender(<ReviewPane id="r-1" worktreeId="w-1" isFocused />);
+      rerender(<ReviewPane id="r-1" worktreeId="w-1" onClose={vi.fn()} isFocused />);
     });
 
     expect(document.activeElement).toBe(container.firstElementChild);
@@ -107,7 +109,9 @@ describe("ReviewPane reactive focus (#11133)", () => {
   });
 
   it("leaves focus alone when it already sits inside the pane", () => {
-    const { container } = render(<ReviewPane id="r-1" worktreeId="w-1" isFocused />);
+    const { container } = render(
+      <ReviewPane id="r-1" worktreeId="w-1" onClose={vi.fn()} isFocused />
+    );
     const hub = container.querySelector<HTMLElement>('[data-testid="review-hub"]')!;
     hub.tabIndex = -1;
     act(() => hub.focus());
