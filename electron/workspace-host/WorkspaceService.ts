@@ -284,13 +284,16 @@ export class WorkspaceService {
   constructor(private readonly sendEvent: (event: WorkspaceHostEvent) => void) {
     this.fetchCoordinator = new RepoFetchCoordinator({
       onFetchSuccess: (worktreeId) => {
-        const monitor = this.monitors.get(worktreeId);
-        if (!monitor || !monitor.isRunning) return;
         // A successful fetch updated remote refs, so the next `rev-list` for
-        // ahead/behind will return fresh counts. Trigger a status refresh
-        // immediately rather than waiting for the next poll tick — but
-        // fire-and-forget; fetch success must never block.
-        monitor.triggerRefreshIfUpdating();
+        // ahead/behind returns fresh counts for *every* worktree sharing this
+        // repo's common dir — not just the one that triggered the fetch. Force
+        // a status refresh across all siblings so a sibling-triggered fetch
+        // still surfaces the main worktree's new behind-count promptly (drives
+        // the forge-count recheck, #11151) instead of waiting for that
+        // worktree's own next poll tick. Fire-and-forget; fetch success must
+        // never block, and a commondir-resolution race during teardown must
+        // not surface as an unhandled rejection.
+        void this.refreshStatusForFetchSiblings(worktreeId).catch(() => {});
       },
       onAuthFailureConfirmed: (commonDir, reason) =>
         this.handleAuthFailureConfirmed(commonDir, reason),
@@ -1496,6 +1499,38 @@ export class WorkspaceService {
       const monitorCommonDir = await getGitCommonDir(monitor.path, { logErrors: false });
       if (monitorCommonDir === triggeringCommonDir) {
         monitor.setFetchState(result.lastFetchedAt, result.authFailed, result.networkFailed);
+      }
+    }
+  }
+
+  /**
+   * Force a fresh git-status pass on every monitor sharing the triggering
+   * worktree's `git common-dir` after a real fetch completes (#11151). Linked
+   * worktrees back the same object store, so one `git fetch origin` advances
+   * upstream refs for all of them — but only the triggering monitor was being
+   * refreshed, leaving siblings (notably the main worktree, whose behind-count
+   * feeds the forge-count auto-recheck) on a stale count until their own next
+   * poll. `triggerRefreshIfUpdating()` invalidates the git-status cache and
+   * kicks a forced pass, mirroring the single-monitor call this replaced.
+   *
+   * Only invoked from `onFetchSuccess` (a genuine completed fetch), never from
+   * the recency-cache/skip paths, so it can't fan status work out on a no-op.
+   */
+  private async refreshStatusForFetchSiblings(triggeringWorktreeId: string): Promise<void> {
+    const triggering = this.monitors.get(triggeringWorktreeId);
+    if (!triggering || !triggering.isRunning) return;
+    const triggeringCommonDir = await getGitCommonDir(triggering.path, { logErrors: false });
+    if (!triggeringCommonDir) {
+      // Without a commondir we can't identify siblings. Refresh the triggering
+      // monitor alone — its own counts still benefit.
+      triggering.triggerRefreshIfUpdating();
+      return;
+    }
+    for (const monitor of this.monitors.values()) {
+      if (!monitor.isRunning) continue;
+      const monitorCommonDir = await getGitCommonDir(monitor.path, { logErrors: false });
+      if (monitorCommonDir === triggeringCommonDir) {
+        monitor.triggerRefreshIfUpdating();
       }
     }
   }

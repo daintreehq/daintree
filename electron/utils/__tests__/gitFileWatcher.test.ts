@@ -264,6 +264,71 @@ describe("GitFileWatcher", () => {
     expect(onChange).toHaveBeenCalledTimes(1);
   });
 
+  // ---- Remote-tracking refs arm (#11151) ----
+
+  it("watches refs/remotes/origin so an external fetch advancing origin surfaces", async () => {
+    const originDir = pathJoin("/repo", ".git", "refs", "remotes", "origin");
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "main",
+      debounceMs: 150,
+      onChange: vi.fn(),
+    });
+
+    await expect(gitWatcher.start()).resolves.toBe(true);
+
+    const watchedPaths = vi.mocked(watch).mock.calls.map(([path]) => path);
+    expect(watchedPaths).toContain(originDir);
+  });
+
+  it("triggers a debounced onChange for any change under refs/remotes/origin", async () => {
+    const originDir = pathJoin("/repo", ".git", "refs", "remotes", "origin");
+    const onChange = vi.fn();
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "main",
+      debounceMs: 150,
+      onChange,
+    });
+
+    await expect(gitWatcher.start()).resolves.toBe(true);
+
+    const originCall = vi.mocked(watch).mock.calls.find(([path]) => path === originDir) as
+      | [unknown, unknown, unknown]
+      | undefined;
+    expect(originCall).toBeDefined();
+    const originCallback = originCall?.[2] as
+      | ((eventType: string, filename: string | Buffer | null) => void)
+      | undefined;
+    expect(originCallback).toBeDefined();
+
+    // A fetch writing origin/main; the arm is filename-agnostic (any event here
+    // means upstream may have moved), and a burst coalesces into one refresh.
+    originCallback?.("rename", "main");
+    originCallback?.("rename", "main.lock");
+    originCallback?.("change", null);
+    await vi.advanceTimersByTimeAsync(150);
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("degrades silently when refs/remotes/origin cannot be watched", async () => {
+    const originDir = pathJoin("/repo", ".git", "refs", "remotes", "origin");
+    vi.mocked(watch).mockImplementation(((path: string) => {
+      if (path === originDir) throw new Error("ENOENT: no such directory");
+      return createMockWatcher();
+    }) as unknown as typeof watch);
+
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "main",
+      debounceMs: 150,
+      onChange: vi.fn(),
+    });
+
+    // A missing origin dir (no fetch yet / all refs packed) must not fail start.
+    await expect(gitWatcher.start()).resolves.toBe(true);
+  });
+
   // ---- Worktree debounce tests ----
 
   it("worktree events debounce normally for short bursts", async () => {
