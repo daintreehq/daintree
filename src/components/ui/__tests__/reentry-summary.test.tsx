@@ -2,6 +2,12 @@
 import { render, screen, act, fireEvent } from "@testing-library/react";
 import { describe, expect, it, beforeEach, vi, afterEach } from "vitest";
 import { ReEntrySummary } from "../ReEntrySummary";
+import {
+  UI_ENTER_DURATION,
+  UI_EXIT_DURATION,
+  UI_ENTER_EASING,
+  UI_EXIT_EASING,
+} from "@/lib/animationUtils";
 import type { ReEntrySummaryState, WorktreeRow } from "@/hooks/useReEntrySummary";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 
@@ -96,11 +102,24 @@ describe("ReEntrySummary", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    delete document.body.dataset.performanceMode;
   });
 
+  // The entrance is RAF-deferred, so the card mounts hidden and only reaches its
+  // visible state a frame later. `vi.useFakeTimers()` fakes requestAnimationFrame
+  // itself — overriding the module-level stub above — and its rAF fires on a
+  // 16ms frame, so the clock has to advance a full frame, not 0ms.
+  const FRAME_MS = 16;
+  const flushEntry = () =>
+    act(() => {
+      vi.advanceTimersByTime(FRAME_MS);
+    });
+
   it("renders nothing when state.visible is false", () => {
-    const { container } = render(<ReEntrySummary state={makeState({ visible: false })} />);
-    expect(container.innerHTML).toBe("");
+    // The card portals into document.body, so assert against the screen — the
+    // RTL container is empty either way.
+    render(<ReEntrySummary state={makeState({ visible: false })} />);
+    expect(screen.queryByRole("status")).toBeNull();
   });
 
   it("renders worktree rows with severity icon, name, and title", () => {
@@ -393,5 +412,143 @@ describe("ReEntrySummary", () => {
     );
     const card = screen.getByRole("status");
     expect(document.activeElement).not.toBe(card);
+  });
+
+  describe("exit animation (#11163)", () => {
+    // `useReEntrySummary` returns EMPTY content the instant `visible` flips
+    // false, so a dismissed card arrives here with no rows at all. These tests
+    // drive the real `useAnimatedPresence` rather than mocking it — the whole
+    // point of the fix is how long the card stays mounted.
+    const dismissedState = (dismiss: () => void) =>
+      makeState({ visible: false, dismiss, rows: [], overflowCount: 0 });
+
+    it("keeps the card mounted for the exit window, then unmounts it", () => {
+      const dismiss = vi.fn();
+      const { rerender } = render(
+        <ReEntrySummary state={makeState({ dismiss, rows: [makeRow()] })} />
+      );
+      flushEntry();
+      expect(screen.getByRole("status")).toBeTruthy();
+
+      rerender(<ReEntrySummary state={dismissedState(dismiss)} />);
+      expect(screen.getByRole("status")).toBeTruthy();
+
+      act(() => {
+        vi.advanceTimersByTime(UI_EXIT_DURATION - 1);
+      });
+      expect(screen.queryByRole("status")).toBeTruthy();
+
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(screen.queryByRole("status")).toBeNull();
+    });
+
+    it("keeps rendering the dismissed summary's rows while it slides out", () => {
+      const dismiss = vi.fn();
+      const { rerender } = render(
+        <ReEntrySummary
+          state={makeState({
+            dismiss,
+            rows: [makeRow({ worktreeName: "feature-foo", highlightTitle: "Build failed" })],
+            overflowCount: 2,
+          })}
+        />
+      );
+      flushEntry();
+
+      rerender(<ReEntrySummary state={dismissedState(dismiss)} />);
+
+      expect(screen.getByText("feature-foo")).toBeTruthy();
+      expect(screen.getByText("Build failed")).toBeTruthy();
+      expect(screen.getByText("+2 more")).toBeTruthy();
+    });
+
+    it("makes the exiting card inert without hiding it from assistive tech", () => {
+      const dismiss = vi.fn();
+      const { rerender } = render(
+        <ReEntrySummary state={makeState({ dismiss, rows: [makeRow()] })} />
+      );
+      flushEntry();
+      expect(screen.getByRole("status").className).toContain("pointer-events-auto");
+
+      rerender(<ReEntrySummary state={dismissedState(dismiss)} />);
+
+      const card = screen.getByRole("status");
+      expect(card.className).toContain("pointer-events-none");
+      // Never aria-hidden: the dismiss button still holds DOM focus during the
+      // exit, and Chromium blocks aria-hidden over a focused element.
+      expect(card.getAttribute("aria-hidden")).toBeNull();
+    });
+
+    it("cancels the pending exit and swaps in new content when a summary arrives mid-exit", () => {
+      const dismiss = vi.fn();
+      const { rerender } = render(
+        <ReEntrySummary
+          state={makeState({
+            dismiss,
+            rows: [makeRow({ worktreeId: "wt-1", worktreeName: "first-wt" })],
+          })}
+        />
+      );
+      flushEntry();
+
+      rerender(<ReEntrySummary state={dismissedState(dismiss)} />);
+      act(() => {
+        vi.advanceTimersByTime(Math.floor(UI_EXIT_DURATION / 2));
+      });
+      expect(screen.getByText("first-wt")).toBeTruthy();
+
+      rerender(
+        <ReEntrySummary
+          state={makeState({
+            visible: true,
+            dismiss,
+            rows: [makeRow({ worktreeId: "wt-2", worktreeName: "second-wt" })],
+          })}
+        />
+      );
+      flushEntry();
+
+      expect(screen.getByText("second-wt")).toBeTruthy();
+      expect(screen.queryByText("first-wt")).toBeNull();
+
+      // The superseded close timer must not fire and tear down the new card.
+      act(() => {
+        vi.advanceTimersByTime(UI_EXIT_DURATION);
+      });
+      expect(screen.getByText("second-wt")).toBeTruthy();
+    });
+
+    it("switches from the enter tier to the exit tier on dismiss", () => {
+      const dismiss = vi.fn();
+      const { rerender } = render(
+        <ReEntrySummary state={makeState({ dismiss, rows: [makeRow()] })} />
+      );
+      flushEntry();
+
+      const card = screen.getByRole("status");
+      expect(card.style.transitionDuration).toBe(`${UI_ENTER_DURATION}ms`);
+      expect(card.style.transitionTimingFunction).toBe(UI_ENTER_EASING);
+
+      rerender(<ReEntrySummary state={dismissedState(dismiss)} />);
+
+      expect(card.style.transitionDuration).toBe(`${UI_EXIT_DURATION}ms`);
+      expect(card.style.transitionTimingFunction).toBe(UI_EXIT_EASING);
+    });
+
+    it("unmounts without an exit delay in performance mode", () => {
+      document.body.dataset.performanceMode = "true";
+      const dismiss = vi.fn();
+      const { rerender } = render(
+        <ReEntrySummary state={makeState({ dismiss, rows: [makeRow()] })} />
+      );
+      flushEntry();
+      expect(screen.getByRole("status")).toBeTruthy();
+
+      rerender(<ReEntrySummary state={dismissedState(dismiss)} />);
+
+      expect(screen.queryByRole("status")).toBeNull();
+    });
   });
 });
