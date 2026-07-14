@@ -1401,6 +1401,25 @@ describe("worktreeStore", () => {
         expect(terminalStoreState.maximizedId).toBe("a1");
       });
 
+      it("clears the flat trio on a scoped switch so an empty armed set can't blank the grid", () => {
+        twoWorktrees();
+        const token = useWorktreeSelectionStore.getState().enterFleetScope();
+        // Maximize inside scope (terminal.maximize has no fleet guard), then let
+        // a focus promotion move the active worktree out from under it.
+        maximizePanel("a1");
+        terminalStoreState.focusedId = "b1";
+
+        useWorktreeSelectionStore.getState().selectWorktree("wt-b", { source: "focus" });
+
+        // The fleet branch only renders while the armed set is non-empty
+        // (`isFleetScopeRender`), so clearing the fleet selection without leaving
+        // scope falls through to the maximize branch. A trio still pointing at
+        // wt-a's panel would resolve against wt-b's grid and render nothing.
+        expect(terminalStoreState.maximizedId).toBeNull();
+        expect(terminalStoreState.maximizeTarget).toBeNull();
+        useWorktreeSelectionStore.getState().exitFleetScope(token);
+      });
+
       it("does not strand a foreign maximize when scope exits after a promotion", () => {
         twoWorktrees();
         const token = useWorktreeSelectionStore.getState().enterFleetScope();

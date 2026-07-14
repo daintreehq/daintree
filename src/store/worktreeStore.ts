@@ -399,7 +399,11 @@ function maximizeShowsPanel(
  *    only clears the *outgoing* worktree's. Restoring a maximize that does show
  *    the panel (navigating straight back to it) is still correct.
  *
- * Callers must NOT run this while fleet scope is active — see the call sites.
+ * Worktree switches *inside* fleet scope don't swap at all — they clear the flat
+ * trio and leave the parked maximizes alone (see the call sites). Fleet scope
+ * spans every worktree, so no single worktree owns the grid while it's up;
+ * `exitFleetScope` is the one fleet caller that does swap, reconciling the trio
+ * for the worktree being returned to.
  */
 function prepareWorktreeMaximizeSwap(
   state: WorktreeSelectionState,
@@ -508,11 +512,19 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     let panelPatch: PanelMaximizeFields | null = null;
     if (previousId !== id) {
       updates.expandedTerminals = new Set<string>();
-      // Fleet scope renders ahead of the maximize branch and spans every
-      // worktree, so it has no maximize of its own: switches inside it leave
-      // each worktree's parked maximize untouched, and `exitFleetScope`
-      // reconciles the flat trio on the way out.
-      if (!get().isFleetScopeActive) {
+      if (get().isFleetScopeActive) {
+        // Inside fleet scope: clear the trio, but leave the parked maximizes
+        // alone — the user hasn't left the fleet view, so an inactive worktree's
+        // maximize is still owed to them on their way back.
+        //
+        // The clear is not optional. It is tempting to skip it because the fleet
+        // branch renders ahead of the maximize branch, but `isFleetScopeRender`
+        // also requires a non-empty armed set (useContentGridContext) — clearing
+        // the fleet selection without leaving scope drops straight through to the
+        // maximize branch, where a trio left describing the *previous* worktree
+        // resolves against this one's panels and renders nothing (#11183).
+        panelPatch = CLEARED_MAXIMIZE;
+      } else {
         const swap = prepareWorktreeMaximizeSwap(get(), previousId, id, "user");
         updates.maximizeByWorktree = swap.maximizeByWorktree;
         panelPatch = swap.panelPatch;
@@ -570,10 +582,6 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       fromWorktreeId: previousId ?? null,
       toWorktreeId: id,
     });
-    // Fleet scope owns the render path and spans every worktree, so a switch
-    // inside it must leave the parked maximizes alone — including the incoming
-    // worktree's, which a focus promotion between fleet panels would otherwise
-    // consume and destroy. `exitFleetScope` reconciles the trio on the way out.
     const maximizeSwap = get().isFleetScopeActive
       ? null
       : prepareWorktreeMaximizeSwap(get(), previousId, id, source);
@@ -590,9 +598,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     // the same tick as the switch, and before the terminal policy / focus
     // restore below — a frame in between would render the outgoing worktree's
     // maximize target against this worktree's grid, i.e. nothing at all (#11183).
-    if (maximizeSwap) {
-      usePanelStore.setState(maximizeSwap.panelPatch);
-    }
+    usePanelStore.setState(maximizeSwap?.panelPatch ?? CLEARED_MAXIMIZE);
     scheduleWorktreeSwitchPaintedMark(previousId ?? null, id, switchStartedAt);
 
     if (source === "user") {
