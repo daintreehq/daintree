@@ -40,6 +40,7 @@ import { usePreferencesStore } from "@/store";
 import { keybindingService } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { getBuildChannelLabel } from "@shared/config/distribution";
 import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
 import { formatTimeAgo } from "@/utils/timeAgo";
@@ -129,6 +130,10 @@ export function GeneralTab({
 }: GeneralTabProps) {
   const effectiveSubtab =
     activeSubtab && GENERAL_SUBTABS.some((t) => t.id === activeSubtab) ? activeSubtab : "overview";
+
+  // Build provenance from the running version — stable builds get no channel
+  // badge. Distinct from the user-selected update-feed `updateChannel`.
+  const buildChannelLabel = getBuildChannelLabel(appVersion);
 
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   const [hibernationConfig, setHibernationConfig] = useState<HibernationConfig | null>(null);
@@ -703,9 +708,14 @@ export function GeneralTab({
             <div className="flex-1 min-w-0 space-y-1">
               <div className="flex items-center gap-2">
                 <span className="text-sm font-semibold text-daintree-text">Daintree</span>
-                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-status-info/15 text-status-info leading-none">
-                  Beta
-                </span>
+                {buildChannelLabel && (
+                  <span
+                    data-testid="about-build-channel"
+                    className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-status-info/15 text-status-info leading-none"
+                  >
+                    {buildChannelLabel}
+                  </span>
+                )}
                 <span className="text-xs text-text-muted font-mono ml-auto">v{appVersion}</span>
               </div>
               {buildArch && (

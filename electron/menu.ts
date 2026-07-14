@@ -24,15 +24,23 @@ import { evaluateWhen } from "./services/WhenClauseService.js";
 import { getAppWebContents } from "./window/webContentsRegistry.js";
 import { PRODUCT_NAME, PRODUCT_WEBSITE, PRODUCT_COPYRIGHT_ORG } from "./utils/productBranding.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
-import { isWindowsStoreBuild } from "../shared/config/distribution.js";
+import { isWindowsStoreBuild, getBuildChannelLabel } from "../shared/config/distribution.js";
 
-app.setAboutPanelOptions({
-  applicationName: PRODUCT_NAME,
-  applicationVersion: app.getVersion(),
-  version: "Beta",
-  copyright: `© ${new Date().getFullYear()} ${PRODUCT_COPYRIGHT_ORG}`,
-  website: PRODUCT_WEBSITE,
-});
+// The About panel's build-version slot shows the release channel for
+// prerelease builds (Nightly/Beta/RC) and stays blank for stable releases —
+// an empty string suppresses the secondary line rather than falling back to
+// CFBundleVersion (which would duplicate the version on macOS).
+export function buildAboutPanelOptions(version: string): Electron.AboutPanelOptionsOptions {
+  return {
+    applicationName: PRODUCT_NAME,
+    applicationVersion: version,
+    version: getBuildChannelLabel(version) ?? "",
+    copyright: `© ${new Date().getFullYear()} ${PRODUCT_COPYRIGHT_ORG}`,
+    website: PRODUCT_WEBSITE,
+  };
+}
+
+app.setAboutPanelOptions(buildAboutPanelOptions(app.getVersion()));
 
 function convertShortcutToAccelerator(shortcut: string): string {
   return shortcut.replace("Cmd/Ctrl", "CommandOrControl");

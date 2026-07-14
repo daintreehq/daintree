@@ -34,6 +34,13 @@ const mockBrowserWindow = vi.hoisted(() => ({
   id: 1,
 }));
 
+// setAboutPanelOptions runs once at menu.ts import time (module scope), before
+// any beforeEach vi.clearAllMocks() can wipe the mock's call history — so
+// capture the argument in a hoisted holder that survives the reset.
+const aboutPanelCapture = vi.hoisted(() => ({
+  options: undefined as Electron.AboutPanelOptionsOptions | undefined,
+}));
+
 let capturedTemplate: Electron.MenuItemConstructorOptions[] = [];
 
 const menuItemRegistry = vi.hoisted(() => new Map<string, { label: string; enabled: boolean }>());
@@ -71,7 +78,9 @@ vi.mock("electron", () => ({
   app: {
     isPackaged: false,
     getVersion: vi.fn(() => "1.0.0"),
-    setAboutPanelOptions: vi.fn(),
+    setAboutPanelOptions: vi.fn((options: Electron.AboutPanelOptionsOptions) => {
+      aboutPanelCapture.options = options;
+    }),
     setPath: vi.fn(),
     getPath: vi.fn(() => "/mock/path"),
     commandLine: {
@@ -166,11 +175,16 @@ vi.mock("../window/webContentsRegistry.js", () => ({
 }));
 
 const isWindowsStoreBuildMock = vi.hoisted(() => vi.fn(() => true));
-vi.mock("../../shared/config/distribution.js", () => ({
+// Keep the real build-channel helpers (getBuildChannel/getBuildChannelLabel)
+// so the module-load About-panel wiring is exercised for real; only override
+// the Windows Store detection the update-menu tests need to drive.
+vi.mock("../../shared/config/distribution.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../shared/config/distribution.js")>()),
   isWindowsStoreBuild: isWindowsStoreBuildMock,
 }));
 
-import { createApplicationMenu, handleDirectoryOpen } from "../menu.js";
+import { createApplicationMenu, handleDirectoryOpen, buildAboutPanelOptions } from "../menu.js";
+import { getBuildChannelLabel } from "../../shared/config/distribution.js";
 import { webContents, app, Menu } from "electron";
 
 function findMenuItem(
@@ -182,6 +196,40 @@ function findMenuItem(
   if (!menu || !Array.isArray(menu.submenu)) return undefined;
   return (menu.submenu as Electron.MenuItemConstructorOptions[]).find((i) => i.label === itemLabel);
 }
+
+describe("About panel build channel (#11121)", () => {
+  it("wires setAboutPanelOptions at import with the real running version", () => {
+    // Captured at module import: app.getVersion() is mocked to "1.0.0", proving
+    // the About options are actually applied (not dead code) and the raw
+    // version flows through as applicationVersion.
+    expect(aboutPanelCapture.options).toBeDefined();
+    expect(aboutPanelCapture.options?.applicationVersion).toBe("1.0.0");
+    expect(aboutPanelCapture.options?.version).toBe("");
+  });
+
+  describe("buildAboutPanelOptions", () => {
+    it("passes the raw version through and leaves the build-version slot blank for stable builds", () => {
+      const options = buildAboutPanelOptions("1.0.0");
+      expect(options.applicationVersion).toBe("1.0.0");
+      // Stable → no channel label → empty slot (no more hardcoded "Beta").
+      expect(options.version).toBe("");
+    });
+
+    it("surfaces the channel label in the build-version slot for prerelease builds", () => {
+      // Compare against the shared helper rather than duplicating label strings.
+      for (const version of [
+        "0.25.0-nightly.20260713120000.abc1234",
+        "1.0.0-beta.1",
+        "1.0.0-rc.2",
+      ]) {
+        const options = buildAboutPanelOptions(version);
+        expect(options.applicationVersion).toBe(version);
+        expect(options.version).toBe(getBuildChannelLabel(version));
+        expect(options.version).toBeTruthy();
+      }
+    });
+  });
+});
 
 describe("createApplicationMenu", () => {
   beforeEach(() => {
