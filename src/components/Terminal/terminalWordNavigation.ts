@@ -16,6 +16,13 @@
 const META_BACKWARD_WORD = "\x1bb";
 const META_FORWARD_WORD = "\x1bf";
 
+/** The only fields the mapping reads — `code` is excluded so a remapped or
+ *  assistive-tech key can't be matched by its physical position. */
+export type WordJumpKeyEvent = Pick<
+  KeyboardEvent,
+  "key" | "altKey" | "ctrlKey" | "metaKey" | "shiftKey"
+>;
+
 /**
  * The meta sequence Option+Left/Right should emit, or `null` when the event
  * isn't a bare Option+Arrow.
@@ -24,7 +31,7 @@ const META_FORWARD_WORD = "\x1bf";
  * the `terminal.focus*` pane navigation actions, and Shift+Option+Arrow is the
  * selection-extend convention.
  */
-export function getOptionWordJumpSequence(event: KeyboardEvent): string | null {
+export function getOptionWordJumpSequence(event: WordJumpKeyEvent): string | null {
   if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
     return null;
   }

@@ -1,18 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { getOptionWordJumpSequence } from "../terminalWordNavigation";
+import { getOptionWordJumpSequence, type WordJumpKeyEvent } from "../terminalWordNavigation";
 
-function makeKeyEvent(overrides: Partial<KeyboardEvent>): KeyboardEvent {
+function makeKeyEvent(overrides: Partial<WordJumpKeyEvent>): WordJumpKeyEvent {
   return {
-    type: "keydown",
     key: "ArrowLeft",
-    code: "ArrowLeft",
     shiftKey: false,
     ctrlKey: false,
     altKey: false,
     metaKey: false,
-    repeat: false,
     ...overrides,
-  } as unknown as KeyboardEvent;
+  };
 }
 
 describe("getOptionWordJumpSequence", () => {
@@ -26,12 +23,6 @@ describe("getOptionWordJumpSequence", () => {
     expect(getOptionWordJumpSequence(makeKeyEvent({ key: "ArrowRight", altKey: true }))).toBe(
       "\x1bf"
     );
-  });
-
-  it("keeps jumping on key repeat", () => {
-    expect(
-      getOptionWordJumpSequence(makeKeyEvent({ key: "ArrowLeft", altKey: true, repeat: true }))
-    ).toBe("\x1bb");
   });
 
   it("ignores arrows pressed without Option", () => {
@@ -63,14 +54,13 @@ describe("getOptionWordJumpSequence", () => {
   it("ignores vertical arrows and non-arrow keys", () => {
     expect(getOptionWordJumpSequence(makeKeyEvent({ key: "ArrowUp", altKey: true }))).toBeNull();
     expect(getOptionWordJumpSequence(makeKeyEvent({ key: "ArrowDown", altKey: true }))).toBeNull();
+    // Option+B/F already reach the shell as meta sequences via `macOptionIsMeta`.
     expect(getOptionWordJumpSequence(makeKeyEvent({ key: "b", altKey: true }))).toBeNull();
   });
 
-  it("matches on the semantic key, not the physical code", () => {
+  it("ignores a key the browser could not identify", () => {
     expect(
-      getOptionWordJumpSequence(
-        makeKeyEvent({ key: "Unidentified", code: "ArrowLeft", altKey: true })
-      )
+      getOptionWordJumpSequence(makeKeyEvent({ key: "Unidentified", altKey: true }))
     ).toBeNull();
   });
 });
