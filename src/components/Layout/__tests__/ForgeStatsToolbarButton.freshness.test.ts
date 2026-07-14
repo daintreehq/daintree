@@ -94,8 +94,8 @@ describe("ForgeStatsToolbarButton freshness wiring", () => {
       "utf-8"
     );
 
-    const pillClasses = pillSource.match(/"(toolbar-stat-pill[^"]*)"/)?.[1].split(/\s+/);
-    expect(pillClasses).toBeDefined();
+    const pillClasses = pillSource.match(/"(toolbar-stat-pill[^"]*)"/)?.[1]?.split(/\s+/);
+    expect(pillClasses, "pill must carry the toolbar-stat-pill opt-in class").toBeDefined();
     expect(pillClasses).not.toContain("transition-all");
 
     const scoped = pillClasses!.find((token) => /^transition-\[[^\]]+\]$/.test(token));

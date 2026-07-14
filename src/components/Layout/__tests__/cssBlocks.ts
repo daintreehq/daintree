@@ -47,11 +47,12 @@ export function extractAtRuleBlocks(css: string, marker: string): string[] {
  */
 export function transitionPropertiesFor(css: string, selector: string): Set<string> | null {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const rule = new RegExp(`\\.${escaped}\\s*\\{([^{}]*)\\}`).exec(css);
-  if (!rule) return null;
+  const body = new RegExp(`\\.${escaped}\\s*\\{([^{}]*)\\}`).exec(css)?.[1];
+  if (body === undefined) return null;
 
-  const declarations = [...rule[1].matchAll(/\btransition-property\s*:\s*([^;}]+)/g)];
-  if (declarations.length !== 1) return null;
+  const declarations = [...body.matchAll(/\btransition-property\s*:\s*([^;}]+)/g)];
+  const value = declarations.length === 1 ? declarations[0]?.[1] : undefined;
+  if (value === undefined) return null;
 
-  return new Set(declarations[0][1].split(",").map((property) => property.trim()));
+  return new Set(value.split(",").map((property) => property.trim()));
 }
