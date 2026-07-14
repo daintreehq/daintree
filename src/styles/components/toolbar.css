@@ -203,6 +203,20 @@
   box-shadow: var(--_shadow);
 }
 
+/* The stat pills transition opacity, background-color and scale as Tailwind
+ * utilities (ForgeStatPill.tsx) — scale carries the base Button cva's press
+ * snap. Each pill is a Radix tooltip trigger, so it always has a data-state and
+ * the global reduced-motion button rule in index.css — which excludes
+ * data-state buttons — never reaches it. Drop the press-scale interpolation
+ * here instead; the tint fades are not spatial motion and stay, matching the
+ * reduce-motion block further down. The scale still applies on :active, it just
+ * snaps rather than easing back. WCAG 2.3.3. */
+@variant reduce-motion {
+  .toolbar-stat-pill {
+    transition-property: opacity, background-color;
+  }
+}
+
 .toolbar-project-pill {
   --_bg: var(
     --toolbar-project-bg,

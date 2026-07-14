@@ -73,10 +73,30 @@ describe("ForgeStatsToolbarButton freshness wiring", () => {
     expect(source).toContain("animKey={commitAnimKey}");
   });
 
-  it("ForgeStatPill uses scoped transition-opacity, not transition-all", async () => {
+  it("ForgeStatPill scopes the transition to opacity, background-color and scale (issue #11168)", async () => {
+    // A bare `transition-opacity` here replaced the base Button cva's
+    // `transition` outright under tailwind-merge (same conflict group), leaving
+    // the hover tint AND the cva's `active:scale-[0.98]` press snap with no
+    // transitioned property. `scale` must stay in the set for the press to read.
     const pillSource = await fs.readFile(path.resolve(__dirname, "../ForgeStatPill.tsx"), "utf-8");
-    expect(pillSource).toContain("transition-opacity");
+    expect(pillSource).toContain("transition-[opacity,background-color,scale]");
     expect(pillSource).not.toMatch(/\btransition-all\b/);
+  });
+
+  it("ForgeStatPill opts into the reduced-motion rule that drops its press-scale", async () => {
+    // The pill is a Radix tooltip trigger, so it always carries a data-state and
+    // the global reduced-motion button rule in index.css (which excludes
+    // data-state buttons) never reaches it. The opt-in is a two-file contract:
+    // the class on the pill, the @variant rule in toolbar.css. WCAG 2.3.3.
+    const pillSource = await fs.readFile(path.resolve(__dirname, "../ForgeStatPill.tsx"), "utf-8");
+    const toolbarCss = await fs.readFile(
+      path.resolve(__dirname, "../../../styles/components/toolbar.css"),
+      "utf-8"
+    );
+    expect(pillSource).toContain("toolbar-stat-pill");
+    expect(toolbarCss).toMatch(
+      /@variant reduce-motion \{\s*\.toolbar-stat-pill \{\s*transition-property: opacity, background-color;/
+    );
   });
 
   it("Stats pills use stable equal-width hit boxes for titlebar no-drag regions", async () => {
