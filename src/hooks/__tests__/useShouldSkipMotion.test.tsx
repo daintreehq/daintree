@@ -107,8 +107,13 @@ describe("useUiMotionTransition", () => {
     expect(renderHook(() => useUiMotionTransition()).result.current.duration).toBe(0);
   });
 
-  it("keeps the shared easing curve in both modes", () => {
+  it("keeps one real easing curve in both modes", () => {
     const animated = renderHook(() => useUiMotionTransition()).result.current;
+
+    // framer 12 rejects CSS string easings, so the curve has to be a bezier tuple —
+    // an assertion of equality alone would hold even if both modes emitted undefined.
+    expect(animated.ease).toHaveLength(4);
+    expect(animated.ease.every((point) => Number.isFinite(point))).toBe(true);
 
     document.body.dataset.reduceAnimations = "true";
     const instant = renderHook(() => useUiMotionTransition()).result.current;

@@ -43,6 +43,20 @@ const OPTIONS: SegmentedToggleOption<Mode>[] = [
 
 const thumbs = () => document.querySelectorAll("[data-slot='segmented-thumb']");
 
+/** Tailwind's `z-<n>`, ignoring variants — jsdom has no stylesheet to compute against. */
+function stackLevel(el: Element): number {
+  const match = /(?:^|\s)z-(\d+)(?=\s|$)/.exec(el.className);
+  return match?.[1] === undefined ? 0 : Number(match[1]);
+}
+
+/** Does any utility on this element drop it below full opacity (in any state)? */
+function dimsBelowFullOpacity(el: Element): boolean {
+  return el.className.split(/\s+/).some((utility) => {
+    const match = /(?:^|:)opacity-(\d+)$/.exec(utility);
+    return match?.[1] !== undefined && Number(match[1]) < 100;
+  });
+}
+
 /** The button the sole thumb currently lives in — the whole point of the control. */
 function thumbOwner(): Element | null {
   expect(thumbs().length).toBe(1);
@@ -147,13 +161,17 @@ describe("SegmentedToggle", () => {
     expect(screen.getByRole("button", { name: "Diff" })).toBeTruthy();
   });
 
-  it("keeps the label readable above the thumb", () => {
+  it("keeps every label stacked above the thumb, including its neighbours'", () => {
     render(<Controlled />);
-    const active = screen.getByRole("button", { pressed: true });
+    const thumb = thumbs()[0];
 
-    // The thumb is a positioned sibling of the label, so painting order alone
-    // would put it over the text — the label has to carry its own stacking.
-    expect(within(active).getByText("View").className).toContain("z-10");
+    // The thumb is a positioned element, so painting order alone would put it over
+    // the text — and it overflows into the neighbouring segment mid-slide, so it has
+    // to sit below EVERY label, not just the one it shares a button with.
+    expect(thumb).toBeDefined();
+    for (const label of ["View", "Diff"]) {
+      expect(stackLevel(screen.getByText(label))).toBeGreaterThan(stackLevel(thumb!));
+    }
   });
 
   it("does not fire onChange for a disabled segment", () => {
@@ -187,14 +205,14 @@ describe("SegmentedToggle", () => {
     );
     const disabled = screen.getByRole("button", { name: "Diff" });
 
-    // `opacity` below 1 makes an element a stacking context, which would trap this
-    // label at its own z-index and let a thumb sliding over from a sibling paint on
-    // top of it. The dimming has to sit on the contents, never on the button.
-    expect(disabled.className).not.toMatch(/(^|:)opacity-/);
-    expect(within(disabled).getByText("Diff").className).toMatch(/opacity-/);
+    // Opacity below 1 makes an element a stacking context, which would trap this label
+    // at its own z-index and let a thumb sliding over from a sibling paint on top of
+    // it. The dimming has to sit on the contents, never on the button.
+    expect(dimsBelowFullOpacity(disabled)).toBe(false);
+    expect(dimsBelowFullOpacity(within(disabled).getByText("Diff"))).toBe(true);
   });
 
-  it("keeps the thumb on a segment that is both selected and disabled", () => {
+  it("dims a selected-but-disabled segment whole, thumb included, and keeps its thumb", () => {
     render(
       <SegmentedToggle
         options={[
@@ -208,6 +226,8 @@ describe("SegmentedToggle", () => {
 
     // Unavailable is not unselected: the control must still show what's active.
     expect(thumbOwner()).toBe(screen.getByRole("button", { name: "View" }));
+    expect(dimsBelowFullOpacity(thumbs()[0]!)).toBe(true);
+    expect(dimsBelowFullOpacity(screen.getByText("View"))).toBe(true);
   });
 
   it("renders no thumb when the value matches no option", () => {

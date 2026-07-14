@@ -60,6 +60,11 @@ export function SegmentedToggle<T extends string>({
                 layoutId={thumbLayoutId}
                 layoutCrossfade={false}
                 transition={thumbTransition}
+                // `rounded` tracks the theme (it resolves to --theme-radius-scale), which an
+                // inline pixel radius would not. framer can only scale-correct a radius it
+                // reads from `style`, so the corners stretch slightly while the thumb morphs
+                // between segments of different widths — a frame or two, and worth it to stay
+                // theme-correct at rest.
                 className={cn(
                   "absolute inset-0 z-0 rounded bg-daintree-border pointer-events-none",
                   option.disabled && "opacity-40"
