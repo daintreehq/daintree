@@ -392,14 +392,14 @@ function maximizeShowsPanel(
  *
  * Restore is skipped — and the stash dropped — when:
  *  - the snapshot no longer resolves in the incoming worktree (stale target), or
- *  - fleet scope is active: a maximize would shadow the fleet grid, which is
- *    exactly what `enterFleetScope`'s own trio-clear exists to prevent, or
  *  - the switch is a `"focus"` promotion whose focused panel this maximize would
  *    bury. A promotion means "reveal this panel" — it is how `useTypeAnywhere`,
  *    panel spawning and the quick switcher surface a panel living in a worktree
  *    the user isn't looking at, and those callers' defensive `exitMaximize()`
  *    only clears the *outgoing* worktree's. Restoring a maximize that does show
  *    the panel (navigating straight back to it) is still correct.
+ *
+ * Callers must NOT run this while fleet scope is active — see the call sites.
  */
 function prepareWorktreeMaximizeSwap(
   state: WorktreeSelectionState,
@@ -425,7 +425,7 @@ function prepareWorktreeMaximizeSwap(
     // The incoming worktree becomes active, so its maximize moves back into the
     // flat fields — drop the slot whether or not it survives validation.
     next.delete(toWorktreeId);
-    if (stashed && !state.isFleetScopeActive) {
+    if (stashed) {
       const candidate = resolveMaximizeForWorktree(stashed, toWorktreeId, panels);
       const buriesFocusedPanel =
         source === "focus" &&
@@ -508,9 +508,15 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     let panelPatch: PanelMaximizeFields | null = null;
     if (previousId !== id) {
       updates.expandedTerminals = new Set<string>();
-      const swap = prepareWorktreeMaximizeSwap(get(), previousId, id, "user");
-      updates.maximizeByWorktree = swap.maximizeByWorktree;
-      panelPatch = swap.panelPatch;
+      // Fleet scope renders ahead of the maximize branch and spans every
+      // worktree, so it has no maximize of its own: switches inside it leave
+      // each worktree's parked maximize untouched, and `exitFleetScope`
+      // reconciles the flat trio on the way out.
+      if (!get().isFleetScopeActive) {
+        const swap = prepareWorktreeMaximizeSwap(get(), previousId, id, "user");
+        updates.maximizeByWorktree = swap.maximizeByWorktree;
+        panelPatch = swap.panelPatch;
+      }
     }
 
     set(updates);
@@ -564,21 +570,29 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       fromWorktreeId: previousId ?? null,
       toWorktreeId: id,
     });
-    const maximizeSwap = prepareWorktreeMaximizeSwap(get(), previousId, id, source);
+    // Fleet scope owns the render path and spans every worktree, so a switch
+    // inside it must leave the parked maximizes alone — including the incoming
+    // worktree's, which a focus promotion between fleet panels would otherwise
+    // consume and destroy. `exitFleetScope` reconciles the trio on the way out.
+    const maximizeSwap = get().isFleetScopeActive
+      ? null
+      : prepareWorktreeMaximizeSwap(get(), previousId, id, source);
     // Auto-collapse terminals accordion when switching worktrees
     set({
       activeWorktreeId: id,
       focusedWorktreeId: id,
       _policyGeneration: generation,
       expandedTerminals: new Set<string>(),
-      maximizeByWorktree: maximizeSwap.maximizeByWorktree,
+      ...(maximizeSwap ? { maximizeByWorktree: maximizeSwap.maximizeByWorktree } : {}),
       ...(source === "user" ? { restoreWorktreeId: id } : {}),
     });
     // Hand the incoming worktree's maximize (or a clear) to the panel store in
     // the same tick as the switch, and before the terminal policy / focus
     // restore below — a frame in between would render the outgoing worktree's
     // maximize target against this worktree's grid, i.e. nothing at all (#11183).
-    usePanelStore.setState(maximizeSwap.panelPatch);
+    if (maximizeSwap) {
+      usePanelStore.setState(maximizeSwap.panelPatch);
+    }
     scheduleWorktreeSwitchPaintedMark(previousId ?? null, id, switchStartedAt);
 
     if (source === "user") {
@@ -949,12 +963,23 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     // the value used for focus restore is stable against any reads/writes
     // the in-tick clears below might trigger.
     const primaryTerminalId = getFleetLastArmedId();
+    // Reconcile maximize for the worktree we're returning to (#11183). Scope
+    // entry cleared the trio, but `activeWorktreeId` can move *during* scope (a
+    // fleet panel in another worktree gains focus and promotes it), and
+    // `terminal.maximize` still works while scoped — so the flat trio can now
+    // describe a worktree we're about to leave. Restoring `restoreId` to the
+    // active slot without reconciling would strand that foreign target and
+    // blank the grid, which is the very bug this map exists to fix. A maximize
+    // made *during* scope is discarded rather than stashed: the fleet branch
+    // renders ahead of the maximize branch, so it was never visible anyway.
+    const maximizeSwap = prepareWorktreeMaximizeSwap(get(), null, restoreId, "user");
     set({
       isFleetScopeActive: false,
       _previousActiveWorktreeId: null,
       _previousRestoreWorktreeId: null,
       _fleetScopeToken: null,
       activeWorktreeId: restoreId,
+      maximizeByWorktree: maximizeSwap.maximizeByWorktree,
       // Restore the durable selection captured at entry so a focus-promotion
       // that happened before scope entry survives the cycle (#9512).
       restoreWorktreeId: previousRestoreId,
@@ -962,9 +987,10 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       _policyGeneration: generation,
     });
     persistActiveWorktree(restoreId);
-    // Defensive: drop any preMaximizeLayout snapshot that may have survived
-    // scope entry. The restored worktree's layout should be computed fresh.
-    usePanelStore.setState({ preMaximizeLayout: null });
+    // Hand the restored worktree its own maximize back, or clear the trio
+    // outright. Either way `preMaximizeLayout` is replaced, so a snapshot that
+    // survived scope entry can no longer restore a foreign column count.
+    usePanelStore.setState(maximizeSwap.panelPatch);
     // Focus the primary (most-recently-armed) terminal so the user lands on
     // a known pane instead of whatever `focusedId` happened to be during
     // fleet scope. Runs in-tick now, so the prior token/generation guards

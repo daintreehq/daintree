@@ -417,6 +417,63 @@ describe("rendererStoreOrchestrator", () => {
 
       expect(stashedIds().get("wt-1")?.maximizedId).toBe("term-1");
     });
+
+    it("keeps one worktree's stash when another worktree's is purged", () => {
+      seedPanels([
+        { id: "term-1", worktreeId: "wt-1" },
+        { id: "term-2", worktreeId: "wt-2" },
+      ]);
+      useWorktreeSelectionStore.setState({
+        maximizeByWorktree: new Map([
+          [
+            "wt-1",
+            {
+              maximizedId: "term-1",
+              maximizeTarget: { type: "panel" as const, id: "term-1" },
+              preMaximizeLayout: null,
+            },
+          ],
+          [
+            "wt-2",
+            {
+              maximizedId: "term-2",
+              maximizeTarget: { type: "panel" as const, id: "term-2" },
+              preMaximizeLayout: null,
+            },
+          ],
+        ]),
+      });
+
+      usePanelStore.getState().trashPanel("term-1");
+
+      expect(stashedIds().has("wt-1")).toBe(false);
+      expect(stashedIds().get("wt-2")?.maximizedId).toBe("term-2");
+    });
+
+    it("purges a group stash when the panel it was maximized on is trashed", () => {
+      seedPanels([
+        { id: "term-1", worktreeId: "wt-1" },
+        { id: "term-2", worktreeId: "wt-1" },
+      ]);
+      useWorktreeSelectionStore.setState({
+        maximizeByWorktree: new Map([
+          [
+            "wt-1",
+            {
+              maximizedId: "term-1",
+              maximizeTarget: { type: "group" as const, id: "group-1" },
+              preMaximizeLayout: null,
+            },
+          ],
+        ]),
+      });
+
+      usePanelStore.getState().trashPanel("term-1");
+
+      // The stash is keyed on the maximized panel regardless of target kind:
+      // losing it leaves the group target with nothing to anchor to.
+      expect(stashedIds().has("wt-1")).toBe(false);
+    });
   });
 
   it("records terminal MRU on focus change", () => {
