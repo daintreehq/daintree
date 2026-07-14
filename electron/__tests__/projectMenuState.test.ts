@@ -40,9 +40,19 @@ function openProject(id: string, status = "active"): FakeProject {
   return { id, path: `/tmp/${id}`, status };
 }
 
-/** A window whose ProjectViewManager reports `activeId` as its active workspace. */
-function pvmWindow(activeId: string | null) {
-  return { services: { projectViewManager: { getActiveProjectId: () => activeId } } };
+/**
+ * A window whose ProjectViewManager reports `activeId` as its active workspace,
+ * and `bridgeId` as the still-painted outgoing project of an open paint gate.
+ */
+function pvmWindow(activeId: string | null, bridgeId: string | null = null) {
+  return {
+    services: {
+      projectViewManager: {
+        getActiveProjectId: () => activeId,
+        getOutgoingBridgeProjectId: () => bridgeId,
+      },
+    },
+  };
 }
 
 /** A window with no ProjectViewManager at all (legacy host). */
@@ -143,6 +153,31 @@ describe("resolveProjectIdForApplicationMenu", () => {
 
     expect(resolveProjectIdForApplicationMenu()).toBeNull();
   });
+
+  it("answers with the project still painted behind an open paint gate", () => {
+    // Mid cold-switch from project-1 to a scratch: the PVM already reports the
+    // scratch as active, but project-1's view is still on screen as the
+    // anti-flash bridge. Reading only the active id would blink the gates off.
+    projectStoreMock.getProjectById.mockImplementation((id) =>
+      id === "project-1" ? openProject("project-1") : null
+    );
+    windowRefMock.getWindowRegistry.mockReturnValue(
+      registryWith(pvmWindow("scratch-uuid", "project-1"))
+    );
+
+    expect(resolveProjectIdForApplicationMenu()).toBe("project-1");
+  });
+
+  it("ignores a bridge whose project is no longer open", () => {
+    projectStoreMock.getProjectById.mockImplementation((id) =>
+      id === "project-2" ? openProject("project-2") : openProject("project-1", "closed")
+    );
+    windowRefMock.getWindowRegistry.mockReturnValue(
+      registryWith(pvmWindow("project-2", "project-1"))
+    );
+
+    expect(resolveProjectIdForApplicationMenu()).toBe("project-2");
+  });
 });
 
 describe("refreshProjectMenuState", () => {
@@ -195,5 +230,20 @@ describe("refreshProjectMenuState", () => {
   it("does not throw when the menu is missing the project items", () => {
     menuItems.clear();
     expect(() => refreshProjectMenuState()).not.toThrow();
+  });
+
+  it("swallows a resolver failure instead of masking the caller's error", () => {
+    // Callers refresh from a `finally` after a project switch, so a throw here
+    // would REPLACE the original rejection and hide the real failure.
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    projectStoreMock.getProjectById.mockImplementation(() => {
+      throw new Error("SQLITE_IOERR");
+    });
+    windowRefMock.getWindowRegistry.mockReturnValue(registryWith(pvmWindow("project-1")));
+
+    expect(() => refreshProjectMenuState()).not.toThrow();
+    expect(consoleError).toHaveBeenCalled();
+
+    consoleError.mockRestore();
   });
 });

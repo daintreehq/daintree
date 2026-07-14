@@ -39,7 +39,17 @@ export function resolveProjectIdForApplicationMenu(): string | null {
   if (!primary) return null;
 
   const pvm = primary.services.projectViewManager;
-  if (pvm) return validateOpenProject(pvm.getActiveProjectId());
+  if (pvm) {
+    // A cold switch flips `activeProjectId` to the incoming workspace while the
+    // outgoing project's view stays on screen as the anti-flash bridge until the
+    // paint gate settles. If that bridge names an open project, a project IS
+    // still displayed — so answer with it rather than the not-yet-visible
+    // incoming id, which would blink the gates off mid-switch.
+    const bridged = validateOpenProject(pvm.getOutgoingBridgeProjectId());
+    if (bridged) return bridged;
+
+    return validateOpenProject(pvm.getActiveProjectId());
+  }
 
   // Window without a ProjectViewManager: no per-window state exists, so the
   // global pointer is the best available answer.
@@ -54,18 +64,24 @@ function validateOpenProject(projectId: string | null): string | null {
 }
 
 /**
- * Re-evaluate the project gate and push it onto the live menu items. Best-effort:
- * a missing menu (before the first build) or missing items must never reject the
- * project operation that triggered the refresh.
+ * Re-evaluate the project gate and push it onto the live menu items.
+ *
+ * Best-effort by construction: callers invoke this from a `finally` after a
+ * project switch, so a throw here would REPLACE the original rejection and mask
+ * the real failure. A cosmetic menu update must never do that — swallow and log.
  */
 export function refreshProjectMenuState(): void {
-  const menu = Menu.getApplicationMenu();
-  if (!menu) return;
+  try {
+    const menu = Menu.getApplicationMenu();
+    if (!menu) return;
 
-  const enabled = resolveProjectIdForApplicationMenu() !== null;
-  for (const id of PROJECT_MENU_ITEM_IDS) {
-    const item = menu.getMenuItemById(id);
-    if (!item) continue;
-    item.enabled = enabled;
+    const enabled = resolveProjectIdForApplicationMenu() !== null;
+    for (const id of PROJECT_MENU_ITEM_IDS) {
+      const item = menu.getMenuItemById(id);
+      if (!item) continue;
+      item.enabled = enabled;
+    }
+  } catch (err) {
+    console.error("[MAIN] Failed to refresh the File-menu project gates:", err);
   }
 }

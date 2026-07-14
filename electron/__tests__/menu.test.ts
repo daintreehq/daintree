@@ -431,6 +431,19 @@ describe("createApplicationMenu", () => {
       expect(fileItem("Project Settings…").id).toBe("file-project-settings");
       expect(fileItem("Close Project").id).toBe("file-close-project");
     });
+
+    it("resolves the gate from repaired project rows, not a pre-repair snapshot", () => {
+      vi.clearAllMocks();
+      rebuildWithProject("project-1");
+
+      // Building Open Recent calls getAllProjects(), which repairs stale status
+      // rows as a side effect (a "closed" row that is still the current pointer
+      // is promoted back to "active"). Resolving the gate first would snapshot
+      // pre-repair rows and install a template the repair contradicts.
+      expect(projectStoreMock.getAllProjects.mock.invocationCallOrder[0]).toBeLessThan(
+        projectStoreMock.getCurrentProjectId.mock.invocationCallOrder[0]
+      );
+    });
   });
 
   describe("View menu Toggle Full Screen item", () => {
@@ -860,6 +873,7 @@ describe("handleDirectoryOpen window targeting", () => {
         isNew: true,
       })),
       getActiveProjectId: vi.fn<() => string | null>(() => null),
+      getOutgoingBridgeProjectId: vi.fn<() => string | null>(() => null),
     };
   }
 

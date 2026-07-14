@@ -457,7 +457,7 @@ describe("registerAppLifecycleHandlers – window-all-closed", () => {
     // still resolve against the window that is going away.
     expect(refreshProjectMenuStateMock).not.toHaveBeenCalled();
 
-    await new Promise((resolve) => setImmediate(resolve));
+    await Promise.resolve();
 
     expect(refreshProjectMenuStateMock).toHaveBeenCalled();
   });
