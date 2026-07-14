@@ -48,12 +48,19 @@ vi.mock("@/store/cliAvailabilityStore", () => ({
     selector({ isLoading: false, isRefreshing: false, availability: {}, hasRealData: true }),
 }));
 
+// Hoisted so the auto-select assertion can reach the spy. Inline `vi.fn()`s inside
+// the selector would also hand the component a fresh action identity every render.
+const themeStoreMock = vi.hoisted(() => ({
+  setSelectedSchemeId: vi.fn(),
+  setSelectedSchemeIdSilent: vi.fn(),
+}));
+
 vi.mock("@/store/appThemeStore", () => ({
   useAppThemeStore: (selector: (s: unknown) => unknown) =>
     selector({
       selectedSchemeId: "daintree",
-      setSelectedSchemeId: vi.fn(),
-      setSelectedSchemeIdSilent: vi.fn(),
+      setSelectedSchemeId: themeStoreMock.setSelectedSchemeId,
+      setSelectedSchemeIdSilent: themeStoreMock.setSelectedSchemeIdSilent,
     }),
 }));
 
@@ -424,5 +431,50 @@ describe("AgentSetupWizard silent-default privacy notify", () => {
     expect(notifyMock).not.toHaveBeenCalled();
     // Wizard still closes — failure should not strand the user.
     expect(onClose).toHaveBeenCalled();
+  });
+});
+
+describe("AgentSetupWizard first-run theme auto-select", () => {
+  beforeEach(() => {
+    themeStoreMock.setSelectedSchemeIdSilent.mockClear();
+  });
+
+  function setOsPrefersLight(prefersLight: boolean) {
+    window.matchMedia = ((query: string) => ({
+      matches: prefersLight && query.includes("prefers-color-scheme: light"),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      media: query,
+      onchange: null,
+    })) as unknown as typeof window.matchMedia;
+  }
+
+  it("crossfades into the OS-preferred theme", async () => {
+    // Store is mocked on "daintree" (dark); a light OS makes "bondi" the target.
+    setOsPrefersLight(true);
+
+    await act(async () => {
+      render(<AgentSetupWizard isOpen onClose={vi.fn()} isFirstRun initialAvailability={{}} />);
+    });
+
+    // The wizard has already painted, so the swap fades rather than cutting — but it
+    // stays silent, since mirroring the OS is not a user pick.
+    expect(themeStoreMock.setSelectedSchemeIdSilent).toHaveBeenCalledWith("bondi", {
+      crossfade: true,
+    });
+  });
+
+  it("does not re-apply a theme that already matches the OS", async () => {
+    // Dark OS + a store already on "daintree" — nothing to change, so nothing to fade.
+    setOsPrefersLight(false);
+
+    await act(async () => {
+      render(<AgentSetupWizard isOpen onClose={vi.fn()} isFirstRun initialAvailability={{}} />);
+    });
+
+    expect(themeStoreMock.setSelectedSchemeIdSilent).not.toHaveBeenCalled();
   });
 });

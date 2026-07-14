@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { runThemeReveal, prefersReducedMotion } from "../appThemeViewTransition";
+import {
+  runThemeReveal,
+  runThemeCrossfade,
+  prefersReducedMotion,
+  THEME_WIPE_DURATION,
+} from "../appThemeViewTransition";
+import { UI_ENTER_DURATION } from "../animationUtils";
 
 interface MockTransition {
   ready: Promise<void>;
@@ -239,6 +245,142 @@ describe("appThemeViewTransition", () => {
 
       expect(startSpy).not.toHaveBeenCalled();
       expect(skipTransition).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("runThemeCrossfade", () => {
+    it("calls mutate synchronously when startViewTransition is unavailable", () => {
+      const mutate = vi.fn();
+      runThemeCrossfade(mutate);
+      expect(mutate).toHaveBeenCalledTimes(1);
+    });
+
+    it("skips the transition when prefers-reduced-motion is set", () => {
+      const { startSpy } = installViewTransitionMock();
+      setReducedMotion(true);
+      const mutate = vi.fn();
+
+      runThemeCrossfade(mutate);
+
+      expect(mutate).toHaveBeenCalledTimes(1);
+      expect(startSpy).not.toHaveBeenCalled();
+    });
+
+    it("skips the transition when performance mode is enabled", () => {
+      const { startSpy } = installViewTransitionMock();
+      document.body.dataset.performanceMode = "true";
+      const mutate = vi.fn();
+
+      runThemeCrossfade(mutate);
+
+      expect(mutate).toHaveBeenCalledTimes(1);
+      expect(startSpy).not.toHaveBeenCalled();
+    });
+
+    it("skips the transition when the document is hidden", () => {
+      const { startSpy } = installViewTransitionMock();
+      setVisibility("hidden");
+      const mutate = vi.fn();
+
+      runThemeCrossfade(mutate);
+
+      expect(mutate).toHaveBeenCalledTimes(1);
+      expect(startSpy).not.toHaveBeenCalled();
+    });
+
+    it("defers mutate to the transition's update callback when guards pass", () => {
+      const { startSpy, capturedMutate } = installViewTransitionMock();
+      const mutate = vi.fn();
+
+      runThemeCrossfade(mutate);
+
+      expect(startSpy).toHaveBeenCalledTimes(1);
+      expect(mutate).not.toHaveBeenCalled();
+      capturedMutate()?.();
+      expect(mutate).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not animate before the ready promise settles", () => {
+      const { animateSpy } = installViewTransitionMock();
+
+      runThemeCrossfade(() => {});
+
+      expect(animateSpy).not.toHaveBeenCalled();
+    });
+
+    it("fades the old root snapshot out rather than wiping it", async () => {
+      const { animateSpy } = installViewTransitionMock();
+
+      runThemeCrossfade(() => {});
+      await Promise.resolve();
+
+      expect(animateSpy).toHaveBeenCalledTimes(1);
+      const [keyframes, options] = animateSpy.mock.calls[0]!;
+      // Opacity only — a clip-path here would encode a direction the programmatic
+      // path has no gesture origin for.
+      expect(keyframes).toEqual({ opacity: [1, 0] });
+      expect(options).toMatchObject({
+        pseudoElement: "::view-transition-old(root)",
+        duration: UI_ENTER_DURATION,
+        easing: "ease-out",
+        fill: "forwards",
+      });
+    });
+
+    it("leaves the new root snapshot untouched (its opacity is the crossfade)", async () => {
+      const { animateSpy } = installViewTransitionMock();
+
+      runThemeCrossfade(() => {});
+      await Promise.resolve();
+
+      const targets = animateSpy.mock.calls.map(([, options]) => options.pseudoElement);
+      expect(targets).not.toContain("::view-transition-new(root)");
+    });
+
+    it("is briefer than the deliberate-pick wipe", () => {
+      expect(UI_ENTER_DURATION).toBeLessThan(THEME_WIPE_DURATION);
+    });
+
+    it("skips an in-flight ViewTransition before starting a new one", () => {
+      const skipTransition = vi.fn();
+      (
+        document as unknown as { activeViewTransition?: { skipTransition: () => void } }
+      ).activeViewTransition = { skipTransition };
+      const { startSpy } = installViewTransitionMock();
+
+      runThemeCrossfade(() => {});
+
+      expect(skipTransition).toHaveBeenCalledTimes(1);
+      expect(startSpy).toHaveBeenCalledTimes(1);
+      const skipOrder = skipTransition.mock.invocationCallOrder[0]!;
+      const startOrder = startSpy.mock.invocationCallOrder[0]!;
+      expect(skipOrder).toBeLessThan(startOrder);
+    });
+
+    it("does not call skipTransition when a guard skips the transition", () => {
+      const skipTransition = vi.fn();
+      (
+        document as unknown as { activeViewTransition?: { skipTransition: () => void } }
+      ).activeViewTransition = { skipTransition };
+      const { startSpy } = installViewTransitionMock();
+      setReducedMotion(true);
+
+      runThemeCrossfade(() => {});
+
+      expect(startSpy).not.toHaveBeenCalled();
+      expect(skipTransition).not.toHaveBeenCalled();
+    });
+
+    it("swallows ready-promise rejections without throwing", async () => {
+      const rejected = Promise.reject(new Error("aborted"));
+      rejected.catch(() => {});
+      (document as unknown as { startViewTransition: unknown }).startViewTransition = vi.fn(() => ({
+        ready: rejected,
+        finished: Promise.resolve(),
+      }));
+
+      expect(() => runThemeCrossfade(() => {})).not.toThrow();
+      await rejected.catch(() => {});
     });
   });
 });

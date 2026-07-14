@@ -3,6 +3,7 @@ import { BUILT_IN_APP_SCHEMES, DEFAULT_APP_SCHEME_ID } from "@/config/appColorSc
 import { applyAccentOverrideToScheme, resolveAppTheme, type AppColorScheme } from "@shared/theme";
 import type { ColorVisionMode } from "@shared/types";
 import { applyAppThemeToRoot, applyColorVisionMode } from "@/theme/applyAppTheme";
+import { runThemeCrossfade } from "@/lib/appThemeViewTransition";
 
 const RECENT_SCHEMES_LIMIT = 5;
 
@@ -29,8 +30,13 @@ interface AppThemeState {
    * Like setSelectedSchemeId, but does NOT update recentSchemeIds. Used for
    * OS-driven follow-system changes and startup hydration, where the change
    * does not reflect direct user intent.
+   *
+   * Pass `{ crossfade: true }` when the app has already painted the outgoing
+   * theme (OS appearance switch, first-run auto-select) so the swap fades
+   * rather than cutting. Startup hydration leaves it unset on purpose — there
+   * is no prior theme to fade from, only the placeholder default.
    */
-  setSelectedSchemeIdSilent: (id: string) => void;
+  setSelectedSchemeIdSilent: (id: string, opts?: { crossfade?: boolean }) => void;
   addCustomScheme: (scheme: AppColorScheme) => void;
   removeCustomScheme: (id: string) => void;
   injectTheme: (scheme: AppColorScheme) => void;
@@ -131,11 +137,17 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
     }));
   },
 
-  setSelectedSchemeIdSilent: (id) => {
+  setSelectedSchemeIdSilent: (id, opts) => {
     const { customSchemes } = useAppThemeStore.getState();
     const scheme = resolveAppTheme(id, customSchemes);
     set({ selectedSchemeId: scheme.id });
-    injectSchemeToDOM(scheme);
+    if (opts?.crossfade) {
+      // `immediate` is required inside a transition callback — the RAF-coalesced
+      // write would land after the API has already snapshotted the new state.
+      runThemeCrossfade(() => injectSchemeToDOM(scheme, { immediate: true }));
+    } else {
+      injectSchemeToDOM(scheme);
+    }
   },
 
   addCustomScheme: (scheme) =>

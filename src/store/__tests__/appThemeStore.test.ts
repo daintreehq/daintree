@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BUILT_IN_APP_SCHEMES, DEFAULT_APP_SCHEME_ID } from "@/config/appColorSchemes";
 import { flushPendingTheme, injectSchemeToDOM, useAppThemeStore } from "../appThemeStore";
 
@@ -240,5 +240,100 @@ describe("injectSchemeToDOM RAF coalescing", () => {
     // Second flush should not change anything
     flushPendingTheme();
     expect(document.documentElement.style.getPropertyValue("--theme-surface-canvas")).toBe(before);
+  });
+});
+
+describe("setSelectedSchemeIdSilent crossfade option", () => {
+  const daintree = BUILT_IN_APP_SCHEMES.find((s) => s.id === "daintree")!;
+  const bondi = BUILT_IN_APP_SCHEMES.find((s) => s.id === "bondi")!;
+
+  beforeEach(() => {
+    flushPendingTheme();
+    // jsdom ships no matchMedia, and prefersReducedMotion() treats its absence as
+    // "reduce" — without this the crossfade would always take the fallback path.
+    Object.defineProperty(window, "matchMedia", {
+      writable: true,
+      configurable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        matches: false,
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    });
+    document.body.dataset.reduceAnimations = "false";
+    document.body.dataset.performanceMode = "false";
+
+    useAppThemeStore.setState({
+      selectedSchemeId: DEFAULT_APP_SCHEME_ID,
+      customSchemes: [],
+      colorVisionMode: "default",
+      followSystem: false,
+      accentColorOverride: null,
+      recentSchemeIds: [],
+    });
+    injectSchemeToDOM(daintree, { immediate: true });
+  });
+
+  afterEach(() => {
+    delete (document as unknown as { startViewTransition?: unknown }).startViewTransition;
+    delete document.body.dataset.reduceAnimations;
+    delete document.body.dataset.performanceMode;
+    flushPendingTheme();
+    vi.restoreAllMocks();
+  });
+
+  const canvasToken = () =>
+    document.documentElement.style.getPropertyValue("--theme-surface-canvas");
+
+  it("defers the DOM write to the next frame when crossfade is not requested", () => {
+    useAppThemeStore.getState().setSelectedSchemeIdSilent("bondi");
+
+    // State is synchronous, the DOM write is RAF-coalesced — hydration keeps this path.
+    expect(useAppThemeStore.getState().selectedSchemeId).toBe("bondi");
+    expect(canvasToken()).toBe(daintree.tokens["surface-canvas"]);
+
+    flushPendingTheme();
+    expect(canvasToken()).toBe(bondi.tokens["surface-canvas"]);
+  });
+
+  it("writes the DOM synchronously when crossfade falls back (no View Transition API)", () => {
+    // jsdom exposes no startViewTransition, so the crossfade guard degrades to a
+    // direct mutate — which must still apply immediately, not land a frame later.
+    useAppThemeStore.getState().setSelectedSchemeIdSilent("bondi", { crossfade: true });
+
+    expect(canvasToken()).toBe(bondi.tokens["surface-canvas"]);
+  });
+
+  it("routes the DOM write through the transition callback and applies it without a flush", () => {
+    let captured: (() => void) | null = null;
+    (
+      document as unknown as { startViewTransition: (cb: () => void) => unknown }
+    ).startViewTransition = (cb: () => void) => {
+      captured = cb;
+      return { ready: Promise.resolve(), finished: Promise.resolve() };
+    };
+
+    useAppThemeStore.getState().setSelectedSchemeIdSilent("bondi", { crossfade: true });
+
+    // The mutation belongs to the transition — it must not have run yet.
+    expect(useAppThemeStore.getState().selectedSchemeId).toBe("bondi");
+    expect(canvasToken()).toBe(daintree.tokens["surface-canvas"]);
+
+    captured!();
+
+    // Applied synchronously inside the callback ({ immediate: true }); a RAF-coalesced
+    // write here would be snapshotted by the API before it landed.
+    expect(canvasToken()).toBe(bondi.tokens["surface-canvas"]);
+    flushPendingTheme();
+    expect(canvasToken()).toBe(bondi.tokens["surface-canvas"]);
+  });
+
+  it("does not record the crossfaded scheme in recentSchemeIds", () => {
+    useAppThemeStore.getState().setSelectedSchemeId("svalbard");
+    useAppThemeStore.getState().setSelectedSchemeIdSilent("bondi", { crossfade: true });
+
+    // Crossfading is still a silent path — OS-driven changes are not user picks.
+    expect(useAppThemeStore.getState().recentSchemeIds).toEqual(["svalbard"]);
   });
 });

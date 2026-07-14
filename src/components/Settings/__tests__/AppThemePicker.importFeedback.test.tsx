@@ -22,6 +22,7 @@ vi.mock("@/clients/appThemeClient", () => ({
 
 vi.mock("@/lib/appThemeViewTransition", () => ({
   runThemeReveal: (_origin: unknown, cb: () => void) => cb(),
+  runThemeCrossfade: (cb: () => void) => cb(),
 }));
 
 const storeState: Record<string, unknown> = {};

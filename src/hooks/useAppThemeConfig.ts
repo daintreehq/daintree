@@ -102,8 +102,10 @@ export function useAppThemeConfig() {
 
   useEffect(() => {
     return window.electron.appTheme.onSystemAppearanceChanged(({ schemeId }) => {
-      // OS-driven follow-system changes must not populate the recently-used list
-      setSelectedSchemeIdSilent(schemeId);
+      // OS-driven follow-system changes must not populate the recently-used list.
+      // The app has already painted the outgoing theme, so crossfade rather than
+      // cut — but without the directional wipe, which signals a deliberate pick.
+      setSelectedSchemeIdSilent(schemeId, { crossfade: true });
     });
   }, [setSelectedSchemeIdSilent]);
 }
