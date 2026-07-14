@@ -433,6 +433,35 @@ describe("registerAppLifecycleHandlers – window-all-closed", () => {
     expect(refreshProjectMenuStateMock).not.toHaveBeenCalled();
   });
 
+  it("refreshes the gates after a closing window's survivor is promoted", async () => {
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    registerAppLifecycleHandlers(makeOpts());
+
+    const createdCall = appMock.on.mock.calls.find(
+      ([event]: string[]) => event === "browser-window-created"
+    );
+    expect(createdCall).toBeDefined();
+
+    const winListeners: Record<string, () => void> = {};
+    const fakeWin = {
+      once: (event: string, cb: () => void) => {
+        winListeners[event] = cb;
+      },
+    };
+    (createdCall![1] as (event: unknown, win: unknown) => void)({}, fakeWin);
+
+    winListeners.closed();
+
+    // Must NOT be synchronous: WindowRegistry promotes the surviving window in
+    // its own "closed" listener, registered after this one. Refreshing now would
+    // still resolve against the window that is going away.
+    expect(refreshProjectMenuStateMock).not.toHaveBeenCalled();
+
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(refreshProjectMenuStateMock).toHaveBeenCalled();
+  });
+
   it("refreshes the File-menu project gates whenever a window takes focus", async () => {
     const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
     registerAppLifecycleHandlers(makeOpts());

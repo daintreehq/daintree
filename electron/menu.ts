@@ -170,6 +170,15 @@ export function createApplicationMenu(
   const terminalPluginItems = buildPluginMenuItems("terminal");
   const helpPluginItems = buildPluginMenuItems("help");
 
+  // Built BEFORE the gate is resolved: this reads getAllProjects(), which
+  // repairs stale status rows as a side effect (a "closed" row that is still the
+  // current pointer gets promoted back to "active"). Resolving first would snapshot
+  // the gate from pre-repair rows and install a template the repair contradicts.
+  const recentProjectsMenu = buildRecentProjectsMenu(
+    getTargetBrowserWindow,
+    cliAvailabilityService
+  );
+
   // Same resolver the live refresh uses, so the cold build and every later
   // refresh agree on what "a project is open" means.
   const projectMenuEnabled = resolveProjectIdForApplicationMenu() !== null;
@@ -214,7 +223,7 @@ export function createApplicationMenu(
         },
         {
           label: "Open Recent",
-          submenu: buildRecentProjectsMenu(getTargetBrowserWindow, cliAvailabilityService),
+          submenu: recentProjectsMenu,
         },
         { type: "separator" },
         ...(process.platform !== "darwin"

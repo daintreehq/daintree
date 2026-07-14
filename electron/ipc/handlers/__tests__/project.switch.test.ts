@@ -252,7 +252,25 @@ describe("project switch/reopen refreshes the File-menu project gates (#11136)",
 
     await expect(handler({ sender: { id: 10 } }, "ghost")).rejects.toThrow();
 
+    // Rejected before the swap ran, so nothing moved and there is nothing to converge.
     expect(refreshProjectMenuStateMock).not.toHaveBeenCalled();
+  });
+
+  it("still refreshes when the swap fails, so a rolled-back binding converges", async () => {
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: "proj-new",
+      name: "New",
+      path: "/projects/new",
+    });
+    const pvm = makePvm();
+    pvm.switchTo.mockRejectedValue(new Error("view failed to load"));
+    const handler = handlerFor(CHANNELS.PROJECT_SWITCH, depsWith(pvm));
+
+    await expect(handler({ sender: { id: 10 } }, "proj-new")).rejects.toThrow();
+
+    // Once the swap has run, the PVM binding has moved or been rolled back — the
+    // gates must reflect where we actually landed, not stay stale.
+    expect(refreshProjectMenuStateMock).toHaveBeenCalled();
   });
 });
 

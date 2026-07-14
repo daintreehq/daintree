@@ -278,6 +278,17 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): void {
     refreshProjectMenuState();
   });
 
+  app.on("browser-window-created", (_event, win) => {
+    win.once("closed", () => {
+      // Closing the focused window promotes a survivor that may never take focus
+      // (minimized/hidden), so `browser-window-focus` can't be relied on here.
+      // Deferred a tick because WindowRegistry attaches its own "closed" listener
+      // at register() — after this one — and that listener is what performs the
+      // promotion; refreshing synchronously would still read the closing window.
+      setImmediate(() => refreshProjectMenuState());
+    });
+  });
+
   app.on("window-all-closed", () => {
     // `BrowserWindow.destroy()` in the OOM recreate path synchronously emits
     // `window-all-closed` before the replacement window registers. On
