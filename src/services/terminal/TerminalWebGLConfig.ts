@@ -9,11 +9,17 @@
 // The gap between the two values is hysteresis: opening/closing a single panel
 // at the boundary will not flap the whole fleet.
 //
-// Chromium hard-caps active WebGL contexts at 16 per renderer process and
-// silently evicts the oldest on overflow (webglcontextlost), so the upper
-// threshold must stay comfortably below 16 to leave headroom for devtools,
-// OffscreenCanvas, and any future non-terminal WebGL consumer.
-// Initial values match the balanced resource profile.
+// Chromium silently evicts the oldest active WebGL context on overflow
+// (webglcontextlost), so the upper threshold must stay a headroom margin below
+// the effective per-renderer ceiling to leave room for devtools, OffscreenCanvas,
+// and any non-terminal WebGL consumer. That ceiling is raised above Chromium's
+// default 16 and RAM-tiered (see electron/setup/environment.ts), and the live
+// thresholds are resolved from it and pushed in via useResourceProfile (#11192).
+//
+// These are conservative bootstrap defaults only — used until the first
+// resource-profile push/pull resolves the real RAM-tiered values on mount. They
+// are intentionally low so a slow or failed pull can't briefly over-attach
+// contexts; they are NOT the balanced profile's source of truth.
 
 let upperThreshold = 12;
 let lowerThreshold = 10;

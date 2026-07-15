@@ -22,8 +22,12 @@ export interface ResourceProfileConfig {
   /**
    * Upper threshold for the WebGL mode switch. When the count of terminals
    * wanting WebGL exceeds this value, every active context is released and
-   * the manager flips to DOM-mode. Must stay below 16 to leave headroom for
-   * Chromium's per-renderer WebGL-context cap.
+   * the manager flips to DOM-mode. Kept a headroom margin below the effective
+   * per-renderer WebGL-context ceiling (RAM-tiered via the
+   * `max-active-webgl-contexts` switch) so devtools and other in-renderer
+   * WebGL consumers still have room. Not stored in RESOURCE_PROFILE_CONFIGS —
+   * resolved from the ceiling on the main process (see
+   * electron/utils/resourceProfileConfig.ts, #11192).
    */
   webglUpperThreshold: number;
   /**
@@ -31,7 +35,8 @@ export interface ResourceProfileConfig {
    * value or below, the manager flips back to WebGL-mode and re-attaches an
    * addon to every want via a rAF-staggered drain. The gap between upper and
    * lower is the hysteresis band — opening/closing one panel at the boundary
-   * will not flap the fleet.
+   * will not flap the fleet. Resolved from the ceiling alongside
+   * webglUpperThreshold (see webglUpperThreshold).
    */
   webglLowerThreshold: number;
   /**
@@ -102,6 +107,19 @@ export interface ResourceProfileConfig {
   warmPaintGateHardTimeoutMs: number;
 }
 
+/**
+ * Host-independent slice of ResourceProfileConfig — everything except the
+ * WebGL flip thresholds, which are RAM-dependent and resolved on the main
+ * process (electron/utils/resourceProfileConfig.ts). RESOURCE_PROFILE_CONFIGS
+ * is typed as this so a stale literal WebGL threshold can never be read off the
+ * static table again; the full config is only ever assembled by the resolver
+ * (#11192).
+ */
+export type BaseResourceProfileConfig = Omit<
+  ResourceProfileConfig,
+  "webglUpperThreshold" | "webglLowerThreshold"
+>;
+
 export interface ResourceProfilePayload {
   profile: ResourceProfile;
   config: ResourceProfileConfig;
@@ -137,22 +155,22 @@ export interface ResourceProfileSnapshot {
  * - pollIntervalBackground: 10000 (WorkspaceService DEFAULT_BACKGROUND_WORKTREE_INTERVAL_MS)
  * - processTreePollInterval: 2500 (ProcessTreeCache constructor default)
  * - projectStatsPollInterval: 5000 (ProjectStatsService DEFAULT_POLL_INTERVAL_MS)
- * - webglUpperThreshold: 12 (TerminalWebGLConfig initial value)
- * - webglLowerThreshold: 10 (TerminalWebGLConfig initial value)
  * - memoryPressureInactiveMs: 1800000 (HibernationService MEMORY_PRESSURE_INACTIVE_MS = 30min)
+ *
+ * The WebGL flip thresholds (webglUpperThreshold / webglLowerThreshold) are NOT
+ * stored here: they are RAM-dependent and resolved from the effective
+ * per-renderer WebGL-context ceiling on the main process
+ * (electron/utils/resourceProfileConfig.ts). The table is therefore typed
+ * `BaseResourceProfileConfig` and the full config is only ever assembled by the
+ * resolver (#11192).
  */
-export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, ResourceProfileConfig> = {
+export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, BaseResourceProfileConfig> = {
   performance: {
     pollIntervalActive: 1500,
     pollIntervalBackground: 5000,
     backgroundGitWatcherCap: 20,
     processTreePollInterval: 2000,
     projectStatsPollInterval: 5000,
-    // Performance pushes closer to Chromium's 16-context cap. Higher upper +
-    // 2-slot hysteresis still leaves room for devtools / OffscreenCanvas while
-    // letting more agents render through WebGL simultaneously.
-    webglUpperThreshold: 14,
-    webglLowerThreshold: 12,
     memoryPressureInactiveMs: 60 * 60 * 1000, // 60 min
     lowMemoryFreeThresholdMb: null,
     agentScrollbackMaxLines: 5000,
@@ -170,8 +188,6 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, ResourceProfileCo
     backgroundGitWatcherCap: 12,
     processTreePollInterval: 2500,
     projectStatsPollInterval: 5000,
-    webglUpperThreshold: 12,
-    webglLowerThreshold: 10,
     memoryPressureInactiveMs: 30 * 60 * 1000, // 30 min
     lowMemoryFreeThresholdMb: 768,
     agentScrollbackMaxLines: 5000,
@@ -195,10 +211,6 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, ResourceProfileCo
     backgroundGitWatcherCap: 6,
     processTreePollInterval: 5000,
     projectStatsPollInterval: 25000,
-    // Efficiency kicks to DOM-mode sooner on constrained hardware where each
-    // active WebGL context is comparatively more expensive.
-    webglUpperThreshold: 8,
-    webglLowerThreshold: 6,
     memoryPressureInactiveMs: 15 * 60 * 1000, // 15 min
     lowMemoryFreeThresholdMb: 1024,
     // Half the agent history ceiling on constrained hardware — ~3MB less

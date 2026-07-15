@@ -25,6 +25,7 @@ import fs from "fs";
 import { existsSync } from "fs";
 import os from "os";
 import { isLinuxWaylandHybridGpu } from "../utils/gpuDetection.js";
+import { getMaxWebGLContextCeiling } from "../utils/webglContextBudget.js";
 // Deliberately the tiny pure-fs module, NOT GpuCrashMonitorService — importing
 // the service here would evaluate its logger/telemetry/store import chain at
 // module load, before this file's body re-paths userData for dev instances.
@@ -192,21 +193,19 @@ function getGpuTileMemoryCapMb(): string {
 
 app.commandLine.appendSwitch("force-gpu-mem-available-mb", getGpuTileMemoryCapMb());
 
-// Lift Chromium's 16-active-WebGL-context per-renderer ceiling so the terminal pool
-// can keep more xterm panes on the WebGL renderer before LRU eviction drops them to
-// DOM. Scales with system RAM on the same tiers as the tile-memory budget above.
-// Each xterm WebGL context is small (no 3D geometry, no MSAA) so headroom for 24-32
-// is safe within the raised tile budget. Memory-pressure context loss is still
-// possible at the OS/GPU-budget level (Chromium 465176577) — the existing
-// TerminalWebGLManager circuit breaker handles that path independently.
-function getMaxWebGLContexts(): string {
-  const totalMem = os.totalmem();
-  if (totalMem <= 8 * 1024 ** 3) return "24";
-  if (totalMem <= 16 * 1024 ** 3) return "28";
-  return "32";
-}
-
-app.commandLine.appendSwitch("max-active-webgl-contexts", getMaxWebGLContexts());
+// Lift Chromium's default 16-active-WebGL-context per-renderer ceiling so the
+// terminal pool can keep more xterm panes on the WebGL renderer before the
+// whole-fleet flip drops them to DOM. Scales with system RAM on the same tiers
+// as the tile-memory budget above (24/28/32). Each xterm WebGL context is small
+// (no 3D geometry, no MSAA) so this headroom is safe within the raised tile
+// budget. Memory-pressure context loss is still possible at the OS/GPU-budget
+// level (Chromium 465176577) — the existing TerminalWebGLManager circuit breaker
+// handles that path independently.
+//
+// getMaxWebGLContextCeiling is the single source of truth: the resource-profile
+// fleet-flip thresholds derive from the same function so the raised cap and the
+// thresholds guarding it can never drift apart (#11192).
+app.commandLine.appendSwitch("max-active-webgl-contexts", String(getMaxWebGLContextCeiling()));
 
 if (process.platform === "win32") {
   const extraPaths = getWindowsExtraPaths();
