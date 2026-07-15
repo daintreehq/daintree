@@ -8,7 +8,7 @@ describe("HtmlViewer", () => {
     const { getByTestId } = render(
       <HtmlViewer previewUrl="daintree-html://tok/index.html" reloadNonce={0} title="report.html" />
     );
-    const frame = getByTestId("html-preview-frame") as HTMLIFrameElement;
+    const frame = getByTestId("html-preview-frame");
     // Exactly allow-scripts — same-origin would let the frame escape its opaque origin.
     expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
     expect(frame.getAttribute("sandbox")).not.toContain("allow-same-origin");
@@ -20,7 +20,7 @@ describe("HtmlViewer", () => {
     const { getByTestId, rerender } = render(
       <HtmlViewer previewUrl="daintree-html://tok/index.html" reloadNonce={1} title="r" />
     );
-    const frame = () => getByTestId("html-preview-frame") as HTMLIFrameElement;
+    const frame = () => getByTestId("html-preview-frame");
     expect(frame().getAttribute("src")).toBe("daintree-html://tok/index.html?v=1");
 
     rerender(<HtmlViewer previewUrl="daintree-html://tok/index.html" reloadNonce={2} title="r" />);
@@ -31,7 +31,7 @@ describe("HtmlViewer", () => {
     const { getByTestId } = render(
       <HtmlViewer previewUrl="daintree-html://tok/index.html?a=1" reloadNonce={3} title="r" />
     );
-    const frame = getByTestId("html-preview-frame") as HTMLIFrameElement;
+    const frame = getByTestId("html-preview-frame");
     expect(frame.getAttribute("src")).toBe("daintree-html://tok/index.html?a=1&v=3");
   });
 
