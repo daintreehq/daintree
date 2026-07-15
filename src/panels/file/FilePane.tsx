@@ -8,6 +8,8 @@ import { ContentPanel } from "@/components/Panel/ContentPanel";
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { MarkdownViewer, type MarkdownViewerHandle } from "@/components/Markdown/MarkdownViewer";
 import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
+import { HtmlViewer } from "@/components/Html/HtmlViewer";
+import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
 import { CodeViewer, type CodeViewerHandle } from "@/components/FileViewer/CodeViewer";
 import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -251,8 +253,10 @@ export function FilePane({
 
   const filePath = panel?.filePath;
   const isMarkdown = filePath !== undefined && isMarkdownFilePath(filePath);
-  // "rendered" is a markdown-only mode; other files always view as source.
-  const viewMode: FileViewMode = isMarkdown ? (panel?.fileViewMode ?? "source") : "source";
+  const isHtml = filePath !== undefined && isHtmlFilePath(filePath);
+  // Markdown and HTML get a Source/Rendered toggle; every other file is source-only.
+  const isRenderable = isMarkdown || isHtml;
+  const viewMode: FileViewMode = isRenderable ? (panel?.fileViewMode ?? "source") : "source";
 
   const worktreeId = panel?.worktreeId;
   const worktreePath = useWorktreeStore(
@@ -278,6 +282,12 @@ export function FilePane({
   const [loadState, setLoadState] = useState<LoadState>("idle");
   const [errorCode, setErrorCode] = useState<FileReadErrorCode | null>(null);
   const [pathCopied, setPathCopied] = useState(false);
+  // Sandboxed-iframe preview URL for HTML files (#11191), minted by files:read.
+  const [htmlPreviewUrl, setHtmlPreviewUrl] = useState<string | null>(null);
+  // Bumped whenever the file's content actually changes so the (cross-origin)
+  // preview frame re-navigates — a rewritten report re-renders on refresh/focus.
+  const [reloadNonce, setReloadNonce] = useState(0);
+  const lastContentRef = useRef<string | null>(null);
   const requestRef = useRef(0);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const markdownViewerRef = useRef<MarkdownViewerHandle>(null);
@@ -304,10 +314,20 @@ export function FilePane({
         setErrorCode(null);
       }
       filesClient
-        .read({ path: filePath, rootPath: effectiveRootPath })
-        .then(({ content: fileContent }) => {
+        .read({
+          path: filePath,
+          rootPath: effectiveRootPath,
+          htmlPreview: isHtmlFilePath(filePath),
+        })
+        .then(({ content: fileContent, htmlPreviewUrl: previewUrl }) => {
           if (requestRef.current !== requestId) return;
+          const changed = lastContentRef.current !== fileContent;
+          lastContentRef.current = fileContent;
           setContent((previous) => (previous === fileContent ? previous : fileContent));
+          setHtmlPreviewUrl(previewUrl ?? null);
+          // Re-navigate the preview frame only when content actually changed —
+          // avoids a needless reflash on a silent same-content refresh.
+          if (changed) setReloadNonce((nonce) => nonce + 1);
           setLoadState("loaded");
           setErrorCode(null);
         })
@@ -434,7 +454,7 @@ export function FilePane({
   const toolbar = filePath ? (
     <>
       <div className="flex items-center gap-1.5 px-2 py-1.5 bg-surface border-b border-overlay">
-        {isMarkdown && (
+        {isRenderable && (
           <SegmentedToggle<FileViewMode>
             options={[
               { value: "source", label: "Source" },
@@ -609,7 +629,7 @@ export function FilePane({
         {filePath &&
           loadState === "loaded" &&
           content !== null &&
-          (isMarkdown && viewMode === "rendered" ? (
+          (viewMode === "rendered" && isMarkdown ? (
             <MarkdownViewer
               ref={markdownViewerRef}
               content={content}
@@ -617,6 +637,15 @@ export function FilePane({
               rootPath={effectiveRootPath}
               viewMode="rendered"
               wrapLines={markdownWrapLines}
+            />
+          ) : viewMode === "rendered" && isHtml ? (
+            // Rendered HTML fills the pane in a sandboxed iframe rather than the
+            // min-h-full source column; the frame owns its own scrolling.
+            <HtmlViewer
+              previewUrl={htmlPreviewUrl}
+              reloadNonce={reloadNonce}
+              title={fileName ?? "HTML preview"}
+              className="min-h-full"
             />
           ) : (
             // min-h-full column (mirrors FileViewerModal): the editor surface

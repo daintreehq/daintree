@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { ReactNode } from "react";
-import { render, act } from "@testing-library/react";
+import { render, act, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // FilePane forwards a fixed prop list to ContentPanel; #10991 was a dropped
@@ -12,9 +12,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const contentPanelProps: Array<Record<string, unknown>> = [];
 
 vi.mock("@/components/Panel/ContentPanel", () => ({
-  ContentPanel: (props: Record<string, unknown> & { toolbar?: ReactNode }) => {
+  ContentPanel: (
+    props: Record<string, unknown> & { toolbar?: ReactNode; children?: ReactNode }
+  ) => {
     contentPanelProps.push(props);
-    return <>{props.toolbar}</>;
+    // Render children too so the Source/Rendered branch is observable, not just
+    // the toolbar (#11191 HTML preview branch).
+    return (
+      <>
+        {props.toolbar}
+        {props.children}
+      </>
+    );
   },
 }));
 
@@ -55,8 +64,15 @@ vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: dispatchMock },
 }));
 vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
-vi.mock("@/components/Markdown/MarkdownViewer", () => ({ MarkdownViewer: () => null }));
-vi.mock("@/components/FileViewer/CodeViewer", () => ({ CodeViewer: () => null }));
+vi.mock("@/components/Markdown/MarkdownViewer", () => ({
+  MarkdownViewer: () => <div data-testid="markdown-viewer-mock" />,
+}));
+vi.mock("@/components/FileViewer/CodeViewer", () => ({
+  CodeViewer: () => <div data-testid="code-viewer-mock" />,
+}));
+vi.mock("@/components/Html/HtmlViewer", () => ({
+  HtmlViewer: () => <div data-testid="html-viewer-mock" />,
+}));
 
 import { FilePane } from "../FilePane";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -293,5 +309,72 @@ describe("FilePane open-in-editor failure feedback (#11114)", () => {
       { source: "user" }
     );
     expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
+});
+
+// #11191: HTML files get the same Source/Rendered toggle as Markdown; rendered
+// HTML routes to the sandboxed-iframe HtmlViewer.
+describe("FilePane HTML Source/Rendered (#11191)", () => {
+  function renderPane(filePath: string, fileViewMode?: "source" | "rendered") {
+    panelsById["file-1"] = { id: "file-1", kind: "file", filePath, fileViewMode };
+    return render(
+      <TooltipProvider>
+        <FilePane
+          id="file-1"
+          title={filePath.split("/").pop() ?? filePath}
+          isFocused={false}
+          location="grid"
+          onFocus={() => {}}
+          onClose={() => {}}
+        />
+      </TooltipProvider>
+    );
+  }
+
+  it("shows the Source/Rendered toggle for an .html file", async () => {
+    renderPane("/repo/dist/report.html");
+    // SegmentedToggle labels are literal text; both appear only for renderable files.
+    expect(await screen.findByText("Rendered")).toBeTruthy();
+    expect(screen.getByText("Source")).toBeTruthy();
+  });
+
+  it("shows the toggle for a .htm file", async () => {
+    renderPane("/repo/dist/page.htm");
+    expect(await screen.findByText("Rendered")).toBeTruthy();
+  });
+
+  it("does not show the toggle for a non-renderable file (.css)", async () => {
+    renderPane("/repo/src/index.css");
+    // Wait for load to settle so we're not asserting on a pre-render frame.
+    await screen.findByTestId("code-viewer-mock");
+    expect(screen.queryByText("Rendered")).toBeNull();
+  });
+
+  it("routes rendered HTML to the sandboxed HtmlViewer", async () => {
+    renderPane("/repo/dist/report.html", "rendered");
+    expect(await screen.findByTestId("html-viewer-mock")).toBeTruthy();
+    expect(screen.queryByTestId("code-viewer-mock")).toBeNull();
+  });
+
+  it("routes source HTML to the CodeViewer, not the HtmlViewer", async () => {
+    renderPane("/repo/dist/report.html", "source");
+    expect(await screen.findByTestId("code-viewer-mock")).toBeTruthy();
+    expect(screen.queryByTestId("html-viewer-mock")).toBeNull();
+  });
+
+  it("passes htmlPreview:true to files:read for HTML files", async () => {
+    const { filesClient } = await import("@/clients/filesClient");
+    renderPane("/repo/dist/report.html", "rendered");
+    await waitFor(() =>
+      expect(filesClient.read).toHaveBeenCalledWith(
+        expect.objectContaining({ path: "/repo/dist/report.html", htmlPreview: true })
+      )
+    );
+  });
+
+  it("still routes rendered Markdown to the MarkdownViewer (regression)", async () => {
+    renderPane("/repo/docs/spec.md", "rendered");
+    expect(await screen.findByTestId("markdown-viewer-mock")).toBeTruthy();
+    expect(screen.queryByTestId("html-viewer-mock")).toBeNull();
   });
 });
