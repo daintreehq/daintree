@@ -227,32 +227,24 @@ class TerminalInstanceService {
 
         if (this.webGLPolicy.wantsWebGLAtTier(managed, tier)) {
           this.webGLManager.ensureContext(id, managed);
-        } else if (
-          (managed.webGLHideTimer === undefined && !managed.isVisible) ||
-          !managed.runtimeAgentId
-        ) {
-          // Agent terminals keep WebGL while visible — releasing causes a
-          // one-frame renderer gap, and VISIBLE is an eligible tier for them
-          // anyway. Plain terminals release as soon as they stop being
-          // focused (even while visible): the DOM renderer is their
-          // status-quo at VISIBLE, and a lingering want per previously
-          // focused shell would accumulate toward the mode-switch threshold.
-          // Tier demotion is an authoritative signal — cancel any pending
-          // hide-dwell and release immediately. The webGLHideTimer guard keeps
-          // the dwell window intact for a hidden agent still streaming at BURST:
-          // wantsWebGLAtTier now returns false for off-screen panes (#10671), so
-          // without it the next write's tier-apply would release on frame 1
-          // instead of after WEBGL_HIDE_DWELL_MS — defeating the hide→show
-          // anti-churn dwell. Once the dwell timer fires (or never armed), the
-          // guard is undefined and the release proceeds.
+        } else if (managed.webGLHideTimer === undefined && !managed.isVisible) {
+          // Standard and agent terminals are treated identically now (#11193):
+          // both keep WebGL while visible — releasing causes a one-frame renderer
+          // gap, and VISIBLE is an eligible tier for both. Release only happens
+          // once a pane is off-screen (an ineligible tier while still visible,
+          // e.g. a visible-BACKGROUND handoff, retains the live context until the
+          // hide path releases it). No refresh on release: the pane is off-screen
+          // here, and repainting an offscreen DOM produces a stale frame that
+          // flashes on next show (#6802). Tier demotion is an authoritative
+          // signal — cancel any pending hide-dwell and release. The webGLHideTimer
+          // guard keeps the dwell window intact for a hidden terminal still
+          // streaming at BURST: wantsWebGLAtTier returns false for off-screen
+          // panes (#10671), so without it the next write's tier-apply would
+          // release on frame 1 instead of after WEBGL_HIDE_DWELL_MS — defeating
+          // the hide→show anti-churn dwell. Once the dwell timer fires (or never
+          // armed), the guard is undefined and the release proceeds.
           this.cancelWebGLHideTimer(managed);
-          const hadWebGL = this.webGLManager.isActive(id);
           this.webGLManager.releaseContext(id);
-          // Only refresh for a visible terminal — repainting an offscreen
-          // DOM produces a stale frame that flashes on next show (#6802).
-          if (hadWebGL && managed.isVisible && managed.terminal.rows > 0) {
-            managed.terminal.refresh(0, managed.terminal.rows - 1);
-          }
         }
 
         // Cursor blink is policy-driven: plain terminals run the blink timer
@@ -2440,9 +2432,9 @@ class TerminalInstanceService {
     this.applyCursorBlinkPolicy(managed);
     restoreScrollback(managed);
     // Agent demotion is authoritative — cancel any pending hide-dwell so the
-    // timer can't fire later and call releaseContext on a stale slot. A
-    // focused pane stays WebGL-eligible as a plain terminal, so keep (or
-    // acquire) its context instead of churning it through a release.
+    // timer can't fire later and call releaseContext on a stale slot. Any
+    // visible pane stays WebGL-eligible as a plain terminal now (#11193), so
+    // keep (or acquire) its context instead of churning it through a release.
     this.cancelWebGLHideTimer(managed);
     if (managed.isOpened && this.webGLPolicy.wantsWebGLAtTier(managed, managed.lastAppliedTier)) {
       this.webGLManager.ensureContext(id, managed);
