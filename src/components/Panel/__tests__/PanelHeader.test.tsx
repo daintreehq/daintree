@@ -435,6 +435,44 @@ describe("PanelHeader", () => {
     });
   });
 
+  describe("close button dismiss-vs-destroy copy (#11186)", () => {
+    const tooltipTexts = () =>
+      screen.getAllByTestId("tooltip-content").map((el) => el.textContent ?? "");
+
+    it("labels the grid close button as a destructive close", () => {
+      render(<PanelHeader {...makeProps({ location: "grid" })} />);
+      const closeBtn = screen.getByTestId("panel-close");
+      expect(closeBtn.getAttribute("aria-label")).toMatch(/close session/i);
+      expect(closeBtn.getAttribute("aria-label")).not.toMatch(/dismiss/i);
+      expect(tooltipTexts().some((t) => /close session/i.test(t))).toBe(true);
+    });
+
+    it("labels the dock close button as a non-destructive dismiss, not a close", () => {
+      // The dock X only collapses the preview (the PTY keeps running), so its
+      // accessible name and tooltip must not read as a destructive "close".
+      render(<PanelHeader {...makeProps({ location: "dock" })} />);
+      const closeBtn = screen.getByTestId("panel-close");
+      expect(closeBtn.getAttribute("aria-label")).toMatch(/dismiss preview/i);
+      expect(closeBtn.getAttribute("aria-label")).not.toMatch(/close session/i);
+      const texts = tooltipTexts();
+      expect(texts.some((t) => /dismiss preview/i.test(t))).toBe(true);
+      expect(texts.every((t) => !/close session/i.test(t))).toBe(true);
+    });
+
+    it("keeps the Alt+Click force-close affordance on both surfaces", () => {
+      // Relabeling the dock X as "dismiss" must not drop the escape hatch that
+      // still lets the user force-kill (Alt+Click) — nothing loses the ability
+      // to be destroyed.
+      for (const location of ["grid", "dock"] as const) {
+        const { unmount } = render(<PanelHeader {...makeProps({ location })} />);
+        expect(screen.getByTestId("panel-close").getAttribute("aria-label")).toMatch(
+          /force close/i
+        );
+        unmount();
+      }
+    });
+  });
+
   describe("Move to grid button", () => {
     it("renders when docked with onRestore and showRestoreControl", () => {
       const onRestore = vi.fn();
