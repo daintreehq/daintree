@@ -64,9 +64,12 @@ export interface WebglThresholds {
 /**
  * Resolve the whole-fleet flip thresholds for a profile against the effective
  * RAM-tiered ceiling. The ratio-derived values are rounded, then clamped
- * defensively so the result always leaves headroom below the ceiling and a
- * real hysteresis gap. The clamps never bind at the supported 24/28/32
- * ceilings — they only guard against a degenerate (very small) ceiling.
+ * defensively so the result leaves headroom below the ceiling and a real
+ * hysteresis gap. The clamps never bind at the supported 24/28/32 ceilings;
+ * they only guard a degenerate ceiling from producing an inverted or negative
+ * pair. The full MIN_HEADROOM / MIN_HYSTERESIS_GAP invariants (2 slots each)
+ * are only guaranteed for a ceiling ≥ 4 — the supported inputs are always well
+ * above that.
  */
 export function resolveWebglThresholds(
   profile: ResourceProfile,

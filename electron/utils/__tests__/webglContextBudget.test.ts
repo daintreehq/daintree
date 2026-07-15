@@ -76,16 +76,30 @@ describe("resolveWebglThresholds — invariants", () => {
     }
   });
 
-  it("derives from the exported ratios (upper ≈ round(ceiling × ratio.upper))", () => {
-    // Guards against the derivation silently decoupling from WEBGL_THRESHOLD_RATIOS.
-    // (Loose: the defensive clamps may pull a value in, but never push it out.)
+  it("derives exactly from the exported ratios at supported ceilings (clamps do not bind)", () => {
+    // Ties the output to WEBGL_THRESHOLD_RATIOS: at 24/28/32 the defensive clamps
+    // never engage, so both thresholds are exactly round(ceiling × ratio).
     for (const ceiling of SUPPORTED_CEILINGS) {
       for (const profile of PROFILES) {
-        const { webglUpperThreshold: upper } = resolveWebglThresholds(profile, ceiling);
-        expect(upper).toBeLessThanOrEqual(
-          Math.round(ceiling * WEBGL_THRESHOLD_RATIOS[profile].upper)
+        const { webglUpperThreshold: upper, webglLowerThreshold: lower } = resolveWebglThresholds(
+          profile,
+          ceiling
         );
+        expect(upper).toBe(Math.round(ceiling * WEBGL_THRESHOLD_RATIOS[profile].upper));
+        expect(lower).toBe(Math.round(ceiling * WEBGL_THRESHOLD_RATIOS[profile].lower));
       }
+    }
+  });
+
+  it("clamps a degenerate ceiling to a valid (non-inverted, non-negative) pair", () => {
+    // At ceiling 4 the raw ratio-derived values would violate the headroom /
+    // hysteresis floors, so the clamps engage. Every profile resolves to the
+    // same clamped {2, 0}: upper pulled to ceiling-2, lower to upper-2.
+    for (const profile of PROFILES) {
+      expect(resolveWebglThresholds(profile, 4)).toEqual({
+        webglUpperThreshold: 2,
+        webglLowerThreshold: 0,
+      });
     }
   });
 });

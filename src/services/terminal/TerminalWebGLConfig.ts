@@ -16,13 +16,20 @@
 // default 16 and RAM-tiered (see electron/setup/environment.ts), and the live
 // thresholds are resolved from it and pushed in via useResourceProfile (#11192).
 //
-// These are conservative bootstrap defaults only — used until the first
-// resource-profile push/pull resolves the real RAM-tiered values on mount. They
-// are intentionally low so a slow or failed pull can't briefly over-attach
-// contexts; they are NOT the balanced profile's source of truth.
+// Bootstrap defaults only — used until the first resource-profile push/pull
+// resolves the real RAM-tiered values on mount. They are NOT the balanced
+// profile's source of truth. Sized to the balanced profile at the guaranteed
+// minimum ceiling of 24 (resolveWebglThresholds("balanced", 24) → 18/15,
+// electron/utils/webglContextBudget.ts): cold start is always balanced (the
+// efficiency profile only latches after sustained runtime pressure), and every
+// machine gets a ceiling ≥ 24 from the max-active-webgl-contexts switch, so 18
+// is always within budget. Keeping these in step with the resolved cold-start
+// value stops a large restored fleet from flipping to DOM under the old stale
+// 12-upper and then being stranded there — DOM→WebGL only re-flips once the
+// count falls back to the lower threshold (#11192).
 
-let upperThreshold = 12;
-let lowerThreshold = 10;
+let upperThreshold = 18;
+let lowerThreshold = 15;
 
 export function getWebglUpperThreshold(): number {
   return upperThreshold;
