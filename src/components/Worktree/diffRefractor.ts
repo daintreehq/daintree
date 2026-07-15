@@ -59,6 +59,16 @@ export function _resetLangStateForTests(): void {
   langLoadPromises.clear();
 }
 
+/**
+ * Test-only: await every in-flight grammar load so a rejected dynamic import
+ * (and its `console.warn`) settles before the test file tears down. Without
+ * this drain a late rejection can fire during vitest worker teardown, tripping
+ * "Closing rpc while onUserConsoleLog was pending".
+ */
+export function _flushLangLoadsForTests(): Promise<unknown> {
+  return Promise.allSettled([...langLoadPromises.values()]);
+}
+
 export function isLanguageRegistered(language: string): boolean {
   return refractor.registered(language);
 }
