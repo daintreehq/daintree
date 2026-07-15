@@ -1,4 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect } from "vitest";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import {
   ALLOWED_PREFIXES,
   PLATFORMS,
@@ -7,6 +10,7 @@ import {
   resolvePlatforms,
   shouldSkipUpload,
   validatePrefix,
+  writeSkipUploadOutput,
 } from "./check-version-monotonic.mjs";
 
 describe("check-version-monotonic", () => {
@@ -27,8 +31,18 @@ describe("check-version-monotonic", () => {
       expect(checkVersionMonotonic("1.0.0", "1.0.0")).toEqual({ ok: true, skip: true });
     });
 
-    it("skips when equal on a pre-release channel (re-tag of a published rc)", () => {
+    it("skips identical prerelease versions (re-tag of a published rc)", () => {
       expect(checkVersionMonotonic("1.0.0-rc.1", "1.0.0-rc.1")).toEqual({ ok: true, skip: true });
+    });
+
+    it("does NOT skip a build-metadata-only difference — never actually published, fails closed", () => {
+      // semver.eq would treat these as equal (build metadata is ignored for
+      // precedence), but 1.0.0+b was never the live artifact. Exact identity
+      // means it falls through to the strict-greater check and fails closed.
+      const result = checkVersionMonotonic("1.0.0+a", "1.0.0+b");
+      expect(result.ok).toBe(false);
+      expect(result.skip).toBeUndefined();
+      expect(result.error).toContain("not strictly greater");
     });
 
     it("fails when new is older", () => {
@@ -91,8 +105,63 @@ describe("check-version-monotonic", () => {
       expect(shouldSkipUpload(["mac", "linux"], ["linux"], ["mac: downgrade"])).toBe(false);
     });
 
+    it("the failure veto is independent of the skip count (isolates failures.length === 0)", () => {
+      // skipped.length === platforms.length here, so ONLY the zero-failures
+      // clause can force false — this is the case that would regress if that
+      // clause were ever dropped.
+      expect(shouldSkipUpload(["mac"], ["mac"], ["mac: downgrade"])).toBe(false);
+    });
+
     it("does not skip an empty platform set", () => {
       expect(shouldSkipUpload([], [], [])).toBe(false);
+    });
+  });
+
+  describe("writeSkipUploadOutput", () => {
+    const originalOutput = process.env.GITHUB_OUTPUT;
+    let tmpDir;
+
+    afterEach(() => {
+      if (originalOutput === undefined) {
+        delete process.env.GITHUB_OUTPUT;
+      } else {
+        process.env.GITHUB_OUTPUT = originalOutput;
+      }
+      if (tmpDir) {
+        rmSync(tmpDir, { recursive: true, force: true });
+        tmpDir = undefined;
+      }
+    });
+
+    function useTmpOutput() {
+      tmpDir = mkdtempSync(path.join(tmpdir(), "monotonic-out-"));
+      const file = path.join(tmpDir, "github_output");
+      process.env.GITHUB_OUTPUT = file;
+      return file;
+    }
+
+    it("appends skip_upload=true when skipping", () => {
+      const file = useTmpOutput();
+      writeSkipUploadOutput(true);
+      expect(readFileSync(file, "utf8")).toBe("skip_upload=true\n");
+    });
+
+    it("appends skip_upload=false when not skipping", () => {
+      const file = useTmpOutput();
+      writeSkipUploadOutput(false);
+      expect(readFileSync(file, "utf8")).toBe("skip_upload=false\n");
+    });
+
+    it("is a no-op when GITHUB_OUTPUT is unset (local / vitest runs)", () => {
+      delete process.env.GITHUB_OUTPUT;
+      expect(() => writeSkipUploadOutput(true)).not.toThrow();
+    });
+
+    it("throws (fail-closed) when GITHUB_OUTPUT points at an unwritable path", () => {
+      // A set-but-broken output path must not be silently swallowed — the skip
+      // decision would go uncommunicated and the gate should fail closed.
+      process.env.GITHUB_OUTPUT = path.join(tmpdir(), "no-such-dir-monotonic", "out");
+      expect(() => writeSkipUploadOutput(true)).toThrow();
     });
   });
 

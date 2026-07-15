@@ -141,10 +141,15 @@ export function checkVersionMonotonic(liveVersion, newVersion) {
   if (!semver.valid(newVersion)) {
     return { ok: false, error: `new version '${newVersion}' is not valid semver` };
   }
-  // Equal is not a regression — it's a re-tag of a version that already
-  // published successfully. Signal "skip" so the caller uploads nothing rather
-  // than either failing (the old behavior) or rewriting live artifacts.
-  if (semver.eq(newVersion, liveVersion)) {
+  // An identical version string is not a regression — it's a re-tag of a
+  // version that already published successfully. Signal "skip" so the caller
+  // uploads nothing rather than failing (the old behavior) or rewriting the
+  // live artifacts. Use exact identity, not semver.eq: build-metadata- or
+  // format-only variants (e.g. 1.0.0+a vs 1.0.0+b, or v1.0.0 vs 1.0.0) share
+  // updater precedence but were never actually the published version, so they
+  // fall through to the strict-greater check and fail closed. A genuine re-tag
+  // always produces a byte-identical version string (same package.json version).
+  if (newVersion === liveVersion) {
     return { ok: true, skip: true };
   }
   if (!semver.gt(newVersion, liveVersion)) {
@@ -346,7 +351,7 @@ async function main() {
  * swallow a write error: if the runner set GITHUB_OUTPUT but the append fails,
  * the skip decision can't be communicated and the gate should fail closed.
  */
-function writeSkipUploadOutput(skipUpload) {
+export function writeSkipUploadOutput(skipUpload) {
   const outputPath = process.env.GITHUB_OUTPUT;
   if (!outputPath) return;
   appendFileSync(outputPath, `skip_upload=${skipUpload}\n`, "utf8");
