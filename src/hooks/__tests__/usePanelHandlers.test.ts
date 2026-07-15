@@ -152,12 +152,16 @@ describe("usePanelHandlers", () => {
   it("dock-surface dismiss stays repeatable across reopen cycles (no trashedRef latch)", () => {
     // The DockedPanel hook instance survives collapse/reopen, so the X must
     // dismiss every time — not latch after the first like the destructive paths.
-    const { result } = renderHook(() => usePanelHandlers({ terminalId: "p1", surface: "dock" }));
+    const onAfterClose = vi.fn();
+    const { result } = renderHook(() =>
+      usePanelHandlers({ terminalId: "p1", surface: "dock", onAfterClose })
+    );
 
     act(() => result.current.handleClose());
     act(() => result.current.handleClose());
 
     expect(closeDockTerminalMock).toHaveBeenCalledTimes(2);
+    expect(onAfterClose).toHaveBeenCalledTimes(2);
   });
 
   it("dock-surface force-close still destroys via removePanel, never dismissing", () => {
