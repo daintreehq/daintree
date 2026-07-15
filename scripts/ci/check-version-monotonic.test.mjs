@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect } from "vitest";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -140,10 +140,14 @@ describe("check-version-monotonic", () => {
       return file;
     }
 
-    it("appends skip_upload=true when skipping", () => {
+    it("appends skip_upload=true, preserving any lines a prior step already wrote", () => {
       const file = useTmpOutput();
+      // GITHUB_OUTPUT accumulates across a job — the write must APPEND, not
+      // clobber (a writeFileSync swap would pass an empty-file assertion but
+      // wipe another step's output).
+      writeFileSync(file, "prior-step=1\n");
       writeSkipUploadOutput(true);
-      expect(readFileSync(file, "utf8")).toBe("skip_upload=true\n");
+      expect(readFileSync(file, "utf8")).toBe("prior-step=1\nskip_upload=true\n");
     });
 
     it("appends skip_upload=false when not skipping", () => {
@@ -159,8 +163,11 @@ describe("check-version-monotonic", () => {
 
     it("throws (fail-closed) when GITHUB_OUTPUT points at an unwritable path", () => {
       // A set-but-broken output path must not be silently swallowed — the skip
-      // decision would go uncommunicated and the gate should fail closed.
-      process.env.GITHUB_OUTPUT = path.join(tmpdir(), "no-such-dir-monotonic", "out");
+      // decision would go uncommunicated and the gate should fail closed. The
+      // missing parent is nested inside a fresh temp dir so it's guaranteed
+      // absent (a predictable /tmp path could pre-exist and let the write land).
+      tmpDir = mkdtempSync(path.join(tmpdir(), "monotonic-out-"));
+      process.env.GITHUB_OUTPUT = path.join(tmpDir, "missing", "out");
       expect(() => writeSkipUploadOutput(true)).toThrow();
     });
   });
