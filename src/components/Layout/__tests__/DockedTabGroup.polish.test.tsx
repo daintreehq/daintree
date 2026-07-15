@@ -387,4 +387,45 @@ describe("DockedTabGroup dock-popover polish (#8164)", () => {
       }
     });
   });
+
+  // #11187 — plain-terminal running/finished cue aggregates across the group's
+  // tabs (any plain tab working → spinner). The real useDockActivityState helper
+  // runs here; deriveTerminalChrome is mocked to isAgent:false so tabs resolve
+  // as plain shells.
+  describe("plain-terminal group activity cue (#11187)", () => {
+    it("shows a running spinner when any plain tab in the group is working", () => {
+      const panels = [
+        makePanel({ id: "t-1" }),
+        makePanel({ id: "t-2", activityStatus: "working" }),
+      ];
+      const { container } = render(
+        <DockedTabGroup group={makeGroup(["t-1", "t-2"], "t-1")} panels={panels} />
+      );
+      expect(container.querySelector('[data-dock-activity-state="working"]')).not.toBeNull();
+    });
+
+    it("announces 'command running' in the group chip accessible name while aggregating working", () => {
+      const panels = [
+        makePanel({ id: "t-1" }),
+        makePanel({ id: "t-2", activityStatus: "working" }),
+      ];
+      const { container } = render(
+        <DockedTabGroup group={makeGroup(["t-1", "t-2"], "t-1")} panels={panels} />
+      );
+      const chip = container.querySelector('[data-dock-item=""]') as HTMLElement | null;
+      expect(chip).not.toBeNull();
+      expect(chip!.getAttribute("aria-label")).toContain("command running");
+    });
+
+    it("shows no cue when every plain tab is idle", () => {
+      const panels = [
+        makePanel({ id: "t-1", activityStatus: "success" }),
+        makePanel({ id: "t-2", activityStatus: "success" }),
+      ];
+      const { container } = render(
+        <DockedTabGroup group={makeGroup(["t-1", "t-2"], "t-1")} panels={panels} />
+      );
+      expect(container.querySelector("[data-dock-activity-state]")).toBeNull();
+    });
+  });
 });

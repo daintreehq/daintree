@@ -238,3 +238,38 @@ describe("DockedTerminalItem drag wiring", () => {
     expect(screen.getByRole("button", { name: /drag to reorder/i })).not.toBeNull();
   });
 });
+
+// #11187 — plain (non-agent) terminals must show a running/finished affordance
+// on their dock chip. The real useDockActivityState helper/hook run here (only
+// useDockBlockedState is mocked); deriveTerminalChrome is mocked to isAgent:false
+// so these terminals resolve as plain.
+describe("DockedTerminalItem plain-terminal activity cue (#11187)", () => {
+  beforeEach(() => {
+    mockActiveDockTerminalId = null;
+    mockDockAgentState = undefined;
+  });
+
+  it("shows a running spinner and 'command running' accessible name while a plain command runs", () => {
+    const { container } = render(
+      <DockedTerminalItem terminal={makeTerminal({ id: "t-1", activityStatus: "working" })} />
+    );
+    expect(container.querySelector('[data-dock-activity-state="working"]')).not.toBeNull();
+    expect(screen.getByRole("button", { name: /command running/ })).not.toBeNull();
+  });
+
+  it("shows no cue for an idle plain terminal that never transitioned from working", () => {
+    const { container } = render(
+      <DockedTerminalItem terminal={makeTerminal({ id: "t-1", activityStatus: "success" })} />
+    );
+    expect(container.querySelector("[data-dock-activity-state]")).toBeNull();
+    expect(screen.queryByRole("button", { name: /command running/ })).toBeNull();
+  });
+
+  it("yields the indicator slot to an active agent state (no plain cue on agent chips)", () => {
+    mockDockAgentState = "working";
+    const { container } = render(
+      <DockedTerminalItem terminal={makeTerminal({ id: "t-1", activityStatus: "working" })} />
+    );
+    expect(container.querySelector("[data-dock-activity-state]")).toBeNull();
+  });
+});

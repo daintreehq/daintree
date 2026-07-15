@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDndMonitor } from "@dnd-kit/core";
 import type { DraggableSyntheticListeners } from "@dnd-kit/core";
+import { CheckCircle2 } from "lucide-react";
+import { SpinnerCircle } from "@/components/icons";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import { cn } from "@/lib/utils";
@@ -30,6 +32,7 @@ import {
   isDockAgentStateDeprioritized,
   useDockBlockedState,
 } from "./useDockBlockedState";
+import { getDockDisplayActivityState, useTransientDockFinishedCue } from "./useDockActivityState";
 import {
   handleDockInteractOutside,
   handleDockEscapeKeyDown,
@@ -301,6 +304,11 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   const isActive = isWorking || isWaiting;
   const commandText = terminal.activityHeadline || terminal.lastCommand;
   const blockedState = useDockBlockedState(agentState);
+  // Plain (non-agent) terminals surface their own running/finished affordance —
+  // the agent path above returns undefined for them by design.
+  const plainActivityState = getDockDisplayActivityState(terminal);
+  const showFinishedCue = useTransientDockFinishedCue(plainActivityState, terminal.id);
+  const plainWorking = plainActivityState === "working";
   const showDockAgentHighlights = usePreferencesStore((s) => s.showDockAgentHighlights);
   // Use shortened title without command summary for dock items
   const displayTitle = terminal.title;
@@ -364,7 +372,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                   e.stopPropagation();
                   handleMoveToGrid();
                 }}
-                aria-label={`${terminal.title}${displayAgentState ? ` — agent ${getEffectiveStateLabel(displayAgentState)}` : ""} - Click to preview, double-click to move to grid, drag to reorder`}
+                aria-label={`${terminal.title}${displayAgentState ? ` — agent ${getEffectiveStateLabel(displayAgentState)}` : plainWorking ? " — command running" : ""} - Click to preview, double-click to move to grid, drag to reorder`}
               >
                 <div className="flex items-center justify-center shrink-0">
                   <TerminalIcon
@@ -378,7 +386,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                   {displayTitle}
                 </span>
 
-                {isActive && commandText && (
+                {(isActive || plainWorking) && commandText && (
                   <>
                     <div className="h-3 w-px bg-border-subtle shrink-0" aria-hidden="true" />
                     <Tooltip open={commandTip.open} onOpenChange={commandTip.onOpenChange}>
@@ -390,6 +398,27 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                       <TooltipContent side="bottom">{commandText}</TooltipContent>
                     </Tooltip>
                   </>
+                )}
+
+                {/* Plain-terminal running/finished cue — same icon slot as the
+                    agent state icon, but only when there is no agent state.
+                    aria-hidden: the running state rides the accessible name; the
+                    finished cue is transient and must not spam a live region. */}
+                {!displayAgentState && (plainWorking || showFinishedCue) && (
+                  <div
+                    className={cn(
+                      "ml-1.5 flex items-center shrink-0",
+                      plainWorking ? "text-daintree-text/50" : "text-status-success"
+                    )}
+                    data-dock-activity-state={plainWorking ? "working" : "finished"}
+                    aria-hidden="true"
+                  >
+                    {plainWorking ? (
+                      <SpinnerCircle className="w-3.5 h-3.5 animate-spin-slow motion-reduce:animate-none" />
+                    ) : (
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                    )}
+                  </div>
                 )}
 
                 {/* State icon (compact spacing from title) */}
