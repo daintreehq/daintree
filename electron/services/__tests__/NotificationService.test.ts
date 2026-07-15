@@ -2,6 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const electronMock = vi.hoisted(() => {
   const notificationInstances: NotificationMockInstance[] = [];
+  const webContentsById = new Map<number, WebContentsMock>();
+
+  interface WebContentsMock {
+    id: number;
+    isDestroyed: () => boolean;
+    send: ReturnType<typeof vi.fn>;
+  }
 
   interface NotificationMockInstance {
     options: { title: string; body: string; silent?: boolean };
@@ -34,7 +41,11 @@ const electronMock = vi.hoisted(() => {
       setBadgeCount: vi.fn(),
     },
     Notification: NotificationMock,
+    webContents: {
+      fromId: vi.fn((id: number) => webContentsById.get(id)),
+    },
     notificationInstances,
+    webContentsById,
   };
 });
 
@@ -47,20 +58,45 @@ vi.mock("../../ipc/utils.js", () => ({
   sendToRenderer: vi.fn(),
 }));
 
+// The service asks the registry which view a window is currently showing, and
+// which window owns a webContents. Both are keyed off the ids the mocks hand out.
+const registryMock = vi.hoisted(() => ({
+  getAppWebContents: vi.fn(),
+  getWindowForWebContents: vi.fn(),
+}));
+
+vi.mock("../../window/webContentsRegistry.js", () => registryMock);
+
+import { sendToRenderer } from "../../ipc/utils.js";
 import { notificationService } from "../NotificationService.js";
+
+const sendToRendererMock = vi.mocked(sendToRenderer);
 
 interface WindowListeners {
   focus?: () => void;
   blur?: () => void;
 }
 
-function createWindowMock(isFocused = false) {
+let nextWindowId = 1;
+
+/**
+ * A window plus the project views it hosts. `ownerIds[0]` is the view the window
+ * is currently showing; the rest are cached (deactivated) views — alive, holding
+ * their own waiting counts, invisible to the user.
+ */
+function createWindowMock(isFocused = false, ownerIds: number[] = []) {
   const listeners: WindowListeners = {};
+  const id = nextWindowId++;
   return {
-    id: Math.floor(Math.random() * 10000),
+    id,
+    ownerIds,
     listeners,
     isDestroyed: vi.fn(() => false),
     isFocused: vi.fn(() => isFocused),
+    isMinimized: vi.fn(() => false),
+    restore: vi.fn(),
+    show: vi.fn(),
+    focus: vi.fn(),
     setTitle: vi.fn(),
     on: vi.fn((event: "focus" | "blur", handler: () => void) => {
       listeners[event] = handler;
@@ -74,7 +110,9 @@ function createWindowMock(isFocused = false) {
   };
 }
 
-function createRegistryMock(windows: ReturnType<typeof createWindowMock>[]) {
+type WindowMock = ReturnType<typeof createWindowMock>;
+
+function createRegistryMock(windows: WindowMock[]) {
   const contexts = windows.map((w) => ({
     windowId: w.id,
     webContentsId: w.id + 1000,
@@ -85,14 +123,42 @@ function createRegistryMock(windows: ReturnType<typeof createWindowMock>[]) {
     cleanup: [],
   }));
 
+  const windowForOwner = (ownerId: number) =>
+    windows.find((w) => w.ownerIds.includes(ownerId)) ?? null;
+
+  // Wire the webContents lookups the service uses for focus scoping and click
+  // routing so they agree with the window/owner topology under test.
+  registryMock.getAppWebContents.mockImplementation((win: WindowMock) => ({
+    id: win.ownerIds[0] ?? win.id + 1000,
+  }));
+  registryMock.getWindowForWebContents.mockImplementation(
+    (wc: { id: number }) => windowForOwner(wc.id) ?? null
+  );
+
+  for (const w of windows) {
+    for (const ownerId of w.ownerIds) {
+      electronMock.webContentsById.set(ownerId, {
+        id: ownerId,
+        isDestroyed: () => false,
+        send: vi.fn(),
+      });
+    }
+  }
+
   return {
     all: () => contexts,
     getPrimary: () => contexts[0],
     getByWindowId: (id: number) => contexts.find((c) => c.windowId === id),
-    getByWebContentsId: (id: number) => contexts.find((c) => c.webContentsId === id),
+    getByWebContentsId: (id: number) => {
+      const owned = windowForOwner(id);
+      if (owned) return contexts.find((c) => c.windowId === owned.id);
+      return contexts.find((c) => c.webContentsId === id);
+    },
     size: contexts.length,
   };
 }
+
+const ownerSend = (ownerId: number) => electronMock.webContentsById.get(ownerId)!.send;
 
 describe("NotificationService", () => {
   const originalPlatform = process.platform;
@@ -100,6 +166,7 @@ describe("NotificationService", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers();
+    electronMock.webContentsById.clear();
     Object.defineProperty(process, "platform", { value: "darwin", writable: true });
   });
 
@@ -115,8 +182,8 @@ describe("NotificationService", () => {
   });
 
   it("detaches old window listeners when reinitialized with a new registry", () => {
-    const firstWindow = createWindowMock(false);
-    const secondWindow = createWindowMock(false);
+    const firstWindow = createWindowMock(false, [11]);
+    const secondWindow = createWindowMock(false, [12]);
 
     notificationService.initialize(createRegistryMock([firstWindow]) as never);
     notificationService.initialize(createRegistryMock([secondWindow]) as never);
@@ -127,57 +194,29 @@ describe("NotificationService", () => {
   });
 
   it("clears title when focus event fires", () => {
-    const windowMock = createWindowMock(false);
+    const windowMock = createWindowMock(false, [11]);
     notificationService.initialize(createRegistryMock([windowMock]) as never);
 
-    notificationService.updateNotifications({ waitingCount: 2 });
+    notificationService.updateNotifications(11, { waitingCount: 2 });
     vi.advanceTimersByTime(301);
     expect(windowMock.setTitle).toHaveBeenCalledWith("(2) Daintree");
 
     windowMock.trigger("focus");
     expect(windowMock.setTitle).toHaveBeenCalledWith("Daintree");
+    expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(0);
   });
 
   it("does not throw if update is called after dispose", () => {
-    const windowMock = createWindowMock(false);
+    const windowMock = createWindowMock(false, [11]);
     notificationService.initialize(createRegistryMock([windowMock]) as never);
     notificationService.dispose();
 
-    expect(() => notificationService.updateNotifications({ waitingCount: 1 })).not.toThrow();
-  });
-
-  it("tracks focus across multiple windows — badge is 0 when any window focused", () => {
-    const win1 = createWindowMock(false);
-    const win2 = createWindowMock(true); // win2 starts focused
-    notificationService.initialize(createRegistryMock([win1, win2]) as never);
-
-    notificationService.updateNotifications({ waitingCount: 3 });
-    vi.advanceTimersByTime(301);
-
-    // win2 is focused, so no title update should show count
-    expect(win1.setTitle).toHaveBeenCalledWith("Daintree");
-    expect(win2.setTitle).toHaveBeenCalledWith("Daintree");
-    expect(electronMock.app.setBadgeCount).toHaveBeenCalledWith(0);
-  });
-
-  it("shows badge and title when all windows are blurred", () => {
-    const win1 = createWindowMock(true);
-    const win2 = createWindowMock(false);
-    notificationService.initialize(createRegistryMock([win1, win2]) as never);
-
-    // Blur win1 so both windows are blurred
-    win1.trigger("blur");
-
-    notificationService.updateNotifications({ waitingCount: 5 });
-    vi.advanceTimersByTime(301);
-
-    expect(win1.setTitle).toHaveBeenCalledWith("(5) Daintree");
-    expect(win2.setTitle).toHaveBeenCalledWith("(5) Daintree");
+    expect(() => notificationService.updateNotifications(11, { waitingCount: 1 })).not.toThrow();
   });
 
   it("dispose detaches listeners from all tracked windows", () => {
-    const win1 = createWindowMock(false);
-    const win2 = createWindowMock(false);
+    const win1 = createWindowMock(false, [11]);
+    const win2 = createWindowMock(false, [21]);
     notificationService.initialize(createRegistryMock([win1, win2]) as never);
     notificationService.dispose();
 
@@ -188,7 +227,7 @@ describe("NotificationService", () => {
   });
 
   it("detachWindowListeners clears focus state when the window was destroyed mid-session", () => {
-    const win = createWindowMock(true);
+    const win = createWindowMock(true, [11]);
     notificationService.initialize(createRegistryMock([win]) as never);
 
     expect(notificationService.isWindowFocused()).toBe(true);
@@ -207,7 +246,7 @@ describe("NotificationService", () => {
   });
 
   it("detachWindowListeners removes focus/blur listeners when the window is still alive", () => {
-    const win = createWindowMock(true);
+    const win = createWindowMock(true, [11]);
     notificationService.initialize(createRegistryMock([win]) as never);
 
     expect(notificationService.isWindowFocused()).toBe(true);
@@ -220,8 +259,8 @@ describe("NotificationService", () => {
   });
 
   it("detachWindowListeners only clears the targeted window in a multi-window setup", () => {
-    const win1 = createWindowMock(true);
-    const win2 = createWindowMock(true);
+    const win1 = createWindowMock(true, [11]);
+    const win2 = createWindowMock(true, [21]);
     notificationService.initialize(createRegistryMock([win1, win2]) as never);
 
     expect(notificationService.isWindowFocused()).toBe(true);
@@ -241,8 +280,8 @@ describe("NotificationService", () => {
   });
 
   it("isWindowFocused returns true if any window is focused", () => {
-    const win1 = createWindowMock(false);
-    const win2 = createWindowMock(false);
+    const win1 = createWindowMock(false, [11]);
+    const win2 = createWindowMock(false, [21]);
     notificationService.initialize(createRegistryMock([win1, win2]) as never);
 
     expect(notificationService.isWindowFocused()).toBe(false);
@@ -300,5 +339,335 @@ describe("NotificationService", () => {
       expect.stringContaining("native notification failed"),
       "unsigned dev build"
     );
+  });
+
+  // #11110 — state used to be one global `currentState` that any renderer could
+  // overwrite, so the last window to report won and every other window's title
+  // and the dock badge followed it.
+  describe("per-owner waiting counts", () => {
+    it("aggregates the badge across owners instead of taking the last writer", () => {
+      const win1 = createWindowMock(false, [11]);
+      const win2 = createWindowMock(false, [21]);
+      notificationService.initialize(createRegistryMock([win1, win2]) as never);
+
+      notificationService.updateNotifications(11, { waitingCount: 2 });
+      notificationService.updateNotifications(21, { waitingCount: 3 });
+      vi.advanceTimersByTime(301);
+
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(5);
+    });
+
+    it("titles each window from its own owners only", () => {
+      const win1 = createWindowMock(false, [11]);
+      const win2 = createWindowMock(false, [21]);
+      notificationService.initialize(createRegistryMock([win1, win2]) as never);
+
+      notificationService.updateNotifications(11, { waitingCount: 2 });
+      notificationService.updateNotifications(21, { waitingCount: 3 });
+      vi.advanceTimersByTime(301);
+
+      expect(win1.setTitle).toHaveBeenLastCalledWith("(2) Daintree");
+      expect(win2.setTitle).toHaveBeenLastCalledWith("(3) Daintree");
+    });
+
+    it("sums the cached project views a window hosts into one title", () => {
+      // One window, active view + a cached one, each with waiting agents.
+      const win = createWindowMock(false, [11, 12]);
+      notificationService.initialize(createRegistryMock([win]) as never);
+
+      notificationService.updateNotifications(11, { waitingCount: 1 });
+      notificationService.updateNotifications(12, { waitingCount: 2 });
+      vi.advanceTimersByTime(301);
+
+      expect(win.setTitle).toHaveBeenLastCalledWith("(3) Daintree");
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(3);
+    });
+
+    it("focusing one window leaves another window's title and its badge share intact", () => {
+      const win1 = createWindowMock(false, [11]);
+      const win2 = createWindowMock(false, [21]);
+      notificationService.initialize(createRegistryMock([win1, win2]) as never);
+
+      notificationService.updateNotifications(11, { waitingCount: 2 });
+      notificationService.updateNotifications(21, { waitingCount: 3 });
+      vi.advanceTimersByTime(301);
+
+      // Old behavior: this zeroed the badge and reset every window's title.
+      win2.trigger("focus");
+
+      expect(win1.setTitle).toHaveBeenLastCalledWith("(2) Daintree");
+      expect(win2.setTitle).toHaveBeenLastCalledWith("Daintree");
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(2);
+    });
+
+    it("focus clears only the view the window is showing, not its cached views", () => {
+      // The user focuses the window and sees view 11. View 12's waiting agents
+      // are still unseen, so they must survive — the renderer only re-reports on
+      // a count *change*, so discarding them here would lose the signal for good.
+      const win = createWindowMock(false, [11, 12]);
+      notificationService.initialize(createRegistryMock([win]) as never);
+
+      notificationService.updateNotifications(11, { waitingCount: 1 });
+      notificationService.updateNotifications(12, { waitingCount: 2 });
+      vi.advanceTimersByTime(301);
+
+      win.trigger("focus");
+
+      expect(win.setTitle).toHaveBeenLastCalledWith("(2) Daintree");
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(2);
+    });
+
+    it("one owner reporting zero does not clear another owner's count", () => {
+      // This is the renderer's real focus/unmount path: useWindowNotifications
+      // pushes { waitingCount: 0 } for its own view. Under the old global
+      // `currentState` that zero wiped every other window's title and the badge.
+      const win1 = createWindowMock(false, [11]);
+      const win2 = createWindowMock(false, [21]);
+      notificationService.initialize(createRegistryMock([win1, win2]) as never);
+
+      notificationService.updateNotifications(11, { waitingCount: 2 });
+      notificationService.updateNotifications(21, { waitingCount: 3 });
+      notificationService.updateNotifications(11, { waitingCount: 0 });
+      vi.advanceTimersByTime(301);
+
+      expect(win1.setTitle).toHaveBeenLastCalledWith("Daintree");
+      expect(win2.setTitle).toHaveBeenLastCalledWith("(3) Daintree");
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(3);
+    });
+
+    it("drops an owner that no longer resolves to a live window", () => {
+      const win = createWindowMock(false, [11, 12]);
+      const registry = createRegistryMock([win]);
+      notificationService.initialize(registry as never);
+
+      notificationService.updateNotifications(11, { waitingCount: 1 });
+      notificationService.updateNotifications(12, { waitingCount: 2 });
+      vi.advanceTimersByTime(301);
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(3);
+
+      // The view was evicted: WindowRegistry unindexes it before closing its
+      // webContents, so it stops resolving. Its count must not linger.
+      win.ownerIds = [11];
+
+      notificationService.updateNotifications(11, { waitingCount: 1 });
+      vi.advanceTimersByTime(301);
+
+      expect(win.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(1);
+    });
+
+    it("drops owners whose window is destroyed", () => {
+      const win = createWindowMock(false, [11]);
+      notificationService.initialize(createRegistryMock([win]) as never);
+
+      notificationService.updateNotifications(11, { waitingCount: 4 });
+      vi.advanceTimersByTime(301);
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(4);
+
+      win.isDestroyed.mockReturnValue(true);
+      notificationService.updateNotifications(11, { waitingCount: 4 });
+      vi.advanceTimersByTime(301);
+
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(0);
+    });
+
+    it("dispose forgets every owner's state", () => {
+      const win = createWindowMock(false, [11, 12]);
+      notificationService.initialize(createRegistryMock([win]) as never);
+
+      notificationService.updateNotifications(11, { waitingCount: 2 });
+      vi.advanceTimersByTime(301);
+
+      notificationService.dispose();
+      notificationService.initialize(createRegistryMock([win]) as never);
+
+      notificationService.updateNotifications(12, { waitingCount: 3 });
+      vi.advanceTimersByTime(301);
+
+      // 3, never 5 — owner 11's pre-dispose count must not survive.
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(3);
+    });
+
+    it("removeOwner drops that owner's count from the badge and title", () => {
+      const win = createWindowMock(false, [11, 12]);
+      notificationService.initialize(createRegistryMock([win]) as never);
+
+      notificationService.updateNotifications(11, { waitingCount: 1 });
+      notificationService.updateNotifications(12, { waitingCount: 2 });
+      vi.advanceTimersByTime(301);
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(3);
+
+      notificationService.removeOwner(12);
+
+      expect(win.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(1);
+
+      // Idempotent — the webContents "destroyed" listener and the window's
+      // cleanup can both fire for the same owner.
+      expect(() => notificationService.removeOwner(12)).not.toThrow();
+    });
+  });
+
+  describe("click routing", () => {
+    const context = { panelId: "term-9", panelTitle: "Agent", worktreeId: "wt-1" };
+
+    it("focuses the window that owns the panel, not the primary window", () => {
+      const primary = createWindowMock(true, [11]);
+      const secondary = createWindowMock(false, [21]);
+      notificationService.initialize(createRegistryMock([primary, secondary]) as never);
+
+      notificationService.showWatchNotification(
+        "Agent waiting",
+        "Needs input",
+        context,
+        "notification:watch-navigate",
+        { ownerWebContentsId: 21 }
+      );
+      electronMock.notificationInstances.at(-1)!.trigger("click");
+
+      expect(secondary.focus).toHaveBeenCalled();
+      expect(primary.focus).not.toHaveBeenCalled();
+    });
+
+    it("sends the navigate to the owning view, not whichever view the window is showing", () => {
+      // Owner 12 is a cached view: sendToRenderer would deliver to the active
+      // view (11) and the navigate would land in the wrong renderer.
+      const win = createWindowMock(false, [11, 12]);
+      notificationService.initialize(createRegistryMock([win]) as never);
+
+      notificationService.showWatchNotification(
+        "Agent waiting",
+        "Needs input",
+        context,
+        "notification:watch-navigate",
+        { ownerWebContentsId: 12 }
+      );
+      electronMock.notificationInstances.at(-1)!.trigger("click");
+
+      expect(ownerSend(12)).toHaveBeenCalledWith("notification:watch-navigate", context);
+      expect(ownerSend(11)).not.toHaveBeenCalled();
+      expect(sendToRendererMock).not.toHaveBeenCalled();
+    });
+
+    it("restores a minimized owner window", () => {
+      const win = createWindowMock(false, [11]);
+      win.isMinimized.mockReturnValue(true);
+      notificationService.initialize(createRegistryMock([win]) as never);
+
+      notificationService.showWatchNotification(
+        "Agent waiting",
+        "Needs input",
+        context,
+        "notification:watch-navigate",
+        { ownerWebContentsId: 11 }
+      );
+      electronMock.notificationInstances.at(-1)!.trigger("click");
+
+      expect(win.restore).toHaveBeenCalled();
+      expect(win.show).toHaveBeenCalled();
+    });
+
+    it("falls back to the primary window when the owner is gone", () => {
+      const primary = createWindowMock(true, [11]);
+      notificationService.initialize(createRegistryMock([primary]) as never);
+
+      notificationService.showWatchNotification(
+        "Agent waiting",
+        "Needs input",
+        context,
+        "notification:watch-navigate",
+        { ownerWebContentsId: 999 }
+      );
+      electronMock.notificationInstances.at(-1)!.trigger("click");
+
+      expect(primary.focus).toHaveBeenCalled();
+      expect(sendToRendererMock).toHaveBeenCalledWith(
+        primary,
+        "notification:watch-navigate",
+        context
+      );
+    });
+
+    it("falls back to the primary window when the owner's webContents is destroyed", () => {
+      const primary = createWindowMock(true, [11]);
+      const secondary = createWindowMock(false, [21]);
+      notificationService.initialize(createRegistryMock([primary, secondary]) as never);
+
+      electronMock.webContentsById.set(21, {
+        id: 21,
+        isDestroyed: () => true,
+        send: vi.fn(),
+      });
+
+      notificationService.showWatchNotification(
+        "Agent waiting",
+        "Needs input",
+        context,
+        "notification:watch-navigate",
+        { ownerWebContentsId: 21 }
+      );
+      electronMock.notificationInstances.at(-1)!.trigger("click");
+
+      expect(ownerSend(21)).not.toHaveBeenCalled();
+      expect(sendToRendererMock).toHaveBeenCalledWith(
+        primary,
+        "notification:watch-navigate",
+        context
+      );
+    });
+
+    it("falls back to the primary window when the send to the owner throws", () => {
+      const primary = createWindowMock(true, [11]);
+      const secondary = createWindowMock(false, [21]);
+      notificationService.initialize(createRegistryMock([primary, secondary]) as never);
+
+      // Alive at the guard, torn down by the time we send.
+      electronMock.webContentsById.set(21, {
+        id: 21,
+        isDestroyed: () => false,
+        send: vi.fn(() => {
+          throw new Error("render frame was disposed");
+        }),
+      });
+
+      notificationService.showWatchNotification(
+        "Agent waiting",
+        "Needs input",
+        context,
+        "notification:watch-navigate",
+        { ownerWebContentsId: 21 }
+      );
+      electronMock.notificationInstances.at(-1)!.trigger("click");
+
+      expect(sendToRendererMock).toHaveBeenCalledWith(
+        primary,
+        "notification:watch-navigate",
+        context
+      );
+    });
+
+    it("navigates from an escalation notification — the path that had no click handler", () => {
+      const win = createWindowMock(false, [11]);
+      notificationService.initialize(createRegistryMock([win]) as never);
+
+      notificationService.showNativeNotification("Agent still waiting", "3 minutes", {
+        ownerWebContentsId: 11,
+        navigation: { channel: "notification:watch-navigate", context },
+      });
+      electronMock.notificationInstances.at(-1)!.trigger("click");
+
+      expect(win.focus).toHaveBeenCalled();
+      expect(ownerSend(11)).toHaveBeenCalledWith("notification:watch-navigate", context);
+    });
+
+    it("a native notification with no navigation stays unclickable", () => {
+      const win = createWindowMock(false, [11]);
+      notificationService.initialize(createRegistryMock([win]) as never);
+
+      notificationService.showNativeNotification("Disk space low", "2GB left");
+      const instance = electronMock.notificationInstances.at(-1)!;
+
+      expect(instance.handlers.click).toBeUndefined();
+    });
   });
 });

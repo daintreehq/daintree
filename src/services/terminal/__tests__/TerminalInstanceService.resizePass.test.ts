@@ -206,7 +206,7 @@ describe("TerminalInstanceService runResizePass", () => {
     expect(resizedIds(spy)).toEqual(["c", "a", "b"]);
   });
 
-  it("aborts an in-flight pass when a newer pass supersedes it", async () => {
+  it("restarts an in-flight pass without losing unprocessed resize obligations", async () => {
     for (const id of ["a", "b", "c", "d", "e"]) {
       service.instances.set(id, makeManaged());
     }
@@ -216,15 +216,16 @@ describe("TerminalInstanceService runResizePass", () => {
     service.runResizePass(["a", "b", "c"]);
     expect(resizedIds(spy)).toEqual(["a"]);
 
-    // A new close arrives mid-pass: pass 2 supersedes pass 1.
+    // A new close arrives mid-pass: pass 2 supersedes pass 1 but carries its
+    // unprocessed ids because they still need fresh host measurements.
     service.runResizePass(["d", "e"]);
     expect(resizedIds(spy)).toEqual(["a", "d"]);
 
     await vi.advanceTimersByTimeAsync(50);
 
-    // Pass 1's remaining survivors ("b", "c") are cancelled; only pass 2
-    // finishes ("e"). The stale reflows never run.
-    expect(resizedIds(spy)).toEqual(["a", "d", "e"]);
+    // The new ids run first, then the old pass's remaining survivors are
+    // measured against current geometry instead of being stranded.
+    expect(resizedIds(spy)).toEqual(["a", "d", "e", "b", "c"]);
   });
 
   it("skips ineligible panels (delegates to batchResize guards)", async () => {

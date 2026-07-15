@@ -24,6 +24,7 @@ vi.mock("../../GitServiceCache.js", () => ({
 import { broadcastToRenderer } from "../../../ipc/utils.js";
 import { events } from "../../events.js";
 import { gitServiceCache } from "../../GitServiceCache.js";
+import { generateProjectId } from "../../projectStorePaths.js";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "../../../../shared/utils/forgeProviderIds.js";
 import type { RateLimitInfo } from "../../../../shared/types/forge.js";
 
@@ -1024,6 +1025,41 @@ describe("WorkspaceHostEventRouter", () => {
         providerId: FAKE_PROVIDER_ID,
         isUnhealthy: true,
       });
+    });
+  });
+
+  describe("forge-remote-changed (#11155)", () => {
+    it("broadcasts a project-scoped signal so the renderer re-resolves its provider", () => {
+      const entry = makeEntry({ projectPath: "/project/test" });
+      router.routeHostEvent(entry, { type: "forge-remote-changed" });
+
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
+      expect(broadcastToRenderer).toHaveBeenCalledWith(CHANNELS.EVENTS_PUSH, {
+        name: "forge:remote-changed",
+        payload: { projectId: generateProjectId("/project/test") },
+      });
+    });
+
+    it("scopes the signal to the emitting host's project", () => {
+      router.routeHostEvent(makeEntry({ projectPath: "/a" }), { type: "forge-remote-changed" });
+      router.routeHostEvent(makeEntry({ projectPath: "/b" }), { type: "forge-remote-changed" });
+
+      const projectIds = vi
+        .mocked(broadcastToRenderer)
+        .mock.calls.map(([, payload]) => (payload as { payload: { projectId: string } }).payload);
+      expect(projectIds).toEqual([
+        { projectId: generateProjectId("/a") },
+        { projectId: generateProjectId("/b") },
+      ]);
+    });
+
+    it("carries no remote URL — https remotes can embed credentials", () => {
+      router.routeHostEvent(makeEntry(), { type: "forge-remote-changed" });
+
+      const [, payload] = vi.mocked(broadcastToRenderer).mock.calls[0]!;
+      expect(Object.keys((payload as { payload: Record<string, unknown> }).payload)).toEqual([
+        "projectId",
+      ]);
     });
   });
 });

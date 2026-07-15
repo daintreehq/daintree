@@ -81,3 +81,41 @@ describe("TwoPaneSplitLayout hydration lock gating (issue #10827)", () => {
     expect(content).toContain("subscribeSidebarHydrationUnlock(");
   });
 });
+
+describe("TwoPaneSplitLayout coordinated terminal resize", () => {
+  it("unlocks into one tracked final resize pass without calling raw fit", async () => {
+    const content = await readFile(LAYOUT_PATH, "utf-8");
+
+    expect(content).not.toContain("terminalInstanceService.fit(");
+    expect(content).toMatch(
+      /dragLockedIdsRef\.current = \[\][\s\S]{0,220}lockResize\(id, false\)[\s\S]{0,180}runResizePass\(ids\)/
+    );
+  });
+
+  it("re-arms gesture-owned locks and clears ownership before drag-end unlock", async () => {
+    const content = await readFile(LAYOUT_PATH, "utf-8");
+
+    expect(content).toContain("dragLockedIdsRef");
+    expect(content).toMatch(
+      /const rearm = \(\) => \{[\s\S]{0,220}lockResize\(id, true\)[\s\S]{0,120}requestAnimationFrame\(rearm\)/
+    );
+    expect(content).toMatch(/dragLockedIdsRef\.current = \[\][\s\S]{0,220}lockResize\(id, false\)/);
+  });
+
+  it("registers non-drag layout work with the batch scheduler immediately", async () => {
+    const content = await readFile(LAYOUT_PATH, "utf-8");
+
+    expect(content).toContain("terminalInstanceService.scheduleBatchResize(panelIds)");
+  });
+
+  it("unmount cleanup releases only gesture-owned terminal locks", async () => {
+    const content = await readFile(LAYOUT_PATH, "utf-8");
+    const cleanupStart = content.indexOf("// Cleanup: unlock resize");
+    const cleanupEnd = content.indexOf("const minRatio", cleanupStart);
+    const cleanup = content.slice(cleanupStart, cleanupEnd);
+
+    expect(cleanup).toContain("const lockedIds = dragLockedIdsRef.current");
+    expect(cleanup).toMatch(/for \(const id of lockedIds\)[\s\S]*lockResize\(id, false\)/);
+    expect(cleanup).not.toContain("terminalsRef.current.map");
+  });
+});

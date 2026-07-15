@@ -1,4 +1,5 @@
 import { notify } from "@/lib/notify";
+import { systemClient } from "@/clients/systemClient";
 import type { HydrateResult } from "@shared/types/ipc/app";
 
 // One-shot guard so the GPU-disabled toast fires at most once per renderer
@@ -56,6 +57,41 @@ export function dispatchRecoveryNotifications(hydrateResult: HydrateResult): voi
         priority: "high",
         duration: 0,
         context: { eventKind: "recovery" },
+      });
+    }
+  }
+
+  if (hydrateResult.databaseRecovery) {
+    const { kind, quarantinedPath } = hydrateResult.databaseRecovery;
+    const pathNote = quarantinedPath ? `\nCorrupt file preserved at: ${quarantinedPath}` : "";
+    const revealAction = quarantinedPath
+      ? {
+          label: "Show damaged file",
+          onClick: () => {
+            void systemClient.showItemInFolderUnconfined(quarantinedPath);
+          },
+        }
+      : undefined;
+
+    if (kind === "restored-from-backup") {
+      notify({
+        type: "warning",
+        title: "Database restored from backup",
+        message: `Daintree's database was corrupted and has been restored from a backup. Projects or history added since that backup may be missing.${pathNote}`,
+        priority: "high",
+        duration: 8000,
+        context: { eventKind: "recovery" },
+        action: revealAction,
+      });
+    } else {
+      notify({
+        type: "warning",
+        title: "Database reset",
+        message: `Daintree's database was corrupted and no usable backup was available, so it started fresh. Re-add your projects to continue — your repositories and worktrees on disk are untouched.${pathNote}`,
+        priority: "high",
+        duration: 0,
+        context: { eventKind: "recovery" },
+        action: revealAction,
       });
     }
   }

@@ -367,8 +367,6 @@
   --color-secondary-foreground: var(--secondary-foreground);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
-  --color-accent: var(--accent);
-  --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
   --color-border: var(--border);
@@ -733,8 +731,6 @@ code.hljs {
   --secondary-foreground: var(--theme-text-primary);
   --muted: var(--theme-surface-panel);
   --muted-foreground: var(--theme-text-secondary);
-  --accent: var(--theme-accent-soft);
-  --accent-foreground: var(--theme-text-primary);
   --destructive: var(--theme-status-danger);
   --destructive-foreground: var(--theme-text-inverse);
   --border: var(--theme-border-default);
@@ -1008,6 +1004,28 @@ body,
 .animate-agent-pulse {
   animation: agent-pulse var(--duration-150) var(--ease-out-expo) 1 both;
   will-change: opacity, transform;
+}
+
+@keyframes checkbox-check-in {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* The indicator mounts with this class already on it and keeps it for the whole
+ * checked lifetime — unlike .animate-agent-pulse, which is dropped on
+ * animationend. Hence `backwards` rather than `both`: it still pins the opening
+ * frame to `from` (no flash of an opaque checkmark before the animation runs),
+ * but releases the element on completion instead of parking a permanent
+ * scale(1) effect on it. For the same reason there is no will-change — the hint
+ * would outlive the 150ms it could help. */
+.animate-checkbox-check {
+  animation: checkbox-check-in var(--duration-150) var(--ease-out-expo) 1 backwards;
 }
 
 /* Organic breathing animation for waiting/loading states
@@ -1593,6 +1611,7 @@ body,
 @variant reduce-motion {
   .animate-activity-pulse,
   .animate-agent-pulse,
+  .animate-checkbox-check,
   .animate-breathe,
   .animate-spin,
   .animate-spin-slow,
@@ -1638,6 +1657,26 @@ body,
   .content-fade-in {
     animation: none;
     opacity: 1;
+  }
+
+  /* Empty-grid launcher entry stagger — drop the keyframes and snap every
+   * section to its resting state. The sections' `motion-safe:` utilities
+   * already cover the OS preference; this rule is what honours the in-app
+   * reduce-animations toggle, which `motion-safe:` cannot see. */
+  .launcher-section-enter {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+
+  /* Launcher press controls (recipe cards, quick actions). `active:scale-*`
+   * emits the individual `scale` property, so the `transform: none` button
+   * reset below cannot neutralize it — see the Tailwind v4 trap in
+   * `docs/themes/interaction-state-recipes.md`. That reset also excludes these
+   * recipe cards outright: they are Radix context-menu triggers, so they carry
+   * a `data-state` attribute. Kill the press scale explicitly. */
+  .launcher-press {
+    scale: none !important;
   }
 
   /* Fleet polish animations — opacity-only already, but drop the keyframe
@@ -2630,13 +2669,13 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   }
 
   /* Project Pulse heatmap (issue #9819). Theme-authored backgrounds collapse
-   * to Canvas under forced-colors, so the four heat levels + missed-day cell
-   * become indistinguishable. Use a system-paint + size-coded inner square
-   * (GitHub's 2023+ contribution-graph approach) keyed off data-heat-level,
-   * and a solid fill for the missed-day streak-break signal. The shape span
-   * is rendered always (display: none baseline) so theme switches don't
+   * to Canvas under forced-colors, so the four heat levels become
+   * indistinguishable. Use a system-paint + size-coded inner square (GitHub's
+   * 2023+ contribution-graph approach) keyed off data-heat-level. The shape
+   * span is rendered always (display: none baseline) so theme switches don't
    * reflow; the !important on the heat cell background is required to beat
-   * the inline author style set in PulseHeatmap.getCellStyle. */
+   * the inline author style set in PulseHeatmap.getCellStyle. A zero-commit
+   * day carries no shape at all — quiet, never a failure signal. */
   .pulse-heat-cell {
     background: Canvas !important;
   }
@@ -2659,9 +2698,6 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   .pulse-heat-cell[data-heat-level="4"] .pulse-heat-cell-shape {
     width: 90%;
     height: 90%;
-  }
-  .pulse-heat-cell-missed {
-    background: CanvasText !important;
   }
   /* The empty (level 0) legend swatch is a <span>, so it misses both the
      global button ButtonText border above and the shape-span cue (empty cells
@@ -2870,9 +2906,12 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   }
 }
 
-/* Horizontal wipe for app theme switches.
-   The old snapshot sits on top and is clipped away via WAAPI clip-path:inset(),
-   revealing the new snapshot underneath. */
+/* App theme switches drive the root snapshots from WAAPI, not CSS: `animation: none`
+   kills the UA's default crossfade so `src/lib/appThemeViewTransition.ts` can animate
+   the old snapshot itself — clipped away for a deliberate pick (runThemeReveal), faded
+   out for a programmatic one (runThemeCrossfade). Either way the old snapshot sits on
+   top and the new one is revealed underneath, so a bare startViewTransition() on the
+   document root animates nothing. */
 ::view-transition-old(root),
 ::view-transition-new(root) {
   animation: none;

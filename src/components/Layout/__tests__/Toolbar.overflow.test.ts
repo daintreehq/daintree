@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import fs from "fs/promises";
 import path from "path";
+import { extractAtRuleBlocks } from "./cssBlocks";
 
 const TOOLBAR_PATH = path.resolve(__dirname, "../Toolbar.tsx");
 const TOOLBAR_CSS_PATH = path.resolve(__dirname, "../../../styles/components/toolbar.css");
@@ -166,9 +167,14 @@ describe("Toolbar overflow menu state preservation — issue #9821", () => {
     it("keeps a timed (not none) display swap under reduced motion — lesson #6182", () => {
       // Inside the @variant reduce-motion block the trigger must still toggle
       // display (display 0s, not transition: none) so the discrete swap lands.
-      expect(css).toMatch(
-        /@variant reduce-motion\s*\{[\s\S]*?\[data-toolbar-overflow-trigger\]\s*\{[\s\S]*?display\s+0s/
+      // Brace-walk the blocks rather than regexing across them: toolbar.css now
+      // has more than one reduce-motion block, and a lazy `[\s\S]*?` match would
+      // happily start in an earlier one and run out of it, proving nothing.
+      const trigger = extractAtRuleBlocks(css, "@variant reduce-motion").find((block) =>
+        block.includes("[data-toolbar-overflow-trigger]")
       );
+      expect(trigger, "no reduce-motion block styles the overflow trigger").toBeDefined();
+      expect(trigger).toMatch(/\[data-toolbar-overflow-trigger\]\s*\{[^{}]*display\s+0s/);
     });
   });
 });

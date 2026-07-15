@@ -1,5 +1,83 @@
 # Changelog
 
+## [0.26.0] - 2026-07-15
+
+Terminal editing gains real power — word-by-word cursor jumps and a type-anywhere rescue that routes stray keystrokes back to the agent you were talking to — while the forge toolbar starts reacting to local git activity instead of a fixed poll. A broad multi-window pass makes project context follow the window that acted, and a motion sweep smooths theme changes, toggles, and settings controls.
+
+### Features
+
+**Terminal**
+
+- Jump the cursor a word at a time with Option+←/→ in the shell line editor (#11159)
+- Type-anywhere rescue routes stray keystrokes to the last agent you typed to, and a locator surfaces an off-screen focused pane (#11147)
+
+**Forge**
+
+- Toolbar counts refresh off local git signals — ref movement and origin-behind — instead of a fixed timer, so merge sprees update promptly (#11153)
+- A newly-added git origin is detected without reloading the project (#11161)
+
+**Worktree & Pulse**
+
+- Sidebar activity recency is unified across worktrees (#11099)
+- Pulse coaching reframes from commit streaks to shipped outcomes (#11182)
+
+**Motion & polish**
+
+- Programmatic theme changes crossfade instead of snapping (#11178)
+- The SegmentedToggle slides a thumb between segments (#11181)
+- The settings nav slides an active indicator between items (#11176), and the SettingsCheckbox animates its checkmark on check-in (#11175)
+- The empty-grid launcher staggers its entry and adds press feedback (#11180)
+
+### Bug Fixes
+
+**Multi-window & project context**
+
+- IPC project context resolves from the sending window's identity, not the last-created window (#11131), and every window's foreground project counts as visible (#11123)
+- Outgoing layout (#11127), copytree settings (#11125), and notification state (#11146) are keyed to the owning window/renderer instead of leaking across projects
+
+**Focus & keyboard**
+
+- Keyboard focus and the selected pane stay in agreement (#11150)
+- Docked-terminal arrow keys no longer rove the dock rail (#11160)
+
+**Panels**
+
+- Maximize state is scoped per worktree (#11184)
+- Enter a focused panel of any kind from the macro grid (#11132)
+- The Review panel's Close button and Escape hit the real close callback (#11138)
+- Dev-preview panels keep their chrome during first load (#11094)
+
+**Settings, actions & updater**
+
+- Failed settings persistence is surfaced and rolled back (#11145), and a failed update-channel load no longer silently falls back to stable (#11140)
+- ActionService dispatch failures surface at three UI call sites instead of failing silently (#11144)
+- The updater stops double-notifying and lets late renderers pull update state (#11141), routes install through the graceful-shutdown coordinator (#11129), and stable builds no longer identify as Beta (#11139)
+
+**Terminal**
+
+- Column math reserves scrollbar width so wrapping is correct (#11097)
+- Agent terminal resizing is coordinated to avoid races (#11098)
+- An inherited NO_COLOR is respected when defaulting FORCE_COLOR (#11142)
+
+**Menu, window & platform**
+
+- File-menu enabled states track project open/close (#11152)
+- Fullscreen uses platform-appropriate APIs, and the Project Settings menu item is wired (#11135)
+- Windows can reach the mic prompt, and a missing Linux settings binary no longer kills the app (#11124)
+- Enter on a webview dialog's Cancel button now cancels (#11126)
+
+**Security & data**
+
+- Persisted runtime data is written owner-only on POSIX (#11148)
+- Database maintenance never overwrites a good backup with a corrupt one (#11130)
+
+**UI & interaction**
+
+- Accent CTA text paints with the contrast-validated foreground (#11149)
+- The notification inbox gains scroll shadows (#11179), the forge stat pill eases its hover tint and press snap (#11177), the re-entry summary animates out instead of unmounting instantly (#11174), and the AppDialog keeps its opacity fade under reduced motion (#11173)
+- The toolbar commit count stays stable on switch-back (#11096)
+- Clear logs is gated behind a confirmation (#11128)
+
 ## [0.25.0] - 2026-07-13
 
 Scratch workspaces become a first-class place to work — nameable, with a real first-run launcher and bulk cleanup — alongside a generalized agent-completion system that adds Codex's $ Skills/Apps/Plugins picker. Rounding it out: browser panels dock properly, dock and maximize interactions settle, and memory-pressure recovery is markedly more robust.

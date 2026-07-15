@@ -55,7 +55,7 @@ export function usePromptHistoryPalette({ terminalId, projectId }: UsePromptHist
     (entry: PromptHistoryEntry) => {
       const store = useTerminalInputStore.getState();
       store.setDraftInput(terminalId, entry.prompt, projectId);
-      store.bumpVoiceDraftRevision();
+      store.bumpExternalDraftRevision();
       palette.close();
     },
     [terminalId, projectId, palette]

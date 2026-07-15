@@ -106,3 +106,78 @@ describe("buildTerminalEnv NODE_COMPILE_CACHE injection", () => {
     expect(env.NODE_COMPILE_CACHE).toBe("/custom/path");
   });
 });
+
+describe("buildTerminalEnv colour hints", () => {
+  let originalNoColor: string | undefined;
+  let originalForceColor: string | undefined;
+
+  beforeEach(() => {
+    // buildTerminalEnv inherits from process.env, so a NO_COLOR or FORCE_COLOR
+    // exported by the host shell would decide these assertions for us — the
+    // exact ambient dependency this suite exists to pin down (#11118).
+    originalNoColor = process.env.NO_COLOR;
+    originalForceColor = process.env.FORCE_COLOR;
+    delete process.env.NO_COLOR;
+    delete process.env.FORCE_COLOR;
+  });
+
+  afterEach(() => {
+    if (originalNoColor === undefined) delete process.env.NO_COLOR;
+    else process.env.NO_COLOR = originalNoColor;
+    if (originalForceColor === undefined) delete process.env.FORCE_COLOR;
+    else process.env.FORCE_COLOR = originalForceColor;
+  });
+
+  it("defaults FORCE_COLOR when neither colour variable is set", () => {
+    const env = buildTerminalEnv(baseOptions, "pane-1", "/bin/bash");
+    expect(env.FORCE_COLOR).toBeDefined();
+  });
+
+  it("does not inject FORCE_COLOR when NO_COLOR is inherited", () => {
+    process.env.NO_COLOR = "1";
+    const env = buildTerminalEnv(baseOptions, "pane-1", "/bin/bash");
+    expect(env.FORCE_COLOR).toBeUndefined();
+    expect(env.NO_COLOR).toBe("1");
+  });
+
+  it("treats an empty inherited NO_COLOR as set", () => {
+    process.env.NO_COLOR = "";
+    const env = buildTerminalEnv(baseOptions, "pane-1", "/bin/bash");
+    expect(env.FORCE_COLOR).toBeUndefined();
+  });
+
+  it("does not inject FORCE_COLOR when NO_COLOR comes from intentionalEnv", () => {
+    const env = buildTerminalEnv({ ...baseOptions, env: { NO_COLOR: "1" } }, "pane-1", "/bin/bash");
+    expect(env.FORCE_COLOR).toBeUndefined();
+    expect(env.NO_COLOR).toBe("1");
+  });
+
+  it("preserves an explicit FORCE_COLOR rather than rewriting it", () => {
+    const env = buildTerminalEnv(
+      { ...baseOptions, env: { FORCE_COLOR: "0" } },
+      "pane-1",
+      "/bin/bash"
+    );
+    expect(env.FORCE_COLOR).toBe("0");
+  });
+
+  it("leaves a user-supplied FORCE_COLOR/NO_COLOR pairing alone", () => {
+    const env = buildTerminalEnv(
+      { ...baseOptions, env: { FORCE_COLOR: "1", NO_COLOR: "1" } },
+      "pane-1",
+      "/bin/bash"
+    );
+    expect(env.FORCE_COLOR).toBe("1");
+    expect(env.NO_COLOR).toBe("1");
+  });
+
+  it("still defaults FORCE_COLOR when only COLORTERM is inherited", () => {
+    const env = buildTerminalEnv(
+      { ...baseOptions, env: { COLORTERM: "24bit" } },
+      "pane-1",
+      "/bin/bash"
+    );
+    expect(env.FORCE_COLOR).toBeDefined();
+    expect(env.COLORTERM).toBe("24bit");
+  });
+});

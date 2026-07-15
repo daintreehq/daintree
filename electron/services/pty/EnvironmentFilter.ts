@@ -115,6 +115,30 @@ export function filterSensitiveOnly(
   return result;
 }
 
+/**
+ * Whether a spawn env should receive Daintree's `FORCE_COLOR` default.
+ *
+ * False once the env already carries `FORCE_COLOR` (the user's own value wins)
+ * or `NO_COLOR` (#11118). chalk/supports-color/ink read `FORCE_COLOR` first and
+ * short-circuit, so injecting it alongside `NO_COLOR` would override the opt-out
+ * and make Node print "NO_COLOR is ignored because FORCE_COLOR is set" in every
+ * terminal. Presence — not truthiness — is the test, so `NO_COLOR=` counts.
+ *
+ * Windows env names are case-insensitive, but the filters above return plain
+ * objects that preserve whatever casing the OS reported, so a `no_color` set via
+ * PowerShell would slip past an uppercase lookup and land in a child process
+ * that does resolve it case-insensitively. Fold case there only — on POSIX,
+ * `no_color` is a genuinely different variable and must not suppress anything.
+ */
+export function shouldInjectForceColor(env: Record<string, string>): boolean {
+  const foldCase = process.platform === "win32";
+  for (const key of Object.keys(env)) {
+    const name = foldCase ? key.toUpperCase() : key;
+    if (name === "NO_COLOR" || name === "FORCE_COLOR") return false;
+  }
+  return true;
+}
+
 const UTF8_PATTERN = /utf-?8/i;
 
 /**

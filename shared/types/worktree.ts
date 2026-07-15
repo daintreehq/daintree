@@ -155,7 +155,7 @@ export interface Worktree {
   /** High-level mood/state for dashboard sorting */
   mood?: WorktreeMood;
 
-  /** Timestamp of last git activity (milliseconds since epoch, null if no activity yet) */
+  /** Most recent valid dirty-file modification time or HEAD committer time (milliseconds since epoch) */
   lastActivityTimestamp?: number | null;
 
   /** Timestamp when worktree directory was created (milliseconds since epoch, for sorting) */
@@ -377,6 +377,6 @@ export interface WorktreeState extends Worktree {
   worktreeId: string;
   /** Current changes snapshot (null if not yet calculated) */
   worktreeChanges: WorktreeChanges | null;
-  /** Override to ensure lastActivityTimestamp is always present */
+  /** Override to ensure the canonical dirty-file-or-commit activity timestamp is always present */
   lastActivityTimestamp: number | null;
 }

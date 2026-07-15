@@ -81,7 +81,7 @@ import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { sortAgentsByToolbarPin } from "@/lib/agentMenuOrder";
-import { getMaximizedGroupFocusTarget } from "./contentGridFocus";
+import { getMaximizedGroupFocusTarget, enterFocusedPanel } from "./contentGridFocus";
 import { setGridLayoutSnapshot } from "./gridLayoutSnapshot";
 import { actionService } from "@/services/ActionService";
 
@@ -541,11 +541,9 @@ export function useContentGridContext({
       if (e.key === "Enter" && focusedId) {
         e.preventDefault();
         e.stopPropagation();
-        const instance = terminalInstanceService.get(focusedId);
-        if (instance) {
-          terminalInstanceService.focus(focusedId);
-          useMacroFocusStore.getState().clearFocus();
-        }
+        // Every panel kind registers a focus handler, so this enters browser,
+        // review, dev-preview, file and plugin panes as well as terminals.
+        enterFocusedPanel(focusedId);
         return;
       }
     },

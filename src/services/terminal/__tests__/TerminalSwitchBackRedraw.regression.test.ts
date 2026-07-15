@@ -181,6 +181,7 @@ function buildDeps(
     resumeFlush: vi.fn(),
     hasInFlightWake: vi.fn(() => false),
     hasPendingWake: vi.fn(() => false),
+    isResizeTransitioning: vi.fn(() => false),
     isWebGLActive: vi.fn(() => true),
     shouldHaveWebGL: vi.fn(() => false),
     ensureWebGL: vi.fn(),

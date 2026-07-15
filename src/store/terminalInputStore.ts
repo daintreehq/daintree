@@ -87,13 +87,32 @@ function deleteProjectKeys<V>(
   return next;
 }
 
+/**
+ * The agent a user last actually typed into — the routing target for the
+ * type-anywhere rescue (#11134).
+ *
+ * Deliberately NOT derived from panel selection or `lastFocusedTerminalByWorktree`:
+ * selection is overloaded by fleet membership and can point at a file or browser
+ * panel, and focus is not typing. This is recorded only from real `input.type`
+ * transactions in an agent's hybrid editor.
+ *
+ * `workspaceId` pins the record to the view that produced it, so a sibling
+ * project view can never route into it.
+ */
+export interface LastTypedAgentTarget {
+  workspaceId: string;
+  terminalId: string;
+}
+
 export interface TerminalInputState {
   hybridInputEnabled: boolean;
   hybridInputAutoFocus: boolean;
   draftInputs: Map<string, string>;
-  /** Incremented when voice transcription appends to a draft, so
-   *  UI components can detect external draft mutations. */
-  voiceDraftRevision: number;
+  /** Incremented when something outside the editor writes a draft (voice
+   *  transcription, prompt history, the type-anywhere rescue), so a mounted
+   *  editor can detect the external mutation and sync its document. */
+  externalDraftRevision: number;
+  lastTypedAgentTarget: LastTypedAgentTarget | null;
   commandHistory: Map<string, string[]>;
   historyIndex: Map<string, number>;
   tempDraft: Map<string, string>;
@@ -103,7 +122,8 @@ export interface TerminalInputState {
   setHybridInputAutoFocus: (enabled: boolean) => void;
   getDraftInput: (terminalId: string, projectId?: string) => string;
   setDraftInput: (terminalId: string, value: string, projectId?: string) => void;
-  bumpVoiceDraftRevision: () => void;
+  bumpExternalDraftRevision: () => void;
+  recordLastTypedAgentTarget: (terminalId: string, workspaceId: string) => void;
   clearDraftInput: (terminalId: string, projectId?: string) => void;
   clearAllDraftInputs: () => void;
   setPendingDraft: (terminalId: string, value: string, projectId?: string) => void;
@@ -135,7 +155,8 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
   hybridInputEnabled: true,
   hybridInputAutoFocus: true,
   draftInputs: new Map(),
-  voiceDraftRevision: 0,
+  externalDraftRevision: 0,
+  lastTypedAgentTarget: null,
   commandHistory: new Map(),
   historyIndex: new Map(),
   tempDraft: new Map(),
@@ -198,8 +219,17 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
       newDraftInputs.delete(key);
       return { draftInputs: newDraftInputs };
     }),
-  bumpVoiceDraftRevision: () =>
-    set((state) => ({ voiceDraftRevision: state.voiceDraftRevision + 1 })),
+  bumpExternalDraftRevision: () =>
+    set((state) => ({ externalDraftRevision: state.externalDraftRevision + 1 })),
+
+  recordLastTypedAgentTarget: (terminalId, workspaceId) =>
+    set((state) => {
+      const current = state.lastTypedAgentTarget;
+      if (current?.terminalId === terminalId && current.workspaceId === workspaceId) {
+        return state;
+      }
+      return { lastTypedAgentTarget: { terminalId, workspaceId } };
+    }),
 
   clearAllDraftInputs: () =>
     set({
@@ -210,6 +240,7 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
       commandHistory: new Map(),
       historyIndex: new Map(),
       tempDraft: new Map(),
+      lastTypedAgentTarget: null,
     }),
 
   stashEditorState: (terminalId, editorState, projectId) =>
@@ -385,6 +416,10 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
           })()
         : state.voiceSubmittingPanels;
 
+      // A removed terminal can never be a routing target again.
+      const newLastTyped =
+        state.lastTypedAgentTarget?.terminalId === terminalId ? null : state.lastTypedAgentTarget;
+
       const changed =
         newDraftInputs !== state.draftInputs ||
         newPendingDrafts !== state.pendingDrafts ||
@@ -392,7 +427,8 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
         newHistory !== state.commandHistory ||
         newIndex !== state.historyIndex ||
         newTempDraft !== state.tempDraft ||
-        newVoiceSubmitting !== state.voiceSubmittingPanels;
+        newVoiceSubmitting !== state.voiceSubmittingPanels ||
+        newLastTyped !== state.lastTypedAgentTarget;
 
       if (!changed) return state;
 
@@ -404,6 +440,7 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
         historyIndex: newIndex,
         tempDraft: newTempDraft,
         voiceSubmittingPanels: newVoiceSubmitting,
+        lastTypedAgentTarget: newLastTyped,
       };
     }),
 
@@ -424,13 +461,24 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
       const newIndex = deleteProjectKeys(state.historyIndex, projectId, preserveTerminalIds);
       const newTempDraft = deleteProjectKeys(state.tempDraft, projectId, preserveTerminalIds);
 
+      // Drop the routing target only if this switch actually discards it — a
+      // preserved terminal keeps its claim.
+      const target = state.lastTypedAgentTarget;
+      const newLastTyped =
+        target !== null &&
+        target.workspaceId === projectId &&
+        !preserveTerminalIds?.has(target.terminalId)
+          ? null
+          : target;
+
       const changed =
         newDraftInputs !== state.draftInputs ||
         newPendingDrafts !== state.pendingDrafts ||
         newStashed !== state.stashedEditorStates ||
         newHistory !== state.commandHistory ||
         newIndex !== state.historyIndex ||
-        newTempDraft !== state.tempDraft;
+        newTempDraft !== state.tempDraft ||
+        newLastTyped !== state.lastTypedAgentTarget;
 
       if (!changed) return state;
 
@@ -441,6 +489,7 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
         commandHistory: newHistory,
         historyIndex: newIndex,
         tempDraft: newTempDraft,
+        lastTypedAgentTarget: newLastTyped,
       };
     }),
 

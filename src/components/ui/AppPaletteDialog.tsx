@@ -28,6 +28,7 @@ import {
   UI_PALETTE_EXIT_DURATION,
   UI_ENTER_EASING,
   UI_EXIT_EASING,
+  UI_SCRIM_EASING,
   UI_PALETTE_STALE_DELAY,
   getUiPaletteTransitionDuration,
 } from "@/lib/animationUtils";
@@ -204,15 +205,16 @@ export function AppPaletteDialog({
     <div
       className={cn(
         "fixed inset-0 z-[var(--z-modal)] flex items-start justify-center pt-[15vh] bg-scrim-medium backdrop-blur-[var(--theme-scrim-blur-palette)] backdrop-saturate-[var(--theme-material-saturation)]",
+        // Opacity-only, so reduced motion leaves it alone: a scrim fade is not
+        // spatial motion. WCAG 2.3.3.
         "transition-opacity",
-        "motion-reduce:transition-none motion-reduce:duration-0",
         isVisible ? "opacity-100" : "opacity-0"
       )}
       style={{
         transitionDuration: isVisible
           ? `${UI_PALETTE_ENTER_DURATION}ms`
           : `${UI_PALETTE_EXIT_DURATION}ms`,
-        transitionTimingFunction: "linear",
+        transitionTimingFunction: UI_SCRIM_EASING,
       }}
       onClick={handleBackdropClick}
     >

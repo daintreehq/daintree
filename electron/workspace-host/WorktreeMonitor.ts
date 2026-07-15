@@ -81,6 +81,13 @@ export interface WorktreeMonitorCallbacks {
   onEmfileLimitReached?: (worktreeId: string) => void;
   onWatcherRecovered?: (worktreeId: string) => void;
   /**
+   * The worktree's `.git/config` was written — `git remote add` / `set-url` /
+   * `remove` all land here. Routed to `WorkspaceService` (not handled locally)
+   * because remotes are a repo-level fact: every worktree sharing the common
+   * dir sees the same event, and the service coalesces them into one probe.
+   */
+  onGitConfigChanged?: (worktreeId: string) => void;
+  /**
    * Schedule a background `git fetch` for this worktree's repo. Routed through
    * `WorkspaceService` so per-repo serialization and failure-cache state are
    * shared across sibling monitors. Resolves regardless of fetch outcome.
@@ -391,6 +398,7 @@ export class WorktreeMonitor {
       onEmfileLimitReached: (worktreeId: string) =>
         monitor.callbacks.onEmfileLimitReached?.(worktreeId),
       onWatcherRecovered: () => monitor.callbacks.onWatcherRecovered?.(monitor.id),
+      onGitConfigChanged: () => monitor.callbacks.onGitConfigChanged?.(monitor.id),
     };
     this.watcherController = new WatcherController(watcherHost);
 
@@ -1513,7 +1521,13 @@ export class WorktreeMonitor {
     if (this._isUpdating) {
       this.watcherController.markPending();
     } else {
-      void this.updateGitStatus(true);
+      // Fire-and-forget, but guarded: GitStatusPass surfaces expected failures
+      // as mood=error and then rethrows, so a detached call would turn a
+      // transient `git status` failure into an unhandled rejection — which the
+      // workspace-host's exit-on-unhandled-rejection guard escalates to a
+      // process exit. The error is already reflected in monitor state, so
+      // swallowing the rethrow here loses nothing (#11151 review).
+      void this.updateGitStatus(true).catch(() => {});
     }
   }
 

@@ -29,7 +29,7 @@ const projectStoreMock = vi.hoisted(() => {
     getCurrentProjectId: vi.fn<() => string | null>(),
     getProjectById:
       vi.fn<(id: string) => { id: string; name: string; path: string; status?: string } | null>(),
-    setCurrentProject: vi.fn<(id: string) => Promise<void>>(),
+    setCurrentProject: vi.fn<(id: string, outgoingId?: string | null) => Promise<void>>(),
     getProjectState,
     saveProjectState,
     // Mirrors the real queue contract: read, apply updater, save unless null.
@@ -68,16 +68,43 @@ vi.mock("../../../services/RunCommandDetector.js", () => ({
 }));
 
 const mockGetWindowForWebContents = vi.fn();
+// The sender's view→project binding. Deliberately NOT defaulted to
+// getCurrentProjectId(): the handler must never reach for the global pointer to
+// answer a per-sender question, so a harness that conflated the two would hide
+// the very bug these tests exist to catch (#11101).
+const mockGetProjectForWebContents = vi.fn<(webContentsId: number) => string | null>();
 vi.mock("../../../window/webContentsRegistry.js", () => ({
   getWindowForWebContents: (...args: unknown[]) => mockGetWindowForWebContents(...args),
+  getProjectForWebContents: (webContentsId: number) => mockGetProjectForWebContents(webContentsId),
   // broadcastProjectSwitchUpdates → broadcastToRenderer → getAllAppWebContents.
   // Returning [] keeps the broadcast a no-op in this suite; PROJECT_UPDATED
   // delivery is covered by projectSwitchBroadcast.test.ts.
   getAllAppWebContents: vi.fn(() => []),
 }));
 
+// Root hook: runs before every describe's own `clearAllMocks` (which clears call
+// history but not return values), so no fixture inherits a previous test's
+// binding. Each test declares the project its sender view is displaying.
+beforeEach(() => {
+  mockGetProjectForWebContents.mockReturnValue(null);
+});
+
 vi.mock("../../../window/portDistribution.js", () => ({
   distributePortsToView: vi.fn(),
+}));
+
+// Mocked so the multi-window tests can assert the exact ids the switch
+// announces. Row-delivery behavior stays covered by projectSwitchBroadcast.test.ts.
+const mockBroadcastProjectSwitchUpdates =
+  vi.fn<(previousProjectId: string | null, activeProjectId: string) => void>();
+vi.mock("../../projectSwitchBroadcast.js", () => ({
+  broadcastProjectSwitchUpdates: (previousProjectId: string | null, activeProjectId: string) =>
+    mockBroadcastProjectSwitchUpdates(previousProjectId, activeProjectId),
+}));
+
+const refreshProjectMenuStateMock = vi.hoisted(() => vi.fn());
+vi.mock("../../../projectMenuState.js", () => ({
+  refreshProjectMenuState: refreshProjectMenuStateMock,
 }));
 
 import { ipcMain } from "electron";
@@ -121,6 +148,131 @@ function makeWindowRegistry(contexts: WindowContext[]): WindowRegistry {
     },
   } as unknown as WindowRegistry;
 }
+
+// #11136: the File-menu "Close Project" / "Project Settings…" gates are computed
+// when the menu is built, so every path that opens a project has to refresh them
+// or they stay disabled until something unrelated rebuilds the menu.
+describe("project switch/reopen refreshes the File-menu project gates (#11136)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetWindowForWebContents.mockReturnValue({ id: 1, isDestroyed: () => false });
+    projectStoreMock.setCurrentProject.mockResolvedValue(undefined);
+  });
+
+  function handlerFor(channel: string, deps: HandlerDependencies) {
+    registerProjectCrudHandlers(deps);
+    const call = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls.find(
+      (c) => c[0] === channel
+    );
+    expect(call).toBeDefined();
+    return call![1] as (...args: unknown[]) => Promise<unknown>;
+  }
+
+  function depsWith(pvm: unknown | null): HandlerDependencies {
+    const ctx = makeWindowContext(
+      1,
+      10,
+      pvm ? { projectViewManager: pvm as never } : {} // no PVM ⇒ legacy path
+    );
+    return {
+      mainWindow: { id: 1 } as unknown,
+      windowRegistry: makeWindowRegistry([ctx]),
+      ...(pvm ? { projectViewManager: pvm } : {}),
+    } as unknown as HandlerDependencies;
+  }
+
+  function makePvm() {
+    return {
+      switchTo: vi.fn().mockResolvedValue({
+        view: { webContents: { id: 200, isDestroyed: () => false, send: vi.fn() } },
+        isNew: false,
+      }),
+      getProjectIdForWebContents: vi.fn(),
+      setPendingFocusIntent: vi.fn(),
+    };
+  }
+
+  it("refreshes after a PVM-backed switch", async () => {
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: "proj-new",
+      name: "New",
+      path: "/projects/new",
+    });
+    const handler = handlerFor(CHANNELS.PROJECT_SWITCH, depsWith(makePvm()));
+
+    await handler({ sender: { id: 10 } }, "proj-new");
+
+    expect(refreshProjectMenuStateMock).toHaveBeenCalled();
+  });
+
+  it("refreshes after a legacy (no-PVM) switch", async () => {
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: "proj-new",
+      name: "New",
+      path: "/projects/new",
+    });
+    const handler = handlerFor(CHANNELS.PROJECT_SWITCH, depsWith(null));
+
+    await handler({ sender: { id: 10 } }, "proj-new");
+
+    expect(refreshProjectMenuStateMock).toHaveBeenCalled();
+  });
+
+  it("refreshes after a PVM-backed reopen", async () => {
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: "proj-bg",
+      name: "Backgrounded",
+      path: "/projects/bg",
+      status: "background",
+    });
+    const handler = handlerFor(CHANNELS.PROJECT_REOPEN, depsWith(makePvm()));
+
+    await handler({ sender: { id: 10 } }, "proj-bg");
+
+    expect(refreshProjectMenuStateMock).toHaveBeenCalled();
+  });
+
+  it("refreshes after a legacy (no-PVM) reopen", async () => {
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: "proj-bg",
+      name: "Backgrounded",
+      path: "/projects/bg",
+      status: "background",
+    });
+    const handler = handlerFor(CHANNELS.PROJECT_REOPEN, depsWith(null));
+
+    await handler({ sender: { id: 10 } }, "proj-bg");
+
+    expect(refreshProjectMenuStateMock).toHaveBeenCalled();
+  });
+
+  it("does not refresh when the switch is rejected for an unknown project", async () => {
+    projectStoreMock.getProjectById.mockReturnValue(null);
+    const handler = handlerFor(CHANNELS.PROJECT_SWITCH, depsWith(makePvm()));
+
+    await expect(handler({ sender: { id: 10 } }, "ghost")).rejects.toThrow();
+
+    // Rejected before the swap ran, so nothing moved and there is nothing to converge.
+    expect(refreshProjectMenuStateMock).not.toHaveBeenCalled();
+  });
+
+  it("still refreshes when the swap fails, so a rolled-back binding converges", async () => {
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: "proj-new",
+      name: "New",
+      path: "/projects/new",
+    });
+    const pvm = makePvm();
+    pvm.switchTo.mockRejectedValue(new Error("view failed to load"));
+    const handler = handlerFor(CHANNELS.PROJECT_SWITCH, depsWith(pvm));
+
+    await expect(handler({ sender: { id: 10 } }, "proj-new")).rejects.toThrow();
+
+    // Once the swap has run, the PVM binding has moved or been rolled back — the
+    // gates must reflect where we actually landed, not stay stale.
+    expect(refreshProjectMenuStateMock).toHaveBeenCalled();
+  });
+});
 
 describe("project:switch multi-window PVM routing", () => {
   beforeEach(() => {
@@ -321,6 +473,10 @@ describe("project:switch multi-window PVM routing", () => {
 describe("project:switch activeWorktreeId pre-apply (#5000)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Single-window fixtures: the sender view is the one displaying proj-old.
+    // Stated explicitly now that the outgoing id is resolved per-sender rather
+    // than from the global pointer (#11101).
+    mockGetProjectForWebContents.mockReturnValue("proj-old");
   });
 
   it("persists activeWorktreeId from outgoingState on project switch", async () => {
@@ -485,6 +641,7 @@ describe("project:switch activeWorktreeId pre-apply (#5000)", () => {
 describe("project:switch outgoing tabGroups pre-apply (#5001)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetProjectForWebContents.mockReturnValue("proj-old");
   });
 
   it("persists tabGroups from outgoingState on project switch", async () => {
@@ -729,18 +886,21 @@ describe("project:switch concurrent worktree load", () => {
     loadProject?: () => Promise<void>;
     previousProject?: { id: string; name: string; path: string } | null;
   }) {
+    const previous =
+      opts.previousProject === undefined
+        ? { id: "proj-old", name: "Old Project", path: "/projects/old" }
+        : opts.previousProject;
+
     const pvm = {
       switchTo: vi.fn(opts.switchTo),
       getProjectIdForWebContents: vi.fn(),
     };
 
     mockGetWindowForWebContents.mockReturnValue({ id: 7, isDestroyed: () => false });
-
-    const previous =
-      opts.previousProject === undefined
-        ? { id: "proj-old", name: "Old Project", path: "/projects/old" }
-        : opts.previousProject;
     projectStoreMock.getCurrentProjectId.mockReturnValue(previous?.id ?? null);
+    // The sender view displays the previous project (null models the welcome
+    // view, which is bound to no project at all).
+    mockGetProjectForWebContents.mockReturnValue(previous?.id ?? null);
     projectStoreMock.getProjectById.mockImplementation((id: string) => {
       if (id === "proj-new") {
         return { id: "proj-new", name: "New Project", path: "/projects/new" };
@@ -1113,5 +1273,232 @@ describe("project:switch PTY port ordering (#10075)", () => {
     // Switching TO a project must foreground its host so a previously
     // backgrounded project resumes full-rate polling for fresh state.
     expect(worktreeService.resumeProject).toHaveBeenCalledWith("/projects/new");
+  });
+});
+
+describe("project:switch outgoing project is the sender's, not the global (#11101)", () => {
+  const PROJECTS: Record<string, { id: string; name: string; path: string; status?: string }> = {
+    p1: { id: "p1", name: "Window A project", path: "/projects/p1", status: "active" },
+    p2: { id: "p2", name: "Window B project", path: "/projects/p2", status: "active" },
+    p3: { id: "p3", name: "Target", path: "/projects/p3", status: "background" },
+  };
+
+  const WINDOW_B = 2;
+  const SENDER_B = 20;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    projectStoreMock.getProjectById.mockImplementation((id: string) => PROJECTS[id] ?? null);
+    projectStoreMock.setCurrentProject.mockResolvedValue(undefined);
+    projectStoreMock.getProjectState.mockResolvedValue(null);
+    projectStoreMock.saveProjectState.mockResolvedValue(undefined);
+  });
+
+  /**
+   * Window A displays p1 and is the globally-current project. Window B displays
+   * p2 and is the one switching. Anything the handler derives from the global
+   * pointer therefore comes back as window A's project — which is the bug.
+   */
+  function setup(
+    opts: {
+      senderProjectId?: string | null;
+      senderUrl?: string;
+      withPvm?: boolean;
+      switchTo?: () => Promise<{ view: unknown; isNew: boolean }>;
+      worktree?: boolean;
+    } = {}
+  ) {
+    const view = { webContents: { id: 210, isDestroyed: () => false, send: vi.fn() } };
+    const pvm = {
+      switchTo: vi.fn(opts.switchTo ?? (async () => ({ view, isNew: false }))),
+      getProjectIdForWebContents: vi.fn(),
+      setPendingFocusIntent: vi.fn(),
+    };
+
+    mockGetWindowForWebContents.mockReturnValue({ id: WINDOW_B, isDestroyed: () => false });
+    mockGetProjectForWebContents.mockImplementation((id: number) =>
+      id === SENDER_B ? (opts.senderProjectId ?? null) : null
+    );
+    // The global pointer is window A's project throughout.
+    projectStoreMock.getCurrentProjectId.mockReturnValue("p1");
+
+    const worktreeService = {
+      loadProject: vi.fn(async () => undefined),
+      attachDirectPort: vi.fn(),
+      getHostForProject: vi.fn(() => null),
+      resumeProject: vi.fn(),
+      pauseProject: vi.fn(),
+      unregisterWindow: vi.fn(),
+    };
+
+    const withPvm = opts.withPvm ?? true;
+    const ctxB = makeWindowContext(
+      WINDOW_B,
+      SENDER_B,
+      withPvm ? { projectViewManager: pvm as never } : {}
+    );
+    const deps = {
+      mainWindow: { id: 1 } as unknown,
+      windowRegistry: makeWindowRegistry([ctxB]),
+      ...(withPvm ? { projectViewManager: pvm } : {}),
+      ...(opts.worktree ? { worktreeService: worktreeService as never } : {}),
+    } as unknown as HandlerDependencies;
+
+    registerProjectCrudHandlers(deps);
+
+    const handleMap = new Map<string, (...args: unknown[]) => unknown>();
+    for (const call of (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls) {
+      handleMap.set(call[0] as string, call[1] as (...args: unknown[]) => unknown);
+    }
+
+    const sender: Record<string, unknown> = { id: SENDER_B };
+    if (opts.senderUrl) sender.getURL = () => opts.senderUrl;
+
+    const invoke = (channel: string, targetId: string, outgoingState?: unknown) =>
+      handleMap.get(channel)!({ sender }, targetId, outgoingState);
+
+    return { invoke, pvm, worktreeService, view };
+  }
+
+  const OUTGOING = {
+    terminals: [],
+    activeWorktreeId: "wt-from-window-b",
+    draftInputs: { "wt-from-window-b": "half-typed prompt" },
+  };
+
+  it("persists the sender window's layout under ITS project, not the global one", async () => {
+    const { invoke } = setup({ senderProjectId: "p2" });
+
+    await invoke(CHANNELS.PROJECT_SWITCH, "p3", OUTGOING);
+
+    // The whole bug: window B's terminals/drafts/worktree landing on p1 would
+    // silently overwrite window A's saved layout, discovered only on reopen.
+    expect(projectStoreMock.enqueueProjectStateUpdate).toHaveBeenCalledTimes(1);
+    expect(projectStoreMock.enqueueProjectStateUpdate.mock.calls[0][0]).toBe("p2");
+    expect(projectStoreMock.saveProjectState).toHaveBeenCalledWith(
+      "p2",
+      expect.objectContaining({ projectId: "p2", activeWorktreeId: "wt-from-window-b" })
+    );
+    expect(projectStoreMock.saveProjectState).not.toHaveBeenCalledWith("p1", expect.anything());
+  });
+
+  it("backgrounds and announces the sender's project, leaving the other window's alone", async () => {
+    const { invoke } = setup({ senderProjectId: "p2" });
+
+    await invoke(CHANNELS.PROJECT_SWITCH, "p3", OUTGOING);
+
+    // Passing p2 explicitly is what stops the store backgrounding + MRU-bumping
+    // p1, which window A is still displaying.
+    expect(projectStoreMock.setCurrentProject).toHaveBeenCalledWith("p3", "p2");
+    // The broadcast must mirror the same rows the transaction wrote (#8563).
+    expect(mockBroadcastProjectSwitchUpdates).toHaveBeenCalledWith("p2", "p3");
+  });
+
+  it("keeps the captured outgoing project across the switchTo await", async () => {
+    // switchTo flips the PVM's active project to the incoming one, and another
+    // window can move the global pointer meanwhile. A handler that re-derived
+    // the outgoing id after the swap would read p3/whatever and persist there.
+    const { invoke } = setup({
+      senderProjectId: "p2",
+      switchTo: async () => {
+        mockGetProjectForWebContents.mockReturnValue("p3");
+        projectStoreMock.getCurrentProjectId.mockReturnValue("p3");
+        return {
+          view: { webContents: { id: 210, isDestroyed: () => false, send: vi.fn() } },
+          isNew: false,
+        };
+      },
+    });
+
+    await invoke(CHANNELS.PROJECT_SWITCH, "p3", OUTGOING);
+
+    expect(projectStoreMock.saveProjectState).toHaveBeenCalledWith("p2", expect.anything());
+    expect(projectStoreMock.setCurrentProject).toHaveBeenCalledWith("p3", "p2");
+    expect(mockBroadcastProjectSwitchUpdates).toHaveBeenCalledWith("p2", "p3");
+  });
+
+  it("reopen persists the sender's layout even when the global already equals the target", async () => {
+    // Global pointer is p1... but make it p3 (the reopen target) to prove the
+    // no-op check is asking about the SENDER, not the global.
+    const { invoke } = setup({ senderProjectId: "p2" });
+    projectStoreMock.getCurrentProjectId.mockReturnValue("p3");
+
+    await invoke(CHANNELS.PROJECT_REOPEN, "p3", OUTGOING);
+
+    // The old global-based check (`global !== target`) would short-circuit here
+    // and drop window B's outgoing layout on the floor entirely.
+    expect(projectStoreMock.saveProjectState).toHaveBeenCalledWith("p2", expect.anything());
+    expect(projectStoreMock.setCurrentProject).toHaveBeenCalledWith("p3", "p2");
+  });
+
+  it("reopen skips the persist when the sender already displays the target", async () => {
+    const { invoke } = setup({ senderProjectId: "p2" });
+
+    await invoke(CHANNELS.PROJECT_REOPEN, "p2", OUTGOING);
+
+    expect(projectStoreMock.enqueueProjectStateUpdate).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the sender URL while the restored view is not yet bound", async () => {
+    // loadRenderer() sends the initial view its `?projectId=` and can serve IPC
+    // before registerInitialView() binds it in the project maps.
+    const { invoke } = setup({ senderProjectId: null, senderUrl: "app://index.html?projectId=p2" });
+
+    await invoke(CHANNELS.PROJECT_SWITCH, "p3", OUTGOING);
+
+    expect(projectStoreMock.saveProjectState).toHaveBeenCalledWith("p2", expect.anything());
+    expect(projectStoreMock.setCurrentProject).toHaveBeenCalledWith("p3", "p2");
+  });
+
+  it("persists nothing for an unbound welcome view instead of stealing the global project", async () => {
+    const { invoke } = setup({ senderProjectId: null });
+
+    await invoke(CHANNELS.PROJECT_SWITCH, "p3", OUTGOING);
+
+    // A fresh Cmd+N window has no layout of its own. Falling back to the global
+    // here would write window B's empty state over window A's p1 (#6016).
+    expect(projectStoreMock.enqueueProjectStateUpdate).not.toHaveBeenCalled();
+    // Explicit null, not undefined: undefined would let the store infer p1 and
+    // background a project another window is still showing.
+    expect(projectStoreMock.setCurrentProject).toHaveBeenCalledWith("p3", null);
+    expect(mockBroadcastProjectSwitchUpdates).toHaveBeenCalledWith(null, "p3");
+  });
+
+  it("still uses the global pointer on the legacy non-PVM path", async () => {
+    // No ProjectViewManager anywhere means a single shared renderer, where the
+    // global pointer IS this window's project. The sender URL is deliberately
+    // not consulted there — that renderer never reloads, so its query string
+    // goes stale after the first switch.
+    const { invoke } = setup({
+      senderProjectId: null,
+      senderUrl: "app://index.html?projectId=p2",
+      withPvm: false,
+    });
+
+    await invoke(CHANNELS.PROJECT_SWITCH, "p3", OUTGOING);
+
+    expect(projectStoreMock.saveProjectState).toHaveBeenCalledWith("p1", expect.anything());
+  });
+
+  it("restores the sender's own project when the swap fails", async () => {
+    const { invoke, worktreeService } = setup({
+      senderProjectId: "p2",
+      worktree: true,
+      switchTo: async () => {
+        throw new Error("paint gate timeout");
+      },
+    });
+
+    await expect(invoke(CHANNELS.PROJECT_SWITCH, "p3", OUTGOING)).rejects.toThrow(
+      "paint gate timeout"
+    );
+
+    // The early load already pointed window B at the failed p3. Restoring from
+    // the global would re-point window B at p1 — window A's project — which is
+    // the cross-project contamination loadProject exists to prevent.
+    await vi.waitFor(() =>
+      expect(worktreeService.loadProject).toHaveBeenCalledWith("/projects/p2", WINDOW_B)
+    );
+    expect(worktreeService.loadProject).not.toHaveBeenCalledWith("/projects/p1", WINDOW_B);
   });
 });

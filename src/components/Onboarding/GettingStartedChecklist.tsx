@@ -33,7 +33,7 @@ function CheckBadge({ done, isPopping, onPopEnd }: CheckBadgeProps) {
         isPopping && "animate-badge-bump"
       )}
     >
-      {done && <Check className="h-2.5 w-2.5 text-daintree-bg" />}
+      {done && <Check className="h-2.5 w-2.5 text-accent-primary-foreground" />}
     </div>
   );
 }
@@ -252,7 +252,7 @@ export function GettingStartedChecklist({
             {/* Endowed progress: Install Daintree (always complete) */}
             <div className="flex items-start gap-2.5 rounded-[var(--radius-xs)] px-2 py-1.5 opacity-60">
               <div className="h-4 w-4 rounded-full bg-daintree-accent border border-daintree-accent flex items-center justify-center shrink-0">
-                <Check className="h-2.5 w-2.5 text-daintree-bg" />
+                <Check className="h-2.5 w-2.5 text-accent-primary-foreground" />
               </div>
               <Download className="h-3.5 w-3.5 text-daintree-text/40 shrink-0" />
               <span className="text-xs leading-snug text-daintree-text/40">Install Daintree</span>

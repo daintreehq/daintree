@@ -34,6 +34,13 @@ const mockBrowserWindow = vi.hoisted(() => ({
   id: 1,
 }));
 
+// setAboutPanelOptions runs once at menu.ts import time (module scope), before
+// any beforeEach vi.clearAllMocks() can wipe the mock's call history — so
+// capture the argument in a hoisted holder that survives the reset.
+const aboutPanelCapture = vi.hoisted(() => ({
+  options: undefined as Electron.AboutPanelOptionsOptions | undefined,
+}));
+
 let capturedTemplate: Electron.MenuItemConstructorOptions[] = [];
 
 const menuItemRegistry = vi.hoisted(() => new Map<string, { label: string; enabled: boolean }>());
@@ -71,7 +78,9 @@ vi.mock("electron", () => ({
   app: {
     isPackaged: false,
     getVersion: vi.fn(() => "1.0.0"),
-    setAboutPanelOptions: vi.fn(),
+    setAboutPanelOptions: vi.fn((options: Electron.AboutPanelOptionsOptions) => {
+      aboutPanelCapture.options = options;
+    }),
     setPath: vi.fn(),
     getPath: vi.fn(() => "/mock/path"),
     commandLine: {
@@ -84,11 +93,26 @@ vi.mock("electron", () => ({
   },
 }));
 
+const projectStoreMock = vi.hoisted(() => ({
+  getAllProjects: vi.fn(() => []),
+  getCurrentProjectId: vi.fn<() => string | null>(() => null),
+  addProject: vi.fn<(path: string) => Promise<{ id: string; path: string }>>(),
+  setCurrentProject: vi.fn<(id: string) => Promise<void>>(async () => {}),
+  getProjectById: vi.fn<(id: string) => { id: string; path: string; status?: string } | null>(
+    () => null
+  ),
+}));
+
 vi.mock("../services/ProjectStore.js", () => ({
-  projectStore: {
-    getAllProjects: vi.fn(() => []),
-    getCurrentProjectId: vi.fn(() => null),
-  },
+  projectStore: projectStoreMock,
+}));
+
+vi.mock("../ipc/projectSwitchBroadcast.js", () => ({
+  broadcastProjectSwitchUpdates: vi.fn(),
+}));
+
+vi.mock("../window/portDistribution.js", () => ({
+  distributePortsToView: vi.fn(),
 }));
 
 vi.mock("../ipc/channels.js", () => ({
@@ -108,9 +132,16 @@ vi.mock("../window/windowServices.js", () => ({
   getWorktreePortBrokerRef: vi.fn(),
 }));
 
-vi.mock("../window/windowRef.js", () => ({
-  getWindowRegistry: vi.fn(() => null),
-  getProjectViewManager: vi.fn(() => null),
+const windowRefMock = vi.hoisted(() => ({
+  getWindowRegistry: vi.fn<() => unknown>(() => null),
+  getProjectViewManager: vi.fn<() => unknown>(() => null),
+}));
+
+vi.mock("../window/windowRef.js", () => windowRefMock);
+
+const toggleWindowFullscreenMock = vi.hoisted(() => vi.fn<(win: unknown) => boolean>(() => true));
+vi.mock("../window/fullscreen.js", () => ({
+  toggleWindowFullscreen: toggleWindowFullscreenMock,
 }));
 
 const autoUpdaterServiceMock = vi.hoisted(() => {
@@ -146,11 +177,16 @@ vi.mock("../window/webContentsRegistry.js", () => ({
 }));
 
 const isWindowsStoreBuildMock = vi.hoisted(() => vi.fn(() => true));
-vi.mock("../../shared/config/distribution.js", () => ({
+// Keep the real build-channel helpers (getBuildChannel/getBuildChannelLabel)
+// so the module-load About-panel wiring is exercised for real; only override
+// the Windows Store detection the update-menu tests need to drive.
+vi.mock("../../shared/config/distribution.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../shared/config/distribution.js")>()),
   isWindowsStoreBuild: isWindowsStoreBuildMock,
 }));
 
-import { createApplicationMenu } from "../menu.js";
+import { createApplicationMenu, handleDirectoryOpen, buildAboutPanelOptions } from "../menu.js";
+import { getBuildChannelLabel } from "../../shared/config/distribution.js";
 import { webContents, app, Menu } from "electron";
 
 function findMenuItem(
@@ -162,6 +198,40 @@ function findMenuItem(
   if (!menu || !Array.isArray(menu.submenu)) return undefined;
   return (menu.submenu as Electron.MenuItemConstructorOptions[]).find((i) => i.label === itemLabel);
 }
+
+describe("About panel build channel (#11121)", () => {
+  it("wires setAboutPanelOptions at import with the real running version", () => {
+    // Captured at module import: app.getVersion() is mocked to "1.0.0", proving
+    // the About options are actually applied (not dead code) and the raw
+    // version flows through as applicationVersion.
+    expect(aboutPanelCapture.options).toBeDefined();
+    expect(aboutPanelCapture.options?.applicationVersion).toBe("1.0.0");
+    expect(aboutPanelCapture.options?.version).toBe("");
+  });
+
+  describe("buildAboutPanelOptions", () => {
+    it("passes the raw version through and leaves the build-version slot blank for stable builds", () => {
+      const options = buildAboutPanelOptions("1.0.0");
+      expect(options.applicationVersion).toBe("1.0.0");
+      // Stable → no channel label → empty slot (no more hardcoded "Beta").
+      expect(options.version).toBe("");
+    });
+
+    it("surfaces the channel label in the build-version slot for prerelease builds", () => {
+      // Compare against the shared helper rather than duplicating label strings.
+      for (const version of [
+        "0.25.0-nightly.20260713120000.abc1234",
+        "1.0.0-beta.1",
+        "1.0.0-rc.2",
+      ]) {
+        const options = buildAboutPanelOptions(version);
+        expect(options.applicationVersion).toBe(version);
+        expect(options.version).toBe(getBuildChannelLabel(version));
+        expect(options.version).toBeTruthy();
+      }
+    });
+  });
+});
 
 describe("createApplicationMenu", () => {
   beforeEach(() => {
@@ -289,6 +359,103 @@ describe("createApplicationMenu", () => {
         actionId: "project.cloneRepo",
         args: undefined,
       });
+    });
+  });
+
+  describe("File menu project-gated items", () => {
+    afterEach(() => {
+      // mockReturnValue survives vi.clearAllMocks(), so restore the defaults or an
+      // active project leaks into every later test in this file.
+      projectStoreMock.getCurrentProjectId.mockReturnValue(null);
+      projectStoreMock.getProjectById.mockReturnValue(null);
+    });
+
+    // No window registry in this suite, so the menu resolver falls back to the
+    // global pointer — but it still validates the row, so the project must exist.
+    function rebuildWithProject(projectId: string | null): void {
+      projectStoreMock.getCurrentProjectId.mockReturnValue(projectId);
+      projectStoreMock.getProjectById.mockImplementation((id) =>
+        projectId !== null && id === projectId
+          ? { id: projectId, path: `/tmp/${projectId}`, status: "active" }
+          : null
+      );
+      createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
+    }
+
+    function fileItem(label: string): Electron.MenuItemConstructorOptions {
+      const item = findMenuItem(capturedTemplate, "File", label);
+      expect(item).toBeDefined();
+      return item!;
+    }
+
+    it("sends the project-settings action, not the app-settings one", () => {
+      rebuildWithProject("project-1");
+      fileItem("Project Settings…").click!(
+        {} as Electron.MenuItem,
+        mockBrowserWindow as unknown as Electron.BaseWindow,
+        {} as Electron.KeyboardEvent
+      );
+      expect(mockWebContents.send).toHaveBeenCalledWith("menu-action", {
+        actionId: "project.settings.open",
+        args: undefined,
+      });
+    });
+
+    it("enables both project items only while a project is open", () => {
+      rebuildWithProject("project-1");
+      expect(fileItem("Project Settings…").enabled).toBe(true);
+      expect(fileItem("Close Project").enabled).toBe(true);
+
+      rebuildWithProject(null);
+      expect(fileItem("Project Settings…").enabled).toBe(false);
+      expect(fileItem("Close Project").enabled).toBe(false);
+    });
+
+    it("disables both items when the pointed-at project row is closed", () => {
+      // The pointer can outlive the open project: the row's status is what
+      // decides, not the id's presence.
+      projectStoreMock.getCurrentProjectId.mockReturnValue("project-1");
+      projectStoreMock.getProjectById.mockReturnValue({
+        id: "project-1",
+        path: "/tmp/project-1",
+        status: "closed",
+      });
+      createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
+
+      expect(fileItem("Project Settings…").enabled).toBe(false);
+      expect(fileItem("Close Project").enabled).toBe(false);
+    });
+
+    it("gives both items stable ids so the live refresh can address them", () => {
+      rebuildWithProject("project-1");
+      expect(fileItem("Project Settings…").id).toBe("file-project-settings");
+      expect(fileItem("Close Project").id).toBe("file-close-project");
+    });
+
+    it("resolves the gate from repaired project rows, not a pre-repair snapshot", () => {
+      vi.clearAllMocks();
+      rebuildWithProject("project-1");
+
+      // Building Open Recent calls getAllProjects(), which repairs stale status
+      // rows as a side effect (a "closed" row that is still the current pointer
+      // is promoted back to "active"). Resolving the gate first would snapshot
+      // pre-repair rows and install a template the repair contradicts.
+      expect(projectStoreMock.getAllProjects.mock.invocationCallOrder[0]).toBeLessThan(
+        projectStoreMock.getCurrentProjectId.mock.invocationCallOrder[0]
+      );
+    });
+  });
+
+  describe("View menu Toggle Full Screen item", () => {
+    it("delegates to the shared platform-aware fullscreen helper", () => {
+      const item = findMenuItem(capturedTemplate, "View", "Toggle Full Screen");
+      expect(item).toBeDefined();
+      item!.click!(
+        {} as Electron.MenuItem,
+        mockBrowserWindow as unknown as Electron.BaseWindow,
+        {} as Electron.KeyboardEvent
+      );
+      expect(toggleWindowFullscreenMock).toHaveBeenCalledWith(mockBrowserWindow);
     });
   });
 
@@ -563,8 +730,6 @@ describe("update menu lifecycle", () => {
       const settings = items.find((i) => i.label === "Settings…");
       expect(settings).toBeDefined();
       expect(settings!.accelerator).toBe("CommandOrControl+,");
-
-      expect(items.some((i) => i.label === "Project Settings")).toBe(true);
     });
 
     it("on linux: File menu ends with separator + Exit (role: quit) and exposes Settings... with CommandOrControl+,", () => {
@@ -691,5 +856,53 @@ describe("update menu lifecycle", () => {
 
       expect(() => dispatchUpdate("checking")).not.toThrow();
     });
+  });
+});
+
+// #11100: handleDirectoryOpen reached for the process-global ProjectViewManager,
+// which every new window overwrites. Opening a directory from an older window's
+// menu therefore switched the newest window's view instead of the one the user
+// clicked in.
+describe("handleDirectoryOpen window targeting", () => {
+  const PROJECT = { id: "project-a", path: "/repos/alpha" };
+
+  function createManager() {
+    return {
+      switchTo: vi.fn(async () => ({
+        view: { webContents: { isDestroyed: () => false, send: vi.fn() } },
+        isNew: true,
+      })),
+      getActiveProjectId: vi.fn<() => string | null>(() => null),
+      getOutgoingBridgeProjectId: vi.fn<() => string | null>(() => null),
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    projectStoreMock.addProject.mockResolvedValue(PROJECT);
+    projectStoreMock.getProjectById.mockReturnValue(PROJECT);
+    projectStoreMock.getCurrentProjectId.mockReturnValue(null);
+  });
+
+  it("switches the view of the window the menu action came from, not the newest window", async () => {
+    const targetManager = createManager();
+    const newestManager = createManager();
+
+    // The user clicked in window 7; window 9 was created most recently, so it
+    // owns the global slot.
+    windowRefMock.getWindowRegistry.mockReturnValue({
+      getByWindowId: (id: number) =>
+        id === 7 ? { services: { projectViewManager: targetManager } } : undefined,
+      // handleDirectoryOpen rebuilds the menu, and the rebuild resolves the
+      // project gates against the focused window.
+      getPrimary: () => ({ services: { projectViewManager: targetManager } }),
+    });
+    windowRefMock.getProjectViewManager.mockReturnValue(newestManager);
+
+    const targetWindow = { id: 7, isDestroyed: () => false } as unknown as Electron.BrowserWindow;
+    await handleDirectoryOpen(PROJECT.path, targetWindow);
+
+    expect(targetManager.switchTo).toHaveBeenCalledWith(PROJECT.id, PROJECT.path);
+    expect(newestManager.switchTo).not.toHaveBeenCalled();
   });
 });

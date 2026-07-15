@@ -22,6 +22,7 @@ const profileIoMock = vi.hoisted(() => ({
 
 const windowRegistryMock = vi.hoisted(() => ({
   getWindowForWebContents: vi.fn(),
+  getProjectForWebContents: vi.fn(() => null),
 }));
 
 vi.mock("electron", () => ({

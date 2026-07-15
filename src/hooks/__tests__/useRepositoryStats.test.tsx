@@ -46,9 +46,27 @@ vi.mock("@/clients/forgeClient", () => ({
 // provider and gate polling. The persisted counts it seeds from (#11078) come
 // off the project returned by `projectClient.getCurrent()`, which is main's
 // authoritative row, so seed tests drive `getCurrentMock` rather than this.
+const { currentProjectRef } = vi.hoisted(() => ({
+  currentProjectRef: { current: { id: "test-project" } as { id: string } | null },
+}));
+
 vi.mock("@/store/projectStore", () => ({
   useProjectStore: (selector: (s: { currentProject: { id: string } | null }) => unknown) =>
-    selector({ currentProject: { id: "test-project" } }),
+    selector({ currentProject: currentProjectRef.current }),
+}));
+
+// The hook reads the main worktree's ahead/behind counts off the per-project
+// worktree store to drive local-git-signal rechecks (#11151). Mock the store
+// hook so `renderHook` doesn't need a real `WorktreeStoreProvider`; tests mutate
+// `worktreeStateRef.current` and `rerender()` to simulate git movement.
+const { worktreeStateRef } = vi.hoisted(() => ({
+  worktreeStateRef: {
+    current: { worktrees: new Map<string, Record<string, unknown>>() },
+  },
+}));
+
+vi.mock("@/hooks/useWorktreeStore", () => ({
+  useWorktreeStore: (selector: (s: unknown) => unknown) => selector(worktreeStateRef.current),
 }));
 
 const { resolvedProviderRef, makeResolvedProvider } = vi.hoisted(() => {
@@ -97,6 +115,38 @@ function createDeferred<T>() {
   return { promise, resolve: resolve!, reject: reject! };
 }
 
+// Real-timer wait — the debounce and poll lifecycle in this hook use real
+// timers throughout this file (fake timers deadlock the poll loop), so signal
+// tests wait past the 1s debounce (LOCAL_GIT_SIGNAL_REFRESH_DEBOUNCE_MS) with a
+// real delay to assert a flush fired (or, with a negative assertion, didn't).
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Point the mocked worktree store at a single main worktree carrying the given
+// ahead/behind counts. `undefined` counts model an absent upstream (the field
+// is optional in WorktreeSnapshot); a distinct `id` models a project switch.
+function setMainWorktreeCounts(counts: { ahead?: number; behind?: number; id?: string }) {
+  const id = counts.id ?? "/repo";
+  worktreeStateRef.current = {
+    worktrees: new Map<string, Record<string, unknown>>([
+      [
+        id,
+        {
+          id,
+          path: id,
+          name: "repo",
+          isCurrent: true,
+          isMainWorktree: true,
+          worktreeId: id,
+          aheadCount: counts.ahead,
+          behindCount: counts.behind,
+        },
+      ],
+    ]),
+  };
+}
+
 describe("useRepositoryStats", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -107,6 +157,10 @@ describe("useRepositoryStats", () => {
     resolvedProviderRef.current = makeResolvedProvider("test.forge.provider");
     _resetPollingLifecycleForTests();
     _resetSwitchBackCacheForTests();
+    // Reset the mocked worktree store so a prior test's main-worktree counts
+    // can't leak in as a spurious first-render baseline / delta.
+    worktreeStateRef.current = { worktrees: new Map() };
+    currentProjectRef.current = { id: "test-project" };
     useSystemWakeStore.setState({
       wakeEpoch: 0,
       lastSleepDuration: 0,
@@ -617,6 +671,46 @@ describe("useRepositoryStats", () => {
         await Promise.resolve();
       });
       expect(getRepoStatsMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps a cached view's unchanged commit count visible while switch-back revalidates", async () => {
+      const project = { id: "a", path: "/repo/a" };
+      const delayedCurrent = createDeferred<typeof project>();
+      getCurrentMock.mockResolvedValueOnce(project);
+      let switchHandler:
+        | ((payload?: { project: typeof project; switchId: string }) => void)
+        | undefined;
+      onSwitchMock.mockImplementation((cb: typeof switchHandler) => {
+        switchHandler = cb;
+        return () => {};
+      });
+
+      const stats = freshStats({
+        commitCount: 19_488,
+        issueCount: 5,
+        prCount: 1,
+        lastUpdated: Date.now(),
+      });
+      getRepoStatsMock.mockResolvedValue(stats);
+
+      const { result } = renderHook(() => useRepositoryStats());
+      await waitFor(() => expect(result.current.stats?.commitCount).toBe(19_488));
+
+      getCurrentMock.mockImplementationOnce(() => delayedCurrent.promise);
+      act(() => {
+        switchHandler?.({ project, switchId: "switch-back-a" });
+      });
+
+      expect(result.current.stats?.commitCount).toBe(19_488);
+      expect(result.current.loading).toBe(false);
+
+      await act(async () => {
+        delayedCurrent.resolve(project);
+        await delayedCurrent.promise;
+      });
+
+      expect(result.current.stats?.commitCount).toBe(19_488);
+      expect(getRepoStatsMock).toHaveBeenCalledTimes(1);
     });
 
     it("skips the network even when both project-switch and visibility reactivations fire (#10765)", async () => {
@@ -2668,6 +2762,181 @@ describe("useRepositoryStats", () => {
       await waitFor(() => {
         expect(getRepoStatsMock).toHaveBeenCalledTimes(3);
       });
+    });
+  });
+
+  describe("local git signal refresh (#11151)", () => {
+    const stats: ForgeRepositoryStats = {
+      commitCount: 1,
+      issueCount: 1,
+      prCount: 1,
+      loading: false,
+      stale: false,
+      lastUpdated: 1000,
+    };
+
+    it("triggers a recheck when the main worktree's ahead-count moves", async () => {
+      getCurrentMock.mockResolvedValue({ id: "p", path: "/repo" });
+      onSwitchMock.mockReturnValue(() => {});
+      getRepoStatsMock.mockResolvedValue(stats);
+      setMainWorktreeCounts({ ahead: 0, behind: 0 });
+
+      const { rerender } = renderHook(() => useRepositoryStats());
+      await waitFor(() => expect(getRepoStatsMock).toHaveBeenCalledTimes(1));
+
+      act(() => setMainWorktreeCounts({ ahead: 1, behind: 0 }));
+      rerender();
+
+      await waitFor(() => expect(getRepoStatsMock).toHaveBeenCalledTimes(2), { timeout: 3000 });
+      // Plain (unforced) refresh — the cheap conditional-REST path, not the
+      // forced GraphQL page query reserved for explicit user refreshes.
+      const lastCall = getRepoStatsMock.mock.calls.at(-1);
+      expect(lastCall?.[0]).toBe("/repo");
+      expect(lastCall?.[1]).not.toBe(true);
+    });
+
+    it("triggers a recheck when the behind-count increases", async () => {
+      getCurrentMock.mockResolvedValue({ id: "p", path: "/repo" });
+      onSwitchMock.mockReturnValue(() => {});
+      getRepoStatsMock.mockResolvedValue(stats);
+      setMainWorktreeCounts({ ahead: 0, behind: 1 });
+
+      const { rerender } = renderHook(() => useRepositoryStats());
+      await waitFor(() => expect(getRepoStatsMock).toHaveBeenCalledTimes(1));
+
+      act(() => setMainWorktreeCounts({ ahead: 0, behind: 2 }));
+      rerender();
+
+      await waitFor(() => expect(getRepoStatsMock).toHaveBeenCalledTimes(2), { timeout: 3000 });
+      // Plain (unforced) refresh — the cheap conditional-REST path, not the
+      // forced GraphQL page query reserved for explicit user refreshes.
+      const lastCall = getRepoStatsMock.mock.calls.at(-1);
+      expect(lastCall?.[0]).toBe("/repo");
+      expect(lastCall?.[1]).not.toBe(true);
+    });
+
+    it("re-baselines a behind-count decrease without refreshing, then fires on the next increase", async () => {
+      getCurrentMock.mockResolvedValue({ id: "p", path: "/repo" });
+      onSwitchMock.mockReturnValue(() => {});
+      getRepoStatsMock.mockResolvedValue(stats);
+      setMainWorktreeCounts({ ahead: 0, behind: 3 });
+
+      const { rerender } = renderHook(() => useRepositoryStats());
+      await waitFor(() => expect(getRepoStatsMock).toHaveBeenCalledTimes(1));
+
+      // Decrease 3 -> 2 is a local catch-up, not new remote content: no recheck.
+      act(() => setMainWorktreeCounts({ ahead: 0, behind: 2 }));
+      rerender();
+      await wait(1300);
+      expect(getRepoStatsMock).toHaveBeenCalledTimes(1);
+
+      // Increase 2 -> 3 fires — proving the decrease moved the baseline to 2.
+      act(() => setMainWorktreeCounts({ ahead: 0, behind: 3 }));
+      rerender();
+      await waitFor(() => expect(getRepoStatsMock).toHaveBeenCalledTimes(2), { timeout: 3000 });
+      // Plain (unforced) refresh — the cheap conditional-REST path, not the
+      // forced GraphQL page query reserved for explicit user refreshes.
+      const lastCall = getRepoStatsMock.mock.calls.at(-1);
+      expect(lastCall?.[0]).toBe("/repo");
+      expect(lastCall?.[1]).not.toBe(true);
+    });
+
+    it("coalesces a burst of signal changes into a single forced recheck", async () => {
+      getCurrentMock.mockResolvedValue({ id: "p", path: "/repo" });
+      onSwitchMock.mockReturnValue(() => {});
+      getRepoStatsMock.mockResolvedValue(stats);
+      setMainWorktreeCounts({ ahead: 0, behind: 0 });
+
+      const { rerender } = renderHook(() => useRepositoryStats());
+      await waitFor(() => expect(getRepoStatsMock).toHaveBeenCalledTimes(1));
+
+      // A rebase burst: several ahead/behind moves inside the debounce window.
+      act(() => setMainWorktreeCounts({ ahead: 1, behind: 0 }));
+      rerender();
+      act(() => setMainWorktreeCounts({ ahead: 2, behind: 1 }));
+      rerender();
+      act(() => setMainWorktreeCounts({ ahead: 3, behind: 2 }));
+      rerender();
+
+      await waitFor(() => expect(getRepoStatsMock).toHaveBeenCalledTimes(2), { timeout: 3000 });
+      // No second flush arrives after the window — the burst collapsed to one.
+      await wait(1300);
+      expect(getRepoStatsMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("suppresses the forced recheck while the rate limit is parked", async () => {
+      getCurrentMock.mockResolvedValue({ id: "p", path: "/repo" });
+      onSwitchMock.mockReturnValue(() => {});
+      getRepoStatsMock.mockResolvedValue(stats);
+      let pushHandler: ((p: unknown) => void) | undefined;
+      onRateLimitChangedMock.mockImplementation((cb: (p: unknown) => void) => {
+        pushHandler = cb as typeof pushHandler;
+        return () => {};
+      });
+      setMainWorktreeCounts({ ahead: 0, behind: 0 });
+
+      const { rerender } = renderHook(() => useRepositoryStats());
+      await waitFor(() => expect(getRepoStatsMock).toHaveBeenCalledTimes(1));
+
+      // Park the poller against a future reset (the abuse/limit band).
+      act(() => {
+        pushHandler?.({
+          providerId: PROVIDER_ID,
+          state: { limit: 5000, remaining: 0, resetAt: Date.now() + 60_000 },
+        });
+      });
+
+      // A real signal arrives while parked — it must not bypass the backoff.
+      act(() => setMainWorktreeCounts({ ahead: 1, behind: 0 }));
+      rerender();
+      await wait(1300);
+      expect(getRepoStatsMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("re-baselines on a project switch instead of reading the new counts as movement", async () => {
+      getCurrentMock.mockResolvedValue({ id: "p", path: "/repo" });
+      onSwitchMock.mockReturnValue(() => {});
+      getRepoStatsMock.mockResolvedValue(stats);
+      setMainWorktreeCounts({ ahead: 5, behind: 0, id: "/repo" });
+
+      const { rerender } = renderHook(() => useRepositoryStats());
+      await waitFor(() => expect(getRepoStatsMock).toHaveBeenCalledTimes(1));
+
+      // Project switch: the store swaps to a different main worktree (new id)
+      // whose counts differ. The identity change must reset the baseline, not
+      // fire a recheck off the incoming project's numbers.
+      act(() => setMainWorktreeCounts({ ahead: 9, behind: 4, id: "/repo2" }));
+      rerender();
+      await wait(1300);
+      expect(getRepoStatsMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("re-baselines when the project id flips before the worktree store swaps", async () => {
+      getCurrentMock.mockResolvedValue({ id: "p", path: "/repo" });
+      onSwitchMock.mockReturnValue(() => {});
+      getRepoStatsMock.mockResolvedValue(stats);
+      setMainWorktreeCounts({ ahead: 5, behind: 0, id: "/repo" });
+
+      const { rerender } = renderHook(() => useRepositoryStats());
+      await waitFor(() => expect(getRepoStatsMock).toHaveBeenCalledTimes(1));
+
+      // The project id flips while the store still exposes the outgoing
+      // project's worktree (same id) with different counts — the switch-first,
+      // store-later ordering. The composite scope key changes on the project id
+      // alone, so the ahead 5->9 jump re-baselines instead of firing. (Without
+      // the project id in the scope key, the unchanged worktree id would let it
+      // read as local movement.)
+      act(() => {
+        currentProjectRef.current = { id: "project-b" };
+        setMainWorktreeCounts({ ahead: 9, behind: 0, id: "/repo" });
+      });
+      rerender();
+      // Let any immediate project-switch refetch settle, then confirm the
+      // debounce window produces no signal-driven recheck.
+      await wait(100);
+      const afterSwitch = getRepoStatsMock.mock.calls.length;
+      await wait(1300);
+      expect(getRepoStatsMock.mock.calls.length).toBe(afterSwitch);
     });
   });
 

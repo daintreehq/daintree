@@ -53,6 +53,13 @@ export interface WatcherControllerHost {
    * guards and clear the persistent degraded indicator.
    */
   onWatcherRecovered?(): void;
+  /**
+   * Fired when the flushed watcher burst included a `.git/config` write — the
+   * file `git remote add` / `set-url` / `remove` edits. Lets the host re-read
+   * the repo's remotes and re-resolve its forge provider without a project
+   * reload (#11155), without paying a git subprocess on every status pass.
+   */
+  onGitConfigChanged?(): void;
 }
 
 /**
@@ -155,6 +162,7 @@ export class WatcherController {
       branch: this.host.branch,
       debounceMs: this.host.gitWatchDebounceMs,
       onChange: () => this.handleGitFileChange(),
+      onGitConfigChanged: () => this.host.onGitConfigChanged?.(),
       watchWorktree: mode === "recursive",
       worktreeMinDebounceMs: WATCHER_WORKTREE_MIN_DEBOUNCE_MS,
       worktreeMaxDebounceMs: WATCHER_WORKTREE_MAX_DEBOUNCE_MS,

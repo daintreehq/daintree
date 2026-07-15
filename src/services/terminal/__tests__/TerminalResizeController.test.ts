@@ -27,11 +27,41 @@ import {
   RESIZE_FLUSH_SYNC_BUDGET_BYTES,
   type ResizeControllerDeps,
 } from "../TerminalResizeController";
+import { TERMINAL_SCROLLBAR_WIDTH } from "@/config/xtermConfig";
+
+/**
+ * The scrollbar gutter the controller reserves before dividing a container width
+ * into columns, mirroring `FitAddon` (#11095). Sourced from the config rather
+ * than hardcoded so a change to the configured width doesn't silently desync the
+ * mock terminal from the production one.
+ */
+const SCROLLBAR_PX = TERMINAL_SCROLLBAR_WIDTH;
+
+/** Cell metrics these tests attach via `_core` (see `getXtermCellDimensions`). */
+const CELL = { width: 10, height: 20 };
+
+/**
+ * Columns the controller should derive for a container of `widthPx`.
+ *
+ * These suites exercise the resize *control flow* — dedup gates, debounce, lock
+ * replay, PTY delivery — so they take the column formula as given and assert
+ * against it. The formula itself is verified against a genuinely independent
+ * oracle (the real `FitAddon`) in `TerminalResizeController.fitParity.test.ts`.
+ */
+const colsFor = (widthPx: number): number =>
+  Math.max(2, Math.floor((widthPx - SCROLLBAR_PX) / CELL.width));
 
 function createManagedTerminal() {
   const terminal = {
     cols: 80,
     rows: 24,
+    // Mirrors getXtermOptions(): a live terminal always has scrollback and a
+    // visible scrollbar, so the controller reserves SCROLLBAR_PX of every
+    // container width before dividing into columns — same as FitAddon (#11095).
+    options: {
+      scrollback: 1000,
+      scrollbar: { width: SCROLLBAR_PX },
+    },
     buffer: {
       active: {
         baseY: 0,
@@ -48,6 +78,7 @@ function createManagedTerminal() {
   } as unknown as {
     cols: number;
     rows: number;
+    options: { scrollback: number; scrollbar: { width: number } };
     buffer: { active: { baseY: number; viewportY: number; length: number } };
     resize: ReturnType<typeof vi.fn>;
     write: ReturnType<typeof vi.fn>;
@@ -144,13 +175,15 @@ describe("TerminalResizeController", () => {
     });
 
     const result = controller.resize("term-1", 1600, 800);
-    expect(result).toEqual({ cols: 160, rows: 40 });
+    expect(result).toEqual({ cols: colsFor(1600), rows: 40 });
     expect(managed.fitAddon.fit).not.toHaveBeenCalled();
     // Buffer reflow is deferred to wake — xterm.resize() must NOT fire while paint is paused.
     expect(managed.terminal.resize).not.toHaveBeenCalled();
-    expect(resizeMock).toHaveBeenCalledWith("term-1", 160, 40);
-    expect(managed.latestCols).toBe(160);
+    expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1600), 40);
+    expect(managed.latestCols).toBe(colsFor(1600));
     expect(managed.latestRows).toBe(40);
+    // The pixel dedup cache still tracks the RAW container width — the scrollbar
+    // is reserved when dividing into columns, never folded into this gate.
     expect(managed.lastWidth).toBe(1600);
     expect(managed.lastHeight).toBe(800);
   });
@@ -241,7 +274,8 @@ describe("TerminalResizeController", () => {
 
     vi.advanceTimersByTime(500);
     expect(resizeMock).toHaveBeenCalledTimes(1);
-    expect(resizeMock).toHaveBeenCalledWith("term-1", 170, 40);
+    expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1700), 40);
+    expect(managed.terminal.resize).not.toHaveBeenCalled();
   });
 
   it("background-tier resize reflows xterm when the terminal is visible", () => {
@@ -270,10 +304,10 @@ describe("TerminalResizeController", () => {
     });
 
     const result = controller.resize("term-1", 1600, 800, { immediate: true });
-    expect(result).toEqual({ cols: 160, rows: 40 });
+    expect(result).toEqual({ cols: colsFor(1600), rows: 40 });
     // Visible terminal: xterm's grid is reflowed, not deferred to wake.
-    expect(managed.terminal.resize).toHaveBeenCalledWith(160, 40);
-    expect(resizeMock).toHaveBeenCalledWith("term-1", 160, 40);
+    expect(managed.terminal.resize).toHaveBeenCalledWith(colsFor(1600), 40);
+    expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1600), 40);
   });
 
   it("flushes and resets ingest buffers before applying resize", () => {
@@ -358,12 +392,15 @@ describe("TerminalResizeController", () => {
 
       controller.applyResize("term-1", 132, 41);
 
-      // The settled timer owns the xterm+PTY resize, but the held backlog must
-      // not wait 500ms to start draining.
+      // Oversized ingest keeps draining at the still-consistent outgoing grid.
       expect(dataBuffer.flushForTerminal).not.toHaveBeenCalled();
       expect(dataBuffer.resumeFlush).toHaveBeenCalledWith("term-1");
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(resizeMock).not.toHaveBeenCalled();
       vi.advanceTimersByTime(500);
       expect(managed.terminal.resize).toHaveBeenCalledWith(132, 41);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", 132, 41);
+      expect(dataBuffer.resumeFlush).toHaveBeenCalledTimes(2);
     });
 
     it("applies the budget on the debounced resize path", () => {
@@ -388,6 +425,46 @@ describe("TerminalResizeController", () => {
       expect(dataBuffer.resetForTerminal).not.toHaveBeenCalled();
       expect(managed.terminal.resize).toHaveBeenCalled();
       expect(dataBuffer.resumeFlush).toHaveBeenCalledWith("term-1");
+    });
+
+    it("commits a debounced settled resize in flush, xterm, PTY order", () => {
+      const managed = createManagedTerminal();
+      managed.runtimeAgentId = "codex";
+      managed.isFocused = false;
+      managed.terminal.buffer.active.length = 5000;
+      Object.assign(managed.terminal, {
+        _core: { _renderService: { dimensions: { css: { cell: CELL } } } },
+      });
+      getEffectiveAgentConfigMock.mockReturnValue({
+        capabilities: { resizeStrategy: "settled" },
+      });
+      const sequence: string[] = [];
+      managed.terminal.resize.mockImplementation(function (
+        this: { cols: number; rows: number },
+        cols: number,
+        rows: number
+      ) {
+        sequence.push("xterm");
+        this.cols = cols;
+        this.rows = rows;
+      });
+      resizeMock.mockImplementation(() => sequence.push("pty"));
+      const controller = new TerminalResizeController({
+        getInstance: vi.fn(() => managed),
+        dataBuffer: {
+          flushForTerminal: vi.fn(() => sequence.push("flush")),
+          resetForTerminal: vi.fn(() => sequence.push("reset")),
+          getQueuedBytes: vi.fn(() => 0),
+          resumeFlush: vi.fn(() => sequence.push("resume")),
+        } as unknown as ResizeControllerDeps["dataBuffer"],
+      });
+
+      controller.resize("term-1", 1600, 800);
+      vi.advanceTimersByTime(599);
+      expect(sequence).toEqual(["flush", "reset"]);
+
+      vi.advanceTimersByTime(1);
+      expect(sequence).toEqual(["flush", "reset", "flush", "reset", "xterm", "pty"]);
     });
   });
 
@@ -688,10 +765,75 @@ describe("TerminalResizeController", () => {
     });
 
     const result = controller.fit("term-1");
-    expect(result).not.toBeNull();
+    expect(result).toEqual({ cols: 100, rows: 30 });
     expect(managed.hostElement.checkVisibility).toHaveBeenCalled();
-    expect(managed.fitAddon.fit).toHaveBeenCalled();
-    expect(resizeMock).toHaveBeenCalledWith("term-1", managed.terminal.cols, managed.terminal.rows);
+    expect(managed.fitAddon.fit).not.toHaveBeenCalled();
+    expect(managed.terminal.resize).toHaveBeenCalledWith(100, 30);
+    expect(resizeMock).toHaveBeenCalledWith("term-1", 100, 30);
+  });
+
+  it("fit() defers a settled xterm and PTY pair until the same commit", () => {
+    const managed = createManagedTerminal();
+    managed.runtimeAgentId = "codex";
+    getEffectiveAgentConfigMock.mockReturnValue({
+      capabilities: { resizeStrategy: "settled" },
+    });
+    const dataBuffer = {
+      flushForTerminal: vi.fn(),
+      resetForTerminal: vi.fn(),
+      getQueuedBytes: vi.fn(() => 0),
+      resumeFlush: vi.fn(),
+    } as unknown as ResizeControllerDeps["dataBuffer"];
+    const controller = new TerminalResizeController({
+      getInstance: vi.fn(() => managed),
+      dataBuffer,
+    });
+
+    expect(controller.fit("term-1")).toEqual({ cols: 100, rows: 30 });
+    expect(managed.fitAddon.fit).not.toHaveBeenCalled();
+    expect(managed.terminal.resize).not.toHaveBeenCalled();
+    expect(resizeMock).not.toHaveBeenCalled();
+    expect(dataBuffer.flushForTerminal).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(500);
+
+    expect(dataBuffer.flushForTerminal).toHaveBeenCalledTimes(2);
+    expect(dataBuffer.flushForTerminal).toHaveBeenCalledWith("term-1");
+    expect(managed.terminal.resize).toHaveBeenCalledTimes(1);
+    expect(managed.terminal.resize).toHaveBeenCalledWith(100, 30);
+    expect(resizeMock).toHaveBeenCalledTimes(1);
+    expect(resizeMock).toHaveBeenCalledWith("term-1", 100, 30);
+  });
+
+  it("rapid settled fit requests apply only the newest proposal", () => {
+    const managed = createManagedTerminal();
+    managed.runtimeAgentId = "codex";
+    getEffectiveAgentConfigMock.mockReturnValue({
+      capabilities: { resizeStrategy: "settled" },
+    });
+    managed.fitAddon.proposeDimensions
+      .mockReturnValueOnce({ cols: 90, rows: 28 })
+      .mockReturnValueOnce({ cols: 95, rows: 29 })
+      .mockReturnValueOnce({ cols: 105, rows: 31 });
+    const controller = new TerminalResizeController({
+      getInstance: vi.fn(() => managed),
+      dataBuffer: {
+        flushForTerminal: vi.fn(),
+        resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 0),
+        resumeFlush: vi.fn(),
+      } as unknown as ResizeControllerDeps["dataBuffer"],
+    });
+
+    controller.fit("term-1");
+    controller.fit("term-1");
+    controller.fit("term-1");
+    vi.advanceTimersByTime(500);
+
+    expect(managed.terminal.resize).toHaveBeenCalledTimes(1);
+    expect(managed.terminal.resize).toHaveBeenCalledWith(105, 31);
+    expect(resizeMock).toHaveBeenCalledTimes(1);
+    expect(resizeMock).toHaveBeenCalledWith("term-1", 105, 31);
   });
 
   it("settled strategy batches rapid resizes into a single PTY resize", () => {
@@ -718,6 +860,8 @@ describe("TerminalResizeController", () => {
     controller.sendPtyResize("term-1", 120, 40);
 
     expect(resizeMock).not.toHaveBeenCalled();
+    expect(managed.latestCols).toBe(120);
+    expect(managed.latestRows).toBe(40);
 
     vi.advanceTimersByTime(500);
 
@@ -779,6 +923,32 @@ describe("TerminalResizeController", () => {
     expect(resizeMock).not.toHaveBeenCalled();
   });
 
+  it("a resize lock cancels a pending settled xterm and PTY commit", () => {
+    const managed = createManagedTerminal();
+    managed.runtimeAgentId = "codex";
+    getEffectiveAgentConfigMock.mockReturnValue({
+      capabilities: { resizeStrategy: "settled" },
+    });
+    const controller = new TerminalResizeController({
+      getInstance: vi.fn(() => managed),
+      dataBuffer: {
+        flushForTerminal: vi.fn(),
+        resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 0),
+        resumeFlush: vi.fn(),
+      } as unknown as ResizeControllerDeps["dataBuffer"],
+    });
+
+    controller.applyResize("term-1", 120, 40);
+    expect(controller.hasPendingResize("term-1")).toBe(true);
+    controller.lockResize("term-1", true);
+    expect(controller.hasPendingResize("term-1")).toBe(false);
+    vi.advanceTimersByTime(500);
+
+    expect(managed.terminal.resize).not.toHaveBeenCalled();
+    expect(resizeMock).not.toHaveBeenCalled();
+  });
+
   it("forceImmediateResize sends an immediate resize and cancels pending settled timer", () => {
     const managed = createManagedTerminal();
     managed.launchAgentId = "codex";
@@ -803,6 +973,8 @@ describe("TerminalResizeController", () => {
 
     controller.sendPtyResize("term-1", 100, 30);
     expect(resizeMock).not.toHaveBeenCalled();
+    managed.latestCols = 132;
+    managed.latestRows = 41;
 
     controller.forceImmediateResize("term-1");
     expect(resizeMock).toHaveBeenCalledTimes(1);
@@ -828,6 +1000,27 @@ describe("TerminalResizeController", () => {
       dataBuffer,
     });
 
+    controller.forceImmediateResize("term-1");
+
+    expect(resizeMock).not.toHaveBeenCalled();
+  });
+
+  it("public PTY resize helpers do not bypass an active resize lock", () => {
+    const managed = createManagedTerminal();
+    managed.latestCols = 120;
+    managed.latestRows = 40;
+    const controller = new TerminalResizeController({
+      getInstance: vi.fn(() => managed),
+      dataBuffer: {
+        flushForTerminal: vi.fn(),
+        resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 0),
+        resumeFlush: vi.fn(),
+      } as unknown as ResizeControllerDeps["dataBuffer"],
+    });
+
+    controller.lockResize("term-1", true);
+    controller.sendPtyResize("term-1", 120, 40);
     controller.forceImmediateResize("term-1");
 
     expect(resizeMock).not.toHaveBeenCalled();
@@ -1053,6 +1246,169 @@ describe("TerminalResizeController", () => {
       expect(dataBuffer.flushForTerminal).toHaveBeenCalled();
     });
 
+    it("flushResize immediately commits a pending settled xterm and PTY pair", () => {
+      const managed = createManagedTerminal();
+      managed.runtimeAgentId = "codex";
+      getEffectiveAgentConfigMock.mockReturnValue({
+        capabilities: { resizeStrategy: "settled" },
+      });
+      const controller = new TerminalResizeController({
+        getInstance: vi.fn(() => managed),
+        dataBuffer: mockDataBuffer(),
+      });
+
+      controller.applyResize("term-1", 120, 40);
+      expect(controller.hasPendingResize("term-1")).toBe(true);
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(resizeMock).not.toHaveBeenCalled();
+
+      controller.flushResize("term-1");
+
+      expect(controller.hasPendingResize("term-1")).toBe(false);
+      expect(managed.terminal.resize).toHaveBeenCalledTimes(1);
+      expect(managed.terminal.resize).toHaveBeenCalledWith(120, 40);
+      expect(resizeMock).toHaveBeenCalledTimes(1);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", 120, 40);
+      vi.advanceTimersByTime(500);
+      expect(managed.terminal.resize).toHaveBeenCalledTimes(1);
+      expect(resizeMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("flushResize preserves a pending settled PTY-only resize intent", () => {
+      const managed = createManagedTerminal();
+      managed.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
+      managed.isFocused = false;
+      managed.isVisible = false;
+      managed.runtimeAgentId = "codex";
+      attachCellDims(managed);
+      getEffectiveAgentConfigMock.mockReturnValue({
+        capabilities: { resizeStrategy: "settled" },
+      });
+      const controller = new TerminalResizeController({
+        getInstance: vi.fn(() => managed),
+        dataBuffer: mockDataBuffer(),
+      });
+
+      controller.resize("term-1", 1200, 800);
+      expect(controller.hasPendingResize("term-1")).toBe(true);
+      controller.flushResize("term-1");
+
+      expect(controller.hasPendingResize("term-1")).toBe(false);
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(resizeMock).toHaveBeenCalledTimes(1);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1200), 40);
+      vi.advanceTimersByTime(500);
+      expect(resizeMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("cancelPendingResize drops a pending settled commit", () => {
+      const managed = createManagedTerminal();
+      managed.runtimeAgentId = "codex";
+      getEffectiveAgentConfigMock.mockReturnValue({
+        capabilities: { resizeStrategy: "settled" },
+      });
+      const controller = new TerminalResizeController({
+        getInstance: vi.fn(() => managed),
+        dataBuffer: mockDataBuffer(),
+      });
+
+      controller.applyResize("term-1", 120, 40);
+      controller.cancelPendingResize("term-1");
+      vi.advanceTimersByTime(500);
+
+      expect(controller.hasPendingResize("term-1")).toBe(false);
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(resizeMock).not.toHaveBeenCalled();
+    });
+
+    it("a direct default PTY target supersedes an older debounce job", () => {
+      const managed = createManagedTerminal();
+      managed.isFocused = false;
+      managed.terminal.buffer.active.length = 300;
+      attachCellDims(managed);
+      const controller = new TerminalResizeController({
+        getInstance: vi.fn(() => managed),
+        dataBuffer: mockDataBuffer(),
+      });
+
+      controller.resize("term-1", 1200, 800);
+      expect(managed.resizeDebounceTimer).toBeDefined();
+      controller.sendPtyResize("term-1", 140, 45);
+      vi.advanceTimersByTime(100);
+
+      expect(managed.resizeDebounceTimer).toBeUndefined();
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(resizeMock).toHaveBeenCalledTimes(1);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", 140, 45);
+    });
+
+    it("a direct settled target supersedes an older debounce job", () => {
+      const managed = createManagedTerminal();
+      managed.runtimeAgentId = "codex";
+      managed.isFocused = false;
+      managed.terminal.buffer.active.length = 300;
+      attachCellDims(managed);
+      getEffectiveAgentConfigMock.mockReturnValue({
+        capabilities: { resizeStrategy: "settled" },
+      });
+      const controller = new TerminalResizeController({
+        getInstance: vi.fn(() => managed),
+        dataBuffer: mockDataBuffer(),
+      });
+
+      controller.resize("term-1", 1200, 800);
+      controller.sendPtyResize("term-1", 140, 45);
+      vi.advanceTimersByTime(499);
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(resizeMock).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(1);
+      expect(managed.terminal.resize).toHaveBeenCalledTimes(1);
+      expect(managed.terminal.resize).toHaveBeenCalledWith(140, 45);
+      expect(resizeMock).toHaveBeenCalledTimes(1);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", 140, 45);
+    });
+
+    it("a PTY-only target supersedes an older debounce job without reflowing xterm", () => {
+      const managed = createManagedTerminal();
+      managed.isFocused = false;
+      managed.terminal.buffer.active.length = 300;
+      attachCellDims(managed);
+      const controller = new TerminalResizeController({
+        getInstance: vi.fn(() => managed),
+        dataBuffer: mockDataBuffer(),
+      });
+
+      controller.resize("term-1", 1200, 800);
+      controller.resizePtyOnly("term-1", 1500, 800);
+      vi.advanceTimersByTime(100);
+
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(resizeMock).toHaveBeenCalledTimes(1);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1500), 40);
+    });
+
+    it("forceImmediateResize supersedes an older debounce job", () => {
+      const managed = createManagedTerminal();
+      managed.isFocused = false;
+      managed.terminal.buffer.active.length = 300;
+      attachCellDims(managed);
+      const controller = new TerminalResizeController({
+        getInstance: vi.fn(() => managed),
+        dataBuffer: mockDataBuffer(),
+      });
+
+      controller.resize("term-1", 1200, 800);
+      managed.latestCols = 140;
+      managed.latestRows = 45;
+      controller.forceImmediateResize("term-1");
+      vi.advanceTimersByTime(100);
+
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(resizeMock).toHaveBeenCalledTimes(1);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", 140, 45);
+    });
+
     it("debounceResize stores timer in resizeDebounceTimer, not resizeJob", () => {
       const managed = createManagedTerminal();
       attachCellDims(managed);
@@ -1117,7 +1473,8 @@ describe("TerminalResizeController", () => {
 
     it("postTask callback applies resize and clears resizeJob", async () => {
       const managed = createManagedTerminal();
-      attachCellDims(managed); // width:10, height:20 → 1200/10=120 cols, 900/20=45 rows
+      // width:10, height:20 → (1200-15)/10 = 118 cols (scrollbar reserved), 900/20 = 45 rows
+      attachCellDims(managed);
       managed.isFocused = false;
       managed.isVisible = false;
       managed.terminal.buffer.active.length = 300;
@@ -1135,7 +1492,7 @@ describe("TerminalResizeController", () => {
 
       expect(managed.resizeJob).toBeUndefined();
       expect(dataBuffer.flushForTerminal).toHaveBeenCalledWith("term-1");
-      expect(managed.terminal.resize).toHaveBeenCalledWith(120, 45);
+      expect(managed.terminal.resize).toHaveBeenCalledWith(colsFor(1200), 45);
     });
   });
 
@@ -1171,13 +1528,13 @@ describe("TerminalResizeController", () => {
 
       const result = controller.resize("term-1", 1000, 500);
 
-      expect(result).toEqual({ cols: 100, rows: 25 });
+      expect(result).toEqual({ cols: colsFor(1000), rows: 25 });
       expect(managed.fitAddon.fit).not.toHaveBeenCalled();
-      expect(managed.terminal.resize).toHaveBeenCalledWith(100, 25);
-      expect(resizeMock).toHaveBeenCalledWith("term-1", 100, 25);
+      expect(managed.terminal.resize).toHaveBeenCalledWith(colsFor(1000), 25);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1000), 25);
     });
 
-    it("falls back to fitAddon.fit() when cell dims are null", () => {
+    it("uses FitAddon's proposal when cell dims are null", () => {
       const managed = createManagedTerminal();
 
       const controller = new TerminalResizeController({
@@ -1187,16 +1544,13 @@ describe("TerminalResizeController", () => {
 
       const result = controller.resize("term-1", 1200, 900);
 
-      expect(result).not.toBeNull();
-      expect(managed.fitAddon.fit).toHaveBeenCalled();
-      expect(resizeMock).toHaveBeenCalledWith(
-        "term-1",
-        managed.terminal.cols,
-        managed.terminal.rows
-      );
+      expect(result).toEqual({ cols: 100, rows: 30 });
+      expect(managed.fitAddon.fit).not.toHaveBeenCalled();
+      expect(managed.terminal.resize).toHaveBeenCalledWith(100, 30);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", 100, 30);
     });
 
-    it("falls back to fitAddon.fit() when cell dims are zero", () => {
+    it("uses FitAddon's proposal when cell dims are zero", () => {
       const managed = createManagedTerminal();
       attachCellDims(managed, { width: 0, height: 0 });
 
@@ -1207,13 +1561,10 @@ describe("TerminalResizeController", () => {
 
       const result = controller.resize("term-1", 1200, 900);
 
-      expect(result).not.toBeNull();
-      expect(managed.fitAddon.fit).toHaveBeenCalled();
-      expect(resizeMock).toHaveBeenCalledWith(
-        "term-1",
-        managed.terminal.cols,
-        managed.terminal.rows
-      );
+      expect(result).toEqual({ cols: 100, rows: 30 });
+      expect(managed.fitAddon.fit).not.toHaveBeenCalled();
+      expect(managed.terminal.resize).toHaveBeenCalledWith(100, 30);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", 100, 30);
     });
 
     it("returns null without mutating cache when proposeDimensions returns undefined", () => {
@@ -1255,12 +1606,9 @@ describe("TerminalResizeController", () => {
 
       // Should NOT be suppressed by dedup guard since lastWidth was never updated
       expect(result2).not.toBeNull();
-      expect(managed.fitAddon.fit).toHaveBeenCalled();
-      expect(resizeMock).toHaveBeenCalledWith(
-        "term-1",
-        managed.terminal.cols,
-        managed.terminal.rows
-      );
+      expect(managed.fitAddon.fit).not.toHaveBeenCalled();
+      expect(managed.terminal.resize).toHaveBeenCalledWith(120, 45);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", 120, 45);
     });
 
     it("returns null when proposeDimensions returns degenerate 1x1", () => {
@@ -1305,11 +1653,11 @@ describe("TerminalResizeController", () => {
       const controller = makeController(managed);
       const result = controller.resizePtyOnly("term-1", 1600, 800);
 
-      expect(result).toEqual({ cols: 160, rows: 40 });
+      expect(result).toEqual({ cols: colsFor(1600), rows: 40 });
       expect(managed.terminal.resize).not.toHaveBeenCalled();
       expect(managed.fitAddon.fit).not.toHaveBeenCalled();
-      expect(resizeMock).toHaveBeenCalledWith("term-1", 160, 40);
-      expect(managed.latestCols).toBe(160);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1600), 40);
+      expect(managed.latestCols).toBe(colsFor(1600));
       expect(managed.latestRows).toBe(40);
       expect(managed.lastWidth).toBe(1600);
       expect(managed.lastHeight).toBe(800);
@@ -1347,6 +1695,32 @@ describe("TerminalResizeController", () => {
       expect(resizeMock).toHaveBeenCalledTimes(1);
     });
 
+    it("reasserts a pending settled target when the PTY-only box is redundant", () => {
+      const managed = createManagedTerminal();
+      managed.launchAgentId = "codex";
+      managed.runtimeAgentId = "codex";
+      Object.assign(managed.terminal, {
+        _core: { _renderService: { dimensions: { css: { cell: { width: 10, height: 20 } } } } },
+      });
+      getEffectiveAgentConfigMock.mockReturnValue({
+        capabilities: { resizeStrategy: "settled" },
+      });
+      const controller = makeController(managed);
+
+      controller.resize("term-1", 1600, 800);
+      expect(controller.hasPendingResize("term-1")).toBe(true);
+      expect(resizeMock).not.toHaveBeenCalled();
+
+      expect(controller.resizePtyOnly("term-1", 1600, 800)).toBeNull();
+
+      expect(controller.hasPendingResize("term-1")).toBe(false);
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1600), 40);
+
+      vi.advanceTimersByTime(500);
+      expect(resizeMock).toHaveBeenCalledTimes(1);
+    });
+
     it("updates pixel cache without re-notifying the PTY when cols/rows are unchanged", () => {
       const managed = createManagedTerminal();
       Object.assign(managed.terminal, {
@@ -1357,12 +1731,19 @@ describe("TerminalResizeController", () => {
       controller.resizePtyOnly("term-1", 1600, 800);
       expect(resizeMock).toHaveBeenCalledTimes(1);
 
-      // +5px is under one 10px cell — same cols/rows, but the cache must
-      // track the new pixels so the next delta computes against them.
-      const second = controller.resizePtyOnly("term-1", 1605, 800);
+      // Grow the container to the widest pixel that still yields the same column
+      // count — under one cell, so cols/rows don't move, but the cache must
+      // track the new pixels so the next delta computes against them. Derived
+      // from the gutter rather than hardcoded: now that the scrollbar is
+      // reserved before the division (#11095), a fixed "+5px" would cross a cell
+      // boundary and silently stop testing the dedup path it was written for.
+      const subCellWidth = 1600 + (CELL.width - 1 - ((1600 - SCROLLBAR_PX) % CELL.width));
+      expect(colsFor(subCellWidth)).toBe(colsFor(1600));
+
+      const second = controller.resizePtyOnly("term-1", subCellWidth, 800);
       expect(second).toBeNull();
       expect(resizeMock).toHaveBeenCalledTimes(1);
-      expect(managed.lastWidth).toBe(1605);
+      expect(managed.lastWidth).toBe(subCellWidth);
     });
 
     it("returns null without poisoning the dedup cache when cell dims are unavailable", () => {
@@ -1405,10 +1786,10 @@ describe("TerminalResizeController", () => {
       const controller = makeController(managed);
       const result = controller.resizePtyOnly("term-1", 1600, 800);
 
-      expect(result).toEqual({ cols: 160, rows: 40 });
+      expect(result).toEqual({ cols: colsFor(1600), rows: 40 });
       // Direct delivery — not deferred behind the settled 500ms timer, which
       // would also reflow xterm in a hidden (possibly frozen) renderer.
-      expect(resizeMock).toHaveBeenCalledWith("term-1", 160, 40);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1600), 40);
 
       vi.advanceTimersByTime(500);
       expect(managed.terminal.resize).not.toHaveBeenCalled();
@@ -1432,7 +1813,7 @@ describe("TerminalResizeController", () => {
       expect(resizeMock).not.toHaveBeenCalled();
 
       controller.resizePtyOnly("term-1", 1600, 800);
-      expect(resizeMock).toHaveBeenCalledWith("term-1", 160, 40);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1600), 40);
 
       vi.advanceTimersByTime(500);
       // The stale timer must not fire its 120x30 resize or reflow xterm.
@@ -1648,7 +2029,9 @@ describe("TerminalResizeController", () => {
 
     it("falls back to cell-metric math when no proposable dimensions exist", () => {
       const managed = createManagedTerminal();
-      // host box is 1000x700; cell is 10x20 → 100 cols x 35 rows.
+      // host box is 1000x700; cell is 10x20 → (1000-15)/10 = 98 cols x 35 rows.
+      // The fallback reserves the same scrollbar gutter the primary
+      // proposeDimensions() branch would, so the two agree (#11095).
       managed.fitAddon.proposeDimensions = vi.fn(() => undefined);
       Object.assign(managed.terminal, {
         _core: { _renderService: { dimensions: { css: { cell: { width: 10, height: 20 } } } } },
@@ -1658,8 +2041,8 @@ describe("TerminalResizeController", () => {
       const ok = controller.reconcileGeometryFresh("term-1");
 
       expect(ok).toBe(true);
-      expect(managed.terminal.resize).toHaveBeenCalledWith(100, 35);
-      expect(resizeMock).toHaveBeenCalledWith("term-1", 100, 35);
+      expect(managed.terminal.resize).toHaveBeenCalledWith(colsFor(1000), 35);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1000), 35);
     });
 
     it("returns false (retry next frame) when the box is not measurable yet", () => {
@@ -1753,7 +2136,7 @@ describe("TerminalResizeController", () => {
       controller.lockResize("term-1", false);
 
       // The held geometry is delivered to the PTY once on unlock, stash cleared.
-      expect(resizeMock).toHaveBeenCalledWith("term-1", 160, 40);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1600), 40);
       expect(managed.pendingBackgroundResize).toBeUndefined();
     });
 

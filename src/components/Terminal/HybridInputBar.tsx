@@ -10,6 +10,7 @@ import { useFileAutocomplete } from "@/hooks/useFileAutocomplete";
 import { useSlashCommandAutocomplete } from "@/hooks/useSlashCommandAutocomplete";
 import { useSlashCommandList } from "@/hooks/useSlashCommandList";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
+import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { AutocompleteMenu, type AutocompleteItem } from "./AutocompleteMenu";
 import {
   getDaintreeAtClaim,
@@ -60,7 +61,8 @@ import { useHostReparent } from "./hooks/useHostReparent";
 
 export interface HybridInputBarHandle {
   focus: () => void;
-  focusWithCursorAtEnd: () => void;
+  /** Returns whether an editor was mounted to take the focus. */
+  focusWithCursorAtEnd: () => boolean;
   cancelPendingFocus: () => void;
 }
 
@@ -116,6 +118,15 @@ type ApplyEditorValue = (
 ) => void;
 
 const EMPTY_STALE_KEYS: ReadonlySet<string> = new Set<string>();
+
+/**
+ * Whether the editor holds the caret, judged by the DOM rather than by
+ * `view.hasFocus` — CodeMirror reports false there whenever the window is
+ * blurred, even though the editor is still `document.activeElement`.
+ */
+function editorOwnsDomFocus(view: EditorView): boolean {
+  return view.contentDOM.contains(document.activeElement);
+}
 
 const hybridInputE2EControllers = new Map<string, HybridInputE2EController>();
 
@@ -201,7 +212,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const currentProject = useProjectStore((s) => s.currentProject);
     const voiceStatus = useVoiceRecordingStore((s) => s.status);
     const activeVoicePanelId = useVoiceRecordingStore((s) => s.activeTarget?.panelId ?? null);
-    const voiceDraftRevision = useTerminalInputStore((s) => s.voiceDraftRevision);
+    const externalDraftRevision = useTerminalInputStore((s) => s.externalDraftRevision);
     const panelWorktreeId = usePanelStore((s) => s.panelsById[terminalId]?.worktreeId);
     const panelWorktree = useWorktreeStore((s) =>
       panelWorktreeId ? s.worktrees.get(panelWorktreeId) : undefined
@@ -469,7 +480,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     });
 
     useEffect(() => {
-      if (voiceDraftRevision === 0) return;
+      if (externalDraftRevision === 0) return;
       const draft = useTerminalInputStore.getState().getDraftInput(terminalId, currentProject?.id);
       const view = editorViewRef.current;
       if (!view) return;
@@ -484,7 +495,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           scrollIntoView: true,
         });
       }
-    }, [voiceDraftRevision, terminalId, currentProject?.id]);
+    }, [externalDraftRevision, terminalId, currentProject?.id]);
 
     useVoiceDecorations({ terminalId, editorViewRef });
 
@@ -598,18 +609,30 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         focus: focusEditor,
         focusWithCursorAtEnd: () => {
           const view = editorViewRef.current;
-          if (!view) return;
+          // No mounted editor (lazy CodeMirror still loading) means nothing can
+          // take focus — say so rather than let the caller assume it landed.
+          if (!view) return false;
+          // Already holding the keyboard: callers want focus, not a caret move.
+          // Re-running the cursor dispatch would drag the caret to the end of the
+          // draft from wherever the user just clicked (#11133). Ownership is read
+          // from the DOM rather than `view.hasFocus`, which reports false whenever
+          // the window itself is blurred even though the editor still holds the
+          // caret — a background state change would otherwise move it.
+          if (editorOwnsDomFocus(view)) return true;
           const gen = focusGenerationRef.current;
           requestAnimationFrame(() => {
             if (focusGenerationRef.current !== gen) return;
             if (editorViewRef.current !== view) return;
             if (usePanelStore.getState().preferredTerminalFocusTarget !== "hybridInput") return;
+            // The user can click into the draft between the call and this frame.
+            if (editorOwnsDomFocus(view)) return;
             view.dispatch({
               selection: EditorSelection.cursor(view.state.doc.length),
               scrollIntoView: true,
             });
             view.focus();
           });
+          return true;
         },
         cancelPendingFocus: () => {
           focusGenerationRef.current += 1;
@@ -617,6 +640,19 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       }),
       [focusEditor]
     );
+
+    // Claim the type-anywhere routing target (#11134) whenever the user really
+    // types here. Agent panels only — `agentId` is absent for the fleet-armed
+    // raw-shell branch of `shouldShowHybridInputBar`, and routing into a shell
+    // is exactly what the rescue must never do. While a broadcast is live the
+    // user typed to a fleet, not to one agent, so claim nothing.
+    const recordTypedTarget = () => {
+      if (agentId === undefined) return;
+      if (useFleetArmingStore.getState().armedIds.size >= 2) return;
+      const workspaceId = getViewWorkspaceId();
+      if (workspaceId === null) return;
+      useTerminalInputStore.getState().recordLastTypedAgentTarget(terminalId, workspaceId);
+    };
 
     const { handleUpdateRef: contextUpdateRef } = useContextDetection({
       latestRef,
@@ -633,6 +669,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         return true;
       },
       setActiveCompletionContext,
+      onUserType: recordTypedTarget,
     });
 
     const {
@@ -778,6 +815,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const barContent = (
       <div
         className="relative group cursor-text px-3.5 pb-2.5 pt-2.5"
+        // Anchors the type-anywhere rescue (#11134): marks this subtree as a
+        // real typing surface, and lets the rescue verify focus actually landed
+        // here rather than trusting a handle's boolean return.
+        data-hybrid-input-root={terminalId}
         style={{ backgroundColor: inputBarColors.background, ...shellVars }}
       >
         <div className="flex items-end gap-2">

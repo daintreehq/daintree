@@ -1935,6 +1935,61 @@ describe("PullRequestService", () => {
       pullRequestService.destroy();
     });
 
+    it("re-resolves after a no-match when the repo's git remotes change (#11155)", async () => {
+      mockForgeProviderUnresolved({ status: "no-match" });
+      const bridge = lastMockBridge!;
+
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+
+      pullRequestService.initialize("/repo");
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/test" })
+      );
+
+      await pullRequestService.start(0);
+      await vi.advanceTimersByTimeAsync(60_000);
+      const callsWhilePaused = bridge.resolveProvider.mock.calls.length;
+
+      // `git remote add origin` — the one signal narrow enough to release the
+      // pause. Unlike a worktree update, it means the input to resolution
+      // itself changed, so the cached no-match is now stale.
+      events.emit("sys:forge:remote-changed", { timestamp: Date.now() });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(bridge.resolveProvider.mock.calls.length).toBeGreaterThan(callsWhilePaused);
+
+      pullRequestService.destroy();
+    });
+
+    it("re-pauses after a remote change that still resolves to no-match", async () => {
+      mockForgeProviderUnresolved({ status: "no-match" });
+      const bridge = lastMockBridge!;
+
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+
+      pullRequestService.initialize("/repo");
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/test" })
+      );
+      await pullRequestService.start(0);
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      // A remote pointing at a host no provider claims: the re-resolve happens
+      // once, then the pause must re-arm. Without this, adding an unsupported
+      // remote would reopen #9997's forever-5s spin.
+      events.emit("sys:forge:remote-changed", { timestamp: Date.now() });
+      await vi.advanceTimersByTimeAsync(10_000);
+      const callsAfterRemoteChange = bridge.resolveProvider.mock.calls.length;
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(bridge.resolveProvider.mock.calls.length).toBe(callsAfterRemoteChange);
+
+      pullRequestService.destroy();
+    });
+
     it("re-resolves after a no-match when forge settings change (setForgeSettings + refresh)", async () => {
       mockForgeProviderUnresolved({ status: "no-match" });
       const bridge = lastMockBridge!;

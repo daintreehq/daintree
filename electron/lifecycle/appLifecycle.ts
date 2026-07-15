@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import type { CliAvailabilityService } from "../services/CliAvailabilityService.js";
 import type { WindowRegistry } from "../window/WindowRegistry.js";
 import { handleDirectoryOpen } from "../menu.js";
+import { refreshProjectMenuState } from "../projectMenuState.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
@@ -271,12 +272,37 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): void {
     }
   });
 
+  // The application menu is process-global but its project gates track the
+  // focused window, so every focus change can flip them (#11136).
+  app.on("browser-window-focus", () => {
+    refreshProjectMenuState();
+  });
+
+  app.on("browser-window-created", (_event, win) => {
+    win.once("closed", () => {
+      // Closing the focused window promotes a survivor that may never take focus
+      // (minimized/hidden), so `browser-window-focus` can't be relied on here.
+      // Deferred because WindowRegistry attaches its own "closed" listener at
+      // register() — after this one — and that listener performs the promotion
+      // synchronously; refreshing inline would still read the closing window. A
+      // microtask runs once every listener for this emit has, which is exactly
+      // the ordering we need.
+      queueMicrotask(() => refreshProjectMenuState());
+    });
+  });
+
   app.on("window-all-closed", () => {
     // `BrowserWindow.destroy()` in the OOM recreate path synchronously emits
     // `window-all-closed` before the replacement window registers. On
     // non-darwin this would call `app.quit()` mid-recreate; the flag suppresses
     // that until the recreation settles. See `windowRecreationState.ts`.
     if (isWindowRecreating()) return;
+
+    // `browser-window-focus` never fires when focus drops to zero windows, so
+    // this is the only signal that clears the gates on macOS, where the app
+    // survives windowless with just its menu bar.
+    refreshProjectMenuState();
+
     if (process.platform !== "darwin") {
       app.quit();
     }

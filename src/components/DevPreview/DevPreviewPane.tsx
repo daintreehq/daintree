@@ -508,6 +508,9 @@ export function DevPreviewPane({
     handleZoomChange,
     handleOpenExternal,
     handlePromoteToPortal,
+    promoteToPortalError,
+    isPromotingToPortal,
+    clearPromoteToPortalError,
   } = useDevPreviewNavigation({
     id,
     currentProjectId,
@@ -855,7 +858,7 @@ export function DevPreviewPane({
           onReload={handleReload}
           onHardReload={handleHardReload}
           onOpenExternal={handleOpenExternal}
-          onPromoteToPortal={currentUrl ? handlePromoteToPortal : undefined}
+          onPromoteToPortal={currentUrl ? () => void handlePromoteToPortal() : undefined}
           onZoomChange={handleZoomChange}
           onCaptureScreenshot={handleCaptureScreenshot}
           onToggleDevTools={handleToggleDevTools}
@@ -865,6 +868,26 @@ export function DevPreviewPane({
           onViewportDprChange={handleViewportDprChange}
           onViewportFitToggle={handleViewportFitToggle}
         />
+
+        {promoteToPortalError && (
+          <InlineStatusBanner
+            icon={OctagonAlert}
+            title="Couldn't open in Portal"
+            description={promoteToPortalError}
+            severity="error"
+            action={{
+              id: "retry-promote-to-portal",
+              label: "Retry",
+              icon: RotateCw,
+              variant: "dangerFilled",
+              loading: isPromotingToPortal,
+              onClick: () => void handlePromoteToPortal(),
+              ariaLabel: "Retry opening in Portal",
+            }}
+            onClose={clearPromoteToPortalError}
+            closeAriaLabel="Dismiss Portal error"
+          />
+        )}
 
         {stuckTier >= 2 && (
           <DevPreviewStuckBanner

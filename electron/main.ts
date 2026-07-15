@@ -43,6 +43,7 @@ import {
 } from "./window/windowRef.js";
 import { WindowRegistry } from "./window/WindowRegistry.js";
 import { ProjectViewManager } from "./window/ProjectViewManager.js";
+import { helpSessionService } from "./services/HelpSessionService.js";
 import { effectiveCachedProjectViews } from "./utils/cachedProjectViews.js";
 import { setupBrowserWindow } from "./window/createWindow.js";
 import { distributePortsToView } from "./window/portDistribution.js";
@@ -281,6 +282,21 @@ if (!gotTheLock) {
       cachedProjectViews: effectiveCachedProjectViews(
         store.get("terminalConfig")?.cachedProjectViews
       ),
+      // Lets the eviction policy keep a view whose assistant is still running
+      // out of the routine LRU pool (#11157) — evicting it would run the
+      // revoke-and-kill path below and take the assistant's sub-agents and
+      // background shells with it. Injected here rather than imported by
+      // electron/window/ so the eviction controller stays free of both services.
+      // The static import is free: PtyClient already value-imports
+      // HelpSessionService, so it is in the eager graph either way.
+      assistantBackendForProject: (projectId) => helpSessionService.getAssistantBackend(projectId),
+      // The liveness half. PtyClient's spawn registry is main-local and
+      // synchronous — written by spawn() before the host round-trip, dropped on
+      // exit and on kill — so it is authoritative from the assistant's first
+      // instant. The pty-host's terminal snapshot is not a substitute: it is
+      // async, and a shard that times out comes back as an empty list, which
+      // would read as "the assistant is gone" and unprotect a live one.
+      isTerminalLive: (terminalId) => getPtyClient()?.hasTerminal(terminalId) === true,
       onViewEvicted: (wcId) => {
         // Each cleanup is isolated: if removeDirectPort throws, the worktree
         // port must still close. Partial cleanup leaves a live producer
@@ -360,11 +376,13 @@ if (!gotTheLock) {
         const broker = getWorktreePortBrokerRef();
         const wsClient = getWorkspaceClientRef();
         if (broker && wsClient) {
-          const pvm = getProjectViewManager();
-          const projectId = pvm?.getProjectIdForWebContents(wc.id);
+          // This window's own manager, not the process-global one: the global
+          // points at the last-created window, so an older window's view
+          // reload would broker no port at all (#11100).
+          const projectId = pvm.getProjectIdForWebContents(wc.id);
           if (projectId) {
             // Find the project path from PVM to look up the host
-            const viewEntry = pvm?.getAllViews().find((v) => v.projectId === projectId);
+            const viewEntry = pvm.getAllViews().find((v) => v.projectId === projectId);
             if (viewEntry) {
               const host = wsClient.getHostForProject(viewEntry.projectPath);
               if (host) {
@@ -403,6 +421,13 @@ if (!gotTheLock) {
         // one-shot push was dropped on a true cold restore. No push needed here.
       },
     });
+    // Publish to this window's context immediately, not later in
+    // setupWindowServices: the renderer starts loading inside that call, so
+    // anything resolving the manager per-window (crash classification, the
+    // directory-open menu action) would otherwise see no manager for a window
+    // that has one, and fall back to a global or legacy path (#11100).
+    // setupWindowServices reassigns the same instance.
+    ctx.services.projectViewManager = pvm;
     setProjectViewManager(pvm);
 
     // Sync this window's fresh PVM to the live resource profile — the

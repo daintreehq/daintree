@@ -1086,6 +1086,7 @@ export class WorkspaceHostProcess extends EventEmitter {
       case "topology-watcher-recovered":
       case "forge-rate-limit-changed":
       case "forge-token-health-changed":
+      case "forge-remote-changed":
         this.emit("host-event", event);
         break;
 

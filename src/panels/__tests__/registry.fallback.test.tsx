@@ -24,6 +24,11 @@ function mockWiringImports(): void {
       <div data-testid="browser-skeleton">{label}</div>
     ),
   }));
+  vi.doMock("../dev-preview/DevPreviewPaneFallback", () => ({
+    DevPreviewPaneFallback: ({ title }: { title: string }) => (
+      <div data-testid="dev-preview-panel-fallback">{title}</div>
+    ),
+  }));
   vi.doMock("../review/ReviewPaneSkeleton", () => ({
     ReviewPaneSkeleton: () => <div data-testid="review-skeleton" />,
   }));
@@ -50,10 +55,10 @@ describe("panel registry Suspense fallback wiring", () => {
     expect(screen.getByTestId("browser-skeleton")).toBeTruthy();
   });
 
-  it("dev-preview falls back to the browser skeleton with its own label", async () => {
+  it("dev-preview falls back to real panel chrome instead of the browser ghost", async () => {
     await renderPanelKind("dev-preview");
-    const skeleton = screen.getByTestId("browser-skeleton");
-    expect(skeleton.textContent).toBe("Loading dev preview panel");
+    expect(screen.getByTestId("dev-preview-panel-fallback").textContent).toBe("Panel");
+    expect(screen.queryByTestId("browser-skeleton")).toBeNull();
   });
 
   it("review falls back to the review skeleton, not the browser one", async () => {

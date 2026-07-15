@@ -39,7 +39,14 @@ vi.mock("drizzle-orm/better-sqlite3", () => ({
   drizzle: vi.fn(() => ({})),
 }));
 
-import { openDb, probeDb, attemptRecovery, closeSharedDb, withDiskRecovery } from "../db.js";
+import {
+  openDb,
+  probeDb,
+  probeDbFile,
+  attemptRecovery,
+  closeSharedDb,
+  withDiskRecovery,
+} from "../db.js";
 
 describe("probeDb", () => {
   let tmpDir: string;
@@ -172,7 +179,13 @@ describe("attemptRecovery", () => {
 
     const result = attemptRecovery(dbPath);
 
-    expect(result).toBe(true);
+    expect(result).toEqual({
+      kind: "restored-from-backup",
+      quarantinedPath: expect.stringContaining("daintree.db.corrupt-"),
+    });
+    // The reported path is the quarantined DB itself, and it still holds the
+    // original bytes — a user handed this path must find the damaged file there.
+    expect(fs.readFileSync(result!.quarantinedPath!, "utf8")).toBe("corrupt");
     // Backup was copied to dbPath
     expect(fs.readFileSync(dbPath, "utf8")).toBe("valid backup");
     // Original files quarantined
@@ -182,17 +195,63 @@ describe("attemptRecovery", () => {
     expect(files.filter((f) => f.includes(".corrupt-")).length).toBe(3);
   });
 
-  it("returns false when no backup exists", () => {
+  // chmod is a POSIX no-op on Windows, so the mode-bit assertions only run there.
+  const posixIt = process.platform === "win32" ? it.skip : it;
+
+  posixIt("tightens the restored database and the quarantined file to owner-only", () => {
+    const dbPath = path.join(tmpDir, "daintree.db");
+    const backupPath = dbPath + ".backup";
+
+    // Simulate a pre-fix install: everything world-readable.
+    fs.writeFileSync(dbPath, "corrupt");
+    fs.writeFileSync(backupPath, "valid backup");
+    fs.chmodSync(dbPath, 0o644);
+    fs.chmodSync(backupPath, 0o644);
+
+    const result = attemptRecovery(dbPath);
+
+    expect(result!.kind).toBe("restored-from-backup");
+    // Restored copy is owner-only despite the 0o644 backup source.
+    expect(fs.statSync(dbPath).mode & 0o777).toBe(0o600);
+    // The quarantined forensic copy is tightened too, not left at 0o644.
+    expect(fs.statSync(result!.quarantinedPath!).mode & 0o777).toBe(0o600);
+  });
+
+  posixIt("tightens a preserved-aside backup to owner-only", () => {
+    const dbPath = path.join(tmpDir, "daintree.db");
+    const backupPath = dbPath + ".backup";
+    fs.writeFileSync(dbPath, "corrupt");
+    fs.writeFileSync(backupPath, "the user's real data");
+    fs.chmodSync(backupPath, 0o644);
+
+    // Unverifiable backup → preserved aside rather than restored.
+    mockPragma.mockImplementation(() => {
+      throw Object.assign(new Error("io error"), { code: "SQLITE_IOERR_SHORT_READ" });
+    });
+
+    attemptRecovery(dbPath);
+
+    const preserved = fs
+      .readdirSync(tmpDir)
+      .find((f) => f.startsWith("daintree.db.backup.corrupt-"));
+    expect(preserved).toBeDefined();
+    expect(fs.statSync(path.join(tmpDir, preserved!)).mode & 0o777).toBe(0o600);
+  });
+
+  it("resets to a fresh database when no backup exists", () => {
     const dbPath = path.join(tmpDir, "daintree.db");
     fs.writeFileSync(dbPath, "corrupt");
 
     const result = attemptRecovery(dbPath);
 
-    expect(result).toBe(false);
+    expect(result).toEqual({
+      kind: "reset-to-fresh",
+      quarantinedPath: expect.stringContaining("daintree.db.corrupt-"),
+    });
     expect(fs.existsSync(dbPath)).toBe(false);
   });
 
-  it("returns false when backup is also corrupt", () => {
+  it("resets to a fresh database when the backup is also corrupt", () => {
     const dbPath = path.join(tmpDir, "daintree.db");
     const backupPath = dbPath + ".backup";
 
@@ -208,10 +267,150 @@ describe("attemptRecovery", () => {
 
     const result = attemptRecovery(dbPath);
 
-    expect(result).toBe(false);
+    expect(result).toEqual({
+      kind: "reset-to-fresh",
+      quarantinedPath: expect.stringContaining("daintree.db.corrupt-"),
+    });
     // Both quarantined
     expect(fs.existsSync(dbPath)).toBe(false);
     expect(fs.existsSync(backupPath)).toBe(false);
+  });
+
+  it("reports no recovery when quarantining the corrupt DB fails", () => {
+    const dbPath = path.join(tmpDir, "daintree.db");
+    fs.writeFileSync(dbPath, "corrupt");
+
+    const renameSpy = vi.spyOn(fs, "renameSync").mockImplementation(() => {
+      throw Object.assign(new Error("rename failed"), { code: "EPERM" });
+    });
+
+    // The corrupt DB is still in place, so claiming a restore or a reset here
+    // would tell the user something that never happened.
+    expect(attemptRecovery(dbPath)).toBeNull();
+    expect(fs.existsSync(dbPath)).toBe(true);
+    renameSpy.mockRestore();
+  });
+
+  it("still reports a reset when the DB moved but a later quarantine step failed", () => {
+    const dbPath = path.join(tmpDir, "daintree.db");
+    fs.writeFileSync(dbPath, "corrupt");
+    fs.writeFileSync(dbPath + "-wal", "wal");
+
+    // The main DB is quarantined, then the WAL rename fails. The DB is already
+    // gone, so a fresh one WILL be created — staying silent here would lose the
+    // user's data with no notification, which is the whole bug being fixed.
+    const realRename = fs.renameSync.bind(fs);
+    let calls = 0;
+    const renameSpy = vi
+      .spyOn(fs, "renameSync")
+      .mockImplementation((from: fs.PathLike, to: fs.PathLike) => {
+        calls += 1;
+        if (calls === 1) return realRename(from, to);
+        throw Object.assign(new Error("rename failed"), { code: "EPERM" });
+      });
+
+    const result = attemptRecovery(dbPath);
+
+    expect(result).toMatchObject({ kind: "reset-to-fresh" });
+    expect(fs.existsSync(dbPath)).toBe(false);
+    // A stale WAL left at its live name can be replayed into the replacement DB.
+    // If it won't move aside it has to go.
+    expect(fs.existsSync(dbPath + "-wal")).toBe(false);
+    renameSpy.mockRestore();
+  });
+
+  it("moves a surviving backup aside when it cannot be restored", () => {
+    const dbPath = path.join(tmpDir, "daintree.db");
+    const backupPath = dbPath + ".backup";
+    fs.writeFileSync(dbPath, "corrupt");
+    fs.writeFileSync(backupPath, "the user's real data");
+
+    // The backup can't be read — not proven corrupt, just unverifiable.
+    mockPragma.mockImplementation(() => {
+      throw Object.assign(new Error("io error"), { code: "SQLITE_IOERR_SHORT_READ" });
+    });
+
+    const result = attemptRecovery(dbPath);
+
+    // It must NOT be copied over the DB and announced as a successful restore...
+    expect(result).toMatchObject({ kind: "reset-to-fresh" });
+    // ...and it must not be left sitting at backupPath either: the app now comes
+    // up on an empty database, and the first idle backup would copy that empty
+    // DB straight over the user's last good data. Preserve it, don't destroy it.
+    expect(fs.existsSync(backupPath)).toBe(false);
+    const preserved = fs
+      .readdirSync(tmpDir)
+      .find((f) => f.startsWith("daintree.db.backup.corrupt-"));
+    expect(preserved).toBeDefined();
+    expect(fs.readFileSync(path.join(tmpDir, preserved!), "utf8")).toBe("the user's real data");
+  });
+});
+
+describe("probeDbFile", () => {
+  let tmpDir: string;
+  let dbPath: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-db-probe-"));
+    dbPath = path.join(tmpDir, "candidate.db");
+    fs.writeFileSync(dbPath, "dummy");
+    vi.clearAllMocks();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    mockDatabaseConstructor.mockImplementation(() => ({}));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it("opens the candidate read-only and refuses to create a missing one", () => {
+    mockPragma.mockReturnValue("ok");
+
+    expect(probeDbFile(dbPath)).toBe("ok");
+    expect(mockDatabaseConstructor).toHaveBeenCalledWith(dbPath, {
+      readonly: true,
+      fileMustExist: true,
+    });
+    expect(mockClose).toHaveBeenCalled();
+  });
+
+  it("reports a failed quick_check as corrupt", () => {
+    mockPragma.mockReturnValue("*** in database main ***\nPage 48: btreeInitPage() error");
+
+    expect(probeDbFile(dbPath)).toBe("corrupt");
+    expect(mockClose).toHaveBeenCalled();
+  });
+
+  it("reports SQLITE_CORRUPT and SQLITE_NOTADB as corrupt", () => {
+    for (const code of ["SQLITE_CORRUPT_VTAB", "SQLITE_NOTADB"]) {
+      mockPragma.mockImplementation(() => {
+        throw Object.assign(new Error("bad"), { code });
+      });
+      expect(probeDbFile(dbPath)).toBe("corrupt");
+    }
+  });
+
+  // The whole point of this function. probeDb is fail-open — it returns TRUE for
+  // both of these, which is right at boot (don't quarantine a DB over a transient
+  // EACCES) and catastrophic when promoting a backup (an unverifiable candidate
+  // would overwrite the only good copy). Neither may ever come back "ok".
+  it("reports an unreadable candidate as unknown, never as ok", () => {
+    mockPragma.mockImplementation(() => {
+      throw Object.assign(new Error("permission denied"), { code: "SQLITE_IOERR_SHORT_READ" });
+    });
+
+    expect(probeDbFile(dbPath)).toBe("unknown");
+    expect(probeDb(dbPath)).toBe(true); // ...whereas the fail-open probe says fine
+    expect(mockClose).toHaveBeenCalled();
+  });
+
+  it("reports a missing candidate as unknown, never as ok", () => {
+    const absent = path.join(tmpDir, "absent.db");
+
+    expect(probeDbFile(absent)).toBe("unknown");
+    expect(probeDb(absent)).toBe(true); // ...whereas the fail-open probe says fine
+    expect(mockDatabaseConstructor).not.toHaveBeenCalled();
   });
 });
 

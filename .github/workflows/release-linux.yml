@@ -103,9 +103,10 @@ jobs:
       suite: ${{ matrix.suite }}
       platform: linux
 
-  # Online E2E runs for signal only — nothing `needs:` it, so it never gates
-  # build or publish. Do NOT add job-level continue-on-error here: it is invalid
-  # on reusable-workflow (`uses:`) jobs and makes the whole workflow fail to start.
+  # Online E2E gates build and publish, same as core and full-* — a failing
+  # real-agent run must not ship. Do NOT add job-level continue-on-error here:
+  # it is invalid on reusable-workflow (`uses:`) jobs and makes the whole
+  # workflow fail to start.
   e2e-online-gate:
     needs: [checks, unit-tests]
     uses: ./.github/workflows/e2e.yml
@@ -115,7 +116,7 @@ jobs:
     secrets: inherit
 
   build-daintree:
-    needs: [checks, unit-tests, e2e-core-gate, e2e-full-gate]
+    needs: [checks, unit-tests, e2e-core-gate, e2e-full-gate, e2e-online-gate]
     name: Build Daintree (Linux)
     runs-on: ubuntu-22.04
     timeout-minutes: 90

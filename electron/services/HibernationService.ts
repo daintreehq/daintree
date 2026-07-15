@@ -11,6 +11,7 @@ import { CHANNELS } from "../ipc/channels.js";
 import { writeHibernatedMarker } from "./pty/terminalSessionPersistence.js";
 import type { PtyClient } from "./PtyClient.js";
 import type { ProjectViewManager } from "../window/ProjectViewManager.js";
+import { collectActiveProjectIds } from "../window/activeProjectIds.js";
 import { getPtyClient } from "../window/serviceRefs.js";
 
 export interface HibernationConfig {
@@ -104,6 +105,20 @@ export class HibernationService {
    */
   setProjectViewManagersProvider(provider: (() => ProjectViewManager[]) | null): void {
     this.projectViewManagersProvider = provider;
+  }
+
+  /**
+   * The set of project IDs on-screen in ANY window. The DB current-project
+   * pointer only tracks the last-focused window, so comparing against it alone
+   * would hibernate a project the user is actively looking at in a second,
+   * unfocused window (#11102).
+   */
+  private collectActiveProjectIds(): Set<string> {
+    return collectActiveProjectIds(
+      this.projectViewManagersProvider,
+      projectStore.getCurrentProjectId(),
+      "hibernation"
+    );
   }
 
   setMemoryPressureThresholdMs(ms: number): void {
@@ -250,7 +265,6 @@ export class HibernationService {
       return;
     }
 
-    const currentProjectId = projectStore.getCurrentProjectId();
     const projects = projectStore.getAllProjects();
     const now = Date.now();
     const thresholdMs = config.inactiveThresholdHours * 60 * 60 * 1000;
@@ -259,9 +273,12 @@ export class HibernationService {
     const ptyClient = this.ptyClient;
     const allTerminals = await ptyClient.getAllTerminalsAsync();
 
+    const activeIds = this.collectActiveProjectIds();
+
     for (const project of projects) {
-      // Never hibernate the active project
-      if (project.id === currentProjectId) continue;
+      // Never hibernate a project that's on-screen in ANY window (#11102) — the
+      // DB pointer alone only tracks the last-focused one.
+      if (activeIds.has(project.id)) continue;
 
       // Skip projects with missing/invalid lastOpened to avoid treating them as infinitely inactive
       if (!project.lastOpened) continue;
@@ -295,6 +312,11 @@ export class HibernationService {
         continue;
       }
 
+      // Re-read visibility immediately before acting: the git probe above is a
+      // filesystem round-trip, and the user can bring the project on-screen in
+      // any window while it runs. Same TOCTOU guard the auto-close sweep uses.
+      if (this.collectActiveProjectIds().has(project.id)) continue;
+
       const hoursInactive = Math.floor(inactiveDuration / 3600000);
       logInfo("scheduled-hibernate-project", {
         project: project.name,
@@ -326,7 +348,6 @@ export class HibernationService {
   }
 
   async hibernateUnderMemoryPressure(): Promise<void> {
-    const currentProjectId = projectStore.getCurrentProjectId();
     const projects = projectStore.getAllProjects();
     const now = Date.now();
 
@@ -334,8 +355,11 @@ export class HibernationService {
     const ptyClient = this.ptyClient;
     const allTerminals = await ptyClient.getAllTerminalsAsync();
 
+    const activeIds = this.collectActiveProjectIds();
+
     for (const project of projects) {
-      if (project.id === currentProjectId) continue;
+      // Never hibernate a project that's on-screen in ANY window (#11102).
+      if (activeIds.has(project.id)) continue;
 
       if (!project.lastOpened) continue;
 
@@ -357,6 +381,10 @@ export class HibernationService {
         });
         continue;
       }
+
+      // Re-read visibility immediately before acting — the git probe above is a
+      // filesystem round-trip the user can bring the project on-screen during.
+      if (this.collectActiveProjectIds().has(project.id)) continue;
 
       logInfo("memory-pressure-hibernate-project", {
         project: project.name,

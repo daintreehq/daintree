@@ -416,7 +416,10 @@ describe("HibernationService", () => {
       const service = makeService();
       await service.hibernateUnderMemoryPressure();
 
-      expect(ptyManagerMock.gracefulKillByProject).not.toHaveBeenCalled();
+      // Assert on the selection observable, not gracefulKillByProject: the PTY
+      // kill is experiment-guarded off on this path, so it never fires either
+      // way and asserting it would pass even if the guard regressed.
+      expect(hibernatedProjectIds()).toEqual([]);
     });
 
     it("skips projects inactive less than 30 minutes", async () => {
@@ -1334,6 +1337,157 @@ describe("HibernationService", () => {
         "hibernation:project-hibernated",
         expect.objectContaining({ reason: "user-initiated" })
       );
+    });
+  });
+
+  describe("multi-window visibility guard (#11102)", () => {
+    const THIRTY_ONE_MINUTES = 31 * 60 * 1000;
+    const TWENTY_FIVE_HOURS = 25 * 60 * 60 * 1000;
+
+    type PvmMock = {
+      getActiveProjectId: Mock<() => string | null>;
+      getOutgoingBridgeProjectId: Mock<() => string | null>;
+      destroyView: Mock<(projectId: string) => boolean>;
+    };
+
+    function makePvm(
+      activeProjectId: string | null = null,
+      outgoingBridgeProjectId: string | null = null
+    ): PvmMock {
+      return {
+        getActiveProjectId: vi.fn(() => activeProjectId),
+        getOutgoingBridgeProjectId: vi.fn(() => outgoingBridgeProjectId),
+        destroyView: vi.fn(() => true),
+      };
+    }
+
+    function serviceWith(managers: PvmMock[]): HibernationService {
+      const service = makeService();
+      service.setProjectViewManagersProvider(() => managers as unknown as ProjectViewManager[]);
+      return service;
+    }
+
+    /**
+     * Two long-idle projects with live terminals. `focused` is the DB pointer's
+     * project; `second` is the one on-screen in the OTHER, unfocused window.
+     * Both are old enough to be eligible, so any that survives the sweep did so
+     * because of the visibility guard, not the inactivity threshold.
+     */
+    function seedTwoIdleProjects(inactiveFor: number): void {
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
+        { id: "t1", projectId: "focused-proj", agentState: "idle" },
+        { id: "t2", projectId: "second-window-proj", agentState: "idle" },
+        { id: "t3", projectId: "truly-background-proj", agentState: "idle" },
+      ]);
+      projectStoreMock.getAllProjects.mockReturnValue([
+        {
+          id: "focused-proj",
+          name: "Focused",
+          path: "/projects/focused",
+          lastOpened: Date.now() - inactiveFor,
+        },
+        {
+          id: "second-window-proj",
+          name: "Second Window",
+          path: "/projects/second",
+          lastOpened: Date.now() - inactiveFor,
+        },
+        {
+          id: "truly-background-proj",
+          name: "Background",
+          path: "/projects/background",
+          lastOpened: Date.now() - inactiveFor,
+        },
+      ]);
+      projectStoreMock.getCurrentProjectId.mockReturnValue("focused-proj");
+    }
+
+    it("does not hibernate a project visible in a second, unfocused window", async () => {
+      (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
+      seedTwoIdleProjects(TWENTY_FIVE_HOURS);
+      const service = serviceWith([makePvm("focused-proj"), makePvm("second-window-proj")]);
+
+      await (service as unknown as { checkAndHibernate(): Promise<void> }).checkAndHibernate();
+
+      // Only the project no window is showing gets selected.
+      expect(hibernatedProjectIds()).toEqual(["truly-background-proj"]);
+    });
+
+    it("does not hibernate the outgoing paint-gate bridge project", async () => {
+      (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
+      seedTwoIdleProjects(TWENTY_FIVE_HOURS);
+      // Second window is mid cold-switch: it already points at a third project,
+      // but second-window-proj is still painted behind the anti-flash bridge.
+      const service = serviceWith([
+        makePvm("focused-proj"),
+        makePvm("truly-background-proj", "second-window-proj"),
+      ]);
+
+      await (service as unknown as { checkAndHibernate(): Promise<void> }).checkAndHibernate();
+
+      expect(hibernatedProjectIds()).toEqual([]);
+    });
+
+    it("spares a second-window project under memory pressure too", async () => {
+      (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
+      seedTwoIdleProjects(THIRTY_ONE_MINUTES);
+      const service = serviceWith([makePvm("focused-proj"), makePvm("second-window-proj")]);
+
+      await service.hibernateUnderMemoryPressure();
+
+      expect(hibernatedProjectIds()).toEqual(["truly-background-proj"]);
+    });
+
+    it("re-reads visibility after the git probe, sparing a project brought on-screen mid-sweep", async () => {
+      (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
+      seedTwoIdleProjects(TWENTY_FIVE_HOURS);
+
+      // The window shows nothing when the sweep starts, then switches to
+      // truly-background-proj while the (awaited) git probe is in flight.
+      const late = makePvm("focused-proj");
+      let collectCount = 0;
+      late.getActiveProjectId.mockImplementation(() => {
+        collectCount++;
+        // First collection (pre-loop) sees the old state; later ones see the switch.
+        return collectCount <= 1 ? "focused-proj" : "truly-background-proj";
+      });
+
+      const service = serviceWith([late]);
+      await (service as unknown as { checkAndHibernate(): Promise<void> }).checkAndHibernate();
+
+      // Without the late recheck this would have hibernated a now-visible project.
+      expect(hibernatedProjectIds()).not.toContain("truly-background-proj");
+    });
+
+    it("still hibernates a background project when one window's manager throws (#8607)", async () => {
+      (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
+      seedTwoIdleProjects(TWENTY_FIVE_HOURS);
+
+      const disposing = makePvm();
+      disposing.getActiveProjectId.mockImplementation(() => {
+        throw new Error("manager disposed");
+      });
+      const healthy = makePvm("second-window-proj");
+      const service = serviceWith([disposing, healthy]);
+
+      await (service as unknown as { checkAndHibernate(): Promise<void> }).checkAndHibernate();
+
+      // The throwing window doesn't abort collection: the healthy window's
+      // project is still protected, and the sweep still does its job.
+      expect(hibernatedProjectIds()).toEqual(["truly-background-proj"]);
+    });
+
+    it("falls back to the DB pointer when no provider is wired (early startup)", async () => {
+      (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
+      seedTwoIdleProjects(TWENTY_FIVE_HOURS);
+
+      const service = makeService(); // provider never injected
+
+      await (service as unknown as { checkAndHibernate(): Promise<void> }).checkAndHibernate();
+
+      // The pointer still protects the focused project; the rest are fair game.
+      expect(hibernatedProjectIds()).not.toContain("focused-proj");
+      expect(hibernatedProjectIds()).toContain("truly-background-proj");
     });
   });
 });

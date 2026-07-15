@@ -9,8 +9,8 @@
  * open/close/open cycles and that the moveBefore path and its appendChild
  * fallback both land the wrapper in the destination.
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, render } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { act, render, cleanup } from "@testing-library/react";
 import type { PtyPanelData } from "@shared/types/panel";
 
 const closeDockTerminalMock = vi.fn();
@@ -21,11 +21,15 @@ vi.mock("zustand/react/shallow", () => ({
   useShallow: <T,>(fn: T) => fn,
 }));
 
-vi.mock("@/store", () => ({
-  usePanelStore: (selector: (s: Record<string, unknown>) => unknown) => selector(mockState),
-  useWorktreeSelectionStore: (selector: (s: { activeWorktreeId: string | null }) => unknown) =>
-    selector({ activeWorktreeId: null }),
-}));
+vi.mock("@/store", () => {
+  const usePanelStore = (selector: (s: Record<string, unknown>) => unknown) => selector(mockState);
+  usePanelStore.getState = () => mockState;
+  return {
+    usePanelStore,
+    useWorktreeSelectionStore: (selector: (s: { activeWorktreeId: string | null }) => unknown) =>
+      selector({ activeWorktreeId: null }),
+  };
+});
 
 vi.mock("@/store/helpPanelStore", () => ({
   useHelpPanelStore: (selector: (s: { terminalId: string | null }) => unknown) =>
@@ -46,7 +50,11 @@ vi.mock("@/components/Terminal/DockedPanel", async () => {
           data-pid={terminal.id}
           data-has-listeners={dragHandle?.listeners ? "true" : "false"}
           data-has-activator={dragHandle?.setActivatorNodeRef ? "true" : "false"}
-        />
+        >
+          {/* Stands in for the pane's real input surface, so focus has somewhere
+              to live inside the wrapper when it is parked or revealed. */}
+          <input data-testid="pane-input" data-pid={terminal.id} />
+        </div>
       );
     },
   };
@@ -66,6 +74,7 @@ vi.mock("@/components/ui/DockPopoverChildContext", () => ({
 }));
 
 import { DockPanelOffscreenContainer } from "../DockPanelOffscreenContainer";
+import { registerPanelFocusHandler } from "@/components/Panel/panelFocusRegistry";
 import {
   useDockPanelPortal,
   useDockPanelDragHandleRegistration,
@@ -382,5 +391,137 @@ describe("DockPanelOffscreenContainer drag-handle bridge (#10990)", () => {
 
     const panel = document.querySelector('[data-testid="docked-panel"]')!;
     expect(panel.getAttribute("data-has-listeners")).toBe("true");
+  });
+});
+
+/**
+ * The parking container is aria-hidden with `content-visibility: hidden`.
+ * moveToDestination used to restore focus after EVERY move, including the move
+ * that parks a wrapper there — so a dock pane dismissed while holding the
+ * keyboard kept it, invisibly, and went on receiving every keystroke (#11133).
+ */
+describe("DockPanelOffscreenContainer focus handoff (#11133)", () => {
+  beforeEach(() => {
+    closeDockTerminalMock.mockClear();
+    setPanels([makePanel({ id: "panel-1" })]);
+  });
+
+  afterEach(cleanup);
+
+  /**
+   * Model Chromium's `moveBefore`, which carries DOM focus across the move —
+   * that is the whole reason the dock relocates wrappers with it. jsdom has no
+   * `moveBefore`, and its `appendChild` fallback drops focus on its own, so
+   * without this stub a test would pass on jsdom's blur rather than on the code
+   * under test.
+   */
+  function stubFocusPreservingMove(dest: HTMLElement) {
+    (dest as unknown as { moveBefore: (node: Node, ref: Node | null) => void }).moveBefore =
+      function (this: HTMLElement, node: Node) {
+        const active = document.activeElement;
+        this.appendChild(node);
+        if (active instanceof HTMLElement && active.isConnected) active.focus();
+      };
+  }
+
+  // Scope every lookup to this render — the wrappers are long-lived DOM nodes
+  // and a document-wide query can pick up a previous test's container.
+  function nodesOf(container: HTMLElement) {
+    return {
+      offscreen: container.querySelector<HTMLElement>(".dock-panel-offscreen-container")!,
+      wrapper: container.querySelector<HTMLElement>('[data-dock-panel-wrapper="panel-1"]')!,
+      input: container.querySelector<HTMLInputElement>('[data-testid="pane-input"]')!,
+    };
+  }
+
+  it("drops focus when parking a pane that holds it", () => {
+    const { container } = renderContainer();
+    const { offscreen, wrapper, input } = nodesOf(container);
+    stubFocusPreservingMove(offscreen);
+
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    act(() => captured!("panel-1", target));
+
+    act(() => input.focus());
+    expect(document.activeElement).toBe(input);
+
+    act(() => captured!("panel-1", null));
+
+    // The move itself would carry focus along, so the pane has to be blurred
+    // before it goes — otherwise the keyboard lives in a pane nobody can see.
+    expect(wrapper.contains(document.activeElement)).toBe(false);
+    target.remove();
+  });
+
+  it("drops focus even when the pane is already parked", () => {
+    // A parked wrapper can still hold focus (a focus restore that raced the
+    // move). The early return for "already at the destination" must not skip
+    // the blur — there is no move left to dislodge it.
+    const { container } = renderContainer();
+    const { wrapper, input } = nodesOf(container);
+
+    act(() => input.focus());
+    expect(document.activeElement).toBe(input);
+
+    act(() => captured!("panel-1", null));
+
+    expect(wrapper.contains(document.activeElement)).toBe(false);
+  });
+
+  it("asks a revealed pane to take focus when the store says it is focused", () => {
+    // The store sets `focusedId` before the wrapper has anywhere visible to
+    // live, so the pane's own focus effect ran against a parked, unfocusable
+    // subtree and came up empty. Reveal is the retry.
+    const { container } = renderContainer();
+    void container;
+    mockState.focusedId = "panel-1";
+
+    const handler = vi.fn(() => true);
+    const release = registerPanelFocusHandler("panel-1", handler);
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+
+    act(() => captured!("panel-1", target));
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    release();
+    target.remove();
+  });
+
+  it("does not disturb a revealed pane that already owns the keyboard", () => {
+    const { container } = renderContainer();
+    const { input } = nodesOf(container);
+    mockState.focusedId = "panel-1";
+
+    const handler = vi.fn(() => true);
+    const release = registerPanelFocusHandler("panel-1", handler);
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    act(() => input.focus());
+
+    act(() => captured!("panel-1", target));
+
+    expect(handler).not.toHaveBeenCalled();
+    release();
+    target.remove();
+  });
+
+  it("does not claim focus for a revealed pane the store is not focused on", () => {
+    // A pane can be relocated for reasons other than being focused — a tab
+    // switch inside a group parks one member and reveals another.
+    renderContainer();
+    mockState.focusedId = "grid-7";
+
+    const handler = vi.fn(() => true);
+    const release = registerPanelFocusHandler("panel-1", handler);
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+
+    act(() => captured!("panel-1", target));
+
+    expect(handler).not.toHaveBeenCalled();
+    release();
+    target.remove();
   });
 });

@@ -676,6 +676,47 @@ describe("FleetArmingRibbon", () => {
     dispatchSpy.mockRestore();
   });
 
+  // This listener is capture-phase, so without a modal guard it beat a focused
+  // dialog button to the Enter and confirmed a destructive fleet action instead
+  // of activating that button (issue #11106).
+  describe.each([
+    // Inside the dialog's own subtree — a webview dialog's Cancel button.
+    { name: "a modal dialog owns", portaled: false },
+    // Outside it — Radix menus and selects portal their content under <body>,
+    // so an ancestry check would miss this one.
+    { name: "portaled content of an open modal owns", portaled: true },
+  ])("ignores Enter that $name", ({ portaled }) => {
+    it("leaves the fleet action undispatched", async () => {
+      useFleetArmingStore.getState().armIds(["a", "b", "c"]);
+      useFleetPendingActionStore.setState({
+        pending: { kind: "kill", targetCount: 3, sessionLossCount: 0 },
+      });
+      const actionServiceModule = await import("@/services/ActionService");
+      const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
+      render(<FleetArmingRibbon />);
+
+      const modal = document.createElement("div");
+      modal.setAttribute("role", "dialog");
+      modal.setAttribute("aria-modal", "true");
+      document.body.appendChild(modal);
+
+      const target = document.createElement("button");
+      target.textContent = "Cancel";
+      (portaled ? document.body : modal).appendChild(target);
+
+      try {
+        target.focus();
+        fireEvent.keyDown(target, { key: "Enter" });
+
+        expect(dispatchSpy.mock.calls.find((c) => c[0] === "fleet.kill")).toBeUndefined();
+      } finally {
+        target.remove();
+        modal.remove();
+        dispatchSpy.mockRestore();
+      }
+    });
+  });
+
   describe("Selection menu", () => {
     function findMenuItem(label: RegExp | string): HTMLElement {
       const items = screen.getAllByRole("menuitem");

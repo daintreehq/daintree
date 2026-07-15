@@ -3,6 +3,8 @@ import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../..
 
 const errorStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
 const notificationHistoryMock = vi.hoisted(() => ({ getState: vi.fn() }));
+const logsClientMock = vi.hoisted(() => ({ clear: vi.fn() }));
+const logsStoreMock = vi.hoisted(() => ({ clearLogs: vi.fn() }));
 
 vi.mock("@/store/errorStore", () => ({
   useErrorStore: { getState: errorStoreMock.getState },
@@ -10,10 +12,13 @@ vi.mock("@/store/errorStore", () => ({
 vi.mock("@/store/slices/notificationHistorySlice", () => ({
   useNotificationHistoryStore: { getState: notificationHistoryMock.getState },
 }));
+vi.mock("@/store/logsStore", () => ({
+  useLogsStore: { getState: () => logsStoreMock },
+}));
 vi.mock("@/clients", () => ({
   errorsClient: { openLogs: vi.fn() },
   eventInspectorClient: {},
-  logsClient: {},
+  logsClient: logsClientMock,
   telemetryPreviewClient: {},
 }));
 
@@ -333,5 +338,28 @@ describe("notifications.recent", () => {
       limit: 1,
     });
     expect(result.notifications.map((e: any) => e.id)).toEqual(["n2"]);
+  });
+});
+
+describe("logs.clear", () => {
+  it("clears the renderer view only after the buffer clear succeeds", async () => {
+    logsClientMock.clear.mockResolvedValue(undefined);
+    const actions = setupActions();
+
+    await run(actions, "logs.clear");
+
+    expect(logsClientMock.clear).toHaveBeenCalledTimes(1);
+    expect(logsStoreMock.clearLogs).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the renderer view intact when the buffer clear fails", async () => {
+    // The confirm dialog tells the user a failed clear leaves their logs alone.
+    // Clearing the store before awaiting the IPC would make that copy a lie.
+    logsClientMock.clear.mockRejectedValue(new Error("buffer locked"));
+    const actions = setupActions();
+
+    await expect(run(actions, "logs.clear")).rejects.toThrow("buffer locked");
+
+    expect(logsStoreMock.clearLogs).not.toHaveBeenCalled();
   });
 });

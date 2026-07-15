@@ -271,6 +271,16 @@ export function initStoreOrchestrator(): () => void {
               if (lastFocused === removedId) {
                 worktreeState.clearWorktreeFocusTracking(removed.worktreeId);
               }
+              // Same hygiene for an inactive worktree's stashed maximize
+              // (#11183): the switch-boundary validator would reject a snapshot
+              // pointing at a dead panel anyway, but nothing else writes an
+              // inactive worktree's slot, so leaving it pins a dead panel id for
+              // the rest of the session.
+              if (
+                worktreeState.maximizeByWorktree.get(removed.worktreeId)?.maximizedId === removedId
+              ) {
+                worktreeState.clearWorktreeMaximizeTracking(removed.worktreeId);
+              }
             }
           }
         },
@@ -342,6 +352,19 @@ export function initStoreOrchestrator(): () => void {
           for (const id of trashed.keys()) {
             if (!prevTrashed.has(id)) {
               removeArtifactsForTerminal(id);
+              // Drop an inactive worktree's stashed maximize when its panel is
+              // trashed (#11183). `trashPanel` doesn't shrink `panelIds`, so the
+              // removal subscriber above never fires for this — the same
+              // constraint that put the artifact cleanup here. The panel is
+              // still in `panelsById` (flipped to "trash"), so it can still be
+              // asked which worktree it belonged to.
+              const worktreeId = usePanelStore.getState().panelsById[id]?.worktreeId;
+              if (worktreeId) {
+                const worktreeState = useWorktreeSelectionStore.getState();
+                if (worktreeState.maximizeByWorktree.get(worktreeId)?.maximizedId === id) {
+                  worktreeState.clearWorktreeMaximizeTracking(worktreeId);
+                }
+              }
             }
           }
         }

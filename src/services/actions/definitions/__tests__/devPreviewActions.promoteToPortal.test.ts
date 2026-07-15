@@ -204,10 +204,15 @@ describe("devPreview.promoteToPortal", () => {
     ).rejects.toThrow(/not a dev preview/);
   });
 
-  it("rolls back the tab when portal.create rejects", async () => {
+  // The rollback must not also swallow the error: resolving normally made
+  // dispatch() report {ok:true} on a failed promotion, leaving the caller with
+  // nothing to surface and the user with no feedback at all (#11114).
+  it("rolls back the tab and rethrows when portal.create rejects", async () => {
     createMock.mockRejectedValueOnce(new Error("ipc boom"));
     const { run } = setupActions();
-    await run("devPreview.promoteToPortal", undefined, { projectId: "proj" });
+    await expect(
+      run("devPreview.promoteToPortal", undefined, { projectId: "proj" })
+    ).rejects.toThrow(/ipc boom/);
     expect(closeTabMock).toHaveBeenCalledTimes(1);
     expect(markTabCreatedMock).not.toHaveBeenCalled();
     expect(portalStoreMock.setState).not.toHaveBeenCalled();

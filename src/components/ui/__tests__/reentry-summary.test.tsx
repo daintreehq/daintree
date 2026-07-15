@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
 import { render, screen, act, fireEvent } from "@testing-library/react";
 import { describe, expect, it, beforeEach, vi, afterEach } from "vitest";
-import { ReEntrySummary } from "../ReEntrySummary";
+import { ReEntrySummary, AUTO_DISMISS_MS } from "../ReEntrySummary";
+import {
+  UI_ENTER_DURATION,
+  UI_EXIT_DURATION,
+  UI_ENTER_EASING,
+  UI_EXIT_EASING,
+} from "@/lib/animationUtils";
 import type { ReEntrySummaryState, WorktreeRow } from "@/hooks/useReEntrySummary";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 
@@ -9,11 +15,9 @@ vi.mock("@/store/createWorktreeStore", () => ({
   getCurrentViewStoreOrNull: vi.fn(),
 }));
 
-vi.stubGlobal(
-  "requestAnimationFrame",
-  (cb: FrameRequestCallback) => setTimeout(() => cb(0), 0) as unknown as number
-);
-vi.stubGlobal("cancelAnimationFrame", (id: number) => clearTimeout(id));
+// No requestAnimationFrame stub: `vi.useFakeTimers()` fakes rAF itself, so any
+// stub here is dead — the fake clock's rAF is what actually runs, and it fires
+// on a 16ms frame (see FRAME_MS below).
 
 function makeEntry(overrides: Partial<NotificationHistoryEntry> = {}): NotificationHistoryEntry {
   return {
@@ -96,11 +100,24 @@ describe("ReEntrySummary", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    delete document.body.dataset.performanceMode;
   });
 
+  // The entrance is RAF-deferred, so the card mounts hidden and only reaches its
+  // visible state a frame later. `vi.useFakeTimers()` fakes requestAnimationFrame
+  // itself, and its rAF fires on a 16ms frame — so the clock has to advance a
+  // full frame, not 0ms.
+  const FRAME_MS = 16;
+  const flushEntry = () =>
+    act(() => {
+      vi.advanceTimersByTime(FRAME_MS);
+    });
+
   it("renders nothing when state.visible is false", () => {
-    const { container } = render(<ReEntrySummary state={makeState({ visible: false })} />);
-    expect(container.innerHTML).toBe("");
+    // The card portals into document.body, so assert against the screen — the
+    // RTL container is empty either way.
+    render(<ReEntrySummary state={makeState({ visible: false })} />);
+    expect(screen.queryByRole("status")).toBeNull();
   });
 
   it("renders worktree rows with severity icon, name, and title", () => {
@@ -236,7 +253,7 @@ describe("ReEntrySummary", () => {
     );
     expect(dismiss).not.toHaveBeenCalled();
     act(() => {
-      vi.advanceTimersByTime(8000);
+      vi.advanceTimersByTime(AUTO_DISMISS_MS);
     });
     expect(dismiss).toHaveBeenCalledOnce();
   });
@@ -255,13 +272,13 @@ describe("ReEntrySummary", () => {
 
     fireEvent.mouseEnter(card);
     act(() => {
-      vi.advanceTimersByTime(10000);
+      vi.advanceTimersByTime(AUTO_DISMISS_MS + 2000);
     });
     expect(dismiss).not.toHaveBeenCalled();
 
     fireEvent.mouseLeave(card);
     act(() => {
-      vi.advanceTimersByTime(8000);
+      vi.advanceTimersByTime(AUTO_DISMISS_MS);
     });
     expect(dismiss).toHaveBeenCalledOnce();
   });
@@ -308,7 +325,7 @@ describe("ReEntrySummary", () => {
     expect(pinButton.getAttribute("aria-pressed")).toBe("false");
 
     act(() => {
-      vi.advanceTimersByTime(8000);
+      vi.advanceTimersByTime(AUTO_DISMISS_MS);
     });
     expect(dismiss).toHaveBeenCalledOnce();
   });
@@ -393,5 +410,259 @@ describe("ReEntrySummary", () => {
     );
     const card = screen.getByRole("status");
     expect(document.activeElement).not.toBe(card);
+  });
+
+  describe("exit animation (#11163)", () => {
+    // `useReEntrySummary` returns EMPTY content the instant `visible` flips
+    // false, so a dismissed card arrives here with no rows at all. These tests
+    // drive the real `useAnimatedPresence` rather than mocking it — the whole
+    // point of the fix is how long the card stays mounted.
+    const dismissedState = (dismiss: () => void) =>
+      makeState({ visible: false, dismiss, rows: [], overflowCount: 0 });
+
+    it("keeps the card mounted for the exit window, then unmounts it", () => {
+      const dismiss = vi.fn();
+      const { rerender } = render(
+        <ReEntrySummary state={makeState({ dismiss, rows: [makeRow()] })} />
+      );
+      flushEntry();
+      expect(screen.getByRole("status")).toBeTruthy();
+
+      rerender(<ReEntrySummary state={dismissedState(dismiss)} />);
+      expect(screen.getByRole("status")).toBeTruthy();
+
+      act(() => {
+        vi.advanceTimersByTime(UI_EXIT_DURATION - 1);
+      });
+      expect(screen.queryByRole("status")).toBeTruthy();
+
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(screen.queryByRole("status")).toBeNull();
+    });
+
+    it("keeps rendering the dismissed summary's rows while it slides out", () => {
+      const dismiss = vi.fn();
+      const { rerender } = render(
+        <ReEntrySummary
+          state={makeState({
+            dismiss,
+            rows: [makeRow({ worktreeName: "feature-foo", highlightTitle: "Build failed" })],
+            overflowCount: 2,
+          })}
+        />
+      );
+      flushEntry();
+
+      rerender(<ReEntrySummary state={dismissedState(dismiss)} />);
+
+      expect(screen.getByText("feature-foo")).toBeTruthy();
+      expect(screen.getByText("Build failed")).toBeTruthy();
+      expect(screen.getByText("+2 more")).toBeTruthy();
+    });
+
+    it("makes the exiting card inert rather than aria-hidden", () => {
+      const dismiss = vi.fn();
+      const { rerender } = render(
+        <ReEntrySummary state={makeState({ dismiss, rows: [makeRow()] })} />
+      );
+      flushEntry();
+      expect(screen.getByRole("status").hasAttribute("inert")).toBe(false);
+
+      rerender(<ReEntrySummary state={dismissedState(dismiss)} />);
+
+      const card = screen.getByRole("status");
+      // `inert` blocks pointer AND keyboard activation on the fading card and
+      // blurs the focused dismiss button. aria-hidden would do neither, and
+      // Chromium blocks it over a focused element.
+      expect(card.hasAttribute("inert")).toBe(true);
+      expect(card.getAttribute("aria-hidden")).toBeNull();
+    });
+
+    it("clears a stuck hover pause when the card is dismissed while hovered", () => {
+      // onMouseLeave never fires for a node pulled out from under the pointer,
+      // and this component never unmounts — so a leaked `isPaused` would
+      // disable auto-dismiss for every later summary.
+      const dismiss = vi.fn();
+      const { rerender } = render(
+        <ReEntrySummary
+          state={makeState({
+            dismiss,
+            entries: [makeEntry({ id: "a" })],
+            rows: [makeRow({ worktreeId: "wt-1" })],
+          })}
+        />
+      );
+      flushEntry();
+
+      fireEvent.mouseEnter(screen.getByRole("status"));
+      rerender(<ReEntrySummary state={dismissedState(dismiss)} />);
+      act(() => {
+        vi.advanceTimersByTime(UI_EXIT_DURATION);
+      });
+      expect(screen.queryByRole("status")).toBeNull();
+
+      rerender(
+        <ReEntrySummary
+          state={makeState({
+            dismiss,
+            entries: [makeEntry({ id: "b" })],
+            rows: [makeRow({ worktreeId: "wt-2" })],
+          })}
+        />
+      );
+      flushEntry();
+      dismiss.mockClear();
+
+      act(() => {
+        vi.advanceTimersByTime(AUTO_DISMISS_MS);
+      });
+      expect(dismiss).toHaveBeenCalledOnce();
+    });
+
+    it("restarts the auto-dismiss timer for a replacement summary on the same worktrees", () => {
+      // Same worktree ids and same entry count as the outgoing summary: keyed on
+      // either of those alone, the replacement would inherit the old, nearly
+      // expired timer and be dismissed almost immediately.
+      const dismiss = vi.fn();
+      const { rerender } = render(
+        <ReEntrySummary
+          state={makeState({
+            dismiss,
+            entries: [makeEntry({ id: "a" })],
+            rows: [makeRow({ worktreeId: "wt-1", highlightTitle: "First" })],
+          })}
+        />
+      );
+      flushEntry();
+
+      act(() => {
+        vi.advanceTimersByTime(AUTO_DISMISS_MS - 500);
+      });
+      expect(dismiss).not.toHaveBeenCalled();
+
+      rerender(
+        <ReEntrySummary
+          state={makeState({
+            dismiss,
+            entries: [makeEntry({ id: "b" })],
+            rows: [makeRow({ worktreeId: "wt-1", highlightTitle: "Second" })],
+          })}
+        />
+      );
+
+      // The old timer would have fired here; the replacement gets a full window.
+      act(() => {
+        vi.advanceTimersByTime(600);
+      });
+      expect(dismiss).not.toHaveBeenCalled();
+
+      act(() => {
+        vi.advanceTimersByTime(AUTO_DISMISS_MS);
+      });
+      expect(dismiss).toHaveBeenCalledOnce();
+    });
+
+    it("resets the pin for a replacement summary on the same worktrees", () => {
+      // The pin half of the same collision: a replacement summary must not
+      // silently inherit the outgoing summary's pin.
+      const dismiss = vi.fn();
+      const { rerender } = render(
+        <ReEntrySummary
+          state={makeState({
+            dismiss,
+            entries: [makeEntry({ id: "a" })],
+            rows: [makeRow({ worktreeId: "wt-1" })],
+          })}
+        />
+      );
+      flushEntry();
+
+      fireEvent.click(screen.getByLabelText("Pin summary"));
+      expect(screen.getByLabelText("Unpin summary").getAttribute("aria-pressed")).toBe("true");
+
+      rerender(
+        <ReEntrySummary
+          state={makeState({
+            dismiss,
+            entries: [makeEntry({ id: "b" })],
+            rows: [makeRow({ worktreeId: "wt-1" })],
+          })}
+        />
+      );
+
+      expect(screen.getByLabelText("Pin summary").getAttribute("aria-pressed")).toBe("false");
+    });
+
+    it("cancels the pending exit and swaps in new content when a summary arrives mid-exit", () => {
+      const dismiss = vi.fn();
+      const { rerender } = render(
+        <ReEntrySummary
+          state={makeState({
+            dismiss,
+            rows: [makeRow({ worktreeId: "wt-1", worktreeName: "first-wt" })],
+          })}
+        />
+      );
+      flushEntry();
+
+      rerender(<ReEntrySummary state={dismissedState(dismiss)} />);
+      act(() => {
+        vi.advanceTimersByTime(Math.floor(UI_EXIT_DURATION / 2));
+      });
+      expect(screen.getByText("first-wt")).toBeTruthy();
+
+      rerender(
+        <ReEntrySummary
+          state={makeState({
+            visible: true,
+            dismiss,
+            rows: [makeRow({ worktreeId: "wt-2", worktreeName: "second-wt" })],
+          })}
+        />
+      );
+      flushEntry();
+
+      expect(screen.getByText("second-wt")).toBeTruthy();
+      expect(screen.queryByText("first-wt")).toBeNull();
+
+      // The superseded close timer must not fire and tear down the new card.
+      act(() => {
+        vi.advanceTimersByTime(UI_EXIT_DURATION);
+      });
+      expect(screen.getByText("second-wt")).toBeTruthy();
+    });
+
+    it("switches from the enter tier to the exit tier on dismiss", () => {
+      const dismiss = vi.fn();
+      const { rerender } = render(
+        <ReEntrySummary state={makeState({ dismiss, rows: [makeRow()] })} />
+      );
+      flushEntry();
+
+      const card = screen.getByRole("status");
+      expect(card.style.transitionDuration).toBe(`${UI_ENTER_DURATION}ms`);
+      expect(card.style.transitionTimingFunction).toBe(UI_ENTER_EASING);
+
+      rerender(<ReEntrySummary state={dismissedState(dismiss)} />);
+
+      expect(card.style.transitionDuration).toBe(`${UI_EXIT_DURATION}ms`);
+      expect(card.style.transitionTimingFunction).toBe(UI_EXIT_EASING);
+    });
+
+    it("unmounts without an exit delay in performance mode", () => {
+      document.body.dataset.performanceMode = "true";
+      const dismiss = vi.fn();
+      const { rerender } = render(
+        <ReEntrySummary state={makeState({ dismiss, rows: [makeRow()] })} />
+      );
+      flushEntry();
+      expect(screen.getByRole("status")).toBeTruthy();
+
+      rerender(<ReEntrySummary state={dismissedState(dismiss)} />);
+
+      expect(screen.queryByRole("status")).toBeNull();
+    });
   });
 });

@@ -5,10 +5,18 @@ import { cn } from "@/lib/utils";
 import { useUIStore } from "@/store/uiStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
+import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
+import {
+  UI_ENTER_DURATION,
+  UI_EXIT_DURATION,
+  UI_ENTER_EASING,
+  UI_EXIT_EASING,
+  getUiTransitionDuration,
+} from "@/lib/animationUtils";
 import type { ReEntrySummaryState } from "@/hooks/useReEntrySummary";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 
-const AUTO_DISMISS_MS = 8000;
+export const AUTO_DISMISS_MS = 8000;
 
 const SEVERITY_ICON: Record<NotificationHistoryEntry["type"], typeof AlertCircle> = {
   error: AlertCircle,
@@ -26,32 +34,54 @@ const SEVERITY_CLASS: Record<NotificationHistoryEntry["type"], string> = {
 
 export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
   const { visible, dismiss, entries, rows, overflowCount } = state;
-  const [isVisible, setIsVisible] = useState(false);
+  const { isVisible, shouldRender } = useAnimatedPresence({
+    isOpen: visible,
+    animationDuration: getUiTransitionDuration("exit"),
+  });
   const [isPaused, setIsPaused] = useState(false);
   const [isPinned, setIsPinned] = useState(false);
-  const entryCount = entries.length;
+
+  // Identity of the summary being shown. Entry ids are unique and a dismissed
+  // batch is never re-summarized, so this changes exactly when a new summary
+  // arrives — unlike the entry count or the worktree-id list, which collide
+  // when the same worktrees report again and would leave a replacement summary
+  // inheriting the previous one's pin and its already-half-elapsed timer.
+  const entriesKey = entries.map((e) => e.id).join(",");
 
   useEffect(() => {
-    if (!visible) {
-      setIsVisible(false);
-      return;
-    }
-    setIsPinned(false);
-    const handle = requestAnimationFrame(() => setIsVisible(true));
-    return () => cancelAnimationFrame(handle);
-  }, [visible, entryCount]);
+    if (visible) setIsPinned(false);
+  }, [visible, entriesKey]);
 
-  const rowsKey = rows.map((r) => r.worktreeId).join(",");
+  // Hover pause is transient: clear it once the card is gone. onMouseLeave does
+  // not fire for a node removed out from under the pointer (dismissing while
+  // hovering), and this component instance never unmounts — it just renders
+  // null — so a stuck `isPaused` would silently disable auto-dismiss for every
+  // later summary.
+  useEffect(() => {
+    if (!shouldRender) setIsPaused(false);
+  }, [shouldRender]);
 
   useEffect(() => {
     if (!visible || isPaused || isPinned) return;
     const timer = setTimeout(dismiss, AUTO_DISMISS_MS);
     return () => clearTimeout(timer);
-  }, [visible, dismiss, isPaused, isPinned, rowsKey]);
+  }, [visible, dismiss, isPaused, isPinned, entriesKey]);
 
-  if (!state.visible) return null;
+  // Latch the last visible content so the card keeps rendering the rows it had
+  // while it slides out. `useReEntrySummary` returns EMPTY the instant `visible`
+  // flips false, so without this the exit would animate a blank card — the same
+  // bug ScrollIndicator solves for its count (#10316). State adjusted during
+  // render, not a ref: React discards an abandoned concurrent render's state
+  // update, so stale rows can't leak in.
+  const [content, setContent] = useState({ rows, overflowCount });
+  if (visible && (content.rows !== rows || content.overflowCount !== overflowCount)) {
+    setContent({ rows, overflowCount });
+  }
 
-  const hasUrgent = rows.some((r) => r.worstType === "error" || r.worstType === "warning");
+  if (!shouldRender) return null;
+
+  const { rows: displayRows, overflowCount: displayOverflowCount } = content;
+  const hasUrgent = displayRows.some((r) => r.worstType === "error" || r.worstType === "warning");
   const accentClass = hasUrgent ? "border-l-status-warning" : "border-l-status-success";
 
   const handleOpenNotifications = () => {
@@ -73,7 +103,7 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
     >
       <div
         className={cn(
-          "pointer-events-auto relative flex flex-col w-full max-w-[360px]",
+          "relative flex flex-col w-full max-w-[360px]",
           "rounded-[var(--radius-sm)] border-l-[3px] border border-tint/[0.08]",
           "bg-surface-panel/85 backdrop-blur-xl",
           "px-3 py-2.5 pr-2",
@@ -82,12 +112,26 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
           "ring-1 ring-inset ring-tint/[0.05]",
           // Tailwind v4 translate-* emits the individual `translate` property,
           // which `transform` in a transition list does NOT cover — list it
-          // explicitly or the slide-in snaps and only the fade animates.
-          "transition-[translate,opacity] duration-300 ease-out",
+          // explicitly or the slide snaps and only the fade animates.
+          "transition-[translate,opacity]",
           "motion-reduce:transition-none motion-reduce:duration-0",
-          isVisible ? "translate-x-0 opacity-100" : "translate-x-8 opacity-0",
+          isVisible
+            ? "pointer-events-auto translate-x-0 opacity-100"
+            : "pointer-events-none translate-x-8 opacity-0",
           accentClass
         )}
+        style={{
+          transitionDuration: isVisible ? `${UI_ENTER_DURATION}ms` : `${UI_EXIT_DURATION}ms`,
+          transitionTimingFunction: isVisible ? UI_ENTER_EASING : UI_EXIT_EASING,
+        }}
+        // Real inertness while sliding out: pointer-events alone still lets a
+        // Tab/Enter land on the fading card's buttons. `inert` also blurs the
+        // focused dismiss button for us — aria-hidden would not, and Chromium
+        // blocks aria-hidden over a focused element. Keyed on the incoming
+        // `visible`, not `isVisible`: the latter is also false for the hidden
+        // entry frame, and inert there would drop this role="status" live
+        // region out of the a11y tree exactly as it's inserted.
+        inert={!visible}
         role="status"
         onMouseEnter={() => setIsPaused(true)}
         onMouseLeave={() => setIsPaused(false)}
@@ -131,7 +175,7 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
         </div>
 
         <ul className="mt-1.5 space-y-0.5">
-          {rows.map((row) => {
+          {displayRows.map((row) => {
             const Icon = SEVERITY_ICON[row.worstType];
             return (
               <li key={row.worktreeId}>
@@ -157,7 +201,7 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
               </li>
             );
           })}
-          {overflowCount > 0 && (
+          {displayOverflowCount > 0 && (
             <li>
               <button
                 type="button"
@@ -167,7 +211,7 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
                   "px-0.5 py-0.5 transition-colors duration-150"
                 )}
               >
-                +{overflowCount} more
+                +{displayOverflowCount} more
               </button>
             </li>
           )}

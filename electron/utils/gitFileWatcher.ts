@@ -23,6 +23,9 @@ const MACOS_EMFILE_LIMIT_HELP =
  * .git is included for both the bare worktree pointer file and
  * all child paths, replacing the old JS-side prefix check.
  */
+/** Name of the git config file inside the common dir. */
+const GIT_CONFIG_FILE_NAME = "config";
+
 const WORKTREE_IGNORE_GLOBS = [
   "**/node_modules/**",
   "**/dist/**",
@@ -53,6 +56,14 @@ export interface GitFileWatcherOptions {
   branch?: string;
   debounceMs: number;
   onChange: () => void;
+  /**
+   * Fired alongside `onChange` when the flushed burst included a write to
+   * `.git/config` — the file `git remote add` / `set-url` / `remove` edits.
+   * Separate from `onChange` because re-reading the repo's remotes costs a git
+   * subprocess: gating it on the specific file keeps the cost at one spawn per
+   * config write instead of one per status pass (#9997).
+   */
+  onGitConfigChanged?: () => void;
   /** Watch the working tree recursively for file edits (macOS FSEvents). */
   watchWorktree?: boolean;
   /** Minimum debounce delay for worktree events — first event in a burst fires at this delay. */
@@ -102,6 +113,11 @@ export class GitFileWatcher {
   /** Per-event ramp applied inside the min..max range. Private tuning constant. */
   private readonly worktreeDebounceRampMs = 10;
   private readonly onChange: () => void;
+  private readonly onGitConfigChanged: (() => void) | undefined;
+  /** Set when the current (unflushed) burst touched `.git/config`. */
+  private gitConfigChangePending = false;
+  /** Directory holding `.git/config` — always the common dir. */
+  private gitConfigDir: string | null = null;
   private readonly onWatcherFailed: (() => void) | undefined;
   private readonly onInotifyLimitReached: (() => void) | undefined;
   private readonly onEmfileLimitReached: (() => void) | undefined;
@@ -117,6 +133,7 @@ export class GitFileWatcher {
     this.worktreeLeadingDebounceMs = options.worktreeLeadingDebounceMs;
     this.worktreeQuietWindowMs = options.worktreeQuietWindowMs ?? 2_000;
     this.onChange = options.onChange;
+    this.onGitConfigChanged = options.onGitConfigChanged;
     this.onWatcherFailed = options.onWatcherFailed;
     this.onInotifyLimitReached = options.onInotifyLimitReached;
     this.onEmfileLimitReached = options.onEmfileLimitReached;
@@ -149,7 +166,10 @@ export class GitFileWatcher {
       // Watch .git/config so `git push -u` / `git branch --set-upstream-to`
       // triggers a poll deterministically — without this the new tracking
       // info from `git status` only surfaces on the next timed poll.
-      this.watchFile(pathJoin(commonDir, "config"));
+      // Also the file `git remote add` writes, which is what drives
+      // onGitConfigChanged (#11155).
+      this.gitConfigDir = commonDir;
+      this.watchFile(pathJoin(commonDir, GIT_CONFIG_FILE_NAME));
 
       // For linked worktrees, the per-worktree reflog lives under gitDir, not commonDir.
       // Watch it so branch changes in linked worktrees trigger the onChange callback.
@@ -176,6 +196,17 @@ export class GitFileWatcher {
       // matchesTrackedFile() already covers the index.lock → index rename
       // pattern git uses for atomic index writes.
       this.watchFile(pathJoin(gitDir, "index"));
+
+      // Watch loose remote-tracking refs under refs/remotes/origin so an
+      // external `git fetch` — from a terminal, or any tool outside Daintree's
+      // own fetch scheduler — that advances origin/<branch> triggers a status
+      // pass. The behind-count then updates, driving the forge-count recheck
+      // (#11151). Non-recursive on purpose: the default branch's ref (e.g.
+      // refs/remotes/origin/main) sits at the top level here, and recursive
+      // fs.watch is unreliable and inotify-limit-prone on Linux. packed-refs
+      // (watched above) covers the post-`git gc` packed case; nested
+      // feature-branch remote refs don't affect the repo-level toolbar counts.
+      this.watchRemoteRefsDir(pathJoin(commonDir, "refs", "remotes", "origin"));
 
       if (this.watchWorktree) {
         // Fire-and-forget: subscribe() schedules the native watcher
@@ -216,6 +247,7 @@ export class GitFileWatcher {
       this.worktreeMaxWaitTimer = null;
     }
     this.worktreeBurstCount = 0;
+    this.gitConfigChangePending = false;
 
     for (const watcher of this.watchers) {
       try {
@@ -322,6 +354,35 @@ export class GitFileWatcher {
     }
   }
 
+  /**
+   * Watch a git-internal directory for *any* change and route it through the
+   * fast debounce. Used for refs/remotes/origin, where the relevant events are
+   * loose-ref writes (and their `.lock` churn) from a fetch rather than a fixed
+   * set of tracked filenames — so unlike `watchFile`, every event in the
+   * directory is a conservative "refs may have moved" signal.
+   */
+  private watchRemoteRefsDir(dirPath: string): void {
+    try {
+      const watcher = fsWatch(dirPath, { persistent: false }, () => {
+        this.handleGitFileChange();
+      });
+
+      watcher.on("error", (error) => {
+        logWarn("Git remote-refs watcher error", {
+          path: dirPath,
+          error: error.message,
+        });
+      });
+
+      this.watchers.push(watcher);
+    } catch {
+      // The directory may not exist yet (no fetch has written loose remote
+      // refs, or they are all packed). Silent fallback: packed-refs watching,
+      // Daintree's own fetch-triggered status refresh, and the timed poll
+      // still cover origin movement.
+    }
+  }
+
   private watchFile(filePath: string): void {
     const watchDir = dirname(filePath);
     const fileName = basename(filePath);
@@ -336,6 +397,9 @@ export class GitFileWatcher {
       const trackedFiles = new Set<string>([fileName]);
       const watcher = fsWatch(watchDir, { persistent: false }, (_eventType, changedFileName) => {
         if (this.shouldHandleDirectoryEvent(changedFileName, trackedFiles)) {
+          if (this.isGitConfigEvent(watchDir, changedFileName)) {
+            this.gitConfigChangePending = true;
+          }
           this.handleGitFileChange();
         }
       });
@@ -372,6 +436,24 @@ export class GitFileWatcher {
     return false;
   }
 
+  /**
+   * Whether a directory event names `.git/config` (or its `.lock` twin — git
+   * writes the file lock-then-rename, so both land in the burst). Only the
+   * common dir holds the config, so events from the per-worktree gitDir are
+   * never config writes even when a same-named file appears there.
+   */
+  private isGitConfigEvent(watchDir: string, changedFileName: string | Buffer | null): boolean {
+    if (this.gitConfigDir === null) return false;
+    if (pathNormalize(watchDir) !== pathNormalize(this.gitConfigDir)) return false;
+    // A null filename means the platform couldn't say what changed. Treat it as
+    // possibly-config: the probe it triggers re-reads the remotes and emits
+    // nothing when they're unchanged, so a false positive costs one git spawn,
+    // while a false negative would silently strand the toolbar pills.
+    if (!changedFileName) return true;
+    const changedName = changedFileName.toString().replaceAll("\\", "/");
+    return this.matchesTrackedFile(changedName, GIT_CONFIG_FILE_NAME);
+  }
+
   private matchesTrackedFile(changedName: string, trackedFile: string): boolean {
     if (changedName === trackedFile || changedName === `${trackedFile}.lock`) {
       return true;
@@ -396,8 +478,14 @@ export class GitFileWatcher {
 
     this.debounceTimer = setTimeout(() => {
       this.debounceTimer = null;
-      if (!this.disposed) {
-        this.onChange();
+      if (this.disposed) return;
+      // Read and clear before the callbacks: a config write landing while they
+      // run belongs to the next burst, not this one.
+      const configChanged = this.gitConfigChangePending;
+      this.gitConfigChangePending = false;
+      this.onChange();
+      if (configChanged) {
+        this.onGitConfigChanged?.();
       }
     }, this.debounceMs);
   }

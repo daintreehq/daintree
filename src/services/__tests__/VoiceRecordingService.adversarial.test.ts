@@ -114,7 +114,7 @@ const runtime = vi.hoisted(() => ({
   terminalInputFns: {
     getDraftInput: vi.fn<(panelId: string, projectId?: string) => string>(),
     setDraftInput: vi.fn<(panelId: string, value: string, projectId?: string) => void>(),
-    bumpVoiceDraftRevision: vi.fn<() => void>(),
+    bumpExternalDraftRevision: vi.fn<() => void>(),
   },
   statusListeners: new Set<VoiceStatusCallback>(),
   errorListeners: new Set<VoiceErrorCallback>(),
@@ -150,7 +150,7 @@ const runtime = vi.hoisted(() => ({
     >(),
     checkMicPermission: vi.fn<() => Promise<string>>(),
     requestMicPermission: vi.fn<() => Promise<boolean>>(),
-    openMicSettings: vi.fn(),
+    openMicSettings: vi.fn<() => Promise<void>>(),
     sendAudioChunk: vi.fn<(chunk: ArrayBuffer) => void>(),
     start: vi.fn<() => Promise<{ ok: boolean; error?: string }>>(),
     stop: vi.fn<() => Promise<void>>(),
@@ -253,7 +253,7 @@ function resetRuntime(): void {
   runtime.terminalInputFns.setDraftInput.mockImplementation((panelId, value) => {
     runtime.drafts[panelId] = value;
   });
-  runtime.terminalInputFns.bumpVoiceDraftRevision.mockImplementation(() => undefined);
+  runtime.terminalInputFns.bumpExternalDraftRevision.mockImplementation(() => undefined);
 
   runtime.voiceInput.getSettings.mockResolvedValue({
     enabled: true,
@@ -268,6 +268,9 @@ function resetRuntime(): void {
     const next = runtime.requestMicPermissionQueue.shift();
     return next instanceof Promise ? next : (next ?? true);
   });
+  // The real IPC method resolves a promise; the caller hands it to
+  // safeFireAndForget, which would throw on a bare undefined.
+  runtime.voiceInput.openMicSettings.mockImplementation(async () => {});
   runtime.voiceInput.start.mockImplementation(async () => {
     const next = runtime.startQueue.shift();
     if (next instanceof Promise) {
@@ -557,6 +560,79 @@ describe("VoiceRecordingService adversarial", () => {
     expect(runtime.voiceFns.beginSession).not.toHaveBeenCalled();
     expect(runtime.voiceInput.start).not.toHaveBeenCalled();
     expect(runtime.createdWorkletNodes).toHaveLength(0);
+  });
+
+  it("NOT_DETERMINED_PREFLIGHT_REACHES_GET_USER_MEDIA", async () => {
+    // Windows reports not-determined and has no native request API, so the
+    // preflight only clears the way — getUserMedia is the real gate and must be
+    // reached. Regression for the dead-end where a non-grant aborted start().
+    runtime.micPermissionQueue.push("not-determined");
+    runtime.requestMicPermissionQueue.push(true);
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Panel One" });
+
+    expect(runtime.createdStreams).toHaveLength(1);
+    expect(runtime.voiceFns.beginSession).toHaveBeenCalledTimes(1);
+    expect(runtime.voiceInput.start).toHaveBeenCalledTimes(1);
+  });
+
+  it("NATIVE_PREFLIGHT_DENIAL_SKIPS_CAPTURE", async () => {
+    // macOS is the one platform that can deny authoritatively; that false must
+    // still abort before we ever open the mic.
+    runtime.micPermissionQueue.push("not-determined");
+    runtime.requestMicPermissionQueue.push(false);
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Panel One" });
+
+    expect(runtime.createdStreams).toHaveLength(0);
+    expect(runtime.voiceFns.beginSession).not.toHaveBeenCalled();
+    expect(runtime.voiceFns.setLastError).toHaveBeenCalledWith(
+      expect.objectContaining({ code: "mic_permission_denied", severity: "fatal" })
+    );
+  });
+
+  it("CAPTURE_DENIAL_IS_FATAL_BUT_RETRYABLE", async () => {
+    // A denial at the getUserMedia gate must report as a permission denial and
+    // leave no cached refusal behind — the next start has to try capture again.
+    const denial = Promise.reject(new DOMException("Permission denied", "NotAllowedError"));
+    denial.catch(() => {}); // Mark handled; the mock still rejects on await.
+    const retryStream = createStream();
+    runtime.micPermissionQueue.push("not-determined", "not-determined");
+    runtime.requestMicPermissionQueue.push(true, true);
+    runtime.getUserMediaQueue.push(denial as unknown as MockStream, retryStream);
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const target: VoiceRecordingTarget = { panelId: "panel-1", panelTitle: "Panel One" };
+
+    await voiceRecordingService.start(target);
+    expect(runtime.voiceFns.setLastError).toHaveBeenCalledWith(
+      expect.objectContaining({ code: "mic_permission_denied", severity: "fatal" })
+    );
+    expect(runtime.voiceFns.beginSession).not.toHaveBeenCalled();
+
+    await voiceRecordingService.start(target);
+    expect(runtime.voiceFns.beginSession).toHaveBeenCalledTimes(1);
+    expect(runtime.voiceInput.start).toHaveBeenCalledTimes(1);
+  });
+
+  it("OS_LEVEL_DENIAL_NEVER_REACHES_THE_PREFLIGHT", async () => {
+    // A status of denied/restricted is already authoritative on every platform,
+    // so it must short-circuit ahead of both the preflight and capture.
+    for (const status of ["denied", "restricted"]) {
+      resetRuntime();
+      setupGlobals();
+      runtime.micPermissionQueue.push(status);
+
+      vi.resetModules();
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Panel One" });
+
+      expect(runtime.voiceInput.requestMicPermission).not.toHaveBeenCalled();
+      expect(runtime.createdStreams).toHaveLength(0);
+      expect(runtime.voiceInput.openMicSettings).toHaveBeenCalledTimes(1);
+    }
   });
 
   it("HUGE_AUDIO_BUFFER_BATCHES_LEVEL_PER_FRAME", async () => {

@@ -297,7 +297,7 @@ export function WorktreeSettingsTab() {
               className={cn(
                 "px-4 py-1.5 text-sm font-medium rounded-[var(--radius-md)] transition-colors",
                 hasChanges && validation.valid
-                  ? "bg-daintree-accent text-text-inverse hover:bg-daintree-accent/90"
+                  ? "bg-daintree-accent text-accent-primary-foreground hover:bg-daintree-accent/90"
                   : "bg-daintree-border text-daintree-text/50 cursor-not-allowed"
               )}
             >

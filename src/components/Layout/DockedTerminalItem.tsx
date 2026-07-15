@@ -147,7 +147,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
     onDragStart: ({ active }) => {
       if (active.id === terminal.id) {
         dismissTips();
-        if (isOpen) closeDockTerminal();
+        if (isOpen) closeDockTerminal(terminal.id);
       }
     },
   });
@@ -174,7 +174,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
       } else {
         // Focus-driven dismissals are blocked upstream by onFocusOutside, so a
         // close here is a genuine pointer-outside or Escape and is honored.
-        closeDockTerminal();
+        closeDockTerminal(terminal.id);
       }
     },
     [terminal.id, openDockTerminal, closeDockTerminal]
@@ -185,7 +185,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   // (the store wrapper clears activeDockTerminalId — see #4997).
   const handleMoveToGrid = useCallback(() => {
     const moved = moveTerminalToGrid(terminal.id);
-    if (moved) closeDockTerminal();
+    if (moved) closeDockTerminal(terminal.id);
   }, [terminal.id, moveTerminalToGrid, closeDockTerminal]);
 
   const presetCustomPresets = useAgentSettingsStore((s) =>
@@ -354,7 +354,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                   dismissTips();
                   if (e.detail >= 2) return;
                   if (isOpen) {
-                    closeDockTerminal();
+                    closeDockTerminal(terminal.id);
                   } else {
                     openDockTerminal(terminal.id);
                   }

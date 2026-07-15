@@ -153,6 +153,13 @@ vi.mock("../../services/HibernationService.js", () => ({
   getHibernationService: () => ({ stop: vi.fn(), hibernateUnderMemoryPressure: vi.fn() }),
 }));
 
+const initIdleTerminalNotificationMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../services/IdleTerminalNotificationService.js", () => ({
+  initializeIdleTerminalNotificationService: initIdleTerminalNotificationMock,
+  getIdleTerminalNotificationService: vi.fn(),
+}));
+
 vi.mock("../../services/pty/terminalSessionPersistence.js", () => ({
   evictSessionFiles: vi.fn(async () => ({ deleted: 0, bytesFreed: 0 })),
   SESSION_EVICTION_TTL_MS: 0,
@@ -279,12 +286,17 @@ vi.mock("electron", () => ({
   app: { exit: vi.fn(), getPath: vi.fn((name: string) => `/tmp/${name}`) },
   dialog: { showErrorBox: vi.fn() },
   session: { defaultSession: { clearCache: vi.fn(), clearStorageData: vi.fn() } },
+  // The update-state pull is registered eagerly here (not from its deferred
+  // task), so init touches ipcMain directly.
+  ipcMain: { handle: vi.fn() },
 }));
 
 import { initGlobalServices } from "../globalServicesInit.js";
 import { getGlobalServicesInitialized, setGlobalServicesInitialized } from "../serviceRefs.js";
 import type { WindowRegistry } from "../WindowRegistry.js";
-import { app } from "electron";
+import { app, ipcMain } from "electron";
+import type { Mock } from "vitest";
+import { CHANNELS } from "../../ipc/channels.js";
 import { store } from "../../store.js";
 
 describe("initGlobalServices task ordering", () => {
@@ -319,6 +331,26 @@ describe("initGlobalServices task ordering", () => {
 
   afterEach(() => {
     setGlobalServicesInitialized(false);
+  });
+
+  // The deferred queue drains on the renderer's own first-interactive signal, so
+  // `useUpdateListener` mounts and pulls BEFORE the auto-updater task runs. A
+  // handler registered from that task would reject the very call it exists to
+  // answer (issue #11111), so this one is registered eagerly and reads the
+  // service through its ref.
+  it("answers the update-state pull before the auto-updater task has run", async () => {
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+
+    const registration = (ipcMain.handle as unknown as Mock).mock.calls.find(
+      ([channel]) => channel === CHANNELS.UPDATE_GET_LATEST
+    );
+    expect(registration).toBeDefined();
+
+    // Deferred tasks are captured, not run — so the service ref is still unset,
+    // which is the honest answer: no check has run, nothing is pending.
+    const handler = registration![1] as () => unknown;
+    expect(handler()).toBeNull();
   });
 
   it("registers tasks in grouped order: cheap wires, then telemetry, then heavy dynamic-import tasks", async () => {
@@ -409,6 +441,40 @@ describe("initGlobalServices task ordering", () => {
     expect(typeof provider).toBe("function");
     // Lazy: re-reads the registry on each call rather than capturing a snapshot.
     expect(provider()).toEqual([]);
+  });
+
+  it("wires a lazy ProjectViewManager provider into IdleTerminalNotificationService (#11102)", async () => {
+    initIdleTerminalNotificationMock.mockClear();
+
+    const contexts: Array<{ services: { projectViewManager?: unknown } }> = [];
+    const fakeRegistry = {
+      all: () => contexts,
+      get size() {
+        return contexts.length;
+      },
+    } as unknown as WindowRegistry;
+
+    await initGlobalServices(fakeRegistry);
+
+    const run = registeredTaskRuns.get("idle-terminal-notification-service");
+    expect(run).toBeDefined();
+    await run!();
+
+    // The provider is passed to the initializer, which wires it BEFORE start()
+    // — so the first check already sees every window's foreground project.
+    expect(initIdleTerminalNotificationMock).toHaveBeenCalledTimes(1);
+    const provider = initIdleTerminalNotificationMock.mock.calls[0][0] as () => unknown[];
+    expect(typeof provider).toBe("function");
+
+    // Lazy: a window that opens after wiring is still seen.
+    expect(provider()).toEqual([]);
+    const pvm = { getActiveProjectId: () => "p1" };
+    contexts.push({ services: { projectViewManager: pvm } });
+    expect(provider()).toEqual([pvm]);
+
+    // Windows without a ProjectViewManager are filtered out.
+    contexts.push({ services: {} });
+    expect(provider()).toEqual([pvm]);
   });
 
   it("registers monitor tasks before resource-profile-service so the profile reads ready data", async () => {

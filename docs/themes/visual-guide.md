@@ -607,9 +607,8 @@ In Bondi: `#FDFDFE` with `0 1px 3px rgba(0,0,0,0.06)` — a white card with a ba
 
 The heatmap shows rectangular cells for each day. Color intensity represents activity level:
 
-- **Empty (no activity):** `pulse-empty-bg` (defaults to `surface-panel`)
+- **Empty (no activity):** `pulse-empty-bg` (defaults to `surface-panel`) — a day with no commits is simply quiet; the heatmap has no failure state
 - **Before range (future):** `pulse-before-bg` (defaults to `surface-sidebar`)
-- **Missed (failed):** `pulse-missed-bg` (defaults to `status-danger` at 18%)
 - **Low activity:** `accent-primary` at `pulse-heat-low-opacity` (14%)
 - **Medium activity:** `accent-primary` at `pulse-heat-medium-opacity` (30%)
 - **High activity:** `accent-primary` at `pulse-heat-high-opacity` (50%)

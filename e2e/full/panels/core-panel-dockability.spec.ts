@@ -55,7 +55,7 @@ test.describe.serial("Core: Panel dockability", () => {
 
       // browser is now a dockable reading surface (panelKindIsDockable), so the
       // dock affordance renders — the panel can leave the grid without vanishing.
-      await browserPanel.hover();
+      await browserPanel.locator("[data-pane-chrome]").hover();
       await expect(browserPanel.locator(SEL.panel.minimize)).toBeVisible({ timeout: T_SHORT });
       // It still has the standard close affordance, confirming this is a real
       // panel header and not a missing-panel false negative.

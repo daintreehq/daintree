@@ -17,12 +17,25 @@ function fireProvenanceChanged(): void {
   for (const cb of [...provenanceCallbacks]) cb();
 }
 
+// Same multiplexer shape for `forge:remote-changed` (#11155), which unlike
+// provenance carries the project it applies to.
+let remoteChangedCallbacks: Array<(payload: { projectId: string }) => void> = [];
+function fireRemoteChanged(projectId: string): void {
+  for (const cb of [...remoteChangedCallbacks]) cb({ projectId });
+}
+
 vi.stubGlobal("electron", undefined);
 Object.defineProperty(window, "electron", {
   configurable: true,
   value: {
     forge: {
       resolveProvider: (projectId: string) => resolveProviderMock(projectId),
+      onRemoteChanged: (cb: (payload: { projectId: string }) => void) => {
+        remoteChangedCallbacks.push(cb);
+        return () => {
+          remoteChangedCallbacks = remoteChangedCallbacks.filter((c) => c !== cb);
+        };
+      },
     },
     plugin: {
       onProvenanceChanged: (cb: () => void) => {
@@ -46,6 +59,7 @@ function nextProjectId(): string {
 describe("useResolvedForgeProvider", () => {
   beforeEach(() => {
     provenanceCallbacks = [];
+    remoteChangedCallbacks = [];
     resolveProviderMock.mockReset();
   });
 
@@ -139,5 +153,82 @@ describe("useResolvedForgeProvider", () => {
     // No unresolved flash: initial state comes straight from the cache.
     expect(second.result.current.entry).toEqual(GITHUB_ENTRY);
     expect(second.result.current.loading).toBe(false);
+  });
+
+  describe("remote-changed invalidation (#11155)", () => {
+    it("resolves a provider after an origin is added to an open project", async () => {
+      // The bug: `git remote add origin` in an already-open project left the
+      // toolbar pills hidden until a reload, because the hook resolved once on
+      // mount (unresolved) and the toolbar never unmounts to re-ask.
+      resolveProviderMock.mockResolvedValue({ entry: null, resolvedVia: null });
+      const projectId = nextProjectId();
+
+      const { result } = renderHook(() => useResolvedForgeProvider(projectId));
+      await waitFor(() => expect(result.current.loading).toBe(false));
+      expect(result.current.providerId).toBeNull();
+
+      resolveProviderMock.mockResolvedValue({ entry: GITHUB_ENTRY, resolvedVia: "hostname" });
+      act(() => fireRemoteChanged(projectId));
+
+      await waitFor(() => expect(result.current.entry).toEqual(GITHUB_ENTRY));
+      expect(result.current.providerId).toBe("daintree.github.github");
+    });
+
+    it("ignores a remote change on a different project", async () => {
+      resolveProviderMock.mockResolvedValue({ entry: null, resolvedVia: null });
+      const projectId = nextProjectId();
+      const otherProjectId = nextProjectId();
+
+      const { result } = renderHook(() => useResolvedForgeProvider(projectId));
+      await waitFor(() => expect(result.current.loading).toBe(false));
+      const callsAfterMount = resolveProviderMock.mock.calls.length;
+
+      resolveProviderMock.mockResolvedValue({ entry: GITHUB_ENTRY, resolvedVia: "hostname" });
+      act(() => fireRemoteChanged(otherProjectId));
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      // A sibling project's remote says nothing about this one's resolution.
+      expect(resolveProviderMock.mock.calls.length).toBe(callsAfterMount);
+      expect(result.current.entry).toBeNull();
+    });
+
+    it("converges every concurrently-mounted instance for the project", async () => {
+      // Same fan-out as the provenance case: the toolbar, the stats pill and
+      // the sidebar each hold an instance, and all must see the new provider.
+      resolveProviderMock.mockResolvedValue({ entry: null, resolvedVia: null });
+      const projectId = nextProjectId();
+
+      const instances = Array.from({ length: 3 }, () =>
+        renderHook(() => useResolvedForgeProvider(projectId))
+      );
+      for (const { result } of instances) {
+        await waitFor(() => expect(result.current.loading).toBe(false));
+      }
+
+      resolveProviderMock.mockResolvedValue({ entry: GITHUB_ENTRY, resolvedVia: "hostname" });
+      act(() => fireRemoteChanged(projectId));
+
+      for (const { result } of instances) {
+        await waitFor(() => expect(result.current.entry).toEqual(GITHUB_ENTRY));
+      }
+    });
+
+    it("unsubscribes on unmount", async () => {
+      resolveProviderMock.mockResolvedValue({ entry: null, resolvedVia: null });
+      const projectId = nextProjectId();
+
+      const { unmount, result } = renderHook(() => useResolvedForgeProvider(projectId));
+      await waitFor(() => expect(result.current.loading).toBe(false));
+      expect(remoteChangedCallbacks).toHaveLength(1);
+
+      unmount();
+      expect(remoteChangedCallbacks).toHaveLength(0);
+
+      const callsAfterUnmount = resolveProviderMock.mock.calls.length;
+      act(() => fireRemoteChanged(projectId));
+      expect(resolveProviderMock.mock.calls.length).toBe(callsAfterUnmount);
+    });
   });
 });

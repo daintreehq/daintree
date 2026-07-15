@@ -236,6 +236,114 @@ describe("GitFileWatcher", () => {
     expect(onChange).toHaveBeenCalledTimes(1);
   });
 
+  // ---- onGitConfigChanged: the `git remote add` signal (#11155) ----
+
+  describe("onGitConfigChanged", () => {
+    const gitDir = pathJoin("/repo", ".git");
+
+    /** Arms a watcher and returns the gitDir directory-event callback. */
+    async function armAndGetGitDirCallback(options: {
+      onChange: () => void;
+      onGitConfigChanged?: () => void;
+      debounceMs?: number;
+    }): Promise<(eventType: string, filename: string | Buffer | null) => void> {
+      const gitWatcher = new GitFileWatcher({
+        worktreePath: "/repo",
+        branch: "main",
+        debounceMs: options.debounceMs ?? 100,
+        onChange: options.onChange,
+        onGitConfigChanged: options.onGitConfigChanged,
+      });
+      await expect(gitWatcher.start()).resolves.toBe(true);
+
+      const dotGitCall = vi.mocked(watch).mock.calls.find(([path]) => path === gitDir) as
+        | [unknown, unknown, unknown]
+        | undefined;
+      expect(dotGitCall).toBeDefined();
+      return dotGitCall?.[2] as (eventType: string, filename: string | Buffer | null) => void;
+    }
+
+    it("fires on a config write — the file `git remote add` edits", async () => {
+      const onChange = vi.fn();
+      const onGitConfigChanged = vi.fn();
+      const cb = await armAndGetGitDirCallback({ onChange, onGitConfigChanged });
+
+      cb("rename", "config");
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(onGitConfigChanged).toHaveBeenCalledTimes(1);
+      // The status pass still runs: a config write can also change tracking info.
+      expect(onChange).toHaveBeenCalledTimes(1);
+    });
+
+    it("stays silent for non-config git files — a remote re-read costs a subprocess", async () => {
+      const onChange = vi.fn();
+      const onGitConfigChanged = vi.fn();
+      const cb = await armAndGetGitDirCallback({ onChange, onGitConfigChanged });
+
+      cb("rename", "HEAD");
+      cb("rename", "index");
+      cb("rename", "packed-refs");
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(onChange).toHaveBeenCalledTimes(1);
+      expect(onGitConfigChanged).not.toHaveBeenCalled();
+    });
+
+    it("fires for the config.lock half of git's lock-then-rename write", async () => {
+      const onChange = vi.fn();
+      const onGitConfigChanged = vi.fn();
+      const cb = await armAndGetGitDirCallback({ onChange, onGitConfigChanged });
+
+      // git writes config.lock, then renames it over config. Both land in the
+      // same debounce burst and must collapse into ONE probe.
+      cb("rename", "config.lock");
+      cb("rename", "config");
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(onGitConfigChanged).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not leak the config flag into the next burst", async () => {
+      const onChange = vi.fn();
+      const onGitConfigChanged = vi.fn();
+      const cb = await armAndGetGitDirCallback({ onChange, onGitConfigChanged });
+
+      cb("rename", "config");
+      await vi.advanceTimersByTimeAsync(100);
+      expect(onGitConfigChanged).toHaveBeenCalledTimes(1);
+
+      // A later HEAD-only burst must not re-fire the (already consumed) flag.
+      cb("rename", "HEAD");
+      await vi.advanceTimersByTimeAsync(100);
+      expect(onChange).toHaveBeenCalledTimes(2);
+      expect(onGitConfigChanged).toHaveBeenCalledTimes(1);
+    });
+
+    it("treats an unnamed event as possibly-config rather than missing the write", async () => {
+      const onChange = vi.fn();
+      const onGitConfigChanged = vi.fn();
+      const cb = await armAndGetGitDirCallback({ onChange, onGitConfigChanged });
+
+      // A null filename means the platform couldn't say what changed. A false
+      // positive costs one git spawn that emits nothing; a false negative would
+      // strand the toolbar pills until a reload.
+      cb("rename", null);
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(onGitConfigChanged).toHaveBeenCalledTimes(1);
+    });
+
+    it("is optional — a watcher without the callback still drives onChange", async () => {
+      const onChange = vi.fn();
+      const cb = await armAndGetGitDirCallback({ onChange });
+
+      expect(() => cb("rename", "config")).not.toThrow();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(onChange).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("detects commits via reflog changes", async () => {
     const gitDir = pathJoin("/repo", ".git");
     const onChange = vi.fn();
@@ -262,6 +370,71 @@ describe("GitFileWatcher", () => {
     logsCallback?.("rename", "HEAD");
     await vi.advanceTimersByTimeAsync(150);
     expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  // ---- Remote-tracking refs arm (#11151) ----
+
+  it("watches refs/remotes/origin so an external fetch advancing origin surfaces", async () => {
+    const originDir = pathJoin("/repo", ".git", "refs", "remotes", "origin");
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "main",
+      debounceMs: 150,
+      onChange: vi.fn(),
+    });
+
+    await expect(gitWatcher.start()).resolves.toBe(true);
+
+    const watchedPaths = vi.mocked(watch).mock.calls.map(([path]) => path);
+    expect(watchedPaths).toContain(originDir);
+  });
+
+  it("triggers a debounced onChange for any change under refs/remotes/origin", async () => {
+    const originDir = pathJoin("/repo", ".git", "refs", "remotes", "origin");
+    const onChange = vi.fn();
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "main",
+      debounceMs: 150,
+      onChange,
+    });
+
+    await expect(gitWatcher.start()).resolves.toBe(true);
+
+    const originCall = vi.mocked(watch).mock.calls.find(([path]) => path === originDir) as
+      | [unknown, unknown, unknown]
+      | undefined;
+    expect(originCall).toBeDefined();
+    const originCallback = originCall?.[2] as
+      | ((eventType: string, filename: string | Buffer | null) => void)
+      | undefined;
+    expect(originCallback).toBeDefined();
+
+    // A fetch writing origin/main; the arm is filename-agnostic (any event here
+    // means upstream may have moved), and a burst coalesces into one refresh.
+    originCallback?.("rename", "main");
+    originCallback?.("rename", "main.lock");
+    originCallback?.("change", null);
+    await vi.advanceTimersByTimeAsync(150);
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("degrades silently when refs/remotes/origin cannot be watched", async () => {
+    const originDir = pathJoin("/repo", ".git", "refs", "remotes", "origin");
+    vi.mocked(watch).mockImplementation(((path: string) => {
+      if (path === originDir) throw new Error("ENOENT: no such directory");
+      return createMockWatcher();
+    }) as unknown as typeof watch);
+
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "main",
+      debounceMs: 150,
+      onChange: vi.fn(),
+    });
+
+    // A missing origin dir (no fetch yet / all refs packed) must not fail start.
+    await expect(gitWatcher.start()).resolves.toBe(true);
   });
 
   // ---- Worktree debounce tests ----

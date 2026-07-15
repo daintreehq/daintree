@@ -7,6 +7,7 @@ import {
   getFirstGridPanel,
   getFocusedPanelId,
   getGridPanelIds,
+  openBrowser,
 } from "../../helpers/panels";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
@@ -226,6 +227,54 @@ test.describe.serial("Core: Focus Management", () => {
 
       // Focus restored to terminal
       await expectTerminalFocused(panel, T_MEDIUM);
+    });
+  });
+
+  test("Enter from the grid region enters a non-PTY panel", async () => {
+    const { window } = ctx;
+    await ensureWindowFocused(ctx.app);
+
+    const grid = window.locator('[role="region"]').filter({
+      has: window.locator('[data-grid-container="true"]'),
+    });
+    let before = 0;
+    let browserPanel: ReturnType<typeof getFirstGridPanel>;
+    let browserId: string | null = null;
+
+    await test.step("Open a browser panel and make it the focused panel", async () => {
+      before = await getGridPanelCount(window);
+      await openBrowser(window);
+      await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
+
+      browserPanel = window.locator(SEL.panel.gridPanel).last();
+      browserId = await browserPanel.getAttribute("data-panel-id");
+      expect(browserId).toBeTruthy();
+
+      // Click the panel's title bar (top-left, clear of the embedded web view)
+      // rather than relying on new panels being auto-focused: it pins
+      // `focusedId` AND puts document.activeElement inside the panel, so
+      // getFocusedPanelId resolves without depending on the multi-panel
+      // `.terminal-selected` fallback.
+      await browserPanel.click({ force: true, position: { x: 12, y: 8 } });
+      await expect.poll(() => getFocusedPanelId(window), { timeout: T_MEDIUM }).toBe(browserId);
+    });
+
+    await test.step("F6 lifts focus to the grid macro region", async () => {
+      await window.keyboard.press("F6");
+      await expect(grid).toBeFocused({ timeout: T_MEDIUM });
+    });
+
+    await test.step("Enter moves focus into the browser panel (#11109)", async () => {
+      // This Enter used to no-op: the handler only ever reached a live xterm,
+      // so every non-PTY kind swallowed the key and focus stayed on the grid.
+      await window.keyboard.press("Enter");
+      await expect(browserPanel).toBeFocused({ timeout: T_MEDIUM });
+      await expect(grid).not.toBeFocused();
+    });
+
+    await test.step("Clean up the browser panel", async () => {
+      await browserPanel.locator(SEL.panel.close).first().click({ force: true });
+      await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(before);
     });
   });
 });

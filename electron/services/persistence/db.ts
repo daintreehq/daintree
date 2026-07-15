@@ -6,7 +6,10 @@ import { app } from "electron";
 import fs from "node:fs";
 import path from "path";
 import { getWritesSuppressed } from "../diskPressureState.js";
+import { tightenFilePermissionsSync, OWNER_RW_FILE_MODE } from "../../utils/fs.js";
 import * as schema from "./schema.js";
+import type { DatabaseRecovery } from "../../../shared/types/ipc/app.js";
+import type { DbProbeResult } from "./dbWorkerProtocol.js";
 
 export type AppDb = ReturnType<typeof drizzle<typeof schema>>;
 
@@ -22,6 +25,19 @@ export function getBackupPath(): string {
 
 export function getMigrationsFolder(): string {
   return path.join(app.getAppPath(), "electron/services/persistence/migrations");
+}
+
+// better-sqlite3 12.x exposes no file-mode option, so the main daintree.db lands
+// at the umask default on creation and must be chmod'd. Bundled SQLite derives
+// the -wal/-shm sidecar mode from the main file's mode, so tightening the main
+// file BEFORE the WAL journal is enabled makes those sidecars owner-only too;
+// we still chmod them here as belt-and-suspenders and to cover any that already
+// exist. Best-effort, POSIX-gated, skips missing sidecars. Doubles as the
+// retroactive fix for installs that predate this change and hold a 0o644 db.
+function tightenDatabaseFilePermissions(dbPath: string): void {
+  for (const suffix of ["", "-wal", "-shm"]) {
+    tightenFilePermissionsSync(dbPath + suffix);
+  }
 }
 
 export function getSharedDb(): AppDb {
@@ -79,8 +95,29 @@ export function openDb(
     throw new Error("Cannot open database: disk space is critical");
   }
 
+  // Create a brand-new database owner-only from the very first byte. better-sqlite3
+  // creates the file at the umask default (world-readable) on open, so we win the
+  // race by pre-creating it with an exclusive 0o600 handle before handing the path
+  // to the constructor. Best-effort: EEXIST is the normal existing-DB case, and any
+  // other failure (missing parent, permissions) resurfaces from `new Database`
+  // below — which stays the authority on open errors — while the post-open chmod
+  // still tightens whatever it manages to create. POSIX-only.
+  if (process.platform !== "win32") {
+    try {
+      fs.closeSync(fs.openSync(dbPath, "wx", OWNER_RW_FILE_MODE));
+    } catch {
+      // Intentionally ignored — see comment above.
+    }
+  }
+
   const sqlite = new Database(dbPath);
   try {
+    // Tighten the main file up front — before the WAL journal is enabled and
+    // before migrations run. This makes an upgrading install's pre-existing
+    // 0o644 database owner-only for the whole migration, and lets SQLite create
+    // the -wal/-shm sidecars from the (now 0o600) main file's mode.
+    tightenDatabaseFilePermissions(dbPath);
+
     sqlite.pragma("journal_mode = WAL");
     sqlite.pragma("busy_timeout = 3000");
     sqlite.pragma("synchronous = NORMAL");
@@ -101,6 +138,11 @@ export function openDb(
     sqlite
       .prepare("UPDATE projects SET last_accessed_at = ? WHERE last_accessed_at = 0")
       .run(Date.now());
+
+    // Tighten the whole family once here: migrate()/the backfill above are the
+    // first WAL-mode writes, so -wal/-shm exist by now, and an existing 0o644
+    // daintree.db from a pre-fix install gets corrected in place too.
+    tightenDatabaseFilePermissions(dbPath);
 
     return { sqlite, db };
   } catch (error) {
@@ -156,40 +198,131 @@ export function probeDb(dbPath: string, fullCheck = true): boolean {
   }
 }
 
-export function attemptRecovery(dbPath: string): boolean {
+/**
+ * Quarantine a corrupt database and restore it from the backup when that backup
+ * probes clean, otherwise leave the path empty so `openDb` creates a fresh file.
+ *
+ * Returns what actually happened so callers can tell the user. `null` means the
+ * recovery itself failed (a rename threw) — the corrupt database may still be in
+ * place, so callers must not report a successful restore or reset.
+ */
+/**
+ * Probe an arbitrary SQLite file, reporting "could not verify" separately from
+ * "proven corrupt". Distinct from `probeDb`, which is fail-open by design: at
+ * boot, a transient EACCES must not quarantine a healthy database. Promoting a
+ * backup is the opposite call — it overwrites the last known-good copy, so
+ * anything short of a proven "ok" must not proceed.
+ *
+ * The DB worker reimplements this verdict table inline (it cannot import this
+ * module — Electron's `app` does not exist in a worker thread); keep them in step.
+ */
+export function probeDbFile(dbPath: string): DbProbeResult {
+  if (!fs.existsSync(dbPath)) return "unknown";
+  let testDb: Database.Database | null = null;
+  try {
+    testDb = new Database(dbPath, { readonly: true, fileMustExist: true });
+    return testDb.pragma("quick_check", { simple: true }) === "ok" ? "ok" : "corrupt";
+  } catch (error: unknown) {
+    const code = (error as { code?: string }).code;
+    if (
+      typeof code === "string" &&
+      (code.startsWith("SQLITE_CORRUPT") || code === "SQLITE_NOTADB")
+    ) {
+      return "corrupt";
+    }
+    return "unknown";
+  } finally {
+    try {
+      testDb?.close();
+    } catch {
+      // ignore close errors
+    }
+  }
+}
+
+export function attemptRecovery(dbPath: string): DatabaseRecovery | null {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
   const corruptSuffix = `.corrupt-${timestamp}`;
   const backupPath = dbPath + ".backup";
 
+  // Quarantine the corrupt DB and its WAL/SHM sidecars. Only the main file's
+  // path is reported — it is the one a user would inspect or hand to support.
+  let quarantinedPath: string | undefined;
+  for (const suffix of ["", "-wal", "-shm"]) {
+    const filePath = dbPath + suffix;
+    if (!fs.existsSync(filePath)) continue;
+    try {
+      fs.renameSync(filePath, filePath + corruptSuffix);
+      // rename preserves the source mode, so an upgrading install's 0o644 db
+      // would keep world-readable (corrupt but still sensitive) contents in the
+      // forensic copy. Tighten the quarantined file explicitly.
+      tightenFilePermissionsSync(filePath + corruptSuffix);
+      if (suffix === "") quarantinedPath = filePath + corruptSuffix;
+    } catch (error) {
+      if (suffix === "") {
+        // Nothing moved — the corrupt DB is still in place and will be reopened.
+        // Claiming a restore or a reset here would report something that never
+        // happened, so report nothing at all.
+        console.error("[DB] Failed to quarantine the corrupt database:", error);
+        return null;
+      }
+      // A stale WAL/SHM left beside the replacement database can be replayed
+      // into it. If it will not move aside, delete it — losing an orphaned
+      // sidecar beats corrupting the database we are about to restore.
+      console.warn(`[DB] Could not quarantine ${filePath}, removing it instead:`, error);
+      try {
+        fs.unlinkSync(filePath);
+      } catch (unlinkError) {
+        console.error(`[DB] Could not remove ${filePath} either:`, unlinkError);
+      }
+    }
+  }
+
+  // Past this point the corrupt DB is gone, so the app WILL come up on a
+  // different database — the user has to be told either way.
   try {
-    // Quarantine corrupt DB and associated WAL/SHM files
-    for (const suffix of ["", "-wal", "-shm"]) {
-      const filePath = dbPath + suffix;
-      if (fs.existsSync(filePath)) {
-        fs.renameSync(filePath, filePath + corruptSuffix);
-      }
-    }
-
-    // Restore from backup if available
     if (fs.existsSync(backupPath)) {
-      // Verify backup integrity before restoring
-      if (probeDb(backupPath)) {
+      // probeDbFile, not probeDb: restoring overwrites the database the app is
+      // about to open, so a backup we merely failed to READ must not be copied
+      // over it and then reported as a successful restore.
+      const verdict = probeDbFile(backupPath);
+      if (verdict === "ok") {
         fs.copyFileSync(backupPath, dbPath);
+        // copyFileSync's mode propagation is platform/filesystem-dependent, so
+        // tighten the restored database explicitly (openDb will re-tighten the
+        // full family on reopen, but this keeps the restored copy owner-only in
+        // the interim).
+        tightenFilePermissionsSync(dbPath);
         console.log("[DB] Restored database from backup");
-        return true;
-      } else {
-        console.error("[DB] Backup is also corrupt, cannot restore");
-        // Quarantine the corrupt backup too
-        fs.renameSync(backupPath, backupPath + corruptSuffix);
-        return false;
+        return { kind: "restored-from-backup", quarantinedPath };
       }
+      console.error(`[DB] Backup cannot be restored (${verdict}) — starting fresh`);
+    } else {
+      console.warn("[DB] No backup available for recovery — fresh database will be created");
     }
-
-    console.warn("[DB] No backup available for recovery — fresh database will be created");
-    return false;
   } catch (error) {
-    console.error("[DB] Recovery failed:", error);
-    return false;
+    console.error("[DB] Restore from backup failed:", error);
+  }
+
+  // Starting fresh. DatabaseMaintenanceService will back the new (empty) database
+  // up over `backupPath` on its first idle tick, so any surviving backup has to
+  // move out of the way first — otherwise recovery itself destroys the last copy
+  // of the user's data, which is the very failure this whole change exists to
+  // prevent. Preserve it rather than delete it: it may still be salvageable.
+  preserveStaleBackup(backupPath, corruptSuffix);
+  return { kind: "reset-to-fresh", quarantinedPath };
+}
+
+function preserveStaleBackup(backupPath: string, corruptSuffix: string): void {
+  try {
+    if (fs.existsSync(backupPath)) {
+      fs.renameSync(backupPath, backupPath + corruptSuffix);
+      // rename carries the source mode forward; tighten in case a pre-fix
+      // install's backup was world-readable.
+      tightenFilePermissionsSync(backupPath + corruptSuffix);
+    }
+  } catch (error) {
+    console.error("[DB] Could not move the unusable backup aside:", error);
   }
 }
 

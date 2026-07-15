@@ -83,11 +83,12 @@ const LazyHybridInputBar = lazy(() =>
 import {
   getTerminalFocusTarget,
   isLikelyAtSynthesizedPointer,
+  resolvePaneFocusAction,
   shouldShowHybridInputBar,
   shouldSuppressUnfocusedClick,
 } from "./terminalFocus";
 import { decideChromeAction } from "./multiSelectGestures";
-import { registerPanelFocusHandler } from "./terminalFocusRegistry";
+import { registerPanelFocusHandler } from "@/components/Panel/panelFocusRegistry";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import { isPtyPanel } from "@shared/types/panel";
 import type { TerminalRuntimeIdentity } from "@shared/types/panel";
@@ -95,6 +96,23 @@ import type { TerminalRuntimeIdentity } from "@shared/types/panel";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 
 export type {};
+
+/**
+ * Live selection/focus state of a pane's xterm, for `resolvePaneFocusAction`.
+ * Ownership is measured against `hostElement` — the xterm host specifically,
+ * not the pane container, which also holds the input bar and toolbar.
+ */
+function readXtermSelectionState(id: string): {
+  hasSelection: boolean;
+  xtermOwnsDomFocus: boolean;
+} {
+  const managed = terminalInstanceService.get(id);
+  if (!managed) return { hasSelection: false, xtermOwnsDomFocus: false };
+  return {
+    hasSelection: managed.terminal.hasSelection(),
+    xtermOwnsDomFocus: managed.hostElement.contains(document.activeElement),
+  };
+}
 
 export interface BannerSlotProps {
   visible: boolean;
@@ -479,6 +497,12 @@ function TerminalPaneComponent({
 
   const isBackendDisconnected = backendStatus === "disconnected";
   const isBackendRecovering = backendStatus === "recovering";
+
+  // Single source of truth for "the hybrid editor cannot take input": it gates
+  // both the bar's `disabled` prop and focus-target resolution. Resolving focus
+  // against a narrower condition would route Enter to a disabled editor.
+  const isHybridInputDisabled =
+    isBackendDisconnected || isBackendRecovering || isInputLocked || isRestarting;
 
   const isHibernated = useIsHibernated(id);
 
@@ -963,24 +987,24 @@ function TerminalPaneComponent({
 
     if (!isFocused) return;
 
-    const focusTarget = getTerminalFocusTarget({
-      preferredTarget: preferredTerminalFocusTarget,
-      hasHybridInputSurface: showHybridInputBar,
-      isInputDisabled: isBackendDisconnected || isBackendRecovering || isInputLocked,
-      hybridInputEnabled,
+    // Read selection and focus ownership synchronously, before any handoff.
+    // Deciding up front (rather than inside the deferred RAF) also keeps focus
+    // from briefly landing on the ContentPanel container, which made screen
+    // readers announce the container instead of the input bar.
+    const action = resolvePaneFocusAction({
+      focusTarget: getTerminalFocusTarget({
+        preferredTarget: preferredTerminalFocusTarget,
+        hasHybridInputSurface: showHybridInputBar,
+        isInputDisabled: isHybridInputDisabled,
+        hybridInputEnabled,
+      }),
+      ...readXtermSelectionState(id),
     });
 
-    if (focusTarget === "hybridInput") {
-      // xterm v6 clears selection on blur, so read selection state
-      // synchronously here — before any focus handoff. Don't steal focus from
-      // xterm when the user has an active text selection. Checking up front
-      // (rather than inside a deferred double-RAF) also avoids focus briefly
-      // landing on the ContentPanel container, which made screen readers
-      // announce the container instead of the input bar. A RAF then defers the
-      // handoff until the pane has painted; focus never lands on the container.
-      const managed = terminalInstanceService.get(id);
-      if (managed?.terminal.hasSelection()) return;
+    if (action === "preserve") return;
 
+    if (action === "hybridInput") {
+      // A RAF defers the handoff until the pane has painted.
       const rafId = requestAnimationFrame(() => {
         inputBarRef.current?.focusWithCursorAtEnd();
       });
@@ -998,9 +1022,7 @@ function TerminalPaneComponent({
     showHybridInputBar,
     hybridInputEnabled,
     preferredTerminalFocusTarget,
-    isBackendDisconnected,
-    isBackendRecovering,
-    isInputLocked,
+    isHybridInputDisabled,
   ]);
 
   useEffect(() => {
@@ -1010,26 +1032,33 @@ function TerminalPaneComponent({
     // forcing the input; that's what the old model did, and tab switching
     // would otherwise yank focus out of xterm against the user's intent.
     return registerPanelFocusHandler(id, () => {
-      const focusTarget = getTerminalFocusTarget({
-        preferredTarget: usePanelStore.getState().preferredTerminalFocusTarget,
-        hasHybridInputSurface: showHybridInputBar,
-        isInputDisabled: isBackendDisconnected || isBackendRecovering || isInputLocked,
-        hybridInputEnabled,
+      const action = resolvePaneFocusAction({
+        focusTarget: getTerminalFocusTarget({
+          preferredTarget: usePanelStore.getState().preferredTerminalFocusTarget,
+          hasHybridInputSurface: showHybridInputBar,
+          isInputDisabled: isHybridInputDisabled,
+          hybridInputEnabled,
+        }),
+        ...readXtermSelectionState(id),
       });
-      if (focusTarget === "hybridInput") {
-        inputBarRef.current?.focusWithCursorAtEnd();
-      } else {
-        terminalInstanceService.focus(id);
+      // An xterm that already owns the keyboard while holding a selection is a
+      // completed handoff — the pane has focus, just not on the input bar.
+      if (action === "preserve") return true;
+      if (action === "hybridInput") {
+        // The bar is rendered but its editor may still be lazy-loading. Decline
+        // rather than falling through to xterm: focusing xterm flips the stored
+        // preferred target, so a transient miss would silently and permanently
+        // move the user off the input bar.
+        return inputBarRef.current?.focusWithCursorAtEnd() ?? false;
       }
+      // Verify rather than predict. Neither map membership nor `isOpened` is
+      // liveness — an instance is registered before its xterm opens, and the
+      // flag stays true after a detach — so the only trustworthy signal is
+      // whether focus actually landed inside this pane.
+      terminalInstanceService.focus(id);
+      return containerRef.current?.contains(document.activeElement) ?? false;
     });
-  }, [
-    id,
-    showHybridInputBar,
-    isBackendDisconnected,
-    isBackendRecovering,
-    isInputLocked,
-    hybridInputEnabled,
-  ]);
+  }, [id, showHybridInputBar, isHybridInputDisabled, hybridInputEnabled]);
 
   // Sync agent state to terminal service for scroll management
   useEffect(() => {
@@ -1461,8 +1490,7 @@ function TerminalPaneComponent({
                         const focusTarget = getTerminalFocusTarget({
                           preferredTarget: usePanelStore.getState().preferredTerminalFocusTarget,
                           hasHybridInputSurface: showHybridInputBar,
-                          isInputDisabled:
-                            isBackendDisconnected || isBackendRecovering || isInputLocked,
+                          isInputDisabled: isHybridInputDisabled,
                           hybridInputEnabled,
                         });
                         if (focusTarget === "hybridInput") {
@@ -1518,9 +1546,7 @@ function TerminalPaneComponent({
                 <LazyHybridInputBar
                   ref={inputBarRef}
                   terminalId={id}
-                  disabled={
-                    isBackendDisconnected || isBackendRecovering || isInputLocked || isRestarting
-                  }
+                  disabled={isHybridInputDisabled}
                   cwd={cwd}
                   agentId={effectiveAgentId}
                   agentHasLifecycleEvent={stateChangeTrigger !== undefined}

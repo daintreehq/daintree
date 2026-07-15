@@ -36,6 +36,36 @@ export function getVisibleTabbableElements(root: ParentNode): HTMLElement[] {
 }
 
 /**
+ * Hand focus to the first candidate that actually accepts it, falling back to
+ * the app shell's first tabbable element so focus never drops silently to
+ * `<body>` (which strands keyboard users with nothing to tab from).
+ *
+ * Candidates are tried in preference order — typically the element focused
+ * before an overlay opened, then a logical successor for when that element has
+ * since been unmounted. `<body>` never counts as a candidate: it is what
+ * `document.activeElement` reports when nothing is focused at all.
+ *
+ * Being connected is not enough to accept focus: a candidate that is `disabled`,
+ * `inert`, or hidden makes `.focus()` a silent no-op, which would drop focus to
+ * `<body>` — so each attempt is verified and the chain continues on failure.
+ * Strict equality is the right check even for a candidate that delegates focus
+ * into a shadow tree (an Electron `<webview>` hosts the guest page that way):
+ * focus inside a shadow tree is reported at the document level as the host.
+ */
+export function restoreFocusTo(...candidates: (HTMLElement | null | undefined)[]): void {
+  for (const candidate of candidates) {
+    if (!candidate || candidate === document.body) continue;
+    if (!document.contains(candidate)) continue;
+
+    candidate.focus();
+    if (document.activeElement === candidate) return;
+  }
+
+  const root = document.getElementById("root");
+  getVisibleTabbableElements(root ?? document.body)[0]?.focus();
+}
+
+/**
  * Close a modal/dialog/popover, then announce a result to assistive tech.
  *
  * macOS VoiceOver drops `aria-live` updates that originate outside the focused

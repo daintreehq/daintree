@@ -699,12 +699,30 @@ export default tseslint.config(
     rules: { "no-restricted-imports": "off" },
   },
 
+  // Allowlist — framer-motion settings nav sliding active indicator. Costs the
+  // eager graph nothing: App.tsx already static-imports framer-motion to mount
+  // LazyMotion, and SettingsDialog is itself lazy (see lazyPanels.ts), so the
+  // shared-layout indicator rides a chunk that is already downstream of boot.
+  {
+    files: ["src/components/Settings/SettingsDialog.tsx"],
+    rules: { "no-restricted-imports": "off" },
+  },
+
   // Allowlist — framer-motion Fleet, Layout chrome.
   {
     files: [
       "src/components/Fleet/FleetArmingRibbon.tsx",
+      "src/components/Fleet/FleetPickerPalette.tsx",
       "src/components/Layout/DockedTabGroup.tsx",
     ],
+    rules: { "no-restricted-imports": "off" },
+  },
+
+  // Allowlist — framer-motion segmented-control thumb. Both import `m` (the
+  // feature-less component) and the reduced-motion hook, not the animation
+  // features themselves; those still arrive lazily via loadMotionFeatures().
+  {
+    files: ["src/components/ui/SegmentedToggle.tsx", "src/hooks/useShouldSkipMotion.ts"],
     rules: { "no-restricted-imports": "off" },
   },
 

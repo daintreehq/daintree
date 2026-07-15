@@ -9,7 +9,8 @@ import { isAssistantOnlyAgentId } from "../shared/config/agentIds.js";
 import type { CliAvailabilityService } from "./services/CliAvailabilityService.js";
 import { isAgentInstalled } from "../shared/utils/agentAvailability.js";
 import * as CliInstallService from "./services/CliInstallService.js";
-import { getWindowRegistry, getProjectViewManager } from "./window/windowRef.js";
+import { getWindowRegistry } from "./window/windowRef.js";
+import { toggleWindowFullscreen } from "./window/fullscreen.js";
 import {
   getPtyClient,
   getWorkspaceClientRef,
@@ -21,17 +22,26 @@ import { getAutoUpdaterServiceRef } from "./window/serviceRefs.js";
 import { getPluginMenuItems } from "./services/pluginMenuRegistry.js";
 import { evaluateWhen } from "./services/WhenClauseService.js";
 import { getAppWebContents } from "./window/webContentsRegistry.js";
+import { PROJECT_MENU_ITEM_IDS, resolveProjectIdForApplicationMenu } from "./projectMenuState.js";
 import { PRODUCT_NAME, PRODUCT_WEBSITE, PRODUCT_COPYRIGHT_ORG } from "./utils/productBranding.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
-import { isWindowsStoreBuild } from "../shared/config/distribution.js";
+import { isWindowsStoreBuild, getBuildChannelLabel } from "../shared/config/distribution.js";
 
-app.setAboutPanelOptions({
-  applicationName: PRODUCT_NAME,
-  applicationVersion: app.getVersion(),
-  version: "Beta",
-  copyright: `© ${new Date().getFullYear()} ${PRODUCT_COPYRIGHT_ORG}`,
-  website: PRODUCT_WEBSITE,
-});
+// The About panel's build-version slot shows the release channel for
+// prerelease builds (Nightly/Beta/RC) and stays blank for stable releases —
+// an empty string suppresses the secondary line rather than falling back to
+// CFBundleVersion (which would duplicate the version on macOS).
+export function buildAboutPanelOptions(version: string): Electron.AboutPanelOptionsOptions {
+  return {
+    applicationName: PRODUCT_NAME,
+    applicationVersion: version,
+    version: getBuildChannelLabel(version) ?? "",
+    copyright: `© ${new Date().getFullYear()} ${PRODUCT_COPYRIGHT_ORG}`,
+    website: PRODUCT_WEBSITE,
+  };
+}
+
+app.setAboutPanelOptions(buildAboutPanelOptions(app.getVersion()));
 
 function convertShortcutToAccelerator(shortcut: string): string {
   return shortcut.replace("Cmd/Ctrl", "CommandOrControl");
@@ -160,6 +170,19 @@ export function createApplicationMenu(
   const terminalPluginItems = buildPluginMenuItems("terminal");
   const helpPluginItems = buildPluginMenuItems("help");
 
+  // Built BEFORE the gate is resolved: this reads getAllProjects(), which
+  // repairs stale status rows as a side effect (a "closed" row that is still the
+  // current pointer gets promoted back to "active"). Resolving first would snapshot
+  // the gate from pre-repair rows and install a template the repair contradicts.
+  const recentProjectsMenu = buildRecentProjectsMenu(
+    getTargetBrowserWindow,
+    cliAvailabilityService
+  );
+
+  // Same resolver the live refresh uses, so the cold build and every later
+  // refresh agree on what "a project is open" means.
+  const projectMenuEnabled = resolveProjectIdForApplicationMenu() !== null;
+
   const template: Electron.MenuItemConstructorOptions[] = [
     {
       label: "File",
@@ -200,7 +223,7 @@ export function createApplicationMenu(
         },
         {
           label: "Open Recent",
-          submenu: buildRecentProjectsMenu(getTargetBrowserWindow, cliAvailabilityService),
+          submenu: recentProjectsMenu,
         },
         { type: "separator" },
         ...(process.platform !== "darwin"
@@ -219,15 +242,18 @@ export function createApplicationMenu(
             ]
           : []),
         {
-          label: "Project Settings",
+          id: PROJECT_MENU_ITEM_IDS[0],
+          label: "Project Settings…",
+          enabled: projectMenuEnabled,
           click: (_item, browserWindow) =>
-            sendAction("app.settings", getTargetBrowserWindow(browserWindow)),
+            sendAction("project.settings.open", getTargetBrowserWindow(browserWindow)),
         },
         ...(filePluginItems.length > 0 ? [{ type: "separator" as const }, ...filePluginItems] : []),
         { type: "separator" },
         {
+          id: PROJECT_MENU_ITEM_IDS[1],
           label: "Close Project",
-          enabled: !!projectStore.getCurrentProjectId(),
+          enabled: projectMenuEnabled,
           click: (_item, browserWindow) =>
             sendAction("project.closeActive", getTargetBrowserWindow(browserWindow)),
         },
@@ -384,9 +410,7 @@ export function createApplicationMenu(
           click: (_item, browserWindow) => {
             const win = getTargetBrowserWindow(browserWindow);
             if (!win) return;
-            // Use simpleFullScreen for pre-Lion behavior that extends into the notch area
-            const isSimpleFullScreen = win.isSimpleFullScreen();
-            win.setSimpleFullScreen(!isSimpleFullScreen);
+            toggleWindowFullscreen(win);
           },
         },
         ...(viewPluginItems.length > 0 ? [{ type: "separator" as const }, ...viewPluginItems] : []),
@@ -607,8 +631,11 @@ export async function handleDirectoryOpen(
   try {
     const project = await projectStore.addProject(directoryPath);
 
-    // Use ProjectViewManager for multi-view switching when available
-    const pvm = getProjectViewManager();
+    // Use the target window's own ProjectViewManager for multi-view switching
+    // when available. The process-global manager points at the last-created
+    // window, so opening a directory from an older window's menu would switch
+    // the wrong window's view (#11100).
+    const pvm = getWindowRegistry()?.getByWindowId(targetWindow.id)?.services.projectViewManager;
     if (pvm) {
       const { view, isNew } = await pvm.switchTo(project.id, project.path);
       // Capture the outgoing project id before the pointer flips so we can

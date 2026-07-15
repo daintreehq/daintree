@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import type { WorktreeSnapshot, WorktreeState } from "@shared/types";
 import { compareWorktreeNames } from "@/lib/worktreeFilters";
+import { isValidPastTimestamp } from "@/utils/timestamps";
 import { useWorktreeStore } from "./useWorktreeStore";
 
 export interface UseWorktreesReturn {
@@ -41,12 +42,17 @@ function getNormalized(worktreeMap: Map<string, WorktreeSnapshot>): {
     for (const [id, snap] of worktreeMap) {
       normalizedMap.set(id, normalizeSnapshot(snap));
     }
+    const now = Date.now();
     const worktrees = Array.from(normalizedMap.values()).sort((a, b) => {
       if (a.isMainWorktree && !b.isMainWorktree) return -1;
       if (!a.isMainWorktree && b.isMainWorktree) return 1;
 
-      const timeA = a.lastActivityTimestamp ?? 0;
-      const timeB = b.lastActivityTimestamp ?? 0;
+      const timeA = isValidPastTimestamp(a.lastActivityTimestamp, now)
+        ? a.lastActivityTimestamp
+        : 0;
+      const timeB = isValidPastTimestamp(b.lastActivityTimestamp, now)
+        ? b.lastActivityTimestamp
+        : 0;
       if (timeA !== timeB) {
         return timeB - timeA;
       }

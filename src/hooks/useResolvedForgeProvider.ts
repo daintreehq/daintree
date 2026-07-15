@@ -100,7 +100,7 @@ export function useResolvedForgeProvider(
     run();
 
     const plugin = window.electron?.plugin;
-    const unsubscribe =
+    const unsubscribeProvenance =
       typeof plugin?.onProvenanceChanged === "function"
         ? plugin.onProvenanceChanged(() => {
             resolutionCache.clear();
@@ -108,9 +108,26 @@ export function useResolvedForgeProvider(
           })
         : null;
 
+    // A remote was added/changed/removed on this project's repo (#11155) —
+    // `git remote add origin` in an already-open project used to leave the
+    // toolbar pills hidden until a reload, because nothing invalidated this
+    // cache. Scoped to the project that changed (unlike provenance, which
+    // invalidates wholesale): a sibling project's remote says nothing about
+    // this one's resolution.
+    const forge = window.electron?.forge;
+    const unsubscribeRemote =
+      typeof forge?.onRemoteChanged === "function"
+        ? forge.onRemoteChanged((payload) => {
+            if (payload.projectId !== projectId) return;
+            resolutionCache.delete(projectId);
+            run();
+          })
+        : null;
+
     return () => {
       cancelled = true;
-      unsubscribe?.();
+      unsubscribeProvenance?.();
+      unsubscribeRemote?.();
     };
   }, [projectId, resolve]);
 

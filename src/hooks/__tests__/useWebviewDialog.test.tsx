@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/notify", () => ({
   notify: vi.fn(),
@@ -35,7 +35,10 @@ beforeEach(() => {
   dismissCleanup = vi.fn(() => {
     dismissListener = null;
   });
-  respondToDialog = vi.fn();
+  // The hook chains .catch() onto every respond, so the default must be a
+  // Promise. Tests that need a specific outcome still override it with a
+  // *Once mock, which takes precedence.
+  respondToDialog = vi.fn().mockResolvedValue(undefined);
   registerPanel = vi.fn().mockResolvedValue(undefined);
 
   Object.defineProperty(window, "electron", {
@@ -196,5 +199,233 @@ describe("useWebviewDialog", () => {
     unmount();
     expect(dismissCleanup).toHaveBeenCalled();
     expect(dismissListener).toBeNull();
+  });
+});
+
+// A queue of dialogs is one modal session: focus is captured once on the way in
+// and restored once on the way out, never between queued dialogs.
+describe("useWebviewDialog focus lifecycle", () => {
+  let root: HTMLElement;
+  let spawned: HTMLElement[] = [];
+
+  function addButton(label: string, parent: HTMLElement = document.body): HTMLButtonElement {
+    const button = document.createElement("button");
+    button.textContent = label;
+    parent.appendChild(button);
+    spawned.push(button);
+    return button;
+  }
+
+  // Stands in for the control WebviewDialog autofocuses. Closing the overlay
+  // detaches it, which is what leaves document.activeElement on <body> and tells
+  // the hook the dialog still owned focus — so the tests must detach it too.
+  function focusOverlayControl(label: string): HTMLButtonElement {
+    const control = addButton(label);
+    control.focus();
+    return control;
+  }
+
+  beforeEach(() => {
+    root = document.createElement("div");
+    root.id = "root";
+    document.body.appendChild(root);
+  });
+
+  // Removed one by one rather than wiping <body>, which would race Testing
+  // Library's own container cleanup.
+  afterEach(() => {
+    for (const element of spawned) element.remove();
+    spawned = [];
+    root.remove();
+  });
+
+  it("returns focus to the element that was focused before the dialog opened", async () => {
+    const opener = addButton("opener");
+    opener.focus();
+
+    const { result } = renderHook(() => useWebviewDialog("panel-1", null, false));
+
+    act(() => {
+      emitDialog("panel-1", "dialog-1");
+    });
+    await waitFor(() => {
+      expect(result.current.currentDialog?.dialogId).toBe("dialog-1");
+    });
+
+    const ok = focusOverlayControl("OK");
+
+    act(() => {
+      ok.remove();
+      result.current.handleDialogRespond(true);
+    });
+    await waitFor(() => {
+      expect(result.current.currentDialog).toBeNull();
+    });
+
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it("does not restore or recapture focus while advancing through a queue", async () => {
+    const opener = addButton("opener");
+    opener.focus();
+
+    const { result } = renderHook(() => useWebviewDialog("panel-1", null, false));
+
+    act(() => {
+      emitDialog("panel-1", "dialog-1");
+      emitDialog("panel-1", "dialog-2");
+    });
+    await waitFor(() => {
+      expect(result.current.currentDialog?.dialogId).toBe("dialog-1");
+    });
+
+    const firstOk = focusOverlayControl("OK (dialog-1)");
+
+    act(() => {
+      result.current.handleDialogRespond(true);
+    });
+    await waitFor(() => {
+      expect(result.current.currentDialog?.dialogId).toBe("dialog-2");
+    });
+
+    // Mid-queue the overlay is still open, so focus stays in it. Restoring here
+    // would yank the user out of a dialog they still have to answer.
+    expect(document.activeElement).toBe(firstOk);
+
+    firstOk.remove();
+    const secondOk = focusOverlayControl("OK (dialog-2)");
+
+    act(() => {
+      secondOk.remove();
+      result.current.handleDialogRespond(false);
+    });
+    await waitFor(() => {
+      expect(result.current.currentDialog).toBeNull();
+    });
+
+    // The opener — not either dialog's own OK button, which is what a naive
+    // per-dialog recapture would have recorded.
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it("restores focus when the queue is dismissed rather than answered", async () => {
+    const opener = addButton("opener");
+    opener.focus();
+
+    const { result } = renderHook(() => useWebviewDialog("panel-1", null, false));
+
+    act(() => {
+      emitDialog("panel-1", "dialog-1");
+      emitDialog("panel-1", "dialog-2");
+    });
+    await waitFor(() => {
+      expect(result.current.currentDialog?.dialogId).toBe("dialog-1");
+    });
+
+    const ok = focusOverlayControl("OK");
+
+    act(() => {
+      ok.remove();
+      emitDismiss("panel-1");
+    });
+    await waitFor(() => {
+      expect(result.current.currentDialog).toBeNull();
+    });
+
+    expect(document.activeElement).toBe(opener);
+    expect(respondToDialog).not.toHaveBeenCalled();
+  });
+
+  // Guest pages fire dialogs on their own schedule, so the user may well have
+  // clicked into another pane before this one's queue drains.
+  it("leaves focus alone when something else took it while the dialog was open", async () => {
+    const opener = addButton("opener");
+    opener.focus();
+
+    const { result } = renderHook(() => useWebviewDialog("panel-1", null, false));
+
+    act(() => {
+      emitDialog("panel-1", "dialog-1");
+    });
+    await waitFor(() => {
+      expect(result.current.currentDialog?.dialogId).toBe("dialog-1");
+    });
+
+    const ok = focusOverlayControl("OK");
+    // The user clicks into a different panel, which takes focus out of the overlay.
+    const otherPane = addButton("other pane");
+    otherPane.focus();
+
+    act(() => {
+      ok.remove();
+      emitDismiss("panel-1");
+    });
+    await waitFor(() => {
+      expect(result.current.currentDialog).toBeNull();
+    });
+
+    expect(document.activeElement).toBe(otherPane);
+  });
+
+  it("falls back to the app shell when the opener is gone by the time the dialog closes", async () => {
+    const shellButton = addButton("shell", root);
+    const opener = addButton("opener");
+    opener.focus();
+
+    const { result } = renderHook(() => useWebviewDialog("panel-1", null, false));
+
+    act(() => {
+      emitDialog("panel-1", "dialog-1");
+    });
+    await waitFor(() => {
+      expect(result.current.currentDialog?.dialogId).toBe("dialog-1");
+    });
+
+    const ok = focusOverlayControl("OK");
+    // The page behind the dialog navigated away and took the opener with it.
+    opener.remove();
+
+    act(() => {
+      ok.remove();
+      result.current.handleDialogRespond(true);
+    });
+    await waitFor(() => {
+      expect(result.current.currentDialog).toBeNull();
+    });
+
+    expect(document.activeElement).toBe(shellButton);
+  });
+
+  it("restores focus when the panel unmounts with a dialog still open", async () => {
+    const opener = addButton("opener");
+    opener.focus();
+
+    const { result, unmount } = renderHook(() => useWebviewDialog("panel-1", null, false));
+
+    act(() => {
+      emitDialog("panel-1", "dialog-1");
+    });
+    await waitFor(() => {
+      expect(result.current.currentDialog?.dialogId).toBe("dialog-1");
+    });
+
+    const ok = focusOverlayControl("OK");
+
+    // Unmounting skips the non-empty -> empty edge entirely, so without the
+    // cleanup restore, focus would be stranded on the removed OK button.
+    ok.remove();
+    unmount();
+
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it("does not move focus when a panel with no open dialog unmounts", () => {
+    const elsewhere = addButton("elsewhere");
+    elsewhere.focus();
+
+    const { unmount } = renderHook(() => useWebviewDialog("panel-1", null, false));
+    unmount();
+
+    expect(document.activeElement).toBe(elsewhere);
   });
 });

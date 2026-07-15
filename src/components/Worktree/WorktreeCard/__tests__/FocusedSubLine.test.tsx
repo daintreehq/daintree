@@ -135,6 +135,17 @@ describe("FocusedSubLine", () => {
     expect(wrapper.hasAttribute("data-open")).toBe(false);
   });
 
+  it("treats future timestamps as absent", () => {
+    renderSubLine({
+      open: true,
+      changedFileCount: null,
+      lastActivityTimestamp: Date.now() + 60_000,
+      statusLabel: null,
+    });
+    const wrapper = screen.getByTestId("worktree-focused-subline");
+    expect(wrapper.hasAttribute("data-open")).toBe(false);
+  });
+
   it("treats whitespace-only statusLabel as absent", () => {
     renderSubLine({
       open: true,

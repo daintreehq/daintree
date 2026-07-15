@@ -218,6 +218,9 @@ describe("BrowserPane webview lifecycle regression", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
+    // dispatch() resolves an ActionDispatchResult union and never rejects;
+    // callers branch on `.ok`, so the mock must honour that shape.
+    actionDispatchMock.mockResolvedValue({ ok: true, result: undefined });
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (globalThis as any).window = globalThis.window ?? {};
@@ -934,6 +937,189 @@ describe("BrowserPane webview lifecycle regression", () => {
         { terminalId: "browser-panel-1", url: "https://oauth.provider.com/auth" },
         { source: "user" }
       );
+    });
+
+    // #11114: dispatch() resolves {ok:false} rather than rejecting, so the old
+    // handler cleared the notice unconditionally — destroying the user's only
+    // route to the blocked URL whenever the external open actually failed.
+    describe("failed external open (#11114)", () => {
+      const OPEN_FAILED = {
+        ok: false,
+        error: { code: "EXECUTION_ERROR", message: "xdg-open exited with code 3" },
+      };
+
+      function blockNavigation(container: HTMLElement, url: string) {
+        const callback = getNavigationBlockedCallback();
+        act(() => {
+          callback({ panelId: "browser-panel-1", url, canOpenExternal: true });
+          vi.advanceTimersByTime(150);
+        });
+        return container;
+      }
+
+      function findButton(container: HTMLElement, text: string) {
+        return Array.from(container.querySelectorAll("button")).find((b) =>
+          b.textContent?.includes(text)
+        );
+      }
+
+      // Deferred on purpose: the old code cleared the notice synchronously, so a
+      // test that only checks the end state would pass on the pre-fix build. The
+      // load-bearing assertion is that the notice SURVIVES until the result lands.
+      it("holds the notice open until the external open resolves, then clears it", async () => {
+        let resolveOpen: (value: unknown) => void = () => {};
+        actionDispatchMock.mockReturnValue(
+          new Promise((resolve) => {
+            resolveOpen = resolve;
+          })
+        );
+        const { container } = render(<BrowserPane {...baseProps} />);
+        blockNavigation(container, "https://oauth.provider.com/auth");
+
+        act(() => {
+          findButton(container, "Open in external browser")!.dispatchEvent(
+            new MouseEvent("click", { bubbles: true })
+          );
+        });
+
+        // Still pending: the notice must not be torn down before we know the outcome.
+        expect(container.textContent).toContain("oauth.provider.com");
+        expect(findButton(container, "Opening…")?.hasAttribute("disabled")).toBe(true);
+
+        await act(async () => {
+          resolveOpen({ ok: true, result: undefined });
+        });
+
+        expect(container.textContent).not.toContain("oauth.provider.com");
+      });
+
+      it("keeps the notice and surfaces the reason when the external open fails", async () => {
+        actionDispatchMock.mockResolvedValue(OPEN_FAILED);
+        const { container } = render(<BrowserPane {...baseProps} />);
+        blockNavigation(container, "https://oauth.provider.com/auth");
+
+        await act(async () => {
+          findButton(container, "Open in external browser")!.dispatchEvent(
+            new MouseEvent("click", { bubbles: true })
+          );
+        });
+
+        // The failure reason reaches the user, the blocked host is still named,
+        // and the recovery route survives.
+        expect(container.textContent).toContain(OPEN_FAILED.error.message);
+        expect(container.textContent).toContain("oauth.provider.com");
+        expect(findButton(container, "Retry")).toBeDefined();
+        // Tier 3 is pane-local: no redundant global toast.
+        expect(notifyMock).not.toHaveBeenCalled();
+      });
+
+      it("does not auto-dismiss a failed notice after the 10s blocked-notice timeout", async () => {
+        actionDispatchMock.mockResolvedValue(OPEN_FAILED);
+        const { container } = render(<BrowserPane {...baseProps} />);
+        blockNavigation(container, "https://oauth.provider.com/auth");
+
+        await act(async () => {
+          findButton(container, "Open in external browser")!.dispatchEvent(
+            new MouseEvent("click", { bubbles: true })
+          );
+        });
+
+        act(() => {
+          vi.advanceTimersByTime(20_000);
+        });
+
+        // The auto-dismiss timer only owns the untouched notice — otherwise the
+        // error banner would silently delete itself and take the recovery with it.
+        expect(container.textContent).toContain(OPEN_FAILED.error.message);
+        expect(findButton(container, "Retry")).toBeDefined();
+      });
+
+      // The auto-dismiss timer is armed while the notice is "blocked". Its callback
+      // can still be picked up by the event loop after the user clicks — cleanup
+      // can't cancel a callback already in flight — so the callback itself has to
+      // re-check ownership. Otherwise it nulls the notice mid-attempt and the
+      // failure below has nothing left to attach to.
+      it("does not let a queued auto-dismiss timer destroy a notice that is mid-attempt", async () => {
+        let resolveOpen: (value: unknown) => void = () => {};
+        actionDispatchMock.mockReturnValue(
+          new Promise((resolve) => {
+            resolveOpen = resolve;
+          })
+        );
+        const { container } = render(<BrowserPane {...baseProps} />);
+        blockNavigation(container, "https://oauth.provider.com/auth");
+
+        act(() => {
+          findButton(container, "Open in external browser")!.dispatchEvent(
+            new MouseEvent("click", { bubbles: true })
+          );
+          // Fires the timer armed by the "blocked" render, in the same batch.
+          vi.advanceTimersByTime(10_000);
+        });
+
+        await act(async () => {
+          resolveOpen(OPEN_FAILED);
+        });
+
+        expect(container.textContent).toContain(OPEN_FAILED.error.message);
+        expect(findButton(container, "Retry")).toBeDefined();
+      });
+
+      it("retries the same URL from the error banner and clears the notice once it succeeds", async () => {
+        actionDispatchMock.mockResolvedValue(OPEN_FAILED);
+        const { container } = render(<BrowserPane {...baseProps} />);
+        blockNavigation(container, "https://oauth.provider.com/auth");
+
+        await act(async () => {
+          findButton(container, "Open in external browser")!.dispatchEvent(
+            new MouseEvent("click", { bubbles: true })
+          );
+        });
+
+        actionDispatchMock.mockResolvedValue({ ok: true, result: undefined });
+        await act(async () => {
+          findButton(container, "Retry")!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        });
+
+        expect(actionDispatchMock).toHaveBeenLastCalledWith(
+          "browser.openExternal",
+          { terminalId: "browser-panel-1", url: "https://oauth.provider.com/auth" },
+          { source: "user" }
+        );
+        expect(container.textContent).not.toContain("oauth.provider.com");
+      });
+
+      it("does not let a superseded notice's failure overwrite a newer blocked navigation", async () => {
+        let resolveOpen: (value: unknown) => void = () => {};
+        actionDispatchMock.mockReturnValue(
+          new Promise((resolve) => {
+            resolveOpen = resolve;
+          })
+        );
+        const { container } = render(<BrowserPane {...baseProps} />);
+        blockNavigation(container, "https://first.com/auth");
+
+        act(() => {
+          findButton(container, "Open in external browser")!.dispatchEvent(
+            new MouseEvent("click", { bubbles: true })
+          );
+        });
+
+        // The first notice is still alive and mid-attempt (the old code had
+        // already destroyed it here, which is what made its result harmless).
+        expect(container.textContent).toContain("first.com");
+
+        // A second navigation is blocked while the first open is still in flight.
+        blockNavigation(container, "https://second.com/auth");
+
+        await act(async () => {
+          resolveOpen(OPEN_FAILED);
+        });
+
+        // The stale failure belongs to first.com's notice, which no longer exists.
+        expect(container.textContent).toContain("second.com");
+        expect(container.textContent).not.toContain(OPEN_FAILED.error.message);
+      });
     });
 
     it("closes this panel when onCloseShortcut fires for it, and ignores other panels (#10859)", () => {

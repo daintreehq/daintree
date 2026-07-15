@@ -87,6 +87,57 @@ describe("openDb (integration)", () => {
     }
   });
 
+  // chmod is a POSIX no-op on Windows, so the mode-bit assertions only run there.
+  const posixIt = process.platform === "win32" ? it.skip : it;
+
+  posixIt("creates the database and its WAL/SHM sidecars owner-only", () => {
+    const dbPath = path.join(tmpDir, "perms.db");
+    const { sqlite } = openDb(dbPath, migrationsFolder);
+    try {
+      // Force a WAL frame so -wal/-shm are guaranteed to materialize (a no-op
+      // migrate could otherwise checkpoint them away and leave the loop vacuous).
+      sqlite.pragma("user_version = 42");
+
+      expect(fs.statSync(dbPath).mode & 0o777).toBe(0o600);
+      for (const suffix of ["-wal", "-shm"]) {
+        const sidecar = dbPath + suffix;
+        expect(fs.existsSync(sidecar)).toBe(true);
+        expect(fs.statSync(sidecar).mode & 0o777).toBe(0o600);
+      }
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  posixIt("pre-creates a fresh database with an exclusive owner-only handle", () => {
+    // The final-mode assertion above would still pass with only the post-open
+    // chmod, so pin the TOCTOU protection: the fresh file is created via an
+    // exclusive 0o600 handle BEFORE better-sqlite3 opens it.
+    const dbPath = path.join(tmpDir, "toctou.db");
+    const openSyncSpy = vi.spyOn(fs, "openSync");
+    const { sqlite } = openDb(dbPath, migrationsFolder);
+    try {
+      expect(openSyncSpy).toHaveBeenCalledWith(dbPath, "wx", 0o600);
+    } finally {
+      sqlite.close();
+      openSyncSpy.mockRestore();
+    }
+  });
+
+  posixIt("tightens a pre-existing world-readable database on reopen (upgrade case)", () => {
+    const dbPath = path.join(tmpDir, "legacy.db");
+    openDb(dbPath, migrationsFolder).sqlite.close();
+    // Simulate a database written by a pre-fix app version at the umask default.
+    fs.chmodSync(dbPath, 0o644);
+
+    const reopened = openDb(dbPath, migrationsFolder);
+    try {
+      expect(fs.statSync(dbPath).mode & 0o777).toBe(0o600);
+    } finally {
+      reopened.sqlite.close();
+    }
+  });
+
   it("is idempotent — opening the same DB twice does not throw or duplicate rows", () => {
     const dbPath = path.join(tmpDir, "twice.db");
     const first = openDb(dbPath, migrationsFolder);

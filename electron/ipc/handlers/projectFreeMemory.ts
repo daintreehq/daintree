@@ -1,6 +1,7 @@
 import { CHANNELS } from "../channels.js";
 import { broadcastToRenderer } from "../utils.js";
 import { projectStore } from "../../services/ProjectStore.js";
+import { collectActiveProjectIds, projectViewManagersFrom } from "../../window/activeProjectIds.js";
 import { getHibernationService } from "../../services/HibernationService.js";
 import { writeHibernatedMarker } from "../../services/pty/terminalSessionPersistence.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
@@ -32,12 +33,20 @@ export function registerProjectFreeMemoryHandlers(deps: HandlerDependencies): ()
             throw new Error("Invalid project ID");
           }
 
-          // The active project owns the visible renderer and the live workspace
-          // host for this window — tearing them down would blank the window and
-          // sever the worktree feed. Match project:close's guard: switch away.
-          if (projectId === projectStore.getCurrentProjectId()) {
+          // A visible project owns its window's renderer and live workspace host
+          // — tearing them down would blank that window and sever the worktree
+          // feed. Check EVERY window, not just the DB current-project pointer:
+          // that only tracks the last-focused window, so a project on-screen in
+          // a second window would otherwise look like a background one (#11102).
+          const activeIds = collectActiveProjectIds(
+            projectViewManagersFrom(deps.windowRegistry),
+            projectStore.getCurrentProjectId(),
+            "project-free-memory"
+          );
+          if (activeIds.has(projectId)) {
             throw new Error(
-              "Cannot free memory for the active project. Switch to another project first."
+              "Cannot free memory for a project that's open in a window. " +
+                "Switch that window to another project first."
             );
           }
 

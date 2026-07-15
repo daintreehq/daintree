@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { ACCENT_CONTRAST_PAIR, accentOverrideHasLowContrast, contrastRatio } from "../contrast.js";
 import {
   applyAccentOverrideToScheme,
   BUILT_IN_APP_SCHEMES,
@@ -72,18 +73,40 @@ describe("computeAccentOverrideTokens", () => {
     expect(softAlpha).toBeLessThan(mutedAlpha);
   });
 
-  it("picks a high-contrast accent-foreground for a very light accent", () => {
-    // A near-white accent must choose a dark foreground for readability.
-    const tokens = computeAccentOverrideTokens("#fafafa", darkScheme);
-    // Candidate order: text-inverse, text-primary, #ffffff, #000000.
-    // On a dark theme, text-inverse is dark, so contrast is very high.
-    // Either way, the winner must NOT be #ffffff.
-    expect(tokens["accent-foreground"]).not.toBe("#ffffff");
-  });
+  // Adversarial accents, both polarities (#11115). The old assertions only said the
+  // derived foreground wasn't pure white/black — a 2.4:1 near-miss satisfied that.
+  // #757575 is the genuinely hardest 8-bit neutral: white clears it by only 4.61:1
+  // and black by 4.56:1, so a derivation that picks the wrong candidate fails here
+  // while #808080 (black clears at 5.32:1) would let it pass.
+  describe.each([
+    ["very light", "#fafafa"],
+    ["very dark", "#050505"],
+    ["boundary mid-luminance", "#757575"],
+  ])("a %s accent", (_label, accent) => {
+    it.each([
+      ["dark", darkScheme],
+      ["light", lightScheme],
+    ])("derives a foreground legible on the accent fill, on a %s base scheme", (_type, base) => {
+      const scheme = applyAccentOverrideToScheme(base, accent);
 
-  it("picks a high-contrast accent-foreground for a very dark accent", () => {
-    const tokens = computeAccentOverrideTokens("#050505", lightScheme);
-    expect(tokens["accent-foreground"]).not.toBe("#000000");
+      // Assert the ratio directly, with the threshold read from the validator's own
+      // pair. Going through accentOverrideHasLowContrast alone would fail OPEN: it
+      // skips the foreground branch entirely when the derived value isn't a hex, so
+      // a derivation regressing to an rgba()/var() string would report no failure.
+      const ratio = contrastRatio(
+        scheme.tokens[ACCENT_CONTRAST_PAIR.foreground],
+        scheme.tokens[ACCENT_CONTRAST_PAIR.background]
+      );
+      expect(ratio, `accent-foreground is illegible on ${accent}`).toBeGreaterThanOrEqual(
+        ACCENT_CONTRAST_PAIR.minimum
+      );
+
+      // And the production validator must agree. A `surface`-mode failure is expected
+      // and allowed — a near-white accent IS hard to see on a light canvas, which is a
+      // separate finding the theme picker warns about on its own.
+      const failure = accentOverrideHasLowContrast(scheme);
+      expect(failure?.mode).not.toBe("foreground");
+    });
   });
 
   it("throws on invalid hex input", () => {

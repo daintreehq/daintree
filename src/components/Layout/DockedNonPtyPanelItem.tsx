@@ -85,7 +85,7 @@ export function DockedNonPtyPanelItem({ panel, displayTitle }: DockedNonPtyPanel
   useDndMonitor({
     onDragStart: ({ active }) => {
       if (active.id === panel.id && isOpen) {
-        closeDockTerminal();
+        closeDockTerminal(panel.id);
       }
     },
   });
@@ -95,7 +95,7 @@ export function DockedNonPtyPanelItem({ panel, displayTitle }: DockedNonPtyPanel
       if (open) {
         openDockTerminal(panel.id);
       } else {
-        closeDockTerminal();
+        closeDockTerminal(panel.id);
       }
     },
     [panel.id, openDockTerminal, closeDockTerminal]
@@ -103,7 +103,7 @@ export function DockedNonPtyPanelItem({ panel, displayTitle }: DockedNonPtyPanel
 
   const handleMoveToGrid = useCallback(() => {
     const moved = moveTerminalToGrid(panel.id);
-    if (moved) closeDockTerminal();
+    if (moved) closeDockTerminal(panel.id);
   }, [panel.id, moveTerminalToGrid, closeDockTerminal]);
 
   const chrome = useMemo(() => deriveTerminalChrome({ kind: panel.kind }), [panel.kind]);
@@ -133,7 +133,7 @@ export function DockedNonPtyPanelItem({ panel, displayTitle }: DockedNonPtyPanel
                   e.stopPropagation();
                   if (e.detail >= 2) return;
                   if (isOpen) {
-                    closeDockTerminal();
+                    closeDockTerminal(panel.id);
                   } else {
                     openDockTerminal(panel.id);
                   }

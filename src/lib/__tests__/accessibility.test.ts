@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { closeAndAnnounce } from "../accessibility";
+import { closeAndAnnounce, restoreFocusTo } from "../accessibility";
 import {
   useAnnouncerStore,
   _resetAnnouncerDeliveryForTests,
@@ -84,5 +84,105 @@ describe("closeAndAnnounce", () => {
     // announcement is only written after the modal closes.
     expect(storeWasEmptyAtCloseTime).toBe(true);
     expect(useAnnouncerStore.getState().polite?.msg).toBe("Terminal killed");
+  });
+});
+
+describe("restoreFocusTo", () => {
+  let root: HTMLElement;
+
+  function addButton(label: string, parent: HTMLElement = document.body): HTMLButtonElement {
+    const button = document.createElement("button");
+    button.textContent = label;
+    parent.appendChild(button);
+    return button;
+  }
+
+  beforeEach(() => {
+    root = document.createElement("div");
+    root.id = "root";
+    document.body.appendChild(root);
+  });
+
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("focuses the first candidate when it is still connected", () => {
+    const first = addButton("first");
+    const second = addButton("second");
+
+    restoreFocusTo(first, second);
+
+    expect(document.activeElement).toBe(first);
+  });
+
+  it("falls through to the next candidate when the first was unmounted", () => {
+    const removed = addButton("removed");
+    const successor = addButton("successor");
+    removed.remove();
+
+    restoreFocusTo(removed, successor);
+
+    expect(document.activeElement).toBe(successor);
+  });
+
+  it("skips null and body candidates without consuming the chain", () => {
+    const successor = addButton("successor");
+
+    restoreFocusTo(null, document.body, undefined, successor);
+
+    expect(document.activeElement).toBe(successor);
+  });
+
+  // Being connected isn't enough to accept focus — .focus() on a disabled
+  // element is a silent no-op, which would otherwise drop focus to <body>.
+  it("falls through a connected candidate that refuses focus", () => {
+    const disabled = addButton("disabled");
+    disabled.disabled = true;
+    const successor = addButton("successor");
+
+    restoreFocusTo(disabled, successor);
+
+    expect(document.activeElement).toBe(successor);
+  });
+
+  it("falls back to the app shell when every candidate refuses focus", () => {
+    const shellButton = addButton("shell", root);
+    const disabled = addButton("disabled");
+    disabled.disabled = true;
+
+    restoreFocusTo(disabled);
+
+    expect(document.activeElement).toBe(shellButton);
+  });
+
+  it("stops at the first accepting candidate without touching later ones", () => {
+    const accepting = addButton("accepting");
+    const successor = addButton("successor");
+
+    restoreFocusTo(accepting, successor);
+
+    expect(document.activeElement).toBe(accepting);
+  });
+
+  // Focus falling to <body> strands keyboard users with nothing to tab from.
+  it("falls back to the app shell's first tabbable element when no candidate survives", () => {
+    const shellButton = addButton("shell", root);
+    const removed = addButton("removed");
+    removed.remove();
+
+    restoreFocusTo(removed, null);
+
+    expect(document.activeElement).toBe(shellButton);
+  });
+
+  // Degrades rather than throwing when the app shell isn't mounted.
+  it("does nothing when no candidate survives and nothing is tabbable", () => {
+    const removed = addButton("removed");
+    removed.remove();
+    root.remove();
+
+    expect(() => restoreFocusTo(removed)).not.toThrow();
+    expect(document.activeElement).toBe(document.body);
   });
 });

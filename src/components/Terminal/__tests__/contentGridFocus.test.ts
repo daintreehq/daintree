@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { getMaximizedGroupFocusTarget } from "../contentGridFocus";
+import { describe, expect, it, beforeEach } from "vitest";
+import { getMaximizedGroupFocusTarget, enterFocusedPanel } from "../contentGridFocus";
+import { registerPanelFocusHandler } from "@/components/Panel/panelFocusRegistry";
+import { useMacroFocusStore } from "@/store/macroFocusStore";
 import type { PtyPanelData } from "@shared/types/panel";
 
 function createTerminal(id: string): PtyPanelData {
@@ -74,8 +76,9 @@ describe("getMaximizedGroupFocusTarget", () => {
     };
 
     expect(getMaximizedGroupFocusTarget({ ...args, openDockPopoverId: "dock-1" })).toBeNull();
-    // `closeDockTerminal` clears only `activeDockTerminalId`, leaving focus on
-    // the closed dock terminal — enforcement resumes and reclaims the group.
+    // `closeDockTerminal` now hands focus back itself (#11133), but this stays
+    // the backstop for focus left on a dock pane by any other route — persisted
+    // state, a crash mid-close — so enforcement still reclaims the group.
     expect(getMaximizedGroupFocusTarget({ ...args, openDockPopoverId: null })).toBe("term-2");
   });
 
@@ -101,5 +104,42 @@ describe("getMaximizedGroupFocusTarget", () => {
     });
 
     expect(nextFocus).toBe("term-2");
+  });
+});
+
+describe("enterFocusedPanel (#11109)", () => {
+  beforeEach(() => {
+    useMacroFocusStore.setState({ focusedRegion: "grid" });
+  });
+
+  it("releases the macro region once a live target takes focus", () => {
+    const cleanup = registerPanelFocusHandler("panel-1", () => true);
+
+    expect(enterFocusedPanel("panel-1")).toBe(true);
+    expect(useMacroFocusStore.getState().focusedRegion).toBeNull();
+
+    cleanup();
+  });
+
+  it("keeps the macro region armed when the panel declines the handoff", () => {
+    // A panel whose focus target is not mounted yet declines. Releasing the
+    // region here would leave DOM focus on the grid with the arrow keys no
+    // longer handled — Enter would silently kill grid navigation.
+    const cleanup = registerPanelFocusHandler("panel-1", () => false);
+
+    expect(enterFocusedPanel("panel-1")).toBe(false);
+    expect(useMacroFocusStore.getState().focusedRegion).toBe("grid");
+
+    cleanup();
+  });
+
+  it("keeps the macro region armed for a panel that never registered", () => {
+    expect(enterFocusedPanel("panel-unknown")).toBe(false);
+    expect(useMacroFocusStore.getState().focusedRegion).toBe("grid");
+  });
+
+  it("does nothing when no panel holds focus", () => {
+    expect(enterFocusedPanel(null)).toBe(false);
+    expect(useMacroFocusStore.getState().focusedRegion).toBe("grid");
   });
 });

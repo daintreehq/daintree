@@ -1,14 +1,14 @@
 import path from "path";
 import fs from "fs";
 import { execFileSync } from "child_process";
-import { test, expect } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 import { ensureWindowFocused } from "../../helpers/focus";
-import { getGridPanelCount } from "../../helpers/panels";
+import { getGridPanelIds, getPanelById } from "../../helpers/panels";
 import { waitForTerminalText } from "../../helpers/terminal";
 import {
   writeResourceConfig,
@@ -31,6 +31,20 @@ let fixtureCleanup: (() => void) | undefined;
 
 const BRANCH = "e2e/resource-substitution";
 const mod = process.platform === "darwin" ? "Meta" : "Control";
+
+async function waitForNewGridPanel(page: Page, existingIds: Set<string>): Promise<Locator> {
+  let panelId = "";
+  await expect
+    .poll(
+      async () => {
+        panelId = (await getGridPanelIds(page)).find((id) => !existingIds.has(id)) ?? "";
+        return panelId;
+      },
+      { timeout: T_LONG }
+    )
+    .not.toBe("");
+  return getPanelById(page, panelId);
+}
 
 test.describe.serial("Full: Worktree Resource Substitution", () => {
   test.beforeAll(async () => {
@@ -65,7 +79,7 @@ test.describe.serial("Full: Worktree Resource Substitution", () => {
   test("connect action spawns terminal with substituted worktree_name variable", async () => {
     const { window } = ctx;
 
-    const countBefore = await getGridPanelCount(window);
+    const panelIdsBefore = new Set(await getGridPanelIds(window));
 
     await ensureWindowFocused(ctx.app);
     await window.keyboard.press(`${mod}+Shift+P`);
@@ -82,9 +96,7 @@ test.describe.serial("Full: Worktree Resource Substitution", () => {
     await expect(connectOption.first()).toBeVisible({ timeout: T_SHORT });
     await connectOption.first().click();
 
-    await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(countBefore + 1);
-
-    const newPanel = window.locator(SEL.panel.gridPanel).last();
+    const newPanel = await waitForNewGridPanel(window, panelIdsBefore);
     const xtermScreen = newPanel.locator(SEL.terminal.xtermRows);
     await expect(xtermScreen).toBeVisible({ timeout: T_MEDIUM });
 
@@ -206,17 +218,14 @@ test.describe.serial("Full: Worktree Resource Substitution", () => {
     });
 
     // Provision is idempotent — a no-op when the resource is already ready — so the
-    // helper script may not re-run. Wait for the host to ingest the rewritten
-    // config before dispatching Connect; otherwise Connect can read the previous
-    // resourceConnectCommand from the renderer store. Match by branch instead of
-    // exact path because Windows may report the same worktree path with different
-    // separators across git output and the host snapshot.
+    // helper script may not re-run. Wait for the renderer store used by the
+    // Connect action to ingest the rewritten config before dispatching it.
     await expect
       .poll(
         async () =>
           window.evaluate(
             async ({ branch }) => {
-              const states = await window.electron.worktree.getAll();
+              const states = window.__DAINTREE_E2E_WORKTREES__?.() ?? [];
               return states.find((state) => state.branch === branch)?.resourceConnectCommand ?? "";
             },
             { branch: BRANCH }
@@ -225,18 +234,23 @@ test.describe.serial("Full: Worktree Resource Substitution", () => {
       )
       .toContain("BRANCH=");
 
-    const countBefore = await getGridPanelCount(window);
-    await window.keyboard.press(`${mod}+Shift+P`);
-    const palette = window.locator(SEL.actionPalette.dialog);
-    await expect(palette).toBeVisible({ timeout: T_MEDIUM });
-    await palette.locator(SEL.actionPalette.searchInput).fill("Connect to Resource");
-    const option = palette.locator('[role="option"]').filter({ hasText: /Connect to Resource/i });
-    await expect(option.first()).toBeVisible({ timeout: T_SHORT });
-    await option.first().click();
+    const panelIdsBefore = new Set(await getGridPanelIds(window));
+    await window.evaluate(
+      async ({ branch }) => {
+        const worktree = window
+          .__DAINTREE_E2E_WORKTREES__?.()
+          .find((state) => state.branch === branch);
+        if (!worktree?.resourceConnectCommand?.includes("BRANCH=")) {
+          throw new Error("Renderer worktree snapshot does not contain the rewritten command");
+        }
+        const dispatch = window.__daintreeDispatchAction;
+        if (!dispatch) throw new Error("__daintreeDispatchAction is not installed");
+        await dispatch("worktree.resource.connect", { worktreeId: worktree.id });
+      },
+      { branch: BRANCH }
+    );
 
-    await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(countBefore + 1);
-
-    const newPanel = window.locator(SEL.panel.gridPanel).last();
+    const newPanel = await waitForNewGridPanel(window, panelIdsBefore);
     const xtermScreen = newPanel.locator(SEL.terminal.xtermRows);
     await expect(xtermScreen).toBeVisible({ timeout: T_MEDIUM });
 

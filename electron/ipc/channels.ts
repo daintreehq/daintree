@@ -453,6 +453,7 @@ export const CHANNELS = {
   UPDATE_SET_CHANNEL: "update:set-channel",
   UPDATE_DISMISS_TOAST: "update:dismiss-toast",
   UPDATE_GET_LAST_CHECK: "update:get-last-check",
+  UPDATE_GET_LATEST: "update:get-latest",
 
   // Windows Store update notification channels (separate from electron-updater
   // because Store builds can't auto-install — these power a notify-only path

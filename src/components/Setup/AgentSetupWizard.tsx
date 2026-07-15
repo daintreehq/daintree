@@ -473,8 +473,9 @@ export function AgentSetupWizard({
     const targetId = prefersLight ? "bondi" : "daintree";
     if (selectedSchemeId !== targetId) {
       // Auto-select mirrors OS appearance — not a direct user pick, so use the
-      // silent setter to avoid polluting the recently-used list.
-      setSelectedSchemeIdSilent(targetId);
+      // silent setter to avoid polluting the recently-used list. The wizard has
+      // already painted, so crossfade the swap instead of cutting it.
+      setSelectedSchemeIdSilent(targetId, { crossfade: true });
       appThemeClient
         .setColorScheme(targetId)
         .catch((err) => logError("Failed to set color scheme", err));

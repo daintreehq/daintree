@@ -128,6 +128,16 @@ const POLL_QUEUE_TASK_TIMEOUT_MS = 60_000;
 // a silent no-op, even when the underlying pipelines are degraded.
 const HOST_REFRESH_TIMEOUT_MS = 45_000;
 
+// Coalescing window for `.git/config` writes (#11155). Every worktree sharing
+// the common dir reports the same write, and git itself writes config as
+// lock-then-rename (two events), so a short trailing debounce collapses the
+// burst into one `getRemotes()` spawn.
+const FORGE_REMOTE_REPROBE_DEBOUNCE_MS = 250;
+
+// Backstop cadence for the config fingerprint check when the git watcher is
+// disabled or has silently degraded. A stat, not a subprocess.
+const FORGE_CONFIG_POLL_INTERVAL_MS = 5 * 60 * 1000;
+
 // FIFO cap on the acknowledged-mutation dedup set. Mutation ids are arbitrary
 // UUIDs (not path-keyed), so size-capping is the only viable pruning strategy;
 // a session sees well under 100 deletes, so 500 never evicts a live id.
@@ -180,6 +190,27 @@ export class WorkspaceService {
   // Empty until the first relay lands (after plugin load), so monitors start
   // unmatched and re-resolve when the table arrives or changes.
   private forgeProviderMatchers: ForgeProviderMatcher[] = [];
+  // Repo-level forge-remote state (#11155). Remotes live in the shared
+  // `.git/config`, so every worktree's watcher reports the same write — the
+  // service coalesces them into ONE probe and fans the result out to all
+  // monitors. `forgeRemoteSignature` is the last-seen remote table (names +
+  // fetch URLs, host-local and never transmitted — remote URLs can embed
+  // credentials). Events fire only when it genuinely changes, so the unrelated
+  // config writes that already wake the watcher (`git push -u`,
+  // `branch --set-upstream-to`) cost nothing and cannot churn the provider.
+  private forgeRemoteSignature: string | null = null;
+  private forgeRemoteProbeSeq = 0;
+  private forgeRemoteReprobeTimer: NodeJS.Timeout | null = null;
+  // Bumped whenever a `.git/config` write is OBSERVED. A baseline read that
+  // spans a bump may already contain the change it was meant to precede, so it
+  // is discarded rather than seeded.
+  private forgeConfigEpoch = 0;
+  // Watcher-independent backstop: `GitFileWatcher` swallows `fs.watch` failures
+  // (silent fallback to polling) and Linux inotify exhaustion is a live failure
+  // mode, so a repo can miss the config event entirely. Costs one stat per
+  // interval; the git subprocess runs only when the fingerprint actually moved.
+  private forgeConfigPollTimer: NodeJS.Timeout | null = null;
+  private forgeConfigFingerprint: string | null = null;
   private git: SimpleGit | null = null;
   private pollingEnabled: boolean = true;
   private projectRootPath: string | null = null;
@@ -284,13 +315,16 @@ export class WorkspaceService {
   constructor(private readonly sendEvent: (event: WorkspaceHostEvent) => void) {
     this.fetchCoordinator = new RepoFetchCoordinator({
       onFetchSuccess: (worktreeId) => {
-        const monitor = this.monitors.get(worktreeId);
-        if (!monitor || !monitor.isRunning) return;
         // A successful fetch updated remote refs, so the next `rev-list` for
-        // ahead/behind will return fresh counts. Trigger a status refresh
-        // immediately rather than waiting for the next poll tick — but
-        // fire-and-forget; fetch success must never block.
-        monitor.triggerRefreshIfUpdating();
+        // ahead/behind returns fresh counts for *every* worktree sharing this
+        // repo's common dir — not just the one that triggered the fetch. Force
+        // a status refresh across all siblings so a sibling-triggered fetch
+        // still surfaces the main worktree's new behind-count promptly (drives
+        // the forge-count recheck, #11151) instead of waiting for that
+        // worktree's own next poll tick. Fire-and-forget; fetch success must
+        // never block, and a commondir-resolution race during teardown must
+        // not surface as an unhandled rejection.
+        void this.refreshStatusForFetchSiblings(worktreeId).catch(() => {});
       },
       onAuthFailureConfirmed: (commonDir, reason) =>
         this.handleAuthFailureConfirmed(commonDir, reason),
@@ -572,6 +606,8 @@ export class WorkspaceService {
         throw new Error(`Project directory does not exist: ${projectRootPath}`);
       }
       this.projectRootPath = projectRootPath;
+      // Backstop for a disabled or silently-degraded git watcher (#11155).
+      this.startForgeRemoteDetection();
       if (wslGitByWorktree && typeof wslGitByWorktree === "object") {
         // Merge instead of replacing: a `set-wsl-opt-in` message arriving
         // during this load-project's async work would otherwise be silently
@@ -1226,6 +1262,7 @@ export class WorkspaceService {
         onInotifyLimitReached: () => this.handleInotifyLimitReached(),
         onEmfileLimitReached: () => this.handleEmfileLimitReached(),
         onWatcherRecovered: () => this.handleWatcherRecovered(),
+        onGitConfigChanged: () => this.scheduleForgeRemoteReprobe({ observedConfigWrite: true }),
         onScheduleFetch: async (worktreeId, _isCurrent, force) => {
           const target = this.monitors.get(worktreeId);
           if (!target || !target.isRunning) return;
@@ -1501,6 +1538,78 @@ export class WorkspaceService {
   }
 
   /**
+   * Force a fresh git-status pass after a real fetch completes (#11151). One
+   * `git fetch origin` advances upstream refs for every linked worktree sharing
+   * the object store, but a fetch triggered by one worktree (e.g. the focused
+   * feature worktree) would only re-poll that worktree — leaving the main
+   * worktree, whose behind-count feeds the forge-count auto-recheck, on a stale
+   * count until its own slower background tier.
+   *
+   * Refreshes the triggering worktree (as the prior single-monitor call did)
+   * plus the main worktree — and *only* those two. Fanning out to every
+   * common-dir sibling would turn one fetch on a many-worktree repo into an
+   * N-way `git status` storm (these passes run outside the poll queue), so the
+   * fan-out is deliberately bounded to the one sibling the toolbar reads from.
+   *
+   * Only invoked from `onFetchSuccess` (a genuine completed fetch), never from
+   * the recency-cache/skip paths, so it can't fan status work out on a no-op.
+   */
+  private async refreshStatusForFetchSiblings(triggeringWorktreeId: string): Promise<void> {
+    const triggering = this.monitors.get(triggeringWorktreeId);
+    if (!triggering || !triggering.isRunning) return;
+    // The triggering worktree's own counts are freshest to it — refresh it
+    // first, matching the single-monitor behaviour this replaced.
+    triggering.triggerRefreshIfUpdating();
+
+    // Find the main worktree; skip when it's the trigger (already refreshed) or
+    // not running.
+    let mainWorktree: WorktreeMonitor | undefined;
+    for (const monitor of this.monitors.values()) {
+      if (monitor.isMainWorktree && monitor !== triggering) {
+        mainWorktree = monitor;
+        break;
+      }
+    }
+    if (!mainWorktree || !mainWorktree.isRunning) return;
+
+    // Only refresh the main worktree if it shares the fetched repo's common dir
+    // (linked worktree of the same repo). Re-check `isRunning` after the awaits:
+    // the monitor can be stopped/removed while the commondir resolutions are
+    // pending.
+    const [triggeringCommonDir, mainCommonDir] = await Promise.all([
+      getGitCommonDir(triggering.path, { logErrors: false }),
+      getGitCommonDir(mainWorktree.path, { logErrors: false }),
+    ]);
+    if (triggeringCommonDir && mainCommonDir === triggeringCommonDir && mainWorktree.isRunning) {
+      mainWorktree.triggerRefreshIfUpdating();
+    }
+  }
+
+  /**
+   * Read the repo's remote table once. Returns origin's (or the first remote's)
+   * fetch URL plus a stable signature of every name→fetch-URL pair, used to tell
+   * a real remote change from an unrelated `.git/config` write. The signature
+   * stays in this process — remote URLs can carry embedded credentials.
+   */
+  private async readForgeRemotes(
+    cwd: string
+  ): Promise<{ fetchUrl: string | undefined; signature: string } | null> {
+    try {
+      const git = await createHardenedGit(cwd);
+      const remotes = await git.getRemotes(true);
+      const origin = remotes.find((r) => r.name === "origin") ?? remotes[0];
+      const signature = remotes
+        .map((remote) => `${remote.name} ${remote.refs?.fetch ?? ""}`)
+        .sort()
+        .join("");
+      return { fetchUrl: origin?.refs?.fetch, signature };
+    } catch {
+      // Remote probe is best-effort; keep the affordance hidden on failure.
+      return null;
+    }
+  }
+
+  /**
    * Probe origin's fetch URL once at monitor start, remember it on the
    * monitor, and resolve it against the relayed provider-matcher table. Runs
    * off the critical path — failures are silent (the affordance simply stays
@@ -1508,18 +1617,199 @@ export class WorkspaceService {
    * lets `setForgeProviderMatchers` re-match without re-probing git.
    */
   private async probeForgeRemoteAsync(monitor: WorktreeMonitor): Promise<void> {
-    try {
-      const git = await createHardenedGit(monitor.path);
-      const remotes = await git.getRemotes(true);
-      const origin = remotes.find((r) => r.name === "origin") ?? remotes[0];
-      const fetchUrl = origin?.refs?.fetch;
-      monitor.setRemoteFetchUrl(fetchUrl);
-      monitor.setMatchedForgeProviderId(
-        fetchUrl ? matchProviderForRemoteUrl(fetchUrl, this.forgeProviderMatchers) : null
-      );
-    } catch {
-      // Remote probe is best-effort; keep the affordance hidden on failure.
+    const probed = await this.readForgeRemotes(monitor.path);
+    if (!probed) return;
+    monitor.setRemoteFetchUrl(probed.fetchUrl);
+    monitor.setMatchedForgeProviderId(
+      probed.fetchUrl
+        ? matchProviderForRemoteUrl(probed.fetchUrl, this.forgeProviderMatchers)
+        : null
+    );
+    // Deliberately does NOT seed `forgeRemoteSignature`. A monitor start probe
+    // races the user: it can complete AFTER a `git remote add` and would then
+    // record the post-change remotes as the "before" baseline, leaving the
+    // reprobe with an equal signature and nothing to emit — the toolbar would
+    // stay stale for exactly the case this feature exists to catch. The
+    // baseline is seeded once at load instead (`startForgeRemoteDetection`).
+  }
+
+  /**
+   * A worktree's `.git/config` was written. Remotes are repo-level, so every
+   * sibling worktree reports the same write (and git writes config as
+   * lock-then-rename) — a trailing debounce collapses the burst into one probe.
+   */
+  private scheduleForgeRemoteReprobe(opts: { observedConfigWrite: boolean }): void {
+    if (this._shutdownController.signal.aborted) return;
+    // Bump on a real observed write even when a reprobe is already pending: it
+    // marks an in-flight baseline seed as spanning the write, so it can't record
+    // a snapshot that already absorbed the change. The backstop tick observes
+    // nothing, so it must not invalidate the seed.
+    if (opts.observedConfigWrite) this.forgeConfigEpoch++;
+    if (this.forgeRemoteReprobeTimer) return;
+    this.forgeRemoteReprobeTimer = setTimeout(() => {
+      this.forgeRemoteReprobeTimer = null;
+      void this.reprobeForgeRemoteAsync();
+    }, FORGE_REMOTE_REPROBE_DEBOUNCE_MS);
+  }
+
+  /**
+   * Re-read the repo's remotes after a `.git/config` write and, when the remote
+   * table actually changed, re-resolve every monitor's forge affordance and
+   * signal both the in-process PR poller and the renderer (#11155). An
+   * unchanged signature emits nothing — that restraint is what keeps
+   * `PullRequestService`'s no-match pause (#9997) meaningful, since the same
+   * config file is written by `git push -u` on every first push.
+   */
+  private async reprobeForgeRemoteAsync(): Promise<void> {
+    const cwd = this.forgeProbeCwd();
+    if (!cwd) return;
+    const seq = ++this.forgeRemoteProbeSeq;
+
+    // Cheap gate in front of the subprocess. Two callers land here — the git
+    // watcher and the 5-minute backstop — and neither proves the remotes moved:
+    // `fs.watch` may report a change with NO filename (so we conservatively
+    // assume config), and the backstop fires on a timer. Without this gate a
+    // repo emitting unnamed `.git/` events would spawn `git remote` every
+    // debounce window.
+    //
+    // Safe to gate on, because git writes `.git/config` lock-then-rename — a
+    // real `git remote add/set-url/remove` ALWAYS lands a new inode, so it can
+    // never be mistaken for "unchanged". Stat failure fails open (probe anyway).
+    const fingerprint = await this.readForgeConfigFingerprint();
+    if (seq !== this.forgeRemoteProbeSeq) return;
+    if (fingerprint !== null && fingerprint === this.forgeConfigFingerprint) return;
+
+    const probed = await this.readForgeRemotes(cwd);
+    // A dispose (or a newer probe) landed while git ran: the monitors this one
+    // would touch may already be stopped, and its read is no longer the truth.
+    if (!probed || seq !== this.forgeRemoteProbeSeq) return;
+    if (this._shutdownController.signal.aborted) return;
+
+    // Consume the fingerprint only now that this probe has actually READ the
+    // remotes that go with it. Recording it up front (before the git read) loses
+    // changes two ways: a superseding probe would see the fingerprint already
+    // consumed and bail while the superseded probe dies on the seq check, and a
+    // transient git failure would leave the change permanently marked as seen.
+    this.forgeConfigFingerprint = fingerprint;
+
+    const matchedProviderId = probed.fetchUrl
+      ? matchProviderForRemoteUrl(probed.fetchUrl, this.forgeProviderMatchers)
+      : null;
+    for (const monitor of this.monitors.values()) {
+      if (!monitor.isRunning) continue;
+      monitor.setRemoteFetchUrl(probed.fetchUrl);
+      monitor.setMatchedForgeProviderId(matchedProviderId);
     }
+
+    if (probed.signature === this.forgeRemoteSignature) return;
+    this.forgeRemoteSignature = probed.signature;
+
+    // In-process: releases PullRequestService's sticky "no-match" pause so the
+    // per-worktree PR badges resolve against the new remote.
+    events.emit("sys:forge:remote-changed", { timestamp: Date.now() });
+    // Cross-process: main relays this to the renderer, which drops its cached
+    // provider resolution and re-runs the full precedence chain (per-project
+    // override → global default → hostname match).
+    this.sendEvent({ type: "forge-remote-changed" });
+  }
+
+  /**
+   * Any running monitor resolves the same remotes — they share one common dir.
+   * Prefer the main worktree (longest-lived), then any running monitor, then
+   * the project root for the window between load and the first monitor start.
+   */
+  private forgeProbeCwd(): string | null {
+    for (const monitor of this.monitors.values()) {
+      if (monitor.isRunning && monitor.isMainWorktree) return monitor.path;
+    }
+    for (const monitor of this.monitors.values()) {
+      if (monitor.isRunning) return monitor.path;
+    }
+    return this.projectRootPath;
+  }
+
+  /**
+   * Identity fingerprint of `<commonDir>/config`, or null when it can't be read.
+   * Includes the inode: git writes config lock-then-rename, so every real
+   * `git remote` mutation lands a NEW inode. That makes the fingerprint a
+   * trustworthy "did this file actually change" gate even on filesystems whose
+   * timestamp granularity is too coarse to catch a same-size rewrite.
+   */
+  private async readForgeConfigFingerprint(): Promise<string | null> {
+    const rootPath = this.projectRootPath;
+    if (!rootPath) return null;
+    try {
+      const commonDir = await getGitCommonDir(rootPath, { logErrors: false });
+      if (!commonDir) return null;
+      const stats = await stat(pathResolve(commonDir, "config"));
+      return `${stats.ino}:${stats.mtimeMs}:${stats.ctimeMs}:${stats.size}`;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Seed the change baseline and arm the watcher-independent backstop. Called
+   * at project load, before any monitor (and therefore any git watcher) starts.
+   *
+   * The load-time read is the ONLY one allowed to establish the "before"
+   * snapshot: it provably precedes the watcher, whereas a per-monitor start
+   * probe races the user and can absorb the very `git remote add` we need to
+   * detect. `??=` keeps a reprobe that already landed from being overwritten by
+   * this slower read.
+   */
+  private startForgeRemoteDetection(): void {
+    if (this.forgeConfigPollTimer) return;
+    const rootPath = this.projectRootPath;
+    if (!rootPath) return;
+
+    const seq = this.forgeRemoteProbeSeq;
+    const epoch = this.forgeConfigEpoch;
+    void (async () => {
+      // stat → read → stat. The remote table and the fingerprint must describe
+      // the SAME config, or the pair is incoherent: pre-change remotes stamped
+      // with a post-change fingerprint would make the backstop consider the
+      // change already seen and never emit it. Reading them concurrently cannot
+      // guarantee that; bracketing the git read with two stats can.
+      const before = await this.readForgeConfigFingerprint();
+      const probed = await this.readForgeRemotes(rootPath);
+      const after = await this.readForgeConfigFingerprint();
+
+      // Discard when: the project unloaded mid-read, a config write was observed
+      // mid-read, or the config moved between the stats (so this read may
+      // already contain the change it is supposed to precede). Leaving the
+      // baseline null is the safe failure — the next reprobe then sees
+      // `signature !== null` and emits.
+      if (seq !== this.forgeRemoteProbeSeq || epoch !== this.forgeConfigEpoch) return;
+      if (before !== after) return;
+      if (probed) this.forgeRemoteSignature ??= probed.signature;
+      this.forgeConfigFingerprint ??= after;
+    })();
+
+    // The backstop only has to WAKE the reprobe — the reprobe itself stats the
+    // config and skips the git spawn when nothing moved, so an idle tick costs
+    // one stat.
+    this.forgeConfigPollTimer = setInterval(() => {
+      this.scheduleForgeRemoteReprobe({ observedConfigWrite: false });
+    }, FORGE_CONFIG_POLL_INTERVAL_MS);
+    this.forgeConfigPollTimer.unref?.();
+  }
+
+  private stopForgeRemoteDetection(): void {
+    if (this.forgeConfigPollTimer) {
+      clearInterval(this.forgeConfigPollTimer);
+      this.forgeConfigPollTimer = null;
+    }
+    if (this.forgeRemoteReprobeTimer) {
+      clearTimeout(this.forgeRemoteReprobeTimer);
+      this.forgeRemoteReprobeTimer = null;
+    }
+    // Invalidate every in-flight read (baseline seed and reprobe alike) so a
+    // late completion can't touch stopped monitors, seed the incoming project's
+    // baseline, or signal on behalf of a project that is no longer loaded.
+    this.forgeRemoteProbeSeq++;
+    this.forgeRemoteSignature = null;
+    this.forgeConfigFingerprint = null;
   }
 
   /**
@@ -3134,6 +3424,10 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     // re-surface its toast instead of being silently suppressed.
     this.authFailureConfirmedNotified.clear();
     this.pollQueue.clear();
+    // Drops the forge-remote baseline with the project: the next one's own
+    // start probe re-seeds it, and an in-flight probe from this project must
+    // not signal against the incoming one.
+    this.stopForgeRemoteDetection();
 
     this.activeWorktreeId = null;
     this.mainBranch = "main";
@@ -3263,6 +3557,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     this.fetchCoordinator.destroy();
     this.authFailureConfirmedNotified.clear();
     this.pollQueue.clear();
+    this.stopForgeRemoteDetection();
     this.listService.invalidateCache();
   }
 }

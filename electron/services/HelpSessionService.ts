@@ -398,6 +398,48 @@ export class HelpSessionService {
   }
 
   /**
+   * The assistant backend bound to `projectId` — its PTY and the WebContents
+   * the session pinned at provision time — or null when the project has no
+   * unrevoked help session with a spawned terminal.
+   *
+   * ProjectViewManager's eviction policy reads this synchronously to keep the
+   * view hosting a running assistant out of the routine LRU candidate pool
+   * (#11157): destroying that view fires `onViewEvicted` →
+   * `revokeByWebContentsId` → `gracefulKill`, tearing down the whole PTY
+   * process tree, so every sub-agent and background shell the assistant spawned
+   * dies with it. A grid terminal has no such coupling (its PTY lives in the
+   * pty-host and reconnects on switch-back), which is why the floor is scoped
+   * to help sessions rather than to `hasActiveAgent()` at large.
+   *
+   * `webContentsId` is the same pin `revokeByWebContentsId` matches on, so the
+   * caller can protect exactly the view whose eviction would do the killing —
+   * a second window's cached view of the same project kills nothing and stays
+   * an ordinary LRU candidate.
+   *
+   * NOT a liveness signal on its own: the binding is dropped on revoke,
+   * displacement, and unbind, but nothing drops it when the PTY exits under its
+   * own steam (the orphan sweep deliberately skips bound sessions). Callers
+   * must cross-check `terminalId` against a registry that tracks PTY exits, or
+   * an assistant the user quit would pin its view forever.
+   */
+  getAssistantBackend(projectId: string): { terminalId: string; webContentsId: number } | null {
+    if (!projectId) return null;
+    const terminalId = this.activeHelpTerminalByProjectId.get(projectId);
+    if (!terminalId) return null;
+    for (const record of this.sessionsById.values()) {
+      if (record.revoked) continue;
+      // Match on the project too, not just the terminal id: nothing enforces
+      // terminal-id uniqueness across projects, and picking up another
+      // project's record would return the wrong pin — which reads as "this view
+      // isn't the pinned one" and hands the running assistant back to the LRU.
+      if (record.projectId !== projectId) continue;
+      if (this.terminalBySessionId.get(record.sessionId) !== terminalId) continue;
+      return { terminalId, webContentsId: record.projectViewWebContentsId };
+    }
+    return null;
+  }
+
+  /**
    * Looks up the renderer WebContents id pinned to a help-session bearer at
    * provision time. The MCP server uses this at handshake to pin each
    * transport session to the window that minted it, so a tool call from the

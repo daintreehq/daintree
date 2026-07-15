@@ -21,7 +21,11 @@ const mockDbModule = vi.hoisted(() => ({
   getBackupPath: vi.fn().mockReturnValue("/fake/daintree.db.backup"),
   getSharedSqlite: vi.fn().mockReturnValue(mockSqlite),
   probeDb: vi.fn().mockReturnValue(true),
-  attemptRecovery: vi.fn().mockReturnValue(true),
+  probeDbFile: vi.fn().mockReturnValue("ok"),
+  attemptRecovery: vi.fn().mockReturnValue({
+    kind: "restored-from-backup",
+    quarantinedPath: "/fake/daintree.db.corrupt-2026-01-01",
+  }),
 }));
 
 vi.mock("electron", () => ({
@@ -76,6 +80,14 @@ async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
 }
 
+/**
+ * A backup now awaits its candidate integrity probe before the rename, so the
+ * chain spans several microtask turns. Drain generously rather than counting.
+ */
+async function drainMicrotasks(): Promise<void> {
+  for (let i = 0; i < 8; i++) await Promise.resolve();
+}
+
 describe("DatabaseMaintenanceService adversarial", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -88,6 +100,7 @@ describe("DatabaseMaintenanceService adversarial", () => {
     mockDbModule.getBackupPath.mockReturnValue("/fake/daintree.db.backup");
     mockDbModule.getSharedSqlite.mockReturnValue(mockSqlite);
     mockDbModule.probeDb.mockReturnValue(true);
+    mockDbModule.probeDbFile.mockReturnValue("ok");
     mockSqlite.backup.mockResolvedValue(undefined);
     mockSqlite.pragma.mockReset();
     mockPowerMonitor.getSystemIdleTime.mockReturnValue(120);
@@ -177,12 +190,60 @@ describe("DatabaseMaintenanceService adversarial", () => {
     service.startMaintenance();
 
     vi.advanceTimersByTime(5 * 60 * 1000);
-    await flushMicrotasks();
+    // The candidate probe (probeDb, mocked clean) sits between the backup and
+    // the rename now, so the rename is one extra microtask turn out.
+    await drainMicrotasks();
 
     expect(console.warn).toHaveBeenCalledWith("[DatabaseMaintenance] Backup failed:", renameError);
     expect(vi.mocked(fs.unlinkSync)).toHaveBeenCalledWith("/fake/daintree.db.backup.tmp");
 
     await expect(service.dispose()).resolves.toBeUndefined();
+  });
+
+  it("CORRUPT_CANDIDATE_SURVIVES_FAILED_TEMP_CLEANUP", async () => {
+    // The candidate probes dirty AND the temp file cannot be removed. A failed
+    // unlink is not a reason to promote the bad copy over the good backup.
+    mockDbModule.probeDbFile.mockReturnValue("corrupt");
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.unlinkSync).mockImplementation(() => {
+      throw Object.assign(new Error("unlink failed"), { code: "EPERM" });
+    });
+
+    const service = new DatabaseMaintenanceService();
+    service.initialize();
+    service.startMaintenance();
+
+    vi.advanceTimersByTime(5 * 60 * 1000);
+    await drainMicrotasks();
+
+    expect(vi.mocked(fs.renameSync)).not.toHaveBeenCalled();
+
+    await service.dispose();
+    expect(vi.mocked(fs.renameSync)).not.toHaveBeenCalled();
+  });
+
+  it("CORRUPT_CANDIDATE_NEVER_REPLACES_GOOD_BACKUP", async () => {
+    // Every candidate sqlite.backup() produces probes dirty. However many ticks
+    // pass and however shutdown lands, the good backup must never be renamed
+    // over — that file is the user's last copy of their data.
+    mockDbModule.probeDbFile.mockReturnValue("corrupt");
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+
+    const service = new DatabaseMaintenanceService();
+    service.initialize();
+    service.startMaintenance();
+
+    for (let i = 0; i < 6; i++) {
+      vi.advanceTimersByTime(5 * 60 * 1000);
+      await drainMicrotasks();
+    }
+
+    expect(vi.mocked(fs.unlinkSync)).toHaveBeenCalledWith("/fake/daintree.db.backup.tmp");
+    expect(vi.mocked(fs.renameSync)).not.toHaveBeenCalled();
+
+    await service.dispose();
+    expect(vi.mocked(fs.renameSync)).not.toHaveBeenCalled();
+    expect(mockSqlite.pragma.mock.calls.at(-1)).toEqual(["wal_checkpoint(TRUNCATE)"]);
   });
 
   it("SUSPEND_DURING_INFLIGHT_BACKUP_ONLY_CHECKPOINTS", async () => {

@@ -246,7 +246,7 @@ export const SETTINGS_REGISTRY = [
         section: "About",
         title: "About Daintree",
         description: "App version and description",
-        keywords: ["version", "about", "info", "beta"],
+        keywords: ["version", "about", "info"],
       },
       {
         id: "general-system-status",

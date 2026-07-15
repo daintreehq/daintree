@@ -159,6 +159,62 @@ test.describe.serial("Core: Cross-Worktree Terminal Isolation", () => {
     });
   });
 
+  test("maximizing in one worktree leaves another worktree's grid intact", async () => {
+    test.setTimeout(process.env.CI ? 180_000 : 120_000);
+
+    // Don't lean on panels spawned by earlier tests in this serial block — a
+    // --grep'd run of this test alone would otherwise fail before it starts.
+    async function ensureGridPanel(page: Page): Promise<string> {
+      const existing = await getGridPanelIds(page);
+      if (existing.length > 0) return existing[0]!;
+      const panel = await spawnTerminalAndVerify(page);
+      return getPanelId(panel);
+    }
+
+    let window = await switchMainWorktree(ctx);
+    const restoreBtn = window.locator(SEL.panel.restore);
+
+    const mainPanelId = await test.step("maximize the main worktree's panel", async () => {
+      const panelId = await ensureGridPanel(window);
+      expect(panelId).toBeTruthy();
+
+      const panel = getPanelById(window, panelId);
+      await panel.hover();
+      await panel.locator(SEL.panel.maximize).first().click();
+      await expect(restoreBtn.first()).toBeVisible({ timeout: T_SHORT });
+      return panelId;
+    });
+
+    await test.step("the feature worktree still renders its own panels", async () => {
+      window = await switchNamedWorktree(ctx, FEATURE);
+
+      // The regression (#11183): maximize was a single global pointer, so it
+      // survived the switch and ContentGrid took its maximize branch, failed to
+      // find the main worktree's panel among this worktree's grid panels, and
+      // rendered nothing at all — a blank screen. Reverting the fix fails
+      // exactly here, on a grid with zero panels.
+      const featurePanelIds = await getGridPanelIds(window);
+      expect(featurePanelIds.length).toBeGreaterThan(0);
+      expect(featurePanelIds).not.toContain(mainPanelId);
+      await expect(getPanelById(window, featurePanelIds[0]!)).toBeVisible({ timeout: T_LONG });
+
+      // ...and this worktree is not itself maximized: nothing leaked into it.
+      await expect(window.locator(SEL.panel.restore)).toHaveCount(0, { timeout: T_SHORT });
+    });
+
+    await test.step("returning to the main worktree restores its maximized panel", async () => {
+      window = await switchMainWorktree(ctx);
+
+      await expect(window.locator(SEL.panel.restore).first()).toBeVisible({ timeout: T_LONG });
+      await expect(getPanelById(window, mainPanelId)).toBeVisible({ timeout: T_LONG });
+    });
+
+    await test.step("unmaximize so later tests start from the grid", async () => {
+      await window.locator(SEL.panel.restore).first().click();
+      await expect(window.locator(SEL.panel.restore)).toHaveCount(0, { timeout: T_SHORT });
+    });
+  });
+
   test("overview modal opens and shows worktree cards", async () => {
     // Re-acquire the active window — worktree switches in the preceding
     // test may have changed the active WebContentsView.

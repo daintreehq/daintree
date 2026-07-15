@@ -281,10 +281,16 @@ export const EXTENSION_KEYS = [
   "pulse-heat-high-opacity",
   "pulse-heat-low-opacity",
   "pulse-heat-medium-opacity",
-  "pulse-missed-bg",
   "pulse-range-bg",
   "pulse-ring-offset",
   "pulse-skeleton-gradient",
+  "pulse-streak-1",
+  "pulse-streak-2",
+  "pulse-streak-3",
+  "pulse-streak-4",
+  "pulse-streak-5",
+  "pulse-streak-6",
+  "pulse-streak-7",
 
   // Settings tab
   "settings-card-bg",

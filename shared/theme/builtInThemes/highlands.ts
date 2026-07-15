@@ -127,8 +127,6 @@ export const theme: BuiltInThemeSource = {
     "pulse-heat-3": "#A07EBE",
     "pulse-heat-4": "#BD92E4",
     "pulse-heat-color": "#BD92E4",
-    // Derived from danger #C08078.
-    "pulse-missed-bg": "rgba(192,128,120,0.18)",
     "pulse-range-bg": "#1F1E22",
     "pulse-ring-offset": "#2B292D",
     "pulse-skeleton-gradient": "linear-gradient(90deg, #3C3A3F 25%, #454248 50%, #3C3A3F 75%)",

@@ -9,7 +9,13 @@
 // their xterm canvases) aren't snapshotted; omit it for a document-level
 // transition. To morph a specific element between its before/after positions,
 // assign a matching `view-transition-name` to it in both states (the caller
-// owns naming); with no names the captured root simply crossfades.
+// owns naming); with no names a scoped root simply crossfades.
+//
+// Caveat for the DOCUMENT root: `src/index.css` sets `animation: none` on
+// `::view-transition-old/new(root)` so the theme transitions can drive their own
+// WAAPI animations, which also disables the UA's default crossfade. An unscoped
+// call therefore hard-cuts unless the caller animates the root pseudo-element
+// itself — see `runThemeCrossfade` in `./appThemeViewTransition`.
 import { prefersReducedMotion } from "./appThemeViewTransition";
 
 type ViewTransition = { ready: Promise<void>; finished: Promise<void> };

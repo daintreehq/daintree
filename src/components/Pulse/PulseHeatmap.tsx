@@ -24,43 +24,11 @@ export function getPulseHeatmapRowWidth({
   return columns > 0 ? cellSize * columns + gap * (columns - 1) : 0;
 }
 
-interface RenderCell extends HeatCell {
-  isMissedDay: boolean;
-}
-
 const COLUMNS_PER_ROW = 60;
 const CELL_SIZE_PX = 10;
 const GAP_PX = 3;
 const COMPACT_CELL_SIZE_PX = 6;
 const COMPACT_GAP_PX = 2;
-const MISSED_DAY_WINDOW = 4;
-
-function isMissedDay(cells: HeatCell[], index: number): boolean {
-  const cell = cells[index];
-  if (!cell || cell.count > 0 || cell.isBeforeProject || cell.isToday) {
-    return false;
-  }
-
-  let hasRecentActivityBefore = false;
-  for (let i = Math.max(0, index - MISSED_DAY_WINDOW); i < index; i += 1) {
-    if (cells[i]!.count > 0) {
-      hasRecentActivityBefore = true;
-      break;
-    }
-  }
-
-  if (!hasRecentActivityBefore) {
-    return false;
-  }
-
-  for (let i = index + 1; i <= Math.min(cells.length - 1, index + MISSED_DAY_WINDOW); i += 1) {
-    if (cells[i]!.count > 0) {
-      return true;
-    }
-  }
-
-  return false;
-}
 
 // Per-theme opaque heat stops (pulse-heat-1..4) step in both lightness and
 // chroma (GitHub light-contributions model) rather than one hue at four alphas
@@ -108,17 +76,9 @@ export function getPulseHeatLevelBackground(level: 0 | 1 | 2 | 3 | 4): string {
   return level === 0 ? EMPTY_CELL_BACKGROUND : getHeatCellBackground(level);
 }
 
-function getCellStyle(cell: RenderCell): CSSProperties {
-  if (cell.isMissedDay) {
-    // Destructive-tier streak-break signal. Backed by an opaque danger tint
-    // (pulse-missed-bg, P-Heat authors these >=3:1 vs the empty cell) PLUS a
-    // non-colour shape cue (inset danger ring, light-only) so it stays distinct
-    // from heat levels and legible for colour-vision deficiency. The ring is
-    // drawn with an inset box-shadow via the .pulse-heat-cell-missed class.
-    // Every built-in defines pulse-missed-bg (P-Heat authors them opaque, >=3:1).
-    return { background: "var(--pulse-missed-bg)" };
-  }
-
+// A day with no commits is just quiet — every zero cell reads the same,
+// whatever its neighbours did. The heatmap has no way to express failure.
+function getCellStyle(cell: HeatCell): CSSProperties {
   if (cell.count === 0) {
     return { background: EMPTY_CELL_BACKGROUND };
   }
@@ -128,11 +88,7 @@ function getCellStyle(cell: RenderCell): CSSProperties {
   };
 }
 
-function getTooltipText(cell: RenderCell): string {
-  if (cell.isMissedDay) {
-    return "Missed day";
-  }
-
+function getTooltipText(cell: HeatCell): string {
   if (cell.count === 0) {
     return "No commits";
   }
@@ -146,7 +102,7 @@ function PulseHeatmapCell({
   isActive,
   onCellRef,
 }: {
-  cell: RenderCell;
+  cell: HeatCell;
   cellSize: number;
   isActive: boolean;
   onCellRef: (date: string, el: HTMLButtonElement | null) => void;
@@ -191,7 +147,6 @@ function PulseHeatmapCell({
           }}
           className={cn(
             "pulse-heat-cell relative overflow-hidden rounded-[2px] shrink-0 border-0 p-0 cursor-default transition-[transform,background-color,box-shadow] duration-150",
-            cell.isMissedDay && "pulse-heat-cell-missed",
             cell.isMostRecentActive && "ring-1 ring-daintree-text/25 ring-offset-1"
           )}
           aria-label={`${formatted}: ${getTooltipText(cell)}`}
@@ -219,16 +174,15 @@ export function PulseHeatmap({
       .filter((cell) => !Number.isNaN(new Date(cell.date).getTime()))
       .filter((cell) => !cell.isBeforeProject)
       .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
-      .map((cell, index, allCells) => ({
+      .map((cell) => ({
         ...cell,
         level: Math.max(0, Math.min(4, cell.level)) as HeatCell["level"],
-        isMissedDay: isMissedDay(allCells, index),
       }));
 
     const columnsPerRow = compact
       ? Math.min(COLUMNS_PER_ROW, normalizedCells.length)
       : COLUMNS_PER_ROW;
-    const result: RenderCell[][] = [];
+    const result: HeatCell[][] = [];
     const firstRowSize = normalizedCells.length % columnsPerRow || columnsPerRow;
 
     if (normalizedCells.length > 0) {

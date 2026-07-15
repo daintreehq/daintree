@@ -65,6 +65,11 @@ vi.mock("@/components/ui/Kbd", () => ({
 }));
 
 import { LauncherQuickActions } from "../LauncherQuickActions";
+import {
+  basePressTreatment,
+  reduceMotionSelectors,
+  transitionWideners,
+} from "./launcherMotionContract";
 
 beforeEach(() => {
   h.dispatch.mockClear();
@@ -192,5 +197,58 @@ describe("LauncherQuickActions", () => {
     expect(claude.getAttribute("aria-keyshortcuts")).toBe("Meta+Alt+C");
     expect(claude.getAttribute("aria-label")).toBeNull();
     expect(screen.getByTestId("kbd").textContent).toBe("Cmd+Alt+C");
+  });
+
+  // These are hand-rolled buttons, not the shared `Button`, so nothing makes
+  // them inherit its press feedback — without this they drift back to feeling
+  // inert on click while every other button in the app snaps.
+  describe("press feedback", () => {
+    const launcherButtons = () => [
+      screen.getByRole("button", { name: /Claude/i }),
+      screen.getByRole("button", { name: /New terminal/i }),
+      screen.getByRole("button", { name: /Search agents & panels/i }),
+    ];
+
+    it("carries exactly the press treatment the shared Button owns", () => {
+      const press = basePressTreatment();
+      // Guard: if the shared recipe ever loses its `active:` classes there is
+      // nothing left to enforce, and the comparison below would pass vacuously.
+      expect(press.length).toBeGreaterThan(0);
+
+      render(<LauncherQuickActions />);
+
+      for (const button of launcherButtons()) {
+        // Exact, not superset: a class the shared recipe has dropped must not
+        // linger here either.
+        const pressed = button.className.split(/\s+/).filter((c) => c.startsWith("active:"));
+        expect(new Set(pressed)).toEqual(new Set(press));
+      }
+    });
+
+    it("keeps transform out of its transition set, so the press snaps", () => {
+      render(<LauncherQuickActions />);
+
+      for (const button of launcherButtons()) {
+        // Anything that pulls a transform into the transition set would ease
+        // the scale back over the shared 150ms instead of snapping it.
+        expect(transitionWideners(button.className)).toEqual([]);
+      }
+    });
+
+    // `active:scale-*` emits the individual `scale` property, which the app's
+    // `transform: none` reduced-motion button reset cannot neutralize. Without
+    // a class the reduce-motion block actually names, the press scale keeps
+    // animating for users who asked for no motion.
+    it("registers the press scale with the reduce-animations kill switch", () => {
+      const suppressed = reduceMotionSelectors();
+      expect(suppressed.size).toBeGreaterThan(0);
+
+      render(<LauncherQuickActions />);
+
+      for (const button of launcherButtons()) {
+        const covered = button.className.split(/\s+/).filter((c) => suppressed.has(c));
+        expect(covered.length).toBeGreaterThan(0);
+      }
+    });
   });
 });

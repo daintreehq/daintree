@@ -6,6 +6,8 @@ import type {
   IdleTerminalProjectEntry,
 } from "../../shared/types/ipc/idleTerminals.js";
 import type { PtyClient } from "./PtyClient.js";
+import type { ProjectViewManagersProvider } from "../window/activeProjectIds.js";
+import { collectActiveProjectIds } from "../window/activeProjectIds.js";
 import { getPtyClient } from "../window/serviceRefs.js";
 import { store } from "../store.js";
 import { projectStore } from "./ProjectStore.js";
@@ -56,6 +58,7 @@ export class IdleTerminalNotificationService {
   private readonly WAKE_QUIET_MS = 30_000;
   private currentCheckIntervalMs = this.CHECK_INTERVAL_MS;
   private ptyClient: PtyClient | null = null;
+  private projectViewManagersProvider: ProjectViewManagersProvider | null = null;
 
   /**
    * Inject the live PtyClient so idle checks read the real terminal registry
@@ -64,6 +67,29 @@ export class IdleTerminalNotificationService {
    */
   setPtyClient(client: PtyClient | null): void {
     this.ptyClient = client;
+  }
+
+  /**
+   * Inject a lazy provider over every window's ProjectViewManager so a project
+   * on-screen in a non-focused window is never nudged about its "idle"
+   * terminals (#11102). Lazy because windows open and close after this wires —
+   * re-read on each check. NOT cleared in stop(): it's a stateless closure over
+   * the window registry (no stale object pinned), so a Settings off→on toggle
+   * doesn't lose multi-window awareness (#8637).
+   */
+  setProjectViewManagersProvider(provider: ProjectViewManagersProvider | null): void {
+    this.projectViewManagersProvider = provider;
+  }
+
+  /**
+   * The set of project IDs on-screen in ANY window — see #11102.
+   */
+  private collectActiveProjectIds(): Set<string> {
+    return collectActiveProjectIds(
+      this.projectViewManagersProvider,
+      projectStore.getCurrentProjectId(),
+      "idle-terminal-notification"
+    );
   }
 
   private normalizeThreshold(value: unknown, fallback: number): number {
@@ -342,7 +368,6 @@ export class IdleTerminalNotificationService {
       }
     }
 
-    const currentProjectId = projectStore.getCurrentProjectId();
     const projects = projectStore.getAllProjects();
     if (projects.length === 0) {
       if (notifiedChanged) store.set("idleTerminalNotifiedAt", notifiedAt);
@@ -354,6 +379,11 @@ export class IdleTerminalNotificationService {
       return;
     }
     const allTerminals = await this.ptyClient.getAllTerminalsAsync();
+
+    // Collected AFTER the pty-host round-trip, not before: the loop below runs
+    // synchronously from here, so sampling visibility any earlier would let a
+    // project brought on-screen during that await be nudged anyway.
+    const activeIds = this.collectActiveProjectIds();
 
     const clearNotified = (pid: string): void => {
       if (notifiedAt[pid] !== undefined) {
@@ -368,13 +398,14 @@ export class IdleTerminalNotificationService {
       if (!project.id) continue;
       const pid = project.id;
 
-      // The active project is never notified, but we deliberately do NOT reset
-      // its throttle here: merely viewing a project isn't engaging with its
-      // terminals, and clearing on focus alone would let a switch-to-then-away
-      // round trip re-notify the same still-idle terminals inside the cooldown.
-      // A genuine reset (typing, agent activity) surfaces as terminal activity
-      // below and clears the throttle through the ineligible path.
-      if (pid === currentProjectId) continue;
+      // A project on-screen in ANY window is never notified (#11102 — the DB
+      // pointer alone only tracks the last-focused one). We deliberately do NOT
+      // reset its throttle here: merely viewing a project isn't engaging with
+      // its terminals, and clearing on focus alone would let a switch-to-then-
+      // away round trip re-notify the same still-idle terminals inside the
+      // cooldown. A genuine reset (typing, agent activity) surfaces as terminal
+      // activity below and clears the throttle through the ineligible path.
+      if (activeIds.has(pid)) continue;
 
       // Any remaining non-qualifying reason (no terminals, active agent, recent
       // activity) means the project has left the idle state, so its notified
@@ -460,9 +491,19 @@ export function getIdleTerminalNotificationService(): IdleTerminalNotificationSe
   return idleTerminalNotificationService;
 }
 
-export function initializeIdleTerminalNotificationService(): IdleTerminalNotificationService {
+/**
+ * `projectViewManagersProvider` is wired BEFORE start() so the first (5s) check
+ * already sees every window's foreground project — taking it here makes that
+ * ordering correct by construction rather than by convention.
+ */
+export function initializeIdleTerminalNotificationService(
+  projectViewManagersProvider?: ProjectViewManagersProvider
+): IdleTerminalNotificationService {
   const service = getIdleTerminalNotificationService();
   service.setPtyClient(getPtyClient());
+  if (projectViewManagersProvider) {
+    service.setProjectViewManagersProvider(projectViewManagersProvider);
+  }
   service.start();
   return service;
 }

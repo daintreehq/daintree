@@ -70,6 +70,10 @@ async function createManagedTerminal(id: string) {
   });
 }
 
+function flushWrites(terminal: { write(data: string, callback?: () => void): void }) {
+  return new Promise<void>((resolve) => terminal.write("", resolve));
+}
+
 describe("captureBufferText", () => {
   beforeEach(() => {
     // Clean up any existing instances
@@ -93,16 +97,11 @@ describe("captureBufferText", () => {
     // Write some plain text to the terminal
     managed.terminal.write("Hello World\r\n");
     managed.terminal.write("Second line\r\n");
+    await flushWrites(managed.terminal);
 
-    // Allow xterm to process the writes
-    return new Promise<void>((resolve) => {
-      setTimeout(() => {
-        const result = terminalInstanceService.captureBufferText("test-2");
-        expect(result).toContain("Hello World");
-        expect(result).toContain("Second line");
-        resolve();
-      }, 50);
-    });
+    const result = terminalInstanceService.captureBufferText("test-2");
+    expect(result).toContain("Hello World");
+    expect(result).toContain("Second line");
   });
 
   it("strips ANSI escape codes from captured text", async () => {
@@ -110,18 +109,14 @@ describe("captureBufferText", () => {
     // Write text with ANSI color codes
     managed.terminal.write("\x1b[31mRed text\x1b[0m\r\n");
     managed.terminal.write("\x1b[1;32mBold green\x1b[0m\r\n");
+    await flushWrites(managed.terminal);
 
-    return new Promise<void>((resolve) => {
-      setTimeout(() => {
-        const result = terminalInstanceService.captureBufferText("test-3");
-        // translateToString already strips most ANSI, but stripAnsiAndOscCodes
-        // handles any remaining sequences
-        expect(result).not.toContain("\x1b[");
-        expect(result).toContain("Red text");
-        expect(result).toContain("Bold green");
-        resolve();
-      }, 50);
-    });
+    const result = terminalInstanceService.captureBufferText("test-3");
+    // translateToString already strips most ANSI, but stripAnsiAndOscCodes
+    // handles any remaining sequences
+    expect(result).not.toContain("\x1b[");
+    expect(result).toContain("Red text");
+    expect(result).toContain("Bold green");
   });
 
   it("truncates to maxChars keeping the tail", async () => {
@@ -130,16 +125,12 @@ describe("captureBufferText", () => {
     for (let i = 0; i < 20; i++) {
       managed.terminal.write(`Line number ${i.toString().padStart(3, "0")}\r\n`);
     }
+    await flushWrites(managed.terminal);
 
-    return new Promise<void>((resolve) => {
-      setTimeout(() => {
-        const result = terminalInstanceService.captureBufferText("test-4", 50);
-        expect(result.length).toBeLessThanOrEqual(50);
-        // Should contain the tail (later lines), not the head
-        expect(result).toContain("019");
-        resolve();
-      }, 50);
-    });
+    const result = terminalInstanceService.captureBufferText("test-4", 50);
+    expect(result.length).toBeLessThanOrEqual(50);
+    // Should contain the tail (later lines), not the head
+    expect(result).toContain("019");
   });
 
   it("preserves head lines when the whole buffer fits within maxChars", async () => {
@@ -147,20 +138,14 @@ describe("captureBufferText", () => {
     managed.terminal.write("FIRST line marker\r\n");
     managed.terminal.write("middle line\r\n");
     managed.terminal.write("LAST line marker\r\n");
+    await flushWrites(managed.terminal);
 
-    return new Promise<void>((resolve) => {
-      setTimeout(() => {
-        const result = terminalInstanceService.captureBufferText("test-head", 20000);
-        // Tail-scan must still walk all the way up when the buffer is small —
-        // the head must not be dropped, and order must be top-to-bottom.
-        expect(result).toContain("FIRST line marker");
-        expect(result).toContain("LAST line marker");
-        expect(result.indexOf("FIRST line marker")).toBeLessThan(
-          result.indexOf("LAST line marker")
-        );
-        resolve();
-      }, 50);
-    });
+    const result = terminalInstanceService.captureBufferText("test-head", 20000);
+    // Tail-scan must still walk all the way up when the buffer is small —
+    // the head must not be dropped, and order must be top-to-bottom.
+    expect(result).toContain("FIRST line marker");
+    expect(result).toContain("LAST line marker");
+    expect(result.indexOf("FIRST line marker")).toBeLessThan(result.indexOf("LAST line marker"));
   });
 
   it("fills maxChars from the tail when visible content exceeds it", async () => {
@@ -169,17 +154,13 @@ describe("captureBufferText", () => {
     for (let i = 0; i < 50; i++) {
       managed.terminal.write(`row ${i.toString().padStart(3, "0")} payload\r\n`);
     }
+    await flushWrites(managed.terminal);
 
-    return new Promise<void>((resolve) => {
-      setTimeout(() => {
-        const result = terminalInstanceService.captureBufferText("test-fill", 100);
-        // The window must widen until the stripped tail fills the budget — never
-        // stop short — and keep the most recent line.
-        expect(result.length).toBe(100);
-        expect(result).toContain("row 049");
-        expect(result).not.toContain("row 000");
-        resolve();
-      }, 50);
-    });
+    const result = terminalInstanceService.captureBufferText("test-fill", 100);
+    // The window must widen until the stripped tail fills the budget — never
+    // stop short — and keep the most recent line.
+    expect(result.length).toBe(100);
+    expect(result).toContain("row 049");
+    expect(result).not.toContain("row 000");
   });
 });

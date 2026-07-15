@@ -1,5 +1,9 @@
 import { events } from "./events.js";
-import { notificationService, type WatchNotificationContext } from "./NotificationService.js";
+import {
+  notificationService,
+  type NotificationOwnerId,
+  type WatchNotificationContext,
+} from "./NotificationService.js";
 import { store, type StoreSchema } from "../store.js";
 import type { NotificationSettings } from "../../shared/types/ipc/api.js";
 import { projectStore } from "./ProjectStore.js";
@@ -47,6 +51,7 @@ interface PendingNotification {
   agentId?: string;
   triggerSound: boolean;
   soundFile?: string;
+  ownerWebContentsId?: NotificationOwnerId;
 }
 
 interface BurstWaitingEntry {
@@ -56,6 +61,7 @@ interface BurstWaitingEntry {
   waitingReason?: WaitingReason;
   soundFile: string;
   soundEnabled: boolean;
+  ownerWebContentsId?: NotificationOwnerId;
 }
 
 class AgentNotificationService {
@@ -66,7 +72,21 @@ class AgentNotificationService {
   private notificationQueue: PendingNotification[] = [];
   private staggerTimer: NodeJS.Timeout | null = null;
   private unsubscribers: Array<() => void> = [];
-  private watchedTerminals = new Set<string>();
+  /** Watched panels per owning renderer — a sync replaces only its own set. */
+  private watchedPanelsByOwner = new Map<NotificationOwnerId, Set<string>>();
+  /**
+   * Reverse index. A set, not a single owner: the same project can be open in
+   * two windows (#11101), so two renderers can watch the same panel, and a
+   * single value would reintroduce last-writer-wins inside the fix.
+   */
+  private ownersByPanel = new Map<string, Set<NotificationOwnerId>>();
+  /**
+   * Last renderer known to own a panel, kept after it stops being watched.
+   * Routing metadata only — never a watched-state source. The renderer unwatches
+   * one-shot the instant a state lands, so by the time a completion debounce or
+   * a minutes-later escalation fires, the live index no longer knows the owner.
+   */
+  private lastOwnerByPanel = new Map<string, NotificationOwnerId>();
   private hasEverGoneWorking = false;
   private peakConcurrentWorking = 0;
   private allClearTimer: NodeJS.Timeout | null = null;
@@ -84,8 +104,110 @@ class AgentNotificationService {
   /** Session-mute expiry mirrored from the renderer's quick-action buttons. */
   private sessionMuteUntil = 0;
 
-  syncWatchedPanels(panelIds: string[]): void {
-    this.watchedTerminals = new Set(panelIds);
+  syncWatchedPanels(ownerWebContentsId: NotificationOwnerId, panelIds: string[]): void {
+    const previous = this.watchedPanelsByOwner.get(ownerWebContentsId);
+    const next = new Set(panelIds);
+
+    if (previous) {
+      for (const panelId of previous) {
+        if (next.has(panelId)) continue;
+        this.detachOwnerFromPanel(panelId, ownerWebContentsId);
+      }
+    }
+
+    for (const panelId of next) {
+      let owners = this.ownersByPanel.get(panelId);
+      if (!owners) {
+        owners = new Set();
+        this.ownersByPanel.set(panelId, owners);
+      }
+      owners.add(ownerWebContentsId);
+      this.lastOwnerByPanel.set(panelId, ownerWebContentsId);
+    }
+
+    if (next.size === 0) {
+      this.watchedPanelsByOwner.delete(ownerWebContentsId);
+    } else {
+      this.watchedPanelsByOwner.set(ownerWebContentsId, next);
+    }
+  }
+
+  /**
+   * Drop everything owned by a renderer that no longer exists. Idempotent — the
+   * webContents "destroyed" listener and its window's cleanup can both fire.
+   *
+   * Deliberately does not touch `waitingTerminalIds` or escalation timers: those
+   * track main-process terminal state, which outlives any renderer watching it.
+   */
+  removeOwner(ownerWebContentsId: NotificationOwnerId): void {
+    const watched = this.watchedPanelsByOwner.get(ownerWebContentsId);
+    if (watched) {
+      for (const panelId of watched) {
+        this.detachOwnerFromPanel(panelId, ownerWebContentsId);
+      }
+      this.watchedPanelsByOwner.delete(ownerWebContentsId);
+    }
+
+    for (const [panelId, ownerId] of [...this.lastOwnerByPanel]) {
+      if (ownerId !== ownerWebContentsId) continue;
+      // Hand the hint to a surviving watcher rather than dropping it: with the
+      // same project open in two windows, the dead renderer may not have been
+      // the panel's only owner, and orphaning it here would send the click to
+      // the primary window instead of the window that still shows the panel.
+      const survivor = this.firstOwnerOf(panelId);
+      if (survivor === undefined) {
+        this.lastOwnerByPanel.delete(panelId);
+      } else {
+        this.lastOwnerByPanel.set(panelId, survivor);
+      }
+    }
+  }
+
+  private detachOwnerFromPanel(panelId: string, ownerWebContentsId: NotificationOwnerId): void {
+    const owners = this.ownersByPanel.get(panelId);
+    if (!owners) return;
+    owners.delete(ownerWebContentsId);
+    if (owners.size === 0) {
+      this.ownersByPanel.delete(panelId);
+    }
+  }
+
+  private isWatched(terminalId: string): boolean {
+    return this.ownersByPanel.has(terminalId);
+  }
+
+  private firstOwnerOf(panelId: string): NotificationOwnerId | undefined {
+    for (const ownerId of this.ownersByPanel.get(panelId) ?? []) {
+      return ownerId;
+    }
+    return undefined;
+  }
+
+  /**
+   * The renderer a notification for this panel should navigate. Prefers a live
+   * watcher; falls back to the last one that watched it, which is what survives
+   * the renderer's one-shot unwatch.
+   */
+  private resolveOwner(terminalId?: string): NotificationOwnerId | undefined {
+    if (!terminalId) return undefined;
+    return this.firstOwnerOf(terminalId) ?? this.lastOwnerByPanel.get(terminalId);
+  }
+
+  /**
+   * Owner for a notification that is about to be shown. Re-resolving at emit
+   * time matters because an owner captured when the event arrived can be
+   * destroyed during the burst/debounce window, while a sibling window that
+   * watches the same panel is still alive and is the right click target.
+   */
+  private emitOwner(
+    terminalId?: string,
+    capturedOwnerId?: NotificationOwnerId
+  ): NotificationOwnerId | undefined {
+    return this.resolveOwner(terminalId) ?? capturedOwnerId;
+  }
+
+  private forgetPanelOwnership(terminalId: string): void {
+    this.lastOwnerByPanel.delete(terminalId);
   }
 
   setSessionMuteUntil(timestampMs: number): void {
@@ -142,10 +264,30 @@ class AgentNotificationService {
     const unsubExited = events.on("agent:exited", (payload) => {
       if (payload.terminalId) {
         this.agentSpawnTimestamps.delete(payload.terminalId);
+        // Bound the routing hint's lifetime to the agent's. A re-watch of the
+        // same panel repopulates it; notifications already in flight captured
+        // their owner when the event fired.
+        this.forgetPanelOwnership(payload.terminalId);
       }
     });
 
-    this.unsubscribers.push(unsubStateChanged, unsubSpawned, unsubDetected, unsubExited);
+    // A killed terminal never emits agent:exited (TerminalExitHandler suppresses
+    // it for `wasKilled`), so without this the routing hint for every killed
+    // agent would sit in the map for the rest of the session.
+    const unsubKilled = events.on("agent:killed", (payload) => {
+      if (payload.terminalId) {
+        this.agentSpawnTimestamps.delete(payload.terminalId);
+        this.forgetPanelOwnership(payload.terminalId);
+      }
+    });
+
+    this.unsubscribers.push(
+      unsubStateChanged,
+      unsubSpawned,
+      unsubDetected,
+      unsubExited,
+      unsubKilled
+    );
   }
 
   private isWithinBootGrace(): boolean {
@@ -306,11 +448,16 @@ class AgentNotificationService {
     // The renderer one-shot unwatches immediately on state change, so by the time
     // the 2s completion debounce fires, the terminal is already removed from the
     // watched set. Capturing here preserves the intent.
-    const isWatched = terminalId !== undefined && this.watchedTerminals.has(terminalId);
+    const isWatched = terminalId !== undefined && this.isWatched(terminalId);
     if (!isWatched) return;
 
+    // Capture the owner alongside the watched snapshot — same reason the
+    // snapshot exists at all: the renderer unwatches one-shot on this very
+    // transition, so the live index is empty by the time the notification fires.
+    const ownerWebContentsId = this.resolveOwner(terminalId);
+
     if ((state === "completed" || state === "exited") && settings.completedEnabled) {
-      this.scheduleCompletionNotification(key, worktreeId, terminalId, agentId);
+      this.scheduleCompletionNotification(key, worktreeId, terminalId, agentId, ownerWebContentsId);
     } else if (
       state === "waiting" &&
       settings.waitingEnabled &&
@@ -323,6 +470,7 @@ class AgentNotificationService {
         waitingReason: coerceWaitingReason(payload.waitingReason),
         soundFile: settings.waitingSoundFile,
         soundEnabled: settings.soundEnabled,
+        ownerWebContentsId,
       });
       if (this.waitingBurstTimer === null) {
         this.waitingBurstTimer = setTimeout(() => this.flushWaitingBurst(), BURST_WINDOW_MS);
@@ -389,7 +537,8 @@ class AgentNotificationService {
     key: string,
     worktreeId?: string,
     terminalId?: string,
-    agentId?: string
+    agentId?: string,
+    ownerWebContentsId?: NotificationOwnerId
   ): void {
     if (this.completionTimers.has(key)) {
       clearTimeout(this.completionTimers.get(key)!);
@@ -407,6 +556,7 @@ class AgentNotificationService {
         terminalId,
         agentId,
         triggerSound: settings.soundEnabled,
+        ownerWebContentsId,
       });
       if (!this.completionBurstSoundFile) {
         this.completionBurstSoundFile = settings.completedSoundFile;
@@ -441,6 +591,8 @@ class AgentNotificationService {
     const first = dedupedItems[0];
     this.playNotificationSound(first.soundEnabled, first.soundFile);
 
+    const ownerWebContentsId = this.emitOwner(first.terminalId, first.ownerWebContentsId);
+
     if (dedupedItems.length === 1) {
       const label = this.getLabel(first.agentId, first.worktreeId);
       const context = this.makeContext(first.terminalId, first.agentId, first.worktreeId);
@@ -449,7 +601,7 @@ class AgentNotificationService {
         describeWaiting(label, first.waitingReason),
         context,
         CHANNELS.NOTIFICATION_WATCH_NAVIGATE,
-        true
+        { silent: true, ownerWebContentsId }
       );
     } else {
       const context = this.makeContext(first.terminalId, first.agentId, first.worktreeId);
@@ -459,12 +611,14 @@ class AgentNotificationService {
       const uniformReason = dedupedItems.every((item) => item.waitingReason === first.waitingReason)
         ? actionableWaitingReason(first.waitingReason)
         : null;
+      // Context and owner both come from `first` so the click lands on the
+      // panel the body is about, in the renderer that actually owns it.
       notificationService.showWatchNotification(
         "Agents waiting",
         describeWaitingMany(dedupedItems.length, uniformReason ?? undefined),
         context,
         CHANNELS.NOTIFICATION_WATCH_NAVIGATE,
-        true
+        { silent: true, ownerWebContentsId }
       );
     }
   }
@@ -488,6 +642,7 @@ class AgentNotificationService {
           terminalId: first.terminalId,
           agentId: first.agentId,
           triggerSound: first.triggerSound,
+          ownerWebContentsId: first.ownerWebContentsId,
         },
         true,
         soundFile
@@ -531,6 +686,23 @@ class AgentNotificationService {
 
       this.playNotificationSound(currentSettings.soundEnabled, currentSettings.escalationSoundFile);
 
+      // Escalation is the most urgent notification and was the only one with no
+      // click handler at all, so it could never navigate anywhere. Attach panel
+      // context and resolve the owner now rather than at schedule time: minutes
+      // have passed, and the renderer that watched this panel may have been
+      // destroyed since. A docked terminal that was never watched has no known
+      // owner — the click then falls back to the primary window, which is
+      // explicit and no worse than today's dead click.
+      // Take the worktree from the terminal as it is NOW, not as it was when the
+      // timer was armed: the body below already uses the fresh title, and a panel
+      // dragged to another worktree during the wait would otherwise navigate to
+      // the worktree it used to live in. The agent id can't change for a terminal.
+      const navigation = {
+        channel: CHANNELS.NOTIFICATION_WATCH_NAVIGATE,
+        context: this.makeContext(terminalId, agentId, currentTerminal.worktreeId ?? worktreeId),
+      };
+      const ownerWebContentsId = this.resolveOwner(terminalId);
+
       if (waitingDockTerminalIds.length > 1) {
         // Cancel sibling escalation timers so only one grouped notification fires
         for (const siblingId of waitingDockTerminalIds) {
@@ -540,7 +712,8 @@ class AgentNotificationService {
         }
         notificationService.showNativeNotification(
           "Agents still waiting",
-          `${waitingDockTerminalIds.length} agents have been waiting for input`
+          `${waitingDockTerminalIds.length} agents have been waiting for input`,
+          { ownerWebContentsId, navigation }
         );
       } else {
         const label = currentTerminal.title || this.getLabel(agentId, worktreeId);
@@ -551,7 +724,8 @@ class AgentNotificationService {
         const reason = actionableWaitingReason(waitingReason);
         notificationService.showNativeNotification(
           "Agent still waiting",
-          reason ? describeWaiting(label, reason) : `${label} has been waiting for input`
+          reason ? describeWaiting(label, reason) : `${label} has been waiting for input`,
+          { ownerWebContentsId, navigation }
         );
       }
     }, settings.waitingEscalationDelayMs);
@@ -585,7 +759,7 @@ class AgentNotificationService {
     if (!settings.workingPulseEnabled || !settings.soundEnabled) return;
 
     // Eligibility: watched OR (docked + escalation enabled)
-    const isWatched = this.watchedTerminals.has(terminalId);
+    const isWatched = this.isWatched(terminalId);
     if (!isWatched) {
       const terminal = terminals.find((t) => t.id === terminalId);
       if (!terminal || terminal.location !== "dock" || !settings.waitingEscalationEnabled) return;
@@ -698,7 +872,7 @@ class AgentNotificationService {
       item.body,
       context,
       CHANNELS.NOTIFICATION_WATCH_NAVIGATE,
-      true
+      { silent: true, ownerWebContentsId: this.emitOwner(item.terminalId, item.ownerWebContentsId) }
     );
 
     if (this.notificationQueue.length > 0) {
@@ -797,6 +971,9 @@ class AgentNotificationService {
 
     this.waitingTerminalIds.clear();
     this.agentSpawnTimestamps.clear();
+    this.watchedPanelsByOwner.clear();
+    this.ownersByPanel.clear();
+    this.lastOwnerByPanel.clear();
     this.notificationQueue = [];
     this.hasEverGoneWorking = false;
     this.peakConcurrentWorking = 0;

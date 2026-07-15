@@ -334,19 +334,39 @@ describe("DockedTabGroup mount-time close guard (#6602)", () => {
     expect(openDockTerminalMock).not.toHaveBeenCalled();
   });
 
-  it("still honors a real onOpenChange(false) when mounted closed", () => {
-    // Regression guard against accidentally arming the ref unconditionally.
+  it("still honors a real onOpenChange(false) after mounting closed", () => {
+    // Regression guard against a close path that only works when the group was
+    // open at mount. Opening after mount must still arm a genuine dismissal.
     mockActiveDockTerminalId = null;
     const panels = [makePanel({ id: "t-1" }), makePanel({ id: "t-2" })];
+    const group = makeGroup(["t-1", "t-2"], "t-1");
 
-    render(<DockedTabGroup group={makeGroup(["t-1", "t-2"], "t-1")} panels={panels} />);
+    const { rerender } = render(<DockedTabGroup group={group} panels={panels} />);
+    mockActiveDockTerminalId = "t-1";
+    rerender(<DockedTabGroup group={group} panels={panels} />);
     expect(capturedOnOpenChange).not.toBeNull();
 
     act(() => {
       capturedOnOpenChange?.(false);
     });
 
-    expect(closeDockTerminalMock).toHaveBeenCalledTimes(1);
+    expect(closeDockTerminalMock).toHaveBeenCalledWith("t-1");
+  });
+
+  it("does not close another group's dock pane on a spurious dismissal", () => {
+    // Radix can fire onOpenChange(false) on a group that has nothing open. An
+    // unqualified close would clear `activeDockTerminalId` wholesale and dismiss
+    // whichever pane actually owns the dock (#11133).
+    mockActiveDockTerminalId = "other-1";
+    const panels = [makePanel({ id: "t-1" }), makePanel({ id: "t-2" })];
+
+    render(<DockedTabGroup group={makeGroup(["t-1", "t-2"], "t-1")} panels={panels} />);
+
+    act(() => {
+      capturedOnOpenChange?.(false);
+    });
+
+    expect(closeDockTerminalMock).not.toHaveBeenCalled();
   });
 
   it("ignores spurious close when active panel is not the group's stored active tab", () => {

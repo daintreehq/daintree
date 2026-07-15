@@ -1,6 +1,7 @@
 import {
   Suspense,
   lazy,
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -12,6 +13,7 @@ import type { PanelViewProps } from "@shared/types/plugin";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { BrowserPaneSkeleton } from "@/components/Browser/BrowserPaneSkeleton";
 import { ContentFadeIn } from "@/components/ui/ContentFadeIn";
+import { usePanelRootFocus } from "@/components/Panel/usePanelRootFocus";
 import type { PanelComponentProps } from "@/panels/registry";
 import { logWarn } from "@/utils/logger";
 
@@ -145,6 +147,14 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Panel
     // in its own slot.
     const [retryCount, setRetryCount] = useState(0);
 
+    const rootRef = useRef<HTMLDivElement | null>(null);
+    const panelId = props.id;
+    // Focusing the host root establishes ownership in the parent document; it
+    // does not push focus into the plugin's guest frame. Focus already inside
+    // the host (a plugin input, an iframe) is left where it is.
+    const getRootNode = useCallback(() => rootRef.current, []);
+    usePanelRootFocus({ id: panelId, isFocused: props.isFocused, getNode: getRootNode });
+
     // The dispose controller lives in state because its signal is consumed
     // during render (passed to the plugin view as `disposeSignal`), and refs
     // must not be read during render. A retry swaps in a fresh controller via
@@ -199,23 +209,28 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Panel
     };
 
     return (
-      <ErrorBoundary
-        variant="component"
-        componentName={`PluginView:${pluginId}.${kindId}`}
-        onReset={handleReset}
-        resetKeys={[retryCount]}
-      >
-        <Suspense fallback={<BrowserPaneSkeleton label={`Loading ${displayName}`} />}>
-          <ContentFadeIn className="flex flex-col h-full w-full">
-            <LazyView
-              panelId={props.id}
-              pluginId={pluginId!}
-              disposeSignal={controller.signal}
-              initialArgs={props.extensionState}
-            />
-          </ContentFadeIn>
-        </Suspense>
-      </ErrorBoundary>
+      // Plugin views render no ContentPanel, so the host owns the panel's focus
+      // target. Sitting outside the boundary keeps macro-grid Enter working
+      // while the view is still loading and after it has failed.
+      <div ref={rootRef} tabIndex={-1} className="flex flex-col h-full w-full">
+        <ErrorBoundary
+          variant="component"
+          componentName={`PluginView:${pluginId}.${kindId}`}
+          onReset={handleReset}
+          resetKeys={[retryCount]}
+        >
+          <Suspense fallback={<BrowserPaneSkeleton label={`Loading ${displayName}`} />}>
+            <ContentFadeIn className="flex flex-col h-full w-full">
+              <LazyView
+                panelId={props.id}
+                pluginId={pluginId!}
+                disposeSignal={controller.signal}
+                initialArgs={props.extensionState}
+              />
+            </ContentFadeIn>
+          </Suspense>
+        </ErrorBoundary>
+      </div>
     );
   }
 

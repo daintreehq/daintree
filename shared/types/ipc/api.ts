@@ -1077,7 +1077,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   window: {
     /** Subscribe to fullscreen state changes */
     onFullscreenChange(callback: (isFullscreen: boolean) => void): () => void;
-    /** Toggle simple fullscreen mode (extends into notch area on MacBook) */
+    /**
+     * Toggle fullscreen: simple fullscreen on macOS, native elsewhere. Resolves to the
+     * requested state, which macOS may not have settled yet — subscribe to
+     * onFullscreenChange for the observed one.
+     */
     toggleFullscreen(): Promise<boolean>;
     /** Reload the window via Electron webContents */
     reload(): Promise<void>;
@@ -1178,6 +1182,15 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     setChannel(channel: "stable" | "nightly"): Promise<"stable" | "nightly">;
     notifyDismiss(version: string): Promise<void>;
     getLastCheck(): Promise<number | null>;
+    /**
+     * Hydrate-time getter for the update the user should currently be told
+     * about, so a renderer created after the one-shot `onUpdateAvailable` /
+     * `onUpdateDownloaded` broadcast (a second project view, a new window, a
+     * view rebuilt after LRU eviction) still learns an update is pending.
+     * `null` on builds where the updater never activates, and for a version the
+     * user has dismissed within the cooldown.
+     */
+    getLatest(): Promise<{ version: string; downloaded: boolean } | null>;
   };
   storeUpdate: {
     /** Subscribe to Store-build update notifications. Renderer hook short-circuits unless `isWindowsStore`. */
@@ -1476,6 +1489,13 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (data: import("./forge.js").ForgeTokenHealthChangedPayload) => void
     ): () => void;
     /**
+     * The project's git remote table changed (#11155) — e.g. `git remote add
+     * origin` in an already-open project. Signal-only: re-resolve the provider
+     * for `projectId` via `resolveProvider`, which is where the precedence
+     * chain (per-project override → global default → hostname match) lives.
+     */
+    onRemoteChanged(callback: (payload: { projectId: string }) => void): () => void;
+    /**
      * Classify a `git push` failure via the resolved forge provider. Returns
      * the provider's canonical `{pluginId}.{contributionId}` id (for routing
      * the push-error banner's settings CTA) plus the provider's classification
@@ -1604,7 +1624,15 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onError(callback: (error: VoiceInputError) => void): () => void;
     onStatus(callback: (status: VoiceInputStatus) => void): () => void;
     checkMicPermission(): Promise<MicPermissionStatus>;
+    /**
+     * Native permission preflight. Resolves to whether the renderer may proceed
+     * to getUserMedia — NOT to whether the OS granted access. Only macOS can
+     * answer authoritatively (a `false` there is a real denial); Windows and
+     * Linux have no main-process request API and always resolve `true`, because
+     * getUserMedia is the real gate on those platforms.
+     */
     requestMicPermission(): Promise<boolean>;
+    /** Best-effort: opens the OS microphone settings. Failures are logged, never surfaced. */
     openMicSettings(): Promise<void>;
     validateApiKey(apiKey: string): Promise<{ valid: boolean; error?: string }>;
     /** Run a whole-passage AI cleanup pass over the dictated text after recording stops. */

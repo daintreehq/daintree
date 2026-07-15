@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import { projectClient } from "@/clients";
+import type { Project } from "@shared/types";
 
 /**
  * Why a fetch fired. Lets a consumer treat a cheap reactivation (tab focus /
@@ -48,10 +49,10 @@ export interface PollingLifecycleConfig {
    */
   calculateNextInterval: (context: { isVisible: boolean }) => number;
   /**
-   * Fires before the post-switch fetch kicks off. The consumer should reset
-   * any per-project state here so the immediate refetch lands cleanly.
+   * Fires before the post-switch fetch kicks off. The target lets consumers
+   * distinguish a cached-view reactivation from a genuine project change.
    */
-  onProjectSwitch?: () => void;
+  onProjectSwitch?: (project?: Project) => void;
   /**
    * When false, the lifecycle is fully inert: no initial fetch, no timer, and
    * no global-trigger subscription — the consumer never registers in the
@@ -72,7 +73,7 @@ interface Subscriber {
   onVisibilityVisible: () => void;
   onVisibilityHidden: () => void;
   onSidebarRefresh: () => void;
-  onProjectSwitch: () => void;
+  onProjectSwitch: (project?: Project) => void;
 }
 
 // Module-level singleton: every consumer of `usePollingLifecycle` shares one
@@ -85,7 +86,7 @@ let visibilityHandler: (() => void) | null = null;
 let sidebarHandler: (() => void) | null = null;
 let projectSwitchCleanup: (() => void) | null = null;
 
-function fanOut(method: keyof Subscriber) {
+function fanOut(method: Exclude<keyof Subscriber, "onProjectSwitch">) {
   // Snapshot to a copy so subscribers can register/unregister inside their
   // own callbacks (defensive — current consumers don't, but the Set
   // iterator's mutation-during-iteration behaviour is undefined).
@@ -102,6 +103,17 @@ function fanOut(method: keyof Subscriber) {
   }
 }
 
+function fanOutProjectSwitch(project?: Project) {
+  const snapshot = Array.from(subscribers);
+  for (const subscriber of snapshot) {
+    try {
+      subscriber.onProjectSwitch(project);
+    } catch (err) {
+      console.warn("usePollingLifecycle: onProjectSwitch subscriber failed", err);
+    }
+  }
+}
+
 function ensureGlobalListenersInstalled() {
   if (visibilityHandler !== null) return;
 
@@ -112,7 +124,7 @@ function ensureGlobalListenersInstalled() {
   // silently missing for the rest of the process lifetime.
   let cleanup: (() => void) | null;
   try {
-    cleanup = projectClient.onSwitch(() => fanOut("onProjectSwitch"));
+    cleanup = projectClient.onSwitch((payload) => fanOutProjectSwitch(payload?.project));
   } catch (err) {
     console.warn("usePollingLifecycle: failed to subscribe project switch", err);
     return;
@@ -339,12 +351,12 @@ export function usePollingLifecycle(config: PollingLifecycleConfig): PollingLife
       onSidebarRefresh: () => {
         void refresh({ force: true });
       },
-      onProjectSwitch: () => {
+      onProjectSwitch: (project) => {
         if (pollTimerRef.current) {
           clearTimeout(pollTimerRef.current);
           pollTimerRef.current = null;
         }
-        configRef.current.onProjectSwitch?.();
+        configRef.current.onProjectSwitch?.(project);
         void callFetchFn(false, "reactivate").then(() => {
           if (aliveRef.current) scheduleNextPoll();
         });

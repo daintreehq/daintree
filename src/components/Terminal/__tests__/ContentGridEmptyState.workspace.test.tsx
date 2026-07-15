@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
+import { reduceMotionSelectors } from "./launcherMotionContract";
 
 // Hoisted mutable state so each mock reads its slice at call time and a test can
 // reshape the stores before rendering.
@@ -198,6 +199,127 @@ describe("ContentGridEmptyState — workspace capabilities", () => {
       render(<ContentGridEmptyState {...PROJECT_PROPS} showProjectPulse={false} />);
 
       expect(screen.queryByTestId("project-pulse")).toBeNull();
+    });
+  });
+
+  // The launcher arrives as a sequence of sections rather than one flat block.
+  // These assert the structural rules the stagger depends on, not the utilities
+  // themselves — a class name copied out of the component would be a tautology,
+  // but "every delayed section fills backwards" is a real invariant: the
+  // underlying `enter` animation defaults to `fill-mode: none`, which paints a
+  // delayed section fully visible for the length of its delay and then snaps it
+  // hidden before fading it in.
+  describe("entry stagger", () => {
+    // Utilities that animate. Each must be gated on `motion-safe:` so the OS
+    // reduced-motion preference suppresses it.
+    const MOTION_UTILITY =
+      /(^|:)(animate-in|fade-in|slide-in-from-[a-z]+-\d+|fill-mode-[a-z]+|\[--tw-animation-(delay|duration):\d+ms\])$/;
+
+    const classesOf = (el: Element) => el.className.split(/\s+/).filter(Boolean);
+
+    // The ladder rides `--tw-animation-delay` rather than `delay-*`, because
+    // Tailwind's `delay-*` compiles to `transition-delay` — which a keyframe
+    // animation never reads. Parsing the property (not a `delay-N` class name)
+    // is what keeps this suite honest: a regression back to `delay-*` reads as
+    // "no delay at all" here, which is exactly what it would be on screen.
+    const delayOf = (el: Element) => {
+      const token = classesOf(el).find((c) => /\[--tw-animation-delay:\d+ms\]$/.test(c));
+      const ms = token?.match(/(\d+)ms/);
+      return ms ? Number(ms[1]) : 0;
+    };
+
+    /** Every section carrying an entry animation, in DOM order. */
+    const animatedSections = (container: HTMLElement) =>
+      Array.from(container.querySelectorAll('[class*="animate-in"]'));
+
+    // Every gate satisfied, so all six sections render at once.
+    const renderWholeLauncher = () => {
+      markLaunchedAnAgent();
+      h.recipes.currentProjectId = "project-1";
+      return render(<ContentGridEmptyState {...PROJECT_PROPS} />).container;
+    };
+
+    it("animates each launcher section rather than the container as one block", () => {
+      const container = renderWholeLauncher();
+
+      // The whole point of the issue: the launcher must not arrive as one flat
+      // block, so its root carries no entry animation of its own…
+      for (const root of Array.from(container.children)) {
+        expect(classesOf(root).some((c) => /(^|:)animate-in$/.test(c))).toBe(false);
+      }
+      // …and every section that renders arrives on its own: hero, recipes,
+      // resume, quick actions, pulse, tip.
+      expect(animatedSections(container)).toHaveLength(6);
+    });
+
+    it("staggers the sections by a single uniform step, in DOM order", () => {
+      const container = renderWholeLauncher();
+
+      const delays = animatedSections(container).map(delayOf);
+      const steps = delays.slice(1).map((delay, i) => delay - (delays[i] ?? 0));
+
+      // The head of the ladder carries no delay, each step is forward, and the
+      // cadence never varies — without asserting the step's literal size.
+      expect(delays[0]).toBe(0);
+      expect(steps.every((step) => step > 0)).toBe(true);
+      expect(new Set(steps).size).toBe(1);
+    });
+
+    it("fills backwards on every delayed section, so none flashes before its turn", () => {
+      const container = renderWholeLauncher();
+
+      for (const section of animatedSections(container)) {
+        if (delayOf(section) === 0) continue;
+        expect(classesOf(section).some((c) => /(^|:)fill-mode-backwards$/.test(c))).toBe(true);
+      }
+    });
+
+    // `duration-*` and `delay-*` compile to `transition-duration` /
+    // `transition-delay`, which a keyframe animation never reads — so they
+    // cannot drive this stagger. Worse, these wrappers declare no
+    // `transition-property`, so either one would land on CSS's `all` default
+    // and silently give every section an every-property transition. The entry
+    // rides the animation's own custom properties instead.
+    it("drives the entry from the animation, never leaking into the transition system", () => {
+      const container = renderWholeLauncher();
+
+      for (const section of animatedSections(container)) {
+        const transitionUtilities = classesOf(section).filter((c) =>
+          /(^|:)(duration|delay)-/.test(c)
+        );
+        expect(transitionUtilities).toEqual([]);
+      }
+    });
+
+    it("gates every animating utility on motion-safe, so the OS preference suppresses it", () => {
+      const container = renderWholeLauncher();
+
+      for (const section of animatedSections(container)) {
+        const motionUtilities = classesOf(section).filter((c) => MOTION_UTILITY.test(c));
+
+        expect(motionUtilities.length).toBeGreaterThan(0);
+        for (const utility of motionUtilities) {
+          expect(utility.startsWith("motion-safe:")).toBe(true);
+        }
+      }
+    });
+
+    // `motion-safe:` only sees the OS preference. Daintree's own
+    // reduce-animations toggle is a `body` attribute, and the only thing that
+    // reads it is the `@variant reduce-motion` block in index.css — so a
+    // section is suppressible by that toggle if, and only if, one of its
+    // classes is named in that block. This asserts the wiring between the
+    // component and the stylesheet, which nothing else would catch.
+    it("registers every animated section with the in-app reduce-animations kill switch", () => {
+      const suppressed = reduceMotionSelectors();
+      expect(suppressed.size).toBeGreaterThan(0);
+
+      const container = renderWholeLauncher();
+
+      for (const section of animatedSections(container)) {
+        const covered = classesOf(section).filter((c) => suppressed.has(c));
+        expect(covered.length).toBeGreaterThan(0);
+      }
     });
   });
 

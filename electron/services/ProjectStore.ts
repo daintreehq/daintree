@@ -843,13 +843,34 @@ export class ProjectStore {
     return this.getProjectById(currentId);
   }
 
-  async setCurrentProject(projectId: string): Promise<void> {
+  /**
+   * `outgoingProjectId` names the project the switching window was actually
+   * displaying — the one whose departing `lastOpened` gets the MRU bump. Three
+   * distinct meanings:
+   *   - omitted/`undefined`: infer from the global pointer (single-window and
+   *     legacy callers, where the two always agree).
+   *   - a string: treat exactly that project as the departing one. Multi-window
+   *     callers pass their own view's project; the global pointer names whichever
+   *     window switched most recently, which is a different question (#11101).
+   *   - `null`: the window had no project displayed (welcome view), so nothing
+   *     departed — only the pointer moves and the incoming row activates.
+   * `?? this.getCurrentProjectId()` would collapse that `null` back into an
+   * unrelated window's project, which is the bug this parameter exists to fix.
+   *
+   * The durable effect is on `lastOpened` (Alt+Tab MRU order), which nothing
+   * else rewrites. The `status` flip is comparatively cosmetic: `getAllProjects`
+   * reconciles `status` to a singleton keyed on the global pointer, demoting
+   * every other active row, so status converges the same way regardless of what
+   * is passed here. Per-window status would require changing that reconciler.
+   */
+  async setCurrentProject(projectId: string, outgoingProjectId?: string | null): Promise<void> {
     const project = this.getProjectById(projectId);
     if (!project) {
       throw new Error(`Project not found: ${projectId}`);
     }
 
-    const previousProjectId = this.getCurrentProjectId();
+    const previousProjectId =
+      outgoingProjectId === undefined ? this.getCurrentProjectId() : outgoingProjectId;
     const db = getSharedDb();
 
     const now = Date.now();

@@ -8,7 +8,12 @@
 import Database from "better-sqlite3";
 import { parentPort, workerData } from "node:worker_threads";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import type { DbWorkerData, DbWorkerRequest, DbWorkerResponse } from "./dbWorkerProtocol.js";
+import type {
+  DbProbeResult,
+  DbWorkerData,
+  DbWorkerRequest,
+  DbWorkerResponse,
+} from "./dbWorkerProtocol.js";
 
 const port = parentPort;
 if (!port) {
@@ -57,6 +62,36 @@ function getRingStatements(): RingStatements {
   return ringStatements;
 }
 
+// Full quick_check against an arbitrary file on its own short-lived readonly
+// handle. Deliberately duplicates db.ts's probeDbFile rather than importing it:
+// that module imports Electron's `app` at module scope, which does not exist
+// inside a worker thread. Keep the two verdict tables in step.
+//
+// "unknown" (could not verify) is distinct from "corrupt" (proven bad): the
+// caller discards the candidate either way, but only "corrupt" stops backups.
+function probePath(dbPath: string): DbProbeResult {
+  let candidate: Database.Database | null = null;
+  try {
+    candidate = new Database(dbPath, { readonly: true, fileMustExist: true });
+    return candidate.pragma("quick_check", { simple: true }) === "ok" ? "ok" : "corrupt";
+  } catch (error: unknown) {
+    const code = (error as { code?: string }).code;
+    if (
+      typeof code === "string" &&
+      (code.startsWith("SQLITE_CORRUPT") || code === "SQLITE_NOTADB")
+    ) {
+      return "corrupt";
+    }
+    return "unknown";
+  } finally {
+    try {
+      candidate?.close();
+    } catch {
+      // ignore close errors
+    }
+  }
+}
+
 function execute(request: DbWorkerRequest): unknown {
   switch (request.op) {
     case "checkpoint":
@@ -64,6 +99,8 @@ function execute(request: DbWorkerRequest): unknown {
       return null;
     case "quickCheck":
       return sqlite.pragma("quick_check", { simple: true });
+    case "probePath":
+      return probePath(request.dbPath);
     case "ringWriteAll": {
       const { ring, records, maxRecords, fence } = request;
       const { insert, trim, clear } = getRingStatements();

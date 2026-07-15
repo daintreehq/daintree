@@ -19,6 +19,7 @@ import { NotificationCenterEntry } from "./NotificationCenterEntry";
 import { useSnoozeExpiryTimer } from "./useSnoozeExpiryTimer";
 import { resolveSnoozeDuration, type SnoozeDurationOption } from "@shared/utils/snoozeTimestamps";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { cn } from "@/lib/utils";
 import {
   DropdownMenu,
@@ -216,7 +217,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   const [filter, setFilter] = useState<"all" | "unread" | "archived" | "snoozed">("all");
   const [snoozePendingIndex, setSnoozePendingIndex] = useState<number | null>(null);
   const [frozenUnreadIds, setFrozenUnreadIds] = useState<Set<string> | null>(null);
-  const [scrollContainer, setScrollContainer] = useState<HTMLDivElement | null>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [dividerEl, setDividerEl] = useState<HTMLDivElement | null>(null);
   const [showJumpPill, setShowJumpPill] = useState(false);
   const prevShowJumpPillRef = useRef(false);
@@ -306,6 +307,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   }, [open, isSessionMuted, quietUntil, quietHoursEnabled]);
 
   useEffect(() => {
+    const scrollContainer = scrollContainerRef.current;
     if (!scrollContainer || !dividerEl || typeof IntersectionObserver === "undefined") {
       setShowJumpPill(false);
       return;
@@ -328,11 +330,14 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
           setShowJumpPill(entry.boundingClientRect.top > rootBounds.bottom);
         }
       },
-      { root: scrollContainer, threshold: 0 }
+      // Pull the bottom edge in by the height of the scroll fade (h-8 in
+      // ScrollShadow): a divider still under the gradient is washed out, so it
+      // doesn't count as reached and the pill stays up.
+      { root: scrollContainer, rootMargin: "0px 0px -32px 0px", threshold: 0 }
     );
     observer.observe(dividerEl);
     return () => observer.disconnect();
-  }, [scrollContainer, dividerEl]);
+  }, [dividerEl]);
 
   useEffect(() => {
     if (showJumpPill && !prevShowJumpPillRef.current) {
@@ -1027,111 +1032,119 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
         </div>
       )}
       <div className="relative flex-1 min-h-0">
-        <div
-          ref={setScrollContainer}
+        <ScrollShadow
+          ref={scrollContainerRef}
           onKeyDown={handleListKeyDown}
           role={rowCount > 0 ? "list" : undefined}
           aria-label={rowCount > 0 ? "Notifications" : undefined}
-          className="h-full overflow-y-auto"
+          className="h-full"
+          // The fades occlude the first and last 32px of the scrollport, so keep
+          // scroll-into-view targets (the jump-to-new divider, keyboard-focused
+          // rows) clear of them.
+          scrollClassName="scroll-py-8"
         >
-          {totalChronoGroups === 0 && needsAttentionGroups.length === 0 ? (
-            filter === "snoozed" && entries.length > 0 ? (
-              <EmptyState
-                variant="user-cleared"
-                scale="sidebar"
-                title="Nothing snoozed"
-                icon={<Clock />}
-                className="py-10"
-              />
-            ) : filter === "archived" && entries.length > 0 ? (
-              <EmptyState
-                variant="user-cleared"
-                scale="sidebar"
-                title="No archived notifications"
-                icon={<Archive />}
-                className="py-10"
-              />
-            ) : filter === "unread" && entries.length > 0 ? (
-              <EmptyState
-                variant="user-cleared"
-                scale="sidebar"
-                title="You're all caught up"
-                icon={<Bell />}
-                className="py-10"
-              />
-            ) : isSessionMuted || isScheduledMuted ? (
-              // OS DND alone does not trigger the "Notifications paused" copy
-              // — in-app toasts still fire, so naming them "paused" would be
-              // misleading. The pill above still surfaces the OS state.
-              <div data-testid="notification-muted-empty-state">
+          {/* One stable child: the shadow hook observes firstElementChild, so it
+              must outlive the empty-state/section swaps below. */}
+          <div>
+            {totalChronoGroups === 0 && needsAttentionGroups.length === 0 ? (
+              filter === "snoozed" && entries.length > 0 ? (
                 <EmptyState
-                  variant="zero-data"
-                  scale="canvas"
-                  title="Notifications paused"
-                  icon={<Moon />}
-                  description={mutedEmptyDescription}
+                  variant="user-cleared"
+                  scale="sidebar"
+                  title="Nothing snoozed"
+                  icon={<Clock />}
                   className="py-10"
                 />
-              </div>
+              ) : filter === "archived" && entries.length > 0 ? (
+                <EmptyState
+                  variant="user-cleared"
+                  scale="sidebar"
+                  title="No archived notifications"
+                  icon={<Archive />}
+                  className="py-10"
+                />
+              ) : filter === "unread" && entries.length > 0 ? (
+                <EmptyState
+                  variant="user-cleared"
+                  scale="sidebar"
+                  title="You're all caught up"
+                  icon={<Bell />}
+                  className="py-10"
+                />
+              ) : isSessionMuted || isScheduledMuted ? (
+                // OS DND alone does not trigger the "Notifications paused" copy
+                // — in-app toasts still fire, so naming them "paused" would be
+                // misleading. The pill above still surfaces the OS state.
+                <div data-testid="notification-muted-empty-state">
+                  <EmptyState
+                    variant="zero-data"
+                    scale="canvas"
+                    title="Notifications paused"
+                    icon={<Moon />}
+                    description={mutedEmptyDescription}
+                    className="py-10"
+                  />
+                </div>
+              ) : (
+                <EmptyState
+                  variant="zero-data"
+                  scale="popover"
+                  title="No notifications yet"
+                  icon={<Bell />}
+                  className="py-10"
+                />
+              )
             ) : (
-              <EmptyState
-                variant="zero-data"
-                scale="popover"
-                title="No notifications yet"
-                icon={<Bell />}
-                className="py-10"
-              />
-            )
-          ) : (
-            <>
-              {needsAttentionGroups.length > 0 && (
-                <NeedsAttentionSection
-                  groups={needsAttentionGroups}
-                  overflowCount={needsAttentionOverflow}
-                  indexOffset={0}
-                  focusedIndex={focusedIndex}
-                  setRowRef={setRowRef}
-                  onRowFocus={setFocusedIndex}
-                  onDropdownOpenChange={handleDropdownOpenChange}
-                  onDismiss={dismissEntry}
-                  onDismissThread={dismissByCorrelationId}
-                  snoozePendingIndex={snoozePendingIndex}
-                  snoozedThreads={snoozedThreads}
-                  snoozeRenderTime={snoozeRenderTime}
-                  onConsumeSnoozePending={consumeSnoozePending}
-                  onSnoozeRow={handleSnoozeForRow}
-                  onUnsnoozeRow={handleUnsnoozeForRow}
-                />
-              )}
-              {chronoSections.map((section, sectionIdx) => (
-                <ChronoSection
-                  key={section.key}
-                  section={section}
-                  indexOffset={
-                    needsAttentionGroups.length + (chronoSectionOffsets[sectionIdx] ?? 0)
-                  }
-                  focusedIndex={focusedIndex}
-                  setRowRef={setRowRef}
-                  onRowFocus={setFocusedIndex}
-                  onDropdownOpenChange={handleDropdownOpenChange}
-                  groupByContext={groupByContext}
-                  dividerGroupId={dividerGroupId}
-                  dividerRef={setDividerEl}
-                  lastClosedAt={lastClosedAt}
-                  onDismiss={dismissEntry}
-                  onDismissThread={dismissByCorrelationId}
-                  onMarkIdsRead={markIdsReadWithUndo}
-                  snoozePendingIndex={snoozePendingIndex}
-                  snoozedThreads={snoozedThreads}
-                  snoozeRenderTime={snoozeRenderTime}
-                  onConsumeSnoozePending={consumeSnoozePending}
-                  onSnoozeRow={handleSnoozeForRow}
-                  onUnsnoozeRow={handleUnsnoozeForRow}
-                />
-              ))}
-            </>
-          )}
-        </div>
+              <>
+                {needsAttentionGroups.length > 0 && (
+                  <NeedsAttentionSection
+                    groups={needsAttentionGroups}
+                    overflowCount={needsAttentionOverflow}
+                    indexOffset={0}
+                    focusedIndex={focusedIndex}
+                    setRowRef={setRowRef}
+                    onRowFocus={setFocusedIndex}
+                    onDropdownOpenChange={handleDropdownOpenChange}
+                    onDismiss={dismissEntry}
+                    onDismissThread={dismissByCorrelationId}
+                    snoozePendingIndex={snoozePendingIndex}
+                    snoozedThreads={snoozedThreads}
+                    snoozeRenderTime={snoozeRenderTime}
+                    onConsumeSnoozePending={consumeSnoozePending}
+                    onSnoozeRow={handleSnoozeForRow}
+                    onUnsnoozeRow={handleUnsnoozeForRow}
+                  />
+                )}
+                {chronoSections.map((section, sectionIdx) => (
+                  <ChronoSection
+                    key={section.key}
+                    section={section}
+                    indexOffset={
+                      needsAttentionGroups.length + (chronoSectionOffsets[sectionIdx] ?? 0)
+                    }
+                    focusedIndex={focusedIndex}
+                    setRowRef={setRowRef}
+                    onRowFocus={setFocusedIndex}
+                    onDropdownOpenChange={handleDropdownOpenChange}
+                    groupByContext={groupByContext}
+                    dividerGroupId={dividerGroupId}
+                    dividerRef={setDividerEl}
+                    lastClosedAt={lastClosedAt}
+                    onDismiss={dismissEntry}
+                    onDismissThread={dismissByCorrelationId}
+                    onMarkIdsRead={markIdsReadWithUndo}
+                    snoozePendingIndex={snoozePendingIndex}
+                    snoozedThreads={snoozedThreads}
+                    snoozeRenderTime={snoozeRenderTime}
+                    onConsumeSnoozePending={consumeSnoozePending}
+                    onSnoozeRow={handleSnoozeForRow}
+                    onUnsnoozeRow={handleUnsnoozeForRow}
+                  />
+                ))}
+              </>
+            )}
+          </div>
+        </ScrollShadow>
         {dividerGroupId !== null && (
           <button
             type="button"

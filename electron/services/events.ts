@@ -117,6 +117,12 @@ export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
     requiresTimestamp: true,
     description: "Forge provider confirmed issue does not exist on current repo",
   },
+  "sys:forge:remote-changed": {
+    category: "system",
+    requiresContext: false,
+    requiresTimestamp: true,
+    description: "Repo's git remotes changed — forge provider must be re-resolved",
+  },
 
   // File events
   "file:open": {
@@ -511,6 +517,18 @@ export type DaintreeEventMap = {
   "sys:issue:not-found": {
     worktreeId: string;
     issueNumber: number;
+    timestamp: number;
+  };
+
+  /**
+   * The repo's git remote table changed (`git remote add` / `set-url` /
+   * `remove`), detected from a `.git/config` write (#11155). Repo-level, so it
+   * carries no worktree id. Deliberately distinct from `sys:worktree:update`:
+   * `PullRequestService` pauses provider resolution forever on a "no-match"
+   * (#9997), and only a signal this narrow may release that pause — a generic
+   * worktree update must not.
+   */
+  "sys:forge:remote-changed": {
     timestamp: number;
   };
 

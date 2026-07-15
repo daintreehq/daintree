@@ -4,7 +4,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, render, cleanup } from "@testing-library/react";
 import { ActivityLight } from "../ActivityLight";
-import { DECAY_DURATION } from "@/utils/colorInterpolation";
+import { ACTIVITY_HOLD_DURATION, DECAY_DURATION } from "@/utils/colorInterpolation";
 
 describe("ActivityLight", () => {
   beforeEach(() => {
@@ -14,6 +14,7 @@ describe("ActivityLight", () => {
   afterEach(() => {
     cleanup();
     vi.useRealTimers();
+    document.body.removeAttribute("data-performance-mode");
   });
 
   function getDot(container: HTMLElement): HTMLElement {
@@ -74,6 +75,21 @@ describe("ActivityLight", () => {
     expect(container.firstChild).toBeNull();
   });
 
+  it.each([Number.NaN, Infinity, 0, -1])(
+    "renders nothing for invalid timestamp %s",
+    (timestamp) => {
+      const { container } = render(<ActivityLight lastActivityTimestamp={timestamp} />);
+      expect(container.firstChild).toBeNull();
+    }
+  );
+
+  it("renders nothing for a future timestamp", () => {
+    const now = Date.now();
+    vi.setSystemTime(now);
+    const { container } = render(<ActivityLight lastActivityTimestamp={now + 1} />);
+    expect(container.firstChild).toBeNull();
+  });
+
   it("applies the className prop", () => {
     const { container } = render(
       <ActivityLight lastActivityTimestamp={Date.now()} className="w-1.5 h-1.5" />
@@ -108,11 +124,8 @@ describe("ActivityLight", () => {
     expect(getDot(container).className).not.toMatch(/\bborder\b/);
     expect(getDot(container).getAttribute("data-activity-active")).toBe("true");
 
-    // Jump wall-clock past the decay window and let the next scheduled
-    // flip fire — the component recomputes from Date.now().
     act(() => {
-      vi.setSystemTime(now + DECAY_DURATION + 1);
-      vi.advanceTimersByTime(1000);
+      vi.advanceTimersByTime(DECAY_DURATION);
     });
 
     expect(getDot(container).className).toMatch(/\bborder\b/);
@@ -136,12 +149,45 @@ describe("ActivityLight", () => {
     expect(vi.getTimerCount()).toBeGreaterThan(0);
 
     act(() => {
-      vi.setSystemTime(now + DECAY_DURATION + 1);
-      vi.advanceTimersByTime(1000);
+      vi.advanceTimersByTime(DECAY_DURATION);
     });
 
     // Past decay: the effect bails out and does not re-arm.
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("sleeps through the full-colour hold instead of waking every second", () => {
+    const now = Date.now();
+    vi.setSystemTime(now);
+    const { container } = render(<ActivityLight lastActivityTimestamp={now} />);
+    const initialColor = getDot(container).style.backgroundColor;
+
+    expect(vi.getTimerCount()).toBe(1);
+    act(() => {
+      vi.advanceTimersByTime(ACTIVITY_HOLD_DURATION - 1);
+    });
+
+    expect(getDot(container).style.backgroundColor).toBe(initialColor);
+    expect(vi.getTimerCount()).toBe(1);
+  });
+
+  it("uses a coarse update cadence while fading", () => {
+    const now = Date.now();
+    vi.setSystemTime(now);
+    const { container } = render(
+      <ActivityLight lastActivityTimestamp={now - ACTIVITY_HOLD_DURATION - 1} />
+    );
+    const initialColor = getDot(container).style.backgroundColor;
+
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(getDot(container).style.backgroundColor).toBe(initialColor);
+
+    act(() => {
+      vi.advanceTimersByTime(14_000);
+    });
+    expect(getDot(container).style.backgroundColor).not.toBe(initialColor);
   });
 
   it("flips to idle at the decay boundary even under performance mode", () => {
@@ -157,7 +203,7 @@ describe("ActivityLight", () => {
       expect(getDot(container).className).not.toMatch(/\bborder\b/);
 
       // The perf-mode 60s floor must NOT delay the idle transition past the
-      // 90s window — the delay is clamped to the remaining decay time.
+      // 10-minute window — the delay is clamped to the remaining decay time.
       act(() => {
         vi.advanceTimersByTime(1000);
       });

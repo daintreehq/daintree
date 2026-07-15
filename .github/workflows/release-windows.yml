@@ -123,9 +123,10 @@ jobs:
       suite: ${{ matrix.suite }}
       platform: windows
 
-  # Online E2E runs for signal only — nothing `needs:` it, so it never gates
-  # build or publish. Do NOT add job-level continue-on-error here: it is invalid
-  # on reusable-workflow (`uses:`) jobs and makes the whole workflow fail to start.
+  # Online E2E gates build and publish, same as core and full-* — a failing
+  # real-agent run must not ship. Do NOT add job-level continue-on-error here:
+  # it is invalid on reusable-workflow (`uses:`) jobs and makes the whole
+  # workflow fail to start.
   e2e-online-gate:
     if: github.event_name != 'workflow_dispatch' || inputs.smoke_artifact_run_id == ''
     needs: [checks, unit-tests]
@@ -137,7 +138,7 @@ jobs:
 
   build-daintree-x64:
     if: github.event_name != 'workflow_dispatch' || inputs.smoke_artifact_run_id == ''
-    needs: [checks, unit-tests, e2e-core-gate, e2e-full-gate]
+    needs: [checks, unit-tests, e2e-core-gate, e2e-full-gate, e2e-online-gate]
     name: Build Daintree (Windows x64)
     runs-on: windows-2022
     timeout-minutes: 90
@@ -325,7 +326,7 @@ jobs:
 
   build-daintree-arm64:
     if: github.event_name != 'workflow_dispatch' || inputs.smoke_artifact_run_id == ''
-    needs: [checks, unit-tests, e2e-core-gate, e2e-full-gate]
+    needs: [checks, unit-tests, e2e-core-gate, e2e-full-gate, e2e-online-gate]
     name: Build Daintree (Windows arm64)
     runs-on: windows-11-arm
     timeout-minutes: 90
@@ -482,9 +483,12 @@ jobs:
   # --smoke-test mode. Validates the four native modules including
   # win-job-object (asar.unpacked native that doesn't ship a prebuilt and so
   # is uniquely at risk if cross-compile for arm64 fails silently). Gates
-  # publish.
+  # publish. always() is only here so the smoke_artifact_run_id dispatch can
+  # smoke a prior run's artifact; otherwise assembly must have succeeded, or a
+  # gate failure would skip assembly and leave this job downloading an artifact
+  # that was never uploaded.
   smoke-packaged:
-    if: always() && (github.event_name != 'workflow_dispatch' || inputs.smoke_artifact_run_id != '' || needs.assemble-windows-release.result == 'success')
+    if: always() && ((github.event_name == 'workflow_dispatch' && inputs.smoke_artifact_run_id != '') || needs.assemble-windows-release.result == 'success')
     needs: [assemble-windows-release]
     name: Smoke (packaged NSIS)
     runs-on: windows-2022

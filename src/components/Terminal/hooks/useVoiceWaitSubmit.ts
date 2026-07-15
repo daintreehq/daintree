@@ -57,7 +57,7 @@ export function useVoiceWaitSubmit({
 
         if (!useTerminalInputStore.getState().isVoiceSubmitting(terminalId)) return;
 
-        // `stop()` bumps voiceDraftRevision after writing the final transcript
+        // `stop()` bumps externalDraftRevision after writing the final transcript
         // to the input store, but HybridInputBar's sync useEffect doesn't fire
         // until the next React render — which is AFTER this microtask. Sync
         // the editor here so sendFromEditor reads the final dictated text and

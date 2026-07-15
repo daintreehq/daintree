@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { scheduleFlip } from "@/utils/flipScheduler";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { isValidPastTimestamp } from "@/utils/timestamps";
 
 interface LiveTimeAgoProps {
   timestamp?: number | null;
@@ -88,9 +89,9 @@ export function LiveTimeAgo({ timestamp, className, noTooltip }: LiveTimeAgoProp
   const [tick, setTick] = useState(0);
 
   useEffect(() => {
-    if (timestamp == null || !Number.isFinite(timestamp)) return;
-
     const now = Date.now();
+    if (!isValidPastTimestamp(timestamp, now)) return;
+
     let delay = msUntilNextFlip(now - timestamp, now);
     if (document.body.dataset.performanceMode === "true") {
       delay = Math.max(delay, PERFORMANCE_MODE_FLOOR);
@@ -99,7 +100,7 @@ export function LiveTimeAgo({ timestamp, className, noTooltip }: LiveTimeAgoProp
     return scheduleFlip(delay, () => setTick((n) => n + 1));
   }, [timestamp, tick]);
 
-  if (timestamp == null || !Number.isFinite(timestamp)) {
+  if (!isValidPastTimestamp(timestamp)) {
     return null;
   }
 

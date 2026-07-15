@@ -290,8 +290,25 @@ export const usePanelStore = create<PanelGridState>()(
     })(set, get, api);
 
     const getActiveWorktreeId = () => useWorktreeSelectionStore.getState().activeWorktreeId;
-    const focusSlice = createTerminalFocusSlice(getTerminals, getActiveWorktreeId, (id) =>
-      get().stampLastActive(id)
+    // Which tab of a panel's group is on screen — the focus fallback needs it to
+    // avoid handing the keyboard to a background tab (#11133). The stored id is
+    // resolved the same way GridTabGroup resolves it for rendering: a stale one
+    // (member removed or moved) yields to the first member, so the fallback and
+    // the renderer never disagree about which tab is visible.
+    const getPanelGroupInfo = (panelId: string) => {
+      const state = get();
+      const group = state.getPanelGroup(panelId);
+      if (!group) return undefined;
+      const stored = state.tabGroups.get(group.id)?.activeTabId ?? null;
+      const activeTabId =
+        stored && group.panelIds.includes(stored) ? stored : (group.panelIds[0] ?? null);
+      return { groupId: group.id, activeTabId };
+    };
+    const focusSlice = createTerminalFocusSlice(
+      getTerminals,
+      getActiveWorktreeId,
+      (id) => get().stampLastActive(id),
+      getPanelGroupInfo
     )(set, get, api);
     const commandQueueSlice = createTerminalCommandQueueSlice(getTerminal)(set, get, api);
     const mruSlice = createTerminalMruSlice(set, get, api);

@@ -4,6 +4,7 @@ import {
   filterEnvironment,
   injectDaintreeMetadata,
   ensureUtf8Locale,
+  shouldInjectForceColor,
 } from "./EnvironmentFilter.js";
 import { getDefaultShell, getDefaultShellArgs } from "./terminalShell.js";
 import { computePoolEnvHash } from "./ptyPoolEnvHash.js";
@@ -103,9 +104,13 @@ export function buildTerminalEnv(
   );
 
   // Universal colour hints — xterm.js supports truecolor, and most CLIs
-  // (chalk, supports-color, termenv, ink) honour these. Plain shells and
-  // agent CLIs both benefit; neither suffers.
-  mergedEnv.FORCE_COLOR = mergedEnv.FORCE_COLOR ?? "3";
+  // (chalk, supports-color, termenv, ink) honour these. The FORCE_COLOR default
+  // yields to a NO_COLOR the user already set; see `shouldInjectForceColor`.
+  // COLORTERM stays unconditional: it feeds depth detection behind NO_COLOR's
+  // own check, so it cannot resurrect colour the user opted out of.
+  if (shouldInjectForceColor(mergedEnv)) {
+    mergedEnv.FORCE_COLOR = "3";
+  }
   mergedEnv.COLORTERM = mergedEnv.COLORTERM ?? "truecolor";
 
   // V8 bytecode cache for Node-based agent CLIs. Path is per-agent to

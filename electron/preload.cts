@@ -2323,6 +2323,8 @@ function buildElectronApi(): ElectronAPI {
       notifyDismiss: (version: string) => _unwrappingInvoke(CHANNELS.UPDATE_DISMISS_TOAST, version),
 
       getLastCheck: () => _unwrappingInvoke(CHANNELS.UPDATE_GET_LAST_CHECK),
+
+      getLatest: () => _unwrappingInvoke(CHANNELS.UPDATE_GET_LATEST),
     },
 
     // Windows Store update-notification API (parallel to `update`; only active
@@ -2625,6 +2627,8 @@ function buildElectronApi(): ElectronAPI {
           data: import("../shared/types/ipc/forge.js").ForgeTokenHealthChangedPayload
         ) => void
       ) => _typedOn(CHANNELS.FORGE_TOKEN_HEALTH_CHANGED, callback),
+      onRemoteChanged: (callback: (payload: { projectId: string }) => void) =>
+        _eventBusOn("forge:remote-changed", callback),
       classifyPushError: (payload: { cwd: string; stderr: string }) =>
         _unwrappingInvoke(CHANNELS.FORGE_CLASSIFY_PUSH_ERROR, payload),
       getRepoStats: (payload: { cwd: string; bypassCache?: boolean }) =>

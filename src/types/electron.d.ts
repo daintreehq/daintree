@@ -22,6 +22,11 @@ declare global {
     }>;
     __DAINTREE_E2E_ADD_ERROR__?: (message: string) => void;
     __DAINTREE_E2E_CLEAR_ERRORS__?: () => void;
+    __DAINTREE_E2E_WORKTREES__?: () => Array<{
+      id: string;
+      branch?: string;
+      resourceConnectCommand?: string;
+    }>;
     __DAINTREE_E2E_REFRESH_GITHUB_CONFIG__?: () => Promise<void>;
     __DAINTREE_E2E_TRIGGER_RECIPE_CONFLICT__?: (recipeName: string) => void;
     /** Per-window store accessors for the multi-window isolation spec (#9599). */

@@ -134,7 +134,7 @@ class VoiceRecordingService {
               useVoiceRecordingStore.getState().setActiveParagraphStart(panelId, insertStart);
             }
             inputStore.setDraftInput(panelId, base + separator + finalText, projectId);
-            inputStore.bumpVoiceDraftRevision();
+            inputStore.bumpExternalDraftRevision();
           }
         }
         useVoiceRecordingStore.getState().completeSegment(text);
@@ -158,7 +158,7 @@ class VoiceRecordingService {
           const before = draft.slice(0, idx);
           const after = draft.slice(idx + description.length);
           inputStore.setDraftInput(panelId, before + replacement + after, projectId);
-          inputStore.bumpVoiceDraftRevision();
+          inputStore.bumpExternalDraftRevision();
         } else {
           logDebug(`${LOG_PREFIX} File token description not found in draft, discarding`, {
             description,
@@ -184,7 +184,7 @@ class VoiceRecordingService {
 
         // Insert a newline to visually separate paragraphs and reset paragraph state.
         inputStore.setDraftInput(panelId, draft + "\n", projectId);
-        inputStore.bumpVoiceDraftRevision();
+        inputStore.bumpExternalDraftRevision();
 
         voiceState.resetParagraphState(panelId);
       })
@@ -566,10 +566,12 @@ class VoiceRecordingService {
     }
 
     if (micStatus === "not-determined") {
-      logDebug(`${LOG_PREFIX} Requesting OS microphone permission`);
-      let granted: boolean;
+      logDebug(`${LOG_PREFIX} Running native microphone permission preflight`);
+      // Only macOS can answer this natively; Windows/Linux resolve `true` to mean
+      // "clear to attempt capture", so a `false` here is a genuine macOS denial.
+      let canAttemptCapture: boolean;
       try {
-        granted = await window.electron.voiceInput.requestMicPermission();
+        canAttemptCapture = await window.electron.voiceInput.requestMicPermission();
       } catch (err) {
         logError(`${LOG_PREFIX} requestMicPermission IPC rejected`, err);
         if (!this.isStartRequestStale(startRequestId)) {
@@ -585,8 +587,8 @@ class VoiceRecordingService {
       if (this.isStartRequestStale(startRequestId)) {
         return;
       }
-      logDebug(`${LOG_PREFIX} OS microphone permission result`, { granted });
-      if (!granted) {
+      logDebug(`${LOG_PREFIX} Native microphone preflight result`, { canAttemptCapture });
+      if (!canAttemptCapture) {
         const message = "Microphone permission denied. Enable it in System Settings and try again.";
         useVoiceRecordingStore
           .getState()
@@ -597,7 +599,9 @@ class VoiceRecordingService {
       }
     }
 
-    // Acquire microphone stream — permission should be granted at this point.
+    // Acquire microphone stream. On macOS the preflight above already settled
+    // permission; on Windows/Linux this call IS the permission gate, so a denial
+    // arrives here as NotAllowedError rather than from the preflight.
     logDebug(`${LOG_PREFIX} Requesting microphone access`);
     let stream: MediaStream;
     try {
@@ -974,7 +978,7 @@ class VoiceRecordingService {
               const base = segmentStart >= 0 ? draft.slice(0, segmentStart) : draft;
               const { separator } = getVoiceInsertMetadata(base);
               inputStore.setDraftInput(panelId, base + separator + remaining, projectId);
-              inputStore.bumpVoiceDraftRevision();
+              inputStore.bumpExternalDraftRevision();
             }
           }
         }
@@ -1054,7 +1058,7 @@ class VoiceRecordingService {
     useVoiceRecordingStore
       .getState()
       .setCorrectionRange(panelId, { from: sessionStart, to: draftBefore.length });
-    inputStore.bumpVoiceDraftRevision();
+    inputStore.bumpExternalDraftRevision();
 
     let correctedText = rawText;
     try {
@@ -1072,7 +1076,7 @@ class VoiceRecordingService {
     // don't clobber it.
     if (this.generation !== stopGeneration) {
       logDebug(`${LOG_PREFIX} Correction result stale (new session), discarding`);
-      inputStore.bumpVoiceDraftRevision();
+      inputStore.bumpExternalDraftRevision();
       return;
     }
 
@@ -1108,7 +1112,7 @@ class VoiceRecordingService {
     // worth suggesting for the custom dictionary (#9749).
     useVoiceRecordingStore.getState().setSessionCorrectedText(panelId, correctedText);
 
-    inputStore.bumpVoiceDraftRevision();
+    inputStore.bumpExternalDraftRevision();
   }
 
   async toggleFocusedPanel(): Promise<void> {

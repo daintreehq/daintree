@@ -75,6 +75,7 @@ export const config: AgentConfig = {
   contextWindow: 200_000,
   capabilities: {
     scrollback: 10000,
+    resizeStrategy: "default",
     supportsBracketedPaste: true,
     softNewlineSequence: "\x1b\r",
     ignoredInputSequences: ["\x1b\r"],

@@ -1,10 +1,7 @@
-/**
- * Linear decay from accent (working) color to idle over 90 seconds.
- * Uses CSS color-mix(in oklab) for perceptually accurate interpolation.
- * Colors are read from CSS custom properties with hardcoded fallbacks.
- */
+import { isValidPastTimestamp } from "./timestamps";
 
-export const DECAY_DURATION = 90 * 1000;
+export const ACTIVITY_HOLD_DURATION = 5 * 60 * 1000;
+export const DECAY_DURATION = 10 * 60 * 1000;
 
 function getCSSColor(property: string, fallback: string): string {
   if (typeof document === "undefined") return fallback;
@@ -13,17 +10,19 @@ function getCSSColor(property: string, fallback: string): string {
 }
 
 export function getActivityColor(lastActivityTimestamp: number | null | undefined): string {
-  if (lastActivityTimestamp == null || !Number.isFinite(lastActivityTimestamp)) {
+  const now = Date.now();
+  if (!isValidPastTimestamp(lastActivityTimestamp, now)) {
     return getCSSColor("--theme-activity-idle", "#52525b");
   }
 
-  const elapsed = Math.max(0, Date.now() - lastActivityTimestamp);
+  const elapsed = now - lastActivityTimestamp;
 
   if (elapsed >= DECAY_DURATION) {
     return getCSSColor("--theme-activity-idle", "#52525b");
   }
 
-  const factor = elapsed / DECAY_DURATION;
+  const fadeDuration = DECAY_DURATION - ACTIVITY_HOLD_DURATION;
+  const factor = Math.max(0, elapsed - ACTIVITY_HOLD_DURATION) / fadeDuration;
   const percentage = Math.max(0, Math.min(100, Math.round((1 - factor) * 100)));
 
   const accent = getCSSColor("--theme-activity-working", "#22c55e");

@@ -7,7 +7,13 @@ vi.mock("@/components/ui/ScrollShadow", () => ({
   ScrollShadow: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
-vi.mock("@/lib/animationUtils", () => ({
+// Spread the real module rather than hand-listing exports: the palette pulls in
+// more of animationUtils than this test cares about, and a factory that misses a
+// single constant fails every test in the file at render time (e.g. the commit-mode
+// thumb's duration). Only the timing values that would make the palette animate are
+// overridden.
+vi.mock("@/lib/animationUtils", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/animationUtils")>()),
   UI_ENTER_DURATION: 0,
   UI_EXIT_DURATION: 0,
   UI_ENTER_EASING: "linear",
@@ -592,6 +598,27 @@ describe("FleetPickerPalette", () => {
       expect(append.getAttribute("aria-checked")).toBe("false");
       const confirm = screen.getByTestId("fleet-picker-cold-start-confirm");
       expect(confirm.textContent).toContain("Arm 1 selected");
+    });
+
+    it("keeps a single sliding thumb, owned by the checked mode", async () => {
+      seedTerminals([makeTerminal("t1", { worktreeId: "wt-1" })]);
+      renderPalette([makeWorktreeSnap("wt-1", "main")]);
+      await act(async () => {});
+
+      const group = screen.getByTestId("fleet-picker-cold-start-commit-mode");
+      const thumbOwner = () => {
+        const thumbs = group.querySelectorAll("[data-slot='segmented-thumb']");
+        expect(thumbs.length).toBe(1);
+        return thumbs[0]?.closest("[role='radio']");
+      };
+
+      expect(thumbOwner()).toBe(screen.getByTestId("fleet-picker-cold-start-commit-mode-replace"));
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("fleet-picker-cold-start-commit-mode-append"));
+      });
+
+      expect(thumbOwner()).toBe(screen.getByTestId("fleet-picker-cold-start-commit-mode-append"));
     });
 
     it("switching to Append updates aria-checked and confirm label", async () => {

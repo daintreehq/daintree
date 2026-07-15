@@ -7,9 +7,7 @@ import type { UpdateInfo, ProgressInfo } from "electron-updater";
 import * as semver from "semver";
 import { CHANNELS } from "../ipc/channels.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
-import { getCrashRecoveryService } from "./CrashRecoveryService.js";
-import { getCrashLoopGuard } from "./CrashLoopGuardService.js";
-import { getPanelSuspectLedger } from "./PanelSuspectLedgerService.js";
+import { requestGracefulShutdownForUpdate } from "../lifecycle/shutdownCoordinator.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
 import { trackEvent } from "./TelemetryService.js";
 import { store } from "../store.js";
@@ -91,13 +89,22 @@ const { autoUpdater } = electronUpdater;
 
 const RESUME_CHECK_DELAY_MS = 7_000;
 
-// macOS-only watchdog after `autoUpdater.quitAndInstall()`: if the process is
-// still alive after 5s, Squirrel.Mac's ShipIt likely failed to acquire its
-// staging lock (electron-builder #8997) and the in-flight `app.quit()` will
-// never fire. `app.exit(0)` force-terminates so ShipIt has a clean shot on the
+// Watchdog after `autoUpdater.quitAndInstall()`: if the process is still alive
+// after 5s, the install handoff failed to end it and nothing else will.
+//
+// On macOS that means Squirrel.Mac's ShipIt likely failed to acquire its staging
+// lock (electron-builder #8997) and the in-flight `app.quit()` will never fire.
+// On Windows/Linux, `BaseUpdater.quitAndInstall()` only schedules its `app.quit()`
+// when `install()` SUCCEEDS — a failed install simply returns. That used to be
+// survivable (the app stayed live and showed an "Update failed" toast), but the
+// install is now preceded by the full graceful-shutdown chain: by this point the
+// DB is closed and the PTYs and IPC handlers are torn down, so a non-quitting
+// process is a zombie. Hence the watchdog arms on every platform (issue #11104).
+//
+// `app.exit(0)` force-terminates, which also gives ShipIt a clean shot on the
 // next launch. 5s is the community-recommended floor — 3s is too tight under
-// memory pressure or slow disk. Windows/Linux keep the original setImmediate
-// timing (no force-exit) because their installer paths don't share this mode.
+// memory pressure or slow disk. It only ever fires if the install path failed to
+// quit on its own, so a healthy install never reaches it.
 const QUIT_AND_INSTALL_WATCHDOG_MS = 5_000;
 
 // 400ms Doherty threshold gates the "Checking…" menu label so a fast CDN
@@ -105,6 +112,20 @@ const QUIT_AND_INSTALL_WATCHDOG_MS = 5_000;
 const CHECKING_MENU_DELAY_MS = 400;
 
 export type UpdateMenuState = "idle" | "checking" | "ready";
+
+// Renderer-facing snapshot of the update the user should currently be told
+// about. Distinct from `updateDownloaded`, which is the install-authorization
+// guard: this one carries dismissal semantics and exists purely so a renderer
+// that mounts after the one-shot broadcast (new project view, new window, a
+// view restored from LRU eviction) can still pull the current stage.
+export type LatestUpdateState = { version: string; downloaded: boolean };
+
+// Why an `update-available` event was not broadcast. The two reasons need
+// different cache handling: an event deduped within the session is one an
+// as-yet-unopened renderer has still never seen (keep it pullable), whereas a
+// dismissed one was explicitly waved off by the user (a fresh window must not
+// re-nag them with it).
+type UpdateAvailableSuppressionReason = "session-dedup" | "dismiss-cooldown";
 
 class AutoUpdaterService {
   private checkInterval: NodeJS.Timeout | null = null;
@@ -118,8 +139,17 @@ class AutoUpdaterService {
   private initialized = false;
   private channelHandlersRegistered = false;
   private updateDownloaded = false;
+  // Spans the whole install window — from the moment the shutdown coordinator
+  // accepts, through the multi-second cleanup chain, to the updater handoff.
+  // Guards re-entry, and tells dispose() (which the cleanup chain itself invokes)
+  // not to tear down the state the pending handoff still depends on.
+  private installInFlight = false;
   private isManualCheck = false;
   private lastBroadcastVersion: string | null = null;
+  // Replayable form of the UPDATE_AVAILABLE / UPDATE_DOWNLOADED broadcasts.
+  // Those are one-shot, so a renderer created after they fired never learned an
+  // update was pending; this is what UPDATE_GET_LATEST hands such a renderer.
+  private latestUpdate: LatestUpdateState | null = null;
   private menuState: UpdateMenuState = "idle";
   private checkingMenuTimeout: NodeJS.Timeout | null = null;
   private menuStateListeners: Set<(state: UpdateMenuState) => void> = new Set();
@@ -175,6 +205,19 @@ class AutoUpdaterService {
     return this.menuState;
   }
 
+  // Backs UPDATE_GET_LATEST. Returns a copy so a renderer round-trip can never
+  // alias the service's own state.
+  //
+  // Answers null for the whole install window. The shutdown chain runs for
+  // multiple seconds before the updater takes the process, and the updater keeps
+  // emitting during it — a download that lands in there would otherwise
+  // repopulate the snapshot and offer a view created mid-shutdown a "Restart to
+  // update" for a payload that is already being installed.
+  getLatestUpdate(): LatestUpdateState | null {
+    if (this.installInFlight) return null;
+    return this.latestUpdate ? { ...this.latestUpdate } : null;
+  }
+
   onMenuStateChange(cb: (state: UpdateMenuState) => void): () => void {
     this.menuStateListeners.add(cb);
     return () => {
@@ -182,32 +225,83 @@ class AutoUpdaterService {
     };
   }
 
-  // Shared install-trigger for `quitAndInstallIfReady()` and the
-  // UPDATE_QUIT_AND_INSTALL IPC handler. Both call sites need identical
-  // behavior: defer past the menu-close frame via `setImmediate` (Windows
-  // animation timing), then arm a macOS-only watchdog that force-exits if
-  // ShipIt fails to land its `app.quit()`. `quitAndInstall()` is wrapped so
-  // a thrown exception still arms the watchdog (force-exit is still the
-  // right move — ShipIt has its best chance on the next launch), and the
-  // `app.exit(0)` inside the watchdog is wrapped so a shutdown-time throw
-  // doesn't become an unhandled rejection.
+  // The install handoff. Runs ONLY once the graceful-shutdown chain has settled
+  // (see `startQuitAndInstall`), so everything the chain owns — agent session
+  // journaling, the DB checkpoint, audit flushes, subprocess teardown — is
+  // already durable before the updater takes the process.
+  //
+  // Deliberately synchronous. The old `setImmediate` wrapper (which existed to
+  // clear the menu-close frame) would now reopen the very gap this fix closes:
+  // the shutdown coordinator is in its `handoff` phase the moment this is called,
+  // so a `before-quit` arriving in a deferred tick would be let through and quit
+  // the app WITHOUT installing. The multi-tick cleanup chain already provides far
+  // more deferral than a `setImmediate` ever did, and `BaseUpdater.quitAndInstall()`
+  // keeps its own internal `setImmediate` before `app.quit()` on Windows/Linux.
+  //
+  // `quitAndInstall()` is wrapped so a throw still arms the watchdog — force-exit
+  // remains the right move, and it's the only thing standing between a failed
+  // install and a torn-down zombie process. The `app.exit(0)` inside the watchdog
+  // is wrapped so a shutdown-time throw doesn't become an unhandled rejection.
   private executeQuitAndInstall(): void {
-    setImmediate(() => {
+    try {
+      autoUpdater.quitAndInstall();
+    } catch (err) {
+      console.error("[MAIN] autoUpdater.quitAndInstall() threw:", err);
+    }
+    this.watchdogTimeout = setTimeout(() => {
+      this.watchdogTimeout = null;
       try {
-        autoUpdater.quitAndInstall();
+        app.exit(0);
       } catch (err) {
-        console.error("[MAIN] autoUpdater.quitAndInstall() threw:", err);
+        console.error("[MAIN] Quit-and-install watchdog app.exit(0) failed:", err);
       }
-      if (process.platform !== "darwin") return;
-      this.watchdogTimeout = setTimeout(() => {
-        this.watchdogTimeout = null;
-        try {
-          app.exit(0);
-        } catch (err) {
-          console.error("[MAIN] Quit-and-install watchdog app.exit(0) failed:", err);
-        }
-      }, QUIT_AND_INSTALL_WATCHDOG_MS);
-    });
+    }, QUIT_AND_INSTALL_WATCHDOG_MS);
+  }
+
+  // Shared entry point for `quitAndInstallIfReady()` (native menu) and the
+  // UPDATE_QUIT_AND_INSTALL IPC handler (renderer toast).
+  //
+  // Before #11104 both call sites hand-copied three clean-exit markers and then
+  // installed immediately, because on macOS `quitAndInstall()` reaches native
+  // Squirrel.Mac — which closes every window before Electron emits `before-quit`,
+  // so the graceful-shutdown chain never ran. Everything else it does (session
+  // journaling, DB checkpoint, audit flushes) was simply lost on an update.
+  //
+  // Now the install waits for that chain. The markers are gone from here: the
+  // chain writes them itself, and only once it has actually settled clean.
+  private startQuitAndInstall(): boolean {
+    if (this.installInFlight) return false;
+
+    const previousAutoInstall = autoUpdater.autoInstallOnAppQuit;
+    this.installInFlight = true;
+    // Disarm the auto-install-on-quit path for the WHOLE cleanup window, not just
+    // the instant before installing. Cleanup is now multi-second, and a Cmd+Q
+    // landing inside it would otherwise be a second, concurrent install trigger
+    // racing the installer subprocess.
+    autoUpdater.autoInstallOnAppQuit = false;
+
+    const status = requestGracefulShutdownForUpdate(() => this.executeQuitAndInstall());
+    if (status !== "started") {
+      // Either a quit already owns the shutdown (its terminal action will end the
+      // process — attaching ours too would race `app.exit()` against the installer)
+      // or the coordinator has no chain registered. Roll back so the staged update
+      // stays installable rather than being silently consumed.
+      console.warn(`[MAIN] Quit-and-install declined by the shutdown coordinator: ${status}`);
+      this.installInFlight = false;
+      autoUpdater.autoInstallOnAppQuit = previousAutoInstall;
+      return false;
+    }
+
+    // Consume the staged update only once the coordinator has accepted, so a
+    // declined request leaves the menu item and toast still actionable. Flipping
+    // both guards here also means a rapid double-click reads idle and bails.
+    this.updateDownloaded = false;
+    // Drop it from the pull cache on the same terms: the update is being
+    // installed, so a view created during the (multi-second) shutdown chain must
+    // not be handed a "Restart to update" for it.
+    this.latestUpdate = null;
+    this.setMenuState("idle");
+    return true;
   }
 
   private checkPendingUpdateInstallVersion(): void {
@@ -239,42 +333,7 @@ class AutoUpdaterService {
   quitAndInstallIfReady(): boolean {
     if (isWindowsStoreBuild()) return false;
     if (this.menuState !== "ready" || !this.updateDownloaded) return false;
-    // Flip both guards synchronously so a rapid double-click can't queue two
-    // setImmediate(quitAndInstall) calls — the second invocation reads idle
-    // and bails. Resetting menuState back to idle also gives instant visual
-    // feedback that the click registered.
-    this.updateDownloaded = false;
-    this.setMenuState("idle");
-    try {
-      getCrashRecoveryService().cleanupOnExit();
-    } catch (err) {
-      console.error("[MAIN] Crash recovery cleanup before quit-and-install failed:", err);
-    }
-    // An update relaunch is a clean exit, but quitAndInstall() bypasses the
-    // before-quit cleanup chain (issue #9638), so the two clean-exit markers the
-    // normal shutdown path writes are skipped — leaving cleanExit:false and
-    // firing a false crash-recovery prompt on the post-update boot. Mirror
-    // shutdown.ts: each marker in its own try/catch so one failure can't skip
-    // the next (lesson #7158). markCleanExit/markCleanLaunch are synchronous
-    // writeFileSync, so they commit before the setImmediate-deferred install.
-    try {
-      getCrashLoopGuard().markCleanExit();
-    } catch (err) {
-      console.error("[MAIN] CrashLoopGuard.markCleanExit before quit-and-install failed:", err);
-    }
-    try {
-      getPanelSuspectLedger().markCleanLaunch();
-    } catch (err) {
-      console.error(
-        "[MAIN] PanelSuspectLedger.markCleanLaunch before quit-and-install failed:",
-        err
-      );
-    }
-    // Disarm the before-quit listener so the explicit quitAndInstall() path
-    // and the autoInstallOnAppQuit path don't race the installer subprocess.
-    autoUpdater.autoInstallOnAppQuit = false;
-    this.executeQuitAndInstall();
-    return true;
+    return this.startQuitAndInstall();
   }
 
   // electron-updater 6.3.x doesn't surface a categorized error type, so classify
@@ -350,14 +409,52 @@ class AutoUpdaterService {
     }
   }
 
-  private shouldSuppressUpdateAvailable(version: string): boolean {
+  // Returns null when the event should be broadcast, otherwise WHY it was
+  // withheld. The reason matters: `availableHandler` keeps a deduped version
+  // pullable via UPDATE_GET_LATEST but drops a dismissed one, so a window the
+  // user opens later is told about an update it never saw yet is not re-nagged
+  // about one they already waved off.
+  //
+  // Dismissal is evaluated BEFORE session dedup. Checking dedup first (as this
+  // did when it returned a bare boolean) misclassifies the common
+  // broadcast → user dismisses → next poll refires sequence as "dedup", which
+  // would repopulate the cache with a version the user just dismissed. Both
+  // reasons suppress the broadcast either way, so the reorder changes only the
+  // cache decision, never what the user is shown live.
+  private getUpdateAvailableSuppressionReason(
+    version: string
+  ): UpdateAvailableSuppressionReason | null {
     // Manual checks always bypass suppression so users see a result.
-    if (this.isManualCheck) return false;
+    if (this.isManualCheck) return null;
+
+    if (this.isDismissedWithinCooldown(version)) return "dismiss-cooldown";
 
     // In-session dedup: electron-updater refires `update-available` on every
     // poll for the same pending version. Swallow repeats within this session.
-    if (this.lastBroadcastVersion === version) return true;
+    if (this.lastBroadcastVersion === version) return "session-dedup";
 
+    return null;
+  }
+
+  // Pruning is best-effort and must never throw. This runs inside
+  // `update-available`, an EventEmitter listener: a throw there is turned into an
+  // updater `error` event, which this service classifies as permanent and
+  // therefore does NOT retry — an unwritable store would abort the update check
+  // outright. Fail open instead; a record we couldn't delete is re-evaluated on
+  // the next poll anyway.
+  private forgetDismissRecord(): void {
+    try {
+      store.delete("dismissedUpdateVersion");
+      store.delete("dismissedUpdateAt");
+    } catch (err) {
+      console.error("[MAIN] Failed to clear the dismissed-update record:", err);
+    }
+  }
+
+  // True only while the user's dismissal of THIS version is still in force.
+  // Prunes corrupt and expired records as it goes, so a bad write can't
+  // permanently mute updates.
+  private isDismissedWithinCooldown(version: string): boolean {
     const dismissedVersion = store.get("dismissedUpdateVersion");
     const dismissedAt = store.get("dismissedUpdateAt");
     if (
@@ -368,8 +465,7 @@ class AutoUpdaterService {
       // Corrupt record (e.g., NaN/Infinity from a future writer or hand-edited
       // config) — clear it and fall through so the user still sees updates.
       if (typeof dismissedVersion === "string" || typeof dismissedAt === "number") {
-        store.delete("dismissedUpdateVersion");
-        store.delete("dismissedUpdateAt");
+        this.forgetDismissRecord();
       }
       return false;
     }
@@ -390,13 +486,24 @@ class AutoUpdaterService {
     const elapsed = Date.now() - dismissedAt;
     if (elapsed < 0 || elapsed >= DISMISS_COOLDOWN_MS) {
       // Cooldown expired (or clock skew) — clear stale record and broadcast.
-      store.delete("dismissedUpdateVersion");
-      store.delete("dismissedUpdateAt");
+      this.forgetDismissRecord();
       return false;
     }
 
     // Same version is still within the 24h cooldown.
     return dismissedVersion === version;
+  }
+
+  // Records the Available stage for a late-mounting renderer to pull.
+  //
+  // Never downgrades a completed download: electron-updater refires
+  // `update-available` on every poll for the version it has ALREADY staged, so
+  // a plain assignment here would silently roll the cached stage back from
+  // "ready to install" to "downloading…" on the next 4-hour tick, and any window
+  // opened afterwards would render the wrong (and un-actionable) toast.
+  private cacheAvailableUpdate(version: string): void {
+    if (this.latestUpdate?.downloaded && this.latestUpdate.version === version) return;
+    this.latestUpdate = { version, downloaded: false };
   }
 
   private configureFeedForChannel(channel: "stable" | "nightly"): void {
@@ -417,9 +524,25 @@ class AutoUpdaterService {
     autoUpdater.allowDowngrade = channel === "nightly";
   }
 
+  // `checkForUpdates()`, NOT `checkForUpdatesAndNotify()`. The latter is just
+  // this call plus an un-awaited `.then()` on the download promise that fires
+  // electron-updater's OWN native OS notification on `update-downloaded` — which
+  // lands on top of the in-app "Update ready" toast this app already renders
+  // from the same event (`useUpdateListener`), so the user is told twice. There
+  // is no option to suppress just the native half (`formatDownloadNotification`
+  // only rewrites its text), so the automatic contexts use the plain call, which
+  // is what the manual path (`checkForUpdatesManually`) has always done.
+  //
+  // Nothing else differs — autoDownload gating, error emission, and the returned
+  // UpdateCheckResult are identical, and the wrapper below already treats the
+  // return value opaquely.
+  //
+  // Worth knowing when verifying: the duplicate is invisible on an unsigned dev
+  // build, where Electron 42 silently fails the native notification. It only
+  // surfaces on signed/notarized release builds.
   private runUpdateCheck(context: "Initial" | "Periodic" | "Retry" | "Resume"): void {
     try {
-      const result = autoUpdater.checkForUpdatesAndNotify();
+      const result = autoUpdater.checkForUpdates();
       Promise.resolve(result).catch((err) => {
         console.error(`[MAIN] ${context} update check failed:`, err);
       });
@@ -502,6 +625,9 @@ class AutoUpdaterService {
         autoUpdater.autoInstallOnAppQuit = false;
         this.updateDownloaded = false;
         this.lastBroadcastVersion = null;
+        // The staged payload belongs to the channel being left; a renderer that
+        // mounts before the new channel's first check must not be handed it.
+        this.latestUpdate = null;
         this.resetRetryState();
         this.clearCheckingMenuTimeout();
         this.setMenuState("idle");
@@ -545,7 +671,23 @@ class AutoUpdaterService {
         if (!semver.valid(trimmed)) return;
         store.set("dismissedUpdateVersion", trimmed);
         store.set("dismissedUpdateAt", Date.now());
+        // Withdraw the version from the pull cache the moment it's dismissed,
+        // not just on the next `update-available`. Otherwise a window opened
+        // between the dismissal and the next 4-hour poll would still hydrate the
+        // toast the user just closed. A downloaded update survives: it stays
+        // separately actionable (see the dismiss-cooldown branch in
+        // `availableHandler`).
+        if (this.latestUpdate?.version === trimmed && !this.latestUpdate.downloaded) {
+          this.latestUpdate = null;
+        }
       });
+
+      // NB: UPDATE_GET_LATEST is deliberately NOT registered here. Every handler
+      // in this method runs from a deferred init task, and that queue drains on
+      // the renderer's own first-interactive signal — so `useUpdateListener` has
+      // already mounted and pulled by the time we get here. It is registered
+      // eagerly in `globalServicesInit`, which reads `getLatestUpdate()` through
+      // the service ref.
 
       this.channelHandlersRegistered = true;
     }
@@ -624,7 +766,8 @@ class AutoUpdaterService {
       this.availableHandler = (info: UpdateInfo) => {
         console.log("[MAIN] Update available:", info.version);
         this.downloadGeneration = this.channelGeneration;
-        const suppressed = this.shouldSuppressUpdateAvailable(info.version);
+        // Read the reason before `isManualCheck` is cleared — it feeds the check.
+        const suppressionReason = this.getUpdateAvailableSuppressionReason(info.version);
         this.isManualCheck = false;
         this.recordSuccessfulUpdateCheck();
         // A successful check ends the retry cycle regardless of whether we
@@ -635,7 +778,26 @@ class AutoUpdaterService {
         // completes — let the downloaded handler flip to "ready".
         this.clearCheckingMenuTimeout();
         if (this.menuState !== "ready") this.setMenuState("idle");
-        if (suppressed) return;
+
+        if (suppressionReason === "dismiss-cooldown") {
+          // The user waved this version off. Drop it from the pull cache so a
+          // window opened during the cooldown isn't handed it — but only at the
+          // Available stage. A finished download is a separate, still-actionable
+          // signal that outranks an Available-stage dismissal (the renderer
+          // deliberately raises a fresh "Update ready" toast for it either way).
+          if (this.latestUpdate?.version === info.version && !this.latestUpdate.downloaded) {
+            this.latestUpdate = null;
+          }
+          return;
+        }
+
+        // Cached for BOTH remaining paths, including "session-dedup": a repeat
+        // event carries no news for renderers that are already listening, but a
+        // window opened after the first broadcast never saw it at all, and this
+        // cache is the only way it can find out.
+        this.cacheAvailableUpdate(info.version);
+        if (suppressionReason === "session-dedup") return;
+
         this.lastBroadcastVersion = info.version;
         broadcastToRenderer(CHANNELS.UPDATE_AVAILABLE, { version: info.version });
       };
@@ -647,6 +809,14 @@ class AutoUpdaterService {
         this.resetRetryState();
         this.clearCheckingMenuTimeout();
         if (this.menuState !== "ready") this.setMenuState("idle");
+        // The feed no longer offers the version we were mid-download on (a
+        // withdrawn or replaced release). Drop it, or every window opened from
+        // here on would be told it's "downloading" an update that is never
+        // coming. A finished download survives: that installer is on disk and
+        // still installable regardless of what the feed now says.
+        if (this.latestUpdate && !this.latestUpdate.downloaded) {
+          this.latestUpdate = null;
+        }
         if (this.isManualCheck) {
           this.isManualCheck = false;
           broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
@@ -660,6 +830,10 @@ class AutoUpdaterService {
 
       this.errorHandler = (err: Error) => {
         console.error("[MAIN] Auto-updater error:", err);
+        // Once the install is underway the service is being torn down around us:
+        // scheduling a retry would arm a timer against a disposed service, and a
+        // toast would target a renderer that is going away. Log and stop.
+        if (this.installInFlight) return;
         const wasManual = this.isManualCheck;
         this.isManualCheck = false;
         this.clearCheckingMenuTimeout();
@@ -712,6 +886,11 @@ class AutoUpdaterService {
         // channel and must not re-arm install.
         if (this.channelGeneration !== this.downloadGeneration) return;
         this.updateDownloaded = true;
+        // After the guard, never before: a stale download from the previous
+        // channel is refused install authorization above, so caching it would
+        // hand a late-mounting renderer an actionable "Restart to update" for a
+        // payload this service will not install.
+        this.latestUpdate = { version: info.version, downloaded: true };
         autoUpdater.autoInstallOnAppQuit = true;
         // Persist the staged version so the next boot can detect a silent
         // install failure (issue #9261). Write before broadcasting so a crash
@@ -737,9 +916,9 @@ class AutoUpdaterService {
       };
       autoUpdater.on("update-downloaded", this.downloadedHandler);
 
-      // Handle quit-and-install request from renderer. Mirrors the guard +
-      // cleanup pattern from quitAndInstallIfReady() and validates the sender
-      // origin synchronously (matches UPDATE_DISMISS_TOAST pattern).
+      // Handle quit-and-install request from renderer. Validates the sender origin
+      // synchronously (matches the UPDATE_DISMISS_TOAST pattern), then delegates to
+      // the same coordinated install path the native menu uses.
       ipcMain.handle(CHANNELS.UPDATE_QUIT_AND_INSTALL, (event) => {
         const senderUrl = event.senderFrame?.url;
         if (!senderUrl || !isTrustedRendererUrl(senderUrl)) return;
@@ -747,31 +926,7 @@ class AutoUpdaterService {
           console.warn("[MAIN] Quit-and-install called before download completed");
           return;
         }
-        this.updateDownloaded = false;
-        this.setMenuState("idle");
-        try {
-          getCrashRecoveryService().cleanupOnExit();
-        } catch (err) {
-          console.error("[MAIN] Crash recovery cleanup before quit-and-install failed:", err);
-        }
-        // Issue #9638: write the clean-exit markers the before-quit chain would
-        // otherwise skip on an update relaunch. Independent try/catch per marker
-        // (lesson #7158); both are synchronous so they commit before the install.
-        try {
-          getCrashLoopGuard().markCleanExit();
-        } catch (err) {
-          console.error("[MAIN] CrashLoopGuard.markCleanExit before quit-and-install failed:", err);
-        }
-        try {
-          getPanelSuspectLedger().markCleanLaunch();
-        } catch (err) {
-          console.error(
-            "[MAIN] PanelSuspectLedger.markCleanLaunch before quit-and-install failed:",
-            err
-          );
-        }
-        autoUpdater.autoInstallOnAppQuit = false;
-        this.executeQuitAndInstall();
+        this.startQuitAndInstall();
       });
 
       // Handle manual check-for-updates request from renderer
@@ -849,7 +1004,13 @@ class AutoUpdaterService {
       clearTimeout(this.resumeTimeout);
       this.resumeTimeout = null;
     }
-    if (this.watchdogTimeout) {
+    // The graceful-shutdown chain disposes this service as part of its normal
+    // teardown — which, on the update path, happens WHILE an install is pending.
+    // Never clear the force-exit watchdog in that case: a cleanup chain that hit
+    // its hard timeout keeps running in the background and can reach this line
+    // AFTER the handoff already armed it, disarming the one thing that guarantees
+    // a failed install can't leave a torn-down zombie process (issue #11104).
+    if (this.watchdogTimeout && !this.installInFlight) {
       clearTimeout(this.watchdogTimeout);
       this.watchdogTimeout = null;
     }
@@ -876,6 +1037,12 @@ class AutoUpdaterService {
       autoUpdater.off("update-not-available", this.notAvailableHandler);
       this.notAvailableHandler = null;
     }
+    // Detach unconditionally, including during an in-flight install. It's safe:
+    // AppUpdater's own constructor attaches a permanent "error" listener of its
+    // own (it logs), so the emitter is never left listener-less and
+    // `emit("error")` cannot throw for want of a handler. Detaching ours is in
+    // fact the stronger guarantee — it makes it impossible for a late install
+    // error to schedule a retry timer against this now-disposed service.
     if (this.errorHandler) {
       autoUpdater.off("error", this.errorHandler);
       this.errorHandler = null;
@@ -926,6 +1093,14 @@ class AutoUpdaterService {
     }
 
     this.updateDownloaded = false;
+    // The UPDATE_GET_LATEST handler outlives this service (it's registered
+    // eagerly and reads through the ref, which shutdown nulls out), so there is
+    // no handler to remove — only the state it reports.
+    this.latestUpdate = null;
+    // Reset last: every guard above reads it to decide what an in-flight install
+    // still needs. By this point those decisions are made, and the flag must not
+    // survive a full teardown.
+    this.installInFlight = false;
     this.isManualCheck = false;
     this.lastBroadcastVersion = null;
     this.channelHandlersRegistered = false;
