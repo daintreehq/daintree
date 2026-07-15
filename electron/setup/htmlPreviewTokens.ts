@@ -49,6 +49,10 @@ export function resolveHtmlPreviewRoot(token: string): string | undefined {
  * absolute paths.
  */
 export function buildHtmlPreviewUrl(canonicalRoot: string, canonicalFile: string): string | null {
+  // Never mint a whole-volume capability: the file panel's parent-directory
+  // fallback can pick a filesystem/drive root for a top-level file, which would
+  // make the entire disk readable inside the preview. Refuse it.
+  if (path.dirname(canonicalRoot) === canonicalRoot) return null;
   const rel = path.relative(canonicalRoot, canonicalFile);
   if (rel === "" || rel === ".." || rel.startsWith(".." + path.sep) || path.isAbsolute(rel)) {
     return null;

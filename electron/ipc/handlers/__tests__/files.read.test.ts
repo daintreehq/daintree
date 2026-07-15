@@ -63,6 +63,7 @@ vi.mock("../../../services/FileSearchService.js", () => ({
 import { ipcMain } from "electron";
 import { CHANNELS } from "../../channels.js";
 import { registerFilesHandlers, isLfsPointer } from "../files.js";
+import { _resetHtmlPreviewTokensForTests } from "../../../setup/htmlPreviewTokens.js";
 import type { FileReadResult } from "../../../../shared/types/ipc/files.js";
 
 const LFS_HEADER = "version https://git-lfs.github.com/spec/v1\n";
@@ -445,5 +446,74 @@ describe("files:read handler", () => {
       expect(fsMock.realpath).not.toHaveBeenCalled();
       expect(fsMock.open).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("files:read HTML preview mint (#11191)", () => {
+  const root = path.resolve("/tmp/report");
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    fsMock.realpath.mockImplementation(async (p: string) => p);
+    fsMock.stat.mockResolvedValue({ size: 11 });
+    _resetHtmlPreviewTokensForTests();
+  });
+
+  async function read(payload: { path: string; rootPath: string; htmlPreview?: boolean }) {
+    fsMock.open.mockResolvedValue(makeFileHandle(Buffer.from("<h1>hi</h1>")));
+    registerFilesHandlers();
+    return getReadHandler()({}, payload);
+  }
+
+  it("mints a daintree-html:// preview URL for an .html file when htmlPreview is true", async () => {
+    const result = await read({
+      path: path.join(root, "index.html"),
+      rootPath: root,
+      htmlPreview: true,
+    });
+    expect(result.content).toBe("<h1>hi</h1>");
+    // Opaque UUID authority + the file's relative path; token is unguessable.
+    expect(result.htmlPreviewUrl).toMatch(/^daintree-html:\/\/[0-9a-f-]{36}\/index\.html$/);
+  });
+
+  it("mints for a .htm file", async () => {
+    const result = await read({
+      path: path.join(root, "page.htm"),
+      rootPath: root,
+      htmlPreview: true,
+    });
+    expect(result.htmlPreviewUrl).toMatch(/\/page\.htm$/);
+  });
+
+  it("mints for an uppercase .HTML file (case-insensitive)", async () => {
+    const result = await read({
+      path: path.join(root, "REPORT.HTML"),
+      rootPath: root,
+      htmlPreview: true,
+    });
+    expect(result.htmlPreviewUrl).toMatch(/^daintree-html:\/\/[0-9a-f-]{36}\/REPORT\.HTML$/);
+  });
+
+  it("does not mint for a non-HTML file even when htmlPreview is true", async () => {
+    const result = await read({
+      path: path.join(root, "data.txt"),
+      rootPath: root,
+      htmlPreview: true,
+    });
+    expect(result.htmlPreviewUrl).toBeUndefined();
+  });
+
+  it("does not mint when htmlPreview is omitted (opt-in)", async () => {
+    const result = await read({ path: path.join(root, "index.html"), rootPath: root });
+    expect(result.htmlPreviewUrl).toBeUndefined();
+  });
+
+  it("does not mint when htmlPreview is false", async () => {
+    const result = await read({
+      path: path.join(root, "index.html"),
+      rootPath: root,
+      htmlPreview: false,
+    });
+    expect(result.htmlPreviewUrl).toBeUndefined();
   });
 });

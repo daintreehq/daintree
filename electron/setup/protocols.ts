@@ -240,10 +240,11 @@ async function readContainedDaintreeFile(
   }
 
   // Open the user-supplied normalized path (not realFile) with O_NOFOLLOW
-  // so a final-component symlink injected after the realpath check is
-  // rejected with ELOOP. Closes the TOCTOU gap between realpath and the
-  // actual read. On Windows O_NOFOLLOW is 0 (no-op); realpath containment
-  // still applies. Mirrors the files:read IPC handler.
+  // so a *final-component* symlink injected after the realpath check is
+  // rejected with ELOOP — narrowing (not fully closing) the realpath→open
+  // TOCTOU window; an intermediate-directory swap is still theoretically
+  // possible and is an accepted limitation shared with files:read. On Windows
+  // O_NOFOLLOW is 0 (no-op); realpath containment still applies.
   let fileHandle: Awaited<ReturnType<typeof fs.open>>;
   try {
     fileHandle = await fs.open(normalizedFile, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
@@ -327,6 +328,11 @@ function createDaintreeFileProtocolHandler() {
   };
 }
 
+/** True for any `daintree-html://…` request URL (the sandboxed preview scheme). */
+function isDaintreeHtmlPreviewUrl(url: string | undefined): boolean {
+  return typeof url === "string" && url.startsWith("daintree-html://");
+}
+
 /**
  * CSP for a `daintree-html://<token>` sandboxed preview *document* (.html/.htm).
  * Scoped to the exact token authority — NOT the whole `daintree-html:` scheme —
@@ -354,6 +360,9 @@ function buildDaintreeHtmlDocHeaders(token: string, contentLength: number): Reco
     `font-src ${self} data:`,
     `media-src ${self} data: blob:`,
     "connect-src 'none'",
+    // WebRTC is not covered by connect-src, so block it explicitly — otherwise a
+    // rendered report could exfiltrate via an attacker-controlled STUN/TURN host.
+    "webrtc 'block'",
     "worker-src 'none'",
     "frame-src 'none'",
     "object-src 'none'",
@@ -366,6 +375,10 @@ function buildDaintreeHtmlDocHeaders(token: string, contentLength: number): Reco
     "Content-Security-Policy": csp,
     "Cross-Origin-Resource-Policy": "cross-origin",
     "X-Content-Type-Options": "nosniff",
+    // Belt-and-suspenders egress limits: no referrer leakage on any request the
+    // page makes, and no speculative DNS lookups of hostnames in the markup.
+    "Referrer-Policy": "no-referrer",
+    "X-DNS-Prefetch-Control": "off",
     "Cache-Control": "no-store",
   };
 }
@@ -402,6 +415,25 @@ function createDaintreeHtmlProtocolHandler() {
     const root = token ? resolveHtmlPreviewRoot(token) : undefined;
     if (!root) {
       // Unknown or released token — never fall back to a raw filesystem read.
+      return new Response("Not Found", {
+        status: 404,
+        headers: buildDaintreeFileErrorHeaders(),
+      });
+    }
+
+    // Root-identity binding: the token maps to a canonical (realpath'd) root
+    // captured at mint time. If that path no longer canonically resolves to
+    // itself — e.g. the directory was renamed away and replaced with a symlink
+    // to "/" — the token would otherwise retarget to a different subtree. Reject
+    // it so a stale capability can't be deterministically repointed.
+    try {
+      if ((await fs.realpath(root)) !== root) {
+        return new Response("Not Found", {
+          status: 404,
+          headers: buildDaintreeFileErrorHeaders(),
+        });
+      }
+    } catch {
       return new Response("Not Found", {
         status: 404,
         headers: buildDaintreeFileErrorHeaders(),
@@ -856,6 +888,10 @@ export function applyDaintreeAppCspToSession(ses: Electron.Session): void {
   ses.webRequest.onHeadersReceived(
     { urls: ["<all_urls>"], types: ["mainFrame", "subFrame", "script"] },
     (details, callback) => {
+      if (isDaintreeHtmlPreviewUrl(details.url)) {
+        callback({ responseHeaders: details.responseHeaders });
+        return;
+      }
       callback({
         responseHeaders: mergeCspHeaders(details, cspPolicy),
       });
@@ -898,6 +934,16 @@ export function setupWebviewCSP(): void {
     ses.webRequest.onHeadersReceived(
       { urls: ["<all_urls>"], types: ["mainFrame", "subFrame", "script"] },
       (details, callback) => {
+        // A daintree-html:// preview iframe carries its own token-scoped CSP
+        // (buildDaintreeHtmlDocHeaders). protocol.handle responses DO flow
+        // through onHeadersReceived (Electron 42 / Chromium 148), so without
+        // this bypass mergeCspHeaders would replace that policy with the trusted
+        // app CSP — breaking the sandboxed page's scripts AND re-exposing
+        // connect-src daintree-file:. Pass it through untouched.
+        if (isDaintreeHtmlPreviewUrl(details.url)) {
+          callback({ responseHeaders: details.responseHeaders });
+          return;
+        }
         callback({
           responseHeaders: mergeCspHeaders(details, cspPolicy),
         });

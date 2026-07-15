@@ -284,10 +284,10 @@ export function FilePane({
   const [pathCopied, setPathCopied] = useState(false);
   // Sandboxed-iframe preview URL for HTML files (#11191), minted by files:read.
   const [htmlPreviewUrl, setHtmlPreviewUrl] = useState<string | null>(null);
-  // Bumped whenever the file's content actually changes so the (cross-origin)
-  // preview frame re-navigates — a rewritten report re-renders on refresh/focus.
+  // Bumped on every successful (re)load so the (cross-origin) preview frame
+  // re-navigates — a rewritten report re-renders on refresh/focus. Bumping on
+  // every load, not just entry-file changes, keeps relative assets fresh too.
   const [reloadNonce, setReloadNonce] = useState(0);
-  const lastContentRef = useRef<string | null>(null);
   const requestRef = useRef(0);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const markdownViewerRef = useRef<MarkdownViewerHandle>(null);
@@ -321,13 +321,13 @@ export function FilePane({
         })
         .then(({ content: fileContent, htmlPreviewUrl: previewUrl }) => {
           if (requestRef.current !== requestId) return;
-          const changed = lastContentRef.current !== fileContent;
-          lastContentRef.current = fileContent;
           setContent((previous) => (previous === fileContent ? previous : fileContent));
           setHtmlPreviewUrl(previewUrl ?? null);
-          // Re-navigate the preview frame only when content actually changed —
-          // avoids a needless reflash on a silent same-content refresh.
-          if (changed) setReloadNonce((nonce) => nonce + 1);
+          // Re-navigate the preview frame on every successful load so a rewritten
+          // report — or an unchanged entry file whose relative asset changed —
+          // always reflects the latest bytes. reloadNonce isn't a loadFile dep,
+          // so this can't re-trigger the load.
+          setReloadNonce((nonce) => nonce + 1);
           setLoadState("loaded");
           setErrorCode(null);
         })

@@ -1155,6 +1155,48 @@ describe("setupWebviewCSP — partition CSP wiring", () => {
     }
   });
 
+  it("passes daintree-html:// preview responses through without overwriting their CSP (#11191)", async () => {
+    const { session } = await import("electron");
+    const { mergeCspHeaders } = await import("../../utils/webviewCsp.js");
+    const fromPartition = vi.mocked(session.fromPartition);
+    vi.mocked(mergeCspHeaders).mockClear();
+
+    let captured:
+      | ((details: unknown, callback: (r: { responseHeaders?: unknown }) => void) => void)
+      | undefined;
+    fromPartition.mockImplementation((partition: string) => {
+      const onHeadersReceived = vi.fn(
+        (
+          _filter: unknown,
+          listener: (details: unknown, callback: (r: { responseHeaders?: unknown }) => void) => void
+        ) => {
+          if (partition === "persist:daintree") captured = listener;
+        }
+      );
+      return { webRequest: { onHeadersReceived } } as unknown as Electron.Session;
+    });
+
+    setupWebviewCSP();
+    expect(captured).toBeDefined();
+
+    // A daintree-html preview iframe already carries its own token-scoped CSP;
+    // the app overlay must NOT replace it (that would break the sandboxed page's
+    // scripts and re-expose connect-src daintree-file:).
+    const previewHeaders = {
+      "Content-Security-Policy": ["sandbox allow-scripts; default-src 'none'"],
+    };
+    let previewResult: { responseHeaders?: unknown } | undefined;
+    captured!({ url: "daintree-html://tok/index.html", responseHeaders: previewHeaders }, (r) => {
+      previewResult = r;
+    });
+    expect(previewResult?.responseHeaders).toBe(previewHeaders);
+    expect(vi.mocked(mergeCspHeaders)).not.toHaveBeenCalled();
+
+    // A normal app response still gets the app CSP overlay applied.
+    captured!({ url: "app://daintree/index.html", responseHeaders: {} }, () => {});
+    expect(vi.mocked(mergeCspHeaders)).toHaveBeenCalledTimes(1);
+  });
+
   it("attaches an onHeadersReceived listener for persist:daintree only (browser is excluded)", async () => {
     const { session } = await import("electron");
     const fromPartition = vi.mocked(session.fromPartition);
@@ -2518,12 +2560,30 @@ describe("createDaintreeHtmlProtocolHandler — sandboxed HTML preview (#11191)"
     expect(csp).toContain("sandbox allow-scripts");
     expect(csp).toContain("connect-src 'none'");
     expect(csp).toContain("default-src 'none'");
+    // WebRTC isn't governed by connect-src, so it's blocked explicitly.
+    expect(csp).toContain("webrtc 'block'");
+    // Egress-limiting response headers.
+    expect(response.headers.get("Referrer-Policy")).toBe("no-referrer");
+    expect(response.headers.get("X-DNS-Prefetch-Control")).toBe("off");
     // Opens the user-derived path with O_NOFOLLOW (TOCTOU defense).
     const fs = await import("fs/promises");
     expect(fs.open).toHaveBeenCalledWith(
       path.resolve(ROOT, "index.html"),
       fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW
     );
+  });
+
+  it("404s when the token's root no longer canonically resolves to itself (retarget guard)", async () => {
+    const fs = await import("fs/promises");
+    // The root path was renamed away and now resolves elsewhere (symlink swap).
+    vi.mocked(fs.realpath).mockImplementation((p) =>
+      Promise.resolve(p === ROOT ? (path.resolve("/") as string) : (p as string))
+    );
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest(token, "index.html"));
+    expect(response.status).toBe(404);
+    expect(fs.open).not.toHaveBeenCalled();
   });
 
   it("treats .htm the same as .html", async () => {

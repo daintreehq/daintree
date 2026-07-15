@@ -69,4 +69,9 @@ describe("buildHtmlPreviewUrl", () => {
     expect(buildHtmlPreviewUrl(ROOT, path.resolve("/project/other/x.html"))).toBeNull();
     expect(buildHtmlPreviewUrl(ROOT, path.resolve("/etc/passwd"))).toBeNull();
   });
+
+  it("returns null for a filesystem-root root (no whole-volume capability)", () => {
+    const fsRoot = path.parse(process.cwd()).root;
+    expect(buildHtmlPreviewUrl(fsRoot, path.join(fsRoot, "index.html"))).toBeNull();
+  });
 });

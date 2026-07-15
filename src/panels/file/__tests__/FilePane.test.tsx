@@ -48,11 +48,12 @@ vi.mock("@/hooks/useWorktreeStore", () => ({
 vi.mock("@/store/accessibilityAnnouncerStore", () => ({
   useAnnouncerStore: { getState: () => ({ announce: vi.fn() }) },
 }));
+const { readMock, searchMock } = vi.hoisted(() => ({
+  readMock: vi.fn(),
+  searchMock: vi.fn(),
+}));
 vi.mock("@/clients/filesClient", () => ({
-  filesClient: {
-    read: vi.fn().mockResolvedValue({ content: "" }),
-    search: vi.fn().mockResolvedValue({ files: [] }),
-  },
+  filesClient: { read: readMock, search: searchMock },
 }));
 // dispatch() resolves an ActionDispatchResult union and never rejects; callers
 // branch on `.ok`, so the mock must honour that shape rather than resolve void.
@@ -71,7 +72,13 @@ vi.mock("@/components/FileViewer/CodeViewer", () => ({
   CodeViewer: () => <div data-testid="code-viewer-mock" />,
 }));
 vi.mock("@/components/Html/HtmlViewer", () => ({
-  HtmlViewer: () => <div data-testid="html-viewer-mock" />,
+  HtmlViewer: (props: { previewUrl: string | null; reloadNonce: number }) => (
+    <div
+      data-testid="html-viewer-mock"
+      data-preview-url={props.previewUrl ?? ""}
+      data-reload-nonce={props.reloadNonce}
+    />
+  ),
 }));
 
 import { FilePane } from "../FilePane";
@@ -86,6 +93,12 @@ function lastContentPanelProps(): Record<string, unknown> {
 beforeEach(() => {
   dispatchMock.mockReset();
   dispatchMock.mockResolvedValue({ ok: true, result: undefined });
+  // Reset per test so a prior test's read call can't satisfy a later
+  // toHaveBeenCalledWith assertion (cross-test contamination).
+  readMock.mockReset();
+  readMock.mockResolvedValue({ content: "" });
+  searchMock.mockReset();
+  searchMock.mockResolvedValue({ files: [] });
   // InlineStatusBanner reads window.matchMedia at render time; jsdom does not
   // implement it, so provide a no-op stub.
   if (typeof window.matchMedia !== "function") {
@@ -350,9 +363,15 @@ describe("FilePane HTML Source/Rendered (#11191)", () => {
     expect(screen.queryByText("Rendered")).toBeNull();
   });
 
-  it("routes rendered HTML to the sandboxed HtmlViewer", async () => {
+  it("routes rendered HTML to the sandboxed HtmlViewer with the minted preview URL", async () => {
+    readMock.mockResolvedValue({
+      content: "<h1>x</h1>",
+      htmlPreviewUrl: "daintree-html://tok/report.html",
+    });
     renderPane("/repo/dist/report.html", "rendered");
-    expect(await screen.findByTestId("html-viewer-mock")).toBeTruthy();
+    const viewer = await screen.findByTestId("html-viewer-mock");
+    // The URL from files:read must reach HtmlViewer's previewUrl prop.
+    expect(viewer.getAttribute("data-preview-url")).toBe("daintree-html://tok/report.html");
     expect(screen.queryByTestId("code-viewer-mock")).toBeNull();
   });
 
@@ -363,11 +382,19 @@ describe("FilePane HTML Source/Rendered (#11191)", () => {
   });
 
   it("passes htmlPreview:true to files:read for HTML files", async () => {
-    const { filesClient } = await import("@/clients/filesClient");
     renderPane("/repo/dist/report.html", "rendered");
     await waitFor(() =>
-      expect(filesClient.read).toHaveBeenCalledWith(
+      expect(readMock).toHaveBeenCalledWith(
         expect.objectContaining({ path: "/repo/dist/report.html", htmlPreview: true })
+      )
+    );
+  });
+
+  it("passes htmlPreview:false to files:read for non-HTML files", async () => {
+    renderPane("/repo/src/index.css");
+    await waitFor(() =>
+      expect(readMock).toHaveBeenCalledWith(
+        expect.objectContaining({ path: "/repo/src/index.css", htmlPreview: false })
       )
     );
   });

@@ -316,6 +316,13 @@ test.describe.serial("Core: File viewer panel (dialog + panel)", () => {
         "    t.setAttribute('data-has-electron', String(typeof window.electron !== 'undefined'));",
         "    try { void window.parent.document; t.setAttribute('data-parent', 'reachable'); }",
         "    catch (e) { t.setAttribute('data-parent', 'blocked'); }",
+        // connect-src 'none' must hold: a fetch to the legacy daintree-file://
+        // arbitrary-read route must be blocked by the token-scoped preview CSP.
+        // If the trusted app CSP had leaked onto this frame, this would resolve.
+        "    t.setAttribute('data-fetch', 'pending');",
+        "    fetch('daintree-file://load?path=/etc/passwd&root=/')",
+        "      .then(function () { t.setAttribute('data-fetch', 'allowed'); })",
+        "      .catch(function () { t.setAttribute('data-fetch', 'blocked'); });",
         "  </script>",
         "</body>",
         "</html>",
@@ -347,5 +354,9 @@ test.describe.serial("Core: File viewer panel (dialog + panel)", () => {
     // Isolation: no app bridge, and the opaque-origin frame can't reach the parent.
     await expect(title).toHaveAttribute("data-has-electron", "false");
     await expect(title).toHaveAttribute("data-parent", "blocked");
+    // The token-scoped preview CSP (connect-src 'none') is authoritative — the
+    // trusted app CSP is NOT overlaid onto the frame, so the legacy daintree-file
+    // arbitrary-read route is unreachable.
+    await expect(title).toHaveAttribute("data-fetch", "blocked", { timeout: T_MEDIUM });
   });
 });
