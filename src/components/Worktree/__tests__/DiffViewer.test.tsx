@@ -2,7 +2,7 @@
 import React from "react";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { ChangeData, HunkData, RenderToken } from "react-diff-view";
 import type { InsertChange, DeleteChange } from "gitdiff-parser";
@@ -85,18 +85,27 @@ function wrap(ui: React.ReactElement) {
   return <TooltipProvider>{ui}</TooltipProvider>;
 }
 
-// The refractor/rust mock above throws on dynamic import, so any test rendering
-// a rust diff makes `ensureLanguage` reject and `console.warn` asynchronously.
-// Silence that expected warn and drain the pending load after every test, so a
-// late rejection never fires during worker teardown ("Closing rpc while
-// onUserConsoleLog was pending").
-let warnSpy: ReturnType<typeof vi.spyOn>;
+// DiffViewer tokenizes through DiffTokenizeService. jsdom has no Worker, so the
+// service fails over to in-thread tokenization behind setTimeout(0) yields, fired
+// by the component as a floating promise (`void tokenize().then(setPass)`). That
+// leaves async work that can log after a test finishes:
+//   - console.warn "Diff tokenize worker unavailable…" (failover)
+//   - console.warn "Failed to load refractor grammar…" (the rust mock throws)
+//   - console.error React act() warning when the late setPass lands out of act
+// Any of these firing during worker teardown trips vitest's
+// "Closing rpc while onUserConsoleLog was pending". Silence the expected console
+// noise for this file (never restored, so nothing leaks at teardown) and, in
+// afterEach, drain the macrotask/microtask queue inside act() so the pipeline
+// and its state update settle deterministically before the next test.
 beforeEach(() => {
-  warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  vi.spyOn(console, "error").mockImplementation(() => {});
 });
 afterEach(async () => {
-  await _flushLangLoadsForTests();
-  warnSpy.mockRestore();
+  await act(async () => {
+    for (let i = 0; i < 8; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+    await _flushLangLoadsForTests();
+  });
 });
 
 describe("DiffViewer", () => {
