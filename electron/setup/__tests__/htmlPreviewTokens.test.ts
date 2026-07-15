@@ -5,7 +5,7 @@ import {
   mintHtmlPreviewToken,
   resolveHtmlPreviewRoot,
   _resetHtmlPreviewTokensForTests,
-} from "../htmlPreviewTokens";
+} from "../htmlPreviewTokens.js";
 
 afterEach(() => {
   _resetHtmlPreviewTokensForTests();

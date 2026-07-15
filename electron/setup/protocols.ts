@@ -195,10 +195,10 @@ function buildDaintreeFileErrorHeaders(): Record<string, string> {
  * original daintree-file:// handler; the flow (realpath → path.relative → stat →
  * O_NOFOLLOW open) and its TOCTOU defenses are unchanged.
  */
-async function readContainedDaintreeFile(
-  normalizedRoot: string,
-  normalizedFile: string
-): Promise<{ buffer: Buffer; realFile: string } | Response> {
+// Return type is inferred, not annotated: annotating `buffer: Buffer` widens it
+// to `Buffer<ArrayBufferLike>`, which `new Response(...)` rejects as a BodyInit.
+// Inference preserves the exact `readFile()` result type the Response accepts.
+async function readContainedDaintreeFile(normalizedRoot: string, normalizedFile: string) {
   // Resolve symlinks before containment to block in-root symlinks pointing outside root (CVE-2025-53109 / CVE-2025-54794 class).
   let realRoot: string;
   let realFile: string;
