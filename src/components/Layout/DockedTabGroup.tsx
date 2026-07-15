@@ -20,7 +20,8 @@ import {
 } from "@dnd-kit/sortable";
 import { restrictToHorizontalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
 import { LayoutGroup, AnimatePresence, m } from "framer-motion";
-import { ChevronDown, CopyPlus } from "lucide-react";
+import { ChevronDown, CopyPlus, CheckCircle2 } from "lucide-react";
+import { SpinnerCircle } from "@/components/icons";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import {
@@ -59,6 +60,12 @@ import {
   getGroupBlockedAgentState,
   isGroupDeprioritized,
 } from "./useDockBlockedState";
+import {
+  getDockDisplayActivityState,
+  getGroupDockDisplayActivityState,
+  getGroupActivityScopeKey,
+  useTransientDockFinishedCue,
+} from "./useDockActivityState";
 import { SortableTabButton } from "@/components/Panel/SortableTabButton";
 import { makeSortableAnnouncements } from "@/components/DragDrop/sortableAnnouncements";
 import type { TabGroup } from "@/types";
@@ -504,6 +511,19 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const isDeprioritized = !isOpen && isGroupDeprioritized(panels);
   const showDockAgentHighlights = usePreferencesStore((s) => s.showDockAgentHighlights);
 
+  // Plain-terminal activity for the group aggregates across tabs: any plain tab
+  // running → spinner. The scope key tracks the plain contributors (see
+  // getGroupActivityScopeKey) so a tab leaving the aggregate — closed or
+  // agent-detected — re-baselines rather than flashing a false "finished" cue.
+  // Declared before the early return below to keep hook order stable.
+  const groupPlainActivityState = getGroupDockDisplayActivityState(panels);
+  const groupActivityScopeKey = `${group.id}:${getGroupActivityScopeKey(panels)}`;
+  const showFinishedCue = useTransientDockFinishedCue(
+    groupPlainActivityState,
+    groupActivityScopeKey
+  );
+  const groupPlainWorking = groupPlainActivityState === "working";
+
   const agentSettingsAll = useAgentSettingsStore((s) => s.settings);
   const ccrPresetsByAgent = useCcrPresetsStore((s) => s.ccrPresetsByAgent);
   const projectPresetsByAgent = useProjectPresetsStore((s) => s.presetsByAgent);
@@ -568,6 +588,10 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const isWaiting = agentState === "waiting";
   const isActive = isWorking || isWaiting;
   const commandText = activePanel.activityHeadline || activePanel.lastCommand;
+  // Command text belongs to the active tab, so gate it on the active panel's own
+  // status — not the group aggregate — so an idle active tab never shows a
+  // background tab's command.
+  const activePlainWorking = getDockDisplayActivityState(activePanel) === "working";
   const displayTitle = activePanel.title;
   const displayAgentState = getTerminalAgentDisplayState(activeChrome, agentState);
   const StateIcon = displayAgentState ? getEffectiveStateIcon(displayAgentState) : null;
@@ -611,7 +635,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                 const moved = moveTerminalToGrid(activePanel.id);
                 if (moved && openDockPanelId) closeDockTerminal(openDockPanelId);
               }}
-              aria-label={`${activePanel.title}${displayAgentState ? ` — agent ${getEffectiveStateLabel(displayAgentState)}` : ""} (${panels.length} tabs) - Click to preview, double-click to move to grid, drag to reorder`}
+              aria-label={`${activePanel.title}${displayAgentState ? ` — agent ${getEffectiveStateLabel(displayAgentState)}` : groupPlainWorking ? " — command running" : ""} (${panels.length} tabs) - Click to preview, double-click to move to grid, drag to reorder`}
             >
               <div className="flex items-center justify-center shrink-0">
                 <TerminalIcon
@@ -630,7 +654,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                 ({panels.length})
               </span>
 
-              {isActive && commandText && (
+              {(isActive || activePlainWorking) && commandText && (
                 <>
                   <div className="h-3 w-px bg-border-subtle shrink-0" aria-hidden="true" />
                   <Tooltip open={commandTip.open} onOpenChange={commandTip.onOpenChange}>
@@ -642,6 +666,26 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                     <TooltipContent side="bottom">{commandText}</TooltipContent>
                   </Tooltip>
                 </>
+              )}
+
+              {/* Plain-terminal running/finished cue (group aggregate) — same
+                  icon slot as the agent state icon, shown only when no agent
+                  state occupies it. aria-hidden mirrors the single chip. */}
+              {!displayAgentState && (groupPlainWorking || showFinishedCue) && (
+                <div
+                  className={cn(
+                    "ml-1.5 flex items-center shrink-0",
+                    groupPlainWorking ? "text-daintree-text/50" : "text-status-success"
+                  )}
+                  data-dock-activity-state={groupPlainWorking ? "working" : "finished"}
+                  aria-hidden="true"
+                >
+                  {groupPlainWorking ? (
+                    <SpinnerCircle className="w-3.5 h-3.5 animate-spin-slow motion-reduce:animate-none" />
+                  ) : (
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                  )}
+                </div>
               )}
 
               {displayAgentState && StateIcon && (
