@@ -442,8 +442,9 @@ export class TerminalWebGLManager {
 
   // External re-evaluation hook. Threshold changes pushed from the main
   // process via useResourceProfile arrive between consumer events; without
-  // this, a profile downgrade from balanced (12/10) to efficiency (8/6) would
-  // leave 9+ wants on WebGL until the next ensure/release happens to land.
+  // this, a profile downgrade (which lowers both thresholds, e.g. balanced →
+  // efficiency) would leave over-budget wants on WebGL until the next
+  // ensure/release happens to land.
   refreshMode(): void {
     this.evaluateMode();
   }
