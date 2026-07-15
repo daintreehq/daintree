@@ -233,22 +233,18 @@ class TerminalInstanceService {
           // gap, and VISIBLE is an eligible tier for both. Release only happens
           // once a pane is off-screen (an ineligible tier while still visible,
           // e.g. a visible-BACKGROUND handoff, retains the live context until the
-          // hide path releases it). Tier demotion is an authoritative signal —
-          // cancel any pending hide-dwell and release. The webGLHideTimer guard
-          // keeps the dwell window intact for a hidden terminal still streaming at
-          // BURST: wantsWebGLAtTier returns false for off-screen panes (#10671),
-          // so without it the next write's tier-apply would release on frame 1
-          // instead of after WEBGL_HIDE_DWELL_MS — defeating the hide→show
-          // anti-churn dwell. Once the dwell timer fires (or never armed), the
-          // guard is undefined and the release proceeds.
+          // hide path releases it). No refresh on release: the pane is off-screen
+          // here, and repainting an offscreen DOM produces a stale frame that
+          // flashes on next show (#6802). Tier demotion is an authoritative
+          // signal — cancel any pending hide-dwell and release. The webGLHideTimer
+          // guard keeps the dwell window intact for a hidden terminal still
+          // streaming at BURST: wantsWebGLAtTier returns false for off-screen
+          // panes (#10671), so without it the next write's tier-apply would
+          // release on frame 1 instead of after WEBGL_HIDE_DWELL_MS — defeating
+          // the hide→show anti-churn dwell. Once the dwell timer fires (or never
+          // armed), the guard is undefined and the release proceeds.
           this.cancelWebGLHideTimer(managed);
-          const hadWebGL = this.webGLManager.isActive(id);
           this.webGLManager.releaseContext(id);
-          // Only refresh for a visible terminal — repainting an offscreen
-          // DOM produces a stale frame that flashes on next show (#6802).
-          if (hadWebGL && managed.isVisible && managed.terminal.rows > 0) {
-            managed.terminal.refresh(0, managed.terminal.rows - 1);
-          }
         }
 
         // Cursor blink is policy-driven: plain terminals run the blink timer
