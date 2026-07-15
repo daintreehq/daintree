@@ -49,6 +49,8 @@ import { app, powerMonitor } from "electron";
 import { broadcastToRenderer } from "../../ipc/utils.js";
 import { ResourceProfileService, type ResourceProfileDeps } from "../ResourceProfileService.js";
 import { RESOURCE_PROFILE_CONFIGS } from "../../../shared/types/resourceProfile.js";
+import { resolveResourceProfileConfig } from "../../utils/resourceProfileConfig.js";
+import { resolveWebglThresholds } from "../../utils/webglContextBudget.js";
 import { resetAppMetricsSnapshotForTesting } from "../../utils/appMetricsSnapshot.js";
 import { resetMemoryAccountingForTesting } from "../memoryAccounting.js";
 import type { MemoryRollup } from "../../../shared/types/pty-host.js";
@@ -342,13 +344,17 @@ describe("ResourceProfileService", () => {
     // Past warmup + hysteresis
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
 
+    // The broadcast config must be the RESOLVED config (base table + RAM-derived
+    // WebGL thresholds), routed through the same resolver the pull path uses.
+    // os.totalmem is pinned to 8 GB (ceiling 24) in beforeEach, so this stays
+    // deterministic without echoing literal threshold numbers.
     expect(broadcastToRenderer).toHaveBeenCalledWith(
       "events:push",
       expect.objectContaining({
         name: "resource:profile-changed",
         payload: expect.objectContaining({
           profile: "efficiency",
-          config: RESOURCE_PROFILE_CONFIGS.efficiency,
+          config: resolveResourceProfileConfig("efficiency"),
         }),
       })
     );
@@ -939,26 +945,34 @@ describe("ResourceProfileService", () => {
     expect(balanced.pollIntervalBackground).toBe(10000);
     expect(balanced.processTreePollInterval).toBe(2500);
     expect(balanced.projectStatsPollInterval).toBe(5000);
-    expect(balanced.webglUpperThreshold).toBe(12);
-    expect(balanced.webglLowerThreshold).toBe(10);
     expect(balanced.memoryPressureInactiveMs).toBe(30 * 60 * 1000);
     expect(balanced.lowMemoryFreeThresholdMb).toBe(768);
   });
 
-  it("performance and efficiency WebGL thresholds stay pinned", () => {
-    // Performance pushes closer to Chromium's 16-context cap.
-    expect(RESOURCE_PROFILE_CONFIGS.performance.webglUpperThreshold).toBe(14);
-    expect(RESOURCE_PROFILE_CONFIGS.performance.webglLowerThreshold).toBe(12);
-    // Efficiency kicks to DOM-mode sooner on constrained hardware.
-    expect(RESOURCE_PROFILE_CONFIGS.efficiency.webglUpperThreshold).toBe(8);
-    expect(RESOURCE_PROFILE_CONFIGS.efficiency.webglLowerThreshold).toBe(6);
+  it("resolves per-profile WebGL thresholds off the RAM-tiered ceiling", () => {
+    // WebGL thresholds are no longer stored in the static table — they are
+    // resolved from the effective ceiling so they track the raised cap and
+    // never drift from environment.ts's switch. Assert the profile ordering
+    // that the resolver must preserve rather than any literal number.
+    const eff = resolveResourceProfileConfig("efficiency");
+    const bal = resolveResourceProfileConfig("balanced");
+    const perf = resolveResourceProfileConfig("performance");
+    expect(eff.webglUpperThreshold).toBeLessThan(bal.webglUpperThreshold);
+    expect(bal.webglUpperThreshold).toBeLessThan(perf.webglUpperThreshold);
+    // On the pinned 8 GB test host the ceiling is 24; every profile must leave
+    // headroom below it for non-terminal WebGL consumers.
+    for (const config of [eff, bal, perf]) {
+      expect(config.webglUpperThreshold).toBeLessThan(24);
+    }
   });
 
-  it("every profile keeps webglLowerThreshold <= webglUpperThreshold", () => {
+  it("every resolved profile keeps webglLowerThreshold <= webglUpperThreshold", () => {
     // The mode-switch hysteresis assumes lower <= upper. A profile that
     // inverted them would oscillate forever at the boundary.
-    for (const config of Object.values(RESOURCE_PROFILE_CONFIGS)) {
-      expect(config.webglLowerThreshold).toBeLessThanOrEqual(config.webglUpperThreshold);
+    for (const profile of ["performance", "balanced", "efficiency"] as const) {
+      const { webglUpperThreshold: upper, webglLowerThreshold: lower } =
+        resolveWebglThresholds(profile);
+      expect(lower).toBeLessThanOrEqual(upper);
     }
   });
 

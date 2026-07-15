@@ -27,6 +27,7 @@ import {
 import type { WhySlowResourceReason, WhySlowResourceSnapshot } from "../../shared/types/whySlow.js";
 import { ACTIVE_AGENT_STATES, type AgentState } from "../../shared/types/agent.js";
 import { getSystemMemoryThresholds, readAvailableSystemMemoryMb } from "../utils/systemMemory.js";
+import { resolveResourceProfileConfig } from "../utils/resourceProfileConfig.js";
 
 /** Map an additive pressure score to a profile. Efficiency latches at ≥ 3; a
  *  zero score (no pressure signals) unlocks performance; anything else is
@@ -1225,9 +1226,14 @@ export class ResourceProfileService {
       }
     }
 
-    // Broadcast to renderer
+    // Broadcast to renderer. Resolve the full config (base table + RAM-derived
+    // WebGL flip thresholds) so the push carries the same thresholds the pull
+    // path builds — see resolveResourceProfileConfig (#11192).
     try {
-      const payload: ResourceProfilePayload = { profile, config };
+      const payload: ResourceProfilePayload = {
+        profile,
+        config: resolveResourceProfileConfig(profile),
+      };
       broadcastToRenderer(CHANNELS.EVENTS_PUSH, { name: "resource:profile-changed", payload });
     } catch {
       // non-critical — window may be closing

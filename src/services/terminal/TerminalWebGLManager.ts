@@ -23,8 +23,10 @@ import { type ManagedTerminal } from "./types";
 // DAINTREE_* env vars to import.meta.env via envPrefix in vite.config.ts.
 //
 // Why this shape instead of an LRU pool:
-// Chromium hard-caps active WebGL contexts at 16 per renderer and silently
-// evicts the oldest on overflow (webglcontextlost — see crbug 40939743). An
+// Chromium caps active WebGL contexts per renderer (default 16, raised and
+// RAM-tiered to 24/28/32 here via the max-active-webgl-contexts switch — see
+// electron/setup/environment.ts) and silently evicts the oldest on overflow
+// (webglcontextlost — see crbug 40939743). An
 // LRU pool inside our renderer was making the same eviction decisions
 // Chromium was already making one layer below, producing visible churn at
 // 12-20 visible agent terminals: contexts cycled out, fell back to DOM,
@@ -38,7 +40,7 @@ type WebglAddonConstructor = new () => WebglAddonType;
 // eager critical path. ensureContext() routes every new request through a
 // requestAnimationFrame drain queue (one attach per frame): without that
 // stagger, a burst of synchronous attaches during bulk worktree creation or a
-// DOM→WebGL mode flip over-subscribes Chromium's 16-context-per-renderer cap,
+// DOM→WebGL mode flip over-subscribes Chromium's per-renderer context cap,
 // causing silent eviction of older contexts that then sit blank for 3s waiting
 // on webglcontextrestored before xterm's onContextLoss fires (see #7467).
 let WebglAddonClass: WebglAddonConstructor | null = null;
@@ -63,7 +65,7 @@ function loadWebglAddon(): Promise<WebglAddonConstructor> {
 
 // Force synchronous GPU-side context release. Reaches into @xterm/addon-webgl
 // 0.20's renderer internals to get the WebGL context and call loseContext()
-// before addon.dispose() — without this, Chromium's 16-context budget is not
+// before addon.dispose() — without this, Chromium's per-renderer context budget is not
 // freed until garbage collection runs the WebGL teardown. Wrapped in try/catch
 // so a future addon shape change degrades gracefully rather than throwing.
 function forceGpuSlotRelease(addon: WebglAddonType): void {
@@ -210,7 +212,7 @@ export class TerminalWebGLManager {
   // Focus pin: in DOM mode, exactly one WebGL context stays attached to the
   // focused terminal so the pane the user is reading keeps fast, glyph-correct
   // rendering above the mode-switch threshold. One context is far below
-  // Chromium's 16-cap, and its churn is bounded by user focus clicks — not the
+  // Chromium's per-renderer cap, and its churn is bounded by user focus clicks — not the
   // N-terminal output/visibility cycling the wholesale mode switch replaced
   // (see header comment). In WebGL mode the pin is bookkeeping only; it takes
   // effect when the fleet flips to DOM.
@@ -232,7 +234,7 @@ export class TerminalWebGLManager {
   // identically by isPinned() at every DOM-mode exemption site; they are kept
   // separate only because their lifecycles differ (focus events vs buffer-mode
   // changes). Each alt-buffer pin still holds one WebGL context against
-  // Chromium's 16-cap, so this is bounded by how many alt-buffer panes are
+  // Chromium's per-renderer cap, so this is bounded by how many alt-buffer panes are
   // visible — far below the cap in practice, and the breaker trip clears them
   // all (see setHardwareAvailable).
   private altBufferPinnedIds = new Set<string>();
@@ -440,8 +442,9 @@ export class TerminalWebGLManager {
 
   // External re-evaluation hook. Threshold changes pushed from the main
   // process via useResourceProfile arrive between consumer events; without
-  // this, a profile downgrade from balanced (12/10) to efficiency (8/6) would
-  // leave 9+ wants on WebGL until the next ensure/release happens to land.
+  // this, a profile downgrade (which lowers both thresholds, e.g. balanced →
+  // efficiency) would leave over-budget wants on WebGL until the next
+  // ensure/release happens to land.
   refreshMode(): void {
     this.evaluateMode();
   }
@@ -526,8 +529,8 @@ export class TerminalWebGLManager {
       }
       // terminal.dispose() handles addon cleanup, so we skip addon.dispose()
       // here — but we still need to force the synchronous GPU-slot release so
-      // a hibernation-then-bulk-recreate cycle does not stall on the 16-slot
-      // Chromium budget the same way #7467 stalled the attach path.
+      // a hibernation-then-bulk-recreate cycle does not stall on the
+      // per-renderer Chromium context budget the same way #7467 stalled the attach path.
       forceGpuSlotRelease(entry.addon);
       this.pool.delete(id);
     }
@@ -644,7 +647,7 @@ export class TerminalWebGLManager {
     // (per-session, but recoverable across the cycle).
     this.hasLoggedModeFlip = false;
     // Queue every still-wanting terminal for attach. The rAF drain serialises
-    // them so the bulk attach never over-subscribes the 16-context budget.
+    // them so the bulk attach never over-subscribes the per-renderer context budget.
     for (const [id, managed] of this.wants) {
       if (!this.pool.has(id)) {
         this.queueAttach(id, managed);
@@ -1038,7 +1041,7 @@ export class TerminalWebGLManager {
       // ignore
     }
     // Force synchronous GPU-side context release before addon.dispose() so the
-    // 16-context Chromium budget actually frees this slot before the next
+    // per-renderer Chromium context budget actually frees this slot before the next
     // getContext() call.
     forceGpuSlotRelease(entry.addon);
     try {

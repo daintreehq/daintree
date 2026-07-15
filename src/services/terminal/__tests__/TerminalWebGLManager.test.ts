@@ -1154,8 +1154,9 @@ describe("TerminalWebGLManager", () => {
 
   describe("mode switch", () => {
     // Tight thresholds so the count manipulation here is small enough to
-    // follow. Real defaults are 12/10 (balanced profile); the test layer
-    // controls them directly.
+    // follow. The live thresholds are resolved per resource profile from the
+    // RAM-tiered ceiling (the module carries conservative bootstrap defaults
+    // until the first profile push); the test layer controls them directly.
     beforeEach(async () => {
       const mod = await import("../TerminalWebGLManager");
       mod.TerminalWebGLManager.setWebglThresholds(3, 2);
