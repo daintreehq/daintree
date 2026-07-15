@@ -5,11 +5,13 @@ import { render, screen, fireEvent } from "@testing-library/react";
 // Control the cached pulse the strip reads and capture fetch calls. The
 // component reads via usePulseStore((s) => s.getPulse(id)),
 // s.isLoading(id), s.getError(id), and s.fetchPulse; the mock applies each
-// selector to our controllable state.
+// selector to our controllable state. getError is tri-state like the real
+// store: undefined = never fetched (cold), null = settled "no commits", a
+// string = a real error.
 const state = {
   getPulse: (_id: string) => undefined as unknown,
   isLoading: (_id: string) => false,
-  getError: (_id: string) => null as unknown,
+  getError: (_id: string) => undefined as unknown,
   fetchPulse: vi.fn(),
 };
 vi.mock("@/store", () => ({
@@ -50,7 +52,7 @@ function makePulse(overrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   state.getPulse = () => undefined;
   state.isLoading = () => false;
-  state.getError = () => null;
+  state.getError = () => undefined;
   state.fetchPulse.mockClear();
 });
 
@@ -82,8 +84,18 @@ describe("ProjectPulseStrip", () => {
     expect(state.fetchPulse).not.toHaveBeenCalled();
   });
 
-  it("does not fetch on mount when the last fetch errored", () => {
+  it("does not fetch on mount when the last fetch errored (store handles retry)", () => {
     state.getError = () => "Unable to load activity data";
+    render(<ProjectPulseStrip worktreeId="wt1" />);
+    expect(state.fetchPulse).not.toHaveBeenCalled();
+  });
+
+  it("does not refetch on mount once a fetch settled with no error (no-commits repo)", () => {
+    // A settled null error (distinct from the cold undefined) means a fetch
+    // already ran and classified the repo as commit-less. The mount guard keys
+    // on `error === undefined`, so null counts as "already attempted" — treating
+    // it as falsy would spin a tight refetch loop against git/IPC.
+    state.getError = () => null;
     render(<ProjectPulseStrip worktreeId="wt1" />);
     expect(state.fetchPulse).not.toHaveBeenCalled();
   });
@@ -110,6 +122,15 @@ describe("ProjectPulseStrip", () => {
     render(<ProjectPulseStrip worktreeId="wt1" />);
     expect(
       screen.getByRole("button", { name: /show project activity — 5 active days, 2 day streak/i })
+    ).toBeTruthy();
+  });
+
+  it("uses a singular 'active day' in the accessible name and omits a 1-day streak", () => {
+    state.getPulse = () => makePulse({ activeDays: 1, currentStreakDays: 1 });
+    render(<ProjectPulseStrip worktreeId="wt1" />);
+    // Anchored so "1 active days" (plural bug) or a spurious streak suffix fails.
+    expect(
+      screen.getByRole("button", { name: /^show project activity — 1 active day$/i })
     ).toBeTruthy();
   });
 

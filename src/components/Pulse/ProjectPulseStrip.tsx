@@ -70,11 +70,15 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
   const toggledRef = useRef(false);
 
   // Populate the collapsed strip on load. A fresh empty grid has no cached
-  // pulse, so kick one fetch on mount — skipped when a pulse is already cached
-  // or a request/error is already in flight (mirrors ProjectPulseCard). The
-  // store dedupes, so a later expand collapses onto the same request.
+  // pulse, so kick one fetch on mount — but only when nothing has been
+  // attempted yet. getError is a tri-state: undefined = never fetched, a
+  // string = a real error (the store self-retries with backoff), and null =
+  // the deliberate "no commits" outcome. Guard on `error === undefined`, not
+  // `!error`: a settled null would otherwise keep passing the guard and, since
+  // this effect is the fetch trigger, spin a tight refetch loop. The store also
+  // dedupes in-flight requests, so a later expand collapses onto this one.
   useEffect(() => {
-    if (!pulse && !isLoading && !error) {
+    if (!pulse && !isLoading && error === undefined) {
       void fetchPulse(worktreeId);
     }
   }, [worktreeId, pulse, isLoading, error, fetchPulse]);

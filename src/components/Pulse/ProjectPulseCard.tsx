@@ -409,8 +409,12 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
     wasLoadingRef.current = isLoading;
   }, [isLoading, pulse, error]);
 
+  // Guard on `error === undefined` (never fetched), not `!error`: a settled
+  // null is the deliberate "no commits" outcome, and treating it as falsy would
+  // let this effect refetch in a tight loop. A string error self-retries in the
+  // store; an in-flight request is deduped there too.
   useEffect(() => {
-    if (!pulse && !isLoading && !error) {
+    if (!pulse && !isLoading && error === undefined) {
       fetchPulse(worktreeId);
     }
   }, [worktreeId, pulse, isLoading, error, fetchPulse]);
