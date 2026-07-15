@@ -3,6 +3,12 @@ import { getDevServerOrigins, getDevServerWebSocketOrigins } from "./devServer.j
 // Custom protocol scheme the renderer fetches/loads from.
 const FILE_SCHEMES = "daintree-file:";
 
+// Sandboxed HTML file preview scheme (#11191). Only appears in `frame-src` so
+// the file panel can mount a `daintree-html://<token>/…` iframe; the framed
+// document's own scripts/assets are governed by the per-document CSP the
+// protocol handler serves (scoped to its exact token authority), never this one.
+const HTML_PREVIEW_SCHEME = "daintree-html:";
+
 // Plugin-served renderer modules. `plugin:` is a hardened first-party scheme
 // (`standard: true, secure: true`, no `bypassCSP`) — see
 // `electron/main.ts:120-130` — that resolves to the plugin's installed-on-disk
@@ -101,7 +107,7 @@ export function getDaintreeAppProdCSP(options?: DaintreeCspOptions): string {
     "font-src 'self' data:",
     "media-src 'self'",
     "worker-src 'self' blob:",
-    `frame-src 'self' ${FRAME_LOCALHOST}`,
+    `frame-src 'self' ${HTML_PREVIEW_SCHEME} ${FRAME_LOCALHOST}`,
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'none'",
@@ -135,7 +141,7 @@ export function getDaintreeAppDevCSP(): string {
     `font-src 'self' ${origins} data:`,
     "media-src 'self'",
     "worker-src 'self' blob:",
-    `frame-src 'self' ${FRAME_LOCALHOST}`,
+    `frame-src 'self' ${HTML_PREVIEW_SCHEME} ${FRAME_LOCALHOST}`,
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'none'",

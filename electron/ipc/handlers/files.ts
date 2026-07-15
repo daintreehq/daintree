@@ -3,6 +3,7 @@ import fs from "fs/promises";
 import { CHANNELS } from "../channels.js";
 import { checkRateLimit, typedHandleValidated } from "../utils.js";
 import { fileSearchService } from "../../services/FileSearchService.js";
+import { buildHtmlPreviewUrl } from "../../setup/htmlPreviewTokens.js";
 import {
   FileSearchPayloadSchema,
   FileReadPayloadSchema,
@@ -49,6 +50,7 @@ export function registerFilesHandlers(): () => void {
   const handleRead = async ({
     path: filePath,
     rootPath,
+    htmlPreview,
   }: FileReadPayload): Promise<FileReadResult> => {
     if (!path.isAbsolute(filePath) || !path.isAbsolute(rootPath)) {
       throw new AppError({
@@ -196,7 +198,16 @@ export function registerFilesHandlers(): () => void {
       });
     }
 
-    return { content: buffer.toString("utf-8") };
+    // #11191: on opt-in, mint a sandboxed-iframe preview URL for HTML files. The
+    // token maps to the canonical root; the daintree-html:// handler re-applies
+    // full containment, so this never widens access. realRoot/realFile are
+    // already realpath-resolved and contained above.
+    const htmlPreviewUrl =
+      htmlPreview && /\.html?$/i.test(realFile)
+        ? (buildHtmlPreviewUrl(realRoot, realFile) ?? undefined)
+        : undefined;
+
+    return { content: buffer.toString("utf-8"), htmlPreviewUrl };
   };
 
   handlers.push(typedHandleValidated(CHANNELS.FILES_READ, FileReadPayloadSchema, handleRead));

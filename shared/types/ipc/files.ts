@@ -13,6 +13,12 @@ export interface FileSearchResult {
 export interface FileReadPayload {
   path: string;
   rootPath: string;
+  /**
+   * When true and the file is HTML (.html/.htm), the result also carries an
+   * `htmlPreviewUrl` for rendering the file in a sandboxed iframe (#11191).
+   * Opt-in so a plain read never mints a preview capability.
+   */
+  htmlPreview?: boolean;
 }
 
 /**
@@ -38,4 +44,10 @@ export type FileReadErrorCode = _AssertSubset<
 
 export interface FileReadResult {
   content: string;
+  /**
+   * `daintree-html://<token>/<relpath>` URL for a sandboxed iframe preview,
+   * present only when the read was requested with `htmlPreview` and the file is
+   * HTML. Absent otherwise (#11191).
+   */
+  htmlPreviewUrl?: string;
 }

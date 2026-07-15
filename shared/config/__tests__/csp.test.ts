@@ -100,6 +100,30 @@ describe("Daintree app CSP", () => {
     });
   });
 
+  describe("daintree-html: preview scheme in frame-src (#11191)", () => {
+    // The file panel mounts a `daintree-html://<token>/…` iframe to render HTML
+    // files. Without the scheme in frame-src the iframe cannot navigate at all;
+    // the framed document's own scripts/assets are governed by the per-document
+    // CSP the protocol handler serves, never this one.
+    it("allows daintree-html: in frame-src in production", () => {
+      const frameSrc = getDaintreeAppProdCSP().match(/frame-src ([^;]*);/)?.[1];
+      expect(frameSrc).toContain("daintree-html:");
+    });
+
+    it("allows daintree-html: in frame-src in development", () => {
+      const frameSrc = getDaintreeAppDevCSP().match(/frame-src ([^;]*);/)?.[1];
+      expect(frameSrc).toContain("daintree-html:");
+    });
+
+    it("does not add daintree-html: to script-src or connect-src", () => {
+      // The scheme is frame-only; the sandboxed document is isolated, so the
+      // trusted shell must never gain script/connect access to it.
+      const csp = getDaintreeAppProdCSP();
+      expect(csp.match(/script-src ([^;]*);/)?.[1]).not.toContain("daintree-html:");
+      expect(csp.match(/connect-src ([^;]*);/)?.[1]).not.toContain("daintree-html:");
+    });
+  });
+
   describe("daintree.org doc images in img-src (#9828)", () => {
     // The `help.displayImage` MCP tool surfaces documentation images served
     // from daintree.org. Chromium 148 does not match the apex against a

@@ -241,7 +241,7 @@ export interface FilePanelOptions extends AddPanelOptionsBase {
   kind: "file";
   /** Absolute path of the file to view */
   filePath?: string;
-  /** Initial view mode; defaults to "source" (rendered applies to markdown only) */
+  /** Initial view mode; defaults to "source" (rendered applies to Markdown and HTML) */
   fileViewMode?: FileViewMode;
 }
 

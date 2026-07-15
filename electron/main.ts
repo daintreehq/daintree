@@ -24,6 +24,7 @@ import { enforceIpcSenderValidation, setupPermissionLockdown } from "./setup/sec
 import {
   registerAppProtocol,
   registerDaintreeFileProtocol,
+  registerDaintreeHtmlProtocol,
   registerDeepLinkProtocolClient,
   registerPluginProtocol,
   setupWebviewCSP,
@@ -127,6 +128,20 @@ protocol.registerSchemesAsPrivileged([
     privileges: {
       secure: true,
       supportFetchAPI: true,
+    },
+  },
+  {
+    // Sandboxed HTML file preview (#11191). standard:true gives the scheme
+    // hierarchical URLs + a real origin so the browser natively resolves a
+    // rendered page's relative/root-relative assets against the document URL
+    // (`daintree-html://<token>/<relpath>`). Deliberately kept off the
+    // battle-tested daintree-file:// scheme so its consumers (markdown images,
+    // WebAudio fetch, file viewer) are untouched. No supportFetchAPI/corsEnabled:
+    // preview docs run under `connect-src 'none'` and load assets via tags only.
+    scheme: "daintree-html",
+    privileges: {
+      standard: true,
+      secure: true,
     },
   },
   {
@@ -568,6 +583,7 @@ if (!gotTheLock) {
       registerDeepLinkProtocolClient();
       registerAppProtocol(distPath, { allowDisplayCapture: isDemoMode });
       registerDaintreeFileProtocol();
+      registerDaintreeHtmlProtocol();
       // Register `plugin://` with a placeholder resolver that 404s every
       // request, keeping the heavy ~2900-line PluginService module off the
       // first-paint critical path (#10322). The handler must exist before

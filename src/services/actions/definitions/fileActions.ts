@@ -5,6 +5,7 @@ import { useProjectStore } from "@/store";
 import { usePanelStore } from "@/store/panelStore";
 import { isFilePanel } from "@shared/types/panel";
 import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
+import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
 import { isAbsolute, isPathInside, join, normalize } from "@shared/utils/path";
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 
@@ -65,7 +66,7 @@ const openPanelArgsSchema = z.object({
     .enum(["rendered", "source"])
     .optional()
     .describe(
-      'Initial view mode. Defaults to "source". "rendered" only applies to markdown files.'
+      'Initial view mode. Defaults to "source". "rendered" applies to Markdown and HTML files.'
     ),
 });
 
@@ -175,17 +176,21 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
     id: "file.openPanel",
     title: "Open File Panel",
     description:
-      "Open a file in a read-only file viewer panel in the grid. Markdown files get a Source/Rendered toggle (source is the default view). Args: `path` (required) — absolute or repo-relative file path; `rootPath` (optional) — root used to resolve a relative `path` (defaults to the current project root); `viewMode` (optional) — 'source' (default) or 'rendered' (markdown only). Reuses a panel already showing the same file instead of opening a duplicate. Returns { panelId }. Use `file.read` to read a file's content without displaying it.",
+      "Open a file in a read-only file viewer panel in the grid. Markdown and HTML files get a Source/Rendered toggle (source is the default view; rendered HTML shows the page in a sandboxed iframe). Args: `path` (required) — absolute or repo-relative file path; `rootPath` (optional) — root used to resolve a relative `path` (defaults to the current project root); `viewMode` (optional) — 'source' (default) or 'rendered' (Markdown and HTML only). Reuses a panel already showing the same file instead of opening a duplicate. Returns { panelId }. Use `file.read` to read a file's content without displaying it.",
     category: "files",
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    keywords: ["file", "viewer", "panel", "markdown", "preview", "md", "readme", "spec"],
+    keywords: ["file", "viewer", "panel", "markdown", "html", "preview", "md", "readme", "spec"],
     argsSchema: openPanelArgsSchema,
     examples: [
       {
         args: { path: "docs/spec.md", viewMode: "rendered" },
         description: "Open a repo-relative markdown file as a rendered document panel",
+      },
+      {
+        args: { path: "dist/report.html", viewMode: "rendered" },
+        description: "Render a generated HTML report in a sandboxed iframe",
       },
       {
         args: { path: "src/index.css" },
@@ -195,10 +200,14 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
     run: async (args: unknown) => {
       const { path, rootPath, viewMode } = openPanelArgsSchema.parse(args);
       const absolutePath = resolveFilePanelPath(path, rootPath);
-      // "rendered" is a markdown-only mode — clamp so a stray request can't
-      // persist a mode the panel can never display.
+      // "rendered" applies only to Markdown and HTML — clamp so a stray request
+      // can't persist a mode the panel can never display.
       const effectiveViewMode =
-        viewMode === "rendered" && !isMarkdownFilePath(absolutePath) ? "source" : viewMode;
+        viewMode === "rendered" &&
+        !isMarkdownFilePath(absolutePath) &&
+        !isHtmlFilePath(absolutePath)
+          ? "source"
+          : viewMode;
 
       const store = usePanelStore.getState();
       const existing = store.panelIds
