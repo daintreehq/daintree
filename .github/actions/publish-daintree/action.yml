@@ -72,12 +72,14 @@ runs:
       run: npm install --no-save --no-audit --no-fund --ignore-scripts js-yaml semver
 
     - name: Check version is monotonically increasing
+      id: version-check
       shell: bash
       env:
         RELEASE_PLATFORMS: ${{ inputs.release_platforms }}
       run: node scripts/ci/check-version-monotonic.mjs
 
     - name: Upload binaries to R2
+      if: steps.version-check.outputs.skip_upload != 'true'
       shell: bash
       env:
         AWS_ACCESS_KEY_ID: ${{ inputs.r2_access_key_id }}
@@ -99,12 +101,14 @@ runs:
           --cache-control "public, max-age=31536000, immutable"
 
     - name: Verify binaries reachable on R2
+      if: steps.version-check.outputs.skip_upload != 'true'
       shell: bash
       env:
         PUBLISH_URL: ${{ inputs.publish_url }}
       run: node scripts/ci/verify-r2-uploads.mjs
 
     - name: Upload metadata to R2
+      if: steps.version-check.outputs.skip_upload != 'true'
       shell: bash
       env:
         AWS_ACCESS_KEY_ID: ${{ inputs.r2_access_key_id }}
@@ -121,6 +125,7 @@ runs:
           --cache-control "no-cache, no-store, must-revalidate"
 
     - name: Verify update metadata at CDN edge
+      if: steps.version-check.outputs.skip_upload != 'true'
       shell: bash
       env:
         PUBLISH_URL: ${{ inputs.publish_url }}

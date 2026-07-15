@@ -5,6 +5,7 @@ import {
   checkVersionMonotonic,
   extractVersion,
   resolvePlatforms,
+  shouldSkipUpload,
   validatePrefix,
 } from "./check-version-monotonic.mjs";
 
@@ -22,15 +23,18 @@ describe("check-version-monotonic", () => {
       expect(checkVersionMonotonic("1.5.7", "2.0.0")).toEqual({ ok: true });
     });
 
-    it("fails when versions are equal (republishing the same tag is a regression footgun)", () => {
-      const result = checkVersionMonotonic("1.0.0", "1.0.0");
-      expect(result.ok).toBe(false);
-      expect(result.error).toContain("not strictly greater");
+    it("skips when versions are equal (re-tag of an already-published version)", () => {
+      expect(checkVersionMonotonic("1.0.0", "1.0.0")).toEqual({ ok: true, skip: true });
+    });
+
+    it("skips when equal on a pre-release channel (re-tag of a published rc)", () => {
+      expect(checkVersionMonotonic("1.0.0-rc.1", "1.0.0-rc.1")).toEqual({ ok: true, skip: true });
     });
 
     it("fails when new is older", () => {
       const result = checkVersionMonotonic("1.0.0", "0.9.9");
       expect(result.ok).toBe(false);
+      expect(result.skip).toBeUndefined();
       expect(result.error).toContain("not strictly greater");
     });
 
@@ -46,9 +50,10 @@ describe("check-version-monotonic", () => {
       expect(checkVersionMonotonic("1.0.0", "1.0.1-rc.1")).toEqual({ ok: true });
     });
 
-    it("fails going from release to pre-release of same version", () => {
+    it("fails going from release to pre-release of same version (a downgrade, not a skip)", () => {
       const result = checkVersionMonotonic("1.0.0", "1.0.0-rc.1");
       expect(result.ok).toBe(false);
+      expect(result.skip).toBeUndefined();
       expect(result.error).toContain("not strictly greater");
     });
 
@@ -64,6 +69,30 @@ describe("check-version-monotonic", () => {
       expect(result.ok).toBe(false);
       expect(result.error).toContain("new version");
       expect(result.error).toContain("not valid semver");
+    });
+  });
+
+  describe("shouldSkipUpload", () => {
+    it("skips only when every checked platform is already live and nothing failed", () => {
+      expect(shouldSkipUpload(["mac"], ["mac"], [])).toBe(true);
+      expect(shouldSkipUpload(["mac", "linux"], ["mac", "linux"], [])).toBe(true);
+    });
+
+    it("does not skip when only some platforms are already live (others need upload)", () => {
+      expect(shouldSkipUpload(["mac", "linux"], ["mac"], [])).toBe(false);
+    });
+
+    it("does not skip when no platform is already live (a 404 first release / greater bump)", () => {
+      expect(shouldSkipUpload(["mac", "linux"], [], [])).toBe(false);
+    });
+
+    it("does not skip when any platform failed, even alongside a skip", () => {
+      expect(shouldSkipUpload(["mac"], [], ["mac: downgrade"])).toBe(false);
+      expect(shouldSkipUpload(["mac", "linux"], ["linux"], ["mac: downgrade"])).toBe(false);
+    });
+
+    it("does not skip an empty platform set", () => {
+      expect(shouldSkipUpload([], [], [])).toBe(false);
     });
   });
 
