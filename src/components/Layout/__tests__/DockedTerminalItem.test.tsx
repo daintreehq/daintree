@@ -9,8 +9,9 @@
  * dock popover only closes when moveTerminalToGrid succeeds.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { PtyPanelData } from "@shared/types/panel";
+import { UI_TRANSIENT_HINT_DWELL_MS } from "@/lib/animationUtils";
 
 const openDockTerminalMock = vi.fn();
 const closeDockTerminalMock = vi.fn();
@@ -271,5 +272,30 @@ describe("DockedTerminalItem plain-terminal activity cue (#11187)", () => {
       <DockedTerminalItem terminal={makeTerminal({ id: "t-1", activityStatus: "working" })} />
     );
     expect(container.querySelector("[data-dock-activity-state]")).toBeNull();
+  });
+
+  it("flashes a finished cue on working→success, then clears it after the dwell", () => {
+    vi.useFakeTimers();
+    try {
+      const { container, rerender } = render(
+        <DockedTerminalItem terminal={makeTerminal({ id: "t-1", activityStatus: "working" })} />
+      );
+      expect(container.querySelector('[data-dock-activity-state="working"]')).not.toBeNull();
+
+      rerender(
+        <DockedTerminalItem terminal={makeTerminal({ id: "t-1", activityStatus: "success" })} />
+      );
+      const finished = container.querySelector('[data-dock-activity-state="finished"]');
+      expect(finished).not.toBeNull();
+      // A visible glyph, not just an empty wrapper.
+      expect(finished!.querySelector("svg")).not.toBeNull();
+
+      act(() => {
+        vi.advanceTimersByTime(UI_TRANSIENT_HINT_DWELL_MS);
+      });
+      expect(container.querySelector('[data-dock-activity-state="finished"]')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -14,6 +14,7 @@ import { UI_TRANSIENT_HINT_DWELL_MS } from "@/lib/animationUtils";
 import {
   getDockDisplayActivityState,
   getGroupDockDisplayActivityState,
+  getGroupActivityScopeKey,
   useTransientDockFinishedCue,
   type DockDisplayActivityState,
 } from "../useDockActivityState";
@@ -91,6 +92,48 @@ describe("getGroupDockDisplayActivityState", () => {
   });
 });
 
+describe("getGroupActivityScopeKey", () => {
+  it("keys on plain contributors, so an agent-detected tab re-baselines", () => {
+    const before = getGroupActivityScopeKey([
+      { id: "a", activityStatus: "success" },
+      { id: "b", activityStatus: "working" },
+    ]);
+    // b's command is detected as an agent — it leaves the plain aggregate.
+    const after = getGroupActivityScopeKey([
+      { id: "a", activityStatus: "success" },
+      { id: "b", activityStatus: "working", launchAgentId: "claude" },
+    ]);
+    expect(before).not.toBe(after);
+  });
+
+  it("stays stable across a working→success transition of the same members", () => {
+    const running = getGroupActivityScopeKey([
+      { id: "a", activityStatus: "working" },
+      { id: "b", activityStatus: "success" },
+    ]);
+    const done = getGroupActivityScopeKey([
+      { id: "a", activityStatus: "success" },
+      { id: "b", activityStatus: "success" },
+    ]);
+    // Membership is unchanged, so a real completion is still detectable.
+    expect(running).toBe(done);
+  });
+
+  it("is order-independent", () => {
+    expect(
+      getGroupActivityScopeKey([
+        { id: "b", activityStatus: "working" },
+        { id: "a", activityStatus: "success" },
+      ])
+    ).toBe(
+      getGroupActivityScopeKey([
+        { id: "a", activityStatus: "success" },
+        { id: "b", activityStatus: "working" },
+      ])
+    );
+  });
+});
+
 describe("useTransientDockFinishedCue", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -104,6 +147,28 @@ describe("useTransientDockFinishedCue", () => {
     expect(result.current).toBe(false);
   });
 
+  it("stays quiet on a late undefined→success (only working→success finishes)", () => {
+    const { result, rerender } = renderHook(
+      ({ state }: { state: State }) => useTransientDockFinishedCue(state, "t-1"),
+      { initialProps: { state: undefined as State } }
+    );
+    act(() => {
+      rerender({ state: "success" });
+    });
+    expect(result.current).toBe(false);
+  });
+
+  it("stays quiet on success→working with no prior completion", () => {
+    const { result, rerender } = renderHook(
+      ({ state }: { state: State }) => useTransientDockFinishedCue(state, "t-1"),
+      { initialProps: { state: "success" as State } }
+    );
+    act(() => {
+      rerender({ state: "working" });
+    });
+    expect(result.current).toBe(false);
+  });
+
   it("shows the cue on working→success and clears it after the dwell", () => {
     const { result, rerender } = renderHook(
       ({ state }: { state: State }) => useTransientDockFinishedCue(state, "t-1"),
@@ -111,15 +176,21 @@ describe("useTransientDockFinishedCue", () => {
     );
     expect(result.current).toBe(false);
 
-    act(() => rerender({ state: "success" }));
+    act(() => {
+      rerender({ state: "success" });
+    });
     expect(result.current).toBe(true);
 
     // Still visible right up to the dwell boundary…
-    act(() => vi.advanceTimersByTime(UI_TRANSIENT_HINT_DWELL_MS - 1));
+    act(() => {
+      vi.advanceTimersByTime(UI_TRANSIENT_HINT_DWELL_MS - 1);
+    });
     expect(result.current).toBe(true);
 
     // …then gone.
-    act(() => vi.advanceTimersByTime(1));
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
     expect(result.current).toBe(false);
   });
 
@@ -128,10 +199,14 @@ describe("useTransientDockFinishedCue", () => {
       ({ state }: { state: State }) => useTransientDockFinishedCue(state, "t-1"),
       { initialProps: { state: "working" as State } }
     );
-    act(() => rerender({ state: "success" }));
+    act(() => {
+      rerender({ state: "success" });
+    });
     expect(result.current).toBe(true);
 
-    act(() => rerender({ state: "working" }));
+    act(() => {
+      rerender({ state: "working" });
+    });
     expect(result.current).toBe(false);
   });
 
@@ -140,20 +215,32 @@ describe("useTransientDockFinishedCue", () => {
       ({ state }: { state: State }) => useTransientDockFinishedCue(state, "t-1"),
       { initialProps: { state: "working" as State } }
     );
-    act(() => rerender({ state: "success" })); // finish #1
+    act(() => {
+      rerender({ state: "success" }); // finish #1
+    });
     expect(result.current).toBe(true);
 
     // Near the first deadline, restart then finish again.
-    act(() => vi.advanceTimersByTime(UI_TRANSIENT_HINT_DWELL_MS - 100));
-    act(() => rerender({ state: "working" }));
+    act(() => {
+      vi.advanceTimersByTime(UI_TRANSIENT_HINT_DWELL_MS - 100);
+    });
+    act(() => {
+      rerender({ state: "working" });
+    });
     expect(result.current).toBe(false);
-    act(() => rerender({ state: "success" })); // finish #2
+    act(() => {
+      rerender({ state: "success" }); // finish #2
+    });
     expect(result.current).toBe(true);
 
     // The first completion's leftover 100ms must not clear the fresh cue.
-    act(() => vi.advanceTimersByTime(UI_TRANSIENT_HINT_DWELL_MS - 1));
+    act(() => {
+      vi.advanceTimersByTime(UI_TRANSIENT_HINT_DWELL_MS - 1);
+    });
     expect(result.current).toBe(true);
-    act(() => vi.advanceTimersByTime(1));
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
     expect(result.current).toBe(false);
   });
 
@@ -165,7 +252,52 @@ describe("useTransientDockFinishedCue", () => {
         useTransientDockFinishedCue(state, scope),
       { initialProps: { state: "working" as State, scope: "a|b" } }
     );
-    act(() => rerender({ state: "success", scope: "b" }));
+    act(() => {
+      rerender({ state: "success", scope: "b" });
+    });
+    expect(result.current).toBe(false);
+  });
+
+  it("clears a visible cue when the scope changes while still on 'success'", () => {
+    // Cue is legitimately showing from a real completion; then an unrelated idle
+    // tab is closed (membership changes, aggregate stays "success"). The cue must
+    // clear — no stale cue lingering under the new subject — and its timer too.
+    const { result, rerender } = renderHook(
+      ({ state, scope }: { state: State; scope: string }) =>
+        useTransientDockFinishedCue(state, scope),
+      { initialProps: { state: "working" as State, scope: "s1" } }
+    );
+    act(() => {
+      rerender({ state: "success", scope: "s1" });
+    });
+    expect(result.current).toBe(true);
+
+    act(() => {
+      rerender({ state: "success", scope: "s2" });
+    });
+    expect(result.current).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("establishes a fresh baseline after a scope change", () => {
+    const { result, rerender } = renderHook(
+      ({ state, scope }: { state: State; scope: string }) =>
+        useTransientDockFinishedCue(state, scope),
+      { initialProps: { state: "working" as State, scope: "s1" } }
+    );
+    act(() => {
+      rerender({ state: "working", scope: "s2" }); // membership changed mid-run
+    });
+    expect(result.current).toBe(false);
+
+    act(() => {
+      rerender({ state: "success", scope: "s2" }); // completes in the new scope
+    });
+    expect(result.current).toBe(true);
+
+    act(() => {
+      vi.advanceTimersByTime(UI_TRANSIENT_HINT_DWELL_MS);
+    });
     expect(result.current).toBe(false);
   });
 
@@ -174,8 +306,11 @@ describe("useTransientDockFinishedCue", () => {
       ({ state }: { state: State }) => useTransientDockFinishedCue(state, "t-1"),
       { initialProps: { state: "working" as State } }
     );
-    act(() => rerender({ state: "success" }));
+    act(() => {
+      rerender({ state: "success" });
+    });
     expect(result.current).toBe(true);
+    expect(vi.getTimerCount()).toBe(1);
 
     unmount();
     expect(vi.getTimerCount()).toBe(0);

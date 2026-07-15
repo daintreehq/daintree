@@ -9,10 +9,11 @@
  *   3. The active row in the overflow dropdown carries a leading accent bar.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render } from "@testing-library/react";
+import { act, render } from "@testing-library/react";
 import { useEffect } from "react";
 import type { PtyPanelData } from "@shared/types/panel";
 import type { TabGroup } from "@/types";
+import { UI_TRANSIENT_HINT_DWELL_MS } from "@/lib/animationUtils";
 
 const trashPanelMock = vi.fn();
 const setActiveTabMock = vi.fn();
@@ -426,6 +427,60 @@ describe("DockedTabGroup dock-popover polish (#8164)", () => {
         <DockedTabGroup group={makeGroup(["t-1", "t-2"], "t-1")} panels={panels} />
       );
       expect(container.querySelector("[data-dock-activity-state]")).toBeNull();
+    });
+
+    it("flashes a finished cue when the last running tab finishes, then clears it", () => {
+      const { container, rerender } = render(
+        <DockedTabGroup
+          group={makeGroup(["t-1", "t-2"], "t-1")}
+          panels={[
+            makePanel({ id: "t-1", activityStatus: "success" }),
+            makePanel({ id: "t-2", activityStatus: "working" }),
+          ]}
+        />
+      );
+      expect(container.querySelector('[data-dock-activity-state="working"]')).not.toBeNull();
+
+      rerender(
+        <DockedTabGroup
+          group={makeGroup(["t-1", "t-2"], "t-1")}
+          panels={[
+            makePanel({ id: "t-1", activityStatus: "success" }),
+            makePanel({ id: "t-2", activityStatus: "success" }),
+          ]}
+        />
+      );
+      const finished = container.querySelector('[data-dock-activity-state="finished"]');
+      expect(finished).not.toBeNull();
+      expect(finished!.querySelector("svg")).not.toBeNull();
+
+      act(() => {
+        vi.advanceTimersByTime(UI_TRANSIENT_HINT_DWELL_MS);
+      });
+      expect(container.querySelector('[data-dock-activity-state="finished"]')).toBeNull();
+    });
+
+    it("does not flash a finished cue when a running tab is removed while an idle tab remains", () => {
+      const { container, rerender } = render(
+        <DockedTabGroup
+          group={makeGroup(["t-1", "t-2"], "t-1")}
+          panels={[
+            makePanel({ id: "t-1", activityStatus: "success" }),
+            makePanel({ id: "t-2", activityStatus: "working" }),
+          ]}
+        />
+      );
+      expect(container.querySelector('[data-dock-activity-state="working"]')).not.toBeNull();
+
+      // The running tab is closed; only the idle tab remains. The aggregate flips
+      // working→success but membership changed, so no false completion.
+      rerender(
+        <DockedTabGroup
+          group={makeGroup(["t-1"], "t-1")}
+          panels={[makePanel({ id: "t-1", activityStatus: "success" })]}
+        />
+      );
+      expect(container.querySelector('[data-dock-activity-state="finished"]')).toBeNull();
     });
   });
 });

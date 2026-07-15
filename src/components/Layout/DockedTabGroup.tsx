@@ -63,6 +63,7 @@ import {
 import {
   getDockDisplayActivityState,
   getGroupDockDisplayActivityState,
+  getGroupActivityScopeKey,
   useTransientDockFinishedCue,
 } from "./useDockActivityState";
 import { SortableTabButton } from "@/components/Panel/SortableTabButton";
@@ -511,11 +512,12 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const showDockAgentHighlights = usePreferencesStore((s) => s.showDockAgentHighlights);
 
   // Plain-terminal activity for the group aggregates across tabs: any plain tab
-  // running → spinner. The scope key is the sorted membership so closing a
-  // running tab re-baselines rather than flashing a false "finished" cue.
+  // running → spinner. The scope key tracks the plain contributors (see
+  // getGroupActivityScopeKey) so a tab leaving the aggregate — closed or
+  // agent-detected — re-baselines rather than flashing a false "finished" cue.
   // Declared before the early return below to keep hook order stable.
   const groupPlainActivityState = getGroupDockDisplayActivityState(panels);
-  const groupActivityScopeKey = `${group.id}:${[...panels.map((p) => p.id)].sort().join("|")}`;
+  const groupActivityScopeKey = `${group.id}:${getGroupActivityScopeKey(panels)}`;
   const showFinishedCue = useTransientDockFinishedCue(
     groupPlainActivityState,
     groupActivityScopeKey

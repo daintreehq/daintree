@@ -56,6 +56,25 @@ export function getGroupDockDisplayActivityState(
 }
 
 /**
+ * Identity of the plain terminals that FEED the group aggregate — the subject
+ * the transient cue observes. Keyed on the contributing (non-agent) tabs' ids,
+ * NOT the raw membership, so a running plain tab that gets agent-detected
+ * mid-command (it drops out of the aggregate, flipping working→success) changes
+ * this key and re-baselines the cue instead of flashing a false "finished". A
+ * genuine working→success of the same members leaves the key unchanged, so real
+ * completions still register.
+ */
+export function getGroupActivityScopeKey(
+  terminals: ReadonlyArray<{ id: string } & DockActivityStateSource>
+): string {
+  const plainIds: string[] = [];
+  for (const terminal of terminals) {
+    if (getDockDisplayActivityState(terminal) !== undefined) plainIds.push(terminal.id);
+  }
+  return plainIds.sort().join("|");
+}
+
+/**
  * Renderer-local transient "finished" cue. There is no backend timestamp for
  * when `activityStatus` last changed (updateActivity just overwrites the
  * field), so a brief completion flash has to be derived here from a
@@ -78,7 +97,13 @@ export function useTransientDockFinishedCue(
   activityState: DockDisplayActivityState | undefined,
   scopeKey: string
 ): boolean {
-  const [showFinished, setShowFinished] = useState(false);
+  // The cue carries the scope it was raised under so a membership change hides
+  // it synchronously in render — before the passive effect commits — rather than
+  // surfacing a stale cue for one frame under the new scope.
+  const [finished, setFinished] = useState<{ shown: boolean; scope: string }>({
+    shown: false,
+    scope: scopeKey,
+  });
   const prevStateRef = useRef<DockDisplayActivityState | undefined>(activityState);
   const prevScopeRef = useRef(scopeKey);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -102,7 +127,7 @@ export function useTransientDockFinishedCue(
     if (prevScope !== scopeKey) {
       clearTimer();
       generationRef.current++;
-      setShowFinished(false);
+      setFinished({ shown: false, scope: scopeKey });
       return;
     }
 
@@ -110,11 +135,11 @@ export function useTransientDockFinishedCue(
     if (prevState === "working" && activityState === "success") {
       clearTimer();
       const generation = ++generationRef.current;
-      setShowFinished(true);
+      setFinished({ shown: true, scope: scopeKey });
       timerRef.current = setTimeout(() => {
         // Only the newest completion may hide the cue.
         if (generationRef.current === generation) {
-          setShowFinished(false);
+          setFinished({ shown: false, scope: scopeKey });
         }
       }, getPerformanceModeFloor(UI_TRANSIENT_HINT_DWELL_MS));
       return;
@@ -126,17 +151,21 @@ export function useTransientDockFinishedCue(
     if (activityState !== "success") {
       clearTimer();
       generationRef.current++;
-      setShowFinished(false);
+      setFinished({ shown: false, scope: scopeKey });
     }
   }, [activityState, scopeKey]);
 
   useEffect(
     () => () => {
+      // Invalidate any already-queued dwell callback so it can't fire a setter
+      // after unmount, then clear the timer.
+      generationRef.current++;
       if (timerRef.current) clearTimeout(timerRef.current);
     },
     []
   );
 
-  // Working always wins over a lingering cue, even before the effect commits.
-  return showFinished && activityState === "success";
+  // Working always wins over a lingering cue, even before the effect commits;
+  // the scope guard drops a cue raised under a now-stale subject.
+  return finished.shown && finished.scope === scopeKey && activityState === "success";
 }
