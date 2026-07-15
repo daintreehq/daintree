@@ -30,10 +30,9 @@ describe("resolveResourceProfileConfig", () => {
     for (const profile of PROFILES) {
       const base = RESOURCE_PROFILE_CONFIGS[profile];
       const resolved = resolveResourceProfileConfig(profile, 28);
-      for (const key of Object.keys(base) as (keyof typeof base)[]) {
-        expect(resolved[key]).toBe(base[key]);
-      }
-      // …and adds exactly the two resolved WebGL fields on top of the base keys.
+      // Every base field is carried through unchanged…
+      expect(resolved).toMatchObject(base);
+      // …and the resolved config adds exactly the two WebGL fields on top.
       expect(new Set(Object.keys(resolved))).toEqual(
         new Set([...Object.keys(base), "webglUpperThreshold", "webglLowerThreshold"])
       );
