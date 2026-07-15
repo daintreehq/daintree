@@ -3,10 +3,10 @@ import React from "react";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { ChangeData, HunkData, RenderToken } from "react-diff-view";
 import type { InsertChange, DeleteChange } from "gitdiff-parser";
-import { DiffViewer, _resetLangStateForTests } from "../DiffViewer";
+import { DiffViewer, _resetLangStateForTests, _flushLangLoadsForTests } from "../DiffViewer";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 vi.mock("refractor/rust", () => {
@@ -84,6 +84,20 @@ index 0123456..abcdefg 100644
 function wrap(ui: React.ReactElement) {
   return <TooltipProvider>{ui}</TooltipProvider>;
 }
+
+// The refractor/rust mock above throws on dynamic import, so any test rendering
+// a rust diff makes `ensureLanguage` reject and `console.warn` asynchronously.
+// Silence that expected warn and drain the pending load after every test, so a
+// late rejection never fires during worker teardown ("Closing rpc while
+// onUserConsoleLog was pending").
+let warnSpy: ReturnType<typeof vi.spyOn>;
+beforeEach(() => {
+  warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+});
+afterEach(async () => {
+  await _flushLangLoadsForTests();
+  warnSpy.mockRestore();
+});
 
 describe("DiffViewer", () => {
   beforeEach(() => {

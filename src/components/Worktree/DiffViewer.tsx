@@ -63,7 +63,7 @@ import { isLanguageFailed } from "./diffRefractor";
 import { diffTokenizeClient } from "@/services/DiffTokenizeService";
 import { formatBytes } from "@/lib/formatBytes";
 
-export { _resetLangStateForTests } from "./diffRefractor";
+export { _resetLangStateForTests, _flushLangLoadsForTests } from "./diffRefractor";
 
 export interface DiffViewerProps {
   diff: string;

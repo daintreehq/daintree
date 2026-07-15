@@ -70,6 +70,20 @@ async function createManagedTerminal(id: string) {
   });
 }
 
+// The marker reaches the buffer over two async xterm parse hops (OSC write →
+// microtask → visible-line write → parse). A fixed sleep flakes on slow CI, so
+// poll the captured buffer until the expected text lands (or time out).
+async function waitForBufferText(id: string, needle: string, timeoutMs = 2000): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  let text = "";
+  while (Date.now() < deadline) {
+    text = terminalInstanceService.captureBufferText(id);
+    if (text.includes(needle)) return text;
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  }
+  return text;
+}
+
 describe("injectDataLossMarker", () => {
   beforeEach(() => {
     terminalInstanceService.dispose();
@@ -104,9 +118,7 @@ describe("injectDataLossMarker", () => {
     await createManagedTerminal("dl-3");
     terminalInstanceService.injectDataLossMarker("dl-3", 2048);
 
-    await new Promise<void>((resolve) => setTimeout(resolve, 50));
-
-    const text = terminalInstanceService.captureBufferText("dl-3");
+    const text = await waitForBufferText("dl-3", "Output dropped (~2048 bytes)");
     expect(text).toContain("Output dropped (~2048 bytes)");
     // The raw OSC sequence is consumed by the handler and never reaches the
     // buffer as visible text.
@@ -117,9 +129,7 @@ describe("injectDataLossMarker", () => {
     await createManagedTerminal("dl-4");
     terminalInstanceService.injectDataLossMarker("dl-4", 0);
 
-    await new Promise<void>((resolve) => setTimeout(resolve, 50));
-
-    const text = terminalInstanceService.captureBufferText("dl-4");
+    const text = await waitForBufferText("dl-4", "Output dropped (output)");
     expect(text).toContain("Output dropped (output)");
   });
 });
