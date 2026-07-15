@@ -11,6 +11,7 @@ vi.mock("@/utils/logger", () => ({
 const {
   setFocusedMock,
   trashPanelGroupMock,
+  closeDockTerminalMock,
   removePanelMock,
   updateTitleMock,
   getPanelGroupMock,
@@ -18,6 +19,7 @@ const {
 } = vi.hoisted(() => ({
   setFocusedMock: vi.fn(),
   trashPanelGroupMock: vi.fn(),
+  closeDockTerminalMock: vi.fn(),
   removePanelMock: vi.fn(),
   updateTitleMock: vi.fn(),
   getPanelGroupMock: vi.fn(),
@@ -28,6 +30,7 @@ vi.mock("@/store", () => {
   const state = {
     setFocused: setFocusedMock,
     trashPanelGroup: trashPanelGroupMock,
+    closeDockTerminal: closeDockTerminalMock,
     removePanel: removePanelMock,
     updateTitle: updateTitleMock,
     getPanelGroup: getPanelGroupMock,
@@ -47,6 +50,7 @@ describe("usePanelHandlers", () => {
   beforeEach(() => {
     setFocusedMock.mockClear();
     trashPanelGroupMock.mockReset();
+    closeDockTerminalMock.mockClear();
     removePanelMock.mockClear();
     updateTitleMock.mockClear();
     getPanelGroupMock.mockReset();
@@ -130,13 +134,44 @@ describe("usePanelHandlers", () => {
     expect(removePanelMock).not.toHaveBeenCalled();
   });
 
-  it("dock-surface close trashes synchronously, bypassing the optimistic coordinator", () => {
-    const { result } = renderHook(() => usePanelHandlers({ terminalId: "p1", surface: "dock" }));
+  it("dock-surface close dismisses the preview without trashing or killing the terminal", () => {
+    const onAfterClose = vi.fn();
+    const { result } = renderHook(() =>
+      usePanelHandlers({ terminalId: "p1", surface: "dock", onAfterClose })
+    );
 
     act(() => result.current.handleClose());
 
-    expect(trashPanelGroupMock).toHaveBeenCalledWith("p1");
+    expect(closeDockTerminalMock).toHaveBeenCalledWith("p1");
+    expect(trashPanelGroupMock).not.toHaveBeenCalled();
+    expect(removePanelMock).not.toHaveBeenCalled();
     expect(requestPanelCloseMock).not.toHaveBeenCalled();
+    expect(onAfterClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("dock-surface dismiss stays repeatable across reopen cycles (no trashedRef latch)", () => {
+    // The DockedPanel hook instance survives collapse/reopen, so the X must
+    // dismiss every time — not latch after the first like the destructive paths.
+    const onAfterClose = vi.fn();
+    const { result } = renderHook(() =>
+      usePanelHandlers({ terminalId: "p1", surface: "dock", onAfterClose })
+    );
+
+    act(() => result.current.handleClose());
+    act(() => result.current.handleClose());
+
+    expect(closeDockTerminalMock).toHaveBeenCalledTimes(2);
+    expect(onAfterClose).toHaveBeenCalledTimes(2);
+  });
+
+  it("dock-surface force-close still destroys via removePanel, never dismissing", () => {
+    const { result } = renderHook(() => usePanelHandlers({ terminalId: "p1", surface: "dock" }));
+
+    act(() => result.current.handleClose(true));
+
+    expect(removePanelMock).toHaveBeenCalledWith("p1");
+    expect(closeDockTerminalMock).not.toHaveBeenCalled();
+    expect(trashPanelGroupMock).not.toHaveBeenCalled();
   });
 
   it("handleFocus delegates to setFocused", () => {

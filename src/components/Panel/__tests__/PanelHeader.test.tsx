@@ -45,7 +45,10 @@ vi.mock("@/hooks", () => ({
   useBackgroundPanelStats: () => ({ activeCount: 0, workingCount: 0 }),
   useTabOverflow: () => mockHiddenTabIds,
   useKeybindingDisplay: () => "",
-  useAriaKeyshortcuts: () => undefined,
+  // Sentinel so tests can prove the close button's aria-keyshortcuts is present
+  // on grid but omitted on dock. Only terminal.close resolves — keeps other
+  // buttons (maximize, etc.) shortcut-less so unrelated tests are unaffected.
+  useAriaKeyshortcuts: (actionId: string) => (actionId === "terminal.close" ? "Meta+W" : undefined),
 }));
 
 let mockDragHandle: {
@@ -432,6 +435,49 @@ describe("PanelHeader", () => {
       const onMinimize = vi.fn();
       render(<PanelHeader {...makeProps({ location: "dock", onMinimize })} />);
       expect(screen.queryByTestId("panel-collapse-to-dock")).toBeNull();
+    });
+  });
+
+  describe("close button dismiss-vs-destroy copy (#11186)", () => {
+    const tooltipTexts = () =>
+      screen.getAllByTestId("tooltip-content").map((el) => el.textContent ?? "");
+
+    it("labels the grid close button as a destructive close and keeps its shortcut", () => {
+      render(<PanelHeader {...makeProps({ location: "grid" })} />);
+      const closeBtn = screen.getByTestId("panel-close");
+      expect(closeBtn.getAttribute("aria-label")).toMatch(/close session/i);
+      expect(closeBtn.getAttribute("aria-label")).not.toMatch(/dismiss/i);
+      // Grid keeps advertising the terminal.close chord (it closes the panel).
+      expect(closeBtn.getAttribute("aria-keyshortcuts")).toBe("Meta+W");
+      expect(tooltipTexts().some((t) => /close session/i.test(t))).toBe(true);
+    });
+
+    it("labels the dock close button as a non-destructive dismiss and drops the destructive chord", () => {
+      // The dock X only collapses the preview (the PTY keeps running), so its
+      // accessible name and tooltip must not read as a destructive "close", and
+      // it must not advertise the terminal.close chord (Cmd+W) — that key still
+      // trashes the focused panel, so it isn't a way to dismiss the preview.
+      render(<PanelHeader {...makeProps({ location: "dock" })} />);
+      const closeBtn = screen.getByTestId("panel-close");
+      expect(closeBtn.getAttribute("aria-label")).toMatch(/dismiss preview/i);
+      expect(closeBtn.getAttribute("aria-label")).not.toMatch(/close session/i);
+      expect(closeBtn.getAttribute("aria-keyshortcuts")).toBeNull();
+      const texts = tooltipTexts();
+      expect(texts.some((t) => /dismiss preview/i.test(t))).toBe(true);
+      expect(texts.every((t) => !/close session/i.test(t))).toBe(true);
+    });
+
+    it("keeps the Alt+Click force-close affordance on both surfaces", () => {
+      // Relabeling the dock X as "dismiss" must not drop the escape hatch that
+      // still lets the user force-kill (Alt+Click) — nothing loses the ability
+      // to be destroyed.
+      for (const location of ["grid", "dock"] as const) {
+        const { unmount } = render(<PanelHeader {...makeProps({ location })} />);
+        expect(screen.getByTestId("panel-close").getAttribute("aria-label")).toMatch(
+          /force close/i
+        );
+        unmount();
+      }
     });
   });
 

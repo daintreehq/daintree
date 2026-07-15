@@ -1222,16 +1222,23 @@ function PanelHeaderComponent({
               className="p-1.5 rounded-sm hover:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] focus-visible:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-status-error focus-visible:outline-offset-2 text-daintree-text/60 hover:text-status-error transition-colors"
               data-testid="panel-close"
               aria-label={formatShortcutForTooltip(
-                "Close session. Hold Alt and click to force close without recovery."
+                location === "dock"
+                  ? "Dismiss preview. Hold Alt and click to force close without recovery."
+                  : "Close session. Hold Alt and click to force close without recovery."
               )}
-              aria-keyshortcuts={closeAriaShortcut}
+              // Dock previews dismiss non-destructively; the terminal.close chord
+              // (Cmd+W) still trashes the focused panel, so don't advertise it as
+              // the way to dismiss the preview (#11186).
+              aria-keyshortcuts={location === "dock" ? undefined : closeAriaShortcut}
             >
               <X className="w-3 h-3" aria-hidden="true" />
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
             <div className="flex flex-col gap-1">
-              {createTooltipContent("Close Session", closeShortcut)}
+              {location === "dock"
+                ? createTooltipContent("Dismiss preview")
+                : createTooltipContent("Close Session", closeShortcut)}
               <span className="text-daintree-text/50 text-[11px]">
                 {formatShortcutForTooltip("Alt+Click to force close")}
               </span>
