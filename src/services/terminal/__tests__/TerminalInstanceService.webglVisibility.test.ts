@@ -280,9 +280,13 @@ describe("TerminalInstanceService - visibility-driven WebGL lease", () => {
     expect(service.webGLManager.isActive("t1")).toBe(false);
   });
 
-  it("standard (non-agent) unfocused terminal does not acquire WebGL on show", () => {
+  it("standard (non-agent) unfocused visible terminal acquires WebGL on show (#11193)", () => {
+    // Parity with agents: a visible-but-unfocused standard terminal at VISIBLE
+    // tier keeps a WebGL context so blur no longer visibly shifts it to the DOM
+    // renderer (mangled block/box-drawing glyphs).
     const managed = makeMockManaged({
       isVisible: false,
+      isFocused: false,
       runtimeAgentId: undefined,
       launchAgentId: undefined,
       lastAppliedTier: TerminalRefreshTier.VISIBLE,
@@ -293,7 +297,7 @@ describe("TerminalInstanceService - visibility-driven WebGL lease", () => {
     service.setVisible("t1", true);
     vi.advanceTimersByTime(100);
 
-    expect(service.webGLManager.isActive("t1")).toBe(false);
+    expect(service.webGLManager.isActive("t1")).toBe(true);
   });
 
   it("standard (non-agent) focused terminal acquires WebGL on show", () => {
@@ -406,6 +410,33 @@ describe("TerminalInstanceService - visibility-driven WebGL lease", () => {
     expect(managed.terminal.refresh).not.toHaveBeenCalled();
   });
 
+  it("standard terminal blur (FOCUSED → VISIBLE) keeps WebGL, no DOM swap (#11193)", () => {
+    // The core fix: a standard pane that loses focus but stays visible drops
+    // from FOCUSED to VISIBLE. Pre-#11193 this released the context and forced a
+    // full-buffer refresh onto the DOM renderer (the visible glyph shift). Now
+    // VISIBLE is eligible for standard terminals, so the context is retained and
+    // no refresh runs.
+    const managed = makeMockManaged({
+      isVisible: true,
+      isFocused: false,
+      runtimeAgentId: undefined,
+      launchAgentId: undefined,
+      lastAppliedTier: TerminalRefreshTier.FOCUSED,
+      getRefreshTier: () => TerminalRefreshTier.VISIBLE,
+    });
+    service.instances.set("t1", managed as unknown as Record<string, unknown>);
+    service.webGLManager.ensureContext("t1", managed);
+    expect(service.webGLManager.isActive("t1")).toBe(true);
+    (managed.terminal.refresh as ReturnType<typeof vi.fn>).mockClear();
+
+    // FOCUSED → VISIBLE is a downgrade, applied through the tier hysteresis.
+    service.applyRendererPolicy("t1", TerminalRefreshTier.VISIBLE);
+    vi.advanceTimersByTime(500);
+
+    expect(service.webGLManager.isActive("t1")).toBe(true);
+    expect(managed.terminal.refresh).not.toHaveBeenCalled();
+  });
+
   it("destroy cancels the pending WebGL hide-dwell timer", () => {
     const managed = makeMockManaged();
     service.instances.set("t1", managed as unknown as Record<string, unknown>);
@@ -446,7 +477,7 @@ describe("TerminalInstanceService - visibility-driven WebGL lease", () => {
     expect(managed.webGLHideTimer).toBeUndefined();
   });
 
-  it("agent demotion during debounce window cancels WebGL restore for an unfocused pane", () => {
+  it("agent demotion during debounce window does not cancel WebGL restore for a visible pane (#11193)", () => {
     const managed = makeMockManaged({
       isVisible: false,
       lastAppliedTier: TerminalRefreshTier.VISIBLE,
@@ -458,14 +489,16 @@ describe("TerminalInstanceService - visibility-driven WebGL lease", () => {
     expect(service.webGLManager.isActive("t1")).toBe(false);
 
     // Demotion happens inside the debounce window — runtimeAgentId clears.
-    // VISIBLE keeps an agent eligible but not a plain terminal.
+    // Eligibility is identity-neutral now: VISIBLE keeps both an agent and a
+    // plain terminal eligible, so demotion must NOT revoke the pending restore.
     managed.runtimeAgentId = undefined;
 
     vi.advanceTimersByTime(100);
 
-    // shouldRestoreWebGL re-checks eligibility in the timer callback,
-    // so the deferred restore must not fire after demotion.
-    expect(service.webGLManager.isActive("t1")).toBe(false);
+    // shouldRestoreWebGL re-checks eligibility in the timer callback and a
+    // visible plain terminal at VISIBLE still wants WebGL, so the deferred
+    // restore fires.
+    expect(service.webGLManager.isActive("t1")).toBe(true);
   });
 
   // #10671: off-screen agent terminals must not register a fleet-wide WebGL
@@ -481,6 +514,25 @@ describe("TerminalInstanceService - visibility-driven WebGL lease", () => {
 
     // A PTY write while off-screen drives the pane to BURST. The tier still
     // applies (backpressure cadence), but the want must not be registered.
+    service.applyRendererPolicy("t1", TerminalRefreshTier.BURST);
+
+    expect(service.webGLManager.isActive("t1")).toBe(false);
+    expect(managed.lastAppliedTier).toBe(TerminalRefreshTier.BURST);
+  });
+
+  // #10671 is now identity-neutral (#11193): the off-screen guard must reject a
+  // hidden standard terminal at BURST exactly as it does a hidden agent, so a
+  // streaming background build/log pane can't inflate the fleet-wide want set.
+  it("hidden standard terminal at BURST tier does not acquire WebGL (#10671, #11193)", () => {
+    const managed = makeMockManaged({
+      isVisible: false,
+      runtimeAgentId: undefined,
+      launchAgentId: undefined,
+      lastAppliedTier: TerminalRefreshTier.VISIBLE,
+      getRefreshTier: () => TerminalRefreshTier.VISIBLE,
+    });
+    service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
     service.applyRendererPolicy("t1", TerminalRefreshTier.BURST);
 
     expect(service.webGLManager.isActive("t1")).toBe(false);

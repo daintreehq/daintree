@@ -206,12 +206,14 @@ describe("WebGL lease through tier transitions", () => {
 
 describe("onTierApplied handler — WebGL manager integration", () => {
   let webGLManager: import("../TerminalWebGLManager").TerminalWebGLManager;
+  let webGLPolicy: import("../TerminalWebGLPolicy").TerminalWebGLPolicy;
   let managed: ManagedTerminal;
 
   function makeManagedTerminal(agentId?: string | null): ManagedTerminal {
-    // Agent identity lives on `runtimeAgentId`. WebGL reservation gates on it.
-    // Tests that want a plain (non-agent) terminal pass `null` (or omit — but
-    // `null` is more explicit and avoids the default-param trap when callers
+    // Agent identity lives on `runtimeAgentId`. Eligibility is identity-neutral
+    // now (#11193): standard and agent terminals both want WebGL at visible
+    // tiers. Tests that want a plain (non-agent) terminal pass `null` (or omit —
+    // but `null` is more explicit and avoids the default-param trap when callers
     // pass `undefined`).
     return {
       terminal: { loadAddon: vi.fn(), refresh: vi.fn(), rows: 24 },
@@ -228,28 +230,27 @@ describe("onTierApplied handler — WebGL manager integration", () => {
     vi.resetModules();
 
     const { TerminalWebGLManager } = await import("../TerminalWebGLManager");
+    const { TerminalWebGLPolicy } = await import("../TerminalWebGLPolicy");
     webGLManager = new TerminalWebGLManager();
+    webGLPolicy = new TerminalWebGLPolicy({
+      getMode: () => webGLManager.getMode(),
+      getPinnedId: () => webGLManager.getPinnedId(),
+      isAltBufferPinned: (id) => webGLManager.isAltBufferPinned(id),
+    });
     managed = makeManagedTerminal();
     await preloadMockWebglAddon();
   });
 
+  // Drives the real TerminalWebGLPolicy for the acquire decision so this suite
+  // can't drift from production eligibility (it previously hand-rolled an
+  // agent-only rule that already contradicted production for standard FOCUSED
+  // terminals). The release branch is deliberately the simplified tier→WebGL
+  // model — the production webGLHideTimer dwell + isVisible-gated refresh are
+  // covered by webglVisibility.test.ts, which drives the real service.
   function simulateOnTierApplied(id: string, tier: TerminalRefreshTier, m: ManagedTerminal) {
-    if (!m.runtimeAgentId) return;
-
-    // Mirrors wantsWebGLAtTier: an off-screen pane never wants WebGL, even an
-    // agent at an eligible tier (#10671).
-    if (
-      m.isVisible &&
-      (tier === TerminalRefreshTier.FOCUSED ||
-        tier === TerminalRefreshTier.BURST ||
-        tier === TerminalRefreshTier.VISIBLE)
-    ) {
+    if (webGLPolicy.wantsWebGLAtTier(m, tier)) {
       webGLManager.ensureContext(id, m);
     } else if (!m.isVisible) {
-      // This model intentionally omits the production webGLHideTimer dwell
-      // guard (TerminalInstanceService.onTierApplied) — the lease suite covers
-      // pure tier→WebGL mapping; hide-dwell timing lives in
-      // webglVisibility.test.ts, which drives the real service.
       const hadWebGL = webGLManager.isActive(id);
       webGLManager.releaseContext(id);
       if (hadWebGL && m.terminal.rows > 0) {
@@ -329,21 +330,24 @@ describe("onTierApplied handler — WebGL manager integration", () => {
     expect(webGLManager.isActive("t1")).toBe(true);
   });
 
-  it("standard terminal at FOCUSED never acquires WebGL context", () => {
+  it("standard terminal at FOCUSED acquires WebGL context (#11193)", () => {
     const stdManaged = makeManagedTerminal(null);
     simulateOnTierApplied("t-std", TerminalRefreshTier.FOCUSED, stdManaged);
-    expect(webGLManager.isActive("t-std")).toBe(false);
+    expect(webGLManager.isActive("t-std")).toBe(true);
   });
 
-  it("standard terminal at BURST/VISIBLE never acquires WebGL context", () => {
+  it("standard terminal at BURST/VISIBLE acquires WebGL context (#11193)", () => {
     const stdManaged = makeManagedTerminal(null);
     simulateOnTierApplied("t-std", TerminalRefreshTier.BURST, stdManaged);
-    expect(webGLManager.isActive("t-std")).toBe(false);
+    expect(webGLManager.isActive("t-std")).toBe(true);
     simulateOnTierApplied("t-std", TerminalRefreshTier.VISIBLE, stdManaged);
-    expect(webGLManager.isActive("t-std")).toBe(false);
+    expect(webGLManager.isActive("t-std")).toBe(true);
   });
 
-  it("rapid tier churn on standard terminal does not create pool entries", () => {
+  it("visible standard terminal retains its context across tier churn (#11193)", () => {
+    // FOCUSED→BURST→FOCUSED keep the context; a visible BACKGROUND retains it
+    // (ineligible tier while visible is a no-op, not a release); VISIBLE
+    // re-ensures. The pane stays visible throughout, so it never releases.
     const stdManaged = makeManagedTerminal(null);
     const tiers = [
       TerminalRefreshTier.FOCUSED,
@@ -355,10 +359,10 @@ describe("onTierApplied handler — WebGL manager integration", () => {
     for (const tier of tiers) {
       simulateOnTierApplied("t-std", tier, stdManaged);
     }
-    expect(webGLManager.isActive("t-std")).toBe(false);
+    expect(webGLManager.isActive("t-std")).toBe(true);
   });
 
-  it("mixed pool: standard terminals don't consume agent WebGL slots", () => {
+  it("mixed pool: standard and agent terminals both acquire WebGL uniformly (#11193)", () => {
     const agents = Array.from({ length: 3 }, (_, i) => ({
       id: `agent-${i}`,
       m: makeManagedTerminal("claude"),
@@ -373,7 +377,7 @@ describe("onTierApplied handler — WebGL manager integration", () => {
     for (const { id } of agents) {
       expect(webGLManager.isActive(id)).toBe(true);
     }
-    expect(webGLManager.isActive("t-std")).toBe(false);
+    expect(webGLManager.isActive("t-std")).toBe(true);
   });
 
   it("agent terminal refresh is called after WebGL release", () => {

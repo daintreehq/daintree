@@ -308,9 +308,10 @@ export const GRID_RESIZE_COALESCE_MS = 120;
  * VISIBLE is included because xterm's pixel-perfect block / box-drawing /
  * Powerline glyph rendering only works under the WebGL or canvas renderer —
  * the DOM renderer always falls back to the configured font, which
- * mangles glyphs like U+2584 used in agent ASCII-art headers. Limiting WebGL
- * to FOCUSED|BURST visibly degraded rendering on every unfocused-but-visible
- * agent pane in tiled fleets.
+ * mangles glyphs like U+2584 (agent ASCII-art headers, TUI box-drawing).
+ * Limiting WebGL to FOCUSED|BURST visibly degraded rendering on every
+ * unfocused-but-visible pane in tiled fleets — for standard terminals as much
+ * as agents (#11193), which is why eligibility is identity-neutral.
  */
 export function isWebGLEligibleTier(tier: TerminalRefreshTier | undefined): boolean {
   return (
