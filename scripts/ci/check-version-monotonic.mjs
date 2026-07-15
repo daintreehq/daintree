@@ -9,15 +9,25 @@
 // `release/${UPDATE_METADATA_PREFIX}{,-mac,-linux}.yml` (Windows uses the
 // no-suffix file), fetches the same files from
 // https://updates.daintree.org/releases/, and compares with `semver.gt`.
-// Equal versions also fail (republishing the same version is the same footgun).
+// Equal versions are treated as "already published" — the gate passes without
+// re-uploading (a re-tag of a version already live shouldn't red-build or
+// rewrite the artifacts already serving clients); see #11185.
 //
-// Failure modes:
+// Outcomes (per platform):
+//   - new > live                   -> OK, upload proceeds
+//   - new == live                  -> skip (already published; no re-upload)
+//   - new < live                   -> fail closed (a downgrade would strand clients)
 //   - 404 on the live feed         -> pass for that platform (first release in channel)
 //   - any other HTTP / network err -> fail closed
 //   - YAML parse / missing version -> fail closed
 //   - mac and linux disagree on    -> fail closed (split-brain build)
 //     the new version
+//
+// When every checked platform resolves to "already live", the script writes
+// `skip_upload=true` to $GITHUB_OUTPUT so the composite action skips the R2
+// upload and verify steps for this run (see .github/actions/publish-daintree).
 
+import { appendFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -131,6 +141,17 @@ export function checkVersionMonotonic(liveVersion, newVersion) {
   if (!semver.valid(newVersion)) {
     return { ok: false, error: `new version '${newVersion}' is not valid semver` };
   }
+  // An identical version string is not a regression — it's a re-tag of a
+  // version that already published successfully. Signal "skip" so the caller
+  // uploads nothing rather than failing (the old behavior) or rewriting the
+  // live artifacts. Use exact identity, not semver.eq: build-metadata- or
+  // format-only variants (e.g. 1.0.0+a vs 1.0.0+b, or v1.0.0 vs 1.0.0) share
+  // updater precedence but were never actually the published version, so they
+  // fall through to the strict-greater check and fail closed. A genuine re-tag
+  // always produces a byte-identical version string (same package.json version).
+  if (newVersion === liveVersion) {
+    return { ok: true, skip: true };
+  }
   if (!semver.gt(newVersion, liveVersion)) {
     return {
       ok: false,
@@ -138,6 +159,22 @@ export function checkVersionMonotonic(liveVersion, newVersion) {
     };
   }
   return { ok: true };
+}
+
+/**
+ * Aggregate the per-platform outcomes into the single `skip_upload` boolean the
+ * composite action gates its R2 upload/verify steps on. Skipping is only safe
+ * when *every* checked platform is already live and nothing failed — the upload
+ * steps `aws s3 sync` the whole `release/` dir, so a partial skip isn't
+ * expressible at the file level. Production invokes this gate one platform at a
+ * time (release-{macos,linux,windows}.yml), so this AND is unambiguous there;
+ * the aggregate only matters for a hypothetical caller that scopes several
+ * platforms at once.
+ */
+export function shouldSkipUpload(platforms, skippedPlatforms, failures) {
+  return (
+    platforms.length > 0 && failures.length === 0 && skippedPlatforms.length === platforms.length
+  );
 }
 
 async function fetchLiveVersion(prefix, platform) {
@@ -255,6 +292,7 @@ async function main() {
   );
 
   const failures = [];
+  const skippedPlatforms = [];
   for (let i = 0; i < platforms.length; i++) {
     const platform = platforms[i];
     const settled = fetchResults[i];
@@ -273,6 +311,11 @@ async function main() {
     const result = checkVersionMonotonic(live.version, newVersion);
     if (!result.ok) {
       failures.push(`${platform}: ${result.error} (feed: ${live.url})`);
+    } else if (result.skip) {
+      skippedPlatforms.push(platform);
+      console.log(
+        `[monotonic] ${platform}: ${newVersion} is already live (${live.url}) — already published, skipping re-upload for this platform.`
+      );
     } else {
       console.log(
         `[monotonic] ${platform}: ${newVersion} > ${live.version} (live ${live.url}) — OK.`
@@ -284,9 +327,32 @@ async function main() {
     fail(`version-monotonic gate failed:\n  - ${failures.join("\n  - ")}`);
   }
 
-  console.log(
-    `[monotonic] gate passed for channel '${prefix}': new version ${newVersion} is greater than every live feed.`
-  );
+  const skipUpload = shouldSkipUpload(platforms, skippedPlatforms, failures);
+  writeSkipUploadOutput(skipUpload);
+
+  if (skipUpload) {
+    console.log(
+      `[monotonic] channel '${prefix}': version ${newVersion} is already live on every checked platform — skipping re-upload for this run.`
+    );
+  } else {
+    const uploadCount = platforms.length - skippedPlatforms.length;
+    console.log(
+      `[monotonic] gate passed for channel '${prefix}': new version ${newVersion} cleared the monotonic check; upload enabled for ${uploadCount} platform(s).`
+    );
+  }
+}
+
+/**
+ * Communicate the skip decision to the composite action via $GITHUB_OUTPUT so
+ * later steps can gate on `steps.<id>.outputs.skip_upload`. No-op when the env
+ * var is unset (local runs / vitest self-execution). We deliberately do NOT
+ * swallow a write error: if the runner set GITHUB_OUTPUT but the append fails,
+ * the skip decision can't be communicated and the gate should fail closed.
+ */
+export function writeSkipUploadOutput(skipUpload) {
+  const outputPath = process.env.GITHUB_OUTPUT;
+  if (!outputPath) return;
+  appendFileSync(outputPath, `skip_upload=${skipUpload}\n`, "utf8");
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
