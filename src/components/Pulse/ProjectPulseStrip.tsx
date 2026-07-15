@@ -46,11 +46,12 @@ function MiniRibbon({ cells }: { cells: HeatCell[] }) {
  * "click to quickly peek", never a permanent dashboard. Expansion is ephemeral
  * (resets to collapsed each mount) by design, so the launcher stays the focus.
  *
- * The collapsed strip renders whatever pulse is already cached but never
- * triggers a fetch itself — the git-log scan only runs when the user expands,
- * so simply landing on an empty grid costs nothing. Expanding kicks a fetch
- * (deduped/TTL-gated in the store) so the peek is fresh and the card opens on a
- * skeleton rather than a blank first frame.
+ * The strip populates itself on load: a cold cache kicks one pulse fetch on
+ * mount so the ribbon/stat/flame peek is there from the first frame instead of
+ * hiding behind a first expand. That fetch is a bounded git-log scan — deduped
+ * in the store while in flight and cheap on repeat (the service caches under a
+ * 60s TTL behind a HEAD probe). Expanding kicks another (deduped) fetch to
+ * refresh the peek and open the card on a skeleton rather than a blank frame.
  */
 export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
   const [expanded, setExpanded] = useState(false);
@@ -58,6 +59,8 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
   // so a plain selector is churn-free — no useShallow needed. fetchPulse is a
   // stable store action.
   const pulse = usePulseStore((state) => state.getPulse(worktreeId));
+  const isLoading = usePulseStore((state) => state.isLoading(worktreeId));
+  const error = usePulseStore((state) => state.getError(worktreeId));
   const fetchPulse = usePulseStore((state) => state.fetchPulse);
 
   const stripButtonRef = useRef<HTMLButtonElement>(null);
@@ -65,6 +68,16 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
   // Only move focus on a user-driven toggle — never grab focus on first mount
   // (the empty grid must not steal focus just by rendering).
   const toggledRef = useRef(false);
+
+  // Populate the collapsed strip on load. A fresh empty grid has no cached
+  // pulse, so kick one fetch on mount — skipped when a pulse is already cached
+  // or a request/error is already in flight (mirrors ProjectPulseCard). The
+  // store dedupes, so a later expand collapses onto the same request.
+  useEffect(() => {
+    if (!pulse && !isLoading && !error) {
+      void fetchPulse(worktreeId);
+    }
+  }, [worktreeId, pulse, isLoading, error, fetchPulse]);
 
   useEffect(() => {
     if (!toggledRef.current) return;
@@ -83,7 +96,7 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
   const expand = () => {
     toggledRef.current = true;
     // Kick a fetch before mounting the card so it opens on a skeleton (loading
-    // is set synchronously) and the peek reflects the latest commits.
+    // is set synchronously) and the peek reflects the latest activity.
     void fetchPulse(worktreeId);
     setExpanded(true);
   };
@@ -111,11 +124,12 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
   }
 
   const hasStreak = (pulse?.currentStreakDays ?? 0) > 1;
-  // Expose the peeked stats to assistive tech — the visible commit/streak text
-  // lives in aria-hidden decorative spans, so fold it into the button's name.
+  // The button's explicit aria-label overrides its descendant text for the
+  // accessible name, so fold the visible active-days/streak peek into it —
+  // otherwise assistive tech hears only "Show project activity".
   const activityLabel = pulse
-    ? `Show project activity — ${pulse.commitsInRange} commit${
-        pulse.commitsInRange !== 1 ? "s" : ""
+    ? `Show project activity — ${pulse.activeDays} active day${
+        pulse.activeDays !== 1 ? "s" : ""
       }${hasStreak ? `, ${pulse.currentStreakDays} day streak` : ""}`
     : "Show project activity";
 
@@ -135,7 +149,7 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
         {pulse ? (
           <>
             <span className="font-mono text-xs text-daintree-text/50">
-              {pulse.commitsInRange} commit{pulse.commitsInRange !== 1 ? "s" : ""}
+              {pulse.activeDays} active day{pulse.activeDays !== 1 ? "s" : ""}
             </span>
             {hasStreak && (
               <span className="flex items-center gap-1 font-mono text-xs text-daintree-text/70">
