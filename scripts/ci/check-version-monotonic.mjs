@@ -173,9 +173,7 @@ export function checkVersionMonotonic(liveVersion, newVersion) {
  */
 export function shouldSkipUpload(platforms, skippedPlatforms, failures) {
   return (
-    platforms.length > 0 &&
-    failures.length === 0 &&
-    skippedPlatforms.length === platforms.length
+    platforms.length > 0 && failures.length === 0 && skippedPlatforms.length === platforms.length
   );
 }
 
