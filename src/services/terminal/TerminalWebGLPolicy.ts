@@ -53,9 +53,9 @@ export class TerminalWebGLPolicy {
 
   /**
    * Eligibility for visibility-driven WebGL restore. Mirrors the gates in
-   * onTierApplied (agent identity / focus + tier) plus liveness checks
-   * (opened, not attaching). Used by the debounced timer in setVisible()
-   * before re-acquiring a context.
+   * onTierApplied (identity-neutral tier eligibility via wantsWebGLAtTier) plus
+   * liveness checks (opened, not attaching). Used by the debounced timer in
+   * setVisible() before re-acquiring a context.
    */
   shouldRestoreWebGL(managed: ManagedTerminal, opts?: { trustDomVisibility?: boolean }): boolean {
     if (!managed.isOpened) return false;

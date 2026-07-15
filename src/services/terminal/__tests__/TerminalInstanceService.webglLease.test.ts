@@ -251,11 +251,10 @@ describe("onTierApplied handler — WebGL manager integration", () => {
     if (webGLPolicy.wantsWebGLAtTier(m, tier)) {
       webGLManager.ensureContext(id, m);
     } else if (!m.isVisible) {
-      const hadWebGL = webGLManager.isActive(id);
+      // Production guards the DOM-swap refresh on isVisible, so a hidden pane is
+      // released WITHOUT a repaint (#6802). Mirror that here — the branch only
+      // runs when hidden, so no refresh is invoked.
       webGLManager.releaseContext(id);
-      if (hadWebGL && m.terminal.rows > 0) {
-        m.terminal.refresh(0, m.terminal.rows - 1);
-      }
     }
   }
 
@@ -380,14 +379,21 @@ describe("onTierApplied handler — WebGL manager integration", () => {
     expect(webGLManager.isActive("t-std")).toBe(true);
   });
 
-  it("agent terminal refresh is called after WebGL release", () => {
+  it("hidden release does not repaint the DOM (#6802)", () => {
+    // Release only happens once a pane is off-screen. Repainting an offscreen
+    // DOM produces a stale frame that flashes on next show, so production guards
+    // the refresh on isVisible — a hidden release never repaints.
     simulateOnTierApplied("t1", TerminalRefreshTier.FOCUSED, managed);
     expect(webGLManager.isActive("t1")).toBe(true);
+
+    // The DOM→WebGL attach on the FOCUSED ensure repaints once; clear that so
+    // the assertion isolates the release path itself.
+    (managed.terminal.refresh as ReturnType<typeof vi.fn>).mockClear();
 
     managed.isVisible = false;
     simulateOnTierApplied("t1", TerminalRefreshTier.BACKGROUND, managed);
     expect(webGLManager.isActive("t1")).toBe(false);
-    expect(managed.terminal.refresh).toHaveBeenCalledWith(0, 23);
+    expect(managed.terminal.refresh).not.toHaveBeenCalled();
   });
 
   it("agent terminal refresh is NOT called when no WebGL was active", () => {
