@@ -101,6 +101,14 @@ describe("TerminalWriteController.write", () => {
     controller = new TerminalWriteController(deps);
   });
 
+  afterEach(() => {
+    // The constructor subscribes to the view-lifecycle singleton, so an
+    // undisposed controller stays reachable from it (along with its deps and
+    // managed terminals) for the rest of the file.
+    controller.dispose();
+    __resetProjectViewCacheStateForTests();
+  });
+
   it("no-ops when the terminal id is unknown", () => {
     controller.write("unknown", "abc");
     expect(deps.acknowledgePortData).not.toHaveBeenCalled();
@@ -671,6 +679,31 @@ describe("TerminalWriteController — cached project view (#11212)", () => {
     expect(markerCalls(second)).toBe(1);
   });
 
+  it("settles a cached burst on a reveal that arrives without warm activation", () => {
+    emitCached();
+    controller.write("t1", "a");
+
+    emitRevealed();
+
+    expect(markerCalls(managed)).toBe(1);
+  });
+
+  it("does not lose or duplicate a write landing between warm activation and reveal", () => {
+    emitCached();
+    controller.write("t1", "a");
+    emitWarmActivated();
+    expect(markerCalls(managed)).toBe(1);
+
+    // Active again: this write takes the ordinary frame-scheduled path.
+    controller.write("t1", "b");
+    emitRevealed();
+    flushFrames();
+
+    // The cached settle, then exactly one more for the post-activation write —
+    // the reveal pass must not double-count it.
+    expect(markerCalls(managed)).toBe(2);
+  });
+
   it("does not refresh a terminal that saw no writes while cached", () => {
     emitCached();
     emitWarmActivated();
@@ -740,25 +773,56 @@ describe("TerminalWriteController — cached project view (#11212)", () => {
     expect(markerCalls(managed)).toBe(0);
   });
 
-  it("forget() releases a terminal destroyed during the cached window", () => {
-    // Without this the dirty set — now held for the whole cached window rather
-    // than one frame — keeps a killed agent's xterm buffer reachable until the
-    // next reveal.
+  it("forget() drops the pending obligation itself, not just via the identity guard", () => {
+    // The instance deliberately STAYS in the store: removing it would let the
+    // stale-identity guard produce this same result whether or not forget()
+    // did anything, and the point is that the dirty set — now held for the
+    // whole cached window rather than one frame — released the reference.
     emitCached();
     controller.write("t1", "a");
 
     controller.forget("t1");
-    store.delete("t1");
     emitWarmActivated();
 
     expect(markerCalls(managed)).toBe(0);
   });
 
-  it("dispose() drops the pending set and stops responding to lifecycle events", () => {
+  it("forget() leaves other terminals' obligations intact", () => {
+    const second = makeManaged();
+    store.set("t2", second);
+
+    emitCached();
+    controller.write("t1", "a");
+    controller.write("t2", "b");
+    controller.forget("t1");
+    emitWarmActivated();
+
+    expect(markerCalls(managed)).toBe(0);
+    expect(markerCalls(second)).toBe(1);
+  });
+
+  it("dispose() drops the pending set", () => {
+    // Proven independently of unsubscription: hold a frame callback the loop
+    // already picked up, dispose, then run it. If dispose only unsubscribed and
+    // left the map populated, this would still register a marker.
+    controller.write("t1", "a");
+    const [, queued] = [...rafQueue][0]!;
+    rafQueue.clear();
+
+    controller.dispose();
+    queued(0);
+
+    expect(markerCalls(managed)).toBe(0);
+  });
+
+  it("dispose() unsubscribes from lifecycle events", () => {
+    // Prove the subscription is gone, not just that the map was cleared: give a
+    // disposed controller a fresh pending obligation, then fire the signal that
+    // would flush it. A still-subscribed controller would register a marker.
+    controller.dispose();
     emitCached();
     controller.write("t1", "a");
 
-    controller.dispose();
     emitWarmActivated();
 
     expect(markerCalls(managed)).toBe(0);

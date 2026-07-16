@@ -19,9 +19,13 @@ type Emitters = {
  * ProjectViewSwitchController send. Returns the emitters plus the per-channel
  * unsubscribe spies so listener hygiene is assertable.
  */
-function installElectronStub(): {
+function installElectronStub(latchedCached = false): {
   emit: Emitters;
-  offSpies: { cached: ReturnType<typeof vi.fn> };
+  offSpies: {
+    cached: ReturnType<typeof vi.fn>;
+    warmActivated: ReturnType<typeof vi.fn>;
+    revealed: ReturnType<typeof vi.fn>;
+  };
   registrationCounts: () => { cached: number; warmActivated: number; revealed: number };
 } {
   const handlers: {
@@ -31,6 +35,8 @@ function installElectronStub(): {
   } = { cached: [], warm: [], revealed: [] };
   const counts = { cached: 0, warmActivated: 0, revealed: 0 };
   const offCached = vi.fn();
+  const offWarmActivated = vi.fn();
+  const offRevealed = vi.fn();
 
   (window as unknown as { electron: unknown }).electron = {
     app: {
@@ -39,15 +45,16 @@ function installElectronStub(): {
         handlers.cached.push(cb);
         return offCached;
       },
+      isViewCached: () => latchedCached,
       onViewWarmActivated: (cb: () => void) => {
         counts.warmActivated += 1;
         handlers.warm.push(cb);
-        return vi.fn();
+        return offWarmActivated;
       },
       onViewRevealed: (cb: () => void) => {
         counts.revealed += 1;
         handlers.revealed.push(cb);
-        return vi.fn();
+        return offRevealed;
       },
     },
   };
@@ -58,7 +65,7 @@ function installElectronStub(): {
       warmActivated: () => handlers.warm.forEach((h) => h()),
       revealed: () => handlers.revealed.forEach((h) => h()),
     },
-    offSpies: { cached: offCached },
+    offSpies: { cached: offCached, warmActivated: offWarmActivated, revealed: offRevealed },
     registrationCounts: () => ({ ...counts }),
   };
 }
@@ -98,14 +105,22 @@ describe("viewCacheState", () => {
     // Load-bearing: main only sends APP_VIEW_REVEALED while the view is still
     // the active project, so a superseded switch delivers warm-activated with
     // no revealed. If revealed owned the clear, that view would stay demoted.
+    expect(isProjectViewCached()).toBe(false); // arms the module
+
     stub.emit.cached();
+    expect(isProjectViewCached()).toBe(true);
+
     stub.emit.warmActivated();
 
     expect(isProjectViewCached()).toBe(false);
   });
 
   it("clears a stale cached flag if revealed arrives without warm-activated", () => {
+    expect(isProjectViewCached()).toBe(false); // arms the module
+
     stub.emit.cached();
+    expect(isProjectViewCached()).toBe(true);
+
     stub.emit.revealed();
 
     expect(isProjectViewCached()).toBe(false);
@@ -183,6 +198,45 @@ describe("viewCacheState", () => {
     expect(isProjectViewCached()).toBe(true);
   });
 
+  it("seeds from preload's latch when the cached edge landed before arming", () => {
+    // The signals are non-replaying edges and a cold switch is released at the
+    // pre-React skeleton, so a switch storm can cache this view before this
+    // module ever evaluates. Preload has tracked since before any page script,
+    // so a late first query must report cached — not the false default that
+    // would leave the view running full-rate terminal work.
+    __resetProjectViewCacheStateForTests();
+    delete (window as unknown as { electron?: unknown }).electron;
+    stub = installElectronStub(true);
+
+    expect(isProjectViewCached()).toBe(true);
+  });
+
+  it("still tracks live transitions after seeding from a cached latch", () => {
+    __resetProjectViewCacheStateForTests();
+    delete (window as unknown as { electron?: unknown }).electron;
+    stub = installElectronStub(true);
+    expect(isProjectViewCached()).toBe(true);
+
+    stub.emit.warmActivated();
+
+    expect(isProjectViewCached()).toBe(false);
+  });
+
+  it("tolerates a preload without the latch", () => {
+    // Defensive: an older/partial bridge must degrade to the un-demoted answer
+    // rather than throwing on the hot query path.
+    __resetProjectViewCacheStateForTests();
+    (window as unknown as { electron: unknown }).electron = {
+      app: {
+        onViewCached: () => vi.fn(),
+        onViewWarmActivated: () => vi.fn(),
+        onViewRevealed: () => vi.fn(),
+      },
+    };
+
+    expect(isProjectViewCached()).toBe(false);
+  });
+
   it("answers not-cached when the electron bridge is unavailable", () => {
     __resetProjectViewCacheStateForTests();
     delete (window as unknown as { electron?: unknown }).electron;
@@ -196,6 +250,10 @@ describe("viewCacheState", () => {
 
     __resetProjectViewCacheStateForTests();
 
+    // All three, not just cached — a regression that forgot one would leak a
+    // listener per reset.
     expect(stub.offSpies.cached).toHaveBeenCalledTimes(1);
+    expect(stub.offSpies.warmActivated).toHaveBeenCalledTimes(1);
+    expect(stub.offSpies.revealed).toHaveBeenCalledTimes(1);
   });
 });

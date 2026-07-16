@@ -1,6 +1,10 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { TerminalReflowController, forceXtermReflow } from "../TerminalReflowController";
+import {
+  REFLOW_HEARTBEAT_MS,
+  TerminalReflowController,
+  forceXtermReflow,
+} from "../TerminalReflowController";
 import { __resetProjectViewCacheStateForTests } from "@/lib/viewCacheState";
 import type { ManagedTerminal } from "../types";
 
@@ -274,7 +278,7 @@ describe("TerminalReflowController dispose / listener cleanup", () => {
     // Heartbeat hasn't fired yet.
     expect(paddingHistory(managed).length).toBe(0);
 
-    vi.advanceTimersByTime(3000);
+    vi.advanceTimersByTime(REFLOW_HEARTBEAT_MS);
     expect(paddingHistory(managed)).toContain("0.01px");
 
     controller.dispose();
@@ -290,7 +294,7 @@ describe("TerminalReflowController dispose / listener cleanup", () => {
 
     expect(paddingHistory(managed).length).toBe(0);
 
-    vi.advanceTimersByTime(3000);
+    vi.advanceTimersByTime(REFLOW_HEARTBEAT_MS);
     expect(paddingHistory(managed)).toContain("0.01px");
 
     controller.dispose();
@@ -304,7 +308,7 @@ describe("TerminalReflowController dispose / listener cleanup", () => {
     instances = [managed];
     controller = new TerminalReflowController({ getInstances: () => instances });
 
-    vi.advanceTimersByTime(3000);
+    vi.advanceTimersByTime(REFLOW_HEARTBEAT_MS);
     const reflowsAfterFirstTick = paddingHistory(managed).length;
     expect(reflowsAfterFirstTick).toBeGreaterThan(0);
 
@@ -330,7 +334,7 @@ describe("TerminalReflowController dispose / listener cleanup", () => {
       configurable: true,
       get: () => "hidden",
     });
-    vi.advanceTimersByTime(3000);
+    vi.advanceTimersByTime(REFLOW_HEARTBEAT_MS);
     expect(paddingHistory(managed).length).toBe(0);
 
     Object.defineProperty(document, "visibilityState", {
@@ -339,7 +343,7 @@ describe("TerminalReflowController dispose / listener cleanup", () => {
     });
     // Reset throttle in case the visibilitychange listener fired one already.
     managed.lastReflowAt = 0;
-    vi.advanceTimersByTime(3000);
+    vi.advanceTimersByTime(REFLOW_HEARTBEAT_MS);
     expect(paddingHistory(managed)).toContain("0.01px");
 
     controller.dispose();
@@ -428,6 +432,13 @@ describe("TerminalReflowController — cached project view (#11212)", () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
+    // Explicit: jsdom does not report "visible" by default, and inheriting it
+    // from an earlier test's stub would make this suite order-dependent (it
+    // would fail under .only or if the file were reordered).
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => "visible",
+    });
     const cachedHandlers: Array<() => void> = [];
     const warmHandlers: Array<() => void> = [];
     const revealedHandlers: Array<() => void> = [];
@@ -463,6 +474,8 @@ describe("TerminalReflowController — cached project view (#11212)", () => {
     __resetProjectViewCacheStateForTests();
     vi.useRealTimers();
     delete (window as unknown as { electron?: unknown }).electron;
+    // makeManaged appends to the document on every call.
+    document.body.innerHTML = "";
   });
 
   it("maybeReflow no-ops while cached even when called directly", () => {
@@ -505,7 +518,7 @@ describe("TerminalReflowController — cached project view (#11212)", () => {
 
     emitCached();
     getInstances.mockClear();
-    vi.advanceTimersByTime(30_000);
+    vi.advanceTimersByTime(REFLOW_HEARTBEAT_MS * 10);
 
     // A cached view's visibilityState stays "visible", so the heartbeat's own
     // check can't stop it — only clearing the interval removes the wakeup.
@@ -520,7 +533,7 @@ describe("TerminalReflowController — cached project view (#11212)", () => {
     emitCached();
     emitWarmActivated();
     getInstances.mockClear();
-    vi.advanceTimersByTime(3000);
+    vi.advanceTimersByTime(REFLOW_HEARTBEAT_MS);
 
     // Exactly one sweep — a stacked second interval would double it.
     expect(getInstances).toHaveBeenCalledTimes(1);
@@ -535,7 +548,7 @@ describe("TerminalReflowController — cached project view (#11212)", () => {
     emitWarmActivated();
     emitWarmActivated();
     getInstances.mockClear();
-    vi.advanceTimersByTime(3000);
+    vi.advanceTimersByTime(REFLOW_HEARTBEAT_MS);
 
     expect(getInstances).toHaveBeenCalledTimes(1);
   });
@@ -562,7 +575,7 @@ describe("TerminalReflowController — cached project view (#11212)", () => {
     const spy = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
     emitWarmActivated();
     getInstances.mockClear();
-    vi.advanceTimersByTime(3000);
+    vi.advanceTimersByTime(REFLOW_HEARTBEAT_MS);
 
     // Window minimize is a separate suppression signal — being un-cached must
     // not override it.
@@ -579,7 +592,7 @@ describe("TerminalReflowController — cached project view (#11212)", () => {
     controller = undefined;
     emitWarmActivated();
     getInstances.mockClear();
-    vi.advanceTimersByTime(30_000);
+    vi.advanceTimersByTime(REFLOW_HEARTBEAT_MS * 10);
 
     expect(getInstances).not.toHaveBeenCalled();
   });

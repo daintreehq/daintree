@@ -44,8 +44,10 @@ export function forceXtermReflow(element: HTMLElement): void {
 const REFLOW_THROTTLE_MS = 250;
 
 // Periodic heartbeat interval — low frequency is enough to recover a paused
-// renderer that has no writes, without costing measurable CPU.
-const REFLOW_HEARTBEAT_MS = 3000;
+// renderer that has no writes, without costing measurable CPU. Exported for the
+// same reason as the watchdog's WATCHDOG_INTERVAL_MS: tests assert the
+// one-sweep-per-interval invariant and must not hard-code the cadence.
+export const REFLOW_HEARTBEAT_MS = 3000;
 
 export interface ReflowControllerDeps {
   /**

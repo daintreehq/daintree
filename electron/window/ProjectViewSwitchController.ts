@@ -430,6 +430,19 @@ export async function performSwitch(
       }
       previousEntry.state = "active";
       previousEntry.lastUsed = Date.now();
+      // If the failure landed after deactivateEntry, this view already received
+      // APP_VIEW_CACHED and demoted its periodic terminal work (watchdog sweep,
+      // reflow heartbeat, activity markers — #11212). It is about to be the
+      // visible active view again, so it needs the matching un-gate signal:
+      // without it a rolled-back view stays demoted for the rest of its life,
+      // and an xterm renderer paused while it was occluded would never unpause.
+      // Warm-activated is the right edge — reveal is reserved for the composited
+      // foreground and is skipped when a switch is superseded.
+      try {
+        previousEntry.view.webContents.send(CHANNELS.APP_VIEW_WARM_ACTIVATED);
+      } catch {
+        // non-critical — a destroyed renderer has nothing to un-gate
+      }
       // Re-fire the view-ready hook so per-view IPC helpers re-bind to the
       // rolled-back active view, matching the load/reload path that normally
       // fires it for the active view.

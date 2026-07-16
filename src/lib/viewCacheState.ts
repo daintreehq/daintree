@@ -62,8 +62,12 @@ function emit(phase: ProjectViewLifecyclePhase): void {
  * import-time side effects while making a query-only consumer impossible to
  * get wrong — an unarmed module would answer "not cached" forever.
  *
- * A cold view never receives `warm-activated`, so `cached` must default to
- * false: the safe answer is the un-demoted one.
+ * Seeds from preload's latch rather than assuming false. The signals are
+ * non-replaying edges and a cold switch is released at the pre-React skeleton,
+ * so a switch storm can cache this view before this module ever evaluates;
+ * preload has been tracking since before any page script ran, and is the only
+ * thing that can answer for the window we missed. Absent the bridge (or an
+ * older preload), false is the safe default — the un-demoted answer.
  */
 function ensureArmed(): void {
   if (armed) return;
@@ -71,6 +75,8 @@ function ensureArmed(): void {
 
   const app = window.electron?.app;
   if (!app) return;
+
+  cached = app.isViewCached?.() ?? false;
 
   const offCached = app.onViewCached?.(() => {
     if (cached) return;

@@ -1192,16 +1192,70 @@ describe("TerminalReconciliationWatchdog — cached project view (#11212)", () =
     vi.clearAllMocks();
   });
 
-  it("issues no repairs of any kind for a cached view", () => {
-    // Every layer at once: an on-screen-looking pane that is invisible, at
-    // BACKGROUND tier, with a background backend tier and a missing WebGL
-    // context would normally draw a repair from several branches.
+  // One divergence per case. A single terminal carrying every divergence at
+  // once proves nothing about the later branches: reconcile() repairs the first
+  // divergence it finds and returns, so an isVisible=false pane short-circuits
+  // at the visibility branch and the tier/backend/WebGL assertions would hold
+  // even with no gate at all.
+  it("repairs no divergent visibility for a cached view", () => {
+    instances.set("t1", makeManaged({ isVisible: false }));
+    const deps = makeDeps(instances);
+    watchdog = new TerminalReconciliationWatchdog(deps);
+
+    emitCached();
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS * 5);
+
+    expect(deps.setVisible).not.toHaveBeenCalled();
+  });
+
+  it("repairs no BACKGROUND tier for a cached view", () => {
     instances.set(
       "t1",
-      makeManaged({ isVisible: false, lastAppliedTier: TerminalRefreshTier.BACKGROUND })
+      makeManaged({
+        isVisible: true,
+        lastAppliedTier: TerminalRefreshTier.BACKGROUND,
+        getRefreshTier: () => TerminalRefreshTier.VISIBLE as never,
+      })
+    );
+    const deps = makeDeps(instances);
+    watchdog = new TerminalReconciliationWatchdog(deps);
+
+    emitCached();
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS * 5);
+
+    expect(deps.applyRendererPolicy).not.toHaveBeenCalled();
+  });
+
+  it("reasserts no backend tier for a cached view", () => {
+    instances.set(
+      "t1",
+      makeManaged({
+        isVisible: true,
+        lastAppliedTier: TerminalRefreshTier.VISIBLE,
+        getRefreshTier: () => TerminalRefreshTier.VISIBLE as never,
+      })
+    );
+    const deps = makeDeps(instances, { getBackendTier: vi.fn(() => "background" as const) });
+    watchdog = new TerminalReconciliationWatchdog(deps);
+
+    emitCached();
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS * 5);
+
+    expect(deps.reassertActiveBackendTier).not.toHaveBeenCalled();
+  });
+
+  it("attaches no WebGL context for a cached view", () => {
+    // A hidden view reattaching WebGL burns a slot from the fleet-wide context
+    // cap that a pane the user is actually looking at needs (cf. #10671).
+    instances.set(
+      "t1",
+      makeManaged({
+        isVisible: true,
+        lastAppliedTier: TerminalRefreshTier.VISIBLE,
+        getRefreshTier: () => TerminalRefreshTier.VISIBLE as never,
+      })
     );
     const deps = makeDeps(instances, {
-      getBackendTier: vi.fn(() => "background" as const),
       shouldHaveWebGL: vi.fn(() => true),
       isWebGLActive: vi.fn(() => false),
     });
@@ -1210,14 +1264,53 @@ describe("TerminalReconciliationWatchdog — cached project view (#11212)", () =
     emitCached();
     vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS * 5);
 
-    expect(deps.setVisible).not.toHaveBeenCalled();
-    expect(deps.applyRendererPolicy).not.toHaveBeenCalled();
-    expect(deps.reassertActiveBackendTier).not.toHaveBeenCalled();
-    expect(deps.forceReflow).not.toHaveBeenCalled();
-    // ensureWebGL on a hidden view would burn a slot from the fleet-wide
-    // context cap that a visible pane needs (cf. #10671).
     expect(deps.ensureWebGL).not.toHaveBeenCalled();
+  });
+
+  it("keeps a reveal-pending obligation armed across a cached window and discharges it on reveal", () => {
+    // The obligation must survive the cache window intact — neither consumed by
+    // a cached tick nor dropped — and reveal is what discharges it.
+    const managed = makeManaged({
+      isVisible: true,
+      lastAppliedTier: TerminalRefreshTier.VISIBLE,
+      getRefreshTier: () => TerminalRefreshTier.VISIBLE as never,
+      revealPendingRepair: true,
+      revealPendingGeneration: 0,
+      attachGeneration: 0,
+    });
+    instances.set("t1", managed);
+    const deps = makeDeps(instances);
+    watchdog = new TerminalReconciliationWatchdog(deps);
+
+    emitCached();
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS * 5);
     expect(deps.reconcileRevealGeometry).not.toHaveBeenCalled();
+    expect(managed.revealPendingRepair).toBe(true);
+
+    emitRevealed();
+
+    expect(deps.reconcileRevealGeometry).toHaveBeenCalledWith("t1");
+    expect(managed.revealPendingRepair).toBe(false);
+  });
+
+  it("retains a reveal-pending obligation when the reveal reconcile cannot measure", () => {
+    const managed = makeManaged({
+      isVisible: true,
+      lastAppliedTier: TerminalRefreshTier.VISIBLE,
+      getRefreshTier: () => TerminalRefreshTier.VISIBLE as never,
+      revealPendingRepair: true,
+      revealPendingGeneration: 0,
+      attachGeneration: 0,
+    });
+    instances.set("t1", managed);
+    const deps = makeDeps(instances, { reconcileRevealGeometry: vi.fn(() => false) });
+    watchdog = new TerminalReconciliationWatchdog(deps);
+
+    emitCached();
+    emitRevealed();
+
+    // An unmeasurable box keeps the obligation for a later tick.
+    expect(managed.revealPendingRepair).toBe(true);
   });
 
   it("reads no DOM geometry for a cached view", () => {
