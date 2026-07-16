@@ -1,5 +1,62 @@
 # Changelog
 
+## [0.27.0] - 2026-07-16
+
+This release hardens memory for long, multi-agent streaming sessions — renderer growth in project views is capped, idle cached views stop doing full-rate terminal work, and reclaim passes now free real memory. Alongside it, HTML files open in a proper in-app viewer with a Source/Rendered toggle, and a round of dock, plugin, and terminal fixes lands.
+
+### Features
+
+**Files**
+
+- Render HTML files in the file panel via a sandboxed iframe, with a Source/Rendered toggle and open-in-browser from Rendered mode (#11191)
+- View selected file paths from the composer and terminal context menus (#11204)
+
+**Terminal & Dock**
+
+- Grok and OpenCode default to inline mode (#11206)
+- Plain terminal dock chips show running and finished state (#11187)
+
+**Project & Launcher**
+
+- The Project pulse strip populates on load and leads with active days (#11194)
+- The empty-canvas launcher replays its entry animation on project switch (#11209)
+
+**Plugins & Diagnostics**
+
+- Plugin render errors surface real diagnostics for developers (#11207)
+- Renderer processes are labeled with project names in the memory popover (#11213)
+
+### Performance
+
+- Hidden cached project views stop doing full-rate terminal work (#11212)
+
+### Bug Fixes
+
+**Memory**
+
+- Renderer memory in project views is capped while agents stream, and the shared WebGL glyph atlas is bounded so a streaming view plateaus (#11210)
+- Memory-pressure reclaim passes free real memory and report what each lever freed (#11211)
+
+**Terminal & WebGL**
+
+- WebGL stays on visible standard terminals, not only the focused one (#11193)
+- WebGL fleet-flip thresholds track the raised context cap (#11192)
+- The dock pane X dismisses the preview instead of killing the running terminal (#11186)
+
+**Files, Plugins & Forge**
+
+- Third-party plugins can import React in packaged builds (#11208)
+- A missing COEP header no longer leaves the HTML preview blank (#11200)
+- The open-in-GitHub button links to the default list instead of a raw search (#11201)
+
+**PTY**
+
+- Closed a 60-descriptor-per-run leak in PTY host pooling (#11199)
+
+### Other Changes
+
+- The version-monotonic release gate skips an already-published version on re-tag, and re-upload is skipped for an unchanged version (#11185)
+
 ## [0.26.0] - 2026-07-15
 
 Terminal editing gains real power — word-by-word cursor jumps and a type-anywhere rescue that routes stray keystrokes back to the agent you were talking to — while the forge toolbar starts reacting to local git activity instead of a fixed poll. A broad multi-window pass makes project context follow the window that acted, and a motion sweep smooths theme changes, toggles, and settings controls.
