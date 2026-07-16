@@ -19,9 +19,9 @@ import { LauncherQuickActions } from "./LauncherQuickActions";
 
 const PATH_TRUNCATE_LENGTH = 52;
 
-// Marks a section as carrying the entry, for the two things that need to find
-// one: the reduce-motion block in `index.css` and `replaySectionEntries` below.
-// Shared so those two cannot drift apart.
+// Marks a section as carrying the entry, so `replaySectionEntries` can find one
+// by the same name the class applies. The reduce-motion block in `index.css`
+// spells this selector out for itself — renaming it means changing both.
 const SECTION_ENTRY_MARKER = "launcher-section-enter";
 
 // Entry motion for each launcher section — the column arrives as a sequence
@@ -171,17 +171,18 @@ export function ContentGridEmptyState({
   // switch, by contrast, remounts this component and replays for free). Nothing
   // renders differently at reveal either, so the replay has to be imperative.
   //
-  // `app:view-revealed` is both the right moment and a safe one to act on
-  // synchronously: main sends it only once the warm paint gate has run, the
-  // anti-flash bridge is detached and the view is the invalidated foreground
-  // surface. So the restart lands on a view that is already compositing, and
-  // waiting out frames here would only show the launcher at rest before yanking
-  // it back to replay.
+  // Restart on `app:view-revealed`, and do it synchronously. Main sends that
+  // only once the warm gate has run and the anti-flash bridge is detached, so
+  // this view is the foreground surface and its next paint carries the restarted
+  // entry. Deferring a frame or two would buy nothing and cost the flash the
+  // whole exercise is about — the launcher sitting at rest, then yanked back to
+  // replay in front of the user.
   //
-  // Cold switches need no replay: an evicted project's view mounts this
-  // component fresh, and the paint gate they release on (`skeleton-painted`,
-  // fired before the module entry evaluates) detaches the bridge well before
-  // hydration mounts the canvas — so the natural entry is the one the user sees.
+  // Only warm reveals arrive here; a cold-started view is never sent one. It
+  // needs no replay for the reason this hook exists — it mounts the launcher
+  // fresh, so the entry runs on its own. That entry does still overlap the
+  // view's own startup-skeleton exit, but so does every cold boot's: it is
+  // startup choreography, not the persistent-tree gap this closes.
   //
   // Restarting rather than remounting: RecipeRunner, ProjectPulseStrip and
   // RotatingTip own fetches and rotation timers a remount would reset, and the
