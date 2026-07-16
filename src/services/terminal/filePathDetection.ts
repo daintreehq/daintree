@@ -62,6 +62,7 @@ export function resolveSelectedFilePath(selection: string, cwd: string): Resolve
   if (!trimmed || isPathExcluded(trimmed)) return null;
   const matches = [...trimmed.matchAll(FILE_PATH_REGEX)];
   if (matches.length !== 1) return null;
-  if (matches[0][1] !== trimmed) return null;
+  const [match] = matches;
+  if (!match || match[1] !== trimmed) return null;
   return resolveFilePathCandidate(trimmed, cwd);
 }
