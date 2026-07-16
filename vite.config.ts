@@ -19,6 +19,7 @@ import { getDaintreeAppDevCSP, getDaintreeAppProdCSP } from "./shared/config/csp
 // way this config already imports from `./shared/*`.
 import { HOST_IMPORTMAP_SPECIFIERS } from "./packages/plugin-vite/src/index";
 import { getFirstRenderPreloadSeeds } from "./shared/config/panelKindRegistry";
+import { formatErrorMessage } from "./shared/utils/errorMessage";
 import { computeFirstRenderPreloadFiles } from "./scripts/first-render-closure-lib.mjs";
 
 const devServerConfig = getDevServerConfig();
@@ -447,7 +448,8 @@ function hostReactExportNames(specifier: string): string[] {
   } catch (err) {
     throw new Error(
       `[host-react-facade] cannot resolve "${specifier}" to read its export surface: ` +
-        `${err instanceof Error ? err.message : String(err)}`
+        formatErrorMessage(err, "module resolution failed"),
+      { cause: err }
     );
   }
   // `default` is excluded here and re-exported explicitly below; emitting it in
@@ -744,9 +746,7 @@ function hostImportMapPlugin(state: ImportMapBuildState): Plugin {
       // that won't be emitted would be a runtime 404.
       if (!ctx.bundle) return;
 
-      const facadePaths = findHostReactFacadePaths(
-        ctx.bundle as Record<string, FacadeLookupChunk>
-      );
+      const facadePaths = findHostReactFacadePaths(ctx.bundle as Record<string, FacadeLookupChunk>);
 
       // One distinct target per specifier — each facade exposes only that
       // specifier's public surface. hostReactFacadePlugin has already verified
