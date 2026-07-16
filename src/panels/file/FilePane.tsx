@@ -1,5 +1,14 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Check, ExternalLink, FileText, RefreshCw, Search, WrapText, XCircle } from "lucide-react";
+import {
+  Check,
+  ExternalLink,
+  FileText,
+  Globe,
+  RefreshCw,
+  Search,
+  WrapText,
+  XCircle,
+} from "lucide-react";
 import type { FileViewMode } from "@shared/types/panel";
 import { isFilePanel } from "@shared/types/panel";
 import type { FileReadErrorCode } from "@shared/types/ipc/files";
@@ -393,49 +402,64 @@ export function FilePane({
       .catch((err) => logError("[FilePane] copy path failed", err));
   }, [filePath]);
 
+  // Rendered HTML opens in the browser; every other view opens in the editor.
+  // The button and its failure banner follow this target.
+  const openTarget: "browser" | "editor" = isHtml && viewMode === "rendered" ? "browser" : "editor";
+
   // dispatch() resolves an ActionDispatchResult and never rejects, so a failed
   // open used to vanish entirely (#11114). Surface it inline on the pane that
-  // owns the button rather than through a global toast.
-  const [openInEditorError, setOpenInEditorError] = useState<string | null>(null);
-  const [isOpeningInEditor, setIsOpeningInEditor] = useState(false);
-  const openInEditorAttemptRef = useRef(0);
+  // owns the button rather than through a global toast. The target is passed in
+  // by the caller — the toolbar button uses the live view's target, Retry reuses
+  // the banner's — so a mode toggle mid-launch can never relabel or re-aim it.
+  const [openError, setOpenError] = useState<{
+    message: string;
+    target: "browser" | "editor";
+  } | null>(null);
+  const [isOpening, setIsOpening] = useState(false);
+  const openAttemptRef = useRef(0);
   // Synchronous re-entry guard: state can't stop a double-click in one tick.
   // Without it a second launch could land after the first succeeded and report
-  // "Couldn't open in editor" over a file the editor did in fact open.
-  const openInEditorInFlightRef = useRef(false);
+  // a failure over a file that was in fact opened.
+  const openInFlightRef = useRef(false);
 
   // A result that lands after the pane switched files (or panels) belongs to the
   // old file: drop it, and clear any banner the old file left behind.
   useEffect(() => {
-    openInEditorAttemptRef.current += 1;
-    openInEditorInFlightRef.current = false;
-    setOpenInEditorError(null);
-    setIsOpeningInEditor(false);
+    openAttemptRef.current += 1;
+    openInFlightRef.current = false;
+    setOpenError(null);
+    setIsOpening(false);
   }, [id, filePath]);
 
-  const handleOpenInEditor = useCallback(async () => {
-    if (!filePath) return;
-    if (openInEditorInFlightRef.current) return;
-    openInEditorInFlightRef.current = true;
-    const attempt = ++openInEditorAttemptRef.current;
-    setIsOpeningInEditor(true);
-    const result = await actionService.dispatch(
-      "file.openInEditor",
-      { path: filePath },
-      { source: "user" }
-    );
-    // A newer attempt (or a file/panel switch) already reset the guard and owns
-    // the banner — an obsolete completion must not unlock it or overwrite state.
-    if (openInEditorAttemptRef.current !== attempt) return;
-    openInEditorInFlightRef.current = false;
-    setIsOpeningInEditor(false);
-    if (result.ok) {
-      setOpenInEditorError(null);
-      return;
-    }
-    logError("[FilePane] openInEditor failed", result.error);
-    setOpenInEditorError(result.error.message);
-  }, [filePath]);
+  const handleOpenExternal = useCallback(
+    async (target: "browser" | "editor") => {
+      if (!filePath) return;
+      if (openInFlightRef.current) return;
+      openInFlightRef.current = true;
+      const attempt = ++openAttemptRef.current;
+      setIsOpening(true);
+      const result = await actionService.dispatch(
+        target === "browser" ? "file.openInBrowser" : "file.openInEditor",
+        { path: filePath },
+        { source: "user" }
+      );
+      // A newer attempt (or a file/panel switch) already reset the guard and owns
+      // the banner — an obsolete completion must not unlock it or overwrite state.
+      if (openAttemptRef.current !== attempt) return;
+      openInFlightRef.current = false;
+      setIsOpening(false);
+      if (result.ok) {
+        setOpenError(null);
+        return;
+      }
+      logError(
+        `[FilePane] openIn${target === "browser" ? "Browser" : "Editor"} failed`,
+        result.error
+      );
+      setOpenError({ message: result.error.message, target });
+    },
+    [filePath]
+  );
 
   const [pickerQuery, setPickerQuery] = useState("");
   const pickerRoot = worktreePath || projectPath;
@@ -506,28 +530,42 @@ export function FilePane({
           <ToolbarIconButton label="Refresh" onClick={() => loadFile(false)}>
             <RefreshCw className="w-4 h-4" />
           </ToolbarIconButton>
-          <ToolbarIconButton label="Open in editor" onClick={() => void handleOpenInEditor()}>
-            <ExternalLink className="w-4 h-4" />
+          <ToolbarIconButton
+            label={openTarget === "browser" ? "Open in browser" : "Open in editor"}
+            onClick={() => void handleOpenExternal(openTarget)}
+          >
+            {openTarget === "browser" ? (
+              <Globe className="w-4 h-4" />
+            ) : (
+              <ExternalLink className="w-4 h-4" />
+            )}
           </ToolbarIconButton>
         </div>
       </div>
-      {openInEditorError && (
+      {openError && (
         <InlineStatusBanner
           icon={XCircle}
-          title="Couldn't open in editor"
-          description={openInEditorError}
+          title={
+            openError.target === "browser" ? "Couldn't open in browser" : "Couldn't open in editor"
+          }
+          description={openError.message}
           severity="error"
           action={{
-            id: "retry-open-in-editor",
+            id: "retry-open-external",
             label: "Retry",
             icon: RefreshCw,
             variant: "dangerFilled",
-            loading: isOpeningInEditor,
-            onClick: () => void handleOpenInEditor(),
-            ariaLabel: "Retry opening in editor",
+            loading: isOpening,
+            onClick: () => void handleOpenExternal(openError.target),
+            ariaLabel:
+              openError.target === "browser"
+                ? "Retry opening in browser"
+                : "Retry opening in editor",
           }}
-          onClose={() => setOpenInEditorError(null)}
-          closeAriaLabel="Dismiss editor error"
+          onClose={() => setOpenError(null)}
+          closeAriaLabel={
+            openError.target === "browser" ? "Dismiss browser error" : "Dismiss editor error"
+          }
         />
       )}
     </>

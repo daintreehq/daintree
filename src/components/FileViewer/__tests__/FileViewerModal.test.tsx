@@ -188,6 +188,12 @@ vi.mock("../CodeViewer", () => ({
   )),
 }));
 
+vi.mock("@/components/Html/HtmlViewer", () => ({
+  HtmlViewer: (props: { previewUrl: string | null }) => (
+    <div data-testid="html-viewer" data-preview-url={props.previewUrl ?? ""} />
+  ),
+}));
+
 const mockRead = vi.fn();
 vi.mock("@/clients/filesClient", () => ({
   filesClient: {
@@ -265,6 +271,46 @@ describe("FileViewerModal", () => {
     expect(screen.queryByLabelText("Open in image viewer")).toBeNull();
   });
 
+  it("gives HTML files a Source/Rendered toggle and opens Source by default", async () => {
+    mockRead.mockResolvedValue({
+      content: "<h1>x</h1>",
+      htmlPreviewUrl: "daintree-html://tok/report.html",
+    });
+    render(<FileViewerModal {...defaultProps} filePath="/project/dist/report.html" />);
+
+    await waitFor(() => expect(screen.getByTestId("code-viewer")).toBeTruthy());
+    expect(screen.getByText("Rendered")).toBeTruthy();
+    expect(screen.getByText("Source")).toBeTruthy();
+    // Source is the default; the browser button only appears in Rendered.
+    expect(screen.getByLabelText("Open in editor")).toBeTruthy();
+    expect(screen.queryByLabelText("Open in browser")).toBeNull();
+    expect(mockRead).toHaveBeenCalledWith(
+      expect.objectContaining({ path: "/project/dist/report.html", htmlPreview: true })
+    );
+  });
+
+  it("renders HTML in the sandboxed iframe and opens it in the browser when Rendered", async () => {
+    mockRead.mockResolvedValue({
+      content: "<h1>x</h1>",
+      htmlPreviewUrl: "daintree-html://tok/report.html",
+    });
+    render(<FileViewerModal {...defaultProps} filePath="/project/dist/report.html" />);
+
+    await waitFor(() => expect(screen.getByTestId("code-viewer")).toBeTruthy());
+    fireEvent.click(screen.getByText("Rendered"));
+
+    const viewer = await screen.findByTestId("html-viewer");
+    expect(viewer.getAttribute("data-preview-url")).toBe("daintree-html://tok/report.html");
+    expect(screen.queryByTestId("code-viewer")).toBeNull();
+
+    fireEvent.click(screen.getByLabelText("Open in browser"));
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "file.openInBrowser",
+      { path: "/project/dist/report.html" },
+      { source: "user" }
+    );
+  });
+
   it("renders inline image for PNG files without calling filesClient.read", async () => {
     render(<FileViewerModal {...defaultProps} filePath="/project/assets/logo.png" />);
 
@@ -305,6 +351,7 @@ describe("FileViewerModal", () => {
       expect(mockRead).toHaveBeenCalledWith({
         path: "/project/icon.svg",
         rootPath: "/project",
+        htmlPreview: false,
       });
     });
 
@@ -460,6 +507,7 @@ describe("FileViewerModal", () => {
       expect(mockRead).toHaveBeenCalledWith({
         path: "/tmp/notes.txt",
         rootPath: "/tmp",
+        htmlPreview: false,
       });
     });
   });

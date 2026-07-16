@@ -76,6 +76,10 @@ const openInEditorArgsSchema = z.object({
   col: z.number().int().positive().optional(),
 });
 
+const openInBrowserArgsSchema = z.object({
+  path: z.string(),
+});
+
 const openImageViewerArgsSchema = z.object({
   path: z.string(),
 });
@@ -284,6 +288,22 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
       const { path, line, col } = args as z.infer<typeof openInEditorArgsSchema>;
       const projectId = useProjectStore.getState().currentProject?.id;
       await systemClient.openInEditor({ path, line, col, projectId });
+    },
+  }));
+
+  actions.set("file.openInBrowser", () => ({
+    id: "file.openInBrowser",
+    title: "Open in Browser",
+    description:
+      "Open a file with the OS default handler for its type — for HTML files this is the default web browser. Args: `path` (required) — absolute file path. Use `file.openInEditor` to open in the external editor instead.",
+    category: "files",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: openInBrowserArgsSchema,
+    run: async (args: unknown) => {
+      const { path } = openInBrowserArgsSchema.parse(args);
+      await systemClient.openPath(path);
     },
   }));
 
