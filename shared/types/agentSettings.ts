@@ -147,7 +147,7 @@ export interface AgentSettings {
    * and no curated registry default apply. Default off — so `inlineMode`
    * resolves to inline (no alt-screen) globally unless something overrides it,
    * mirroring how `globalSkipPermissions` defaults off. A curated per-agent
-   * registry `defaultInlineMode` (e.g. Grok's alt-screen) still wins over this
+   * registry `defaultInlineMode` (when an agent declares one) still wins over this
    * switch; an explicit per-agent/preset `"on"`/`"off"` always vetoes it. Like
    * the bypass override it is a *live* value OR-ed in at flag-generation time
    * (see {@link resolveEffectiveInlineMode}), never mutating per-agent state.
@@ -270,9 +270,9 @@ export function combineInlineModes(agentMode: InlineMode, presetMode?: InlineMod
  * - `"on"`  → inline (inject flag).
  * - `"off"` → alt-screen (no flag); an explicit veto that beats the global switch.
  * - `"inherit"` → a curated per-agent registry `capabilities.defaultInlineMode`
- *   (e.g. Grok's `false`, kept on the alternate screen because inline renders its
- *   Rust TUI as garbled scrollback) wins if declared; otherwise defer to the
- *   global "Use alt-screen mode by default" switch (`globalUseAltScreen` on →
+ *   wins if declared (no shipped agent pins one today — they all follow the
+ *   global switch so it stays user-overridable); otherwise defer to the global
+ *   "Use alt-screen mode by default" switch (`globalUseAltScreen` on →
  *   alt-screen, off → inline).
  *
  * Callers that resolve a launch from a preset must bake the combined mode onto
@@ -572,9 +572,16 @@ export function generateAgentCommand(
     // Add inline mode flag when the resolved tri-state says inline and the agent
     // supports it (#10876). resolveEffectiveInlineMode encodes the full chain:
     // explicit on/off → preset (already baked onto the entry) → curated registry
-    // default → the global `globalUseAltScreen` switch.
+    // default → the global `globalUseAltScreen` switch. Inline rendering only
+    // applies to the interactive TUI, so a headless one-shot (`interactive:
+    // false` — e.g. opencode's `run` subcommand, which rejects `--mini`) must not
+    // carry the flag.
     const inlineModeFlag = agentConfig?.capabilities?.inlineModeFlag;
-    if (inlineModeFlag && resolveEffectiveInlineMode(entry, agentId, options?.globalUseAltScreen)) {
+    if (
+      inlineModeFlag &&
+      (options?.interactive ?? true) &&
+      resolveEffectiveInlineMode(entry, agentId, options?.globalUseAltScreen)
+    ) {
       parts.push(inlineModeFlag);
     }
   }

@@ -40,6 +40,9 @@ export class WorktreePortBroker {
 
     const wcId = webContents.id;
 
+    const existing = this.ports.get(wcId);
+    if (existing?.host === host) return true;
+
     // Close existing port for this view if any (also removes old listeners)
     this.closePortsForView(wcId);
 

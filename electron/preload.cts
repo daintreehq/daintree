@@ -780,6 +780,31 @@ function _typedOn<K extends Extract<keyof IpcEventMap, string>>(
   return () => ipcRenderer.removeListener(channel, handler);
 }
 
+/**
+ * Latched view-cache state, tracked from preload evaluation onward (#11212).
+ *
+ * The app:view-* signals are non-replaying `ipcRenderer.on` edges, and main
+ * releases a cold switch at the pre-React skeleton — so a switch storm can
+ * cache a view long before its deferred module graph evaluates and subscribes,
+ * and the renderer would never learn it is cached. Preload runs before any page
+ * script, so latching here gives a late subscriber an authoritative snapshot to
+ * seed from instead of defaulting to "not cached" and running the full-rate
+ * terminal work this issue exists to stop.
+ */
+let _viewCached = false;
+ipcRenderer.on(CHANNELS.APP_VIEW_CACHED, () => {
+  _viewCached = true;
+});
+// Warm activation — not reveal — owns the clear: main only sends
+// APP_VIEW_REVEALED while the view is still the active project, so a superseded
+// switch delivers warm-activated alone. Reveal clears too, defensively.
+ipcRenderer.on(CHANNELS.APP_VIEW_WARM_ACTIVATED, () => {
+  _viewCached = false;
+});
+ipcRenderer.on(CHANNELS.APP_VIEW_REVEALED, () => {
+  _viewCached = false;
+});
+
 // Shared multiplexer for the typed event bus. All `window.electron.events.on`
 // subscribers — plus the migrated per-domain helpers below (terminal.onExit,
 // window.onFullscreenChange, etc.) — dispatch through a single ipcRenderer
@@ -1519,6 +1544,7 @@ function buildElectronApi(): ElectronAPI {
       onViewWarmActivated: (callback: () => void) =>
         _typedOn(CHANNELS.APP_VIEW_WARM_ACTIVATED, callback),
       onViewCached: (callback: () => void) => _typedOn(CHANNELS.APP_VIEW_CACHED, callback),
+      isViewCached: () => _viewCached,
     },
 
     menu: buildMenuPreloadBindings(_unwrappingInvoke),

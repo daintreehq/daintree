@@ -44,6 +44,11 @@ function createFakeProcess(
     }),
     onExit: vi.fn((callback: (event: { exitCode: number }) => void) => {
       onExitHandler = callback;
+      return {
+        dispose: vi.fn(() => {
+          if (onExitHandler === callback) onExitHandler = null;
+        }),
+      };
     }),
     emitData: (chunk: string) => {
       for (const handler of dataHandlers) handler(chunk);
@@ -173,6 +178,7 @@ describe("PtyPool", () => {
     await pool.drainAndRefill("/repo");
 
     expect(pool.getDefaultCwd()).toBe("/repo");
+    expect(initial.onExit.mock.results[0]?.value.dispose).toHaveBeenCalledTimes(1);
     expect(initial.kill).toHaveBeenCalledTimes(1);
     expect(spawnMock).toHaveBeenCalledTimes(2);
     expect(spawnMock.mock.calls[1]?.[2]).toMatchObject({ cwd: "/repo" });

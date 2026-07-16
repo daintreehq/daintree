@@ -28,6 +28,8 @@ import { getActionBreadcrumbService } from "../../services/ActionBreadcrumbServi
 import type * as DiagnosticsCollectorModule from "../../services/DiagnosticsCollector.js";
 import { recordBlinkSample, recordEluSample } from "../../services/ProcessMemoryMonitor.js";
 import { getAppMetricsSnapshot } from "../../utils/appMetricsSnapshot.js";
+import { getRegisteredProjectViews } from "../../window/webContentsRegistry.js";
+import { projectStore } from "../../services/ProjectStore.js";
 
 let cachedDiagnosticsCollector: typeof DiagnosticsCollectorModule | null = null;
 async function getDiagnosticsCollector(): Promise<typeof DiagnosticsCollectorModule> {
@@ -240,19 +242,63 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
   };
   handlers.push(typedHandle(CHANNELS.SYSTEM_GET_APP_METRICS, handleGetAppMetrics));
 
+  // OS pid → the projects rendering in it, keyed by project id: views share one
+  // partition and URL, so Chromium may collapse several projects into one
+  // renderer process. Keyed by id rather than name because names are not unique
+  // — two projects both called "api" are two owners, not one. Each view is
+  // resolved independently so a teardown race on one cannot blank the table.
+  const collectProjectNamesByPid = (): Map<number, string[]> => {
+    const byPid = new Map<number, Map<string, string>>();
+    for (const { webContents, projectId } of getRegisteredProjectViews()) {
+      try {
+        // Re-checked here, not just in the registry: getOSProcessId() throws
+        // once the webContents is destroyed, and destruction can race the
+        // enumeration above.
+        if (webContents.isDestroyed()) continue;
+        // 0 means "no renderer process yet" (pre-spawn) or "crashed" — never a
+        // real pid, so it must not group views together.
+        const pid = webContents.getOSProcessId();
+        if (!Number.isInteger(pid) || pid <= 0) continue;
+        const name = projectStore.getProjectById(projectId)?.name;
+        if (!name) continue;
+        const projects = byPid.get(pid) ?? new Map<string, string>();
+        projects.set(projectId, name);
+        byPid.set(pid, projects);
+      } catch {
+        // Torn down mid-read: leave this view unlabelled.
+      }
+    }
+    // Plain lexical order, not localeCompare: the label must not reshuffle
+    // between polls on a different OS locale or ICU build.
+    return new Map(
+      [...byPid].map(([pid, projects]) => [
+        pid,
+        [...projects.values()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+      ])
+    );
+  };
+
   const handleGetProcessMetrics = (): ProcessMetricEntry[] => {
     try {
       const metrics = getAppMetricsSnapshot();
+      const projectNamesByPid = collectProjectNamesByPid();
       return metrics
-        .map((proc) => ({
-          pid: proc.pid,
-          type: proc.type,
-          name: proc.name ?? proc.type,
-          // workingSetSize only — privateBytes is Windows-only and reports 0
-          // on macOS/Linux (lesson #8646).
-          memoryMB: Math.round(proc.memory.workingSetSize / 1024),
-          cpuPercent: Math.round((proc.cpu?.percentCPUUsage ?? 0) * 10) / 10,
-        }))
+        .map((proc) => {
+          const entry: ProcessMetricEntry = {
+            pid: proc.pid,
+            type: proc.type,
+            name: proc.name ?? proc.type,
+            // workingSetSize only — privateBytes is Windows-only and reports 0
+            // on macOS/Linux (lesson #8646).
+            memoryMB: Math.round(proc.memory.workingSetSize / 1024),
+            cpuPercent: Math.round((proc.cpu?.percentCPUUsage ?? 0) * 10) / 10,
+          };
+          const names = proc.type === "Tab" ? projectNamesByPid.get(proc.pid) : undefined;
+          if (names?.length) {
+            entry.projectNames = names;
+          }
+          return entry;
+        })
         .sort((a, b) => b.memoryMB - a.memoryMB);
     } catch {
       return [];

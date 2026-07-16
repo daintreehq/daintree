@@ -63,3 +63,17 @@ export function formatMemory(mb: number): string {
   if (mb >= 1024) return `${(mb / 1024).toFixed(1)}GB`;
   return `${mb}MB`;
 }
+
+/**
+ * Name a process row by the projects rendering in it, falling back to Electron's
+ * own label when none own it. The count leads the multi-project form because the
+ * row truncates at ~23 characters: "2 views · Cedar Forg…" still reports the
+ * sharing honestly, where a bare name list would ellipsize into what reads as a
+ * single oddly-named project.
+ */
+export function formatProcessLabel(proc: { name: string; projectNames?: string[] }): string {
+  const names = proc.projectNames;
+  if (!names?.length) return proc.name;
+  if (names.length === 1) return `${names[0]} view`;
+  return `${names.length} views · ${names.join(", ")}`;
+}

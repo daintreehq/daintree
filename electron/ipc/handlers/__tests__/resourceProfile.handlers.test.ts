@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { ResourceProfileSnapshot } from "../../../../shared/types/resourceProfile.js";
+import type {
+  ResourceProfile,
+  ResourceProfilePayload,
+  ResourceProfileSnapshot,
+} from "../../../../shared/types/resourceProfile.js";
+import { resolveResourceProfileConfig } from "../../../utils/resourceProfileConfig.js";
 
 const ipcMainMock = vi.hoisted(() => ({
   handle: vi.fn(),
@@ -85,6 +90,43 @@ describe("registerResourceProfileHandlers — getResourceProfileSnapshot", () =>
       speedLimit: 100,
       lagPressureActive: false,
     });
+  });
+});
+
+describe("registerResourceProfileHandlers — getResourceProfile", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("resolves the live profile's config through the shared resolver (pull == push)", async () => {
+    serviceRefsMock.getResourceProfileService.mockReturnValue({
+      getProfile: (): ResourceProfile => "performance",
+    });
+
+    registerResourceProfileHandlers({} as never);
+    const result = (await getHandler("system:get-resource-profile")()) as ResourceProfilePayload;
+
+    expect(result.profile).toBe("performance");
+    // The pulled config must match the resolver exactly — the same helper the
+    // broadcast path uses — so a late-created renderer gets identical WebGL flip
+    // thresholds. Comparing against the resolver (not literal numbers) keeps this
+    // deterministic on any host RAM.
+    expect(result.config).toEqual(resolveResourceProfileConfig("performance"));
+    // The resolved config must actually carry the WebGL flip thresholds (they
+    // were removed from the static table) with a valid hysteresis band.
+    expect(result.config.webglLowerThreshold).toBeLessThanOrEqual(
+      result.config.webglUpperThreshold
+    );
+  });
+
+  it("falls back to the balanced profile's resolved config when the service is unavailable", async () => {
+    serviceRefsMock.getResourceProfileService.mockReturnValue(null);
+
+    registerResourceProfileHandlers({} as never);
+    const result = (await getHandler("system:get-resource-profile")()) as ResourceProfilePayload;
+
+    expect(result.profile).toBe("balanced");
+    expect(result.config).toEqual(resolveResourceProfileConfig("balanced"));
   });
 });
 

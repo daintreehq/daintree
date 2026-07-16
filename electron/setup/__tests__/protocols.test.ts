@@ -143,6 +143,7 @@ import {
   setPluginDirResolver,
   setupWebviewCSP,
 } from "../protocols.js";
+import { mintHtmlPreviewToken, _resetHtmlPreviewTokensForTests } from "../htmlPreviewTokens.js";
 import { getWebviewDialogService } from "../../services/WebviewDialogService.js";
 
 const mockedGetWebviewDialogService = vi.mocked(getWebviewDialogService);
@@ -1154,6 +1155,48 @@ describe("setupWebviewCSP — partition CSP wiring", () => {
     }
   });
 
+  it("passes daintree-html:// preview responses through without overwriting their CSP (#11191)", async () => {
+    const { session } = await import("electron");
+    const { mergeCspHeaders } = await import("../../utils/webviewCsp.js");
+    const fromPartition = vi.mocked(session.fromPartition);
+    vi.mocked(mergeCspHeaders).mockClear();
+
+    let captured:
+      | ((details: unknown, callback: (r: { responseHeaders?: unknown }) => void) => void)
+      | undefined;
+    fromPartition.mockImplementation((partition: string) => {
+      const onHeadersReceived = vi.fn(
+        (
+          _filter: unknown,
+          listener: (details: unknown, callback: (r: { responseHeaders?: unknown }) => void) => void
+        ) => {
+          if (partition === "persist:daintree") captured = listener;
+        }
+      );
+      return { webRequest: { onHeadersReceived } } as unknown as Electron.Session;
+    });
+
+    setupWebviewCSP();
+    expect(captured).toBeDefined();
+
+    // A daintree-html preview iframe already carries its own token-scoped CSP;
+    // the app overlay must NOT replace it (that would break the sandboxed page's
+    // scripts and re-expose connect-src daintree-file:).
+    const previewHeaders = {
+      "Content-Security-Policy": ["sandbox allow-scripts; default-src 'none'"],
+    };
+    let previewResult: { responseHeaders?: unknown } | undefined;
+    captured!({ url: "daintree-html://tok/index.html", responseHeaders: previewHeaders }, (r) => {
+      previewResult = r;
+    });
+    expect(previewResult?.responseHeaders).toBe(previewHeaders);
+    expect(vi.mocked(mergeCspHeaders)).not.toHaveBeenCalled();
+
+    // A normal app response still gets the app CSP overlay applied.
+    captured!({ url: "app://daintree/index.html", responseHeaders: {} }, () => {});
+    expect(vi.mocked(mergeCspHeaders)).toHaveBeenCalledTimes(1);
+  });
+
   it("attaches an onHeadersReceived listener for persist:daintree only (browser is excluded)", async () => {
     const { session } = await import("electron");
     const fromPartition = vi.mocked(session.fromPartition);
@@ -1376,9 +1419,10 @@ describe("protocol registration", () => {
     // plugin:// is skipped here — registerPluginProtocol hasn't been called yet
     // in this test. Production order is the opposite: registerPluginProtocol runs
     // in app.whenReady() before any per-project session is created.
-    expect(handle).toHaveBeenCalledTimes(2);
+    expect(handle).toHaveBeenCalledTimes(3);
     expect(handle).toHaveBeenCalledWith("app", expect.any(Function));
     expect(handle).toHaveBeenCalledWith("daintree-file", expect.any(Function));
+    expect(handle).toHaveBeenCalledWith("daintree-html", expect.any(Function));
   });
 
   it("also registers plugin:// on per-project sessions after the resolver is cached", async () => {
@@ -2458,5 +2502,164 @@ describe("createAppProtocolHandler — direct disk read", () => {
     expect(response.status).toBe(200);
     expect(await response.text()).toBe("ok");
     expect(handle.close).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("createDaintreeHtmlProtocolHandler — sandboxed HTML preview (#11191)", () => {
+  type ProtocolHandler = (request: GlobalRequest) => Promise<Response>;
+
+  const ROOT = path.resolve("/project/report");
+  let token: string;
+
+  async function captureHandler(): Promise<ProtocolHandler> {
+    const handle = vi.fn();
+    const mockSession = { protocol: { handle } } as unknown as Electron.Session;
+    registerProtocolsForSession(mockSession, "/tmp/dist");
+    const call = handle.mock.calls.find((c) => c[0] === "daintree-html");
+    if (!call) throw new Error("handler for daintree-html not registered");
+    return call[1] as ProtocolHandler;
+  }
+
+  function makeRequest(authority: string, relPath: string): GlobalRequest {
+    return new Request(`daintree-html://${authority}/${relPath}`) as GlobalRequest;
+  }
+
+  function makeFileHandle(content: string | Buffer = "<h1>hi</h1>") {
+    const buffer = typeof content === "string" ? Buffer.from(content) : content;
+    return {
+      readFile: vi.fn().mockResolvedValue(buffer),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+  }
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    _resetHtmlPreviewTokensForTests();
+    token = mintHtmlPreviewToken(ROOT);
+    const fs = await import("fs/promises");
+    vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
+    vi.mocked(fs.stat).mockResolvedValue({ size: 11 } as Awaited<ReturnType<typeof fs.stat>>);
+    vi.mocked(fs.open).mockResolvedValue(
+      makeFileHandle() as unknown as Awaited<ReturnType<typeof fs.open>>
+    );
+    const appProtocol = await import("../../utils/appProtocol.js");
+    vi.mocked(appProtocol.getMimeType).mockReturnValue("text/css");
+  });
+
+  it("serves an HTML document with a token-scoped preview CSP", async () => {
+    const handler = await captureHandler();
+    const response = await handler(makeRequest(token, "index.html"));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("text/html; charset=utf-8");
+    const csp = response.headers.get("Content-Security-Policy") ?? "";
+    // Scoped to the EXACT token authority — never scheme-wide — so the framed
+    // report can't tag-load through the legacy daintree-file:// route.
+    expect(csp).toContain(`script-src daintree-html://${token} 'unsafe-inline' 'unsafe-eval'`);
+    expect(csp).not.toMatch(/script-src daintree-html:(?!\/\/)/);
+    expect(csp).toContain("sandbox allow-scripts");
+    expect(csp).toContain("connect-src 'none'");
+    expect(csp).toContain("default-src 'none'");
+    // WebRTC isn't governed by connect-src, so it's blocked explicitly.
+    expect(csp).toContain("webrtc 'block'");
+    // Egress-limiting response headers.
+    expect(response.headers.get("Referrer-Policy")).toBe("no-referrer");
+    expect(response.headers.get("X-DNS-Prefetch-Control")).toBe("off");
+    // Opens the user-derived path with O_NOFOLLOW (TOCTOU defense).
+    const fs = await import("fs/promises");
+    expect(fs.open).toHaveBeenCalledWith(
+      path.resolve(ROOT, "index.html"),
+      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW
+    );
+  });
+
+  it("404s when the token's root no longer canonically resolves to itself (retarget guard)", async () => {
+    const fs = await import("fs/promises");
+    // The root path was renamed away and now resolves elsewhere (symlink swap).
+    vi.mocked(fs.realpath).mockImplementation((p) =>
+      Promise.resolve(p === ROOT ? (path.resolve("/") as string) : (p as string))
+    );
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest(token, "index.html"));
+    expect(response.status).toBe(404);
+    expect(fs.open).not.toHaveBeenCalled();
+  });
+
+  it("treats .htm the same as .html", async () => {
+    const handler = await captureHandler();
+    const response = await handler(makeRequest(token, "page.htm"));
+    expect(response.headers.get("Content-Type")).toBe("text/html; charset=utf-8");
+    expect(response.headers.get("Content-Security-Policy")).toContain("sandbox allow-scripts");
+  });
+
+  it("serves a non-HTML sibling asset with the strict leaf CSP, not the preview CSP", async () => {
+    const handler = await captureHandler();
+    const response = await handler(makeRequest(token, "assets/app.css"));
+
+    expect(response.status).toBe(200);
+    // Sub-resource: strict leaf headers (browser ignores CSP on sub-resources).
+    expect(response.headers.get("Content-Security-Policy")).toBe("sandbox; default-src 'none'");
+    expect(response.headers.get("Content-Type")).toBe("text/css");
+    const fs = await import("fs/promises");
+    expect(fs.open).toHaveBeenCalledWith(
+      path.resolve(ROOT, "assets/app.css"),
+      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW
+    );
+  });
+
+  it("resolves root-relative asset paths within the mapped root", async () => {
+    const handler = await captureHandler();
+    await handler(makeRequest(token, "assets/logo.svg"));
+    const fs = await import("fs/promises");
+    expect(fs.open).toHaveBeenCalledWith(path.resolve(ROOT, "assets/logo.svg"), expect.any(Number));
+  });
+
+  it("404s an unknown or released token without touching the filesystem", async () => {
+    const handler = await captureHandler();
+    const response = await handler(
+      makeRequest("00000000-dead-beef-0000-000000000000", "index.html")
+    );
+
+    expect(response.status).toBe(404);
+    const fs = await import("fs/promises");
+    expect(fs.open).not.toHaveBeenCalled();
+    expect(fs.realpath).not.toHaveBeenCalled();
+  });
+
+  it("404s a bare token URL with no file path", async () => {
+    const handler = await captureHandler();
+    const response = await handler(new Request(`daintree-html://${token}/`) as GlobalRequest);
+    expect(response.status).toBe(404);
+  });
+
+  it("rejects a symlink that escapes the root (realpath containment)", async () => {
+    const fs = await import("fs/promises");
+    // The requested file realpath-resolves outside the mapped root.
+    vi.mocked(fs.realpath).mockImplementation((p) =>
+      Promise.resolve(p === ROOT ? ROOT : (path.resolve("/etc/passwd") as string))
+    );
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest(token, "link.html"));
+    expect(response.status).toBe(404);
+    expect(fs.open).not.toHaveBeenCalled();
+  });
+
+  it("rejects an encoded backslash segment", async () => {
+    const handler = await captureHandler();
+    const response = await handler(makeRequest(token, "sub%5Cfile.html"));
+    expect(response.status).toBe(404);
+  });
+
+  it("enforces the 512 KB size cap with 413", async () => {
+    const fs = await import("fs/promises");
+    vi.mocked(fs.stat).mockResolvedValue({ size: 512 * 1024 + 1 } as Awaited<
+      ReturnType<typeof fs.stat>
+    >);
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest(token, "big.html"));
+    expect(response.status).toBe(413);
   });
 });

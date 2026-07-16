@@ -1,4 +1,12 @@
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { EditorView } from "@codemirror/view";
 import { EditorSelection } from "@codemirror/state";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
@@ -58,6 +66,9 @@ import { useFleetMirror } from "./hooks/useFleetMirror";
 import { useEditorDomHandlers } from "./hooks/useEditorDomHandlers";
 import { useEditorFactory } from "./hooks/useEditorFactory";
 import { useHostReparent } from "./hooks/useHostReparent";
+import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
+import { SelectedFileMenuItems } from "./SelectedFileMenuItems";
+import { resolveSelectedFilePath } from "@/services/terminal/filePathDetection";
 
 export interface HybridInputBarHandle {
   focus: () => void;
@@ -188,6 +199,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const [isExpanded, setIsExpanded] = useState(false);
     const modalEditorHostRef = useRef<HTMLDivElement | null>(null);
     const compactEditorHostRef = useRef<HTMLDivElement | null>(null);
+    // Absolute path the current selection resolves to, captured on right-click.
+    // Gates the "View file" / "Open folder" context-menu section.
+    const [selectionFilePath, setSelectionFilePath] = useState<string | null>(null);
     const lastEnterKeydownNewlineRef = useRef(false);
     const handledEnterRef = useRef(false);
     const historyPaletteOpenRef = useRef<(() => void) | null>(null);
@@ -710,6 +724,29 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       setActiveCompletionContext,
     });
 
+    // Right-click gate for the composer's file-path menu. Read the selection
+    // synchronously from the live EditorView, resolve it against the terminal's
+    // cwd, and only let Radix open its menu when it resolves to a path —
+    // otherwise preventDefault so no empty menu appears. When not prevented,
+    // the batched setState lands before Radix renders the (portalled) content,
+    // so the items are present the moment the menu opens.
+    const handleEditorContextMenu = useCallback(
+      (event: React.MouseEvent) => {
+        const view = editorViewRef.current;
+        let resolvedPath: string | null = null;
+        if (view) {
+          const { from, to } = view.state.selection.main;
+          if (from !== to) {
+            resolvedPath =
+              resolveSelectedFilePath(view.state.sliceDoc(from, to), cwd)?.absolutePath ?? null;
+          }
+        }
+        setSelectionFilePath(resolvedPath);
+        if (!resolvedPath) event.preventDefault();
+      },
+      [cwd]
+    );
+
     useEditorFactory({
       terminalId,
       editorHostRef,
@@ -918,16 +955,34 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             >
               ❯
             </button>
-            <div className="relative flex-1">
-              <div
-                ref={(node) => {
-                  editorHostRef.current = node;
-                  compactEditorHostRef.current = node;
-                }}
-                className={cn("w-full min-h-[20px]", disabled && "pointer-events-none")}
-                style={{ color: inputBarColors.foreground }}
-              />
-            </div>
+            <ContextMenu>
+              <ContextMenuTrigger asChild onContextMenu={handleEditorContextMenu}>
+                <div className="relative flex-1">
+                  <div
+                    ref={(node) => {
+                      editorHostRef.current = node;
+                      compactEditorHostRef.current = node;
+                      // The Radix trigger swaps element type (Slot → Trigger)
+                      // when its lazy chunk resolves, remounting this host node
+                      // and orphaning CodeMirror's imperatively-attached DOM.
+                      // Re-adopt the editor only when it is genuinely detached
+                      // (isConnected === false) so the normal expand/collapse
+                      // reparent in useHostReparent is left untouched. The modal
+                      // host carries the mirror-image guard.
+                      const view = editorViewRef.current;
+                      if (node && view && !isExpanded && !view.dom.isConnected) {
+                        node.appendChild(view.dom);
+                      }
+                    }}
+                    className={cn("w-full min-h-[20px]", disabled && "pointer-events-none")}
+                    style={{ color: inputBarColors.foreground }}
+                  />
+                </div>
+              </ContextMenuTrigger>
+              <ContextMenuContent>
+                {selectionFilePath && <SelectedFileMenuItems absolutePath={selectionFilePath} />}
+              </ContextMenuContent>
+            </ContextMenu>
             <div className="flex items-center pr-1.5">
               {hasStash && (
                 <Tooltip>
@@ -1003,10 +1058,30 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             <AppDialog.CloseButton />
           </AppDialog.Header>
           <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-            <div
-              ref={modalEditorHostRef}
-              className="flex-1 min-h-[200px] overflow-auto text-daintree-text p-4"
-            />
+            <ContextMenu>
+              <ContextMenuTrigger asChild onContextMenu={handleEditorContextMenu}>
+                <div
+                  ref={(node) => {
+                    modalEditorHostRef.current = node;
+                    // Mirror of the compact host's guard: AppDialog is not a
+                    // Radix consumer, so this trigger can also mount in the
+                    // Slot state and remount (orphaning the editor) when the
+                    // chunk resolves. Re-adopt only when detached so the normal
+                    // reparent is untouched; this also closes the AppDialog
+                    // mount-order gap where the reparent effect could run
+                    // before this host exists.
+                    const view = editorViewRef.current;
+                    if (node && view && isExpanded && !view.dom.isConnected) {
+                      node.appendChild(view.dom);
+                    }
+                  }}
+                  className="flex-1 min-h-[200px] overflow-auto text-daintree-text p-4"
+                />
+              </ContextMenuTrigger>
+              <ContextMenuContent>
+                {selectionFilePath && <SelectedFileMenuItems absolutePath={selectionFilePath} />}
+              </ContextMenuContent>
+            </ContextMenu>
           </div>
         </AppDialog>
         {isFocusedTerminal && (

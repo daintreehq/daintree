@@ -20,15 +20,15 @@ export class TerminalWebGLPolicy {
   constructor(private deps: TerminalWebGLPolicyDeps) {}
 
   /**
-   * Whether a terminal wants a WebGL context at the given tier. Agent
-   * terminals are eligible at every WebGL-eligible tier (FOCUSED/BURST/
-   * VISIBLE) — the DOM renderer mangles the block glyphs agent headers use
-   * (see isWebGLEligibleTier in types.ts). Plain terminals are eligible only
-   * while focused: FOCUSED, or a BURST on the focused pane (input bursts and
-   * streaming output must not drop the context mid-use). BURST alone is
-   * write-driven for every terminal, so granting it to unfocused plain shells
-   * would add a want per streaming build/log pane and trip the count-based
-   * mode switch; VISIBLE is excluded for the same budget reason.
+   * Whether a terminal wants a WebGL context at the given tier. Eligibility is
+   * identity-neutral: standard and agent terminals are treated identically and
+   * both want WebGL at every WebGL-eligible tier (FOCUSED/BURST/VISIBLE). The
+   * DOM renderer falls back to the configured font, mangling block/box-drawing/
+   * Powerline glyphs (see isWebGLEligibleTier in types.ts) — so a visible-but-
+   * unfocused plain pane must keep its context instead of visibly shifting to
+   * DOM on blur (#11193). Only two things veto a want: an ineligible tier
+   * (BACKGROUND/undefined) and off-screen visibility. Headroom for the wider
+   * want-set is tracked by the fleet-flip threshold retune in #11192.
    */
   wantsWebGLAtTier(
     managed: ManagedTerminal,
@@ -37,27 +37,25 @@ export class TerminalWebGLPolicy {
   ): boolean {
     if (!isWebGLEligibleTier(tier)) return false;
     // Visibility gates every case: an off-screen pane never wants WebGL, even
-    // an agent streaming at BURST. The want set is fleet-wide per project view,
-    // so hidden streaming agents would otherwise accumulate wants and trip the
-    // count-based mode switch, dropping the whole visible fleet to DOM
-    // (#10671). The reveal path (setVisible(true) → debounced shouldRestoreWebGL
-    // → ensureContext) re-acquires the want once the pane is on-screen again —
-    // and on a warm WebContentsView resume it passes trustDomVisibility because
-    // it has already proven the pane on-screen from DOM truth, so the stale
+    // an agent (or plain shell) streaming at BURST. The want set is fleet-wide
+    // per project view, so hidden streaming terminals would otherwise accumulate
+    // wants and trip the count-based mode switch, dropping the whole visible
+    // fleet to DOM (#10671). This gate must stay first, before the unconditional
+    // return, so identity-neutral eligibility never resurrects that bug. The
+    // reveal path (setVisible(true) → debounced shouldRestoreWebGL →
+    // ensureContext) re-acquires the want once the pane is on-screen again — and
+    // on a warm WebContentsView resume it passes trustDomVisibility because it
+    // has already proven the pane on-screen from DOM truth, so the stale
     // reactive isVisible flag must not veto the want there.
     if (!opts?.trustDomVisibility && !managed.isVisible) return false;
-    if (managed.runtimeAgentId) return true;
-    return (
-      tier === TerminalRefreshTier.FOCUSED ||
-      (tier === TerminalRefreshTier.BURST && managed.isFocused)
-    );
+    return true;
   }
 
   /**
    * Eligibility for visibility-driven WebGL restore. Mirrors the gates in
-   * onTierApplied (agent identity / focus + tier) plus liveness checks
-   * (opened, not attaching). Used by the debounced timer in setVisible()
-   * before re-acquiring a context.
+   * onTierApplied (identity-neutral tier eligibility via wantsWebGLAtTier) plus
+   * liveness checks (opened, not attaching). Used by the debounced timer in
+   * setVisible() before re-acquiring a context.
    */
   shouldRestoreWebGL(managed: ManagedTerminal, opts?: { trustDomVisibility?: boolean }): boolean {
     if (!managed.isOpened) return false;

@@ -4,11 +4,16 @@ import type { Plugin } from "vite";
 /**
  * The exact React specifiers the Daintree host import map serves. This is the
  * single source of truth for the host/plugin contract: `vite.config.ts` imports
- * this list to build the `<script type="importmap">` it injects, and the plugin
- * build (below) errors at build time on any React subpath outside it. Keeping
- * the two sides on one constant is what stops the "externalized but unresolved
- * at runtime" drift (e.g. `react-dom/server`) that this list previously had to
- * be hand-synced against.
+ * this list to emit one facade chunk per specifier and to build the `<script
+ * type="importmap">` it injects, and the plugin build (below) errors at build
+ * time on any React subpath outside it. Keeping the two sides on one constant is
+ * what stops the "externalized but unresolved at runtime" drift (e.g.
+ * `react-dom/server`) that this list previously had to be hand-synced against.
+ *
+ * Adding an entry here is a real change on the host side: it must also declare
+ * the specifier's expected public exports in `HOST_REACT_REQUIRED_EXPORTS`
+ * (vite.config.ts), which is typed against this list and will fail typecheck
+ * until it does.
  */
 export const HOST_IMPORTMAP_SPECIFIERS = [
   "react",
@@ -27,8 +32,13 @@ export const HOST_IMPORTMAP_SPECIFIERS = [
  * matches only the literal string and would bundle `react/jsx-runtime`).
  *
  * Paired with the host import map (injected into Daintree's index.html), the
- * stripped imports resolve at load time to Daintree's single `vendor-react`
- * chunk, sharing one React instance across the host and every loaded plugin.
+ * stripped imports resolve at load time to a per-specifier facade module that
+ * re-exports that specifier's public API. All the facades are backed by
+ * Daintree's single `vendor-react` chunk, so the host and every loaded plugin
+ * share one React instance. The map deliberately does NOT point at that chunk
+ * directly: a code-split chunk only exports the private cross-chunk interface
+ * other chunks import from it, so `import { useState } from "react"` failed to
+ * load in every packaged build until #11208.
  *
  * Breadth here is safe only because {@link daintreePlugin} also runs a
  * `resolveId` guard that fails the build on any React subpath the host import

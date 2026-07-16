@@ -109,6 +109,27 @@ describe("file.openPanel", () => {
     expect(addPanelSpy).toHaveBeenCalledWith(expect.objectContaining({ fileViewMode: "rendered" }));
   });
 
+  it("passes rendered through for html files", async () => {
+    const run = setupActions();
+    await run("file.openPanel", { path: "dist/report.html", viewMode: "rendered" });
+
+    expect(addPanelSpy).toHaveBeenCalledWith(expect.objectContaining({ fileViewMode: "rendered" }));
+  });
+
+  it("passes rendered through for .htm files", async () => {
+    const run = setupActions();
+    await run("file.openPanel", { path: "dist/page.htm", viewMode: "rendered" });
+
+    expect(addPanelSpy).toHaveBeenCalledWith(expect.objectContaining({ fileViewMode: "rendered" }));
+  });
+
+  it("clamps a rendered request on a non-renderable file (.xhtml) to source", async () => {
+    const run = setupActions();
+    await run("file.openPanel", { path: "dist/page.xhtml", viewMode: "rendered" });
+
+    expect(addPanelSpy).toHaveBeenCalledWith(expect.objectContaining({ fileViewMode: "source" }));
+  });
+
   it("reuses a panel already showing the same file instead of duplicating", async () => {
     setPanelState({
       "file-1": {

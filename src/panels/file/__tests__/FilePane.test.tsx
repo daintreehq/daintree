@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { ReactNode } from "react";
-import { render, act } from "@testing-library/react";
+import { render, act, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // FilePane forwards a fixed prop list to ContentPanel; #10991 was a dropped
@@ -12,9 +12,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const contentPanelProps: Array<Record<string, unknown>> = [];
 
 vi.mock("@/components/Panel/ContentPanel", () => ({
-  ContentPanel: (props: Record<string, unknown> & { toolbar?: ReactNode }) => {
+  ContentPanel: (
+    props: Record<string, unknown> & { toolbar?: ReactNode; children?: ReactNode }
+  ) => {
     contentPanelProps.push(props);
-    return <>{props.toolbar}</>;
+    // Render children too so the Source/Rendered branch is observable, not just
+    // the toolbar (#11191 HTML preview branch).
+    return (
+      <>
+        {props.toolbar}
+        {props.children}
+      </>
+    );
   },
 }));
 
@@ -39,11 +48,12 @@ vi.mock("@/hooks/useWorktreeStore", () => ({
 vi.mock("@/store/accessibilityAnnouncerStore", () => ({
   useAnnouncerStore: { getState: () => ({ announce: vi.fn() }) },
 }));
+const { readMock, searchMock } = vi.hoisted(() => ({
+  readMock: vi.fn(),
+  searchMock: vi.fn(),
+}));
 vi.mock("@/clients/filesClient", () => ({
-  filesClient: {
-    read: vi.fn().mockResolvedValue({ content: "" }),
-    search: vi.fn().mockResolvedValue({ files: [] }),
-  },
+  filesClient: { read: readMock, search: searchMock },
 }));
 // dispatch() resolves an ActionDispatchResult union and never rejects; callers
 // branch on `.ok`, so the mock must honour that shape rather than resolve void.
@@ -55,8 +65,21 @@ vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: dispatchMock },
 }));
 vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
-vi.mock("@/components/Markdown/MarkdownViewer", () => ({ MarkdownViewer: () => null }));
-vi.mock("@/components/FileViewer/CodeViewer", () => ({ CodeViewer: () => null }));
+vi.mock("@/components/Markdown/MarkdownViewer", () => ({
+  MarkdownViewer: () => <div data-testid="markdown-viewer-mock" />,
+}));
+vi.mock("@/components/FileViewer/CodeViewer", () => ({
+  CodeViewer: () => <div data-testid="code-viewer-mock" />,
+}));
+vi.mock("@/components/Html/HtmlViewer", () => ({
+  HtmlViewer: (props: { previewUrl: string | null; reloadNonce: number }) => (
+    <div
+      data-testid="html-viewer-mock"
+      data-preview-url={props.previewUrl ?? ""}
+      data-reload-nonce={props.reloadNonce}
+    />
+  ),
+}));
 
 import { FilePane } from "../FilePane";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -70,6 +93,12 @@ function lastContentPanelProps(): Record<string, unknown> {
 beforeEach(() => {
   dispatchMock.mockReset();
   dispatchMock.mockResolvedValue({ ok: true, result: undefined });
+  // Reset per test so a prior test's read call can't satisfy a later
+  // toHaveBeenCalledWith assertion (cross-test contamination).
+  readMock.mockReset();
+  readMock.mockResolvedValue({ content: "" });
+  searchMock.mockReset();
+  searchMock.mockResolvedValue({ files: [] });
   // InlineStatusBanner reads window.matchMedia at render time; jsdom does not
   // implement it, so provide a no-op stub.
   if (typeof window.matchMedia !== "function") {
@@ -293,5 +322,138 @@ describe("FilePane open-in-editor failure feedback (#11114)", () => {
       { source: "user" }
     );
     expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
+});
+
+// #11191: HTML files get the same Source/Rendered toggle as Markdown; rendered
+// HTML routes to the sandboxed-iframe HtmlViewer.
+describe("FilePane HTML Source/Rendered (#11191)", () => {
+  function renderPane(filePath: string, fileViewMode?: "source" | "rendered") {
+    panelsById["file-1"] = { id: "file-1", kind: "file", filePath, fileViewMode };
+    return render(
+      <TooltipProvider>
+        <FilePane
+          id="file-1"
+          title={filePath.split("/").pop() ?? filePath}
+          isFocused={false}
+          location="grid"
+          onFocus={() => {}}
+          onClose={() => {}}
+        />
+      </TooltipProvider>
+    );
+  }
+
+  it("shows the Source/Rendered toggle for an .html file", async () => {
+    renderPane("/repo/dist/report.html");
+    // SegmentedToggle labels are literal text; both appear only for renderable files.
+    expect(await screen.findByText("Rendered")).toBeTruthy();
+    expect(screen.getByText("Source")).toBeTruthy();
+  });
+
+  it("shows the toggle for a .htm file", async () => {
+    renderPane("/repo/dist/page.htm");
+    expect(await screen.findByText("Rendered")).toBeTruthy();
+  });
+
+  it("does not show the toggle for a non-renderable file (.css)", async () => {
+    renderPane("/repo/src/index.css");
+    // Wait for load to settle so we're not asserting on a pre-render frame.
+    await screen.findByTestId("code-viewer-mock");
+    expect(screen.queryByText("Rendered")).toBeNull();
+  });
+
+  it("routes rendered HTML to the sandboxed HtmlViewer with the minted preview URL", async () => {
+    readMock.mockResolvedValue({
+      content: "<h1>x</h1>",
+      htmlPreviewUrl: "daintree-html://tok/report.html",
+    });
+    renderPane("/repo/dist/report.html", "rendered");
+    const viewer = await screen.findByTestId("html-viewer-mock");
+    // The URL from files:read must reach HtmlViewer's previewUrl prop.
+    expect(viewer.getAttribute("data-preview-url")).toBe("daintree-html://tok/report.html");
+    expect(screen.queryByTestId("code-viewer-mock")).toBeNull();
+  });
+
+  it("routes source HTML to the CodeViewer, not the HtmlViewer", async () => {
+    renderPane("/repo/dist/report.html", "source");
+    expect(await screen.findByTestId("code-viewer-mock")).toBeTruthy();
+    expect(screen.queryByTestId("html-viewer-mock")).toBeNull();
+  });
+
+  it("passes htmlPreview:true to files:read for HTML files", async () => {
+    renderPane("/repo/dist/report.html", "rendered");
+    await waitFor(() =>
+      expect(readMock).toHaveBeenCalledWith(
+        expect.objectContaining({ path: "/repo/dist/report.html", htmlPreview: true })
+      )
+    );
+  });
+
+  it("passes htmlPreview:false to files:read for non-HTML files", async () => {
+    renderPane("/repo/src/index.css");
+    await waitFor(() =>
+      expect(readMock).toHaveBeenCalledWith(
+        expect.objectContaining({ path: "/repo/src/index.css", htmlPreview: false })
+      )
+    );
+  });
+
+  it("still routes rendered Markdown to the MarkdownViewer (regression)", async () => {
+    renderPane("/repo/docs/spec.md", "rendered");
+    expect(await screen.findByTestId("markdown-viewer-mock")).toBeTruthy();
+    expect(screen.queryByTestId("html-viewer-mock")).toBeNull();
+  });
+
+  // The toolbar's open button follows the view: rendered HTML opens in the
+  // browser, everything else in the editor.
+  async function clickOpen(label: string) {
+    const button = await screen.findByLabelText(label);
+    await act(async () => {
+      button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+  }
+
+  it("opens rendered HTML in the browser, not the editor", async () => {
+    renderPane("/repo/dist/report.html", "rendered");
+    await clickOpen("Open in browser");
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "file.openInBrowser",
+      { path: "/repo/dist/report.html" },
+      { source: "user" }
+    );
+  });
+
+  it("opens source HTML in the editor", async () => {
+    renderPane("/repo/dist/report.html", "source");
+    await clickOpen("Open in editor");
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "file.openInEditor",
+      { path: "/repo/dist/report.html" },
+      { source: "user" }
+    );
+  });
+
+  it("retries a failed browser open as a browser open, not an editor open", async () => {
+    dispatchMock.mockResolvedValue({
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: "Launch failed" },
+    });
+    const { container } = renderPane("/repo/dist/report.html", "rendered");
+    await clickOpen("Open in browser");
+
+    const retry = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Retry")
+    );
+    await act(async () => {
+      retry!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    // Retry must re-aim at the banner's action even if the view mode changed.
+    expect(dispatchMock).toHaveBeenLastCalledWith(
+      "file.openInBrowser",
+      { path: "/repo/dist/report.html" },
+      { source: "user" }
+    );
   });
 });

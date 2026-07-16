@@ -466,6 +466,16 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      */
     onViewWarmActivated(callback: () => void): () => void;
     onViewCached(callback: () => void): () => void;
+    /**
+     * Whether main currently has this view cached. The three signals above are
+     * non-replaying `ipcRenderer.on` edges, and a cold switch is released at
+     * the pre-React skeleton — so a switch storm can cache a view before its
+     * module graph evaluates and subscribes, losing the edge entirely. Preload
+     * latches the state from its own evaluation onward (before any page
+     * script), making this the authoritative snapshot a late subscriber seeds
+     * from (#11212).
+     */
+    isViewCached?(): boolean;
   };
   // menu is generated — see GeneratedElectronAPI.
   logs: {

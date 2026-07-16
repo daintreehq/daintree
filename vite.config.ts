@@ -6,6 +6,7 @@ import tailwindcss from "@tailwindcss/vite";
 import { visualizer } from "rollup-plugin-visualizer";
 import path from "path";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
 import { getDevServerConfig } from "./shared/config/devServer";
@@ -18,6 +19,7 @@ import { getDaintreeAppDevCSP, getDaintreeAppProdCSP } from "./shared/config/csp
 // way this config already imports from `./shared/*`.
 import { HOST_IMPORTMAP_SPECIFIERS } from "./packages/plugin-vite/src/index";
 import { getFirstRenderPreloadSeeds } from "./shared/config/panelKindRegistry";
+import { formatErrorMessage } from "./shared/utils/errorMessage";
 import { computeFirstRenderPreloadFiles } from "./scripts/first-render-closure-lib.mjs";
 
 const devServerConfig = getDevServerConfig();
@@ -385,11 +387,15 @@ function renderFanoutProbePlugin(state: ImportMapBuildState): Plugin {
 }
 
 // `HOST_IMPORTMAP_SPECIFIERS` (imported from @daintreehq/plugin-vite above) is
-// the set of specifiers exposed to externalized plugin bundles. In production
-// each bare specifier points at the same `vendor-react` chunk because Rolldown
-// bundles `react`, `react-dom`, `scheduler`, and `use-sync-external-store` into
-// one file (see the `vendor-react` codeSplitting group below). Trailing-slash
-// mappings ("react/") can't substitute — a single chunk file has no subpath
+// the set of specifiers exposed to externalized plugin bundles. Each one gets
+// its OWN facade module re-exporting that specifier's public API; the import
+// map points at the facades, never at `vendor-react` directly. Pointing every
+// specifier at the shared `vendor-react` chunk is what broke the contract in
+// #11208: a code-split chunk is not an entry, so its exports are Rolldown's
+// private cross-chunk interface (`export{n as a,i,...}`), not React's public
+// API — `import { useEffect } from "react"` threw "does not provide an export
+// named 'useEffect'" in every packaged build since v0.15.0. Trailing-slash
+// mappings ("react/") can't substitute either — a chunk file has no subpath
 // structure to concatenate against — so every JSX/React entrypoint plugins
 // might import is listed explicitly in the shared constant. `scheduler` is
 // internal to React and not exposed because no documented plugin path imports
@@ -398,19 +404,317 @@ function renderFanoutProbePlugin(state: ImportMapBuildState): Plugin {
 
 const HOST_APP_ORIGIN = "app://daintree";
 
-// Locate the vendor-react chunk by its codeSplitting `name`, which Rolldown
-// preserves as `OutputChunk.name`. The hashed `.fileName` is what plugins (and
-// the browser) must load, so the import map resolves bare React specifiers to
-// that exact filename.
-function findVendorReactChunkPath(
-  bundle: Record<string, { type: string; name?: string; fileName?: string }>
-): string | null {
+type HostReactSpecifier = (typeof HOST_IMPORTMAP_SPECIFIERS)[number];
+
+// Prefix for the virtual facade modules that re-export the host's React. Shared
+// by the production emitter (hostReactFacadePlugin) and the dev server
+// (hostImportMapDevPlugin) — the two apply to disjoint modes but must generate
+// byte-identical module source, which is the whole point of #11208: dev built a
+// real facade while production mapped to a raw chunk, so the ABI plugins compile
+// against silently differed between `npm run dev` and a packaged build.
+const HOST_REACT_VIRTUAL_PREFIX = "virtual:daintree-host-react/";
+
+// Resolution anchor for reading the installed React packages. Anchored on cwd
+// rather than `import.meta.url` because Vite may load this config as either ESM
+// or CJS, and `import.meta` is absent in the CJS path.
+const requireFromRoot = createRequire(path.join(process.cwd(), "vite.config.ts"));
+
+// A conservative "safe to write in an export clause" identifier test. Anything
+// exotic is dropped rather than risking a syntax error in generated code; no
+// React export has ever needed it.
+const SAFE_EXPORT_NAME = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+
+const hostReactExportNameCache = new Map<string, string[]>();
+
+// The public names a specifier actually exports, read from the installed
+// package. Generating from the real surface (rather than a hand-kept list)
+// keeps the facades correct across React upgrades, and matches per mode: Vite
+// defaults NODE_ENV to production for `build` (and preserves an explicit one)
+// and uses that same value for the browser's `process.env.NODE_ENV` define, so
+// this Node process and the bundle always select the same branch of React's
+// `if (process.env.NODE_ENV === 'production')` CJS switch. `vite dev` likewise
+// sees the development build the dev server serves.
+//
+// Memoized: the generator and the build guard both need this list, and the
+// guard's whole job is to compare what the generator ASKED for against what
+// Rolldown emitted — so both must read exactly the same set.
+function hostReactExportNames(specifier: string): string[] {
+  const cached = hostReactExportNameCache.get(specifier);
+  if (cached) return cached;
+
+  let ns: Record<string, unknown>;
+  try {
+    ns = requireFromRoot(specifier) as Record<string, unknown>;
+  } catch (err) {
+    throw new Error(
+      `[host-react-facade] cannot resolve "${specifier}" to read its export surface: ` +
+        formatErrorMessage(err, "module resolution failed"),
+      { cause: err }
+    );
+  }
+  // `default` is excluded here and re-exported explicitly below; emitting it in
+  // the named clause too would be a duplicate-binding syntax error.
+  const names = Object.keys(ns)
+    .filter((name) => name !== "default" && SAFE_EXPORT_NAME.test(name))
+    .sort();
+  hostReactExportNameCache.set(specifier, names);
+  return names;
+}
+
+// The single source of the facade module body, shared by the production emitter
+// and the dev server.
+//
+// The named re-exports are enumerated EXPLICITLY. `export * from "react"` looks
+// equivalent and is not: React ships CJS, and a star re-export from CJS has no
+// statically-known name set, so Rolldown emits a facade exporting nothing but
+// `default` — silently, with a clean build. (Dev got away with `export *` only
+// because Vite pre-bundles React into real ESM first, which is precisely the
+// dev/prod divergence behind #11208.) Naming each export is what makes the
+// production chunk's signature real; hostReactFacadePlugin's generateBundle
+// then proves it against the built output.
+//
+// The star form also never re-exports `default` (ESM semantics), so the
+// computed default below keeps `import React from "react"` working without a
+// direct `export { default }`, which would throw for subpaths (e.g.
+// jsx-runtime) that have no own default export.
+function renderHostReactFacade(specifier: string): string {
+  const target = JSON.stringify(specifier);
+  const named = hostReactExportNames(specifier);
+  const lines = [`import * as m from ${target};`];
+  if (named.length > 0) lines.push(`export { ${named.join(", ")} } from ${target};`);
+  lines.push(`export default m.default ?? m;`);
+  return `${lines.join("\n")}\n`;
+}
+
+// Emitted-chunk name for a specifier. Slashes are flattened to hyphens so the
+// name can't be read as a directory path. The hashed `.fileName` is resolved
+// from the bundle by this name — never predicted — because only Rolldown knows
+// the final hash.
+function hostReactFacadeChunkName(specifier: string): string {
+  return `host-react-${specifier.replaceAll("/", "-")}`;
+}
+
+// Exact name -> specifier, not a `startsWith("host-react-")` prefix test: this
+// set decides which chunks are excluded from entry selection and compile hints,
+// and a real app chunk that happened to share the prefix would be silently
+// dropped from those gates.
+const HOST_REACT_FACADE_CHUNK_NAMES: ReadonlyMap<string, HostReactSpecifier> = new Map(
+  HOST_IMPORTMAP_SPECIFIERS.map((specifier) => [hostReactFacadeChunkName(specifier), specifier])
+);
+
+// Flattening `/` to `-` is not injective, so prove the derived names are
+// distinct. Throwing at module scope fails config load — loud and immediate —
+// rather than letting two specifiers collide onto one chunk.
+if (HOST_REACT_FACADE_CHUNK_NAMES.size !== HOST_IMPORTMAP_SPECIFIERS.length) {
+  throw new Error(
+    "[host-react-facade] two HOST_IMPORTMAP_SPECIFIERS entries flatten to the same chunk name: " +
+      HOST_IMPORTMAP_SPECIFIERS.map((s) => `${s} -> ${hostReactFacadeChunkName(s)}`).join(", ")
+  );
+}
+
+function isHostReactFacadeChunkName(name: string): boolean {
+  return HOST_REACT_FACADE_CHUNK_NAMES.has(name);
+}
+
+// A MINIMUM public API per specifier, verified against the built chunk's real
+// export list (see hostReactFacadePlugin's generateBundle).
+//
+// This is the second of two independent checks, and it exists to catch what the
+// first one structurally cannot. The first check asserts every name
+// `hostReactExportNames` asked for survived into the chunk — that catches
+// tree-shaking/elision (`experimental.lazyBarrel` prunes barrel-shaped
+// re-exports; #8850 shows this repo has been bitten before). But it compares the
+// generator against itself: if the generator regressed to emit a handful of
+// names, the built chunk would still match what it asked for and the check would
+// pass vacuously. This hand-written list is the fixed point that catches that —
+// the names third-party plugins are promised, independent of what any code
+// derives. Keyed by HostReactSpecifier so adding a specifier to the shared
+// constant fails typecheck until its contract is declared here.
+const HOST_REACT_REQUIRED_EXPORTS: Record<HostReactSpecifier, readonly string[]> = {
+  react: [
+    "default",
+    "Fragment",
+    "Suspense",
+    "createContext",
+    "createElement",
+    "forwardRef",
+    "lazy",
+    "memo",
+    "useCallback",
+    "useContext",
+    "useEffect",
+    "useMemo",
+    "useReducer",
+    "useRef",
+    "useState",
+    "version",
+  ],
+  "react/jsx-runtime": ["Fragment", "jsx", "jsxs"],
+  // `jsxDEV` is exported as `undefined` by React's PRODUCTION jsx-dev-runtime
+  // build — the name exists, the value doesn't. Asserting the name here is
+  // exactly right for a chunk export list; the runtime E2E uses `Object.hasOwn`
+  // rather than a truthiness check, since an ABSENT export also reads
+  // `undefined` and would otherwise pass.
+  "react/jsx-dev-runtime": ["Fragment", "jsxDEV"],
+  "react-dom": ["createPortal", "flushSync", "version"],
+  "react-dom/client": ["createRoot", "hydrateRoot", "version"],
+};
+
+interface FacadeLookupChunk {
+  type: string;
+  name?: string;
+  fileName?: string;
+}
+
+// Resolve each specifier's facade chunk to its hashed `.fileName`, which
+// Rolldown assigns and the browser must load. Throws rather than falling back:
+// a missing facade means the emitter didn't run, and silently mapping to
+// something else is how #11208 shipped in the first place.
+function findHostReactFacadePaths(
+  bundle: Record<string, FacadeLookupChunk>
+): Record<string, string> {
+  const byName = new Map<string, string>();
   for (const output of Object.values(bundle)) {
-    if (output.type === "chunk" && output.name === "vendor-react" && output.fileName) {
-      return output.fileName;
+    if (output.type === "chunk" && output.name && output.fileName) {
+      if (isHostReactFacadeChunkName(output.name)) byName.set(output.name, output.fileName);
     }
   }
-  return null;
+
+  const paths: Record<string, string> = {};
+  const missing: string[] = [];
+  for (const specifier of HOST_IMPORTMAP_SPECIFIERS) {
+    const fileName = byName.get(hostReactFacadeChunkName(specifier));
+    if (fileName) paths[specifier] = fileName;
+    else missing.push(specifier);
+  }
+  if (missing.length > 0) {
+    throw new Error(
+      `[host-import-map] no facade chunk emitted for: ${missing.join(", ")}. ` +
+        "Check hostReactFacadePlugin's buildStart emitFile calls in vite.config.ts."
+    );
+  }
+  return paths;
+}
+
+// Emits one facade entry chunk per host specifier and verifies the built result
+// actually carries React's public API (#11208).
+//
+// Why entry chunks: only an ENTRY has a preserved, meaningful export signature.
+// `vendor-react` is a code-split chunk, so its exports are whatever other chunks
+// happen to import from it — the private cross-chunk interface the import map
+// used to point at. Emitting `import * as m from "react"; export * from "react"`
+// as its own entry (`preserveSignature: "exports-only"`) makes Rolldown emit a
+// chunk whose export list IS react's public surface, while the actual runtime
+// modules stay captured by the untouched `vendor-react` group (priority 80) —
+// so all five facades import that same one chunk and the single-React-instance
+// guarantee holds. Do NOT add `entriesAware` to the vendor-react group to
+// "help": it fragments a group per unique importing-entry-set, which would give
+// each facade its own React copy and reintroduce `Invalid hook call`.
+function hostReactFacadePlugin(): Plugin {
+  return {
+    name: "host-react-facade",
+    apply: "build",
+    buildStart() {
+      for (const [name, specifier] of HOST_REACT_FACADE_CHUNK_NAMES) {
+        this.emitFile({
+          type: "chunk",
+          id: `${HOST_REACT_VIRTUAL_PREFIX}${specifier}`,
+          name,
+          // Explicit rather than relying on the `'exports-only'` global default:
+          // this is the property the whole contract rests on, and Vite's
+          // RollupOptions type doesn't surface `preserveEntrySignatures`, so the
+          // per-chunk override is the only place it can be stated in config.
+          preserveSignature: "exports-only",
+        });
+      }
+    },
+    resolveId(id) {
+      if (id.startsWith(HOST_REACT_VIRTUAL_PREFIX)) return `\0${id}`;
+      return null;
+    },
+    load(id) {
+      const resolvedPrefix = `\0${HOST_REACT_VIRTUAL_PREFIX}`;
+      if (!id.startsWith(resolvedPrefix)) return null;
+      return renderHostReactFacade(id.slice(resolvedPrefix.length));
+    },
+    // Runs against the FINAL bundle, so `chunk.exports` is the post-tree-shake
+    // export list — the only thing that proves the facade survived. Source-level
+    // `export *` and `preserveSignature` are both necessary but neither is
+    // sufficient evidence: lazyBarrel prunes silently.
+    generateBundle(_options, bundle) {
+      const chunksByName = new Map<string, { fileName: string; exports: string[] }>();
+      let vendorReactFileName: string | null = null;
+      const facadeImports = new Map<string, readonly string[]>();
+
+      for (const output of Object.values(bundle)) {
+        if (output.type !== "chunk") continue;
+        if (output.name === "vendor-react") vendorReactFileName = output.fileName;
+        if (!output.name || !isHostReactFacadeChunkName(output.name)) continue;
+        chunksByName.set(output.name, { fileName: output.fileName, exports: output.exports });
+        facadeImports.set(output.name, output.imports);
+      }
+
+      const problems: string[] = [];
+
+      // Fail closed. If the named group ever stops emitting, every per-facade
+      // single-instance check below would silently no-op while React quietly
+      // duplicated across entries — the exact failure this guard exists to catch.
+      if (!vendorReactFileName) {
+        problems.push(
+          "no chunk named `vendor-react` in the build output — the codeSplitting group in " +
+            "vite.config.ts is the only thing keeping React a single shared instance."
+        );
+      }
+
+      for (const [name, specifier] of HOST_REACT_FACADE_CHUNK_NAMES) {
+        const chunk = chunksByName.get(name);
+        if (!chunk) {
+          problems.push(`"${specifier}": no facade chunk named "${name}" in the bundle`);
+          continue;
+        }
+        const actual = new Set(chunk.exports);
+
+        // Check 1 — nothing the generator asked for got tree-shaken away.
+        const elided = [...hostReactExportNames(specifier), "default"].filter(
+          (n) => !actual.has(n)
+        );
+        if (elided.length > 0) {
+          problems.push(
+            `"${specifier}" (${chunk.fileName}) lost ${elided.length} export(s) the facade ` +
+              `re-exported: ${elided.join(", ")}`
+          );
+        }
+
+        // Check 2 — the promised minimum is present regardless of what the
+        // generator derived (see HOST_REACT_REQUIRED_EXPORTS).
+        const missing = HOST_REACT_REQUIRED_EXPORTS[specifier].filter((n) => !actual.has(n));
+        if (missing.length > 0) {
+          problems.push(
+            `"${specifier}" (${chunk.fileName}) is missing: ${missing.join(", ")}. ` +
+              `Emitted exports: ${chunk.exports.join(", ") || "(none)"}`
+          );
+        }
+
+        // Every facade must reach React through the one shared chunk. If a
+        // facade stopped importing vendor-react, React got inlined into it —
+        // i.e. a second copy — which breaks hooks at the first render.
+        if (vendorReactFileName && !facadeImports.get(name)?.includes(vendorReactFileName)) {
+          problems.push(
+            `"${specifier}" (${chunk.fileName}) does not import the shared vendor-react chunk ` +
+              `(${vendorReactFileName}) — React may have been duplicated into the facade.`
+          );
+        }
+      }
+
+      if (problems.length > 0) {
+        throw new Error(
+          "[host-react-facade] the production import map would serve modules that do not " +
+            "expose React's public API — third-party plugins would fail to load (#11208):\n" +
+            problems.map((p) => `  - ${p}`).join("\n")
+        );
+      }
+    },
+  };
 }
 
 // Injects `<script type="importmap">` into the production index.html and emits
@@ -442,22 +746,35 @@ function hostImportMapPlugin(state: ImportMapBuildState): Plugin {
       // that won't be emitted would be a runtime 404.
       if (!ctx.bundle) return;
 
-      const vendorReactPath = findVendorReactChunkPath(
-        ctx.bundle as Record<string, { type: string; name?: string; fileName?: string }>
-      );
-      if (!vendorReactPath) {
-        throw new Error(
-          "[host-import-map] vendor-react chunk not found in build output. " +
-            "Check the codeSplitting group with `name: 'vendor-react'` in vite.config.ts."
-        );
-      }
+      const facadePaths = findHostReactFacadePaths(ctx.bundle as Record<string, FacadeLookupChunk>);
 
-      const targetUrl = `${HOST_APP_ORIGIN}/${vendorReactPath}`;
+      // One distinct target per specifier — each facade exposes only that
+      // specifier's public surface. hostReactFacadePlugin has already verified
+      // those surfaces against the built chunks, so a map emitted here is a map
+      // that actually resolves.
       const importMapPayload = {
         imports: Object.fromEntries(
-          HOST_IMPORTMAP_SPECIFIERS.map((specifier) => [specifier, targetUrl])
+          HOST_IMPORTMAP_SPECIFIERS.map((specifier) => [
+            specifier,
+            `${HOST_APP_ORIGIN}/${facadePaths[specifier]}`,
+          ])
         ),
       };
+
+      // Pin the shape of the map itself, not just the facades it points at.
+      // The facade guard proves the CHUNKS are good; it cannot see this HTML, so
+      // a refactor that collapsed every specifier back onto one target (#11208's
+      // original shape) would leave five valid-but-unused facades and still
+      // build clean. This is the assertion that makes that regression loud.
+      const targets = Object.values(importMapPayload.imports);
+      if (new Set(targets).size !== HOST_IMPORTMAP_SPECIFIERS.length) {
+        throw new Error(
+          "[host-import-map] every specifier must map to its own facade; got " +
+            `${new Set(targets).size} distinct target(s) for ${HOST_IMPORTMAP_SPECIFIERS.length} ` +
+            "specifiers. Mapping several specifiers at one file is #11208: a shared chunk only " +
+            "exports the private cross-chunk interface, never React's public API."
+        );
+      }
       // Compact JSON without trailing whitespace — the byte sequence here is
       // exactly what the browser receives, and the SHA-256 must match.
       const serialized = JSON.stringify(importMapPayload);
@@ -492,46 +809,36 @@ function hostImportMapPlugin(state: ImportMapBuildState): Plugin {
   };
 }
 
-// Prefix for the dev-only virtual modules that re-export the host's React. Each
-// `HOST_IMPORTMAP_SPECIFIERS` entry gets one (`…/react`, `…/react-dom/client`,
-// …). Vite serves a resolved virtual id at `/@id/<id>` in dev, so that URL is
-// stable across runs — unlike the optimized-dep path (`/node_modules/.vite/
-// deps/react.js?v=<hash>`), whose hash changes per optimize pass and can't be
-// referenced statically from an import map.
-const DEV_HOST_REACT_PREFIX = "virtual:daintree-host-react/";
-
-// Dev counterpart to hostImportMapPlugin. In production the import map points
-// plugin bundles at the hashed `vendor-react` chunk; in dev that chunk doesn't
-// exist (Vite serves React from the module graph), so a sideloaded plugin view
-// that externalizes React has nothing to resolve `react` against and fails to
-// mount (#10514). This plugin closes that gap: it injects an import map into the
-// dev index.html mapping each host specifier to a stable virtual module that
+// Dev counterpart to hostImportMapPlugin. Production maps each specifier to a
+// hashed facade chunk emitted by hostReactFacadePlugin; in dev those chunks
+// don't exist (Vite serves React from the module graph), so a sideloaded plugin
+// view that externalizes React has nothing to resolve `react` against and fails
+// to mount (#10514). This plugin closes that gap: it injects an import map into
+// the dev index.html mapping each host specifier to a stable virtual module that
 // re-exports the host's React. Because the virtual module's own `import` is
 // resolved by Vite server-side (not via the browser import map), it lands on the
 // exact React instance the host uses — one instance shared with every plugin,
 // same guarantee as production. Serve-only; the dev CSP carries `'unsafe-inline'`
 // so the inline `<script type="importmap">` needs no hash.
+//
+// Vite serves a resolved virtual id at `/@id/<id>`, so that URL is stable across
+// runs — unlike the optimized-dep path (`/node_modules/.vite/deps/react.js?v=
+// <hash>`), whose hash changes per optimize pass and can't be referenced
+// statically from an import map. The id is left un-prefixed here for that
+// reason; the production emitter `\0`-prefixes the same id, which is why these
+// two plugins resolve alike but not identically.
 function hostImportMapDevPlugin(): Plugin {
   return {
     name: "host-import-map-dev",
     apply: "serve",
     resolveId(id) {
-      if (id.startsWith(DEV_HOST_REACT_PREFIX)) return id;
+      if (id.startsWith(HOST_REACT_VIRTUAL_PREFIX)) return id;
       return null;
     },
     load(id) {
-      if (!id.startsWith(DEV_HOST_REACT_PREFIX)) return null;
-      const specifier = id.slice(DEV_HOST_REACT_PREFIX.length);
-      const target = JSON.stringify(specifier);
-      // `export *` carries the named exports (`useState`, `jsx`, …); the
-      // computed default keeps `import React from "react"` working without a
-      // direct `export { default }` that would throw for subpaths (e.g.
-      // jsx-runtime) that have no own default export.
-      return (
-        `import * as m from ${target};\n` +
-        `export * from ${target};\n` +
-        `export default m.default ?? m;\n`
-      );
+      if (!id.startsWith(HOST_REACT_VIRTUAL_PREFIX)) return null;
+      // Same generator as production — dev/prod ABI parity by construction.
+      return renderHostReactFacade(id.slice(HOST_REACT_VIRTUAL_PREFIX.length));
     },
     transformIndexHtml(_html, ctx) {
       if (!ctx.server) return;
@@ -539,7 +846,7 @@ function hostImportMapDevPlugin(): Plugin {
         imports: Object.fromEntries(
           HOST_IMPORTMAP_SPECIFIERS.map((specifier) => [
             specifier,
-            `/@id/${DEV_HOST_REACT_PREFIX}${specifier}`,
+            `/@id/${HOST_REACT_VIRTUAL_PREFIX}${specifier}`,
           ])
         ),
       };
@@ -603,8 +910,11 @@ function rendererBundleSizePlugin(): Plugin {
           chunks[name] = { raw, gzip: gz };
           totalJsRaw += raw;
           totalJsGzip += gz;
-          if (output.isEntry && !entryChunkName) {
-            entryChunkName = name;
+          // The app entry specifically, not merely the first `isEntry` chunk:
+          // hostReactFacadePlugin emits five React facades as additional
+          // entries, and bundle order does not guarantee the app comes first.
+          if (output.isEntry && !isHostReactFacadeChunkName(name)) {
+            entryChunkName ??= name;
           }
         } else if (output.type === "asset" && output.fileName.endsWith(".css")) {
           const src = output.source;
@@ -755,6 +1065,10 @@ function compileHintsPlugin(): Plugin {
     facadeModuleId?: string | null;
   }): boolean => {
     const facade = chunk.facadeModuleId?.split(path.sep).join("/");
+    // The React facades are entries but not boot-hot: they're re-export shims a
+    // plugin pulls in on demand, so eager-compiling them costs startup time for
+    // code the app itself never calls.
+    if (isHostReactFacadeChunkName(chunk.name)) return false;
     return (
       chunk.isEntry ||
       hintedChunkNames.has(chunk.name) ||
@@ -798,6 +1112,7 @@ function compileHintsPlugin(): Plugin {
 // the native handle, so they're read lazily, never structured-cloned.
 interface BundleChunkLike {
   type: string;
+  name?: string;
   fileName: string;
   isEntry?: boolean;
   facadeModuleId?: string | null;
@@ -842,7 +1157,15 @@ function firstRenderModulePreloadPlugin(): Plugin {
       // Populated only for production builds — the dev server has no bundle.
       if (!ctx.bundle) return;
 
-      const chunks = Object.values(ctx.bundle as unknown as Record<string, BundleChunkLike>);
+      // Drop the React facades before the closure math. computeFirstRenderPreloadFiles
+      // subtracts every `isEntry` chunk's closure as "what Vite already
+      // auto-preloads" — true for the HTML entry, false for the facades, which
+      // index.html never references (a plugin imports them at runtime through
+      // the import map). Leaving them in would subtract a closure the browser
+      // was never given, silently dropping preload tags a first-render seed needs.
+      const chunks = Object.values(ctx.bundle as unknown as Record<string, BundleChunkLike>).filter(
+        (chunk) => !isHostReactFacadeChunkName(chunk.name ?? "")
+      );
       const { files, matchedSeedCount } = computeFirstRenderPreloadFiles(
         chunks,
         seedSourcePaths,
@@ -954,6 +1277,9 @@ export default defineConfig(({ command, mode }) => {
         ],
       }),
       tailwindcss(),
+      // Must precede hostImportMapPlugin: it emits (and validates) the facade
+      // chunks that plugin's transformIndexHtml resolves the map targets from.
+      hostReactFacadePlugin(),
       hostImportMapPlugin(importMapState),
       hostImportMapDevPlugin(),
       // Must precede cspTransformPlugin: both use default-order

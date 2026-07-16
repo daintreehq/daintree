@@ -1,11 +1,11 @@
 import { z } from "zod";
 import { defineIpcNamespace, op, opValidated } from "../define.js";
 import {
-  RESOURCE_PROFILE_CONFIGS,
   type ResourceProfilePayload,
   type ResourceProfileSnapshot,
 } from "../../../shared/types/resourceProfile.js";
 import { getResourceProfileService } from "../../window/serviceRefs.js";
+import { resolveResourceProfileConfig } from "../../utils/resourceProfileConfig.js";
 import type { HandlerDependencies } from "../types.js";
 import { RESOURCE_PROFILE_METHOD_CHANNELS } from "./resourceProfile.preload.js";
 
@@ -23,7 +23,9 @@ export function registerResourceProfileHandlers(_deps: HandlerDependencies): () 
         RESOURCE_PROFILE_METHOD_CHANNELS.getResourceProfile,
         async (): Promise<ResourceProfilePayload> => {
           const profile = getResourceProfileService()?.getProfile() ?? "balanced";
-          return { profile, config: RESOURCE_PROFILE_CONFIGS[profile] };
+          // Resolve through the same helper the broadcast path uses so the
+          // pulled WebGL flip thresholds match the pushed ones (#11192).
+          return { profile, config: resolveResourceProfileConfig(profile) };
         }
       ),
       // Read-only host-pressure projection (profile + thermal/battery/CPU/lag

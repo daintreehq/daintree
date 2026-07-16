@@ -146,6 +146,7 @@ export const BUILT_IN_ACTION_IDS = [
   "file.read",
   "file.openDiff",
   "file.openInEditor",
+  "file.openInBrowser",
   "file.openImageViewer",
   "file.showItemInFolder",
   "file.openPanel",

@@ -12,6 +12,28 @@ vi.mock("@/components/ui/ContentFadeIn", () => ({
   ContentFadeIn: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
+// The subset of ErrorBoundary's contract the host relies on. Typed here rather
+// than cast at each read site — a cast would regress the per-rule
+// no-unsafe-type-assertion lint baseline.
+interface CapturedFallbackProps {
+  error: Error;
+  errorInfo?: React.ErrorInfo;
+  resetError: () => void;
+  incidentId?: string | null;
+}
+interface CapturedBoundaryProps {
+  children: React.ReactNode;
+  onReset?: () => void;
+  resetKeys?: Array<string | number>;
+  componentName?: string;
+  fallback?: React.ComponentType<CapturedFallbackProps>;
+}
+
+// The fake records the props it was handed, so the tests can render the very
+// fallback the host supplied. Asserting only that `fallback` is *a function*
+// would be satisfied by `() => null`.
+const boundaryProps = vi.hoisted(() => ({ last: null as CapturedBoundaryProps | null }));
+
 // Stub the real ErrorBoundary with a minimal class — exercising the entire
 // reporting pipeline (Sentry, errorStore, notify) is out of scope for the
 // host's unit tests. The stub honors `resetKeys` and `onReset` so the reload
@@ -19,12 +41,7 @@ vi.mock("@/components/ui/ContentFadeIn", () => ({
 vi.mock("@/components/ErrorBoundary", async () => {
   const { Component } = await import("react");
   class FakeBoundary extends Component<
-    {
-      children: React.ReactNode;
-      onReset?: () => void;
-      resetKeys?: Array<string | number>;
-      componentName?: string;
-    },
+    CapturedBoundaryProps,
     { hasError: boolean; lastKey: string | number | undefined }
   > {
     state = { hasError: false, lastKey: this.props.resetKeys?.[0] };
@@ -42,6 +59,7 @@ vi.mock("@/components/ErrorBoundary", async () => {
       void prev;
     }
     render(): React.ReactNode {
+      boundaryProps.last = this.props;
       if (this.state.hasError) {
         return (
           <button
@@ -79,6 +97,7 @@ function makeConfig(overrides: Partial<PanelKindConfig> = {}): PanelKindConfig {
 const onPanelKindsChangedMock = vi.fn();
 
 beforeEach(() => {
+  boundaryProps.last = null;
   onPanelKindsChangedMock.mockReset();
   onPanelKindsChangedMock.mockReturnValue(() => {});
   vi.stubGlobal("electron", undefined);
@@ -413,6 +432,150 @@ describe("makePluginViewHost", () => {
     expect(() => act(() => emit!({ kinds: [] }))).not.toThrow();
 
     unmount();
+  });
+
+  it("hands the boundary a plugin-specific fallback and an undoubled component name (#11207)", async () => {
+    const { makePluginViewHost } = await import("../PluginViewHost");
+    const Host = makePluginViewHost(makeConfig());
+
+    render(
+      <Host
+        id="panel-fallback"
+        title="Dashboard"
+        isFocused={false}
+        onFocus={(): void => {}}
+        onClose={(): void => {}}
+      />
+    );
+
+    await waitFor(() => expect(boundaryProps.last).not.toBeNull());
+    // `kindId` already carries the plugin prefix, so re-prefixing it produced
+    // `PluginView:acme.acme.dashboard` in the title and every log field.
+    expect(boundaryProps.last!.componentName).toBe("PluginView:acme.dashboard");
+  });
+
+  // Closes the seam the fake boundary would otherwise hide: asserting that
+  // `fallback` is merely a function is satisfied by `() => null`. Rendering the
+  // very component the host handed the boundary proves the wiring reaches the
+  // real diagnostics pane, carries this plugin's identity, and fails closed
+  // when the runtime store holds no metadata for it.
+  it("hands the boundary a fallback that renders this plugin's diagnostics (#11207)", async () => {
+    const { makePluginViewHost } = await import("../PluginViewHost");
+    const Host = makePluginViewHost(makeConfig());
+
+    render(
+      <Host
+        id="panel-fallback-render"
+        title="Dashboard"
+        isFocused={false}
+        onFocus={(): void => {}}
+        onClose={(): void => {}}
+      />
+    );
+    await waitFor(() => expect(boundaryProps.last).not.toBeNull());
+
+    const Fallback = boundaryProps.last!.fallback!;
+    const error = new Error("view exploded");
+    error.stack = "Error: view exploded\n    at View (/Users/alice/acme/dashboard.js:3:1)";
+
+    render(
+      <Fallback
+        error={error}
+        errorInfo={{ componentStack: "\n    at View" }}
+        resetError={(): void => {}}
+        incidentId={null}
+      />
+    );
+
+    const pane = screen.getByTestId("plugin-view-diagnostics").textContent ?? "";
+    expect(pane).toContain("view exploded");
+    expect(pane).toContain("plugin://acme/dashboard.js");
+    expect(pane).toContain("acme.dashboard");
+    // This suite never seeds a runtime snapshot ⇒ unknown devMode ⇒ redacted.
+    expect(screen.getByTestId("plugin-view-diagnostics-trace").textContent).not.toContain(
+      "/Users/alice"
+    );
+  });
+
+  // The metadata the pane needs may not exist at host-mount time: `loadPlugin`
+  // registers the panel kind before the plugin is listable, and dev attach
+  // never fires provenance. Reaching the fallback means the view already threw,
+  // so the plugin is loaded — the pane must pull for itself at that point
+  // rather than trust whatever the store happened to hold earlier (#11207).
+  it("pulls a fresh plugin snapshot when the diagnostics pane mounts (#11207)", async () => {
+    const list = vi.fn().mockResolvedValue([]);
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      writable: true,
+      value: {
+        plugin: {
+          onPanelKindsChanged: onPanelKindsChangedMock,
+          onProvenanceChanged: vi.fn().mockReturnValue(() => {}),
+          list,
+        },
+      },
+    });
+
+    const { makePluginViewHost } = await import("../PluginViewHost");
+    const Host = makePluginViewHost(makeConfig());
+
+    render(
+      <Host
+        id="panel-refresh"
+        title="Dashboard"
+        isFocused={false}
+        onFocus={(): void => {}}
+        onClose={(): void => {}}
+      />
+    );
+    await waitFor(() => expect(boundaryProps.last).not.toBeNull());
+    const callsBeforeCrash = list.mock.calls.length;
+
+    const Fallback = boundaryProps.last!.fallback!;
+    render(<Fallback error={new Error("view exploded")} resetError={(): void => {}} />);
+
+    await waitFor(() => expect(list.mock.calls.length).toBeGreaterThan(callsBeforeCrash));
+  });
+
+  // The dev-plugin snapshot can land *after* the view has already crashed (the
+  // pull is async, and `daintree-plugin dev` never fires provenance). The pane
+  // must upgrade in place rather than stay redacted until the user retries.
+  it("upgrades a redacted trace to raw when the plugin's dev-mode snapshot lands late (#11207)", async () => {
+    const { makePluginViewHost } = await import("../PluginViewHost");
+    // Resolved from the same module graph as the host — the suite resets
+    // modules between cases, so a static import would seed a different store.
+    const { usePluginRuntimeStore } = await import("@/store/pluginRuntimeStore");
+    const Host = makePluginViewHost(makeConfig());
+
+    render(
+      <Host
+        id="panel-late-snapshot"
+        title="Dashboard"
+        isFocused={false}
+        onFocus={(): void => {}}
+        onClose={(): void => {}}
+      />
+    );
+    await waitFor(() => expect(boundaryProps.last).not.toBeNull());
+
+    const Fallback = boundaryProps.last!.fallback!;
+    const error = new Error("view exploded");
+    error.stack = "Error: view exploded\n    at View (/Users/alice/acme/dashboard.js:3:1)";
+    render(<Fallback error={error} resetError={(): void => {}} />);
+
+    const trace = () => screen.getByTestId("plugin-view-diagnostics-trace").textContent ?? "";
+    expect(trace()).not.toContain("/Users/alice");
+
+    act(() => {
+      usePluginRuntimeStore.setState({
+        pluginMetaById: new Map([["acme", { devMode: true, displayName: "Acme Tools" }]]),
+      });
+    });
+
+    expect(trace()).toContain("/Users/alice");
+    // The same snapshot carries the manifest display name, which the panel's
+    // own `config.name` ("Dashboard") can't supply.
+    expect(screen.getByTestId("plugin-view-diagnostics").textContent).toContain("Acme Tools");
   });
 });
 

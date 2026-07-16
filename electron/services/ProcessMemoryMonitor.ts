@@ -276,9 +276,17 @@ export function getEluHighStreaks(): ReadonlyMap<number, number> {
 }
 
 export interface MemoryPressureActions {
-  destroyHiddenWebviews: (tier: 1 | 2) => Promise<void>;
+  /**
+   * Returns the number of hidden portal tabs destroyed. This is a FLOOR, not a
+   * total: the `window:destroy-hidden-webviews` push that rides along is
+   * fire-and-forget, so any webviews the renderers drop in response are not
+   * counted. Reported under a name that says what it measures rather than
+   * implying it covers every webview this action tears down.
+   */
+  destroyHiddenWebviews: (tier: 1 | 2) => Promise<number>;
   hibernateIdleProjects: () => Promise<void>;
-  evictCachedProjectViews?: () => Promise<void> | void;
+  /** Returns the number of cached project views evicted. */
+  evictCachedProjectViews?: () => Promise<number> | number;
   trimPtyHostState?: () => void;
   /**
    * Optional Blink memory sampler. If wired, called once per poll BEFORE
@@ -540,20 +548,61 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
       mitigationInFlight = true;
       void (async () => {
         try {
-          let beforeMb = 0;
-          try {
-            // Force-refresh: this pair measures a reclaim delta across the
-            // settle window — a TTL-stale read would zero the delta and
-            // change tier-2 escalation behavior.
+          // Force-refresh (never read stale): these samples bracket a reclaim
+          // delta — a TTL-stale read would zero the delta and change tier-2
+          // escalation behavior.
+          const sumMonitoredMb = (): number => {
+            let total = 0;
             for (const proc of refreshAppMetricsSnapshot()) {
               if (!MONITORED_TYPES.has(proc.type)) continue;
-              beforeMb += getProcessMemoryMb(proc);
+              total += getProcessMemoryMb(proc);
             }
+            return total;
+          };
+
+          const measurePressure = (): {
+            totalMb: number;
+            pressureRemains: boolean;
+            systemPressureRemains: boolean;
+          } => {
+            let totalMb = 0;
+            let remains = false;
+            let systemRemains = false;
+            for (const proc of refreshAppMetricsSnapshot()) {
+              if (!MONITORED_TYPES.has(proc.type)) continue;
+              const mb = getProcessMemoryMb(proc);
+              totalMb += mb;
+              const threshold = warnThresholdsMb[proc.type];
+              if (threshold !== undefined && mb > threshold) {
+                remains = true;
+              }
+            }
+            // Aggregate fan-out can hold the combined footprint above the safe
+            // ceiling even when no single process trips its per-type threshold.
+            // Mirror the main poll's aggregate gate here so aggregate-driven
+            // pressure can still escalate to tier 2 when tier 1 under-reclaims —
+            // without this, aggregate-only pressure triggers tier 1 forever but
+            // can never reach tier 2.
+            if (totalMb > aggregateWarnThresholdMb) {
+              remains = true;
+            }
+            const availableMb = readAvailableSystemMemoryMb();
+            if (availableMb !== null && availableMb < systemLowMemoryThresholdMb) {
+              remains = true;
+              systemRemains = true;
+            }
+            return { totalMb, pressureRemains: remains, systemPressureRemains: systemRemains };
+          };
+
+          let beforeMb = 0;
+          try {
+            beforeMb = sumMonitoredMb();
           } catch {
             // If pre-sample fails, beforeMb stays 0; delta will be 0 and we'll
             // err on the side of escalating if pressure persists.
           }
 
+          let tier1TabsEvicted = 0;
           if (shouldRunTier1) {
             lastTier1At = Date.now();
             logInfo("memory-pressure-tier1-mitigation", {
@@ -562,7 +611,7 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
               beforeMb: Math.round(beforeMb),
             });
 
-            await actions.destroyHiddenWebviews(1);
+            tier1TabsEvicted = await actions.destroyHiddenWebviews(1);
 
             try {
               actions.trimPtyHostState?.();
@@ -578,29 +627,10 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
           let systemPressureRemains = false;
           let resampleFailed = false;
           try {
-            for (const proc of refreshAppMetricsSnapshot()) {
-              if (!MONITORED_TYPES.has(proc.type)) continue;
-              const mb = getProcessMemoryMb(proc);
-              afterMb += mb;
-              const threshold = warnThresholdsMb[proc.type];
-              if (threshold !== undefined && mb > threshold) {
-                pressureRemains = true;
-              }
-            }
-            // Aggregate fan-out can hold the combined footprint above the safe
-            // ceiling even when no single process trips its per-type threshold.
-            // Mirror the main poll's aggregate gate here so aggregate-driven
-            // pressure can still escalate to tier 2 when tier 1 under-reclaims —
-            // without this, aggregate-only pressure triggers tier 1 forever but
-            // can never reach tier 2.
-            if (afterMb > aggregateWarnThresholdMb) {
-              pressureRemains = true;
-            }
-            const availableAfterMb = readAvailableSystemMemoryMb();
-            if (availableAfterMb !== null && availableAfterMb < systemLowMemoryThresholdMb) {
-              pressureRemains = true;
-              systemPressureRemains = true;
-            }
+            const measured = measurePressure();
+            afterMb = measured.totalMb;
+            pressureRemains = measured.pressureRemains;
+            systemPressureRemains = measured.systemPressureRemains;
           } catch {
             // Re-sample failed — assume pressure persists and treat reclaim
             // as zero so the gate falls through to escalation. Without
@@ -621,6 +651,12 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
               beforeMb: Math.round(beforeMb),
               afterMb: Math.round(afterMb),
               deltaMb: Math.round(deltaMb),
+              // Portal tabs are the only part of this lever whose outcome main
+              // can observe (the webview push is fire-and-forget), so this is a
+              // floor. Even so it separates "tier 1 found tabs to destroy" from
+              // "it found none" when the delta reads zero — previously
+              // indistinguishable.
+              portalTabsDestroyed: tier1TabsEvicted,
               pressureRemains,
               resampleFailed,
             });
@@ -637,14 +673,96 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
             // doesn't leave the cooldown unconsumed and let the next poll
             // re-fire destroyHiddenWebviews(2).
             lastTier2At = Date.now();
+            // The escalation inputs, not a reclaim delta: on the common path
+            // tier 1 ran polls earlier and its cooldown blocks a re-run, so
+            // nothing has acted between `beforeMb` and `afterMb` here. This
+            // line previously logged that no-action delta as `deltaMb`, which
+            // is ~0 by construction and read as "tier 2 reclaimed nothing".
             logInfo("memory-pressure-tier2-mitigation", {
               pollCount,
               consecutivePressureCount,
-              deltaMb: Math.round(deltaMb),
+              tier1ReclaimMb: Math.round(lastTier1ReclaimMb),
+              systemPressureRemains,
             });
-            await actions.destroyHiddenWebviews(2);
-            await actions.evictCachedProjectViews?.();
-            await actions.hibernateIdleProjects();
+
+            // `afterMb` is this tier's baseline: sampled after tier 1 settled
+            // (or with no action taken at all) and before any tier-2 action.
+            // The exception is a failed re-sample, where it was forced to
+            // `beforeMb` as an escalation sentinel rather than measured. Then
+            // it is either 0 (the pre-sample failed too) or, if tier 1 acted in
+            // this cycle, a pre-tier-1 value that would bill tier 1's reclaim
+            // to tier 2. Re-baseline instead, and report the measurement failed
+            // if even that can't be had.
+            //
+            // The two tiers cannot currently act in one cycle — tier 1 re-fires
+            // on a 5-min clock and tier 2 on a 10-min one, leaving them
+            // permanently out of phase — but that is a consequence of the
+            // cooldown arithmetic, not a guarantee, and this tier's whole job
+            // is to not report numbers it cannot stand behind.
+            let tier2BeforeMb = afterMb;
+            let tier2MeasurementFailed = false;
+            if (resampleFailed) {
+              try {
+                tier2BeforeMb = sumMonitoredMb();
+              } catch {
+                tier2MeasurementFailed = true;
+              }
+            }
+
+            // Each action is isolated: one throwing must neither skip the
+            // levers after it nor blind the reclaim measurement below, which
+            // is this tier's whole point. Previously a thrown
+            // destroyHiddenWebviews(2) skipped both remaining levers.
+            let tier2TabsEvicted = 0;
+            try {
+              tier2TabsEvicted = await actions.destroyHiddenWebviews(2);
+            } catch (err) {
+              logWarn("memory-pressure-tier2-action-failed", {
+                action: "destroyHiddenWebviews",
+                error: String(err),
+              });
+            }
+            let tier2ViewsEvicted = 0;
+            try {
+              tier2ViewsEvicted = (await actions.evictCachedProjectViews?.()) ?? 0;
+            } catch (err) {
+              logWarn("memory-pressure-tier2-action-failed", {
+                action: "evictCachedProjectViews",
+                error: String(err),
+              });
+            }
+            try {
+              await actions.hibernateIdleProjects();
+            } catch (err) {
+              logWarn("memory-pressure-tier2-action-failed", {
+                action: "hibernateIdleProjects",
+                error: String(err),
+              });
+            }
+
+            await new Promise<void>((resolve) => setTimeout(resolve, RECLAIM_SETTLE_MS));
+
+            let tier2AfterMb = tier2BeforeMb;
+            let tier2PressureRemains = true;
+            try {
+              const measured = measurePressure();
+              tier2AfterMb = measured.totalMb;
+              tier2PressureRemains = measured.pressureRemains;
+            } catch {
+              tier2MeasurementFailed = true;
+            }
+
+            logInfo("memory-pressure-tier2-reclaim", {
+              beforeMb: Math.round(tier2BeforeMb),
+              afterMb: Math.round(tier2AfterMb),
+              deltaMb: tier2MeasurementFailed
+                ? 0
+                : Math.round(Math.max(0, tier2BeforeMb - tier2AfterMb)),
+              portalTabsDestroyed: tier2TabsEvicted,
+              viewsEvicted: tier2ViewsEvicted,
+              pressureRemains: tier2PressureRemains,
+              resampleFailed: tier2MeasurementFailed,
+            });
           }
         } catch (err) {
           logWarn("memory-pressure-mitigation-failed", { error: String(err) });

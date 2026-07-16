@@ -127,8 +127,9 @@ export function useAgentScope({
     scopeKind === "custom" ? agentResolvedInline : resolveInline("inherit");
   // Mirror the three-tier precedence in `resolveEffectiveInlineMode`: a preset
   // inherits from the agent Default scope; the agent Default scope inherits from
-  // the curated registry default (`capabilities.defaultInlineMode`, currently
-  // only Grok) when one exists, and only otherwise from the global switch.
+  // the curated registry default (`capabilities.defaultInlineMode`) when one is
+  // declared, and only otherwise from the global switch. No shipped agent pins
+  // one today — they all follow the global switch so it stays user-overridable.
   // Attributing a registry-shadowed value to the global setting (#10894) is wrong
   // — the global toggle has no effect while the built-in default decides.
   const hasRegistryInlineDefault = typeof agentCfg?.capabilities?.defaultInlineMode === "boolean";

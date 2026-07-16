@@ -24,6 +24,7 @@ import {
   mergeCspHeaders,
   isDevPreviewPartition,
 } from "../utils/webviewCsp.js";
+import { resolveHtmlPreviewRoot } from "./htmlPreviewTokens.js";
 import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
 import {
   isLocalhostUrl,
@@ -187,6 +188,87 @@ function buildDaintreeFileErrorHeaders(): Record<string, string> {
 }
 
 /**
+ * Shared read core for daintree-file:// and daintree-html://: realpath
+ * containment, 512 KB cap, and O_RDONLY|O_NOFOLLOW open. Returns the file bytes
+ * plus the canonical path (for MIME), or an error Response. Callers own the
+ * success headers so each scheme sets its own CSP. Extracted verbatim from the
+ * original daintree-file:// handler; the flow (realpath → path.relative → stat →
+ * O_NOFOLLOW open) and its TOCTOU defenses are unchanged.
+ */
+// Return type is inferred, not annotated: annotating `buffer: Buffer` widens it
+// to `Buffer<ArrayBufferLike>`, which `new Response(...)` rejects as a BodyInit.
+// Inference preserves the exact `readFile()` result type the Response accepts.
+async function readContainedDaintreeFile(normalizedRoot: string, normalizedFile: string) {
+  // Resolve symlinks before containment to block in-root symlinks pointing outside root (CVE-2025-53109 / CVE-2025-54794 class).
+  let realRoot: string;
+  let realFile: string;
+  try {
+    realRoot = await fs.realpath(normalizedRoot);
+    realFile = await fs.realpath(normalizedFile);
+  } catch {
+    return new Response("Not Found", {
+      status: 404,
+      headers: buildDaintreeFileErrorHeaders(),
+    });
+  }
+
+  const rel = path.relative(realRoot, realFile);
+  // Match exact ".." and "../*" — bare startsWith("..") would reject legitimate files like "..hidden/x". isAbsolute catches Windows cross-drive escapes.
+  if (rel === ".." || rel.startsWith(".." + path.sep) || path.isAbsolute(rel)) {
+    return new Response("Not Found", {
+      status: 404,
+      headers: buildDaintreeFileErrorHeaders(),
+    });
+  }
+
+  // Stat the realpath-resolved path for an accurate size before any read.
+  let fileStat: Awaited<ReturnType<typeof fs.stat>>;
+  try {
+    fileStat = await fs.stat(realFile);
+  } catch {
+    return new Response("Not Found", {
+      status: 404,
+      headers: buildDaintreeFileErrorHeaders(),
+    });
+  }
+
+  if (fileStat.size > DAINTREE_FILE_MAX_BYTES) {
+    return new Response("Payload Too Large", {
+      status: 413,
+      headers: buildDaintreeFileErrorHeaders(),
+    });
+  }
+
+  // Open the user-supplied normalized path (not realFile) with O_NOFOLLOW
+  // so a *final-component* symlink injected after the realpath check is
+  // rejected with ELOOP — narrowing (not fully closing) the realpath→open
+  // TOCTOU window; an intermediate-directory swap is still theoretically
+  // possible and is an accepted limitation shared with files:read. On Windows
+  // O_NOFOLLOW is 0 (no-op); realpath containment still applies.
+  let fileHandle: Awaited<ReturnType<typeof fs.open>>;
+  try {
+    fileHandle = await fs.open(normalizedFile, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  } catch (err) {
+    const errCode = (err as NodeJS.ErrnoException).code;
+    if (errCode === "ELOOP" || errCode === "ENOENT") {
+      return new Response("Not Found", {
+        status: 404,
+        headers: buildDaintreeFileErrorHeaders(),
+      });
+    }
+    throw err;
+  }
+
+  try {
+    const buffer = await fileHandle.readFile();
+    return { buffer, realFile };
+  } finally {
+    // Swallow close errors so they don't mask a preceding readFile failure.
+    await fileHandle.close().catch(() => {});
+  }
+}
+
+/**
  * Create the daintree-file:// protocol handler function.
  */
 function createDaintreeFileProtocolHandler() {
@@ -224,84 +306,202 @@ function createDaintreeFileProtocolHandler() {
         });
       }
 
-      const normalizedFile = path.normalize(filePath);
-      const normalizedRoot = path.normalize(rootPath);
+      const result = await readContainedDaintreeFile(
+        path.normalize(rootPath),
+        path.normalize(filePath)
+      );
+      if (result instanceof Response) return result;
 
-      // Resolve symlinks before containment to block in-root symlinks pointing outside root (CVE-2025-53109 / CVE-2025-54794 class).
-      let realRoot: string;
-      let realFile: string;
-      try {
-        realRoot = await fs.realpath(normalizedRoot);
-        realFile = await fs.realpath(normalizedFile);
-      } catch {
-        return new Response("Not Found", {
-          status: 404,
-          headers: buildDaintreeFileErrorHeaders(),
-        });
-      }
-
-      const rel = path.relative(realRoot, realFile);
-      // Match exact ".." and "../*" — bare startsWith("..") would reject legitimate files like "..hidden/x". isAbsolute catches Windows cross-drive escapes.
-      if (rel === ".." || rel.startsWith(".." + path.sep) || path.isAbsolute(rel)) {
-        return new Response("Not Found", {
-          status: 404,
-          headers: buildDaintreeFileErrorHeaders(),
-        });
-      }
-
-      // Stat the realpath-resolved path for an accurate size before any read.
-      let fileStat: Awaited<ReturnType<typeof fs.stat>>;
-      try {
-        fileStat = await fs.stat(realFile);
-      } catch {
-        return new Response("Not Found", {
-          status: 404,
-          headers: buildDaintreeFileErrorHeaders(),
-        });
-      }
-
-      if (fileStat.size > DAINTREE_FILE_MAX_BYTES) {
-        return new Response("Payload Too Large", {
-          status: 413,
-          headers: buildDaintreeFileErrorHeaders(),
-        });
-      }
-
-      // Open the user-supplied normalized path (not realFile) with O_NOFOLLOW
-      // so a final-component symlink injected after the realpath check is
-      // rejected with ELOOP. Closes the TOCTOU gap between realpath and the
-      // actual read. On Windows O_NOFOLLOW is 0 (no-op); realpath containment
-      // still applies. Mirrors the files:read IPC handler.
-      let fileHandle: Awaited<ReturnType<typeof fs.open>>;
-      try {
-        fileHandle = await fs.open(normalizedFile, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-      } catch (err) {
-        const errCode = (err as NodeJS.ErrnoException).code;
-        if (errCode === "ELOOP" || errCode === "ENOENT") {
-          return new Response("Not Found", {
-            status: 404,
-            headers: buildDaintreeFileErrorHeaders(),
-          });
-        }
-        throw err;
-      }
-
-      try {
-        const buffer = await fileHandle.readFile();
-        const mimeType = getMimeType(realFile);
-        // Content-Length reflects the bytes actually returned. If the file
-        // grew between stat() and readFile(), buffer.length is the truth;
-        // fileStat.size would be stale.
-        return new Response(buffer, {
-          status: 200,
-          headers: buildDaintreeFileHeaders(mimeType, buffer.length),
-        });
-      } finally {
-        // Swallow close errors so they don't mask a preceding readFile failure.
-        await fileHandle.close().catch(() => {});
-      }
+      // Content-Length reflects the bytes actually returned. If the file
+      // grew between stat() and readFile(), buffer.length is the truth.
+      return new Response(result.buffer, {
+        status: 200,
+        headers: buildDaintreeFileHeaders(getMimeType(result.realFile), result.buffer.length),
+      });
     } catch (err) {
       console.error("[MAIN] daintree-file protocol error:", err);
+      return new Response("Internal Server Error", {
+        status: 500,
+        headers: buildDaintreeFileErrorHeaders(),
+      });
+    }
+  };
+}
+
+/** True for any `daintree-html://…` request URL (the sandboxed preview scheme). */
+function isDaintreeHtmlPreviewUrl(url: string | undefined): boolean {
+  return typeof url === "string" && url.startsWith("daintree-html://");
+}
+
+/**
+ * CSP for a `daintree-html://<token>` sandboxed preview *document* (.html/.htm).
+ * Scoped to the exact token authority — NOT the whole `daintree-html:` scheme —
+ * so a rendered report cannot tag-load through a different token's root. Only
+ * navigable-document responses carry an enforced CSP (the browser ignores CSP
+ * on sub-resource responses), so sibling css/js/img assets keep the strict leaf
+ * headers.
+ *
+ * The iframe element also sets sandbox="allow-scripts" (opaque origin, no
+ * allow-same-origin); the `sandbox allow-scripts` directive here is
+ * defense-in-depth if that attribute is ever dropped. `connect-src 'none'`
+ * blocks fetch/XHR/WebSocket back to the scheme; the document can still execute
+ * its own scripts and tag-load its own assets. 'unsafe-inline'/'unsafe-eval'
+ * are harmless inside a fully isolated, network-less opaque origin and let
+ * real-world report/chart pages run.
+ */
+function buildDaintreeHtmlDocHeaders(token: string, contentLength: number): Record<string, string> {
+  const self = `daintree-html://${token}`;
+  const csp = [
+    "sandbox allow-scripts",
+    "default-src 'none'",
+    `script-src ${self} 'unsafe-inline' 'unsafe-eval'`,
+    `style-src ${self} 'unsafe-inline'`,
+    `img-src ${self} data: blob:`,
+    `font-src ${self} data:`,
+    `media-src ${self} data: blob:`,
+    "connect-src 'none'",
+    // WebRTC is not covered by connect-src, so block it explicitly — otherwise a
+    // rendered report could exfiltrate via an attacker-controlled STUN/TURN host.
+    "webrtc 'block'",
+    "worker-src 'none'",
+    "frame-src 'none'",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'none'",
+  ].join("; ");
+  return {
+    "Content-Type": "text/html; charset=utf-8",
+    "Content-Length": String(contentLength),
+    "Content-Security-Policy": csp,
+    "Cross-Origin-Resource-Policy": "cross-origin",
+    // The trusted renderer document is COEP `credentialless` (app:// headers +
+    // vite dev server), and a COEP document may only embed frames whose own
+    // document response carries a compatible COEP. Without this the iframe
+    // navigation dies with ERR_BLOCKED_BY_RESPONSE — a blank white frame.
+    "Cross-Origin-Embedder-Policy": "credentialless",
+    "X-Content-Type-Options": "nosniff",
+    // Belt-and-suspenders egress limits: no referrer leakage on any request the
+    // page makes, and no speculative DNS lookups of hostnames in the markup.
+    "Referrer-Policy": "no-referrer",
+    "X-DNS-Prefetch-Control": "off",
+    "Cache-Control": "no-store",
+  };
+}
+
+/**
+ * Create the daintree-html:// protocol handler — sandboxed HTML file preview
+ * (issue #11191). URL shape: `daintree-html://<token>/<relative/path>`, where
+ * <token> is an opaque capability minted by htmlPreviewTokens for exactly one
+ * canonical root. Unknown/stale tokens 404 — a request never falls through to a
+ * filesystem read without a registered root. Security mirrors daintree-file://:
+ * segment `..` rejection, realpath containment, and O_RDONLY|O_NOFOLLOW on the
+ * final open (via the shared read core).
+ */
+function createDaintreeHtmlProtocolHandler() {
+  return async (request: GlobalRequest) => {
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      return new Response("Method Not Allowed", {
+        status: 405,
+        headers: buildDaintreeFileErrorHeaders(),
+      });
+    }
+
+    let url: URL;
+    try {
+      url = new URL(request.url);
+    } catch {
+      return new Response("Bad Request", {
+        status: 400,
+        headers: buildDaintreeFileErrorHeaders(),
+      });
+    }
+
+    const token = url.hostname;
+    const root = token ? resolveHtmlPreviewRoot(token) : undefined;
+    if (!root) {
+      // Unknown or released token — never fall back to a raw filesystem read.
+      return new Response("Not Found", {
+        status: 404,
+        headers: buildDaintreeFileErrorHeaders(),
+      });
+    }
+
+    // Root-identity binding: the token maps to a canonical (realpath'd) root
+    // captured at mint time. If that path no longer canonically resolves to
+    // itself — e.g. the directory was renamed away and replaced with a symlink
+    // to "/" — the token would otherwise retarget to a different subtree. Reject
+    // it so a stale capability can't be deterministically repointed.
+    try {
+      if ((await fs.realpath(root)) !== root) {
+        return new Response("Not Found", {
+          status: 404,
+          headers: buildDaintreeFileErrorHeaders(),
+        });
+      }
+    } catch {
+      return new Response("Not Found", {
+        status: 404,
+        headers: buildDaintreeFileErrorHeaders(),
+      });
+    }
+
+    // Decode the pathname segment-by-segment; ignore query/fragment so a
+    // cache-busting `?v=N` on the iframe src still maps to the same file.
+    const pathname = url.pathname;
+    if (pathname === "/" || pathname === "") {
+      return new Response("Not Found", {
+        status: 404,
+        headers: buildDaintreeFileErrorHeaders(),
+      });
+    }
+    let decodedPath: string;
+    try {
+      decodedPath = decodeURIComponent(pathname.startsWith("/") ? pathname.slice(1) : pathname);
+    } catch {
+      return new Response("Bad Request", {
+        status: 400,
+        headers: buildDaintreeFileErrorHeaders(),
+      });
+    }
+    if (decodedPath.includes("\0")) {
+      return new Response("Bad Request", {
+        status: 400,
+        headers: buildDaintreeFileErrorHeaders(),
+      });
+    }
+    if (decodedPath.includes("\\")) {
+      return new Response("Not Found", {
+        status: 404,
+        headers: buildDaintreeFileErrorHeaders(),
+      });
+    }
+    // Collapse `..` against a leading slash, then reject any residual `..`
+    // segment. Defense-in-depth; realpath/path.relative containment in the
+    // shared read core is the real traversal guard. #4702: segment match, not
+    // substring includes('..').
+    const normalizedPosix = path.posix.normalize("/" + decodedPath).slice(1);
+    if (normalizedPosix === "" || normalizedPosix.split("/").some((seg) => seg === "..")) {
+      return new Response("Not Found", {
+        status: 404,
+        headers: buildDaintreeFileErrorHeaders(),
+      });
+    }
+
+    try {
+      const candidatePath = path.resolve(root, normalizedPosix);
+      const result = await readContainedDaintreeFile(path.normalize(root), candidatePath);
+      if (result instanceof Response) return result;
+
+      // Only navigable HTML documents get the loosened, token-scoped CSP;
+      // sibling assets keep the strict leaf headers (sub-resource CSP is
+      // unenforced by the browser anyway).
+      const isHtmlDoc = /\.html?$/i.test(result.realFile);
+      const headers = isHtmlDoc
+        ? buildDaintreeHtmlDocHeaders(token, result.buffer.length)
+        : buildDaintreeFileHeaders(getMimeType(result.realFile), result.buffer.length);
+      return new Response(result.buffer, { status: 200, headers });
+    } catch (err) {
+      console.error("[MAIN] daintree-html protocol error:", err);
       return new Response("Internal Server Error", {
         status: 500,
         headers: buildDaintreeFileErrorHeaders(),
@@ -553,6 +753,7 @@ export function registerProtocolsForSession(ses: Electron.Session, distPath: str
 
   ses.protocol.handle("app", createAppProtocolHandler(distPath));
   ses.protocol.handle("daintree-file", createDaintreeFileProtocolHandler());
+  ses.protocol.handle("daintree-html", createDaintreeHtmlProtocolHandler());
   if (cachedGetPluginDir) {
     ses.protocol.handle("plugin", createPluginProtocolHandler(resolvePluginDir));
   }
@@ -593,6 +794,10 @@ export function registerDeepLinkProtocolClient(): void {
 
 export function registerDaintreeFileProtocol(): void {
   protocol.handle("daintree-file", createDaintreeFileProtocolHandler());
+}
+
+export function registerDaintreeHtmlProtocol(): void {
+  protocol.handle("daintree-html", createDaintreeHtmlProtocolHandler());
 }
 
 // Stable indirection so the live `plugin://` resolver can be swapped after the
@@ -688,6 +893,10 @@ export function applyDaintreeAppCspToSession(ses: Electron.Session): void {
   ses.webRequest.onHeadersReceived(
     { urls: ["<all_urls>"], types: ["mainFrame", "subFrame", "script"] },
     (details, callback) => {
+      if (isDaintreeHtmlPreviewUrl(details.url)) {
+        callback({ responseHeaders: details.responseHeaders });
+        return;
+      }
       callback({
         responseHeaders: mergeCspHeaders(details, cspPolicy),
       });
@@ -730,6 +939,16 @@ export function setupWebviewCSP(): void {
     ses.webRequest.onHeadersReceived(
       { urls: ["<all_urls>"], types: ["mainFrame", "subFrame", "script"] },
       (details, callback) => {
+        // A daintree-html:// preview iframe carries its own token-scoped CSP
+        // (buildDaintreeHtmlDocHeaders). protocol.handle responses DO flow
+        // through onHeadersReceived (Electron 42 / Chromium 148), so without
+        // this bypass mergeCspHeaders would replace that policy with the trusted
+        // app CSP — breaking the sandboxed page's scripts AND re-exposing
+        // connect-src daintree-file:. Pass it through untouched.
+        if (isDaintreeHtmlPreviewUrl(details.url)) {
+          callback({ responseHeaders: details.responseHeaders });
+          return;
+        }
         callback({
           responseHeaders: mergeCspHeaders(details, cspPolicy),
         });

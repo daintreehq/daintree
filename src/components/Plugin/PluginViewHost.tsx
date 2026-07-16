@@ -11,9 +11,12 @@ import {
 import type { PanelKindConfig } from "@shared/config/panelKindRegistry";
 import type { PanelViewProps } from "@shared/types/plugin";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import type { ErrorFallbackProps } from "@/components/ErrorBoundary/ErrorFallback";
 import { BrowserPaneSkeleton } from "@/components/Browser/BrowserPaneSkeleton";
 import { ContentFadeIn } from "@/components/ui/ContentFadeIn";
 import { usePanelRootFocus } from "@/components/Panel/usePanelRootFocus";
+import { PluginViewDiagnosticsFallback } from "@/components/Plugin/PluginViewDiagnosticsFallback";
+import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import type { PanelComponentProps } from "@/panels/registry";
 import { logWarn } from "@/utils/logger";
 
@@ -83,6 +86,45 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Panel
     };
   }
 
+  // Defined once per host, not inline in render: the boundary swaps its
+  // fallback subtree whenever this component *type* changes identity, which
+  // would remount the diagnostics pane (and drop its copy feedback) on every
+  // host render.
+  function PluginViewFallback({ error, errorInfo, resetError, incidentId }: ErrorFallbackProps) {
+    // Two primitive selectors rather than one object selector: the meta record
+    // is rebuilt on every provenance pull, so selecting it whole would re-render
+    // the pane on pulls that changed nothing about this plugin.
+    const devMode = usePluginRuntimeStore((s) => s.pluginMetaById.get(pluginId!)?.devMode === true);
+    const pluginDisplayName = usePluginRuntimeStore(
+      (s) => s.pluginMetaById.get(pluginId!)?.displayName ?? pluginId!
+    );
+
+    // Re-pull here rather than at host mount, because at host mount the plugin
+    // may not be listable yet: `loadPlugin` registers the panel kind (which is
+    // what mounts this host) before awaiting skill loading and entering the
+    // plugins map, and `daintree-plugin dev` never fires provenance at all.
+    // Reaching this component means the view rendered and threw, so its plugin
+    // is certainly loaded by now and this pull can see it. The pane fails
+    // closed meanwhile and upgrades in place when the snapshot lands.
+    const refreshPluginRuntime = usePluginRuntimeStore((s) => s.refresh);
+    useEffect(() => refreshPluginRuntime(), [refreshPluginRuntime]);
+
+    return (
+      <PluginViewDiagnosticsFallback
+        error={error}
+        errorInfo={errorInfo}
+        resetError={resetError}
+        incidentId={incidentId}
+        pluginId={pluginId!}
+        pluginDisplayName={pluginDisplayName}
+        kindId={kindId}
+        panelDisplayName={displayName}
+        componentPath={componentPath!}
+        devMode={devMode}
+      />
+    );
+  }
+
   const createLazyView = (): LazyExoticComponent<ComponentType<PanelViewProps>> =>
     lazy<ComponentType<PanelViewProps>>(async () => {
       // Race the `plugin://` import against a timeout. A wedged protocol load
@@ -146,6 +188,12 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Panel
     // counter is observable to the boundary even though the lazy ref lives
     // in its own slot.
     const [retryCount, setRetryCount] = useState(0);
+
+    // Warm the plugin runtime mirror at mount so the dev-mode flag is usually
+    // already there if this view later throws. The fallback re-pulls for the
+    // cases this can't cover; see PluginViewFallback.
+    const initPluginRuntime = usePluginRuntimeStore((s) => s.init);
+    useEffect(() => initPluginRuntime(), [initPluginRuntime]);
 
     const rootRef = useRef<HTMLDivElement | null>(null);
     const panelId = props.id;
@@ -215,7 +263,10 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Panel
       <div ref={rootRef} tabIndex={-1} className="flex flex-col h-full w-full">
         <ErrorBoundary
           variant="component"
-          componentName={`PluginView:${pluginId}.${kindId}`}
+          // `kindId` is already `${pluginId}.${panel.id}` (PluginService builds
+          // it that way), so prefixing pluginId again doubled it.
+          componentName={`PluginView:${kindId}`}
+          fallback={PluginViewFallback}
           onReset={handleReset}
           resetKeys={[retryCount]}
         >

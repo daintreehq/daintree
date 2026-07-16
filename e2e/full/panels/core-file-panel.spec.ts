@@ -1,5 +1,5 @@
 import path from "path";
-import { writeFileSync } from "fs";
+import { writeFileSync, mkdirSync } from "fs";
 import { test, expect, type Page } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
@@ -287,5 +287,76 @@ test.describe.serial("Core: File viewer panel (dialog + panel)", () => {
         { timeout: T_MEDIUM }
       )
       .toEqual({ columnFillsPane: true, backgroundsMatch: true });
+  });
+
+  // #11191: rendered HTML runs the page's own scripts, resolves its relative
+  // assets via daintree-html://, and stays isolated from the app. This is the
+  // only automated proof of the runtime security contract (unit tests can't
+  // exercise Chromium's iframe origin/CSP). Located last, by content not count.
+  test("rendered HTML runs its scripts + relative assets while staying sandboxed", async () => {
+    const assetsDir = path.join(fixtureDir, "html-report", "assets");
+    mkdirSync(assetsDir, { recursive: true });
+    writeFileSync(path.join(assetsDir, "report.css"), "#title { color: rgb(12, 34, 56); }\n");
+    writeFileSync(
+      path.join(assetsDir, "report.js"),
+      "document.getElementById('title').setAttribute('data-external-ran', 'yes');\n"
+    );
+    writeFileSync(
+      path.join(fixtureDir, "html-report", "index.html"),
+      [
+        "<!doctype html>",
+        "<html>",
+        '<head><link rel="stylesheet" href="assets/report.css" /></head>',
+        "<body>",
+        '  <h1 id="title">Report</h1>',
+        '  <script src="assets/report.js"></script>',
+        "  <script>",
+        "    var t = document.getElementById('title');",
+        "    t.setAttribute('data-inline-ran', 'yes');",
+        "    t.setAttribute('data-has-electron', String(typeof window.electron !== 'undefined'));",
+        "    try { void window.parent.document; t.setAttribute('data-parent', 'reachable'); }",
+        "    catch (e) { t.setAttribute('data-parent', 'blocked'); }",
+        // connect-src 'none' must hold: a fetch to the legacy daintree-file://
+        // arbitrary-read route must be blocked by the token-scoped preview CSP.
+        // If the trusted app CSP had leaked onto this frame, this would resolve.
+        "    t.setAttribute('data-fetch', 'pending');",
+        "    fetch('daintree-file://load?path=/etc/passwd&root=/')",
+        "      .then(function () { t.setAttribute('data-fetch', 'allowed'); })",
+        "      .catch(function () { t.setAttribute('data-fetch', 'blocked'); });",
+        "  </script>",
+        "</body>",
+        "</html>",
+      ].join("\n")
+    );
+
+    await dispatchAction(ctx.window, "file.openPanel", {
+      path: path.join(fixtureDir, "html-report", "index.html").replace(/\\/g, "/"),
+      viewMode: "rendered",
+    });
+
+    const frameEl = ctx.window.locator('[data-testid="html-preview-frame"]');
+    await expect(frameEl).toBeVisible({ timeout: T_LONG });
+    // Exactly allow-scripts — never allow-same-origin (that would let the page
+    // escape its opaque origin back into the daintree-html:// partition).
+    await expect(frameEl).toHaveAttribute("sandbox", "allow-scripts");
+
+    const frame = ctx.window.frameLocator('[data-testid="html-preview-frame"]');
+    const title = frame.locator("#title");
+
+    // The page's own inline + relative external scripts execute.
+    await expect(title).toHaveAttribute("data-inline-ran", "yes", { timeout: T_LONG });
+    await expect(title).toHaveAttribute("data-external-ran", "yes", { timeout: T_MEDIUM });
+    // Relative stylesheet resolved via daintree-html:// and applied.
+    await expect
+      .poll(() => title.evaluate((el) => getComputedStyle(el).color), { timeout: T_MEDIUM })
+      .toBe("rgb(12, 34, 56)");
+
+    // Isolation: no app bridge, and the opaque-origin frame can't reach the parent.
+    await expect(title).toHaveAttribute("data-has-electron", "false");
+    await expect(title).toHaveAttribute("data-parent", "blocked");
+    // The token-scoped preview CSP (connect-src 'none') is authoritative — the
+    // trusted app CSP is NOT overlaid onto the frame, so the legacy daintree-file
+    // arbitrary-read route is unreachable.
+    await expect(title).toHaveAttribute("data-fetch", "blocked", { timeout: T_MEDIUM });
   });
 });

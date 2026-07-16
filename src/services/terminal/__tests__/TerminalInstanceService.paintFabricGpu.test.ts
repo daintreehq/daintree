@@ -66,6 +66,14 @@ async function importFresh() {
   const compositorModule = await import("../paintFabric/PaintFabricCompositor");
   const configModule = await import("../paintFabric/paintFabricConfig");
   const clientsModule = await import("@/clients");
+  // Pin the whole-fleet WebGL flip thresholds so this test's count logic — the
+  // 13th want crosses a single surface's threshold; a round-robin split keeps
+  // each surface under it — is independent of the RAM-tiered bootstrap default.
+  // resetModules() re-seeds that default from system memory (now 18/15), which
+  // would otherwise let all 13 wants stay in WebGL. 12/10 restores the "13th
+  // flips" boundary this scenario was written around.
+  const webglConfigModule = await import("../TerminalWebGLConfig");
+  webglConfigModule.setWebglThresholds(12, 10);
   return {
     terminalInstanceService: serviceModule.terminalInstanceService,
     PaintFabricCompositor: compositorModule.PaintFabricCompositor,

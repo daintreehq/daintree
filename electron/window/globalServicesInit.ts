@@ -380,6 +380,7 @@ export async function initGlobalServices(
       setStopAppMetricsMonitor(
         startAppMetricsMonitor({
           destroyHiddenWebviews: async (tier) => {
+            let tabsEvicted = 0;
             if (windowRegistry) {
               for (const wCtx of windowRegistry.all()) {
                 if (wCtx.browserWindow.isDestroyed()) continue;
@@ -387,6 +388,7 @@ export async function initGlobalServices(
                   if (wCtx.services.portalManager) {
                     const evictedTabIds = await wCtx.services.portalManager.destroyHiddenTabs();
                     if (evictedTabIds.length > 0) {
+                      tabsEvicted += evictedTabIds.length;
                       sendToRenderer(wCtx.browserWindow, CHANNELS.PORTAL_TABS_EVICTED, {
                         tabIds: evictedTabIds,
                       });
@@ -405,15 +407,19 @@ export async function initGlobalServices(
                 }
               }
             }
+            return tabsEvicted;
           },
           hibernateIdleProjects: async () => {
             await getHibernationService().hibernateUnderMemoryPressure();
           },
           evictCachedProjectViews: () => {
-            if (!windowRegistry) return;
+            if (!windowRegistry) return 0;
+            let viewsEvicted = 0;
             for (const wCtx of windowRegistry.all()) {
-              wCtx.services.projectViewManager?.reclaimCachedViewsUnderPressure();
+              viewsEvicted +=
+                wCtx.services.projectViewManager?.reclaimCachedViewsUnderPressure() ?? 0;
             }
+            return viewsEvicted;
           },
           trimPtyHostState: () => {
             getPtyClient()?.trimState(SCROLLBACK_BACKGROUND);

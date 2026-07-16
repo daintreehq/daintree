@@ -73,13 +73,14 @@ export const config: AgentConfig = {
   capabilities: {
     scrollback: 10000,
     resizeStrategy: "default",
-    // Rust TUI that takes over the alternate screen. We keep it ON the alt
-    // screen by default: forcing it inline (--no-alt-screen) renders every frame
-    // into the normal-buffer scrollback, so scrolling up shows garbled overdrawn
-    // history and the overlay scrollbar can't be auto-hidden. The flag stays
-    // available as an opt-in via the inline-mode toggle.
+    // Rust TUI that would otherwise take over the alternate screen. We default
+    // it inline (`--no-alt-screen`, grok's scrollback-native mode) so output
+    // flows into Daintree's own WebGL scrollback and stays selectable with our
+    // native text-selection layer instead of grok's mouse-grabbing full-screen
+    // TUI. No `defaultInlineMode` override: inline follows the global
+    // "Use alt-screen mode by default" switch (off ⇒ inline), so users can still
+    // flip back to alt-screen globally or per-agent.
     inlineModeFlag: "--no-alt-screen",
-    defaultInlineMode: false,
     supportsBracketedPaste: true,
     // Rust TUI reads the PTY buffer atomically, so the quit-command body and
     // Enter must be sent as separate writes (same rationale as Codex).

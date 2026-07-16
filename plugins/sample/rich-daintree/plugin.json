@@ -24,12 +24,27 @@
         "canRestart": false,
         "canConvert": false,
         "showInPalette": true
+      },
+      {
+        "id": "hook-panel",
+        "name": "Hook Panel",
+        "iconId": "layout-panel-top",
+        "color": "#22d3ee",
+        "hasPty": false,
+        "canRestart": false,
+        "canConvert": false,
+        "showInPalette": true
       }
     ],
     "views": [
       {
         "id": "rich-panel",
         "componentPath": "./view/rich-panel-view.js",
+        "location": "panel"
+      },
+      {
+        "id": "hook-panel",
+        "componentPath": "./view/hook-panel-view.js",
         "location": "panel"
       }
     ],
