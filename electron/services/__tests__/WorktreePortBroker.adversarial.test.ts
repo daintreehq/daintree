@@ -111,6 +111,20 @@ describe("WorktreePortBroker adversarial", () => {
     expect(createdChannels).toHaveLength(0);
   });
 
+  it("reuses the live channel when the same host and view are brokered again", () => {
+    const broker = new WorktreePortBroker();
+    const host = createHost();
+    const webContents = createWebContents();
+
+    expect(broker.brokerPort(asWorkspaceHostProcess(host), asWebContents(webContents))).toBe(true);
+    expect(broker.brokerPort(asWorkspaceHostProcess(host), asWebContents(webContents))).toBe(true);
+
+    expect(createdChannels).toHaveLength(1);
+    expect(host.attachWorktreePort).toHaveBeenCalledTimes(1);
+    expect(createdChannels[0].port1.close).not.toHaveBeenCalled();
+    expect(webContents.postMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("replaces an existing brokered port without accumulating lifecycle listeners", () => {
     const broker = new WorktreePortBroker();
     const firstHost = createHost("/tmp/project-a");

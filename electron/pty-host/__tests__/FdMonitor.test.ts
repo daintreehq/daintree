@@ -32,13 +32,13 @@ describe("FdMonitor", () => {
 
   describe("getFdCount", () => {
     it("returns count of entries from fd directory", () => {
-      const monitor = new FdMonitor("/dev/fd");
+      const monitor = new FdMonitor("/dev/fd", 0);
       mockReaddirSync.mockReturnValue(["0", "1", "2", "3", "4", "5", "6"]);
       expect(monitor.getFdCount()).toBe(7);
     });
 
     it("returns 0 if readdirSync throws", () => {
-      const monitor = new FdMonitor("/dev/fd");
+      const monitor = new FdMonitor("/dev/fd", 0);
       mockReaddirSync.mockImplementation(() => {
         throw new Error("ENOENT");
       });
@@ -50,7 +50,7 @@ describe("FdMonitor", () => {
     it("returns no warning when FDs are within threshold", () => {
       // baseline: 5 FDs, current: 15 FDs, 5 active terminals
       // threshold = 5 * 2 + 10 + 5 = 25 → 15 < 25 → no warning
-      const monitor = new FdMonitor("/dev/fd");
+      const monitor = new FdMonitor("/dev/fd", 0);
       mockReaddirSync.mockReturnValue(Array.from({ length: 15 }, (_, i) => String(i)));
 
       const result = monitor.checkForLeaks(5, []);
@@ -64,13 +64,26 @@ describe("FdMonitor", () => {
     it("returns warning when FDs exceed threshold", () => {
       // baseline: 5 FDs, current: 50 FDs, 2 active terminals
       // threshold = 2 * 2 + 10 + 5 = 19 → 50 > 19 → warning
-      const monitor = new FdMonitor("/dev/fd");
+      const monitor = new FdMonitor("/dev/fd", 0);
       mockReaddirSync.mockReturnValue(Array.from({ length: 50 }, (_, i) => String(i)));
 
       const result = monitor.checkForLeaks(2, []);
       expect(result.isWarning).toBe(true);
       expect(result.totalFds).toBe(50);
       expect(result.estimatedTerminalFds).toBe(45);
+    });
+
+    it("calibrates startup descriptors before reporting later growth", () => {
+      const monitor = new FdMonitor("/dev/fd", 2);
+      mockReaddirSync.mockReturnValue(Array.from({ length: 40 }, (_, i) => String(i)));
+
+      expect(monitor.checkForLeaks(2, []).isWarning).toBe(false);
+      expect(monitor.checkForLeaks(2, []).baselineFds).toBe(36);
+
+      mockReaddirSync.mockReturnValue(Array.from({ length: 60 }, (_, i) => String(i)));
+      const result = monitor.checkForLeaks(2, []);
+      expect(result.isWarning).toBe(true);
+      expect(result.estimatedTerminalFds).toBe(24);
     });
   });
 

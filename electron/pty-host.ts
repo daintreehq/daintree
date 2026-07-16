@@ -583,6 +583,7 @@ function disconnectTerminalWorkerPort(windowId: number, terminalId: string, reas
 
   try {
     conn.port.removeListener("message", conn.handler);
+    if (conn.closeHandler) conn.port.removeListener("close", conn.closeHandler);
   } catch {
     // ignore
   }
@@ -631,6 +632,7 @@ function disconnectWindow(windowId: number, reason: string): void {
 
   try {
     conn.port.removeListener("message", conn.handler);
+    if (conn.closeHandler) conn.port.removeListener("close", conn.closeHandler);
   } catch {
     // ignore
   }
