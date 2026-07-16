@@ -162,13 +162,16 @@ describe("usePluginRuntimeStore", () => {
     );
 
     // The superseded pull lands last; its snapshot must not roll the store back.
-    resolveFirst?.([makePlugin({ id: "acme.stale" })]);
+    resolveFirst?.([makePlugin({ id: "acme.stale", disabled: true })]);
     await Promise.resolve();
     await Promise.resolve();
 
     const state = usePluginRuntimeStore.getState();
     expect(state.pluginMetaById.has("acme.stale")).toBe(false);
     expect(state.pluginMetaById.has("acme.fresh")).toBe(true);
+    // Both collections ride the same guard — checking only the metadata map
+    // would still pass if a stale response could commit the disabled set.
+    expect(state.disabledPluginIds.has("acme.stale")).toBe(false);
   });
 
   it("pulls and subscribes once across repeated init calls", async () => {
@@ -186,19 +189,58 @@ describe("usePluginRuntimeStore", () => {
     installBridge({});
 
     expect(() => usePluginRuntimeStore.getState().init()).not.toThrow();
+    expect(() => usePluginRuntimeStore.getState().refresh()).not.toThrow();
     expect(listMock).not.toHaveBeenCalled();
     expect(usePluginRuntimeStore.getState().pluginMetaById.size).toBe(0);
   });
 
-  it("leaves both collections intact when the list pull rejects", async () => {
-    listMock.mockRejectedValue(new Error("bridge down"));
+  // `daintree-plugin dev` attaches a plugin without broadcasting provenance, so
+  // a store already initialized by some earlier consumer would never learn the
+  // dev plugin's devMode and would redact its author's own stack forever. This
+  // is the escape hatch for exactly that (#11207) — it must pull even though
+  // the one-shot init() has already run.
+  it("pulls on refresh even once initialized, picking up a plugin that never announced itself", async () => {
+    listMock.mockResolvedValueOnce([makePlugin({ id: "acme.installed" })]);
 
     usePluginRuntimeStore.getState().init();
+    await vi.waitFor(() => expect(usePluginRuntimeStore.getState().pluginMetaById.size).toBe(1));
+
+    // The dev plugin attaches now — no provenance event fires for it.
+    listMock.mockResolvedValueOnce([
+      makePlugin({ id: "acme.installed" }),
+      makePlugin({ id: "acme.dev", displayName: "Acme Dev", devMode: true }),
+    ]);
+    usePluginRuntimeStore.getState().refresh();
+
+    await vi.waitFor(() =>
+      expect(usePluginRuntimeStore.getState().pluginMetaById.get("acme.dev")?.devMode).toBe(true)
+    );
+    expect(listMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the last good snapshot when a later pull rejects", async () => {
+    let fire: (() => void) | undefined;
+    onProvenanceChangedMock.mockImplementation((cb) => {
+      fire = cb;
+      return () => {};
+    });
+    listMock.mockResolvedValueOnce([
+      makePlugin({ id: "acme.a", displayName: "Acme A", disabled: true, devMode: true }),
+    ]);
+
+    usePluginRuntimeStore.getState().init();
+    await vi.waitFor(() => expect(usePluginRuntimeStore.getState().pluginMetaById.size).toBe(1));
+
+    // Starting from a populated store, not an empty one: asserting "still
+    // empty" after a rejection would also pass if a transient failure wiped a
+    // good snapshot.
+    listMock.mockRejectedValueOnce(new Error("bridge down"));
+    fire?.();
 
     await vi.waitFor(() => expect(logErrorMock).toHaveBeenCalled());
     const state = usePluginRuntimeStore.getState();
-    expect(state.pluginMetaById.size).toBe(0);
-    expect(state.disabledPluginIds.size).toBe(0);
+    expect(state.pluginMetaById.get("acme.a")).toEqual({ devMode: true, displayName: "Acme A" });
+    expect(state.disabledPluginIds.has("acme.a")).toBe(true);
   });
 
   it("unsubscribes and clears every collection on test reset", async () => {

@@ -37,6 +37,15 @@ interface PluginRuntimeState {
   pluginMetaById: ReadonlyMap<string, PluginRuntimeMeta>;
   /** Idempotent: pulls the current snapshot and subscribes to live updates. */
   init: () => void;
+  /**
+   * Pull a fresh snapshot now. Unlike `init()` this runs even once initialized,
+   * because not every plugin that appears announces itself: `daintree-plugin
+   * dev` attaches one through `PluginService.loadDevPlugin`, which broadcasts
+   * `plugin:panel-kinds-changed` but never `plugin:provenance-changed`. A store
+   * that initialized before the dev plugin attached would otherwise never learn
+   * its `devMode` and would redact its author's own stack forever (#11207).
+   */
+  refresh: () => void;
 }
 
 let initialized = false;
@@ -90,6 +99,10 @@ export const usePluginRuntimeStore = create<PluginRuntimeState>((set) => ({
     unsubscribe = plugin.onProvenanceChanged(() => {
       void pullPluginRuntimeSnapshot(set);
     });
+    void pullPluginRuntimeSnapshot(set);
+  },
+  refresh: () => {
+    if (typeof window.electron?.plugin?.list !== "function") return;
     void pullPluginRuntimeSnapshot(set);
   },
 }));

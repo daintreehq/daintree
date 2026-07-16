@@ -183,8 +183,18 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Panel
     // the pull is async, and starting it at mount means the dev-mode flag has
     // landed long before a view can resolve and then throw. The fallback still
     // subscribes, so a late snapshot upgrades a redacted trace in place.
+    //
+    // `refresh` on top of `init` because `init` is one-shot: a store some other
+    // consumer initialized at startup would never see a plugin that attached
+    // later via `daintree-plugin dev` (that path broadcasts panel kinds but not
+    // provenance), leaving the author's own stack redacted forever. This host
+    // only exists because a plugin view is about to render, so pull for it.
     const initPluginRuntime = usePluginRuntimeStore((s) => s.init);
-    useEffect(() => initPluginRuntime(), [initPluginRuntime]);
+    const refreshPluginRuntime = usePluginRuntimeStore((s) => s.refresh);
+    useEffect(() => {
+      initPluginRuntime();
+      refreshPluginRuntime();
+    }, [initPluginRuntime, refreshPluginRuntime]);
 
     const rootRef = useRef<HTMLDivElement | null>(null);
     const panelId = props.id;

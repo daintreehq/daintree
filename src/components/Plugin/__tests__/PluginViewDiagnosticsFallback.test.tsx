@@ -18,11 +18,16 @@ vi.mock("@/store/accessibilityAnnouncerStore", () => ({
 
 const writeTextMock = vi.fn<(text: string) => Promise<void>>();
 
-// A stack and a component stack that carry *different* usernames: a scrub that
-// only reached the stack would leave `bob` behind, which a single-path fixture
-// could never catch.
-const STACK = "Error: boom\n    at Widget (/Users/alice/plugins/acme/dashboard.js:10:5)";
-const COMPONENT_STACK = "\n    at Widget (/Users/bob/plugins/acme/dashboard.js:10:5)";
+// Both stacks carry a *distinct* username and a *distinct* secret sigil. The
+// usernames catch a scrub that reaches only one of the two stacks; the tokens
+// catch a downgrade from `scrubReportText` to path-only `scrubReportPath`,
+// which would keep every path assertion green while leaking credentials.
+const ALICE_TOKEN = `ghp_${"a".repeat(36)}`;
+const BOB_TOKEN = `ghp_${"b".repeat(36)}`;
+const STACK = `Error: boom (${ALICE_TOKEN})\n    at Widget (/Users/alice/plugins/acme/dashboard.js:10:5)`;
+const COMPONENT_STACK = `\n    at Widget (/Users/bob/plugins/acme/dashboard.js:10:5) ${BOB_TOKEN}`;
+/** Everything that must never survive redaction for an installed plugin. */
+const SENSITIVE = ["/Users/alice", "/Users/bob", ALICE_TOKEN, BOB_TOKEN];
 
 function makeError(message: string, stack?: string): Error {
   const error = new Error(message);
@@ -77,37 +82,39 @@ describe("PluginViewDiagnosticsFallback", () => {
     );
   });
 
-  it("renders the stack and the component stack", () => {
+  it("renders frames from both the stack and the component stack", () => {
     renderFallback({ devMode: true });
 
-    expect(trace()).toContain("at Widget");
-    expect(trace()).toContain("Component stack:");
+    // Assert the frames themselves, not the headings — a heading proves only
+    // that the label was printed, not that any stack reached the pane.
+    expect(trace()).toContain("dashboard.js:10:5");
+    expect(trace()).toContain("/Users/bob");
   });
 
   // The bug this component exists to fix: a plugin author runs a *production*
   // Daintree, so a build-mode gate hides the trace from the one person who can
-  // act on it. Vitest runs with DEV=true, so a `import.meta.env.DEV` gate would
+  // act on it. Vitest runs with DEV=true, so an `import.meta.env.DEV` gate would
   // wrongly unlock raw output here and fail this case.
-  it("redacts an installed plugin's stacks even though the app build is DEV", () => {
+  it("redacts an installed plugin's paths and secrets even though the app build is DEV", () => {
     renderFallback({ devMode: false });
 
-    expect(trace()).toContain("/Users/USER/plugins");
-    expect(trace()).not.toContain("/Users/alice");
-    expect(trace()).not.toContain("/Users/bob");
+    for (const secret of SENSITIVE) expect(trace()).not.toContain(secret);
+    // Redaction must not cost the frame itself — the author still needs to see
+    // which module and line threw.
+    expect(trace()).toContain("dashboard.js:10:5");
   });
 
-  it("leaves a dev-mode plugin's stacks raw even though the app build is not DEV", () => {
+  it("leaves a dev-mode plugin's paths and secrets raw even though the app build is not DEV", () => {
     vi.stubEnv("DEV", false);
 
     renderFallback({ devMode: true });
 
-    expect(trace()).toContain("/Users/alice");
-    expect(trace()).toContain("/Users/bob");
+    for (const secret of SENSITIVE) expect(trace()).toContain(secret);
   });
 
   // Redaction is about the user's data, not the plugin's. Scrubbing the message
   // would cost diagnostic signal for no leak benefit (#9427).
-  it("never redacts the message or the plugin identity", () => {
+  it("never redacts the message", () => {
     renderFallback({
       devMode: false,
       error: makeError("Failed to load /Users/alice/config.json", STACK),
@@ -118,7 +125,7 @@ describe("PluginViewDiagnosticsFallback", () => {
     );
   });
 
-  it("copies the same trace it renders, so the two can never diverge", async () => {
+  it("copies the trace it renders and nothing sensitive beyond it", async () => {
     renderFallback({ devMode: false });
 
     fireEvent.click(screen.getByTestId("plugin-view-diagnostics-copy"));
@@ -126,7 +133,9 @@ describe("PluginViewDiagnosticsFallback", () => {
     await waitFor(() => expect(writeTextMock).toHaveBeenCalledTimes(1));
     const copied = writeTextMock.mock.calls[0]![0];
     expect(copied).toContain(trace());
-    expect(copied).not.toContain("/Users/alice");
+    // Containment alone would still pass if the report appended a *raw* second
+    // copy of either stack, so assert every sensitive value is absent outright.
+    for (const secret of SENSITIVE) expect(copied).not.toContain(secret);
     expect(copied).toContain("plugin://acme/dashboard.js");
   });
 
@@ -189,8 +198,10 @@ describe("PluginViewDiagnosticsFallback", () => {
   });
 
   it("announces the failure once for screen readers", () => {
-    renderFallback();
+    const { rerender, props } = renderFallback();
+    rerender(<PluginViewDiagnosticsFallback {...props} />);
 
+    expect(announceMock).toHaveBeenCalledTimes(1);
     expect(announceMock).toHaveBeenCalledWith("Dashboard error", "polite");
   });
 });
