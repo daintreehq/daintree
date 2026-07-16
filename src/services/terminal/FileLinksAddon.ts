@@ -1,23 +1,13 @@
 import type { Terminal, ILinkProvider, ILink, IBufferRange } from "@xterm/xterm";
 import { systemClient } from "@/clients";
-import { basename, isAbsolute, resolve } from "@shared/utils/path";
+import { basename } from "@shared/utils/path";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import { notify } from "@/lib/notify";
 import { isClientAppError } from "@/utils/clientAppError";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { FILE_PATH_REGEX, isPathExcluded, resolveFilePathCandidate } from "./filePathDetection";
 import type { TerminalLink } from "./types";
-
-interface ResolvedFilePath {
-  absolutePath: string;
-  line?: number;
-  col?: number;
-}
-
-const FILE_PATH_REGEX =
-  /(?:^|[\s(])((?:\\\\wsl(?:\$|\.localhost)\\[^\\]+(?:\\[\w.-]+)+|\/[\w./-]+|[a-zA-Z]:[\\/][\w./\\-]+|(?:\.\.?[\\/])+[\w./\\-]+|[\w-]+[\\/][\w./\\-]+)\.[\w]+(?::\d+(?::\d+)?)?)/g;
-
-const WINDOWS_ABS = /^(?:[a-zA-Z]:[\\/]|\\\\)/;
 
 // Coalesce key for file-link activation failures. A user who scrolls a stack
 // trace and clicks 10 bad links shouldn't see 10 toasts; collapse the burst
@@ -174,11 +164,11 @@ export class FileLinksAddon implements ILinkProvider {
     for (const match of lineText.matchAll(FILE_PATH_REGEX)) {
       const fullMatch = match[1];
       if (fullMatch === undefined) continue;
-      if (this._isExcluded(fullMatch)) {
+      if (isPathExcluded(fullMatch)) {
         continue;
       }
 
-      const resolved = this._resolveFilePath(fullMatch);
+      const resolved = resolveFilePathCandidate(fullMatch, this._getCwd());
       if (!resolved) {
         continue;
       }
@@ -204,48 +194,6 @@ export class FileLinksAddon implements ILinkProvider {
     }
 
     callback(links.length > 0 ? links : undefined);
-  }
-
-  private _isExcluded(text: string): boolean {
-    if (text.includes("://")) {
-      return true;
-    }
-    if (text.includes("\x1b")) {
-      return true;
-    }
-    return false;
-  }
-
-  private _resolveFilePath(text: string): ResolvedFilePath | null {
-    const match = /^(.*\.[^\s:]+?)(?::(\d+)(?::(\d+))?)?$/.exec(text);
-    if (!match) return null;
-    const pathPart = match[1];
-    if (pathPart === undefined) return null;
-    const linePart = match[2] ? Number(match[2]) : undefined;
-    const colPart = match[3] ? Number(match[3]) : undefined;
-
-    let absolutePath: string;
-
-    if (isAbsolute(pathPart)) {
-      absolutePath = pathPart;
-    } else {
-      const cwd = this._getCwd();
-      if (!cwd) {
-        return null;
-      }
-      if (WINDOWS_ABS.test(cwd)) {
-        const sep = cwd.includes("\\") ? "\\" : "/";
-        absolutePath = `${cwd.replace(/[\\/]+$/, "")}${sep}${pathPart.replace(/[\\/]+/g, sep)}`;
-      } else {
-        absolutePath = resolve(cwd, pathPart);
-      }
-    }
-
-    return {
-      absolutePath,
-      line: linePart,
-      col: colPart,
-    };
   }
 
   dispose(): void {}

@@ -10,6 +10,7 @@ export * from "./brands";
 export {
   Activity, // project pulse / live activity heartbeat
   BellDot, // watch alert / notify on completion
+  FileText, // view selected file path in the read-only file viewer
   FolderGit2, // git worktree (single)
   FolderOpen, // reveal in file manager (Finder / Explorer / file manager)
   Folders, // copy tree / file hierarchy capture (two overlapping folders)
