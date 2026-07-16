@@ -1156,7 +1156,7 @@ describe("TerminalReconciliationWatchdog — cached project view (#11212)", () =
     const cachedHandlers: Array<() => void> = [];
     const warmHandlers: Array<() => void> = [];
     const revealedHandlers: Array<() => void> = [];
-    (window as unknown as { electron: unknown }).electron = {
+    vi.stubGlobal("electron", {
       app: {
         onViewCached: (cb: () => void) => {
           cachedHandlers.push(cb);
@@ -1175,7 +1175,7 @@ describe("TerminalReconciliationWatchdog — cached project view (#11212)", () =
         // module ever evaluated, so no "cached" phase is ever delivered.
         isViewCached: () => latchedCached,
       },
-    };
+    });
     emitCached = () => cachedHandlers.forEach((h) => h());
     emitWarmActivated = () => warmHandlers.forEach((h) => h());
     emitRevealed = () => revealedHandlers.forEach((h) => h());
@@ -1190,7 +1190,7 @@ describe("TerminalReconciliationWatchdog — cached project view (#11212)", () =
     watchdog?.dispose();
     watchdog = undefined;
     __resetProjectViewCacheStateForTests();
-    delete (window as unknown as { electron?: unknown }).electron;
+    vi.stubGlobal("electron", undefined);
     document.body.innerHTML = "";
     __resetSidebarLayoutTransitionLockForTests();
     __resetSidebarHydrationLockForTests();
@@ -1220,7 +1220,7 @@ describe("TerminalReconciliationWatchdog — cached project view (#11212)", () =
       makeManaged({
         isVisible: true,
         lastAppliedTier: TerminalRefreshTier.BACKGROUND,
-        getRefreshTier: () => TerminalRefreshTier.VISIBLE as never,
+        getRefreshTier: () => TerminalRefreshTier.VISIBLE,
       })
     );
     const deps = makeDeps(instances);
@@ -1238,7 +1238,7 @@ describe("TerminalReconciliationWatchdog — cached project view (#11212)", () =
       makeManaged({
         isVisible: true,
         lastAppliedTier: TerminalRefreshTier.VISIBLE,
-        getRefreshTier: () => TerminalRefreshTier.VISIBLE as never,
+        getRefreshTier: () => TerminalRefreshTier.VISIBLE,
       })
     );
     const deps = makeDeps(instances, { getBackendTier: vi.fn(() => "background" as const) });
@@ -1258,7 +1258,7 @@ describe("TerminalReconciliationWatchdog — cached project view (#11212)", () =
       makeManaged({
         isVisible: true,
         lastAppliedTier: TerminalRefreshTier.VISIBLE,
-        getRefreshTier: () => TerminalRefreshTier.VISIBLE as never,
+        getRefreshTier: () => TerminalRefreshTier.VISIBLE,
       })
     );
     const deps = makeDeps(instances, {
@@ -1279,7 +1279,7 @@ describe("TerminalReconciliationWatchdog — cached project view (#11212)", () =
     const managed = makeManaged({
       isVisible: true,
       lastAppliedTier: TerminalRefreshTier.VISIBLE,
-      getRefreshTier: () => TerminalRefreshTier.VISIBLE as never,
+      getRefreshTier: () => TerminalRefreshTier.VISIBLE,
       revealPendingRepair: true,
       revealPendingGeneration: 0,
       attachGeneration: 0,
@@ -1303,7 +1303,7 @@ describe("TerminalReconciliationWatchdog — cached project view (#11212)", () =
     const managed = makeManaged({
       isVisible: true,
       lastAppliedTier: TerminalRefreshTier.VISIBLE,
-      getRefreshTier: () => TerminalRefreshTier.VISIBLE as never,
+      getRefreshTier: () => TerminalRefreshTier.VISIBLE,
       revealPendingRepair: true,
       revealPendingGeneration: 0,
       attachGeneration: 0,

@@ -38,7 +38,7 @@ function installElectronStub(latchedCached = false): {
   const offWarmActivated = vi.fn();
   const offRevealed = vi.fn();
 
-  (window as unknown as { electron: unknown }).electron = {
+  vi.stubGlobal("electron", {
     app: {
       onViewCached: (cb: () => void) => {
         counts.cached += 1;
@@ -57,7 +57,7 @@ function installElectronStub(latchedCached = false): {
         return offRevealed;
       },
     },
-  };
+  });
 
   return {
     emit: {
@@ -79,7 +79,7 @@ describe("viewCacheState", () => {
 
   afterEach(() => {
     __resetProjectViewCacheStateForTests();
-    delete (window as unknown as { electron?: unknown }).electron;
+    vi.stubGlobal("electron", undefined);
   });
 
   it("reports not-cached by default so a cold view is never demoted", () => {
@@ -205,7 +205,7 @@ describe("viewCacheState", () => {
     // so a late first query must report cached — not the false default that
     // would leave the view running full-rate terminal work.
     __resetProjectViewCacheStateForTests();
-    delete (window as unknown as { electron?: unknown }).electron;
+    vi.stubGlobal("electron", undefined);
     stub = installElectronStub(true);
 
     expect(isProjectViewCached()).toBe(true);
@@ -213,7 +213,7 @@ describe("viewCacheState", () => {
 
   it("still tracks live transitions after seeding from a cached latch", () => {
     __resetProjectViewCacheStateForTests();
-    delete (window as unknown as { electron?: unknown }).electron;
+    vi.stubGlobal("electron", undefined);
     stub = installElectronStub(true);
     expect(isProjectViewCached()).toBe(true);
 
@@ -226,20 +226,20 @@ describe("viewCacheState", () => {
     // Defensive: an older/partial bridge must degrade to the un-demoted answer
     // rather than throwing on the hot query path.
     __resetProjectViewCacheStateForTests();
-    (window as unknown as { electron: unknown }).electron = {
+    vi.stubGlobal("electron", {
       app: {
         onViewCached: () => vi.fn(),
         onViewWarmActivated: () => vi.fn(),
         onViewRevealed: () => vi.fn(),
       },
-    };
+    });
 
     expect(isProjectViewCached()).toBe(false);
   });
 
   it("answers not-cached when the electron bridge is unavailable", () => {
     __resetProjectViewCacheStateForTests();
-    delete (window as unknown as { electron?: unknown }).electron;
+    vi.stubGlobal("electron", undefined);
 
     expect(isProjectViewCached()).toBe(false);
     expect(() => subscribeProjectViewLifecycle(vi.fn())).not.toThrow();

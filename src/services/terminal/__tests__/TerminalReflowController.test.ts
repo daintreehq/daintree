@@ -444,7 +444,7 @@ describe("TerminalReflowController — cached project view (#11212)", () => {
     const cachedHandlers: Array<() => void> = [];
     const warmHandlers: Array<() => void> = [];
     const revealedHandlers: Array<() => void> = [];
-    (window as unknown as { electron: unknown }).electron = {
+    vi.stubGlobal("electron", {
       app: {
         onViewCached: (cb: () => void) => {
           cachedHandlers.push(cb);
@@ -463,7 +463,7 @@ describe("TerminalReflowController — cached project view (#11212)", () => {
         // module ever evaluated, so no "cached" phase is ever delivered.
         isViewCached: () => latchedCached,
       },
-    };
+    });
     emitCached = () => cachedHandlers.forEach((h) => h());
     emitWarmActivated = () => warmHandlers.forEach((h) => h());
     emitRevealed = () => revealedHandlers.forEach((h) => h());
@@ -479,7 +479,7 @@ describe("TerminalReflowController — cached project view (#11212)", () => {
     controller = undefined;
     __resetProjectViewCacheStateForTests();
     vi.useRealTimers();
-    delete (window as unknown as { electron?: unknown }).electron;
+    vi.stubGlobal("electron", undefined);
     // makeManaged appends to the document on every call.
     document.body.innerHTML = "";
   });

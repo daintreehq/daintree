@@ -162,8 +162,7 @@ describe("TerminalWriteController.write", () => {
   it("normal path: writes to terminal, acks both data and port data, increments unseen", () => {
     controller.write("t1", "hello");
 
-    const term = managed.terminal as unknown as MockTerminal;
-    expect(term.write).toHaveBeenCalledWith("hello", expect.any(Function));
+    expect(vi.mocked(managed.terminal.write)).toHaveBeenCalledWith("hello", expect.any(Function));
     expect(deps.incrementUnseen).toHaveBeenCalledWith("t1", false);
     expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 5, 1);
     expect(deps.acknowledgeData).toHaveBeenCalledWith("t1", 5);
@@ -547,14 +546,14 @@ describe("TerminalWriteController — cached project view (#11212)", () => {
   }
 
   function markerCalls(m: ManagedTerminal): number {
-    return (m.terminal as unknown as MockTerminal).registerMarker.mock.calls.length;
+    return vi.mocked(m.terminal.registerMarker).mock.calls.length;
   }
 
   beforeEach(() => {
     const cachedHandlers: Array<() => void> = [];
     const warmHandlers: Array<() => void> = [];
     const revealedHandlers: Array<() => void> = [];
-    (window as unknown as { electron: unknown }).electron = {
+    vi.stubGlobal("electron", {
       app: {
         onViewCached: (cb: () => void) => {
           cachedHandlers.push(cb);
@@ -569,7 +568,7 @@ describe("TerminalWriteController — cached project view (#11212)", () => {
           return vi.fn();
         },
       },
-    };
+    });
     emitCached = () => cachedHandlers.forEach((h) => h());
     emitWarmActivated = () => warmHandlers.forEach((h) => h());
     emitRevealed = () => revealedHandlers.forEach((h) => h());
@@ -606,7 +605,7 @@ describe("TerminalWriteController — cached project view (#11212)", () => {
     controller.dispose();
     __resetProjectViewCacheStateForTests();
     vi.unstubAllGlobals();
-    delete (window as unknown as { electron?: unknown }).electron;
+    vi.stubGlobal("electron", undefined);
   });
 
   it("keeps the byte stream and every ledger live while cached", () => {
@@ -615,8 +614,7 @@ describe("TerminalWriteController — cached project view (#11212)", () => {
     emitCached();
     controller.write("t1", "hello");
 
-    const term = managed.terminal as unknown as MockTerminal;
-    expect(term.write).toHaveBeenCalledWith("hello", expect.any(Function));
+    expect(vi.mocked(managed.terminal.write)).toHaveBeenCalledWith("hello", expect.any(Function));
     expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 5, 1);
     expect(deps.acknowledgeData).toHaveBeenCalledWith("t1", 5);
     expect(deps.notifyWriteComplete).toHaveBeenCalledWith("t1", 5);
