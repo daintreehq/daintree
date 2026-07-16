@@ -374,6 +374,11 @@ function buildDaintreeHtmlDocHeaders(token: string, contentLength: number): Reco
     "Content-Length": String(contentLength),
     "Content-Security-Policy": csp,
     "Cross-Origin-Resource-Policy": "cross-origin",
+    // The trusted renderer document is COEP `credentialless` (app:// headers +
+    // vite dev server), and a COEP document may only embed frames whose own
+    // document response carries a compatible COEP. Without this the iframe
+    // navigation dies with ERR_BLOCKED_BY_RESPONSE — a blank white frame.
+    "Cross-Origin-Embedder-Policy": "credentialless",
     "X-Content-Type-Options": "nosniff",
     // Belt-and-suspenders egress limits: no referrer leakage on any request the
     // page makes, and no speculative DNS lookups of hostnames in the markup.
