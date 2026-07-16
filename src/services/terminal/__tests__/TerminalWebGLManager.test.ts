@@ -204,6 +204,9 @@ describe("TerminalWebGLManager", () => {
     // a tight band that's high enough for any single-suite tests to attach
     // freely; the mode-switch describe block raises/lowers them as needed.
     mod.TerminalWebGLManager.setWebglThresholds(32, 28);
+    // Also module-level: once an atlas is capped the manager stops retrying, so
+    // a case that caps would otherwise suppress capping in every later case.
+    mod.__testing.resetAtlasCapState();
     manager = new mod.TerminalWebGLManager();
   });
 
@@ -224,6 +227,87 @@ describe("TerminalWebGLManager", () => {
     expect(WebglAddonMock).toHaveBeenCalledTimes(1);
     expect(managed.terminal.loadAddon).toHaveBeenCalledTimes(1);
     expect(manager.isActive("t1")).toBe(true);
+  });
+
+  describe("shared atlas page-size cap", () => {
+    const HARDWARE_MAX_TEXTURE_SIZE = 16384;
+
+    // One class across every addon, matching the real TextureAtlas: the statics
+    // are module-global to the addon bundle, not per terminal.
+    function makeAtlasClass() {
+      return class FakeTextureAtlas {
+        public static maxTextureSize: number | undefined = HARDWARE_MAX_TEXTURE_SIZE;
+        public static maxAtlasPages: number | undefined = 16;
+      };
+    }
+
+    // Mirrors WebglAddon.activate(): the renderer and its atlas are constructed
+    // synchronously, so both exist by the time loadAddon returns. Attaching the
+    // atlas here rather than at addon construction is what pins the ordering —
+    // a cap applied before loadAddon would find nothing to cap.
+    function activateOnLoad(
+      managed: ManagedTerminal,
+      atlasClass: ReturnType<typeof makeAtlasClass> | null
+    ): void {
+      vi.mocked(managed.terminal.loadAddon).mockImplementation((addon: unknown) => {
+        if (!atlasClass) return;
+        if (typeof addon !== "object" || addon === null) return;
+        if (!("_renderer" in addon)) return;
+        const renderer = addon._renderer;
+        if (typeof renderer !== "object" || renderer === null) return;
+        Object.assign(renderer, { _charAtlas: new atlasClass() });
+      });
+    }
+
+    it("caps the atlas once the addon has activated", () => {
+      const atlasClass = makeAtlasClass();
+      const managed = makeManagedTerminal();
+      activateOnLoad(managed, atlasClass);
+
+      manager.ensureContext("t1", managed);
+
+      expect(atlasClass.maxTextureSize).toBeLessThan(HARDWARE_MAX_TEXTURE_SIZE);
+    });
+
+    it("keeps retrying while the atlas stays unreachable, then caps a later attach", () => {
+      const unreachable = makeManagedTerminal();
+      activateOnLoad(unreachable, null);
+      manager.ensureContext("t1", unreachable);
+
+      const atlasClass = makeAtlasClass();
+      const reachable = makeManagedTerminal();
+      activateOnLoad(reachable, atlasClass);
+      manager.ensureContext("t2", reachable);
+
+      expect(atlasClass.maxTextureSize).toBeLessThan(HARDWARE_MAX_TEXTURE_SIZE);
+    });
+
+    it("stops touching the atlas once it is capped", () => {
+      const atlasClass = makeAtlasClass();
+      const first = makeManagedTerminal();
+      activateOnLoad(first, atlasClass);
+      manager.ensureContext("t1", first);
+
+      const capped = atlasClass.maxTextureSize;
+      // A second atlas class stands in for a shape the cap would reject; it must
+      // never be consulted, because the first attach already retired the retry.
+      const second = makeManagedTerminal();
+      const laterClass = makeAtlasClass();
+      activateOnLoad(second, laterClass);
+      manager.ensureContext("t2", second);
+
+      expect(atlasClass.maxTextureSize).toBe(capped);
+      expect(laterClass.maxTextureSize).toBe(HARDWARE_MAX_TEXTURE_SIZE);
+    });
+
+    it("still attaches WebGL when the atlas cannot be reached", () => {
+      const managed = makeManagedTerminal();
+      activateOnLoad(managed, null);
+
+      manager.ensureContext("t1", managed);
+
+      expect(manager.isActive("t1")).toBe(true);
+    });
   });
 
   it("is a no-op when terminal is not opened", () => {

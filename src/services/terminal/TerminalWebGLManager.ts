@@ -1,5 +1,6 @@
 import type { WebglAddon as WebglAddonType } from "@xterm/addon-webgl";
 import type { IDisposable } from "@xterm/xterm";
+import { applyAtlasPageSizeCap } from "./TerminalWebGLAtlasCap";
 import {
   getWebglLowerThreshold,
   getWebglUpperThreshold,
@@ -45,6 +46,11 @@ type WebglAddonConstructor = new () => WebglAddonType;
 // on webglcontextrestored before xterm's onContextLoss fires (see #7467).
 let WebglAddonClass: WebglAddonConstructor | null = null;
 let webglAddonLoadPromise: Promise<WebglAddonConstructor> | null = null;
+
+// Module-scoped to match what it tracks: the atlas cap is a static on the
+// addon's own module-global TextureAtlas, so it is set once per renderer
+// regardless of how many managers or terminals that renderer has.
+let atlasPageSizeCapped = false;
 
 function loadWebglAddon(): Promise<WebglAddonConstructor> {
   if (WebglAddonClass) return Promise.resolve(WebglAddonClass);
@@ -917,6 +923,14 @@ export class TerminalWebGLManager {
       });
       managed.terminal.loadAddon(addon);
 
+      // loadAddon activates the renderer synchronously, which constructs the
+      // first GlyphRenderer and so initializes the atlas statics this bounds.
+      // Retried on later attaches because a drifted internal shape reports false
+      // rather than throwing.
+      if (!atlasPageSizeCapped) {
+        atlasPageSizeCapped = applyAtlasPageSizeCap(addon);
+      }
+
       // Watch the shared TextureAtlas for page merges, and the renderer for
       // atlas-object swaps caused by font/theme/DPR changes. The pinned addon
       // typings declare both events; the guards keep older test mocks working.
@@ -1077,6 +1091,13 @@ export const __testing = {
   resetLoaderState(): void {
     WebglAddonClass = null;
     webglAddonLoadPromise = null;
+    atlasPageSizeCapped = false;
+  },
+  resetAtlasCapState(): void {
+    atlasPageSizeCapped = false;
+  },
+  isAtlasPageSizeCapped(): boolean {
+    return atlasPageSizeCapped;
   },
   isLoaded(): boolean {
     return WebglAddonClass !== null;
