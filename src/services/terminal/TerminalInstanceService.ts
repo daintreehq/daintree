@@ -2497,6 +2497,7 @@ class TerminalInstanceService {
     this.agentStateController.destroy(id);
     this.restoreController.destroy(id);
     this.burstController.destroy(id);
+    this.writeController.forget(id);
 
     managed.scrollbackRestoreState = "none";
 
@@ -2610,6 +2611,7 @@ class TerminalInstanceService {
     this.resizePassScheduler.dispose();
     this.reflowController.dispose();
     this.reconciliationWatchdog.dispose();
+    this.writeController.dispose();
     this.instances.forEach((_, id) => this.destroy(id));
     this.offscreenManager.dispose();
     this.webGLManager.dispose();

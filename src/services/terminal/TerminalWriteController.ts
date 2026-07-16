@@ -1,6 +1,7 @@
 import type { ManagedTerminal } from "./types";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
+import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 
 /**
  * UTF-8 byte length of a string chunk — the unit the pty-host's IPC
@@ -129,24 +130,73 @@ export class TerminalWriteController {
   // (user-invoked scrollToLastActivity) needs at most one fresh position per
   // frame and already falls back to scrollToBottom on a disposed marker.
   private pendingMarkerRefresh = new Map<string, ManagedTerminal>();
-  private markerRefreshScheduled = false;
+  private markerRefreshRafId: number | undefined;
+  private readonly offViewLifecycle: () => void;
 
   constructor(deps: WriteControllerDeps) {
     this.deps = deps;
+    this.offViewLifecycle = subscribeProjectViewLifecycle((phase) => {
+      if (phase === "cached") {
+        this.cancelMarkerRefreshFrame();
+        return;
+      }
+      // Back in the foreground: settle the dirty set accumulated while cached.
+      // Runs on `active` (behind the anti-flash bridge) rather than waiting for
+      // `revealed`, because a superseded switch never sends `revealed` — and
+      // this is buffer bookkeeping, not a paint, so the bridge is irrelevant.
+      // The `revealed` pass then finds an empty map and no-ops.
+      this.flushActivityMarkers();
+    });
   }
 
+  /**
+   * Mark a terminal's activity marker stale and settle it on the next frame.
+   *
+   * While the project view is cached the frame is NOT scheduled: rAF still
+   * fires at full rate for a detached view (Chromium only suspends it for
+   * window-level occlusion), and each refresh allocates a Marker plus four
+   * buffer emitter subscriptions, so a streaming agent churns hundreds of
+   * alloc/dispose pairs per second into a view nobody can see. Deferring loses
+   * nothing: `registerMarker(0)` marks the cursor line as of the flush, so one
+   * flush on reveal lands exactly where the last hidden-frame refresh would
+   * have, and the only reader (user-invoked `scrollToLastActivity`) is
+   * unreachable until the view comes back.
+   */
   private scheduleActivityMarkerRefresh(id: string, managed: ManagedTerminal): void {
     this.pendingMarkerRefresh.set(id, managed);
-    if (this.markerRefreshScheduled) return;
+    if (isProjectViewCached()) return;
+    if (this.markerRefreshRafId !== undefined) return;
     if (typeof requestAnimationFrame !== "function") {
       this.flushActivityMarkers();
       return;
     }
-    this.markerRefreshScheduled = true;
-    requestAnimationFrame(() => {
-      this.markerRefreshScheduled = false;
+    this.markerRefreshRafId = requestAnimationFrame(() => {
+      this.markerRefreshRafId = undefined;
+      // The view can be cached between scheduling and the frame, and cancelling
+      // can't retract a callback the event loop has already picked up — so the
+      // gate has to be re-checked in the body, not just at cancel time.
+      if (isProjectViewCached()) return;
       this.flushActivityMarkers();
     });
+  }
+
+  private cancelMarkerRefreshFrame(): void {
+    if (this.markerRefreshRafId === undefined) return;
+    if (typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(this.markerRefreshRafId);
+    }
+    this.markerRefreshRafId = undefined;
+  }
+
+  /**
+   * Drop a destroyed terminal's pending marker obligation. Load-bearing only
+   * because the dirty set is now held for the whole cached window instead of
+   * one frame: without this, a terminal destroyed while the view is hidden
+   * (an agent killed mid-cache) would keep its ManagedTerminal — and with it
+   * the entire xterm buffer — reachable until the next reveal.
+   */
+  forget(id: string): void {
+    this.pendingMarkerRefresh.delete(id);
   }
 
   private flushActivityMarkers(): void {
@@ -272,5 +322,11 @@ export class TerminalWriteController {
         this.scheduleActivityMarkerRefresh(id, managed);
       }
     });
+  }
+
+  dispose(): void {
+    this.cancelMarkerRefreshFrame();
+    this.pendingMarkerRefresh.clear();
+    this.offViewLifecycle();
   }
 }
