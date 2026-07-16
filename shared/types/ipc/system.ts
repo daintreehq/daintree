@@ -224,6 +224,14 @@ export interface ProcessMetricEntry {
   name: string;
   memoryMB: number;
   cpuPercent: number;
+  /**
+   * Names of the projects whose views run in this renderer, for "Tab" processes
+   * only. Absent when no project owns the process (GPU/utility/browser, portal
+   * views, an unbound welcome view) — an array because project views share one
+   * session partition and URL, so Chromium can collapse several into a single
+   * renderer process. Sorted, deduped, and never empty when present.
+   */
+  projectNames?: string[];
 }
 
 /** V8 heap statistics from the main process */

@@ -5,6 +5,7 @@ import {
   computeSlope,
   getTrendDirection,
   formatMemory,
+  formatProcessLabel,
   FALLBACK_THRESHOLDS,
 } from "../ProjectResourceBadge.utils";
 
@@ -120,5 +121,41 @@ describe("formatMemory", () => {
     expect(formatMemory(1024)).toBe("1.0GB");
     expect(formatMemory(1536)).toBe("1.5GB");
     expect(formatMemory(2048)).toBe("2.0GB");
+  });
+});
+
+describe("formatProcessLabel", () => {
+  it("falls back to the process name when no project owns the process", () => {
+    expect(formatProcessLabel({ name: "GPU Process" })).toBe("GPU Process");
+    expect(formatProcessLabel({ name: "Tab", projectNames: [] })).toBe("Tab");
+  });
+
+  it("names the owning project instead of the generic process name", () => {
+    const label = formatProcessLabel({ name: "Tab", projectNames: ["RuinWeave"] });
+    expect(label).toBe("RuinWeave view");
+    expect(label).not.toContain("Tab");
+  });
+
+  it("reports every project sharing a consolidated renderer, counted first", () => {
+    const label = formatProcessLabel({
+      name: "Tab",
+      projectNames: ["Cedar Forge", "RuinWeave"],
+    });
+    expect(label).toBe("2 views · Cedar Forge, RuinWeave");
+    // The count leads so it survives the row's ~23-char truncation.
+    expect(label.slice(0, 23)).toContain("2 views");
+  });
+
+  it("counts each additional project sharing the renderer", () => {
+    const names = ["Alpha", "Cedar Forge", "RuinWeave"];
+    expect(formatProcessLabel({ name: "Tab", projectNames: names })).toBe(
+      `${names.length} views · ${names.join(", ")}`
+    );
+  });
+
+  it("keeps the label free of trailing punctuation", () => {
+    for (const projectNames of [undefined, ["RuinWeave"], ["Cedar Forge", "RuinWeave"]]) {
+      expect(formatProcessLabel({ name: "Tab", projectNames })).not.toMatch(/\.$/);
+    }
   });
 });
