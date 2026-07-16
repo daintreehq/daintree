@@ -73,6 +73,13 @@ function ensureArmed(): void {
   if (armed) return;
   armed = true;
 
+  // `TerminalInstanceService` constructs its controllers at module scope, so
+  // importing anything downstream of it runs this in node-like suites where
+  // `window` is not merely empty but undeclared — a bare read is a
+  // ReferenceError, not something `?.` can catch. No window, no view lifecycle;
+  // not-cached is the right answer.
+  if (typeof window === "undefined") return;
+
   const app = window.electron?.app;
   if (!app) return;
 
