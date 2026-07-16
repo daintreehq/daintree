@@ -29,7 +29,11 @@ export function SelectedFileMenuItems({ absolutePath }: SelectedFileMenuItemsPro
             .dispatch("file.openPanel", { path: absolutePath }, { source })
             .then((result) => {
               if (!result.ok) {
-                reportFileLinkFailure("Failed to open file panel", result.error.details, absolutePath);
+                reportFileLinkFailure(
+                  "Failed to open file panel",
+                  result.error.details,
+                  absolutePath
+                );
               }
             });
         }}
