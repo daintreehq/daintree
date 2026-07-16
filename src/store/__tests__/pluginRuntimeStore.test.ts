@@ -218,6 +218,26 @@ describe("usePluginRuntimeStore", () => {
     expect(listMock).toHaveBeenCalledTimes(2);
   });
 
+  // refresh() subscribes on its own rather than leaning on a separate init()
+  // call: two pulls in one tick would make `pullSeq` discard the first, so a
+  // rejected second pull would throw away the only successful snapshot.
+  it("subscribes and pulls exactly once when refresh is the first caller", async () => {
+    listMock.mockResolvedValue([makePlugin({ id: "acme.a", devMode: true })]);
+
+    usePluginRuntimeStore.getState().refresh();
+
+    await vi.waitFor(() =>
+      expect(usePluginRuntimeStore.getState().pluginMetaById.get("acme.a")?.devMode).toBe(true)
+    );
+    expect(listMock).toHaveBeenCalledTimes(1);
+    expect(onProvenanceChangedMock).toHaveBeenCalledTimes(1);
+
+    // A later init() must not re-subscribe or re-pull on top of it.
+    usePluginRuntimeStore.getState().init();
+    expect(listMock).toHaveBeenCalledTimes(1);
+    expect(onProvenanceChangedMock).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps the last good snapshot when a later pull rejects", async () => {
     let fire: (() => void) | undefined;
     onProvenanceChangedMock.mockImplementation((cb) => {

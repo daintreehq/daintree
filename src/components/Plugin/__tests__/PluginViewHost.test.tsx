@@ -497,6 +497,46 @@ describe("makePluginViewHost", () => {
     );
   });
 
+  // The metadata the pane needs may not exist at host-mount time: `loadPlugin`
+  // registers the panel kind before the plugin is listable, and dev attach
+  // never fires provenance. Reaching the fallback means the view already threw,
+  // so the plugin is loaded — the pane must pull for itself at that point
+  // rather than trust whatever the store happened to hold earlier (#11207).
+  it("pulls a fresh plugin snapshot when the diagnostics pane mounts (#11207)", async () => {
+    const list = vi.fn().mockResolvedValue([]);
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      writable: true,
+      value: {
+        plugin: {
+          onPanelKindsChanged: onPanelKindsChangedMock,
+          onProvenanceChanged: vi.fn().mockReturnValue(() => {}),
+          list,
+        },
+      },
+    });
+
+    const { makePluginViewHost } = await import("../PluginViewHost");
+    const Host = makePluginViewHost(makeConfig());
+
+    render(
+      <Host
+        id="panel-refresh"
+        title="Dashboard"
+        isFocused={false}
+        onFocus={(): void => {}}
+        onClose={(): void => {}}
+      />
+    );
+    await waitFor(() => expect(boundaryProps.last).not.toBeNull());
+    const callsBeforeCrash = list.mock.calls.length;
+
+    const Fallback = boundaryProps.last!.fallback!;
+    render(<Fallback error={new Error("view exploded")} resetError={(): void => {}} />);
+
+    await waitFor(() => expect(list.mock.calls.length).toBeGreaterThan(callsBeforeCrash));
+  });
+
   // The dev-plugin snapshot can land *after* the view has already crashed (the
   // pull is async, and `daintree-plugin dev` never fires provenance). The pane
   // must upgrade in place rather than stay redacted until the user retries.

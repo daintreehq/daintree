@@ -99,6 +99,16 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Panel
       (s) => s.pluginMetaById.get(pluginId!)?.displayName ?? pluginId!
     );
 
+    // Re-pull here rather than at host mount, because at host mount the plugin
+    // may not be listable yet: `loadPlugin` registers the panel kind (which is
+    // what mounts this host) before awaiting skill loading and entering the
+    // plugins map, and `daintree-plugin dev` never fires provenance at all.
+    // Reaching this component means the view rendered and threw, so its plugin
+    // is certainly loaded by now and this pull can see it. The pane fails
+    // closed meanwhile and upgrades in place when the snapshot lands.
+    const refreshPluginRuntime = usePluginRuntimeStore((s) => s.refresh);
+    useEffect(() => refreshPluginRuntime(), [refreshPluginRuntime]);
+
     return (
       <PluginViewDiagnosticsFallback
         error={error}
@@ -179,22 +189,11 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Panel
     // in its own slot.
     const [retryCount, setRetryCount] = useState(0);
 
-    // Warm the plugin runtime mirror from the host rather than the fallback:
-    // the pull is async, and starting it at mount means the dev-mode flag has
-    // landed long before a view can resolve and then throw. The fallback still
-    // subscribes, so a late snapshot upgrades a redacted trace in place.
-    //
-    // `refresh` on top of `init` because `init` is one-shot: a store some other
-    // consumer initialized at startup would never see a plugin that attached
-    // later via `daintree-plugin dev` (that path broadcasts panel kinds but not
-    // provenance), leaving the author's own stack redacted forever. This host
-    // only exists because a plugin view is about to render, so pull for it.
+    // Warm the plugin runtime mirror at mount so the dev-mode flag is usually
+    // already there if this view later throws. The fallback re-pulls for the
+    // cases this can't cover; see PluginViewFallback.
     const initPluginRuntime = usePluginRuntimeStore((s) => s.init);
-    const refreshPluginRuntime = usePluginRuntimeStore((s) => s.refresh);
-    useEffect(() => {
-      initPluginRuntime();
-      refreshPluginRuntime();
-    }, [initPluginRuntime, refreshPluginRuntime]);
+    useEffect(() => initPluginRuntime(), [initPluginRuntime]);
 
     const rootRef = useRef<HTMLDivElement | null>(null);
     const panelId = props.id;

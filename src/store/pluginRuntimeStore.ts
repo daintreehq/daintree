@@ -38,12 +38,15 @@ interface PluginRuntimeState {
   /** Idempotent: pulls the current snapshot and subscribes to live updates. */
   init: () => void;
   /**
-   * Pull a fresh snapshot now. Unlike `init()` this runs even once initialized,
-   * because not every plugin that appears announces itself: `daintree-plugin
-   * dev` attaches one through `PluginService.loadDevPlugin`, which broadcasts
-   * `plugin:panel-kinds-changed` but never `plugin:provenance-changed`. A store
-   * that initialized before the dev plugin attached would otherwise never learn
-   * its `devMode` and would redact its author's own stack forever (#11207).
+   * Pull a fresh snapshot now, subscribing first if nobody has yet. Unlike
+   * `init()` this pulls even once initialized, because not every plugin that
+   * appears announces itself: `daintree-plugin dev` attaches one through
+   * `PluginService.loadDevPlugin`, which broadcasts `plugin:panel-kinds-changed`
+   * but never `plugin:provenance-changed`. A store that initialized before the
+   * dev plugin attached would otherwise never learn its `devMode` and would
+   * redact its author's own stack forever (#11207).
+   *
+   * Call it where the answer has to be current — not on a hot path.
    */
   refresh: () => void;
 }
@@ -79,29 +82,42 @@ async function pullPluginRuntimeSnapshot(
   }
 }
 
+/**
+ * Subscribe to provenance updates once. Returns true when this call is what
+ * established the subscription, i.e. the caller still owes the first pull.
+ *
+ * Consumed from many leaf components (toolbar pills, banners, tooltips, slot
+ * hooks), so tolerate a partially-stubbed bridge instead of pushing a
+ * plugin-namespace mock into every component test. Absent bridge ⇒ the disabled
+ * set stays empty (plugins read as enabled), matching prod optimism before the
+ * first snapshot.
+ */
+function ensureSubscribed(set: (state: Partial<PluginRuntimeState>) => void): boolean {
+  if (initialized) return false;
+  initialized = true;
+
+  const plugin = window.electron?.plugin;
+  if (typeof plugin?.onProvenanceChanged !== "function" || typeof plugin.list !== "function") {
+    return false;
+  }
+
+  unsubscribe = plugin.onProvenanceChanged(() => {
+    void pullPluginRuntimeSnapshot(set);
+  });
+  return true;
+}
+
 export const usePluginRuntimeStore = create<PluginRuntimeState>((set) => ({
   disabledPluginIds: new Set<string>(),
   pluginMetaById: new Map<string, PluginRuntimeMeta>(),
   init: () => {
-    if (initialized) return;
-    initialized = true;
-
-    // Consumed from many leaf components (toolbar pills, banners, tooltips,
-    // slot hooks), so tolerate a partially-stubbed bridge instead of pushing
-    // a plugin-namespace mock into every component test. Absent bridge ⇒ the
-    // disabled set stays empty (plugins read as enabled), matching prod
-    // optimism before the first snapshot.
-    const plugin = window.electron?.plugin;
-    if (typeof plugin?.onProvenanceChanged !== "function" || typeof plugin.list !== "function") {
-      return;
-    }
-
-    unsubscribe = plugin.onProvenanceChanged(() => {
-      void pullPluginRuntimeSnapshot(set);
-    });
-    void pullPluginRuntimeSnapshot(set);
+    if (ensureSubscribed(set)) void pullPluginRuntimeSnapshot(set);
   },
   refresh: () => {
+    // Subscribes without pulling twice — `pullSeq` would discard the first of
+    // two same-tick pulls, so a rejected second one could throw away the only
+    // successful snapshot.
+    ensureSubscribed(set);
     if (typeof window.electron?.plugin?.list !== "function") return;
     void pullPluginRuntimeSnapshot(set);
   },
