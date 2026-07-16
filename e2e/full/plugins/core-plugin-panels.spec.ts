@@ -75,9 +75,10 @@ test.describe.serial("Core: Plugin panels contribution", () => {
   // which is the coverage gap that let the bug ship.
   //
   // This view imports nothing, which is deliberate: it isolates a `plugin://`
-  // protocol failure from a React-contract failure (covered below). If both
-  // tests go red the loader broke; if only the hook test does, the import map
-  // did.
+  // protocol failure from a React-contract failure (covered below). Read the two
+  // together — this one passing while the hook view fails means the loader is
+  // fine and the React contract broke. (The suite is `serial`, so a failure here
+  // skips the rest rather than reporting them red.)
   test("mounts the contributed view's React component in the grid", async () => {
     await dispatchAction(ctx.window, "panel.openPluginPanel", {
       kind: "daintree.rich.rich-panel",
@@ -97,30 +98,19 @@ test.describe.serial("Core: Plugin panels contribution", () => {
   // named 'useState'". Nothing caught it because the only plugin:// view in the
   // repo imported no React, and dev mode used a different (working) mechanism.
   //
-  // `hook-panel-view` is built by the public @daintreehq/plugin-vite preset, so
-  // this exercises the same externalize→import-map path a third-party plugin
-  // takes. Waiting on the post-effect "ready" is the whole assertion: reaching
-  // it requires the named `react` imports to have resolved, JSX to have resolved
-  // `react/jsx-runtime`, AND the hooks to dispatch through the HOST's React —
-  // a duplicated React would throw "Invalid hook call" before ever getting here.
-  test("mounts a hook-based view that imports React through the host import map", async () => {
-    await dispatchAction(ctx.window, "panel.openPluginPanel", {
-      kind: "daintree.rich.hook-panel",
-    });
-
-    await expect(ctx.window.getByText("Hook panel view ready")).toBeVisible({
-      timeout: T_LONG,
-    });
-  });
-
   // The build-time guard (hostReactFacadePlugin in vite.config.ts) proves the
-  // facade CHUNKS carry the right export names. This proves the other half the
-  // build can't see: that the import map in the shipped index.html actually
-  // RESOLVES those specifiers at runtime, under the real app:// protocol and CSP.
+  // facade CHUNKS carry the right export names. This proves the half the build
+  // can't see: that the shipped index.html's import map actually RESOLVES those
+  // specifiers at runtime, under the real app:// protocol and CSP.
+  //
+  // Ordered before the hook-panel test on purpose — the suite is `serial`, so on
+  // a #11208-style regression this reports exactly which specifiers lost which
+  // exports instead of just "the panel never mounted".
   test("resolves every mapped specifier to its public export surface", async () => {
-    // Passed as a string on purpose: Playwright transpiles this TS spec, which
-    // rewrites `await import(...)` inside a callback into a `require()` the
-    // renderer can't run. A string literal reaches the page verbatim.
+    // Passed as a string rather than a callback so the probe reaches the page
+    // verbatim. A callback's `await import(...)` has to survive Playwright's TS
+    // transform intact, which is a version-dependent detail this test has no
+    // reason to depend on; a string can't be rewritten.
     const probe = `(async () => {
       const CONTRACT = {
         "react": ["useState", "useEffect", "useMemo", "useCallback", "useRef",
@@ -132,9 +122,10 @@ test.describe.serial("Core: Plugin panels contribution", () => {
         "react-dom/client": ["createRoot", "hydrateRoot"]
       };
       const rows = [];
+      const fragments = new Map();
       for (const specifier of Object.keys(CONTRACT)) {
         const row = { specifier, error: null, missing: [], notFunctions: [],
-                      hasFragment: false, hasOwnJsxDEV: false };
+                      fragmentType: "absent", hasOwnJsxDEV: false, versionType: "absent" };
         try {
           const ns = await import(specifier);
           for (const name of CONTRACT[specifier]) {
@@ -143,26 +134,38 @@ test.describe.serial("Core: Plugin panels contribution", () => {
               row.notFunctions.push(name + ":" + typeof ns[name]);
             }
           }
-          row.hasFragment = Object.hasOwn(ns, "Fragment");
+          if (Object.hasOwn(ns, "Fragment")) {
+            row.fragmentType = typeof ns.Fragment;
+            fragments.set(specifier, ns.Fragment);
+          }
+          if (Object.hasOwn(ns, "version")) row.versionType = typeof ns.version;
           row.hasOwnJsxDEV = Object.hasOwn(ns, "jsxDEV");
         } catch (err) {
           row.error = String((err && err.message) || err);
         }
         rows.push(row);
       }
-      return rows;
+      // Identity, not just presence: every specifier that exposes Fragment must
+      // expose the SAME symbol. Distinct symbols mean the facades resolved to
+      // different React copies, which is the "Invalid hook call" failure.
+      const fragmentValues = [...fragments.values()];
+      const distinctFragments = new Set(fragmentValues).size;
+      return { rows, fragmentOwners: [...fragments.keys()], distinctFragments };
     })()`;
 
-    const rows = await ctx.window.evaluate<
-      Array<{
+    const { rows, fragmentOwners, distinctFragments } = await ctx.window.evaluate<{
+      rows: Array<{
         specifier: string;
         error: string | null;
         missing: string[];
         notFunctions: string[];
-        hasFragment: boolean;
+        fragmentType: string;
         hasOwnJsxDEV: boolean;
-      }>
-    >(probe);
+        versionType: string;
+      }>;
+      fragmentOwners: string[];
+      distinctFragments: number;
+    }>(probe);
 
     // Assert on the whole shape at once so a failure names every broken
     // specifier, not just the first.
@@ -181,16 +184,57 @@ test.describe.serial("Core: Plugin panels contribution", () => {
       { specifier: "react-dom/client", error: null, missing: [], notFunctions: [] },
     ]);
 
-    // Fragment rides on the three specifiers that document it.
-    const fragmentOwners = rows.filter((r) => r.hasFragment).map((r) => r.specifier);
+    // Fragment rides on the three specifiers that document it, is a real symbol
+    // (not an own-but-undefined binding), and agrees across all three.
+    //
+    // NOT a single-instance proof, despite the temptation to read it as one:
+    // React builds Fragment with `Symbol.for("react.fragment")`, a REGISTERED
+    // symbol, so two duplicated React copies in one realm still hand back the
+    // identical symbol. This only proves the facades expose a live, canonical
+    // marker rather than a hollow binding. Single-instance is proven by the
+    // hook-panel test below (a second copy throws "Invalid hook call") and, at
+    // build time, by the guard asserting all five facades import the one shared
+    // vendor-react chunk.
     expect(fragmentOwners).toEqual(["react", "react/jsx-runtime", "react/jsx-dev-runtime"]);
+    expect(rows.filter((r) => r.fragmentType === "symbol").map((r) => r.specifier)).toEqual(
+      fragmentOwners
+    );
+    expect(distinctFragments).toBe(1);
+
+    // `version` is a string wherever React documents it — catches a facade whose
+    // names resolve but whose bindings are hollow.
+    expect(rows.filter((r) => r.versionType === "string").map((r) => r.specifier)).toEqual([
+      "react",
+      "react-dom",
+      "react-dom/client",
+    ]);
 
     // React's PRODUCTION jsx-dev-runtime exports `jsxDEV` as `undefined` — the
     // name is there, the value isn't. `hasOwn` is the only honest check: reading
     // `ns.jsxDEV` yields `undefined` whether the export exists or not, so a
     // truthiness/`toBeUndefined` assertion would pass on a map that serves
-    // nothing at all — exactly the #11208 bug.
+    // nothing at all — exactly the #11208 bug. The value itself is deliberately
+    // not asserted: it's React's to define, and differs between dev and prod.
     const jsxDev = rows.find((r) => r.specifier === "react/jsx-dev-runtime");
     expect(jsxDev?.hasOwnJsxDEV).toBe(true);
+  });
+
+  // `hook-panel-view` is built by the public @daintreehq/plugin-vite preset, so
+  // this exercises the same externalize→import-map path a third-party plugin
+  // takes — the probe above proves the specifiers resolve; this proves a real
+  // component built the real way actually renders.
+  //
+  // Waiting on the post-effect "ready" is the whole assertion: reaching it
+  // requires the named `react` imports to have resolved, JSX to have resolved
+  // `react/jsx-runtime`, AND the hooks to dispatch through the HOST's React —
+  // a duplicated React would throw "Invalid hook call" before ever getting here.
+  test("mounts a hook-based view that imports React through the host import map", async () => {
+    await dispatchAction(ctx.window, "panel.openPluginPanel", {
+      kind: "daintree.rich.hook-panel",
+    });
+
+    await expect(ctx.window.getByText("Hook panel view ready")).toBeVisible({
+      timeout: T_LONG,
+    });
   });
 });

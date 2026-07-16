@@ -423,13 +423,24 @@ const requireFromRoot = createRequire(path.join(process.cwd(), "vite.config.ts")
 // React export has ever needed it.
 const SAFE_EXPORT_NAME = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
+const hostReactExportNameCache = new Map<string, string[]>();
+
 // The public names a specifier actually exports, read from the installed
 // package. Generating from the real surface (rather than a hand-kept list)
-// keeps the facades correct across React upgrades, and matches per mode: `vite
-// build` runs with NODE_ENV=production so this sees React's production build,
-// exactly the one the browser bundle resolves to; `vite dev` likewise sees the
-// development build the dev server serves.
+// keeps the facades correct across React upgrades, and matches per mode: Vite
+// defaults NODE_ENV to production for `build` (and preserves an explicit one)
+// and uses that same value for the browser's `process.env.NODE_ENV` define, so
+// this Node process and the bundle always select the same branch of React's
+// `if (process.env.NODE_ENV === 'production')` CJS switch. `vite dev` likewise
+// sees the development build the dev server serves.
+//
+// Memoized: the generator and the build guard both need this list, and the
+// guard's whole job is to compare what the generator ASKED for against what
+// Rolldown emitted — so both must read exactly the same set.
 function hostReactExportNames(specifier: string): string[] {
+  const cached = hostReactExportNameCache.get(specifier);
+  if (cached) return cached;
+
   let ns: Record<string, unknown>;
   try {
     ns = requireFromRoot(specifier) as Record<string, unknown>;
@@ -441,9 +452,11 @@ function hostReactExportNames(specifier: string): string[] {
   }
   // `default` is excluded here and re-exported explicitly below; emitting it in
   // the named clause too would be a duplicate-binding syntax error.
-  return Object.keys(ns)
+  const names = Object.keys(ns)
     .filter((name) => name !== "default" && SAFE_EXPORT_NAME.test(name))
     .sort();
+  hostReactExportNameCache.set(specifier, names);
+  return names;
 }
 
 // The single source of the facade module body, shared by the production emitter
@@ -472,26 +485,49 @@ function renderHostReactFacade(specifier: string): string {
 }
 
 // Emitted-chunk name for a specifier. Slashes are flattened to hyphens so the
-// name can't be read as a directory path; the results are asserted unique at
-// emit time. The hashed `.fileName` is resolved from the bundle by this name —
-// never predicted — because only Rolldown knows the final hash.
+// name can't be read as a directory path. The hashed `.fileName` is resolved
+// from the bundle by this name — never predicted — because only Rolldown knows
+// the final hash.
 function hostReactFacadeChunkName(specifier: string): string {
   return `host-react-${specifier.replaceAll("/", "-")}`;
 }
 
-function isHostReactFacadeChunkName(name: string): boolean {
-  return name.startsWith("host-react-");
+// Exact name -> specifier, not a `startsWith("host-react-")` prefix test: this
+// set decides which chunks are excluded from entry selection and compile hints,
+// and a real app chunk that happened to share the prefix would be silently
+// dropped from those gates.
+const HOST_REACT_FACADE_CHUNK_NAMES: ReadonlyMap<string, HostReactSpecifier> = new Map(
+  HOST_IMPORTMAP_SPECIFIERS.map((specifier) => [hostReactFacadeChunkName(specifier), specifier])
+);
+
+// Flattening `/` to `-` is not injective, so prove the derived names are
+// distinct. Throwing at module scope fails config load — loud and immediate —
+// rather than letting two specifiers collide onto one chunk.
+if (HOST_REACT_FACADE_CHUNK_NAMES.size !== HOST_IMPORTMAP_SPECIFIERS.length) {
+  throw new Error(
+    "[host-react-facade] two HOST_IMPORTMAP_SPECIFIERS entries flatten to the same chunk name: " +
+      HOST_IMPORTMAP_SPECIFIERS.map((s) => `${s} -> ${hostReactFacadeChunkName(s)}`).join(", ")
+  );
 }
 
-// The public API each facade must expose, verified against the built chunk's
-// real export list (see hostReactFacadePlugin's generateBundle). This is an
-// independent statement of the host/plugin contract — the names third-party
-// plugins are promised — not a copy of React's export table: the build compares
-// it against what Rolldown ACTUALLY emitted, which is what catches a
-// tree-shaking regression (`experimental.lazyBarrel` prunes barrel-shaped
-// `export *` re-exports; #8850 shows this repo has been bitten by it before).
-// Keyed by HostReactSpecifier so adding a specifier to the shared constant
-// fails typecheck until its contract is declared here.
+function isHostReactFacadeChunkName(name: string): boolean {
+  return HOST_REACT_FACADE_CHUNK_NAMES.has(name);
+}
+
+// A MINIMUM public API per specifier, verified against the built chunk's real
+// export list (see hostReactFacadePlugin's generateBundle).
+//
+// This is the second of two independent checks, and it exists to catch what the
+// first one structurally cannot. The first check asserts every name
+// `hostReactExportNames` asked for survived into the chunk — that catches
+// tree-shaking/elision (`experimental.lazyBarrel` prunes barrel-shaped
+// re-exports; #8850 shows this repo has been bitten before). But it compares the
+// generator against itself: if the generator regressed to emit a handful of
+// names, the built chunk would still match what it asked for and the check would
+// pass vacuously. This hand-written list is the fixed point that catches that —
+// the names third-party plugins are promised, independent of what any code
+// derives. Keyed by HostReactSpecifier so adding a specifier to the shared
+// constant fails typecheck until its contract is declared here.
 const HOST_REACT_REQUIRED_EXPORTS: Record<HostReactSpecifier, readonly string[]> = {
   react: [
     "default",
@@ -577,16 +613,7 @@ function hostReactFacadePlugin(): Plugin {
     name: "host-react-facade",
     apply: "build",
     buildStart() {
-      const seen = new Set<string>();
-      for (const specifier of HOST_IMPORTMAP_SPECIFIERS) {
-        const name = hostReactFacadeChunkName(specifier);
-        if (seen.has(name)) {
-          throw new Error(
-            `[host-react-facade] duplicate facade chunk name "${name}". Two entries in ` +
-              "HOST_IMPORTMAP_SPECIFIERS flatten to the same name; give one a distinct name."
-          );
-        }
-        seen.add(name);
+      for (const [name, specifier] of HOST_REACT_FACADE_CHUNK_NAMES) {
         this.emitFile({
           type: "chunk",
           id: `${HOST_REACT_VIRTUAL_PREFIX}${specifier}`,
@@ -626,14 +653,38 @@ function hostReactFacadePlugin(): Plugin {
       }
 
       const problems: string[] = [];
-      for (const specifier of HOST_IMPORTMAP_SPECIFIERS) {
-        const name = hostReactFacadeChunkName(specifier);
+
+      // Fail closed. If the named group ever stops emitting, every per-facade
+      // single-instance check below would silently no-op while React quietly
+      // duplicated across entries — the exact failure this guard exists to catch.
+      if (!vendorReactFileName) {
+        problems.push(
+          "no chunk named `vendor-react` in the build output — the codeSplitting group in " +
+            "vite.config.ts is the only thing keeping React a single shared instance."
+        );
+      }
+
+      for (const [name, specifier] of HOST_REACT_FACADE_CHUNK_NAMES) {
         const chunk = chunksByName.get(name);
         if (!chunk) {
           problems.push(`"${specifier}": no facade chunk named "${name}" in the bundle`);
           continue;
         }
         const actual = new Set(chunk.exports);
+
+        // Check 1 — nothing the generator asked for got tree-shaken away.
+        const elided = [...hostReactExportNames(specifier), "default"].filter(
+          (n) => !actual.has(n)
+        );
+        if (elided.length > 0) {
+          problems.push(
+            `"${specifier}" (${chunk.fileName}) lost ${elided.length} export(s) the facade ` +
+              `re-exported: ${elided.join(", ")}`
+          );
+        }
+
+        // Check 2 — the promised minimum is present regardless of what the
+        // generator derived (see HOST_REACT_REQUIRED_EXPORTS).
         const missing = HOST_REACT_REQUIRED_EXPORTS[specifier].filter((n) => !actual.has(n));
         if (missing.length > 0) {
           problems.push(
@@ -641,6 +692,7 @@ function hostReactFacadePlugin(): Plugin {
               `Emitted exports: ${chunk.exports.join(", ") || "(none)"}`
           );
         }
+
         // Every facade must reach React through the one shared chunk. If a
         // facade stopped importing vendor-react, React got inlined into it —
         // i.e. a second copy — which breaks hooks at the first render.
@@ -708,6 +760,21 @@ function hostImportMapPlugin(state: ImportMapBuildState): Plugin {
           ])
         ),
       };
+
+      // Pin the shape of the map itself, not just the facades it points at.
+      // The facade guard proves the CHUNKS are good; it cannot see this HTML, so
+      // a refactor that collapsed every specifier back onto one target (#11208's
+      // original shape) would leave five valid-but-unused facades and still
+      // build clean. This is the assertion that makes that regression loud.
+      const targets = Object.values(importMapPayload.imports);
+      if (new Set(targets).size !== HOST_IMPORTMAP_SPECIFIERS.length) {
+        throw new Error(
+          "[host-import-map] every specifier must map to its own facade; got " +
+            `${new Set(targets).size} distinct target(s) for ${HOST_IMPORTMAP_SPECIFIERS.length} ` +
+            "specifiers. Mapping several specifiers at one file is #11208: a shared chunk only " +
+            "exports the private cross-chunk interface, never React's public API."
+        );
+      }
       // Compact JSON without trailing whitespace — the byte sequence here is
       // exactly what the browser receives, and the SHA-256 must match.
       const serialized = JSON.stringify(importMapPayload);
@@ -1045,6 +1112,7 @@ function compileHintsPlugin(): Plugin {
 // the native handle, so they're read lazily, never structured-cloned.
 interface BundleChunkLike {
   type: string;
+  name?: string;
   fileName: string;
   isEntry?: boolean;
   facadeModuleId?: string | null;
@@ -1089,7 +1157,15 @@ function firstRenderModulePreloadPlugin(): Plugin {
       // Populated only for production builds — the dev server has no bundle.
       if (!ctx.bundle) return;
 
-      const chunks = Object.values(ctx.bundle as unknown as Record<string, BundleChunkLike>);
+      // Drop the React facades before the closure math. computeFirstRenderPreloadFiles
+      // subtracts every `isEntry` chunk's closure as "what Vite already
+      // auto-preloads" — true for the HTML entry, false for the facades, which
+      // index.html never references (a plugin imports them at runtime through
+      // the import map). Leaving them in would subtract a closure the browser
+      // was never given, silently dropping preload tags a first-render seed needs.
+      const chunks = Object.values(ctx.bundle as unknown as Record<string, BundleChunkLike>).filter(
+        (chunk) => !isHostReactFacadeChunkName(chunk.name ?? "")
+      );
       const { files, matchedSeedCount } = computeFirstRenderPreloadFiles(
         chunks,
         seedSourcePaths,
