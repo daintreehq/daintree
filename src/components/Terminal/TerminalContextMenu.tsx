@@ -19,6 +19,8 @@ import {
 } from "@shared/types/panel";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { reportFileLinkFailure } from "@/services/terminal/FileLinksAddon";
+import { resolveSelectedFilePath } from "@/services/terminal/filePathDetection";
+import { SelectedFileMenuItems } from "./SelectedFileMenuItems";
 import { useIsHibernated } from "@/hooks/useIsHibernated";
 import { usePluginContextMenuItems } from "@/hooks/usePluginContextMenuItems";
 import { PluginContextMenuSection } from "@/components/Plugin/PluginContextMenuSection";
@@ -127,6 +129,7 @@ export function TerminalContextMenu({
   const [hasSelection, setHasSelection] = useState(false);
   const [hoveredUrl, setHoveredUrl] = useState<string | null>(null);
   const [hoveredFilePath, setHoveredFilePath] = useState<string | null>(null);
+  const [selectedText, setSelectedText] = useState<string | null>(null);
   const suppressNextCloseAutoFocusRef = useRef(false);
   // Local confirm dialog for single-terminal kill/restart when an agent
   // session is mid-work. Bare PTY terminals skip this gate and run
@@ -186,10 +189,14 @@ export function TerminalContextMenu({
         setHasSelection(false);
         setHoveredUrl(null);
         setHoveredFilePath(null);
+        setSelectedText(null);
         return;
       }
+      // Read the selection synchronously here — xterm clears it on the next
+      // forwarded keystroke (#7649), so a deferred read would see nothing.
       const selection = managed.terminal.getSelection();
       setHasSelection(!!selection);
+      setSelectedText(selection || null);
       setHoveredUrl(terminalInstanceService.getHoveredLinkText(terminalId));
       setHoveredFilePath(terminalInstanceService.getHoveredFilePath(terminalId));
     },
@@ -198,6 +205,17 @@ export function TerminalContextMenu({
 
   const terminalPty = terminal && isPtyPanel(terminal) ? terminal : undefined;
   const terminalBrowser = terminal && isBrowserPanel(terminal) ? terminal : undefined;
+
+  // A selection that resolves to a file path unlocks the "View file" / "Open
+  // folder" section. Relative paths resolve against the terminal's cwd;
+  // absolute selections resolve without one (empty cwd is fine for those).
+  const selectionFilePath = useMemo(
+    () =>
+      selectedText
+        ? (resolveSelectedFilePath(selectedText, terminalPty?.cwd ?? "")?.absolutePath ?? null)
+        : null,
+    [selectedText, terminalPty?.cwd]
+  );
   const isPaused =
     terminalPty?.flowStatus === "paused-backpressure" ||
     terminalPty?.flowStatus === "paused-resource-governor";
@@ -833,6 +851,12 @@ export function TerminalContextMenu({
                     <FolderOpen className={ICON_CLASS} aria-hidden="true" />
                     {mac ? "Reveal in Finder" : isWindows() ? "Show in Explorer" : "Show in folder"}
                   </ContextMenuItem>
+                </>
+              )}
+              {selectionFilePath && (
+                <>
+                  <ContextMenuSeparator />
+                  <SelectedFileMenuItems absolutePath={selectionFilePath} />
                 </>
               )}
               <ContextMenuSeparator />
