@@ -30,6 +30,12 @@
       "@shared/*": ["./shared/*"]
     }
   },
-  "include": ["src", "shared", "plugins/builtin/*/renderer", "packages/plugin-vite/src"],
+  "include": [
+    "src",
+    "shared",
+    "plugins/builtin/*/renderer",
+    "plugins/sample/*/renderer",
+    "packages/plugin-vite/src"
+  ],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

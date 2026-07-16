@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   collectEagerChunks,
   compareReport,
+  findEntryKey,
   parseArgs,
   shrinkageGuardError,
   stableChunkId,
@@ -42,6 +43,56 @@ function makeManifest(extra = {}) {
     ...extra,
   };
 }
+
+// vite.config.ts emits five `host-react-*` React facade entry chunks for the
+// plugin import map (#11208). They are `isEntry: true` but are not the app, and
+// manifest key order is not specified — so the gate must identify the app entry
+// by more than "first entry wins" or it silently measures a re-export shim.
+describe("findEntryKey", () => {
+  it("skips host-react facade entries that precede the app entry", () => {
+    const manifest = {
+      "\0virtual:daintree-host-react/react": {
+        file: "assets/host-react-react-aaa.js",
+        name: "host-react-react",
+        isEntry: true,
+        imports: ["_vendor-react.js"],
+        dynamicImports: [],
+      },
+      ...makeManifest(),
+    };
+    expect(findEntryKey(manifest)).toBe("src/main.tsx");
+  });
+
+  it("identifies a facade by its file path when the manifest carries no name", () => {
+    const manifest = {
+      "\0virtual:daintree-host-react/react-dom/client": {
+        file: "assets/host-react-react-dom-client-bbb.js",
+        isEntry: true,
+        imports: ["_vendor-react.js"],
+        dynamicImports: [],
+      },
+      ...makeManifest(),
+    };
+    expect(findEntryKey(manifest)).toBe("src/main.tsx");
+  });
+
+  it("does not mistake a real chunk for a facade just because it imports react", () => {
+    expect(findEntryKey(makeManifest())).toBe("src/main.tsx");
+  });
+
+  it("returns null when the manifest has only facade entries", () => {
+    const manifest = {
+      "\0virtual:daintree-host-react/react": {
+        file: "assets/host-react-react-aaa.js",
+        name: "host-react-react",
+        isEntry: true,
+        imports: [],
+        dynamicImports: [],
+      },
+    };
+    expect(findEntryKey(manifest)).toBeNull();
+  });
+});
 
 describe("collectEagerChunks", () => {
   it("walks imports[] from the entry key", () => {
