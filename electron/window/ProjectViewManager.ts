@@ -530,8 +530,9 @@ export class ProjectViewManager {
     EvictionController.maybeEvictUnderPressure(this);
   }
 
-  reclaimCachedViewsUnderPressure(): void {
-    EvictionController.evictStaleViews(this, "pressure", true);
+  /** Returns the number of cached views evicted — 0 means nothing was eligible. */
+  reclaimCachedViewsUnderPressure(): number {
+    return EvictionController.evictStaleViews(this, "pressure", true);
   }
 
   /**

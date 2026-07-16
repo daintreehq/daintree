@@ -17,6 +17,16 @@ import { readAvailableSystemMemoryMb } from "../utils/systemMemory.js";
 type EvictionCandidate = [string, ViewEntry, boolean, boolean];
 
 /**
+ * workingSetSize is the only cross-platform field — privateBytes is
+ * Windows-only and reports 0 (not undefined) on macOS/Linux, so a
+ * `privateBytes ?? workingSetSize` fallback never fires there and silently
+ * logs every view as 0 KB (lesson #8646).
+ */
+function readProcessMemoryKb(proc: Electron.ProcessMetric): number {
+  return proc.memory.workingSetSize;
+}
+
+/**
  * Whether destroying `entry` would kill a running Daintree Assistant (#11157).
  *
  * Three conditions, all load-bearing:
@@ -84,11 +94,12 @@ export function evictDeadView(
   });
 }
 
+/** Returns the number of views actually evicted — 0 means nothing was eligible. */
 export function evictStaleViews(
   host: ProjectViewManager,
   reason: EvictionReason,
   forcePressure = false
-): void {
+): number {
   // Override the user-configured cap when system memory is low so we can
   // reclaim Chromium renderers (~100–500 MB each) before the OS hits
   // compressed-RAM throttling. The override is per-pass — `maxCachedViews`
@@ -103,8 +114,8 @@ export function evictStaleViews(
   const effectiveMax = lowMemoryOverride ? 1 : host.maxCachedViews;
   const effectiveReason: EvictionReason = lowMemoryOverride ? "pressure" : reason;
 
-  if (host.views.size <= effectiveMax) return;
-  if (host.activeProjectId === null) return;
+  if (host.views.size <= effectiveMax) return 0;
+  if (host.activeProjectId === null) return 0;
 
   if (lowMemoryOverride) {
     logInfo("projectview.pressure-override", {
@@ -115,7 +126,7 @@ export function evictStaleViews(
     });
   }
 
-  // Build pid → privateBytes index from the synchronous app.getAppMetrics()
+  // Build pid → memory index from the synchronous app.getAppMetrics()
   // snapshot. Joined per-view via `webContents.getOSProcessId()` so the
   // eviction log line can record each evicted view's footprint. Memory size
   // does not drive eviction order — the largest renderer is typically the
@@ -126,8 +137,8 @@ export function evictStaleViews(
     // Shared TTL snapshot: the eviction log line tolerates a few seconds of
     // staleness, so a pass landing near another sampler's sweep reuses it.
     for (const proc of getAppMetricsSnapshot()) {
-      const kb = proc.memory.privateBytes ?? proc.memory.workingSetSize;
-      if (typeof kb === "number" && kb > 0) {
+      const kb = readProcessMemoryKb(proc);
+      if (kb > 0) {
         memoryByPid.set(proc.pid, kb);
       }
     }
@@ -204,6 +215,7 @@ export function evictStaleViews(
     ? [...safeToEvict, ...activeAgentFallback, ...assistantProtected]
     : [...safeToEvict, ...activeAgentFallback];
 
+  let evictedCount = 0;
   while (host.views.size > effectiveMax && candidates.length > 0) {
     const [projectId, entry, activeAgent, liveAssistantBackend] = candidates.shift()!;
     const ageMs = Date.now() - entry.lastUsed;
@@ -222,6 +234,7 @@ export function evictStaleViews(
     logInfo("projectview.eviction", ctx);
     host.evictionTimestamps.set(projectId, Date.now());
     cleanupEntry(host, projectId);
+    evictedCount++;
   }
 
   // The cache is deliberately over its cap because protecting a running
@@ -236,6 +249,8 @@ export function evictStaleViews(
       protectedProjectIds: assistantProtected.map(([projectId]) => projectId),
     });
   }
+
+  return evictedCount;
 }
 
 /**
@@ -255,8 +270,8 @@ export function sampleCachedViewMemory(host: ProjectViewManager): void {
     // samplers near the 30s aligned sweeps reuse them instead of stacking
     // additional full-process-table scans.
     for (const proc of getAppMetricsSnapshot()) {
-      const kb = proc.memory.privateBytes ?? proc.memory.workingSetSize;
-      if (typeof kb === "number" && kb > 0) {
+      const kb = readProcessMemoryKb(proc);
+      if (kb > 0) {
         memoryByPid.set(proc.pid, kb);
       }
     }
