@@ -12,6 +12,11 @@ vi.mock("@/components/ui/ContentFadeIn", () => ({
   ContentFadeIn: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
+// The fake records the props it was handed. Fallback *rendering* is covered by
+// PluginViewDiagnosticsFallback.test.tsx against the real component — asserting
+// pane content through this stub would pass without exercising any of it.
+const boundaryProps = vi.hoisted(() => ({ last: null as Record<string, unknown> | null }));
+
 // Stub the real ErrorBoundary with a minimal class — exercising the entire
 // reporting pipeline (Sentry, errorStore, notify) is out of scope for the
 // host's unit tests. The stub honors `resetKeys` and `onReset` so the reload
@@ -24,6 +29,7 @@ vi.mock("@/components/ErrorBoundary", async () => {
       onReset?: () => void;
       resetKeys?: Array<string | number>;
       componentName?: string;
+      fallback?: React.ComponentType<unknown>;
     },
     { hasError: boolean; lastKey: string | number | undefined }
   > {
@@ -42,6 +48,7 @@ vi.mock("@/components/ErrorBoundary", async () => {
       void prev;
     }
     render(): React.ReactNode {
+      boundaryProps.last = this.props;
       if (this.state.hasError) {
         return (
           <button
@@ -79,6 +86,7 @@ function makeConfig(overrides: Partial<PanelKindConfig> = {}): PanelKindConfig {
 const onPanelKindsChangedMock = vi.fn();
 
 beforeEach(() => {
+  boundaryProps.last = null;
   onPanelKindsChangedMock.mockReset();
   onPanelKindsChangedMock.mockReturnValue(() => {});
   vi.stubGlobal("electron", undefined);
@@ -413,6 +421,27 @@ describe("makePluginViewHost", () => {
     expect(() => act(() => emit!({ kinds: [] }))).not.toThrow();
 
     unmount();
+  });
+
+  it("hands the boundary a plugin-specific fallback and an undoubled component name (#11207)", async () => {
+    const { makePluginViewHost } = await import("../PluginViewHost");
+    const Host = makePluginViewHost(makeConfig());
+
+    render(
+      <Host
+        id="panel-fallback"
+        title="Dashboard"
+        isFocused={false}
+        onFocus={(): void => {}}
+        onClose={(): void => {}}
+      />
+    );
+
+    await waitFor(() => expect(boundaryProps.last).not.toBeNull());
+    // `kindId` already carries the plugin prefix, so re-prefixing it produced
+    // `PluginView:acme.acme.dashboard` in the title and every log field.
+    expect(boundaryProps.last!.componentName).toBe("PluginView:acme.dashboard");
+    expect(typeof boundaryProps.last!.fallback).toBe("function");
   });
 });
 

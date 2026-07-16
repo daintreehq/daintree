@@ -11,9 +11,12 @@ import {
 import type { PanelKindConfig } from "@shared/config/panelKindRegistry";
 import type { PanelViewProps } from "@shared/types/plugin";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import type { ErrorFallbackProps } from "@/components/ErrorBoundary/ErrorFallback";
 import { BrowserPaneSkeleton } from "@/components/Browser/BrowserPaneSkeleton";
 import { ContentFadeIn } from "@/components/ui/ContentFadeIn";
 import { usePanelRootFocus } from "@/components/Panel/usePanelRootFocus";
+import { PluginViewDiagnosticsFallback } from "@/components/Plugin/PluginViewDiagnosticsFallback";
+import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import type { PanelComponentProps } from "@/panels/registry";
 import { logWarn } from "@/utils/logger";
 
@@ -83,6 +86,35 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Panel
     };
   }
 
+  // Defined once per host, not inline in render: the boundary swaps its
+  // fallback subtree whenever this component *type* changes identity, which
+  // would remount the diagnostics pane (and drop its copy feedback) on every
+  // host render.
+  function PluginViewFallback({ error, errorInfo, resetError, incidentId }: ErrorFallbackProps) {
+    // Two primitive selectors rather than one object selector: the meta record
+    // is rebuilt on every provenance pull, so selecting it whole would re-render
+    // the pane on pulls that changed nothing about this plugin.
+    const devMode = usePluginRuntimeStore((s) => s.pluginMetaById.get(pluginId!)?.devMode === true);
+    const pluginDisplayName = usePluginRuntimeStore(
+      (s) => s.pluginMetaById.get(pluginId!)?.displayName ?? pluginId!
+    );
+
+    return (
+      <PluginViewDiagnosticsFallback
+        error={error}
+        errorInfo={errorInfo}
+        resetError={resetError}
+        incidentId={incidentId}
+        pluginId={pluginId!}
+        pluginDisplayName={pluginDisplayName}
+        kindId={kindId}
+        panelDisplayName={displayName}
+        componentPath={componentPath!}
+        devMode={devMode}
+      />
+    );
+  }
+
   const createLazyView = (): LazyExoticComponent<ComponentType<PanelViewProps>> =>
     lazy<ComponentType<PanelViewProps>>(async () => {
       // Race the `plugin://` import against a timeout. A wedged protocol load
@@ -146,6 +178,13 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Panel
     // counter is observable to the boundary even though the lazy ref lives
     // in its own slot.
     const [retryCount, setRetryCount] = useState(0);
+
+    // Warm the plugin runtime mirror from the host rather than the fallback:
+    // the pull is async, and starting it at mount means the dev-mode flag has
+    // landed long before a view can resolve and then throw. The fallback still
+    // subscribes, so a late snapshot upgrades a redacted trace in place.
+    const initPluginRuntime = usePluginRuntimeStore((s) => s.init);
+    useEffect(() => initPluginRuntime(), [initPluginRuntime]);
 
     const rootRef = useRef<HTMLDivElement | null>(null);
     const panelId = props.id;
@@ -215,7 +254,10 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Panel
       <div ref={rootRef} tabIndex={-1} className="flex flex-col h-full w-full">
         <ErrorBoundary
           variant="component"
-          componentName={`PluginView:${pluginId}.${kindId}`}
+          // `kindId` is already `${pluginId}.${panel.id}` (PluginService builds
+          // it that way), so prefixing pluginId again doubled it.
+          componentName={`PluginView:${kindId}`}
+          fallback={PluginViewFallback}
           onReset={handleReset}
           resetKeys={[retryCount]}
         >
