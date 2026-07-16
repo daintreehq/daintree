@@ -107,13 +107,17 @@ describe("applyAtlasPageSizeCap", () => {
     expect(writes).toBe(0);
   });
 
-  it("reports failure when the static swallows the write", () => {
-    // A getter-only static accepts the assignment in sloppy mode and keeps the
-    // hardware value; retiring the retry on that would leave the atlas unbounded.
+  it("reports failure when the static accepts the write but ignores it", () => {
+    // An ignoring setter takes the assignment without throwing and keeps the
+    // hardware value. Trusting the write here would retire the retry with the
+    // atlas still unbounded, so only a read-back can tell the two apart.
     class SwallowingAtlas {
       public static maxAtlasPages: number | undefined = HARDWARE_MAX_ATLAS_PAGES;
       public static get maxTextureSize(): number | undefined {
         return HARDWARE_MAX_TEXTURE_SIZE;
+      }
+      public static set maxTextureSize(_value: number | undefined) {
+        // accepted and dropped
       }
     }
 
@@ -155,16 +159,31 @@ describe("applyAtlasPageSizeCap", () => {
   });
 });
 
+// The cap reaches through the addon's private shape and degrades silently by
+// design, so a bump that moved any of this would restore the unbounded growth it
+// fixes with no other signal. These match the surrounding mechanism rather than
+// bare identifiers: `_charAtlas` alone occurs elsewhere in the bundle, so a
+// rename of the one member the cap reaches would slip past a plain search.
 describe("pinned @xterm/addon-webgl contract", () => {
-  // The cap reaches through the addon's private shape and degrades silently by
-  // design, so a rename in a future bump would restore the unbounded growth this
-  // fixes with no other signal. Fail loudly at the bump instead.
-  it("still ships the internals and statics the cap depends on", () => {
-    const require = createRequire(import.meta.url);
-    const bundle = readFileSync(require.resolve("@xterm/addon-webgl/lib/addon-webgl.mjs"), "utf8");
+  const bundle = readFileSync(
+    createRequire(import.meta.url).resolve("@xterm/addon-webgl/lib/addon-webgl.mjs"),
+    "utf8"
+  );
 
-    for (const identifier of ["_renderer", "_charAtlas", "maxAtlasPages", "maxTextureSize"]) {
-      expect(bundle).toContain(identifier);
-    }
+  it("still grows pages only by the merge rule the cap constrains", () => {
+    expect(bundle).toMatch(/canvas\.width\s*\*\s*2\s*<=\s*\(?\s*\w+\.maxTextureSize\s*\|\|/);
+  });
+
+  it("still probes both statics together, which is why the cap has to run after activation", () => {
+    expect(bundle).toMatch(/MAX_TEXTURE_IMAGE_UNITS[\s\S]{0,120}\.maxTextureSize\s*=/);
+  });
+
+  it("still gates page reclaim on the page count the cap leaves at its hardware value", () => {
+    expect(bundle).toMatch(/\w+\.maxAtlasPages\s*&&/);
+  });
+
+  it("still exposes the renderer and atlas the cap reaches through", () => {
+    expect(bundle).toMatch(/this\._renderer\s*=/);
+    expect(bundle).toMatch(/this\._charAtlas\s*=\s*\w+\s*,\s*this\._charAtlas\.warmUp\(\)/);
   });
 });
