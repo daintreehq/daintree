@@ -242,18 +242,21 @@ describe("TerminalWebGLManager", () => {
     }
 
     // Mirrors WebglAddon.activate(): the renderer and its atlas are constructed
-    // synchronously, so both exist by the time loadAddon returns.
+    // synchronously, so both exist by the time loadAddon returns. Attaching the
+    // atlas here rather than at addon construction is what pins the ordering —
+    // a cap applied before loadAddon would find nothing to cap.
     function activateOnLoad(
       managed: ManagedTerminal,
       atlasClass: ReturnType<typeof makeAtlasClass> | null
     ): void {
-      (managed.terminal.loadAddon as ReturnType<typeof vi.fn>).mockImplementation(
-        (addon: { _renderer?: { _charAtlas?: object } }) => {
-          if (atlasClass && addon._renderer) {
-            addon._renderer._charAtlas = new atlasClass();
-          }
-        }
-      );
+      vi.mocked(managed.terminal.loadAddon).mockImplementation((addon: unknown) => {
+        if (!atlasClass) return;
+        if (typeof addon !== "object" || addon === null) return;
+        if (!("_renderer" in addon)) return;
+        const renderer = addon._renderer;
+        if (typeof renderer !== "object" || renderer === null) return;
+        Object.assign(renderer, { _charAtlas: new atlasClass() });
+      });
     }
 
     it("caps the atlas once the addon has activated", () => {
