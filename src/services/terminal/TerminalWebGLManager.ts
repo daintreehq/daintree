@@ -1091,6 +1091,13 @@ export const __testing = {
   resetLoaderState(): void {
     WebglAddonClass = null;
     webglAddonLoadPromise = null;
+    atlasPageSizeCapped = false;
+  },
+  resetAtlasCapState(): void {
+    atlasPageSizeCapped = false;
+  },
+  isAtlasPageSizeCapped(): boolean {
+    return atlasPageSizeCapped;
   },
   isLoaded(): boolean {
     return WebglAddonClass !== null;

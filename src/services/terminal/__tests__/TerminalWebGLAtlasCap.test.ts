@@ -1,11 +1,7 @@
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
-import {
-  ATLAS_MAX_TEXTURE_SIZE,
-  ATLAS_PAGE_START_SIZE,
-  applyAtlasPageSizeCap,
-  atlasByteCeiling,
-  isPageMergeEligible,
-} from "../TerminalWebGLAtlasCap";
+import { ATLAS_MAX_TEXTURE_SIZE, applyAtlasPageSizeCap } from "../TerminalWebGLAtlasCap";
 
 // Mirrors the shipped addon: TextureAtlas holds the limits as statics on the
 // class, and the only handle we get on that class is a live atlas instance's
@@ -26,12 +22,16 @@ function createAddon(atlasClass?: ReturnType<typeof createAtlasClass>): object {
 const HARDWARE_MAX_TEXTURE_SIZE = 16384;
 const HARDWARE_MAX_ATLAS_PAGES = 16;
 
+function createProbedAtlasClass() {
+  return createAtlasClass({
+    maxTextureSize: HARDWARE_MAX_TEXTURE_SIZE,
+    maxAtlasPages: HARDWARE_MAX_ATLAS_PAGES,
+  });
+}
+
 describe("applyAtlasPageSizeCap", () => {
-  it("lowers an initialized hardware limit to the cap", () => {
-    const atlasClass = createAtlasClass({
-      maxTextureSize: HARDWARE_MAX_TEXTURE_SIZE,
-      maxAtlasPages: HARDWARE_MAX_ATLAS_PAGES,
-    });
+  it("lowers a probed hardware limit to the cap", () => {
+    const atlasClass = createProbedAtlasClass();
 
     expect(applyAtlasPageSizeCap(createAddon(atlasClass))).toBe(true);
     expect(atlasClass.maxTextureSize).toBeLessThan(HARDWARE_MAX_TEXTURE_SIZE);
@@ -39,23 +39,46 @@ describe("applyAtlasPageSizeCap", () => {
   });
 
   it("leaves maxAtlasPages alone, since it is baked into the shader at GlyphRenderer construction", () => {
-    const atlasClass = createAtlasClass({
-      maxTextureSize: HARDWARE_MAX_TEXTURE_SIZE,
-      maxAtlasPages: HARDWARE_MAX_ATLAS_PAGES,
-    });
+    const atlasClass = createProbedAtlasClass();
 
-    applyAtlasPageSizeCap(createAddon(atlasClass));
-
+    expect(applyAtlasPageSizeCap(createAddon(atlasClass))).toBe(true);
     expect(atlasClass.maxAtlasPages).toBe(HARDWARE_MAX_ATLAS_PAGES);
   });
 
-  it("declines an uninitialized atlas so the hardware probe cannot overwrite the cap", () => {
-    // GlyphRenderer initializes both statics together, gated on maxAtlasPages
-    // being undefined. Capping first would be clobbered moments later.
+  it("declines an atlas whose probe has not run, so the cap cannot be overwritten", () => {
+    // GlyphRenderer assigns both statics together, gated on maxAtlasPages being
+    // undefined. Capping first would be clobbered moments later.
     const atlasClass = createAtlasClass({ maxTextureSize: undefined, maxAtlasPages: undefined });
 
     expect(applyAtlasPageSizeCap(createAddon(atlasClass))).toBe(false);
     expect(atlasClass.maxTextureSize).toBeUndefined();
+  });
+
+  it("caps a probe that set the page count but left the texture size unusable", () => {
+    // GlyphRenderer assigns maxAtlasPages before querying MAX_TEXTURE_SIZE, so a
+    // throw between the two leaves this state permanently: later renderers skip
+    // the probe entirely and the atlas falls back to its own 4096 default.
+    const atlasClass = createAtlasClass({
+      maxTextureSize: undefined,
+      maxAtlasPages: HARDWARE_MAX_ATLAS_PAGES,
+    });
+
+    expect(applyAtlasPageSizeCap(createAddon(atlasClass))).toBe(true);
+    expect(atlasClass.maxTextureSize).toBe(ATLAS_MAX_TEXTURE_SIZE);
+  });
+
+  it("declines when the page count cannot bound the atlas, leaving the cap inert", () => {
+    // Reclaim is gated on a truthy maxAtlasPages; without one the atlas grows
+    // pages regardless of their size, so reporting success would be a lie.
+    for (const maxAtlasPages of [0, -1, Number.POSITIVE_INFINITY, Number.NaN]) {
+      const atlasClass = createAtlasClass({
+        maxTextureSize: HARDWARE_MAX_TEXTURE_SIZE,
+        maxAtlasPages,
+      });
+
+      expect(applyAtlasPageSizeCap(createAddon(atlasClass))).toBe(false);
+      expect(atlasClass.maxTextureSize).toBe(HARDWARE_MAX_TEXTURE_SIZE);
+    }
   });
 
   it("never raises a limit that is already below the cap", () => {
@@ -66,83 +89,82 @@ describe("applyAtlasPageSizeCap", () => {
     expect(atlasClass.maxTextureSize).toBe(belowCap);
   });
 
-  it("is idempotent across repeated attaches", () => {
-    const atlasClass = createAtlasClass({
-      maxTextureSize: HARDWARE_MAX_TEXTURE_SIZE,
-      maxAtlasPages: HARDWARE_MAX_ATLAS_PAGES,
-    });
-    const addon = createAddon(atlasClass);
+  it("does not rewrite a static that is already at the cap", () => {
+    let writes = 0;
+    let stored: number | undefined = ATLAS_MAX_TEXTURE_SIZE;
+    class CountingAtlas {
+      public static maxAtlasPages: number | undefined = HARDWARE_MAX_ATLAS_PAGES;
+      public static get maxTextureSize(): number | undefined {
+        return stored;
+      }
+      public static set maxTextureSize(value: number | undefined) {
+        writes++;
+        stored = value;
+      }
+    }
 
-    applyAtlasPageSizeCap(addon);
-    const afterFirst = atlasClass.maxTextureSize;
+    expect(applyAtlasPageSizeCap({ _renderer: { _charAtlas: new CountingAtlas() } })).toBe(true);
+    expect(writes).toBe(0);
+  });
 
-    expect(applyAtlasPageSizeCap(addon)).toBe(true);
-    expect(atlasClass.maxTextureSize).toBe(afterFirst);
+  it("reports failure when the static swallows the write", () => {
+    // A getter-only static accepts the assignment in sloppy mode and keeps the
+    // hardware value; retiring the retry on that would leave the atlas unbounded.
+    class SwallowingAtlas {
+      public static maxAtlasPages: number | undefined = HARDWARE_MAX_ATLAS_PAGES;
+      public static get maxTextureSize(): number | undefined {
+        return HARDWARE_MAX_TEXTURE_SIZE;
+      }
+    }
+
+    expect(applyAtlasPageSizeCap({ _renderer: { _charAtlas: new SwallowingAtlas() } })).toBe(false);
   });
 
   it("reports failure rather than throwing when the internal shape has drifted", () => {
-    expect(applyAtlasPageSizeCap(createAddon())).toBe(false);
-    expect(applyAtlasPageSizeCap({})).toBe(false);
-    expect(applyAtlasPageSizeCap({ _renderer: { _charAtlas: null } })).toBe(false);
-  });
-});
-
-describe("merge generations under the cap", () => {
-  it("allows a freshly allocated page to merge exactly once", () => {
-    const merged = ATLAS_PAGE_START_SIZE * 2;
-
-    expect(isPageMergeEligible(ATLAS_PAGE_START_SIZE, ATLAS_MAX_TEXTURE_SIZE)).toBe(true);
-    expect(isPageMergeEligible(merged, ATLAS_MAX_TEXTURE_SIZE)).toBe(false);
-  });
-
-  it("permits far more merge generations at the hardware limit than under the cap", () => {
-    const generations = (limit: number): number => {
-      let count = 0;
-      for (let width = ATLAS_PAGE_START_SIZE; isPageMergeEligible(width, limit); width *= 2) {
-        count++;
+    class ThrowingAtlas {
+      public static get maxAtlasPages(): number {
+        throw new Error("internal shape drifted");
       }
-      return count;
-    };
+    }
 
-    expect(generations(ATLAS_MAX_TEXTURE_SIZE)).toBeLessThan(
-      generations(HARDWARE_MAX_TEXTURE_SIZE)
-    );
+    const drifted: object[] = [
+      createAddon(),
+      {},
+      { _renderer: null },
+      { _renderer: "not-an-object" },
+      { _renderer: { _charAtlas: null } },
+      { _renderer: { _charAtlas: 42 } },
+      { _renderer: { _charAtlas: { constructor: undefined } } },
+      { _renderer: { _charAtlas: { constructor: "not-a-class" } } },
+      { _renderer: { _charAtlas: new ThrowingAtlas() } },
+    ];
+
+    for (const addon of drifted) {
+      expect(applyAtlasPageSizeCap(addon)).toBe(false);
+    }
   });
 
-  it("keeps the cap at or above the size pages are allocated at", () => {
-    // A cap below the start size would bar merging outright and quarter the
-    // glyph capacity, which trades unbounded growth for eviction churn.
-    expect(ATLAS_MAX_TEXTURE_SIZE).toBeGreaterThanOrEqual(ATLAS_PAGE_START_SIZE);
+  it("caps a frozen class only if the write lands", () => {
+    const atlasClass = createProbedAtlasClass();
+    Object.freeze(atlasClass);
+
+    // Strict mode makes the assignment throw; the guard must swallow it and
+    // report the atlas as unbounded rather than break the attach path.
+    expect(applyAtlasPageSizeCap(createAddon(atlasClass))).toBe(false);
+    expect(atlasClass.maxTextureSize).toBe(HARDWARE_MAX_TEXTURE_SIZE);
   });
 });
 
-describe("atlasByteCeiling", () => {
-  it("bounds the atlas far below the uncapped hardware ceiling", () => {
-    const capped = atlasByteCeiling(HARDWARE_MAX_ATLAS_PAGES, ATLAS_MAX_TEXTURE_SIZE);
-    const uncapped = atlasByteCeiling(HARDWARE_MAX_ATLAS_PAGES, HARDWARE_MAX_TEXTURE_SIZE);
+describe("pinned @xterm/addon-webgl contract", () => {
+  // The cap reaches through the addon's private shape and degrades silently by
+  // design, so a rename in a future bump would restore the unbounded growth this
+  // fixes with no other signal. Fail loudly at the bump instead.
+  it("still ships the internals and statics the cap depends on", () => {
+    const require = createRequire(import.meta.url);
+    const bundle = readFileSync(require.resolve("@xterm/addon-webgl/lib/addon-webgl.mjs"), "utf8");
 
-    expect(capped).toBeLessThan(uncapped);
-  });
-
-  it("holds the capped ceiling within the renderer's memory budget on the widest hardware", () => {
-    // 32 is the most pages xterm will use (Math.min(32, MAX_TEXTURE_IMAGE_UNITS)).
-    // The issue reports a view climbing past 1GB, so the bound is what makes a
-    // busy view plateau.
-    const widestHardware = atlasByteCeiling(32, ATLAS_MAX_TEXTURE_SIZE);
-
-    expect(widestHardware).toBeLessThanOrEqual(128 * 1024 * 1024);
-  });
-
-  it("cannot shrink the atlas below the four-page floor the atlas enforces", () => {
-    const belowFloor = atlasByteCeiling(1, ATLAS_MAX_TEXTURE_SIZE);
-    const atFloor = atlasByteCeiling(4, ATLAS_MAX_TEXTURE_SIZE);
-
-    expect(belowFloor).toBe(atFloor);
-  });
-
-  it("scales with page count above the floor", () => {
-    expect(atlasByteCeiling(16, ATLAS_MAX_TEXTURE_SIZE)).toBeGreaterThan(
-      atlasByteCeiling(8, ATLAS_MAX_TEXTURE_SIZE)
-    );
+    for (const identifier of ["_renderer", "_charAtlas", "maxAtlasPages", "maxTextureSize"]) {
+      expect(bundle).toContain(identifier);
+    }
   });
 });
