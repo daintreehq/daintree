@@ -353,3 +353,26 @@ export function getWebContentsForProject(projectId: string): WebContents[] {
   }
   return result;
 }
+
+/**
+ * Every live project view paired with the project that owns it, across all
+ * windows. Cached (deactivated) views are included — they keep a live renderer
+ * process. Prunes stale entries like getWebContentsForProject().
+ */
+export function getRegisteredProjectViews(): Array<{
+  webContents: WebContents;
+  projectId: string;
+}> {
+  const result: Array<{ webContents: WebContents; projectId: string }> = [];
+  for (const [wcId, projectId] of viewToProject) {
+    const wc = webContentsModule.fromId(wcId);
+    if (wc && !wc.isDestroyed()) {
+      result.push({ webContents: wc, projectId });
+    } else {
+      // Full unregister, not a bare map delete: a view pruned here never fired
+      // "destroyed", so its listener registration would retain the WebContents.
+      unregisterProjectView(wcId);
+    }
+  }
+  return result;
+}

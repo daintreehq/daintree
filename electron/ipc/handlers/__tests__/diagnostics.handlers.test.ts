@@ -100,6 +100,10 @@ vi.mock("electron", () => ({
   BrowserWindow: {
     fromWebContents: vi.fn(() => null),
   },
+  // The real webContentsRegistry loads through importOriginal below, so the
+  // electron surface it imports at module scope has to exist here.
+  WebContentsView: vi.fn(),
+  webContents: { fromId: vi.fn(() => null) },
 }));
 
 const chmodMock = vi.hoisted(() =>
@@ -174,6 +178,25 @@ vi.mock("../../../services/ProcessMemoryMonitor.js", () => ({
   recordEluSample: recordEluSampleMock,
 }));
 
+const getRegisteredProjectViewsMock = vi.hoisted(() =>
+  vi.fn<() => Array<{ webContents: unknown; projectId: string }>>(() => [])
+);
+
+// Spread the real module: buildIpcContext imports seven other members from it,
+// and a bare factory would shadow them all away.
+vi.mock("../../../window/webContentsRegistry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../window/webContentsRegistry.js")>()),
+  getRegisteredProjectViews: getRegisteredProjectViewsMock,
+}));
+
+const getProjectByIdMock = vi.hoisted(() =>
+  vi.fn<(projectId: string) => { name: string } | null>(() => null)
+);
+
+vi.mock("../../../services/ProjectStore.js", () => ({
+  projectStore: { getProjectById: getProjectByIdMock },
+}));
+
 import { registerDiagnosticsHandlers } from "../diagnostics.js";
 import { resetAppMetricsSnapshotForTesting } from "../../../utils/appMetricsSnapshot.js";
 
@@ -196,6 +219,8 @@ describe("registerDiagnosticsHandlers", () => {
     // The metrics handlers read through a 5s shared cache; clear it so each
     // test's mocked getAppMetrics (incl. per-test throw overrides) actually runs.
     resetAppMetricsSnapshotForTesting();
+    getRegisteredProjectViewsMock.mockReturnValue([]);
+    getProjectByIdMock.mockReturnValue(null);
   });
 
   it("registers all expected IPC handlers", () => {
@@ -265,6 +290,185 @@ describe("registerDiagnosticsHandlers", () => {
       registerDiagnosticsHandlers(deps);
       const handler = getHandlerFn("diagnostics:get-process-metrics");
       expect(handler()).toEqual([]);
+    });
+
+    type ProcessRow = { pid: number; type: string; name: string; projectNames?: string[] };
+
+    function createProjectView(projectId: string, osProcessId: number | (() => number)) {
+      return {
+        projectId,
+        webContents: {
+          isDestroyed: vi.fn(() => false),
+          getOSProcessId: vi.fn(
+            typeof osProcessId === "function" ? osProcessId : () => osProcessId
+          ),
+        },
+      };
+    }
+
+    /** Adds Tab processes to the fixture without disturbing the shared non-Tab rows. */
+    function withTabPids(...pids: number[]): void {
+      const base = appMock.getAppMetrics();
+      appMock.getAppMetrics.mockReturnValueOnce([
+        ...base,
+        ...pids.map((pid) => ({
+          pid,
+          type: "Tab",
+          name: "Tab",
+          memory: { privateBytes: 0, workingSetSize: 102400 },
+          // Deliberately not a round number, so the row exercises the handler's
+          // rounding rather than passing a value straight through.
+          cpu: { percentCPUUsage: 1.26 },
+        })),
+      ]);
+      resetAppMetricsSnapshotForTesting();
+    }
+
+    function getProcessRows(): ProcessRow[] {
+      registerDiagnosticsHandlers(deps);
+      return getHandlerFn("diagnostics:get-process-metrics")() as ProcessRow[];
+    }
+
+    function rowForPid(rows: ProcessRow[], pid: number): ProcessRow {
+      const row = rows.find((r) => r.pid === pid);
+      if (!row) throw new Error(`No process row for pid ${pid}`);
+      return row;
+    }
+
+    it("labels a Tab process with the project rendering in it", () => {
+      withTabPids(400);
+      getRegisteredProjectViewsMock.mockReturnValue([createProjectView("project-a", 400)]);
+      getProjectByIdMock.mockImplementation((id) =>
+        id === "project-a" ? { name: "RuinWeave" } : null
+      );
+
+      expect(rowForPid(getProcessRows(), 400).projectNames).toEqual(["RuinWeave"]);
+    });
+
+    it("reports every project when Chromium consolidates views into one renderer", () => {
+      withTabPids(400);
+      getRegisteredProjectViewsMock.mockReturnValue([
+        createProjectView("project-a", 400),
+        createProjectView("project-b", 400),
+      ]);
+      getProjectByIdMock.mockImplementation(
+        (id) =>
+          ({ "project-a": { name: "RuinWeave" }, "project-b": { name: "Cedar Forge" } })[id] ?? null
+      );
+
+      // Sorted, so the label stays stable across polls regardless of view order.
+      expect(rowForPid(getProcessRows(), 400).projectNames).toEqual(["Cedar Forge", "RuinWeave"]);
+    });
+
+    it("dedupes a project whose views share one renderer", () => {
+      withTabPids(400);
+      getRegisteredProjectViewsMock.mockReturnValue([
+        createProjectView("project-a", 400),
+        createProjectView("project-a", 400),
+      ]);
+      getProjectByIdMock.mockReturnValue({ name: "RuinWeave" });
+
+      expect(rowForPid(getProcessRows(), 400).projectNames).toEqual(["RuinWeave"]);
+    });
+
+    it("counts same-named projects separately, since names are not unique", () => {
+      withTabPids(400);
+      getRegisteredProjectViewsMock.mockReturnValue([
+        createProjectView("project-a", 400),
+        createProjectView("project-b", 400),
+      ]);
+      // Two distinct repos can carry the same name; they are still two owners.
+      getProjectByIdMock.mockReturnValue({ name: "api" });
+
+      expect(rowForPid(getProcessRows(), 400).projectNames).toEqual(["api", "api"]);
+    });
+
+    it("keeps each renderer's label to the projects actually running in it", () => {
+      withTabPids(400, 401);
+      getRegisteredProjectViewsMock.mockReturnValue([
+        createProjectView("project-a", 400),
+        createProjectView("project-b", 401),
+      ]);
+      getProjectByIdMock.mockImplementation(
+        (id) =>
+          ({ "project-a": { name: "RuinWeave" }, "project-b": { name: "Cedar Forge" } })[id] ?? null
+      );
+
+      const rows = getProcessRows();
+      expect(rowForPid(rows, 400).projectNames).toEqual(["RuinWeave"]);
+      expect(rowForPid(rows, 401).projectNames).toEqual(["Cedar Forge"]);
+    });
+
+    it("leaves non-Tab processes generic even when a project view reports their pid", () => {
+      // pid 200 is the GPU process in the shared fixture.
+      getRegisteredProjectViewsMock.mockReturnValue([createProjectView("project-a", 200)]);
+      getProjectByIdMock.mockReturnValue({ name: "RuinWeave" });
+
+      const gpu = rowForPid(getProcessRows(), 200);
+      expect(gpu.projectNames).toBeUndefined();
+      expect(gpu.name).toBe("GPU Process");
+    });
+
+    it("never reads the pid of a destroyed view", () => {
+      withTabPids(400);
+      const view = createProjectView("project-a", 400);
+      view.webContents.isDestroyed.mockReturnValue(true);
+      getRegisteredProjectViewsMock.mockReturnValue([view]);
+      getProjectByIdMock.mockReturnValue({ name: "RuinWeave" });
+
+      // getOSProcessId() throws on a destroyed webContents, so it must not be called.
+      expect(rowForPid(getProcessRows(), 400).projectNames).toBeUndefined();
+      expect(view.webContents.getOSProcessId).not.toHaveBeenCalled();
+    });
+
+    it("ignores pid 0, which means the renderer has not spawned or has crashed", () => {
+      withTabPids(0);
+      getRegisteredProjectViewsMock.mockReturnValue([createProjectView("project-a", 0)]);
+      getProjectByIdMock.mockReturnValue({ name: "RuinWeave" });
+
+      expect(rowForPid(getProcessRows(), 0).projectNames).toBeUndefined();
+    });
+
+    it("skips views whose project record is gone", () => {
+      withTabPids(400);
+      getRegisteredProjectViewsMock.mockReturnValue([createProjectView("project-a", 400)]);
+      getProjectByIdMock.mockReturnValue(null);
+
+      expect(rowForPid(getProcessRows(), 400).projectNames).toBeUndefined();
+    });
+
+    it("keeps labelling the other projects when one view is torn down mid-read", () => {
+      withTabPids(400, 401);
+      getRegisteredProjectViewsMock.mockReturnValue([
+        createProjectView("project-a", () => {
+          throw new Error("Object has been destroyed");
+        }),
+        createProjectView("project-b", 401),
+      ]);
+      getProjectByIdMock.mockImplementation(
+        (id) =>
+          ({ "project-a": { name: "RuinWeave" }, "project-b": { name: "Cedar Forge" } })[id] ?? null
+      );
+
+      const rows = getProcessRows();
+      // The throwing view neither blanks the table nor suppresses its siblings.
+      expect(rowForPid(rows, 400).projectNames).toBeUndefined();
+      expect(rowForPid(rows, 401).projectNames).toEqual(["Cedar Forge"]);
+    });
+
+    it("preserves memory, cpu and sort order while labelling", () => {
+      withTabPids(400);
+      getRegisteredProjectViewsMock.mockReturnValue([createProjectView("project-a", 400)]);
+      getProjectByIdMock.mockReturnValue({ name: "RuinWeave" });
+
+      const rows = getProcessRows() as Array<ProcessRow & { memoryMB: number; cpuPercent: number }>;
+      const tab = rowForPid(rows, 400) as ProcessRow & { memoryMB: number; cpuPercent: number };
+      // workingSetSize 102400 KB / 1024 = 100 MB, from workingSetSize not privateBytes.
+      expect(tab.memoryMB).toBe(100);
+      // 1.26 rounded to one decimal.
+      expect(tab.cpuPercent).toBe(1.3);
+      const memory = rows.map((r) => r.memoryMB);
+      expect(memory).toEqual([...memory].sort((a, b) => b - a));
     });
   });
 

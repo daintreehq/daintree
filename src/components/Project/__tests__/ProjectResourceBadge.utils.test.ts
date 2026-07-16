@@ -5,6 +5,7 @@ import {
   computeSlope,
   getTrendDirection,
   formatMemory,
+  formatProcessLabel,
   FALLBACK_THRESHOLDS,
 } from "../ProjectResourceBadge.utils";
 
@@ -120,5 +121,48 @@ describe("formatMemory", () => {
     expect(formatMemory(1024)).toBe("1.0GB");
     expect(formatMemory(1536)).toBe("1.5GB");
     expect(formatMemory(2048)).toBe("2.0GB");
+  });
+});
+
+describe("formatProcessLabel", () => {
+  it("falls back to the process name when no project owns the process", () => {
+    expect(formatProcessLabel({ name: "GPU Process" })).toBe("GPU Process");
+    expect(formatProcessLabel({ name: "Tab", projectNames: [] })).toBe("Tab");
+  });
+
+  it("names the owning project instead of the generic process name", () => {
+    expect(formatProcessLabel({ name: "Tab", projectNames: ["RuinWeave"] })).toBe("RuinWeave view");
+  });
+
+  it("reports every project sharing a consolidated renderer, counted first", () => {
+    const label = formatProcessLabel({
+      name: "Tab",
+      projectNames: ["Cedar Forge", "RuinWeave"],
+    });
+    expect(label).toBe("2 views · Cedar Forge, RuinWeave");
+  });
+
+  it("scales the count with the projects sharing the renderer, listing them in order", () => {
+    const names = ["Alpha", "Cedar Forge", "RuinWeave"];
+    const label = formatProcessLabel({ name: "Tab", projectNames: names });
+
+    // The count leads, so it survives the row's truncation.
+    expect(label.startsWith("3 views")).toBe(true);
+    // Every project stays named, in the order given.
+    expect(names.every((name) => label.includes(name))).toBe(true);
+    expect(label.indexOf("Alpha")).toBeLessThan(label.indexOf("RuinWeave"));
+  });
+
+  it("keeps same-named projects distinct rather than collapsing them", () => {
+    // Names are not unique across projects; two owners must still read as two.
+    expect(formatProcessLabel({ name: "Tab", projectNames: ["api", "api"] })).toBe(
+      "2 views · api, api"
+    );
+  });
+
+  it("keeps the label free of trailing punctuation", () => {
+    for (const projectNames of [undefined, ["RuinWeave"], ["Cedar Forge", "RuinWeave"]]) {
+      expect(formatProcessLabel({ name: "Tab", projectNames })).not.toMatch(/\.$/);
+    }
   });
 });

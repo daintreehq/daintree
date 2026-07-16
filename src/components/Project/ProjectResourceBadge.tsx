@@ -20,6 +20,7 @@ import {
   getMemoryState,
   getTrendDirection,
   formatMemory,
+  formatProcessLabel,
 } from "./ProjectResourceBadge.utils";
 
 const MAX_SAMPLES = 12;
@@ -170,20 +171,26 @@ function ProcessTable({ metrics }: { metrics: ProcessMetricEntry[] }) {
     <div className="space-y-1">
       <div className="text-[10px] text-daintree-text/50 font-medium">Daintree processes</div>
       <div className="space-y-px">
-        {metrics.map((proc) => (
-          <div
-            key={proc.pid}
-            className="flex items-center justify-between text-[10px] font-mono py-0.5"
-          >
-            <span className="text-daintree-text/60 truncate max-w-[140px]">
-              {proc.name} <span className="text-daintree-text/25">({proc.pid})</span>
-            </span>
-            <div className="flex gap-2 text-daintree-text/40 shrink-0">
-              <span>{proc.memoryMB}MB</span>
-              <span className="w-10 text-right">{proc.cpuPercent}%</span>
+        {metrics.map((proc) => {
+          const label = formatProcessLabel(proc);
+          return (
+            <div
+              key={proc.pid}
+              className="flex items-center justify-between text-[10px] font-mono py-0.5"
+            >
+              <span
+                className="text-daintree-text/60 truncate max-w-[140px]"
+                title={`${label} (${proc.pid})`}
+              >
+                {label} <span className="text-daintree-text/25">({proc.pid})</span>
+              </span>
+              <div className="flex gap-2 text-daintree-text/40 shrink-0">
+                <span>{proc.memoryMB}MB</span>
+                <span className="w-10 text-right">{proc.cpuPercent}%</span>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

@@ -55,6 +55,7 @@ import type {
   CompositeMemorySnapshot,
   TerminalWorkloadSlice,
 } from "@shared/types/memoryAccounting";
+import type { ProcessMetricEntry } from "@shared/types/ipc/system";
 import { ProjectResourceBadge } from "../ProjectResourceBadge";
 
 const mockGetAll = vi.mocked(projectClient.getAll);
@@ -142,36 +143,40 @@ async function renderOpenBadge(): Promise<HTMLElement> {
   return container;
 }
 
-describe("ProjectResourceBadge — popover memory honesty", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    mockGetAll.mockReset().mockResolvedValue([makeProject()]);
-    mockGetBulkStats.mockReset().mockResolvedValue({
-      p1: makeBulkStatsEntry({
-        terminalMemoryMB: 750,
-        topProcess: { name: "node", memoryMB: 400 },
-      }),
-    });
-    mockGetAppMetrics.mockReset().mockResolvedValue({ totalMemoryMB: 290 });
-    mockGetHardwareInfo.mockReset().mockResolvedValue({
-      totalMemoryBytes: 8 * 1024 * 1024 * 1024,
-      logicalCpuCount: 8,
-    });
-    mockGetProcessMetrics.mockReset().mockResolvedValue([]);
-    mockGetHeapStats
-      .mockReset()
-      .mockResolvedValue({ usedMB: 100, limitMB: 200, percent: 50, externalMB: 10 });
-    mockGetDiagnosticsInfo
-      .mockReset()
-      .mockResolvedValue({ uptimeSeconds: 60, eventLoopP99Ms: 10, systemAvailableMB: 4096 });
-    mockGetMemorySnapshot.mockReset().mockResolvedValue(makeMemorySnapshot());
-    statsStoreState.stats = { p1: { processCount: 1 } };
+function setupDefaultMocks(): void {
+  vi.useFakeTimers();
+  mockGetAll.mockReset().mockResolvedValue([makeProject()]);
+  mockGetBulkStats.mockReset().mockResolvedValue({
+    p1: makeBulkStatsEntry({
+      terminalMemoryMB: 750,
+      topProcess: { name: "node", memoryMB: 400 },
+    }),
   });
+  mockGetAppMetrics.mockReset().mockResolvedValue({ totalMemoryMB: 290 });
+  mockGetHardwareInfo.mockReset().mockResolvedValue({
+    totalMemoryBytes: 8 * 1024 * 1024 * 1024,
+    logicalCpuCount: 8,
+  });
+  mockGetProcessMetrics.mockReset().mockResolvedValue([]);
+  mockGetHeapStats
+    .mockReset()
+    .mockResolvedValue({ usedMB: 100, limitMB: 200, percent: 50, externalMB: 10 });
+  mockGetDiagnosticsInfo
+    .mockReset()
+    .mockResolvedValue({ uptimeSeconds: 60, eventLoopP99Ms: 10, systemAvailableMB: 4096 });
+  mockGetMemorySnapshot.mockReset().mockResolvedValue(makeMemorySnapshot());
+  statsStoreState.stats = { p1: { processCount: 1 } };
+}
 
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-  });
+function restoreTimersAndMocks(): void {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+}
+
+describe("ProjectResourceBadge — popover memory honesty", () => {
+  beforeEach(setupDefaultMocks);
+
+  afterEach(restoreTimersAndMocks);
 
   it("labels measured app and workload memory from the composite snapshot", async () => {
     const container = await renderOpenBadge();
@@ -281,5 +286,52 @@ describe("ProjectResourceBadge — popover memory honesty", () => {
 
     expect(container.textContent).toContain("~150MB");
     expect(container.textContent).toContain("estimated from terminal count, not measured");
+  });
+});
+
+describe("ProjectResourceBadge — process ownership", () => {
+  beforeEach(setupDefaultMocks);
+
+  afterEach(restoreTimersAndMocks);
+
+  function makeProcess(overrides: Partial<ProcessMetricEntry> = {}): ProcessMetricEntry {
+    return { pid: 400, type: "Tab", name: "Tab", memoryMB: 100, cpuPercent: 1, ...overrides };
+  }
+
+  /** The process row's label cell, located by the pid it renders. */
+  function processRowLabel(container: HTMLElement, pid: number): string {
+    const row = container.querySelector(`[title$="(${pid})"]`);
+    if (!row) throw new Error(`No process row for pid ${pid}`);
+    return row.textContent ?? "";
+  }
+
+  it("names the owning project instead of the generic renderer label", async () => {
+    mockGetProcessMetrics.mockResolvedValue([makeProcess({ projectNames: ["RuinWeave"] })]);
+
+    const container = await renderOpenBadge();
+
+    expect(processRowLabel(container, 400)).toBe("RuinWeave view (400)");
+  });
+
+  it("leaves an unowned process on its generic label", async () => {
+    mockGetProcessMetrics.mockResolvedValue([
+      makeProcess({ pid: 200, type: "GPU", name: "GPU Process" }),
+    ]);
+
+    const container = await renderOpenBadge();
+
+    // Scoped to the row: unrelated popover copy may legitimately say "view".
+    expect(processRowLabel(container, 200)).toBe("GPU Process (200)");
+  });
+
+  it("surfaces the full label on hover when the row truncates", async () => {
+    mockGetProcessMetrics.mockResolvedValue([
+      makeProcess({ projectNames: ["Cedar Forge", "RuinWeave"] }),
+    ]);
+
+    const container = await renderOpenBadge();
+
+    const row = container.querySelector('[title*="RuinWeave"]');
+    expect(row?.getAttribute("title")).toBe("2 views · Cedar Forge, RuinWeave (400)");
   });
 });

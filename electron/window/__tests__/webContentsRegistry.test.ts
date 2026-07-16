@@ -5,7 +5,9 @@ import type { BrowserWindow, WebContents, WebContentsView } from "electron";
 const electronMock = vi.hoisted(() => ({
   fromWebContents: vi.fn(() => null),
   getAllWindows: vi.fn(() => []),
-  fromId: vi.fn(() => null),
+  // Typed at the source: the enumeration tests resolve ids to real mock
+  // webContents, which a `() => null` inference would reject.
+  fromId: vi.fn<(id: number) => WebContents | null>(() => null),
 }));
 
 vi.mock("electron", () => ({
@@ -197,6 +199,82 @@ describe("webContentsRegistry", () => {
 
     expect(() => unregisterAppView(win)).not.toThrow();
     expect(getAppWebContents(win)).toBe(win.webContents);
+  });
+
+  it("getRegisteredProjectViews pairs every live view with its project across windows", async () => {
+    const { getRegisteredProjectViews, registerProjectView } = await loadRegistry();
+    const wcA = createWebContents(301);
+    const wcB = createWebContents(302);
+    electronMock.fromId.mockImplementation(
+      (id: number) => ({ 301: wcA, 302: wcB })[id] as unknown as WebContents
+    );
+
+    registerProjectView("project-a", wcA as unknown as WebContents);
+    registerProjectView("project-b", wcB as unknown as WebContents);
+
+    expect(getRegisteredProjectViews()).toEqual([
+      { webContents: wcA, projectId: "project-a" },
+      { webContents: wcB, projectId: "project-b" },
+    ]);
+  });
+
+  it("getRegisteredProjectViews includes cached (deactivated) views", async () => {
+    const { getRegisteredProjectViews, registerCachedViewWebContents, registerProjectView } =
+      await loadRegistry();
+    const wc = createWebContents(303);
+    electronMock.fromId.mockImplementation((id: number) =>
+      id === 303 ? (wc as unknown as WebContents) : null
+    );
+
+    registerProjectView("project-a", wc as unknown as WebContents);
+    // Deactivation only marks the view; its renderer process stays alive.
+    registerCachedViewWebContents(wc as unknown as WebContents);
+
+    expect(getRegisteredProjectViews()).toEqual([{ webContents: wc, projectId: "project-a" }]);
+  });
+
+  it("getRegisteredProjectViews prunes only the stale view, keeping live ones", async () => {
+    const {
+      getProjectForWebContents,
+      getRegisteredProjectViews,
+      isCachedViewWebContents,
+      registerCachedViewWebContents,
+      registerProjectView,
+    } = await loadRegistry();
+    const staleWc = createWebContents(304);
+    const liveWc = createWebContents(305);
+    electronMock.fromId.mockImplementation(
+      (id: number) => ({ 304: staleWc, 305: liveWc })[id] as unknown as WebContents
+    );
+
+    registerProjectView("project-a", staleWc as unknown as WebContents);
+    registerCachedViewWebContents(staleWc as unknown as WebContents);
+    registerProjectView("project-b", liveWc as unknown as WebContents);
+
+    // Destroyed without firing "destroyed", so only the read-time prune can clear it.
+    staleWc.setDestroyed(true);
+
+    expect(getRegisteredProjectViews()).toEqual([{ webContents: liveWc, projectId: "project-b" }]);
+    expect(getProjectForWebContents(staleWc.id)).toBeNull();
+    expect(isCachedViewWebContents(staleWc.id)).toBe(false);
+    expect(getProjectForWebContents(liveWc.id)).toBe("project-b");
+    // Pruning a view that never fired "destroyed" must release its listener too,
+    // or the registration keeps the WebContents and its closure alive.
+    expect(staleWc.listenerCount("destroyed")).toBe(0);
+    expect(liveWc.listenerCount("destroyed")).toBe(1);
+  });
+
+  it("getRegisteredProjectViews prunes views whose webContents no longer resolves", async () => {
+    const { getProjectForWebContents, getRegisteredProjectViews, registerProjectView } =
+      await loadRegistry();
+    const wc = createWebContents(306);
+    registerProjectView("project-a", wc as unknown as WebContents);
+
+    // fromId returns null once Electron has torn the webContents down entirely.
+    electronMock.fromId.mockReturnValue(null);
+
+    expect(getRegisteredProjectViews()).toEqual([]);
+    expect(getProjectForWebContents(wc.id)).toBeNull();
   });
 
   it("marks a webContents cached and clears the mark on unregister", async () => {
