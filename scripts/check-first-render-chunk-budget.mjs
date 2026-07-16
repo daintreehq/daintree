@@ -166,9 +166,22 @@ export function collectClosure(manifest, seedKeys, { followDynamic = true } = {}
   });
 }
 
-function findEntryKey(manifest) {
+// The React facade chunks (`host-react-*`) that vite.config.ts emits for the
+// plugin import map (#11208) are entry chunks, but they are NOT the app entry —
+// they're re-export shims third-party plugin bundles resolve against. Manifest
+// order is not specified, so without this a facade could be picked as the entry
+// and the gate would silently measure a ~1KB shim instead of the app.
+// Matches on `name` when the manifest carries one and falls back to the emitted
+// `file` path, so the check holds regardless of which field Vite populates.
+function isHostReactFacadeChunk(chunk) {
+  const name = typeof chunk?.name === "string" ? chunk.name : "";
+  const file = typeof chunk?.file === "string" ? chunk.file : "";
+  return name.startsWith("host-react-") || /(^|\/)host-react-/.test(file);
+}
+
+export function findEntryKey(manifest) {
   for (const [key, chunk] of Object.entries(manifest)) {
-    if (chunk?.isEntry) return key;
+    if (chunk?.isEntry && !isHostReactFacadeChunk(chunk)) return key;
   }
   return null;
 }
