@@ -721,6 +721,7 @@ describe("ProcessMemoryMonitor", () => {
         if (tier === 1) {
           mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 10 * 1024, 100)]);
         }
+        return 0;
       });
 
       stop = startAppMetricsMonitor(mockActions);
