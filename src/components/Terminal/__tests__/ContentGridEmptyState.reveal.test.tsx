@@ -76,6 +76,7 @@ const SCRATCH_PROPS = {
  * against the real engine rather than asserted here.
  */
 const reflowsWhileOverridden = new Map<Element, string>();
+let originalOffsetWidth: PropertyDescriptor | undefined;
 
 let revealCallbacks: (() => void)[] = [];
 const offReveal = vi.fn();
@@ -103,6 +104,7 @@ beforeEach(() => {
   // jsdom lays nothing out, so offsetWidth is an inert 0 and the reflow it is
   // meant to pin is unobservable. Recording the animation override in force when
   // it is read makes the ordering the restart depends on testable.
+  originalOffsetWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetWidth");
   Object.defineProperty(HTMLElement.prototype, "offsetWidth", {
     configurable: true,
     get(this: HTMLElement) {
@@ -125,7 +127,9 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  delete (HTMLElement.prototype as Partial<HTMLElement>).offsetWidth;
+  if (originalOffsetWidth) {
+    Object.defineProperty(HTMLElement.prototype, "offsetWidth", originalOffsetWidth);
+  }
   document.body.removeAttribute("data-reduce-animations");
   document.body.removeAttribute("data-performance-mode");
   vi.unstubAllGlobals();
