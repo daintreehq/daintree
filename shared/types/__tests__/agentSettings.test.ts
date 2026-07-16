@@ -18,6 +18,8 @@ import {
   DEFAULT_AGENT_SETTINGS,
   DEFAULT_DANGEROUS_ARGS,
 } from "../agentSettings.js";
+import { setUserRegistry } from "../../config/agentRegistry.js";
+import type { AgentConfig } from "../../config/agentRegistry.js";
 
 // Force POSIX shell-escape semantics so the hardcoded single-quote assertions
 // below hold on Windows CI. The Windows double-quote branch is exercised via
@@ -252,18 +254,28 @@ describe("buildAgentLaunchFlags", () => {
     expect(flags).not.toContain("--no-alt-screen");
   });
 
-  it("defaults grok to the alternate screen (defaultInlineMode false → no flag)", () => {
-    // Grok declares defaultInlineMode: false, so an unset inlineMode must NOT add
-    // --no-alt-screen — it should run full-screen on the alt buffer, unlike codex.
+  it("defaults grok to inline like codex (no curated default → global switch, off ⇒ inline)", () => {
+    // Neither grok nor codex pins a curated default now, so an unset inlineMode
+    // follows the global switch (default off ⇒ inline) and both get --no-alt-screen.
     const grok = buildAgentLaunchFlags({}, "grok");
     const codex = buildAgentLaunchFlags({}, "codex");
-    expect(grok).not.toContain("--no-alt-screen");
+    expect(grok).toContain("--no-alt-screen");
     expect(codex).toContain("--no-alt-screen");
   });
 
   it("still lets grok opt into inline mode explicitly", () => {
     const flags = buildAgentLaunchFlags({ inlineMode: true }, "grok");
     expect(flags).toContain("--no-alt-screen");
+  });
+
+  it("injects opencode's --mini on the interactive spawn and drops it when alt-screen is forced", () => {
+    // buildAgentLaunchFlags is the persistent interactive-terminal spawn path,
+    // so opencode's inline flag rides every spawn/restart unless the global
+    // switch (or a per-agent choice) forces alt-screen.
+    expect(buildAgentLaunchFlags({}, "opencode")).toContain("--mini");
+    expect(buildAgentLaunchFlags({}, "opencode", { globalUseAltScreen: true })).not.toContain(
+      "--mini"
+    );
   });
 
   it("does not include clipboard directory", () => {
@@ -383,13 +395,13 @@ describe("generateAgentCommand per-agent prompt injection", () => {
     expect(oneShotCmd).toMatch(/-p\s+'Fix the bug'/);
   });
 
-  it("grok's first-spawn command defaults to the alternate screen, unlike codex", () => {
+  it("grok's and codex's first-spawn commands default to inline (--no-alt-screen)", () => {
     // Covers the generateAgentCommand inline-flag path (separate from
-    // buildAgentLaunchFlags): an unset inlineMode must not add --no-alt-screen
-    // for grok (defaultInlineMode false), while codex still gets it.
+    // buildAgentLaunchFlags): an unset inlineMode follows the global switch
+    // (default off ⇒ inline), so both agents get --no-alt-screen.
     const grok = generateAgentCommand("grok", {}, "grok");
     const codex = generateAgentCommand("codex", {}, "codex");
-    expect(grok).not.toContain("--no-alt-screen");
+    expect(grok).toContain("--no-alt-screen");
     expect(codex).toContain("--no-alt-screen");
   });
 
@@ -407,6 +419,21 @@ describe("generateAgentCommand per-agent prompt injection", () => {
     });
     expect(cmd).toMatch(/run\s+'Fix the bug'/);
     expect(cmd).not.toContain("--prompt");
+  });
+
+  it("opencode injects --mini for the interactive TUI but never the headless run", () => {
+    // `--mini` is opencode's inline (scrollback-native) flag on the default
+    // command. Its `run` subcommand rejects it ("--mini must be used without the
+    // run subcommand"), so the inline flag is interactive-only.
+    const interactiveCmd = generateAgentCommand("opencode", {}, "opencode", {
+      initialPrompt: "Fix the bug",
+    });
+    const headlessCmd = generateAgentCommand("opencode", {}, "opencode", {
+      initialPrompt: "Fix the bug",
+      interactive: false,
+    });
+    expect(interactiveCmd).toContain("--mini");
+    expect(headlessCmd).not.toContain("--mini");
   });
 
   it("aider uses -m in both modes (positionals are filenames)", () => {
@@ -966,6 +993,26 @@ describe("combineInlineModes (#10876)", () => {
 });
 
 describe("resolveEffectiveInlineMode (#10876)", () => {
+  // Synthetic agent exercising the curated registry-default tier. No shipped
+  // agent sets `defaultInlineMode` anymore — they all default inline via the
+  // global switch so it stays user-overridable — so the tier is covered here
+  // with a registered test agent instead of coupling to a real one.
+  const ALT_DEFAULT_AGENT: AgentConfig = {
+    id: "alt-default-agent",
+    name: "Alt Default Agent",
+    command: "alt-default-agent",
+    color: "#ffffff",
+    iconId: "custom",
+    supportsContextInjection: false,
+    capabilities: {
+      scrollback: 1000,
+      inlineModeFlag: "--no-alt-screen",
+      defaultInlineMode: false,
+    },
+  };
+  beforeEach(() => setUserRegistry({ "alt-default-agent": ALT_DEFAULT_AGENT }));
+  afterEach(() => setUserRegistry({}));
+
   it("honours an explicit on/off regardless of the global switch", () => {
     expect(resolveEffectiveInlineMode({ inlineMode: "on" }, "codex", true)).toBe(true);
     expect(resolveEffectiveInlineMode({ inlineMode: "off" }, "codex", false)).toBe(false);
@@ -974,21 +1021,26 @@ describe("resolveEffectiveInlineMode (#10876)", () => {
   });
 
   it("keeps a curated registry default winning over the global switch on inherit", () => {
-    // Grok declares defaultInlineMode: false (alt-screen) — it must stay
+    // The agent declares defaultInlineMode: false (alt-screen) — it must stay
     // alt-screen even when the global "use alt-screen by default" is OFF.
-    expect(resolveEffectiveInlineMode({}, "grok", false)).toBe(false);
-    expect(resolveEffectiveInlineMode({}, "grok", true)).toBe(false);
-    expect(resolveEffectiveInlineMode({ inlineMode: "inherit" }, "grok", false)).toBe(false);
+    expect(resolveEffectiveInlineMode({}, "alt-default-agent", false)).toBe(false);
+    expect(resolveEffectiveInlineMode({}, "alt-default-agent", true)).toBe(false);
+    expect(resolveEffectiveInlineMode({ inlineMode: "inherit" }, "alt-default-agent", false)).toBe(
+      false
+    );
   });
 
   it("falls back to the global switch on inherit when no registry default is declared", () => {
-    // Codex declares no defaultInlineMode → global switch decides.
+    // Codex and Grok declare no defaultInlineMode → the global switch decides,
+    // so both now default inline (global off ⇒ inline).
     expect(resolveEffectiveInlineMode({}, "codex", false)).toBe(true); // global off → inline
     expect(resolveEffectiveInlineMode({}, "codex", true)).toBe(false); // global on → alt-screen
+    expect(resolveEffectiveInlineMode({}, "grok", false)).toBe(true); // grok follows global now
+    expect(resolveEffectiveInlineMode({}, "grok", true)).toBe(false);
   });
 
   it("still lets an agent override its curated registry default explicitly", () => {
-    expect(resolveEffectiveInlineMode({ inlineMode: "on" }, "grok", false)).toBe(true);
+    expect(resolveEffectiveInlineMode({ inlineMode: "on" }, "alt-default-agent", false)).toBe(true);
   });
 });
 
@@ -1046,8 +1098,10 @@ describe("global alt-screen threading through command generation (#10876)", () =
     );
   });
 
-  it("keeps grok on alt-screen regardless of the global switch (curated default)", () => {
-    expect(buildAgentLaunchFlags({}, "grok", { globalUseAltScreen: false })).not.toContain(
+  it("makes grok follow the global switch now that it has no curated default", () => {
+    // Grok no longer pins a curated default, so it threads the global switch
+    // like any other inherit agent: inline when off, alt-screen when on.
+    expect(buildAgentLaunchFlags({}, "grok", { globalUseAltScreen: false })).toContain(
       "--no-alt-screen"
     );
     expect(buildAgentLaunchFlags({}, "grok", { globalUseAltScreen: true })).not.toContain(
