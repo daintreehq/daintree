@@ -404,4 +404,56 @@ describe("FilePane HTML Source/Rendered (#11191)", () => {
     expect(await screen.findByTestId("markdown-viewer-mock")).toBeTruthy();
     expect(screen.queryByTestId("html-viewer-mock")).toBeNull();
   });
+
+  // The toolbar's open button follows the view: rendered HTML opens in the
+  // browser, everything else in the editor.
+  async function clickOpen(label: string) {
+    const button = await screen.findByLabelText(label);
+    await act(async () => {
+      button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+  }
+
+  it("opens rendered HTML in the browser, not the editor", async () => {
+    renderPane("/repo/dist/report.html", "rendered");
+    await clickOpen("Open in browser");
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "file.openInBrowser",
+      { path: "/repo/dist/report.html" },
+      { source: "user" }
+    );
+  });
+
+  it("opens source HTML in the editor", async () => {
+    renderPane("/repo/dist/report.html", "source");
+    await clickOpen("Open in editor");
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "file.openInEditor",
+      { path: "/repo/dist/report.html" },
+      { source: "user" }
+    );
+  });
+
+  it("retries a failed browser open as a browser open, not an editor open", async () => {
+    dispatchMock.mockResolvedValue({
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: "Launch failed" },
+    });
+    const { container } = renderPane("/repo/dist/report.html", "rendered");
+    await clickOpen("Open in browser");
+
+    const retry = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Retry")
+    );
+    await act(async () => {
+      retry!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    // Retry must re-aim at the banner's action even if the view mode changed.
+    expect(dispatchMock).toHaveBeenLastCalledWith(
+      "file.openInBrowser",
+      { path: "/repo/dist/report.html" },
+      { source: "user" }
+    );
+  });
 });

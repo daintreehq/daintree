@@ -7,6 +7,8 @@ import { CodeViewer } from "./CodeViewer";
 import type { CodeViewerHandle } from "./CodeViewer";
 import { MarkdownViewer } from "@/components/Markdown/MarkdownViewer";
 import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
+import { HtmlViewer } from "@/components/Html/HtmlViewer";
+import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
 import { FILE_READ_ERROR_MESSAGES } from "./fileReadErrors";
 import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
 import { filesClient } from "@/clients/filesClient";
@@ -16,6 +18,7 @@ import {
   Copy,
   Check,
   FileDiff as FileDiffIcon,
+  Globe,
   Image as ImageIcon,
   ChevronLeft,
   ChevronRight,
@@ -212,6 +215,10 @@ export function FileViewerModal({
 
   const hasDiff = Boolean(diff && diff.trim() && diff !== "NO_CHANGES" && diff !== "ERROR");
   const markdownFile = !isImageFile(filePath) && isMarkdownFilePath(filePath);
+  const htmlFile = !isImageFile(filePath) && isHtmlFilePath(filePath);
+  // Markdown and HTML both get a Source/Rendered toggle; HTML renders in a
+  // sandboxed iframe (matching the FilePane panel), markdown as prose.
+  const renderableFile = markdownFile || htmlFile;
   const [mode, setMode] = useState<ViewMode>(() => {
     if (isImageFile(filePath)) return "view";
     if (defaultMode) return defaultMode;
@@ -220,6 +227,10 @@ export function FileViewerModal({
     return "view";
   });
   const [content, setContent] = useState<string | null>(null);
+  // Sandboxed-iframe preview URL for HTML files (#11191), minted by files:read.
+  const [htmlPreviewUrl, setHtmlPreviewUrl] = useState<string | null>(null);
+  // Bumped on each successful load so the cross-origin preview frame re-navigates.
+  const [htmlReloadNonce, setHtmlReloadNonce] = useState(0);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [errorCode, setErrorCode] = useState<FileReadErrorCode | null>(null);
   // Renderer-local failures (SVG sanitization, image decode) that have no FileReadErrorCode
@@ -347,6 +358,7 @@ export function FileViewerModal({
   const loadFile = useEffectEvent(() => {
     if (!isOpen) {
       setContent(null);
+      setHtmlPreviewUrl(null);
       setLoadState("loading");
       setErrorCode(null);
       setDisplayErrorMessage(null);
@@ -373,9 +385,9 @@ export function FileViewerModal({
 
     // Stepping between files (onNavigateFile) keeps the modal open, so a mode
     // the new file can't render must be clamped: "rendered" is only valid for
-    // markdown files.
+    // markdown and HTML files.
     setMode((current) =>
-      current === "rendered" && !markdownFile ? (hasDiff ? "diff" : "view") : current
+      current === "rendered" && !renderableFile ? (hasDiff ? "diff" : "view") : current
     );
 
     // Image-compare-eligible files (including SVG) never need the working-tree
@@ -387,8 +399,8 @@ export function FileViewerModal({
     }
 
     filesClient
-      .read({ path: filePath, rootPath: effectiveRootPath })
-      .then(({ content: fileContent }) => {
+      .read({ path: filePath, rootPath: effectiveRootPath, htmlPreview: isHtmlFilePath(filePath) })
+      .then(({ content: fileContent, htmlPreviewUrl: previewUrl }) => {
         if (!isMountedRef.current || requestRef.current !== requestId) return;
         if (svgFile) {
           const sanitized = sanitizeSvg(fileContent);
@@ -401,6 +413,8 @@ export function FileViewerModal({
           }
         } else {
           setContent(fileContent);
+          setHtmlPreviewUrl(previewUrl ?? null);
+          setHtmlReloadNonce((nonce) => nonce + 1);
           setLoadState("loaded");
         }
       })
@@ -441,6 +455,12 @@ export function FileViewerModal({
     setLoadState("error");
   }, []);
 
+  const handleOpenInBrowser = useCallback(() => {
+    actionService
+      .dispatch("file.openInBrowser", { path: filePath }, { source: "user" })
+      .catch((err) => logError("[FileViewerModal] openInBrowser failed", err));
+  }, [filePath]);
+
   const handleOpenInImageViewer = useCallback(() => {
     actionService
       .dispatch("file.openImageViewer", { path: filePath }, { source: "user" })
@@ -470,13 +490,13 @@ export function FileViewerModal({
           path: filePath,
           rootPath: effectiveRootPath,
           // Carry the mode the user is already reading in into the panel.
-          ...(markdownFile && { viewMode: mode === "rendered" ? "rendered" : "source" }),
+          ...(renderableFile && { viewMode: mode === "rendered" ? "rendered" : "source" }),
         },
         { source: "user" }
       )
       .catch((err) => logError("[FileViewerModal] openAsPanel failed", err));
     onClose();
-  }, [filePath, effectiveRootPath, markdownFile, mode, onClose]);
+  }, [filePath, effectiveRootPath, renderableFile, mode, onClose]);
 
   const handleCopyDiff = useCallback(async () => {
     if (!hasDiff || !diff) return;
@@ -1102,25 +1122,27 @@ export function FileViewerModal({
               </span>
             )}
 
-          {/* Mode toggle: markdown files get Rendered/Source (plus Diff when
-              available); other files keep the original View/Diff pair. */}
-          {(hasDiff || markdownFile) && !imageFile && (canShowView || loadState !== "loading") && (
-            <SegmentedToggle
-              options={[
-                {
-                  value: "view" as ViewMode,
-                  label: markdownFile ? "Source" : "View",
-                  disabled: !canShowView,
-                },
-                ...(markdownFile
-                  ? [{ value: "rendered" as ViewMode, label: "Rendered", disabled: !canShowView }]
-                  : []),
-                ...(hasDiff ? [{ value: "diff" as ViewMode, label: "Diff" }] : []),
-              ]}
-              value={mode}
-              onChange={setMode}
-            />
-          )}
+          {/* Mode toggle: markdown and HTML files get Rendered/Source (plus Diff
+              when available); other files keep the original View/Diff pair. */}
+          {(hasDiff || renderableFile) &&
+            !imageFile &&
+            (canShowView || loadState !== "loading") && (
+              <SegmentedToggle
+                options={[
+                  {
+                    value: "view" as ViewMode,
+                    label: renderableFile ? "Source" : "View",
+                    disabled: !canShowView,
+                  },
+                  ...(renderableFile
+                    ? [{ value: "rendered" as ViewMode, label: "Rendered", disabled: !canShowView }]
+                    : []),
+                  ...(hasDiff ? [{ value: "diff" as ViewMode, label: "Diff" }] : []),
+                ]}
+                value={mode}
+                onChange={setMode}
+              />
+            )}
         </div>
 
         <div className="flex items-center gap-2 shrink-0 whitespace-nowrap">
@@ -1192,6 +1214,20 @@ export function FileViewerModal({
                 </button>
               </TooltipTrigger>
               <TooltipContent side="bottom">Open in image viewer</TooltipContent>
+            </Tooltip>
+          ) : htmlFile && mode === "rendered" ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={handleOpenInBrowser}
+                  aria-label="Open in browser"
+                  className="p-1.5 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-daintree-border"
+                >
+                  <Globe className="w-4 h-4" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Open in browser</TooltipContent>
             </Tooltip>
           ) : (
             <Tooltip>
@@ -1319,7 +1355,15 @@ export function FileViewerModal({
 
                 {loadState === "loaded" &&
                   content !== null &&
-                  (mode === "rendered" && markdownFile ? (
+                  (mode === "rendered" && htmlFile ? (
+                    // Rendered HTML fills the body in a sandboxed iframe that owns
+                    // its own scrolling (matching the FilePane panel).
+                    <HtmlViewer
+                      previewUrl={htmlPreviewUrl}
+                      reloadNonce={htmlReloadNonce}
+                      title={fileName}
+                    />
+                  ) : mode === "rendered" && markdownFile ? (
                     <MarkdownViewer
                       content={content}
                       filePath={filePath}
