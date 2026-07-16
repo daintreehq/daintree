@@ -277,10 +277,11 @@ export function getEluHighStreaks(): ReadonlyMap<number, number> {
 
 export interface MemoryPressureActions {
   /**
-   * Returns the number of hidden portal tabs actually destroyed. The
-   * `window:destroy-hidden-webviews` push that rides along is fire-and-forget,
-   * so its effect is deliberately NOT counted here — a count is only reported
-   * where the caller can observe the outcome.
+   * Returns the number of hidden portal tabs destroyed. This is a FLOOR, not a
+   * total: the `window:destroy-hidden-webviews` push that rides along is
+   * fire-and-forget, so any webviews the renderers drop in response are not
+   * counted. Reported under a name that says what it measures rather than
+   * implying it covers every webview this action tears down.
    */
   destroyHiddenWebviews: (tier: 1 | 2) => Promise<number>;
   hibernateIdleProjects: () => Promise<void>;
@@ -650,10 +651,12 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
               beforeMb: Math.round(beforeMb),
               afterMb: Math.round(afterMb),
               deltaMb: Math.round(deltaMb),
-              // A zero delta with zero evictions means tier 1 had nothing to
-              // reclaim — not that reclaim failed. Without this the two are
-              // indistinguishable in the logs.
-              tabsEvicted: tier1TabsEvicted,
+              // Portal tabs are the only part of this lever whose outcome main
+              // can observe (the webview push is fire-and-forget), so this is a
+              // floor. Even so it separates "tier 1 found tabs to destroy" from
+              // "it found none" when the delta reads zero — previously
+              // indistinguishable.
+              portalTabsDestroyed: tier1TabsEvicted,
               pressureRemains,
               resampleFailed,
             });
@@ -684,7 +687,27 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
 
             // `afterMb` is this tier's baseline: sampled after tier 1 settled
             // (or with no action taken at all) and before any tier-2 action.
-            const tier2BeforeMb = afterMb;
+            // The exception is a failed re-sample, where it was forced to
+            // `beforeMb` as an escalation sentinel rather than measured. Then
+            // it is either 0 (the pre-sample failed too) or, if tier 1 acted in
+            // this cycle, a pre-tier-1 value that would bill tier 1's reclaim
+            // to tier 2. Re-baseline instead, and report the measurement failed
+            // if even that can't be had.
+            //
+            // The two tiers cannot currently act in one cycle — tier 1 re-fires
+            // on a 5-min clock and tier 2 on a 10-min one, leaving them
+            // permanently out of phase — but that is a consequence of the
+            // cooldown arithmetic, not a guarantee, and this tier's whole job
+            // is to not report numbers it cannot stand behind.
+            let tier2BeforeMb = afterMb;
+            let tier2MeasurementFailed = false;
+            if (resampleFailed) {
+              try {
+                tier2BeforeMb = sumMonitoredMb();
+              } catch {
+                tier2MeasurementFailed = true;
+              }
+            }
 
             // Each action is isolated: one throwing must neither skip the
             // levers after it nor blind the reclaim measurement below, which
@@ -721,25 +744,24 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
 
             let tier2AfterMb = tier2BeforeMb;
             let tier2PressureRemains = true;
-            let tier2ResampleFailed = false;
             try {
               const measured = measurePressure();
               tier2AfterMb = measured.totalMb;
               tier2PressureRemains = measured.pressureRemains;
             } catch {
-              tier2ResampleFailed = true;
+              tier2MeasurementFailed = true;
             }
 
             logInfo("memory-pressure-tier2-reclaim", {
               beforeMb: Math.round(tier2BeforeMb),
               afterMb: Math.round(tier2AfterMb),
-              deltaMb: tier2ResampleFailed
+              deltaMb: tier2MeasurementFailed
                 ? 0
                 : Math.round(Math.max(0, tier2BeforeMb - tier2AfterMb)),
-              tabsEvicted: tier2TabsEvicted,
+              portalTabsDestroyed: tier2TabsEvicted,
               viewsEvicted: tier2ViewsEvicted,
               pressureRemains: tier2PressureRemains,
-              resampleFailed: tier2ResampleFailed,
+              resampleFailed: tier2MeasurementFailed,
             });
           }
         } catch (err) {

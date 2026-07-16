@@ -1122,11 +1122,15 @@ describe("ProcessMemoryMonitor", () => {
 
     it("measures its own reclaim across a settle window that starts after its actions", async () => {
       mockGetAppMetrics.mockReturnValue(underPressure);
-      // Only tier 2's last lever frees anything. A delta can therefore appear
-      // only if tier 2 re-samples after its own actions — the tier-1 sample
-      // taken before them cannot see this drop.
+      // The drop lands midway through the settle window, not when the lever
+      // returns. Only a sample taken after the window can see it: an
+      // implementation that measured straight after the levers and merely
+      // delayed the log would report 0. The tier-1 sample, taken before the
+      // levers, cannot see it either.
       mockActions.hibernateIdleProjects = vi.fn().mockImplementation(async () => {
-        mockGetAppMetrics.mockReturnValue(metricsForMb(100));
+        setTimeout(() => {
+          mockGetAppMetrics.mockReturnValue(metricsForMb(100));
+        }, RECLAIM_SETTLE_MS / 2);
       });
 
       stop = startAppMetricsMonitor(mockActions);
@@ -1161,12 +1165,15 @@ describe("ProcessMemoryMonitor", () => {
       expect(logInfo).toHaveBeenCalledWith("memory-pressure-tier2-reclaim", expect.any(Object));
     });
 
-    it("reports what each tier evicted so a zero delta is attributable", async () => {
-      // Nothing is freed, so both tiers report deltaMb 0 — the eviction counts
-      // are what separate "nothing was eligible" from "levers ran, the metric
-      // could not observe it yet".
+    it("reports what each tier destroyed so a zero delta is attributable", async () => {
+      // Nothing is freed, so both tiers report deltaMb 0 — the counts are what
+      // separate "nothing was eligible" from "levers ran, the metric could not
+      // observe it yet". Each tier returns a distinct count so a tier that
+      // reported its sibling's number would not pass.
       mockGetAppMetrics.mockReturnValue(underPressure);
-      mockActions.destroyHiddenWebviews = vi.fn().mockResolvedValue(2);
+      mockActions.destroyHiddenWebviews = vi
+        .fn()
+        .mockImplementation(async (tier: 1 | 2) => (tier === 1 ? 2 : 4));
       mockActions.evictCachedProjectViews = vi.fn().mockResolvedValue(3);
 
       stop = startAppMetricsMonitor(mockActions);
@@ -1174,11 +1181,11 @@ describe("ProcessMemoryMonitor", () => {
 
       expect(logInfo).toHaveBeenCalledWith(
         "memory-pressure-tier1-reclaim",
-        expect.objectContaining({ deltaMb: 0, tabsEvicted: 2 })
+        expect.objectContaining({ deltaMb: 0, portalTabsDestroyed: 2 })
       );
       expect(logInfo).toHaveBeenCalledWith(
         "memory-pressure-tier2-reclaim",
-        expect.objectContaining({ deltaMb: 0, tabsEvicted: 2, viewsEvicted: 3 })
+        expect.objectContaining({ deltaMb: 0, portalTabsDestroyed: 4, viewsEvicted: 3 })
       );
     });
 
@@ -1221,7 +1228,7 @@ describe("ProcessMemoryMonitor", () => {
       expect(mockActions.hibernateIdleProjects).toHaveBeenCalledTimes(1);
       expect(logInfo).toHaveBeenCalledWith(
         "memory-pressure-tier2-reclaim",
-        expect.objectContaining({ deltaMb: 2400, tabsEvicted: 0 })
+        expect.objectContaining({ deltaMb: 2400, portalTabsDestroyed: 0 })
       );
     });
   });

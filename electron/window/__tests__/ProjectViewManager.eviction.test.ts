@@ -1138,6 +1138,40 @@ describe("ProjectViewManager — eviction safety", () => {
     );
   });
 
+  it("reports the working set, not privateBytes, when both are populated", async () => {
+    // Windows shape: both fields carry distinct non-zero values. The eviction
+    // log standardises on the working set across all three platforms, so the
+    // divergent privateBytes must not win.
+    const managerWithLimit = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
+      cachedProjectViews: 2,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await managerWithLimit.switchTo("proj-b", "/path/b");
+    await flushImmediates();
+
+    mockGetAppMetrics.mockReturnValue([
+      { pid: wcA.osPid, memory: { workingSetSize: 250 * 1024, privateBytes: 900 * 1024 } },
+    ] as unknown as Electron.ProcessMetric[]);
+
+    resetAppMetricsSnapshotForTesting();
+    await managerWithLimit.switchTo("proj-c", "/path/c");
+    await flushImmediates();
+
+    expect(vi.mocked(logInfo)).toHaveBeenCalledWith(
+      "projectview.eviction",
+      expect.objectContaining({ projectId: "proj-a", memoryKb: 250 * 1024 })
+    );
+  });
+
   it("falls back to LRU when app.getAppMetrics() throws", async () => {
     const managerWithLimit = new ProjectViewManager(win as never, {
       dirname: "/test",
