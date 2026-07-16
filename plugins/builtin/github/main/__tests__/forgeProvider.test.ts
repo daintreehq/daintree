@@ -2036,10 +2036,38 @@ describe("buildIssuesUrl", () => {
     expect(q).toBeNull();
   });
 
-  it("passes a query through to q without a state qualifier", () => {
+  // #11201: the default open filter with no search should link to the bare
+  // /issues list (GitHub already scopes it to `is:issue is:open`), not a raw
+  // `?q=is:open` search view.
+  it("returns the bare /issues path with no q param for the default open filter", () => {
+    const { path, q } = parseBuiltUrl(githubForgeProvider.buildIssuesUrl(repo, { state: "open" }));
+    expect(path).toBe("/owner/repo/issues");
+    expect(q).toBeNull();
+  });
+
+  it("treats an empty-string query with state 'open' as the default open filter", () => {
+    const { path, q } = parseBuiltUrl(
+      githubForgeProvider.buildIssuesUrl(repo, { query: "", state: "open" })
+    );
+    expect(path).toBe("/owner/repo/issues");
+    expect(q).toBeNull();
+  });
+
+  // #11201: once a search query is present the `is:issue` type qualifier is
+  // required so results stay scoped to issues and don't leak PRs (GitHub's
+  // issue/PR search is unified).
+  it("prefixes the is:issue type qualifier when a query is given", () => {
     const { path, q } = parseBuiltUrl(githubForgeProvider.buildIssuesUrl(repo, { query: "bug" }));
     expect(path).toBe("/owner/repo/issues");
-    expect(q).toBe("bug");
+    expect(q).toBe("is:issue bug");
+  });
+
+  it("keeps the is:open state qualifier alongside a query on the open filter", () => {
+    const { path, q } = parseBuiltUrl(
+      githubForgeProvider.buildIssuesUrl(repo, { query: "bug", state: "open" })
+    );
+    expect(path).toBe("/owner/repo/issues");
+    expect(q).toBe("is:issue bug is:open");
   });
 
   // Regression for #9986: the previous implementation gated the `is:<state>`
@@ -2065,7 +2093,7 @@ describe("buildIssuesUrl", () => {
       githubForgeProvider.buildIssuesUrl(repo, { query: "bug", state: "closed" })
     );
     expect(path).toBe("/owner/repo/issues");
-    expect(q).toBe("bug is:closed");
+    expect(q).toBe("is:issue bug is:closed");
   });
 
   it("treats state: 'all' as a no-op when given alone", () => {
@@ -2078,7 +2106,7 @@ describe("buildIssuesUrl", () => {
     const { q } = parseBuiltUrl(
       githubForgeProvider.buildIssuesUrl(repo, { query: "bug", state: "all" })
     );
-    expect(q).toBe("bug");
+    expect(q).toBe("is:issue bug");
   });
 });
 
@@ -2095,10 +2123,36 @@ describe("buildPRsUrl", () => {
     expect(q).toBeNull();
   });
 
-  it("passes a query through to q without a state qualifier", () => {
+  // #11201: the default open filter → bare /pulls list (GitHub already scopes
+  // it to `is:pr is:open`), not a raw `?q=is:open` search view.
+  it("returns the bare /pulls path with no q param for the default open filter", () => {
+    const { path, q } = parseBuiltUrl(githubForgeProvider.buildPRsUrl(repo, { state: "open" }));
+    expect(path).toBe("/owner/repo/pulls");
+    expect(q).toBeNull();
+  });
+
+  it("treats an empty-string query with state 'open' as the default open filter", () => {
+    const { path, q } = parseBuiltUrl(
+      githubForgeProvider.buildPRsUrl(repo, { query: "", state: "open" })
+    );
+    expect(path).toBe("/owner/repo/pulls");
+    expect(q).toBeNull();
+  });
+
+  // #11201: once a search query is present the `is:pr` type qualifier is
+  // required so results stay scoped to PRs.
+  it("prefixes the is:pr type qualifier when a query is given", () => {
     const { path, q } = parseBuiltUrl(githubForgeProvider.buildPRsUrl(repo, { query: "bug" }));
     expect(path).toBe("/owner/repo/pulls");
-    expect(q).toBe("bug");
+    expect(q).toBe("is:pr bug");
+  });
+
+  it("keeps the is:open state qualifier alongside a query on the open filter", () => {
+    const { path, q } = parseBuiltUrl(
+      githubForgeProvider.buildPRsUrl(repo, { query: "bug", state: "open" })
+    );
+    expect(path).toBe("/owner/repo/pulls");
+    expect(q).toBe("is:pr bug is:open");
   });
 
   // Regression for #9986: see buildIssuesUrl counterpart.
@@ -2128,7 +2182,7 @@ describe("buildPRsUrl", () => {
       githubForgeProvider.buildPRsUrl(repo, { query: "bug", state: "closed" })
     );
     expect(path).toBe("/owner/repo/pulls");
-    expect(q).toBe("bug is:closed");
+    expect(q).toBe("is:pr bug is:closed");
   });
 
   it("treats state: 'all' as a no-op when given alone", () => {
@@ -2141,7 +2195,7 @@ describe("buildPRsUrl", () => {
     const { q } = parseBuiltUrl(
       githubForgeProvider.buildPRsUrl(repo, { query: "bug", state: "all" })
     );
-    expect(q).toBe("bug");
+    expect(q).toBe("is:pr bug");
   });
 });
 
