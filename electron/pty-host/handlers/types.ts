@@ -18,6 +18,7 @@ import type {
 export interface RendererConnection {
   port: MessagePort;
   handler: (e: MessageEvent) => void;
+  closeHandler?: () => void;
   portQueueManager: PortQueueManager;
   batcher: PortBatcher;
 }
@@ -32,6 +33,7 @@ export interface RendererConnection {
 export interface TerminalWorkerConnection {
   port: MessagePort;
   handler: (e: MessageEvent) => void;
+  closeHandler?: () => void;
   portQueueManager: PortQueueManager;
   batcher: PortBatcher;
   engaged: boolean;

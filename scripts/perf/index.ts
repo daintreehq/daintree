@@ -103,6 +103,27 @@ function playwrightMemory(): Runner {
     );
 }
 
+function playwrightMemoryGrowth(): Runner {
+  return async (rest) => {
+    const buildExitCode = await npmScript("build:e2e");
+    if (buildExitCode !== 0) return buildExitCode;
+    return spawnNode(
+      [
+        resolveBin(
+          ["node_modules/@playwright/test/cli.js", "node_modules/playwright/cli.js"],
+          "playwright"
+        ),
+        "test",
+        "--project=full-resilience",
+        "--workers=1",
+        "e2e/full/resilience/memory-growth-perf.spec.ts",
+        ...rest,
+      ],
+      { RUN_PERF_MEMORY_GROWTH: "1" }
+    );
+  };
+}
+
 function npmScript(name: string): Promise<number> {
   const npmCli = process.env.npm_execpath;
   if (!npmCli) {
@@ -199,6 +220,14 @@ const REGISTRY: Record<string, Command> = {
   memory: {
     summary: "Memory kitchen-sink soak spec via Playwright",
     runner: playwrightMemory(),
+  },
+  "memory-growth": {
+    summary: "Single-session retained-memory growth benchmark via Playwright",
+    runner: playwrightMemoryGrowth(),
+  },
+  "memory-growth-compare": {
+    summary: "Compare two long-session memory-growth results",
+    runner: tsxScript("memory-growth-compare.ts"),
   },
   "memory-compare": {
     summary: "Diff two memory-bench result files into a delta table",

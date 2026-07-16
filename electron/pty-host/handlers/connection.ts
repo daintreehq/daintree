@@ -174,17 +174,19 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
 
       receivedPort.on("message", handler);
 
-      receivedPort.on("close", () => {
+      const closeHandler = () => {
         // Guard: only disconnect if this port is still the active one for this window
         const current = rendererConnections.get(windowId);
         if (current?.port === receivedPort) {
           disconnectWindow(windowId, "port-close");
         }
-      });
+      };
+      receivedPort.on("close", closeHandler);
 
       rendererConnections.set(windowId, {
         port: receivedPort,
         handler,
+        closeHandler,
         portQueueManager: perWindowQueueManager,
         batcher: perWindowBatcher,
       });
@@ -266,12 +268,13 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
       };
       receivedPort.on("message", handler);
 
-      receivedPort.on("close", () => {
+      const closeHandler = () => {
         const current = terminalWorkerConnections.get(windowId)?.get(terminalId);
         if (current?.port === receivedPort) {
           disconnectTerminalWorkerPort(windowId, terminalId, "port-close");
         }
-      });
+      };
+      receivedPort.on("close", closeHandler);
 
       let perWindow = terminalWorkerConnections.get(windowId);
       if (!perWindow) {
@@ -281,6 +284,7 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
       perWindow.set(terminalId, {
         port: receivedPort,
         handler,
+        closeHandler,
         portQueueManager: queueManager,
         batcher,
         engaged: false,

@@ -32,6 +32,7 @@ interface PooledPty {
   env: Record<string, string>;
   createdAt: number;
   dataDisposable: IDisposable;
+  exitDisposable: IDisposable;
   dataHandoff?: BufferedPtyDataHandoff;
   /**
    * Set false in the onExit handler so acquireByKey can reject entries whose
@@ -54,6 +55,19 @@ interface PooledPty {
 interface PoolFailureState {
   count: number;
   blockedUntil: number;
+}
+
+function disposePooledListeners(entry: PooledPty): void {
+  try {
+    entry.dataDisposable.dispose();
+  } catch {
+    // ignore
+  }
+  try {
+    entry.exitDisposable.dispose();
+  } catch {
+    // ignore
+  }
 }
 
 const DEFAULT_POOL_SIZE = 2;
@@ -328,6 +342,7 @@ export class PtyPool {
         env,
         createdAt: Date.now(),
         dataDisposable: { dispose: () => {} },
+        exitDisposable: { dispose: () => {} },
         alive: true,
         prelude: "",
       };
@@ -351,36 +366,39 @@ export class PtyPool {
       });
       entry.dataDisposable = dataDisposable;
 
-      ptyProcess.onExit(({ exitCode }) => {
+      const exitDisposable = ptyProcess.onExit(({ exitCode }) => {
+        entry.exitDisposable.dispose();
         if (process.env.DAINTREE_VERBOSE) {
           console.log(`[PtyPool] Pooled PTY ${id} exited with code ${exitCode}`);
         }
-        const entry = this.pool.get(id);
-        if (!entry) {
+        const currentEntry = this.pool.get(id);
+        if (!currentEntry) {
           // Entry was already removed (drain, evict, or acquire path). Those
           // paths handle their own followup and FD cleanup; refilling or
           // counting failures here would race them.
           return;
         }
-        entry.alive = false;
-        entry.dataDisposable.dispose();
+        currentEntry.alive = false;
+        currentEntry.dataDisposable.dispose();
         // Remove from the pool BEFORE destroying. Real node-pty delivers
         // onExit via libuv (always async), so synchronous re-entry can't
         // happen — but the invariant "removed from map → never re-observed"
         // matches dispose()/evictIfAtCapacity()/drainAndRefill() and makes
         // the code easier to reason about.
         this.pool.delete(id);
-        destroyPty(entry.process);
-        this.recordFastExit(entry.poolKey, entry.createdAt);
+        destroyPty(currentEntry.process);
+        this.recordFastExit(currentEntry.poolKey, currentEntry.createdAt);
         // Skip refill if this entry belonged to a prior drain cycle — a
         // newer drainAndRefill() already initiated its own refill.
         if (!this.isDisposed && this.drainEpoch === epoch) {
           this.refillPool();
         }
       });
+      entry.exitDisposable = exitDisposable;
 
       if (this.isDisposed || this.drainEpoch !== epoch) {
         dataDisposable.dispose();
+        exitDisposable.dispose();
         destroyPty(ptyProcess);
         return;
       }
@@ -442,6 +460,7 @@ export class PtyPool {
 
     const { id, entry } = matched;
     this.pool.delete(id);
+    entry.exitDisposable.dispose();
 
     // Liveness check. `alive` is set false by the onExit handler — it tracks
     // actual process exit, unlike the prior `pid !== undefined` probe which
@@ -617,11 +636,7 @@ export class PtyPool {
 
     for (const entry of snapshot) {
       entry.alive = false;
-      try {
-        entry.dataDisposable.dispose();
-      } catch {
-        // ignore
-      }
+      disposePooledListeners(entry);
       destroyPty(entry.process);
     }
 
@@ -669,11 +684,7 @@ export class PtyPool {
 
     for (const [id, entry] of entries) {
       entry.alive = false;
-      try {
-        entry.dataDisposable.dispose();
-      } catch (error) {
-        console.warn(`[PtyPool] Error disposing pooled PTY ${id} data listener:`, error);
-      }
+      disposePooledListeners(entry);
       destroyPty(entry.process);
       if (process.env.DAINTREE_VERBOSE) {
         console.log(`[PtyPool] Killed pooled PTY ${id}`);
@@ -710,11 +721,7 @@ export class PtyPool {
 
     this.pool.delete(chosen.id);
     chosen.entry.alive = false;
-    try {
-      chosen.entry.dataDisposable.dispose();
-    } catch {
-      // ignore
-    }
+    disposePooledListeners(chosen.entry);
     destroyPty(chosen.entry.process);
 
     if (process.env.DAINTREE_VERBOSE) {

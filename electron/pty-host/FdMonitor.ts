@@ -15,12 +15,13 @@ export interface FdCheckResult {
 }
 
 export class FdMonitor {
-  private readonly baselineFds: number;
+  private baselineFds: number;
+  private calibrationChecksRemaining: number;
   private readonly ptmxLimit: number | null;
   private readonly fdPath: string | null;
   private readonly isSupported: boolean;
 
-  constructor(fdPathOverride?: string) {
+  constructor(fdPathOverride?: string, calibrationChecks = 5) {
     const platform = process.platform;
 
     if (fdPathOverride) {
@@ -38,6 +39,7 @@ export class FdMonitor {
     }
 
     this.baselineFds = this.getFdCount();
+    this.calibrationChecksRemaining = calibrationChecks;
     this.ptmxLimit = this.readPtmxLimit();
   }
 
@@ -52,9 +54,15 @@ export class FdMonitor {
 
   checkForLeaks(activeTerminalCount: number, knownPids: number[]): FdCheckResult {
     const totalFds = this.getFdCount();
+    const terminalAllowance = activeTerminalCount * WARNING_MULTIPLIER;
+    const isCalibrating = this.calibrationChecksRemaining > 0;
+    if (isCalibrating) {
+      this.baselineFds = Math.max(this.baselineFds, totalFds - terminalAllowance);
+      this.calibrationChecksRemaining--;
+    }
     const estimatedTerminalFds = Math.max(0, totalFds - this.baselineFds);
-    const threshold = activeTerminalCount * WARNING_MULTIPLIER + SAFETY_MARGIN + this.baselineFds;
-    const isWarning = this.isSupported && totalFds > threshold;
+    const threshold = terminalAllowance + SAFETY_MARGIN + this.baselineFds;
+    const isWarning = !isCalibrating && this.isSupported && totalFds > threshold;
     const orphanedPids = this.findOrphanedPids(knownPids);
 
     return {
