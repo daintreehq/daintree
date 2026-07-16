@@ -256,6 +256,10 @@ describe("webContentsRegistry", () => {
     expect(getProjectForWebContents(staleWc.id)).toBeNull();
     expect(isCachedViewWebContents(staleWc.id)).toBe(false);
     expect(getProjectForWebContents(liveWc.id)).toBe("project-b");
+    // Pruning a view that never fired "destroyed" must release its listener too,
+    // or the registration keeps the WebContents and its closure alive.
+    expect(staleWc.listenerCount("destroyed")).toBe(0);
+    expect(liveWc.listenerCount("destroyed")).toBe(1);
   });
 
   it("getRegisteredProjectViews prunes views whose webContents no longer resolves", async () => {

@@ -316,7 +316,9 @@ describe("registerDiagnosticsHandlers", () => {
           type: "Tab",
           name: "Tab",
           memory: { privateBytes: 0, workingSetSize: 102400 },
-          cpu: { percentCPUUsage: 1 },
+          // Deliberately not a round number, so the row exercises the handler's
+          // rounding rather than passing a value straight through.
+          cpu: { percentCPUUsage: 1.26 },
         })),
       ]);
       resetAppMetricsSnapshotForTesting();
@@ -366,6 +368,18 @@ describe("registerDiagnosticsHandlers", () => {
       getProjectByIdMock.mockReturnValue({ name: "RuinWeave" });
 
       expect(rowForPid(getProcessRows(), 400).projectNames).toEqual(["RuinWeave"]);
+    });
+
+    it("counts same-named projects separately, since names are not unique", () => {
+      withTabPids(400);
+      getRegisteredProjectViewsMock.mockReturnValue([
+        createProjectView("project-a", 400),
+        createProjectView("project-b", 400),
+      ]);
+      // Two distinct repos can carry the same name; they are still two owners.
+      getProjectByIdMock.mockReturnValue({ name: "api" });
+
+      expect(rowForPid(getProcessRows(), 400).projectNames).toEqual(["api", "api"]);
     });
 
     it("keeps each renderer's label to the projects actually running in it", () => {
@@ -435,7 +449,6 @@ describe("registerDiagnosticsHandlers", () => {
 
       const rows = getProcessRows();
       // The throwing view neither blanks the table nor suppresses its siblings.
-      expect(rows.length).toBeGreaterThan(0);
       expect(rowForPid(rows, 400).projectNames).toBeUndefined();
       expect(rowForPid(rows, 401).projectNames).toEqual(["Cedar Forge"]);
     });
@@ -449,7 +462,8 @@ describe("registerDiagnosticsHandlers", () => {
       const tab = rowForPid(rows, 400) as ProcessRow & { memoryMB: number; cpuPercent: number };
       // workingSetSize 102400 KB / 1024 = 100 MB, from workingSetSize not privateBytes.
       expect(tab.memoryMB).toBe(100);
-      expect(tab.cpuPercent).toBe(1);
+      // 1.26 rounded to one decimal.
+      expect(tab.cpuPercent).toBe(1.3);
       const memory = rows.map((r) => r.memoryMB);
       expect(memory).toEqual([...memory].sort((a, b) => b - a));
     });

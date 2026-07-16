@@ -242,12 +242,13 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
   };
   handlers.push(typedHandle(CHANNELS.SYSTEM_GET_APP_METRICS, handleGetAppMetrics));
 
-  // OS pid → names of the projects rendering in it. A Set because project views
-  // share one partition and URL, so Chromium may collapse several into one
-  // renderer process; each view is resolved independently so a teardown race on
-  // one cannot blank the whole process table.
-  const collectProjectNamesByPid = (): Map<number, Set<string>> => {
-    const byPid = new Map<number, Set<string>>();
+  // OS pid → the projects rendering in it, keyed by project id: views share one
+  // partition and URL, so Chromium may collapse several projects into one
+  // renderer process. Keyed by id rather than name because names are not unique
+  // — two projects both called "api" are two owners, not one. Each view is
+  // resolved independently so a teardown race on one cannot blank the table.
+  const collectProjectNamesByPid = (): Map<number, string[]> => {
+    const byPid = new Map<number, Map<string, string>>();
     for (const { webContents, projectId } of getRegisteredProjectViews()) {
       try {
         // Re-checked here, not just in the registry: getOSProcessId() throws
@@ -260,14 +261,21 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
         if (!Number.isInteger(pid) || pid <= 0) continue;
         const name = projectStore.getProjectById(projectId)?.name;
         if (!name) continue;
-        const names = byPid.get(pid) ?? new Set<string>();
-        names.add(name);
-        byPid.set(pid, names);
+        const projects = byPid.get(pid) ?? new Map<string, string>();
+        projects.set(projectId, name);
+        byPid.set(pid, projects);
       } catch {
         // Torn down mid-read: leave this view unlabelled.
       }
     }
-    return byPid;
+    // Plain lexical order, not localeCompare: the label must not reshuffle
+    // between polls on a different OS locale or ICU build.
+    return new Map(
+      [...byPid].map(([pid, projects]) => [
+        pid,
+        [...projects.values()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+      ])
+    );
   };
 
   const handleGetProcessMetrics = (): ProcessMetricEntry[] => {
@@ -286,8 +294,8 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
             cpuPercent: Math.round((proc.cpu?.percentCPUUsage ?? 0) * 10) / 10,
           };
           const names = proc.type === "Tab" ? projectNamesByPid.get(proc.pid) : undefined;
-          if (names?.size) {
-            entry.projectNames = [...names].sort((a, b) => a.localeCompare(b));
+          if (names?.length) {
+            entry.projectNames = names;
           }
           return entry;
         })

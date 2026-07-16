@@ -131,9 +131,7 @@ describe("formatProcessLabel", () => {
   });
 
   it("names the owning project instead of the generic process name", () => {
-    const label = formatProcessLabel({ name: "Tab", projectNames: ["RuinWeave"] });
-    expect(label).toBe("RuinWeave view");
-    expect(label).not.toContain("Tab");
+    expect(formatProcessLabel({ name: "Tab", projectNames: ["RuinWeave"] })).toBe("RuinWeave view");
   });
 
   it("reports every project sharing a consolidated renderer, counted first", () => {
@@ -142,14 +140,23 @@ describe("formatProcessLabel", () => {
       projectNames: ["Cedar Forge", "RuinWeave"],
     });
     expect(label).toBe("2 views · Cedar Forge, RuinWeave");
-    // The count leads so it survives the row's ~23-char truncation.
-    expect(label.slice(0, 23)).toContain("2 views");
   });
 
-  it("counts each additional project sharing the renderer", () => {
+  it("scales the count with the projects sharing the renderer, listing them in order", () => {
     const names = ["Alpha", "Cedar Forge", "RuinWeave"];
-    expect(formatProcessLabel({ name: "Tab", projectNames: names })).toBe(
-      `${names.length} views · ${names.join(", ")}`
+    const label = formatProcessLabel({ name: "Tab", projectNames: names });
+
+    // The count leads, so it survives the row's truncation.
+    expect(label.startsWith("3 views")).toBe(true);
+    // Every project stays named, in the order given.
+    expect(names.every((name) => label.includes(name))).toBe(true);
+    expect(label.indexOf("Alpha")).toBeLessThan(label.indexOf("RuinWeave"));
+  });
+
+  it("keeps same-named projects distinct rather than collapsing them", () => {
+    // Names are not unique across projects; two owners must still read as two.
+    expect(formatProcessLabel({ name: "Tab", projectNames: ["api", "api"] })).toBe(
+      "2 views · api, api"
     );
   });
 

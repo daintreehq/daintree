@@ -369,9 +369,9 @@ export function getRegisteredProjectViews(): Array<{
     if (wc && !wc.isDestroyed()) {
       result.push({ webContents: wc, projectId });
     } else {
-      viewToProject.delete(wcId);
-      cachedViewWebContents.delete(wcId);
-      invalidateAllAppWebContentsCache();
+      // Full unregister, not a bare map delete: a view pruned here never fired
+      // "destroyed", so its listener registration would retain the WebContents.
+      unregisterProjectView(wcId);
     }
   }
   return result;

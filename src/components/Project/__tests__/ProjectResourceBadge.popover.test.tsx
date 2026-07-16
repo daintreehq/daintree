@@ -298,13 +298,19 @@ describe("ProjectResourceBadge — process ownership", () => {
     return { pid: 400, type: "Tab", name: "Tab", memoryMB: 100, cpuPercent: 1, ...overrides };
   }
 
+  /** The process row's label cell, located by the pid it renders. */
+  function processRowLabel(container: HTMLElement, pid: number): string {
+    const row = container.querySelector(`[title$="(${pid})"]`);
+    if (!row) throw new Error(`No process row for pid ${pid}`);
+    return row.textContent ?? "";
+  }
+
   it("names the owning project instead of the generic renderer label", async () => {
     mockGetProcessMetrics.mockResolvedValue([makeProcess({ projectNames: ["RuinWeave"] })]);
 
     const container = await renderOpenBadge();
 
-    expect(container.textContent).toContain("RuinWeave view");
-    expect(container.textContent).toContain("(400)");
+    expect(processRowLabel(container, 400)).toBe("RuinWeave view (400)");
   });
 
   it("leaves an unowned process on its generic label", async () => {
@@ -314,8 +320,8 @@ describe("ProjectResourceBadge — process ownership", () => {
 
     const container = await renderOpenBadge();
 
-    expect(container.textContent).toContain("GPU Process");
-    expect(container.textContent).not.toContain("view");
+    // Scoped to the row: unrelated popover copy may legitimately say "view".
+    expect(processRowLabel(container, 200)).toBe("GPU Process (200)");
   });
 
   it("surfaces the full label on hover when the row truncates", async () => {
