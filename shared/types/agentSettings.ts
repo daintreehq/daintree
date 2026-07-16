@@ -147,7 +147,7 @@ export interface AgentSettings {
    * and no curated registry default apply. Default off — so `inlineMode`
    * resolves to inline (no alt-screen) globally unless something overrides it,
    * mirroring how `globalSkipPermissions` defaults off. A curated per-agent
-   * registry `defaultInlineMode` (e.g. Grok's alt-screen) still wins over this
+   * registry `defaultInlineMode` (when an agent declares one) still wins over this
    * switch; an explicit per-agent/preset `"on"`/`"off"` always vetoes it. Like
    * the bypass override it is a *live* value OR-ed in at flag-generation time
    * (see {@link resolveEffectiveInlineMode}), never mutating per-agent state.
