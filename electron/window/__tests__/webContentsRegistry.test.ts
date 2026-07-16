@@ -5,7 +5,9 @@ import type { BrowserWindow, WebContents, WebContentsView } from "electron";
 const electronMock = vi.hoisted(() => ({
   fromWebContents: vi.fn(() => null),
   getAllWindows: vi.fn(() => []),
-  fromId: vi.fn(() => null),
+  // Typed at the source: the enumeration tests resolve ids to real mock
+  // webContents, which a `() => null` inference would reject.
+  fromId: vi.fn<(id: number) => WebContents | null>(() => null),
 }));
 
 vi.mock("electron", () => ({

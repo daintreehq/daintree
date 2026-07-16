@@ -352,7 +352,8 @@ describe("registerDiagnosticsHandlers", () => {
         createProjectView("project-b", 400),
       ]);
       getProjectByIdMock.mockImplementation(
-        (id) => ({ "project-a": { name: "RuinWeave" }, "project-b": { name: "Cedar Forge" } })[id]
+        (id) =>
+          ({ "project-a": { name: "RuinWeave" }, "project-b": { name: "Cedar Forge" } })[id] ?? null
       );
 
       // Sorted, so the label stays stable across polls regardless of view order.
@@ -389,7 +390,8 @@ describe("registerDiagnosticsHandlers", () => {
         createProjectView("project-b", 401),
       ]);
       getProjectByIdMock.mockImplementation(
-        (id) => ({ "project-a": { name: "RuinWeave" }, "project-b": { name: "Cedar Forge" } })[id]
+        (id) =>
+          ({ "project-a": { name: "RuinWeave" }, "project-b": { name: "Cedar Forge" } })[id] ?? null
       );
 
       const rows = getProcessRows();
@@ -444,7 +446,8 @@ describe("registerDiagnosticsHandlers", () => {
         createProjectView("project-b", 401),
       ]);
       getProjectByIdMock.mockImplementation(
-        (id) => ({ "project-a": { name: "RuinWeave" }, "project-b": { name: "Cedar Forge" } })[id]
+        (id) =>
+          ({ "project-a": { name: "RuinWeave" }, "project-b": { name: "Cedar Forge" } })[id] ?? null
       );
 
       const rows = getProcessRows();
