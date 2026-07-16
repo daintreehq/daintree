@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { FolderOpen, GitBranch, Settings } from "lucide-react";
 import { DaintreeIcon } from "@/components/icons";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -18,11 +19,17 @@ import { LauncherQuickActions } from "./LauncherQuickActions";
 
 const PATH_TRUNCATE_LENGTH = 52;
 
+// Marks a section as carrying the entry, so `replaySectionEntries` can find one
+// by the same name the class applies. The reduce-motion block in `index.css`
+// spells this selector out for itself — renaming it means changing both.
+const SECTION_ENTRY_MARKER = "launcher-section-enter";
+
 // Entry motion for each launcher section — the column arrives as a sequence
 // rather than one flat block. Static classes, so the animation plays once when
 // a section enters the DOM and never replays on re-render; a section whose
 // condition flips later (recipes finish loading, the pulse is unhidden) simply
-// runs its own entry then.
+// runs its own entry then. A project switch re-enters nothing, which is why the
+// reveal below has to replay these by hand.
 //
 // Two suppressors, both needed, exactly as `ContentFadeIn` does it:
 // `motion-safe:` covers the OS preference, and the `launcher-section-enter`
@@ -37,8 +44,7 @@ const PATH_TRUNCATE_LENGTH = 52;
 // wrappers it lands on CSS's `all` default — an every-property transition
 // nobody asked for. Setting `--tw-animation-duration` keeps the transition set
 // empty, for the same reason the ladder below avoids `delay-*`.
-const SECTION_ENTRY =
-  "launcher-section-enter motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-1 motion-safe:[--tw-animation-duration:var(--duration-200)]";
+const SECTION_ENTRY = `${SECTION_ENTRY_MARKER} motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-1 motion-safe:[--tw-animation-duration:var(--duration-200)]`;
 
 // The stagger ladder. Sequencing IS the signal here, so the per-step delay is a
 // literal ladder rather than one of the shared duration tiers.
@@ -63,6 +69,42 @@ const SECTION_ENTRY_DELAY_4 =
   "motion-safe:[--tw-animation-delay:120ms] motion-safe:fill-mode-backwards";
 const SECTION_ENTRY_DELAY_5 =
   "motion-safe:[--tw-animation-delay:150ms] motion-safe:fill-mode-backwards";
+
+// Both of the entry's suppressors are CSS-only — `motion-safe:` reads the OS
+// preference and the `launcher-section-enter` rule reads the in-app toggle — so
+// neither can stop a replay driven from JS. Restating the same triple check
+// `triggerPanelTransition` makes keeps the replay from restarting animations
+// those rules have already flattened to nothing.
+function isMotionSuppressed(): boolean {
+  return (
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches ||
+    document.body.getAttribute("data-reduce-animations") === "true" ||
+    document.body.getAttribute("data-performance-mode") === "true"
+  );
+}
+
+// Restart each section's entry by tearing the animation down and handing it
+// straight back to the class. NOT WAAPI `cancel()`/`play()`: `getAnimations()`
+// returns only animations that are current or in effect, and an entry that has
+// finished under `fill-mode: backwards` — which fills before its delay, never
+// after — is neither. It omits precisely the spent entries this replays, so it
+// would iterate nothing and silently do nothing.
+//
+// Clearing the override rather than naming the keyframes back keeps them in CSS,
+// and the fresh animation re-reads `--tw-animation-delay`, so the ladder is
+// preserved. Reading a layout property in between is what forces the teardown to
+// land, rather than both writes collapsing into one style resolution.
+//
+// Queried per section, so the launcher's descendants (RotatingTip's fade, pulse
+// skeletons) keep their own timelines.
+function replaySectionEntries(container: HTMLElement | null): void {
+  if (!container || isMotionSuppressed()) return;
+  for (const section of container.querySelectorAll<HTMLElement>(`.${SECTION_ENTRY_MARKER}`)) {
+    section.style.animationName = "none";
+    void section.offsetWidth;
+    section.style.animationName = "";
+  }
+}
 
 // The active workspace is a project OR a scratch (#11076). `hasLaunchTarget`
 // gates the launcher column on having somewhere to launch INTO — a scratch has
@@ -121,6 +163,36 @@ export function ContentGridEmptyState({
   const recipesLoading = useRecipeStore((state) => state.isLoading);
   const { homeDir } = useHomeDir();
 
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // The entry above is DOM-entry motion, which a project switch never re-enters:
+  // every project keeps its own persistent WebContentsView and React tree, so
+  // switching to one reveals a subtree that was already mounted (a worktree
+  // switch, by contrast, remounts this component and replays for free). Nothing
+  // renders differently at reveal either, so the replay has to be imperative.
+  //
+  // Restart on `app:view-revealed`, and do it synchronously. Main sends that
+  // only once the warm gate has run and the anti-flash bridge is detached, so
+  // this view is the foreground surface and its next paint carries the restarted
+  // entry. Deferring a frame or two would buy nothing and cost the flash the
+  // whole exercise is about — the launcher sitting at rest, then yanked back to
+  // replay in front of the user.
+  //
+  // Only warm reveals arrive here; a cold-started view is never sent one. It
+  // needs no replay for the reason this hook exists — it mounts the launcher
+  // fresh, so the entry runs on its own. That entry does still overlap the
+  // view's own startup-skeleton exit, but so does every cold boot's: it is
+  // startup choreography, not the persistent-tree gap this closes.
+  //
+  // Restarting rather than remounting: RecipeRunner, ProjectPulseStrip and
+  // RotatingTip own fetches and rotation timers a remount would reset, and the
+  // point is to replay a fade, not to rebuild the launcher.
+  useEffect(() => {
+    return window.electron?.app?.onViewRevealed?.(() => {
+      replaySectionEntries(containerRef.current);
+    });
+  }, []);
+
   const branchLabel =
     activeWorktreeIsDetached && activeWorktreeHead
       ? `detached at ${activeWorktreeHead.slice(0, 7)}`
@@ -160,7 +232,7 @@ export function ContentGridEmptyState({
   // carries its own entry, and the no-launch-target branches keep the entry
   // fade `EmptyState` already owns.
   return (
-    <div className="relative h-full w-full overflow-hidden">
+    <div ref={containerRef} className="relative h-full w-full overflow-hidden">
       {/* Content scrolls independently of the fixed watermark so an expanded
           pulse (or a tall recipe list) on a short canvas stays reachable
           instead of being clipped; `min-h-full` keeps it centered when short. */}
