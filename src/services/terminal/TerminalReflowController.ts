@@ -1,6 +1,7 @@
 import type { Terminal } from "@xterm/xterm";
 import type { ManagedTerminal } from "./types";
 import { logWarn } from "@/utils/logger";
+import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 
 type XtermCoreRenderPause = {
   _renderService?: {
@@ -68,34 +69,19 @@ export interface ReflowControllerDeps {
 export class TerminalReflowController {
   private deps: ReflowControllerDeps;
   private heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+  private readonly offViewLifecycle: () => void;
   private readonly _onVisibilityChange = (): void => {
     if (typeof document === "undefined" || document.visibilityState !== "visible") return;
-    for (const managed of this.deps.getInstances()) {
-      this.maybeReflow(managed);
-    }
+    this.sweep();
   };
   private readonly _onWindowFocus = (): void => {
-    for (const managed of this.deps.getInstances()) {
-      this.maybeReflow(managed);
-    }
+    this.sweep();
   };
 
   constructor(deps: ReflowControllerDeps) {
     this.deps = deps;
 
-    // Periodic heartbeat: recovers a terminal whose IntersectionObserver has
-    // paused rendering, even while no new writes are arriving. The pause gate
-    // lives in xterm's core RenderService, so WebGL and DOM renderers alike
-    // are affected. Cheap (~1–5ms per visible terminal). Skipped while the
-    // document is hidden — _onVisibilityChange triggers a sweep on regain.
-    if (typeof setInterval === "function") {
-      this.heartbeatTimer = setInterval(() => {
-        if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
-        for (const managed of this.deps.getInstances()) {
-          this.maybeReflow(managed);
-        }
-      }, REFLOW_HEARTBEAT_MS);
-    }
+    this.startHeartbeat();
 
     // App-level recovery: reflow visible terminals whenever the window
     // regains focus or the tab becomes visible. These are the moments a
@@ -106,6 +92,55 @@ export class TerminalReflowController {
     if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
       window.addEventListener("focus", this._onWindowFocus);
     }
+
+    // A cached view never fires visibilitychange, so the heartbeat's own
+    // visibility check can't stop it and it would keep forcing layout on
+    // terminals nobody can see (#11212). Stop the wakeups outright while
+    // cached — `maybeReflow` stays gated regardless, but only stopping the
+    // interval actually removes the idle wakeup.
+    this.offViewLifecycle = subscribeProjectViewLifecycle((phase) => {
+      if (phase === "cached") {
+        this.stopHeartbeat();
+        return;
+      }
+      this.startHeartbeat();
+      // A renderer paused while the view was cached needs the same immediate
+      // recovery visibilitychange gives a backgrounded window — waiting out
+      // the remaining heartbeat would leave the pane blank for up to 3s at the
+      // exact moment the user is looking at it.
+      if (phase === "revealed") this.sweep();
+    });
+  }
+
+  private sweep(): void {
+    for (const managed of this.deps.getInstances()) {
+      this.maybeReflow(managed);
+    }
+  }
+
+  /**
+   * Periodic heartbeat: recovers a terminal whose IntersectionObserver has
+   * paused rendering, even while no new writes are arriving. The pause gate
+   * lives in xterm's core RenderService, so WebGL and DOM renderers alike are
+   * affected. Cheap (~1–5ms per visible terminal). Idempotent — a rearm while
+   * already running keeps the existing timer rather than stacking a second.
+   */
+  private startHeartbeat(): void {
+    if (this.heartbeatTimer !== undefined) return;
+    if (typeof setInterval !== "function") return;
+    this.heartbeatTimer = setInterval(() => {
+      // maybeReflow re-applies the full gate per terminal; this is the cheap
+      // whole-sweep skip for a hidden window (visibilitychange sweeps on
+      // regain).
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      this.sweep();
+    }, REFLOW_HEARTBEAT_MS);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer === undefined) return;
+    clearInterval(this.heartbeatTimer);
+    this.heartbeatTimer = undefined;
   }
 
   /**
@@ -121,6 +156,13 @@ export class TerminalReflowController {
    * terminal.
    */
   maybeReflow(managed: ManagedTerminal): void {
+    // The decisive gate lives here rather than only on the heartbeat: the
+    // per-write path (`onWriteParsedReflow` → `maybeReflowTerminal`) calls this
+    // directly, so a streaming agent in a cached view would keep forcing layout
+    // no matter what the interval does (#11212). A cached view's
+    // visibilityState is permanently "visible", so this is the only check that
+    // sees it — the document check below still covers window-level occlusion.
+    if (isProjectViewCached()) return;
     if (!managed.isVisible) return;
     if (managed.isAttaching) return;
     if (managed.isAltBuffer) return;
@@ -154,10 +196,8 @@ export class TerminalReflowController {
   }
 
   dispose(): void {
-    if (this.heartbeatTimer !== undefined) {
-      clearInterval(this.heartbeatTimer);
-      this.heartbeatTimer = undefined;
-    }
+    this.stopHeartbeat();
+    this.offViewLifecycle();
     if (typeof document !== "undefined" && typeof document.removeEventListener === "function") {
       document.removeEventListener("visibilitychange", this._onVisibilityChange);
     }

@@ -7,6 +7,7 @@ import {
   lockSidebarLayoutTransition,
   unlockSidebarHydration,
 } from "@/lib/layoutTransitionLock";
+import { __resetProjectViewCacheStateForTests } from "@/lib/viewCacheState";
 import {
   TerminalReconciliationWatchdog,
   WATCHDOG_INTERVAL_MS,
@@ -1129,5 +1130,215 @@ describe("isXtermRenderPaused", () => {
     expect(isXtermRenderPaused(managed.terminal)).toBe(true);
     setRenderPaused(managed, false);
     expect(isXtermRenderPaused(managed.terminal)).toBe(false);
+  });
+});
+
+describe("TerminalReconciliationWatchdog — cached project view (#11212)", () => {
+  let watchdog: TerminalReconciliationWatchdog | undefined;
+  let instances: Map<string, ManagedTerminal>;
+  let emitCached: () => void;
+  let emitWarmActivated: () => void;
+  let emitRevealed: () => void;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    instances = new Map();
+    // The bug's precondition: a cached view keeps reporting "visible", so the
+    // existing gate never engages and its hosts still have real, on-screen rect
+    // geometry — every pane in a hidden project classifies as on-screen.
+    setDocumentVisibility("visible");
+    __resetSidebarLayoutTransitionLockForTests();
+    __resetSidebarHydrationLockForTests();
+    unlockSidebarHydration();
+
+    const cachedHandlers: Array<() => void> = [];
+    const warmHandlers: Array<() => void> = [];
+    const revealedHandlers: Array<() => void> = [];
+    (window as unknown as { electron: unknown }).electron = {
+      app: {
+        onViewCached: (cb: () => void) => {
+          cachedHandlers.push(cb);
+          return vi.fn();
+        },
+        onViewWarmActivated: (cb: () => void) => {
+          warmHandlers.push(cb);
+          return vi.fn();
+        },
+        onViewRevealed: (cb: () => void) => {
+          revealedHandlers.push(cb);
+          return vi.fn();
+        },
+      },
+    };
+    emitCached = () => cachedHandlers.forEach((h) => h());
+    emitWarmActivated = () => warmHandlers.forEach((h) => h());
+    emitRevealed = () => revealedHandlers.forEach((h) => h());
+    // viewCacheState arms on first use and persists for the module's life.
+    // Earlier describes in this file construct controllers before the stub
+    // exists, arming it against no bridge — reset so this suite's
+    // subscriptions bind to the emitters above.
+    __resetProjectViewCacheStateForTests();
+  });
+
+  afterEach(() => {
+    watchdog?.dispose();
+    watchdog = undefined;
+    __resetProjectViewCacheStateForTests();
+    delete (window as unknown as { electron?: unknown }).electron;
+    document.body.innerHTML = "";
+    __resetSidebarLayoutTransitionLockForTests();
+    __resetSidebarHydrationLockForTests();
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  it("issues no repairs of any kind for a cached view", () => {
+    // Every layer at once: an on-screen-looking pane that is invisible, at
+    // BACKGROUND tier, with a background backend tier and a missing WebGL
+    // context would normally draw a repair from several branches.
+    instances.set(
+      "t1",
+      makeManaged({ isVisible: false, lastAppliedTier: TerminalRefreshTier.BACKGROUND })
+    );
+    const deps = makeDeps(instances, {
+      getBackendTier: vi.fn(() => "background" as const),
+      shouldHaveWebGL: vi.fn(() => true),
+      isWebGLActive: vi.fn(() => false),
+    });
+    watchdog = new TerminalReconciliationWatchdog(deps);
+
+    emitCached();
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS * 5);
+
+    expect(deps.setVisible).not.toHaveBeenCalled();
+    expect(deps.applyRendererPolicy).not.toHaveBeenCalled();
+    expect(deps.reassertActiveBackendTier).not.toHaveBeenCalled();
+    expect(deps.forceReflow).not.toHaveBeenCalled();
+    // ensureWebGL on a hidden view would burn a slot from the fleet-wide
+    // context cap that a visible pane needs (cf. #10671).
+    expect(deps.ensureWebGL).not.toHaveBeenCalled();
+    expect(deps.reconcileRevealGeometry).not.toHaveBeenCalled();
+  });
+
+  it("reads no DOM geometry for a cached view", () => {
+    const managed = makeManaged({ isVisible: false });
+    const rectSpy = vi.fn(() => new DOMRect(0, 0, 800, 600));
+    managed.hostElement.getBoundingClientRect = rectSpy;
+    instances.set("t1", managed);
+    const deps = makeDeps(instances);
+    watchdog = new TerminalReconciliationWatchdog(deps);
+
+    emitCached();
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS * 5);
+
+    // The sweep's forced layout is the cost even when no repair follows.
+    expect(rectSpy).not.toHaveBeenCalled();
+  });
+
+  it("stops the interval while cached", () => {
+    instances.set("t1", makeManaged({ isVisible: false }));
+    const getInstances = vi.fn(() => instances.entries());
+    const deps = makeDeps(instances, { getInstances });
+    watchdog = new TerminalReconciliationWatchdog(deps);
+
+    emitCached();
+    getInstances.mockClear();
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS * 10);
+
+    expect(getInstances).not.toHaveBeenCalled();
+  });
+
+  it("a direct tick() while cached is a no-op", () => {
+    // tick() is reachable from visibilitychange and the reveal sweep, and a
+    // cleared interval can't retract an already-dispatched callback — so the
+    // guard has to live in the body, not only on the timer.
+    instances.set("t1", makeManaged({ isVisible: false }));
+    const deps = makeDeps(instances);
+    watchdog = new TerminalReconciliationWatchdog(deps);
+
+    emitCached();
+    watchdog.tick();
+
+    expect(deps.setVisible).not.toHaveBeenCalled();
+  });
+
+  it("rearms exactly one interval on warm activation", () => {
+    instances.set("t1", makeManaged({ isVisible: false }));
+    const deps = makeDeps(instances);
+    watchdog = new TerminalReconciliationWatchdog(deps);
+
+    emitCached();
+    emitWarmActivated();
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+
+    // Exactly once — a stacked second interval would repair twice per period.
+    expect(deps.setVisible).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not stack intervals when warm activation repeats", () => {
+    instances.set("t1", makeManaged({ isVisible: false }));
+    const deps = makeDeps(instances);
+    watchdog = new TerminalReconciliationWatchdog(deps);
+
+    emitWarmActivated();
+    emitWarmActivated();
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+
+    expect(deps.setVisible).toHaveBeenCalledTimes(1);
+  });
+
+  it("sweeps immediately on reveal instead of waiting out the interval", () => {
+    instances.set("t1", makeManaged({ isVisible: false }));
+    const deps = makeDeps(instances);
+    watchdog = new TerminalReconciliationWatchdog(deps);
+
+    emitCached();
+    expect(deps.setVisible).not.toHaveBeenCalled();
+
+    emitRevealed();
+
+    // Reveal is when stale state is most likely and most user-visible.
+    expect(deps.setVisible).toHaveBeenCalledWith("t1");
+  });
+
+  it("keeps document-hidden suppression independent of the cache signal", () => {
+    instances.set("t1", makeManaged({ isVisible: false }));
+    const deps = makeDeps(instances);
+    watchdog = new TerminalReconciliationWatchdog(deps);
+
+    emitWarmActivated();
+    setDocumentVisibility("hidden");
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+
+    expect(deps.setVisible).not.toHaveBeenCalled();
+  });
+
+  it("resumes normal reconciliation after a cached window ends", () => {
+    instances.set("t1", makeManaged({ isVisible: false }));
+    const deps = makeDeps(instances);
+    watchdog = new TerminalReconciliationWatchdog(deps);
+
+    emitCached();
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS * 3);
+    expect(deps.setVisible).not.toHaveBeenCalled();
+
+    emitWarmActivated();
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+
+    expect(deps.setVisible).toHaveBeenCalledWith("t1");
+  });
+
+  it("dispose() stops responding to lifecycle events", () => {
+    instances.set("t1", makeManaged({ isVisible: false }));
+    const deps = makeDeps(instances);
+    watchdog = new TerminalReconciliationWatchdog(deps);
+
+    watchdog.dispose();
+    watchdog = undefined;
+    emitWarmActivated();
+    emitRevealed();
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS * 5);
+
+    expect(deps.setVisible).not.toHaveBeenCalled();
   });
 });

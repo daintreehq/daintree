@@ -1,6 +1,7 @@
 import { Terminal } from "@xterm/xterm";
 import { TerminalRefreshTier } from "@/types";
 import { isSidebarMeasurementLocked } from "@/lib/layoutTransitionLock";
+import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 import { logDebug, logWarn } from "@/utils/logger";
 import { hasStreamingWrites } from "./TerminalResizeController";
 import type { ManagedTerminal } from "./types";
@@ -111,6 +112,7 @@ export interface ReconciliationWatchdogDeps {
 export class TerminalReconciliationWatchdog {
   private deps: ReconciliationWatchdogDeps;
   private intervalTimer: ReturnType<typeof setInterval> | undefined;
+  private readonly offViewLifecycle: () => void;
 
   private readonly _onVisibilityChange = (): void => {
     // The moment the document becomes visible again is when stale state is
@@ -138,9 +140,27 @@ export class TerminalReconciliationWatchdog {
   constructor(deps: ReconciliationWatchdogDeps) {
     this.deps = deps;
 
-    if (typeof setInterval === "function") {
-      this.intervalTimer = setInterval(() => this.tick(), WATCHDOG_INTERVAL_MS);
-    }
+    this.startSweeping();
+
+    // A cached view keeps reporting visibilityState "visible", so `tick`'s own
+    // guard never fires there and every terminal's host still has real,
+    // viewport-passing rect geometry — the sweep classifies panes in a hidden
+    // project as on-screen and issues real repairs against them (#11212).
+    // Stopping the interval removes both the idle wakeups and that whole class
+    // of wasted work; `tick` is gated too, for the callers that aren't this
+    // timer.
+    this.offViewLifecycle = subscribeProjectViewLifecycle((phase) => {
+      if (phase === "cached") {
+        this.stopSweeping();
+        return;
+      }
+      this.startSweeping();
+      // Same reasoning as the visibilitychange sweep: reveal is the moment
+      // stale state is most likely and most visible, so reconcile now rather
+      // than waiting out the rest of the interval.
+      if (phase === "revealed") this.tick();
+    });
+
     if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
       document.addEventListener("visibilitychange", this._onVisibilityChange);
       // Capture phase, registered on document: runs before React's
@@ -152,6 +172,19 @@ export class TerminalReconciliationWatchdog {
     }
   }
 
+  /** Idempotent — a rearm while already sweeping keeps the existing timer. */
+  private startSweeping(): void {
+    if (this.intervalTimer !== undefined) return;
+    if (typeof setInterval !== "function") return;
+    this.intervalTimer = setInterval(() => this.tick(), WATCHDOG_INTERVAL_MS);
+  }
+
+  private stopSweeping(): void {
+    if (this.intervalTimer === undefined) return;
+    clearInterval(this.intervalTimer);
+    this.intervalTimer = undefined;
+  }
+
   /**
    * One reconciliation sweep. Phase 1 batches all DOM geometry reads (rects
    * are pure reads; no repair writes layout until the read pass completes).
@@ -161,6 +194,10 @@ export class TerminalReconciliationWatchdog {
    * re-verification beats issuing several at once.
    */
   tick(): void {
+    // Guarded in the body, not just by stopping the interval: this is reachable
+    // from visibilitychange and the reveal sweep, and clearing an interval
+    // can't retract a callback the event loop has already picked up.
+    if (isProjectViewCached()) return;
     if (typeof document === "undefined" || document.visibilityState !== "visible") return;
     // Mid-drag, mid-layout-animation, and pre-hydration (#10827) geometry is
     // not ground truth, and repairs during any of them would fight legitimate
@@ -582,10 +619,8 @@ export class TerminalReconciliationWatchdog {
   }
 
   dispose(): void {
-    if (this.intervalTimer !== undefined) {
-      clearInterval(this.intervalTimer);
-      this.intervalTimer = undefined;
-    }
+    this.stopSweeping();
+    this.offViewLifecycle();
     if (typeof document !== "undefined" && typeof document.removeEventListener === "function") {
       document.removeEventListener("visibilitychange", this._onVisibilityChange);
       document.removeEventListener("pointerdown", this._onPointerDownCapture, { capture: true });

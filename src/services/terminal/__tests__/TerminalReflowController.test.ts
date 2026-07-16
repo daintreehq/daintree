@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalReflowController, forceXtermReflow } from "../TerminalReflowController";
+import { __resetProjectViewCacheStateForTests } from "@/lib/viewCacheState";
 import type { ManagedTerminal } from "../types";
 
 vi.mock("@/utils/logger", () => ({
@@ -411,5 +412,175 @@ describe("TerminalReflowController dispose / listener cleanup", () => {
     expect(paddingHistory(managed)).toContain("0.01px");
 
     controller.dispose();
+  });
+});
+
+describe("TerminalReflowController — cached project view (#11212)", () => {
+  let emitCached: () => void;
+  let emitWarmActivated: () => void;
+  let emitRevealed: () => void;
+  let controller: TerminalReflowController | undefined;
+
+  function reflowCount(managed: ManagedTerminal): number {
+    // forceXtermReflow writes paddingTop twice per reflow (jitter + restore).
+    return paddingHistory(managed).length;
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    const cachedHandlers: Array<() => void> = [];
+    const warmHandlers: Array<() => void> = [];
+    const revealedHandlers: Array<() => void> = [];
+    (window as unknown as { electron: unknown }).electron = {
+      app: {
+        onViewCached: (cb: () => void) => {
+          cachedHandlers.push(cb);
+          return vi.fn();
+        },
+        onViewWarmActivated: (cb: () => void) => {
+          warmHandlers.push(cb);
+          return vi.fn();
+        },
+        onViewRevealed: (cb: () => void) => {
+          revealedHandlers.push(cb);
+          return vi.fn();
+        },
+      },
+    };
+    emitCached = () => cachedHandlers.forEach((h) => h());
+    emitWarmActivated = () => warmHandlers.forEach((h) => h());
+    emitRevealed = () => revealedHandlers.forEach((h) => h());
+    // viewCacheState arms on first use and persists for the module's life.
+    // Earlier describes in this file construct controllers before the stub
+    // exists, arming it against no bridge — reset so this suite's
+    // subscriptions bind to the emitters above.
+    __resetProjectViewCacheStateForTests();
+  });
+
+  afterEach(() => {
+    controller?.dispose();
+    controller = undefined;
+    __resetProjectViewCacheStateForTests();
+    vi.useRealTimers();
+    delete (window as unknown as { electron?: unknown }).electron;
+  });
+
+  it("maybeReflow no-ops while cached even when called directly", () => {
+    // The per-write path (onWriteParsedReflow → maybeReflowTerminal) calls this
+    // directly, so gating only the heartbeat would leave a streaming agent in a
+    // cached view forcing layout on every parsed write.
+    const managed = makeManaged();
+    controller = new TerminalReflowController({ getInstances: () => [managed] });
+
+    emitCached();
+    // Put the throttle window well in the past: under fake timers
+    // performance.now() is 0, so the default lastReflowAt of 0 would suppress
+    // the reflow on its own and this would pass for the wrong reason.
+    managed.lastReflowAt = -10_000;
+    controller.maybeReflow(managed);
+
+    expect(reflowCount(managed)).toBe(0);
+  });
+
+  it("still reflows via the per-write path once the view is active again", () => {
+    const managed = makeManaged();
+    controller = new TerminalReflowController({ getInstances: () => [managed] });
+
+    emitCached();
+    managed.lastReflowAt = -10_000;
+    controller.maybeReflow(managed);
+    expect(reflowCount(managed)).toBe(0);
+
+    emitWarmActivated();
+    managed.lastReflowAt = -10_000;
+    controller.maybeReflow(managed);
+
+    expect(reflowCount(managed)).toBeGreaterThan(0);
+  });
+
+  it("stops the heartbeat while cached", () => {
+    const managed = makeManaged();
+    const getInstances = vi.fn(() => [managed]);
+    controller = new TerminalReflowController({ getInstances });
+
+    emitCached();
+    getInstances.mockClear();
+    vi.advanceTimersByTime(30_000);
+
+    // A cached view's visibilityState stays "visible", so the heartbeat's own
+    // check can't stop it — only clearing the interval removes the wakeup.
+    expect(getInstances).not.toHaveBeenCalled();
+  });
+
+  it("rearms exactly one heartbeat on warm activation", () => {
+    const managed = makeManaged();
+    const getInstances = vi.fn(() => [managed]);
+    controller = new TerminalReflowController({ getInstances });
+
+    emitCached();
+    emitWarmActivated();
+    getInstances.mockClear();
+    vi.advanceTimersByTime(3000);
+
+    // Exactly one sweep — a stacked second interval would double it.
+    expect(getInstances).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not stack a second heartbeat when warm activation repeats", () => {
+    const managed = makeManaged();
+    const getInstances = vi.fn(() => [managed]);
+    controller = new TerminalReflowController({ getInstances });
+
+    emitWarmActivated();
+    emitWarmActivated();
+    emitWarmActivated();
+    getInstances.mockClear();
+    vi.advanceTimersByTime(3000);
+
+    expect(getInstances).toHaveBeenCalledTimes(1);
+  });
+
+  it("sweeps immediately on reveal rather than waiting out the heartbeat", () => {
+    const managed = makeManaged();
+    controller = new TerminalReflowController({ getInstances: () => [managed] });
+
+    emitCached();
+    emitWarmActivated();
+    managed.lastReflowAt = -10_000;
+    emitRevealed();
+
+    // A renderer paused while cached must not stay blank for up to 3s at the
+    // exact moment the user is looking at it.
+    expect(reflowCount(managed)).toBeGreaterThan(0);
+  });
+
+  it("keeps document-hidden suppression independent of the cache signal", () => {
+    const managed = makeManaged();
+    const getInstances = vi.fn(() => [managed]);
+    controller = new TerminalReflowController({ getInstances });
+
+    const spy = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    emitWarmActivated();
+    getInstances.mockClear();
+    vi.advanceTimersByTime(3000);
+
+    // Window minimize is a separate suppression signal — being un-cached must
+    // not override it.
+    expect(getInstances).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("dispose() stops responding to lifecycle events", () => {
+    const managed = makeManaged();
+    const getInstances = vi.fn(() => [managed]);
+    controller = new TerminalReflowController({ getInstances });
+
+    controller.dispose();
+    controller = undefined;
+    emitWarmActivated();
+    getInstances.mockClear();
+    vi.advanceTimersByTime(30_000);
+
+    expect(getInstances).not.toHaveBeenCalled();
   });
 });

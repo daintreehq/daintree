@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalWriteController, WriteControllerDeps } from "../TerminalWriteController";
+import { __resetProjectViewCacheStateForTests } from "@/lib/viewCacheState";
 import type { ManagedTerminal } from "../types";
 
 vi.mock("@/utils/performance", () => ({
@@ -515,5 +516,251 @@ describe("TerminalWriteController.write", () => {
       expect(term.write).toHaveBeenCalledTimes(1);
       expect(typeof term.write.mock.calls[0]![1]).toBe("function");
     });
+  });
+});
+
+describe("TerminalWriteController — cached project view (#11212)", () => {
+  let store: Map<string, ManagedTerminal>;
+  let deps: WriteControllerDeps;
+  let controller: TerminalWriteController;
+  let managed: ManagedTerminal;
+  let emitCached: () => void;
+  let emitWarmActivated: () => void;
+  let emitRevealed: () => void;
+  let rafQueue: Map<number, FrameRequestCallback>;
+  let rafSpy: ReturnType<typeof vi.fn>;
+  let cancelRafSpy: ReturnType<typeof vi.fn>;
+
+  /** Run every queued frame callback, as one real frame would. */
+  function flushFrames(): void {
+    const pending = [...rafQueue];
+    rafQueue.clear();
+    for (const [, cb] of pending) cb(0);
+  }
+
+  function markerCalls(m: ManagedTerminal): number {
+    return (m.terminal as unknown as MockTerminal).registerMarker.mock.calls.length;
+  }
+
+  beforeEach(() => {
+    const cachedHandlers: Array<() => void> = [];
+    const warmHandlers: Array<() => void> = [];
+    const revealedHandlers: Array<() => void> = [];
+    (window as unknown as { electron: unknown }).electron = {
+      app: {
+        onViewCached: (cb: () => void) => {
+          cachedHandlers.push(cb);
+          return vi.fn();
+        },
+        onViewWarmActivated: (cb: () => void) => {
+          warmHandlers.push(cb);
+          return vi.fn();
+        },
+        onViewRevealed: (cb: () => void) => {
+          revealedHandlers.push(cb);
+          return vi.fn();
+        },
+      },
+    };
+    emitCached = () => cachedHandlers.forEach((h) => h());
+    emitWarmActivated = () => warmHandlers.forEach((h) => h());
+    emitRevealed = () => revealedHandlers.forEach((h) => h());
+    // viewCacheState arms on first use and persists for the module's life.
+    // Earlier describes in this file construct controllers before the stub
+    // exists, arming it against no bridge — reset so this suite's
+    // subscriptions bind to the emitters above.
+    __resetProjectViewCacheStateForTests();
+
+    // Queue-backed rAF with real incrementing ids. Deliberately NOT synchronous:
+    // a sync stub would run the callback before the id is assigned and defeat
+    // the id-based cancel guard this suite exercises.
+    rafQueue = new Map();
+    let nextRafId = 1;
+    rafSpy = vi.fn((cb: FrameRequestCallback) => {
+      const id = nextRafId++;
+      rafQueue.set(id, cb);
+      return id;
+    });
+    cancelRafSpy = vi.fn((id: number) => {
+      rafQueue.delete(id);
+    });
+    vi.stubGlobal("requestAnimationFrame", rafSpy);
+    vi.stubGlobal("cancelAnimationFrame", cancelRafSpy);
+
+    store = new Map<string, ManagedTerminal>();
+    managed = makeManaged();
+    store.set("t1", managed);
+    deps = makeDeps(store);
+    controller = new TerminalWriteController(deps);
+  });
+
+  afterEach(() => {
+    controller.dispose();
+    __resetProjectViewCacheStateForTests();
+    vi.unstubAllGlobals();
+    delete (window as unknown as { electron?: unknown }).electron;
+  });
+
+  it("keeps the byte stream and every ledger live while cached", () => {
+    // The hard constraint from #10811/#4853: demoting a hidden view must never
+    // hold bytes. Ingest stays live, so no backlog exists to detonate on reveal.
+    emitCached();
+    controller.write("t1", "hello");
+
+    const term = managed.terminal as unknown as MockTerminal;
+    expect(term.write).toHaveBeenCalledWith("hello", expect.any(Function));
+    expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 5, 1);
+    expect(deps.acknowledgeData).toHaveBeenCalledWith("t1", 5);
+    expect(deps.notifyWriteComplete).toHaveBeenCalledWith("t1", 5);
+    expect(deps.incrementUnseen).toHaveBeenCalledWith("t1", false);
+  });
+
+  it("schedules no frame and allocates no marker for writes while cached", () => {
+    emitCached();
+    for (let i = 0; i < 50; i++) controller.write("t1", `chunk-${i}`);
+
+    expect(rafSpy).not.toHaveBeenCalled();
+    expect(markerCalls(managed)).toBe(0);
+  });
+
+  it("still schedules a frame per write burst while active", () => {
+    controller.write("t1", "a");
+    expect(rafSpy).toHaveBeenCalledTimes(1);
+
+    flushFrames();
+    expect(markerCalls(managed)).toBe(1);
+  });
+
+  it("coalesces a whole cached burst into exactly one refresh on reveal", () => {
+    emitCached();
+    for (let i = 0; i < 25; i++) controller.write("t1", `chunk-${i}`);
+    expect(markerCalls(managed)).toBe(0);
+
+    emitWarmActivated();
+
+    // registerMarker(0) marks the cursor as of the flush, so one settle on
+    // return lands where the last hidden-frame refresh would have.
+    expect(markerCalls(managed)).toBe(1);
+  });
+
+  it("flushes on warm-activated, so a superseded switch still settles", () => {
+    // Main only sends revealed while the view is still the active project;
+    // warm-activated is the signal that always arrives on reactivation.
+    emitCached();
+    controller.write("t1", "a");
+    emitWarmActivated();
+
+    expect(markerCalls(managed)).toBe(1);
+
+    // The later revealed pass finds an empty dirty set.
+    emitRevealed();
+    expect(markerCalls(managed)).toBe(1);
+  });
+
+  it("refreshes each dirty terminal exactly once on reveal", () => {
+    const second = makeManaged();
+    store.set("t2", second);
+
+    emitCached();
+    controller.write("t1", "a");
+    controller.write("t1", "b");
+    controller.write("t2", "c");
+    emitWarmActivated();
+
+    expect(markerCalls(managed)).toBe(1);
+    expect(markerCalls(second)).toBe(1);
+  });
+
+  it("does not refresh a terminal that saw no writes while cached", () => {
+    emitCached();
+    emitWarmActivated();
+
+    expect(markerCalls(managed)).toBe(0);
+  });
+
+  it("cancels an in-flight frame when the view is cached mid-burst", () => {
+    controller.write("t1", "a");
+    expect(rafQueue.size).toBe(1);
+
+    emitCached();
+
+    expect(cancelRafSpy).toHaveBeenCalledTimes(1);
+    expect(rafQueue.size).toBe(0);
+    expect(markerCalls(managed)).toBe(0);
+  });
+
+  it("a frame callback the loop already picked up cannot refresh once cached", () => {
+    // cancelAnimationFrame can't retract a callback already dispatched, so the
+    // gate has to be re-checked in the body.
+    controller.write("t1", "a");
+    const [, queued] = [...rafQueue][0]!;
+    rafQueue.clear();
+
+    emitCached();
+    queued(0);
+
+    expect(markerCalls(managed)).toBe(0);
+  });
+
+  it("re-arms frame scheduling after a cached window ends", () => {
+    controller.write("t1", "a");
+    emitCached();
+    rafSpy.mockClear();
+
+    emitWarmActivated();
+    controller.write("t1", "b");
+
+    expect(rafSpy).toHaveBeenCalledTimes(1);
+    flushFrames();
+    // One flush from the reveal settle, one from the post-reveal write.
+    expect(markerCalls(managed)).toBe(2);
+  });
+
+  it("skips a terminal replaced at the same id while cached", () => {
+    emitCached();
+    controller.write("t1", "a");
+
+    const replacement = makeManaged();
+    store.set("t1", replacement);
+    emitWarmActivated();
+
+    // The stale-identity guard (#4850) still holds across the deferral.
+    expect(markerCalls(managed)).toBe(0);
+    expect(markerCalls(replacement)).toBe(0);
+  });
+
+  it("skips a terminal that entered the alt buffer while cached", () => {
+    emitCached();
+    controller.write("t1", "a");
+    managed.isAltBuffer = true;
+    emitWarmActivated();
+
+    // Alt-buffer panes are excluded from markers by design; the next
+    // normal-buffer write re-dirties them.
+    expect(markerCalls(managed)).toBe(0);
+  });
+
+  it("forget() releases a terminal destroyed during the cached window", () => {
+    // Without this the dirty set — now held for the whole cached window rather
+    // than one frame — keeps a killed agent's xterm buffer reachable until the
+    // next reveal.
+    emitCached();
+    controller.write("t1", "a");
+
+    controller.forget("t1");
+    store.delete("t1");
+    emitWarmActivated();
+
+    expect(markerCalls(managed)).toBe(0);
+  });
+
+  it("dispose() drops the pending set and stops responding to lifecycle events", () => {
+    emitCached();
+    controller.write("t1", "a");
+
+    controller.dispose();
+    emitWarmActivated();
+
+    expect(markerCalls(managed)).toBe(0);
   });
 });
