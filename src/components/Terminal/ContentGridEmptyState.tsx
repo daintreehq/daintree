@@ -19,11 +19,17 @@ import { LauncherQuickActions } from "./LauncherQuickActions";
 
 const PATH_TRUNCATE_LENGTH = 52;
 
+// Marks a section as carrying the entry, for the two things that need to find
+// one: the reduce-motion block in `index.css` and `replaySectionEntries` below.
+// Shared so those two cannot drift apart.
+const SECTION_ENTRY_MARKER = "launcher-section-enter";
+
 // Entry motion for each launcher section — the column arrives as a sequence
 // rather than one flat block. Static classes, so the animation plays once when
 // a section enters the DOM and never replays on re-render; a section whose
 // condition flips later (recipes finish loading, the pulse is unhidden) simply
-// runs its own entry then.
+// runs its own entry then. A project switch re-enters nothing, which is why the
+// reveal below has to replay these by hand.
 //
 // Two suppressors, both needed, exactly as `ContentFadeIn` does it:
 // `motion-safe:` covers the OS preference, and the `launcher-section-enter`
@@ -38,10 +44,6 @@ const PATH_TRUNCATE_LENGTH = 52;
 // wrappers it lands on CSS's `all` default — an every-property transition
 // nobody asked for. Setting `--tw-animation-duration` keeps the transition set
 // empty, for the same reason the ladder below avoids `delay-*`.
-// Also the hook the reveal replay queries by, so the class the reduce-motion
-// block neutralizes and the class the replay restarts cannot drift apart.
-const SECTION_ENTRY_MARKER = "launcher-section-enter";
-
 const SECTION_ENTRY = `${SECTION_ENTRY_MARKER} motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-1 motion-safe:[--tw-animation-duration:var(--duration-200)]`;
 
 // The stagger ladder. Sequencing IS the signal here, so the per-step delay is a
@@ -81,22 +83,26 @@ function isMotionSuppressed(): boolean {
   );
 }
 
-// Restart each section's own entry, keeping its place on the stagger ladder: the
-// delay lives in a custom property the animation re-reads, so a cancel/play pair
-// in one tick replays the ladder rather than collapsing it. `fill-mode-backwards`
-// makes cancel() paint the pre-entry state, so no section flashes at rest first.
+// Restart each section's entry by tearing the animation down and handing it
+// straight back to the class. NOT WAAPI `cancel()`/`play()`: `getAnimations()`
+// returns only animations that are current or in effect, and an entry that has
+// finished under `fill-mode: backwards` — which fills before its delay, never
+// after — is neither. It omits precisely the spent entries this replays, so it
+// would iterate nothing and silently do nothing.
 //
-// Queried per section and restarted through each element's OWN animations —
-// `getAnimations()` without `subtree` — because the launcher's descendants carry
-// unrelated motion (RotatingTip's fade, pulse skeletons) that must keep running
-// on its own timeline.
+// Clearing the override rather than naming the keyframes back keeps them in CSS,
+// and the fresh animation re-reads `--tw-animation-delay`, so the ladder is
+// preserved. Reading a layout property in between is what forces the teardown to
+// land, rather than both writes collapsing into one style resolution.
+//
+// Queried per section, so the launcher's descendants (RotatingTip's fade, pulse
+// skeletons) keep their own timelines.
 function replaySectionEntries(container: HTMLElement | null): void {
   if (!container || isMotionSuppressed()) return;
-  for (const section of container.querySelectorAll(`.${SECTION_ENTRY_MARKER}`)) {
-    for (const animation of section.getAnimations()) {
-      animation.cancel();
-      animation.play();
-    }
+  for (const section of container.querySelectorAll<HTMLElement>(`.${SECTION_ENTRY_MARKER}`)) {
+    section.style.animationName = "none";
+    void section.offsetWidth;
+    section.style.animationName = "";
   }
 }
 
@@ -165,51 +171,25 @@ export function ContentGridEmptyState({
   // switch, by contrast, remounts this component and replays for free). Nothing
   // renders differently at reveal either, so the replay has to be imperative.
   //
-  // `app:view-revealed` is the moment to hang it on: ProjectViewManager sends it
-  // only once the anti-flash bridge is detached and this view is the foreground
-  // surface, which is exactly when an entry animation is worth spending. Cold
-  // switches need no replay — their view mounts this component fresh, after the
-  // bridge is gone, so the natural entry is already the one the user sees.
+  // `app:view-revealed` is both the right moment and a safe one to act on
+  // synchronously: main sends it only once the warm paint gate has run, the
+  // anti-flash bridge is detached and the view is the invalidated foreground
+  // surface. So the restart lands on a view that is already compositing, and
+  // waiting out frames here would only show the launcher at rest before yanking
+  // it back to replay.
   //
-  // WAAPI restart rather than a remount key: RecipeRunner, ProjectPulseStrip and
+  // Cold switches need no replay: an evicted project's view mounts this
+  // component fresh, and the paint gate they release on (`skeleton-painted`,
+  // fired before the module entry evaluates) detaches the bridge well before
+  // hydration mounts the canvas — so the natural entry is the one the user sees.
+  //
+  // Restarting rather than remounting: RecipeRunner, ProjectPulseStrip and
   // RotatingTip own fetches and rotation timers a remount would reset, and the
   // point is to replay a fade, not to rebuild the launcher.
   useEffect(() => {
-    let outerFrame: number | null = null;
-    let innerFrame: number | null = null;
-
-    const cancelPendingReplay = () => {
-      if (outerFrame !== null) cancelAnimationFrame(outerFrame);
-      if (innerFrame !== null) cancelAnimationFrame(innerFrame);
-      outerFrame = null;
-      innerFrame = null;
-    };
-
-    const offRevealed = window.electron?.app?.onViewRevealed?.(() => {
-      cancelPendingReplay();
-      // Two frames, as the paint signal itself waits: the reveal arrives while
-      // the compositor is still waking this view from occlusion, and a restart
-      // issued into that gap is dropped — the bug this animation already has on
-      // the occluded path, reintroduced.
-      outerFrame = requestAnimationFrame(() => {
-        outerFrame = null;
-        innerFrame = requestAnimationFrame(() => {
-          innerFrame = null;
-          replaySectionEntries(containerRef.current);
-        });
-      });
+    return window.electron?.app?.onViewRevealed?.(() => {
+      replaySectionEntries(containerRef.current);
     });
-
-    // A view parked back in the LRU cache stops painting mid-schedule, leaving a
-    // frame to fire on its next reveal — which would restart the entry a beat
-    // before that reveal's own replay and hitch it.
-    const offCached = window.electron?.app?.onViewCached?.(cancelPendingReplay);
-
-    return () => {
-      cancelPendingReplay();
-      offRevealed?.();
-      offCached?.();
-    };
   }, []);
 
   const branchLabel =

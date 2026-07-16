@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, act, cleanup } from "@testing-library/react";
+import { render, screen, cleanup } from "@testing-library/react";
 
 // Hoisted mutable state so each mock reads its slice at call time and a test can
 // reshape the stores before rendering.
@@ -67,67 +67,27 @@ const SCRATCH_PROPS = {
 } as const;
 
 /**
- * A stand-in for a running CSS animation. jsdom implements no part of the Web
- * Animations API, so the launcher's real entry has no timeline here — what these
- * tests can prove is the orchestration around it: which elements are restarted,
- * when, and whether a suppressor stops it. The restart itself (that cancel/play
- * replays the ladder rather than collapsing it) is browser behaviour, verified
- * against Chromium rather than asserted here.
+ * A CSS animation only restarts if the teardown is flushed before the class is
+ * handed the element back — two writes in one style resolution collapse into no
+ * change at all. jsdom runs no style engine and never lays out, so what stands in
+ * for "did it restart" is the sequence: a forced reflow observed while the
+ * animation was overridden to `none`, and the override released afterwards.
+ * Whether Chromium then replays the keyframes is browser behaviour, verified
+ * against the real engine rather than asserted here.
  */
-const makeAnimation = (log: string[], label: string) => ({
-  cancel: vi.fn(() => log.push(`${label}:cancel`)),
-  play: vi.fn(() => log.push(`${label}:play`)),
-});
-type FakeAnimation = ReturnType<typeof makeAnimation>;
-
-const animationsByElement = new Map<Element, FakeAnimation[]>();
-let queriedElements: Element[] = [];
-
-/** Frames run only when a test says so, so "not yet" is observable. */
-const pendingFrames = new Map<number, FrameRequestCallback>();
-let nextFrameId = 0;
-
-const flushFrame = () => {
-  const due = [...pendingFrames.values()];
-  pendingFrames.clear();
-  act(() => {
-    for (const cb of due) cb(0);
-  });
-};
+const reflowsWhileOverridden = new Map<Element, string>();
 
 let revealCallbacks: (() => void)[] = [];
-let cachedCallbacks: (() => void)[] = [];
 const offReveal = vi.fn();
-const offCached = vi.fn();
 
 const reveal = () => {
   for (const cb of revealCallbacks) cb();
 };
-const parkInCache = () => {
-  for (const cb of cachedCallbacks) cb();
-};
 
-/** Both frames of the reveal's double-rAF wait. */
-const settleReveal = () => {
-  reveal();
-  flushFrame();
-  flushFrame();
-};
-
-const sectionsIn = (container: HTMLElement): Element[] =>
-  [...container.querySelectorAll("div")].filter((el) =>
+const sectionsIn = (container: HTMLElement): HTMLElement[] =>
+  [...container.querySelectorAll<HTMLElement>("div")].filter((el) =>
     el.className.includes("launcher-section-enter")
   );
-
-/** Give every launcher section one animation to restart; returns the log. */
-const armSections = (container: HTMLElement): { log: string[]; sections: Element[] } => {
-  const log: string[] = [];
-  const sections = sectionsIn(container);
-  sections.forEach((section, i) => {
-    animationsByElement.set(section, [makeAnimation(log, `section-${i}`)]);
-  });
-  return { log, sections };
-};
 
 beforeEach(() => {
   h.panelIds = ["p1"];
@@ -136,39 +96,19 @@ beforeEach(() => {
   h.recipes.isLoading = false;
   h.dispatch.mockClear();
 
-  animationsByElement.clear();
-  queriedElements = [];
-  pendingFrames.clear();
-  nextFrameId = 0;
+  reflowsWhileOverridden.clear();
   revealCallbacks = [];
-  cachedCallbacks = [];
   offReveal.mockClear();
-  offCached.mockClear();
 
-  // Models the real contract rather than returning a flat list: `subtree` is the
-  // difference between restarting the six sections and restarting every animation
-  // underneath them, so a stub blind to it would pass either way.
-  Object.defineProperty(Element.prototype, "getAnimations", {
+  // jsdom lays nothing out, so offsetWidth is an inert 0 and the reflow it is
+  // meant to pin is unobservable. Recording the animation override in force when
+  // it is read makes the ordering the restart depends on testable.
+  Object.defineProperty(HTMLElement.prototype, "offsetWidth", {
     configurable: true,
-    writable: true,
-    value: function (this: Element, options?: { subtree?: boolean }) {
-      queriedElements.push(this);
-      const own = animationsByElement.get(this) ?? [];
-      if (!options?.subtree) return own;
-      const descendants = [...this.querySelectorAll("*")].flatMap(
-        (el) => animationsByElement.get(el) ?? []
-      );
-      return [...own, ...descendants];
+    get(this: HTMLElement) {
+      reflowsWhileOverridden.set(this, this.style.animationName);
+      return 0;
     },
-  });
-
-  vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback): number => {
-    const id = ++nextFrameId;
-    pendingFrames.set(id, cb);
-    return id;
-  });
-  vi.stubGlobal("cancelAnimationFrame", (id: number): void => {
-    pendingFrames.delete(id);
   });
 
   vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
@@ -179,17 +119,13 @@ beforeEach(() => {
         revealCallbacks.push(cb);
         return offReveal;
       },
-      onViewCached: (cb: () => void) => {
-        cachedCallbacks.push(cb);
-        return offCached;
-      },
     },
   });
 });
 
 afterEach(() => {
   cleanup();
-  delete (Element.prototype as Partial<Element>).getAnimations;
+  delete (HTMLElement.prototype as Partial<HTMLElement>).offsetWidth;
   document.body.removeAttribute("data-reduce-animations");
   document.body.removeAttribute("data-performance-mode");
   vi.unstubAllGlobals();
@@ -198,126 +134,111 @@ afterEach(() => {
 describe("ContentGridEmptyState — replaying the entry on project reveal (issue #11209)", () => {
   it("restarts every launcher section's entry when the view is revealed", () => {
     const { container } = render(<ContentGridEmptyState {...PROJECT_PROPS} />);
-    const { log, sections } = armSections(container);
+    const sections = sectionsIn(container);
     expect(sections.length).toBeGreaterThan(1);
 
-    settleReveal();
+    reveal();
 
-    // Each section replays, and cancel precedes play — the order that reapplies
-    // the pre-entry state instead of restarting from wherever it left off.
-    expect(log).toEqual(sections.flatMap((_, i) => [`section-${i}:cancel`, `section-${i}:play`]));
+    for (const section of sections) {
+      // Torn down and flushed…
+      expect(reflowsWhileOverridden.get(section)).toBe("none");
+      // …then handed back to the class, which still owns the keyframes and the
+      // section's rung on the delay ladder.
+      expect(section.style.animationName).toBe("");
+    }
   });
 
-  it("waits for the compositor to wake before restarting, rather than replaying into the reveal", () => {
-    const { container } = render(<ContentGridEmptyState {...PROJECT_PROPS} />);
-    const { log } = armSections(container);
+  it("replays on reveal rather than on render, which no switch changes", () => {
+    render(<ContentGridEmptyState {...PROJECT_PROPS} />);
+
+    expect(reflowsWhileOverridden.size).toBe(0);
 
     reveal();
-    expect(log).toEqual([]);
 
-    flushFrame();
-    expect(log).toEqual([]);
-
-    flushFrame();
-    expect(log.length).toBeGreaterThan(0);
+    expect(reflowsWhileOverridden.size).toBeGreaterThan(0);
   });
 
   it("leaves motion owned by the sections' descendants on its own timeline", () => {
-    const { container } = render(<ContentGridEmptyState {...PROJECT_PROPS} />);
-    const { log } = armSections(container);
-
-    // The tip rotates inside a section; a subtree-wide restart would reset it.
-    const descendantLog: string[] = [];
+    render(<ContentGridEmptyState {...PROJECT_PROPS} />);
+    // The tip rotates inside a section; restarting the subtree would reset it.
     const tip = screen.getByTestId("rotating-tip");
-    animationsByElement.set(tip, [makeAnimation(descendantLog, "tip")]);
 
-    settleReveal();
+    reveal();
 
-    expect(log.length).toBeGreaterThan(0);
-    expect(descendantLog).toEqual([]);
-    expect(queriedElements).not.toContain(tip);
+    expect(reflowsWhileOverridden.has(tip)).toBe(false);
+    expect(tip.style.animationName).toBe("");
   });
 
   it("replays for a scratch, which reaches the launcher through the same reveal", () => {
     const { container } = render(<ContentGridEmptyState {...SCRATCH_PROPS} />);
-    const { log } = armSections(container);
+    const sections = sectionsIn(container);
+    expect(sections.length).toBeGreaterThan(0);
 
-    settleReveal();
+    reveal();
 
-    expect(log.length).toBeGreaterThan(0);
+    for (const section of sections) {
+      expect(reflowsWhileOverridden.get(section)).toBe("none");
+    }
   });
 
-  it("collapses a reveal arriving mid-schedule into one replay", () => {
+  it("replays again on every subsequent reveal, not just the first", () => {
     const { container } = render(<ContentGridEmptyState {...PROJECT_PROPS} />);
-    const { log, sections } = armSections(container);
+    const [section] = sectionsIn(container);
 
     reveal();
-    flushFrame();
-    reveal(); // Supersedes the first, which is still a frame from restarting.
-    flushFrame();
-    flushFrame();
+    reflowsWhileOverridden.clear();
+    reveal();
 
-    expect(log).toEqual(sections.flatMap((_, i) => [`section-${i}:cancel`, `section-${i}:play`]));
+    expect(reflowsWhileOverridden.get(section!)).toBe("none");
   });
 
-  it("drops a replay for a view parked back in the cache before it could run", () => {
-    const { container } = render(<ContentGridEmptyState {...PROJECT_PROPS} />);
-    const { log } = armSections(container);
+  it("unsubscribes on unmount", () => {
+    const { unmount } = render(<ContentGridEmptyState {...PROJECT_PROPS} />);
 
-    reveal();
-    parkInCache();
-    flushFrame();
-    flushFrame();
-
-    expect(log).toEqual([]);
-  });
-
-  it("unsubscribes and abandons a pending replay on unmount", () => {
-    const { container, unmount } = render(<ContentGridEmptyState {...PROJECT_PROPS} />);
-    const { log } = armSections(container);
-
-    reveal();
     unmount();
-    flushFrame();
-    flushFrame();
 
-    expect(log).toEqual([]);
     expect(offReveal).toHaveBeenCalled();
-    expect(offCached).toHaveBeenCalled();
+  });
+
+  it("survives a reveal with no launcher to replay", () => {
+    render(
+      <ContentGridEmptyState
+        {...PROJECT_PROPS}
+        hasLaunchTarget={false}
+        isWorktreeInitialized={true}
+      />
+    );
+
+    expect(() => reveal()).not.toThrow();
+    expect(reflowsWhileOverridden.size).toBe(0);
   });
 
   describe("motion suppressors", () => {
     it("skips the replay under the OS reduced-motion preference", () => {
       vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: true }));
-      const { container } = render(<ContentGridEmptyState {...PROJECT_PROPS} />);
-      const { log } = armSections(container);
+      render(<ContentGridEmptyState {...PROJECT_PROPS} />);
 
-      settleReveal();
+      reveal();
 
-      expect(log).toEqual([]);
-      expect(queriedElements).toEqual([]);
+      expect(reflowsWhileOverridden.size).toBe(0);
     });
 
     it("skips the replay under the in-app reduce-animations toggle", () => {
       document.body.setAttribute("data-reduce-animations", "true");
-      const { container } = render(<ContentGridEmptyState {...PROJECT_PROPS} />);
-      const { log } = armSections(container);
+      render(<ContentGridEmptyState {...PROJECT_PROPS} />);
 
-      settleReveal();
+      reveal();
 
-      expect(log).toEqual([]);
-      expect(queriedElements).toEqual([]);
+      expect(reflowsWhileOverridden.size).toBe(0);
     });
 
     it("skips the replay under performance mode", () => {
       document.body.setAttribute("data-performance-mode", "true");
-      const { container } = render(<ContentGridEmptyState {...PROJECT_PROPS} />);
-      const { log } = armSections(container);
+      render(<ContentGridEmptyState {...PROJECT_PROPS} />);
 
-      settleReveal();
+      reveal();
 
-      expect(log).toEqual([]);
-      expect(queriedElements).toEqual([]);
+      expect(reflowsWhileOverridden.size).toBe(0);
     });
   });
 });
