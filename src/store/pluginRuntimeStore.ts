@@ -56,6 +56,13 @@ let unsubscribe: (() => void) | null = null;
 // Monotonic pull sequence: rapid provenance events can interleave list()
 // round-trips, and a slow older response must not overwrite a newer set.
 let pullSeq = 0;
+// Sequence of the newest response that actually *committed*. Staleness is
+// judged against what landed, not against what merely started: keying off the
+// latest started pull would let a rejected newer request discard an older
+// successful one, leaving the store empty when a good snapshot was in hand
+// (React Strict Mode double-invokes mount effects, so same-tick pull pairs are
+// routine in dev).
+let committedSeq = 0;
 
 async function pullPluginRuntimeSnapshot(
   set: (state: Partial<PluginRuntimeState>) => void
@@ -63,7 +70,8 @@ async function pullPluginRuntimeSnapshot(
   const seq = ++pullSeq;
   try {
     const list = await window.electron.plugin.list();
-    if (seq !== pullSeq) return;
+    if (seq <= committedSeq) return;
+    committedSeq = seq;
     const disabledPluginIds = new Set<string>();
     const pluginMetaById = new Map<string, PluginRuntimeMeta>();
     for (const p of list) {
@@ -129,6 +137,7 @@ export function _resetPluginRuntimeStoreForTest(): void {
   unsubscribe = null;
   initialized = false;
   pullSeq = 0;
+  committedSeq = 0;
   usePluginRuntimeStore.setState({
     disabledPluginIds: new Set<string>(),
     pluginMetaById: new Map<string, PluginRuntimeMeta>(),

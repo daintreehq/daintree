@@ -174,6 +174,30 @@ describe("usePluginRuntimeStore", () => {
     expect(state.disabledPluginIds.has("acme.stale")).toBe(false);
   });
 
+  // Staleness is judged on what committed, not what started. React Strict Mode
+  // replays mount effects, so same-tick pull pairs are routine — if the second
+  // rejects, the first must still be allowed to land.
+  it("keeps an in-flight snapshot that resolves after a newer pull rejected", async () => {
+    let resolveFirst: ((v: LoadedPluginInfo[]) => void) | undefined;
+    listMock
+      .mockReturnValueOnce(
+        new Promise<LoadedPluginInfo[]>((r) => {
+          resolveFirst = r;
+        })
+      )
+      .mockRejectedValueOnce(new Error("bridge down"));
+
+    usePluginRuntimeStore.getState().refresh(); // pull 1 — succeeds, but slowly
+    usePluginRuntimeStore.getState().refresh(); // pull 2 — supersedes, then fails
+
+    await vi.waitFor(() => expect(logErrorMock).toHaveBeenCalled());
+    resolveFirst?.([makePlugin({ id: "acme.a", devMode: true })]);
+
+    await vi.waitFor(() =>
+      expect(usePluginRuntimeStore.getState().pluginMetaById.get("acme.a")?.devMode).toBe(true)
+    );
+  });
+
   it("pulls and subscribes once across repeated init calls", async () => {
     listMock.mockResolvedValue([]);
 
