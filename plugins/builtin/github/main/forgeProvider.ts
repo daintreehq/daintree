@@ -341,21 +341,34 @@ export const githubForgeProvider: ForgeProviderImpl = {
     return `https://github.com/${repo.owner}/${repo.repo}/pull/${number}`;
   },
 
+  // GitHub's bare `/issues` list already scopes to `is:issue is:open`, so the
+  // default open filter with no search should link there directly rather than a
+  // raw `?q=is:open` search view (#11201). Once a search query is present the
+  // `is:issue` type qualifier is required to keep results scoped to issues and
+  // not leak PRs (GitHub's issue/PR search is unified). `is:closed`/`is:merged`
+  // have no bare-URL equivalent, so they stay as `q` qualifiers even without a
+  // query (#9986).
   buildIssuesUrl(repo: RepoRef, options?: { query?: string; state?: string }): string {
     const base = `https://github.com/${repo.owner}/${repo.repo}/issues`;
+    const query = options?.query;
+    const state = options?.state;
     const qParts: string[] = [];
-    if (options?.query) qParts.push(options.query);
-    if (options?.state && options.state !== "all") qParts.push(`is:${options.state}`);
+    if (query) qParts.push("is:issue", query);
+    if (state && state !== "all" && (state !== "open" || query)) qParts.push(`is:${state}`);
     const params = new URLSearchParams();
     if (qParts.length > 0) params.set("q", qParts.join(" "));
     return params.toString() ? `${base}?${params.toString()}` : base;
   },
 
+  // Mirrors buildIssuesUrl with the `is:pr` type qualifier; bare `/pulls`
+  // already scopes to `is:pr is:open`. See buildIssuesUrl for the rationale.
   buildPRsUrl(repo: RepoRef, options?: { query?: string; state?: string }): string {
     const base = `https://github.com/${repo.owner}/${repo.repo}/pulls`;
+    const query = options?.query;
+    const state = options?.state;
     const qParts: string[] = [];
-    if (options?.query) qParts.push(options.query);
-    if (options?.state && options.state !== "all") qParts.push(`is:${options.state}`);
+    if (query) qParts.push("is:pr", query);
+    if (state && state !== "all" && (state !== "open" || query)) qParts.push(`is:${state}`);
     const params = new URLSearchParams();
     if (qParts.length > 0) params.set("q", qParts.join(" "));
     return params.toString() ? `${base}?${params.toString()}` : base;
