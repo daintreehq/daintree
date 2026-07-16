@@ -475,7 +475,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * script), making this the authoritative snapshot a late subscriber seeds
      * from (#11212).
      */
-    isViewCached(): boolean;
+    isViewCached?(): boolean;
   };
   // menu is generated — see GeneratedElectronAPI.
   logs: {

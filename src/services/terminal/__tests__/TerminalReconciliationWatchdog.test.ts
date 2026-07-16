@@ -1139,8 +1139,10 @@ describe("TerminalReconciliationWatchdog — cached project view (#11212)", () =
   let emitCached: () => void;
   let emitWarmActivated: () => void;
   let emitRevealed: () => void;
+  let latchedCached = false;
 
   beforeEach(() => {
+    latchedCached = false;
     vi.useFakeTimers();
     instances = new Map();
     // The bug's precondition: a cached view keeps reporting "visible", so the
@@ -1168,6 +1170,10 @@ describe("TerminalReconciliationWatchdog — cached project view (#11212)", () =
           revealedHandlers.push(cb);
           return vi.fn();
         },
+        // Preload's latch. Setting this before constructing reproduces the
+        // switch-storm case where the view was already cached before this
+        // module ever evaluated, so no "cached" phase is ever delivered.
+        isViewCached: () => latchedCached,
       },
     };
     emitCached = () => cachedHandlers.forEach((h) => h());
@@ -1419,6 +1425,33 @@ describe("TerminalReconciliationWatchdog — cached project view (#11212)", () =
     vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
 
     expect(deps.setVisible).toHaveBeenCalledWith("t1");
+  });
+
+  it("does not arm the interval when constructed during a cached window", () => {
+    // The switch-storm case: cached before this module evaluated, so the state
+    // is seeded from preload's latch and no "cached" phase ever arrives.
+    latchedCached = true;
+    instances.set("t1", makeManaged({ isVisible: false }));
+    const getInstances = vi.fn(() => instances.entries());
+    const deps = makeDeps(instances, { getInstances });
+    watchdog = new TerminalReconciliationWatchdog(deps);
+
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS * 10);
+
+    expect(getInstances).not.toHaveBeenCalled();
+    expect(deps.setVisible).not.toHaveBeenCalled();
+  });
+
+  it("arms the interval on activation after being constructed while cached", () => {
+    latchedCached = true;
+    instances.set("t1", makeManaged({ isVisible: false }));
+    const deps = makeDeps(instances);
+    watchdog = new TerminalReconciliationWatchdog(deps);
+
+    emitWarmActivated();
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+
+    expect(deps.setVisible).toHaveBeenCalledTimes(1);
   });
 
   it("dispose() stops responding to lifecycle events", () => {

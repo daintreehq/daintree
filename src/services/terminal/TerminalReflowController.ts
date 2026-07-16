@@ -129,6 +129,10 @@ export class TerminalReflowController {
    */
   private startHeartbeat(): void {
     if (this.heartbeatTimer !== undefined) return;
+    // Construction can happen INSIDE a cached window: the module seeds its state
+    // from preload's latch, so there is no "cached" phase to stop a timer armed
+    // in the constructor, and it would tick unopposed until the view returns.
+    if (isProjectViewCached()) return;
     if (typeof setInterval !== "function") return;
     this.heartbeatTimer = setInterval(() => {
       // maybeReflow re-applies the full gate per terminal; this is the cheap

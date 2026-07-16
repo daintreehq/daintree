@@ -424,6 +424,7 @@ describe("TerminalReflowController — cached project view (#11212)", () => {
   let emitWarmActivated: () => void;
   let emitRevealed: () => void;
   let controller: TerminalReflowController | undefined;
+  let latchedCached = false;
 
   function reflowCount(managed: ManagedTerminal): number {
     // forceXtermReflow writes paddingTop twice per reflow (jitter + restore).
@@ -431,6 +432,7 @@ describe("TerminalReflowController — cached project view (#11212)", () => {
   }
 
   beforeEach(() => {
+    latchedCached = false;
     vi.useFakeTimers();
     // Explicit: jsdom does not report "visible" by default, and inheriting it
     // from an earlier test's stub would make this suite order-dependent (it
@@ -456,6 +458,10 @@ describe("TerminalReflowController — cached project view (#11212)", () => {
           revealedHandlers.push(cb);
           return vi.fn();
         },
+        // Preload's latch. Setting this before constructing reproduces the
+        // switch-storm case where the view was already cached before this
+        // module ever evaluated, so no "cached" phase is ever delivered.
+        isViewCached: () => latchedCached,
       },
     };
     emitCached = () => cachedHandlers.forEach((h) => h());
@@ -581,6 +587,33 @@ describe("TerminalReflowController — cached project view (#11212)", () => {
     // not override it.
     expect(getInstances).not.toHaveBeenCalled();
     spy.mockRestore();
+  });
+
+  it("does not arm the heartbeat when constructed during a cached window", () => {
+    // No "cached" phase arrives here — the module seeds from preload's latch —
+    // so the constructor's arm must consult the seeded state itself or the
+    // interval ticks unopposed until the view returns.
+    latchedCached = true;
+    const managed = makeManaged();
+    const getInstances = vi.fn(() => [managed]);
+    controller = new TerminalReflowController({ getInstances });
+
+    vi.advanceTimersByTime(REFLOW_HEARTBEAT_MS * 10);
+
+    expect(getInstances).not.toHaveBeenCalled();
+  });
+
+  it("arms the heartbeat on activation after being constructed while cached", () => {
+    latchedCached = true;
+    const managed = makeManaged();
+    const getInstances = vi.fn(() => [managed]);
+    controller = new TerminalReflowController({ getInstances });
+
+    emitWarmActivated();
+    getInstances.mockClear();
+    vi.advanceTimersByTime(REFLOW_HEARTBEAT_MS);
+
+    expect(getInstances).toHaveBeenCalledTimes(1);
   });
 
   it("dispose() stops responding to lifecycle events", () => {

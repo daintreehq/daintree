@@ -175,6 +175,10 @@ export class TerminalReconciliationWatchdog {
   /** Idempotent — a rearm while already sweeping keeps the existing timer. */
   private startSweeping(): void {
     if (this.intervalTimer !== undefined) return;
+    // See TerminalReflowController.startHeartbeat: a controller constructed
+    // during a cached window gets no "cached" phase, so the constructor's arm
+    // has to check the seeded state itself.
+    if (isProjectViewCached()) return;
     if (typeof setInterval !== "function") return;
     this.intervalTimer = setInterval(() => this.tick(), WATCHDOG_INTERVAL_MS);
   }
