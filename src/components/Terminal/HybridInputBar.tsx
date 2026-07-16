@@ -966,6 +966,17 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                     ref={(node) => {
                       editorHostRef.current = node;
                       compactEditorHostRef.current = node;
+                      // The Radix trigger swaps element type (Slot → Trigger)
+                      // when its lazy chunk resolves, remounting this host node
+                      // and orphaning CodeMirror's imperatively-attached DOM.
+                      // Re-adopt the editor only when it is genuinely detached
+                      // (isConnected === false) so the normal expand/collapse
+                      // reparent in useHostReparent is left untouched. The modal
+                      // host carries the mirror-image guard.
+                      const view = editorViewRef.current;
+                      if (node && view && !isExpanded && !view.dom.isConnected) {
+                        node.appendChild(view.dom);
+                      }
                     }}
                     className={cn("w-full min-h-[20px]", disabled && "pointer-events-none")}
                     style={{ color: inputBarColors.foreground }}
@@ -1054,7 +1065,20 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             <ContextMenu>
               <ContextMenuTrigger asChild onContextMenu={handleEditorContextMenu}>
                 <div
-                  ref={modalEditorHostRef}
+                  ref={(node) => {
+                    modalEditorHostRef.current = node;
+                    // Mirror of the compact host's guard: AppDialog is not a
+                    // Radix consumer, so this trigger can also mount in the
+                    // Slot state and remount (orphaning the editor) when the
+                    // chunk resolves. Re-adopt only when detached so the normal
+                    // reparent is untouched; this also closes the AppDialog
+                    // mount-order gap where the reparent effect could run
+                    // before this host exists.
+                    const view = editorViewRef.current;
+                    if (node && view && isExpanded && !view.dom.isConnected) {
+                      node.appendChild(view.dom);
+                    }
+                  }}
                   className="flex-1 min-h-[200px] overflow-auto text-daintree-text p-4"
                 />
               </ContextMenuTrigger>
