@@ -938,8 +938,8 @@ describe("ProjectViewManager — eviction safety", () => {
     const wcBEntry = managerWithLimit.getAllViews().find((v) => v.projectId === "proj-b");
     const wcB = wcBEntry?.view.webContents as unknown as ReturnType<typeof createMockWebContents>;
     mockGetAppMetrics.mockReturnValue([
-      { pid: wcA.osPid, memory: { privateBytes: 50 * 1024 } },
-      { pid: wcB.osPid, memory: { privateBytes: 800 * 1024 } },
+      { pid: wcA.osPid, memory: { workingSetSize: 50 * 1024, privateBytes: 0 } },
+      { pid: wcB.osPid, memory: { workingSetSize: 800 * 1024, privateBytes: 0 } },
     ] as unknown as Electron.ProcessMetric[]);
 
     await managerWithLimit.switchTo("proj-c", "/path/c");
@@ -1045,7 +1045,7 @@ describe("ProjectViewManager — eviction safety", () => {
     // not influence the sort — proj-a is the LRU pick and wins eviction
     // priority regardless of which side has metrics.
     mockGetAppMetrics.mockReturnValue([
-      { pid: wcA.osPid, memory: { privateBytes: 600 * 1024 } },
+      { pid: wcA.osPid, memory: { workingSetSize: 600 * 1024, privateBytes: 0 } },
     ] as unknown as Electron.ProcessMetric[]);
 
     await managerWithLimit.switchTo("proj-c", "/path/c");
@@ -1077,13 +1077,13 @@ describe("ProjectViewManager — eviction safety", () => {
     // proj-a is huge but has an active agent — must not be evicted.
     // proj-b is smaller but evictable.
     mockGetAppMetrics.mockReturnValue([
-      { pid: wcA.osPid, memory: { privateBytes: 900 * 1024 } },
+      { pid: wcA.osPid, memory: { workingSetSize: 900 * 1024, privateBytes: 0 } },
       {
         pid: (
           managerWithLimit.getAllViews().find((v) => v.projectId === "proj-b")?.view
             .webContents as unknown as ReturnType<typeof createMockWebContents>
         ).osPid,
-        memory: { privateBytes: 100 * 1024 },
+        memory: { workingSetSize: 100 * 1024, privateBytes: 0 },
       },
     ] as unknown as Electron.ProcessMetric[]);
     mockGetAllTerminals.mockResolvedValue([
@@ -1118,8 +1118,11 @@ describe("ProjectViewManager — eviction safety", () => {
     await managerWithLimit.switchTo("proj-b", "/path/b");
     await flushImmediates();
 
+    // macOS/Linux shape: privateBytes is reported as 0 (not undefined) off
+    // Windows, so a `privateBytes ?? workingSetSize` read resolves to 0 and
+    // silently drops memoryKb from every eviction line (#8646).
     mockGetAppMetrics.mockReturnValue([
-      { pid: wcA.osPid, memory: { privateBytes: 250 * 1024 } },
+      { pid: wcA.osPid, memory: { workingSetSize: 250 * 1024, privateBytes: 0 } },
     ] as unknown as Electron.ProcessMetric[]);
 
     // Sweep fresh: a background sample timer may have cached empty metrics
@@ -1197,9 +1200,9 @@ describe("ProjectViewManager — eviction safety", () => {
     // dropping to 2, the two oldest (a, b) evict and proj-c survives,
     // regardless of their memory footprint.
     mockGetAppMetrics.mockReturnValue([
-      { pid: wcA.osPid, memory: { privateBytes: 800 * 1024 } },
-      { pid: wcB.osPid, memory: { privateBytes: 100 * 1024 } },
-      { pid: wcC.osPid, memory: { privateBytes: 900 * 1024 } },
+      { pid: wcA.osPid, memory: { workingSetSize: 800 * 1024, privateBytes: 0 } },
+      { pid: wcB.osPid, memory: { workingSetSize: 100 * 1024, privateBytes: 0 } },
+      { pid: wcC.osPid, memory: { workingSetSize: 900 * 1024, privateBytes: 0 } },
     ] as unknown as Electron.ProcessMetric[]);
 
     managerWithLimit.setCachedViewLimit(2);
@@ -1588,9 +1591,12 @@ describe("ProjectViewManager — telemetry", () => {
     const wcB = manager.getAllViews().find((v) => v.projectId === "proj-b")?.view
       .webContents as unknown as ReturnType<typeof createMockWebContents>;
 
+    // macOS/Linux shape — privateBytes is 0 there, not undefined, so a
+    // `privateBytes ?? workingSetSize` read resolves to 0 and this sampler
+    // emits nothing at all rather than a zero (#8646).
     mockGetAppMetrics.mockReturnValue([
-      { pid: wcA.osPid, memory: { privateBytes: 250 * 1024 } },
-      { pid: wcB.osPid, memory: { privateBytes: 300 * 1024 } },
+      { pid: wcA.osPid, memory: { workingSetSize: 250 * 1024, privateBytes: 0 } },
+      { pid: wcB.osPid, memory: { workingSetSize: 300 * 1024, privateBytes: 0 } },
     ] as unknown as Electron.ProcessMetric[]);
 
     // Sweep fresh: a background sample timer may have cached empty metrics
@@ -1640,8 +1646,8 @@ describe("ProjectViewManager — telemetry", () => {
     mockGetAllWebContents.mockReturnValue([guest]);
 
     mockGetAppMetrics.mockReturnValue([
-      { pid: wcA.osPid, memory: { privateBytes: 250 * 1024 } },
-      { pid: guestPid, memory: { privateBytes: 400 * 1024 } },
+      { pid: wcA.osPid, memory: { workingSetSize: 250 * 1024, privateBytes: 0 } },
+      { pid: guestPid, memory: { workingSetSize: 400 * 1024, privateBytes: 0 } },
     ] as unknown as Electron.ProcessMetric[]);
 
     // Sweep fresh: a background sample timer may have cached empty metrics
@@ -1678,7 +1684,7 @@ describe("ProjectViewManager — telemetry", () => {
     manager.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     mockGetAppMetrics.mockReturnValue([
-      { pid: wcA.osPid, memory: { privateBytes: 250 * 1024 } },
+      { pid: wcA.osPid, memory: { workingSetSize: 250 * 1024, privateBytes: 0 } },
     ] as unknown as Electron.ProcessMetric[]);
 
     vi.mocked(logInfo).mockClear();
@@ -1751,7 +1757,7 @@ describe("ProjectViewManager — telemetry", () => {
     });
 
     mockGetAppMetrics.mockReturnValue([
-      { pid: wcBPid, memory: { privateBytes: 400 * 1024 } },
+      { pid: wcBPid, memory: { workingSetSize: 400 * 1024, privateBytes: 0 } },
     ] as unknown as Electron.ProcessMetric[]);
 
     // Sweep fresh: a background sample timer may have cached empty metrics
@@ -1824,7 +1830,7 @@ describe("ProjectViewManager — telemetry", () => {
     await flushImmediates();
 
     mockGetAppMetrics.mockReturnValue([
-      { pid: wcA.osPid, memory: { privateBytes: 250 * 1024 } },
+      { pid: wcA.osPid, memory: { workingSetSize: 250 * 1024, privateBytes: 0 } },
     ] as unknown as Electron.ProcessMetric[]);
 
     manager.dispose();
@@ -2453,10 +2459,27 @@ describe("ProjectViewManager — low-memory eviction", () => {
     await manager.switchTo("proj-c", "/path/c");
     await flushImmediates();
 
-    manager.reclaimCachedViewsUnderPressure();
+    const evicted = manager.reclaimCachedViewsUnderPressure();
 
     expect(manager.getAllViews().map((view) => view.projectId)).toEqual(["proj-c"]);
     expect(wcA.close).toHaveBeenCalled();
+    // The count is what makes a zero reclaim delta attributable upstream
+    // (#11211) — proj-a and proj-b both went.
+    expect(evicted).toBe(2);
+  });
+
+  it("pressure reclaim reports zero when only the active view is cached", async () => {
+    // Nothing is eligible, so the memory-pressure ladder must be able to tell
+    // "nothing to evict" apart from "evicted, but the metric saw no drop".
+    stubSystemMemoryInfo({ free: 2 * 1024 * 1024, purgeable: 0, total: 8 * 1024 * 1024 });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+    await flushImmediates();
+
+    expect(manager.reclaimCachedViewsUnderPressure()).toBe(0);
+    expect(wcA.close).not.toHaveBeenCalled();
   });
 
   it("periodic pressure check evicts cached views while idle — no project switch needed", async () => {
