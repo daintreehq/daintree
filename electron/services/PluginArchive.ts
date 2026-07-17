@@ -275,10 +275,27 @@ export async function computeArchiveHash(archivePath: string): Promise<string> {
  */
 function openZip(archivePath: string): Promise<yauzl.ZipFile> {
   return new Promise((resolve, reject) => {
-    yauzl.open(archivePath, { lazyEntries: true }, (err, zipfile) => {
-      if (err) return reject(err);
-      resolve(zipfile);
-    });
+    yauzl.open(
+      archivePath,
+      {
+        lazyEntries: true,
+        // Pin the security-relevant defaults rather than inheriting them, so a
+        // future yauzl bump can't silently weaken a guard. `validateEntrySizes`
+        // enforces each entry's decompressed length against its header — the
+        // cumulative-size zip-bomb guard below trusts it. `strictFileNames`
+        // rejects backslash/invalid-char names at parse time (yauzl otherwise
+        // rewrites `\` to `/` before we ever see the name), enforcing the
+        // `.dntr` POSIX-forward-slash contract at the source. `decodeStrings`
+        // keeps `entry.fileName` a decoded string, not a raw Buffer.
+        strictFileNames: true,
+        decodeStrings: true,
+        validateEntrySizes: true,
+      },
+      (err, zipfile) => {
+        if (err) return reject(err);
+        resolve(zipfile);
+      }
+    );
   });
 }
 
@@ -422,8 +439,10 @@ export async function extractPluginArchive(
         return fail(new Error(`Archive exceeds ${MAX_DNTR_ENTRIES} entry limit`));
       }
 
-      // Reject any raw name that isn't already POSIX-normalized — backslashes,
-      // leading slashes, and drive letters are always invalid in a `.dntr`.
+      // Reject any raw name that isn't already POSIX-normalized. Backslash and
+      // other invalid-char names are already rejected upstream by yauzl's
+      // `strictFileNames` (see openZip), so what this additionally catches is a
+      // leading `/` or `./` prefix that `normalizePath` would otherwise strip.
       if (entry.fileName !== name) {
         return fail(
           new Error(
@@ -463,9 +482,9 @@ export async function extractPluginArchive(
           const out = createWriteStream(resolved, { mode: 0o644 });
 
           // Abort the transfer if the entry stalls. `pipeline` destroys both
-          // streams on abort and rejects with this exact error, which flows to
-          // `fail()` below. The timer is reset on every chunk, so only a truly
-          // dead stream trips it.
+          // streams on abort, then rejects with an AbortError carrying this
+          // error, which flows to `fail()` below. The timer is reset on every
+          // chunk, so only a truly dead stream trips it.
           const controller = new AbortController();
           let timer: ReturnType<typeof setTimeout>;
           const resetTimer = () => {
@@ -502,19 +521,17 @@ export async function extractPluginArchive(
             (pipelineErr: unknown) => {
               clearTimer();
               activeTransfer = null;
-              // On abort, `pipeline` rejects with a generic AbortError that
-              // drops the reason we passed to `controller.abort()`, so recover
-              // it from the signal — that's where the entry-naming stall (or
-              // teardown) error lives. A genuine stream error leaves the signal
-              // un-aborted, so fall through to the pipeline's own error.
+              const err =
+                pipelineErr instanceof Error ? pipelineErr : new Error(String(pipelineErr));
+              // `pipeline` surfaces a genuine stream/fs failure as-is and only
+              // rejects with an AbortError when our abort was the sole cause —
+              // and that AbortError drops the reason we passed, so recover the
+              // entry-naming stall/teardown error from the signal. Discriminate
+              // on the rejection itself (not `signal.aborted`): a real error
+              // that merely raced the inactivity deadline must still win over
+              // the stall message.
               const reason = controller.signal.reason;
-              fail(
-                controller.signal.aborted && reason instanceof Error
-                  ? reason
-                  : pipelineErr instanceof Error
-                    ? pipelineErr
-                    : new Error(String(pipelineErr))
-              );
+              fail(err.name === "AbortError" && reason instanceof Error ? reason : err);
             }
           );
         });
