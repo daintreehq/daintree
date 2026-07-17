@@ -1,16 +1,87 @@
 // @vitest-environment jsdom
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PanelKindConfig } from "@shared/config/panelKindRegistry";
 
 // Stub presentational deps — the host's behavioral contract is the lazy
 // import + AbortController wiring, not the skeleton or fade-in chrome.
-vi.mock("@/components/Browser/BrowserPaneSkeleton", () => ({
-  BrowserPaneSkeleton: ({ label }: { label?: string }) => <div data-testid="skeleton">{label}</div>,
+vi.mock("@/components/ui/Skeleton", () => ({
+  Skeleton: ({ label }: { label?: string }) => <div data-testid="skeleton">{label}</div>,
+  SkeletonHint: () => null,
 }));
 vi.mock("@/components/ui/ContentFadeIn", () => ({
   ContentFadeIn: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
+
+// ContentPanel renders for real: it owns the click-to-focus wiring and the
+// chrome this suite asserts on, so a stand-in would make those behaviors
+// properties of the double instead of the host. Only its store/context graph is
+// stubbed — the same scaffold ContentPanel.focus.test.tsx uses. `panelKindHasPty`
+// and PanelHeader stay real so the focus gate and the close control are genuine.
+vi.mock("@/components/Terminal/TerminalContextMenu", () => ({
+  TerminalContextMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+vi.mock("@/hooks/useWorktreeStore", () => ({
+  useWorktreeStore: (selector: (s: { worktrees: Map<string, unknown> }) => unknown) =>
+    selector({ worktrees: new Map() }),
+}));
+vi.mock("@/hooks/useWorktreeColorMap", () => ({
+  useWorktreeColorMap: () => undefined,
+}));
+vi.mock("@/components/DragDrop", () => ({
+  useIsDragging: () => false,
+}));
+vi.mock("@/components/Layout/useDockBlockedState", () => ({
+  useDockBlockedState: () => null,
+}));
+vi.mock("@/utils/terminalAgentDisplayState", () => ({
+  getTerminalAgentDisplayState: () => undefined,
+}));
+vi.mock("@/components/Terminal/TerminalHeaderContent", () => ({
+  TerminalHeaderContent: () => null,
+}));
+vi.mock("@/store", () => ({
+  usePreferencesStore: (
+    selector: (s: { showGridAgentHighlights: boolean; showAgentTaskTitles: boolean }) => unknown
+  ) => selector({ showGridAgentHighlights: false, showAgentTaskTitles: true }),
+  usePanelStore: (selector: (s: { panelsById: Record<string, never> }) => unknown) =>
+    selector({ panelsById: {} }),
+}));
+vi.mock("@/components/ui/tooltip", () => ({
+  TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
+// Count live focus-registry owners per panel id while delegating to the real
+// registry — the duplicate-registration regression is invisible to the registry's
+// own API (last writer just wins), so it can only be caught at the seam.
+// `importOriginal` is spread back in: a bare factory would drop `focusPanelInput`
+// and every other export the panel graph imports from here.
+const focusRegistry = vi.hoisted(() => {
+  const live = new Map<string, number>();
+  return {
+    live,
+    liveCount: (id: string) => live.get(id) ?? 0,
+    reset: () => live.clear(),
+  };
+});
+
+vi.mock("@/components/Panel/panelFocusRegistry", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/components/Panel/panelFocusRegistry")>();
+  return {
+    ...actual,
+    registerPanelFocusHandler: (id: string, handler: () => boolean) => {
+      focusRegistry.live.set(id, (focusRegistry.live.get(id) ?? 0) + 1);
+      const release = actual.registerPanelFocusHandler(id, handler);
+      return () => {
+        focusRegistry.live.set(id, Math.max(0, (focusRegistry.live.get(id) ?? 0) - 1));
+        release();
+      };
+    },
+  };
+});
 
 // The subset of ErrorBoundary's contract the host relies on. Typed here rather
 // than cast at each read site — a cast would regress the per-rule
@@ -98,6 +169,7 @@ const onPanelKindsChangedMock = vi.fn();
 
 beforeEach(() => {
   boundaryProps.last = null;
+  focusRegistry.reset();
   onPanelKindsChangedMock.mockReset();
   onPanelKindsChangedMock.mockReturnValue(() => {});
   vi.stubGlobal("electron", undefined);
@@ -579,11 +651,20 @@ describe("makePluginViewHost", () => {
   });
 });
 
+/** The panel root ContentPanel renders — the host no longer owns one (#11228). */
+function panelRoot(container: HTMLElement): HTMLElement {
+  const root = container.querySelector<HTMLElement>('[data-panel-id="panel-1"]');
+  if (!root) throw new Error("panel root not rendered");
+  return root;
+}
+
 /**
- * The plugin host bypasses ContentPanel, so it owns its focus target. Focusing
- * the host root claims the keyboard in the parent document; it does not push
- * focus into the plugin's guest frame, and it must never pull focus out of a
- * plugin input the user is already typing in (#11133).
+ * Focus *delivery*: becoming the focused pane must move DOM focus, or the pane
+ * paints as selected while keystrokes land wherever they were before (#11133).
+ * ContentPanel now owns the focus target, so these assert against its root
+ * rather than a host-owned div. Focusing that root claims the keyboard in the
+ * parent document; it never pushes focus into the plugin's guest frame, and it
+ * must never pull focus out of a plugin input the user is already typing in.
  */
 describe("PluginViewHost reactive focus (#11133)", () => {
   it("claims DOM focus when the host becomes the focused pane", async () => {
@@ -617,7 +698,7 @@ describe("PluginViewHost reactive focus (#11133)", () => {
       );
     });
 
-    expect(document.activeElement).toBe(container.firstElementChild);
+    expect(document.activeElement).toBe(panelRoot(container));
     outside.remove();
   });
 
@@ -639,9 +720,8 @@ describe("PluginViewHost reactive focus (#11133)", () => {
       />
     );
 
-    const root = container.firstElementChild as HTMLElement;
     const guestInput = document.createElement("input");
-    root.appendChild(guestInput);
+    panelRoot(container).appendChild(guestInput);
     act(() => guestInput.focus());
 
     let accepted = false;
@@ -651,5 +731,162 @@ describe("PluginViewHost reactive focus (#11133)", () => {
 
     expect(accepted).toBe(true);
     expect(document.activeElement).toBe(guestInput);
+  });
+
+  it("registers exactly one focus handler for the panel id", async () => {
+    // The host used to call usePanelRootFocus itself. Now that ContentPanel
+    // wraps it, a surviving host-side call would be a second registration under
+    // one id — and the registry is last-writer-wins, so the two would silently
+    // clobber each other rather than fail loudly (#11132/#11150).
+    const { focusPanelInput } = await import("@/components/Panel/panelFocusRegistry");
+    const { makePluginViewHost } = await import("../PluginViewHost");
+    const Host = makePluginViewHost(makeConfig());
+
+    const { unmount } = render(
+      <Host
+        id="panel-1"
+        title="Dashboard"
+        isFocused={false}
+        onFocus={(): void => {}}
+        onClose={(): void => {}}
+      />
+    );
+
+    // Count live registrations, not calls: a registration that is added and
+    // released still nets to one owner, and counting this way stays correct if
+    // Strict Mode ever double-invokes the effect.
+    expect(focusRegistry.liveCount("panel-1")).toBe(1);
+    expect(focusPanelInput("panel-1")).toBe(true);
+
+    unmount();
+    expect(focusRegistry.liveCount("panel-1")).toBe(0);
+    expect(focusPanelInput("panel-1")).toBe(false);
+  });
+});
+
+/**
+ * The bug itself (#11228): a plugin panel rendered fine but never took part in
+ * click-based selection, so `focusedId` stayed on the previously focused agent
+ * and Cmd+W closed *that* instead. The chrome cases pin the other half — the
+ * shell has to outlive the plugin's own loading and crash states, or a wedged
+ * view is unclosable.
+ */
+describe("PluginViewHost panel integration (#11228)", () => {
+  const hostProps = {
+    id: "panel-1",
+    title: "Dashboard",
+    isFocused: false,
+    onClose: (): void => {},
+  };
+
+  it("selects the panel when a click bubbles out of the plugin's content", async () => {
+    const { makePluginViewHost } = await import("../PluginViewHost");
+    const Host = makePluginViewHost(makeConfig());
+    const onFocus = vi.fn<() => void>();
+
+    render(<Host {...hostProps} onFocus={onFocus} />);
+
+    // The skeleton stands in for plugin content here — the point is that a click
+    // inside the panel's body reaches ContentPanel's handler, which is exactly
+    // what the bare host div swallowed.
+    await waitFor(() => expect(screen.getByTestId("skeleton")).toBeTruthy());
+    screen.getByTestId("skeleton").click();
+
+    expect(onFocus).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the pane chrome mounted and closable while the plugin view is still loading", async () => {
+    const { makePluginViewHost } = await import("../PluginViewHost");
+    const Host = makePluginViewHost(makeConfig());
+    const onClose = vi.fn<() => void>();
+
+    const { container } = render(<Host {...hostProps} onClose={onClose} onFocus={() => {}} />);
+
+    await waitFor(() => expect(screen.getByTestId("skeleton")).toBeTruthy());
+    expect(panelRoot(container)).toBeTruthy();
+    expect(container.querySelector("[data-pane-chrome]")).toBeTruthy();
+
+    // Not just present — operable. A loading view must stay dismissable.
+    act(() => screen.getByTestId("panel-close").click());
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("keeps the pane chrome mounted and closable after the plugin view crashes", async () => {
+    // The structural claim of the fix: ContentPanel sits OUTSIDE the error
+    // boundary, so a thrown plugin view swaps only the content slot for the
+    // boundary fallback while the header and close control stay live. Without
+    // that, a crashed plugin view would be stranded open (#11228).
+    vi.doMock("react", async () => {
+      const actual = await vi.importActual<typeof import("react")>("react");
+      return {
+        ...actual,
+        lazy: () =>
+          function CrashingView(): never {
+            throw new Error("plugin view exploded on render");
+          },
+      };
+    });
+
+    const { makePluginViewHost } = await import("../PluginViewHost");
+    const Host = makePluginViewHost(makeConfig());
+    const onClose = vi.fn<() => void>();
+
+    const { container } = render(<Host {...hostProps} onClose={onClose} onFocus={() => {}} />);
+
+    // The mocked ErrorBoundary renders its reset sentinel once it catches.
+    await waitFor(() => expect(screen.getByTestId("reset")).toBeTruthy());
+    // Chrome coexists with the fallback rather than being replaced by it.
+    expect(panelRoot(container)).toBeTruthy();
+    expect(container.querySelector("[data-pane-chrome]")).toBeTruthy();
+
+    act(() => screen.getByTestId("panel-close").click());
+    expect(onClose).toHaveBeenCalled();
+    vi.doUnmock("react");
+  });
+
+  it("passes the plugin's own kind and the live panel title to the shell", async () => {
+    // Resolve the registry from the SAME post-reset module graph as the host —
+    // the suite calls vi.resetModules() between tests, so a statically imported
+    // registerPanelKind would write to a different instance than the one the
+    // dynamically imported ContentPanel reads (mirrors the focusPanelInput note
+    // above). Register the kind so the real chrome derivation resolves it to the
+    // panel branch, proving `kindId` (not a default or `props.kind`) reached
+    // ContentPanel end-to-end, via `data-runtime-*` on the panel root.
+    const { registerPanelKind, unregisterPanelKind } =
+      await import("@shared/config/panelKindRegistry");
+    registerPanelKind({
+      id: "acme.dashboard",
+      name: "Dashboard",
+      iconId: "gauge",
+      color: "#abcdef",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      extensionId: "acme",
+    });
+    try {
+      const { makePluginViewHost } = await import("../PluginViewHost");
+      const Host = makePluginViewHost(makeConfig());
+
+      // `buildPanelProps` supplies no `kind`, so the host must source it from its
+      // closure; the title has to be the instance's, not the kind's config name.
+      const { container } = render(
+        <Host {...hostProps} title="Renamed by the user" onFocus={() => {}} />
+      );
+
+      await waitFor(() => expect(screen.getByTestId("skeleton")).toBeTruthy());
+      const root = panelRoot(container);
+      // Non-PTY panel chrome, keyed off the plugin kind's registry entry — a
+      // wrong or defaulted kind would derive a different runtime kind/icon.
+      expect(root.getAttribute("data-runtime-kind")).toBe("panel");
+      expect(root.getAttribute("data-runtime-icon-id")).toBe("gauge");
+      // The header renders the title in more than one node (visible label plus
+      // the rename editor's prefill), so match within the chrome, not globally.
+      const chrome = container.querySelector<HTMLElement>("[data-pane-chrome]");
+      expect(chrome).toBeTruthy();
+      expect(within(chrome!).getAllByText("Renamed by the user").length).toBeGreaterThan(0);
+    } finally {
+      unregisterPanelKind("acme.dashboard");
+    }
   });
 });
