@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "path";
 import type { SimpleGit, SimpleGitProgressEvent } from "simple-git";
 import { detectWslPath } from "./wsl.js";
@@ -11,7 +13,7 @@ import { detectWslPath } from "./wsl.js";
 const simpleGitModule = import("simple-git");
 void simpleGitModule.catch(() => {});
 
-const SAFE_GIT_CONFIG = [
+const SAFE_GIT_CONFIG_BASE = [
   "core.fsmonitor=false",
   // keep reads an existing untracked-cache without creating one and without
   // stripping the extension on the next index write. fsmonitor (the daemon/
@@ -22,7 +24,6 @@ const SAFE_GIT_CONFIG = [
   "core.pager=cat",
   "protocol.ext.allow=never",
   "core.gitProxy=",
-  "core.hooksPath=",
   // Emit literal UTF-8 paths in porcelain/status output so non-ASCII filenames
   // flow through to IPC consumers unquoted (e.g. conflict detection on
   // `café.txt` would otherwise be returned as `"caf\303\251.txt"`).
@@ -36,17 +37,155 @@ const SAFE_GIT_CONFIG = [
 ] as const;
 
 /**
- * Git config overrides that neutralize dangerous .git/config directives.
- * Passed as -c flags to every git command, taking precedence over repo config.
+ * Path-independent half of the hardened profile. `core.hooksPath` is appended
+ * per call by `getHardenedGitConfig()` — it resolves an app-owned absolute
+ * directory that cannot be captured at module evaluation (see
+ * `resolveUserDataDir`).
  */
-export const HARDENED_GIT_CONFIG = [
-  ...SAFE_GIT_CONFIG,
+const HARDENED_GIT_CONFIG_BASE = [
+  ...SAFE_GIT_CONFIG_BASE,
   "core.askpass=",
   "credential.helper=",
   "core.sshCommand=",
 ] as const;
 
-export const AUTHENTICATED_GIT_CONFIG = [...SAFE_GIT_CONFIG] as const;
+const AUTHENTICATED_GIT_CONFIG_BASE = [...SAFE_GIT_CONFIG_BASE] as const;
+
+/**
+ * Hook directory for git running *inside* a WSL distro. `createWslHardenedGit`
+ * spawns `wsl.exe git`, so the Windows-side userData path is meaningless there:
+ * without a leading `/` Linux git would treat it as relative, which is the very
+ * bug this override exists to prevent (issue #11226). Git expands a leading `~`
+ * in `core.hooksPath` against the distro user's home at hook-dispatch time, so
+ * this resolves to an absolute, user-owned directory inside the distro without
+ * the Windows host having to probe for it.
+ *
+ * Not created eagerly: the WSL route only serves read-only status/divergence
+ * polling, and git blocks repo hooks against a missing directory just as well
+ * as an existing one.
+ */
+const WSL_GIT_HOOKS_PATH = "~/.daintree/git-hooks";
+
+let cachedGitHooksDir: string | null = null;
+let hooksDirWarned = false;
+
+/**
+ * Resolve the app-owned directory that holds the git hooks Daintree is willing
+ * to execute. Deliberately lazy — `hardenedGit.ts` is imported very early and
+ * very broadly, and `electron/setup/environment.ts` rewrites `userData` in dev
+ * *after* those imports, so a module-scope capture would pin the wrong path.
+ *
+ * Resolution order, each candidate rejected unless absolute:
+ *   1. `DAINTREE_USER_DATA` — the workspace-host UtilityProcess has no usable
+ *      `app` API and receives this from its fork env (`WorkspaceHostProcess`).
+ *   2. Electron's `userData` — the main process. `require` exists in the
+ *      bundled main (esbuild injects `createRequire`) but not under vitest,
+ *      where this throws and is intentionally swallowed.
+ *   3. The user's home directory — reachable only when neither of the above is
+ *      available (i.e. tests).
+ *
+ * Never falls back to `process.cwd()`: a CWD-relative hooks path is exactly the
+ * defect being fixed.
+ */
+function resolveUserDataDir(): string {
+  const fromEnv = process.env.DAINTREE_USER_DATA;
+  if (fromEnv && path.isAbsolute(fromEnv)) return fromEnv;
+  if (fromEnv) {
+    console.warn(`[hardenedGit] DAINTREE_USER_DATA is not absolute: ${fromEnv}, falling back`);
+  }
+
+  try {
+    // Dynamic require to avoid breaking tests that mock electron
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const electron = require("electron");
+    const userData: unknown = electron.app?.getPath("userData");
+    if (typeof userData === "string" && path.isAbsolute(userData)) return userData;
+  } catch {
+    // Not the main process (or no electron at all) — fall through.
+  }
+
+  const home = os.homedir();
+  if (home && path.isAbsolute(home)) return path.join(home, ".daintree");
+
+  throw new Error("[hardenedGit] Cannot resolve an absolute userData directory for core.hooksPath");
+}
+
+/**
+ * Absolute hooks directory, resolved and created once per process.
+ *
+ * `WorktreeMonitor` polls git status continuously, so the `mkdirSync` must not
+ * ride the hot path — the resolved value is memoized on first use.
+ *
+ * A creation failure is logged once and otherwise ignored: git blocks
+ * repo-supplied hooks against a non-existent absolute path (the security
+ * invariant holds regardless), and the directory only needs to exist so
+ * git-lfs can install its hooks somewhere other than a worktree root. Failing
+ * hard here would take every git operation down over a permissions hiccup.
+ */
+function getGitHooksDir(): string {
+  if (cachedGitHooksDir !== null) return cachedGitHooksDir;
+
+  const dir = path.join(resolveUserDataDir(), "git-hooks");
+  try {
+    // 0o700: git dispatches whatever lives here for every repo Daintree
+    // touches, so it must not be writable by other local users.
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  } catch (e) {
+    if (!hooksDirWarned) {
+      hooksDirWarned = true;
+      console.warn(`[hardenedGit] Could not create git hooks directory: ${dir}`, e);
+    }
+  }
+  cachedGitHooksDir = dir;
+  return dir;
+}
+
+/**
+ * Git parses `-c key=value` values with backslash escape sequences, so a raw
+ * Windows path risks mangling (`C:\Users` → `C:Users`). Git accepts forward
+ * slashes on every platform. POSIX paths pass through untouched — a backslash
+ * there is a legal filename character, not a separator.
+ */
+export function toGitConfigPath(dir: string, platform: NodeJS.Platform = process.platform): string {
+  return platform === "win32" ? dir.replace(/\\/g, "/") : dir;
+}
+
+function hooksPathEntry(hooksPath: string, platform?: NodeJS.Platform): string {
+  return `core.hooksPath=${toGitConfigPath(hooksPath, platform)}`;
+}
+
+/**
+ * Git config overrides that neutralize dangerous .git/config directives.
+ * Passed as -c flags to every git command, taking precedence over repo config.
+ *
+ * `core.hooksPath` points at an app-owned absolute directory rather than being
+ * blanked. An empty value is relative, and git-lfs resolves it against its own
+ * CWD when self-installing its hooks — during `git worktree add` that CWD is
+ * the new worktree root, so four hook files landed there as untracked litter
+ * (issue #11226). An absolute path still overrides (and therefore blocks) any
+ * repo-supplied `.git/hooks` — the invariant from #3742 — while giving git-lfs
+ * a stable home so its `pre-push` object upload keeps working.
+ *
+ * The directory is shared across every repo Daintree touches: git-lfs installs
+ * its hooks there once, and they run (as no-ops) for non-LFS repos too. That is
+ * the deliberate tradeoff recorded in #11226.
+ */
+export function getHardenedGitConfig(platform?: NodeJS.Platform): readonly string[] {
+  return [...HARDENED_GIT_CONFIG_BASE, hooksPathEntry(getGitHooksDir(), platform)];
+}
+
+/**
+ * Authenticated profile. `extraConfig` is placed *before* the hooks entry: git
+ * takes the last `-c` for a single-valued key, so a caller cannot override the
+ * hook enforcement path, accidentally or otherwise.
+ */
+function getAuthenticatedGitConfig(extraConfig?: string[], platform?: NodeJS.Platform): string[] {
+  return [
+    ...AUTHENTICATED_GIT_CONFIG_BASE,
+    ...(extraConfig ?? []),
+    hooksPathEntry(getGitHooksDir(), platform),
+  ];
+}
 
 const UNSAFE_FLAGS = {
   allowUnsafeAskPass: true,
@@ -198,7 +337,7 @@ export async function createHardenedGit(
   const { simpleGit } = await simpleGitModule;
   return simpleGit({
     baseDir: cwd,
-    config: [...HARDENED_GIT_CONFIG],
+    config: [...getHardenedGitConfig(platform)],
     timeout: { block: GIT_BLOCK_TIMEOUT_MS },
     ...(signal ? { abort: signal } : {}),
     unsafe: UNSAFE_FLAGS,
@@ -278,7 +417,11 @@ export async function createWslHardenedGit(
   return simpleGit({
     baseDir: uncPath,
     binary: ["wsl.exe", "git"],
-    config: [...HARDENED_GIT_CONFIG],
+    // The Windows-side hooks directory is not addressable from inside the
+    // distro, so this route carries its own POSIX path (see
+    // WSL_GIT_HOOKS_PATH). Non-path hardening is shared with the native
+    // profile.
+    config: [...HARDENED_GIT_CONFIG_BASE, `core.hooksPath=${WSL_GIT_HOOKS_PATH}`],
     timeout: { block: GIT_BLOCK_TIMEOUT_MS },
     ...(signal ? { abort: signal } : {}),
     unsafe: UNSAFE_FLAGS,
@@ -319,7 +462,7 @@ export async function createAuthenticatedGit(
   const { simpleGit } = await simpleGitModule;
   return simpleGit({
     baseDir: cwd,
-    config: [...AUTHENTICATED_GIT_CONFIG, ...(extraConfig ?? [])],
+    config: getAuthenticatedGitConfig(extraConfig),
     timeout: { block: 0 },
     ...(signal ? { abort: signal } : {}),
     ...(progress ? { progress } : {}),

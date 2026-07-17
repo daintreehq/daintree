@@ -8,6 +8,7 @@ const { mockSpawn, mockHardenedGitConfig, mockBuildHardenedGitEnv } = vi.hoisted
     "core.fsmonitor=false",
     "protocol.ext.allow=never",
     "credential.helper=",
+    "core.hooksPath=/mock/user/data/git-hooks",
   ] as const,
   mockBuildHardenedGitEnv: vi.fn(() => ({
     LC_ALL: "",
@@ -22,7 +23,7 @@ vi.mock("node:child_process", () => ({
 }));
 
 vi.mock("../hardenedGit.js", () => ({
-  HARDENED_GIT_CONFIG: mockHardenedGitConfig,
+  getHardenedGitConfig: () => mockHardenedGitConfig,
   buildHardenedGitEnv: mockBuildHardenedGitEnv,
   // Mocked to a tiny value so the hang-timeout test (which sleeps past this
   // constant to observe the kill) runs in milliseconds, not the real 30s.
@@ -132,17 +133,7 @@ describe("checkIgnoredPaths", () => {
 
     expect(mockSpawn).toHaveBeenCalledWith(
       "git",
-      [
-        "-c",
-        "core.fsmonitor=false",
-        "-c",
-        "protocol.ext.allow=never",
-        "-c",
-        "credential.helper=",
-        "check-ignore",
-        "--stdin",
-        "-z",
-      ],
+      [...mockHardenedGitConfig.flatMap((entry) => ["-c", entry]), "check-ignore", "--stdin", "-z"],
       expect.objectContaining({
         cwd: "/repo",
         stdio: ["pipe", "pipe", "pipe"],
