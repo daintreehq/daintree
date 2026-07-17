@@ -37,7 +37,7 @@
     "execa": "^9.6.0",
     "globby": "^14.1.0",
     "semver": "^7.8.0",
-    "yauzl": "^2.10.0",
+    "yauzl": "^3.4.0",
     "zod": "^4.4.0"
   },
   "devDependencies": {
