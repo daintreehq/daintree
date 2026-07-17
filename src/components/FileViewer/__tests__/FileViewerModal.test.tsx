@@ -166,15 +166,19 @@ vi.mock("@/components/Worktree/DiffViewer", () => ({
 const setDiffViewTypeMock = vi.fn();
 const setDiffShowFileListMock = vi.fn();
 const setDiffFontSizeMock = vi.fn();
+const setMarkdownWrapLinesMock = vi.fn();
+const preferencesState = () => ({
+  diffViewType: "split" as const,
+  setDiffViewType: setDiffViewTypeMock,
+  diffShowFileList: true,
+  setDiffShowFileList: setDiffShowFileListMock,
+  diffFontSize: "m" as const,
+  setDiffFontSize: setDiffFontSizeMock,
+  markdownWrapLines: false,
+  setMarkdownWrapLines: setMarkdownWrapLinesMock,
+});
 const usePreferencesStoreMock = vi.fn((selector?: (s: Record<string, unknown>) => unknown) => {
-  const state = {
-    diffViewType: "split" as const,
-    setDiffViewType: setDiffViewTypeMock,
-    diffShowFileList: true,
-    setDiffShowFileList: setDiffShowFileListMock,
-    diffFontSize: "m" as const,
-    setDiffFontSize: setDiffFontSizeMock,
-  };
+  const state = preferencesState();
   return selector ? selector(state) : state;
 });
 vi.mock("@/store/preferencesStore", () => ({
@@ -234,14 +238,7 @@ beforeEach(() => {
   setDiffViewTypeMock.mockReset();
   usePreferencesStoreMock.mockImplementation(
     (selector?: (s: Record<string, unknown>) => unknown) => {
-      const state = {
-        diffViewType: "split" as const,
-        setDiffViewType: setDiffViewTypeMock,
-        diffShowFileList: true,
-        setDiffShowFileList: setDiffShowFileListMock,
-        diffFontSize: "m" as const,
-        setDiffFontSize: setDiffFontSizeMock,
-      };
+      const state = preferencesState();
       return selector ? selector(state) : state;
     }
   );
@@ -605,6 +602,118 @@ describe("FileViewerModal", () => {
     });
   });
 
+  // The dialog and the FilePane panel render the same viewer bodies, so their
+  // chrome is shared too (#11224). These cover the dialog's half of that
+  // contract: the controls it gained, and the ones that must stay put.
+  describe("plain-file toolbar (#11224)", () => {
+    const markdownProps = { ...defaultProps, filePath: "/project/docs/guide.md" };
+
+    it("copies the absolute path from the toolbar pill", async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, "clipboard", {
+        value: { writeText },
+        configurable: true,
+      });
+      render(<FileViewerModal {...defaultProps} />);
+      await waitFor(() => expect(screen.getByTestId("code-viewer")).toBeTruthy());
+
+      fireEvent.click(screen.getByRole("button", { name: "Copy file path" }));
+
+      // The pill *shows* the root-relative path but copies the absolute one —
+      // agents paste these back into prompts, where a relative path is useless.
+      await waitFor(() => expect(writeText).toHaveBeenCalledWith("/project/src/index.ts"));
+    });
+
+    it("offers exactly one copy-path control in plain view", async () => {
+      render(<FileViewerModal {...defaultProps} />);
+      await waitFor(() => expect(screen.getByTestId("code-viewer")).toBeTruthy());
+
+      // The header's separate copy icon gave way to the pill; two controls with
+      // one name would be a drift regression, not a convenience.
+      expect(screen.getAllByRole("button", { name: "Copy file path" })).toHaveLength(1);
+    });
+
+    it("re-reads the file when Refresh is clicked", async () => {
+      render(<FileViewerModal {...defaultProps} />);
+      await waitFor(() => expect(mockRead).toHaveBeenCalledTimes(1));
+
+      fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+      // Refresh routes through a revision bump rather than calling loadFile
+      // directly (it's an Effect Event), so the re-read is effect-driven.
+      await waitFor(() => expect(mockRead).toHaveBeenCalledTimes(2));
+    });
+
+    it("puts the markdown wrap toggle in the toolbar, above the file body", async () => {
+      render(<FileViewerModal {...markdownProps} />);
+      await waitFor(() => expect(screen.getByTestId("code-viewer")).toBeTruthy());
+
+      const wrap = screen.getByRole("button", { name: "Wrap long lines" });
+      const metadata = screen.getByTestId("file-viewer-metadata");
+
+      // Document order is the assertion that the control actually moved out of
+      // the footer: DOCUMENT_POSITION_FOLLOWING means the metadata strip (and
+      // the body under it) comes after the toggle.
+      expect(
+        wrap.compareDocumentPosition(metadata) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
+
+      fireEvent.click(wrap);
+      expect(setMarkdownWrapLinesMock).toHaveBeenCalledWith(true);
+    });
+
+    it("drops the footer entirely for a plain markdown file", async () => {
+      render(<FileViewerModal {...markdownProps} />);
+      await waitFor(() => expect(screen.getByTestId("code-viewer")).toBeTruthy());
+
+      // The footer used to exist only to host the wrap toggle. With that moved,
+      // a single markdown file has nothing to put down there — and an empty bar
+      // is worse than no bar.
+      expect(screen.queryByRole("button", { name: "Show file list" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Find in diff" })).toBeNull();
+    });
+
+    it("hides the wrap toggle in rendered mode", async () => {
+      render(<FileViewerModal {...markdownProps} />);
+      await waitFor(() => expect(screen.getByTestId("code-viewer")).toBeTruthy());
+      expect(screen.getByRole("button", { name: "Wrap long lines" })).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: "Rendered" }));
+
+      // Wrapping is a source-view concern; rendered prose wraps by nature.
+      expect(screen.queryByRole("button", { name: "Wrap long lines" })).toBeNull();
+    });
+
+    it("keeps Open as panel reachable and carries the mode into the panel", async () => {
+      render(<FileViewerModal {...markdownProps} />);
+      await waitFor(() => expect(screen.getByTestId("code-viewer")).toBeTruthy());
+
+      fireEvent.click(screen.getByTestId("file-viewer-open-as-panel"));
+
+      expect(mockDispatch).toHaveBeenCalledWith(
+        "file.openPanel",
+        expect.objectContaining({ path: "/project/docs/guide.md", viewMode: "source" }),
+        expect.anything()
+      );
+    });
+
+    it("shows no toolbar Refresh in diff mode", async () => {
+      const diff = "diff --git a/file b/file\n--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n+new";
+      render(<FileViewerModal {...defaultProps} diff={diff} defaultMode="diff" />);
+      await waitFor(() => expect(screen.getByTestId("diff-viewer")).toBeTruthy());
+
+      // Diff mode keeps its own chrome; the toolbar row opts out so its Refresh
+      // can never double up with the stale banner's.
+      expect(screen.queryByRole("button", { name: "Refresh" })).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: "View" }));
+
+      await waitFor(() =>
+        expect(screen.getAllByRole("button", { name: "Refresh" })).toHaveLength(1)
+      );
+    });
+  });
+
   describe("diff view type persistence", () => {
     const diff = "diff --git a/file b/file\n--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n+new";
 
@@ -673,6 +782,11 @@ describe("FileViewerModal", () => {
       });
       // The diff itself stays visible — the banner never replaces content.
       expect(screen.getByTestId("diff-viewer")).toBeTruthy();
+
+      // The banner's Refresh is the only one in diff mode: the toolbar row
+      // (which carries its own Refresh) is gated out of diff mode precisely so
+      // these two can't both answer to the same name.
+      expect(screen.getAllByRole("button", { name: "Refresh" })).toHaveLength(1);
 
       fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
       expect(onRetryDiff).toHaveBeenCalledTimes(1);
