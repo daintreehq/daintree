@@ -4,6 +4,7 @@ import { AppDialog } from "@/components/ui/AppDialog";
 import type { RestoreFocusTarget } from "@/components/ui/AppDialog";
 import { DiffViewer } from "@/components/Worktree/DiffViewer";
 import { CodeViewer } from "./CodeViewer";
+import { FileViewerToolbar } from "./FileViewerToolbar";
 import type { CodeViewerHandle } from "./CodeViewer";
 import { MarkdownViewer } from "@/components/Markdown/MarkdownViewer";
 import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
@@ -227,6 +228,7 @@ export function FileViewerModal({
     return "view";
   });
   const [content, setContent] = useState<string | null>(null);
+  const [reloadRevision, setReloadRevision] = useState(0);
   // Sandboxed-iframe preview URL for HTML files (#11191), minted by files:read.
   const [htmlPreviewUrl, setHtmlPreviewUrl] = useState<string | null>(null);
   // Bumped on each successful load so the cross-origin preview frame re-navigates.
@@ -353,8 +355,17 @@ export function FileViewerModal({
     };
   }, []);
 
+  // The default-to-diff switch below is one-shot per file, so it re-arms on the
+  // dialog opening or the file changing — but deliberately NOT on a manual
+  // refresh, which would otherwise re-fire the default and pull the user out of
+  // a mode they picked themselves.
+  useEffect(() => {
+    hasSwitchedToDiffRef.current = false;
+  }, [isOpen, filePath, effectiveRootPath]);
+
   // Non-reactive: reads defaultMode/hasDiff/initialLine/imageFile/svgFile at call
-  // time so the effect only re-runs on isOpen/filePath/effectiveRootPath changes.
+  // time so the effect only re-runs on isOpen/filePath/effectiveRootPath changes
+  // and on an explicit refresh.
   const loadFile = useEffectEvent(() => {
     if (!isOpen) {
       setContent(null);
@@ -366,7 +377,6 @@ export function FileViewerModal({
       setPathCopied(false);
       setSanitizedSvg(null);
       requestRef.current++;
-      hasSwitchedToDiffRef.current = false;
       currentHunkIndexRef.current = -1;
       pendingHunkTargetRef.current = null;
       setSearchOpen(false);
@@ -380,7 +390,6 @@ export function FileViewerModal({
     setLoadState("loading");
     setErrorCode(null);
     setDisplayErrorMessage(null);
-    hasSwitchedToDiffRef.current = false;
     currentHunkIndexRef.current = -1;
 
     // Stepping between files (onNavigateFile) keeps the modal open, so a mode
@@ -429,8 +438,11 @@ export function FileViewerModal({
     void isOpen;
     void filePath;
     void effectiveRootPath;
+    // Toolbar Refresh re-reads by bumping this: loadFile is an Effect Event, so
+    // it can only be called from an effect — never straight from an onClick.
+    void reloadRevision;
     loadFile();
-  }, [isOpen, filePath, effectiveRootPath]);
+  }, [isOpen, filePath, effectiveRootPath, reloadRevision]);
 
   // When diff arrives after mount (FileDiffModal async pattern), switch to diff mode once
   useEffect(() => {
@@ -528,6 +540,11 @@ export function FileViewerModal({
 
   const canShowView = loadState === "loaded" && content !== null;
   const isImageMode = loadState === "image" || loadState === "svg";
+
+  // The toolbar pill shows the worktree-relative path where there is one, and
+  // falls back to the absolute path for files outside the root. Either way the
+  // click copies the absolute path — handleCopyPath owns that.
+  const displayPath = workspaceRelPath ?? fwd(filePath);
 
   const metadata = useMemo(() => {
     if (!canShowView || content === null) return null;
@@ -1123,7 +1140,11 @@ export function FileViewerModal({
             )}
 
           {/* Mode toggle: markdown and HTML files get Rendered/Source (plus Diff
-              when available); other files keep the original View/Diff pair. */}
+              when available); other files keep the original View/Diff pair.
+              This stays in the header rather than leading the toolbar row the
+              way the panel's does — the row is gated out of diff mode, so a
+              toggle inside it would unmount on the View→Diff switch and drop
+              the keyboard focus of whoever just activated it. */}
           {(hasDiff || renderableFile) &&
             !imageFile &&
             (canShowView || loadState !== "loading") && (
@@ -1165,8 +1186,10 @@ export function FileViewerModal({
             </Tooltip>
           )}
 
-          {/* Copy path — agent workflows paste file paths back into prompts */}
-          {!imageFile && (
+          {/* Copy path — agent workflows paste file paths back into prompts.
+              Plain viewing copies from the toolbar's path pill instead, so this
+              is the diff-mode seat only. */}
+          {!imageFile && mode === "diff" && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
@@ -1184,7 +1207,7 @@ export function FileViewerModal({
             </Tooltip>
           )}
 
-          {!imageFile && (
+          {!imageFile && mode === "diff" && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
@@ -1201,6 +1224,10 @@ export function FileViewerModal({
             </Tooltip>
           )}
 
+          {/* Image files never get a toolbar row (there's no path pill or
+              refresh to hang on it), so their open control stays here. Diff
+              mode keeps the editor button for the same reason — the rendered-
+              HTML branch can't apply, since that mode isn't diff. */}
           {imageFile ? (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -1215,21 +1242,7 @@ export function FileViewerModal({
               </TooltipTrigger>
               <TooltipContent side="bottom">Open in image viewer</TooltipContent>
             </Tooltip>
-          ) : htmlFile && mode === "rendered" ? (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  onClick={handleOpenInBrowser}
-                  aria-label="Open in browser"
-                  className="p-1.5 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-daintree-border"
-                >
-                  <Globe className="w-4 h-4" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">Open in browser</TooltipContent>
-            </Tooltip>
-          ) : (
+          ) : mode === "diff" ? (
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
@@ -1243,7 +1256,7 @@ export function FileViewerModal({
               </TooltipTrigger>
               <TooltipContent side="bottom">Open in editor</TooltipContent>
             </Tooltip>
-          )}
+          ) : null}
           <AppDialog.CloseButton />
         </div>
       </AppDialog.Header>
@@ -1262,6 +1275,57 @@ export function FileViewerModal({
           />
         )}
         <div className="relative flex-1 min-w-0 min-h-0 flex flex-col" style={diffFontStyle}>
+          {/* Plain-file-viewing toolbar — the same row the FilePane panel
+              renders, so the two surfaces read identically. Diff mode keeps its
+              own chrome (header toggle + footer controls) and image files have
+              nothing to put here, so both opt out. Refresh living only on this
+              row is what keeps it from colliding with the diff stale banner's
+              own Refresh below. */}
+          {!imageFile && mode !== "diff" && (
+            <FileViewerToolbar.Root>
+              <FileViewerToolbar.Path
+                path={displayPath}
+                copied={pathCopied}
+                onCopy={handleCopyPath}
+              />
+              <FileViewerToolbar.Actions>
+                {markdownFile && mode === "view" && (
+                  <FileViewerToolbar.IconButton
+                    label="Wrap long lines"
+                    pressed={markdownWrapLines}
+                    onClick={() => setMarkdownWrapLines(!markdownWrapLines)}
+                  >
+                    <WrapText className="w-4 h-4" />
+                  </FileViewerToolbar.IconButton>
+                )}
+                <FileViewerToolbar.IconButton
+                  label="Refresh"
+                  onClick={() => setReloadRevision((revision) => revision + 1)}
+                >
+                  <RefreshCw className="w-4 h-4" />
+                </FileViewerToolbar.IconButton>
+                {htmlFile && mode === "rendered" ? (
+                  <FileViewerToolbar.IconButton
+                    label="Open in browser"
+                    onClick={handleOpenInBrowser}
+                  >
+                    <Globe className="w-4 h-4" />
+                  </FileViewerToolbar.IconButton>
+                ) : (
+                  <FileViewerToolbar.IconButton label="Open in editor" onClick={handleOpenInEditor}>
+                    <ExternalLink className="w-4 h-4" />
+                  </FileViewerToolbar.IconButton>
+                )}
+                <FileViewerToolbar.IconButton
+                  label="Open as panel"
+                  onClick={handleOpenAsPanel}
+                  data-testid="file-viewer-open-as-panel"
+                >
+                  <Grid2x2Plus className="w-4 h-4" />
+                </FileViewerToolbar.IconButton>
+              </FileViewerToolbar.Actions>
+            </FileViewerToolbar.Root>
+          )}
           {!isImageMode &&
             mode === "diff" &&
             diffContentStale &&
@@ -1527,10 +1591,17 @@ export function FileViewerModal({
       </div>
 
       {/* Slim footer toolbar: navigation + diff display controls (Kaleidoscope-
-          style bottom stepper). Rendered whenever there's something to put in
-          it — file stepping in either mode, diff controls in diff mode. */}
-      {(canStepFiles || (mode === "diff" && hasDiff) || (markdownFile && mode === "view")) && (
-        <div className="flex items-center justify-between gap-3 px-4 py-1.5 border-t border-border-strong bg-surface-panel shrink-0">
+          style bottom stepper). One term per control it can hold, so it appears
+          exactly when it has something to show: the file-list toggle, the
+          stepper, the Viewed marker, and the diff controls. Plain markdown no
+          longer keeps it alive on its own — the wrap toggle moved up to the
+          toolbar row — but a lone reviewed file still must, since this bar
+          holds the only control that can UNMARK it (`v` only ever marks). */}
+      {(canStepFiles || isWorkspace || workspaceEntry !== null || (mode === "diff" && hasDiff)) && (
+        <div
+          data-testid="file-viewer-footer"
+          className="flex items-center justify-between gap-3 px-4 py-1.5 border-t border-border-strong bg-surface-panel shrink-0"
+        >
           <div className="flex items-center gap-1 min-w-0">
             {isWorkspace && (
               <IconToggle
@@ -1654,15 +1725,6 @@ export function FileViewerModal({
           )}
 
           <div className="flex items-center gap-2">
-            {markdownFile && mode === "view" && (
-              <IconToggle
-                pressed={markdownWrapLines}
-                label="Wrap long lines"
-                onToggle={() => setMarkdownWrapLines(!markdownWrapLines)}
-              >
-                <WrapText className="w-4 h-4" />
-              </IconToggle>
-            )}
             {mode === "diff" && hasDiff && (
               <>
                 <IconToggle
