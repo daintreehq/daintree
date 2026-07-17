@@ -1658,6 +1658,94 @@ describe("createDaintreeFileProtocolHandler — symlink containment", () => {
     expect(fs.open).toHaveBeenCalledTimes(1);
   });
 
+  it("serves an image past the 512 KB text cap (images use the larger ceiling)", async () => {
+    const fs = await import("fs/promises");
+    vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
+    vi.mocked(fs.stat).mockResolvedValue({ size: 5 * 1024 * 1024 } as Awaited<
+      ReturnType<typeof fs.stat>
+    >);
+    const appProtocol = await import("../../utils/appProtocol.js");
+    vi.mocked(appProtocol.getMimeType).mockReturnValue("image/png");
+
+    const handler = await captureHandler("daintree-file");
+    const response = await handler(makeRequest("/project/big.png", "/project"));
+
+    // 5 MB would 413 under the text cap; an image is decoded as pixels, not a
+    // giant string, so it clears the larger image ceiling and gets read.
+    expect(response.status).toBe(200);
+    expect(fs.open).toHaveBeenCalledTimes(1);
+  });
+
+  it("still rejects an image beyond the image ceiling with 413", async () => {
+    const fs = await import("fs/promises");
+    vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
+    vi.mocked(fs.stat).mockResolvedValue({ size: 25 * 1024 * 1024 + 1 } as Awaited<
+      ReturnType<typeof fs.stat>
+    >);
+    const appProtocol = await import("../../utils/appProtocol.js");
+    vi.mocked(appProtocol.getMimeType).mockReturnValue("image/png");
+
+    const handler = await captureHandler("daintree-file");
+    const response = await handler(makeRequest("/project/huge.png", "/project"));
+
+    expect(response.status).toBe(413);
+    expect(fs.open).not.toHaveBeenCalled();
+  });
+
+  it("serves an image exactly at the image ceiling (cap is exclusive)", async () => {
+    const fs = await import("fs/promises");
+    vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
+    vi.mocked(fs.stat).mockResolvedValue({ size: 25 * 1024 * 1024 } as Awaited<
+      ReturnType<typeof fs.stat>
+    >);
+    const appProtocol = await import("../../utils/appProtocol.js");
+    vi.mocked(appProtocol.getMimeType).mockReturnValue("image/png");
+
+    const handler = await captureHandler("daintree-file");
+    const response = await handler(makeRequest("/project/edge.png", "/project"));
+
+    expect(response.status).toBe(200);
+    expect(fs.open).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not extend the raster ceiling to SVG (kept at the text cap)", async () => {
+    // SVG is served through the sanitizing files:read path in the viewer, so the
+    // protocol deliberately keeps it at the tight cap — a 5 MB SVG still 413s.
+    const fs = await import("fs/promises");
+    vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
+    vi.mocked(fs.stat).mockResolvedValue({ size: 5 * 1024 * 1024 } as Awaited<
+      ReturnType<typeof fs.stat>
+    >);
+    const appProtocol = await import("../../utils/appProtocol.js");
+    vi.mocked(appProtocol.getMimeType).mockReturnValue("image/svg+xml");
+
+    const handler = await captureHandler("daintree-file");
+    const response = await handler(makeRequest("/project/big.svg", "/project"));
+
+    expect(response.status).toBe(413);
+    expect(fs.open).not.toHaveBeenCalled();
+  });
+
+  it("rejects a file that grows past the cap between stat and read (413 after open)", async () => {
+    // The pre-open stat is advisory; a writer can grow/swap the file before the
+    // read. The post-read length check is the real ceiling — without it an
+    // oversized buffer would reach the renderer and risk a decode OOM.
+    const fs = await import("fs/promises");
+    vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
+    vi.mocked(fs.stat).mockResolvedValue({ size: 4 } as Awaited<ReturnType<typeof fs.stat>>);
+    const oversized = Buffer.alloc(512 * 1024 + 1);
+    vi.mocked(fs.open).mockResolvedValue(
+      makeFileHandle(oversized) as unknown as Awaited<ReturnType<typeof fs.open>>
+    );
+
+    const handler = await captureHandler("daintree-file");
+    const response = await handler(makeRequest("/project/grew.bin", "/project"));
+
+    expect(response.status).toBe(413);
+    // The open/read did happen — this is the second, post-read guard, not the stat guard.
+    expect(fs.open).toHaveBeenCalledTimes(1);
+  });
+
   it("returns 404 when O_NOFOLLOW rejects a final-component symlink with ELOOP (TOCTOU)", async () => {
     const fs = await import("fs/promises");
     vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
@@ -2660,6 +2748,22 @@ describe("createDaintreeHtmlProtocolHandler — sandboxed HTML preview (#11191)"
 
     const handler = await captureHandler();
     const response = await handler(makeRequest(token, "big.html"));
+    expect(response.status).toBe(413);
+  });
+
+  it("keeps report image assets at the 512 KB cap (raster allowance is file:// only)", async () => {
+    // The larger raster-image ceiling is scoped to the daintree-file:// viewer;
+    // a script-driven preview must not be able to pull multi-MB images through
+    // the shared read core. A 2 MB PNG asset here still 413s.
+    const fs = await import("fs/promises");
+    vi.mocked(fs.stat).mockResolvedValue({ size: 2 * 1024 * 1024 } as Awaited<
+      ReturnType<typeof fs.stat>
+    >);
+    const appProtocol = await import("../../utils/appProtocol.js");
+    vi.mocked(appProtocol.getMimeType).mockReturnValue("image/png");
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest(token, "chart.png"));
     expect(response.status).toBe(413);
   });
 });
