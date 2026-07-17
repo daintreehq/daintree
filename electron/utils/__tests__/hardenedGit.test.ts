@@ -1033,8 +1033,8 @@ describe("core.hooksPath enforcement (issue #11226)", () => {
     expect(fs.existsSync(soleHooksPath(capturedConfig()))).toBe(true);
   });
 
-  // Guards against double-emission: the entry is appended by three separate
-  // builders (hardened, authenticated, WSL).
+  // Guards against double-emission. The WSL profile is covered by its own suite,
+  // whose soleHooksPath call enforces the same cardinality.
   it("appears exactly once in every profile", async () => {
     await createHardenedGit("/test/repo");
     expect(hooksPathValues(capturedConfig())).toHaveLength(1);
@@ -1148,18 +1148,26 @@ describe("hooks directory resolution", () => {
  */
 describe("selectUserDataDir", () => {
   const HOME = "/home/alice";
+  const home = () => HOME;
 
   afterEach(() => {
     vi.restoreAllMocks();
     delete process.env.DAINTREE_UTILITY_PROCESS_KIND;
   });
 
+  // Every workspace host would otherwise attempt a require("electron") it can
+  // never satisfy, on its first git call.
   it("prefers an absolute env value, without consulting electron", () => {
-    expect(selectUserDataDir("/env/userdata", "/electron/userdata", HOME)).toBe("/env/userdata");
+    const electron = vi.fn(() => "/electron/userdata");
+
+    expect(selectUserDataDir("/env/userdata", electron, home)).toBe("/env/userdata");
+    expect(electron).not.toHaveBeenCalled();
   });
 
   it("uses electron's userData when no env value is set — the main-process path", () => {
-    expect(selectUserDataDir(undefined, "/electron/userdata", HOME)).toBe("/electron/userdata");
+    expect(selectUserDataDir(undefined, () => "/electron/userdata", home)).toBe(
+      "/electron/userdata"
+    );
   });
 
   // A relative value would be resolved against the cwd, which is the defect
@@ -1167,20 +1175,20 @@ describe("selectUserDataDir", () => {
   it("skips a relative env value and reports it", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    expect(selectUserDataDir("relative/userdata", "/electron/userdata", HOME)).toBe(
+    expect(selectUserDataDir("relative/userdata", () => "/electron/userdata", home)).toBe(
       "/electron/userdata"
     );
     expect(errorSpy).toHaveBeenCalled();
   });
 
   it("skips a relative electron value too", () => {
-    expect(selectUserDataDir(undefined, "relative/userdata", HOME)).toBe(
+    expect(selectUserDataDir(undefined, () => "relative/userdata", home)).toBe(
       path.join(HOME, ".daintree")
     );
   });
 
   it("falls back to the home directory when neither source is usable", () => {
-    expect(selectUserDataDir(undefined, undefined, HOME)).toBe(path.join(HOME, ".daintree"));
+    expect(selectUserDataDir(undefined, () => undefined, home)).toBe(path.join(HOME, ".daintree"));
   });
 
   // In a utility process the env var is supplied by the fork; missing it means
@@ -1189,7 +1197,7 @@ describe("selectUserDataDir", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     process.env.DAINTREE_UTILITY_PROCESS_KIND = "workspace-host";
 
-    selectUserDataDir(undefined, undefined, HOME);
+    selectUserDataDir(undefined, () => undefined, home);
 
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("workspace-host"));
   });
@@ -1197,13 +1205,19 @@ describe("selectUserDataDir", () => {
   it("stays quiet on the ordinary main-process path", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    selectUserDataDir(undefined, "/electron/userdata", HOME);
+    selectUserDataDir(undefined, () => "/electron/userdata", home);
 
     expect(errorSpy).not.toHaveBeenCalled();
   });
 
   it("throws rather than ever resolving against the cwd", () => {
-    expect(() => selectUserDataDir(undefined, undefined, "")).toThrow(/absolute userData/);
+    expect(() =>
+      selectUserDataDir(
+        undefined,
+        () => undefined,
+        () => ""
+      )
+    ).toThrow(/absolute userData/);
   });
 });
 

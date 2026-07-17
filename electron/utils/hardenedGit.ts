@@ -70,24 +70,7 @@ const WSL_GIT_HOOKS_PATH = "~/.daintree/git-hooks";
 let cachedGitHooksDir: string | null = null;
 let hooksDirWarned = false;
 
-/**
- * Resolve the app-owned directory that holds the git hooks Daintree is willing
- * to execute. Deliberately lazy — `hardenedGit.ts` is imported very early and
- * very broadly, and `electron/setup/environment.ts` rewrites `userData` in dev
- * *after* those imports, so a module-scope capture would pin the wrong path.
- *
- * Resolution order, each candidate rejected unless absolute:
- *   1. `DAINTREE_USER_DATA` — the workspace-host UtilityProcess has no usable
- *      `app` API and receives this from its fork env (`WorkspaceHostProcess`).
- *   2. Electron's `userData` — the main process. `require` exists in the
- *      bundled main (esbuild injects `createRequire`) but not under vitest,
- *      where this throws and is intentionally swallowed.
- *   3. The user's home directory — reachable only when neither of the above is
- *      available (i.e. tests).
- *
- * Never falls back to `process.cwd()`: a CWD-relative hooks path is exactly the
- * defect being fixed.
- */
+/** Electron's `userData`, or undefined outside the main process. */
 function getElectronUserDataPath(): string | undefined {
   try {
     // Dynamic require to avoid breaking tests that mock electron. `require`
@@ -107,13 +90,17 @@ function getElectronUserDataPath(): string | undefined {
  * obtained so it can be tested directly — the `require("electron")` read above
  * is unreachable under vitest.
  *
+ * The later candidates are suppliers, not values, so a valid env var still
+ * short-circuits before Electron is touched — every workspace host would
+ * otherwise attempt (and fail) a `require("electron")` it never needs.
+ *
  * Every candidate must be absolute; a relative one is reported and skipped
  * rather than honoured, because a relative hooks path is the defect itself.
  */
 export function selectUserDataDir(
   fromEnv: string | undefined,
-  fromElectron: string | undefined,
-  homeDir: string
+  fromElectron: () => string | undefined,
+  homeDir: () => string
 ): string {
   if (fromEnv && path.isAbsolute(fromEnv)) return fromEnv;
   if (fromEnv) {
@@ -122,9 +109,11 @@ export function selectUserDataDir(
     console.error(`[hardenedGit] DAINTREE_USER_DATA is not absolute: ${fromEnv}, falling back`);
   }
 
-  if (fromElectron && path.isAbsolute(fromElectron)) return fromElectron;
+  const electronUserData = fromElectron();
+  if (electronUserData && path.isAbsolute(electronUserData)) return electronUserData;
 
-  if (homeDir && path.isAbsolute(homeDir)) {
+  const home = homeDir();
+  if (home && path.isAbsolute(home)) {
     // Only expected in tests: the main process resolves via electron, and every
     // utility process is forked with DAINTREE_USER_DATA. Reaching this in a real
     // process means main and the workspace-host have split onto different hook
@@ -136,14 +125,30 @@ export function selectUserDataDir(
           "which will not match the main process's hooks directory"
       );
     }
-    return path.join(homeDir, ".daintree");
+    return path.join(home, ".daintree");
   }
 
   throw new Error("[hardenedGit] Cannot resolve an absolute userData directory for core.hooksPath");
 }
 
+/**
+ * Resolve the userData root holding the git hooks Daintree is willing to run.
+ *
+ * Deliberately lazy — `hardenedGit.ts` is imported very early and very broadly,
+ * and `electron/setup/environment.ts` rewrites `userData` in dev *after* those
+ * imports, so a module-scope capture would pin the wrong path.
+ *
+ * Candidates, in the order `selectUserDataDir` considers them:
+ *   1. `DAINTREE_USER_DATA` — the workspace-host UtilityProcess has no usable
+ *      `app` API and receives this from its fork env (`WorkspaceHostProcess`).
+ *   2. Electron's `userData` — the main process.
+ *   3. The user's home directory — expected only in tests; in a real process it
+ *      means something is broken, and `selectUserDataDir` says so.
+ */
 function resolveUserDataDir(): string {
-  return selectUserDataDir(process.env.DAINTREE_USER_DATA, getElectronUserDataPath(), os.homedir());
+  return selectUserDataDir(process.env.DAINTREE_USER_DATA, getElectronUserDataPath, () =>
+    os.homedir()
+  );
 }
 
 /**

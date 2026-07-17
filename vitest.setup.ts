@@ -18,7 +18,13 @@ markIpcSecurityReady();
 // on the developer's machine. Point it at a temp root instead; suites that
 // inspect the directory (hardenedGit's own) override this with their own
 // mkdtemp before their first factory call.
-process.env.DAINTREE_USER_DATA ??= path.join(os.tmpdir(), "daintree-vitest-userdata");
+//
+// Assigned unconditionally: an inherited empty or relative value would survive
+// `??=` and land right back on the home directory, and an inherited real
+// userData path would let a test suite write into the developer's own app data.
+// Keyed by pid so a stale hook file from an earlier run can't be dispatched by
+// a later one.
+process.env.DAINTREE_USER_DATA = path.join(os.tmpdir(), `daintree-vitest-userdata-${process.pid}`);
 
 // Tests render Radix wrappers synchronously, but our production wrappers
 // dynamic-import the Radix primitive chunk on demand. Prime the loader once
