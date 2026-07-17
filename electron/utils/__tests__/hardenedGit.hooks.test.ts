@@ -22,13 +22,29 @@ const TEST_USER_DATA = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-hooks-use
 process.env.DAINTREE_USER_DATA = TEST_USER_DATA;
 
 const HOOKS_DIR = path.join(TEST_USER_DATA, "git-hooks");
-const HOOK_NAMES = ["post-checkout", "post-commit", "post-merge", "pre-push"];
 
 let repoDir: string;
 let scratchDir: string;
 
+/**
+ * Fixture git, isolated from the developer's own config: an inherited
+ * `commit.gpgSign=true` would hang the setup commit on a passphrase prompt, and
+ * an inherited `core.hooksPath` would run their hooks against these temp repos.
+ * The timeout keeps a wedged git from blocking the suite — vitest cannot
+ * interrupt a synchronous native call.
+ */
 function git(cwd: string, args: string[]): void {
-  execFileSync("git", args, { cwd, stdio: "pipe" });
+  execFileSync("git", args, {
+    cwd,
+    stdio: "pipe",
+    timeout: 10_000,
+    env: {
+      ...process.env,
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_SYSTEM: "/dev/null",
+      GIT_TERMINAL_PROMPT: "0",
+    },
+  });
 }
 
 function writeHook(dir: string, name: string, body: string): void {
@@ -36,6 +52,12 @@ function writeHook(dir: string, name: string, body: string): void {
   const file = path.join(dir, name);
   fs.writeFileSync(file, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
 }
+
+// Registered outside the suite below: a skipped suite never runs its hooks, so
+// cleanup declared inside it would leak the temp root on Windows.
+afterAll(() => {
+  fs.rmSync(TEST_USER_DATA, { recursive: true, force: true });
+});
 
 // Hooks are shell scripts; Windows git has no /bin/sh on the default PATH, and
 // the WSL route carries its own POSIX hooks path that this suite cannot reach.
@@ -57,7 +79,6 @@ describePosix("hardened git core.hooksPath (real git)", () => {
 
   afterAll(() => {
     fs.rmSync(scratchDir, { recursive: true, force: true });
-    fs.rmSync(TEST_USER_DATA, { recursive: true, force: true });
   });
 
   it("does not execute a repo-supplied hook", async () => {
@@ -84,10 +105,14 @@ describePosix("hardened git core.hooksPath (real git)", () => {
     expect(fs.existsSync(sentinel)).toBe(true);
   });
 
-  // The reported symptom: during `git worktree add` the CWD at checkout-hook
-  // dispatch is the new worktree root, so anything resolving hooks relatively
-  // lands its files there.
-  it("resolves hooks from the app-owned directory during worktree add, not the worktree root", async () => {
+  // `git worktree add` is the operation from the issue report: the CWD at
+  // checkout-hook dispatch is the new worktree root, which is what git-lfs
+  // resolved its relative hooks path against.
+  //
+  // Asserting the four hook files are absent from the worktree root would be
+  // vacuous — nothing here installs them, so it passes against the empty value
+  // too. Only git-lfs writes them, and it is not available in CI.
+  it("dispatches hooks from the app-owned directory during worktree add", async () => {
     const { createHardenedGit } = await import("../hardenedGit.js");
     const sentinel = path.join(scratchDir, "worktree-hook-fired");
     const worktreeDir = path.join(scratchDir, "wt");
@@ -98,9 +123,6 @@ describePosix("hardened git core.hooksPath (real git)", () => {
     await client.raw(["worktree", "add", "-q", worktreeDir, "-b", "wt-branch"]);
 
     expect(fs.existsSync(sentinel)).toBe(true);
-    for (const name of HOOK_NAMES) {
-      expect(fs.existsSync(path.join(worktreeDir, name))).toBe(false);
-    }
   });
 
   it("reports the app-owned directory as the effective hooksPath", async () => {

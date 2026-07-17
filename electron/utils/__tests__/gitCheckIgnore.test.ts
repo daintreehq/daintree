@@ -2,28 +2,33 @@ import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockSpawn, mockHardenedGitConfig, mockBuildHardenedGitEnv } = vi.hoisted(() => ({
-  mockSpawn: vi.fn(),
-  mockHardenedGitConfig: [
-    "core.fsmonitor=false",
-    "protocol.ext.allow=never",
-    "credential.helper=",
-    "core.hooksPath=/mock/user/data/git-hooks",
-  ] as const,
-  mockBuildHardenedGitEnv: vi.fn(() => ({
-    LC_ALL: "",
-    LC_CTYPE: "C.UTF-8",
-    GIT_TERMINAL_PROMPT: "0",
-    GIT_OPTIONAL_LOCKS: "0",
-  })),
-}));
+const { mockSpawn, mockGetHardenedGitConfig, mockHardenedGitConfig, mockBuildHardenedGitEnv } =
+  vi.hoisted(() => {
+    const config = [
+      "core.fsmonitor=false",
+      "protocol.ext.allow=never",
+      "credential.helper=",
+      "core.hooksPath=/mock/user/data/git-hooks",
+    ] as const;
+    return {
+      mockSpawn: vi.fn(),
+      mockHardenedGitConfig: config,
+      mockGetHardenedGitConfig: vi.fn((_platform?: NodeJS.Platform) => config),
+      mockBuildHardenedGitEnv: vi.fn(() => ({
+        LC_ALL: "",
+        LC_CTYPE: "C.UTF-8",
+        GIT_TERMINAL_PROMPT: "0",
+        GIT_OPTIONAL_LOCKS: "0",
+      })),
+    };
+  });
 
 vi.mock("node:child_process", () => ({
   spawn: mockSpawn,
 }));
 
 vi.mock("../hardenedGit.js", () => ({
-  getHardenedGitConfig: () => mockHardenedGitConfig,
+  getHardenedGitConfig: mockGetHardenedGitConfig,
   buildHardenedGitEnv: mockBuildHardenedGitEnv,
   // Mocked to a tiny value so the hang-timeout test (which sleeps past this
   // constant to observe the kill) runs in milliseconds, not the real 30s.
@@ -131,9 +136,11 @@ describe("checkIgnoredPaths", () => {
 
     await checkIgnoredPaths("/repo", ["src/a.txt"]);
 
+    const args = mockSpawn.mock.calls[0][1] as string[];
+    expect(args.slice(-3)).toEqual(["check-ignore", "--stdin", "-z"]);
     expect(mockSpawn).toHaveBeenCalledWith(
       "git",
-      [...mockHardenedGitConfig.flatMap((entry) => ["-c", entry]), "check-ignore", "--stdin", "-z"],
+      expect.anything(),
       expect.objectContaining({
         cwd: "/repo",
         stdio: ["pipe", "pipe", "pipe"],
@@ -149,14 +156,27 @@ describe("checkIgnoredPaths", () => {
 
     await checkIgnoredPaths("/repo", ["src/a.txt"]);
 
+    // Every config entry must be carried as its own `-c <entry>` pair, in order
+    // and ahead of the command — asserted structurally rather than by rebuilding
+    // the expected argv with the same flatMap the implementation uses.
     const args = mockSpawn.mock.calls[0][1] as string[];
-    const configFlags: string[] = [];
-    for (let i = 0; i < args.length - 1; i++) {
-      if (args[i] === "-c") configFlags.push(args[i + 1] as string);
+    const prefix = args.slice(0, args.length - 3);
+    expect(prefix).toHaveLength(mockHardenedGitConfig.length * 2);
+    for (let i = 0; i < prefix.length; i += 2) {
+      expect(prefix[i]).toBe("-c");
+      expect(prefix[i + 1]).toBe(mockHardenedGitConfig[i / 2]);
     }
-    for (const entry of mockHardenedGitConfig) {
-      expect(configFlags).toContain(entry);
-    }
+  });
+
+  it("PROPAGATES_PLATFORM_TO_CONFIG_GETTER", async () => {
+    const child = makeFakeProcess({ exitCode: 0 });
+    mockSpawn.mockReturnValue(child);
+
+    await checkIgnoredPaths("/repo", ["src/a.txt"], { platform: "win32" });
+
+    // The getter converts Windows separators for git's -c parser, so it has to
+    // see the same platform the env builder does.
+    expect(mockGetHardenedGitConfig).toHaveBeenCalledWith("win32");
   });
 
   it("FORWARDS_HARDENED_ENV_TO_SPAWN", async () => {

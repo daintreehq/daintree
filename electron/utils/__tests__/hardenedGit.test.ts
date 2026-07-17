@@ -38,6 +38,7 @@ import {
   buildHardenedGitEnv,
   buildContinueEnv,
   getHardenedGitConfig,
+  selectUserDataDir,
   toGitConfigPath,
 } from "../hardenedGit.js";
 import { simpleGit } from "simple-git";
@@ -185,8 +186,13 @@ describe("createHardenedGit", () => {
     for (const key of expectedKeys) {
       expect(options.config).toContain(key);
     }
-    // +1 for the generated core.hooksPath entry, asserted by value below.
-    expect(options.config).toHaveLength(expectedKeys.length + 1);
+    // Count the static entries on their own; the generated hooks entry has its
+    // own coverage below, and folding it into this total would hide a change to
+    // either half behind one number.
+    const staticEntries = options.config.filter(
+      (entry: string) => !entry.startsWith("core.hooksPath=")
+    );
+    expect(staticEntries).toHaveLength(expectedKeys.length);
   });
 
   it("passes abort signal when provided", async () => {
@@ -987,7 +993,11 @@ describe("config profiles", () => {
   it("both profiles resolve the same app-owned hooks directory", async () => {
     await createAuthenticatedGit("/test/repo");
 
-    expect(soleHooksPath(capturedConfig())).toBe(soleHooksPath(getHardenedGitConfig()));
+    const shared = soleHooksPath(capturedConfig());
+    expect(shared).toBe(soleHooksPath(getHardenedGitConfig()));
+    // Without this the assertion would hold for two empty strings, which is
+    // precisely the state being fixed.
+    expect(path.isAbsolute(shared)).toBe(true);
   });
 });
 
@@ -1023,9 +1033,16 @@ describe("core.hooksPath enforcement (issue #11226)", () => {
     expect(fs.existsSync(soleHooksPath(capturedConfig()))).toBe(true);
   });
 
-  it("appears exactly once per profile", async () => {
+  // Guards against double-emission: the entry is appended by three separate
+  // builders (hardened, authenticated, WSL).
+  it("appears exactly once in every profile", async () => {
     await createHardenedGit("/test/repo");
     expect(hooksPathValues(capturedConfig())).toHaveLength(1);
+
+    await createAuthenticatedGit("/test/repo");
+    expect(hooksPathValues(capturedConfig(1))).toHaveLength(1);
+
+    expect(hooksPathValues(getHardenedGitConfig())).toHaveLength(1);
   });
 
   // git takes the last -c for a single-valued key, so a caller-supplied
@@ -1048,12 +1065,165 @@ describe("core.hooksPath enforcement (issue #11226)", () => {
   });
 });
 
+// The hooks directory is resolved and memoized on first use, so these need a
+// fresh module registry per case rather than the file-wide instance.
+describe("hooks directory resolution", () => {
+  const originalUserData = process.env.DAINTREE_USER_DATA;
+
+  afterEach(() => {
+    process.env.DAINTREE_USER_DATA = originalUserData;
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  async function importFresh(userData: string | undefined) {
+    vi.resetModules();
+    if (userData === undefined) delete process.env.DAINTREE_USER_DATA;
+    else process.env.DAINTREE_USER_DATA = userData;
+    return import("../hardenedGit.js");
+  }
+
+  it("does not touch the filesystem at import time", async () => {
+    const userData = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-lazy-"));
+    const mod = await importFresh(userData);
+
+    // Importing hardenedGit.ts must stay inert: it is pulled in very early and
+    // very broadly, before dev overrides userData.
+    expect(fs.existsSync(path.join(userData, "git-hooks"))).toBe(false);
+
+    mod.getHardenedGitConfig();
+    expect(fs.existsSync(path.join(userData, "git-hooks"))).toBe(true);
+
+    fs.rmSync(userData, { recursive: true, force: true });
+  });
+
+  it("resolves once and reuses the result", async () => {
+    const userData = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-memo-"));
+    const mod = await importFresh(userData);
+
+    const first = mod.getHardenedGitConfig().find((e) => e.startsWith("core.hooksPath="));
+    process.env.DAINTREE_USER_DATA = path.join(os.tmpdir(), "daintree-moved-elsewhere");
+    const second = mod.getHardenedGitConfig().find((e) => e.startsWith("core.hooksPath="));
+
+    expect(second).toBe(first);
+
+    fs.rmSync(userData, { recursive: true, force: true });
+  });
+
+  it("keeps a directory-creation failure non-fatal, still emitting an absolute path", async () => {
+    // A path *under a regular file* makes the real mkdir fail with ENOTDIR — no
+    // fs mocking needed to reach the failure branch.
+    const blocker = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "daintree-enotdir-")), "afile");
+    fs.writeFileSync(blocker, "not a directory");
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const mod = await importFresh(blocker);
+    const hooksPath = mod
+      .getHardenedGitConfig()
+      .find((e) => e.startsWith("core.hooksPath="))
+      ?.slice("core.hooksPath=".length);
+
+    // git blocks repo-supplied hooks against a path that does not exist, so the
+    // security invariant survives a creation failure — only git-lfs's install
+    // target is lost, which must not take git down with it.
+    expect(hooksPath).toBeDefined();
+    expect(path.isAbsolute(hooksPath as string)).toBe(true);
+    expect(fs.existsSync(hooksPath as string)).toBe(false);
+
+    mod.getHardenedGitConfig();
+    mod.getHardenedGitConfig();
+    // Warned once, not once per git invocation — this rides the status-polling path.
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+
+    fs.rmSync(path.dirname(blocker), { recursive: true, force: true });
+  });
+});
+
+/**
+ * The `require("electron")` read cannot be reached under vitest — the bundled
+ * main gets `require` from an esbuild banner that vitest has no equivalent for,
+ * and stubbing the global does not rebind the module's identifier. Its
+ * precedence logic is therefore tested through `selectUserDataDir`, which takes
+ * the candidates as arguments.
+ */
+describe("selectUserDataDir", () => {
+  const HOME = "/home/alice";
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete process.env.DAINTREE_UTILITY_PROCESS_KIND;
+  });
+
+  it("prefers an absolute env value, without consulting electron", () => {
+    expect(selectUserDataDir("/env/userdata", "/electron/userdata", HOME)).toBe("/env/userdata");
+  });
+
+  it("uses electron's userData when no env value is set — the main-process path", () => {
+    expect(selectUserDataDir(undefined, "/electron/userdata", HOME)).toBe("/electron/userdata");
+  });
+
+  // A relative value would be resolved against the cwd, which is the defect
+  // this override exists to prevent.
+  it("skips a relative env value and reports it", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    expect(selectUserDataDir("relative/userdata", "/electron/userdata", HOME)).toBe(
+      "/electron/userdata"
+    );
+    expect(errorSpy).toHaveBeenCalled();
+  });
+
+  it("skips a relative electron value too", () => {
+    expect(selectUserDataDir(undefined, "relative/userdata", HOME)).toBe(
+      path.join(HOME, ".daintree")
+    );
+  });
+
+  it("falls back to the home directory when neither source is usable", () => {
+    expect(selectUserDataDir(undefined, undefined, HOME)).toBe(path.join(HOME, ".daintree"));
+  });
+
+  // In a utility process the env var is supplied by the fork; missing it means
+  // main and the host have split onto different hook roots.
+  it("reports a fallback inside a utility process, where it is never expected", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    process.env.DAINTREE_UTILITY_PROCESS_KIND = "workspace-host";
+
+    selectUserDataDir(undefined, undefined, HOME);
+
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("workspace-host"));
+  });
+
+  it("stays quiet on the ordinary main-process path", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    selectUserDataDir(undefined, "/electron/userdata", HOME);
+
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it("throws rather than ever resolving against the cwd", () => {
+    expect(() => selectUserDataDir(undefined, undefined, "")).toThrow(/absolute userData/);
+  });
+});
+
 describe("toGitConfigPath", () => {
   // git parses -c values with backslash escapes; forward slashes are accepted
   // on every platform and sidestep the question entirely.
-  it("converts Windows separators to forward slashes", () => {
-    const converted = toGitConfigPath("C:\\Users\\Alice\\AppData\\Daintree\\git-hooks", "win32");
+  it("converts Windows separators to forward slashes, preserving every segment", () => {
+    const segments = ["C:", "Users", "Alice", "AppData", "Daintree", "git-hooks"];
+    const converted = toGitConfigPath(segments.join("\\"), "win32");
+
     expect(converted).not.toContain("\\");
+    expect(path.win32.isAbsolute(converted)).toBe(true);
+    // Absoluteness alone would accept a value truncated to "C:/".
+    expect(converted.split("/")).toEqual(segments);
+  });
+
+  it("preserves a UNC root, which stays absolute for git-for-windows", () => {
+    const converted = toGitConfigPath("\\\\server\\share\\Daintree\\git-hooks", "win32");
+
+    expect(converted).toBe("//server/share/Daintree/git-hooks");
     expect(path.win32.isAbsolute(converted)).toBe(true);
   });
 

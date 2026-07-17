@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "path";
 import type { SimpleGit, SimpleGitProgressEvent } from "simple-git";
+import { tightenDirPermissionsSync } from "./fs.js";
 import { detectWslPath } from "./wsl.js";
 
 // Deferred import keeps simple-git out of the eager pre-paint main bundle —
@@ -87,27 +88,62 @@ let hooksDirWarned = false;
  * Never falls back to `process.cwd()`: a CWD-relative hooks path is exactly the
  * defect being fixed.
  */
-function resolveUserDataDir(): string {
-  const fromEnv = process.env.DAINTREE_USER_DATA;
-  if (fromEnv && path.isAbsolute(fromEnv)) return fromEnv;
-  if (fromEnv) {
-    console.warn(`[hardenedGit] DAINTREE_USER_DATA is not absolute: ${fromEnv}, falling back`);
-  }
-
+function getElectronUserDataPath(): string | undefined {
   try {
-    // Dynamic require to avoid breaking tests that mock electron
+    // Dynamic require to avoid breaking tests that mock electron. `require`
+    // exists in the bundled main via esbuild's createRequire banner; under
+    // vitest it does not, and the throw is swallowed on purpose.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const electron = require("electron");
     const userData: unknown = electron.app?.getPath("userData");
-    if (typeof userData === "string" && path.isAbsolute(userData)) return userData;
+    return typeof userData === "string" ? userData : undefined;
   } catch {
-    // Not the main process (or no electron at all) — fall through.
+    return undefined;
+  }
+}
+
+/**
+ * Precedence for the userData root, split out from how the candidates are
+ * obtained so it can be tested directly — the `require("electron")` read above
+ * is unreachable under vitest.
+ *
+ * Every candidate must be absolute; a relative one is reported and skipped
+ * rather than honoured, because a relative hooks path is the defect itself.
+ */
+export function selectUserDataDir(
+  fromEnv: string | undefined,
+  fromElectron: string | undefined,
+  homeDir: string
+): string {
+  if (fromEnv && path.isAbsolute(fromEnv)) return fromEnv;
+  if (fromEnv) {
+    // console.error, not warn: esbuild strips console.warn from production
+    // builds, and a misconfigured hooks root must not fail silently.
+    console.error(`[hardenedGit] DAINTREE_USER_DATA is not absolute: ${fromEnv}, falling back`);
   }
 
-  const home = os.homedir();
-  if (home && path.isAbsolute(home)) return path.join(home, ".daintree");
+  if (fromElectron && path.isAbsolute(fromElectron)) return fromElectron;
+
+  if (homeDir && path.isAbsolute(homeDir)) {
+    // Only expected in tests: the main process resolves via electron, and every
+    // utility process is forked with DAINTREE_USER_DATA. Reaching this in a real
+    // process means main and the workspace-host have split onto different hook
+    // roots, silently costing git-lfs its pre-push hook — so say so loudly.
+    if (process.env.DAINTREE_UTILITY_PROCESS_KIND) {
+      console.error(
+        "[hardenedGit] No usable DAINTREE_USER_DATA in utility process " +
+          `"${process.env.DAINTREE_UTILITY_PROCESS_KIND}" — falling back to the home directory, ` +
+          "which will not match the main process's hooks directory"
+      );
+    }
+    return path.join(homeDir, ".daintree");
+  }
 
   throw new Error("[hardenedGit] Cannot resolve an absolute userData directory for core.hooksPath");
+}
+
+function resolveUserDataDir(): string {
+  return selectUserDataDir(process.env.DAINTREE_USER_DATA, getElectronUserDataPath(), os.homedir());
 }
 
 /**
@@ -127,13 +163,19 @@ function getGitHooksDir(): string {
 
   const dir = path.join(resolveUserDataDir(), "git-hooks");
   try {
-    // 0o700: git dispatches whatever lives here for every repo Daintree
-    // touches, so it must not be writable by other local users.
+    // git dispatches whatever lives here for every repo Daintree touches, so it
+    // must not be writable by other local users. mkdir's `mode` only applies to
+    // segments it newly creates, so tighten unconditionally afterwards — a
+    // directory left at 0o755 by an earlier version would otherwise stay there.
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    tightenDirPermissionsSync(dir);
   } catch (e) {
     if (!hooksDirWarned) {
       hooksDirWarned = true;
-      console.warn(`[hardenedGit] Could not create git hooks directory: ${dir}`, e);
+      // console.error, not warn: esbuild strips console.warn from production
+      // builds, which would make this failure invisible exactly where it costs
+      // git-lfs its install target.
+      console.error(`[hardenedGit] Could not create git hooks directory: ${dir}`, e);
     }
   }
   cachedGitHooksDir = dir;
