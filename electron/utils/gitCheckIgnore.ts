@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { HARDENED_GIT_CONFIG, buildHardenedGitEnv, GIT_BLOCK_TIMEOUT_MS } from "./hardenedGit.js";
+import { getHardenedGitConfig, buildHardenedGitEnv, GIT_BLOCK_TIMEOUT_MS } from "./hardenedGit.js";
 
 /**
  * Direct-spawn wrapper around `git check-ignore --stdin -z`.
@@ -11,12 +11,12 @@ import { HARDENED_GIT_CONFIG, buildHardenedGitEnv, GIT_BLOCK_TIMEOUT_MS } from "
  * makes the argv constant-size and safe up to the OS pipe-buffer limit
  * (typically 64 KB) per spawn.
  *
- * The hardened `-c` config flags from `HARDENED_GIT_CONFIG` are spread into
+ * The hardened `-c` config flags from `getHardenedGitConfig()` are spread into
  * the argv so the call inherits every security-relevant git override the
  * simple-git factory applies (`core.fsmonitor=false`,
- * `protocol.ext.allow=never`, credential-blocking entries, …). Env comes
- * from `buildHardenedGitEnv` so locale and lock-suppression are identical
- * to the simple-git path.
+ * `protocol.ext.allow=never`, credential-blocking entries, an app-owned
+ * `core.hooksPath`, …). Env comes from `buildHardenedGitEnv` so locale and
+ * lock-suppression are identical to the simple-git path.
  *
  * The wrapper applies the same `GIT_BLOCK_TIMEOUT_MS` ceiling that
  * `createHardenedGit` passes to simple-git's `block` knob: a hung git
@@ -48,7 +48,7 @@ export async function checkIgnoredPaths(
   // data follows (matches the output convention of `-z`).
   const body = gitRelativePaths.join("\0") + "\0";
 
-  const configArgs = HARDENED_GIT_CONFIG.flatMap((entry) => ["-c", entry]);
+  const configArgs = getHardenedGitConfig(platform).flatMap((entry) => ["-c", entry]);
   const args = [...configArgs, "check-ignore", "--stdin", "-z"];
 
   return new Promise<Set<string>>((resolve, reject) => {
