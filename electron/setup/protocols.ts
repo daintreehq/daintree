@@ -159,6 +159,34 @@ function createAppProtocolHandler(distPath: string) {
 // renderer OOM via a malicious or accidental large-file URL.
 const DAINTREE_FILE_MAX_BYTES = 512 * 1024;
 
+// Raster images are decoded as pixels by the <img> element, not turned into a
+// giant JS string the way a text read is, so the 512 KB text cap doesn't apply —
+// a normal screenshot or AI-generated PNG routinely runs to several MB. These
+// MIME types get a much larger ceiling (still bounded, and enforced against the
+// bytes actually read) so the inline file viewer can display them. The set
+// mirrors FileViewerModal's IMAGE_EXTENSIONS; SVG is deliberately excluded — the
+// viewer routes SVG through the sanitizing files:read path (its own 512 KB cap),
+// so serving multi-MB raw SVG here would be inconsistent and pointless.
+const DAINTREE_IMAGE_MAX_BYTES = 25 * 1024 * 1024;
+const LARGE_IMAGE_MIME_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "image/bmp",
+  "image/x-icon",
+]);
+
+// The size ceiling for a resolved file. Only the daintree-file:// viewer path
+// opts into the larger raster-image cap (allowLargeImages); daintree-html://
+// report assets stay at the tight cap so a script-driven preview can't turn the
+// allowance into an aggregate-memory DoS.
+function maxBytesForFile(realFile: string, allowLargeImages: boolean): number {
+  return allowLargeImages && LARGE_IMAGE_MIME_TYPES.has(getMimeType(realFile))
+    ? DAINTREE_IMAGE_MAX_BYTES
+    : DAINTREE_FILE_MAX_BYTES;
+}
+
 // Hardened response headers for daintree-file://.
 // CORP must be cross-origin: the app:// renderer and daintree-file:// are
 // different schemes (and therefore different origins/sites), and same-origin
@@ -189,16 +217,20 @@ function buildDaintreeFileErrorHeaders(): Record<string, string> {
 
 /**
  * Shared read core for daintree-file:// and daintree-html://: realpath
- * containment, 512 KB cap, and O_RDONLY|O_NOFOLLOW open. Returns the file bytes
+ * containment, a size cap (per maxBytesForFile — larger for raster images when
+ * allowLargeImages is set), and O_RDONLY|O_NOFOLLOW open. Returns the file bytes
  * plus the canonical path (for MIME), or an error Response. Callers own the
- * success headers so each scheme sets its own CSP. Extracted verbatim from the
- * original daintree-file:// handler; the flow (realpath → path.relative → stat →
- * O_NOFOLLOW open) and its TOCTOU defenses are unchanged.
+ * success headers so each scheme sets its own CSP. The flow (realpath →
+ * path.relative → stat → O_NOFOLLOW open) and its TOCTOU defenses are unchanged.
  */
 // Return type is inferred, not annotated: annotating `buffer: Buffer` widens it
 // to `Buffer<ArrayBufferLike>`, which `new Response(...)` rejects as a BodyInit.
 // Inference preserves the exact `readFile()` result type the Response accepts.
-async function readContainedDaintreeFile(normalizedRoot: string, normalizedFile: string) {
+async function readContainedDaintreeFile(
+  normalizedRoot: string,
+  normalizedFile: string,
+  allowLargeImages: boolean
+) {
   // Resolve symlinks before containment to block in-root symlinks pointing outside root (CVE-2025-53109 / CVE-2025-54794 class).
   let realRoot: string;
   let realFile: string;
@@ -232,7 +264,8 @@ async function readContainedDaintreeFile(normalizedRoot: string, normalizedFile:
     });
   }
 
-  if (fileStat.size > DAINTREE_FILE_MAX_BYTES) {
+  const maxBytes = maxBytesForFile(realFile, allowLargeImages);
+  if (fileStat.size > maxBytes) {
     return new Response("Payload Too Large", {
       status: 413,
       headers: buildDaintreeFileErrorHeaders(),
@@ -261,6 +294,17 @@ async function readContainedDaintreeFile(normalizedRoot: string, normalizedFile:
 
   try {
     const buffer = await fileHandle.readFile();
+    // The pre-read stat is advisory: a writer can grow or swap the file between
+    // stat and read (O_NOFOLLOW blocks only a final-component symlink swap, not
+    // a regular-file replacement or in-place growth). Re-check the bytes we
+    // actually read so an oversized file can never reach the renderer, where the
+    // decode-OOM risk this cap exists to bound actually lives.
+    if (buffer.length > maxBytes) {
+      return new Response("Payload Too Large", {
+        status: 413,
+        headers: buildDaintreeFileErrorHeaders(),
+      });
+    }
     return { buffer, realFile };
   } finally {
     // Swallow close errors so they don't mask a preceding readFile failure.
@@ -308,7 +352,8 @@ function createDaintreeFileProtocolHandler() {
 
       const result = await readContainedDaintreeFile(
         path.normalize(rootPath),
-        path.normalize(filePath)
+        path.normalize(filePath),
+        true
       );
       if (result instanceof Response) return result;
 
@@ -489,7 +534,10 @@ function createDaintreeHtmlProtocolHandler() {
 
     try {
       const candidatePath = path.resolve(root, normalizedPosix);
-      const result = await readContainedDaintreeFile(path.normalize(root), candidatePath);
+      // Report assets keep the tight cap: a preview document can execute scripts
+      // and request the same file many times, so the raster-image allowance is
+      // scoped to the daintree-file:// viewer path only.
+      const result = await readContainedDaintreeFile(path.normalize(root), candidatePath, false);
       if (result instanceof Response) return result;
 
       // Only navigable HTML documents get the loosened, token-scoped CSP;
