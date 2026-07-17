@@ -2,6 +2,7 @@ import { createHash } from "crypto";
 import fs from "fs/promises";
 import { createWriteStream } from "fs";
 import path from "path";
+import { pipeline } from "node:stream/promises";
 import yauzl from "yauzl";
 import { getPluginManifestSchema } from "../schemas/plugin.js";
 import { MAX_DNTR_BYTES } from "../utils/pluginArchiveConstants.js";
@@ -12,6 +13,19 @@ export const ZIP_EPOCH_DATE = new Date("1980-01-01T00:00:00Z");
 // assets; thousands of entries means an archive padded with tiny/empty members
 // to force unbounded filesystem ops during extraction (zip-bomb-by-count).
 export const MAX_DNTR_ENTRIES = 4096;
+
+// Per-entry inactivity budget during extraction. Extraction is a local disk
+// copy, so a window this wide can only be hit by a genuinely dead stream —
+// never by a slow-but-live one. Without it a stalled read stream leaves
+// `installPlugin` awaiting forever, holding `install.lock` and its
+// `.install-tmp-*` dir until the app is quit (#11227). Per-entry and reset on
+// every chunk, so a large archive isn't penalised for making steady progress.
+export const PLUGIN_ARCHIVE_ENTRY_INACTIVITY_MS = 30_000;
+
+export interface ExtractOptions {
+  /** Override the per-entry inactivity abort. Tests only — production uses the default. */
+  inactivityTimeoutMs?: number;
+}
 
 const REQUIRED_EXCLUSIONS: readonly string[] = ["node_modules/", ".git/"];
 
@@ -356,8 +370,17 @@ export async function readArchiveManifest(archivePath: string): Promise<PluginMa
  * rejected via {@link isValidEntryName} before resolution. Directory entries
  * (trailing `/`) only create the directory; file entries stream to disk and
  * the next entry is read only after the write stream closes (`lazyEntries`).
+ *
+ * A file entry that goes quiet for {@link PLUGIN_ARCHIVE_ENTRY_INACTIVITY_MS}
+ * aborts the whole extraction with a rejection rather than hanging, so the
+ * caller's cleanup always runs.
  */
-export async function extractPluginArchive(archivePath: string, destDir: string): Promise<void> {
+export async function extractPluginArchive(
+  archivePath: string,
+  destDir: string,
+  opts?: ExtractOptions
+): Promise<void> {
+  const inactivityMs = opts?.inactivityTimeoutMs ?? PLUGIN_ARCHIVE_ENTRY_INACTIVITY_MS;
   const stat = await fs.stat(archivePath);
   if (stat.size > MAX_DNTR_BYTES) {
     throw new Error(`Archive size ${stat.size} exceeds ${MAX_DNTR_BYTES} byte limit`);
@@ -379,9 +402,15 @@ export async function extractPluginArchive(archivePath: string, destDir: string)
     let totalUncompressed = 0;
     let entryCount = 0;
     const seen = new Set<string>();
+    // The transfer in flight, if any. `lazyEntries` guarantees at most one at a
+    // time, so a single handle (not a set) is enough. `fail()` aborts it before
+    // closing the zip so a zipfile-level error can't leave a live read stream
+    // dangling on the shared file descriptor.
+    let activeTransfer: { abort: () => void } | null = null;
     const fail = (err: Error) => {
       if (settled) return;
       settled = true;
+      activeTransfer?.abort();
       zipfile.close();
       reject(err);
     };
@@ -432,10 +461,62 @@ export async function extractPluginArchive(archivePath: string, destDir: string)
         zipfile.openReadStream(entry, (err, stream) => {
           if (err) return fail(err);
           const out = createWriteStream(resolved, { mode: 0o644 });
-          stream.on("error", fail);
-          out.on("error", fail);
-          out.on("finish", () => zipfile.readEntry());
-          stream.pipe(out);
+
+          // Abort the transfer if the entry stalls. `pipeline` destroys both
+          // streams on abort and rejects with this exact error, which flows to
+          // `fail()` below. The timer is reset on every chunk, so only a truly
+          // dead stream trips it.
+          const controller = new AbortController();
+          let timer: ReturnType<typeof setTimeout>;
+          const resetTimer = () => {
+            clearTimeout(timer);
+            timer = setTimeout(
+              () =>
+                controller.abort(
+                  new Error(`Extraction of "${name}" stalled: no data for ${inactivityMs}ms`)
+                ),
+              inactivityMs
+            );
+          };
+          const clearTimer = () => clearTimeout(timer);
+          // Attaching this listener flips the stream to flowing mode; `pipeline`
+          // below consumes it. Both must be wired in this same synchronous tick
+          // — `resume()` only schedules the first read on the next tick — or a
+          // chunk could be emitted before `pipeline` starts reading. Do not
+          // split these two statements.
+          stream.on("data", resetTimer);
+          resetTimer();
+          // Reuse the abort as the outer teardown hook: if the zip errors while
+          // this transfer is live, `fail()` aborts the controller, which
+          // destroys both streams and rejects the pipeline below.
+          activeTransfer = {
+            abort: () => controller.abort(new Error(`Extraction of "${name}" was interrupted`)),
+          };
+
+          pipeline(stream, out, { signal: controller.signal }).then(
+            () => {
+              clearTimer();
+              activeTransfer = null;
+              if (!settled) zipfile.readEntry();
+            },
+            (pipelineErr: unknown) => {
+              clearTimer();
+              activeTransfer = null;
+              // On abort, `pipeline` rejects with a generic AbortError that
+              // drops the reason we passed to `controller.abort()`, so recover
+              // it from the signal — that's where the entry-naming stall (or
+              // teardown) error lives. A genuine stream error leaves the signal
+              // un-aborted, so fall through to the pipeline's own error.
+              const reason = controller.signal.reason;
+              fail(
+                controller.signal.aborted && reason instanceof Error
+                  ? reason
+                  : pipelineErr instanceof Error
+                    ? pipelineErr
+                    : new Error(String(pipelineErr))
+              );
+            }
+          );
         });
       }, fail);
     });

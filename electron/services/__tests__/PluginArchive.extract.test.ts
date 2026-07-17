@@ -1,8 +1,10 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
 import zlib from "zlib";
+import { Readable } from "stream";
+import yauzl from "yauzl";
 import { packPluginArchive, extractPluginArchive, MAX_DNTR_ENTRIES } from "../PluginArchive.js";
 
 let tmpDir: string;
@@ -251,5 +253,53 @@ describe("extractPluginArchive", () => {
     await fs.mkdir(dest, { recursive: true });
 
     await expect(extractPluginArchive(archivePath, dest)).rejects.toThrow(/exceeds/);
+  });
+
+  // Regression for #11227: a read stream that stops emitting without ever
+  // ending or erroring used to hang extraction forever (the caller's install
+  // lock and temp dir stayed held until the app quit). The inactivity guard now
+  // aborts and rejects instead. We can't reproduce the upstream Node/stream
+  // timing bug deterministically, so we inject a stalled stream via a
+  // prototype spy and drive the guard with a short override — no fake timers,
+  // so the real pipeline/stream machinery runs unmodified.
+  it("aborts and rejects when an entry stream stalls, without advancing to the next entry", async () => {
+    const archivePath = path.join(tmpDir, "stall.dntr");
+    await fs.writeFile(
+      archivePath,
+      buildRawZip([
+        { name: "dist/first.js", content: "a" },
+        { name: "dist/second.js", content: "b" },
+      ])
+    );
+    const dest = path.join(tmpDir, "extracted-stall");
+    await fs.mkdir(dest, { recursive: true });
+
+    const stalledStreams: Readable[] = [];
+    const openReadStreamSpy = vi
+      .spyOn(yauzl.ZipFile.prototype, "openReadStream")
+      .mockImplementation((_entry, callback) => {
+        const stalled = new Readable({ read() {} });
+        stalledStreams.push(stalled);
+        // Emit one chunk, then go silent forever — never end, never error. The
+        // single chunk also exercises the timer's reset-on-data path before the
+        // inactivity window elapses.
+        stalled.push(Buffer.from("partial"));
+        callback(null, stalled);
+      });
+
+    try {
+      await expect(
+        extractPluginArchive(archivePath, dest, { inactivityTimeoutMs: 50 })
+      ).rejects.toThrow(/dist\/first\.js.*stalled/);
+
+      // The abort reached `pipeline`, which destroyed the source stream...
+      expect(stalledStreams).toHaveLength(1);
+      expect(stalledStreams[0].destroyed).toBe(true);
+      // ...and extraction never advanced to the second entry (only one
+      // openReadStream call means readEntry() was never issued after the stall).
+      expect(openReadStreamSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      openReadStreamSpy.mockRestore();
+    }
   });
 });
