@@ -257,8 +257,8 @@ describe("TerminalInstanceService - Scrollback", () => {
 
       service.restoreScrollback("t1");
 
-      // getScrollbackForType(true, 5000) = min(5000, max(500, floor(5000*1.5))) = 5000
-      expect(managed.terminal.options.scrollback).toBe(5000);
+      // getScrollbackForType(true, 5000) = min(10000, max(500, floor(5000*10))) = 10000
+      expect(managed.terminal.options.scrollback).toBe(10000);
     });
   });
 });

@@ -92,7 +92,7 @@ describe("TerminalScrollbackController adversarial", () => {
     restoreScrollback(agentManaged);
 
     expect(terminalManaged.terminal.options.scrollback).toBe(2000);
-    expect(agentManaged.terminal.options.scrollback).toBe(5000);
+    expect(agentManaged.terminal.options.scrollback).toBe(10000);
   });
 
   it("NEGATIVE_SCROLLBACK_USED_NO_WARN", () => {

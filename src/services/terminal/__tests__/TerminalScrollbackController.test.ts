@@ -268,7 +268,8 @@ describe("TerminalScrollbackController", () => {
       managed.terminal.options.scrollback = 100;
 
       restoreScrollback(managed);
-      expect(managed.terminal.options.scrollback).toBe(5000);
+      // getScrollbackForType(true, 5000) = min(10000, floor(5000*10)) = 10000
+      expect(managed.terminal.options.scrollback).toBe(10000);
     });
 
     // #10911 — a demotion flap (agent→plain) calls restoreScrollback with a
