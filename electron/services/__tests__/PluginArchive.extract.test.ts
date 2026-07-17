@@ -315,8 +315,10 @@ describe("extractPluginArchive", () => {
     // yauzl 3.x + pipeline path and checks the bytes round-trip exactly.
     const big = Buffer.alloc(100 * 1024);
     for (let i = 0; i < big.length; i++) {
-      // Knuth multiplicative hash — deterministic, well-distributed, so the
-      // payload barely compresses and genuinely streams many chunks.
+      // Knuth multiplicative hash — a deterministic, varied fill. What matters
+      // for the repro is the 100KB *decompressed* size: it crosses the write
+      // stream's 64KiB highWaterMark and drives the backpressure the stall
+      // depended on. The bytes are also compared exactly on the way out.
       big[i] = (i * 2654435761) >>> 24;
     }
     const archivePath = path.join(tmpDir, "big.dntr");
