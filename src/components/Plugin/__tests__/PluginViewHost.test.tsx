@@ -852,9 +852,8 @@ describe("PluginViewHost panel integration (#11228)", () => {
     // above). Register the kind so the real chrome derivation resolves it to the
     // panel branch, proving `kindId` (not a default or `props.kind`) reached
     // ContentPanel end-to-end, via `data-runtime-*` on the panel root.
-    const { registerPanelKind, unregisterPanelKind } = await import(
-      "@shared/config/panelKindRegistry"
-    );
+    const { registerPanelKind, unregisterPanelKind } =
+      await import("@shared/config/panelKindRegistry");
     registerPanelKind({
       id: "acme.dashboard",
       name: "Dashboard",
