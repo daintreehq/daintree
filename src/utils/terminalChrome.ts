@@ -187,12 +187,18 @@ export function terminalChromeDescriptorsEqual(
 
 export function deriveTerminalChrome(input: TerminalChromeInput = {}): TerminalChromeDescriptor {
   const kind = input.kind ?? "terminal";
-  if (kind === "browser" || kind === "dev-preview" || kind === "review" || kind === "file") {
-    const config = getPanelKindConfig(kind);
+  // Any registered non-PTY kind is a panel, not a process: take its identity
+  // straight from the registry entry. This was a hardcoded list of the built-in
+  // non-PTY kinds (browser/dev-preview/review/file), which is exactly the set
+  // `!hasPty` selects — but it silently excluded plugin-contributed kinds, so a
+  // plugin panel fell through to the agent path and lost the `iconId` its
+  // manifest declares (#11228). An unregistered kind still falls through below.
+  const panelConfig = getPanelKindConfig(kind);
+  if (panelConfig && !panelConfig.hasPty) {
     return {
-      iconId: config?.iconId ?? null,
-      color: config?.color ?? getPanelKindColor(kind),
-      label: config?.name ?? kind,
+      iconId: panelConfig.iconId ?? null,
+      color: panelConfig.color ?? getPanelKindColor(kind),
+      label: panelConfig.name ?? kind,
       isAgent: false,
       agentId: null,
       processId: null,

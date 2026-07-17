@@ -68,13 +68,19 @@ vi.mock("@/components/ui/tooltip", () => ({
 import { ContentPanel } from "../ContentPanel";
 import { focusPanelInput } from "../panelFocusRegistry";
 
-type PanelKind = "terminal" | "browser" | "dev-preview" | "review" | "file";
+// `acme.dashboard` stands in for a plugin-contributed kind: unregistered in this
+// suite, so it also pins `panelKindHasPty`'s `?? false` fallback — an unknown
+// kind must still get a focus target rather than being mistaken for a PTY (#11228).
+type PanelKind = "terminal" | "browser" | "dev-preview" | "review" | "file" | "acme.dashboard";
+
+const NON_PTY_KINDS: PanelKind[] = ["browser", "dev-preview", "review", "file", "acme.dashboard"];
 
 interface RenderExtras {
   tabIndex?: number;
   ref?: React.Ref<HTMLDivElement>;
   isFocused?: boolean;
   children?: React.ReactNode;
+  onFocus?: () => void;
 }
 
 function panelElement(id: string, kind: PanelKind, extra?: RenderExtras) {
@@ -84,7 +90,7 @@ function panelElement(id: string, kind: PanelKind, extra?: RenderExtras) {
       title={`Panel ${id}`}
       kind={kind}
       isFocused={extra?.isFocused ?? false}
-      onFocus={() => {}}
+      onFocus={extra?.onFocus ?? (() => {})}
       onClose={() => {}}
       tabIndex={extra?.tabIndex}
       ref={extra?.ref}
@@ -114,7 +120,7 @@ function panelRoot(container: HTMLElement, id: string): HTMLElement {
 describe("ContentPanel focus target (#11109)", () => {
   afterEach(cleanup);
 
-  it.each<PanelKind>(["browser", "dev-preview", "review", "file"])(
+  it.each<PanelKind>(NON_PTY_KINDS)(
     "moves focus to the panel root and confirms the handoff for %s panels",
     (kind) => {
       const { container } = renderPanel("p-1", kind);
@@ -187,6 +193,54 @@ describe("ContentPanel focus target (#11109)", () => {
 });
 
 /**
+ * Focus *selection*, as distinct from the focus *delivery* covered above:
+ * clicking a pane has to write `focusedId`, or panel-scoped actions keep
+ * resolving `terminalId ?? focusedId` to whatever was selected before — which
+ * is how Cmd+W ended up closing the previously focused agent (#11228).
+ */
+describe("ContentPanel click-to-select (#11228)", () => {
+  afterEach(cleanup);
+
+  it.each<PanelKind>(NON_PTY_KINDS)(
+    "selects a %s panel when a click bubbles out of its content",
+    (kind) => {
+      const onFocus = vi.fn<() => void>();
+      const { container } = renderPanel("p-1", kind, {
+        onFocus,
+        children: <button data-testid="plugin-child">Inside the plugin</button>,
+      });
+
+      // Click the deepest child, not the root: the bug was that content clicks
+      // never reached any focus wiring at all.
+      container.querySelector<HTMLElement>('[data-testid="plugin-child"]')!.click();
+
+      expect(onFocus).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it("lets content opt out of selection by preventing the click", () => {
+    const onFocus = vi.fn<() => void>();
+    const { container } = renderPanel("p-1", "acme.dashboard", {
+      onFocus,
+      children: (
+        <button
+          data-testid="plugin-child"
+          onClick={(e) => {
+            e.preventDefault();
+          }}
+        >
+          Handled by the plugin
+        </button>
+      ),
+    });
+
+    container.querySelector<HTMLElement>('[data-testid="plugin-child"]')!.click();
+
+    expect(onFocus).not.toHaveBeenCalled();
+  });
+});
+
+/**
  * The registry alone only covers macro-grid Enter and in-group tab switches.
  * Arrow navigation, Cmd+1..9, focusNext/Previous and agent-state cycling all
  * just write `focusedId` — so becoming the focused pane has to move DOM focus
@@ -196,7 +250,7 @@ describe("ContentPanel focus target (#11109)", () => {
 describe("ContentPanel reactive focus (#11133)", () => {
   afterEach(cleanup);
 
-  it.each<PanelKind>(["browser", "dev-preview", "review", "file"])(
+  it.each<PanelKind>(NON_PTY_KINDS)(
     "claims DOM focus for a %s panel that becomes focused without the registry",
     (kind) => {
       const outside = document.createElement("button");

@@ -517,6 +517,13 @@ export function TerminalContextMenu({
   const isDevPreview = isDevPreviewPanel(terminal);
   const isReview = isReviewPanel(terminal);
   const isFile = isFilePanel(terminal);
+  // Plugin-contributed kinds match none of the built-in guards, so without this
+  // they fall through to the terminal menu and are offered "Duplicate terminal",
+  // "Kill terminal", and friends — none of which apply (#11228). `pluginId` is
+  // stamped at creation and survives the plugin going missing, which is why it
+  // beats a registry lookup here. The generic panel menu below is exactly the
+  // right item set, so plugin panels share it rather than duplicating it.
+  const isPlugin = Boolean(terminal.pluginId);
   const hasPty = terminal.kind ? panelKindHasPty(terminal.kind) : true;
 
   const layoutSection = (
@@ -744,7 +751,7 @@ export function TerminalContextMenu({
     );
   }
 
-  if (isFile) {
+  if (isFile || isPlugin) {
     return (
       <ContextMenu>
         <MenuActionSourceContext.Consumer>

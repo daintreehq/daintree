@@ -1,7 +1,6 @@
 import {
   Suspense,
   lazy,
-  useCallback,
   useEffect,
   useRef,
   useState,
@@ -12,13 +11,31 @@ import type { PanelKindConfig } from "@shared/config/panelKindRegistry";
 import type { PanelViewProps } from "@shared/types/plugin";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import type { ErrorFallbackProps } from "@/components/ErrorBoundary/ErrorFallback";
-import { BrowserPaneSkeleton } from "@/components/Browser/BrowserPaneSkeleton";
+import { ContentPanel, type BasePanelProps } from "@/components/Panel";
+import type { TabInfo } from "@/components/Panel/TabButton";
+import { Skeleton, SkeletonHint } from "@/components/ui/Skeleton";
 import { ContentFadeIn } from "@/components/ui/ContentFadeIn";
-import { usePanelRootFocus } from "@/components/Panel/usePanelRootFocus";
 import { PluginViewDiagnosticsFallback } from "@/components/Plugin/PluginViewDiagnosticsFallback";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
-import type { PanelComponentProps } from "@/panels/registry";
 import { logWarn } from "@/utils/logger";
+
+/**
+ * Plugin panels are ordinary grid panels: `ContentPanel` owns their chrome and
+ * their focus-registry entry, so the host's props mirror what every other
+ * non-PTY pane declares (`FilePaneProps`) rather than the registry's untyped
+ * `PanelComponentProps` bag — spreading `unknown`-valued tab props into
+ * `ContentPanel` would not typecheck. `GridPanel` supplies every field here.
+ */
+export interface PluginViewHostProps extends BasePanelProps {
+  extensionState?: Record<string, unknown>;
+  tabs?: TabInfo[];
+  groupId?: string;
+  onTabClick?: (tabId: string) => void;
+  onTabClose?: (tabId: string) => void;
+  onTabRename?: (tabId: string, newTitle: string) => void;
+  onAddTab?: () => void;
+  onTabReorder?: (newOrder: string[]) => void;
+}
 
 /**
  * Upper bound on a single `plugin://` view import before the host gives up and
@@ -64,7 +81,7 @@ function isPluginViewModule(mod: unknown): mod is { default: ComponentType<Panel
  * unresolved as of 2026), so every dev iteration permanently expands the
  * renderer's module map. Acceptable for dev; never for production.
  */
-export function makePluginViewHost(config: PanelKindConfig): ComponentType<PanelComponentProps> {
+export function makePluginViewHost(config: PanelKindConfig): ComponentType<PluginViewHostProps> {
   const componentPath = config.componentPath;
   const pluginId = config.extensionId;
   const kindId = config.id;
@@ -174,7 +191,7 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Panel
       return { default: mod.default };
     });
 
-  function PluginViewHost(props: PanelComponentProps) {
+  function PluginViewHost({ extensionState, ...panelProps }: PluginViewHostProps) {
     // Store the lazy component in state so retries can swap in a fresh ref
     // without a useMemo dependency array — `lazy()` memoizes the import
     // promise by factory-function identity, so retrying after a chunk-load
@@ -194,14 +211,6 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Panel
     // cases this can't cover; see PluginViewFallback.
     const initPluginRuntime = usePluginRuntimeStore((s) => s.init);
     useEffect(() => initPluginRuntime(), [initPluginRuntime]);
-
-    const rootRef = useRef<HTMLDivElement | null>(null);
-    const panelId = props.id;
-    // Focusing the host root establishes ownership in the parent document; it
-    // does not push focus into the plugin's guest frame. Focus already inside
-    // the host (a plugin input, an iframe) is left where it is.
-    const getRootNode = useCallback(() => rootRef.current, []);
-    usePanelRootFocus({ id: panelId, isFocused: props.isFocused, getNode: getRootNode });
 
     // The dispose controller lives in state because its signal is consumed
     // during render (passed to the plugin view as `disposeSignal`), and refs
@@ -257,10 +266,13 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Panel
     };
 
     return (
-      // Plugin views render no ContentPanel, so the host owns the panel's focus
-      // target. Sitting outside the boundary keeps macro-grid Enter working
-      // while the view is still loading and after it has failed.
-      <div ref={rootRef} tabIndex={-1} className="flex flex-col h-full w-full">
+      // ContentPanel owns click-to-focus, the focus-registry entry, and the pane
+      // chrome, exactly as it does for every other non-PTY kind (#11228). It sits
+      // outside the boundary and Suspense on purpose: a loading or crashed view
+      // keeps its header, context menu, and close control, so the panel is never
+      // stranded open. `kind` comes from the closure — `buildPanelProps` doesn't
+      // supply one, and the closure value is authoritative anyway.
+      <ContentPanel {...panelProps} kind={kindId}>
         <ErrorBoundary
           variant="component"
           // `kindId` is already `${pluginId}.${panel.id}` (PluginService builds
@@ -270,18 +282,32 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Panel
           onReset={handleReset}
           resetKeys={[retryCount]}
         >
-          <Suspense fallback={<BrowserPaneSkeleton label={`Loading ${displayName}`} />}>
-            <ContentFadeIn className="flex flex-col h-full w-full">
+          <Suspense
+            fallback={
+              // Content-only bones: ContentPanel already paints the real header,
+              // so a skeleton carrying its own (BrowserPaneSkeleton) would double
+              // it. Mirrors DevPreviewPaneFallback's quiet canvas — a plugin's
+              // content shape is unknowable, so bones must not imply one.
+              <div className="relative h-full">
+                <Skeleton
+                  label={`Loading ${displayName}`}
+                  className="h-full bg-surface-canvas"
+                />
+                <SkeletonHint className="absolute bottom-8 left-1/2 -translate-x-1/2 pointer-events-auto" />
+              </div>
+            }
+          >
+            <ContentFadeIn className="flex flex-col flex-1 min-h-0 w-full">
               <LazyView
-                panelId={props.id}
+                panelId={panelProps.id}
                 pluginId={pluginId!}
                 disposeSignal={controller.signal}
-                initialArgs={props.extensionState}
+                initialArgs={extensionState}
               />
             </ContentFadeIn>
           </Suspense>
         </ErrorBoundary>
-      </div>
+      </ContentPanel>
     );
   }
 
