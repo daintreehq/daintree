@@ -61,7 +61,9 @@ test.describe.serial("Core: File Viewer Modal", () => {
     await dispatchViewFile(ctx, filePath);
 
     const dialog = await waitForDialog(ctx);
-    await expect(dialog.locator("text=index.ts")).toBeVisible({ timeout: T_SHORT });
+    await expect(dialog.getByRole("heading", { name: /index\.ts/ })).toBeVisible({
+      timeout: T_SHORT,
+    });
 
     await closeDialog(ctx);
   });

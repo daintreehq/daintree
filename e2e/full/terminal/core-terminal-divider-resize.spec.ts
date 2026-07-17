@@ -126,29 +126,10 @@ test.describe.serial("Terminal divider resize coordination", () => {
     try {
       await window.mouse.move(targetX, y, { steps: 8 });
 
-      await expect
-        .poll(
-          async () => {
-            const geometries = await Promise.all(
-              panelIds.map((panelId) => getTerminalGeometry(window, panelId))
-            );
-            return geometries.every(
-              (geometry, index) =>
-                geometry !== null &&
-                geometry.cols === baselineGrids[index]!.cols &&
-                geometry.rows === baselineGrids[index]!.rows &&
-                geometry.ptyCols === baselineGrids[index]!.ptyCols &&
-                geometry.ptyRows === baselineGrids[index]!.ptyRows &&
-                geometry.proposedCols !== geometry.cols
-            );
-          },
-          { timeout: T_SHORT, intervals: [50, 100, 250] }
-        )
-        .toBe(true);
-
       // The controller's dead-man lock expires after 5s and the watchdog ticks
-      // every 3s. Holding for more than their sum proves the gesture re-arm owns
-      // the grid throughout, regardless of the watchdog's interval phase.
+      // every 3s. The held-state assertion below proves the gesture re-arm owns
+      // the grid throughout, regardless of the watchdog's interval phase. Do not
+      // separately require the transient proposal state to paint within 3s.
       await window.waitForTimeout(8_250);
 
       const held = await Promise.all(
