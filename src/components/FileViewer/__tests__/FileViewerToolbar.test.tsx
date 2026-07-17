@@ -19,10 +19,13 @@ const CHAR_PX = 10;
 const PAD_X = 36; // pl-7 (28) + pr-2 (8), matching the pill's padding
 
 let containerWidth = 0;
-let resizeCallbacks: ResizeObserverCallback[] = [];
+// The fit callback ignores both ResizeObserver arguments (it re-measures the
+// element it already holds), so the double stores it as the zero-arg function
+// it really is rather than manufacturing entries and an observer to pass it.
+let resizeCallbacks: Array<() => void> = [];
 
 class MockResizeObserver {
-  constructor(callback: ResizeObserverCallback) {
+  constructor(callback: () => void) {
     resizeCallbacks.push(callback);
   }
   observe() {}
@@ -34,7 +37,7 @@ class MockResizeObserver {
 function resizeTo(width: number) {
   containerWidth = width;
   act(() => {
-    for (const cb of resizeCallbacks) cb([], {} as ResizeObserver);
+    for (const cb of resizeCallbacks) cb();
   });
 }
 
@@ -66,6 +69,7 @@ beforeEach(() => {
       },
     });
   });
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- the fit only ever touches .font and .measureText().width; a real CanvasRenderingContext2D isn't constructible in jsdom
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
     font: "",
     measureText: (text: string) => ({ width: text.length * CHAR_PX }),
@@ -84,6 +88,8 @@ afterEach(() => {
 describe("FileViewerToolbar.Path", () => {
   const LONG_PATH = "src/components/deeply/nested/file.tsx";
   const BASENAME = "/file.tsx";
+  /** The directory part, which is what the fit is allowed to elide. */
+  const HEAD = LONG_PATH.slice(0, LONG_PATH.length - BASENAME.length);
 
   function renderPath(path: string, { copied = false, onCopy = vi.fn() } = {}) {
     render(<FileViewerToolbar.Path path={path} copied={copied} onCopy={onCopy} />);
@@ -112,6 +118,23 @@ describe("FileViewerToolbar.Path", () => {
     expect(display.match(/…/g)).toHaveLength(1);
     // And the result actually fits the space it measured against.
     expect(display.length * CHAR_PX).toBeLessThanOrEqual(availableWidth());
+  });
+
+  it("keeps both ends of the directory head, not just one", () => {
+    containerWidth = 200;
+    renderPath(LONG_PATH);
+    const display = fittedText();
+
+    // Defaulted for noUncheckedIndexedAccess; the non-empty assertions below
+    // are what actually reject a missing side.
+    const [front = "", back = ""] = display.slice(0, display.length - BASENAME.length).split("…");
+    // Spending the whole budget on the prefix would still fit and still keep
+    // the basename — so pin both ends: the kept text must be a genuine prefix
+    // AND suffix of the elided directory head, and neither may be empty.
+    expect(HEAD.startsWith(front)).toBe(true);
+    expect(HEAD.endsWith(back)).toBe(true);
+    expect(front.length).toBeGreaterThan(0);
+    expect(back.length).toBeGreaterThan(0);
   });
 
   it("keeps as much of the head as fits — one more character would overflow", () => {
@@ -143,11 +166,16 @@ describe("FileViewerToolbar.Path", () => {
     expect(fittedText()).toBe("file.tsx");
   });
 
-  it("shows the full text rather than a stale fit while unmeasurable", () => {
-    // Zero-width (hidden pane): a stale fit of the *previous* path would be
-    // worse than the untruncated text, which CSS truncate still backstops.
-    containerWidth = 0;
+  it("shows the full text rather than a stale fit once unmeasurable", () => {
+    // Must start from a real fit: mounting straight into zero width would pass
+    // on the initial state alone, proving nothing about the guard.
+    containerWidth = 200;
     renderPath(LONG_PATH);
+    expect(fittedText()).not.toBe(LONG_PATH);
+
+    // Zero-width (hidden pane): a stale fit of the previous path would be worse
+    // than the untruncated text, which CSS truncate still backstops.
+    resizeTo(0);
 
     expect(fittedText()).toBe(LONG_PATH);
   });

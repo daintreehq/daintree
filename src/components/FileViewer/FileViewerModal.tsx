@@ -355,8 +355,17 @@ export function FileViewerModal({
     };
   }, []);
 
+  // The default-to-diff switch below is one-shot per file, so it re-arms on the
+  // dialog opening or the file changing — but deliberately NOT on a manual
+  // refresh, which would otherwise re-fire the default and pull the user out of
+  // a mode they picked themselves.
+  useEffect(() => {
+    hasSwitchedToDiffRef.current = false;
+  }, [isOpen, filePath, effectiveRootPath]);
+
   // Non-reactive: reads defaultMode/hasDiff/initialLine/imageFile/svgFile at call
-  // time so the effect only re-runs on isOpen/filePath/effectiveRootPath changes.
+  // time so the effect only re-runs on isOpen/filePath/effectiveRootPath changes
+  // and on an explicit refresh.
   const loadFile = useEffectEvent(() => {
     if (!isOpen) {
       setContent(null);
@@ -368,7 +377,6 @@ export function FileViewerModal({
       setPathCopied(false);
       setSanitizedSvg(null);
       requestRef.current++;
-      hasSwitchedToDiffRef.current = false;
       currentHunkIndexRef.current = -1;
       pendingHunkTargetRef.current = null;
       setSearchOpen(false);
@@ -382,7 +390,6 @@ export function FileViewerModal({
     setLoadState("loading");
     setErrorCode(null);
     setDisplayErrorMessage(null);
-    hasSwitchedToDiffRef.current = false;
     currentHunkIndexRef.current = -1;
 
     // Stepping between files (onNavigateFile) keeps the modal open, so a mode
@@ -1086,29 +1093,6 @@ export function FileViewerModal({
     };
   }, [isOpen, mode, diff, hunkMarkers.length, searchMarkers.length, collapseRevision]);
 
-  // Mode toggle: markdown and HTML files get Rendered/Source (plus Diff when
-  // available); other files keep the original View/Diff pair. Defined once and
-  // mounted either in the toolbar row or — in diff mode, which has no toolbar
-  // row — in the header.
-  const modeToggle =
-    (hasDiff || renderableFile) && !imageFile && (canShowView || loadState !== "loading") ? (
-      <SegmentedToggle
-        options={[
-          {
-            value: "view" as ViewMode,
-            label: renderableFile ? "Source" : "View",
-            disabled: !canShowView,
-          },
-          ...(renderableFile
-            ? [{ value: "rendered" as ViewMode, label: "Rendered", disabled: !canShowView }]
-            : []),
-          ...(hasDiff ? [{ value: "diff" as ViewMode, label: "Diff" }] : []),
-        ]}
-        value={mode}
-        onChange={setMode}
-      />
-    ) : null;
-
   return (
     <AppDialog
       isOpen={isOpen}
@@ -1155,10 +1139,31 @@ export function FileViewerModal({
               </span>
             )}
 
-          {/* In diff mode the toolbar row is gone, so the toggle keeps its
-              original header seat; plain viewing hosts it in the toolbar,
-              leading the row exactly as the panel does. */}
-          {mode === "diff" && modeToggle}
+          {/* Mode toggle: markdown and HTML files get Rendered/Source (plus Diff
+              when available); other files keep the original View/Diff pair.
+              This stays in the header rather than leading the toolbar row the
+              way the panel's does — the row is gated out of diff mode, so a
+              toggle inside it would unmount on the View→Diff switch and drop
+              the keyboard focus of whoever just activated it. */}
+          {(hasDiff || renderableFile) &&
+            !imageFile &&
+            (canShowView || loadState !== "loading") && (
+              <SegmentedToggle
+                options={[
+                  {
+                    value: "view" as ViewMode,
+                    label: renderableFile ? "Source" : "View",
+                    disabled: !canShowView,
+                  },
+                  ...(renderableFile
+                    ? [{ value: "rendered" as ViewMode, label: "Rendered", disabled: !canShowView }]
+                    : []),
+                  ...(hasDiff ? [{ value: "diff" as ViewMode, label: "Diff" }] : []),
+                ]}
+                value={mode}
+                onChange={setMode}
+              />
+            )}
         </div>
 
         <div className="flex items-center gap-2 shrink-0 whitespace-nowrap">
@@ -1278,7 +1283,6 @@ export function FileViewerModal({
               own Refresh below. */}
           {!imageFile && mode !== "diff" && (
             <FileViewerToolbar.Root>
-              {modeToggle}
               <FileViewerToolbar.Path
                 path={displayPath}
                 copied={pathCopied}
@@ -1587,12 +1591,17 @@ export function FileViewerModal({
       </div>
 
       {/* Slim footer toolbar: navigation + diff display controls (Kaleidoscope-
-          style bottom stepper). Rendered whenever there's something to put in
-          it — file stepping in either mode, diff controls in diff mode. Plain
-          markdown no longer qualifies: its wrap toggle moved to the toolbar
-          row, and keeping the clause would leave an empty bar behind. */}
-      {(canStepFiles || (mode === "diff" && hasDiff)) && (
-        <div className="flex items-center justify-between gap-3 px-4 py-1.5 border-t border-border-strong bg-surface-panel shrink-0">
+          style bottom stepper). One term per control it can hold, so it appears
+          exactly when it has something to show: the file-list toggle, the
+          stepper, the Viewed marker, and the diff controls. Plain markdown no
+          longer keeps it alive on its own — the wrap toggle moved up to the
+          toolbar row — but a lone reviewed file still must, since this bar
+          holds the only control that can UNMARK it (`v` only ever marks). */}
+      {(canStepFiles || isWorkspace || workspaceEntry !== null || (mode === "diff" && hasDiff)) && (
+        <div
+          data-testid="file-viewer-footer"
+          className="flex items-center justify-between gap-3 px-4 py-1.5 border-t border-border-strong bg-surface-panel shrink-0"
+        >
           <div className="flex items-center gap-1 min-w-0">
             {isWorkspace && (
               <IconToggle

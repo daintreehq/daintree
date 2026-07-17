@@ -668,9 +668,39 @@ describe("FileViewerModal", () => {
 
       // The footer used to exist only to host the wrap toggle. With that moved,
       // a single markdown file has nothing to put down there — and an empty bar
-      // is worse than no bar.
-      expect(screen.queryByRole("button", { name: "Show file list" })).toBeNull();
-      expect(screen.queryByRole("button", { name: "Find in diff" })).toBeNull();
+      // is worse than no bar. Asserting on the bar itself, not on the controls
+      // it would hold: those are absent either way, so they'd pass on an empty
+      // footer too.
+      expect(screen.queryByTestId("file-viewer-footer")).toBeNull();
+    });
+
+    it("keeps the footer for a lone reviewed file, which owns the only unmark", async () => {
+      // One-entry changeSet: canStepFiles and isWorkspace are both false, so the
+      // wrap clause used to be all that kept this bar alive. The Viewed marker
+      // lives here and `v` only ever MARKS — losing the bar would strand a file
+      // marked viewed with no way back.
+      render(
+        <FileViewerModal
+          {...markdownProps}
+          currentFileIndex={0}
+          totalFileCount={1}
+          onNavigateFile={vi.fn()}
+          onSelectFile={vi.fn()}
+          changeSet={[
+            {
+              path: "docs/guide.md",
+              status: "modified",
+              insertions: 1,
+              deletions: 0,
+              viewedKey: "modified:docs/guide.md",
+            },
+          ]}
+        />
+      );
+      await waitFor(() => expect(screen.getByTestId("code-viewer")).toBeTruthy());
+
+      expect(screen.getByTestId("file-viewer-footer")).toBeTruthy();
+      expect(screen.getByTestId("diff-viewed-button")).toBeTruthy();
     });
 
     it("hides the wrap toggle in rendered mode", async () => {
@@ -695,6 +725,30 @@ describe("FileViewerModal", () => {
         expect.objectContaining({ path: "/project/docs/guide.md", viewMode: "source" }),
         expect.anything()
       );
+    });
+
+    it("stays in the mode the user picked when a refresh races a diff refetch", async () => {
+      const diff = "diff --git a/file b/file\n--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n+new";
+      const { rerender } = render(
+        <FileViewerModal {...defaultProps} diff={diff} defaultMode="diff" />
+      );
+      await waitFor(() => expect(screen.getByTestId("diff-viewer")).toBeTruthy());
+
+      // The user leaves the default behind.
+      fireEvent.click(screen.getByRole("button", { name: "View" }));
+      await waitFor(() => expect(screen.getByTestId("code-viewer")).toBeTruthy());
+
+      fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+      await waitFor(() => expect(mockRead).toHaveBeenCalledTimes(2));
+
+      // ...and the parent refetches, cycling hasDiff true→false→true. The
+      // default-to-diff switch is one-shot per FILE, so a refresh must not
+      // re-arm it and drag the user back into a mode they left.
+      rerender(<FileViewerModal {...defaultProps} diff={undefined} defaultMode="diff" />);
+      rerender(<FileViewerModal {...defaultProps} diff={diff} defaultMode="diff" />);
+
+      expect(screen.getByTestId("code-viewer")).toBeTruthy();
+      expect(screen.queryByTestId("diff-viewer")).toBeNull();
     });
 
     it("shows no toolbar Refresh in diff mode", async () => {
