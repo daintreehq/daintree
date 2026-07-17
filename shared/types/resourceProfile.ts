@@ -43,8 +43,9 @@ export interface ResourceProfileConfig {
    * Ceiling on the agent-terminal scrollback policy (lines). Caps the
    * AGENT_POLICY maxLines in src/utils/scrollbackConfig.ts — at xterm's
    * ~1.2KB/line each agent terminal holds up to ~maxLines×1.2KB of buffer
-   * once filled, so constrained hardware (efficiency) trades history depth
-   * for ~3MB per visible agent terminal. Applied live on profile change via
+   * once filled (~12MB at the 10k perf/balanced ceiling), so constrained
+   * hardware (efficiency) trades history depth for ~7MB per visible agent
+   * terminal by dropping to 4k. Applied live on profile change via
    * useResourceProfile → restoreScrollbackAllForeground.
    */
   agentScrollbackMaxLines: number;
@@ -173,7 +174,7 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, BaseResourceProfi
     projectStatsPollInterval: 5000,
     memoryPressureInactiveMs: 60 * 60 * 1000, // 60 min
     lowMemoryFreeThresholdMb: null,
-    agentScrollbackMaxLines: 5000,
+    agentScrollbackMaxLines: 10000,
     fetchIntervalActiveMs: 20_000,
     fetchIntervalBackgroundMs: 3 * 60_000,
     portBatchThroughputDelayMs: 16,
@@ -190,7 +191,7 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, BaseResourceProfi
     projectStatsPollInterval: 5000,
     memoryPressureInactiveMs: 30 * 60 * 1000, // 30 min
     lowMemoryFreeThresholdMb: 768,
-    agentScrollbackMaxLines: 5000,
+    agentScrollbackMaxLines: 10000,
     fetchIntervalActiveMs: 30_000,
     fetchIntervalBackgroundMs: 5 * 60_000,
     // Must match PORT_BATCH_THROUGHPUT_DELAY_MS — the pty-host's fallback
@@ -213,10 +214,12 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, BaseResourceProfi
     projectStatsPollInterval: 25000,
     memoryPressureInactiveMs: 15 * 60 * 1000, // 15 min
     lowMemoryFreeThresholdMb: 1024,
-    // Half the agent history ceiling on constrained hardware — ~3MB less
-    // buffer headroom per filled agent terminal, consistent with the
-    // efficiency profile's other fidelity trades.
-    agentScrollbackMaxLines: 2500,
+    // Lower agent history ceiling on constrained hardware — ~7MB less buffer
+    // headroom per filled agent terminal versus the 10k perf/balanced ceiling,
+    // consistent with the efficiency profile's other fidelity trades. Still
+    // well above the previous 2.5k efficiency ceiling so a filled session stays
+    // scrollable.
+    agentScrollbackMaxLines: 4000,
     fetchIntervalActiveMs: 45_000,
     fetchIntervalBackgroundMs: 10 * 60_000,
     // ~2.5x fewer flush wakeups and MessagePort posts per busy terminal; the
