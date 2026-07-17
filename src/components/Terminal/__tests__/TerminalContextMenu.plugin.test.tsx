@@ -98,7 +98,13 @@ vi.mock("@/store", () => ({
     }),
 }));
 
+import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
 import { TerminalContextMenu } from "../TerminalContextMenu";
+
+// A PTY-backed plugin kind. Registered so the real `panelKindHasPty` reports
+// `hasPty: true` for it, which is what keeps such a panel on the terminal menu
+// despite carrying a `pluginId`.
+const PTY_PLUGIN_KIND = "acme.shell";
 
 // Terminal-only labels that must never reach a plugin panel. "Rename terminal"
 // and "Trash terminal" are the sharp ones: the generic branch offers its own
@@ -149,21 +155,23 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
     expect(screen.queryByText(label)).toBeNull();
   });
 
-  it("routes a generic item to the panel the menu was opened on", () => {
+  it("routes a generic item to the panel the menu was opened on with the panel action", () => {
     renderMenuFor(pluginPanel);
 
     screen.getByText("Trash panel").click();
 
     expect(dispatch).toHaveBeenCalledTimes(1);
-    // The explicit id matters: panel-scoped actions otherwise fall back to
-    // `focusedId`, which is the exact misrouting this issue is about.
-    const [, args] = dispatch.mock.calls[0]!;
+    // Assert BOTH halves: the action id proves it's the panel action, not a
+    // mislabeled terminal one, and the explicit id proves it doesn't fall back
+    // to `focusedId` — the exact misrouting this issue is about.
+    const [actionId, args] = dispatch.mock.calls[0]!;
+    expect(actionId).toBe("terminal.trash");
     expect(args).toMatchObject({ terminalId: "panel-1" });
   });
 
-  it("still gives a PTY panel the terminal menu", () => {
-    // Guards the discriminator itself: keying off `pluginId` must not drag any
-    // ordinary terminal into the generic branch.
+  it("still gives a built-in terminal the terminal menu", () => {
+    // Guards the discriminator: keying off `pluginId` must not drag an ordinary
+    // terminal into the generic branch.
     renderMenuFor({
       id: "panel-1",
       title: "Agent",
@@ -173,5 +181,36 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
 
     expect(screen.queryByText("Rename panel")).toBeNull();
     expect(screen.getByText("Rename terminal")).toBeTruthy();
+  });
+
+  it("gives a PTY-backed plugin panel the terminal menu, not the generic one", () => {
+    // The load-bearing case behind `&& !hasPty`: a plugin can contribute a
+    // PTY-backed kind that renders through TerminalPane and is stamped with
+    // pluginId. It's a genuine terminal, so keying off pluginId alone would
+    // strip its copy/paste/redraw/restart — the regression this guards.
+    registerPanelKind({
+      id: PTY_PLUGIN_KIND,
+      name: "Acme Shell",
+      iconId: "terminal",
+      color: "#abcdef",
+      hasPty: true,
+      canRestart: true,
+      canConvert: false,
+      extensionId: "acme",
+    });
+    try {
+      renderMenuFor({
+        id: "panel-1",
+        title: "Acme Shell",
+        kind: PTY_PLUGIN_KIND,
+        pluginId: "acme",
+        worktreeId: "wt-1",
+      });
+
+      expect(screen.queryByText("Rename panel")).toBeNull();
+      expect(screen.getByText("Rename terminal")).toBeTruthy();
+    } finally {
+      unregisterPanelKind(PTY_PLUGIN_KIND);
+    }
   });
 });

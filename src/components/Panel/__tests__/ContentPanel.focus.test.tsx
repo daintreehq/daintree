@@ -201,22 +201,23 @@ describe("ContentPanel focus target (#11109)", () => {
 describe("ContentPanel click-to-select (#11228)", () => {
   afterEach(cleanup);
 
-  it.each<PanelKind>(NON_PTY_KINDS)(
-    "selects a %s panel when a click bubbles out of its content",
-    (kind) => {
-      const onFocus = vi.fn<() => void>();
-      const { container } = renderPanel("p-1", kind, {
-        onFocus,
-        children: <button data-testid="plugin-child">Inside the plugin</button>,
-      });
+  // handleClick doesn't branch on kind, so one representative kind covers the
+  // path; the plugin kind is the issue's subject. (The per-kind variation that
+  // matters — panelKindHasPty's unknown-kind fallback — is exercised by the
+  // focus-registration matrices above, not here.)
+  it("selects the panel when a click bubbles out of its content", () => {
+    const onFocus = vi.fn<() => void>();
+    const { container } = renderPanel("p-1", "acme.dashboard", {
+      onFocus,
+      children: <button data-testid="plugin-child">Inside the plugin</button>,
+    });
 
-      // Click the deepest child, not the root: the bug was that content clicks
-      // never reached any focus wiring at all.
-      container.querySelector<HTMLElement>('[data-testid="plugin-child"]')!.click();
+    // Click the deepest child, not the root: the bug was that content clicks
+    // never reached any focus wiring at all.
+    container.querySelector<HTMLElement>('[data-testid="plugin-child"]')!.click();
 
-      expect(onFocus).toHaveBeenCalledTimes(1);
-    }
-  );
+    expect(onFocus).toHaveBeenCalledTimes(1);
+  });
 
   it("lets content opt out of selection by preventing the click", () => {
     const onFocus = vi.fn<() => void>();

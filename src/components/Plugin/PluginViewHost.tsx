@@ -272,7 +272,14 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Plugi
       // keeps its header, context menu, and close control, so the panel is never
       // stranded open. `kind` comes from the closure — `buildPanelProps` doesn't
       // supply one, and the closure value is authoritative anyway.
-      <ContentPanel {...panelProps} kind={kindId}>
+      //
+      // `chrome={undefined}` forces ContentPanel to derive the descriptor from
+      // `kind`, matching FilePane/Browser/DevPreview (none of which forward one).
+      // buildPanelProps precomputes a `chrome` and GridPanel spreads it in
+      // untyped; forwarding it would pin a stale descriptor when a disabled
+      // plugin's persisted panel re-enables (the panelProps memo doesn't depend
+      // on the kind registry).
+      <ContentPanel {...panelProps} kind={kindId} chrome={undefined}>
         <ErrorBoundary
           variant="component"
           // `kindId` is already `${pluginId}.${panel.id}` (PluginService builds

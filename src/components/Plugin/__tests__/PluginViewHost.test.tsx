@@ -784,47 +784,110 @@ describe("PluginViewHost panel integration (#11228)", () => {
     const Host = makePluginViewHost(makeConfig());
     const onFocus = vi.fn<() => void>();
 
-    const { container } = render(<Host {...hostProps} onFocus={onFocus} />);
+    render(<Host {...hostProps} onFocus={onFocus} />);
 
     // The skeleton stands in for plugin content here — the point is that a click
-    // anywhere inside the panel's body reaches ContentPanel's handler, which is
-    // exactly what the bare host div swallowed.
+    // inside the panel's body reaches ContentPanel's handler, which is exactly
+    // what the bare host div swallowed.
     await waitFor(() => expect(screen.getByTestId("skeleton")).toBeTruthy());
     screen.getByTestId("skeleton").click();
 
     expect(onFocus).toHaveBeenCalledTimes(1);
-    expect(panelRoot(container)).toBeTruthy();
   });
 
-  it("keeps the pane chrome mounted while the plugin view is still loading", async () => {
+  it("keeps the pane chrome mounted and closable while the plugin view is still loading", async () => {
     const { makePluginViewHost } = await import("../PluginViewHost");
     const Host = makePluginViewHost(makeConfig());
+    const onClose = vi.fn<() => void>();
 
-    const { container } = render(<Host {...hostProps} onFocus={(): void => {}} />);
+    const { container } = render(<Host {...hostProps} onClose={onClose} onFocus={() => {}} />);
 
     await waitFor(() => expect(screen.getByTestId("skeleton")).toBeTruthy());
     expect(panelRoot(container)).toBeTruthy();
     expect(container.querySelector("[data-pane-chrome]")).toBeTruthy();
-    expect(screen.getByTestId("panel-close")).toBeTruthy();
+
+    // Not just present — operable. A loading view must stay dismissable.
+    act(() => screen.getByTestId("panel-close").click());
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("keeps the pane chrome mounted and closable after the plugin view crashes", async () => {
+    // The structural claim of the fix: ContentPanel sits OUTSIDE the error
+    // boundary, so a thrown plugin view swaps only the content slot for the
+    // boundary fallback while the header and close control stay live. Without
+    // that, a crashed plugin view would be stranded open (#11228).
+    vi.doMock("react", async () => {
+      const actual = await vi.importActual<typeof import("react")>("react");
+      return {
+        ...actual,
+        lazy: () =>
+          function CrashingView(): never {
+            throw new Error("plugin view exploded on render");
+          },
+      };
+    });
+
+    const { makePluginViewHost } = await import("../PluginViewHost");
+    const Host = makePluginViewHost(makeConfig());
+    const onClose = vi.fn<() => void>();
+
+    const { container } = render(<Host {...hostProps} onClose={onClose} onFocus={() => {}} />);
+
+    // The mocked ErrorBoundary renders its reset sentinel once it catches.
+    await waitFor(() => expect(screen.getByTestId("reset")).toBeTruthy());
+    // Chrome coexists with the fallback rather than being replaced by it.
+    expect(panelRoot(container)).toBeTruthy();
+    expect(container.querySelector("[data-pane-chrome]")).toBeTruthy();
+
+    act(() => screen.getByTestId("panel-close").click());
+    expect(onClose).toHaveBeenCalled();
+    vi.doUnmock("react");
   });
 
   it("passes the plugin's own kind and the live panel title to the shell", async () => {
-    const { makePluginViewHost } = await import("../PluginViewHost");
-    const Host = makePluginViewHost(makeConfig());
-
-    // `buildPanelProps` supplies no `kind`, so the host must source it from its
-    // closure; the title has to be the instance's, not the kind's config name.
-    const { container } = render(
-      <Host {...hostProps} title="Renamed by the user" onFocus={() => {}} />
+    // Resolve the registry from the SAME post-reset module graph as the host —
+    // the suite calls vi.resetModules() between tests, so a statically imported
+    // registerPanelKind would write to a different instance than the one the
+    // dynamically imported ContentPanel reads (mirrors the focusPanelInput note
+    // above). Register the kind so the real chrome derivation resolves it to the
+    // panel branch, proving `kindId` (not a default or `props.kind`) reached
+    // ContentPanel end-to-end, via `data-runtime-*` on the panel root.
+    const { registerPanelKind, unregisterPanelKind } = await import(
+      "@shared/config/panelKindRegistry"
     );
+    registerPanelKind({
+      id: "acme.dashboard",
+      name: "Dashboard",
+      iconId: "gauge",
+      color: "#abcdef",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      extensionId: "acme",
+    });
+    try {
+      const { makePluginViewHost } = await import("../PluginViewHost");
+      const Host = makePluginViewHost(makeConfig());
 
-    await waitFor(() => expect(screen.getByTestId("skeleton")).toBeTruthy());
-    expect(panelRoot(container).getAttribute("data-panel-id")).toBe("panel-1");
-    // The header renders the title in more than one node (visible label plus the
-    // rename editor's prefill), so match within the chrome rather than globally.
-    const chrome = container.querySelector<HTMLElement>("[data-pane-chrome]");
-    expect(chrome).toBeTruthy();
-    expect(within(chrome!).getAllByText("Renamed by the user").length).toBeGreaterThan(0);
-    expect(screen.queryByText("Dashboard")).toBeNull();
+      // `buildPanelProps` supplies no `kind`, so the host must source it from its
+      // closure; the title has to be the instance's, not the kind's config name.
+      const { container } = render(
+        <Host {...hostProps} title="Renamed by the user" onFocus={() => {}} />
+      );
+
+      await waitFor(() => expect(screen.getByTestId("skeleton")).toBeTruthy());
+      const root = panelRoot(container);
+      // Non-PTY panel chrome, keyed off the plugin kind's registry entry — a
+      // wrong or defaulted kind would derive a different runtime kind/icon.
+      expect(root.getAttribute("data-runtime-kind")).toBe("panel");
+      expect(root.getAttribute("data-runtime-icon-id")).toBe("gauge");
+      // The header renders the title in more than one node (visible label plus
+      // the rename editor's prefill), so match within the chrome, not globally.
+      const chrome = container.querySelector<HTMLElement>("[data-pane-chrome]");
+      expect(chrome).toBeTruthy();
+      expect(within(chrome!).getAllByText("Renamed by the user").length).toBeGreaterThan(0);
+    } finally {
+      unregisterPanelKind("acme.dashboard");
+    }
   });
 });

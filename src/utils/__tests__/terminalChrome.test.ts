@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
 import {
   deriveTerminalChrome,
   deriveTerminalRuntimeIdentity,
@@ -100,6 +101,66 @@ describe("deriveTerminalChrome", () => {
       processId: null,
       runtimeKind: "panel",
       hasExited: false,
+    });
+  });
+
+  describe("registered plugin kinds (#11228)", () => {
+    afterEach(() => {
+      unregisterPanelKind("acme.dashboard");
+      unregisterPanelKind("acme.shell");
+    });
+
+    it("takes the panel branch for a registered non-PTY plugin kind, keeping its manifest icon", () => {
+      // The generalized allowlist (`!hasPty`) must cover plugin kinds, not just
+      // the four built-ins — otherwise a plugin panel's new header renders with
+      // no icon and a "Terminal" label from the fall-through branch.
+      registerPanelKind({
+        id: "acme.dashboard",
+        name: "Acme Dashboard",
+        iconId: "gauge",
+        color: "#abcdef",
+        hasPty: false,
+        canRestart: false,
+        canConvert: false,
+        extensionId: "acme",
+      });
+
+      expect(deriveTerminalChrome({ kind: "acme.dashboard" })).toMatchObject({
+        iconId: "gauge",
+        label: "Acme Dashboard",
+        isAgent: false,
+        runtimeKind: "panel",
+        hasExited: false,
+      });
+    });
+
+    it("does NOT take the panel branch for a registered PTY plugin kind", () => {
+      // A PTY-backed plugin kind is a real terminal — it must fall through to
+      // the agent/process/none derivation, not the panel branch.
+      registerPanelKind({
+        id: "acme.shell",
+        name: "Acme Shell",
+        iconId: "terminal",
+        color: "#abcdef",
+        hasPty: true,
+        canRestart: true,
+        canConvert: false,
+        extensionId: "acme",
+      });
+
+      expect(deriveTerminalChrome({ kind: "acme.shell" })).toMatchObject({
+        runtimeKind: "none",
+      });
+    });
+
+    it("falls through to generic chrome for an unknown (unregistered) kind", () => {
+      // The `?? false` safety property: a plugin that has gone missing leaves an
+      // unregistered kind, which must not be mistaken for a panel and must stay
+      // on the safe fall-through path.
+      expect(deriveTerminalChrome({ kind: "gone.missing" })).toMatchObject({
+        iconId: null,
+        runtimeKind: "none",
+      });
     });
   });
 
