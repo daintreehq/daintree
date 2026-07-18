@@ -29,6 +29,79 @@ export interface PendingCreation {
   error?: string;
 }
 
+/**
+ * A worktree whose directory is gone but whose terminals are still alive
+ * (#11232). Deleting a worktree used to kill every terminal that belonged to
+ * it, which silently destroyed an agent's conversation — most painfully when
+ * the agent deleted its *own* worktree via the `worktree.delete` action.
+ *
+ * The row keeps the sidebar row alive so those terminals have somewhere to
+ * live until the user drags them to another worktree or dismisses the row.
+ * Only display metadata is snapshotted here: membership is *derived* from the
+ * panel store (see `getDeletedWorktreeTerminalIds`), so a terminal leaving by
+ * any route — moved, trashed, killed, or exited — shrinks the row without
+ * this store having to observe terminal lifecycle events at all.
+ */
+export interface DeletedWorktree {
+  id: string;
+  /**
+   * Last known display name — the branch, or the directory name when the
+   * worktree had no branch to speak of (detached HEAD). Snapshotted because
+   * nothing can look it up again: git has forgotten the worktree entirely.
+   */
+  title: string;
+  path: string;
+  deletedAt: number;
+  /**
+   * Index the row occupied in the sidebar's scrollable list when it was
+   * deleted, so the row holds its slot instead of jumping to an edge.
+   *
+   * A deleted worktree cannot re-sort like a live worktree — the git status and activity
+   * timestamps its sort keys derive from froze at deletion — so the position
+   * is pinned once here rather than recomputed. `-1` means the row was not
+   * visible (filtered out, or deleted before the sidebar ever rendered it),
+   * in which case the row appends.
+   */
+  pinnedIndex: number;
+}
+
+/**
+ * The sidebar's most recent visible worktree order, published by
+ * `SidebarContent` so a deleted worktree can be pinned to the slot its row occupied.
+ *
+ * Deliberately a module-level value rather than store state: it changes on
+ * every filter/sort keystroke and is read exactly once (at deletion), so
+ * putting it in the store would re-render every subscriber for data nothing
+ * renders from.
+ */
+let lastSidebarWorktreeOrder: readonly string[] = [];
+
+export function recordSidebarWorktreeOrder(ids: readonly string[]): void {
+  lastSidebarWorktreeOrder = ids;
+}
+
+export function getPinnedDeletedWorktreeIndex(worktreeId: string): number {
+  return lastSidebarWorktreeOrder.indexOf(worktreeId);
+}
+
+/**
+ * Terminals still held by a deleted worktree's row.
+ *
+ * Mirrors `bulkTrashByWorktree`'s filter exactly (trash + overlay excluded) so
+ * the count shown in the dismiss confirm always matches what dismissing
+ * actually closes (#9699). Overlay panels are the Daintree Assistant, not
+ * worktree sessions.
+ */
+export function getDeletedWorktreeTerminalIds(worktreeId: string): string[] {
+  const { panelIdsByWorktreeId, panelsById } = usePanelStore.getState();
+  const ids = panelIdsByWorktreeId[worktreeId];
+  if (!ids || ids.length === 0) return [];
+  return ids.filter((id) => {
+    const panel = panelsById[id];
+    return panel != null && panel.location !== "trash" && panel.location !== "overlay";
+  });
+}
+
 interface QuickCreateState {
   isOpen: boolean;
   issue: Issue | null;
@@ -64,6 +137,13 @@ interface WorktreeSelectionState {
   focusedWorktreeId: string | null;
   pendingWorktreeId: string | null;
   pendingCreations: Map<string, PendingCreation>;
+  /**
+   * Deleted worktrees whose terminals outlived them, keyed by the former
+   * worktree id (#11232). In-memory only — a deleted directory no longer
+   * exists and git has forgotten the worktree, so there is nothing for the
+   * restore pipeline's cwd inference to resolve on the next launch.
+   */
+  deletedWorktrees: Map<string, DeletedWorktree>;
   expandedWorktrees: Set<string>;
   expandedTerminals: Set<string>;
   createDialog: CreateDialogState;
@@ -103,6 +183,9 @@ interface WorktreeSelectionState {
   resolvePendingCreation: (path: string) => void;
   failPendingCreation: (path: string, error: string) => void;
   dismissPendingCreation: (path: string) => void;
+  addDeletedWorktree: (worktree: DeletedWorktree) => void;
+  dismissDeletedWorktree: (worktreeId: string) => void;
+  pruneDeletedWorktrees: (liveWorktreeIds: ReadonlySet<string>) => void;
   toggleWorktreeExpanded: (id: string) => void;
   setWorktreeExpanded: (id: string, expanded: boolean) => void;
   collapseAllWorktrees: () => void;
@@ -450,6 +533,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
   focusedWorktreeId: null,
   pendingWorktreeId: null,
   pendingCreations: new Map<string, PendingCreation>(),
+  deletedWorktrees: new Map<string, DeletedWorktree>(),
   expandedWorktrees: new Set<string>(),
   expandedTerminals: new Set<string>(),
   createDialog: {
@@ -697,6 +781,46 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       const next = new Map(state.pendingCreations);
       next.delete(path);
       return { pendingCreations: next };
+    });
+  },
+
+  addDeletedWorktree: (worktree) => {
+    set((state) => {
+      // Re-recording an id already present would reset `deletedAt` and reorder
+      // the row for no user-visible gain; the first record wins.
+      if (state.deletedWorktrees.has(worktree.id)) return state;
+      const next = new Map(state.deletedWorktrees);
+      next.set(worktree.id, worktree);
+      return { deletedWorktrees: next };
+    });
+  },
+
+  dismissDeletedWorktree: (worktreeId) => {
+    set((state) => {
+      if (!state.deletedWorktrees.has(worktreeId)) return state;
+      const next = new Map(state.deletedWorktrees);
+      next.delete(worktreeId);
+      return { deletedWorktrees: next };
+    });
+  },
+
+  pruneDeletedWorktrees: (liveWorktreeIds) => {
+    set((state) => {
+      if (state.deletedWorktrees.size === 0) return state;
+      const stale: string[] = [];
+      for (const id of state.deletedWorktrees.keys()) {
+        // A row dies when its last terminal leaves (silently — the row
+        // simply stops being useful), or when a real worktree reclaims the id,
+        // which happens when the workspace host restarts and re-hydrates a
+        // worktree we had already deleted.
+        if (liveWorktreeIds.has(id) || getDeletedWorktreeTerminalIds(id).length === 0) {
+          stale.push(id);
+        }
+      }
+      if (stale.length === 0) return state;
+      const next = new Map(state.deletedWorktrees);
+      for (const id of stale) next.delete(id);
+      return { deletedWorktrees: next };
     });
   },
 
@@ -1036,6 +1160,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       focusedWorktreeId: null,
       pendingWorktreeId: null,
       pendingCreations: new Map<string, PendingCreation>(),
+      deletedWorktrees: new Map<string, DeletedWorktree>(),
       expandedWorktrees: new Set<string>(),
       expandedTerminals: new Set<string>(),
       createDialog: {

@@ -819,3 +819,54 @@ describe("restorePanelsPhase — savedIdToRestoredId remap (issue #10440)", () =
     expect(savedIdToRestoredId.size).toBe(0);
   });
 });
+
+describe("restorePanelsPhase — panels outliving their worktree (issue #11232)", () => {
+  // Only `id` is read when deciding whether a saved worktreeId still resolves,
+  // so the rest of WorktreeState is left off rather than stubbed per test.
+  const worktreeList = (...ids: string[]) =>
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    Promise.resolve(ids.map((id) => ({ id, path: `/repo/${id}` })) as never);
+
+  it("re-homes a saved panel whose worktree no longer exists", async () => {
+    // Deleting a worktree now leaves its terminals running, and the sidebar row
+    // holding them is in-memory only — so a saved panel can name a worktree
+    // that is gone. Restoring it as-is would strand a live PTY off-screen,
+    // since the grid and dock both filter by the active worktree.
+    const ctx = makeContext({
+      activeWorktreeId: "wA",
+      worktreesPromise: worktreeList("wA"),
+    });
+    ctx.backendTerminalMap.set("t1", backend("t1"));
+
+    await restorePanelsPhase([panel("t1", { worktreeId: "deleted-wt" })], ctx);
+
+    expect(ctx.addPanel).toHaveBeenCalledTimes(1);
+    expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({ worktreeId: "wA" });
+  });
+
+  it("leaves a saved panel alone when its worktree still exists", async () => {
+    const ctx = makeContext({
+      activeWorktreeId: "wA",
+      worktreesPromise: worktreeList("wA", "wB"),
+    });
+    ctx.backendTerminalMap.set("t1", backend("t1"));
+
+    await restorePanelsPhase([panel("t1", { worktreeId: "wB" })], ctx);
+
+    expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({ worktreeId: "wB" });
+  });
+
+  it("keeps the saved worktree when the worktree list is unavailable", async () => {
+    // Nothing is known about which worktrees exist, so re-homing would be a
+    // guess — the previous behaviour (trust the saved id) is the safe default.
+    const ctx = makeContext({
+      activeWorktreeId: "wA",
+      worktreesPromise: Promise.resolve(null),
+    });
+    ctx.backendTerminalMap.set("t1", backend("t1"));
+
+    await restorePanelsPhase([panel("t1", { worktreeId: "wB" })], ctx);
+
+    expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({ worktreeId: "wB" });
+  });
+});

@@ -8,7 +8,11 @@ import {
 import type { WorktreeSnapshot, WorktreeEventVersion } from "@shared/types";
 import type { CIStatusState, PR } from "@shared/types/forge";
 import type { PluginWorktreeLinked } from "@shared/types/plugin";
-import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import {
+  useWorktreeSelectionStore,
+  getDeletedWorktreeTerminalIds,
+  getPinnedDeletedWorktreeIndex,
+} from "@/store/worktreeStore";
 import { usePanelStore } from "@/store/panelStore";
 import { usePulseStore } from "@/store/pulseStore";
 import { useProjectStore } from "@/store/projectStore";
@@ -385,18 +389,54 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
           selectionStore.setActiveWorktree(null);
         }
 
-        // Side effect: kill associated terminals
-        const terminalStore = usePanelStore.getState();
-        const idsToKill: string[] = [];
-        for (const id of terminalStore.panelIds) {
-          const t = terminalStore.panelsById[id];
-          if (t && (t.worktreeId ?? undefined) === event.worktreeId) {
-            idsToKill.push(id);
-          }
+        // Side effect: hand surviving terminals to a deleted-worktree row (#11232).
+        //
+        // Removing the worktree used to remove every panel that belonged to
+        // it, which destroyed live agent sessions — worst of all when an agent
+        // deleted its own worktree mid-conversation via `worktree.delete` and
+        // killed itself. "Worktree gone" and "PTY dead" are independent facts
+        // with independent owners (#11083), so the panels are left completely
+        // untouched here: their processes keep running, and the deleted-worktree row only
+        // gives them somewhere to live in the sidebar until the user drags
+        // them to another worktree or dismisses the row.
+        //
+        // Metadata is snapshotted from `worktree`, read above *before*
+        // `applyRemove` dropped it from the live map. Both delete entry points
+        // (the delete dialog and the `worktree.delete` action) funnel through
+        // this event, so they get identical behaviour from this one change.
+        if (worktree && getDeletedWorktreeTerminalIds(event.worktreeId).length > 0) {
+          selectionStore.addDeletedWorktree({
+            id: event.worktreeId,
+            // Detached-HEAD worktrees have no branch; fall back to the folder
+            // name so the row always carries a recognisable last-known title.
+            title:
+              worktree.branch ?? worktree.path.split(/[/\\]/).filter(Boolean).pop() ?? "Unknown",
+            path: worktree.path,
+            deletedAt: Date.now(),
+            pinnedIndex: getPinnedDeletedWorktreeIndex(event.worktreeId),
+          });
         }
-        for (const id of idsToKill) {
-          terminalStore.removePanel(id);
+      })
+    );
+
+    // Deleted-worktree rows are derived state: they exist only while at least one panel
+    // still points at the dead worktree. Watching the panel store (rather than
+    // terminal lifecycle events) means every exit route prunes the row —
+    // moved, trashed, killed, or exited alike. `agent:exited` notably never
+    // fires for a killed terminal (#11110), so an event-driven version of this
+    // would strand a deleted-worktree row holding zero terminals.
+    cleanups.push(
+      usePanelStore.subscribe((state, prevState) => {
+        if (
+          state.panelIdsByWorktreeId === prevState.panelIdsByWorktreeId &&
+          state.panelsById === prevState.panelsById
+        ) {
+          return;
         }
+        if (useWorktreeSelectionStore.getState().deletedWorktrees.size === 0) return;
+        useWorktreeSelectionStore
+          .getState()
+          .pruneDeletedWorktrees(new Set(store.getState().worktrees.keys()));
       })
     );
 
@@ -420,6 +460,14 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
           if (!state.worktrees.has(id)) {
             usePulseStore.getState().invalidate(id);
           }
+        }
+        // A host restart can re-hydrate a worktree we had already deleted
+        // (#11232). The real row wins — its terminals were never detached, so
+        // the row would otherwise render a duplicate row for the same id.
+        if (useWorktreeSelectionStore.getState().deletedWorktrees.size > 0) {
+          useWorktreeSelectionStore
+            .getState()
+            .pruneDeletedWorktrees(new Set(state.worktrees.keys()));
         }
       })
     );
