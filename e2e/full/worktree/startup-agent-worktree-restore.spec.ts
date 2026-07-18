@@ -49,8 +49,7 @@ function prepareFixture(): void {
   fixtureDir = dir;
   fixtureCleanup = cleanup;
 
-  fakeBinDir = path.join(fixtureDir, ".e2e-bin");
-  mkdirSync(fakeBinDir, { recursive: true });
+  fakeBinDir = mkdtempSync(path.join(tmpdir(), "daintree-e2e-startup-agent-bin-"));
 
   const implName = process.platform === "win32" ? "claude.js" : "claude";
   const fakeClaude = path.join(fakeBinDir, implName);
@@ -82,7 +81,7 @@ function prepareFixture(): void {
   if (process.platform === "win32") {
     writeFileSync(
       path.join(fakeBinDir, "claude.cmd"),
-      ["@echo off", 'node "%~dp0claude.js" %*', ""].join("\r\n")
+      ["@echo off", `"${process.execPath}" "%~dp0claude.js" %*`, ""].join("\r\n")
     );
   }
 
@@ -218,6 +217,7 @@ test.describe.serial("Startup: agent terminals across multiple worktrees", () =>
       ctx = null;
     }
     removePathSync(userDataDir);
+    removePathSync(fakeBinDir);
     fixtureCleanup?.();
   });
 
@@ -228,6 +228,19 @@ test.describe.serial("Startup: agent terminals across multiple worktrees", () =>
     // ── Session 1: main + two worktrees, four fake agents spread across them ──
     ctx = await launchApp({ userDataDir, env: launchEnv() });
     let w = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Startup Agent Restore");
+
+    const resolvedClaudePath = await w.evaluate(async () => {
+      await (window as any).electron.system.refreshCliAvailability();
+      const details = await (window as any).electron.system.getAgentCliDetails();
+      return details?.claude?.resolvedPath as string | null | undefined;
+    });
+    const expectedClaudePath = path.join(
+      fakeBinDir,
+      process.platform === "win32" ? "claude.cmd" : "claude"
+    );
+    expect(path.normalize(resolvedClaudePath ?? "<missing>")).toBe(
+      path.normalize(expectedClaudePath)
+    );
 
     // Recipes only load when recipe UI mounts — open and close the New
     // Worktree dialog once so `.daintree/recipes/*.json` is in the store.

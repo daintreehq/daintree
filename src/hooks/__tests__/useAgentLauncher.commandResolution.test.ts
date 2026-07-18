@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveAgentLaunchBaseCommand } from "../useAgentLauncher";
+import { resolveAgentLaunchBaseCommand } from "@/utils/agentLaunchCommand";
 import type { AgentCliDetail } from "@shared/types";
 
 function detail(overrides: Partial<AgentCliDetail>): AgentCliDetail {

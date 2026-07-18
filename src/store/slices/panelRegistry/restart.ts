@@ -45,6 +45,10 @@ import {
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { transferBetweenWorktreeIndex } from "./worktreeIndex";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
+import {
+  getCurrentLaunchCliDetail,
+  resolveAgentLaunchBaseCommand,
+} from "@/utils/agentLaunchCommand";
 
 // Lazy accessor to break circular dependency: restart -> projectStore -> panelPersistence -> core.
 let _cachedProjectStore: typeof import("@/store/projectStore").useProjectStore | null = null;
@@ -361,6 +365,7 @@ export const createRestartActions = (
     let consumedSessionId: string | undefined;
     let freshCommand = commandToRun;
     let freshLaunchFlags = nextAgentLaunchFlags;
+    let resolvedAgentBaseCommand: string | undefined;
 
     const loadAgentRuntimeSettings = async (): Promise<LoadedAgentRuntimeSettings | undefined> => {
       if (!effectiveAgentId || runtimeSettingsLoaded) return loadedRuntimeSettings;
@@ -468,7 +473,12 @@ export const createRestartActions = (
         const persistedFlags = freshLaunchFlags;
         let hasPersistedFlags = Boolean(persistedFlags && persistedFlags.length > 0);
         const agentConfig = getAgentConfig(effectiveAgentId);
-        const baseCommand = agentConfig?.command || effectiveAgentId;
+        const registryBaseCommand = agentConfig?.command || effectiveAgentId;
+        const baseCommand = resolveAgentLaunchBaseCommand(
+          registryBaseCommand,
+          await getCurrentLaunchCliDetail(effectiveAgentId)
+        );
+        if (baseCommand !== registryBaseCommand) resolvedAgentBaseCommand = baseCommand;
         const runtimeSettings = runtimeForEnv ?? (await loadAgentRuntimeSettings());
         if (!hasPersistedFlags && runtimeSettings) {
           freshLaunchFlags = buildAgentLaunchFlagsForRuntimeSettings(
@@ -624,13 +634,17 @@ export const createRestartActions = (
           // An exact candidate never degrades to resume-latest: if its
           // command can't be built, the safe outcome is a fresh launch, not
           // "most recent session in scope".
-          const resumeCmd = buildResumeCommand(effectiveAgentId, sessionId, resumeFlags);
+          const resumeCmd = resolvedAgentBaseCommand
+            ? buildResumeCommand(effectiveAgentId, sessionId, resumeFlags, resolvedAgentBaseCommand)
+            : buildResumeCommand(effectiveAgentId, sessionId, resumeFlags);
           if (resumeCmd) {
             commandToRun = resumeCmd;
             consumedSessionId = sessionId;
           }
         } else if (allowResumeLatest) {
-          const resumeLatestCmd = buildResumeLatestCommand(effectiveAgentId, resumeFlags);
+          const resumeLatestCmd = resolvedAgentBaseCommand
+            ? buildResumeLatestCommand(effectiveAgentId, resumeFlags, resolvedAgentBaseCommand)
+            : buildResumeLatestCommand(effectiveAgentId, resumeFlags);
           if (resumeLatestCmd) {
             commandToRun = resumeLatestCmd;
             usedResumeLatest = true;
@@ -1141,7 +1155,10 @@ export const createRestartActions = (
       }
 
       const agentConfig = getAgentConfig(effectiveAgentId);
-      const baseCommand = agentConfig?.command || effectiveAgentId;
+      const baseCommand = resolveAgentLaunchBaseCommand(
+        agentConfig?.command || effectiveAgentId,
+        await getCurrentLaunchCliDetail(effectiveAgentId)
+      );
       const globalSkipPermissions = agentSettings?.globalSkipPermissions ?? false;
       const globalUseAltScreen = agentSettings?.globalUseAltScreen ?? false;
       const commandToRun = generateAgentCommand(baseCommand, effectiveEntry, effectiveAgentId, {

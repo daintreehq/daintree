@@ -30,7 +30,7 @@ import {
   resolveEffectivePresetId,
 } from "@shared/types";
 import { isAgentLaunchable } from "@shared/utils/agentAvailability";
-import { escapeShellArgOptional, isWindows } from "@shared/utils/shellEscape";
+import { escapeShellArgOptional } from "@shared/utils/shellEscape";
 import {
   getAgentConfig,
   isRegisteredAgent,
@@ -40,12 +40,14 @@ import {
 } from "@/config/agents";
 import type { AgentCliDetail } from "@shared/types/ipc";
 import { applyPresetBehaviorOverrides } from "@/utils/agentRuntimeSettings";
+import {
+  getCurrentLaunchCliDetail,
+  resolveAgentLaunchBaseCommand,
+} from "@/utils/agentLaunchCommand";
+
+export { resolveAgentLaunchBaseCommand } from "@/utils/agentLaunchCommand";
 
 const CLIPBOARD_DIR_NAME = "daintree-clipboard";
-
-function escapePowerShellSingleQuoted(value: string): string {
-  return `'${value.replace(/'/g, "''")}'`;
-}
 
 /**
  * Sanitize an assistant-supplied terminal name for use as a panel title.
@@ -174,55 +176,6 @@ export interface UseAgentLauncherReturn {
   isCheckingAvailability: boolean;
   agentSettings: AgentSettings | null;
   refreshSettings: () => Promise<void>;
-}
-
-export function resolveAgentLaunchBaseCommand(
-  registryCommand: string,
-  detail: AgentCliDetail | undefined,
-  platform?: "posix" | "windows"
-): string {
-  const resolvedPath =
-    detail &&
-    detail.state !== "missing" &&
-    detail.state !== "blocked" &&
-    detail.state !== "installed"
-      ? detail.resolvedPath?.trim()
-      : undefined;
-
-  // When there's no availability-resolved path, fall back to the registry
-  // command. A bare PATH binary name (built-in agents) passes through unchanged.
-  // A plugin-contributed command resolved to an absolute path (#10560) is
-  // escaped like a resolved path so spaces in the plugin dir — e.g. macOS's
-  // "Application Support" — don't split the spawned command string.
-  const effective = resolvedPath ?? registryCommand;
-  const isPathLike = effective.includes("/") || effective.includes("\\");
-  if (!resolvedPath && !isPathLike) return registryCommand;
-
-  const useWindows = platform ? platform === "windows" : isWindows();
-  if (useWindows) {
-    return `& ${escapePowerShellSingleQuoted(effective)}`;
-  }
-
-  return escapeShellArgOptional(effective, "posix");
-}
-
-async function getCurrentLaunchCliDetail(agentId: string): Promise<AgentCliDetail | undefined> {
-  const current = useCliAvailabilityStore.getState().details[agentId];
-  if (
-    (current?.state === "ready" || current?.state === "unauthenticated") &&
-    current.resolvedPath?.trim()
-  ) {
-    return current;
-  }
-
-  try {
-    await useCliAvailabilityStore.getState().refresh(true);
-  } catch {
-    // Launch can still fall back to the registry command; availability UI
-    // surfaces the refresh error separately.
-  }
-
-  return useCliAvailabilityStore.getState().details[agentId];
 }
 
 export function useAgentLauncher(): UseAgentLauncherReturn {

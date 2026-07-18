@@ -32,12 +32,16 @@ vi.mock("@/store/ccrPresetsStore", () => ({
 }));
 
 const buildResumeCommandMock = vi.fn(
-  (agentId: string, sessionId: string, _flags?: string[]): string | undefined =>
-    `${agentId} --resume ${sessionId}`
+  (
+    agentId: string,
+    sessionId: string,
+    _flags?: string[],
+    baseCommand?: string
+  ): string | undefined => `${baseCommand ?? agentId} --resume ${sessionId}`
 );
 
 const buildResumeLatestCommandMock = vi.fn(
-  (_agentId: string, _flags?: string[]): string | undefined => undefined
+  (_agentId: string, _flags?: string[], _baseCommand?: string): string | undefined => undefined
 );
 
 const generateAgentCommandMock = vi.hoisted(() =>
@@ -54,9 +58,9 @@ vi.mock("@shared/types", async () => {
     generateAgentCommand: (base: string, entry: unknown, agentId: string, options: unknown) =>
       generateAgentCommandMock(base, entry, agentId, options),
     buildResumeCommand: (...args: unknown[]) =>
-      buildResumeCommandMock(...(args as [string, string, string[]?])),
+      buildResumeCommandMock(...(args as [string, string, string[]?, string?])),
     buildResumeLatestCommand: (...args: unknown[]) =>
-      buildResumeLatestCommandMock(...(args as [string, string[]?])),
+      buildResumeLatestCommandMock(...(args as [string, string[]?, string?])),
   };
 });
 
@@ -75,7 +79,8 @@ const {
 beforeEach(() => {
   buildResumeCommandMock.mockReset();
   buildResumeCommandMock.mockImplementation(
-    (agentId: string, sessionId: string) => `${agentId} --resume ${sessionId}`
+    (agentId: string, sessionId: string, _flags?: string[], baseCommand?: string) =>
+      `${baseCommand ?? agentId} --resume ${sessionId}`
   );
   buildResumeLatestCommandMock.mockReset();
   buildResumeLatestCommandMock.mockImplementation(() => undefined);
@@ -816,6 +821,34 @@ describe("buildArgsForRespawn", () => {
     expect(generateAgentCommandMock).toHaveBeenCalledOnce();
   });
 
+  it("uses the resolved executable when rebuilding a cold-respawn command", () => {
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal" as const,
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        agentLaunchFlags: [],
+      },
+      "agent",
+      "/p",
+      { agents: { claude: {} } },
+      false,
+      "/tmp/clip",
+      undefined,
+      "'/tmp/daintree-fake-bin/claude'"
+    );
+
+    expect(result.command).toBe("'/tmp/daintree-fake-bin/claude' --generated");
+    expect(generateAgentCommandMock).toHaveBeenCalledWith(
+      "'/tmp/daintree-fake-bin/claude'",
+      expect.any(Object),
+      "claude",
+      expect.any(Object)
+    );
+  });
+
   it("uses persisted agentLaunchFlags when session exists but resume returns undefined", () => {
     buildResumeCommandMock.mockReturnValue(undefined);
     generateAgentCommandMock.mockReturnValue("claude --from-settings");
@@ -861,6 +894,36 @@ describe("buildArgsForRespawn", () => {
     expect(result.command).toBe("claude --continue");
     expect(buildResumeLatestCommandMock).toHaveBeenCalledWith("claude", undefined);
     expect(generateAgentCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("uses the resolved executable for resume-latest after a cold restore", () => {
+    buildResumeLatestCommandMock.mockImplementation(
+      (agentId: string, _flags?: string[], baseCommand?: string) =>
+        `${baseCommand ?? agentId} --continue`
+    );
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal" as const,
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+      },
+      "agent",
+      "/p",
+      { agents: { claude: {} } },
+      false,
+      undefined,
+      undefined,
+      "'/tmp/daintree-fake-bin/claude'"
+    );
+
+    expect(result.command).toBe("'/tmp/daintree-fake-bin/claude' --continue");
+    expect(buildResumeLatestCommandMock).toHaveBeenCalledWith(
+      "claude",
+      undefined,
+      "'/tmp/daintree-fake-bin/claude'"
+    );
   });
 
   it("passes persisted agentLaunchFlags to buildResumeLatestCommand", () => {

@@ -24,6 +24,11 @@ import {
   inferWorktreeIdFromCwd,
 } from "./statePatcher";
 import type { HydrationOptions } from "./";
+import { getAgentConfig } from "@/config/agents";
+import {
+  getCurrentLaunchCliDetail,
+  resolveAgentLaunchBaseCommand,
+} from "@/utils/agentLaunchCommand";
 
 type AddPanelFn = HydrationOptions["addPanel"];
 type RestoreTerminalOrderFn = NonNullable<HydrationOptions["restoreTerminalOrder"]>;
@@ -362,6 +367,13 @@ export async function restorePanelsPhase(
               } else {
                 // not_found on cold app restart means the PTY process was killed
                 // on quit and needs to be respawned.
+                const savedAgentId = resolveAgentId(saved.launchAgentId);
+                const resolvedAgentBaseCommand = savedAgentId
+                  ? resolveAgentLaunchBaseCommand(
+                      getAgentConfig(savedAgentId)?.command ?? savedAgentId,
+                      await getCurrentLaunchCliDetail(savedAgentId)
+                    )
+                  : undefined;
                 const respawnArgs = buildArgsForRespawn(
                   saved,
                   kind,
@@ -369,7 +381,8 @@ export async function restorePanelsPhase(
                   agentSettings,
                   reconnectTimedOut,
                   clipboardDirectory,
-                  projectPresetsByAgent
+                  projectPresetsByAgent,
+                  resolvedAgentBaseCommand
                 );
 
                 // Assign to the active worktree when the saved terminal has no

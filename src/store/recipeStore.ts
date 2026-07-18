@@ -27,6 +27,7 @@ import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { replaceRecipeVariables, type RecipeContext } from "@/utils/recipeVariables";
 import { sanitizeRecipeTerminals, MAX_TERMINALS_PER_RECIPE } from "@shared/utils/recipeSanitizer";
 import type { ActionSource } from "@shared/types/actions";
+import type { AgentCliDetail } from "@shared/types/ipc";
 import type { TerminalSpawnSource, AddPanelFocusPolicy } from "@shared/types/panel";
 import { isInRepoRecipeId, safeRecipeFilename } from "@shared/utils/recipeFilename";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -35,6 +36,10 @@ import { logError } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { isClientAppError } from "@/utils/clientAppError";
 import { useRecipeConflictStore } from "@/store/recipeConflictStore";
+import {
+  getCurrentLaunchCliDetail,
+  resolveAgentLaunchBaseCommand,
+} from "@/utils/agentLaunchCommand";
 
 export interface RecipeSpawnResult {
   index: number;
@@ -796,6 +801,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       (index) => recipe.terminals[index]?.type !== "dev-preview"
     ).length;
     const requestedSpawnBatch = options?.spawnBatch;
+    const launchCliDetails = new Map<string, Promise<AgentCliDetail | undefined>>();
     const spawnBatch =
       requestedSpawnBatch &&
       requestedSpawnBatch.size >= ptySpawnCount &&
@@ -830,7 +836,15 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
           if (isAgentRecipeType(terminal.type)) {
             const agentId = terminal.type as string;
             const agentConfig = getAgentConfig(agentId);
-            const baseCommand = agentConfig?.command ?? "";
+            let launchCliDetail = launchCliDetails.get(agentId);
+            if (!launchCliDetail) {
+              launchCliDetail = getCurrentLaunchCliDetail(agentId, true);
+              launchCliDetails.set(agentId, launchCliDetail);
+            }
+            const baseCommand = resolveAgentLaunchBaseCommand(
+              agentConfig?.command ?? "",
+              await launchCliDetail
+            );
             const rawPrompt = terminal.initialPrompt?.trim();
             const resolvedContext: RecipeContext = { ...context, worktreePath };
             const initialPrompt = rawPrompt

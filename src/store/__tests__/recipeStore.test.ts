@@ -103,6 +103,11 @@ const ccrPresetsState: { ccrPresetsByAgent: Record<string, unknown> } = {
 const projectPresetsState: { presetsByAgent: Record<string, unknown> } = {
   presetsByAgent: {},
 };
+const refreshCliAvailabilityMock = vi.fn(async () => {});
+const cliAvailabilityState: {
+  details: Record<string, unknown>;
+  refresh: typeof refreshCliAvailabilityMock;
+} = { details: {}, refresh: refreshCliAvailabilityMock };
 
 vi.mock("@/store/ccrPresetsStore", () => ({
   useCcrPresetsStore: {
@@ -113,6 +118,12 @@ vi.mock("@/store/ccrPresetsStore", () => ({
 vi.mock("@/store/projectPresetsStore", () => ({
   useProjectPresetsStore: {
     getState: vi.fn(() => projectPresetsState),
+  },
+}));
+
+vi.mock("@/store/cliAvailabilityStore", () => ({
+  useCliAvailabilityStore: {
+    getState: vi.fn(() => cliAvailabilityState),
   },
 }));
 
@@ -136,6 +147,8 @@ describe("recipeStore", () => {
     panelStoreState.panelsById = {};
     ccrPresetsState.ccrPresetsByAgent = {};
     projectPresetsState.presetsByAgent = {};
+    cliAvailabilityState.details = {};
+    refreshCliAvailabilityMock.mockImplementation(async () => {});
     // clearAllMocks resets call counts but not implementations — restore the
     // hoisted default so each test starts from an empty agent-settings shape
     // instead of inheriting a prior test's mockResolvedValue.
@@ -547,6 +560,38 @@ describe("recipeStore", () => {
     expect(spawned.command).toContain("--verbose");
     expect(spawned.command).toContain("--model");
     expect(spawned.command).toContain("sonnet");
+  });
+
+  it("runRecipe uses the availability-resolved agent executable", async () => {
+    refreshCliAvailabilityMock.mockImplementation(async () => {
+      cliAvailabilityState.details = {
+        claude: {
+          state: "ready",
+          resolvedPath: "/tmp/daintree-fake-bin/claude",
+          via: "which",
+        },
+      };
+    });
+    useRecipeStore.setState({
+      recipes: [
+        {
+          id: "recipe-resolved-agent",
+          name: "Resolved Agent Recipe",
+          projectId: "project-1",
+          terminals: [{ type: "claude", title: "Resolved Claude", env: {} }],
+          createdAt: Date.now(),
+        },
+      ],
+      isLoading: false,
+      currentProjectId: "project-1",
+    });
+
+    await useRecipeStore
+      .getState()
+      .runRecipe("recipe-resolved-agent", "/tmp/worktree", "worktree-1");
+
+    expect(addTerminalMock.mock.calls[0]?.[0].command).toContain("/tmp/daintree-fake-bin/claude");
+    expect(refreshCliAvailabilityMock).toHaveBeenCalledWith(true);
   });
 
   it("runRecipe passes spawnedBy through to spawned panels", async () => {

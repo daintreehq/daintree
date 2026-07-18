@@ -849,13 +849,14 @@ export function buildAgentLaunchFlags(
 export function buildResumeCommand(
   agentId: string,
   sessionId: string,
-  launchFlags?: string[]
+  launchFlags?: string[],
+  baseCommand?: string
 ): string | undefined {
   const agentConfig = getEffectiveAgentConfig(agentId);
   const resume = agentConfig?.resume;
   if (!agentConfig || !resume) return undefined;
 
-  const parts = [agentConfig.command];
+  const parts = [baseCommand ?? agentConfig.command];
 
   // Prepend persisted launch flags (original process-level flags)
   if (launchFlags?.length) {
@@ -918,7 +919,8 @@ export function buildResumeCommand(
  */
 export function buildResumeLatestCommand(
   agentId: string,
-  launchFlags?: string[]
+  launchFlags?: string[],
+  baseCommand?: string
 ): string | undefined {
   const agentConfig = getEffectiveAgentConfig(agentId);
   const resume = agentConfig?.resume;
@@ -927,7 +929,7 @@ export function buildResumeLatestCommand(
   const fallbackArgs = resume.resumeLatestArgs;
   if (!fallbackArgs || fallbackArgs.length === 0) return undefined;
 
-  const parts = [agentConfig.command];
+  const parts = [baseCommand ?? agentConfig.command];
 
   if (launchFlags?.length) {
     for (const flag of launchFlags) {
