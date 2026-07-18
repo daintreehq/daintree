@@ -869,4 +869,28 @@ describe("restorePanelsPhase — panels outliving their worktree (issue #11232)"
 
     expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({ worktreeId: "wB" });
   });
+
+  it("keeps saved worktrees when the list is empty (#11234)", async () => {
+    // Hydration races backend init, so `worktree.getAll()` answers [] while the
+    // workspace host is still registering. Reading that as "every worktree is
+    // gone" collapsed every panel into the active worktree, and the save loop
+    // persisted the result — so the damage compounded on each restart. An
+    // active worktree must be set here, otherwise `activeWorktreeId ?? saved`
+    // returns the saved id anyway and the regression hides.
+    const ctx = makeContext({
+      activeWorktreeId: "wA",
+      worktreesPromise: Promise.resolve([]),
+    });
+    ctx.backendTerminalMap.set("t1", backend("t1"));
+    ctx.backendTerminalMap.set("t2", backend("t2"));
+
+    await restorePanelsPhase(
+      [panel("t1", { worktreeId: "wB" }), panel("t2", { worktreeId: "wC" })],
+      ctx
+    );
+
+    // Distinct homes surviving is the invariant: the bug funnelled both into "wA".
+    expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({ worktreeId: "wB" });
+    expect(ctx.addPanel.mock.calls[1]![0]).toMatchObject({ worktreeId: "wC" });
+  });
 });

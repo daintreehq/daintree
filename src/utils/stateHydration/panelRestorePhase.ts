@@ -137,10 +137,18 @@ export async function restorePanelsPhase(
   // already in flight (the orphan phase below awaits the same one), so this
   // costs a microtask per panel once resolved — and unlike sampling a variable
   // the loader may not have filled yet, it cannot silently skip the re-home.
+  //
+  // An empty list counts as unknown, not as "every worktree is gone" (#11234).
+  // Hydration races backend init by design, and `worktree.getAll()` answers []
+  // while the window's workspace host is still registering — indistinguishable
+  // from a real empty list. Empty is never legitimate anyway: `git worktree
+  // list` always reports the main worktree. Treating it as authoritative
+  // re-homed every panel to the active worktree, and the save loop then
+  // persisted that, compounding across restarts.
   let knownWorktreeIdsPromise: Promise<Set<string> | null> | null = null;
   const getKnownWorktreeIds = (): Promise<Set<string> | null> => {
     knownWorktreeIdsPromise ??= worktreesPromise.then((list) =>
-      list ? new Set(list.map((w) => w.id)) : null
+      list && list.length > 0 ? new Set(list.map((w) => w.id)) : null
     );
     return knownWorktreeIdsPromise;
   };

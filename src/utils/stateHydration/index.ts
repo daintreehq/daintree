@@ -596,11 +596,14 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
     const worktrees = await worktreesPromise;
     const savedActiveId = appState.activeWorktreeId;
 
-    if (worktrees === null) {
+    // An empty list means the worktree set is unknown, not that none exist
+    // (#11234) — see `getKnownWorktreeIds` in panelRestorePhase for why. Both
+    // cases keep the saved selection rather than dropping it on the floor.
+    if (worktrees === null || worktrees.length === 0) {
       if (savedActiveId) {
         setActiveWorktree(savedActiveId);
       }
-    } else if (worktrees.length > 0) {
+    } else {
       // Check if the saved active worktree still exists
       const worktreeExists = savedActiveId && worktrees.some((wt) => wt.id === savedActiveId);
 
@@ -617,7 +620,6 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
         setActiveWorktree(fallbackWorktree.id);
       }
     }
-    // If no worktrees exist, we don't set any active worktree (handled gracefully)
 
     // Recipe load starts earlier to overlap with hydration work.
     // Recipes are non-critical for first paint; fire-and-forget on both initial load and project switch.
