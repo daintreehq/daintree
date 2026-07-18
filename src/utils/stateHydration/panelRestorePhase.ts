@@ -140,11 +140,11 @@ export async function restorePanelsPhase(
   //
   // An empty list counts as unknown, not as "every worktree is gone" (#11234).
   // Hydration races backend init by design, and `worktree.getAll()` answers []
-  // while the window's workspace host is still registering — indistinguishable
-  // from a real empty list. Empty is never legitimate anyway: `git worktree
-  // list` always reports the main worktree. Treating it as authoritative
-  // re-homed every panel to the active worktree, and the save loop then
-  // persisted that, compounding across restarts.
+  // while the window's workspace host is still registering. A successful git
+  // enumeration never yields zero — `git worktree list` always reports the main
+  // worktree — so [] only ever means "not ready", never a real count. Treating
+  // it as authoritative re-homed every panel to the active worktree, and the
+  // save loop then persisted that, compounding across restarts.
   let knownWorktreeIdsPromise: Promise<Set<string> | null> | null = null;
   const getKnownWorktreeIds = (): Promise<Set<string> | null> => {
     knownWorktreeIdsPromise ??= worktreesPromise.then((list) =>

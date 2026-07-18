@@ -582,24 +582,31 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
       }
     }
 
-    // Cleanup orphaned terminals after terminal hydration completes
-    // This must run after terminals are restored to ensure we're checking the full terminal list
-    try {
-      const { cleanupOrphanedTerminals } = await import("@/store/createWorktreeStore");
-      cleanupOrphanedTerminals();
-    } catch (error) {
-      logWarn("Failed to cleanup orphaned terminals", { error });
-    }
-
-    // Restore active worktree with validation.
     // Worktree fetch starts earlier to overlap with terminal restoration.
     const worktrees = await worktreesPromise;
     const savedActiveId = appState.activeWorktreeId;
+    // An empty list means "unknown", not "none" — see `getKnownWorktreeIds` in
+    // panelRestorePhase for why a cold boot can answer [] while the workspace
+    // host is still registering.
+    const worktreesAreKnown = worktrees !== null && worktrees.length > 0;
 
-    // An empty list means the worktree set is unknown, not that none exist
-    // (#11234) — see `getKnownWorktreeIds` in panelRestorePhase for why. Both
-    // cases keep the saved selection rather than dropping it on the floor.
-    if (worktrees === null || worktrees.length === 0) {
+    // Runs after terminals are restored so it sees the full list. Destructive —
+    // removePanel kills the PTY — so it only runs against a list we can trust:
+    // restore keeps a saved worktreeId when the list is unknown (#11234), and
+    // cleanup would read that survivor as a deleted worktree and kill a live
+    // agent terminal, the exact outcome #11232 ruled out.
+    if (worktreesAreKnown) {
+      try {
+        const { cleanupOrphanedTerminals } = await import("@/store/createWorktreeStore");
+        cleanupOrphanedTerminals();
+      } catch (error) {
+        logWarn("Failed to cleanup orphaned terminals", { error });
+      }
+    }
+
+    // An unknown worktree set keeps the saved selection rather than dropping it
+    // on the floor (#11234).
+    if (!worktreesAreKnown) {
       if (savedActiveId) {
         setActiveWorktree(savedActiveId);
       }
