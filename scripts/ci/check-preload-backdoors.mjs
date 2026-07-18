@@ -36,6 +36,7 @@ export const STRIPPED_BY_BUILD = [
   "DAINTREE_E2E_DISABLE_CACHED_VIEW_CPU_THROTTLE",
   "DAINTREE_E2E_CRASH_DUMPS_DIR",
   "DAINTREE_E2E_DEFER_RENDERER_LOAD",
+  "DAINTREE_E2E_WORKSPACE_LOAD_DELAY_MS",
 ];
 
 // Both the exposed global keys and the gating env-var names. If the env reads

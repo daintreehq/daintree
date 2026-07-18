@@ -61,6 +61,7 @@ const common = {
           "process.env.DAINTREE_E2E_DISABLE_CACHED_VIEW_CPU_THROTTLE": JSON.stringify(""),
           "process.env.DAINTREE_E2E_CRASH_DUMPS_DIR": JSON.stringify(""),
           "process.env.DAINTREE_E2E_DEFER_RENDERER_LOAD": JSON.stringify(""),
+          "process.env.DAINTREE_E2E_WORKSPACE_LOAD_DELAY_MS": JSON.stringify(""),
         }
       : {}),
   },

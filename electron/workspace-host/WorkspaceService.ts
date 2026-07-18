@@ -595,6 +595,14 @@ export class WorkspaceService {
     }
   ): Promise<void> {
     try {
+      // E2E-only: hold the load so renderer hydration's worktree prefetch
+      // deterministically observes the pre-load window where `get-all-states`
+      // answers [] — the boot race behind #11234, which real projects only hit
+      // when git enumeration is slow enough to lose to hydration.
+      const e2eLoadDelayMs = Number(process.env.DAINTREE_E2E_WORKSPACE_LOAD_DELAY_MS);
+      if (process.env.DAINTREE_E2E_MODE === "1" && e2eLoadDelayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, e2eLoadDelayMs));
+      }
       // #10663: bail before any state is set if the project root was deleted
       // or moved externally. Without this guard `createHardenedGit` throws a
       // GitConstructError on the dead path, but `this.projectRootPath` is
