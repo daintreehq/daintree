@@ -589,13 +589,20 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
     // panelRestorePhase for why a cold boot can answer [] while the workspace
     // host is still registering.
     const worktreesAreKnown = worktrees !== null && worktrees.length > 0;
+    // Restore re-homes a stranded panel onto the saved active worktree, so a
+    // saved selection that is itself gone re-homes onto a dead id. Cleanup
+    // would then kill that panel's PTY before the fallback below repairs the
+    // selection. Skipping cleanup for one boot lets the repaired selection
+    // persist, and the next boot re-homes onto a live worktree.
+    const activeWorktreeIsLive =
+      !savedActiveId || (worktrees?.some((wt) => wt.id === savedActiveId) ?? false);
 
     // Runs after terminals are restored so it sees the full list. Destructive —
-    // removePanel kills the PTY — so it only runs against a list we can trust:
-    // restore keeps a saved worktreeId when the list is unknown (#11234), and
-    // cleanup would read that survivor as a deleted worktree and kill a live
-    // agent terminal, the exact outcome #11232 ruled out.
-    if (worktreesAreKnown) {
+    // removePanel kills the PTY — so it only runs on a coherent worktree
+    // picture: restore keeps a saved worktreeId when the list is unknown
+    // (#11234), and cleanup would read that survivor as a deleted worktree and
+    // kill a live agent terminal, the exact outcome #11232 ruled out.
+    if (worktreesAreKnown && activeWorktreeIsLive) {
       try {
         const { cleanupOrphanedTerminals } = await import("@/store/createWorktreeStore");
         cleanupOrphanedTerminals();
