@@ -582,25 +582,42 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
       }
     }
 
-    // Cleanup orphaned terminals after terminal hydration completes
-    // This must run after terminals are restored to ensure we're checking the full terminal list
-    try {
-      const { cleanupOrphanedTerminals } = await import("@/store/createWorktreeStore");
-      cleanupOrphanedTerminals();
-    } catch (error) {
-      logWarn("Failed to cleanup orphaned terminals", { error });
-    }
-
-    // Restore active worktree with validation.
     // Worktree fetch starts earlier to overlap with terminal restoration.
     const worktrees = await worktreesPromise;
     const savedActiveId = appState.activeWorktreeId;
+    // An empty list means "unknown", not "none" — see `getKnownWorktreeIds` in
+    // panelRestorePhase for why a cold boot can answer [] while the workspace
+    // host is still registering.
+    const worktreesAreKnown = worktrees !== null && worktrees.length > 0;
+    // Restore re-homes a stranded panel onto the saved active worktree, so a
+    // saved selection that is itself gone re-homes onto a dead id. Cleanup
+    // would then kill that panel's PTY before the fallback below repairs the
+    // selection. Skipping cleanup for one boot lets the repaired selection
+    // persist, and the next boot re-homes onto a live worktree.
+    const activeWorktreeIsLive =
+      !savedActiveId || (worktrees?.some((wt) => wt.id === savedActiveId) ?? false);
 
-    if (worktrees === null) {
+    // Runs after terminals are restored so it sees the full list. Destructive —
+    // removePanel kills the PTY — so it only runs on a coherent worktree
+    // picture: restore keeps a saved worktreeId when the list is unknown
+    // (#11234), and cleanup would read that survivor as a deleted worktree and
+    // kill a live agent terminal, the exact outcome #11232 ruled out.
+    if (worktreesAreKnown && activeWorktreeIsLive) {
+      try {
+        const { cleanupOrphanedTerminals } = await import("@/store/createWorktreeStore");
+        cleanupOrphanedTerminals();
+      } catch (error) {
+        logWarn("Failed to cleanup orphaned terminals", { error });
+      }
+    }
+
+    // An unknown worktree set keeps the saved selection rather than dropping it
+    // on the floor (#11234).
+    if (!worktreesAreKnown) {
       if (savedActiveId) {
         setActiveWorktree(savedActiveId);
       }
-    } else if (worktrees.length > 0) {
+    } else {
       // Check if the saved active worktree still exists
       const worktreeExists = savedActiveId && worktrees.some((wt) => wt.id === savedActiveId);
 
@@ -617,7 +634,6 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
         setActiveWorktree(fallbackWorktree.id);
       }
     }
-    // If no worktrees exist, we don't set any active worktree (handled gracefully)
 
     // Recipe load starts earlier to overlap with hydration work.
     // Recipes are non-critical for first paint; fire-and-forget on both initial load and project switch.
