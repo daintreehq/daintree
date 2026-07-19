@@ -284,6 +284,13 @@ test("theme review — chrome, overlays, states", async () => {
         await settle(page, 1200);
         await snap(page, "20-diff-view");
       }
+      // The diff layers above the review rather than replacing it (#11243),
+      // so unwind the stack top-down before moving on to the next step.
+      await page
+        .locator(SEL.reviewHub.diffDialogClose)
+        .click()
+        .catch(() => {});
+      await settle(page, 300);
       await page
         .locator(SEL.reviewHub.close)
         .click()

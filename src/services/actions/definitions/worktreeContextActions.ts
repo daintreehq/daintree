@@ -6,10 +6,10 @@ import type { BuiltInRuntimeActionId } from "@shared/config/actionIds";
 import { copyTreeClient, systemClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
-import { useWorktreeSelectionStore } from "@/store/worktreeStore";
-import { useUIStore } from "@/store/uiStore";
+import { usePanelDialogStore } from "@/store/panelDialogStore";
 import { useForgeProviderHealthStore } from "@/store/forgeProviderHealthStore";
 import { DEFAULT_COPYTREE_FORMAT } from "@/lib/copyTreeFormat";
+import { deriveCommitMessageSeed } from "@/lib/worktreeAiNote";
 import {
   deriveReviewReadiness,
   REVIEW_READINESS_ITEM_IDS,
@@ -275,8 +275,20 @@ export function registerWorktreeContextActions(
         const worktreeId = args?.worktreeId;
         const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
         if (!targetWorktreeId) return;
-        useWorktreeSelectionStore.getState().setActiveWorktree(targetWorktreeId);
-        useUIStore.getState().setPendingReviewHubWorktreeId(targetWorktreeId);
+
+        const worktree = getCurrentViewStore().getState().worktrees.get(targetWorktreeId);
+        if (!worktree) return;
+
+        await usePanelDialogStore.getState().openPanelDialog({
+          kind: "review",
+          title: "Review & Commit",
+          worktreeId: targetWorktreeId,
+          // The AI note's first line if it is still current, else "". Never any
+          // other source — a substituted commit message caused a real bad push
+          // to a shared branch (#7884).
+          initialCommitMessage: deriveCommitMessageSeed(worktree, Date.now()),
+          autoStageOnOpen: true,
+        });
       },
     })
   );

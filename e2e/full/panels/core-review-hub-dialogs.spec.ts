@@ -66,11 +66,16 @@ test.describe.serial("Core: Review Hub Git Confirm Dialogs", () => {
 
     await hub.locator(SEL.reviewHub.fileDiffButton("local-change.txt")).first().click();
 
-    const dialog = window.locator(SEL.fileViewer.dialog);
+    // The diff layers ABOVE the review rather than replacing it (#11243), so
+    // both are `panel-dialog` — scope to the diff, and assert the review is
+    // still mounted underneath. The serial tests after this one depend on it.
+    const dialog = window.locator(SEL.reviewHub.diffDialog);
     await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
+    await expect(hub).toBeVisible();
 
-    await window.locator(SEL.fileViewer.closeButton).first().click();
+    await window.locator(SEL.reviewHub.diffDialogClose).first().click();
     await expect(dialog).toBeHidden({ timeout: T_SHORT });
+    await expect(hub).toBeVisible();
   });
 
   test("empty commit message blocks Commit & Push", async () => {

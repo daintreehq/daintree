@@ -100,13 +100,7 @@ vi.mock("@/utils/debounce", () => ({
   },
 }));
 
-vi.mock("react-dom", async () => {
-  const actual = await vi.importActual<typeof import("react-dom")>("react-dom");
-  return { ...actual, createPortal: (children: ReactNode) => children };
-});
-
 vi.mock("@/hooks", () => ({
-  useOverlayState: vi.fn(),
   useTruncationDetection: vi.fn(() => ({ ref: vi.fn(), isTruncated: false })),
 }));
 
@@ -272,7 +266,7 @@ vi.mock("@/components/ui/EmptyState", () => ({
   ),
 }));
 
-import { ReviewHub } from "../ReviewHub";
+import { ReviewHubContent } from "../ReviewHubContent";
 import { useUIStore } from "@/store/uiStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 
@@ -419,7 +413,7 @@ describe("ReviewHub", () => {
     it("renders both Commit and Commit & Push buttons when hasRemote is true", async () => {
       getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByPlaceholderText("Commit message…"));
 
       expect(screen.getByRole("button", { name: /^Commit$/i })).toBeDefined();
@@ -427,7 +421,7 @@ describe("ReviewHub", () => {
     });
 
     it("renders single Commit button when hasRemote is false", async () => {
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByPlaceholderText("Commit message…"));
 
       expect(screen.queryByRole("button", { name: /Commit & Push/i })).toBeNull();
@@ -437,7 +431,7 @@ describe("ReviewHub", () => {
     it("uses aria-disabled instead of native disabled on commit button when blocked", async () => {
       getStagingStatusMock.mockResolvedValue(makeStatus({ staged: [], hasRemote: false }));
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByPlaceholderText("Commit message…"));
 
       const btn = screen.getByRole("button", { name: /Commit \(0\)/i });
@@ -448,7 +442,7 @@ describe("ReviewHub", () => {
     it("uses aria-disabled on both buttons when blocked and hasRemote is true", async () => {
       getStagingStatusMock.mockResolvedValue(makeStatus({ staged: [], hasRemote: true }));
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByPlaceholderText("Commit message…"));
 
       const commitBtn = screen.getByRole("button", { name: /^Commit$/i });
@@ -460,7 +454,7 @@ describe("ReviewHub", () => {
     it("shows tooltip content when blocked and hasRemote is false", async () => {
       getStagingStatusMock.mockResolvedValue(makeStatus({ staged: [], hasRemote: false }));
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByPlaceholderText("Commit message…"));
 
       // The TooltipContent is mocked but the blocker list renders as ReactNode
@@ -471,7 +465,7 @@ describe("ReviewHub", () => {
     it("shows tooltip content when blocked and hasRemote is true", async () => {
       getStagingStatusMock.mockResolvedValue(makeStatus({ staged: [], hasRemote: true }));
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByPlaceholderText("Commit message…"));
 
       expect(screen.getAllByText("Cannot commit").length).toBeGreaterThan(0);
@@ -480,7 +474,7 @@ describe("ReviewHub", () => {
     it("reentrancy guard prevents double-commit via rapid clicks", async () => {
       commitMock.mockResolvedValue({ hash: "abc", summary: "ok" });
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByPlaceholderText("Commit message…"));
 
       const textarea = screen.getByPlaceholderText("Commit message…");
@@ -496,7 +490,7 @@ describe("ReviewHub", () => {
     it("Cmd+Enter fires primary commit when not blocked", async () => {
       commitMock.mockResolvedValue({ hash: "abc", summary: "ok" });
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByPlaceholderText("Commit message…"));
 
       const textarea = screen.getByPlaceholderText("Commit message…");
@@ -510,7 +504,7 @@ describe("ReviewHub", () => {
       commitMock.mockResolvedValue({ hash: "abc", summary: "ok" });
       getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByPlaceholderText("Commit message…"));
 
       const textarea = screen.getByPlaceholderText("Commit message…");
@@ -531,7 +525,7 @@ describe("ReviewHub", () => {
       usePreferencesStore.getState().setSkipPushConfirmForWorktree(WORKTREE_PATH, true);
 
       getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByPlaceholderText("Commit message…"));
 
       const textarea = screen.getByPlaceholderText("Commit message…");
@@ -977,7 +971,7 @@ describe("ReviewHub", () => {
 
       getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
       const { rerender } = render(
-        <ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
+        <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
       );
       await waitFor(() => screen.getByPlaceholderText("Commit message…"));
 
@@ -990,8 +984,8 @@ describe("ReviewHub", () => {
       });
       await screen.findByTestId("review-hub-push-error");
 
-      rerender(<ReviewHub isOpen={false} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
-      rerender(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      rerender(<ReviewHubContent isOpen={false} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      rerender(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => expect(screen.queryByTestId("review-hub-push-error")).toBeNull());
     });
@@ -1003,7 +997,7 @@ describe("ReviewHub", () => {
       // #8025: bypass the per-push confirm dialog for this push-error test.
       usePreferencesStore.getState().setSkipPushConfirmForWorktree(WORKTREE_PATH, true);
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByPlaceholderText("Commit message…"));
 
       fireEvent.change(screen.getByPlaceholderText("Commit message…"), {

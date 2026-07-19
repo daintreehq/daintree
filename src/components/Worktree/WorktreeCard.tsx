@@ -18,7 +18,6 @@ import { GripVertical } from "lucide-react";
 import { useErrorStore, usePanelStore, type RetryAction } from "../../store";
 import type { PtyPanelData } from "@shared/types/panel";
 import { useRecipeStore } from "../../store/recipeStore";
-import { useUIStore } from "../../store/uiStore";
 import { useWorktreeSelectionStore } from "../../store/worktreeStore";
 import {
   useProjectSettingsStore,
@@ -489,42 +488,17 @@ export function WorktreeCard({
   };
 
   const [showIssuePicker, setShowIssuePicker] = useState(false);
-  const [showReviewHub, setShowReviewHub] = useState(false);
   const [showPlanViewer, setShowPlanViewer] = useState(false);
 
-  const onCloseReviewHub = () => setShowReviewHub(false);
   const onClosePlanViewer = () => setShowPlanViewer(false);
 
-  const pendingReviewHubWorktreeId = useUIStore((s) => s.pendingReviewHubWorktreeId);
-  useEffect(() => {
-    if (pendingReviewHubWorktreeId !== worktree.id) return;
-    setShowReviewHub(true);
-    useUIStore.getState().clearPendingReviewHubWorktreeId();
-  }, [pendingReviewHubWorktreeId, worktree.id]);
-
-  // All Review Hub open paths (banner button, menu, header, terminal section)
-  // route through this window-scoped event so any open also dismisses pane
-  // completion banners for the same worktree. TerminalPane is rendered via
-  // the panel registry — not in this component's React tree — so an event
-  // bridge is the only practical channel.
+  // Every Review Hub entry point (banner button, menu, header, terminal
+  // section) dispatches the action, which presents the review panel as a
+  // dialog through the global host. The action owns the commit-message seed,
+  // so no card-local state or window event bridges it any more.
   const openReviewHubForThisWorktree = () => {
-    window.dispatchEvent(
-      new CustomEvent("daintree:open-review-hub", { detail: { worktreeId: worktree.id } })
-    );
+    void actionService.dispatch("worktree.openReviewHub", { worktreeId: worktree.id });
   };
-
-  useEffect(() => {
-    const handler = (event: Event) => {
-      const detail = (event as CustomEvent<{ worktreeId?: string }>).detail;
-      if (detail?.worktreeId === worktree.id) {
-        setShowReviewHub(true);
-      }
-    };
-    window.addEventListener("daintree:open-review-hub", handler);
-    return () => window.removeEventListener("daintree:open-review-hub", handler);
-  }, [worktree.id]);
-
-  const aiNoteFirstLine = effectiveNote?.split("\n")[0]?.trim() ?? "";
 
   // Route attach/detach through the resilient mutation outbox (#9163) instead
   // of a fire-and-forget IPC. The store applies the local association only once
@@ -1132,10 +1106,6 @@ export function WorktreeCard({
                 onCloseIssuePicker={() => setShowIssuePicker(false)}
                 onAttachIssue={handleAttachIssue}
                 onDetachIssue={handleDetachIssue}
-                showReviewHub={showReviewHub}
-                onCloseReviewHub={onCloseReviewHub}
-                reviewHubInitialCommitMessage={aiNoteFirstLine}
-                reviewHubAutoStageOnOpen={true}
                 showPlanViewer={showPlanViewer}
                 onClosePlanViewer={onClosePlanViewer}
               />

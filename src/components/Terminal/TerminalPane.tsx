@@ -65,6 +65,7 @@ import type { AgentState } from "@/types";
 import { isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { actionService } from "@/services/ActionService";
+import { useReviewDialogOpenForWorktree } from "./useReviewDialogOpenForWorktree";
 import { InputTracker } from "@/services/clearCommandDetection";
 import { getAgentConfig, getMergedPresets } from "@/config/agents";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
@@ -1087,26 +1088,16 @@ function TerminalPaneComponent({
   const completedWithChanges = agentState === "completed" && changedFileCount > 0;
   const completedWithNoChanges = agentState === "completed" && changedFileCount === 0;
 
-  // All "open Review Hub" entry points (banner button, menu, header) flow
-  // through this event so any open path auto-dismisses sibling banners for
-  // the same worktree. WorktreeCard listens for the same event to open the
-  // hub itself.
+  // Any review surface opening for this worktree dismisses the completion
+  // banner: the user is already looking at the changes it was pointing at.
+  const reviewDialogOpen = useReviewDialogOpenForWorktree(reviewWorktreeId);
   useEffect(() => {
-    const handler = (event: Event) => {
-      const detail = (event as CustomEvent<{ worktreeId?: string }>).detail;
-      if (detail?.worktreeId === reviewWorktreeId) {
-        setCompletionBannerDismissed(true);
-      }
-    };
-    window.addEventListener("daintree:open-review-hub", handler);
-    return () => window.removeEventListener("daintree:open-review-hub", handler);
-  }, [reviewWorktreeId]);
+    if (reviewDialogOpen) setCompletionBannerDismissed(true);
+  }, [reviewDialogOpen]);
 
   const handleOpenReviewHub = () => {
     if (reviewWorktreeId) {
-      window.dispatchEvent(
-        new CustomEvent("daintree:open-review-hub", { detail: { worktreeId: reviewWorktreeId } })
-      );
+      void actionService.dispatch("worktree.openReviewHub", { worktreeId: reviewWorktreeId });
     }
   };
 

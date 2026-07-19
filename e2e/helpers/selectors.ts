@@ -183,9 +183,15 @@ export const SEL = {
     lastUpdated: '[data-testid="pulse-last-updated"]',
   },
   reviewHub: {
-    container: '[data-testid="review-hub"]',
+    // The hub is presented through the generic panel-dialog host, so scope to
+    // the dialog that actually contains the review body — a bare
+    // `panel-dialog` would also match a per-file diff layered above it.
+    container: '[data-testid="panel-dialog"]:has([data-testid="review-hub-content"])',
     diffMode: '[data-testid="review-hub-diff-mode"]',
-    close: '[data-testid="review-hub-close"]',
+    // Supplied by AppDialog.Header at this location; the hub's own close button
+    // renders only in the grid presentation.
+    close:
+      '[data-testid="panel-dialog"]:has([data-testid="review-hub-content"]) [aria-label="Close dialog"]',
     commitMessageInput: 'textarea[placeholder="Commit message…"]',
     commitButton: (count: number) => `button:has-text("Commit (${count})")`,
     cleanState: 'text="Working tree clean"',
@@ -206,6 +212,12 @@ export const SEL = {
     pushError: '[data-testid="review-hub-push-error"]',
     pushErrorCta: '[data-testid="review-hub-push-error-cta"]',
     pushErrorSecondaryCta: '[data-testid="review-hub-push-error-secondary-cta"]',
+    // Per-file diff layered ABOVE the review dialog (#11243): both are
+    // `panel-dialog`, so this must be scoped by the diff body or a bare
+    // locator would match the review underneath too and trip strict mode.
+    diffDialog: '[data-testid="panel-dialog"]:has([data-testid="diff-pane-body"])',
+    diffDialogClose:
+      '[data-testid="panel-dialog"]:has([data-testid="diff-pane-body"]) [aria-label="Close dialog"]',
     // Force-push confirm dialog (portal).
     forcePushCommitRow: '[data-testid="force-push-commit-row"]',
     forcePushCommitsLoading: '[data-testid="force-push-commits-loading"]',

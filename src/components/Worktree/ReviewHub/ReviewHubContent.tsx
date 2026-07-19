@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 import type { StagingStatus, GitStatus } from "@shared/types";
+import type { PanelLocation } from "@shared/types/panel";
 import type { CrossWorktreeFile } from "@shared/types/ipc/git";
 import type { PushProgressEvent } from "@shared/types/ipc/gitPush";
 import { isClientAppError } from "@/utils/clientAppError";
@@ -84,6 +85,19 @@ export interface ReviewHubContentProps {
   worktreePath: string;
   onClose: () => void;
   /**
+   * Id of the panel record hosting this content, when it has one. Used to layer
+   * a per-file diff above this surface instead of replacing it, so the staging
+   * state survives a drill-down.
+   */
+  panelId?: string;
+  /**
+   * Where this content is presented. At `"dialog"` the host already draws a
+   * title and close control, so this component suppresses its own rather than
+   * drawing them twice — mirroring `ContentPanel`'s handling of the same
+   * location. Defaults to `"grid"`.
+   */
+  location?: PanelLocation;
+  /**
    * Where to attach the Escape-key listener. Defaults to `document` so the
    * modal shell continues to capture Escape globally. Non-modal callers can
    * pass a scoped element to confine Escape to their panel. `undefined`/`null`
@@ -121,10 +135,13 @@ export function ReviewHubContent({
   isOpen,
   worktreePath,
   onClose,
+  panelId,
+  location = "grid",
   keyboardScope,
   initialCommitMessage,
   autoStageOnOpen,
 }: ReviewHubContentProps) {
+  const isDialog = location === "dialog";
   const [status, setStatus] = useState<StagingStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [isBackgroundRefreshing, setIsBackgroundRefreshing] = useState(false);
@@ -178,28 +195,46 @@ export function ReviewHubContent({
   const worktreeId = useWorktreeIdForPath(worktreePath);
   const hasWorkingTreeSelection = selectedFile !== null;
   const hasBaseBranchSelection = selectedBaseBranchFile !== null;
-  const dialogPanelId = usePanelDialogStore((state) => state.panelId);
+  const dialogStack = usePanelDialogStore((state) => state.dialogStack);
+
+  // Layer the diff above this hub when the hub is itself the presented dialog;
+  // a plain open would supersede it, destroying the staging surface (draft,
+  // selection, filters) the user is in the middle of using (#11243). Everywhere
+  // else the hub is grid-hosted and the diff is the only dialog, so the
+  // replacing open stays correct.
+  const openDiffDialog = useCallback(
+    (
+      store: ReturnType<typeof usePanelDialogStore.getState>,
+      options: Parameters<typeof store.openPanelDialog>[0]
+    ): Promise<string | null> =>
+      isDialog && panelId
+        ? store.pushPanelDialog(options, panelId)
+        : store.openPanelDialog(options),
+    [isDialog, panelId]
+  );
 
   // Ownership loss: the user closed the dialog, promoted it into the grid, or
   // another surface superseded it. The selection has to go with the pointer —
   // it is the record of "a diff is open", and the open effects below key off
   // it, so dropping only the pointer reads as "we want a panel" and instantly
   // reopens the dialog the user just dismissed (or duplicates the promoted one).
+  //
+  // Membership, not top-of-stack: a diff opened from this hub stays ours even
+  // if something is layered above it.
   useEffect(() => {
-    if (!diffPanelId || dialogPanelId === diffPanelId) return;
+    if (!diffPanelId || dialogStack.includes(diffPanelId)) return;
     setDiffPanelId(null);
     setSelectedFile(null);
     setSelectedBaseBranchFile(null);
-  }, [dialogPanelId, diffPanelId]);
+  }, [dialogStack, diffPanelId]);
 
   // Close the panel when the hub drops its selection for a reason of its own
-  // (commit, worktree switch, conflict mode). Compare-and-swap on the global
-  // pointer first: once another surface owns the dialog, closing from here
-  // would tear down their panel, not ours.
+  // (commit, worktree switch, conflict mode). Targeted by id: closing the top
+  // of the stack from here would tear down whatever dialog currently sits
+  // there, which may not be ours.
   useEffect(() => {
     if (hasWorkingTreeSelection || hasBaseBranchSelection || !diffPanelId) return;
-    if (usePanelDialogStore.getState().panelId !== diffPanelId) return;
-    usePanelDialogStore.getState().closePanelDialog();
+    usePanelDialogStore.getState().closePanelDialogById(diffPanelId);
   }, [hasWorkingTreeSelection, hasBaseBranchSelection, diffPanelId]);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(() => new Set());
   const [selectionSection, setSelectionSection] = useState<FileStageRowSection | null>(null);
@@ -453,21 +488,27 @@ export function ReviewHubContent({
         );
       return;
     }
-    void store
-      .openPanelDialog({
-        kind: "diff",
-        filePath: selectedFile.path,
-        fileStatus: liveWorkingTreeStatus,
-        diffSource: "working-tree",
-        changeSet: changeSetsRef.current.workingTree,
-        title: basename(selectedFile.path),
-        ...(liveWorkingTreeViewedKey && { viewedKey: liveWorkingTreeViewedKey }),
-        ...(worktreeId && { worktreeId }),
-      })
+    void openDiffDialog(store, {
+      kind: "diff",
+      filePath: selectedFile.path,
+      fileStatus: liveWorkingTreeStatus,
+      diffSource: "working-tree",
+      changeSet: changeSetsRef.current.workingTree,
+      title: basename(selectedFile.path),
+      ...(liveWorkingTreeViewedKey && { viewedKey: liveWorkingTreeViewedKey }),
+      ...(worktreeId && { worktreeId }),
+    })
       // A refused or superseded open resolves null. Drop the selection with it,
       // or this effect sees "selection, no panel" and retries forever.
-      .then((panelId) => (panelId ? setDiffPanelId(panelId) : setSelectedFile(null)));
-  }, [selectedFile, liveWorkingTreeStatus, liveWorkingTreeViewedKey, diffPanelId, worktreeId]);
+      .then((newPanelId) => (newPanelId ? setDiffPanelId(newPanelId) : setSelectedFile(null)));
+  }, [
+    selectedFile,
+    liveWorkingTreeStatus,
+    liveWorkingTreeViewedKey,
+    diffPanelId,
+    worktreeId,
+    openDiffDialog,
+  ]);
 
   useEffect(() => {
     if (!selectedBaseBranchFile) return;
@@ -479,20 +520,20 @@ export function ReviewHubContent({
         .setDiffPanelFile(diffPanelId, selectedBaseBranchFile.path, "modified", viewedKey);
       return;
     }
-    void store
-      .openPanelDialog({
-        kind: "diff",
-        filePath: selectedBaseBranchFile.path,
-        fileStatus: "modified",
-        diffSource: "base-branch",
-        baseBranch: mainBranch,
-        changeSet: changeSetsRef.current.baseBranch,
-        title: basename(selectedBaseBranchFile.path),
-        viewedKey,
-        ...(worktreeId && { worktreeId }),
-      })
-      .then((panelId) => (panelId ? setDiffPanelId(panelId) : setSelectedBaseBranchFile(null)));
-  }, [selectedBaseBranchFile, diffPanelId, worktreeId, mainBranch]);
+    void openDiffDialog(store, {
+      kind: "diff",
+      filePath: selectedBaseBranchFile.path,
+      fileStatus: "modified",
+      diffSource: "base-branch",
+      baseBranch: mainBranch,
+      changeSet: changeSetsRef.current.baseBranch,
+      title: basename(selectedBaseBranchFile.path),
+      viewedKey,
+      ...(worktreeId && { worktreeId }),
+    }).then((newPanelId) =>
+      newPanelId ? setDiffPanelId(newPanelId) : setSelectedBaseBranchFile(null)
+    );
+  }, [selectedBaseBranchFile, diffPanelId, worktreeId, mainBranch, openDiffDialog]);
 
   // Keep the open panel's change set in step with the live poll. The store
   // bails on a value-equal set, so a quiet poll costs nothing.
@@ -1376,12 +1417,16 @@ export function ReviewHubContent({
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-divider shrink-0">
           <div className="flex items-center gap-2 min-w-0">
-            <h2
-              id="review-hub-title"
-              className="text-daintree-text font-semibold text-sm tracking-wide shrink-0"
-            >
-              Review & Commit
-            </h2>
+            {/* The dialog host already draws the title in AppDialog.Header —
+                drawing it again would stack two "Review & Commit" headings. */}
+            {!isDialog && (
+              <h2
+                id="review-hub-title"
+                className="text-daintree-text font-semibold text-sm tracking-wide shrink-0"
+              >
+                Review & Commit
+              </h2>
+            )}
             {status?.currentBranch && (
               <TruncatedTooltip content={status.currentBranch}>
                 <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-tint/[0.07] border border-tint/[0.08] text-[11px] text-daintree-text/60 font-mono truncate max-w-[200px]">
@@ -1462,18 +1507,22 @@ export function ReviewHubContent({
                 />
               </button>
             )}
-            <button
-              onClick={onClose}
-              className={cn(
-                "p-1.5 rounded transition-colors",
-                "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.06]",
-                "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
-              )}
-              aria-label="Close"
-              data-testid="review-hub-close"
-            >
-              <X className="w-4 h-4" />
-            </button>
+            {/* Same reason as the title: AppDialog.Header supplies the close
+                control at this location. */}
+            {!isDialog && (
+              <button
+                onClick={onClose}
+                className={cn(
+                  "p-1.5 rounded transition-colors",
+                  "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.06]",
+                  "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
+                )}
+                aria-label="Close"
+                data-testid="review-hub-close"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
           </div>
         </div>
 

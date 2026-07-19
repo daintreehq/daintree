@@ -19,13 +19,6 @@ interface UIState {
   // at 0 (no divider until the first close).
   lastNotificationCenterClosedAt: number;
   resetNotificationCenterLastClosedAt: () => void;
-  // Cross-component signal to open the Review Hub on a specific worktree
-  // card. WorktreeCard for the matching worktree subscribes and opens its
-  // local ReviewHub once, then clears the value. Used by
-  // `worktree.openReviewHub` and the completed-with-changes inbox button.
-  pendingReviewHubWorktreeId: string | null;
-  setPendingReviewHubWorktreeId: (id: string) => void;
-  clearPendingReviewHubWorktreeId: () => void;
   // Per-worktree disclosure state for the Review Hub file list. Default
   // (unset) is collapsed so the commit textarea is the focal point on open.
   // Session-scoped (in-memory only — resets on app restart, no persist
@@ -77,14 +70,6 @@ export const useUIStore = create<UIState>((set, get) => ({
       return { notificationCenterOpen: next, lastNotificationCenterClosedAt: Date.now() };
     }),
   resetNotificationCenterLastClosedAt: () => set({ lastNotificationCenterClosedAt: 0 }),
-
-  pendingReviewHubWorktreeId: null,
-  setPendingReviewHubWorktreeId: (id) => set({ pendingReviewHubWorktreeId: id }),
-  clearPendingReviewHubWorktreeId: () =>
-    set((state) => {
-      if (state.pendingReviewHubWorktreeId === null) return state;
-      return { pendingReviewHubWorktreeId: null };
-    }),
 
   reviewHubFileListExpanded: {},
   setReviewHubFileListExpanded: (worktreePath, expanded) =>

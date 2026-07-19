@@ -21,10 +21,12 @@ const { openPanelDialogMock, setDiffPanelChangeSetMock } = vi.hoisted(() => ({
   setDiffPanelChangeSetMock: vi.fn(),
 }));
 
+const EMPTY_DIALOG_STACK = vi.hoisted(() => [] as string[]);
+
 vi.mock("@/store/panelDialogStore", () => ({
   usePanelDialogStore: Object.assign(
-    (selector: (state: unknown) => unknown) => selector({ panelId: null }),
-    { getState: () => ({ openPanelDialog: openPanelDialogMock }) }
+    (selector: (state: unknown) => unknown) => selector({ dialogStack: EMPTY_DIALOG_STACK }),
+    { getState: () => ({ dialogStack: EMPTY_DIALOG_STACK, openPanelDialog: openPanelDialogMock }) }
   ),
 }));
 vi.mock("@/store/panelStore", () => ({

@@ -230,12 +230,20 @@ export interface DevPreviewPanelOptions extends AddPanelOptionsBase {
 
 /**
  * Options for creating a review panel. Mounts the worktree's Review & Commit
- * surface in a grid cell. Carries no kind-specific fields beyond the base:
- * `worktreeId` from `AddPanelOptionsBase` is the sole binding, and the
- * worktree path is resolved at render time from the worktree store.
+ * surface in a grid cell or as a dialog. `worktreeId` from `AddPanelOptionsBase`
+ * is the sole persisted binding — the worktree path is resolved at render time
+ * from the worktree store. Both fields below are open-time hints; neither is
+ * persisted.
  */
 export interface ReviewPanelOptions extends AddPanelOptionsBase {
   kind: "review";
+  /**
+   * Commit message to seed the composer with on first open. Open-time hint;
+   * never persisted. Must carry no fallback — see `ReviewPanelData` (#7884).
+   */
+  initialCommitMessage?: string;
+  /** Stage all unstaged files on open when nothing is staged. Open-time hint. */
+  autoStageOnOpen?: boolean;
 }
 
 /** Options for creating a file viewer panel */
