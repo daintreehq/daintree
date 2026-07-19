@@ -163,7 +163,11 @@ export function DeletedWorktreeCard({ worktree }: DeletedWorktreeCardProps) {
       <button
         type="button"
         data-card-select-overlay=""
-        className="absolute inset-0 z-0 outline-hidden"
+        // Unlike the live card's overlay (allowlisted in the focus-ring
+        // contract), this card has no focusable parent row owning keyboard
+        // nav — the overlay button IS the keyboard path, so it carries its
+        // own inset focus ring.
+        className="absolute inset-0 z-0 outline-hidden focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent"
         aria-label={`Select deleted worktree: ${worktree.title}`}
       />
       <div
