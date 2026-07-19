@@ -6,7 +6,6 @@ import type { BuiltInRuntimeActionId } from "@shared/config/actionIds";
 import { copyTreeClient, systemClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
-import { usePanelDialogStore } from "@/store/panelDialogStore";
 import { useForgeProviderHealthStore } from "@/store/forgeProviderHealthStore";
 import { DEFAULT_COPYTREE_FORMAT } from "@/lib/copyTreeFormat";
 import { deriveCommitMessageSeed } from "@/lib/worktreeAiNote";
@@ -278,6 +277,12 @@ export function registerWorktreeContextActions(
 
         const worktree = getCurrentViewStore().getState().worktrees.get(targetWorktreeId);
         if (!worktree) return;
+
+        // Imported lazily, like `fleetActions` does with ActionService: a static
+        // import pulls panelStore -> panelPersistence into this module's graph,
+        // and that reads `projectClient` from `@/clients` at module scope. Every
+        // action test that mocks `@/clients` without it then dies at import.
+        const { usePanelDialogStore } = await import("@/store/panelDialogStore");
 
         await usePanelDialogStore.getState().openPanelDialog({
           kind: "review",
