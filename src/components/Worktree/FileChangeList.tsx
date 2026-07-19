@@ -1,6 +1,7 @@
 import {
   forwardRef,
   useCallback,
+  useEffect,
   useImperativeHandle,
   useLayoutEffect,
   useMemo,
@@ -10,7 +11,6 @@ import {
 import type { FileChangeDetail, GitStatus } from "../../types";
 import type { DiffChangeSetEntry } from "@/components/FileViewer/diffChangeSet";
 import { cn } from "../../lib/utils";
-import { FileDiffModal } from "./FileDiffModal";
 import { Folder } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { isAbsolute, basename, dirname, normalize, join } from "@shared/utils/path";
@@ -18,6 +18,9 @@ import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/component
 import { usePluginContextMenuItems } from "@/hooks/usePluginContextMenuItems";
 import { PluginContextMenuSection } from "@/components/Plugin/PluginContextMenuSection";
 import { useFileTreeDecorations } from "@/hooks/useFileTreeDecorations";
+import { usePanelDialogStore } from "@/store/panelDialogStore";
+import { usePanelStore } from "@/store/panelStore";
+import { useWorktreeIdForPath } from "@/panels/diff/useWorktreeIdForPath";
 import { FileDecorationBadge } from "@/components/Plugin/FileDecorationBadge";
 
 function getRelativePath(from: string, to: string): string {
@@ -81,11 +84,6 @@ function formatDirForDisplay(dir: string, maxSegments = 2): string {
   return "…/" + segments.slice(-maxSegments).join("/");
 }
 
-interface SelectedFile {
-  path: string;
-  status: GitStatus;
-}
-
 interface FileChangeWithRelativePath extends FileChangeDetail {
   relativePath: string;
 }
@@ -105,7 +103,8 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
     { changes, maxVisible = 8, rootPath, groupByFolder = false, isStale = false, className },
     ref
   ) {
-    const [selectedFile, setSelectedFile] = useState<SelectedFile | null>(null);
+    const [diffPanelId, setDiffPanelId] = useState<string | null>(null);
+    const worktreeId = useWorktreeIdForPath(rootPath);
     // Plugin-contributed `file` context-menu items. Pulled once for the list; a
     // row is only wrapped in a ContextMenu when there are items, so a zero-plugin
     // file list keeps its existing flat-row DOM (no per-row trigger overhead).
@@ -191,38 +190,8 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
       [sortedChanges, maxVisible]
     );
 
-    // Position of the open file, re-derived from the live list every render so
-    // a background refresh that re-sorts (churn ordering) can't strand the
-    // index on a different file. Falls back to path-only when the status
-    // changed under the open modal (e.g. untracked → added).
-    const selectedIndex = useMemo(() => {
-      if (!selectedFile) return null;
-      const exact = sortedChanges.findIndex(
-        (change) =>
-          change.relativePath === selectedFile.path && change.status === selectedFile.status
-      );
-      if (exact !== -1) return exact;
-      const byPath = sortedChanges.findIndex((change) => change.relativePath === selectedFile.path);
-      return byPath === -1 ? null : byPath;
-    }, [selectedFile, sortedChanges]);
-
-    // The modal's fetch subject follows the LIVE entry, not the open-time
-    // snapshot: a file whose status flips under the open modal (untracked →
-    // added, added → modified after an agent commit) must be re-fetched under
-    // its current status, or the diff renders in the wrong mode.
-    const liveSelected = selectedIndex !== null ? (sortedChanges[selectedIndex] ?? null) : null;
-
-    const getAdjacentFile = useCallback(
-      (delta: -1 | 1) => {
-        if (selectedIndex === null) return null;
-        const change = sortedChanges[selectedIndex + delta];
-        return change ? { path: change.relativePath, status: change.status } : null;
-      },
-      [selectedIndex, sortedChanges]
-    );
-
-    // Changeset handed to the diff modal so it can render the review-workspace
-    // sidebar. Indexed identically to `selectedIndex`/`navigateFile`. Viewed
+    // Change set handed to the diff panel so it can render the review
+    // workspace sidebar and step between files. Viewed
     // keys are status-scoped (this list mixes staged and unstaged changes, so
     // it can't use the Review Hub's `section:path` namespace); markers are
     // invalidated wholesale when the hub commits (diffViewedStore.clearWorktree).
@@ -238,14 +207,49 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
       [sortedChanges]
     );
 
-    const selectFileAt = useCallback(
-      (index: number) => {
-        const change = sortedChanges[index];
-        if (!change) return;
-        setSelectedFile({ path: change.relativePath, status: change.status });
+    // The diff panel steps through files itself, so this list only has to open
+    // it and keep its change set current. `openPanelDialog` supersedes any
+    // panel already showing, which is why re-opening needs no explicit close.
+    const openDiffPanel = useCallback(
+      (change: FileChangeWithRelativePath) => {
+        void usePanelDialogStore
+          .getState()
+          .openPanelDialog({
+            kind: "diff",
+            filePath: change.relativePath,
+            fileStatus: change.status,
+            diffSource: "working-tree",
+            changeSet: diffChangeSet,
+            viewedKey: `${change.status}:${change.relativePath}`,
+            title: basename(change.relativePath),
+            ...(worktreeId && { worktreeId }),
+          })
+          // Only adopt a panel that was actually created: a refused or
+          // superseded open resolves null, and this list has no selection to
+          // retry from — the next open is a user activation, not an effect.
+          .then((panelId) => {
+            if (panelId) setDiffPanelId(panelId);
+          });
       },
-      [sortedChanges]
+      [diffChangeSet, worktreeId]
     );
+
+    // Keep the open panel's change set in step with the live worktree poll.
+    // The store bails on a value-equal set, so a quiet poll costs nothing.
+    useEffect(() => {
+      if (!diffPanelId) return;
+      usePanelStore.getState().setDiffPanelChangeSet(diffPanelId, diffChangeSet);
+    }, [diffPanelId, diffChangeSet]);
+
+    // Drop the pointer once the panel is gone (closed, or superseded by another
+    // surface opening its own diff) so a later poll can't resurrect its set —
+    // or push this list's set into a panel another surface now owns. Dropping
+    // it must never reopen anything: the list opens diffs on user activation
+    // only, so there is no "we want a panel" state to confuse this with.
+    const dialogPanelId = usePanelDialogStore((state) => state.panelId);
+    useEffect(() => {
+      if (diffPanelId && dialogPanelId !== diffPanelId) setDiffPanelId(null);
+    }, [dialogPanelId, diffPanelId]);
 
     const groupedChanges = useMemo((): FolderGroup[] => {
       if (!groupByFolder) return [];
@@ -279,9 +283,9 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
         const change = sortedChanges[index];
         if (!change) return;
         triggerElementRef.current = triggerEl;
-        setSelectedFile({ path: change.relativePath, status: change.status });
+        openDiffPanel(change);
       },
-      [sortedChanges]
+      [sortedChanges, openDiffPanel]
     );
 
     // Imperative entry point for the "Open changes" button in WorktreeDetails.
@@ -298,22 +302,6 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
     if (changes.length === 0) {
       return null;
     }
-
-    const closeModal = () => {
-      setSelectedFile(null);
-    };
-
-    const navigateFile = (delta: -1 | 1) => {
-      // Clamp against the live length first — a worktree refresh can shrink the
-      // set while the modal is open, leaving the derived index stale.
-      if (selectedIndex === null) return;
-      const safeCurrent = Math.min(selectedIndex, sortedChanges.length - 1);
-      const next = Math.min(Math.max(safeCurrent + delta, 0), sortedChanges.length - 1);
-      const change = sortedChanges[next];
-      if (change) {
-        setSelectedFile({ path: change.relativePath, status: change.status });
-      }
-    };
 
     const renderFileItem = (change: FileChangeWithRelativePath, showDir: boolean) => {
       const config = STATUS_CONFIG[change.status] || STATUS_CONFIG.untracked;
@@ -440,21 +428,6 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
               </div>
             )}
           </div>
-
-          <FileDiffModal
-            isOpen={selectedFile !== null}
-            filePath={liveSelected?.relativePath ?? selectedFile?.path ?? ""}
-            status={liveSelected?.status ?? selectedFile?.status ?? "modified"}
-            worktreePath={rootPath}
-            onClose={closeModal}
-            restoreFocusTo={triggerElementRef}
-            currentFileIndex={selectedIndex ?? undefined}
-            totalFileCount={sortedChanges.length}
-            onNavigateFile={navigateFile}
-            getAdjacentFile={getAdjacentFile}
-            changeSet={diffChangeSet}
-            onSelectFile={selectFileAt}
-          />
         </>
       );
     }
@@ -485,21 +458,6 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
             </div>
           )}
         </div>
-
-        <FileDiffModal
-          isOpen={selectedFile !== null}
-          filePath={liveSelected?.relativePath ?? selectedFile?.path ?? ""}
-          status={liveSelected?.status ?? selectedFile?.status ?? "modified"}
-          worktreePath={rootPath}
-          onClose={closeModal}
-          restoreFocusTo={triggerElementRef}
-          currentFileIndex={selectedIndex ?? undefined}
-          totalFileCount={sortedChanges.length}
-          onNavigateFile={navigateFile}
-          getAdjacentFile={getAdjacentFile}
-          changeSet={diffChangeSet}
-          onSelectFile={selectFileAt}
-        />
       </>
     );
   }

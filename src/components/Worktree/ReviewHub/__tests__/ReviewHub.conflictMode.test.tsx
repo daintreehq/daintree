@@ -110,64 +110,6 @@ vi.mock("@/hooks", () => ({
   useTruncationDetection: vi.fn(() => ({ ref: vi.fn(), isTruncated: false })),
 }));
 
-interface CapturedNavProps {
-  filePath: string;
-  currentFileIndex?: number;
-  totalFileCount?: number;
-  onNavigateFile?: (delta: -1 | 1) => void;
-}
-
-const { fileDiffModalOpenHistory, fileDiffModalLastFilePath } = vi.hoisted(() => ({
-  fileDiffModalOpenHistory: { value: [] as boolean[] },
-  fileDiffModalLastFilePath: { value: null as string | null },
-}));
-const fileDiffModalNavCapture = vi.hoisted((): { value: CapturedNavProps | null } => ({
-  value: null,
-}));
-const baseBranchModalNavCapture = vi.hoisted((): { value: CapturedNavProps | null } => ({
-  value: null,
-}));
-vi.mock("../../FileDiffModal", () => ({
-  FileDiffModal: ({
-    isOpen,
-    filePath,
-    currentFileIndex,
-    totalFileCount,
-    onNavigateFile,
-  }: { isOpen: boolean } & CapturedNavProps) => {
-    fileDiffModalOpenHistory.value.push(isOpen);
-    if (isOpen) {
-      fileDiffModalLastFilePath.value = filePath;
-      fileDiffModalNavCapture.value = {
-        filePath,
-        currentFileIndex,
-        totalFileCount,
-        onNavigateFile,
-      };
-    }
-    return null;
-  },
-}));
-vi.mock("../BaseBranchDiffModal", () => ({
-  BaseBranchDiffModal: ({
-    isOpen,
-    filePath,
-    currentFileIndex,
-    totalFileCount,
-    onNavigateFile,
-  }: { isOpen: boolean } & CapturedNavProps) => {
-    if (isOpen) {
-      baseBranchModalNavCapture.value = {
-        filePath,
-        currentFileIndex,
-        totalFileCount,
-        onNavigateFile,
-      };
-    }
-    return null;
-  },
-}));
-
 vi.mock("@/hooks/useWorktreeStore", () => ({
   useWorktreeStore: (selector: (state: { worktrees: Map<string, WorktreeState> }) => unknown) =>
     selector({ worktrees: worktreeStoreData.current as Map<string, WorktreeState> }),

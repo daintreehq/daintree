@@ -12,7 +12,6 @@ vi.mock("@/services/ActionService", () => ({
 }));
 
 // The diff modal is irrelevant to the context-menu wiring under test.
-vi.mock("../FileDiffModal", () => ({ FileDiffModal: () => null }));
 
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,

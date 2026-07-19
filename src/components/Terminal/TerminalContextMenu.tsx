@@ -13,6 +13,7 @@ import { panelKindHasPty, panelKindIsDockable } from "@shared/config/panelKindRe
 import {
   isBrowserPanel,
   isDevPreviewPanel,
+  isDiffPanel,
   isFilePanel,
   isPtyPanel,
   isReviewPanel,
@@ -517,6 +518,7 @@ export function TerminalContextMenu({
   const isDevPreview = isDevPreviewPanel(terminal);
   const isReview = isReviewPanel(terminal);
   const isFile = isFilePanel(terminal);
+  const isDiff = isDiffPanel(terminal);
   const hasPty = terminal.kind ? panelKindHasPty(terminal.kind) : true;
   // A non-PTY plugin kind matches none of the built-in guards, so without this
   // it falls through to the terminal menu and is offered "Duplicate terminal",
@@ -753,7 +755,10 @@ export function TerminalContextMenu({
     );
   }
 
-  if (isFile || isPlugin) {
+  // Diff joins the file/plugin branch: all three are non-PTY reading surfaces
+  // whose menu is the generic panel one. Without an early return here the PTY
+  // menu below would narrow against DiffPanelData and lose `isInputLocked`.
+  if (isFile || isDiff || isPlugin) {
     return (
       <ContextMenu>
         <MenuActionSourceContext.Consumer>

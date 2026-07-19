@@ -2,6 +2,7 @@ import type { AgentState, AgentStateChangeTrigger, AgentId, WaitingReason } from
 import type { TerminalCheckResult } from "./checkResult.js";
 import type { BuiltInAgentId } from "../config/agentIds.js";
 import type { BrowserHistory } from "./browser.js";
+import type { GitStatus, DiffChangeSetEntry } from "./git.js";
 import { BUILT_IN_PANEL_KINDS, type BuiltInPanelKind } from "../config/panelKindRegistry.js";
 
 export type { BuiltInPanelKind };
@@ -609,12 +610,75 @@ export interface FilePanelData extends BasePanelData {
   initialLine?: number;
 }
 
+/**
+ * Which set of changes a diff panel is reviewing. Selects both the change-set
+ * derivation (which files appear in the workspace sidebar) and the fetch path:
+ * the working-tree sources diff against the index via `git.getFileDiff`, while
+ * "base-branch" compares the branch against its merge base.
+ */
+export type DiffSource = "working-tree" | "staged" | "unstaged" | "base-branch";
+
+/**
+ * Diff panel — renders one file's diff, plus the multi-file review workspace
+ * (sidebar, viewed markers, cross-file stepping) when its source resolves to
+ * more than one changed file.
+ *
+ * Every field is optional so a partially-restored panel degrades to an empty
+ * state rather than a type error, mirroring `FilePanelData.filePath`. The
+ * change set itself is deliberately absent: it is rebuilt live from the
+ * worktree store on every render, so a restored panel never shows files that
+ * have since been committed or reverted (the `ReviewPanelData` rationale).
+ */
+export interface DiffPanelData extends BasePanelData {
+  kind: "diff";
+  /** Worktree-relative path of the file being diffed; absent = empty state. */
+  filePath?: string;
+  /**
+   * Status the diff was opened against. Persisted as the fallback used before
+   * live change data resolves, and when the file has left the change set.
+   */
+  fileStatus?: GitStatus;
+  /** Which change set this panel reviews. Absent defaults to "working-tree". */
+  diffSource?: DiffSource;
+  /**
+   * Base ref for `diffSource: "base-branch"`. The *current* branch is
+   * deliberately not persisted — it is resolved live from the worktree, so a
+   * branch switch can't strand the panel comparing against a stale ref.
+   */
+  baseBranch?: string;
+  /**
+   * Files the review workspace steps through. Runtime-only — deliberately
+   * absent from `serializeDiff`, so a restored panel opens on its single file
+   * rather than replaying a change set whose files may since have been
+   * committed or reverted.
+   *
+   * Pushed by whichever surface opened the panel (the change list, the review
+   * hub, the base-branch compare) rather than derived here: each of those
+   * orders and keys its files differently, and the base-branch set arrives
+   * from a `compareWorktrees` fetch that has no worktree-store equivalent.
+   * Keeping one owner per set is what stops the two from drifting.
+   */
+  changeSet?: DiffChangeSetEntry[];
+  /**
+   * Cursor into `changeSet` for the open file. Runtime-only (never
+   * serialized), because it only means anything alongside the live set.
+   *
+   * (path, status) is not unique: partial staging puts the same path with the
+   * same status in both the staged and unstaged sections, and those entries
+   * differ only by `viewedKey`. Without this cursor the panel resolves to the
+   * first match, so selecting the unstaged copy highlights the staged row and
+   * marks the wrong file viewed.
+   */
+  viewedKey?: string;
+}
+
 export type PanelInstance =
   | PtyPanelData
   | BrowserPanelData
   | DevPreviewPanelData
   | ReviewPanelData
-  | FilePanelData;
+  | FilePanelData
+  | DiffPanelData;
 
 export function isPtyPanel(panel: PanelInstance | TerminalInstance): panel is PtyPanelData {
   const kind = panel.kind ?? "terminal";
@@ -646,6 +710,12 @@ export function isFilePanel(panel: PanelInstance | TerminalInstance): panel is F
   const kind = panel.kind ?? "terminal";
 
   return kind === "file";
+}
+
+export function isDiffPanel(panel: PanelInstance | TerminalInstance): panel is DiffPanelData {
+  const kind = panel.kind ?? "terminal";
+
+  return kind === "diff";
 }
 
 /**

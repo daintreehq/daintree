@@ -12,8 +12,6 @@ const pluginMcpConfirmState = vi.hoisted(() => ({ current: null as { requestId: 
 const pluginCapabilityConfirmState = vi.hoisted(() => ({ current: { requestId: "cap-1" } }));
 const diagnosticsReviewState = vi.hoisted(() => ({ requestSeq: 5 }));
 
-const stashViewDiffRequestMock = vi.hoisted(() => vi.fn());
-
 function selectorMock<T>(state: T) {
   return vi.fn((selector: (s: T) => unknown) => selector(state));
 }
@@ -45,9 +43,6 @@ vi.mock("@/store/pluginCapabilityConfirmStore", () => ({
 vi.mock("@/store/diagnosticsReviewStore", () => ({
   useDiagnosticsReviewStore: selectorMock(diagnosticsReviewState),
 }));
-vi.mock("@/components/Worktree/pendingViewDiffRequest", () => ({
-  stashViewDiffRequest: stashViewDiffRequestMock,
-}));
 
 import { useModalResetKeys } from "../useModalResetKeys";
 
@@ -70,7 +65,6 @@ describe("useModalResetKeys", () => {
       pluginCapabilityConfirmResetKey: "cap-1",
       diagnosticsReviewResetKey: 5,
       terminalInfoResetKey: 0,
-      diffViewerResetKey: 0,
     });
   });
 
@@ -82,20 +76,6 @@ describe("useModalResetKeys", () => {
     });
 
     expect(result.current.terminalInfoResetKey).toBe(1);
-    expect(result.current.diffViewerResetKey).toBe(0);
-  });
-
-  it("stashes and increments only diffViewerResetKey on daintree:view-diff", () => {
-    const { result } = renderHook(() => useModalResetKeys());
-    const event = new Event("daintree:view-diff");
-
-    act(() => {
-      window.dispatchEvent(event);
-    });
-
-    expect(stashViewDiffRequestMock).toHaveBeenCalledWith(event);
-    expect(result.current.diffViewerResetKey).toBe(1);
-    expect(result.current.terminalInfoResetKey).toBe(0);
   });
 
   it("removes its window listeners on unmount", () => {
@@ -105,7 +85,6 @@ describe("useModalResetKeys", () => {
     unmount();
 
     expect(removeSpy).toHaveBeenCalledWith("daintree:open-terminal-info", expect.any(Function));
-    expect(removeSpy).toHaveBeenCalledWith("daintree:view-diff", expect.any(Function));
     removeSpy.mockRestore();
   });
 });

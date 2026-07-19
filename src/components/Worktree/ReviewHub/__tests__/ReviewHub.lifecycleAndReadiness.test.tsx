@@ -110,64 +110,6 @@ vi.mock("@/hooks", () => ({
   useTruncationDetection: vi.fn(() => ({ ref: vi.fn(), isTruncated: false })),
 }));
 
-interface CapturedNavProps {
-  filePath: string;
-  currentFileIndex?: number;
-  totalFileCount?: number;
-  onNavigateFile?: (delta: -1 | 1) => void;
-}
-
-const { fileDiffModalOpenHistory, fileDiffModalLastFilePath } = vi.hoisted(() => ({
-  fileDiffModalOpenHistory: { value: [] as boolean[] },
-  fileDiffModalLastFilePath: { value: null as string | null },
-}));
-const fileDiffModalNavCapture = vi.hoisted((): { value: CapturedNavProps | null } => ({
-  value: null,
-}));
-const baseBranchModalNavCapture = vi.hoisted((): { value: CapturedNavProps | null } => ({
-  value: null,
-}));
-vi.mock("../../FileDiffModal", () => ({
-  FileDiffModal: ({
-    isOpen,
-    filePath,
-    currentFileIndex,
-    totalFileCount,
-    onNavigateFile,
-  }: { isOpen: boolean } & CapturedNavProps) => {
-    fileDiffModalOpenHistory.value.push(isOpen);
-    if (isOpen) {
-      fileDiffModalLastFilePath.value = filePath;
-      fileDiffModalNavCapture.value = {
-        filePath,
-        currentFileIndex,
-        totalFileCount,
-        onNavigateFile,
-      };
-    }
-    return null;
-  },
-}));
-vi.mock("../BaseBranchDiffModal", () => ({
-  BaseBranchDiffModal: ({
-    isOpen,
-    filePath,
-    currentFileIndex,
-    totalFileCount,
-    onNavigateFile,
-  }: { isOpen: boolean } & CapturedNavProps) => {
-    if (isOpen) {
-      baseBranchModalNavCapture.value = {
-        filePath,
-        currentFileIndex,
-        totalFileCount,
-        onNavigateFile,
-      };
-    }
-    return null;
-  },
-}));
-
 vi.mock("@/hooks/useWorktreeStore", () => ({
   useWorktreeStore: (selector: (state: { worktrees: Map<string, WorktreeState> }) => unknown) =>
     selector({ worktrees: worktreeStoreData.current as Map<string, WorktreeState> }),
@@ -374,6 +316,16 @@ const makeWorktreeState = (path = WORKTREE_PATH): WorktreeState =>
  * (#8242). The push-error CTA only opens the dialog; clicking its
  * `Pull and rebase` confirm button is what reaches the IPC.
  */
+
+const openPanelDialogMock = vi.hoisted(() =>
+  vi.fn<(options: Record<string, unknown>) => Promise<string>>(async () => "diff-panel-1")
+);
+vi.mock("@/store/panelDialogStore", () => ({
+  usePanelDialogStore: Object.assign(
+    (selector: (s: unknown) => unknown) => selector({ panelId: null }),
+    { getState: () => ({ openPanelDialog: openPanelDialogMock, closePanelDialog: vi.fn() }) }
+  ),
+}));
 
 describe("ReviewHub", () => {
   let capturedUpdateCallback: ((state: WorktreeState) => void) | null = null;
@@ -725,11 +677,13 @@ describe("ReviewHub", () => {
       act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
       act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
 
-      fileDiffModalOpenHistory.value.length = 0;
-      fileDiffModalLastFilePath.value = null;
+      openPanelDialogMock.mockClear();
       act(() => void fireEvent.keyDown(document, { key: "Enter" }));
-      await waitFor(() => expect(fileDiffModalOpenHistory.value.at(-1)).toBe(true));
-      expect(fileDiffModalLastFilePath.value).toBe("src/app.ts");
+      await waitFor(() => expect(openPanelDialogMock).toHaveBeenCalled());
+      expect(openPanelDialogMock.mock.calls[0]?.[0]).toMatchObject({
+        kind: "diff",
+        filePath: "src/app.ts",
+      });
     });
 
     it("'v' toggles the Viewed marker for the focused row", async () => {
@@ -761,13 +715,13 @@ describe("ReviewHub", () => {
       await act(async () => {});
 
       expect(screen.queryByRole("listbox", { name: "Changed files" })).toBeNull();
-      fileDiffModalOpenHistory.value.length = 0;
+      openPanelDialogMock.mockClear();
       act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
       act(() => void fireEvent.keyDown(document, { key: " " }));
       act(() => void fireEvent.keyDown(document, { key: "Enter" }));
       expect(stageFileMock).not.toHaveBeenCalled();
       expect(unstageFileMock).not.toHaveBeenCalled();
-      expect(fileDiffModalOpenHistory.value.some((o) => o === true)).toBe(false);
+      expect(openPanelDialogMock).not.toHaveBeenCalled();
     });
 
     it("does not hijack Space when a toolbar button has focus", async () => {

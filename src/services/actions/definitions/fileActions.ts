@@ -89,6 +89,23 @@ const showItemInFolderArgsSchema = z.object({
   path: z.string().min(1),
 });
 
+/**
+ * Strip the worktree root off an absolute path. `isPathInside` is what makes
+ * this safe: a raw `startsWith` accepts a sibling whose name merely extends the
+ * root (`/repo-other/x.ts` under `/repo`, which then mangles into `-other/x.ts`)
+ * and ignores separator normalization. A path outside the worktree passes
+ * through untouched — GitService rejects it downstream with a real git error,
+ * which beats inventing a second failure mode here.
+ */
+function toWorktreeRelative(path: string, worktreeRoot: string | undefined): string {
+  if (!worktreeRoot || !isPathInside(path, worktreeRoot)) return path;
+  const normalizedPath = normalize(path);
+  const normalizedRoot = normalize(worktreeRoot);
+  if (normalizedPath === normalizedRoot) return path;
+  const boundary = normalizedRoot.endsWith("/") ? normalizedRoot : `${normalizedRoot}/`;
+  return normalizedPath.slice(boundary.length);
+}
+
 function resolveFilePanelPath(path: string, rootPath: string | undefined): string {
   if (isAbsolute(path)) return normalize(path);
   const root = rootPath ?? useProjectStore.getState().currentProject?.path;
@@ -270,7 +287,7 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
     id: "file.openDiff",
     title: "Open Diff",
     description:
-      "Open a file's working-tree diff in the in-app side-by-side diff viewer. Args: `path` (required) — absolute or repo-relative file path; `worktreePath` (optional) — worktree root the diff is computed against (defaults to the current project path); `status` (optional git status, defaults to `modified`). Returns nothing (fires the diff-viewer event). Use `file.view` for a read-only file view without a diff.",
+      "Open a file's working-tree diff in the in-app side-by-side diff viewer dialog. The dialog is ephemeral — it is never persisted, never counts toward the panel limit, and is never restored on restart; use its 'Open as panel' control to keep it in the grid. Args: `path` (required) — absolute or repo-relative file path; `worktreePath` (optional) — worktree root the diff is computed against (defaults to the current project path); `status` (optional git status, defaults to `modified`). Returns { panelId }. Use `file.view` for a read-only file view without a diff.",
     category: "files",
     kind: "command",
     danger: "safe",
@@ -285,11 +302,22 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
     run: async (args: unknown) => {
       const { path, worktreePath, status } = openDiffArgsSchema.parse(args);
       const resolvedWorktreePath = worktreePath ?? useProjectStore.getState().currentProject?.path;
-      window.dispatchEvent(
-        new CustomEvent("daintree:view-diff", {
-          detail: { path, worktreePath: resolvedWorktreePath, status: status ?? "modified" },
-        })
-      );
+      // The panel resolves its worktree root from `worktreeId`, so pass the
+      // path through relative — an absolute one would defeat that resolution.
+      const relativePath = toWorktreeRelative(path, resolvedWorktreePath);
+      const fileName = relativePath.split(/[/\\]/).filter(Boolean).pop();
+      const panelId = await usePanelDialogStore.getState().openPanelDialog({
+        kind: "diff",
+        filePath: relativePath,
+        fileStatus: status ?? "modified",
+        diffSource: "working-tree",
+        worktreeId: callbacks.getActiveWorktreeId(),
+        ...(fileName && { title: fileName }),
+      });
+      if (!panelId) {
+        throw new Error("Could not open the diff viewer");
+      }
+      return { panelId };
     },
   }));
 

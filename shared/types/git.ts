@@ -9,6 +9,26 @@ export type GitStatus =
   | "copied"
   | "conflicted";
 
+/**
+ * One file of the change set a diff surface was opened from. Lives in shared
+ * types (rather than beside the sidebar that renders it) because it is carried
+ * on `DiffPanelData`, and `shared/` cannot reach into `src/`.
+ */
+export interface DiffChangeSetEntry {
+  /** Repo-relative path */
+  path: string;
+  status: GitStatus;
+  insertions?: number | null;
+  deletions?: number | null;
+  /**
+   * Caller-owned key for the viewed-marker store (scoped per worktree).
+   * Callers keep their existing conventions: `staged:{path}` /
+   * `unstaged:{path}` (Review Hub), `{status}:{path}` (change list),
+   * `base:{path}` (base-branch review).
+   */
+  viewedKey: string;
+}
+
 /** Details about a single file change in a worktree */
 export interface FileChangeDetail {
   /** Relative path to the file from worktree root */

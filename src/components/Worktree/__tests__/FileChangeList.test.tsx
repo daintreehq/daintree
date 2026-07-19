@@ -6,37 +6,58 @@ import { act, render, cleanup, fireEvent } from "@testing-library/react";
 import { createRef } from "react";
 import type { FileChangeDetail } from "../../../types";
 
-const { capturedModalProps } = vi.hoisted(() => ({
-  capturedModalProps: {
-    isOpen: false as boolean,
-    filePath: "" as string,
-    restoreFocusTo: undefined as unknown,
-    currentFileIndex: undefined as number | undefined,
-    totalFileCount: undefined as number | undefined,
-    onNavigateFile: undefined as ((delta: -1 | 1) => void) | undefined,
-    onClose: undefined as (() => void) | undefined,
-  },
+// The list no longer owns a diff modal: it opens a dialog-presented `diff`
+// panel and keeps that panel's change set current. Stepping between files now
+// belongs to DiffPane, so this file only asserts the opening contract.
+// Reactive stand-in for the real store's single dialog pointer, so tests can
+// move it out from under the list (close, or another surface opening its own
+// diff) and observe what the list does with the panel it thought it owned.
+const dialogStore = vi.hoisted(() => {
+  let panelId: string | null = null;
+  const listeners = new Set<() => void>();
+  return {
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    get: () => panelId,
+    set: (next: string | null) => {
+      panelId = next;
+      for (const listener of listeners) listener();
+    },
+  };
+});
+
+const { openPanelDialogMock, setDiffPanelChangeSetMock, setDiffPanelFileMock } = vi.hoisted(() => ({
+  openPanelDialogMock: vi.fn<(options: Record<string, unknown>) => Promise<string | null>>(
+    async () => {
+      dialogStore.set("diff-panel-1");
+      return "diff-panel-1";
+    }
+  ),
+  setDiffPanelChangeSetMock: vi.fn(),
+  setDiffPanelFileMock: vi.fn(),
 }));
 
-vi.mock("../FileDiffModal", () => ({
-  FileDiffModal: (props: {
-    isOpen: boolean;
-    filePath: string;
-    restoreFocusTo?: unknown;
-    currentFileIndex?: number;
-    totalFileCount?: number;
-    onNavigateFile?: (delta: -1 | 1) => void;
-    onClose: () => void;
-  }) => {
-    capturedModalProps.isOpen = props.isOpen;
-    capturedModalProps.filePath = props.filePath;
-    capturedModalProps.restoreFocusTo = props.restoreFocusTo;
-    capturedModalProps.currentFileIndex = props.currentFileIndex;
-    capturedModalProps.totalFileCount = props.totalFileCount;
-    capturedModalProps.onNavigateFile = props.onNavigateFile;
-    capturedModalProps.onClose = props.onClose;
-    return null;
-  },
+// Both stores are consumed two ways — as a hook with a selector and via
+// `.getState()` — so the mock has to be a callable carrying `getState`.
+vi.mock("@/store/panelDialogStore", async () => {
+  const { useSyncExternalStore } = await import("react");
+  return {
+    usePanelDialogStore: Object.assign(
+      (selector: (state: { panelId: string | null }) => unknown) =>
+        useSyncExternalStore(dialogStore.subscribe, () => selector({ panelId: dialogStore.get() })),
+      { getState: () => ({ panelId: dialogStore.get(), openPanelDialog: openPanelDialogMock }) }
+    ),
+  };
+});
+vi.mock("@/store/panelStore", () => ({
+  usePanelStore: Object.assign((selector: (state: unknown) => unknown) => selector({}), {
+    getState: () => ({
+      setDiffPanelChangeSet: setDiffPanelChangeSetMock,
+      setDiffPanelFile: setDiffPanelFileMock,
+    }),
+  }),
 }));
 
 vi.mock("@/components/ui/tooltip", () => ({
@@ -271,15 +292,9 @@ describe("FileChangeList — stale state (#8069)", () => {
   });
 });
 
-describe("FileChangeList — focus restore & file stepping (#9217)", () => {
+describe("FileChangeList — row activation opens the diff panel (#9217)", () => {
   beforeEach(() => {
-    capturedModalProps.isOpen = false;
-    capturedModalProps.filePath = "";
-    capturedModalProps.restoreFocusTo = undefined;
-    capturedModalProps.currentFileIndex = undefined;
-    capturedModalProps.totalFileCount = undefined;
-    capturedModalProps.onNavigateFile = undefined;
-    capturedModalProps.onClose = undefined;
+    openPanelDialogMock.mockClear();
   });
 
   afterEach(() => {
@@ -288,6 +303,12 @@ describe("FileChangeList — focus restore & file stepping (#9217)", () => {
 
   function rows(container: HTMLElement): HTMLElement[] {
     return Array.from(container.querySelectorAll<HTMLElement>('[role="button"]'));
+  }
+
+  function openedOptions(call = 0): Record<string, unknown> {
+    const options = openPanelDialogMock.mock.calls[call]?.[0];
+    if (!options) throw new Error("openPanelDialog was not called");
+    return options;
   }
 
   it("makes each row a focusable button with an accessible label", () => {
@@ -301,112 +322,57 @@ describe("FileChangeList — focus restore & file stepping (#9217)", () => {
     expect(first!.getAttribute("aria-label")).toContain("a.ts");
   });
 
-  it("opens the modal on Enter and passes the row as the focus-restore target", () => {
+  it("opens the diff panel on Enter", () => {
     const { container } = render(
       <FileChangeList changes={[file("a.ts"), file("b.ts")]} rootPath={ROOT} />
     );
-    const [first] = rows(container);
-    fireEvent.keyDown(first!, { key: "Enter" });
+    fireEvent.keyDown(rows(container)[0]!, { key: "Enter" });
 
-    expect(capturedModalProps.isOpen).toBe(true);
-    expect(capturedModalProps.filePath).toBe("a.ts");
-    // restoreFocusTo is the identity-stable ref; its current points at the row.
-    const ref = capturedModalProps.restoreFocusTo as { current: HTMLElement | null };
-    expect(ref.current).toBe(first);
+    expect(openedOptions()).toMatchObject({ kind: "diff", filePath: "a.ts" });
   });
 
-  it("opens the modal on Space", () => {
+  it("opens the diff panel on Space", () => {
     const { container } = render(<FileChangeList changes={[file("a.ts")]} rootPath={ROOT} />);
     fireEvent.keyDown(rows(container)[0]!, { key: " " });
-    expect(capturedModalProps.isOpen).toBe(true);
+
+    expect(openedOptions()).toMatchObject({ kind: "diff", filePath: "a.ts" });
   });
 
-  it("opens the modal on click and reports the file index and total count", () => {
+  it("opens the clicked row's file and hands the panel the whole sorted change set", () => {
+    // Descending churn, so the sorted set is c, b, a — a raw-order bug would
+    // put a.ts first. Only the top 2 render, but the set must span all three.
+    const changes = [
+      { ...file("a.ts"), insertions: 1 },
+      { ...file("b.ts"), insertions: 5 },
+      { ...file("c.ts"), insertions: 50 },
+    ];
     const { container } = render(
-      <FileChangeList changes={[file("a.ts"), file("b.ts"), file("c.ts")]} rootPath={ROOT} />
+      <FileChangeList changes={changes} rootPath={ROOT} maxVisible={2} />
     );
-    // Sorted alphabetically (equal churn): a, b, c. Click the second row.
     fireEvent.click(rows(container)[1]!);
 
-    expect(capturedModalProps.isOpen).toBe(true);
-    expect(capturedModalProps.filePath).toBe("b.ts");
-    expect(capturedModalProps.currentFileIndex).toBe(1);
-    expect(capturedModalProps.totalFileCount).toBe(3);
+    const options = openedOptions();
+    expect(options.filePath).toBe("b.ts");
+    const changeSet = options.changeSet as Array<{ path: string; status: string }>;
+    expect(changeSet).toHaveLength(changes.length);
+    expect(changeSet[0]).toMatchObject({ path: "c.ts", status: "modified" });
   });
 
-  it("steps to the next and previous file across the whole sorted set", () => {
+  it("resolves an absolute change path against the root before opening", () => {
     const { container } = render(
-      <FileChangeList changes={[file("a.ts"), file("b.ts"), file("c.ts")]} rootPath={ROOT} />
-    );
-    fireEvent.click(rows(container)[0]!);
-    expect(capturedModalProps.currentFileIndex).toBe(0);
-
-    act(() => capturedModalProps.onNavigateFile!(1));
-    expect(capturedModalProps.currentFileIndex).toBe(1);
-    expect(capturedModalProps.filePath).toBe("b.ts");
-
-    act(() => capturedModalProps.onNavigateFile!(1));
-    expect(capturedModalProps.currentFileIndex).toBe(2);
-    expect(capturedModalProps.filePath).toBe("c.ts");
-
-    act(() => capturedModalProps.onNavigateFile!(-1));
-    expect(capturedModalProps.currentFileIndex).toBe(1);
-    expect(capturedModalProps.filePath).toBe("b.ts");
-  });
-
-  it("clamps stepping at the boundaries", () => {
-    const { container } = render(
-      <FileChangeList changes={[file("a.ts"), file("b.ts")]} rootPath={ROOT} />
+      <FileChangeList changes={[file(`${ROOT}/src/deep/a.ts`)]} rootPath={ROOT} />
     );
     fireEvent.click(rows(container)[0]!);
 
-    // Step back from the first file stays at index 0.
-    act(() => capturedModalProps.onNavigateFile!(-1));
-    expect(capturedModalProps.currentFileIndex).toBe(0);
-
-    // Step forward to the last, then past it — stays at the last index.
-    act(() => capturedModalProps.onNavigateFile!(1));
-    act(() => capturedModalProps.onNavigateFile!(1));
-    expect(capturedModalProps.currentFileIndex).toBe(1);
-    expect(capturedModalProps.filePath).toBe("b.ts");
-  });
-
-  it("can step into files beyond the visible cap", () => {
-    const many = Array.from({ length: 12 }, (_, i) =>
-      // Descending churn so the sort order matches the construction order.
-      ({ ...file(`file-${String(i).padStart(2, "0")}.ts`), insertions: 100 - i })
-    );
-    const { container } = render(<FileChangeList changes={many} rootPath={ROOT} maxVisible={8} />);
-    // Only 8 rows render, but stepping spans all 12.
-    expect(rows(container).length).toBe(8);
-    fireEvent.click(rows(container)[7]!);
-    expect(capturedModalProps.currentFileIndex).toBe(7);
-    expect(capturedModalProps.totalFileCount).toBe(12);
-
-    act(() => capturedModalProps.onNavigateFile!(1));
-    expect(capturedModalProps.currentFileIndex).toBe(8);
-    expect(capturedModalProps.filePath).toBe("file-08.ts");
-  });
-
-  it("closing the modal clears the open state and selected index", () => {
-    const { container } = render(<FileChangeList changes={[file("a.ts")]} rootPath={ROOT} />);
-    fireEvent.click(rows(container)[0]!);
-    expect(capturedModalProps.isOpen).toBe(true);
-    expect(capturedModalProps.currentFileIndex).toBe(0);
-
-    act(() => capturedModalProps.onClose!());
-    expect(capturedModalProps.isOpen).toBe(false);
-    expect(capturedModalProps.currentFileIndex).toBeUndefined();
+    const options = openedOptions();
+    expect(options.filePath).toBe("src/deep/a.ts");
+    expect(options.title).toBe("a.ts");
   });
 });
 
 describe("FileChangeList — openFirstFile imperative handle (#11041)", () => {
   beforeEach(() => {
-    capturedModalProps.isOpen = false;
-    capturedModalProps.filePath = "";
-    capturedModalProps.restoreFocusTo = undefined;
-    capturedModalProps.currentFileIndex = undefined;
-    capturedModalProps.totalFileCount = undefined;
+    openPanelDialogMock.mockClear();
   });
 
   afterEach(() => {
@@ -414,7 +380,7 @@ describe("FileChangeList — openFirstFile imperative handle (#11041)", () => {
   });
 
   it.each([false, true])(
-    "opens the highest-churn file first and seeds the given trigger (groupByFolder=%s)",
+    "opens the highest-churn file first (groupByFolder=%s)",
     (groupByFolder) => {
       const ref = createRef<FileChangeListHandle>();
       // Raw order lists b.ts first, but a.ts has more churn, so it sorts to index 0.
@@ -426,14 +392,13 @@ describe("FileChangeList — openFirstFile imperative handle (#11041)", () => {
         <FileChangeList ref={ref} changes={changes} rootPath={ROOT} groupByFolder={groupByFolder} />
       );
 
-      const trigger = document.createElement("button");
-      act(() => ref.current!.openFirstFile(trigger));
+      act(() => ref.current!.openFirstFile(document.createElement("button")));
 
-      expect(capturedModalProps.isOpen).toBe(true);
-      expect(capturedModalProps.filePath).toBe("a.ts");
-      expect(capturedModalProps.currentFileIndex).toBe(0);
-      const restore = capturedModalProps.restoreFocusTo as { current: HTMLElement | null };
-      expect(restore.current).toBe(trigger);
+      const options = openPanelDialogMock.mock.calls[0]?.[0];
+      expect(options).toMatchObject({ kind: "diff", filePath: "a.ts" });
+      // The set is handed over in the same sorted order the handle opened from.
+      const changeSet = options!.changeSet as Array<{ path: string }>;
+      expect(changeSet.map((entry) => entry.path)).toEqual(["a.ts", "b.ts"]);
     }
   );
 
@@ -445,17 +410,78 @@ describe("FileChangeList — openFirstFile imperative handle (#11041)", () => {
     // exists even though nothing rendered; calling it is a safe no-op.
     expect(ref.current).not.toBeNull();
     act(() => ref.current!.openFirstFile(document.createElement("button")));
-    expect(capturedModalProps.isOpen).toBe(false);
+    expect(openPanelDialogMock).not.toHaveBeenCalled();
 
     act(() => {
       rerender(<FileChangeList ref={ref} changes={[file("a.ts")]} rootPath={ROOT} />);
     });
-    // The modal renders now that a file exists but stays closed until the handle
-    // is invoked, so the open below is a real effect of the call, not a leftover.
-    expect(capturedModalProps.isOpen).toBe(false);
+    // Rendering a file must not open anything on its own — the open below has
+    // to be a real effect of the call, not a leftover from the transition.
+    expect(openPanelDialogMock).not.toHaveBeenCalled();
 
     act(() => ref.current!.openFirstFile(document.createElement("button")));
-    expect(capturedModalProps.isOpen).toBe(true);
-    expect(capturedModalProps.filePath).toBe("a.ts");
+    expect(openPanelDialogMock.mock.calls[0]?.[0]).toMatchObject({ filePath: "a.ts" });
+  });
+});
+
+describe("FileChangeList — diff panel ownership", () => {
+  beforeEach(() => {
+    openPanelDialogMock.mockClear();
+    setDiffPanelChangeSetMock.mockClear();
+    dialogStore.set(null);
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  function rows(container: HTMLElement): HTMLElement[] {
+    return Array.from(container.querySelectorAll<HTMLElement>('[role="button"]'));
+  }
+
+  it("opens with the row's viewed-marker cursor so the panel resolves that exact entry", async () => {
+    const { container } = render(
+      <FileChangeList changes={[file("a.ts"), file("b.ts", "added")]} rootPath={ROOT} />
+    );
+    await act(async () => {
+      fireEvent.click(rows(container)[1]!);
+    });
+
+    const options = openPanelDialogMock.mock.calls[0]![0];
+    const changeSet = options.changeSet as Array<{ path: string; viewedKey: string }>;
+    const opened = changeSet.find((entry) => entry.path === options.filePath);
+    // The cursor has to be the set's own key for that row, not a re-derivation
+    // the panel would have to guess at.
+    expect(options.viewedKey).toBe(opened!.viewedKey);
+  });
+
+  it("stops pushing its change set once another surface owns the dialog", async () => {
+    const changes = [file("a.ts"), file("b.ts")];
+    const { container, rerender } = render(<FileChangeList changes={changes} rootPath={ROOT} />);
+    await act(async () => {
+      fireEvent.click(rows(container)[0]!);
+    });
+
+    // Baseline: while the list owns the panel, a poll pushes the fresh set.
+    setDiffPanelChangeSetMock.mockClear();
+    await act(async () => {
+      rerender(<FileChangeList changes={[...changes, file("c.ts")]} rootPath={ROOT} />);
+    });
+    expect(setDiffPanelChangeSetMock).toHaveBeenCalled();
+
+    // Another surface opens its own diff; the pointer moves off our panel.
+    await act(async () => {
+      dialogStore.set("someone-elses-panel");
+    });
+    setDiffPanelChangeSetMock.mockClear();
+
+    await act(async () => {
+      rerender(<FileChangeList changes={[...changes, file("d.ts")]} rootPath={ROOT} />);
+    });
+
+    // Pushing now would overwrite the other surface's change set — and must
+    // never trigger a reopen either, since nothing here asked for a panel.
+    expect(setDiffPanelChangeSetMock).not.toHaveBeenCalled();
+    expect(openPanelDialogMock).toHaveBeenCalledTimes(1);
   });
 });

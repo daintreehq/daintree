@@ -1265,7 +1265,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "files",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Open a file's working-tree diff in the in-app side-by-side diff viewer. Args: \`path\` (required) — absolute or repo-relative file path; \`worktreePath\` (optional) — worktree root the diff is computed against (defaults to the current project path); \`status\` (optional git status, defaults to \`modified\`). Returns nothing (fires the diff-viewer event). Use \`file.view\` for a read-only file view without a diff.",
+    "description": "Open a file's working-tree diff in the in-app side-by-side diff viewer dialog. The dialog is ephemeral — it is never persisted, never counts toward the panel limit, and is never restored on restart; use its 'Open as panel' control to keep it in the grid. Args: \`path\` (required) — absolute or repo-relative file path; \`worktreePath\` (optional) — worktree root the diff is computed against (defaults to the current project path); \`status\` (optional git status, defaults to \`modified\`). Returns { panelId }. Use \`file.view\` for a read-only file view without a diff.",
     "examples": [
       {
         "args": {

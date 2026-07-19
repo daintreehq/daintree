@@ -36,21 +36,14 @@ function setupActions() {
   };
 }
 
-const dispatchSpy = vi.fn<(event: Event) => boolean>(() => true);
-
 beforeEach(() => {
   vi.clearAllMocks();
-  dispatchSpy.mockReset().mockReturnValue(true);
   openPanelDialogMock.mockReset().mockResolvedValue("file-panel-1");
   systemClientMock.openInEditor.mockResolvedValue(undefined);
   systemClientMock.openPath.mockResolvedValue(undefined);
   systemClientMock.showItemInFolder.mockResolvedValue(undefined);
   projectStoreMock.getState.mockReturnValue({
     currentProject: { id: "proj-1", path: "/repo" },
-  });
-  Object.defineProperty(globalThis.window, "dispatchEvent", {
-    value: dispatchSpy,
-    configurable: true,
   });
 });
 
@@ -165,35 +158,68 @@ describe("fileActions adversarial", () => {
     await expect(run("file.openInEditor", { path: "/a/b.ts" })).rejects.toThrow("editor not found");
   });
 
-  it("file.openDiff dispatches view-diff with the supplied worktreePath and status", async () => {
+  it("file.openDiff opens a diff panel with the path relativized against the supplied worktree", async () => {
+    openPanelDialogMock.mockResolvedValue("diff-panel-1");
     const run = setupActions();
-    await run("file.openDiff", {
+    const result = await run("file.openDiff", {
       path: "/repo/src/x.ts",
       worktreePath: "/repo",
       status: "added",
     });
 
-    const event = dispatchSpy.mock.calls[0]![0] as unknown as {
-      type: string;
-      detail: { path: string; worktreePath?: string; status?: string };
-    };
-    expect(event.type).toBe("daintree:view-diff");
-    expect(event.detail).toEqual({
-      path: "/repo/src/x.ts",
-      worktreePath: "/repo",
-      status: "added",
+    const options = openPanelDialogMock.mock.calls[0]![0] as Record<string, unknown>;
+    // The panel resolves its root from worktreeId, so the path must arrive relative.
+    expect(options).toMatchObject({
+      kind: "diff",
+      filePath: "src/x.ts",
+      fileStatus: "added",
+      diffSource: "working-tree",
+      worktreeId: "wt-1",
     });
+    expect(result).toEqual({ panelId: "diff-panel-1" });
   });
 
   it("file.openDiff falls back to the current project path and modified status", async () => {
     const run = setupActions();
     await run("file.openDiff", { path: "/repo/src/y.ts" });
 
-    const event = dispatchSpy.mock.calls[0]![0] as unknown as {
-      detail: { path: string; worktreePath?: string; status?: string };
-    };
-    // worktreePath resolves from currentProject.path (/repo); status defaults.
-    expect(event.detail.worktreePath).toBe("/repo");
-    expect(event.detail.status).toBe("modified");
+    const options = openPanelDialogMock.mock.calls[0]![0] as Record<string, unknown>;
+    // No worktreePath given — currentProject.path (/repo) is what strips the prefix.
+    expect(options.filePath).toBe("src/y.ts");
+    expect(options.fileStatus).toBe("modified");
+  });
+
+  it("file.openDiff leaves a path outside the worktree untouched", async () => {
+    const run = setupActions();
+    await run("file.openDiff", { path: "/elsewhere/z.ts", worktreePath: "/repo" });
+
+    const options = openPanelDialogMock.mock.calls[0]![0] as Record<string, unknown>;
+    expect(options.filePath).toBe("/elsewhere/z.ts");
+  });
+
+  it("file.openDiff does not mangle a sibling worktree whose name extends the root", async () => {
+    const run = setupActions();
+    const siblingPath = "/repo-other/src/x.ts";
+    await run("file.openDiff", { path: siblingPath, worktreePath: "/repo" });
+
+    const options = openPanelDialogMock.mock.calls[0]![0] as Record<string, unknown>;
+    // A prefix test without a separator boundary accepts "/repo-other/..." and
+    // slices the root's length off it, producing "-other/src/x.ts".
+    expect(options.filePath).toBe(siblingPath);
+  });
+
+  it("file.openDiff relativizes across separator styles and redundant segments", async () => {
+    const run = setupActions();
+    await run("file.openDiff", { path: "/repo/./src\\deep\\x.ts", worktreePath: "/repo/" });
+
+    const options = openPanelDialogMock.mock.calls[0]![0] as Record<string, unknown>;
+    expect(options.filePath).toBe("src/deep/x.ts");
+  });
+
+  it("file.openDiff throws when the panel could not be created", async () => {
+    openPanelDialogMock.mockResolvedValue(null);
+    const run = setupActions();
+
+    await expect(run("file.openDiff", { path: "/repo/src/x.ts" })).rejects.toThrow(/diff viewer/i);
   });
 });
