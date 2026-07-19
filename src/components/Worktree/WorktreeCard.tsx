@@ -8,7 +8,11 @@ import { useWorktreeTerminals } from "../../hooks/useWorktreeTerminals";
 
 import { useDroppable } from "@dnd-kit/core";
 import type { SyntheticListenerMap } from "@dnd-kit/core/dist/hooks/utilities";
-import { useIsWorktreeSortDragging, type WorktreeDragData } from "../DragDrop/DndProvider";
+import {
+  useDndPlaceholder,
+  useIsWorktreeSortDragging,
+  type WorktreeDragData,
+} from "../DragDrop/DndProvider";
 import { getWorktreeSortDragId } from "../DragDrop/SortableWorktreeCard";
 import { GripVertical } from "lucide-react";
 import { useErrorStore, usePanelStore, type RetryAction } from "../../store";
@@ -608,33 +612,47 @@ export function WorktreeCard({
     hasActiveAgent: terminalCounts.byState.working > 0,
   });
 
+  // The active card used to opt out of being a drop target entirely — every
+  // panel drag originated from the active worktree, so it could only ever be a
+  // no-op self-drop. Accordion drags broke that assumption: dragging a
+  // terminal out of an inactive (or deleted) worktree's sidebar row onto the
+  // ACTIVE card is the most common rescue flow, so the droppable stays
+  // registered and only disables when the dragged panel already lives here.
+  const { activeTerminal: draggedPanel } = useDndPlaceholder();
+  const isCrossWorktreePanelDrag =
+    draggedPanel !== null && (draggedPanel.worktreeId ?? null) !== worktree.id;
+
   const { setNodeRef, isOver, over, active } = useDroppable({
     id: `worktree-drop-${worktree.id}`,
     data: {
       type: "worktree",
       worktreeId: worktree.id,
     },
-    disabled: isActive || isWorktreeSortDragging,
+    disabled: (isActive && !isCrossWorktreePanelDrag) || isWorktreeSortDragging,
   });
 
   const droppableRef = (node: HTMLElement | null) => {
-    if (!isActive) setNodeRef(node);
+    setNodeRef(node);
   };
 
   const activeDragData = active?.data.current as Partial<WorktreeDragData> | undefined;
   // Only drops handleDragEnd will actually accept: a single-panel drag —
-  // group drags are rejected by cancelDrop, accordion drags never reach the
-  // worktree-drop branch, and worktree-sort drags carry no terminal.
+  // group drags are rejected by cancelDrop, and worktree-sort drags carry no
+  // terminal. Accordion drags count only when they come from a *different*
+  // worktree (a cross-worktree move); within their own worktree they are
+  // reorders and the card must not light up as a drop target.
   const isMovablePanelDrag =
     activeDragData?.terminal !== undefined &&
-    activeDragData.origin !== "accordion" &&
+    (activeDragData.origin !== "accordion" || activeDragData.worktreeId !== worktree.id) &&
     !(activeDragData.groupId && (activeDragData.groupPanelIds?.length ?? 0) > 1);
   // The sidebar row stacks two same-size droppables (this drop target inside
   // the SortableWorktreeCard sortable), and pointerWithin resolves their tie
   // by registration order — `over` can be either id, so match both. Mirrors
   // the dual-id handling in DndProvider's handleDragEnd.
   const isPanelDropTarget =
-    !isActive && isMovablePanelDrag && (isOver || over?.id === getWorktreeSortDragId(worktree.id));
+    (!isActive || isCrossWorktreePanelDrag) &&
+    isMovablePanelDrag &&
+    (isOver || over?.id === getWorktreeSortDragId(worktree.id));
 
   const isMuted =
     (isIdleCard || isStaleCard) && !isWaitingCard && !isActive && !isFocused && !isPanelDropTarget;

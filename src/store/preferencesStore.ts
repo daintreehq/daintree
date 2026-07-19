@@ -11,6 +11,11 @@ export type DiffViewType = "split" | "unified";
 
 export type DiffFontSize = "s" | "m" | "l";
 
+/** Seconds before a deleted worktree's surviving terminals auto-close (0 = never). */
+export type DeletedWorktreeCleanupSeconds = 0 | 30 | 60 | 300;
+
+export const DELETED_WORKTREE_CLEANUP_DEFAULT: DeletedWorktreeCleanupSeconds = 60;
+
 interface PreferencesState {
   showProjectPulse: boolean;
   setShowProjectPulse: (show: boolean) => void;
@@ -50,6 +55,15 @@ interface PreferencesState {
   ) => void;
   skipPushConfirmByWorktreePath: Record<string, boolean>;
   setSkipPushConfirmForWorktree: (worktreePath: string, value: boolean) => void;
+  /**
+   * How long a deleted worktree's row holds its surviving terminals before
+   * they are moved to trash automatically. The countdown starts at deletion
+   * and defers only while a drag is in progress, an agent is still working,
+   * or the row's close-confirm dialog is open (`deletedWorktreeCleanup.ts`).
+   * 0 disables auto-cleanup.
+   */
+  deletedWorktreeCleanupSeconds: DeletedWorktreeCleanupSeconds;
+  setDeletedWorktreeCleanupSeconds: (value: DeletedWorktreeCleanupSeconds) => void;
 }
 
 function isDockDensity(value: unknown): value is DockDensity {
@@ -66,6 +80,12 @@ function isDiffFontSize(value: unknown): value is DiffFontSize {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object";
+}
+
+export function isDeletedWorktreeCleanupSeconds(
+  value: unknown
+): value is DeletedWorktreeCleanupSeconds {
+  return value === 0 || value === 30 || value === 60 || value === 300;
 }
 
 /**
@@ -90,6 +110,9 @@ function sanitizePersistedPreferences(
   if (!isDiffFontSize(sanitized.diffFontSize)) sanitized.diffFontSize = "m";
   if (typeof sanitized.markdownWrapLines !== "boolean") sanitized.markdownWrapLines = true;
   if (typeof sanitized.showAgentTaskTitles !== "boolean") sanitized.showAgentTaskTitles = true;
+  if (!isDeletedWorktreeCleanupSeconds(sanitized.deletedWorktreeCleanupSeconds)) {
+    sanitized.deletedWorktreeCleanupSeconds = DELETED_WORKTREE_CLEANUP_DEFAULT;
+  }
 
   // A truthy non-record value here would otherwise bypass the push-confirm gate.
   const skip = sanitized.skipPushConfirmByWorktreePath;
@@ -162,11 +185,13 @@ export const usePreferencesStore = create<PreferencesState>()(
           const { [worktreePath]: _removed, ...rest } = state.skipPushConfirmByWorktreePath;
           return { skipPushConfirmByWorktreePath: rest };
         }),
+      deletedWorktreeCleanupSeconds: DELETED_WORKTREE_CLEANUP_DEFAULT,
+      setDeletedWorktreeCleanupSeconds: (value) => set({ deletedWorktreeCleanupSeconds: value }),
     }),
     {
       name: "daintree-preferences",
       storage: createSafeJSONStorage(),
-      version: 12,
+      version: 13,
       // Runs on every hydration (unlike `migrate`, which Zustand skips when the
       // persisted version matches). Closed-set normalisation lives here so a
       // corrupt-but-parseable value is clamped even at the current version.
@@ -269,6 +294,11 @@ export const usePreferencesStore = create<PreferencesState>()(
           if (typeof persisted.diffShowFileList !== "boolean") persisted.diffShowFileList = true;
           if (!isDiffFontSize(persisted.diffFontSize)) persisted.diffFontSize = "m";
         }
+        if (version < 13 && isRecord(persisted)) {
+          if (!isDeletedWorktreeCleanupSeconds(persisted.deletedWorktreeCleanupSeconds)) {
+            persisted.deletedWorktreeCleanupSeconds = DELETED_WORKTREE_CLEANUP_DEFAULT;
+          }
+        }
         return persisted as PreferencesState;
       },
     }
@@ -279,5 +309,5 @@ registerPersistedStore({
   storeId: "preferencesStore",
   store: usePreferencesStore,
   persistedStateType:
-    "{ showProjectPulse: boolean; showDeveloperTools: boolean; showGridAgentHighlights: boolean; showDockAgentHighlights: boolean; showAgentTaskTitles: boolean; dockDensity: DockDensity; assignWorktreeToSelf: boolean; reduceAnimations: boolean; diffViewType: DiffViewType; diffWrapLines: boolean; diffIgnoreWhitespace: boolean; diffShowFileList: boolean; diffFontSize: DiffFontSize; markdownWrapLines: boolean; lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>; skipPushConfirmByWorktreePath: Record<string, boolean> }",
+    "{ showProjectPulse: boolean; showDeveloperTools: boolean; showGridAgentHighlights: boolean; showDockAgentHighlights: boolean; showAgentTaskTitles: boolean; dockDensity: DockDensity; assignWorktreeToSelf: boolean; reduceAnimations: boolean; diffViewType: DiffViewType; diffWrapLines: boolean; diffIgnoreWhitespace: boolean; diffShowFileList: boolean; diffFontSize: DiffFontSize; markdownWrapLines: boolean; lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>; skipPushConfirmByWorktreePath: Record<string, boolean>; deletedWorktreeCleanupSeconds: DeletedWorktreeCleanupSeconds }",
 });

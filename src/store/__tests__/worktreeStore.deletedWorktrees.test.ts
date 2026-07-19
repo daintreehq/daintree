@@ -30,6 +30,7 @@ function makeDeleted(overrides: Partial<DeletedWorktree> = {}): DeletedWorktree 
     title: "feature/x",
     path: "/repo/wt-1",
     deletedAt: 1000,
+    expiresAt: null,
     pinnedIndex: 0,
     ...overrides,
   };
@@ -60,6 +61,7 @@ describe("getDeletedWorktreeTerminalIds", () => {
       { id: "docked", worktreeId: "wt-1", location: "dock" },
       { id: "trashed", worktreeId: "wt-1", location: "trash" },
       { id: "assistant", worktreeId: "wt-1", location: "overlay" },
+      { id: "dialog", worktreeId: "wt-1", location: "dialog" },
       { id: "elsewhere", worktreeId: "wt-2" },
     ]);
 
@@ -199,5 +201,29 @@ describe("reset", () => {
     useWorktreeSelectionStore.getState().addDeletedWorktree(makeDeleted());
     useWorktreeSelectionStore.getState().reset();
     expect(useWorktreeSelectionStore.getState().deletedWorktrees.size).toBe(0);
+  });
+});
+
+describe("clearRestoreTarget", () => {
+  it("demotes a matching durable restore target without touching the active selection", () => {
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1", restoreWorktreeId: "wt-1" });
+    useWorktreeSelectionStore.getState().clearRestoreTarget("wt-1");
+
+    expect(useWorktreeSelectionStore.getState().restoreWorktreeId).toBeNull();
+    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-1");
+  });
+
+  it("no-ops when a different worktree is the restore target", () => {
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1", restoreWorktreeId: "wt-2" });
+    useWorktreeSelectionStore.getState().clearRestoreTarget("wt-1");
+
+    expect(useWorktreeSelectionStore.getState().restoreWorktreeId).toBe("wt-2");
+  });
+
+  it("scrubs a matching fleet-parked restore snapshot so scope exit can't resurrect it", () => {
+    useWorktreeSelectionStore.setState({ _previousRestoreWorktreeId: "wt-1" });
+    useWorktreeSelectionStore.getState().clearRestoreTarget("wt-1");
+
+    expect(useWorktreeSelectionStore.getState()._previousRestoreWorktreeId).toBeNull();
   });
 });

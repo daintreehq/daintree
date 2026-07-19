@@ -53,6 +53,13 @@ export interface DeletedWorktree {
   path: string;
   deletedAt: number;
   /**
+   * When the row's auto-cleanup fires (terminals move to trash, row goes).
+   * `null` while cleanup is off or the countdown hasn't been armed yet. Owned
+   * entirely by the cleanup sweep (`deletedWorktreeCleanup.ts`), which arms,
+   * pauses (by re-extending), and fires it — nothing else writes this.
+   */
+  expiresAt: number | null;
+  /**
    * Index the row occupied in the sidebar's scrollable list when it was
    * deleted, so the row holds its slot instead of jumping to an edge.
    *
@@ -87,7 +94,8 @@ export function getPinnedDeletedWorktreeIndex(worktreeId: string): number {
 /**
  * Terminals still held by a deleted worktree's row.
  *
- * Mirrors `bulkTrashByWorktree`'s filter exactly (trash + overlay excluded) so
+ * Mirrors `bulkTrashByWorktree`'s filter exactly (trash + overlay + dialog
+ * excluded) so
  * the count shown in the dismiss confirm always matches what dismissing
  * actually closes (#9699). Overlay panels are the Daintree Assistant, not
  * worktree sessions.
@@ -190,6 +198,8 @@ interface WorktreeSelectionState {
   dismissPendingCreation: (path: string) => void;
   addDeletedWorktree: (worktree: DeletedWorktree) => void;
   dismissDeletedWorktree: (worktreeId: string) => void;
+  setDeletedWorktreeExpiry: (worktreeId: string, expiresAt: number | null) => void;
+  clearRestoreTarget: (worktreeId: string) => void;
   pruneDeletedWorktrees: (liveWorktreeIds: ReadonlySet<string>) => void;
   toggleWorktreeExpanded: (id: string) => void;
   setWorktreeExpanded: (id: string, expanded: boolean) => void;
@@ -809,6 +819,32 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     });
   },
 
+  setDeletedWorktreeExpiry: (worktreeId, expiresAt) => {
+    set((state) => {
+      const entry = state.deletedWorktrees.get(worktreeId);
+      if (!entry || entry.expiresAt === expiresAt) return state;
+      const next = new Map(state.deletedWorktrees);
+      next.set(worktreeId, { ...entry, expiresAt });
+      return { deletedWorktrees: next };
+    });
+  },
+
+  // Demote a worktree from the durable restore target without touching the
+  // session-active selection. Used when a deleted worktree lives on as a ghost
+  // row: it may stay ACTIVE (the user is mid-cleanup on it), but a deleted id
+  // must never persist as the restore point — deletedWorktrees is in-memory
+  // only, so after a restart the id would resolve to nothing. The fleet-parked
+  // snapshot is scrubbed too: exitFleetScope restores `_previousRestoreWorktreeId`
+  // into the durable slot, which would resurrect the deleted id.
+  clearRestoreTarget: (worktreeId) => {
+    const updates: Partial<WorktreeSelectionState> = {};
+    if (get().restoreWorktreeId === worktreeId) updates.restoreWorktreeId = null;
+    if (get()._previousRestoreWorktreeId === worktreeId) updates._previousRestoreWorktreeId = null;
+    if (Object.keys(updates).length === 0) return;
+    set(updates);
+    persistActiveWorktree(null);
+  },
+
   pruneDeletedWorktrees: (liveWorktreeIds) => {
     set((state) => {
       if (state.deletedWorktrees.size === 0) return state;
@@ -1121,7 +1157,13 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       focusedWorktreeId: restoreId,
       _policyGeneration: generation,
     });
-    persistActiveWorktree(restoreId);
+    // The parked active id can have become a ghost row while scope was open
+    // (its worktree deleted with surviving terminals). Restoring the session
+    // selection to it is fine — persisting it is not: deletedWorktrees is
+    // in-memory only, so the id resolves to nothing after a restart.
+    persistActiveWorktree(
+      restoreId !== null && get().deletedWorktrees.has(restoreId) ? null : restoreId
+    );
     // Hand the restored worktree its own maximize back, or clear the trio
     // outright. Either way `preMaximizeLayout` is replaced, so a snapshot that
     // survived scope entry can no longer restore a foreign column count.

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from "react";
-import { AlertCircle, Check, RotateCcw } from "lucide-react";
+import { AlertCircle, Check, FolderX, RotateCcw } from "lucide-react";
 import { FolderGit2 } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -9,7 +9,13 @@ import {
   DEFAULT_WORKTREE_PATH_PATTERN,
 } from "@shared/utils/pathPattern";
 import { actionService } from "@/services/ActionService";
+import {
+  usePreferencesStore,
+  isDeletedWorktreeCleanupSeconds,
+  DELETED_WORKTREE_CLEANUP_DEFAULT,
+} from "@/store/preferencesStore";
 import { SettingsSection } from "./SettingsSection";
+import { SettingsSelect } from "./SettingsSelect";
 import { useSettingsTabValidation } from "./SettingsValidationRegistry";
 import { useSettingsTabFlush } from "./SettingsFlushRegistry";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -34,6 +40,13 @@ const PATTERN_PRESETS = [
 
 const SAMPLE_BRANCH = "feature/example-branch";
 
+const DELETED_WORKTREE_CLEANUP_OPTIONS = [
+  { value: "30", label: "After 30 seconds" },
+  { value: "60", label: "After 1 minute (default)" },
+  { value: "300", label: "After 5 minutes" },
+  { value: "0", label: "Never — close manually" },
+];
+
 export function WorktreeSettingsTab() {
   const [pattern, setPattern] = useState("");
   const [originalPattern, setOriginalPattern] = useState("");
@@ -44,6 +57,13 @@ export function WorktreeSettingsTab() {
   const [savedMessageTimeout, setSavedMessageTimeout] = useState<NodeJS.Timeout | null>(null);
 
   const sampleRootPath = "/Users/name/Projects/my-project";
+
+  const cleanupSeconds = usePreferencesStore((s) => s.deletedWorktreeCleanupSeconds);
+  const setCleanupSeconds = usePreferencesStore((s) => s.setDeletedWorktreeCleanupSeconds);
+  const handleCleanupChange = (value: string) => {
+    const parsed = Number(value);
+    if (isDeletedWorktreeCleanupSeconds(parsed)) setCleanupSeconds(parsed);
+  };
 
   useEffect(() => {
     return () => {
@@ -311,6 +331,23 @@ export function WorktreeSettingsTab() {
             root.
           </p>
         </div>
+      </SettingsSection>
+
+      <SettingsSection
+        icon={FolderX}
+        title="Deleted worktrees"
+        description="When a worktree is deleted while terminals are still running, its terminals stay in a temporary sidebar row until you move or close them."
+      >
+        <SettingsSelect
+          label="Close leftover terminals"
+          description="Leftover terminals move to trash when the timer ends. The timer pauses while a drag is in progress and while an agent is still working."
+          scope="global"
+          value={String(cleanupSeconds)}
+          onValueChange={handleCleanupChange}
+          options={DELETED_WORKTREE_CLEANUP_OPTIONS}
+          isModified={cleanupSeconds !== DELETED_WORKTREE_CLEANUP_DEFAULT}
+          onReset={() => setCleanupSeconds(DELETED_WORKTREE_CLEANUP_DEFAULT)}
+        />
       </SettingsSection>
     </div>
   );

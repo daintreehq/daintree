@@ -1,9 +1,15 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
+import type { ReactNode } from "react";
+
+vi.mock("react-dom", async () => {
+  const actual = await vi.importActual<typeof import("react-dom")>("react-dom");
+  return { ...actual, createPortal: (children: ReactNode) => children };
+});
 
 vi.mock("@dnd-kit/sortable", () => ({
-  SortableContext: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  SortableContext: ({ children }: { children: ReactNode }) => <>{children}</>,
   verticalListSortingStrategy: {},
   useSortable: () => ({
     attributes: {},
@@ -16,9 +22,22 @@ vi.mock("@dnd-kit/sortable", () => ({
   }),
 }));
 
+vi.mock("@/components/DragDrop/SortableWorktreeTerminal", () => ({
+  SortableWorktreeTerminal: ({ children }: { children: ReactNode }) => <>{children}</>,
+  getAccordionDragId: (id: string) => `accordion-${id}`,
+}));
+
+vi.mock("@/components/Terminal/TerminalIcon", () => ({
+  TerminalIcon: ({ className }: { className?: string }) => (
+    <svg data-testid="terminal-row-icon" className={className} />
+  ),
+}));
+
 import { usePanelStore } from "@/store/panelStore";
+import { usePreferencesStore } from "@/store/preferencesStore";
 import { useTerminalPendingDestructiveActionStore } from "@/store/terminalPendingDestructiveActionStore";
 import { useWorktreeSelectionStore, type DeletedWorktree } from "@/store/worktreeStore";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { DeletedWorktreeCard } from "../DeletedWorktreeCard";
 
 function setPanels(
@@ -46,48 +65,119 @@ function setPanels(
   });
 }
 
+function renderCard(wt: DeletedWorktree = worktree) {
+  return render(
+    <TooltipProvider>
+      <DeletedWorktreeCard worktree={wt} />
+    </TooltipProvider>
+  );
+}
+
 const worktree: DeletedWorktree = {
   id: "wt-1",
   title: "feature/login",
   path: "/repo/feature-login",
   deletedAt: 1000,
+  expiresAt: null,
   pinnedIndex: 2,
 };
+
+const originalSelectWorktree = useWorktreeSelectionStore.getState().selectWorktree;
 
 beforeEach(() => {
   cleanup();
   useTerminalPendingDestructiveActionStore.getState().clear();
   useWorktreeSelectionStore.getState().reset();
+  // reset() restores data fields only — undo any per-test action override.
+  useWorktreeSelectionStore.setState({ selectWorktree: originalSelectWorktree });
+  usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: 60 });
   setPanels([]);
 });
 
 describe("DeletedWorktreeCard", () => {
-  it("shows the last-known title, struck-through path, and Deleted badge", () => {
+  it("shows the last-known title, path, and Deleted badge", () => {
     setPanels([{ id: "t1", worktreeId: "wt-1" }]);
-    render(<DeletedWorktreeCard worktree={worktree} />);
+    renderCard();
 
     expect(screen.getByText("feature/login")).toBeTruthy();
     expect(screen.getByText("Deleted")).toBeTruthy();
-    const path = screen.getByText("/repo/feature-login");
-    expect(path.className).toContain("line-through");
+    expect(screen.getByText("/repo/feature-login")).toBeTruthy();
   });
 
-  it("tells the user the one thing they can do with the terminals", () => {
-    setPanels([{ id: "t1", worktreeId: "wt-1" }]);
-    render(<DeletedWorktreeCard worktree={worktree} />);
+  it("shows the live-card terminal summary bar instead of instructional copy", () => {
+    setPanels([
+      { id: "t1", worktreeId: "wt-1" },
+      { id: "t2", worktreeId: "wt-1" },
+    ]);
+    renderCard();
 
-    expect(screen.getByText("Drag terminals to another worktree")).toBeTruthy();
+    expect(screen.queryByText("Drag terminals to another worktree")).toBeNull();
+    // Collapsed WorktreeTerminalSection: count + "active" label, same as live cards.
+    expect(screen.getByText("2")).toBeTruthy();
+    expect(screen.getByText("active")).toBeTruthy();
   });
 
-  it("renders a row per surviving terminal", () => {
+  it("lists surviving terminals when the sessions section is expanded", () => {
     setPanels([
       { id: "t1", worktreeId: "wt-1", title: "claude" },
       { id: "t2", worktreeId: "wt-1", title: "shell" },
     ]);
-    render(<DeletedWorktreeCard worktree={worktree} />);
+    useWorktreeSelectionStore.getState().toggleTerminalsExpanded("wt-1");
+    renderCard();
 
     expect(screen.getByText("claude")).toBeTruthy();
     expect(screen.getByText("shell")).toBeTruthy();
+  });
+
+  it("selects the deleted worktree when the card is clicked", () => {
+    setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+    const selectWorktree = vi.fn();
+    useWorktreeSelectionStore.setState({ selectWorktree });
+    renderCard();
+
+    fireEvent.click(screen.getByRole("button", { name: "Select deleted worktree: feature/login" }));
+
+    // Session-only selection: a ghost id must never become the persisted
+    // restore target (deletedWorktrees does not survive restarts).
+    expect(selectWorktree).toHaveBeenCalledWith("wt-1", { source: "focus" });
+  });
+
+  it("shows the auto-cleanup countdown bar when a deadline is armed", () => {
+    setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+    const { container } = renderCard({ ...worktree, expiresAt: Date.now() + 60_000 });
+
+    expect(container.querySelector("[data-testid='deleted-worktree-countdown']")).toBeTruthy();
+  });
+
+  it("shows the seconds readout next to the close button while armed", () => {
+    setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+    const { container } = renderCard({ ...worktree, expiresAt: Date.now() + 60_000 });
+
+    const readout = container.querySelector("[data-testid='deleted-worktree-countdown-seconds']");
+    expect(readout?.textContent).toMatch(/^\d+s$/);
+  });
+
+  it("hides the countdown bar while auto-cleanup is off or the row is unarmed", () => {
+    setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+    const unarmed = renderCard();
+    expect(
+      unarmed.container.querySelector("[data-testid='deleted-worktree-countdown']")
+    ).toBeNull();
+    cleanup();
+
+    usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: 0 });
+    const off = renderCard({ ...worktree, expiresAt: Date.now() + 60_000 });
+    expect(off.container.querySelector("[data-testid='deleted-worktree-countdown']")).toBeNull();
+  });
+
+  it("marks the card active when it is the active worktree", () => {
+    setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
+    const { container } = renderCard();
+
+    expect(
+      container.querySelector("[data-deleted-worktree-id='wt-1']")?.getAttribute("data-active")
+    ).toBe("true");
   });
 
   it("omits trashed and overlay panels, matching what dismissing would close", () => {
@@ -96,7 +186,7 @@ describe("DeletedWorktreeCard", () => {
       { id: "t2", worktreeId: "wt-1", title: "binned", location: "trash" },
       { id: "t3", worktreeId: "wt-1", title: "assistant", location: "overlay" },
     ]);
-    render(<DeletedWorktreeCard worktree={worktree} />);
+    renderCard();
 
     expect(screen.queryByText("binned")).toBeNull();
     expect(screen.queryByText("assistant")).toBeNull();
@@ -109,7 +199,7 @@ describe("DeletedWorktreeCard", () => {
       { id: "t2", worktreeId: "wt-1" },
       { id: "t3", worktreeId: "wt-1" },
     ]);
-    render(<DeletedWorktreeCard worktree={worktree} />);
+    renderCard();
 
     expect(screen.getByRole("button", { name: "Close 3 terminals" })).toBeTruthy();
   });
@@ -119,7 +209,7 @@ describe("DeletedWorktreeCard", () => {
       { id: "t1", worktreeId: "wt-1" },
       { id: "t2", worktreeId: "wt-1" },
     ]);
-    render(<DeletedWorktreeCard worktree={worktree} />);
+    renderCard();
 
     fireEvent.click(screen.getByRole("button", { name: "Close 2 terminals" }));
 
@@ -133,16 +223,27 @@ describe("DeletedWorktreeCard", () => {
     expect(usePanelStore.getState().panelsById["t1"]).toBeDefined();
   });
 
+  it("does not select the worktree when the dismiss button is clicked", () => {
+    setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+    const selectWorktree = vi.fn();
+    useWorktreeSelectionStore.setState({ selectWorktree });
+    renderCard();
+
+    fireEvent.click(screen.getByRole("button", { name: "Close 1 terminal" }));
+
+    expect(selectWorktree).not.toHaveBeenCalled();
+  });
+
   it("renders nothing once no terminals remain", () => {
     setPanels([{ id: "t1", worktreeId: "other" }]);
-    const { container } = render(<DeletedWorktreeCard worktree={worktree} />);
+    const { container } = renderCard();
 
     expect(container.firstChild).toBeNull();
   });
 
   it("exposes no drop-target data, so terminals can never be dropped onto it", () => {
     setPanels([{ id: "t1", worktreeId: "wt-1" }]);
-    const { container } = render(<DeletedWorktreeCard worktree={worktree} />);
+    const { container } = renderCard();
 
     // The card is identified by its own attribute and must not advertise the
     // worktree drop payload DndProvider gates on.

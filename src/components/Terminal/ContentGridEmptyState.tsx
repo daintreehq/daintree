@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { FolderOpen, GitBranch, Settings } from "lucide-react";
+import { FolderOpen, FolderX, GitBranch, Settings } from "lucide-react";
 import { DaintreeIcon } from "@/components/icons";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,8 @@ import { cn } from "@/lib/utils";
 import { svgToDataUrl, sanitizeSvg } from "@/lib/svg";
 import { actionService } from "@/services/ActionService";
 import { usePanelStore } from "@/store/panelStore";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { isPtyPanel } from "@shared/types/panel";
 import { useRecipeStore } from "@/store/recipeStore";
 import { formatPath, middleTruncate } from "@/utils/textParsing";
@@ -163,6 +165,31 @@ export function ContentGridEmptyState({
   const recipesLoading = useRecipeStore((state) => state.isLoading);
   const { homeDir } = useHomeDir();
 
+  // A deleted worktree can be the active selection (its ghost row is
+  // clickable), and `hasLaunchTarget` is rightly false for it — but the
+  // generic "Select a worktree" copy would gaslight the user who just
+  // selected one. Give the ghost its own state naming the way out.
+  const isDeletedWorktreeActive = useWorktreeSelectionStore(
+    (s) => s.activeWorktreeId !== null && s.deletedWorktrees.has(s.activeWorktreeId)
+  );
+  // Resolved at click time via the view store accessor rather than a hook —
+  // this component also renders in provider-less contexts (tests, scratches),
+  // and the id is only needed once the button is pressed.
+  const handleGoToMainWorktree = () => {
+    const { worktrees } = getCurrentViewStore().getState();
+    let mainId: string | null = null;
+    for (const w of worktrees.values()) {
+      if (w.isMainWorktree) {
+        mainId = w.id;
+        break;
+      }
+      mainId ??= w.id;
+    }
+    if (mainId !== null) {
+      useWorktreeSelectionStore.getState().selectWorktree(mainId);
+    }
+  };
+
   const containerRef = useRef<HTMLDivElement>(null);
 
   // The entry above is DOM-entry motion, which a project switch never re-enters:
@@ -297,15 +324,35 @@ export function ContentGridEmptyState({
             )}
 
             {!hasLaunchTarget && !isWorktreeInitialized && null}
-            {!hasLaunchTarget && isWorktreeInitialized && hasWorktrees && (
-              <EmptyState
-                variant="zero-data"
-                scale="canvas"
-                icon={<FolderOpen />}
-                title="Select a worktree"
-                description="Choose a worktree from the sidebar to open it in the canvas"
-              />
-            )}
+            {!hasLaunchTarget &&
+              isWorktreeInitialized &&
+              hasWorktrees &&
+              isDeletedWorktreeActive && (
+                <EmptyState
+                  variant="zero-data"
+                  scale="canvas"
+                  icon={<FolderX />}
+                  title="Worktree deleted"
+                  description="Its leftover terminals stay in the sidebar row until they close — drag them to another worktree to keep them"
+                  action={
+                    <Button variant="outline" size="sm" onClick={handleGoToMainWorktree}>
+                      Go to main worktree
+                    </Button>
+                  }
+                />
+              )}
+            {!hasLaunchTarget &&
+              isWorktreeInitialized &&
+              hasWorktrees &&
+              !isDeletedWorktreeActive && (
+                <EmptyState
+                  variant="zero-data"
+                  scale="canvas"
+                  icon={<FolderOpen />}
+                  title="Select a worktree"
+                  description="Choose a worktree from the sidebar to open it in the canvas"
+                />
+              )}
             {!hasLaunchTarget && isWorktreeInitialized && !hasWorktrees && (
               <EmptyState
                 variant="zero-data"
