@@ -100,6 +100,7 @@ export const createCorePanelActions = (
   | "getTerminal"
   | "moveTerminalToDock"
   | "moveTerminalToGrid"
+  | "promoteDialogPanelToGrid"
   | "toggleTerminalLocation"
   | "emptyTrash"
 > => ({

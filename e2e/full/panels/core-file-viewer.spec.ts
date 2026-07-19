@@ -111,8 +111,11 @@ test.describe.serial("Core: File Viewer Modal", () => {
       })
       .toBe(true);
 
-    // Header should show the filename
-    await expect(dialog.locator("text=logo.png")).toBeVisible({ timeout: T_SHORT });
+    // Header should show the filename. Scoped to the heading: the panel's own
+    // toolbar also renders the path, so a bare text match is now ambiguous.
+    await expect(dialog.getByRole("heading", { name: /logo\.png/ })).toBeVisible({
+      timeout: T_SHORT,
+    });
 
     await closeDialog(ctx);
   });

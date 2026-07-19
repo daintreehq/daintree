@@ -88,8 +88,8 @@ export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalC
       const idsToClose: string[] = [];
       for (const id of panelIds) {
         const t = panelsById[id];
-        if (!countsTowardPanelLimit(t)) continue;
-        const pty = t && isPtyPanel(t) ? t : undefined;
+        if (!t || !countsTowardPanelLimit(t)) continue;
+        const pty = isPtyPanel(t) ? t : undefined;
         if (pty?.agentState === "completed" || pty?.agentState === "exited") {
           idsToClose.push(t.id);
         }
