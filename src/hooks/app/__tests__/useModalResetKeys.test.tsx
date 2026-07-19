@@ -12,7 +12,6 @@ const pluginMcpConfirmState = vi.hoisted(() => ({ current: null as { requestId: 
 const pluginCapabilityConfirmState = vi.hoisted(() => ({ current: { requestId: "cap-1" } }));
 const diagnosticsReviewState = vi.hoisted(() => ({ requestSeq: 5 }));
 
-
 function selectorMock<T>(state: T) {
   return vi.fn((selector: (s: T) => unknown) => selector(state));
 }
@@ -66,7 +65,6 @@ describe("useModalResetKeys", () => {
       pluginCapabilityConfirmResetKey: "cap-1",
       diagnosticsReviewResetKey: 5,
       terminalInfoResetKey: 0,
-      diffViewerResetKey: 0,
     });
   });
 

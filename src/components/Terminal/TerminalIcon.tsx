@@ -1,4 +1,11 @@
-import { SquareTerminal, Globe, MonitorPlay, GitPullRequest, FileText, FileDiff } from "lucide-react";
+import {
+  SquareTerminal,
+  Globe,
+  MonitorPlay,
+  GitPullRequest,
+  FileText,
+  FileDiff,
+} from "lucide-react";
 import { useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { BrandMark } from "@/components/icons";

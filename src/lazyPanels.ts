@@ -185,7 +185,6 @@ export const LazyPanelDialogHost = lazy(() =>
   preloadPanelDialogHost().then((m) => ({ default: m.PanelDialogHost }))
 );
 
-
 export function preloadMcpConfirmDialog() {
   return import("./components/McpConfirmDialog");
 }
