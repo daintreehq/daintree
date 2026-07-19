@@ -46,12 +46,8 @@ import type { FileReadErrorCode } from "@shared/types/ipc/files";
 import type { GitStatus } from "@shared/types";
 import { isClientAppError } from "@/utils/clientAppError";
 import { sanitizeSvg } from "@shared/utils/svgSanitizer";
-import {
-  buildDaintreeFileUrl,
-  isImageFilePath as isImageFile,
-  isSvgFilePath as isSvgFile,
-} from "./filePreviewKinds";
-import { createTrustedHTML } from "@/lib/trustedTypesPolicy";
+import { isImageFilePath as isImageFile, isSvgFilePath as isSvgFile } from "./filePreviewKinds";
+import { FileImagePreview } from "./FileImagePreview";
 import { logError } from "@/utils/logger";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import type { DiffFontSize, DiffViewType } from "@/store/preferencesStore";
@@ -1348,24 +1344,13 @@ export function FileViewerModal({
             )}
 
             {isImageMode && !imageDiffEligible && (
-              <div className="flex items-center justify-center p-6 min-h-[300px]">
-                {loadState === "image" && (
-                  <img
-                    key={filePath}
-                    src={buildDaintreeFileUrl(filePath, effectiveRootPath)}
-                    alt={fileName}
-                    className="max-w-full max-h-[70vh] object-contain rounded"
-                    draggable={false}
-                    onError={handleImageError}
-                  />
-                )}
-                {loadState === "svg" && sanitizedSvg && (
-                  <div
-                    className="max-w-full max-h-[70vh] overflow-auto [&>svg]:max-w-full [&>svg]:h-auto"
-                    dangerouslySetInnerHTML={{ __html: createTrustedHTML(sanitizedSvg) }}
-                  />
-                )}
-              </div>
+              <FileImagePreview
+                filePath={filePath}
+                rootPath={effectiveRootPath}
+                alt={fileName}
+                sanitizedSvg={loadState === "svg" ? sanitizedSvg : null}
+                onError={handleImageError}
+              />
             )}
 
             {!isImageMode && (mode === "view" || mode === "rendered") && (

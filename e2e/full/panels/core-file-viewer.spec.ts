@@ -15,21 +15,18 @@ async function dispatchViewFile(ctx: AppContext, filePath: string, rootPath?: st
   const normPath = filePath.replace(/\\/g, "/");
   const normRoot = (rootPath ?? fixtureDir).replace(/\\/g, "/");
   // `file.view` opens the panel dialog directly now, so drive the action rather
-  // than the retired `daintree:view-file` window event. It rejects on a path it
-  // can't open (the error-state case), which the caller asserts on separately.
-  await ctx.window
-    .evaluate(
-      ([id, a]) =>
-        (
-          window as unknown as {
-            __daintreeDispatchAction: (id: string, a?: unknown) => unknown;
-          }
-        ).__daintreeDispatchAction(id, a),
-      ["file.view", { path: normPath, rootPath: normRoot }] as const
-    )
-    .catch(() => {
-      // A failed open still renders the dialog's error state; assertions follow.
-    });
+  // than the retired `daintree:view-file` window event. The action resolves once
+  // the panel exists; a missing file surfaces later as the pane's error state,
+  // so this does not reject for the not-found case.
+  await ctx.window.evaluate(
+    ([id, a]) =>
+      (
+        window as unknown as {
+          __daintreeDispatchAction: (id: string, a?: unknown) => unknown;
+        }
+      ).__daintreeDispatchAction(id, a),
+    ["file.view", { path: normPath, rootPath: normRoot }] as const
+  );
 }
 
 async function waitForDialog(ctx: AppContext) {

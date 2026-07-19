@@ -97,7 +97,10 @@ export function registerTerminalSpawnActions(
       const state = usePanelStore.getState();
       const nonTrashed = state.panelIds
         .map((id) => state.panelsById[id])
-        .filter((t) => t && t.location !== "trash");
+        // Ephemeral dialog panels are never the implicit duplicate target: with
+        // only a file dialog open, "the one panel" would resolve to it and the
+        // duplicate would fail on an unsupported kind.
+        .filter((t) => t && t.location !== "trash" && t.location !== "dialog");
       const focusedPanel = state.focusedId ? state.panelsById[state.focusedId] : undefined;
       const liveFocusedId =
         focusedPanel && focusedPanel.location !== "trash" ? state.focusedId : undefined;

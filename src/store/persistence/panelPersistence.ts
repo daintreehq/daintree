@@ -82,6 +82,10 @@ const DEFAULT_OPTIONS: Required<Omit<PanelPersistenceOptions, "getProjectId">> &
   filter: (t) =>
     t.location !== "trash" &&
     t.location !== "background" &&
+    // Dialog panels are ephemeral by location, independent of the flag below —
+    // persisting one would resurrect it as a grid panel on restart, since
+    // hydration coerces unknown locations to "grid".
+    t.location !== "dialog" &&
     t.kind !== "assistant" &&
     t.excludeFromPersistence !== true &&
     !isSmokeTestTerminalId(t.id),

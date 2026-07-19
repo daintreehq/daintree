@@ -35,6 +35,12 @@ interface PanelDialogState {
   /** Close the dialog and remove its ephemeral panel. */
   closePanelDialog: () => void;
   /**
+   * Drop the pointer if `removedId` is the panel currently presented. Called
+   * when a panel is removed by something other than this store, so a dangling
+   * id can't survive a teardown the dialog didn't initiate.
+   */
+  reconcileRemovedPanel: (removedId: string) => void;
+  /**
    * Promote the dialog's panel into the grid, keeping the same panel id, and
    * close the dialog. Returns false (leaving the dialog open) if the promotion
    * was refused — e.g. the panel limit is reached.
@@ -85,6 +91,15 @@ export const usePanelDialogStore = create<PanelDialogState>((set, get) => ({
       set((state) => (state.panelId === requestedId ? { panelId: null } : state));
       return null;
     }
+
+    // Ownership re-check: `addPanel` can yield before it commits the record
+    // (PTY-backed kinds await a spawn), so a close or a superseding open may
+    // have run while this one was in flight. The record it just committed would
+    // then be an orphan no host points at — remove it rather than leak it.
+    if (get().panelId !== requestedId) {
+      usePanelStore.getState().removePanel(created);
+      return null;
+    }
     return created;
   },
 
@@ -95,6 +110,15 @@ export const usePanelDialogStore = create<PanelDialogState>((set, get) => ({
     // removePanel, never trashPanel: an ephemeral panel must not linger under
     // the trash TTL where it could be restored into the grid.
     usePanelStore.getState().removePanel(panelId);
+  },
+
+  reconcileRemovedPanel: (removedId) => {
+    // Something outside the dialog removed our panel (worktree teardown, a bulk
+    // action, orphan cleanup). The host already renders nothing without a
+    // record; clear the pointer so the store agrees rather than holding a
+    // dangling id that a later close/promote would act on.
+    if (get().panelId !== removedId) return;
+    set({ panelId: null });
   },
 
   promoteToGrid: () => {

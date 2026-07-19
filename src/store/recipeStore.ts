@@ -2,6 +2,7 @@ import { create, type StateCreator } from "zustand";
 import type { TerminalRecipe, RecipeTerminal, RecipeTerminalType } from "@/types";
 import { usePanelStore } from "./panelStore";
 import { preflightSpawnBatchLimit } from "./panelLimitStore";
+import { countPanelsTowardLimit } from "./slices/panelRegistry/panelCount";
 import { isMcpSpawnFocusSuppressed } from "./mcpSpawnFocusGuard";
 import { isAssistantFocused } from "./macroFocusStore";
 import {
@@ -773,10 +774,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     // defers the `panelIds` append, so per-call limit checks would all read the
     // same stale count and under-enforce the ceiling; gate the whole burst once
     // here and pass `bypassLimits` on each individual call. (#9165)
-    const currentCount = terminalStore.panelIds.reduce(
-      (n, id) => (terminalStore.panelsById[id]?.location !== "trash" ? n + 1 : n),
-      0
-    );
+    const currentCount = countPanelsTowardLimit(terminalStore.panelsById, terminalStore.panelIds);
     const { allowed } = await preflightSpawnBatchLimit(currentCount, validIndices.length);
     const spawnIndices = validIndices.slice(0, allowed);
     for (const index of validIndices.slice(allowed)) {

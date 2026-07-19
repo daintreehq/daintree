@@ -170,6 +170,23 @@ describe("PanelPersistence", () => {
       expect(savedTerminals).not.toContainEqual(expect.objectContaining({ id: "dialog-1" }));
     });
 
+    it("excludes dialog panels that are missing the ephemeral flag", async () => {
+      // The location alone has to be disqualifying. Hydration coerces any
+      // unrecognized location to "grid", so a dialog snapshot that slipped
+      // through would come back as a real grid panel on the next launch.
+      const client = createMockProjectClient();
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
+
+      const unflagged = createMockTerminal({ id: "dialog-1", location: "dialog" });
+
+      persistence.save([createMockTerminal({ id: "grid-1" }), unflagged], projectId);
+      await vi.advanceTimersByTimeAsync(100);
+
+      const savedTerminals = client.setTerminals.mock.calls[0]![1] as TerminalSnapshot[];
+      expect(savedTerminals).toHaveLength(1);
+      expect(savedTerminals).not.toContainEqual(expect.objectContaining({ id: "dialog-1" }));
+    });
+
     it("excludes non-PTY panels flagged excludeFromPersistence", async () => {
       // The flag lives on the base panel shape, so a file panel honours it too.
       // A PTY-narrowed read would have silently persisted this one.

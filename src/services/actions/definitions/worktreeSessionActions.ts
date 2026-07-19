@@ -78,7 +78,11 @@ export function registerWorktreeSessionActions(
             t != null &&
             t.worktreeId === targetWorktreeId &&
             t.location !== "trash" &&
-            t.location !== "overlay"
+            t.location !== "overlay" &&
+            // Dialog panels are ephemeral modal content, not worktree sessions —
+            // including one inflates the confirmation count while the bulk
+            // action that follows correctly skips it.
+            t.location !== "dialog"
         );
       if (targets.length === 0) return;
       const runningAgents = collectRunningAgentTerminals(targets);
@@ -170,7 +174,11 @@ export function registerWorktreeSessionActions(
             t != null &&
             t.worktreeId === targetWorktreeId &&
             t.location !== "trash" &&
-            t.location !== "overlay"
+            t.location !== "overlay" &&
+            // Dialog panels are ephemeral modal content, not worktree sessions —
+            // including one inflates the confirmation count while the bulk
+            // action that follows correctly skips it.
+            t.location !== "dialog"
         );
       if (targets.length === 0) return;
       if (confirmed !== true) {

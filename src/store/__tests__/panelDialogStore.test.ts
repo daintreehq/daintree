@@ -102,6 +102,69 @@ describe("panelDialogStore", () => {
       expect(result).toBeNull();
       expect(usePanelDialogStore.getState().panelId).toBeNull();
     });
+
+    it("removes a panel that lands after the dialog was already closed", async () => {
+      // `addPanel` yields before committing for PTY-backed kinds, so a close can
+      // land mid-flight. Without an ownership re-check the record commits after
+      // the close and no host ever points at it — an invisible, unclosable leak.
+      let release: (id: string) => void = () => {};
+      addPanelMock.mockImplementation(
+        (options: { requestedId?: string }) =>
+          new Promise<string | null>((resolve) => {
+            release = () => resolve(options.requestedId ?? null);
+          })
+      );
+
+      const pending = usePanelDialogStore.getState().openPanelDialog({ kind: "file" });
+      const inFlightId = usePanelDialogStore.getState().panelId;
+      usePanelDialogStore.getState().closePanelDialog();
+      release(inFlightId!);
+
+      await expect(pending).resolves.toBeNull();
+      expect(usePanelDialogStore.getState().panelId).toBeNull();
+      expect(removePanelMock).toHaveBeenCalledWith(inFlightId);
+    });
+
+    it("removes a panel that lands after a second open superseded it", async () => {
+      const resolvers: Array<() => void> = [];
+      addPanelMock.mockImplementation(
+        (options: { requestedId?: string }) =>
+          new Promise<string | null>((resolve) => {
+            resolvers.push(() => resolve(options.requestedId ?? null));
+          })
+      );
+
+      const first = usePanelDialogStore.getState().openPanelDialog({ kind: "file" });
+      const firstId = usePanelDialogStore.getState().panelId;
+      const second = usePanelDialogStore.getState().openPanelDialog({ kind: "file" });
+      const secondId = usePanelDialogStore.getState().panelId;
+      resolvers.forEach((r) => r());
+
+      await expect(first).resolves.toBeNull();
+      await expect(second).resolves.toBe(secondId);
+      expect(removePanelMock).toHaveBeenCalledWith(firstId);
+      expect(usePanelDialogStore.getState().panelId).toBe(secondId);
+    });
+  });
+
+  describe("reconcileRemovedPanel", () => {
+    it("clears the pointer when the presented panel is removed elsewhere", async () => {
+      // Worktree teardown or a bulk action can remove the record out from under
+      // the dialog; the pointer must not survive as a dangling id.
+      const id = await usePanelDialogStore.getState().openPanelDialog({ kind: "file" });
+
+      usePanelDialogStore.getState().reconcileRemovedPanel(id!);
+
+      expect(usePanelDialogStore.getState().panelId).toBeNull();
+    });
+
+    it("ignores removals of unrelated panels", async () => {
+      const id = await usePanelDialogStore.getState().openPanelDialog({ kind: "file" });
+
+      usePanelDialogStore.getState().reconcileRemovedPanel("some-other-panel");
+
+      expect(usePanelDialogStore.getState().panelId).toBe(id);
+    });
   });
 
   describe("closePanelDialog", () => {

@@ -1,4 +1,4 @@
-import { createTrustedHTML } from "@/lib/trustedTypesPolicy";
+import { useEffect, useRef } from "react";
 import { buildDaintreeFileUrl } from "./filePreviewKinds";
 
 interface FileImagePreviewProps {
@@ -20,6 +20,40 @@ interface FileImagePreviewProps {
 }
 
 /**
+ * Inserts sanitized SVG through `DOMParser` rather than `innerHTML`.
+ *
+ * `sanitizeSvg` documents this explicitly: its output is safe to embed only via
+ * DOM APIs that do not re-tokenize the markup as HTML, because an HTML reparse
+ * can resurrect mutation-XSS vectors its regex pass cannot model. Parsing as
+ * `image/svg+xml` and adopting the resulting node avoids that reparse.
+ */
+function useInlineSvg(sanitizedSvg: string | null | undefined) {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    if (!sanitizedSvg) {
+      container.replaceChildren();
+      return;
+    }
+    const parsed = new DOMParser().parseFromString(sanitizedSvg, "image/svg+xml");
+    const svg = parsed.documentElement;
+    // A parse failure yields a <parsererror> document rather than throwing.
+    if (!svg || svg.nodeName === "parsererror" || parsed.querySelector("parsererror")) {
+      container.replaceChildren();
+      return;
+    }
+    // replaceChildren keeps this idempotent, so StrictMode's double invoke in
+    // dev re-runs it without stacking duplicate nodes.
+    container.replaceChildren(document.importNode(svg, true));
+    return () => container.replaceChildren();
+  }, [sanitizedSvg]);
+
+  return containerRef;
+}
+
+/**
  * Renders an image or inlined SVG preview.
  *
  * Shared by `FilePane` and `FileViewerModal` so both surfaces preview the same
@@ -34,12 +68,16 @@ export function FileImagePreview({
   onError,
   maxHeightClassName = "max-h-[70vh]",
 }: FileImagePreviewProps) {
+  const svgContainerRef = useInlineSvg(sanitizedSvg);
+
   return (
     <div className="flex items-center justify-center p-6 min-h-[300px]">
       {sanitizedSvg ? (
         <div
+          ref={svgContainerRef}
+          role="img"
+          aria-label={alt}
           className={`max-w-full ${maxHeightClassName} overflow-auto [&>svg]:max-w-full [&>svg]:h-auto`}
-          dangerouslySetInnerHTML={{ __html: createTrustedHTML(sanitizedSvg) }}
         />
       ) : (
         <img

@@ -40,6 +40,17 @@ export interface TerminalBulkActionsSlice {
   getDockedCount: () => number;
 }
 
+/**
+ * Whether a bulk action may act on this panel.
+ *
+ * Dialog panels are ephemeral modal content owned by `panelDialogStore`, not
+ * part of the user's panel set — a "close all" that swept one away would
+ * silently empty the open dialog while its host still points at the record.
+ */
+function isBulkActionTarget(panel: CarrierPanel): boolean {
+  return panel.location !== "dialog";
+}
+
 export const createTerminalBulkActionsSlice = (
   getTerminals: () => CarrierPanel[],
   removePanel: (id: string) => void,
@@ -79,19 +90,24 @@ export const createTerminalBulkActionsSlice = (
     bulkCloseByWorktree: (worktreeId, state) => {
       const terminals = getTerminals();
       const toRemove = terminals.filter(
-        (t) => t.worktreeId === worktreeId && (!state || (isPtyPanel(t) && t.agentState === state))
+        (t) =>
+          t.worktreeId === worktreeId &&
+          isBulkActionTarget(t) &&
+          (!state || (isPtyPanel(t) && t.agentState === state))
       );
       toRemove.forEach((t) => removePanel(t.id));
     },
 
     bulkCloseAll: () => {
       const terminals = getTerminals();
-      terminals.forEach((t) => removePanel(t.id));
+      terminals.filter(isBulkActionTarget).forEach((t) => removePanel(t.id));
     },
 
     bulkTrashAll: () => {
       const terminals = getTerminals();
-      const activeTerminals = terminals.filter((t) => t.location !== "trash");
+      const activeTerminals = terminals.filter(
+        (t) => t.location !== "trash" && isBulkActionTarget(t)
+      );
       activeTerminals.forEach((t) => trashPanel(t.id));
     },
 
@@ -99,7 +115,9 @@ export const createTerminalBulkActionsSlice = (
       const idSet = ids instanceof Set ? ids : new Set(ids);
       if (idSet.size === 0) return;
       const terminals = getTerminals();
-      const toTrash = terminals.filter((t) => idSet.has(t.id) && t.location !== "trash");
+      const toTrash = terminals.filter(
+        (t) => idSet.has(t.id) && t.location !== "trash" && isBulkActionTarget(t)
+      );
       toTrash.forEach((t) => trashPanel(t.id));
     },
 
@@ -107,7 +125,7 @@ export const createTerminalBulkActionsSlice = (
       const idSet = ids instanceof Set ? ids : new Set(ids);
       if (idSet.size === 0) return;
       const terminals = getTerminals();
-      const toKill = terminals.filter((t) => idSet.has(t.id));
+      const toKill = terminals.filter((t) => idSet.has(t.id) && isBulkActionTarget(t));
       toKill.forEach((t) => removePanel(t.id));
     },
 

@@ -131,6 +131,16 @@ describe("dialog panel ephemeral lifecycle", () => {
       expect(countPanelsTowardLimit(panelsById, panelIds)).toBe(1);
     });
 
+    it("excludes a dialog panel even when the ephemeral flag is missing", () => {
+      // Ephemerality must follow from the location itself. If it depended only
+      // on a caller remembering to stamp `excludeFromPersistence`, one forgetful
+      // call site would silently leak a counted, persisted zombie panel.
+      seed([makeFilePanel("grid-1"), makeFilePanel("dialog-1", { location: "dialog" })]);
+      const { panelsById, panelIds } = usePanelStore.getState();
+
+      expect(countPanelsTowardLimit(panelsById, panelIds)).toBe(1);
+    });
+
     it("still excludes trashed panels", () => {
       seed([makeFilePanel("grid-1"), makeFilePanel("gone", { location: "trash" })]);
       const { panelsById, panelIds } = usePanelStore.getState();

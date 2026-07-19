@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import { PanelTop } from "lucide-react";
 import { usePanelStore } from "@/store/panelStore";
 import { usePanelDialogStore } from "@/store/panelDialogStore";
@@ -26,6 +26,7 @@ export function PanelDialogHost() {
   const requestSeq = usePanelDialogStore((state) => state.requestSeq);
   const closePanelDialog = usePanelDialogStore((state) => state.closePanelDialog);
   const promoteToGrid = usePanelDialogStore((state) => state.promoteToGrid);
+  const reconcileRemovedPanel = usePanelDialogStore((state) => state.reconcileRemovedPanel);
 
   // Keyed read, not a subscription to the whole `panelsById` map: that map
   // churns on every panel update and would re-render the dialog with it.
@@ -38,6 +39,13 @@ export function PanelDialogHost() {
     // surfaces its own notification from the store action.
     promoteToGrid();
   }, [promoteToGrid]);
+
+  // Reconcile a pointer whose record was removed elsewhere (worktree teardown,
+  // a bulk action). This only clears a dangling id — it never creates or
+  // destroys the panel, so StrictMode's double invoke is harmless.
+  useEffect(() => {
+    if (panelId && !panel) reconcileRemovedPanel(panelId);
+  }, [panelId, panel, reconcileRemovedPanel]);
 
   if (!panelId || !panel) return null;
 
@@ -69,7 +77,10 @@ export function PanelDialogHost() {
           <AppDialog.CloseButton />
         </div>
       </AppDialog.Header>
-      <AppDialog.Body className="flex min-h-0 flex-1 flex-col p-0">
+      {/* BodyScroll, not Body: Body puts its padding on an inner scroll
+          element (scrollClassName="p-6"), so a p-0 on the outer wrapper would
+          not reach it and the panel would sit inside a 24px inset. */}
+      <AppDialog.BodyScroll className="flex min-h-0 flex-1 flex-col overflow-hidden p-0">
         <ErrorBoundary
           variant="component"
           componentName={`PanelDialog:${panel.kind ?? "terminal"}`}
@@ -85,7 +96,7 @@ export function PanelDialogHost() {
             onClose={closePanelDialog}
           />
         </ErrorBoundary>
-      </AppDialog.Body>
+      </AppDialog.BodyScroll>
     </AppDialog>
   );
 }

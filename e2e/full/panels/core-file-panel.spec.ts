@@ -132,7 +132,7 @@ test.describe.serial("Core: File viewer panel (dialog + panel)", () => {
 
   test("Open as panel promotes the dialog into a file grid panel, keeping the mode", async () => {
     const dialog = ctx.window.locator(SEL.fileViewer.dialog);
-    await dialog.locator('[data-testid="file-viewer-open-as-panel"]').click();
+    await dialog.locator(SEL.fileViewer.openAsPanel).click();
 
     await expect(dialog).not.toBeVisible({ timeout: T_MEDIUM });
 
