@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, act } from "@testing-library/react";
+import { render, screen, act, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { AppDialog } from "../AppDialog";
 import { _resetForTests } from "@/lib/escapeStack";
@@ -887,5 +887,149 @@ describe("AppDialog reduced-motion policy", () => {
     const backdrop = screen.getByTestId("test-dialog");
 
     expect(backdrop.style.transitionTimingFunction).not.toBe("");
+  });
+});
+
+describe("AppDialog header composition", () => {
+  beforeEach(() => {
+    mockPrevOpen = false;
+    _resetForTests();
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
+  });
+
+  afterEach(() => {
+    _resetForTests();
+  });
+
+  function labelledBy(): string | null {
+    return screen.getByTestId("test-dialog").getAttribute("aria-labelledby");
+  }
+
+  it("labels the dialog by its title heading", () => {
+    renderDialog({
+      children: (
+        <AppDialog.Header>
+          <AppDialog.Title>Named</AppDialog.Title>
+        </AppDialog.Header>
+      ),
+    });
+
+    expect(screen.getByRole("heading", { level: 2 }).getAttribute("id")).toBe(labelledBy());
+  });
+
+  it("keeps the title wired when rendered as an h3", () => {
+    renderDialog({
+      children: (
+        <AppDialog.Header>
+          <AppDialog.Title as="h3">Section</AppDialog.Title>
+        </AppDialog.Header>
+      ),
+    });
+
+    // Settings renders its section title as an h3; the dialog must still
+    // resolve its accessible name to that heading.
+    expect(screen.getByRole("heading", { level: 3 }).getAttribute("id")).toBe(labelledBy());
+  });
+
+  it("labels the dialog from a title mounted outside the header", () => {
+    renderDialog({
+      children: (
+        <AppDialog.Body>
+          <AppDialog.Title>Standalone</AppDialog.Title>
+        </AppDialog.Body>
+      ),
+    });
+
+    expect(screen.getByRole("heading", { level: 2 }).getAttribute("id")).toBe(labelledBy());
+  });
+
+  it("defaults the close button label", () => {
+    renderDialog({
+      children: (
+        <AppDialog.Header>
+          <AppDialog.CloseButton />
+        </AppDialog.Header>
+      ),
+    });
+
+    expect(screen.queryByRole("button", { name: "Close dialog" })).not.toBeNull();
+  });
+
+  it("lets a surface name its own close button", () => {
+    renderDialog({
+      children: (
+        <AppDialog.Header>
+          <AppDialog.CloseButton aria-label="Close settings" />
+        </AppDialog.Header>
+      ),
+    });
+
+    expect(screen.queryByRole("button", { name: "Close settings" })).not.toBeNull();
+  });
+
+  it("closes through the dialog's own close handler", () => {
+    const onClose = vi.fn();
+    renderDialog({
+      onClose,
+      children: (
+        <AppDialog.Header>
+          <AppDialog.CloseButton />
+        </AppDialog.Header>
+      ),
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Close dialog" }));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("routes the close button through onBeforeClose", async () => {
+    const onClose = vi.fn();
+    const onBeforeClose = vi.fn().mockResolvedValue(true);
+    render(
+      <>
+        <Dispatcher />
+        <AppDialog
+          isOpen
+          onClose={onClose}
+          onBeforeClose={onBeforeClose}
+          data-testid="test-dialog"
+        >
+          <AppDialog.Header>
+            <AppDialog.CloseButton />
+          </AppDialog.Header>
+        </AppDialog>
+      </>
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Close dialog" }));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    expect(onBeforeClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the dialog open when onBeforeClose vetoes", async () => {
+    const onClose = vi.fn();
+    const onBeforeClose = vi.fn().mockResolvedValue(false);
+    render(
+      <>
+        <Dispatcher />
+        <AppDialog
+          isOpen
+          onClose={onClose}
+          onBeforeClose={onBeforeClose}
+          data-testid="test-dialog"
+        >
+          <AppDialog.Header>
+            <AppDialog.CloseButton />
+          </AppDialog.Header>
+        </AppDialog>
+      </>
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Close dialog" }));
+
+    await waitFor(() => expect(onBeforeClose).toHaveBeenCalledTimes(1));
+    expect(onClose).not.toHaveBeenCalled();
   });
 });

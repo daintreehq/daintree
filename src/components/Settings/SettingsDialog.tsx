@@ -680,28 +680,23 @@ function SettingsDialogInner({
         </div>
 
         <div className="settings-shell flex-1 flex flex-col min-w-0">
-          <div className="dialog-header flex items-center justify-between px-6 py-4 border-b border-border-strong shrink-0">
-            <h3 className="text-lg font-semibold text-daintree-text flex items-center gap-2">
-              {isSearching ? (
-                <>
+          <AppDialog.Header>
+            {/* h3, not the default h2: the sidebar's "Settings" h2 is the shell
+                heading and this labels the active section beneath it. */}
+            <AppDialog.Title
+              as="h3"
+              icon={
+                isSearching ? (
                   <Search className="w-5 h-5 text-text-secondary" />
-                  Search Results
-                </>
-              ) : (
-                <>
-                  {tabIcons[activeTab]}
-                  {tabTitles[activeTab]}
-                </>
-              )}
-            </h3>
-            <button
-              onClick={handleClose}
-              className="text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-raised transition-colors p-1 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
-              aria-label="Close settings"
+                ) : (
+                  tabIcons[activeTab]
+                )
+              }
             >
-              <X className="h-5 w-5" />
-            </button>
-          </div>
+              {isSearching ? "Search Results" : tabTitles[activeTab]}
+            </AppDialog.Title>
+            <AppDialog.CloseButton aria-label="Close settings" />
+          </AppDialog.Header>
 
           <ScrollShadow className="flex-1" scrollClassName="p-6">
             {isSearching ? (
