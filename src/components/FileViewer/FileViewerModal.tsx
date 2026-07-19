@@ -46,6 +46,11 @@ import type { FileReadErrorCode } from "@shared/types/ipc/files";
 import type { GitStatus } from "@shared/types";
 import { isClientAppError } from "@/utils/clientAppError";
 import { sanitizeSvg } from "@shared/utils/svgSanitizer";
+import {
+  buildDaintreeFileUrl,
+  isImageFilePath as isImageFile,
+  isSvgFilePath as isSvgFile,
+} from "./filePreviewKinds";
 import { createTrustedHTML } from "@/lib/trustedTypesPolicy";
 import { logError } from "@/utils/logger";
 import { usePreferencesStore } from "@/store/preferencesStore";
@@ -109,22 +114,7 @@ const DIFF_FONT_SIZE_LABEL: Record<DiffFontSize, string> = {
 };
 type LoadState = "loading" | "loaded" | "error" | "image" | "svg";
 
-const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico"]);
-const SVG_EXTENSION = "svg";
 const COPY_FEEDBACK_MS = 2000;
-
-function isImageFile(filePath: string): boolean {
-  const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
-  return IMAGE_EXTENSIONS.has(ext) || ext === SVG_EXTENSION;
-}
-
-function isSvgFile(filePath: string): boolean {
-  return filePath.split(".").pop()?.toLowerCase() === SVG_EXTENSION;
-}
-
-function buildDaintreeFileUrl(filePath: string, rootPath: string): string {
-  return `daintree-file://load?path=${encodeURIComponent(filePath)}&root=${encodeURIComponent(rootPath)}`;
-}
 
 function IconToggle({
   pressed,

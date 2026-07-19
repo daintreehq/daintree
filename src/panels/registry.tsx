@@ -41,7 +41,11 @@ export interface PanelComponentProps {
   title: string;
   isFocused: boolean;
   isMaximized?: boolean;
-  location?: "grid" | "dock";
+  /**
+   * Which presentation is rendering this panel. `"dialog"` means it is hosted
+   * inside a modal by `PanelDialogHost`, which supplies the surrounding chrome.
+   */
+  location?: "grid" | "dock" | "dialog";
   onFocus: () => void;
   onClose: (force?: boolean) => void;
   onToggleMaximize?: () => void;

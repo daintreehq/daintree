@@ -9,17 +9,24 @@ const systemClientMock = vi.hoisted(() => ({
 }));
 
 const projectStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
+const openPanelDialogMock = vi.hoisted(() => vi.fn<(options: unknown) => Promise<string | null>>());
 
 vi.mock("@/clients", () => ({ systemClient: systemClientMock }));
 vi.mock("@/store", () => ({ useProjectStore: projectStoreMock }));
 // file.openPanel pulls the panel store; stub it so its persistence graph stays out.
 vi.mock("@/store/panelStore", () => ({ usePanelStore: { getState: vi.fn() } }));
+vi.mock("@/store/panelDialogStore", () => ({
+  usePanelDialogStore: { getState: () => ({ openPanelDialog: openPanelDialogMock }) },
+}));
 
 import { registerFileActions } from "../fileActions";
 
 function setupActions() {
   const actions: ActionRegistry = new Map();
-  const callbacks: ActionCallbacks = {} as unknown as ActionCallbacks;
+  const callbacks: ActionCallbacks = {
+    getActiveWorktreeId: () => "wt-1",
+    getWorktrees: () => [],
+  } as unknown as ActionCallbacks;
   registerFileActions(actions, callbacks);
   return async (id: string, args?: unknown): Promise<unknown> => {
     const factory = actions.get(id);
@@ -34,6 +41,7 @@ const dispatchSpy = vi.fn<(event: Event) => boolean>(() => true);
 beforeEach(() => {
   vi.clearAllMocks();
   dispatchSpy.mockReset().mockReturnValue(true);
+  openPanelDialogMock.mockReset().mockResolvedValue("file-panel-1");
   systemClientMock.openInEditor.mockResolvedValue(undefined);
   systemClientMock.openPath.mockResolvedValue(undefined);
   systemClientMock.showItemInFolder.mockResolvedValue(undefined);
@@ -51,26 +59,43 @@ afterEach(() => {
 });
 
 describe("fileActions adversarial", () => {
-  it("file.view dispatches event with full detail (path/rootPath/line/col)", async () => {
+  it("file.view opens an ephemeral file panel dialog with the resolved path", async () => {
     const run = setupActions();
-    await run("file.view", {
+    const result = await run("file.view", {
       path: "/a/b.ts",
       rootPath: "/a",
       line: 12,
       col: 4,
     });
 
-    const event = dispatchSpy.mock.calls[0]![0] as unknown as {
-      type: string;
-      detail: { path: string; rootPath?: string; line?: number; col?: number };
-    };
-    expect(event.type).toBe("daintree:view-file");
-    expect(event.detail).toEqual({
-      path: "/a/b.ts",
-      rootPath: "/a",
-      line: 12,
-      col: 4,
-    });
+    expect(openPanelDialogMock).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "file", filePath: "/a/b.ts", initialLine: 12 })
+    );
+    expect(result).toEqual({ panelId: "file-panel-1" });
+  });
+
+  it("file.view resolves a repo-relative path against the current project", async () => {
+    const run = setupActions();
+    await run("file.view", { path: "src/index.ts" });
+
+    expect(openPanelDialogMock).toHaveBeenCalledWith(
+      expect.objectContaining({ filePath: "/repo/src/index.ts" })
+    );
+  });
+
+  it("file.view omits initialLine when no line was requested", async () => {
+    const run = setupActions();
+    await run("file.view", { path: "/a/b.ts" });
+
+    const options = openPanelDialogMock.mock.calls[0]![0] as Record<string, unknown>;
+    expect(options).not.toHaveProperty("initialLine");
+  });
+
+  it("file.view throws when the dialog panel could not be created", async () => {
+    openPanelDialogMock.mockResolvedValue(null);
+    const run = setupActions();
+
+    await expect(run("file.view", { path: "/a/b.ts" })).rejects.toThrow();
   });
 
   it("file.openInEditor forwards projectId from current project", async () => {
@@ -121,17 +146,16 @@ describe("fileActions adversarial", () => {
     );
   });
 
-  it("file.view dispatches correct shape even with only path supplied", async () => {
+  it("file.view opens with only a path supplied, omitting the optional hints", async () => {
     const run = setupActions();
     await run("file.view", { path: "/just/a/path.txt" });
 
-    const event = dispatchSpy.mock.calls[0]![0] as unknown as {
-      detail: { path: string; rootPath?: string; line?: number; col?: number };
-    };
-    expect(event.detail.path).toBe("/just/a/path.txt");
-    expect(event.detail.rootPath).toBeUndefined();
-    expect(event.detail.line).toBeUndefined();
-    expect(event.detail.col).toBeUndefined();
+    const options = openPanelDialogMock.mock.calls[0]![0] as Record<string, unknown>;
+    expect(options.filePath).toBe("/just/a/path.txt");
+    expect(options).not.toHaveProperty("initialLine");
+    // `col` is accepted by the schema for compatibility but never plumbed —
+    // CodeViewer only positions by line.
+    expect(options).not.toHaveProperty("initialCol");
   });
 
   it("file.openInEditor propagates systemClient errors to caller", async () => {

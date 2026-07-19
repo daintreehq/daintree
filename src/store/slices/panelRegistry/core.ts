@@ -26,6 +26,9 @@ import {
 import type { HydrationBatchToken } from "./types";
 import { removeFromWorktreeIndex } from "./worktreeIndex";
 import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
+import { countPanelsTowardLimit } from "./panelCount";
+import { usePanelLimitStore } from "@/store/panelLimitStore";
+import { notify } from "@/lib/notify";
 
 type Set = PanelRegistryStoreApi["setState"];
 type Get = PanelRegistryStoreApi["getState"];
@@ -472,7 +475,9 @@ export const createCorePanelActions = (
   moveTerminalToDock: (id) => {
     // Overlay panels (the Daintree Assistant) self-manage their placement and
     // must never be relocated into the dock by a layout action (#9699).
-    if (get().panelsById[id]?.location === "overlay") return;
+    // Dialog panels are owned by their modal host on the same grounds.
+    const dockSourceLocation = get().panelsById[id]?.location;
+    if (dockSourceLocation === "overlay" || dockSourceLocation === "dialog") return;
 
     // Check if panel is in a group - if so, move the entire group
     const group = get().getPanelGroup(id);
@@ -516,7 +521,11 @@ export const createCorePanelActions = (
   moveTerminalToGrid: (id) => {
     // Overlay panels (the Daintree Assistant) self-manage their placement and
     // must never be relocated into the grid by a layout action (#9699).
-    if (get().panelsById[id]?.location === "overlay") return false;
+    // Dialog panels are ephemeral and uncounted, so promoting one is an
+    // admission decision, not a move: it goes through
+    // `promoteDialogPanelToGrid`, which re-checks the panel limit.
+    const gridSourceLocation = get().panelsById[id]?.location;
+    if (gridSourceLocation === "overlay" || gridSourceLocation === "dialog") return false;
 
     // Check if panel is in a group - if so, move the entire group
     const group = get().getPanelGroup(id);
@@ -562,6 +571,60 @@ export const createCorePanelActions = (
     }
 
     return moveSucceeded;
+  },
+
+  promoteDialogPanelToGrid: (id) => {
+    // Read the ceiling before the updater so the commit stays synchronous and
+    // the whole promotion lands in one atomic `set()` (#6596): a create-then-
+    // activate split lets a reconciler observe the half-formed record.
+    const { hardLimit } = usePanelLimitStore.getState();
+    let promoted = false;
+    let atLimit = false;
+
+    set((state) => {
+      // Re-read inside the updater: the panel may have been closed or already
+      // promoted between the host's click handler and this commit.
+      const panel = state.panelsById[id];
+      if (!panel || panel.location !== "dialog") return state;
+
+      // The dialog panel was never counted, so promoting it admits a genuinely
+      // new panel — the same hard ceiling `addPanel` enforces applies. Only the
+      // hard tier blocks: the confirm band is reserved for batch spawns
+      // (#10547), and a single promotion is one click to undo.
+      if (hardLimit > 0 && countPanelsTowardLimit(state.panelsById, state.panelIds) >= hardLimit) {
+        atLimit = true;
+        return state;
+      }
+
+      // Drop `excludeFromPersistence` rather than setting it false: the field is
+      // optional, and a lingering `false` would read as a deliberate opt-in.
+      const { excludeFromPersistence: _ephemeral, ...persistable } = panel;
+      const updatedPanel = {
+        ...persistable,
+        location: "grid" as const,
+        isVisible: true,
+      } as PanelInstance;
+
+      const newById = { ...state.panelsById, [id]: updatedPanel };
+      saveNormalized(newById, state.panelIds);
+      promoted = true;
+      return { panelsById: newById };
+    });
+
+    if (atLimit) {
+      notify({
+        type: "warning",
+        priority: "high",
+        title: "Panel limit reached",
+        message: `Maximum of ${hardLimit} panels reached. Close some panels before opening this file as a panel.`,
+        duration: 5000,
+        // Direct feedback on a click the user just made — it has to reach them
+        // where they are, which is the open dialog.
+        context: { eventKind: "uiFeedback" },
+      });
+    }
+
+    return promoted;
   },
 
   toggleTerminalLocation: (id) => {

@@ -14,14 +14,22 @@ async function dispatchViewFile(ctx: AppContext, filePath: string, rootPath?: st
   // Normalize to forward slashes so the renderer's containment check works on Windows
   const normPath = filePath.replace(/\\/g, "/");
   const normRoot = (rootPath ?? fixtureDir).replace(/\\/g, "/");
-  await ctx.window.evaluate(
-    ({ p, r }) => {
-      window.dispatchEvent(
-        new CustomEvent("daintree:view-file", { detail: { path: p, rootPath: r } })
-      );
-    },
-    { p: normPath, r: normRoot }
-  );
+  // `file.view` opens the panel dialog directly now, so drive the action rather
+  // than the retired `daintree:view-file` window event. It rejects on a path it
+  // can't open (the error-state case), which the caller asserts on separately.
+  await ctx.window
+    .evaluate(
+      ([id, a]) =>
+        (
+          window as unknown as {
+            __daintreeDispatchAction: (id: string, a?: unknown) => unknown;
+          }
+        ).__daintreeDispatchAction(id, a),
+      ["file.view", { path: normPath, rootPath: normRoot }] as const
+    )
+    .catch(() => {
+      // A failed open still renders the dialog's error state; assertions follow.
+    });
 }
 
 async function waitForDialog(ctx: AppContext) {

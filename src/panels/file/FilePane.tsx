@@ -12,6 +12,10 @@ import { HtmlViewer } from "@/components/Html/HtmlViewer";
 import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
 import { CodeViewer, type CodeViewerHandle } from "@/components/FileViewer/CodeViewer";
 import { FileViewerToolbar } from "@/components/FileViewer/FileViewerToolbar";
+import { FileImagePreview } from "@/components/FileViewer/FileImagePreview";
+import { isImageFilePath, isSvgFilePath } from "@/components/FileViewer/filePreviewKinds";
+import { sanitizeSvg } from "@shared/utils/svgSanitizer";
+import { formatBytes } from "@/lib/formatBytes";
 import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
@@ -52,7 +56,10 @@ function isUnderRoot(filePath: string, rootPath: string): boolean {
   return toForwardSlashes(filePath).startsWith(root);
 }
 
-type LoadState = "idle" | "loading" | "loaded" | "error";
+// "image" and "svg" are terminal preview states: an image is handed to the
+// `daintree-file://` protocol as an <img> src, and an SVG is read as text,
+// sanitized, then inlined. Neither has readable text content.
+type LoadState = "idle" | "loading" | "loaded" | "error" | "image" | "svg";
 
 const SEARCH_DEBOUNCE_MS = 150;
 const COPY_FEEDBACK_MS = 2000;
@@ -163,6 +170,7 @@ export function FilePane({
   }, [filePath, worktreePath, projectPath]);
 
   const [content, setContent] = useState<string | null>(null);
+  const [sanitizedSvg, setSanitizedSvg] = useState<string | null>(null);
   const [loadState, setLoadState] = useState<LoadState>("idle");
   const [errorCode, setErrorCode] = useState<FileReadErrorCode | null>(null);
   const [pathCopied, setPathCopied] = useState(false);
@@ -172,6 +180,14 @@ export function FilePane({
   // re-navigates — a rewritten report re-renders on refresh/focus. Bumping on
   // every load, not just entry-file changes, keeps relative assets fresh too.
   const [reloadNonce, setReloadNonce] = useState(0);
+
+  const metadata = useMemo(() => {
+    if (loadState !== "loaded" || content === null) return null;
+    return {
+      lineCount: content.split("\n").length,
+      sizeLabel: formatBytes(new TextEncoder().encode(content).byteLength),
+    };
+  }, [loadState, content]);
   const requestRef = useRef(0);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const markdownViewerRef = useRef<MarkdownViewerHandle>(null);
@@ -197,6 +213,17 @@ export function FilePane({
         setLoadState("loading");
         setErrorCode(null);
       }
+
+      // Raster images are served straight to an <img> by the protocol handler —
+      // reading them as text would just hit the binary-file guard.
+      if (isImageFilePath(filePath) && !isSvgFilePath(filePath)) {
+        setContent(null);
+        setSanitizedSvg(null);
+        setLoadState("image");
+        setErrorCode(null);
+        return;
+      }
+
       filesClient
         .read({
           path: filePath,
@@ -205,6 +232,23 @@ export function FilePane({
         })
         .then(({ content: fileContent, htmlPreviewUrl: previewUrl }) => {
           if (requestRef.current !== requestId) return;
+          // SVG is text on disk but a picture on screen: sanitize before it can
+          // be inlined, and surface a sanitizer rejection as a load error
+          // rather than silently rendering nothing.
+          if (isSvgFilePath(filePath)) {
+            const sanitized = sanitizeSvg(fileContent);
+            if (sanitized.ok) {
+              setSanitizedSvg(sanitized.svg);
+              setContent(null);
+              setLoadState("svg");
+              setErrorCode(null);
+            } else {
+              setErrorCode("INVALID_PATH");
+              setLoadState("error");
+            }
+            return;
+          }
+          setSanitizedSvg(null);
           setContent((previous) => (previous === fileContent ? previous : fileContent));
           setHtmlPreviewUrl(previewUrl ?? null);
           // Re-navigate the preview frame on every successful load so a rewritten
@@ -509,6 +553,20 @@ export function FilePane({
           </div>
         )}
 
+        {filePath && (loadState === "image" || loadState === "svg") && (
+          <FileImagePreview
+            filePath={filePath}
+            rootPath={effectiveRootPath}
+            alt={fileName ?? filePath}
+            sanitizedSvg={loadState === "svg" ? sanitizedSvg : null}
+            onError={() => {
+              setErrorCode("NOT_FOUND");
+              setLoadState("error");
+            }}
+            maxHeightClassName="max-h-full"
+          />
+        )}
+
         {filePath &&
           loadState === "loaded" &&
           content !== null &&
@@ -545,12 +603,23 @@ export function FilePane({
                   className="flex-1"
                 />
               ) : (
-                <CodeViewer
-                  ref={codeViewerRef}
-                  content={content}
-                  filePath={filePath}
-                  className="flex-1"
-                />
+                <>
+                  {metadata && (
+                    <div
+                      data-testid="file-viewer-metadata"
+                      className="px-3 py-1 border-b border-daintree-border text-xs text-muted-foreground font-mono shrink-0"
+                    >
+                      {metadata.lineCount} lines · {metadata.sizeLabel} · UTF-8
+                    </div>
+                  )}
+                  <CodeViewer
+                    ref={codeViewerRef}
+                    content={content}
+                    filePath={filePath}
+                    initialLine={panel?.initialLine}
+                    className="flex-1"
+                  />
+                </>
               )}
             </div>
           ))}

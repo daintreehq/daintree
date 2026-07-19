@@ -98,7 +98,12 @@ export function getDeletedWorktreeTerminalIds(worktreeId: string): string[] {
   if (!ids || ids.length === 0) return [];
   return ids.filter((id) => {
     const panel = panelsById[id];
-    return panel != null && panel.location !== "trash" && panel.location !== "overlay";
+    return (
+      panel != null &&
+      panel.location !== "trash" &&
+      panel.location !== "overlay" &&
+      panel.location !== "dialog"
+    );
   });
 }
 

@@ -67,7 +67,13 @@ function collectActiveWorktreeTerminalTargets(): string[] {
     if ((panel.kind ?? "terminal") !== "terminal") continue;
     if ((panel.worktreeId ?? null) !== activeWorktreeId) continue;
     const location = panel.location ?? "grid";
-    if (location === "dock" || location === "trash" || location === "overlay") continue;
+    if (
+      location === "dock" ||
+      location === "trash" ||
+      location === "overlay" ||
+      location === "dialog"
+    )
+      continue;
     targets.push(id);
   }
 

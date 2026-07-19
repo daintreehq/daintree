@@ -63,13 +63,15 @@ function collectUngroupedCandidateIds(
 function getPanelTabGroupLocation(
   panel: PanelInstance | CarrierPanel | undefined
 ): TabGroupLocation | null {
-  // Overlay panels (the Daintree Assistant) belong to no tab group — they
-  // self-manage and must never be folded into a grid or dock group (#9699).
+  // Overlay panels (the Daintree Assistant) and dialog panels belong to no tab
+  // group — they self-manage and must never be folded into a grid or dock
+  // group (#9699).
   if (
     !panel ||
     panel.location === "trash" ||
     panel.location === "background" ||
-    panel.location === "overlay"
+    panel.location === "overlay" ||
+    panel.location === "dialog"
   )
     return null;
   return panel.location === "dock" ? "dock" : "grid";
@@ -628,7 +630,8 @@ export const createTabGroupActions = (
       terminal &&
       terminal.location !== "trash" &&
       terminal.location !== "background" &&
-      terminal.location !== "overlay"
+      terminal.location !== "overlay" &&
+      terminal.location !== "dialog"
     ) {
       for (const g of get().tabGroups.values()) {
         if (g.panelIds.includes(groupId)) return null;

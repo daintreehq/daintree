@@ -243,6 +243,8 @@ export interface FilePanelOptions extends AddPanelOptionsBase {
   filePath?: string;
   /** Initial view mode; defaults to "source" (rendered applies to Markdown and HTML) */
   fileViewMode?: FileViewMode;
+  /** 1-based line to scroll to on first render. Open-time hint; never persisted. */
+  initialLine?: number;
 }
 
 /**

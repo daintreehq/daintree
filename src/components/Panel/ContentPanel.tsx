@@ -41,7 +41,12 @@ export interface BasePanelProps {
   worktreeId?: string;
   isFocused: boolean;
   isMaximized?: boolean;
-  location?: "grid" | "dock";
+  /**
+   * Which presentation is rendering this panel. `"dialog"` means it is hosted
+   * inside a modal by `PanelDialogHost`, which supplies the surrounding chrome
+   * and its own header — so this panel draws neither.
+   */
+  location?: "grid" | "dock" | "dialog";
   isMultiPanelGrid?: boolean;
   onFocus: () => void;
   onClose: (force?: boolean) => void;
@@ -508,7 +513,10 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
         className={cn(
           "flex flex-col h-full overflow-hidden group/panel",
           location === "grid" && !isMaximized && "bg-surface",
-          (location === "dock" || isMaximized) && "bg-daintree-bg",
+          // Dialog joins the dock/maximized bucket: AppDialog already draws the
+          // surface, border, radius, and shadow, so a second set here would
+          // read as a panel nested inside a panel.
+          (location === "dock" || location === "dialog" || isMaximized) && "bg-daintree-bg",
           location === "grid" &&
             !isMaximized &&
             "rounded border shadow-[var(--theme-shadow-ambient)] transition-colors duration-300",
@@ -547,52 +555,58 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
         aria-label={ariaLabel}
         aria-selected={ariaSelected}
       >
-        <PanelHeader
-          isDragging={isDragging}
-          id={id}
-          title={title}
-          kind={kind}
-          agentId={agentId}
-          chrome={terminalChrome}
-          presetColor={presetColor}
-          agentLaunchFlags={agentLaunchFlags}
-          worktreeAccentColor={worktreeAccentColor}
-          worktreeBranch={worktreeBranch}
-          isFocused={isFocused}
-          isMaximized={isMaximized}
-          location={location}
-          isEditingTitle={titleEditing.isEditingTitle}
-          editingValue={titleEditing.editingValue}
-          titleInputRef={titleInputRef}
-          onEditingValueChange={titleEditing.setEditingValue}
-          onTitleDoubleClick={handleTitleDoubleClick}
-          onTitleKeyDown={handleTitleKeyDown}
-          onTitleInputKeyDown={handleTitleInputKeyDown}
-          onTitleSave={handleTitleSave}
-          onClose={onClose}
-          onFocus={onFocus}
-          onToggleMaximize={onToggleMaximize}
-          onTitleChange={onTitleChange}
-          onMinimize={onMinimize}
-          onRestore={onRestore}
-          showRestoreControl={showRestoreControl}
-          onRestart={onRestart}
-          isPinged={isPinged}
-          wasJustSelected={wasJustSelected}
-          isSelected={isSelected}
-          isFleetFollower={isFleetFollower}
-          isFleetPreviewed={isFleetPreviewed}
-          headerContent={resolvedHeaderContent}
-          headerContentPlacement={headerContentPlacement}
-          headerActions={headerActions}
-          tabs={tabs}
-          groupId={groupId}
-          onTabClick={onTabClick}
-          onTabClose={onTabClose}
-          onTabRename={onTabRename}
-          onAddTab={onAddTab}
-          onTabReorder={onTabReorder}
-        />
+        {/* The dialog presentation draws its own AppDialog.Header with the
+            title, close, and "Open as panel" controls. Rendering PanelHeader
+            too would duplicate title/close and expose grid-only affordances
+            (rename, move to dock, maximize, trash) that a modal can't honour. */}
+        {location !== "dialog" && (
+          <PanelHeader
+            isDragging={isDragging}
+            id={id}
+            title={title}
+            kind={kind}
+            agentId={agentId}
+            chrome={terminalChrome}
+            presetColor={presetColor}
+            agentLaunchFlags={agentLaunchFlags}
+            worktreeAccentColor={worktreeAccentColor}
+            worktreeBranch={worktreeBranch}
+            isFocused={isFocused}
+            isMaximized={isMaximized}
+            location={location}
+            isEditingTitle={titleEditing.isEditingTitle}
+            editingValue={titleEditing.editingValue}
+            titleInputRef={titleInputRef}
+            onEditingValueChange={titleEditing.setEditingValue}
+            onTitleDoubleClick={handleTitleDoubleClick}
+            onTitleKeyDown={handleTitleKeyDown}
+            onTitleInputKeyDown={handleTitleInputKeyDown}
+            onTitleSave={handleTitleSave}
+            onClose={onClose}
+            onFocus={onFocus}
+            onToggleMaximize={onToggleMaximize}
+            onTitleChange={onTitleChange}
+            onMinimize={onMinimize}
+            onRestore={onRestore}
+            showRestoreControl={showRestoreControl}
+            onRestart={onRestart}
+            isPinged={isPinged}
+            wasJustSelected={wasJustSelected}
+            isSelected={isSelected}
+            isFleetFollower={isFleetFollower}
+            isFleetPreviewed={isFleetPreviewed}
+            headerContent={resolvedHeaderContent}
+            headerContentPlacement={headerContentPlacement}
+            headerActions={headerActions}
+            tabs={tabs}
+            groupId={groupId}
+            onTabClick={onTabClick}
+            onTabClose={onTabClose}
+            onTabRename={onTabRename}
+            onAddTab={onAddTab}
+            onTabReorder={onTabReorder}
+          />
+        )}
 
         {toolbar}
 

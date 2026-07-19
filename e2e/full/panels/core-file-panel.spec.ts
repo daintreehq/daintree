@@ -54,14 +54,9 @@ async function dispatchAction(page: Page, actionId: string, args?: unknown): Pro
 async function dispatchViewFile(page: Page, filePath: string) {
   const normPath = filePath.replace(/\\/g, "/");
   const normRoot = fixtureDir.replace(/\\/g, "/");
-  await page.evaluate(
-    ({ p, r }) => {
-      window.dispatchEvent(
-        new CustomEvent("daintree:view-file", { detail: { path: p, rootPath: r } })
-      );
-    },
-    { p: normPath, r: normRoot }
-  );
+  // Drives the real action rather than a raw window event: `file.view` now
+  // opens the dialog directly, so the event is no longer a public seam.
+  await dispatchAction(page, "file.view", { path: normPath, rootPath: normRoot });
 }
 
 function filePanes(page: Page) {
