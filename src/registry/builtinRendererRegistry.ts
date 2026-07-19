@@ -69,19 +69,18 @@ function resolveSlot<P>(
 ): ComponentType<P> | null {
   const entry = REGISTRY.get(slotId);
   if (!entry) {
-    // A dangling `forgeProviders.slots` ref is a manifest parse error since
-    // #11244, so reaching here means the declaration and the host bundle
-    // disagree: an id is declared in `contributes.builtinViews` but its
-    // `registerBuiltinView` call is missing (or the renderer entry was
-    // tree-shaken out — see the package.json `sideEffects` coupling in
-    // builtinPluginRenderers.ts). Dev-only and warn-not-throw: an empty ref is
-    // the documented "no slot" sentinel, and a null resolution is defined
-    // contract, not an error.
+    // The main process can't validate slot refs against this registry, so
+    // reaching here means the manifest and the host bundle disagree: an id is
+    // declared in `forgeProviders.slots` but its `registerBuiltinView` call is
+    // missing (or the renderer entry was tree-shaken out — see the
+    // package.json `sideEffects` coupling in builtinPluginRenderers.ts).
+    // Dev-only and warn-not-throw: an empty ref is the documented "no slot"
+    // sentinel, and a null resolution is defined contract, not an error.
     if (import.meta.env.DEV && slotId.length > 0 && !warnedMissingSlots.has(slotId)) {
       warnedMissingSlots.add(slotId);
       console.warn(
         `[builtinRendererRegistry] No view registered for declared slot "${slotId}" — ` +
-          `the plugin's contributes.builtinViews and its registerBuiltinView calls disagree`
+          `the plugin's forgeProviders.slots and its registerBuiltinView calls disagree`
       );
     }
     return null;
