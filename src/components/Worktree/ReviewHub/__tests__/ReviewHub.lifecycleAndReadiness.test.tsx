@@ -849,7 +849,9 @@ describe("ReviewHub", () => {
       // The next worktree's staging status never resolves — the previous
       // worktree's summary must not linger against the new path's selectors.
       getStagingStatusMock.mockReturnValue(new Promise(() => {}));
-      rerender(<ReviewHubContent isOpen={true} worktreePath="/home/user/other" onClose={vi.fn()} />);
+      rerender(
+        <ReviewHubContent isOpen={true} worktreePath="/home/user/other" onClose={vi.fn()} />
+      );
       await act(async () => {});
       expect(screen.queryByTestId("review-readiness-rail")).toBeNull();
     });

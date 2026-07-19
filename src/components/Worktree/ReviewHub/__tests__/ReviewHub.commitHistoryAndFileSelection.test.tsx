@@ -537,7 +537,9 @@ describe("ReviewHub", () => {
 
   describe("commit history arrow-key cycling", () => {
     function renderOpen() {
-      return render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      return render(
+        <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
+      );
     }
 
     function focusTextareaAt(textarea: HTMLTextAreaElement, start: number, end = start) {
