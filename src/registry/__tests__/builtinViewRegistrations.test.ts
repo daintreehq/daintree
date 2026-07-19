@@ -40,12 +40,35 @@ interface Registration {
   pluginId: string | null;
 }
 
-/** Manifest shape this test reads — deliberately narrow. */
-interface ManifestShape {
-  name?: string;
-  contributes?: {
-    forgeProviders?: Array<{ slots?: Record<string, string> }>;
-  };
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+/**
+ * Narrow the parsed manifest by hand rather than asserting a shape onto it: the
+ * file is read off disk, so a wrong assumption here would surface as a confusing
+ * runtime error inside an assertion instead of a plain "no slot refs found".
+ */
+function readSlotRefs(manifest: unknown): string[] {
+  if (!isRecord(manifest)) return [];
+  const contributes = manifest.contributes;
+  if (!isRecord(contributes)) return [];
+  const providers = contributes.forgeProviders;
+  if (!Array.isArray(providers)) return [];
+
+  return providers.flatMap((provider) => {
+    if (!isRecord(provider)) return [];
+    const slots = provider.slots;
+    if (!isRecord(slots)) return [];
+    return Object.values(slots).filter(
+      (ref): ref is string => typeof ref === "string" && ref !== ""
+    );
+  });
+}
+
+function readManifestName(manifest: unknown, fallback: string): string {
+  if (!isRecord(manifest)) return fallback;
+  return typeof manifest.name === "string" ? manifest.name : fallback;
 }
 
 function readRendererSource(dir: string): string | null {
@@ -67,7 +90,8 @@ function parseRegistrations(source: string): Registration[] {
   return calls.map((call, index) => {
     const id = call[1] ?? "";
     const start = call.index ?? 0;
-    const end = index + 1 < calls.length ? (calls[index + 1]?.index ?? source.length) : source.length;
+    const end =
+      index + 1 < calls.length ? (calls[index + 1]?.index ?? source.length) : source.length;
     const owner = /pluginId:\s*"([^"]+)"/.exec(source.slice(start, end));
     return { id, pluginId: owner?.[1] ?? null };
   });
@@ -84,11 +108,15 @@ function loadBuiltinPlugins(): BuiltinPlugin[] {
       const rendererSource = readRendererSource(dir);
       if (!fs.existsSync(manifestPath) || rendererSource === null) return [];
 
-      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as ManifestShape;
-      const slotRefs = (manifest.contributes?.forgeProviders ?? []).flatMap((provider) =>
-        Object.values(provider.slots ?? {}).filter((ref) => typeof ref === "string" && ref.length > 0)
-      );
-      return [{ name: manifest.name ?? entry.name, dir, rendererSource, slotRefs }];
+      const manifest: unknown = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      return [
+        {
+          name: readManifestName(manifest, entry.name),
+          dir,
+          rendererSource,
+          slotRefs: readSlotRefs(manifest),
+        },
+      ];
     });
 }
 
