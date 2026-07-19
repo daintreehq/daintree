@@ -1028,12 +1028,7 @@ describe("AppDialog header composition", () => {
     render(
       <>
         <Dispatcher />
-        <AppDialog
-          isOpen
-          onClose={onClose}
-          onBeforeClose={onBeforeClose}
-          data-testid="test-dialog"
-        >
+        <AppDialog isOpen onClose={onClose} onBeforeClose={onBeforeClose} data-testid="test-dialog">
           <AppDialog.Header>
             <AppDialog.CloseButton />
           </AppDialog.Header>
@@ -1053,12 +1048,7 @@ describe("AppDialog header composition", () => {
     render(
       <>
         <Dispatcher />
-        <AppDialog
-          isOpen
-          onClose={onClose}
-          onBeforeClose={onBeforeClose}
-          data-testid="test-dialog"
-        >
+        <AppDialog isOpen onClose={onClose} onBeforeClose={onBeforeClose} data-testid="test-dialog">
           <AppDialog.Header>
             <AppDialog.CloseButton />
           </AppDialog.Header>

@@ -21,8 +21,7 @@ const surfaceHeaderVariants = cva("", {
 });
 
 export interface SurfaceHeaderProps
-  extends React.HTMLAttributes<HTMLDivElement>,
-    VariantProps<typeof surfaceHeaderVariants> {
+  extends React.HTMLAttributes<HTMLDivElement>, VariantProps<typeof surfaceHeaderVariants> {
   children: React.ReactNode;
 }
 
@@ -59,32 +58,33 @@ const SurfaceHeaderTitle = React.forwardRef<HTMLHeadingElement, SurfaceHeaderTit
 );
 SurfaceHeaderTitle.displayName = "SurfaceHeaderTitle";
 
-export interface SurfaceHeaderCloseButtonProps
-  extends Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, "children" | "type"> {
+export interface SurfaceHeaderCloseButtonProps extends Omit<
+  React.ButtonHTMLAttributes<HTMLButtonElement>,
+  "children" | "type"
+> {
   // Required here, defaulted by the surface that owns the wrapper: a bare
   // "Close" is ambiguous once more than one surface uses this button.
   "aria-label": string;
 }
 
-const SurfaceHeaderCloseButton = React.forwardRef<
-  HTMLButtonElement,
-  SurfaceHeaderCloseButtonProps
->(({ className, ...props }, ref) => (
-  <button
-    ref={ref}
-    className={cn(
-      "text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-raised transition-colors p-1 rounded",
-      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
-      className
-    )}
-    {...props}
-    // After the spread: a cast-through `type: "submit"` would otherwise submit
-    // the surrounding form instead of closing the surface.
-    type="button"
-  >
-    <X className="h-5 w-5" />
-  </button>
-));
+const SurfaceHeaderCloseButton = React.forwardRef<HTMLButtonElement, SurfaceHeaderCloseButtonProps>(
+  ({ className, ...props }, ref) => (
+    <button
+      ref={ref}
+      className={cn(
+        "text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-raised transition-colors p-1 rounded",
+        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
+        className
+      )}
+      {...props}
+      // After the spread: a cast-through `type: "submit"` would otherwise submit
+      // the surrounding form instead of closing the surface.
+      type="button"
+    >
+      <X className="h-5 w-5" />
+    </button>
+  )
+);
 SurfaceHeaderCloseButton.displayName = "SurfaceHeaderCloseButton";
 
 export { SurfaceHeader, SurfaceHeaderTitle, SurfaceHeaderCloseButton, surfaceHeaderVariants };
