@@ -3,18 +3,35 @@ import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 
 /**
  * Slot registry for renderer-side views contributed by built-in plugins. The
- * registry exists so host-owned dialogs (NewWorktreeDialog, SidebarContent)
- * can render plugin-contributed components without importing them directly,
- * preserving the plugin boundary while `contributes.views` from the plugin
- * manifest is unimplemented. Slot ids are dot-namespaced by plugin
- * (`github.bulkCreateWorktreeDialog`) so the host can grep the seam.
+ * registry exists so host-owned surfaces (NewWorktreeDialog, SidebarContent,
+ * CodeForgeSettingsTab, ForgeStatsToolbarButton) can render plugin-contributed
+ * components without importing them directly, preserving the plugin boundary.
+ * Slot ids are dot-namespaced by plugin (`github.bulkCreateWorktreeDialog`) so
+ * the host can grep the seam.
  *
- * Registration is unconditional (plugin renderer bundles are imported eagerly
- * at app start), but resolution is enable-aware: a slot registered with an
- * owning `pluginId` resolves to `null` while that plugin is disabled, so host
- * UI drops plugin-contributed views live with the Preferences toggle. React
- * consumers must use {@link useBuiltinView}; {@link getBuiltinView} reads the
- * same gate non-reactively and won't re-render on toggle.
+ * Why this is separate from `contributes.views` / `PluginViewContent` rather
+ * than folded into them (#11244): that path resolves a view's `componentPath`
+ * to a `plugin://{id}/{path}` URL and lazy-imports it, which requires the
+ * plugin to ship its renderer as a separately built bundle. Built-in renderer
+ * entries are compiled into the *host* bundle — `builtinPluginRenderers.ts`
+ * eagerly globs them for their registration side effects, and they import host
+ * modules directly (`@/components/...`, `@/store/...`). There is no
+ * `plugin://` module to import, so the standard loader cannot reach them.
+ *
+ * Folding the two together therefore needs more than a manifest change: either
+ * the built-ins get a standalone build boundary (severing those host imports
+ * through the SDK/import map), or the view-resolution path learns to resolve
+ * host-bundled components in-process. Until one of those lands, this registry
+ * is the seam, and `forgeProviders.slots` refs stay unvalidated against it —
+ * the main process cannot see the renderer bundle. The
+ * `builtinViewRegistrations` test is what keeps the two halves honest.
+ *
+ * Registration is unconditional, but resolution is enable-aware: a slot
+ * registered with an owning `pluginId` resolves to `null` while that plugin is
+ * disabled, so host UI drops plugin-contributed views live with the Preferences
+ * toggle. React consumers must use {@link useBuiltinView};
+ * {@link getBuiltinView} reads the same gate non-reactively and won't re-render
+ * on toggle.
  */
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- slot props vary per consumer; the cast site at getBuiltinView() preserves type safety
@@ -52,16 +69,19 @@ function resolveSlot<P>(
 ): ComponentType<P> | null {
   const entry = REGISTRY.get(slotId);
   if (!entry) {
-    // A non-empty ref that was never registered is most likely a plugin-author
-    // typo in a `forgeProviders.slots` value — the main process can't validate
-    // these against this renderer registry, so surface it here. Dev-only and
-    // warn-not-throw: an empty ref is the documented "no slot" sentinel, and a
-    // null resolution is defined contract, not an error.
+    // A dangling `forgeProviders.slots` ref is a manifest parse error since
+    // #11244, so reaching here means the declaration and the host bundle
+    // disagree: an id is declared in `contributes.builtinViews` but its
+    // `registerBuiltinView` call is missing (or the renderer entry was
+    // tree-shaken out — see the package.json `sideEffects` coupling in
+    // builtinPluginRenderers.ts). Dev-only and warn-not-throw: an empty ref is
+    // the documented "no slot" sentinel, and a null resolution is defined
+    // contract, not an error.
     if (import.meta.env.DEV && slotId.length > 0 && !warnedMissingSlots.has(slotId)) {
       warnedMissingSlots.add(slotId);
       console.warn(
-        `[builtinRendererRegistry] No view registered for slot "${slotId}" — ` +
-          `check the plugin's forgeProviders.slots ref and registerBuiltinView call`
+        `[builtinRendererRegistry] No view registered for declared slot "${slotId}" — ` +
+          `the plugin's contributes.builtinViews and its registerBuiltinView calls disagree`
       );
     }
     return null;
