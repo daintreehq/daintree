@@ -44,11 +44,6 @@
   color: var(--settings-search-muted, var(--theme-text-muted));
 }
 
-.dialog-header {
-  --_bg: var(--dialog-header-bg, color-mix(in srgb, var(--theme-surface-sidebar) 50%, transparent));
-  background: var(--_bg);
-}
-
 .settings-meta {
   color: var(--settings-meta-fg, var(--theme-text-muted));
   font-size: var(--settings-meta-size, 11px);

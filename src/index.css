@@ -4,6 +4,7 @@
 @source not "../.lessons/**/*";
 @import "./styles/components/toolbar.css";
 @import "./styles/components/settings.css";
+@import "./styles/components/surface-header.css";
 @import "./styles/components/pulse.css";
 @import "./styles/components/sidebar.css";
 @import "./styles/components/panels.css";
