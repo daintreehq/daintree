@@ -200,4 +200,17 @@ describe("SurfaceHeaderCloseButton", () => {
 
     expect(onClick).toHaveBeenCalledTimes(1);
   });
+
+  it("does not submit a surrounding form", () => {
+    const onSubmit = vi.fn((e: React.FormEvent) => e.preventDefault());
+    render(
+      <form onSubmit={onSubmit}>
+        <SurfaceHeaderCloseButton aria-label="Close dialog" />
+      </form>
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Close dialog" }));
+
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
 });

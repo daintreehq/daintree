@@ -373,9 +373,19 @@ function SettingsDialogInner({
   const flushRegistry = useContext(SettingsFlushContext);
   const flushAllTabs = flushRegistry?.flushAll;
 
-  const flushDialog = async () => {
-    if (flushAllTabs) await flushAllTabs();
-    await projectForm.flush();
+  // Coalesced: a visibility change landing mid-close would otherwise re-issue
+  // every registered tab flusher alongside the one already in flight.
+  const flushInFlightRef = useRef<Promise<void> | null>(null);
+  const flushDialog = () => {
+    if (flushInFlightRef.current) return flushInFlightRef.current;
+    const pending = (async () => {
+      if (flushAllTabs) await flushAllTabs();
+      await projectForm.flush();
+    })();
+    flushInFlightRef.current = pending;
+    return pending.finally(() => {
+      flushInFlightRef.current = null;
+    });
   };
 
   // Electron 41 WebContentsView detach (project switch, window close) does not
@@ -409,8 +419,10 @@ function SettingsDialogInner({
     onClose();
   };
 
-  // Tab content closes the dialog directly, bypassing onBeforeClose — so this
-  // path owns its own flush.
+  // Handed to tab content via the registry's `needsOnClose` flag. That route
+  // never passes through onBeforeClose, so it keeps its own flush — no tab
+  // invokes it today (AppThemePicker only tests it for presence), but a caller
+  // that did would otherwise close without persisting.
   const handleClose = async () => {
     await flushDialog();
     onClose();
