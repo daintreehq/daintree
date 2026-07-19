@@ -1010,12 +1010,20 @@ describe("PanelHeader", () => {
     // frame utility still fails.
     function frameClassesOf(density: "compact" | "comfortable"): string[] {
       const { container, unmount } = render(<SurfaceHeader density={density}>x</SurfaceHeader>);
-      const classes = classListOf(container.firstElementChild as HTMLElement);
+      const classes = classListOf(rootOf(container));
       unmount();
       return classes;
     }
 
-    function classListOf(el: HTMLElement): string[] {
+    // Element, not HTMLElement: className is declared on Element, so the whole
+    // block stays cast-free.
+    function rootOf(container: HTMLElement): Element {
+      const root = container.firstElementChild;
+      if (!root) throw new Error("expected a rendered root element");
+      return root;
+    }
+
+    function classListOf(el: Element): string[] {
       return el.className.split(/\s+/).filter(Boolean);
     }
 
@@ -1026,7 +1034,7 @@ describe("PanelHeader", () => {
     it("matches the shared compact frame", () => {
       const frame = frameClassesOf("compact");
       const { container } = render(<PanelHeader {...makeProps({ location: "grid" })} />);
-      const header = classListOf(container.firstElementChild as HTMLElement);
+      const header = classListOf(rootOf(container));
       for (const cls of frame) {
         expect(header, `missing shared frame class ${cls}`).toContain(cls);
       }
@@ -1037,9 +1045,7 @@ describe("PanelHeader", () => {
       // fixed height. A subset check alone would still pass if the panel
       // layered padding back on, so assert the absence directly.
       const { container } = render(<PanelHeader {...makeProps({ location: "grid" })} />);
-      const verticalPadding = classListOf(container.firstElementChild as HTMLElement).filter((c) =>
-        /^(py|pt|pb)-/.test(c)
-      );
+      const verticalPadding = classListOf(rootOf(container)).filter((c) => /^(py|pt|pb)-/.test(c));
       expect(verticalPadding).toEqual([]);
     });
 
@@ -1051,7 +1057,7 @@ describe("PanelHeader", () => {
       expect(comfortableOnly.length).toBeGreaterThan(0);
 
       const { container } = render(<PanelHeader {...makeProps({ location: "grid" })} />);
-      const header = new Set(classListOf(container.firstElementChild as HTMLElement));
+      const header = new Set(classListOf(rootOf(container)));
       for (const cls of comfortableOnly) {
         expect(header.has(cls), `leaked comfortable-density class ${cls}`).toBe(false);
       }
@@ -1061,14 +1067,14 @@ describe("PanelHeader", () => {
       // The frame supplies a height and the maximized branch overrides it. If
       // the merge ever stops resolving them, both survive and the taller one
       // silently wins by source order instead of by intent.
-      const heightsOf = (el: HTMLElement) => classListOf(el).filter((c) => /^h-/.test(c));
+      const heightsOf = (el: Element) => classListOf(el).filter((c) => /^h-/.test(c));
 
       const { container: normal } = render(<PanelHeader {...makeProps({ location: "grid" })} />);
       const { container: maximized } = render(
         <PanelHeader {...makeProps({ location: "grid", isMaximized: true })} />
       );
-      const normalHeight = heightsOf(normal.firstElementChild as HTMLElement);
-      const maximizedHeight = heightsOf(maximized.firstElementChild as HTMLElement);
+      const normalHeight = heightsOf(rootOf(normal));
+      const maximizedHeight = heightsOf(rootOf(maximized));
 
       expect(normalHeight).toHaveLength(1);
       expect(maximizedHeight).toHaveLength(1);
@@ -1078,7 +1084,7 @@ describe("PanelHeader", () => {
     it("collapses the maximized border colour against the frame divider", () => {
       // Colour only: border-b/-2/-dashed and friends are width/style utilities,
       // and counting them would fail this test for an unrelated border change.
-      const borderColorsOf = (el: HTMLElement) =>
+      const borderColorsOf = (el: Element) =>
         classListOf(el).filter(
           (c) =>
             c.startsWith("border-") &&
@@ -1091,8 +1097,8 @@ describe("PanelHeader", () => {
       const { container: maximized } = render(
         <PanelHeader {...makeProps({ location: "grid", isMaximized: true })} />
       );
-      const normalBorder = borderColorsOf(normal.firstElementChild as HTMLElement);
-      const maximizedBorder = borderColorsOf(maximized.firstElementChild as HTMLElement);
+      const normalBorder = borderColorsOf(rootOf(normal));
+      const maximizedBorder = borderColorsOf(rootOf(maximized));
 
       expect(normalBorder).toHaveLength(1);
       expect(maximizedBorder).toHaveLength(1);
@@ -1206,7 +1212,7 @@ describe("PanelHeader", () => {
       };
       try {
         const { container } = render(<PanelHeader {...makeProps({ location: "grid" })} />);
-        fireEvent.pointerDown(container.firstElementChild as HTMLElement);
+        fireEvent.pointerDown(rootOf(container));
         expect(dragPointerDown).toHaveBeenCalledTimes(1);
       } finally {
         mockDragHandle = null;
