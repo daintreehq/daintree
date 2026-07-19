@@ -471,11 +471,15 @@ export function registerTerminalLifecycleActions(
     argsSchema: z.object({ confirmed: z.boolean().optional() }).optional(),
     run: async (args: unknown) => {
       const state = usePanelStore.getState();
+      // Location-only, deliberately narrower than `isEphemeralPanel`: this list
+      // must match what `bulkRestartAll` actually restarts, and that still
+      // includes `excludeFromPersistence` terminals like the assistant.
+      // Excluding them here alone would confirm one set and restart another.
       const targets = state.panelIds
         .map((id) => state.panelsById[id])
         .filter(
           (t): t is NonNullable<typeof t> =>
-            t != null && t.location !== "trash" && !isEphemeralPanel(t)
+            t != null && t.location !== "trash" && t.location !== "dialog"
         );
       if (targets.length === 0) return;
       const runningAgents = collectRunningAgentTerminals(targets);

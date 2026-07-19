@@ -27,6 +27,39 @@ interface FileImagePreviewProps {
  * can resurrect mutation-XSS vectors its regex pass cannot model. Parsing as
  * `image/svg+xml` and adopting the resulting node avoids that reparse.
  */
+const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
+
+/**
+ * Parse sanitized SVG into a live element, or null if it isn't usable.
+ *
+ * `image/svg+xml` parsing is namespace-strict, unlike the HTML parser that
+ * `innerHTML` used to run: a document whose root `<svg>` omits `xmlns` (common
+ * in hand-written and tool-exported files) parses into a null-namespace element
+ * that renders blank. `sanitizeSvg` only requires the string to contain `<svg`,
+ * so declare the namespace when it's absent rather than silently showing
+ * nothing.
+ */
+function parseSanitizedSvg(sanitizedSvg: string): Element | null {
+  const parse = (markup: string): Element | null => {
+    const parsed = new DOMParser().parseFromString(markup, "image/svg+xml");
+    // A parse failure yields a <parsererror> document rather than throwing.
+    if (parsed.querySelector("parsererror")) return null;
+    const root = parsed.documentElement;
+    if (!root || root.localName !== "svg" || root.namespaceURI !== SVG_NAMESPACE) return null;
+    return root;
+  };
+
+  const direct = parse(sanitizedSvg);
+  if (direct) return direct;
+
+  // Retry once with the namespace declared on the root element. Only rewrites
+  // the opening tag, so sanitized content is otherwise untouched.
+  if (!/\sxmlns\s*=/.test(sanitizedSvg)) {
+    return parse(sanitizedSvg.replace(/<svg\b/i, `<svg xmlns="${SVG_NAMESPACE}"`));
+  }
+  return null;
+}
+
 function useInlineSvg(sanitizedSvg: string | null | undefined) {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -37,10 +70,8 @@ function useInlineSvg(sanitizedSvg: string | null | undefined) {
       container.replaceChildren();
       return;
     }
-    const parsed = new DOMParser().parseFromString(sanitizedSvg, "image/svg+xml");
-    const svg = parsed.documentElement;
-    // A parse failure yields a <parsererror> document rather than throwing.
-    if (!svg || svg.nodeName === "parsererror" || parsed.querySelector("parsererror")) {
+    const svg = parseSanitizedSvg(sanitizedSvg);
+    if (!svg) {
       container.replaceChildren();
       return;
     }
