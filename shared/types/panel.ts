@@ -16,8 +16,15 @@ export type { BuiltInPanelKind };
  */
 export type PanelKind = BuiltInPanelKind | (string & {});
 
-/** Location of a panel instance in the UI */
-export type PanelLocation = "grid" | "dock" | "overlay" | "trash" | "background";
+/**
+ * Location of a panel instance in the UI.
+ *
+ * `"dialog"` is the ephemeral presentation: the panel renders inside a modal
+ * via `PanelDialogHost` instead of the grid or dock. Dialog panels are never
+ * persisted, never counted toward the panel limit, and never restored on
+ * restart — see `excludeFromPersistence`, which they always carry.
+ */
+export type PanelLocation = "grid" | "dock" | "overlay" | "trash" | "background" | "dialog";
 
 /** Tab group location (subset of PanelLocation, excludes trash) */
 export type TabGroupLocation = "grid" | "dock";
@@ -38,14 +45,16 @@ const GRID_MEMBER_BY_LOCATION = {
   overlay: false,
   trash: false,
   background: false,
+  dialog: false,
 } satisfies Record<PanelLocation, boolean>;
 
 /**
  * Whether a panel at this location is a member of the user-visible panel grid.
  *
  * True only for `"grid"` and `undefined` (legacy panels). `"dock"`, `"overlay"`
- * (Daintree Assistant), `"trash"`, and `"background"` are NOT grid members and
- * must be excluded from grid fleet membership, counts, badges, and focus.
+ * (Daintree Assistant), `"trash"`, `"background"`, and `"dialog"` (modal
+ * presentation) are NOT grid members and must be excluded from grid fleet
+ * membership, counts, badges, and focus.
  */
 export function isGridPanelLocation(location: PanelLocation | undefined): boolean {
   return location === undefined || GRID_MEMBER_BY_LOCATION[location];
@@ -279,6 +288,17 @@ interface BasePanelData {
   /** Persisted creation timestamp (milliseconds since epoch). */
   createdAt?: number;
   /**
+   * When true, this panel is excluded from persisted layout snapshots and from
+   * user-visible terminal surfaces (counts, switchers, bulk actions). Such
+   * panels are never rehydrated on app restart (e.g. Daintree assistant dock
+   * terminals, `location: "dialog"` panels). Independent of `removeOnExit`.
+   *
+   * Lives on the base shape, not `PtyPanelData`: non-PTY panels (the file
+   * viewer presented as a dialog) rely on it too, and a PTY-narrowed read
+   * would silently ignore the flag for them.
+   */
+  excludeFromPersistence?: boolean;
+  /**
    * Timestamp (ms) of the last user-initiated focus on this panel. Used by
    * panel restore to promote the most-recently-active panel per worktree to
    * the priority restore tier.
@@ -447,13 +467,6 @@ export interface PtyPanelData extends BasePanelData {
   /** Focus policy applied when this panel was created. */
   focusPolicy?: AddPanelFocusPolicy;
   /**
-   * When true, this panel is excluded from persisted layout snapshots and from
-   * user-visible terminal surfaces (counts, switchers, bulk actions). Such
-   * panels are never rehydrated on app restart (e.g. Daintree assistant dock
-   * terminals). Independent of `removeOnExit`.
-   */
-  excludeFromPersistence?: boolean;
-  /**
    * When true, this panel is removed immediately when its PTY exits instead of
    * being retained under the trash TTL. Independent of `excludeFromPersistence`.
    */
@@ -588,6 +601,12 @@ export interface FilePanelData extends BasePanelData {
   filePath?: string;
   /** Active view mode. Absent defaults to "source". */
   fileViewMode?: FileViewMode;
+  /**
+   * 1-based line to scroll to on first render. An open-time hint only —
+   * deliberately absent from `serializeFile`, so it never persists and a
+   * restored panel opens at the top rather than at a stale position.
+   */
+  initialLine?: number;
 }
 
 export type PanelInstance =

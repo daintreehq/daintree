@@ -38,6 +38,7 @@ import { addToWorktreeIndex, transferBetweenWorktreeIndex } from "./worktreeInde
 import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
 import { computeEnvProvenance } from "@shared/utils/agentLifecycleLedger";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
+import { countPanelsTowardLimit } from "./panelCount";
 
 // Lazy accessor to break circular dependency: addPanel -> projectStore -> panelPersistence -> addPanel.
 // Resolved on first call (after app init), then cached.
@@ -54,11 +55,7 @@ type Set = PanelRegistryStoreApi["setState"];
 type Get = PanelRegistryStoreApi["getState"];
 
 function countNonTrashTerminals(state: PanelRegistrySlice): number {
-  let count = 0;
-  for (const id of state.panelIds) {
-    if (state.panelsById[id]?.location !== "trash") count++;
-  }
-  return count;
+  return countPanelsTowardLimit(state.panelsById, state.panelIds);
 }
 
 const TERMINAL_STARTUP_ATTACH_TIMEOUT_MS = 2500;

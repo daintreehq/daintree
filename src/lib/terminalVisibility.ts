@@ -1,4 +1,3 @@
-import { isPtyPanel } from "@shared/types/panel";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 
 // Carrier element from the legacy `panelsById` shape, sourced through
@@ -23,10 +22,14 @@ export function isTerminalVisible(
   if (isInTrash(terminal.id)) return false;
   if (terminal.location === "trash") return false;
   if (terminal.location === "background") return false;
-  // Overlay panels (the Daintree Assistant) are never a member of the visible
-  // terminal set — counts, switchers, and waiting lists must skip them (#9699).
+  // Overlay panels (the Daintree Assistant) and dialog panels are never a
+  // member of the visible terminal set — counts, switchers, and waiting lists
+  // must skip them (#9699).
   if (terminal.location === "overlay") return false;
-  if (isPtyPanel(terminal) && terminal.excludeFromPersistence === true) return false;
+  if (terminal.location === "dialog") return false;
+  // Not PTY-narrowed: `excludeFromPersistence` lives on the base panel shape,
+  // and non-PTY panels (a file viewer presented as a dialog) carry it too.
+  if (terminal.excludeFromPersistence === true) return false;
   if (isTerminalOrphaned(terminal, worktreeIds)) return false;
   return true;
 }

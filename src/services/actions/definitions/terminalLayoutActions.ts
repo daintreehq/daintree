@@ -296,6 +296,9 @@ export function registerTerminalLayoutActions(
             // Overlay panels (the Daintree Assistant) are not dock/grid members;
             // including one would make `allDocked` permanently false (#9699).
             t.location !== "overlay" &&
+            // Same for dialog panels: one open file dialog would make
+            // `allDocked` false and turn "toggle" into a no-op "dock all".
+            t.location !== "dialog" &&
             (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
         );
       const allDocked = activeTerminals.every((t) => t!.location === "dock");

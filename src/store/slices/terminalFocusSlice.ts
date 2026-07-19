@@ -661,6 +661,10 @@ export const createTerminalFocusSlice =
         const terminals = getTerminals();
         const terminal = terminals.find((t) => t.id === id);
         if (!terminal) return;
+        // Dialog panels are owned by their modal host: focus follows the
+        // dialog's own trap, and the `else` branch below would otherwise treat
+        // this non-dock location as grid and hand it the grid focus pointer.
+        if (terminal.location === "dialog") return;
 
         // Wake-on-focus: recover this pane's renderer when activated. A first
         // reveal of a parked dock pane takes the full wake; a grid pane and an
@@ -708,10 +712,16 @@ export const createTerminalFocusSlice =
         const target = getTerminals().find((t) => t.id === previousFocusedId);
         if (!target) return;
         // Skip targets that are no longer reachable: trashed panels are
-        // pending TTL cleanup and background panels are hibernated mirrors,
-        // not user-visible. Activating either would surface a panel the user
+        // pending TTL cleanup, background panels are hibernated mirrors, and
+        // dialog panels live behind a modal that may already be closed — none
+        // are user-visible. Activating any would surface a panel the user
         // didn't expect or fail outright.
-        if (target.location === "trash" || target.location === "background") return;
+        if (
+          target.location === "trash" ||
+          target.location === "background" ||
+          target.location === "dialog"
+        )
+          return;
         activateTerminal(previousFocusedId);
       },
 

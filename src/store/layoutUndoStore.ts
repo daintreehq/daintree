@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { usePanelStore } from "./panelStore";
 import type { TabGroup } from "@shared/types";
+import type { PanelLocation } from "@shared/types/panel";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { buildWorktreeIndex } from "@/store/slices/panelRegistry/worktreeIndex";
 
@@ -10,7 +11,10 @@ const MAX_UNDO_HISTORY = 10;
 
 interface TerminalLayoutEntry {
   id: string;
-  location: "grid" | "dock" | "overlay" | "trash" | "background";
+  // Type-linked to the shared union rather than re-listing the members: a
+  // hand-copied literal union silently accepts a new `PanelLocation` value
+  // instead of forcing a decision here.
+  location: PanelLocation;
   worktreeId?: string;
 }
 
@@ -38,7 +42,16 @@ function captureCurrentLayout(): LayoutSnapshot {
   return {
     terminals: state.panelIds
       .map((id) => state.panelsById[id])
-      .filter((t): t is CarrierPanel => Boolean(t) && t!.location !== "trash")
+      // Ephemeral panels are excluded: a dialog panel captured here is gone the
+      // moment the dialog closes, and `applySnapshot` rejects a whole snapshot
+      // whose ids no longer resolve — one file peek would void the undo entry.
+      .filter(
+        (t): t is CarrierPanel =>
+          Boolean(t) &&
+          t!.location !== "trash" &&
+          t!.location !== "dialog" &&
+          t!.excludeFromPersistence !== true
+      )
       .map((t) => ({
         id: t.id,
         location: t.location,
@@ -73,7 +86,13 @@ function applySnapshot(snapshot: LayoutSnapshot): boolean {
   const postSnapshotEntries: TerminalLayoutEntry[] = [];
   for (const tid of panelIds) {
     const t = panelsById[tid];
-    if (t && !snapshotIds.has(t.id) && t.location !== "trash") {
+    if (
+      t &&
+      !snapshotIds.has(t.id) &&
+      t.location !== "trash" &&
+      t.location !== "dialog" &&
+      t.excludeFromPersistence !== true
+    ) {
       postSnapshotEntries.push({ id: t.id, location: t.location, worktreeId: t.worktreeId });
     }
   }

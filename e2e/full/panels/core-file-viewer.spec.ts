@@ -14,13 +14,18 @@ async function dispatchViewFile(ctx: AppContext, filePath: string, rootPath?: st
   // Normalize to forward slashes so the renderer's containment check works on Windows
   const normPath = filePath.replace(/\\/g, "/");
   const normRoot = (rootPath ?? fixtureDir).replace(/\\/g, "/");
+  // `file.view` opens the panel dialog directly now, so drive the action rather
+  // than the retired `daintree:view-file` window event. The action resolves once
+  // the panel exists; a missing file surfaces later as the pane's error state,
+  // so this does not reject for the not-found case.
   await ctx.window.evaluate(
-    ({ p, r }) => {
-      window.dispatchEvent(
-        new CustomEvent("daintree:view-file", { detail: { path: p, rootPath: r } })
-      );
-    },
-    { p: normPath, r: normRoot }
+    ([id, a]) =>
+      (
+        window as unknown as {
+          __daintreeDispatchAction: (id: string, a?: unknown) => unknown;
+        }
+      ).__daintreeDispatchAction(id, a),
+    ["file.view", { path: normPath, rootPath: normRoot }] as const
   );
 }
 
@@ -106,8 +111,11 @@ test.describe.serial("Core: File Viewer Modal", () => {
       })
       .toBe(true);
 
-    // Header should show the filename
-    await expect(dialog.locator("text=logo.png")).toBeVisible({ timeout: T_SHORT });
+    // Header should show the filename. Scoped to the heading: the panel's own
+    // toolbar also renders the path, so a bare text match is now ambiguous.
+    await expect(dialog.getByRole("heading", { name: /logo\.png/ })).toBeVisible({
+      timeout: T_SHORT,
+    });
 
     await closeDialog(ctx);
   });

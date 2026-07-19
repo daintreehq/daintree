@@ -152,6 +152,9 @@ const BROWSER_FIELD_CLASSIFICATION = {
   // serialization layer in panelToSnapshot, not per-kind serializers.
   createdAt: false,
   lastActiveAt: false,
+  // Ephemerality flag: consumed by the persistence filter to decide whether a
+  // panel is written at all, so it is never part of a snapshot's payload.
+  excludeFromPersistence: false,
 } as const satisfies Record<keyof BrowserPanelData, boolean>;
 
 // ── Dev-preview field classification ─────────────────────────────────
@@ -191,6 +194,9 @@ const DEV_PREVIEW_FIELD_CLASSIFICATION = {
   // serialization layer in panelToSnapshot, not per-kind serializers.
   createdAt: false,
   lastActiveAt: false,
+  // Ephemerality flag: consumed by the persistence filter to decide whether a
+  // panel is written at all, so it is never part of a snapshot's payload.
+  excludeFromPersistence: false,
 } as const satisfies Record<keyof DevPreviewSerializeInput, boolean>;
 
 // ── File field classification ────────────────────────────────────────
@@ -213,6 +219,12 @@ const FILE_FIELD_CLASSIFICATION = {
   // serialization layer in panelToSnapshot, not per-kind serializers.
   createdAt: false,
   lastActiveAt: false,
+  // Ephemerality flag: consumed by the persistence filter to decide whether a
+  // panel is written at all, so it is never part of a snapshot's payload.
+  excludeFromPersistence: false,
+  // Open-time scroll hint only — deliberately unserialized so a restored panel
+  // opens at the top rather than at a stale position.
+  initialLine: false,
 } as const satisfies Record<keyof FilePanelData, boolean>;
 
 // ── Built-in kind exhaustiveness ─────────────────────────────────────

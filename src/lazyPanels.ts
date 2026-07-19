@@ -179,11 +179,11 @@ export const LazyCelebrationConfetti = lazy(() =>
   preloadCelebrationConfetti().then((m) => ({ default: m.CelebrationConfetti }))
 );
 
-export function preloadFileViewerModalHost() {
-  return import("./components/FileViewer/FileViewerModalHost");
+export function preloadPanelDialogHost() {
+  return import("./components/Panel/PanelDialogHost");
 }
-export const LazyFileViewerModalHost = lazy(() =>
-  preloadFileViewerModalHost().then((m) => ({ default: m.FileViewerModalHost }))
+export const LazyPanelDialogHost = lazy(() =>
+  preloadPanelDialogHost().then((m) => ({ default: m.PanelDialogHost }))
 );
 
 export function preloadDiffViewerModalHost() {

@@ -12,6 +12,10 @@ import { HtmlViewer } from "@/components/Html/HtmlViewer";
 import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
 import { CodeViewer, type CodeViewerHandle } from "@/components/FileViewer/CodeViewer";
 import { FileViewerToolbar } from "@/components/FileViewer/FileViewerToolbar";
+import { FileImagePreview } from "@/components/FileViewer/FileImagePreview";
+import { isImageFilePath, isSvgFilePath } from "@/components/FileViewer/filePreviewKinds";
+import { sanitizeSvg } from "@shared/utils/svgSanitizer";
+import { formatBytes } from "@/lib/formatBytes";
 import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
@@ -52,7 +56,10 @@ function isUnderRoot(filePath: string, rootPath: string): boolean {
   return toForwardSlashes(filePath).startsWith(root);
 }
 
-type LoadState = "idle" | "loading" | "loaded" | "error";
+// "image" and "svg" are terminal preview states: an image is handed to the
+// `daintree-file://` protocol as an <img> src, and an SVG is read as text,
+// sanitized, then inlined. Neither has readable text content.
+type LoadState = "idle" | "loading" | "loaded" | "error" | "image" | "svg";
 
 const SEARCH_DEBOUNCE_MS = 150;
 const COPY_FEEDBACK_MS = 2000;
@@ -163,8 +170,13 @@ export function FilePane({
   }, [filePath, worktreePath, projectPath]);
 
   const [content, setContent] = useState<string | null>(null);
+  const [sanitizedSvg, setSanitizedSvg] = useState<string | null>(null);
   const [loadState, setLoadState] = useState<LoadState>("idle");
   const [errorCode, setErrorCode] = useState<FileReadErrorCode | null>(null);
+  // Overrides the code-derived copy for failures that no `FileReadErrorCode`
+  // describes (a readable file whose SVG content the sanitizer rejects).
+  // Mirrors FileViewerModal's `displayErrorMessage`.
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [pathCopied, setPathCopied] = useState(false);
   // Sandboxed-iframe preview URL for HTML files (#11191), minted by files:read.
   const [htmlPreviewUrl, setHtmlPreviewUrl] = useState<string | null>(null);
@@ -172,6 +184,14 @@ export function FilePane({
   // re-navigates — a rewritten report re-renders on refresh/focus. Bumping on
   // every load, not just entry-file changes, keeps relative assets fresh too.
   const [reloadNonce, setReloadNonce] = useState(0);
+
+  const metadata = useMemo(() => {
+    if (loadState !== "loaded" || content === null) return null;
+    return {
+      lineCount: content.split("\n").length,
+      sizeLabel: formatBytes(new TextEncoder().encode(content).byteLength),
+    };
+  }, [loadState, content]);
   const requestRef = useRef(0);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const markdownViewerRef = useRef<MarkdownViewerHandle>(null);
@@ -196,7 +216,20 @@ export function FilePane({
       if (!silent) {
         setLoadState("loading");
         setErrorCode(null);
+        setErrorMessage(null);
       }
+
+      // Raster images are served straight to an <img> by the protocol handler —
+      // reading them as text would just hit the binary-file guard.
+      if (isImageFilePath(filePath) && !isSvgFilePath(filePath)) {
+        setContent(null);
+        setSanitizedSvg(null);
+        setLoadState("image");
+        setErrorCode(null);
+        setErrorMessage(null);
+        return;
+      }
+
       filesClient
         .read({
           path: filePath,
@@ -205,6 +238,26 @@ export function FilePane({
         })
         .then(({ content: fileContent, htmlPreviewUrl: previewUrl }) => {
           if (requestRef.current !== requestId) return;
+          // SVG is text on disk but a picture on screen: sanitize before it can
+          // be inlined, and surface a sanitizer rejection as a load error
+          // rather than silently rendering nothing.
+          if (isSvgFilePath(filePath)) {
+            const sanitized = sanitizeSvg(fileContent);
+            if (sanitized.ok) {
+              setSanitizedSvg(sanitized.svg);
+              setContent(null);
+              setLoadState("svg");
+              setErrorCode(null);
+              setErrorMessage(null);
+            } else {
+              // The file read fine; its contents just aren't safe to inline.
+              setErrorCode("INVALID_PATH");
+              setErrorMessage(sanitized.error);
+              setLoadState("error");
+            }
+            return;
+          }
+          setSanitizedSvg(null);
           setContent((previous) => (previous === fileContent ? previous : fileContent));
           setHtmlPreviewUrl(previewUrl ?? null);
           // Re-navigate the preview frame on every successful load so a rewritten
@@ -214,6 +267,7 @@ export function FilePane({
           setReloadNonce((nonce) => nonce + 1);
           setLoadState("loaded");
           setErrorCode(null);
+          setErrorMessage(null);
         })
         .catch((error: unknown) => {
           if (requestRef.current !== requestId) return;
@@ -225,6 +279,7 @@ export function FilePane({
             code === "NOT_FOUND" || code === "PERMISSION" || code === "OUTSIDE_ROOT";
           if (silent && !permanent) return;
           setErrorCode(code);
+          setErrorMessage(null);
           setLoadState("error");
         });
     },
@@ -497,7 +552,9 @@ export function FilePane({
 
         {filePath && loadState === "error" && errorCode && (
           <div className="flex h-full flex-col items-center justify-center gap-3 p-6">
-            <p className="text-sm text-muted-foreground">{FILE_READ_ERROR_MESSAGES[errorCode]}</p>
+            <p className="text-sm text-muted-foreground">
+              {errorMessage ?? FILE_READ_ERROR_MESSAGES[errorCode]}
+            </p>
             <button
               type="button"
               onClick={() => loadFile(false)}
@@ -507,6 +564,20 @@ export function FilePane({
               Retry
             </button>
           </div>
+        )}
+
+        {filePath && (loadState === "image" || loadState === "svg") && (
+          <FileImagePreview
+            filePath={filePath}
+            rootPath={effectiveRootPath}
+            alt={fileName ?? filePath}
+            sanitizedSvg={loadState === "svg" ? sanitizedSvg : null}
+            onError={() => {
+              setErrorCode("NOT_FOUND");
+              setLoadState("error");
+            }}
+            maxHeightClassName="max-h-full"
+          />
         )}
 
         {filePath &&
@@ -534,6 +605,17 @@ export function FilePane({
             // min-h-full column (mirrors FileViewerModal): the editor surface
             // stretches to the bottom of the pane even for files shorter than it.
             <div className="flex min-h-full flex-col">
+              {/* Source mode always carries the metadata bar, markdown included —
+                  it describes the bytes on disk, which is exactly what source
+                  mode shows. Rendered mode omits it (the document is the view). */}
+              {metadata && (
+                <div
+                  data-testid="file-viewer-metadata"
+                  className="px-3 py-1 border-b border-daintree-border text-xs text-muted-foreground font-mono shrink-0"
+                >
+                  {metadata.lineCount} lines · {metadata.sizeLabel} · UTF-8
+                </div>
+              )}
               {isMarkdown ? (
                 <MarkdownViewer
                   ref={markdownViewerRef}
@@ -541,6 +623,7 @@ export function FilePane({
                   filePath={filePath}
                   rootPath={effectiveRootPath}
                   viewMode="source"
+                  initialLine={panel?.initialLine}
                   wrapLines={markdownWrapLines}
                   className="flex-1"
                 />
@@ -549,6 +632,7 @@ export function FilePane({
                   ref={codeViewerRef}
                   content={content}
                   filePath={filePath}
+                  initialLine={panel?.initialLine}
                   className="flex-1"
                 />
               )}

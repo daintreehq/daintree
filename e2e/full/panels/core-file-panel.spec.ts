@@ -54,14 +54,9 @@ async function dispatchAction(page: Page, actionId: string, args?: unknown): Pro
 async function dispatchViewFile(page: Page, filePath: string) {
   const normPath = filePath.replace(/\\/g, "/");
   const normRoot = fixtureDir.replace(/\\/g, "/");
-  await page.evaluate(
-    ({ p, r }) => {
-      window.dispatchEvent(
-        new CustomEvent("daintree:view-file", { detail: { path: p, rootPath: r } })
-      );
-    },
-    { p: normPath, r: normRoot }
-  );
+  // Drives the real action rather than a raw window event: `file.view` now
+  // opens the dialog directly, so the event is no longer a public seam.
+  await dispatchAction(page, "file.view", { path: normPath, rootPath: normRoot });
 }
 
 function filePanes(page: Page) {
@@ -137,7 +132,7 @@ test.describe.serial("Core: File viewer panel (dialog + panel)", () => {
 
   test("Open as panel promotes the dialog into a file grid panel, keeping the mode", async () => {
     const dialog = ctx.window.locator(SEL.fileViewer.dialog);
-    await dialog.locator('[data-testid="file-viewer-open-as-panel"]').click();
+    await dialog.locator(SEL.fileViewer.openAsPanel).click();
 
     await expect(dialog).not.toBeVisible({ timeout: T_MEDIUM });
 

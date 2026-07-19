@@ -14,6 +14,7 @@ import {
   collectRunningAgentTerminals,
   terminalHasRunningAgentSession,
 } from "@/utils/destructiveSessionConfirm";
+import { isEphemeralPanel } from "@/store/slices/panelRegistry/panelCount";
 
 function parseConfirmed(args: unknown): boolean {
   if (!args || typeof args !== "object") return false;
@@ -400,7 +401,7 @@ export function registerTerminalLifecycleActions(
       const idsToClose = state.panelIds.filter((id) => {
         const t = state.panelsById[id];
         if (!t) return false;
-        const isToolingInternal = isPtyPanel(t) && t.excludeFromPersistence === true;
+        const isToolingInternal = isEphemeralPanel(t);
         return (
           !isToolingInternal &&
           t.location !== "trash" &&
@@ -439,7 +440,7 @@ export function registerTerminalLifecycleActions(
         .map((id) => state.panelsById[id])
         .filter((t): t is NonNullable<typeof t> => {
           if (t == null) return false;
-          return !(isPtyPanel(t) && t.excludeFromPersistence === true);
+          return !isEphemeralPanel(t);
         });
       if (targets.length === 0) return;
       const runningAgents = collectRunningAgentTerminals(targets);
@@ -470,9 +471,16 @@ export function registerTerminalLifecycleActions(
     argsSchema: z.object({ confirmed: z.boolean().optional() }).optional(),
     run: async (args: unknown) => {
       const state = usePanelStore.getState();
+      // Location-only, deliberately narrower than `isEphemeralPanel`: this list
+      // must match what `bulkRestartAll` actually restarts, and that still
+      // includes `excludeFromPersistence` terminals like the assistant.
+      // Excluding them here alone would confirm one set and restart another.
       const targets = state.panelIds
         .map((id) => state.panelsById[id])
-        .filter((t): t is NonNullable<typeof t> => t != null && t.location !== "trash");
+        .filter(
+          (t): t is NonNullable<typeof t> =>
+            t != null && t.location !== "trash" && t.location !== "dialog"
+        );
       if (targets.length === 0) return;
       const runningAgents = collectRunningAgentTerminals(targets);
       if (!parseConfirmed(args) && runningAgents.length > 0) {

@@ -1394,7 +1394,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "files",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Open a file in the in-app file viewer modal (read-only, with optional line/column scroll). Args: \`path\` (required) — absolute or repo-relative file path; \`rootPath\` (optional) — repo root used to resolve a relative \`path\`; \`line\`/\`col\` (optional, positive ints) to scroll to a location. Returns nothing (fires the viewer event). Errors when \`path\` is missing. Use \`file.openInEditor\` instead to open in the external editor.",
+    "description": "Open a file in the in-app file viewer dialog (read-only, with optional line scroll). The dialog is ephemeral — it is never persisted, never counts toward the panel limit, and is never restored on restart; use its 'Open as panel' control to keep it in the grid. Args: \`path\` (required) — absolute or repo-relative file path; \`rootPath\` (optional) — repo root used to resolve a relative \`path\`; \`line\` (optional, positive int) to scroll to a line; \`col\` (optional, accepted for compatibility, does not affect scrolling). Returns { panelId }. Errors when \`path\` is missing. Use \`file.openPanel\` to open directly in the grid, or \`file.openInEditor\` for the external editor.",
     "examples": [
       {
         "args": {

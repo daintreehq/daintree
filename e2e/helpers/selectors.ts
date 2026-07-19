@@ -249,9 +249,13 @@ export const SEL = {
     startButton: '[aria-label="Start OpenCode"]',
   },
   fileViewer: {
-    dialog: '[data-testid="file-viewer-dialog"]',
+    // `file.view` renders the file panel inside the generic panel dialog host
+    // (#11239); the bespoke single-file modal is retired. The diff/changeSet
+    // path still uses `file-viewer-dialog` via FileDiffModal.
+    dialog: '[data-testid="panel-dialog"]',
     closeButton: '[aria-label="Close dialog"]',
     metadataBar: '[data-testid="file-viewer-metadata"]',
+    openAsPanel: '[data-testid="panel-dialog-open-as-panel"]',
     image: "img",
   },
   crashRecovery: {

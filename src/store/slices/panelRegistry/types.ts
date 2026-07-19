@@ -150,6 +150,20 @@ export interface PanelRegistrySlice {
 
   moveTerminalToDock: (id: string) => void;
   moveTerminalToGrid: (id: string) => boolean;
+  /**
+   * Promote a `location: "dialog"` panel into the grid, keeping the same panel
+   * id so the content the user is already reading carries over intact.
+   *
+   * Distinct from `moveTerminalToGrid`, which is a pure layout move with no
+   * admission check (#8805 removed the grid's fit cap). A dialog panel was
+   * never counted against the panel limit, so promoting it genuinely admits a
+   * new panel — this re-checks the hard ceiling and clears the ephemeral
+   * `excludeFromPersistence` flag in the same atomic commit.
+   *
+   * Returns false (leaving state untouched) if the panel is missing, is not a
+   * dialog panel, or the hard limit is already reached.
+   */
+  promoteDialogPanelToGrid: (id: string) => boolean;
   toggleTerminalLocation: (id: string) => void;
 
   trashPanel: (id: string) => void;

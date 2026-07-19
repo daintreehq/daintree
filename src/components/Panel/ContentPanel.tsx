@@ -41,7 +41,12 @@ export interface BasePanelProps {
   worktreeId?: string;
   isFocused: boolean;
   isMaximized?: boolean;
-  location?: "grid" | "dock";
+  /**
+   * Which presentation is rendering this panel. `"dialog"` means it is hosted
+   * inside a modal by `PanelDialogHost`, which supplies the surrounding chrome
+   * and its own header — so this panel draws neither.
+   */
+  location?: "grid" | "dock" | "dialog";
   isMultiPanelGrid?: boolean;
   onFocus: () => void;
   onClose: (force?: boolean) => void;
@@ -481,72 +486,79 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     [onFocus, onClick]
   );
 
-  return (
-    <TerminalContextMenu terminalId={id} forceLocation={location}>
-      <div
-        ref={setRootRef}
-        data-panel-id={id}
-        data-panel-location={location}
-        data-detected-process-id={detectedProcessId || undefined}
-        data-detected-agent-id={detectedAgentId || undefined}
-        data-launch-agent-id={agentId || undefined}
-        data-ever-detected-agent={everDetectedAgent ? "true" : undefined}
-        data-chrome-agent-id={terminalChrome.agentId || undefined}
-        data-agent-state={headerAgentState || undefined}
-        data-ambient-agent-state={ambientAgentState || undefined}
-        data-runtime-kind={terminalChrome.runtimeKind}
-        data-runtime-icon-id={terminalChrome.iconId || undefined}
-        data-selected={isSelected || undefined}
-        data-hibernated={isHibernated || undefined}
-        data-fleet-dimmed={isFleetDimmed || undefined}
-        style={{
-          contain: "content",
-          ...(worktreeAccentColor
-            ? ({ "--worktree-color": worktreeAccentColor } as React.CSSProperties)
-            : undefined),
-        }}
-        className={cn(
-          "flex flex-col h-full overflow-hidden group/panel",
-          location === "grid" && !isMaximized && "bg-surface",
-          (location === "dock" || isMaximized) && "bg-daintree-bg",
-          location === "grid" &&
-            !isMaximized &&
-            "rounded border shadow-[var(--theme-shadow-ambient)] transition-colors duration-300",
-          location === "grid" &&
-            !isMaximized &&
-            (showGridAttention && isVoiceArming
-              ? "panel-state-arming"
-              : showSelectedChrome && showGridAttention
-                ? "terminal-selected"
-                : showGridAttention && showGridAgentHighlights && blockedState === "waiting"
-                  ? "panel-state-waiting"
-                  : showGridAttention && showGridAgentHighlights && isWorkingState
-                    ? "panel-state-working"
-                    : showGridAttention && isHibernated
-                      ? "panel-state-hibernated"
-                      : "border-overlay hover:border-tint/[0.08]"),
-          location === "grid" && isMaximized && "border-0 rounded-none z-[var(--z-maximized)]",
-          worktreeAccentColor && location === "grid" && !isMaximized && "panel-worktree-identity",
-          // Voice-dictation lock border overrides ambient state colours so the
-          // pinned target stays unambiguously visible. Applied after the state
-          // ternary so its border-color/box-shadow wins by source order.
-          location === "grid" &&
-            !isMaximized &&
-            isVoiceDictationLocked &&
-            "panel-voice-dictation-locked",
-          isFleetDimmed && "fleet-pane-dimmed",
-          className
-        )}
-        onClick={handleClick}
-        onKeyDown={onKeyDown}
-        // -1 keeps the root out of the Tab sequence while making it a valid
-        // script-focus target; a plain div with no tabindex silently ignores
-        // .focus(). TerminalPane passes 0 explicitly and keeps it.
-        tabIndex={tabIndex ?? -1}
-        role={role}
-        aria-label={ariaLabel}
-        aria-selected={ariaSelected}
-      >
+  const panelSurface = (
+    <div
+      ref={setRootRef}
+      data-panel-id={id}
+      data-panel-location={location}
+      data-detected-process-id={detectedProcessId || undefined}
+      data-detected-agent-id={detectedAgentId || undefined}
+      data-launch-agent-id={agentId || undefined}
+      data-ever-detected-agent={everDetectedAgent ? "true" : undefined}
+      data-chrome-agent-id={terminalChrome.agentId || undefined}
+      data-agent-state={headerAgentState || undefined}
+      data-ambient-agent-state={ambientAgentState || undefined}
+      data-runtime-kind={terminalChrome.runtimeKind}
+      data-runtime-icon-id={terminalChrome.iconId || undefined}
+      data-selected={isSelected || undefined}
+      data-hibernated={isHibernated || undefined}
+      data-fleet-dimmed={isFleetDimmed || undefined}
+      style={{
+        contain: "content",
+        ...(worktreeAccentColor
+          ? ({ "--worktree-color": worktreeAccentColor } as React.CSSProperties)
+          : undefined),
+      }}
+      className={cn(
+        "flex flex-col h-full overflow-hidden group/panel",
+        location === "grid" && !isMaximized && "bg-surface",
+        // Dialog joins the dock/maximized bucket: AppDialog already draws the
+        // surface, border, radius, and shadow, so a second set here would
+        // read as a panel nested inside a panel.
+        (location === "dock" || location === "dialog" || isMaximized) && "bg-daintree-bg",
+        location === "grid" &&
+          !isMaximized &&
+          "rounded border shadow-[var(--theme-shadow-ambient)] transition-colors duration-300",
+        location === "grid" &&
+          !isMaximized &&
+          (showGridAttention && isVoiceArming
+            ? "panel-state-arming"
+            : showSelectedChrome && showGridAttention
+              ? "terminal-selected"
+              : showGridAttention && showGridAgentHighlights && blockedState === "waiting"
+                ? "panel-state-waiting"
+                : showGridAttention && showGridAgentHighlights && isWorkingState
+                  ? "panel-state-working"
+                  : showGridAttention && isHibernated
+                    ? "panel-state-hibernated"
+                    : "border-overlay hover:border-tint/[0.08]"),
+        location === "grid" && isMaximized && "border-0 rounded-none z-[var(--z-maximized)]",
+        worktreeAccentColor && location === "grid" && !isMaximized && "panel-worktree-identity",
+        // Voice-dictation lock border overrides ambient state colours so the
+        // pinned target stays unambiguously visible. Applied after the state
+        // ternary so its border-color/box-shadow wins by source order.
+        location === "grid" &&
+          !isMaximized &&
+          isVoiceDictationLocked &&
+          "panel-voice-dictation-locked",
+        isFleetDimmed && "fleet-pane-dimmed",
+        className
+      )}
+      onClick={handleClick}
+      onKeyDown={onKeyDown}
+      // -1 keeps the root out of the Tab sequence while making it a valid
+      // script-focus target; a plain div with no tabindex silently ignores
+      // .focus(). TerminalPane passes 0 explicitly and keeps it.
+      tabIndex={tabIndex ?? -1}
+      role={role}
+      aria-label={ariaLabel}
+      aria-selected={ariaSelected}
+    >
+      {/* The dialog presentation draws its own AppDialog.Header with the
+            title, close, and "Open as panel" controls. Rendering PanelHeader
+            too would duplicate title/close and expose grid-only affordances
+            (rename, move to dock, maximize, trash) that a modal can't honour. */}
+      {location !== "dialog" && (
         <PanelHeader
           isDragging={isDragging}
           id={id}
@@ -593,13 +605,24 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
           onAddTab={onAddTab}
           onTabReorder={onTabReorder}
         />
+      )}
 
-        {toolbar}
+      {toolbar}
 
-        <div className="flex-1 min-h-0 relative flex flex-col">{children}</div>
+      <div className="flex-1 min-h-0 relative flex flex-col">{children}</div>
 
-        {showExitPulse ? <span className="fleet-exit-pulse-overlay" aria-hidden="true" /> : null}
-      </div>
+      {showExitPulse ? <span className="fleet-exit-pulse-overlay" aria-hidden="true" /> : null}
+    </div>
+  );
+
+  // A dialog-presented panel gets no context menu: every command it offers is
+  // grid/dock-scoped (move to grid, rename, background, trash, remove) and
+  // would act on a panel the user can only see inside a modal.
+  if (location === "dialog") return panelSurface;
+
+  return (
+    <TerminalContextMenu terminalId={id} forceLocation={location}>
+      {panelSurface}
     </TerminalContextMenu>
   );
 });

@@ -3,6 +3,7 @@ import { systemClient } from "@/clients";
 import { filesClient } from "@/clients/filesClient";
 import { useProjectStore } from "@/store";
 import { usePanelStore } from "@/store/panelStore";
+import { usePanelDialogStore } from "@/store/panelDialogStore";
 import { isFilePanel } from "@shared/types/panel";
 import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
 import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
@@ -102,7 +103,7 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
     id: "file.view",
     title: "View File",
     description:
-      "Open a file in the in-app file viewer modal (read-only, with optional line/column scroll). Args: `path` (required) — absolute or repo-relative file path; `rootPath` (optional) — repo root used to resolve a relative `path`; `line`/`col` (optional, positive ints) to scroll to a location. Returns nothing (fires the viewer event). Errors when `path` is missing. Use `file.openInEditor` instead to open in the external editor.",
+      "Open a file in the in-app file viewer dialog (read-only, with optional line scroll). The dialog is ephemeral — it is never persisted, never counts toward the panel limit, and is never restored on restart; use its 'Open as panel' control to keep it in the grid. Args: `path` (required) — absolute or repo-relative file path; `rootPath` (optional) — repo root used to resolve a relative `path`; `line` (optional, positive int) to scroll to a line; `col` (optional, accepted for compatibility, does not affect scrolling). Returns { panelId }. Errors when `path` is missing. Use `file.openPanel` to open directly in the grid, or `file.openInEditor` for the external editor.",
     category: "files",
     kind: "command",
     danger: "safe",
@@ -119,12 +120,25 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
       },
     ],
     run: async (args: unknown) => {
-      const { path, rootPath, line, col } = args as z.infer<typeof viewArgsSchema>;
-      window.dispatchEvent(
-        new CustomEvent("daintree:view-file", {
-          detail: { path, rootPath, line, col },
-        })
-      );
+      const { path, rootPath, line } = viewArgsSchema.parse(args);
+      // Resolve before creating the record, matching file.openPanel: the panel
+      // stores an absolute path and has no root to resolve against later.
+      const absolutePath = resolveFilePanelPath(path, rootPath);
+      // Title the panel with the file name so the dialog header names the file.
+      // FilePane derives the same name for its own panel header, but the dialog
+      // header reads the stored title through the kind-agnostic host.
+      const fileName = absolutePath.split(/[/\\]/).filter(Boolean).pop();
+      const panelId = await usePanelDialogStore.getState().openPanelDialog({
+        kind: "file",
+        filePath: absolutePath,
+        worktreeId: callbacks.getActiveWorktreeId(),
+        ...(fileName && { title: fileName }),
+        ...(line != null && { initialLine: line }),
+      });
+      if (!panelId) {
+        throw new Error("Could not open the file viewer");
+      }
+      return { panelId };
     },
   }));
 
@@ -220,10 +234,14 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
           (panel) =>
             panel !== undefined &&
             isFilePanel(panel) &&
-            // Trashed panels are pending cleanup and background panels are
-            // hibernated mirrors — activating either surfaces nothing.
+            // Trashed panels are pending cleanup, background panels are
+            // hibernated mirrors, and dialog panels are ephemeral modal
+            // content — activating any of them surfaces nothing, and reusing a
+            // dialog panel here would hand the grid an uncounted, unpersisted
+            // record instead of opening a real panel.
             panel.location !== "trash" &&
             panel.location !== "background" &&
+            panel.location !== "dialog" &&
             panel.filePath === absolutePath
         );
       if (existing) {

@@ -32,13 +32,15 @@ export const createBackgroundActions = (
   backgroundTerminal: (id) => {
     const terminal = get().panelsById[id];
     if (!terminal) return;
-    // Overlay panels (the Daintree Assistant) self-manage and are never
-    // backgrounded — short-circuiting also prevents the `originalLocation`
-    // collapse below from recording a bogus "grid" restore target (#9699).
+    // Overlay panels (the Daintree Assistant) and dialog panels self-manage and
+    // are never backgrounded — short-circuiting also prevents the
+    // `originalLocation` collapse below from recording a bogus "grid" restore
+    // target (#9699).
     if (
       terminal.location === "trash" ||
       terminal.location === "background" ||
-      terminal.location === "overlay"
+      terminal.location === "overlay" ||
+      terminal.location === "dialog"
     )
       return;
 

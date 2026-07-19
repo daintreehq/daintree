@@ -19,6 +19,7 @@ import {
   WAIT_UNTIL_IDLE_BATCH_DESCRIPTION,
   WAIT_UNTIL_IDLE_BATCH_OUTPUT_SCHEMA,
 } from "@shared/types/terminalWaitUntilIdle";
+import { isEphemeralPanel } from "@/store/slices/panelRegistry/panelCount";
 export function registerTerminalQueryActions(
   actions: ActionRegistry,
   _callbacks: ActionCallbacks
@@ -52,10 +53,7 @@ export function registerTerminalQueryActions(
       // process during bulk operations.
       let terminals = state.panelIds
         .map((id) => state.panelsById[id])
-        .filter(
-          (t): t is PanelInstance =>
-            t !== undefined && (!isPtyPanel(t) || t.excludeFromPersistence !== true)
-        );
+        .filter((t): t is PanelInstance => t !== undefined && !isEphemeralPanel(t));
 
       // Filter by worktree if specified
       if (worktreeId) {
@@ -268,7 +266,7 @@ export function registerTerminalQueryActions(
           const t = getNarrowPanel(panelsById, id);
           // Treat tooling-internal panels as not found — they must never expose
           // state to MCP callers (mirrors terminal.list).
-          if (!t || (isPtyPanel(t) && t.excludeFromPersistence === true)) {
+          if (!t || isEphemeralPanel(t)) {
             resolved.push({ id, terminal: undefined });
           } else {
             resolved.push({ id, terminal: t });
@@ -277,10 +275,7 @@ export function registerTerminalQueryActions(
       } else {
         let terminals = state.panelIds
           .map((id) => panelsById[id])
-          .filter(
-            (t): t is PanelInstance =>
-              t !== undefined && (!isPtyPanel(t) || t.excludeFromPersistence !== true)
-          );
+          .filter((t): t is PanelInstance => t !== undefined && !isEphemeralPanel(t));
 
         if (worktreeId) {
           terminals = terminals.filter((t) => t.worktreeId === worktreeId);

@@ -46,7 +46,8 @@ import type { FileReadErrorCode } from "@shared/types/ipc/files";
 import type { GitStatus } from "@shared/types";
 import { isClientAppError } from "@/utils/clientAppError";
 import { sanitizeSvg } from "@shared/utils/svgSanitizer";
-import { createTrustedHTML } from "@/lib/trustedTypesPolicy";
+import { isImageFilePath as isImageFile, isSvgFilePath as isSvgFile } from "./filePreviewKinds";
+import { FileImagePreview } from "./FileImagePreview";
 import { logError } from "@/utils/logger";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import type { DiffFontSize, DiffViewType } from "@/store/preferencesStore";
@@ -109,22 +110,7 @@ const DIFF_FONT_SIZE_LABEL: Record<DiffFontSize, string> = {
 };
 type LoadState = "loading" | "loaded" | "error" | "image" | "svg";
 
-const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico"]);
-const SVG_EXTENSION = "svg";
 const COPY_FEEDBACK_MS = 2000;
-
-function isImageFile(filePath: string): boolean {
-  const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
-  return IMAGE_EXTENSIONS.has(ext) || ext === SVG_EXTENSION;
-}
-
-function isSvgFile(filePath: string): boolean {
-  return filePath.split(".").pop()?.toLowerCase() === SVG_EXTENSION;
-}
-
-function buildDaintreeFileUrl(filePath: string, rootPath: string): string {
-  return `daintree-file://load?path=${encodeURIComponent(filePath)}&root=${encodeURIComponent(rootPath)}`;
-}
 
 function IconToggle({
   pressed,
@@ -1358,24 +1344,13 @@ export function FileViewerModal({
             )}
 
             {isImageMode && !imageDiffEligible && (
-              <div className="flex items-center justify-center p-6 min-h-[300px]">
-                {loadState === "image" && (
-                  <img
-                    key={filePath}
-                    src={buildDaintreeFileUrl(filePath, effectiveRootPath)}
-                    alt={fileName}
-                    className="max-w-full max-h-[70vh] object-contain rounded"
-                    draggable={false}
-                    onError={handleImageError}
-                  />
-                )}
-                {loadState === "svg" && sanitizedSvg && (
-                  <div
-                    className="max-w-full max-h-[70vh] overflow-auto [&>svg]:max-w-full [&>svg]:h-auto"
-                    dangerouslySetInnerHTML={{ __html: createTrustedHTML(sanitizedSvg) }}
-                  />
-                )}
-              </div>
+              <FileImagePreview
+                filePath={filePath}
+                rootPath={effectiveRootPath}
+                alt={fileName}
+                sanitizedSvg={loadState === "svg" ? sanitizedSvg : null}
+                onError={handleImageError}
+              />
             )}
 
             {!isImageMode && (mode === "view" || mode === "rendered") && (

@@ -47,8 +47,14 @@ export const createTrashActions = (
 
     // Remove-on-exit panels (e.g. the help-panel assistant terminal) are bound
     // to a transient UI surface and must never linger in trash for the TTL
-    // window — they bypass the trash flow and are removed outright.
-    if (isPtyPanel(terminal) && terminal.removeOnExit === true) {
+    // window — they bypass the trash flow and are removed outright. Dialog
+    // panels are ephemeral on the same grounds: trashing one would record a
+    // bogus "grid" restore target below and leave it undoable back into the
+    // grid after its modal is gone.
+    if (
+      (isPtyPanel(terminal) && terminal.removeOnExit === true) ||
+      terminal.location === "dialog"
+    ) {
       get().removePanel(id);
       return;
     }

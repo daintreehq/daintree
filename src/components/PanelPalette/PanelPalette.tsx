@@ -8,6 +8,7 @@ import type { FuseResultMatch } from "@/hooks/useSearchablePalette";
 import { PanelKindIcon } from "./PanelKindIcon";
 import { usePanelStore } from "@/store/panelStore";
 import { usePanelLimitStore } from "@/store/panelLimitStore";
+import { countPanelsTowardLimit } from "@/store/slices/panelRegistry/panelCount";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 
 interface PanelPaletteProps {
@@ -93,14 +94,9 @@ export function PanelPalette({
     [onSelectPrevious, onSelectNext, onConfirm, onClose]
   );
 
-  const panelCount = usePanelStore((state) => {
-    let count = 0;
-    for (const id of state.panelIds) {
-      const t = state.panelsById[id];
-      if (t && t.location !== "trash") count++;
-    }
-    return count;
-  });
+  const panelCount = usePanelStore((state) =>
+    countPanelsTowardLimit(state.panelsById, state.panelIds)
+  );
   const hardLimit = usePanelLimitStore((state) => state.hardLimit);
   const panelPaletteShortcut = useEffectiveCombo("panel.palette");
   const showCounter = hardLimit > 0 && panelCount / hardLimit >= 0.75;
