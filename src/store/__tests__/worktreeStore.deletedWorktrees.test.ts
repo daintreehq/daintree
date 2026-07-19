@@ -61,6 +61,7 @@ describe("getDeletedWorktreeTerminalIds", () => {
       { id: "docked", worktreeId: "wt-1", location: "dock" },
       { id: "trashed", worktreeId: "wt-1", location: "trash" },
       { id: "assistant", worktreeId: "wt-1", location: "overlay" },
+      { id: "dialog", worktreeId: "wt-1", location: "dialog" },
       { id: "elsewhere", worktreeId: "wt-2" },
     ]);
 

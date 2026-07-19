@@ -222,7 +222,9 @@ describe("sweepDeletedWorktreeCleanup", () => {
     sweepDeletedWorktreeCleanup(makeDeps());
 
     expect(notify).toHaveBeenCalledTimes(1);
-    const payload = vi.mocked(notify).mock.calls[0][0];
+    const call = vi.mocked(notify).mock.calls[0];
+    expect(call).toBeDefined();
+    const payload = call![0];
     // Inbox-only: the sweep fires unattended, so it must never toast.
     expect(payload.priority).toBe("low");
     expect(payload.message).toContain("2 terminals");
@@ -234,7 +236,10 @@ describe("sweepDeletedWorktreeCleanup", () => {
     addRow({ expiresAt: NOW - 1 });
     sweepDeletedWorktreeCleanup(makeDeps());
 
-    const message = vi.mocked(notify).mock.calls[0][0].message;
+    expect(notify).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(notify).mock.calls[0];
+    expect(call).toBeDefined();
+    const message = call![0].message;
     expect(message).toContain("1 terminal ");
     expect(message).not.toContain("terminals");
   });

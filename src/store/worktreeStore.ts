@@ -94,7 +94,8 @@ export function getPinnedDeletedWorktreeIndex(worktreeId: string): number {
 /**
  * Terminals still held by a deleted worktree's row.
  *
- * Mirrors `bulkTrashByWorktree`'s filter exactly (trash + overlay excluded) so
+ * Mirrors `bulkTrashByWorktree`'s filter exactly (trash + overlay + dialog
+ * excluded) so
  * the count shown in the dismiss confirm always matches what dismissing
  * actually closes (#9699). Overlay panels are the Daintree Assistant, not
  * worktree sessions.
