@@ -402,6 +402,15 @@ function SettingsDialogInner({
     return true;
   };
 
+  // AppDialog-mediated closes (Escape, backdrop, the header's close button) have
+  // already flushed via onBeforeClose, so this only dismisses. Flushing again
+  // would re-issue every tab's persistence IPC and the full project save.
+  const handleDialogClose = () => {
+    onClose();
+  };
+
+  // Tab content closes the dialog directly, bypassing onBeforeClose — so this
+  // path owns its own flush.
   const handleClose = async () => {
     await flushDialog();
     onClose();
@@ -557,7 +566,7 @@ function SettingsDialogInner({
   return (
     <AppDialog
       isOpen={isOpen}
-      onClose={handleClose}
+      onClose={handleDialogClose}
       onBeforeClose={handleBeforeClose}
       size="4xl"
       maxHeight="h-[75vh]"

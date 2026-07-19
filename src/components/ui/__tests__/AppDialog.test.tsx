@@ -894,6 +894,9 @@ describe("AppDialog header composition", () => {
   beforeEach(() => {
     mockPrevOpen = false;
     _resetForTests();
+    // Earlier describes install fake timers and never restore them, so a
+    // whole-file run would otherwise leak them into `waitFor` below.
+    vi.useRealTimers();
     vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
   });
 
@@ -901,10 +904,8 @@ describe("AppDialog header composition", () => {
     _resetForTests();
   });
 
-  function labelledBy(): string | null {
-    return screen.getByTestId("test-dialog").getAttribute("aria-labelledby");
-  }
-
+  // Queried by accessible name rather than by comparing two nullable
+  // attributes: dropping the id, or the heading's text, has to fail these.
   it("labels the dialog by its title heading", () => {
     renderDialog({
       children: (
@@ -914,7 +915,7 @@ describe("AppDialog header composition", () => {
       ),
     });
 
-    expect(screen.getByRole("heading", { level: 2 }).getAttribute("id")).toBe(labelledBy());
+    expect(screen.getByRole("dialog", { name: "Named" })).toBe(screen.getByTestId("test-dialog"));
   });
 
   it("keeps the title wired when rendered as an h3", () => {
@@ -928,7 +929,8 @@ describe("AppDialog header composition", () => {
 
     // Settings renders its section title as an h3; the dialog must still
     // resolve its accessible name to that heading.
-    expect(screen.getByRole("heading", { level: 3 }).getAttribute("id")).toBe(labelledBy());
+    expect(screen.getByRole("heading", { level: 3 }).textContent).toBe("Section");
+    expect(screen.getByRole("dialog", { name: "Section" })).toBe(screen.getByTestId("test-dialog"));
   });
 
   it("labels the dialog from a title mounted outside the header", () => {
@@ -940,7 +942,44 @@ describe("AppDialog header composition", () => {
       ),
     });
 
-    expect(screen.getByRole("heading", { level: 2 }).getAttribute("id")).toBe(labelledBy());
+    expect(screen.getByRole("dialog", { name: "Standalone" })).toBe(
+      screen.getByTestId("test-dialog")
+    );
+  });
+
+  it("forwards a header class override to the rendered frame", () => {
+    // CrossWorktreeDiff restyles its header entirely through this prop; the
+    // primitive's own tests would not catch the adapter dropping it.
+    renderDialog({
+      children: (
+        <AppDialog.Header className="px-4 border-border-subtle">
+          <AppDialog.Title>Named</AppDialog.Title>
+        </AppDialog.Header>
+      ),
+    });
+    const header = screen.getByRole("heading").parentElement;
+
+    expect(header?.className).toContain("px-4");
+    expect(header?.className).not.toContain("px-6");
+  });
+
+  it("forwards a title icon and class override", () => {
+    // Nine dialogs pass a leading icon; the file viewers shrink the title.
+    renderDialog({
+      children: (
+        <AppDialog.Header>
+          <AppDialog.Title icon={<span data-testid="icon">*</span>} className="text-sm">
+            Named
+          </AppDialog.Title>
+        </AppDialog.Header>
+      ),
+    });
+    const heading = screen.getByRole("heading");
+
+    expect(screen.queryByTestId("icon")).not.toBeNull();
+    expect(heading.textContent).toBe("*Named");
+    expect(heading.className).toContain("text-sm");
+    expect(heading.className).not.toContain("text-lg");
   });
 
   it("defaults the close button label", () => {

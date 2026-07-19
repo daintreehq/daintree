@@ -1,12 +1,7 @@
 // @vitest-environment jsdom
 import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import {
-  SurfaceHeader,
-  SurfaceHeaderTitle,
-  SurfaceHeaderCloseButton,
-  surfaceHeaderVariants,
-} from "../SurfaceHeader";
+import { SurfaceHeader, SurfaceHeaderTitle, SurfaceHeaderCloseButton } from "../SurfaceHeader";
 
 // Utility-group helpers: assertions target the *relationships* between the
 // density variants rather than their literal class strings, so restyling the
@@ -19,15 +14,25 @@ function matching(el: HTMLElement, pattern: RegExp): string[] {
   return classesOf(el).filter((c) => pattern.test(c));
 }
 
-describe("surfaceHeaderVariants", () => {
-  it("defaults to the comfortable density", () => {
-    expect(surfaceHeaderVariants({})).toBe(surfaceHeaderVariants({ density: "comfortable" }));
-  });
-
-  it("emits a distinct class set per density", () => {
-    expect(surfaceHeaderVariants({ density: "compact" })).not.toBe(
-      surfaceHeaderVariants({ density: "comfortable" })
+describe("SurfaceHeader default density", () => {
+  it("renders an omitted density identically to an explicit comfortable one", () => {
+    // AppDialog.Header deliberately omits `density`, so the default is what
+    // every dialog in the app actually renders.
+    const { unmount } = render(
+      <SurfaceHeader data-testid="header">
+        <span>Title</span>
+      </SurfaceHeader>
     );
+    const defaulted = screen.getByTestId("header").className;
+    unmount();
+
+    render(
+      <SurfaceHeader density="comfortable" data-testid="header">
+        <span>Title</span>
+      </SurfaceHeader>
+    );
+
+    expect(screen.getByTestId("header").className).toBe(defaulted);
   });
 });
 
@@ -111,24 +116,25 @@ describe("SurfaceHeader composition", () => {
 });
 
 describe("SurfaceHeader className merging", () => {
-  it("lets a caller replace same-group density utilities", () => {
-    // Mirrors CrossWorktreeDiff's override shape.
+  it("leaves the caller as the sole winner in every group it overrides", () => {
+    // Mirrors CrossWorktreeDiff's override shape. Asserting group cardinality
+    // (not just presence) is what catches a merge that concatenates instead of
+    // replacing, leaving both utilities to fight in CSS source order.
     render(
       <SurfaceHeader data-testid="header" className="px-4 py-3 border-b border-border-subtle">
         <span>Title</span>
       </SurfaceHeader>
     );
-    const classes = classesOf(screen.getByTestId("header"));
+    const header = screen.getByTestId("header");
 
-    expect(classes).toContain("px-4");
-    expect(classes).toContain("py-3");
-    expect(classes).not.toContain("px-6");
-    expect(classes).not.toContain("py-4");
+    expect(matching(header, /^px-/)).toEqual(["px-4"]);
+    expect(matching(header, /^py-/)).toEqual(["py-3"]);
+    expect(matching(header, /^border-border-/)).toEqual(["border-border-subtle"]);
   });
 
-  it("keeps the plain background class alongside an important override", () => {
-    // The background lives on a bare CSS class, not a Tailwind utility, so
-    // `!bg-transparent` cascades over it instead of being merged away.
+  it("preserves a non-Tailwind class the caller did not override", () => {
+    // The background lives on a bare CSS class rather than a Tailwind utility,
+    // so twMerge must pass it through untouched for the cascade to reach it.
     render(
       <SurfaceHeader data-testid="header" className="!bg-transparent">
         <span>Title</span>
@@ -163,15 +169,11 @@ describe("SurfaceHeaderTitle", () => {
   });
 
   it("lets a caller override the default type scale", () => {
-    render(
-      <SurfaceHeaderTitle className="text-sm">
-        Compact
-      </SurfaceHeaderTitle>
-    );
-    const classes = classesOf(screen.getByRole("heading"));
+    // The file viewers rely on this to shrink the title; a merge that kept both
+    // sizes would resolve by stylesheet order rather than by the caller.
+    render(<SurfaceHeaderTitle className="text-sm">Compact</SurfaceHeaderTitle>);
 
-    expect(classes).toContain("text-sm");
-    expect(classes).not.toContain("text-lg");
+    expect(matching(screen.getByRole("heading"), /^text-(xs|sm|base|lg|xl)$/)).toEqual(["text-sm"]);
   });
 
   it("forwards an id so a dialog can point aria-labelledby at it", () => {

@@ -72,13 +72,15 @@ const SurfaceHeaderCloseButton = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <button
     ref={ref}
-    type="button"
     className={cn(
       "text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-raised transition-colors p-1 rounded",
       "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
       className
     )}
     {...props}
+    // After the spread: a cast-through `type: "submit"` would otherwise submit
+    // the surrounding form instead of closing the surface.
+    type="button"
   >
     <X className="h-5 w-5" />
   </button>
