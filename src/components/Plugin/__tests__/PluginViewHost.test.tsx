@@ -3,8 +3,10 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PanelKindConfig } from "@shared/config/panelKindRegistry";
 
-// Stub presentational deps — the host's behavioral contract is the lazy
-// import + AbortController wiring, not the skeleton or fade-in chrome.
+// Stub presentational deps — the skeleton and fade-in are incidental here. The
+// host's contract is panel adaptation: mapping panel props onto ContentPanel and
+// mounting the content component inside it. The lazy import and AbortController
+// wiring moved to PluginViewContent and are covered by its own suite (#11240).
 vi.mock("@/components/ui/Skeleton", () => ({
   Skeleton: ({ label }: { label?: string }) => <div data-testid="skeleton">{label}</div>,
   SkeletonHint: () => null,
@@ -241,38 +243,45 @@ describe("makePluginViewHost", () => {
       };
     });
 
-    const { makePluginViewHost } = await import("../PluginViewHost");
-    const Host = makePluginViewHost(makeConfig());
+    try {
+      const { makePluginViewHost } = await import("../PluginViewHost");
+      const Host = makePluginViewHost(makeConfig());
 
-    const initialArgs = { path: "/repo/src/index.ts", line: 12 };
-    render(
-      <Host
-        id="panel-args"
-        title="Dashboard"
-        isFocused={false}
-        onFocus={(): void => {}}
-        onClose={(): void => {}}
-        extensionState={initialArgs}
-      />
-    );
+      const initialArgs = { path: "/repo/src/index.ts", line: 12 };
+      render(
+        <Host
+          id="panel-args"
+          title="Dashboard"
+          isFocused={false}
+          onFocus={(): void => {}}
+          onClose={(): void => {}}
+          extensionState={initialArgs}
+        />
+      );
 
-    await waitFor(() => expect(screen.queryByTestId("plugin-view")).toBeTruthy());
-    expect(capturedProps).not.toHaveLength(0);
-    const props = capturedProps[capturedProps.length - 1]!;
-    expect(props.panelId).toBe("panel-args");
-    expect(props.pluginId).toBe("acme");
-    expect(props.initialArgs).toEqual(initialArgs);
-    // The bag is forwarded by reference from extensionState, not reconstructed.
-    expect(props.initialArgs).toBe(initialArgs);
-    vi.doUnmock("react");
+      await waitFor(() => expect(screen.queryByTestId("plugin-view")).toBeTruthy());
+      const props = capturedProps[capturedProps.length - 1]!;
+      expect(props.panelId).toBe("panel-args");
+      expect(props.pluginId).toBe("acme");
+      // The bag is forwarded by reference from extensionState, not reconstructed.
+      expect(props.initialArgs).toBe(initialArgs);
+    } finally {
+      // Unmock in `finally`: a failed assertion above would otherwise leak the
+      // capturing `lazy` into every later test in this file (`vi.resetModules`
+      // clears the module cache but not the registered mock).
+      vi.doUnmock("react");
+    }
   });
 
   it("keeps the plugin view mounted across panel prop changes (#11240)", async () => {
     // The content component type must be created once, at factory-construction
-    // scope. Building it inside the host's render — even behind useMemo — mints
-    // a new type per render, so React unmounts and remounts the plugin view (and
-    // restarts its `plugin://` import, and aborts its disposeSignal) every time
-    // a title or focus prop changes. The signal identity is the observable:
+    // scope. Constructing it during the host's render mints a new type per
+    // render, so React unmounts and remounts the plugin view — restarting its
+    // `plugin://` import and aborting its disposeSignal — every time a title or
+    // focus prop changes. (A `useMemo` with a stable dep array would survive
+    // ordinary rerenders, but it ties the component's identity to a hook that
+    // silently remounts the view the moment a dep changes; construction belongs
+    // outside the component entirely.) The signal identity is the observable:
     // a remount would hand the view a fresh, distinct controller.
     const signals: AbortSignal[] = [];
     vi.doMock("react", async () => {
@@ -502,21 +511,26 @@ describe("PluginViewHost panel integration (#11228)", () => {
       };
     });
 
-    const { makePluginViewHost } = await import("../PluginViewHost");
-    const Host = makePluginViewHost(makeConfig());
-    const onClose = vi.fn<() => void>();
+    try {
+      const { makePluginViewHost } = await import("../PluginViewHost");
+      const Host = makePluginViewHost(makeConfig());
+      const onClose = vi.fn<() => void>();
 
-    const { container } = render(<Host {...hostProps} onClose={onClose} onFocus={() => {}} />);
+      const { container } = render(<Host {...hostProps} onClose={onClose} onFocus={() => {}} />);
 
-    // The mocked ErrorBoundary renders its reset sentinel once it catches.
-    await waitFor(() => expect(screen.getByTestId("reset")).toBeTruthy());
-    // Chrome coexists with the fallback rather than being replaced by it.
-    expect(panelRoot(container)).toBeTruthy();
-    expect(container.querySelector("[data-pane-chrome]")).toBeTruthy();
+      // The mocked ErrorBoundary renders its reset sentinel once it catches.
+      await waitFor(() => expect(screen.getByTestId("reset")).toBeTruthy());
+      // Chrome coexists with the fallback rather than being replaced by it.
+      expect(panelRoot(container)).toBeTruthy();
+      expect(container.querySelector("[data-pane-chrome]")).toBeTruthy();
 
-    act(() => screen.getByTestId("panel-close").click());
-    expect(onClose).toHaveBeenCalled();
-    vi.doUnmock("react");
+      act(() => screen.getByTestId("panel-close").click());
+      expect(onClose).toHaveBeenCalled();
+    } finally {
+      // A failed assertion above would otherwise leak the crashing `lazy` into
+      // every later test in this file.
+      vi.doUnmock("react");
+    }
   });
 
   it("passes the plugin's own kind and the live panel title to the shell", async () => {

@@ -28,7 +28,7 @@ export interface PluginViewHostProps extends BasePanelProps {
  * panel. This is the *presentation adapter* only: it maps panel props onto
  * `ContentPanel` and delegates every plugin concern — activation, the lazy
  * `plugin://` import, the error boundary, and dispose-signal teardown — to
- * `PluginViewContent`, which carries no presentation of its own (#11240).
+ * `PluginViewContent`, which carries no panel chrome of its own (#11240).
  *
  * One host instance is created per plugin panel kind during
  * `usePluginPanelKinds` reconciliation, which caches it per

@@ -15,9 +15,10 @@ vi.mock("@/components/ui/ContentFadeIn", () => ({
 }));
 
 // Note what is absent: this suite mocks none of the worktree/preferences/tooltip
-// graph that ContentPanel needs, because the content layer renders no chrome at
-// all. If a future change reintroduces a ContentPanel dependency here, this file
-// stops resolving — which is the point (#11240).
+// graph that ContentPanel needs, because the content layer renders no panel
+// chrome at all. Reintroducing a ContentPanel wrap here would throw on render
+// (it reaches useWorktreeStore with no provider) rather than quietly pass —
+// which is the point (#11240).
 
 // The subset of ErrorBoundary's contract the content relies on. Typed here
 // rather than cast at each read site — a cast would regress the per-rule
@@ -195,39 +196,68 @@ describe("makePluginViewContent", () => {
     expect(cleanupSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("tolerates a panel-kinds-changed push that omits its kind without throwing", async () => {
+  it("aborts only when a panel-kinds push drops its kind, not on every push", async () => {
+    // The disposeSignal is the observable, not "didn't throw": an implementation
+    // that aborted on *every* broadcast would tear down a healthy plugin view
+    // whenever any unrelated plugin was installed, enabled, or removed — and a
+    // no-throw assertion would happily pass while it did.
     let emit: ((payload: { kinds: PanelKindConfig[] }) => void) | null = null;
     onPanelKindsChangedMock.mockImplementation((cb) => {
       emit = cb;
       return () => {};
     });
 
-    const { makePluginViewContent } = await import("../PluginViewContent");
-    const Content = makePluginViewContent(makeContentConfig());
+    const signals: AbortSignal[] = [];
+    vi.doMock("react", async () => {
+      const actual = await vi.importActual<typeof import("react")>("react");
+      return {
+        ...actual,
+        lazy: () =>
+          function CapturingView(props: { disposeSignal: AbortSignal }) {
+            if (!signals.includes(props.disposeSignal)) signals.push(props.disposeSignal);
+            return <div data-testid="plugin-view" />;
+          },
+      };
+    });
 
-    render(<Content panelId="panel-7" />);
+    try {
+      const { makePluginViewContent } = await import("../PluginViewContent");
+      const Content = makePluginViewContent(makeContentConfig());
 
-    await waitFor(() => expect(onPanelKindsChangedMock).toHaveBeenCalled());
+      render(<Content panelId="panel-7" />);
 
-    const registered: PanelKindConfig[] = [
-      {
-        id: "acme.dashboard",
-        name: "Dashboard",
-        iconId: "gauge",
-        color: "#abcdef",
-        hasPty: false,
-        canRestart: false,
-        canConvert: false,
-        extensionId: "acme",
-      },
-    ];
+      await waitFor(() => expect(onPanelKindsChangedMock).toHaveBeenCalled());
+      await waitFor(() => expect(signals).not.toHaveLength(0));
+      const signal = signals[0]!;
 
-    // Live push that still contains the kind: nothing observable changes.
-    expect(() => act(() => emit!({ kinds: registered }))).not.toThrow();
-    // Push without the kind: the content aborts its controller — this branch
-    // must complete without throwing even though the dynamic import never
-    // resolved in jsdom (Suspense is still showing the skeleton).
-    expect(() => act(() => emit!({ kinds: [] }))).not.toThrow();
+      const registered: PanelKindConfig[] = [
+        {
+          id: "acme.dashboard",
+          name: "Dashboard",
+          iconId: "gauge",
+          color: "#abcdef",
+          hasPty: false,
+          canRestart: false,
+          canConvert: false,
+          extensionId: "acme",
+        },
+      ];
+
+      // A push that still lists this kind must leave the live view untouched.
+      act(() => emit!({ kinds: registered }));
+      expect(signal.aborted).toBe(false);
+
+      // Dropping the kind is what disposes it.
+      act(() => emit!({ kinds: [] }));
+      expect(signal.aborted).toBe(true);
+
+      // A duplicate removal is idempotent — the broadcast can repeat, and
+      // aborting an already-aborted controller must stay a no-op.
+      expect(() => act(() => emit!({ kinds: [] }))).not.toThrow();
+      expect(signal.aborted).toBe(true);
+    } finally {
+      vi.doUnmock("react");
+    }
   });
 
   it("awaits plugin.activateForView with the kind id before importing the view module (#10523)", async () => {
@@ -345,19 +375,19 @@ describe("makePluginViewContent", () => {
       render(<Content panelId="panel-noact" />);
 
       await waitFor(() => expect(capturedFactory).toBeDefined());
-      // No activateForView present — the factory must not throw synchronously.
-      let threw = false;
-      const settled = (async () => {
-        try {
-          await capturedFactory!();
-        } catch {
-          // jsdom can't resolve the plugin:// import; that's expected here.
-        }
-      })().catch(() => {
-        threw = true;
-      });
-      await settled;
-      expect(threw).toBe(false);
+
+      // The factory still rejects here — jsdom can't resolve a `plugin://` URL —
+      // so "did it reject" proves nothing. What matters is the *cause*: with the
+      // optional chaining intact the missing binding is skipped and the failure
+      // comes from the import. Drop the `?.` and the factory instead dies on
+      // "activateForView is not a function" before reaching `import()`.
+      // Awaiting to settlement also lets the factory's `finally` clear the
+      // import timeout instead of leaking a live timer into the next test.
+      const cause: unknown = await capturedFactory!().then(
+        () => null,
+        (e: unknown) => e
+      );
+      expect(String(cause)).not.toMatch(/is not a function/);
       // The content still mounted its (stubbed) view rather than crashing.
       expect(screen.getByTestId("plugin-view")).toBeTruthy();
     } finally {
@@ -384,15 +414,22 @@ describe("makePluginViewContent", () => {
     // render a given generation more than once, and only the identity of the
     // signal handed to the view is contractual.
     const signals: AbortSignal[] = [];
+    // Count factory constructions: `lazy()` memoizes its import promise by
+    // factory identity, so a retry that reuses the old ref would replay the
+    // cached *failed* promise and never re-import. Only a fresh construction
+    // proves the reload actually happens (#9501).
+    const lazyCalls = { count: 0 };
     vi.doMock("react", async () => {
       const actual = await vi.importActual<typeof import("react")>("react");
       return {
         ...actual,
-        lazy: () =>
-          function CapturingView(props: { disposeSignal: AbortSignal }) {
+        lazy: () => {
+          lazyCalls.count += 1;
+          return function CapturingView(props: { disposeSignal: AbortSignal }) {
             if (!signals.includes(props.disposeSignal)) signals.push(props.disposeSignal);
             return <div data-testid="plugin-view" />;
-          },
+          };
+        },
       };
     });
 
@@ -405,12 +442,17 @@ describe("makePluginViewContent", () => {
       await waitFor(() => expect(signals).not.toHaveLength(0));
       const first = signals[0]!;
       expect(first.aborted).toBe(false);
+      const callsBeforeReset = lazyCalls.count;
+      const resetKeyBeforeReset = boundaryProps.last!.resetKeys?.[0];
 
       // Drive the very callback the boundary's "Try again" invokes. Going
       // through `onReset` rather than a thrown render keeps this deterministic:
-      // React's error-recovery re-render semantics are not the contract under
-      // test here, and the #11228 host suite already proves the boundary is
-      // wired to this handler.
+      // a synchronously throwing view double is incompatible with React's
+      // concurrent initial-mount recovery, which discards the uncommitted tree
+      // and re-runs the `useState` initializer, so a call-count-keyed double
+      // ends up mounting the generation it meant to skip. The wiring from the
+      // boundary to this handler is asserted separately, where the boundary's
+      // captured props are checked.
       const onReset = boundaryProps.last!.onReset;
       expect(onReset).toBeTypeOf("function");
       act(() => onReset!());
@@ -422,6 +464,11 @@ describe("makePluginViewContent", () => {
       // The discarded view's signal aborted at swap time, not at unmount.
       expect(first.aborted).toBe(true);
       expect(second.aborted).toBe(false);
+      // ...and the module is genuinely re-imported rather than the controller
+      // merely being swapped: a fresh `lazy()` ref, and a bumped reset key so
+      // the boundary clears its error state.
+      expect(lazyCalls.count).toBeGreaterThan(callsBeforeReset);
+      expect(boundaryProps.last!.resetKeys?.[0]).not.toBe(resetKeyBeforeReset);
 
       // Kind removal must abort the CURRENT controller, resolved through the ref
       // at call time rather than the one captured when the effect was set up.

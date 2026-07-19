@@ -61,8 +61,10 @@ function isPluginViewModule(mod: unknown): mod is { default: ComponentType<Panel
 
 /**
  * Build the chrome-free half of a plugin panel: activation, lazy `plugin://`
- * import, error boundary, and dispose-signal lifecycle, with no presentation
- * concerns at all. The surrounding host supplies the chrome — `ContentPanel`
+ * import, error boundary, and dispose-signal lifecycle. It still owns the UI
+ * those duties imply — the loading skeleton, the fade-in, and the diagnostics
+ * fallback — but none of the surrounding panel shell: no header, no focus
+ * target, no close control. The presentation host supplies that — `ContentPanel`
  * for grid/dock panes today, a dialog shell later (#11240 / #11239).
  *
  * Call this ONCE per kind, at factory-construction scope — never inside a
@@ -82,11 +84,12 @@ function isPluginViewModule(mod: unknown): mod is { default: ComponentType<Panel
  *     fresh state-held ref produces a new `lazy()` call so `import()` is
  *     re-evaluated rather than returning the cached failed promise.
  *
- * The dev-mode hot-reload mechanism (a versioned query-string) is intentionally
- * scoped to `import.meta.env.DEV`. V8 caches ESM module records by URL string
- * and Chromium has no way to evict an entry (Vite #14438 / Chromium #350426234,
- * unresolved as of 2026), so every dev iteration permanently expands the
- * renderer's module map. Acceptable for dev; never for production.
+ * `componentPath` is imported verbatim — there is deliberately no cache-busting
+ * query string. V8 caches ESM module records by URL and Chromium has no way to
+ * evict an entry (Vite #14438 / Chromium #350426234, unresolved as of 2026), so
+ * a per-load version parameter would permanently expand the renderer's module
+ * map. If dev-mode hot reload ever needs one, gate it on `import.meta.env.DEV`;
+ * it must never ship to production.
  */
 export function makePluginViewContent(
   config: PluginViewContentConfig
