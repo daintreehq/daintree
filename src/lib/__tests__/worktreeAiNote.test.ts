@@ -78,17 +78,17 @@ describe("deriveEffectiveNote", () => {
 
   it("keeps a main-worktree note that carries no timestamp", () => {
     // Without a timestamp there is no evidence of staleness to act on.
-    expect(
-      deriveEffectiveNote({ aiNote: "Undated note", isMainWorktree: true }, NOW)
-    ).toBe("Undated note");
+    expect(deriveEffectiveNote({ aiNote: "Undated note", isMainWorktree: true }, NOW)).toBe(
+      "Undated note"
+    );
   });
 });
 
 describe("deriveCommitMessageSeed", () => {
   it("takes only the first line", () => {
-    expect(
-      deriveCommitMessageSeed({ aiNote: "Add retry logic\n\nWhy: flaky network" }, NOW)
-    ).toBe("Add retry logic");
+    expect(deriveCommitMessageSeed({ aiNote: "Add retry logic\n\nWhy: flaky network" }, NOW)).toBe(
+      "Add retry logic"
+    );
   });
 
   it("trims the extracted line", () => {

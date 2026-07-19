@@ -4,12 +4,12 @@ import { usePanelStore } from "./panelStore";
 import { logError } from "@/utils/logger";
 
 /**
- * Owns the single panel currently presented as a modal dialog.
+ * Owns the panels currently presented as modal dialogs.
  *
- * The panel record itself lives in the normal panel registry under
+ * Each panel record lives in the normal panel registry under
  * `location: "dialog"` so panel components (which read their own state from
  * `panelsById`) render unmodified inside the dialog. This store only holds the
- * pointer to it, plus the lifecycle operations the host needs.
+ * pointers to them, plus the lifecycle operations the host needs.
  *
  * Lifecycle ownership is deliberate: open/close/promote are driven from here
  * (and from the host's handlers), never from the presented component's own
@@ -29,9 +29,10 @@ interface PanelDialogState {
    */
   dialogStack: string[];
   /**
-   * Monotonic open counter. `Number(panelId != null)` would stay `1` across
-   * back-to-back opens while a dialog is already open, so an ErrorBoundary
-   * keyed on it would never reset for the next file (#9918).
+   * Monotonic open counter. Stack depth would stay `1` across back-to-back
+   * opens while a dialog is already open, so an ErrorBoundary keyed on it
+   * would never reset for the next file (#9918). Shared by every frame, which
+   * is harmless: the boundary only re-keys while it is actually erroring.
    */
   requestSeq: number;
   /**
@@ -52,10 +53,7 @@ interface PanelDialogState {
    * Layering onto a stale parent would resurrect a dead surface, so a mismatch
    * refuses the push and returns null.
    */
-  pushPanelDialog: (
-    options: AddPanelOptions,
-    expectedParentId: string
-  ) => Promise<string | null>;
+  pushPanelDialog: (options: AddPanelOptions, expectedParentId: string) => Promise<string | null>;
   /** Close the topmost dialog and remove its ephemeral panel. */
   closePanelDialog: () => void;
   /**
@@ -115,6 +113,12 @@ export const usePanelDialogStore = create<PanelDialogState>((set, get) => ({
     if (dialogStack[dialogStack.length - 1] !== expectedParentId) return null;
 
     const requestedId = options.requestedId ?? `${options.kind}-${crypto.randomUUID()}`;
+
+    // A caller-supplied id already on the stack would sit there twice, giving
+    // the host duplicate React keys — which silently breaks the instance
+    // preservation layering exists for — and leaving a dangling entry behind
+    // when one copy is closed.
+    if (dialogStack.includes(requestedId)) return null;
 
     set((state) => ({
       dialogStack: [...state.dialogStack, requestedId],

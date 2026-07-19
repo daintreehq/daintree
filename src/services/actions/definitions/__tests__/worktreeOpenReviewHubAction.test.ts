@@ -4,7 +4,9 @@ import type { AddPanelOptions } from "@shared/types/addPanelOptions";
 import type { WorktreeState } from "@/types";
 import { MAIN_WORKTREE_NOTE_TTL_MS } from "@/lib/worktreeAiNote";
 
-const openPanelDialogMock = vi.hoisted(() => vi.fn<(o: AddPanelOptions) => Promise<string | null>>());
+const openPanelDialogMock = vi.hoisted(() =>
+  vi.fn<(o: AddPanelOptions) => Promise<string | null>>()
+);
 const worktreesMock = vi.hoisted(() => ({ current: new Map<string, Partial<WorktreeState>>() }));
 
 vi.mock("@/store/panelDialogStore", () => ({
@@ -155,8 +157,7 @@ describe("worktree.openReviewHub", () => {
       } as Partial<WorktreeState>);
       await getAction().run({ worktreeId: "wt-1" }, {} as ActionContext);
 
-      const seed = dialogOptions().kind === "review" ? dialogOptions() : undefined;
-      expect(seed).toMatchObject({ initialCommitMessage: "" });
+      expect(dialogOptions()).toMatchObject({ initialCommitMessage: "" });
     });
   });
 });

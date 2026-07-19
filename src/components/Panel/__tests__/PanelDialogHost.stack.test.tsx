@@ -41,20 +41,18 @@ vi.mock("@/panels/registry", () => ({
   getPanelKindDefinition: () => ({ component: StatefulPane }),
 }));
 
-vi.mock("@/components/ErrorBoundary", () => ({
-  ErrorBoundary: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-}));
+// The real ErrorBoundary on purpose: every frame's boundary is keyed on the
+// shared `requestSeq`, which bumps on every push. It only re-keys its children
+// while `hasError` is set, so a healthy parent is untouched — but that is
+// exactly the property these tests depend on, so exercise it rather than mock
+// it away.
 
 // AppDialog is exercised by its own suite; here it is a transparent shell so
 // these assertions are about the host's stack rendering, nothing else.
 vi.mock("@/components/ui/AppDialog", () => {
-  const AppDialog = ({
-    children,
-    zIndex,
-  }: {
-    children: React.ReactNode;
-    zIndex?: string;
-  }) => <div data-testid={`dialog-${zIndex ?? "modal"}`}>{children}</div>;
+  const AppDialog = ({ children, zIndex }: { children: React.ReactNode; zIndex?: string }) => (
+    <div data-testid={`dialog-${zIndex ?? "modal"}`}>{children}</div>
+  );
   AppDialog.Header = ({ children }: { children: React.ReactNode }) => <>{children}</>;
   AppDialog.Title = ({ children }: { children: React.ReactNode }) => <>{children}</>;
   AppDialog.CloseButton = () => <button>close</button>;

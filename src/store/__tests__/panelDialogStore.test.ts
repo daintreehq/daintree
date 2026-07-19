@@ -247,6 +247,21 @@ describe("panelDialogStore", () => {
       expect(addPanelMock).toHaveBeenCalledTimes(1);
     });
 
+    it("refuses to layer an id already on the stack", async () => {
+      const parent = await usePanelDialogStore
+        .getState()
+        .openPanelDialog({ kind: "review", requestedId: "review-1" });
+
+      // Duplicate ids would give the host duplicate React keys and strand an
+      // entry when one copy closes.
+      const pushed = await usePanelDialogStore
+        .getState()
+        .pushPanelDialog({ kind: "diff", requestedId: "review-1" }, parent!);
+
+      expect(pushed).toBeNull();
+      expect(stack()).toEqual(["review-1"]);
+    });
+
     it("refuses to layer when nothing is open", async () => {
       const pushed = await usePanelDialogStore
         .getState()
@@ -289,9 +304,7 @@ describe("panelDialogStore", () => {
   describe("stack-aware close, reconcile and promote", () => {
     async function openReviewWithDiff() {
       const parent = await usePanelDialogStore.getState().openPanelDialog({ kind: "review" });
-      const child = await usePanelDialogStore
-        .getState()
-        .pushPanelDialog({ kind: "diff" }, parent!);
+      const child = await usePanelDialogStore.getState().pushPanelDialog({ kind: "diff" }, parent!);
       return { parent: parent!, child: child! };
     }
 
