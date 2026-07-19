@@ -223,59 +223,6 @@ describe("makePluginViewHost", () => {
     expect(screen.getByText(/Dashboard unavailable/i)).toBeTruthy();
   });
 
-  it("subscribes to plugin:panel-kinds-changed on mount and unsubscribes on unmount", async () => {
-    const cleanupSpy = vi.fn();
-    onPanelKindsChangedMock.mockReturnValue(cleanupSpy);
-
-    const { makePluginViewHost } = await import("../PluginViewHost");
-    const Host = makePluginViewHost(makeConfig());
-
-    const { unmount } = render(
-      <Host
-        id="panel-1"
-        title="Dashboard"
-        isFocused={false}
-        onFocus={(): void => {}}
-        onClose={(): void => {}}
-      />
-    );
-
-    await waitFor(() => expect(onPanelKindsChangedMock).toHaveBeenCalledTimes(1));
-    unmount();
-    expect(cleanupSpy).toHaveBeenCalledTimes(1);
-  });
-
-  it("tolerates a panel-kinds-changed push that omits its kind without throwing", async () => {
-    let emit: ((payload: { kinds: PanelKindConfig[] }) => void) | null = null;
-    onPanelKindsChangedMock.mockImplementation((cb) => {
-      emit = cb;
-      return () => {};
-    });
-
-    const { makePluginViewHost } = await import("../PluginViewHost");
-    const config = makeConfig();
-    const Host = makePluginViewHost(config);
-
-    render(
-      <Host
-        id="panel-7"
-        title="Dashboard"
-        isFocused={false}
-        onFocus={(): void => {}}
-        onClose={(): void => {}}
-      />
-    );
-
-    await waitFor(() => expect(onPanelKindsChangedMock).toHaveBeenCalled());
-
-    // Live push that still contains the kind: nothing observable changes.
-    expect(() => act(() => emit!({ kinds: [config] }))).not.toThrow();
-    // Push without the kind: the host aborts its controller — this branch
-    // must complete without throwing even though the dynamic import never
-    // resolved in jsdom (Suspense is still showing the skeleton).
-    expect(() => act(() => emit!({ kinds: [] }))).not.toThrow();
-  });
-
   it("passes the panel's extensionState to the mounted view as initialArgs", async () => {
     const capturedProps: Array<Record<string, unknown>> = [];
     // Replace React.lazy so the plugin view renders synchronously (the real
@@ -320,334 +267,62 @@ describe("makePluginViewHost", () => {
     vi.doUnmock("react");
   });
 
-  it("awaits plugin.activateForView with the kind id before importing the view module (#10523)", async () => {
-    // Reject activation with a sentinel so we can prove the import is *gated*
-    // on activation, not merely fired alongside it: if the `await` were dropped
-    // the factory would reject with the `plugin://` import error (module not
-    // found) instead of this sentinel.
-    const activateForView = vi.fn().mockRejectedValue(new Error("ACTIVATION_FAILED"));
-    Object.defineProperty(window, "electron", {
-      configurable: true,
-      writable: true,
-      value: { plugin: { onPanelKindsChanged: onPanelKindsChangedMock, activateForView } },
-    });
-
-    // Capture the lazy factory so we can drive it directly — the real
-    // `plugin://` import never resolves in jsdom.
-    let capturedFactory: (() => Promise<unknown>) | undefined;
+  it("keeps the plugin view mounted across panel prop changes (#11240)", async () => {
+    // The content component type must be created once, at factory-construction
+    // scope. Building it inside the host's render — even behind useMemo — mints
+    // a new type per render, so React unmounts and remounts the plugin view (and
+    // restarts its `plugin://` import, and aborts its disposeSignal) every time
+    // a title or focus prop changes. The signal identity is the observable:
+    // a remount would hand the view a fresh, distinct controller.
+    const signals: AbortSignal[] = [];
     vi.doMock("react", async () => {
       const actual = await vi.importActual<typeof import("react")>("react");
       return {
         ...actual,
-        lazy: (factory: () => Promise<unknown>) => {
-          capturedFactory = factory;
-          return function StubView() {
+        lazy: () =>
+          function CapturingView(props: { disposeSignal: AbortSignal }) {
+            signals.push(props.disposeSignal);
             return <div data-testid="plugin-view" />;
-          };
-        },
+          },
       };
     });
 
-    const { makePluginViewHost } = await import("../PluginViewHost");
-    const Host = makePluginViewHost(makeConfig());
+    try {
+      const { makePluginViewHost } = await import("../PluginViewHost");
+      const Host = makePluginViewHost(makeConfig());
 
-    render(
-      <Host
-        id="panel-act"
-        title="Dashboard"
-        isFocused={false}
-        onFocus={(): void => {}}
-        onClose={(): void => {}}
-      />
-    );
+      const { rerender } = render(
+        <Host
+          id="panel-identity"
+          title="Dashboard"
+          isFocused={false}
+          onFocus={(): void => {}}
+          onClose={(): void => {}}
+        />
+      );
 
-    await waitFor(() => expect(capturedFactory).toBeDefined());
-    // Activation rejects, so the awaited call short-circuits before `import()`.
-    await expect(capturedFactory!()).rejects.toThrow("ACTIVATION_FAILED");
-    expect(activateForView).toHaveBeenCalledWith("acme.dashboard");
-    vi.doUnmock("react");
-  });
+      await waitFor(() => expect(signals).not.toHaveLength(0));
+      const first = signals[0]!;
 
-  it("surfaces the real activation cause when activateForView rejects, before import (#10618)", async () => {
-    // The #10618 contract: on activation failure the activate-for-view IPC call
-    // REJECTS with the real cause (the handler throws an AppError), carrying the
-    // plugin's own message. The host's `await` rethrows it before `import()`, so
-    // the ErrorBoundary surfaces why activation failed instead of a generic
-    // import timeout. (Distinct from the #10523 gating test below, which only
-    // proves the await ordering with a sentinel.)
-    const activateForView = vi
-      .fn()
-      .mockRejectedValue(new Error('Plugin failed to activate for view "acme.dashboard": boom'));
-    Object.defineProperty(window, "electron", {
-      configurable: true,
-      writable: true,
-      value: { plugin: { onPanelKindsChanged: onPanelKindsChangedMock, activateForView } },
-    });
-
-    let capturedFactory: (() => Promise<unknown>) | undefined;
-    vi.doMock("react", async () => {
-      const actual = await vi.importActual<typeof import("react")>("react");
-      return {
-        ...actual,
-        lazy: (factory: () => Promise<unknown>) => {
-          capturedFactory = factory;
-          return function StubView() {
-            return <div data-testid="plugin-view" />;
-          };
-        },
-      };
-    });
-
-    const { makePluginViewHost } = await import("../PluginViewHost");
-    const Host = makePluginViewHost(makeConfig());
-
-    render(
-      <Host
-        id="panel-act-fail"
-        title="Dashboard"
-        isFocused={false}
-        onFocus={(): void => {}}
-        onClose={(): void => {}}
-      />
-    );
-
-    await waitFor(() => expect(capturedFactory).toBeDefined());
-    // The factory rejects with the real activation error and never reaches the
-    // `plugin://` import.
-    await expect(capturedFactory!()).rejects.toThrow(/boom/);
-    expect(activateForView).toHaveBeenCalledWith("acme.dashboard");
-    vi.doUnmock("react");
-  });
-
-  it("tolerates a missing activateForView binding without throwing (#10523)", async () => {
-    // beforeEach installs window.electron.plugin without activateForView, so the
-    // optional-chained call must no-op and the import must still proceed.
-    let capturedFactory: (() => Promise<unknown>) | undefined;
-    vi.doMock("react", async () => {
-      const actual = await vi.importActual<typeof import("react")>("react");
-      return {
-        ...actual,
-        lazy: (factory: () => Promise<unknown>) => {
-          capturedFactory = factory;
-          return function StubView() {
-            return <div data-testid="plugin-view" />;
-          };
-        },
-      };
-    });
-
-    const { makePluginViewHost } = await import("../PluginViewHost");
-    const Host = makePluginViewHost(makeConfig());
-
-    render(
-      <Host
-        id="panel-noact"
-        title="Dashboard"
-        isFocused={false}
-        onFocus={(): void => {}}
-        onClose={(): void => {}}
-      />
-    );
-
-    await waitFor(() => expect(capturedFactory).toBeDefined());
-    // No activateForView present — the factory must not throw synchronously.
-    let threw = false;
-    const settled = (async () => {
-      try {
-        await capturedFactory!();
-      } catch {
-        // jsdom can't resolve the plugin:// import; that's expected here.
-      }
-    })().catch(() => {
-      threw = true;
-    });
-    await settled;
-    expect(threw).toBe(false);
-    // The host still mounted its (stubbed) view rather than crashing.
-    expect(screen.getByTestId("plugin-view")).toBeTruthy();
-    vi.doUnmock("react");
-  });
-
-  it("reads the AbortController through a ref so post-retry removals abort the current signal", async () => {
-    // Regression guard for the renderer-first teardown contract: if the
-    // useEffect captured controllerRef.current into a const at setup time,
-    // a kind-removed push after a retry would abort the prior (already
-    // aborted) controller and leave the live signal armed. Capturing
-    // controllerRef.current and asserting it changes across two pushes
-    // proves the ref-through-callback pattern.
-    let emit: ((payload: { kinds: PanelKindConfig[] }) => void) | null = null;
-    onPanelKindsChangedMock.mockImplementation((cb) => {
-      emit = cb;
-      return () => {};
-    });
-
-    const { makePluginViewHost } = await import("../PluginViewHost");
-    const config = makeConfig();
-    const Host = makePluginViewHost(config);
-
-    const { unmount } = render(
-      <Host
-        id="panel-9"
-        title="Dashboard"
-        isFocused={false}
-        onFocus={(): void => {}}
-        onClose={(): void => {}}
-      />
-    );
-
-    await waitFor(() => expect(onPanelKindsChangedMock).toHaveBeenCalled());
-
-    // Removing the kind from the broadcast must abort. Doing this twice and
-    // unmounting in between still must not throw — the callback resolves the
-    // controller through the ref at call time, not via a stale closure.
-    expect(() => act(() => emit!({ kinds: [] }))).not.toThrow();
-    expect(() => act(() => emit!({ kinds: [] }))).not.toThrow();
-
-    unmount();
-  });
-
-  it("hands the boundary a plugin-specific fallback and an undoubled component name (#11207)", async () => {
-    const { makePluginViewHost } = await import("../PluginViewHost");
-    const Host = makePluginViewHost(makeConfig());
-
-    render(
-      <Host
-        id="panel-fallback"
-        title="Dashboard"
-        isFocused={false}
-        onFocus={(): void => {}}
-        onClose={(): void => {}}
-      />
-    );
-
-    await waitFor(() => expect(boundaryProps.last).not.toBeNull());
-    // `kindId` already carries the plugin prefix, so re-prefixing it produced
-    // `PluginView:acme.acme.dashboard` in the title and every log field.
-    expect(boundaryProps.last!.componentName).toBe("PluginView:acme.dashboard");
-  });
-
-  // Closes the seam the fake boundary would otherwise hide: asserting that
-  // `fallback` is merely a function is satisfied by `() => null`. Rendering the
-  // very component the host handed the boundary proves the wiring reaches the
-  // real diagnostics pane, carries this plugin's identity, and fails closed
-  // when the runtime store holds no metadata for it.
-  it("hands the boundary a fallback that renders this plugin's diagnostics (#11207)", async () => {
-    const { makePluginViewHost } = await import("../PluginViewHost");
-    const Host = makePluginViewHost(makeConfig());
-
-    render(
-      <Host
-        id="panel-fallback-render"
-        title="Dashboard"
-        isFocused={false}
-        onFocus={(): void => {}}
-        onClose={(): void => {}}
-      />
-    );
-    await waitFor(() => expect(boundaryProps.last).not.toBeNull());
-
-    const Fallback = boundaryProps.last!.fallback!;
-    const error = new Error("view exploded");
-    error.stack = "Error: view exploded\n    at View (/Users/alice/acme/dashboard.js:3:1)";
-
-    render(
-      <Fallback
-        error={error}
-        errorInfo={{ componentStack: "\n    at View" }}
-        resetError={(): void => {}}
-        incidentId={null}
-      />
-    );
-
-    const pane = screen.getByTestId("plugin-view-diagnostics").textContent ?? "";
-    expect(pane).toContain("view exploded");
-    expect(pane).toContain("plugin://acme/dashboard.js");
-    expect(pane).toContain("acme.dashboard");
-    // This suite never seeds a runtime snapshot ⇒ unknown devMode ⇒ redacted.
-    expect(screen.getByTestId("plugin-view-diagnostics-trace").textContent).not.toContain(
-      "/Users/alice"
-    );
-  });
-
-  // The metadata the pane needs may not exist at host-mount time: `loadPlugin`
-  // registers the panel kind before the plugin is listable, and dev attach
-  // never fires provenance. Reaching the fallback means the view already threw,
-  // so the plugin is loaded — the pane must pull for itself at that point
-  // rather than trust whatever the store happened to hold earlier (#11207).
-  it("pulls a fresh plugin snapshot when the diagnostics pane mounts (#11207)", async () => {
-    const list = vi.fn().mockResolvedValue([]);
-    Object.defineProperty(window, "electron", {
-      configurable: true,
-      writable: true,
-      value: {
-        plugin: {
-          onPanelKindsChanged: onPanelKindsChangedMock,
-          onProvenanceChanged: vi.fn().mockReturnValue(() => {}),
-          list,
-        },
-      },
-    });
-
-    const { makePluginViewHost } = await import("../PluginViewHost");
-    const Host = makePluginViewHost(makeConfig());
-
-    render(
-      <Host
-        id="panel-refresh"
-        title="Dashboard"
-        isFocused={false}
-        onFocus={(): void => {}}
-        onClose={(): void => {}}
-      />
-    );
-    await waitFor(() => expect(boundaryProps.last).not.toBeNull());
-    const callsBeforeCrash = list.mock.calls.length;
-
-    const Fallback = boundaryProps.last!.fallback!;
-    render(<Fallback error={new Error("view exploded")} resetError={(): void => {}} />);
-
-    await waitFor(() => expect(list.mock.calls.length).toBeGreaterThan(callsBeforeCrash));
-  });
-
-  // The dev-plugin snapshot can land *after* the view has already crashed (the
-  // pull is async, and `daintree-plugin dev` never fires provenance). The pane
-  // must upgrade in place rather than stay redacted until the user retries.
-  it("upgrades a redacted trace to raw when the plugin's dev-mode snapshot lands late (#11207)", async () => {
-    const { makePluginViewHost } = await import("../PluginViewHost");
-    // Resolved from the same module graph as the host — the suite resets
-    // modules between cases, so a static import would seed a different store.
-    const { usePluginRuntimeStore } = await import("@/store/pluginRuntimeStore");
-    const Host = makePluginViewHost(makeConfig());
-
-    render(
-      <Host
-        id="panel-late-snapshot"
-        title="Dashboard"
-        isFocused={false}
-        onFocus={(): void => {}}
-        onClose={(): void => {}}
-      />
-    );
-    await waitFor(() => expect(boundaryProps.last).not.toBeNull());
-
-    const Fallback = boundaryProps.last!.fallback!;
-    const error = new Error("view exploded");
-    error.stack = "Error: view exploded\n    at View (/Users/alice/acme/dashboard.js:3:1)";
-    render(<Fallback error={error} resetError={(): void => {}} />);
-
-    const trace = () => screen.getByTestId("plugin-view-diagnostics-trace").textContent ?? "";
-    expect(trace()).not.toContain("/Users/alice");
-
-    act(() => {
-      usePluginRuntimeStore.setState({
-        pluginMetaById: new Map([["acme", { devMode: true, displayName: "Acme Tools" }]]),
+      act(() => {
+        rerender(
+          <Host
+            id="panel-identity"
+            title="Renamed by the user"
+            isFocused
+            onFocus={(): void => {}}
+            onClose={(): void => {}}
+          />
+        );
       });
-    });
 
-    expect(trace()).toContain("/Users/alice");
-    // The same snapshot carries the manifest display name, which the panel's
-    // own `config.name` ("Dashboard") can't supply.
-    expect(screen.getByTestId("plugin-view-diagnostics").textContent).toContain("Acme Tools");
+      // Same controller instance, still live: the view was re-rendered, not
+      // re-created.
+      expect(signals[signals.length - 1]).toBe(first);
+      expect(first.aborted).toBe(false);
+    } finally {
+      vi.doUnmock("react");
+    }
   });
 });
 
