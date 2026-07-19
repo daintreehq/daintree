@@ -13,6 +13,7 @@ import {
   repoStatsAndPageSnapshotCache,
   forgeIssueListCache,
   forgePRListCache,
+  prRequiredStatusCache,
   issueListCache,
   prListCache,
   getRepoListEpoch,
@@ -114,6 +115,31 @@ describe("clearGitHubCaches / clearPRCaches symmetry", () => {
     clearGitHubCaches();
     expect(getETagCacheVersion()).toBeGreaterThan(before);
   });
+
+  // The PR list and the required-status cache jointly back one rendered CI
+  // status: `listPRsImpl` enriches its rows from `prRequiredStatusCache`
+  // before caching the page (#11251). Clearing one without the other would
+  // leave a refreshed list re-enriched from stale required-check entries, or a
+  // cleared status cache shadowed by an already-enriched page — the two-caches-
+  // out-of-step failure mode from #9061.
+  for (const [name, clear] of [
+    ["clearGitHubCaches", clearGitHubCaches],
+    ["clearPRCaches", clearPRCaches],
+  ] as const) {
+    it(`${name} clears the PR list and required-status caches together`, () => {
+      forgePRListCache.set("owner/repo:pr:open:created:", {
+        items: [],
+        nextCursor: null,
+        hasMore: false,
+      } as Page<PR>);
+      prRequiredStatusCache.set("owner/repo:1", { ciStatus: "SUCCESS", ciSummary: undefined });
+
+      clear();
+
+      expect(forgePRListCache.get("owner/repo:pr:open:created:")).toBeUndefined();
+      expect(prRequiredStatusCache.get("owner/repo:1")).toBeUndefined();
+    });
+  }
 });
 
 describe("polling-optimization caches (issues #8757, #9041)", () => {
