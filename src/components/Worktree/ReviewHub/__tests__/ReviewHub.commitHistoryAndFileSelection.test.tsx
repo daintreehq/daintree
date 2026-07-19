@@ -110,63 +110,6 @@ vi.mock("@/hooks", () => ({
   useTruncationDetection: vi.fn(() => ({ ref: vi.fn(), isTruncated: false })),
 }));
 
-interface CapturedNavProps {
-  filePath: string;
-  currentFileIndex?: number;
-  totalFileCount?: number;
-  onNavigateFile?: (delta: -1 | 1) => void;
-}
-
-const { fileDiffModalOpenHistory, fileDiffModalLastFilePath } = vi.hoisted(() => ({
-  fileDiffModalOpenHistory: { value: [] as boolean[] },
-  fileDiffModalLastFilePath: { value: null as string | null },
-}));
-const fileDiffModalNavCapture = vi.hoisted((): { value: CapturedNavProps | null } => ({
-  value: null,
-}));
-const baseBranchModalNavCapture = vi.hoisted((): { value: CapturedNavProps | null } => ({
-  value: null,
-}));
-vi.mock("../../FileDiffModal", () => ({
-  FileDiffModal: ({
-    isOpen,
-    filePath,
-    currentFileIndex,
-    totalFileCount,
-    onNavigateFile,
-  }: { isOpen: boolean } & CapturedNavProps) => {
-    fileDiffModalOpenHistory.value.push(isOpen);
-    if (isOpen) {
-      fileDiffModalLastFilePath.value = filePath;
-      fileDiffModalNavCapture.value = {
-        filePath,
-        currentFileIndex,
-        totalFileCount,
-        onNavigateFile,
-      };
-    }
-    return null;
-  },
-}));
-vi.mock("../BaseBranchDiffModal", () => ({
-  BaseBranchDiffModal: ({
-    isOpen,
-    filePath,
-    currentFileIndex,
-    totalFileCount,
-    onNavigateFile,
-  }: { isOpen: boolean } & CapturedNavProps) => {
-    if (isOpen) {
-      baseBranchModalNavCapture.value = {
-        filePath,
-        currentFileIndex,
-        totalFileCount,
-        onNavigateFile,
-      };
-    }
-    return null;
-  },
-}));
 
 vi.mock("@/hooks/useWorktreeStore", () => ({
   useWorktreeStore: (selector: (state: { worktrees: Map<string, WorktreeState> }) => unknown) =>
@@ -374,6 +317,14 @@ const makeWorktreeState = (path = WORKTREE_PATH): WorktreeState =>
  * (#8242). The push-error CTA only opens the dialog; clicking its
  * `Pull and rebase` confirm button is what reaches the IPC.
  */
+
+const openPanelDialogMock = vi.hoisted(() => vi.fn(async () => "diff-panel-1"));
+vi.mock("@/store/panelDialogStore", () => ({
+  usePanelDialogStore: Object.assign(
+    (selector: (s: unknown) => unknown) => selector({ panelId: null }),
+    { getState: () => ({ openPanelDialog: openPanelDialogMock, closePanelDialog: vi.fn() }) }
+  ),
+}));
 
 describe("ReviewHub", () => {
   let capturedUpdateCallback: ((state: WorktreeState) => void) | null = null;
@@ -807,8 +758,7 @@ describe("ReviewHub", () => {
       expect(stillThere.checked).toBe(true);
     });
 
-    it("does not open the diff modal when the Viewed checkbox is clicked", async () => {
-      fileDiffModalOpenHistory.value = [];
+    it("does not open the diff panel when the Viewed checkbox is clicked", async () => {
       render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByText("index.ts"));
@@ -816,13 +766,12 @@ describe("ReviewHub", () => {
       const indexCheckbox = screen.getByRole("checkbox", {
         name: "Mark src/index.ts as viewed",
       });
-      fileDiffModalOpenHistory.value = [];
+      openPanelDialogMock.mockClear();
 
       fireEvent.click(indexCheckbox);
 
-      // FileDiffModal is rendered with isOpen=true only when selectedFile is set.
-      // After the checkbox click, none of its renders should have isOpen=true.
-      expect(fileDiffModalOpenHistory.value.some((o) => o === true)).toBe(false);
+      // Marking a file viewed must not select it — only a row click does that.
+      expect(openPanelDialogMock).not.toHaveBeenCalled();
     });
 
     it("tracks Viewed state independently for staged and unstaged copies of the same path", async () => {

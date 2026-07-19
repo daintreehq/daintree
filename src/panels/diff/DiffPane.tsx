@@ -33,29 +33,34 @@ export interface DiffPaneProps extends BasePanelProps {
   onAddTab?: () => void;
 }
 
-/** Build the fetch subject for one file, or null when there is nothing to show. */
+/**
+ * Build the fetch subject for one file, or null when there is nothing to show.
+ * Takes the panel's fields rather than the panel so callers can memoize on
+ * primitives — the panel object is rebuilt on every worktree poll.
+ */
 function buildSubject(
-  panel: DiffPanelData | undefined,
+  diffSource: DiffPanelData["diffSource"],
+  panelBaseBranch: string | undefined,
   worktreePath: string,
   filePath: string | undefined,
   status: GitStatus | undefined,
   currentBranch: string
 ): DiffSubject | null {
-  if (!panel || !worktreePath || !filePath) return null;
-  if (panel.diffSource === "base-branch") {
+  if (!worktreePath || !filePath) return null;
+  if (diffSource === "base-branch") {
     // Without both refs there is no comparison to make; render the empty state
     // rather than asking git to diff against undefined.
-    if (!panel.baseBranch || !currentBranch) return null;
+    if (!panelBaseBranch || !currentBranch) return null;
     return {
       source: "base-branch",
       worktreePath,
       filePath,
-      baseBranch: panel.baseBranch,
+      baseBranch: panelBaseBranch,
       currentBranch,
     };
   }
   return {
-    source: panel.diffSource ?? "working-tree",
+    source: diffSource ?? "working-tree",
     worktreePath,
     filePath,
     status: status ?? "modified",
@@ -114,8 +119,16 @@ export function DiffPane({
   const filePath = panel?.filePath;
   const fileStatus = panel?.fileStatus;
   const changeSet = panel?.changeSet;
+  const diffSource = panel?.diffSource;
+  const panelBaseBranch = panel?.baseBranch;
 
-  const subject = buildSubject(panel, worktreePath, filePath, fileStatus, currentBranch);
+  // Memoized on primitives so the subject identity only moves when what we're
+  // diffing does — `useDiffContent` refetches on subject identity.
+  const subject = useMemo(
+    () =>
+      buildSubject(diffSource, panelBaseBranch, worktreePath, filePath, fileStatus, currentBranch),
+    [diffSource, panelBaseBranch, worktreePath, filePath, fileStatus, currentBranch]
+  );
   const isWorkspace = (changeSet?.length ?? 0) > 1;
 
   // Resolved by identity, never stored: a change set rebuilt from a later poll
@@ -163,11 +176,14 @@ export function DiffPane({
   );
 
   // Warms the next file's diff so forward stepping renders from cache.
-  const nextSubject = useMemo(() => {
-    const entry = changeSet?.[currentIndex + 1];
-    if (!entry || currentIndex === -1) return null;
-    return buildSubject(panel, worktreePath, entry.path, entry.status, currentBranch);
-  }, [changeSet, currentIndex, panel, worktreePath, currentBranch]);
+  const nextEntry = currentIndex === -1 ? undefined : changeSet?.[currentIndex + 1];
+  const nextPath = nextEntry?.path;
+  const nextStatus = nextEntry?.status;
+  const nextSubject = useMemo(
+    () =>
+      buildSubject(diffSource, panelBaseBranch, worktreePath, nextPath, nextStatus, currentBranch),
+    [diffSource, panelBaseBranch, worktreePath, nextPath, nextStatus, currentBranch]
+  );
 
   const { content, stale, retry } = useDiffContent(subject, nextSubject);
 
@@ -188,7 +204,8 @@ export function DiffPane({
   }, [filePath]);
 
   const hasPrevFile = isWorkspace && currentIndex > 0;
-  const hasNextFile = isWorkspace && currentIndex !== -1 && currentIndex < (changeSet?.length ?? 0) - 1;
+  const hasNextFile =
+    isWorkspace && currentIndex !== -1 && currentIndex < (changeSet?.length ?? 0) - 1;
 
   // `[` / `]` step files and `v` marks the current file viewed — the same keys
   // the modal bound, scoped to this panel so a background one stays inert.
@@ -198,7 +215,10 @@ export function DiffPane({
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       const target = event.target as HTMLElement | null;
-      if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) {
+      if (
+        target &&
+        (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))
+      ) {
         return;
       }
       if (event.key === "[") {
@@ -220,7 +240,9 @@ export function DiffPane({
   const isImageMode = Boolean(
     filePath && fileStatus && isImageDiffCandidate(filePath) && panel?.diffSource !== "base-branch"
   );
-  const hasDiff = Boolean(content && content.trim() && content !== "NO_CHANGES" && content !== "ERROR");
+  const hasDiff = Boolean(
+    content && content.trim() && content !== "NO_CHANGES" && content !== "ERROR"
+  );
 
   const fileName = filePath?.split(/[/\\]/).filter(Boolean).pop();
   const displayTitle = panel?.titleMode === "user" ? title : (fileName ?? title);

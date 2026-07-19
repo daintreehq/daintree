@@ -55,8 +55,6 @@ vi.mock("@/hooks", () => ({
   useTruncationDetection: vi.fn(() => ({ ref: vi.fn(), isTruncated: false })),
 }));
 
-vi.mock("../../FileDiffModal", () => ({ FileDiffModal: () => null }));
-vi.mock("../BaseBranchDiffModal", () => ({ BaseBranchDiffModal: () => null }));
 
 vi.mock("@/hooks/useWorktreeStore", () => ({
   useWorktreeStore: (selector: (state: { worktrees: Map<string, WorktreeState> }) => unknown) =>

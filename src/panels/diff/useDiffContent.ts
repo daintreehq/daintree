@@ -23,6 +23,9 @@ export interface UseDiffContentResult {
  * Owns one diff panel's content: fetch, request sequencing, freshness tracking
  * and the next-file prefetch. The bounded LRU behind it is module-scoped and
  * shared by every panel (see `diffContentCache`).
+ *
+ * Both subjects are depended on by identity, so callers must memoize them —
+ * an object rebuilt each render refetches each render.
  */
 export function useDiffContent(
   subject: DiffSubject | null,
@@ -94,18 +97,13 @@ export function useDiffContent(
         setContent("ERROR");
       }
     },
-    // `subjectKey` stands in for `subject`: the object identity changes every
-    // render, the key only when what we're diffing actually changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [subjectKey, ignoreWhitespace, worktreeStore]
+    [subject, ignoreWhitespace, worktreeStore]
   );
 
   const retry = useCallback(() => {
     void fetchDiff(true);
   }, [fetchDiff]);
 
-  // Keyed on `subjectKey`, not `subject`: the object is rebuilt every render,
-  // so depending on it would refetch on every render.
   useEffect(() => {
     if (subjectKey === null) {
       setContent(undefined);
@@ -115,7 +113,6 @@ export function useDiffContent(
       return;
     }
     void fetchDiff(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [subjectKey, fetchDiff]);
 
   // Once the current diff has landed and the user has dwelled on it, warm the
@@ -123,7 +120,6 @@ export function useDiffContent(
   // skeleton. The dwell timer keeps rapid scrubbing from bursting requests
   // against the shared gitOps rate limit; failures are silently dropped — the
   // foreground fetch will retry and surface its own error.
-  const nextKey = nextSubject ? diffCacheKey(nextSubject, ignoreWhitespace) : null;
   useEffect(() => {
     if (!nextSubject || content === undefined || content === "ERROR") return;
     const timer = window.setTimeout(() => {
@@ -139,8 +135,7 @@ export function useDiffContent(
       );
     }, PREFETCH_DWELL_MS);
     return () => window.clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nextKey, content, worktreeStore, ignoreWhitespace]);
+  }, [nextSubject, content, worktreeStore, ignoreWhitespace]);
 
   // Stale = the store saw the file change after the shown diff was fetched.
   // Undefined keys (unprovided host, untracked worktree, store not yet
