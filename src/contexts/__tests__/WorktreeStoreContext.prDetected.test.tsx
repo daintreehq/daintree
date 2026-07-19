@@ -225,6 +225,42 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
     expect(getGeneration(key)).toBe(genBefore);
   });
 
+  it("leaves the cache untouched when only the CI status changes", async () => {
+    // The state-change case above would still pass against a narrower
+    // reintroduction that patched CI only when the row's state still matched
+    // the event. This covers that branch: same state, different CI, and the
+    // cached row must still be untouched.
+    const store = await renderProvider();
+    act(() => {
+      store.getState().applyUpdate(makeWorktree("wt-1"), nextV());
+    });
+
+    const key = buildCacheKey("/repo/proj", "pr", "open", "created");
+    const cachedRow = makePR(42, "pending");
+    setCache(key, {
+      items: [cachedRow],
+      nextCursor: null,
+      hasMore: false,
+      timestamp: 1,
+    });
+    const genBefore = getGeneration(key);
+
+    act(() => {
+      emit("pr-detected", {
+        type: "pr-detected",
+        worktreeId: "wt-1",
+        prNumber: 42,
+        prUrl: "https://example.test/pr/42",
+        prState: "open",
+        prCiStatus: "failure",
+      });
+    });
+
+    expect(store.getState().worktrees.get("wt-1")?.prCiStatus).toBe("failure");
+    expect(getCache(key)?.items[0]).toBe(cachedRow);
+    expect(getGeneration(key)).toBe(genBefore);
+  });
+
   it("applies last-write-wins across rapid successive events for the same PR", async () => {
     const store = await renderProvider();
     act(() => {

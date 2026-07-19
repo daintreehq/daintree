@@ -23,6 +23,7 @@ import {
   MAX_REVIEW_THREAD_PAGES,
   REVIEW_THREADS_PER_PAGE,
 } from "../GitHubCaches.js";
+import { buildListCacheKey } from "../GitHubPRs.js";
 import type { Issue, PR, Page } from "../../../../../shared/types/forge.js";
 import type { GitHubIssue, GitHubPR, GitHubListResponse } from "../../shared/types.js";
 
@@ -127,7 +128,12 @@ describe("clearGitHubCaches / clearPRCaches symmetry", () => {
     ["clearPRCaches", clearPRCaches],
   ] as const) {
     it(`${name} clears the PR list and required-status caches together`, () => {
-      forgePRListCache.set("owner/repo:pr:open:created:", {
+      // Key shape must match buildListCacheKey's
+      // `${type}:${owner}/${repo}:${state}:${search}:${sortOrder}:${cursor}` —
+      // a malformed key would still pass under a global clear but would give a
+      // false green if clearing ever became prefix-scoped.
+      const listKey = buildListCacheKey("pr", "owner", "repo", "open", "", "created", "");
+      forgePRListCache.set(listKey, {
         items: [],
         nextCursor: null,
         hasMore: false,
@@ -136,7 +142,7 @@ describe("clearGitHubCaches / clearPRCaches symmetry", () => {
 
       clear();
 
-      expect(forgePRListCache.get("owner/repo:pr:open:created:")).toBeUndefined();
+      expect(forgePRListCache.get(listKey)).toBeUndefined();
       expect(prRequiredStatusCache.get("owner/repo:1")).toBeUndefined();
     });
   }

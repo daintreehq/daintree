@@ -325,6 +325,17 @@ export async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<
 }
 
 /**
+ * How long a PR page will wait on required-check enrichment before returning
+ * its coarse rows. Enrichment sits on the list's critical path, so an unbounded
+ * await would let a stalled CI query hold the dropdown for the full 15s API
+ * timeout — five sequential chunks on a 100-row page could stall it far longer.
+ * Past the budget the request keeps running and still populates
+ * `prRequiredStatusCache`, so the next read (or the sidebar) picks the derived
+ * status up without a refetch; only this page degrades to coarse.
+ */
+const REQUIRED_STATUS_ENRICHMENT_BUDGET_MS = 4_000;
+
+/**
  * Replace each open row's coarse `statusCheckRollup` status with the
  * required-check-aware value the worktree sidebar already renders.
  *
@@ -342,9 +353,10 @@ export async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<
  * — deliberately no "skip PRs that already look green" guard on top of it,
  * which is what froze a stale green permanently in #6149.
  *
- * Best-effort by construction: a rate-limit block, a rejected batch, or a
- * PR missing from the response leaves that row's coarse value untouched, and
- * the page still resolves. CI detail degrading must never blank the dropdown.
+ * Best-effort by construction: a rate-limit block, a rejected batch, a PR
+ * missing from the response, or enrichment overrunning its time budget leaves
+ * that row's coarse value untouched, and the page still resolves. CI detail
+ * degrading must never blank or stall the dropdown.
  */
 async function enrichPRPageWithRequiredStatus(repo: RepoRef, items: PR[]): Promise<PR[]> {
   // Closed and merged rows are skipped: required-check state is meaningless
@@ -353,12 +365,18 @@ async function enrichPRPageWithRequiredStatus(repo: RepoRef, items: PR[]): Promi
   const openNumbers = items.filter((pr) => pr.state === "open").map((pr) => pr.number);
   if (openNumbers.length === 0) return items;
 
-  let statuses: Map<number, CIStatus | null>;
-  try {
-    statuses = await getCIStatusesImpl(repo, openNumbers);
-  } catch {
-    return items;
-  }
+  // Rejections are handled before the race, not after: past the budget the
+  // request keeps running to warm `prRequiredStatusCache` for the next read,
+  // and an unattached rejection would surface as an unhandled rejection.
+  const pending = getCIStatusesImpl(repo, openNumbers).catch(() => null);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const budget = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), REQUIRED_STATUS_ENRICHMENT_BUDGET_MS);
+  });
+
+  const statuses = await Promise.race([pending, budget]);
+  clearTimeout(timer);
+  if (!statuses) return items;
 
   return items.map((pr) => {
     if (pr.state !== "open") return pr;

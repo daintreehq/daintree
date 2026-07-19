@@ -701,10 +701,12 @@ describe("listPRs required-check enrichment", () => {
 
   it("falls back to the raw rollup when the PR has no required checks", async () => {
     // "No required checks" is not "all checks passed" (#6240) — a repo without
-    // branch protection must still surface a red rollup as failing.
+    // branch protection must still surface a red rollup as failing. The list
+    // and enrichment rollups differ so the assertion can only pass via the
+    // enrichment path: dropping the merge would leave "pending".
     mockGraphQLClient
       .mockResolvedValueOnce(
-        prListResponse([makePRNode(1, "feature/a", undefined, makeCommitsRollup("FAILURE"))])
+        prListResponse([makePRNode(1, "feature/a", undefined, makeCommitsRollup("PENDING"))])
       )
       .mockResolvedValueOnce(
         requiredChecksResponse([
@@ -721,9 +723,10 @@ describe("listPRs required-check enrichment", () => {
     expect(page.items[0].ciStatus).toBe("failure");
   });
 
-  it("does not collapse a no-CI PR into success", async () => {
+  it("derives neutral, not success, for a PR with no CI at all", async () => {
     // A missing rollup derives to `neutral`, which the row renderer draws as
-    // "no badge" — it must never read as passing.
+    // "no badge". Asserting the exact state rather than "not success" keeps the
+    // case from passing on the pre-change `undefined`.
     mockGraphQLClient
       .mockResolvedValueOnce(prListResponse([makePRNode(1, "feature/a")]))
       .mockResolvedValueOnce(
@@ -732,7 +735,58 @@ describe("listPRs required-check enrichment", () => {
 
     const page = await githubForgeProvider.listPRs(repo, {});
 
-    expect(page.items[0].ciStatus).not.toBe("success");
+    expect(page.items[0].ciStatus).toBe("neutral");
+  });
+
+  it("preserves every other mapped field on an enriched row", async () => {
+    // The merge rebuilds each open row, so a partial rebuild would silently
+    // drop fields the enrichment never looks at. The suites covering those
+    // fields run with enrichment suppressed, so this is the only case that
+    // exercises them through the merge.
+    mockGraphQLClient
+      .mockResolvedValueOnce(
+        prListResponse([
+          {
+            ...makePRNode(1, "feature/a", "APPROVED", makeCommitsRollup("SUCCESS")),
+            comments: { totalCount: 7 },
+          },
+        ])
+      )
+      .mockResolvedValueOnce(
+        requiredChecksResponse([
+          {
+            number: 1,
+            rollupState: "SUCCESS",
+            contexts: [checkRun("required-e2e", "FAILURE", true)],
+          },
+        ])
+      );
+
+    const page = await githubForgeProvider.listPRs(repo, {});
+    const pr = page.items[0];
+
+    expect(pr.ciStatus).toBe("failure");
+    expect(pr.reviewDecision).toBe("APPROVED");
+    expect(pr.commentCount).toBe(7);
+    expect(pr.number).toBe(1);
+    expect(pr.title).toBe("PR 1");
+    expect(pr.headRef).toBe("feature/a");
+    expect(pr.state).toBe("open");
+  });
+
+  it("issues no enrichment request when the page has no open rows", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(
+      prListResponse([
+        closedPRNode(1, "feature/a", makeCommitsRollup("SUCCESS")),
+        closedPRNode(2, "feature/b", makeCommitsRollup("FAILURE")),
+      ])
+    );
+
+    const page = await githubForgeProvider.listPRs(repo, { state: "closed" });
+
+    expect(page.items[0].ciStatus).toBe("success");
+    expect(page.items[1].ciStatus).toBe("failure");
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(1);
   });
 
   it("reuses the shared required-status cache instead of refetching per surface", async () => {
