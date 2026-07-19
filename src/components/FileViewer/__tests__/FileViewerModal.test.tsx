@@ -336,7 +336,7 @@ describe("FileViewerModal", () => {
     }
   );
 
-  it("renders sanitized SVG inline through the trusted types policy", async () => {
+  it("renders sanitized SVG inline without an HTML reparse", async () => {
     const svg = '<svg xmlns="http://www.w3.org/2000/svg"><circle r="10"/></svg>';
     mockRead.mockResolvedValue({ content: svg });
 
@@ -352,11 +352,19 @@ describe("FileViewerModal", () => {
       });
     });
 
-    await waitFor(() => {
-      expect(container.querySelector("svg")).toBeTruthy();
+    // Scoped to the preview surface: the toolbar is full of Lucide icons, which
+    // are themselves <svg><circle> and would satisfy a bare `svg circle` query.
+    const preview = await waitFor(() => {
+      const el = container.querySelector('[aria-label="icon.svg"]');
+      expect(el?.querySelector("svg")).toBeTruthy();
+      return el!;
     });
-    expect(container.innerHTML).toContain('<circle r="10">');
-    expect(mockCreateTrustedHTML).toHaveBeenCalledWith(svg);
+    expect(preview.querySelector("circle")?.getAttribute("r")).toBe("10");
+    // The SVG now goes in through DOMParser + importNode rather than
+    // dangerouslySetInnerHTML, per sanitizeSvg's warning that an HTML reparse
+    // can resurrect mutation-XSS its regex pass cannot model. No trusted-types
+    // HTML is minted at all, so the policy must never be reached for this path.
+    expect(mockCreateTrustedHTML).not.toHaveBeenCalled();
     expect(screen.getByLabelText("Open in image viewer")).toBeTruthy();
     expect(screen.queryByLabelText("Open in editor")).toBeNull();
   });
