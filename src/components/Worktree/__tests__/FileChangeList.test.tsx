@@ -9,9 +9,31 @@ import type { FileChangeDetail } from "../../../types";
 // The list no longer owns a diff modal: it opens a dialog-presented `diff`
 // panel and keeps that panel's change set current. Stepping between files now
 // belongs to DiffPane, so this file only asserts the opening contract.
+// Reactive stand-in for the real store's single dialog pointer, so tests can
+// move it out from under the list (close, or another surface opening its own
+// diff) and observe what the list does with the panel it thought it owned.
+const dialogStore = vi.hoisted(() => {
+  let panelId: string | null = null;
+  const listeners = new Set<() => void>();
+  return {
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    get: () => panelId,
+    set: (next: string | null) => {
+      panelId = next;
+      for (const listener of listeners) listener();
+    },
+  };
+});
+
 const { openPanelDialogMock, setDiffPanelChangeSetMock, setDiffPanelFileMock } = vi.hoisted(() => ({
-  openPanelDialogMock: vi.fn<(options: Record<string, unknown>) => Promise<string>>(
-    async () => "diff-panel-1"
+  openPanelDialogMock: vi.fn<(options: Record<string, unknown>) => Promise<string | null>>(
+    async () => {
+      dialogStore.set("diff-panel-1");
+      return "diff-panel-1";
+    }
   ),
   setDiffPanelChangeSetMock: vi.fn(),
   setDiffPanelFileMock: vi.fn(),
@@ -19,12 +41,16 @@ const { openPanelDialogMock, setDiffPanelChangeSetMock, setDiffPanelFileMock } =
 
 // Both stores are consumed two ways — as a hook with a selector and via
 // `.getState()` — so the mock has to be a callable carrying `getState`.
-vi.mock("@/store/panelDialogStore", () => ({
-  usePanelDialogStore: Object.assign(
-    (selector: (state: unknown) => unknown) => selector({ panelId: "diff-panel-1" }),
-    { getState: () => ({ openPanelDialog: openPanelDialogMock }) }
-  ),
-}));
+vi.mock("@/store/panelDialogStore", async () => {
+  const { useSyncExternalStore } = await import("react");
+  return {
+    usePanelDialogStore: Object.assign(
+      (selector: (state: { panelId: string | null }) => unknown) =>
+        useSyncExternalStore(dialogStore.subscribe, () => selector({ panelId: dialogStore.get() })),
+      { getState: () => ({ panelId: dialogStore.get(), openPanelDialog: openPanelDialogMock }) }
+    ),
+  };
+});
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: Object.assign((selector: (state: unknown) => unknown) => selector({}), {
     getState: () => ({
@@ -395,5 +421,67 @@ describe("FileChangeList — openFirstFile imperative handle (#11041)", () => {
 
     act(() => ref.current!.openFirstFile(document.createElement("button")));
     expect(openPanelDialogMock.mock.calls[0]?.[0]).toMatchObject({ filePath: "a.ts" });
+  });
+});
+
+describe("FileChangeList — diff panel ownership", () => {
+  beforeEach(() => {
+    openPanelDialogMock.mockClear();
+    setDiffPanelChangeSetMock.mockClear();
+    dialogStore.set(null);
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  function rows(container: HTMLElement): HTMLElement[] {
+    return Array.from(container.querySelectorAll<HTMLElement>('[role="button"]'));
+  }
+
+  it("opens with the row's viewed-marker cursor so the panel resolves that exact entry", async () => {
+    const { container } = render(
+      <FileChangeList changes={[file("a.ts"), file("b.ts", "added")]} rootPath={ROOT} />
+    );
+    await act(async () => {
+      fireEvent.click(rows(container)[1]!);
+    });
+
+    const options = openPanelDialogMock.mock.calls[0]![0];
+    const changeSet = options.changeSet as Array<{ path: string; viewedKey: string }>;
+    const opened = changeSet.find((entry) => entry.path === options.filePath);
+    // The cursor has to be the set's own key for that row, not a re-derivation
+    // the panel would have to guess at.
+    expect(options.viewedKey).toBe(opened!.viewedKey);
+  });
+
+  it("stops pushing its change set once another surface owns the dialog", async () => {
+    const changes = [file("a.ts"), file("b.ts")];
+    const { container, rerender } = render(<FileChangeList changes={changes} rootPath={ROOT} />);
+    await act(async () => {
+      fireEvent.click(rows(container)[0]!);
+    });
+
+    // Baseline: while the list owns the panel, a poll pushes the fresh set.
+    setDiffPanelChangeSetMock.mockClear();
+    await act(async () => {
+      rerender(<FileChangeList changes={[...changes, file("c.ts")]} rootPath={ROOT} />);
+    });
+    expect(setDiffPanelChangeSetMock).toHaveBeenCalled();
+
+    // Another surface opens its own diff; the pointer moves off our panel.
+    await act(async () => {
+      dialogStore.set("someone-elses-panel");
+    });
+    setDiffPanelChangeSetMock.mockClear();
+
+    await act(async () => {
+      rerender(<FileChangeList changes={[...changes, file("d.ts")]} rootPath={ROOT} />);
+    });
+
+    // Pushing now would overwrite the other surface's change set — and must
+    // never trigger a reopen either, since nothing here asked for a panel.
+    expect(setDiffPanelChangeSetMock).not.toHaveBeenCalled();
+    expect(openPanelDialogMock).toHaveBeenCalledTimes(1);
   });
 });

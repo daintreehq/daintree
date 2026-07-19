@@ -152,9 +152,24 @@ export function requestDiff(
   freshnessKey?: string
 ): Promise<CachedDiff | null> {
   const key = diffCacheKey(subject, ignoreWhitespace);
+  // A base-branch key is `baseBranch + currentBranch` — branch NAMES, which are
+  // not content identity: `main` advancing produces the same key for different
+  // content, and the freshness signal can't catch it either (it reads
+  // working-tree file metadata, which is "missing" for a clean worktree). So a
+  // reopen would serve the old diff with no stale banner. The modal this
+  // replaced cached nothing here; keep it that way until we can key on commit
+  // ids. In-flight dedup still applies — that window is one request's lifetime.
+  const cacheable = subject.source !== "base-branch";
   if (!bypassCache) {
-    const cached = diffCache.get(key);
-    if (cached !== undefined) return Promise.resolve(cached);
+    if (cacheable) {
+      const cached = diffCache.get(key);
+      // Reinsert on hit so eviction is genuinely least-recently-USED: a Map
+      // drops in insertion order, which without this is plain FIFO.
+      if (cached !== undefined) {
+        cacheDiff(key, cached);
+        return Promise.resolve(cached);
+      }
+    }
     const inflight = inflightDiffRequests.get(key);
     if (inflight) return inflight;
   }
@@ -163,7 +178,7 @@ export function requestDiff(
     .then((content) => {
       if (content === null) return null;
       const entry: CachedDiff = { content, freshnessKey };
-      if (generation === diffCacheGeneration) cacheDiff(key, entry);
+      if (cacheable && generation === diffCacheGeneration) cacheDiff(key, entry);
       return entry;
     })
     .finally(() => {
@@ -182,6 +197,9 @@ function cacheDiff(key: string, value: CachedDiff): void {
   }
 }
 
-export function peekCachedDiff(subject: DiffSubject, ignoreWhitespace: boolean): CachedDiff | undefined {
+export function peekCachedDiff(
+  subject: DiffSubject,
+  ignoreWhitespace: boolean
+): CachedDiff | undefined {
   return diffCache.get(diffCacheKey(subject, ignoreWhitespace));
 }

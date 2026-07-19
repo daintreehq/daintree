@@ -197,6 +197,25 @@ describe("fileActions adversarial", () => {
     expect(options.filePath).toBe("/elsewhere/z.ts");
   });
 
+  it("file.openDiff does not mangle a sibling worktree whose name extends the root", async () => {
+    const run = setupActions();
+    const siblingPath = "/repo-other/src/x.ts";
+    await run("file.openDiff", { path: siblingPath, worktreePath: "/repo" });
+
+    const options = openPanelDialogMock.mock.calls[0]![0] as Record<string, unknown>;
+    // A prefix test without a separator boundary accepts "/repo-other/..." and
+    // slices the root's length off it, producing "-other/src/x.ts".
+    expect(options.filePath).toBe(siblingPath);
+  });
+
+  it("file.openDiff relativizes across separator styles and redundant segments", async () => {
+    const run = setupActions();
+    await run("file.openDiff", { path: "/repo/./src\\deep\\x.ts", worktreePath: "/repo/" });
+
+    const options = openPanelDialogMock.mock.calls[0]![0] as Record<string, unknown>;
+    expect(options.filePath).toBe("src/deep/x.ts");
+  });
+
   it("file.openDiff throws when the panel could not be created", async () => {
     openPanelDialogMock.mockResolvedValue(null);
     const run = setupActions();

@@ -240,7 +240,8 @@ export interface PanelRegistrySlice {
   setDiffPanelFile: (
     id: string,
     filePath: string,
-    fileStatus: import("@shared/types/git.js").GitStatus
+    fileStatus: import("@shared/types/git.js").GitStatus,
+    viewedKey?: string
   ) => void;
   setDiffPanelChangeSet: (
     id: string,

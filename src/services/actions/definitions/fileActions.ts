@@ -89,6 +89,23 @@ const showItemInFolderArgsSchema = z.object({
   path: z.string().min(1),
 });
 
+/**
+ * Strip the worktree root off an absolute path. `isPathInside` is what makes
+ * this safe: a raw `startsWith` accepts a sibling whose name merely extends the
+ * root (`/repo-other/x.ts` under `/repo`, which then mangles into `-other/x.ts`)
+ * and ignores separator normalization. A path outside the worktree passes
+ * through untouched — GitService rejects it downstream with a real git error,
+ * which beats inventing a second failure mode here.
+ */
+function toWorktreeRelative(path: string, worktreeRoot: string | undefined): string {
+  if (!worktreeRoot || !isPathInside(path, worktreeRoot)) return path;
+  const normalizedPath = normalize(path);
+  const normalizedRoot = normalize(worktreeRoot);
+  if (normalizedPath === normalizedRoot) return path;
+  const boundary = normalizedRoot.endsWith("/") ? normalizedRoot : `${normalizedRoot}/`;
+  return normalizedPath.slice(boundary.length);
+}
+
 function resolveFilePanelPath(path: string, rootPath: string | undefined): string {
   if (isAbsolute(path)) return normalize(path);
   const root = rootPath ?? useProjectStore.getState().currentProject?.path;
@@ -287,10 +304,7 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
       const resolvedWorktreePath = worktreePath ?? useProjectStore.getState().currentProject?.path;
       // The panel resolves its worktree root from `worktreeId`, so pass the
       // path through relative — an absolute one would defeat that resolution.
-      const relativePath =
-        resolvedWorktreePath && path.startsWith(resolvedWorktreePath)
-          ? path.slice(resolvedWorktreePath.length).replace(/^[/\\]/, "")
-          : path;
+      const relativePath = toWorktreeRelative(path, resolvedWorktreePath);
       const fileName = relativePath.split(/[/\\]/).filter(Boolean).pop();
       const panelId = await usePanelDialogStore.getState().openPanelDialog({
         kind: "diff",

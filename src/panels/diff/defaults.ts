@@ -8,5 +8,6 @@ export function createDiffDefaults(options: DiffPanelOptions): Partial<DiffPanel
     diffSource: options.diffSource ?? "working-tree",
     ...(options.baseBranch != null && { baseBranch: options.baseBranch }),
     ...(options.changeSet != null && { changeSet: options.changeSet }),
+    ...(options.viewedKey != null && { viewedKey: options.viewedKey }),
   };
 }

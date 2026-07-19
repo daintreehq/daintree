@@ -270,6 +270,12 @@ export interface DiffPanelOptions extends AddPanelOptionsBase {
    * it current via `setDiffPanelChangeSet` for as long as the panel is open.
    */
   changeSet?: DiffChangeSetEntry[];
+  /**
+   * `changeSet` entry the panel opens on. Pass it whenever the set can hold
+   * two entries with the same path and status (partial staging) — they differ
+   * only by this key. Runtime-only, like the set itself.
+   */
+  viewedKey?: string;
 }
 
 /**

@@ -180,15 +180,26 @@ export function ReviewHubContent({
   const hasBaseBranchSelection = selectedBaseBranchFile !== null;
   const dialogPanelId = usePanelDialogStore((state) => state.panelId);
 
+  // Ownership loss: the user closed the dialog, promoted it into the grid, or
+  // another surface superseded it. The selection has to go with the pointer —
+  // it is the record of "a diff is open", and the open effects below key off
+  // it, so dropping only the pointer reads as "we want a panel" and instantly
+  // reopens the dialog the user just dismissed (or duplicates the promoted one).
   useEffect(() => {
-    if (diffPanelId && dialogPanelId !== diffPanelId) setDiffPanelId(null);
+    if (!diffPanelId || dialogPanelId === diffPanelId) return;
+    setDiffPanelId(null);
+    setSelectedFile(null);
+    setSelectedBaseBranchFile(null);
   }, [dialogPanelId, diffPanelId]);
 
-  // Close the panel when the hub drops its selection for a reason of its own.
+  // Close the panel when the hub drops its selection for a reason of its own
+  // (commit, worktree switch, conflict mode). Compare-and-swap on the global
+  // pointer first: once another surface owns the dialog, closing from here
+  // would tear down their panel, not ours.
   useEffect(() => {
-    if (!hasWorkingTreeSelection && !hasBaseBranchSelection && diffPanelId) {
-      usePanelDialogStore.getState().closePanelDialog();
-    }
+    if (hasWorkingTreeSelection || hasBaseBranchSelection || !diffPanelId) return;
+    if (usePanelDialogStore.getState().panelId !== diffPanelId) return;
+    usePanelDialogStore.getState().closePanelDialog();
   }, [hasWorkingTreeSelection, hasBaseBranchSelection, diffPanelId]);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(() => new Set());
   const [selectionSection, setSelectionSection] = useState<FileStageRowSection | null>(null);
@@ -417,16 +428,29 @@ export function ReviewHubContent({
   // Status follows the LIVE entry, not the open-time snapshot: a file that is
   // staged or committed under the open panel must be re-fetched under its
   // current status or the diff renders in the wrong mode.
-  const liveWorkingTreeStatus =
-    (selectedFileIndex !== null ? navigableItems[selectedFileIndex]?.file.status : undefined) ??
-    selectedFile?.status;
+  const liveWorkingTreeItem =
+    selectedFileIndex !== null ? navigableItems[selectedFileIndex] : undefined;
+  const liveWorkingTreeStatus = liveWorkingTreeItem?.file.status ?? selectedFile?.status;
+  // Section-scoped, matching `workingTreeChangeSet`: it is the only thing that
+  // separates the staged and unstaged rows of a partially staged file, which
+  // otherwise share both path and status.
+  const liveWorkingTreeViewedKey = liveWorkingTreeItem
+    ? `${liveWorkingTreeItem.section}:${liveWorkingTreeItem.file.path}`
+    : selectedFile
+      ? `${selectedFile.section}:${selectedFile.path}`
+      : undefined;
   useEffect(() => {
     if (!selectedFile || !liveWorkingTreeStatus) return;
     const store = usePanelDialogStore.getState();
     if (diffPanelId) {
       usePanelStore
         .getState()
-        .setDiffPanelFile(diffPanelId, selectedFile.path, liveWorkingTreeStatus);
+        .setDiffPanelFile(
+          diffPanelId,
+          selectedFile.path,
+          liveWorkingTreeStatus,
+          liveWorkingTreeViewedKey
+        );
       return;
     }
     void store
@@ -437,18 +461,22 @@ export function ReviewHubContent({
         diffSource: "working-tree",
         changeSet: changeSetsRef.current.workingTree,
         title: basename(selectedFile.path),
+        ...(liveWorkingTreeViewedKey && { viewedKey: liveWorkingTreeViewedKey }),
         ...(worktreeId && { worktreeId }),
       })
-      .then(setDiffPanelId);
-  }, [selectedFile, liveWorkingTreeStatus, diffPanelId, worktreeId]);
+      // A refused or superseded open resolves null. Drop the selection with it,
+      // or this effect sees "selection, no panel" and retries forever.
+      .then((panelId) => (panelId ? setDiffPanelId(panelId) : setSelectedFile(null)));
+  }, [selectedFile, liveWorkingTreeStatus, liveWorkingTreeViewedKey, diffPanelId, worktreeId]);
 
   useEffect(() => {
     if (!selectedBaseBranchFile) return;
     const store = usePanelDialogStore.getState();
+    const viewedKey = `base:${selectedBaseBranchFile.path}`;
     if (diffPanelId) {
       usePanelStore
         .getState()
-        .setDiffPanelFile(diffPanelId, selectedBaseBranchFile.path, "modified");
+        .setDiffPanelFile(diffPanelId, selectedBaseBranchFile.path, "modified", viewedKey);
       return;
     }
     void store
@@ -460,9 +488,10 @@ export function ReviewHubContent({
         baseBranch: mainBranch,
         changeSet: changeSetsRef.current.baseBranch,
         title: basename(selectedBaseBranchFile.path),
+        viewedKey,
         ...(worktreeId && { worktreeId }),
       })
-      .then(setDiffPanelId);
+      .then((panelId) => (panelId ? setDiffPanelId(panelId) : setSelectedBaseBranchFile(null)));
   }, [selectedBaseBranchFile, diffPanelId, worktreeId, mainBranch]);
 
   // Keep the open panel's change set in step with the live poll. The store

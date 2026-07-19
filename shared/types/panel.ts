@@ -659,6 +659,17 @@ export interface DiffPanelData extends BasePanelData {
    * Keeping one owner per set is what stops the two from drifting.
    */
   changeSet?: DiffChangeSetEntry[];
+  /**
+   * Cursor into `changeSet` for the open file. Runtime-only (never
+   * serialized), because it only means anything alongside the live set.
+   *
+   * (path, status) is not unique: partial staging puts the same path with the
+   * same status in both the staged and unstaged sections, and those entries
+   * differ only by `viewedKey`. Without this cursor the panel resolves to the
+   * first match, so selecting the unstaged copy highlights the staged row and
+   * marks the wrong file viewed.
+   */
+  viewedKey?: string;
 }
 
 export type PanelInstance =

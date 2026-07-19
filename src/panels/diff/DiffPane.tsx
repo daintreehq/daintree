@@ -121,6 +121,7 @@ export function DiffPane({
   const changeSet = panel?.changeSet;
   const diffSource = panel?.diffSource;
   const panelBaseBranch = panel?.baseBranch;
+  const panelViewedKey = panel?.viewedKey;
 
   // Memoized on primitives so the subject identity only moves when what we're
   // diffing does — `useDiffContent` refetches on subject identity.
@@ -133,16 +134,22 @@ export function DiffPane({
 
   // Resolved by identity, never stored: a change set rebuilt from a later poll
   // can reorder or drop files, so a persisted index would point at the wrong
-  // one. Exact (path + status) first, then path alone — a file whose status
-  // changed under us is still the file the user is reading.
+  // one. `viewedKey` first — it is the only field that separates the staged and
+  // unstaged copies of a partially staged file, which share path AND status.
+  // Then exact (path + status), then path alone: both fallbacks carry a
+  // restored panel (no key) and a file whose status changed under us.
   const currentIndex = useMemo(() => {
     if (!changeSet || filePath === undefined) return -1;
+    if (panelViewedKey !== undefined) {
+      const byKey = changeSet.findIndex((entry) => entry.viewedKey === panelViewedKey);
+      if (byKey !== -1) return byKey;
+    }
     const exact = changeSet.findIndex(
       (entry) => entry.path === filePath && entry.status === fileStatus
     );
     if (exact !== -1) return exact;
     return changeSet.findIndex((entry) => entry.path === filePath);
-  }, [changeSet, filePath, fileStatus]);
+  }, [changeSet, filePath, fileStatus, panelViewedKey]);
 
   // Survives the open file dropping out of the set, so stepping resumes from
   // where the user was rather than jumping to the top.
@@ -155,7 +162,9 @@ export function DiffPane({
     (index: number) => {
       const entry = changeSet?.[index];
       if (!entry) return;
-      setDiffPanelFile(id, entry.path, entry.status);
+      // Carry the key so the next resolution lands on this exact entry rather
+      // than the first one sharing its path and status.
+      setDiffPanelFile(id, entry.path, entry.status, entry.viewedKey);
     },
     [changeSet, id, setDiffPanelFile]
   );
@@ -335,7 +344,26 @@ export function DiffPane({
               </div>
             )}
 
-            {filePath && isImageMode && fileStatus && (
+            {/* A file is set but nothing can be fetched for it: the worktree
+                didn't resolve, or a base-branch panel is missing a ref. The
+                skeleton below would otherwise spin forever, since `fetchDiff`
+                returns early on a null subject and Refresh with it. */}
+            {filePath && !subject && (
+              <div className="flex h-full w-full items-center justify-center p-6">
+                <EmptyState
+                  variant="zero-data"
+                  scale="canvas"
+                  title="Diff unavailable"
+                  description={
+                    diffSource === "base-branch"
+                      ? "The base or current branch couldn't be resolved, so there's no comparison to make."
+                      : "This panel's worktree couldn't be resolved — it may have been moved or removed."
+                  }
+                />
+              </div>
+            )}
+
+            {filePath && subject && isImageMode && fileStatus && (
               <div className="h-full min-h-[300px]">
                 <ImageDiffViewer
                   relPath={filePath}
@@ -345,7 +373,7 @@ export function DiffPane({
               </div>
             )}
 
-            {filePath && !isImageMode && content && (
+            {filePath && subject && !isImageMode && content && (
               <DiffViewer
                 diff={content}
                 viewType={diffViewType}
@@ -355,7 +383,7 @@ export function DiffPane({
               />
             )}
 
-            {filePath && !isImageMode && !content && (
+            {filePath && subject && !isImageMode && !content && (
               <div className="p-4 space-y-3">
                 <Skeleton label="Loading diff">
                   <SkeletonBone className="h-7 w-3/4" />

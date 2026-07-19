@@ -50,7 +50,8 @@ vi.mock("@/components/FileViewer/DiffFileSidebar", () => ({
 }));
 
 const { setDiffPanelFileMock, toggleViewedMock, useDiffContentMock } = vi.hoisted(() => ({
-  setDiffPanelFileMock: vi.fn<(id: string, path: string, status: GitStatus) => void>(),
+  setDiffPanelFileMock:
+    vi.fn<(id: string, path: string, status: GitStatus, viewedKey?: string) => void>(),
   toggleViewedMock: vi.fn(),
   useDiffContentMock: vi.fn(),
 }));
@@ -170,6 +171,48 @@ describe("DiffPane — current-file resolution", () => {
     expect(positionText()).toBe(`2 of ${changeSet.length}`);
   });
 
+  it("separates the staged and unstaged twins of a partially staged file by viewedKey", () => {
+    // Partial staging: the same path, the same status, in both sections. Only
+    // the key tells them apart, so a path+status match resolves the staged copy.
+    const changeSet: DiffChangeSetEntry[] = [
+      { path: "a.ts", status: "modified", viewedKey: "staged:a.ts" },
+      { path: "b.ts", status: "modified", viewedKey: "unstaged:b.ts" },
+      { path: "a.ts", status: "modified", viewedKey: "unstaged:a.ts" },
+    ];
+    seedPanel({
+      filePath: "a.ts",
+      fileStatus: "modified",
+      viewedKey: "unstaged:a.ts",
+      changeSet,
+    });
+    renderPane();
+
+    const expectedIndex = changeSet.findIndex((e) => e.viewedKey === "unstaged:a.ts");
+    expect(positionText()).toBe(`${expectedIndex + 1} of ${changeSet.length}`);
+    expect(screen.getByTestId("diff-sidebar-mock").getAttribute("data-current-index")).toBe(
+      String(expectedIndex)
+    );
+
+    // The viewed marker follows the resolved entry, not the first path match.
+    fireEvent.click(screen.getByLabelText("Viewed"));
+    expect(toggleViewedMock).toHaveBeenCalledWith(WORKTREE_PATH, "unstaged:a.ts");
+  });
+
+  it("falls back to path+status when the cursor names an entry the set no longer has", () => {
+    // A restored panel has no cursor at all, and a live one can outlive its
+    // entry (the file was staged, so its unstaged key is gone).
+    const changeSet = [entry("a.ts"), entry("b.ts", "added")];
+    seedPanel({
+      filePath: "b.ts",
+      fileStatus: "added",
+      viewedKey: "unstaged:b.ts",
+      changeSet,
+    });
+    renderPane();
+
+    expect(positionText()).toBe(`2 of ${changeSet.length}`);
+  });
+
   it("reports no position when the open file has left the change set entirely", () => {
     seedPanel({
       filePath: "gone.ts",
@@ -194,7 +237,14 @@ describe("DiffPane — file stepping", () => {
 
     fireEvent.click(screen.getByLabelText("Next file"));
 
-    expect(setDiffPanelFileMock).toHaveBeenCalledWith(PANEL_ID, "b.ts", "added");
+    // The entry's own cursor rides along, so the next resolution can't slide
+    // onto a different entry that happens to share its path and status.
+    expect(setDiffPanelFileMock).toHaveBeenCalledWith(
+      PANEL_ID,
+      "b.ts",
+      "added",
+      changeSet[1]!.viewedKey
+    );
   });
 
   it("steps backward to the neighbouring entry", () => {
@@ -203,7 +253,12 @@ describe("DiffPane — file stepping", () => {
 
     fireEvent.click(screen.getByLabelText("Previous file"));
 
-    expect(setDiffPanelFileMock).toHaveBeenCalledWith(PANEL_ID, "b.ts", "added");
+    expect(setDiffPanelFileMock).toHaveBeenCalledWith(
+      PANEL_ID,
+      "b.ts",
+      "added",
+      changeSet[1]!.viewedKey
+    );
   });
 
   it("disables the boundary buttons at each end", () => {
@@ -226,7 +281,12 @@ describe("DiffPane — file stepping", () => {
     // `[` is not gated by the button's disabled state, so it is the path that
     // has to clamp — a bare index-1 decrement would select undefined.
     pressInPane("[");
-    expect(setDiffPanelFileMock).toHaveBeenCalledWith(PANEL_ID, "a.ts", "modified");
+    expect(setDiffPanelFileMock).toHaveBeenCalledWith(
+      PANEL_ID,
+      "a.ts",
+      "modified",
+      changeSet[0]!.viewedKey
+    );
     unmount();
 
     setDiffPanelFileMock.mockReset();
@@ -234,7 +294,12 @@ describe("DiffPane — file stepping", () => {
     renderPane();
 
     pressInPane("]");
-    expect(setDiffPanelFileMock).toHaveBeenCalledWith(PANEL_ID, "c.ts", "modified");
+    expect(setDiffPanelFileMock).toHaveBeenCalledWith(
+      PANEL_ID,
+      "c.ts",
+      "modified",
+      changeSet[2]!.viewedKey
+    );
   });
 
   it("keeps the shortcuts inert while the panel is unfocused", () => {
@@ -283,13 +348,23 @@ describe("DiffPane — file stepping", () => {
 
     pressInPane("]");
     // Clamped to the shrunk set's last entry — never index 3 (undefined) or 4.
-    expect(setDiffPanelFileMock).toHaveBeenCalledWith(PANEL_ID, "b.ts", "modified");
+    expect(setDiffPanelFileMock).toHaveBeenCalledWith(
+      PANEL_ID,
+      "b.ts",
+      "modified",
+      narrow[1]!.viewedKey
+    );
 
     // Backward is what proves the stale index is clamped *before* the step and
     // not just after it: decrementing the remembered 3 would land on b.ts again.
     setDiffPanelFileMock.mockReset();
     pressInPane("[");
-    expect(setDiffPanelFileMock).toHaveBeenCalledWith(PANEL_ID, "a.ts", "modified");
+    expect(setDiffPanelFileMock).toHaveBeenCalledWith(
+      PANEL_ID,
+      "a.ts",
+      "modified",
+      narrow[0]!.viewedKey
+    );
   });
 });
 
@@ -351,6 +426,58 @@ describe("DiffPane — empty state", () => {
     renderPane();
 
     expect(screen.getByTestId("diff-viewer-mock")).toBeTruthy();
+    expect(screen.queryByTestId("empty-state-mock")).toBeNull();
+  });
+});
+
+describe("DiffPane — unresolvable subject", () => {
+  beforeEach(() => {
+    // Nothing has landed yet: the branch under test is exactly the one that
+    // would otherwise sit on the loading skeleton forever.
+    useDiffContentMock.mockReturnValue({ content: undefined, stale: false, retry: vi.fn() });
+  });
+
+  it("explains itself instead of spinning when the worktree cannot be resolved", () => {
+    // The panel outlived its worktree (removed, or never registered), so there
+    // is no root to diff against and no request will ever be made.
+    worktrees.clear();
+    seedPanel({ filePath: "a.ts", fileStatus: "modified" });
+    const { unmount } = renderPane();
+
+    expect(screen.queryByLabelText("Loading diff")).toBeNull();
+    expect(screen.queryByTestId("diff-viewer-mock")).toBeNull();
+    const unavailableTitle = screen.getByTestId("empty-state-mock").getAttribute("data-title");
+    unmount();
+
+    // Distinct from the no-file state: "pick a changed file" invites a click,
+    // and there is nothing here for the user to click.
+    seedPanel({});
+    renderPane();
+    expect(screen.getByTestId("empty-state-mock").getAttribute("data-title")).not.toBe(
+      unavailableTitle
+    );
+  });
+
+  it("explains itself when a base-branch panel has no base ref", () => {
+    seedPanel({ filePath: "a.ts", fileStatus: "modified", diffSource: "base-branch" });
+    renderPane();
+
+    expect(screen.queryByLabelText("Loading diff")).toBeNull();
+    expect(screen.getByTestId("empty-state-mock")).toBeTruthy();
+  });
+
+  it("keeps the skeleton for a resolvable subject whose request is still in flight", () => {
+    // The discriminator is the subject, not the file path: same panel shape,
+    // both refs present, so this one is genuinely loading.
+    seedPanel({
+      filePath: "a.ts",
+      fileStatus: "modified",
+      diffSource: "base-branch",
+      baseBranch: "main",
+    });
+    renderPane();
+
+    expect(screen.getByLabelText("Loading diff")).toBeTruthy();
     expect(screen.queryByTestId("empty-state-mock")).toBeNull();
   });
 });

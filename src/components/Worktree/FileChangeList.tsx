@@ -207,7 +207,6 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
       [sortedChanges]
     );
 
-
     // The diff panel steps through files itself, so this list only has to open
     // it and keep its change set current. `openPanelDialog` supersedes any
     // panel already showing, which is why re-opening needs no explicit close.
@@ -221,10 +220,16 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
             fileStatus: change.status,
             diffSource: "working-tree",
             changeSet: diffChangeSet,
+            viewedKey: `${change.status}:${change.relativePath}`,
             title: basename(change.relativePath),
             ...(worktreeId && { worktreeId }),
           })
-          .then((panelId) => setDiffPanelId(panelId));
+          // Only adopt a panel that was actually created: a refused or
+          // superseded open resolves null, and this list has no selection to
+          // retry from — the next open is a user activation, not an effect.
+          .then((panelId) => {
+            if (panelId) setDiffPanelId(panelId);
+          });
       },
       [diffChangeSet, worktreeId]
     );
@@ -237,7 +242,10 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
     }, [diffPanelId, diffChangeSet]);
 
     // Drop the pointer once the panel is gone (closed, or superseded by another
-    // surface opening its own diff) so a later poll can't resurrect its set.
+    // surface opening its own diff) so a later poll can't resurrect its set —
+    // or push this list's set into a panel another surface now owns. Dropping
+    // it must never reopen anything: the list opens diffs on user activation
+    // only, so there is no "we want a panel" state to confuse this with.
     const dialogPanelId = usePanelDialogStore((state) => state.panelId);
     useEffect(() => {
       if (diffPanelId && dialogPanelId !== diffPanelId) setDiffPanelId(null);

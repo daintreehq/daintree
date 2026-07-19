@@ -110,7 +110,6 @@ vi.mock("@/hooks", () => ({
   useTruncationDetection: vi.fn(() => ({ ref: vi.fn(), isTruncated: false })),
 }));
 
-
 vi.mock("@/hooks/useWorktreeStore", () => ({
   useWorktreeStore: (selector: (state: { worktrees: Map<string, WorktreeState> }) => unknown) =>
     selector({ worktrees: worktreeStoreData.current as Map<string, WorktreeState> }),
@@ -318,13 +317,49 @@ const makeWorktreeState = (path = WORKTREE_PATH): WorktreeState =>
  * `Pull and rebase` confirm button is what reaches the IPC.
  */
 
-const openPanelDialogMock = vi.hoisted(() => vi.fn(async () => "diff-panel-1"));
-vi.mock("@/store/panelDialogStore", () => ({
-  usePanelDialogStore: Object.assign(
-    (selector: (s: unknown) => unknown) => selector({ panelId: null }),
-    { getState: () => ({ openPanelDialog: openPanelDialogMock, closePanelDialog: vi.fn() }) }
-  ),
-}));
+const HUB_PANEL_ID = "diff-panel-1";
+
+// Reactive stand-in for the real store's single dialog pointer. Every ownership
+// transition the hub has to survive — close, promote to grid, superseded by
+// another surface — is a move of that pointer, so a constant makes them
+// unobservable and lets a reopen loop hide behind a first-call assertion.
+const dialogStore = vi.hoisted(() => {
+  let panelId: string | null = null;
+  const listeners = new Set<() => void>();
+  return {
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    get: () => panelId,
+    set: (next: string | null) => {
+      panelId = next;
+      for (const listener of listeners) listener();
+    },
+  };
+});
+
+const openPanelDialogMock = vi.hoisted(() =>
+  vi.fn<(options: Record<string, unknown>) => Promise<string | null>>()
+);
+const closePanelDialogMock = vi.hoisted(() => vi.fn<() => void>());
+
+vi.mock("@/store/panelDialogStore", async () => {
+  const { useSyncExternalStore } = await import("react");
+  return {
+    usePanelDialogStore: Object.assign(
+      (selector: (s: { panelId: string | null }) => unknown) =>
+        useSyncExternalStore(dialogStore.subscribe, () => selector({ panelId: dialogStore.get() })),
+      {
+        getState: () => ({
+          panelId: dialogStore.get(),
+          openPanelDialog: openPanelDialogMock,
+          closePanelDialog: closePanelDialogMock,
+        }),
+      }
+    ),
+  };
+});
 
 describe("ReviewHub", () => {
   let capturedUpdateCallback: ((state: WorktreeState) => void) | null = null;
@@ -333,6 +368,14 @@ describe("ReviewHub", () => {
   beforeEach(() => {
     capturedUpdateCallback = null;
     debounceCancelSpy.mockReset();
+
+    // Mirror the real store: opening publishes the pointer, closing clears it.
+    dialogStore.set(null);
+    openPanelDialogMock.mockImplementation(async () => {
+      dialogStore.set(HUB_PANEL_ID);
+      return HUB_PANEL_ID;
+    });
+    closePanelDialogMock.mockImplementation(() => dialogStore.set(null));
 
     // The Review Hub's file-list disclosure defaults to collapsed (issue
     // #7886). Existing tests assume rows are visible — expand the disclosure
@@ -1193,6 +1236,84 @@ describe("ReviewHub", () => {
       expect(screen.getByTestId("review-hub-stage-section-button").textContent).toMatch(
         /Stage all/i
       );
+    });
+  });
+
+  describe("diff panel ownership", () => {
+    /** Opens the diff for a file row and settles the open promise. */
+    async function openDiffFor(fileName: string): Promise<void> {
+      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByText(fileName));
+      openPanelDialogMock.mockClear();
+      await act(async () => {
+        fireEvent.click(screen.getByText(fileName).closest("button")!);
+      });
+      await act(async () => {});
+      expect(openPanelDialogMock).toHaveBeenCalledTimes(1);
+      expect(dialogStore.get()).toBe(HUB_PANEL_ID);
+    }
+
+    it("does not reopen the dialog the user just closed", async () => {
+      await openDiffFor("index.ts");
+
+      // Closing clears the global pointer while the hub's row selection is
+      // still set — the exact state that used to read as "open a panel".
+      await act(async () => {
+        closePanelDialogMock();
+      });
+      await act(async () => {});
+
+      expect(openPanelDialogMock).toHaveBeenCalledTimes(1);
+      expect(dialogStore.get()).toBeNull();
+    });
+
+    it("does not open a duplicate after its panel is promoted into the grid", async () => {
+      await openDiffFor("index.ts");
+
+      // Promotion drops the pointer WITHOUT removing the panel: it now lives in
+      // the grid, so a second dialog would be a visible duplicate of it.
+      await act(async () => {
+        dialogStore.set(null);
+      });
+      await act(async () => {});
+
+      expect(openPanelDialogMock).toHaveBeenCalledTimes(1);
+      // And the promoted panel must survive — no close was issued for it.
+      expect(closePanelDialogMock).not.toHaveBeenCalled();
+    });
+
+    it("neither reopens nor closes anything when another surface takes the dialog", async () => {
+      await openDiffFor("index.ts");
+
+      await act(async () => {
+        dialogStore.set("some-other-surfaces-panel");
+      });
+      await act(async () => {});
+
+      expect(openPanelDialogMock).toHaveBeenCalledTimes(1);
+      // Dropping our selection must not reach for the global close: the pointer
+      // now names a panel we don't own.
+      expect(closePanelDialogMock).not.toHaveBeenCalled();
+      expect(dialogStore.get()).toBe("some-other-surfaces-panel");
+    });
+
+    it("reopens on a fresh row click after the dialog was closed", async () => {
+      await openDiffFor("index.ts");
+      await act(async () => {
+        closePanelDialogMock();
+      });
+      await act(async () => {});
+
+      // Clearing the selection on ownership loss must not strand the hub: a new
+      // click is a new intent and has to open again.
+      await act(async () => {
+        fireEvent.click(screen.getByText("app.ts").closest("button")!);
+      });
+      await act(async () => {});
+
+      expect(openPanelDialogMock).toHaveBeenCalledTimes(2);
+      expect(openPanelDialogMock.mock.calls[1]?.[0]).toMatchObject({ filePath: "src/app.ts" });
+      expect(dialogStore.get()).toBe(HUB_PANEL_ID);
     });
   });
 });

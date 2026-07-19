@@ -256,6 +256,8 @@ const DIFF_FIELD_CLASSIFICATION = {
   // Rebuilt live by whichever surface owns the review, so a restored panel
   // never replays a change set whose files have since been committed.
   changeSet: false,
+  // Cursor into that runtime set — meaningless without it, so it dies with it.
+  viewedKey: false,
 } as const satisfies Record<keyof DiffPanelData, boolean>;
 
 // ── Built-in kind exhaustiveness ─────────────────────────────────────
@@ -509,13 +511,17 @@ describe("panel serializer field coverage", () => {
     assertCovers("diff serializer", output, persistedKeys(DIFF_FIELD_CLASSIFICATION));
   });
 
-  it("diff serializer omits the runtime change set", () => {
+  it("diff serializer omits the runtime change set and its cursor", () => {
     const withChangeSet: DiffPanelData = {
       ...diffFixture,
       changeSet: [{ path: "src/app.ts", status: "modified", viewedKey: "modified:src/app.ts" }],
+      viewedKey: "modified:src/app.ts",
     };
     const output = getPanelKindConfig("diff")!.serialize!(withChangeSet) as Record<string, unknown>;
     expect(output).not.toHaveProperty("changeSet");
+    // The cursor points into that set, so persisting it would resurrect a
+    // position in a change set the restored panel no longer has.
+    expect(output).not.toHaveProperty("viewedKey");
   });
 });
 
