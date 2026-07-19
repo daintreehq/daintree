@@ -6,7 +6,7 @@ import {
   type WorktreeViewStoreApi,
 } from "@/store/createWorktreeStore";
 import type { WorktreeSnapshot, WorktreeEventVersion } from "@shared/types";
-import type { CIStatusState, PR } from "@shared/types/forge";
+import type { CIStatusState } from "@shared/types/forge";
 import type { PluginWorktreeLinked } from "@shared/types/plugin";
 import {
   useWorktreeSelectionStore,
@@ -24,7 +24,6 @@ import {
   wakeActiveWorktreeTerminals,
 } from "@/store/wakeActiveWorktreeTerminals";
 import { worktreeClient } from "@/clients/worktreeClient";
-import { mutateCacheEntries } from "@/lib/forgeResourceCache";
 import { notify } from "@/lib/notify";
 import { actionService } from "@/services/ActionService";
 
@@ -595,60 +594,14 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
           overlayVersion(store.getState().version)
         );
 
-        // Sync the PR dropdown cache so the sidebar PRBadge and the
-        // dropdown row can't drift. Read the project path at event time —
-        // capturing it in the effect closure would corrupt cache slots after
-        // a project switch (#4670).
-        const projectPath = useProjectStore.getState().currentProject?.path;
-        if (!projectPath) return;
-        // The dropdown cache stores normalized forge rows whose ciStatus is
-        // the same CIStatusState vocabulary as the detection wire. Only the
-        // three render-bearing states are written; neutral/unknown collapse to
-        // undefined ("no checks") to match the row badge's vocabulary.
-        const cacheCiStatus: CIStatusState | undefined =
-          event.prCiStatus === "success" ||
-          event.prCiStatus === "failure" ||
-          event.prCiStatus === "pending"
-            ? event.prCiStatus
-            : undefined;
-        mutateCacheEntries(projectPath, "pr", (entry, keyRemainder) => {
-          // keyRemainder is `${filterState}:${sortOrder}`; filterState values
-          // ("open" | "closed" | "merged" | "all") contain no colons. Unknown
-          // values fall back to "all" semantics (keep the row, only patch CI)
-          // so a malformed key can never silently evict a PR.
-          const filterState = keyRemainder.split(":")[0];
-          const isFilteredSlot =
-            filterState === "open" || filterState === "closed" || filterState === "merged";
-
-          let changed = false;
-          const items: (typeof entry.items)[number][] = [];
-          for (const item of entry.items) {
-            const pr = item as PR;
-            if (pr.number !== event.prNumber) {
-              items.push(item);
-              continue;
-            }
-            // The PR's state no longer matches this filtered slot (e.g. a
-            // closed PR still sitting in the "open" slot). Drop the row so the
-            // sidebar badge and dropdown converge on the next filter switch
-            // instead of waiting out the 45s TTL. This eviction branch must
-            // stay ahead of the CI-only branch below: it sets changed=true on
-            // removal even when ciStatus is unchanged, which is what triggers
-            // the generation bump in mutateCacheEntries.
-            if (isFilteredSlot && pr.state && pr.state !== event.prState) {
-              changed = true;
-              continue;
-            }
-            if (pr.ciStatus === cacheCiStatus) {
-              items.push(item);
-              continue;
-            }
-            changed = true;
-            items.push({ ...pr, ciStatus: cacheCiStatus });
-          }
-          if (!changed) return null;
-          return { ...entry, items };
-        });
+        // No dropdown-cache patch here on purpose. This handler used to
+        // one-way-write the renderer's forgeResourceCache to stop the sidebar
+        // badge and the dropdown row drifting, but it never reached main's
+        // forgePRListCache, so the next revalidate overwrote it with the coarse
+        // rollup and the two surfaces disagreed again. Both now derive CI
+        // status from one place — `listPRsImpl` enriches through the same
+        // `getCIStatusesImpl`/`prRequiredStatusCache` this event's status comes
+        // from — so the dropdown's own fetch already agrees (#11251).
       })
     );
 

@@ -324,6 +324,75 @@ export async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<
   });
 }
 
+/**
+ * How long a PR page will wait on required-check enrichment before returning
+ * its coarse rows. Enrichment sits on the list's critical path, so an unbounded
+ * await would let a stalled CI query hold the dropdown for the full 15s API
+ * timeout — five sequential chunks on a 100-row page could stall it far longer.
+ * Past the budget the request keeps running and still populates
+ * `prRequiredStatusCache`, so the next read (or the sidebar) picks the derived
+ * status up without a refetch; only this page degrades to coarse.
+ */
+const REQUIRED_STATUS_ENRICHMENT_BUDGET_MS = 4_000;
+
+/**
+ * Replace each open row's coarse `statusCheckRollup` status with the
+ * required-check-aware value the worktree sidebar already renders.
+ *
+ * `LIST_PRS_QUERY` can only carry the repo-wide rollup (GraphQL can't bind
+ * `isRequired(pullRequestNumber:)` to a sibling node's own number inside a
+ * list connection), so the list path used to disagree with the sidebar on any
+ * PR whose non-required checks and required checks differ — a green rollup
+ * with a failing required check read as passing in the dropdown (#11251). The
+ * enrichment the legacy `GitHubPRs.listPullRequests` path performed was
+ * dropped when the forge provider migration re-homed listing here (#9061).
+ *
+ * Routes through {@link getCIStatusesImpl} rather than re-deriving, so both
+ * surfaces share one derivation *and* one `prRequiredStatusCache` entry per
+ * PR. That call is already cache-first, chunked, rate-gated and single-flighted
+ * — deliberately no "skip PRs that already look green" guard on top of it,
+ * which is what froze a stale green permanently in #6149.
+ *
+ * Best-effort by construction: a rate-limit block, a rejected batch, a PR
+ * missing from the response, or enrichment overrunning its time budget leaves
+ * that row's coarse value untouched, and the page still resolves. CI detail
+ * degrading must never blank or stall the dropdown.
+ */
+async function enrichPRPageWithRequiredStatus(repo: RepoRef, items: PR[]): Promise<PR[]> {
+  // Closed and merged rows are skipped: required-check state is meaningless
+  // once a PR is no longer open, the row badge only renders for open PRs, and
+  // enriching them would burn rate-limit budget on every `state: "all"` page.
+  const openNumbers = items.filter((pr) => pr.state === "open").map((pr) => pr.number);
+  if (openNumbers.length === 0) return items;
+
+  // Rejections are handled before the race, not after: past the budget the
+  // request keeps running to warm `prRequiredStatusCache` for the next read,
+  // and an unattached rejection would surface as an unhandled rejection.
+  const pending = getCIStatusesImpl(repo, openNumbers).catch(() => null);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const budget = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), REQUIRED_STATUS_ENRICHMENT_BUDGET_MS);
+  });
+
+  const statuses = await Promise.race([pending, budget]);
+  clearTimeout(timer);
+  if (!statuses) return items;
+
+  return items.map((pr) => {
+    if (pr.state !== "open") return pr;
+    const derived = statuses.get(pr.number);
+    // A miss (unfetched chunk, blocked request, absent PR node) means "no
+    // required-check answer", not "no CI" — keep whatever the rollup mapped.
+    if (!derived) return pr;
+    // `neutral`/`unknown` overwrite a coarse value on purpose: the sidebar
+    // renders that same derived state, so preserving the rollup here would
+    // recreate exactly the disagreement this fix removes. Both collapse to
+    // "no badge" in the row renderer (see getPRCIStatusVisual), never to
+    // "passing" — "no required checks" is not "all checks passed" (#6240).
+    return { ...pr, ciStatus: derived.state };
+  });
+}
+
 export async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Page<PR>> {
   const state = listCacheState(opts);
   const sortOrder = opts.sort === "updated" ? "updated" : "created";
@@ -378,8 +447,11 @@ export async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Pag
         }
       | undefined;
     const nodes = (prs?.nodes ?? []) as Array<Record<string, unknown>>;
+    // Enrich before the guard below so the value written to `forgePRListCache`
+    // is the required-check-aware one — a warm cache hit returns early and
+    // never reaches this enrichment pass.
     const page: Page<PR> = {
-      items: nodes.filter(Boolean).map(toForgePR),
+      items: await enrichPRPageWithRequiredStatus(repo, nodes.filter(Boolean).map(toForgePR)),
       nextCursor: prs?.pageInfo?.endCursor ?? null,
       hasMore: prs?.pageInfo?.hasNextPage ?? false,
       ...(typeof prs?.totalCount === "number" ? { totalCount: prs.totalCount } : {}),
