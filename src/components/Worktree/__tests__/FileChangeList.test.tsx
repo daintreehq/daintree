@@ -43,11 +43,30 @@ const { openPanelDialogMock, setDiffPanelChangeSetMock, setDiffPanelFileMock } =
 // `.getState()` — so the mock has to be a callable carrying `getState`.
 vi.mock("@/store/panelDialogStore", async () => {
   const { useSyncExternalStore } = await import("react");
+  // The stack array must be referentially stable for a given id, or
+  // useSyncExternalStore sees a new snapshot every call and re-renders forever.
+  const EMPTY: string[] = [];
+  let cachedId: string | null = null;
+  let cachedStack: string[] = EMPTY;
+  const stackOf = (id: string | null) => {
+    if (id !== cachedId) {
+      cachedId = id;
+      cachedStack = id ? [id] : EMPTY;
+    }
+    return cachedStack;
+  };
   return {
     usePanelDialogStore: Object.assign(
-      (selector: (state: { panelId: string | null }) => unknown) =>
-        useSyncExternalStore(dialogStore.subscribe, () => selector({ panelId: dialogStore.get() })),
-      { getState: () => ({ panelId: dialogStore.get(), openPanelDialog: openPanelDialogMock }) }
+      (selector: (state: { dialogStack: string[] }) => unknown) =>
+        useSyncExternalStore(dialogStore.subscribe, () =>
+          selector({ dialogStack: stackOf(dialogStore.get()) })
+        ),
+      {
+        getState: () => ({
+          dialogStack: stackOf(dialogStore.get()),
+          openPanelDialog: openPanelDialogMock,
+        }),
+      }
     ),
   };
 });

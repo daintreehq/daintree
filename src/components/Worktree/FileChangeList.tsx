@@ -246,10 +246,13 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
     // or push this list's set into a panel another surface now owns. Dropping
     // it must never reopen anything: the list opens diffs on user activation
     // only, so there is no "we want a panel" state to confuse this with.
-    const dialogPanelId = usePanelDialogStore((state) => state.panelId);
+    // Membership, not top-of-stack: another dialog layered above this diff
+    // leaves it presented and still ours, so equality would read that as the
+    // panel being gone and abandon a live diff.
+    const dialogStack = usePanelDialogStore((state) => state.dialogStack);
     useEffect(() => {
-      if (diffPanelId && dialogPanelId !== diffPanelId) setDiffPanelId(null);
-    }, [dialogPanelId, diffPanelId]);
+      if (diffPanelId && !dialogStack.includes(diffPanelId)) setDiffPanelId(null);
+    }, [dialogStack, diffPanelId]);
 
     const groupedChanges = useMemo((): FolderGroup[] => {
       if (!groupByFolder) return [];

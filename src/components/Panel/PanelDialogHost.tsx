@@ -8,30 +8,66 @@ import { Button } from "@/components/ui/button";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 
 /**
- * Presents a panel as a modal dialog — the third presentation alongside
+ * Presents panels as modal dialogs — the third presentation alongside
  * `GridPanel` and `DockedPanel`.
  *
- * The panel is a normal registry record at `location: "dialog"`, so its kind's
+ * Each panel is a normal registry record at `location: "dialog"`, so its kind's
  * component renders here unmodified rather than being duplicated as a bespoke
  * modal. `AppDialog` owns the surface, focus trap, Escape handling, and focus
  * restore; `ContentPanel` suppresses its own header for this location so the
  * title and close control aren't drawn twice.
+ *
+ * Every entry in the stack stays mounted, not just the top one: a dialog panel
+ * can open another (the review hub drills into a per-file diff), and unmounting
+ * the parent to show the child would discard all of the parent's local state
+ * (#11243). Only the topmost frame is focused.
  *
  * Lifecycle is owned by the store, not by this component's effects: React 19
  * StrictMode double-invokes effects in dev, which would destroy and recreate
  * the panel record on mount.
  */
 export function PanelDialogHost() {
-  const panelId = usePanelDialogStore((state) => state.panelId);
+  const dialogStack = usePanelDialogStore((state) => state.dialogStack);
+
+  if (dialogStack.length === 0) return null;
+
+  return (
+    <>
+      {dialogStack.map((panelId, index) => (
+        <PanelDialogFrame
+          key={panelId}
+          panelId={panelId}
+          // The base frame keeps the standard modal layer; anything layered on
+          // top needs the nested tier or it would paint under its own parent.
+          isNested={index > 0}
+          isTop={index === dialogStack.length - 1}
+        />
+      ))}
+    </>
+  );
+}
+
+function PanelDialogFrame({
+  panelId,
+  isNested,
+  isTop,
+}: {
+  panelId: string;
+  isNested: boolean;
+  isTop: boolean;
+}) {
   const requestSeq = usePanelDialogStore((state) => state.requestSeq);
-  const closePanelDialog = usePanelDialogStore((state) => state.closePanelDialog);
+  const closePanelDialogById = usePanelDialogStore((state) => state.closePanelDialogById);
   const promoteToGrid = usePanelDialogStore((state) => state.promoteToGrid);
   const reconcileRemovedPanel = usePanelDialogStore((state) => state.reconcileRemovedPanel);
 
   // Keyed read, not a subscription to the whole `panelsById` map: that map
   // churns on every panel update and would re-render the dialog with it.
-  const panel = usePanelStore(
-    useCallback((state) => (panelId ? state.panelsById[panelId] : undefined), [panelId])
+  const panel = usePanelStore(useCallback((state) => state.panelsById[panelId], [panelId]));
+
+  const handleClose = useCallback(
+    () => closePanelDialogById(panelId),
+    [closePanelDialogById, panelId]
   );
 
   const handlePromote = useCallback(() => {
@@ -44,10 +80,10 @@ export function PanelDialogHost() {
   // a bulk action). This only clears a dangling id — it never creates or
   // destroys the panel, so StrictMode's double invoke is harmless.
   useEffect(() => {
-    if (panelId && !panel) reconcileRemovedPanel(panelId);
+    if (!panel) reconcileRemovedPanel(panelId);
   }, [panelId, panel, reconcileRemovedPanel]);
 
-  if (!panelId || !panel) return null;
+  if (!panel) return null;
 
   const definition = getPanelKindDefinition(panel.kind ?? "terminal");
   if (!definition) return null;
@@ -57,23 +93,28 @@ export function PanelDialogHost() {
   return (
     <AppDialog
       isOpen={true}
-      onClose={closePanelDialog}
+      onClose={handleClose}
       size="6xl"
       maxHeight="max-h-[85vh]"
+      zIndex={isNested ? "nested" : "modal"}
       data-testid="panel-dialog"
     >
       <AppDialog.Header>
         <AppDialog.Title>{panel.title}</AppDialog.Title>
         <div className="flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handlePromote}
-            data-testid="panel-dialog-open-as-panel"
-          >
-            <PanelTop className="h-3.5 w-3.5" />
-            Open as panel
-          </Button>
+          {/* Promotion always targets the topmost dialog, so it is only offered
+              there — a suspended parent's button would move the wrong panel. */}
+          {isTop && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handlePromote}
+              data-testid="panel-dialog-open-as-panel"
+            >
+              <PanelTop className="h-3.5 w-3.5" />
+              Open as panel
+            </Button>
+          )}
           <AppDialog.CloseButton />
         </div>
       </AppDialog.Header>
@@ -90,10 +131,10 @@ export function PanelDialogHost() {
             id={panelId}
             title={panel.title}
             worktreeId={panel.worktreeId}
-            isFocused={true}
+            isFocused={isTop}
             location="dialog"
             onFocus={noop}
-            onClose={closePanelDialog}
+            onClose={handleClose}
           />
         </ErrorBoundary>
       </AppDialog.BodyScroll>
