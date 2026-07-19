@@ -101,10 +101,7 @@ function makeCommitsRollup(state: string | null) {
  * itself never consults the gate, so only the enrichment is suppressed.
  */
 function suppressRequiredStatusEnrichment() {
-  mockShouldBlockRequest.mockReturnValue({
-    blocked: true,
-    reason: "test: required-status enrichment suppressed",
-  });
+  mockShouldBlockRequest.mockReturnValue({ blocked: true, reason: "primary" });
 }
 
 /** A `buildBatchRequiredChecksQuery` response for the `pr_<number>` aliases. */
@@ -648,7 +645,7 @@ describe("listPRs required-check enrichment", () => {
   });
 
   it("keeps the coarse value and still resolves when the rate gate blocks", async () => {
-    mockShouldBlockRequest.mockReturnValue({ blocked: true, reason: "graphql budget" });
+    mockShouldBlockRequest.mockReturnValue({ blocked: true, reason: "primary" });
     mockGraphQLClient.mockResolvedValueOnce(
       prListResponse([makePRNode(1, "feature/a", undefined, makeCommitsRollup("SUCCESS"))])
     );
