@@ -159,6 +159,141 @@ describe("WorktreeStoreProvider — surviving terminals on worktree removal", ()
     expect(usePanelStore.getState().panelIds).toContain("agent-a");
   });
 
+  it("keeps the deleted worktree active while its terminals survive", async () => {
+    const { store } = await renderProvider();
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-1")], nextV());
+    });
+    setPanels([{ id: "agent-a", worktreeId: "wt-1" }]);
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1", restoreWorktreeId: "wt-1" });
+
+    act(() => {
+      emit("worktree-removed", removeEvent("wt-1"));
+    });
+
+    const selection = useWorktreeSelectionStore.getState();
+    // The user may be mid-cleanup on the ghost — deletion must not yank them
+    // away; the fallback to main happens only when the ghost row itself goes.
+    expect(selection.activeWorktreeId).toBe("wt-1");
+    // But a deleted id must never remain the durable restore target — the
+    // ghost row is in-memory only and resolves to nothing after a restart.
+    expect(selection.restoreWorktreeId).toBeNull();
+  });
+
+  it("clears the active selection when the removed worktree has no surviving terminals", async () => {
+    const { store } = await renderProvider();
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-1")], nextV());
+    });
+    setPanels([]);
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1", restoreWorktreeId: "wt-1" });
+
+    act(() => {
+      emit("worktree-removed", removeEvent("wt-1"));
+    });
+
+    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBeNull();
+  });
+
+  it("suppresses the host's auto-switch echo that precedes a UI delete (activated → removed)", async () => {
+    const { store } = await renderProvider();
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-1"), makeWorktree("main")], nextV());
+    });
+    setPanels([{ id: "agent-a", worktreeId: "wt-1" }]);
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
+    act(() => {
+      store.setState({ deletingIds: new Set(["wt-1"]) });
+    });
+
+    // The host switches itself to main before removing the worktree and
+    // echoes that switch; the user mid-delete must not be yanked off wt-1.
+    act(() => {
+      emit("worktree-activated", { type: "worktree-activated", worktreeId: "main", ...nextV() });
+    });
+    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-1");
+
+    act(() => {
+      emit("worktree-removed", removeEvent("wt-1"));
+    });
+    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-1");
+    expect(useWorktreeSelectionStore.getState().deletedWorktrees.has("wt-1")).toBe(true);
+  });
+
+  it("suppresses the host's auto-switch echo that follows an external removal (removed → activated)", async () => {
+    const { store } = await renderProvider();
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-1"), makeWorktree("main")], nextV());
+    });
+    setPanels([{ id: "agent-a", worktreeId: "wt-1" }]);
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
+
+    act(() => {
+      emit("worktree-removed", removeEvent("wt-1"));
+      emit("worktree-activated", { type: "worktree-activated", worktreeId: "main", ...nextV() });
+    });
+
+    // The active id is a ghost row with survivors — the echo must not win.
+    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-1");
+  });
+
+  it("still follows the host's switch when the deletion left no surviving terminals", async () => {
+    const { store } = await renderProvider();
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-1"), makeWorktree("main")], nextV());
+    });
+    setPanels([]);
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
+
+    act(() => {
+      emit("worktree-removed", removeEvent("wt-1"));
+      emit("worktree-activated", { type: "worktree-activated", worktreeId: "main", ...nextV() });
+    });
+
+    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("main");
+  });
+
+  it("keeps the ghost selection through a duplicate removal event", async () => {
+    const { store } = await renderProvider();
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-1")], nextV());
+    });
+    setPanels([{ id: "agent-a", worktreeId: "wt-1" }]);
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
+
+    act(() => {
+      emit("worktree-removed", removeEvent("wt-1"));
+      emit("worktree-removed", removeEvent("wt-1"));
+    });
+
+    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-1");
+    expect(useWorktreeSelectionStore.getState().deletedWorktrees.has("wt-1")).toBe(true);
+  });
+
+  it("ignores a stale same-epoch removal replay entirely", async () => {
+    const { store } = await renderProvider();
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-1")], nextV());
+    });
+    setPanels([{ id: "agent-a", worktreeId: "wt-1" }]);
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1", restoreWorktreeId: "wt-1" });
+
+    act(() => {
+      // seq 0 is older than the snapshot's version — applyRemove rejects it,
+      // and none of the selection/ghost side effects may run either.
+      emit("worktree-removed", {
+        type: "worktree-removed",
+        worktreeId: "wt-1",
+        epoch: TEST_EPOCH,
+        seq: 0,
+      });
+    });
+
+    expect(store.getState().worktrees.has("wt-1")).toBe(true);
+    expect(useWorktreeSelectionStore.getState().restoreWorktreeId).toBe("wt-1");
+    expect(useWorktreeSelectionStore.getState().deletedWorktrees.has("wt-1")).toBe(false);
+  });
+
   it("records a deleted-worktree row carrying the last-known title and path", async () => {
     const { store } = await renderProvider();
     act(() => {

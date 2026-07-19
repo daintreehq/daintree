@@ -382,12 +382,44 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
         store.getState().applyRemove(event.worktreeId, { epoch: event.epoch, seq: event.seq });
         if (epochChanged) fetchInitialState();
 
+        // applyRemove version-gates internally but returns void: a stale
+        // same-epoch replay leaves the worktree in the map. Selection and
+        // ghost side effects must not run on a rejected event — a replay
+        // would otherwise demote the restore target or clear the selection
+        // for a worktree that still exists. Cross-epoch events keep the old
+        // behavior: the refetch reconciles the map, and the ghost row must
+        // still be recorded for survivors of a removal across a host restart.
+        if (!epochChanged && store.getState().worktrees.has(event.worktreeId)) {
+          return;
+        }
+
         // Side effect: invalidate pulse cache
         usePulseStore.getState().invalidate(event.worktreeId);
 
-        // Side effect: clear active selection if removed
+        // Side effect: selection handling for the removed worktree. When
+        // terminals survive, the id lives on as a ghost row and the user may
+        // be mid-cleanup on it — deleting must NOT yank them away, so the
+        // selection stays put and useActiveWorktreeSync falls back to main
+        // only once the ghost row itself is gone (last terminal closed, row
+        // dismissed, or auto-cleanup fired). Only the durable restore target
+        // is demoted (below) — a deleted id must never persist across
+        // restarts. With no survivors there is nothing left to look at, so
+        // the selection clears immediately as before.
         const selectionStore = useWorktreeSelectionStore.getState();
-        if (selectionStore.activeWorktreeId === event.worktreeId) {
+        const willBecomeGhost =
+          !!worktree && getDeletedWorktreeTerminalIds(event.worktreeId).length > 0;
+        // A removed id must never remain the durable restore target — ghost
+        // or not, it can't be restored after a restart. No-ops unless the id
+        // IS the restore target (or its fleet-parked snapshot).
+        selectionStore.clearRestoreTarget(event.worktreeId);
+        // `deletedWorktrees.has` guards a duplicate removal event for an id
+        // that is already a ghost (snapshot lookup misses → willBecomeGhost
+        // false): the live ghost row must not lose the selection to a replay.
+        if (
+          selectionStore.activeWorktreeId === event.worktreeId &&
+          !willBecomeGhost &&
+          !selectionStore.deletedWorktrees.has(event.worktreeId)
+        ) {
           selectionStore.setActiveWorktree(null);
         }
 
@@ -407,7 +439,7 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
         // `applyRemove` dropped it from the live map. Both delete entry points
         // (the delete dialog and the `worktree.delete` action) funnel through
         // this event, so they get identical behaviour from this one change.
-        if (worktree && getDeletedWorktreeTerminalIds(event.worktreeId).length > 0) {
+        if (willBecomeGhost) {
           const cleanupSeconds = usePreferencesStore.getState().deletedWorktreeCleanupSeconds;
           selectionStore.addDeletedWorktree({
             id: event.worktreeId,
@@ -502,6 +534,26 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
         // preceding `worktree-removed` event.
         if (selectionStore.activeWorktreeId === event.worktreeId) {
           return;
+        }
+        // Deleting the active worktree makes the host auto-switch to main and
+        // echo that switch here — but a user standing on a worktree whose
+        // terminals survive must stay on its ghost row, not get yanked to
+        // main mid-cleanup. Two orderings exist: UI deletes emit
+        // activated(main) BEFORE worktree-removed (the active worktree is
+        // then mid-delete: `deletingIds`); external removals emit it AFTER
+        // (the active id is then already a ghost row). Both suppress only
+        // while terminals actually survive — a deletion with nothing left
+        // follows the auto-switch as before.
+        const activeId = selectionStore.activeWorktreeId;
+        if (activeId !== null) {
+          const isActiveGhost = selectionStore.deletedWorktrees.has(activeId);
+          const isActiveDeleting = store.getState().deletingIds.has(activeId);
+          if (
+            (isActiveGhost || isActiveDeleting) &&
+            getDeletedWorktreeTerminalIds(activeId).length > 0
+          ) {
+            return;
+          }
         }
         selectionStore.setPendingWorktree(event.worktreeId);
         selectionStore.selectWorktree(event.worktreeId);
