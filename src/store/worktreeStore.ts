@@ -53,6 +53,13 @@ export interface DeletedWorktree {
   path: string;
   deletedAt: number;
   /**
+   * When the row's auto-cleanup fires (terminals move to trash, row goes).
+   * `null` while cleanup is off or the countdown hasn't been armed yet. Owned
+   * entirely by the cleanup sweep (`deletedWorktreeCleanup.ts`), which arms,
+   * pauses (by re-extending), and fires it — nothing else writes this.
+   */
+  expiresAt: number | null;
+  /**
    * Index the row occupied in the sidebar's scrollable list when it was
    * deleted, so the row holds its slot instead of jumping to an edge.
    *
@@ -190,6 +197,7 @@ interface WorktreeSelectionState {
   dismissPendingCreation: (path: string) => void;
   addDeletedWorktree: (worktree: DeletedWorktree) => void;
   dismissDeletedWorktree: (worktreeId: string) => void;
+  setDeletedWorktreeExpiry: (worktreeId: string, expiresAt: number | null) => void;
   pruneDeletedWorktrees: (liveWorktreeIds: ReadonlySet<string>) => void;
   toggleWorktreeExpanded: (id: string) => void;
   setWorktreeExpanded: (id: string, expanded: boolean) => void;
@@ -805,6 +813,16 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       if (!state.deletedWorktrees.has(worktreeId)) return state;
       const next = new Map(state.deletedWorktrees);
       next.delete(worktreeId);
+      return { deletedWorktrees: next };
+    });
+  },
+
+  setDeletedWorktreeExpiry: (worktreeId, expiresAt) => {
+    set((state) => {
+      const entry = state.deletedWorktrees.get(worktreeId);
+      if (!entry || entry.expiresAt === expiresAt) return state;
+      const next = new Map(state.deletedWorktrees);
+      next.set(worktreeId, { ...entry, expiresAt });
       return { deletedWorktrees: next };
     });
   },

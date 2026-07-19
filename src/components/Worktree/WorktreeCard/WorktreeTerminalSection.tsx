@@ -410,7 +410,10 @@ export function WorktreeTerminalSection({
                   type="button"
                   className="ml-2 rounded-sm text-text-muted hover:text-text-secondary transition-colors"
                   aria-label="Dismiss hint"
-                  onClick={() => {
+                  onClick={(e) => {
+                    // Dismissing the hint must not double as selecting the
+                    // card the section happens to live in.
+                    e.stopPropagation();
                     localStorage.setItem(FLEET_HINT_DISMISSED_KEY, "1");
                     setHintDismissed(true);
                   }}

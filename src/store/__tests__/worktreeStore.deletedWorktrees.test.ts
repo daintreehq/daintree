@@ -30,6 +30,7 @@ function makeDeleted(overrides: Partial<DeletedWorktree> = {}): DeletedWorktree 
     title: "feature/x",
     path: "/repo/wt-1",
     deletedAt: 1000,
+    expiresAt: null,
     pinnedIndex: 0,
     ...overrides,
   };

@@ -14,6 +14,8 @@ import {
   getPinnedDeletedWorktreeIndex,
 } from "@/store/worktreeStore";
 import { usePanelStore } from "@/store/panelStore";
+import { usePreferencesStore } from "@/store/preferencesStore";
+import { startDeletedWorktreeCleanup } from "@/store/deletedWorktreeCleanup";
 import { usePulseStore } from "@/store/pulseStore";
 import { useProjectStore } from "@/store/projectStore";
 import { usePRCircuitBreakerStore } from "@/store/prCircuitBreakerStore";
@@ -398,13 +400,15 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
         // with independent owners (#11083), so the panels are left completely
         // untouched here: their processes keep running, and the deleted-worktree row only
         // gives them somewhere to live in the sidebar until the user drags
-        // them to another worktree or dismisses the row.
+        // them to another worktree, dismisses the row, or its auto-cleanup
+        // countdown moves them to trash (deletedWorktreeCleanup.ts).
         //
         // Metadata is snapshotted from `worktree`, read above *before*
         // `applyRemove` dropped it from the live map. Both delete entry points
         // (the delete dialog and the `worktree.delete` action) funnel through
         // this event, so they get identical behaviour from this one change.
         if (worktree && getDeletedWorktreeTerminalIds(event.worktreeId).length > 0) {
+          const cleanupSeconds = usePreferencesStore.getState().deletedWorktreeCleanupSeconds;
           selectionStore.addDeletedWorktree({
             id: event.worktreeId,
             // Detached-HEAD worktrees have no branch; fall back to the folder
@@ -413,6 +417,11 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
               worktree.branch ?? worktree.path.split(/[/\\]/).filter(Boolean).pop() ?? "Unknown",
             path: worktree.path,
             deletedAt: Date.now(),
+            // Armed HERE, not by the sweep's next tick — deletion starts the
+            // countdown even if this view is hidden and its sweep throttled.
+            // The sweep owns it from now on (defers, re-arms on preference
+            // change, fires into the trash).
+            expiresAt: cleanupSeconds > 0 ? Date.now() + cleanupSeconds * 1000 : null,
             pinnedIndex: getPinnedDeletedWorktreeIndex(event.worktreeId),
           });
         }
@@ -439,6 +448,10 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
           .pruneDeletedWorktrees(new Set(store.getState().worktrees.keys()));
       })
     );
+
+    // Age-based auto-cleanup for deleted-worktree rows: arms/defers/fires each
+    // row's countdown per the user's preference (see deletedWorktreeCleanup.ts).
+    cleanups.push(startDeletedWorktreeCleanup());
 
     // Pulse-cache pruning backstop: the `worktree-removed` event invalidates a
     // single worktree, but `applySnapshot` on a host restart can replace the

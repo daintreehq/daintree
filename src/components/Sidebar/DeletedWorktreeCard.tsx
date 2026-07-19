@@ -1,6 +1,5 @@
-import { useCallback, useMemo } from "react";
-import { FolderX } from "lucide-react";
-import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { useCallback, useMemo, useState, type MouseEvent } from "react";
+import { FolderX, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePanelStore } from "@/store/panelStore";
 import {
@@ -8,78 +7,74 @@ import {
   useWorktreeSelectionStore,
   type DeletedWorktree,
 } from "@/store/worktreeStore";
+import { usePreferencesStore } from "@/store/preferencesStore";
 import { useTerminalPendingDestructiveActionStore } from "@/store/terminalPendingDestructiveActionStore";
-import {
-  SortableWorktreeTerminal,
-  getAccordionDragId,
-} from "@/components/DragDrop/SortableWorktreeTerminal";
-import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
+import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
+import { useWorktreeTerminals } from "@/hooks/useWorktreeTerminals";
+import { WorktreeTerminalSection } from "@/components/Worktree/WorktreeCard/WorktreeTerminalSection";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
-import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
-import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
-import { isPtyPanel } from "@shared/types/panel";
-import type { PanelInstance } from "@shared/types/panel";
+import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
 
 interface DeletedWorktreeCardProps {
   worktree: DeletedWorktree;
 }
 
 /**
- * A deleted-worktree terminal row.
- *
- * Deliberately *not* `WorktreeTerminalSection`'s `TerminalRow`: that row's
- * primary affordance is click-to-focus, which cannot work here. Both the grid
- * and the dock filter panels by `activeWorktreeId`, and a deleted worktree can
- * never be active — so a deleted-worktree terminal is genuinely unviewable in place. The
- * row therefore presents identity only, and dragging it to a live worktree is
- * the single real affordance (hence the card's subtitle).
- */
-function DeletedWorktreeTerminalRow({ panel }: { panel: PanelInstance }) {
-  const dragHandle = useDragHandle();
-  const chrome = deriveTerminalChrome(panel);
-  const agentState = getTerminalAgentDisplayState(
-    chrome,
-    isPtyPanel(panel) ? panel.agentState : undefined
-  );
-
-  return (
-    <div
-      data-terminal-id={panel.id}
-      data-deleted-worktree-terminal-id={panel.id}
-      data-terminal-runtime-kind={chrome.runtimeKind}
-      data-terminal-agent-id={chrome.agentId || undefined}
-      data-terminal-agent-state={agentState || undefined}
-      ref={dragHandle?.setActivatorNodeRef}
-      {...(dragHandle?.listeners ?? {})}
-      className="group/deletedrow flex items-center gap-2 px-3 py-2 cursor-grab active:cursor-grabbing"
-    >
-      <div className="shrink-0 opacity-60 group-hover/deletedrow:opacity-100 transition-opacity">
-        <TerminalIcon kind={panel.kind} chrome={chrome} className="w-3 h-3" />
-      </div>
-      <span className="truncate text-xs font-medium text-text-secondary" title={panel.title}>
-        {panel.title}
-      </span>
-    </div>
-  );
-}
-
-/**
  * Sidebar row for a worktree whose directory is gone but whose terminals are
  * still running (#11232).
  *
- * Intentionally a separate component rather than a variant of `WorktreeCard`:
- * a deleted worktree has no git status, no branch operations, and nowhere to open an
- * editor, so it renders none of that chrome. It also deliberately does *not*
- * use `SortableWorktreeCard`, which is what registers a card as a drop target
- * via `type: "worktree"` drag data — a deleted worktree must never accept terminals, and
- * omitting that wrapper excludes it by construction rather than by a flag
- * `DndProvider` would have to check.
+ * Shares the live card's design language on purpose: same header scale, the
+ * same `WorktreeTerminalSection` (collapsed "N active" bar with waiting
+ * indicators, expandable rows, drag handles), and the same select-on-click
+ * behaviour — activating it shows its surviving terminals in the grid/dock.
+ * What marks it as deleted is the `FolderX` icon, the badge, the struck-through
+ * path, and a slight fade. It deliberately does *not* use
+ * `SortableWorktreeCard`, which is what registers a card as a drop target via
+ * `type: "worktree"` drag data — a deleted worktree must never accept
+ * terminals, and omitting that wrapper excludes it by construction rather than
+ * by a flag `DndProvider` would have to check.
  */
 export function DeletedWorktreeCard({ worktree }: DeletedWorktreeCardProps) {
   const panelsById = usePanelStore((s) => s.panelsById);
   const panelIdsByWorktreeId = usePanelStore((s) => s.panelIdsByWorktreeId);
+  const setFocused = usePanelStore((s) => s.setFocused);
+  const openDockTerminal = usePanelStore((s) => s.openDockTerminal);
+  const pingTerminal = usePanelStore((s) => s.pingTerminal);
   const requestDestructiveAction = useTerminalPendingDestructiveActionStore((s) => s.request);
   const dismissDeletedWorktree = useWorktreeSelectionStore((s) => s.dismissDeletedWorktree);
+  const isActive = useWorktreeSelectionStore((s) => s.activeWorktreeId === worktree.id);
+  const selectWorktree = useWorktreeSelectionStore((s) => s.selectWorktree);
+  const trackTerminalFocus = useWorktreeSelectionStore((s) => s.trackTerminalFocus);
+  const isTerminalsExpanded = useWorktreeSelectionStore((s) =>
+    s.expandedTerminals.has(worktree.id)
+  );
+  const toggleTerminalsExpanded = useWorktreeSelectionStore((s) => s.toggleTerminalsExpanded);
+
+  const { counts, terminals } = useWorktreeTerminals(worktree.id);
+
+  // Auto-cleanup countdown (deletedWorktreeCleanup.ts owns the deadline; this
+  // is display only): a numeric seconds readout in the header plus a depleting
+  // bar along the bottom edge. Both hold at full while the sweep defers the
+  // deadline (drag in progress, agent still working, confirm dialog open).
+  const cleanupSeconds = usePreferencesStore((s) => s.deletedWorktreeCleanupSeconds);
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  const expiresAt = worktree.expiresAt;
+  const hasCountdown = expiresAt !== null && cleanupSeconds > 0;
+  useVisibilityAwareInterval(() => setNowTick(Date.now()), 1000, hasCountdown);
+  // The sweep (which re-extends the deadline while deferred) and this tick run
+  // on independent 1s phases — clamp remaining to the TTL (no "61s" flicker)
+  // and snap the top ~1.5s to exactly full so a paused bar holds steady
+  // instead of sawtoothing between full and full-minus-a-tick.
+  const cleanupMs = cleanupSeconds * 1000;
+  const rawRemainingMs = expiresAt !== null ? Math.max(0, expiresAt - nowTick) : 0;
+  const remainingMs = cleanupMs > 0 ? Math.min(rawRemainingMs, cleanupMs) : rawRemainingMs;
+  const remainingSeconds = Math.ceil(remainingMs / 1000);
+  const remainingFraction = hasCountdown
+    ? remainingMs >= cleanupMs - 1500
+      ? 1
+      : Math.min(1, remainingMs / cleanupMs)
+    : 0;
 
   const panels = useMemo(() => {
     void panelIdsByWorktreeId;
@@ -103,65 +98,157 @@ export function DeletedWorktreeCard({ worktree }: DeletedWorktreeCardProps) {
     });
   }, [panels, worktree.id, requestDestructiveAction, dismissDeletedWorktree]);
 
+  // `source: "focus"` — viewing a ghost row is an incidental, session-only
+  // selection. The user-source path would persist the deleted id as the
+  // durable restore target, and after a restart (deletedWorktrees is
+  // in-memory only) panel restoration would re-home surviving sessions onto
+  // an id with neither a live worktree nor a ghost row.
+  const handleSelect = useCallback(() => {
+    selectWorktree(worktree.id, { source: "focus" });
+  }, [selectWorktree, worktree.id]);
+
+  // Mirrors WorktreeCard's handleTerminalSelect: activate this worktree first
+  // so the grid/dock (both filtered by activeWorktreeId) can actually show the
+  // terminal, then focus and ping it.
+  const handleTerminalSelect = useCallback(
+    (terminal: PtyPanelData) => {
+      if (!isActive) {
+        if (terminal.worktreeId) {
+          trackTerminalFocus(terminal.worktreeId, terminal.id);
+        }
+        selectWorktree(worktree.id, { source: "focus" });
+      }
+      if (terminal.location === "dock") {
+        openDockTerminal(terminal.id);
+      } else {
+        setFocused(terminal.id);
+      }
+      pingTerminal(terminal.id);
+    },
+    [
+      isActive,
+      trackTerminalFocus,
+      selectWorktree,
+      worktree.id,
+      openDockTerminal,
+      setFocused,
+      pingTerminal,
+    ]
+  );
+
+  const handleToggleTerminals = useCallback(
+    (e: MouseEvent) => {
+      e.stopPropagation();
+      toggleTerminalsExpanded(worktree.id);
+    },
+    [toggleTerminalsExpanded, worktree.id]
+  );
+
   // Defensive: the store prunes empty deleted-worktree rows, so an empty row should never
   // reach render. Bailing keeps a torn frame from showing a zero-terminal card.
   if (panels.length === 0) return null;
 
   const noun = panels.length === 1 ? "terminal" : "terminals";
+  const closeLabel = `Close ${panels.length} ${noun}`;
 
   return (
     <div
       data-deleted-worktree-id={worktree.id}
-      // The dashed outline is the load-bearing "this is not a real worktree"
-      // signal — live cards are always solid. Everything else stays neutral and
-      // muted on purpose: a deleted worktree is a resting state the user chose,
-      // not a failure, so no error or warning colour appears anywhere here.
-      className="border-b border-border-default bg-surface-inset/40 border-l-2 border-l-transparent outline-dashed outline-1 -outline-offset-1 outline-border-strong/50"
+      className="sidebar-worktree-card group/card relative isolate transition-colors duration-150 border-b border-border-default"
+      data-active={isActive ? "true" : undefined}
+      data-hoverable={!isActive ? "true" : undefined}
+      aria-label={`Deleted worktree: ${worktree.title}`}
+      onClick={handleSelect}
     >
-      <div className="flex items-start gap-2 px-4 py-3">
-        <FolderX className="w-4 h-4 text-text-muted mt-0.5 shrink-0" aria-hidden="true" />
-        <div className="flex-1 min-w-0 space-y-0.5">
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="truncate text-sm font-medium text-text-muted">{worktree.title}</span>
+      <button
+        type="button"
+        data-card-select-overlay=""
+        className="absolute inset-0 z-0 outline-hidden"
+        aria-label={`Select deleted worktree: ${worktree.title}`}
+      />
+      <div
+        className={cn(
+          // The fade is the "this worktree is gone" signal; it lifts on hover,
+          // focus, and while active so the card stays fully usable. Left
+          // padding matches live sidebar rows' drag-handle gutter (w-4 + pl-1)
+          // so the icon sits exactly in line with live branch icons.
+          "relative z-10 pl-5 pr-4 py-3 transition-opacity duration-150",
+          !isActive && "opacity-70 group-hover/card:opacity-100 group-focus-within/card:opacity-100"
+        )}
+      >
+        {/* Mirrors WorktreeHeader's title row: same row height, and the same
+            icon size/stroke/gap/typography as BranchLabel, with FolderX in
+            the branch-type icon's slot. */}
+        <div className="flex items-center gap-2 min-h-[22px]">
+          <span className="flex items-center gap-1.5 min-w-0 flex-1">
+            <FolderX
+              className="w-3.5 h-3.5 text-text-muted shrink-0"
+              strokeWidth={2.5}
+              aria-hidden="true"
+            />
+            <span
+              className="truncate font-mono text-[11px] font-medium text-text-muted"
+              title={worktree.title}
+            >
+              {worktree.title}
+            </span>
             <span className="shrink-0 rounded-full bg-overlay-soft px-1.5 py-0.5 text-[10px] font-medium text-text-muted">
               Deleted
             </span>
+          </span>
+          <div className="flex items-center gap-2 shrink-0">
+            {hasCountdown && (
+              <span
+                className="font-mono text-[11px] tabular-nums text-text-muted"
+                title={`Closes automatically in ${remainingSeconds}s`}
+                data-testid="deleted-worktree-countdown-seconds"
+              >
+                {remainingSeconds}s
+              </span>
+            )}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleDismiss();
+                  }}
+                  className="sidebar-action-button shrink-0 p-1.5 -my-1.5 text-status-error/70 hover:text-status-error rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                  aria-label={closeLabel}
+                >
+                  <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="top">{closeLabel}</TooltipContent>
+            </Tooltip>
           </div>
-          <div className="truncate text-xs text-text-muted line-through" title={worktree.path}>
-            {worktree.path}
-          </div>
-          <div className="text-xs text-text-muted">Drag terminals to another worktree</div>
         </div>
-        <button
-          type="button"
-          onClick={handleDismiss}
-          className={cn(
-            "shrink-0 rounded-sm text-xs text-text-muted transition-colors",
-            "hover:text-daintree-text focus-visible:outline focus-visible:outline-2",
-            "focus-visible:outline-daintree-accent"
-          )}
-        >
-          {`Close ${panels.length} ${noun}`}
-        </button>
+        <div className="truncate text-xs text-text-muted line-through mt-0.5" title={worktree.path}>
+          {worktree.path}
+        </div>
+        <WorktreeTerminalSection
+          worktreeId={worktree.id}
+          isExpanded={isTerminalsExpanded}
+          counts={counts}
+          terminals={terminals}
+          onToggle={handleToggleTerminals}
+          onTerminalSelect={handleTerminalSelect}
+        />
       </div>
-
-      <SortableContext
-        items={panels.map((panel) => getAccordionDragId(panel.id))}
-        strategy={verticalListSortingStrategy}
-      >
-        <div role="list" aria-label={`Terminals from deleted worktree ${worktree.title}`}>
-          {panels.map((panel, index) => (
-            <SortableWorktreeTerminal
-              key={panel.id}
-              terminal={panel}
-              worktreeId={worktree.id}
-              sourceIndex={index}
-            >
-              <DeletedWorktreeTerminalRow panel={panel} />
-            </SortableWorktreeTerminal>
-          ))}
+      {hasCountdown && (
+        <div
+          className="absolute inset-x-0 bottom-0 z-10 h-[2px]"
+          title={`Closes automatically in ${remainingSeconds}s`}
+          data-testid="deleted-worktree-countdown"
+          aria-hidden="true"
+        >
+          <div
+            className="h-full bg-border-strong transition-[width] duration-1000 ease-linear motion-reduce:transition-none"
+            style={{ width: `${remainingFraction * 100}%` }}
+          />
         </div>
-      </SortableContext>
+      )}
     </div>
   );
 }
