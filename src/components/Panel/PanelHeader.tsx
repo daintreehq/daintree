@@ -52,6 +52,7 @@ import { cn } from "@/lib/utils";
 import { formatShortcutForTooltip } from "@/lib/platform";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { SurfaceHeader } from "@/components/ui/SurfaceHeader";
 import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
 import { STATE_COLORS, STATE_ICONS } from "@/components/Worktree/terminalStateConfig";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
@@ -626,7 +627,13 @@ function PanelHeaderComponent({
   const headerActivatorRef = headerHasDrag ? dragHandle?.setActivatorNodeRef : undefined;
 
   return (
-    <div
+    // Compact density supplies the shared frame (h-8, px-3, border-b
+    // border-divider, flex alignment, shrink-0); everything panel-only —
+    // drag surface, state backgrounds, follower stripe, tab strip, badges,
+    // control cluster — stays composed here rather than folded into the
+    // primitive.
+    <SurfaceHeader
+      density="compact"
       ref={headerActivatorRef}
       {...dragListeners}
       tabIndex={headerHasDrag ? 0 : undefined}
@@ -641,8 +648,7 @@ function PanelHeaderComponent({
       data-fleet-previewed={isFleetPreviewed || undefined}
       data-pane-chrome=""
       className={cn(
-        "flex items-center justify-between px-3 shrink-0 text-xs transition-colors relative overflow-hidden group select-none",
-        "h-8 border-b border-divider",
+        "text-xs transition-colors relative overflow-hidden group select-none",
         isMaximized
           ? "h-10 bg-daintree-sidebar border-daintree-border"
           : location === "dock"
@@ -1258,7 +1264,7 @@ function PanelHeaderComponent({
           data-testid="fleet-preview-enter-overlay"
         />
       ) : null}
-    </div>
+    </SurfaceHeader>
   );
 }
 
