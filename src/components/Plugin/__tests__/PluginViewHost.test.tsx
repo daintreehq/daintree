@@ -85,9 +85,11 @@ vi.mock("@/components/Panel/panelFocusRegistry", async (importOriginal) => {
   };
 });
 
-// The subset of ErrorBoundary's contract the host relies on. Typed here rather
-// than cast at each read site — a cast would regress the per-rule
-// no-unsafe-type-assertion lint baseline.
+// The subset of ErrorBoundary's contract this suite observes. The boundary now
+// lives inside PluginViewContent; what the host cares about is only that a
+// crashed view still sits inside the chrome. Typed here rather than cast at each
+// read site — a cast would regress the per-rule no-unsafe-type-assertion lint
+// baseline.
 interface CapturedFallbackProps {
   error: Error;
   errorInfo?: React.ErrorInfo;
@@ -102,9 +104,10 @@ interface CapturedBoundaryProps {
   fallback?: React.ComponentType<CapturedFallbackProps>;
 }
 
-// The fake records the props it was handed, so the tests can render the very
-// fallback the host supplied. Asserting only that `fallback` is *a function*
-// would be satisfied by `() => null`.
+// The fake records the props it was handed and renders a reset sentinel once it
+// catches, which is how the chrome tests below observe a crashed view. The
+// fallback's own wiring is asserted in the PluginViewContent suite, which owns
+// the boundary.
 const boundaryProps = vi.hoisted(() => ({ last: null as CapturedBoundaryProps | null }));
 
 // Stub the real ErrorBoundary with a minimal class — exercising the entire
@@ -228,7 +231,8 @@ describe("makePluginViewHost", () => {
   it("passes the panel's extensionState to the mounted view as initialArgs", async () => {
     const capturedProps: Array<Record<string, unknown>> = [];
     // Replace React.lazy so the plugin view renders synchronously (the real
-    // `plugin://` dynamic import never resolves in jsdom). The stub renders a
+    // `plugin://` dynamic import rejects in jsdom — unsupported URL scheme —
+    // so the real view could never mount here). The stub renders a
     // capturing component that records the props the host hands it — proving the
     // spawn-time `extensionState` reaches the view as `initialArgs`.
     vi.doMock("react", async () => {

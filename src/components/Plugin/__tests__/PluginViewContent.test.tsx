@@ -273,7 +273,7 @@ describe("makePluginViewContent", () => {
     });
 
     // Capture the lazy factory so we can drive it directly — the real
-    // `plugin://` import never resolves in jsdom.
+    // `plugin://` import rejects in jsdom with an unsupported-scheme error.
     let capturedFactory: (() => Promise<unknown>) | undefined;
     vi.doMock("react", async () => {
       const actual = await vi.importActual<typeof import("react")>("react");
@@ -414,10 +414,10 @@ describe("makePluginViewContent", () => {
     // render a given generation more than once, and only the identity of the
     // signal handed to the view is contractual.
     const signals: AbortSignal[] = [];
-    // Count factory constructions: `lazy()` memoizes its import promise by
-    // factory identity, so a retry that reuses the old ref would replay the
-    // cached *failed* promise and never re-import. Only a fresh construction
-    // proves the reload actually happens (#9501).
+    // Count wrapper constructions: each `lazy()` caches its import result on its
+    // own payload, so a retry that reuses the old wrapper replays the cached
+    // *failed* result and never re-imports. Only a fresh construction proves the
+    // reload actually happens (#9501).
     const lazyCalls = { count: 0 };
     vi.doMock("react", async () => {
       const actual = await vi.importActual<typeof import("react")>("react");

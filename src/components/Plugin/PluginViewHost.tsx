@@ -58,10 +58,12 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Plugi
     };
   }
 
-  // Created once per host, at factory-construction scope. Calling this inside
-  // `PluginViewHost` — even behind `useMemo` — would produce a new component
-  // type per render, remounting the plugin view and restarting its import every
-  // time a panel prop changed.
+  // Created once per host, at factory-construction scope. Constructing it inside
+  // `PluginViewHost` would produce a new component type per render, remounting
+  // the plugin view and restarting its import every time a panel prop changed.
+  // (`useMemo` with a stable dep array would survive ordinary rerenders, but it
+  // ties the view's identity to a hook that remounts it whenever a dep changes;
+  // the construction belongs outside the component entirely.)
   const PluginViewContent = makePluginViewContent({
     id: kindId,
     name: displayName,

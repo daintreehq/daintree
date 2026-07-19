@@ -186,11 +186,12 @@ export function makePluginViewContent(
 
   function PluginViewContent({ panelId, initialArgs }: PluginViewContentProps) {
     // Store the lazy component in state so retries can swap in a fresh ref
-    // without a useMemo dependency array — `lazy()` memoizes the import
-    // promise by factory-function identity, so retrying after a chunk-load
-    // failure requires a genuinely new factory reference. Using a state
-    // initializer (and `setLazyView(() => createLazyView())` on reset) keeps
-    // exhaustive-deps happy and lets the React Compiler optimize this component.
+    // without a useMemo dependency array. Each `lazy()` wrapper caches its
+    // import result on its own payload, so a chunk-load failure is sticky for
+    // that wrapper — recovering requires constructing a genuinely new one, not
+    // re-invoking the old one. Using a state initializer (and
+    // `setLazyView(() => createLazyView())` on reset) keeps exhaustive-deps
+    // happy and lets the React Compiler optimize this component.
     const [LazyView, setLazyView] = useState<LazyExoticComponent<ComponentType<PanelViewProps>>>(
       () => createLazyView()
     );
