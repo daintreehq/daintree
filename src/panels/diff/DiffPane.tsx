@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { ChevronLeft, ChevronRight, Check, PanelLeft, RefreshCw, WrapText } from "lucide-react";
 import { FileDiff as FileDiffIcon } from "lucide-react";
 import type { GitStatus } from "@shared/types/git";
@@ -15,7 +15,7 @@ import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { usePanelStore } from "@/store/panelStore";
-import { usePreferencesStore } from "@/store/preferencesStore";
+import { usePreferencesStore, type DiffFontSize } from "@/store/preferencesStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
 import { useDiffContent } from "./useDiffContent";
@@ -24,6 +24,10 @@ import type { BasePanelProps } from "@/components/Panel/ContentPanel";
 import type { TabInfo } from "@/components/Panel/TabButton";
 
 type DiffViewType = "split" | "unified";
+
+// Mirrors the ladder the modal used, so the preference keeps meaning the same
+// sizes it always did.
+const DIFF_FONT_SIZE_PX: Record<DiffFontSize, string> = { s: "11px", m: "12px", l: "14px" };
 
 export interface DiffPaneProps extends BasePanelProps {
   tabs?: TabInfo[];
@@ -114,6 +118,10 @@ export function DiffPane({
   const diffWrapLines = usePreferencesStore((s) => s.diffWrapLines);
   const setDiffWrapLines = usePreferencesStore((s) => s.setDiffWrapLines);
   const diffShowFileList = usePreferencesStore((s) => s.diffShowFileList);
+  const diffFontSize = usePreferencesStore((s) => s.diffFontSize);
+  const diffFontStyle: CSSProperties & Record<"--diff-font-size", string> = {
+    "--diff-font-size": DIFF_FONT_SIZE_PX[diffFontSize],
+  };
   const setDiffShowFileList = usePreferencesStore((s) => s.setDiffShowFileList);
 
   const filePath = panel?.filePath;
@@ -332,7 +340,13 @@ export function DiffPane({
             }}
           />
         )}
-        <div className="relative flex-1 min-w-0 min-h-0 flex flex-col" data-testid="diff-pane-body">
+        {/* `DiffViewer.css` reads `--diff-font-size`; declaring it here is what
+            makes the size preference reach the rendered diff. */}
+        <div
+          className="relative flex-1 min-w-0 min-h-0 flex flex-col"
+          style={diffFontStyle}
+          data-testid="diff-pane-body"
+        >
           <div className="flex-1 min-h-0 overflow-auto diff-scroll-root">
             {!filePath && (
               <div className="flex h-full w-full items-center justify-center p-6">
