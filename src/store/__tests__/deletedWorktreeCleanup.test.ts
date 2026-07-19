@@ -4,10 +4,13 @@ import { usePanelStore } from "@/store/panelStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useTerminalPendingDestructiveActionStore } from "@/store/terminalPendingDestructiveActionStore";
 import { useWorktreeSelectionStore, type DeletedWorktree } from "@/store/worktreeStore";
+import { notify } from "@/lib/notify";
 import {
   resetDeletedWorktreeCleanupState,
   sweepDeletedWorktreeCleanup,
 } from "../deletedWorktreeCleanup";
+
+vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 
 const NOW = 100_000;
 
@@ -74,6 +77,7 @@ function getExpiry(): number | null | undefined {
 let bulkTrashByWorktree: ReturnType<typeof vi.fn<(worktreeId: string) => void>>;
 
 beforeEach(() => {
+  vi.mocked(notify).mockClear();
   resetDeletedWorktreeCleanupState();
   useWorktreeSelectionStore.getState().reset();
   useTerminalPendingDestructiveActionStore.getState().clear();
@@ -206,6 +210,50 @@ describe("sweepDeletedWorktreeCleanup", () => {
 
     expect(bulkTrashByWorktree).not.toHaveBeenCalled();
     expect(getExpiry()).toBeNull();
+  });
+
+  it("records an inbox-only notification naming the terminals it trashed", () => {
+    setPanels([
+      { id: "t1", worktreeId: "wt-1" },
+      { id: "t2", worktreeId: "wt-1" },
+    ]);
+    usePanelStore.setState({ bulkTrashByWorktree });
+    addRow({ expiresAt: NOW - 1 });
+    sweepDeletedWorktreeCleanup(makeDeps());
+
+    expect(notify).toHaveBeenCalledTimes(1);
+    const payload = vi.mocked(notify).mock.calls[0][0];
+    // Inbox-only: the sweep fires unattended, so it must never toast.
+    expect(payload.priority).toBe("low");
+    expect(payload.message).toContain("2 terminals");
+    expect(payload.message).toContain("feature/x");
+    expect(payload.context?.worktreeId).toBe("wt-1");
+  });
+
+  it("uses singular phrasing for a single surviving terminal", () => {
+    addRow({ expiresAt: NOW - 1 });
+    sweepDeletedWorktreeCleanup(makeDeps());
+
+    const message = vi.mocked(notify).mock.calls[0][0].message;
+    expect(message).toContain("1 terminal ");
+    expect(message).not.toContain("terminals");
+  });
+
+  it("stays silent when the sweep had no surviving terminals to trash", () => {
+    setPanels([]);
+    usePanelStore.setState({ bulkTrashByWorktree });
+    addRow({ expiresAt: NOW - 1 });
+    sweepDeletedWorktreeCleanup(makeDeps());
+
+    expect(bulkTrashByWorktree).toHaveBeenCalledTimes(1);
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("stays silent while the countdown is only being deferred", () => {
+    addRow({ expiresAt: NOW - 1 });
+    sweepDeletedWorktreeCleanup(makeDeps({ isDragActive: () => true }));
+
+    expect(notify).not.toHaveBeenCalled();
   });
 
   it("re-arms a disarmed row when cleanup is turned back on", () => {

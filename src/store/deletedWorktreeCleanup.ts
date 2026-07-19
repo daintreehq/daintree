@@ -5,6 +5,7 @@ import { useTerminalPendingDestructiveActionStore } from "@/store/terminalPendin
 import { isPtyPanel } from "@shared/types/panel";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
+import { notify } from "@/lib/notify";
 
 export const DELETED_WORKTREE_SWEEP_INTERVAL_MS = 1000;
 
@@ -19,8 +20,14 @@ export const DELETED_WORKTREE_SWEEP_INTERVAL_MS = 1000;
  * worktree-removed handler stamps `expiresAt`) and runs to zero by default —
  * the row's visible countdown is the user's window to rescue terminals. It
  * defers (holds at full) only while firing would actively break something:
- * - a drag is in progress (dragging a terminal out IS the rescue gesture —
- *   expiring mid-drag would yank the source away),
+ * - ANY drag is in progress. Dragging a terminal out IS the rescue gesture and
+ *   expiring mid-drag would yank the source away, but the drag flag
+ *   (`documentElement.dataset.dragging`, set by DndProvider) carries no
+ *   identity — the dragged panel's owning row is React state inside the
+ *   provider, not something this module-level sweep can read. So every ghost
+ *   row holds for the duration of any drag anywhere. Drags are short and
+ *   deliberate, so the over-broad hold is cheap; the alternative (plumbing the
+ *   active drag's worktree out of DndProvider) buys nothing at this cost.
  * - any surviving terminal's agent is still `working` (the Codespaces model:
  *   active output resets the idle clock),
  * - the row's own close-confirm dialog is open.
@@ -82,6 +89,29 @@ export function resetDeletedWorktreeCleanupState(): void {
   armedTtlMs.clear();
 }
 
+/**
+ * The sweep is the one path that closes terminals with nobody watching: the
+ * row vanishes and the trash TTL kills the PTYs shortly after, so a user who
+ * stepped away would otherwise have no record it happened and no chance at the
+ * only inverse (restore from trash). Inbox-only — the event is unattended by
+ * definition, so a toast would interrupt whatever the user moved on to.
+ */
+function notifySweepTrashed(title: string, count: number, worktreeId: string): void {
+  notify({
+    type: "info",
+    title: "Deleted worktree cleaned up",
+    message:
+      count === 1
+        ? `${title} still had 1 terminal open — it moved to trash and closes shortly.`
+        : `${title} still had ${count} terminals open — they moved to trash and close shortly.`,
+    // `agent` is the right domain (these are agent sessions) but its policy
+    // baseline is active/high; pin low so the unattended record stays a record
+    // and never interrupts whatever the user moved on to.
+    priority: "low",
+    context: { worktreeId, eventKind: "agent" },
+  });
+}
+
 export function sweepDeletedWorktreeCleanup(deps: SweepDeps = DEFAULT_DEPS): void {
   const selection = useWorktreeSelectionStore.getState();
   const { deletedWorktrees, setDeletedWorktreeExpiry } = selection;
@@ -130,7 +160,11 @@ export function sweepDeletedWorktreeCleanup(deps: SweepDeps = DEFAULT_DEPS): voi
       firedIds.add(entry.id);
       // Same executor as the row's manual close: terminals land in trash
       // (restorable until trash GC), and trashing the last one prunes the row.
+      // Count first — the executor mirrors this exact filter, and once it runs
+      // the panels have already left the row.
+      const trashedCount = getDeletedWorktreeTerminalIds(entry.id).length;
       usePanelStore.getState().bulkTrashByWorktree(entry.id);
+      if (trashedCount > 0) notifySweepTrashed(entry.title, trashedCount, entry.id);
     }
   }
 }
