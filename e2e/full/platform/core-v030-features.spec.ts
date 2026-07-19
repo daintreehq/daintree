@@ -289,7 +289,7 @@ test.describe.serial("Core: v0.3.0 Features", () => {
       const reviewBtn = window.locator(SEL.worktree.reviewHubButton);
       await reviewBtn.first().click();
 
-      // Review Hub is identified by aria-labelledby="review-hub-title"
+      // Review Hub is the panel dialog containing the review body.
       const reviewHub = window.locator(SEL.reviewHub.container);
       await expect(reviewHub).toBeVisible({ timeout: T_MEDIUM });
     });
@@ -301,7 +301,7 @@ test.describe.serial("Core: v0.3.0 Features", () => {
       const diffModeGroup = window.locator(SEL.reviewHub.diffMode);
       await expect(diffModeGroup).toBeVisible({ timeout: T_SHORT });
 
-      // Close button with data-testid="review-hub-close"
+      // Close control comes from AppDialog.Header at the dialog location.
       const closeBtn = window.locator(SEL.reviewHub.close);
       await expect(closeBtn).toBeVisible({ timeout: T_SHORT });
 

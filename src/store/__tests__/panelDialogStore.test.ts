@@ -24,12 +24,17 @@ vi.mock("../panelStore", () => ({
   },
 }));
 
-const { usePanelDialogStore } = await import("../panelDialogStore");
+const { usePanelDialogStore, selectTopDialogPanelId } = await import("../panelDialogStore");
+
+/** Topmost presented panel id — the single-dialog cases below all assert on it. */
+const topId = () => selectTopDialogPanelId(usePanelDialogStore.getState());
+/** Full stack, bottom-first. */
+const stack = () => usePanelDialogStore.getState().dialogStack;
 
 describe("panelDialogStore", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    usePanelDialogStore.setState({ panelId: null, requestSeq: 0 });
+    usePanelDialogStore.setState({ dialogStack: [], requestSeq: 0 });
     addPanelMock.mockImplementation(async (options: { requestedId?: string }) => {
       return options.requestedId ?? "generated";
     });
@@ -58,14 +63,14 @@ describe("panelDialogStore", () => {
       addPanelMock.mockImplementation(async (options: { requestedId?: string }) => {
         // The host renders against this pointer, and a close arriving mid-flight
         // must have an id to act on rather than a null.
-        idDuringCreate = usePanelDialogStore.getState().panelId;
+        idDuringCreate = topId();
         return options.requestedId;
       });
 
       await usePanelDialogStore.getState().openPanelDialog({ kind: "file" });
 
       expect(idDuringCreate).not.toBeNull();
-      expect(idDuringCreate).toBe(usePanelDialogStore.getState().panelId);
+      expect(idDuringCreate).toBe(topId());
     });
 
     it("bumps requestSeq on every open so a crashed boundary resets", async () => {
@@ -91,7 +96,7 @@ describe("panelDialogStore", () => {
       const result = await usePanelDialogStore.getState().openPanelDialog({ kind: "file" });
 
       expect(result).toBeNull();
-      expect(usePanelDialogStore.getState().panelId).toBeNull();
+      expect(topId()).toBeNull();
     });
 
     it("clears the reservation when addPanel throws", async () => {
@@ -100,7 +105,7 @@ describe("panelDialogStore", () => {
       const result = await usePanelDialogStore.getState().openPanelDialog({ kind: "file" });
 
       expect(result).toBeNull();
-      expect(usePanelDialogStore.getState().panelId).toBeNull();
+      expect(topId()).toBeNull();
     });
 
     it("removes a panel that lands after the dialog was already closed", async () => {
@@ -116,12 +121,12 @@ describe("panelDialogStore", () => {
       );
 
       const pending = usePanelDialogStore.getState().openPanelDialog({ kind: "file" });
-      const inFlightId = usePanelDialogStore.getState().panelId;
+      const inFlightId = topId();
       usePanelDialogStore.getState().closePanelDialog();
       release(inFlightId!);
 
       await expect(pending).resolves.toBeNull();
-      expect(usePanelDialogStore.getState().panelId).toBeNull();
+      expect(topId()).toBeNull();
       expect(removePanelMock).toHaveBeenCalledWith(inFlightId);
     });
 
@@ -135,15 +140,15 @@ describe("panelDialogStore", () => {
       );
 
       const first = usePanelDialogStore.getState().openPanelDialog({ kind: "file" });
-      const firstId = usePanelDialogStore.getState().panelId;
+      const firstId = topId();
       const second = usePanelDialogStore.getState().openPanelDialog({ kind: "file" });
-      const secondId = usePanelDialogStore.getState().panelId;
+      const secondId = topId();
       resolvers.forEach((r) => r());
 
       await expect(first).resolves.toBeNull();
       await expect(second).resolves.toBe(secondId);
       expect(removePanelMock).toHaveBeenCalledWith(firstId);
-      expect(usePanelDialogStore.getState().panelId).toBe(secondId);
+      expect(topId()).toBe(secondId);
     });
   });
 
@@ -155,7 +160,7 @@ describe("panelDialogStore", () => {
 
       usePanelDialogStore.getState().reconcileRemovedPanel(id!);
 
-      expect(usePanelDialogStore.getState().panelId).toBeNull();
+      expect(topId()).toBeNull();
     });
 
     it("ignores removals of unrelated panels", async () => {
@@ -163,7 +168,7 @@ describe("panelDialogStore", () => {
 
       usePanelDialogStore.getState().reconcileRemovedPanel("some-other-panel");
 
-      expect(usePanelDialogStore.getState().panelId).toBe(id);
+      expect(topId()).toBe(id);
     });
   });
 
@@ -173,7 +178,7 @@ describe("panelDialogStore", () => {
 
       usePanelDialogStore.getState().closePanelDialog();
 
-      expect(usePanelDialogStore.getState().panelId).toBeNull();
+      expect(topId()).toBeNull();
       expect(removePanelMock).toHaveBeenCalledWith(id);
     });
 
@@ -192,7 +197,7 @@ describe("panelDialogStore", () => {
       const promoted = usePanelDialogStore.getState().promoteToGrid();
 
       expect(promoted).toBe(true);
-      expect(usePanelDialogStore.getState().panelId).toBeNull();
+      expect(topId()).toBeNull();
       // Removing here would destroy the panel the user just chose to keep.
       expect(removePanelMock).not.toHaveBeenCalled();
       expect(activateMock).toHaveBeenCalledWith(id);
@@ -205,13 +210,168 @@ describe("panelDialogStore", () => {
       const promoted = usePanelDialogStore.getState().promoteToGrid();
 
       expect(promoted).toBe(false);
-      expect(usePanelDialogStore.getState().panelId).not.toBeNull();
+      expect(topId()).not.toBeNull();
       expect(activateMock).not.toHaveBeenCalled();
     });
 
     it("is a no-op when nothing is open", () => {
       expect(usePanelDialogStore.getState().promoteToGrid()).toBe(false);
       expect(promoteMock).not.toHaveBeenCalled();
+    });
+  });
+  describe("pushPanelDialog (#11243)", () => {
+    it("layers a child above its parent, keeping the parent's record alive", async () => {
+      const parent = await usePanelDialogStore
+        .getState()
+        .openPanelDialog({ kind: "review", worktreeId: "wt-1" });
+
+      const child = await usePanelDialogStore
+        .getState()
+        .pushPanelDialog({ kind: "diff", filePath: "a.ts" }, parent!);
+
+      expect(stack()).toEqual([parent, child]);
+      // The whole point: the review record survives the drill-down, so its
+      // staging state (draft, selection, filters) is not torn down.
+      expect(removePanelMock).not.toHaveBeenCalledWith(parent);
+    });
+
+    it("refuses to layer onto a parent that is no longer the top", async () => {
+      await usePanelDialogStore.getState().openPanelDialog({ kind: "review" });
+
+      const pushed = await usePanelDialogStore
+        .getState()
+        .pushPanelDialog({ kind: "diff" }, "some-other-panel");
+
+      expect(pushed).toBeNull();
+      expect(stack()).toHaveLength(1);
+      expect(addPanelMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses to layer an id already on the stack", async () => {
+      const parent = await usePanelDialogStore
+        .getState()
+        .openPanelDialog({ kind: "review", requestedId: "review-1" });
+
+      // Duplicate ids would give the host duplicate React keys and strand an
+      // entry when one copy closes.
+      const pushed = await usePanelDialogStore
+        .getState()
+        .pushPanelDialog({ kind: "diff", requestedId: "review-1" }, parent!);
+
+      expect(pushed).toBeNull();
+      expect(stack()).toEqual(["review-1"]);
+    });
+
+    it("refuses to layer when nothing is open", async () => {
+      const pushed = await usePanelDialogStore
+        .getState()
+        .pushPanelDialog({ kind: "diff" }, "ghost");
+
+      expect(pushed).toBeNull();
+      expect(addPanelMock).not.toHaveBeenCalled();
+    });
+
+    it("drops only its own reservation when creation fails", async () => {
+      const parent = await usePanelDialogStore.getState().openPanelDialog({ kind: "review" });
+      addPanelMock.mockResolvedValueOnce(null);
+
+      const pushed = await usePanelDialogStore
+        .getState()
+        .pushPanelDialog({ kind: "diff" }, parent!);
+
+      expect(pushed).toBeNull();
+      // The parent is revealed again rather than collaterally closed.
+      expect(stack()).toEqual([parent]);
+    });
+
+    it("removes a record that lands after its reservation was superseded", async () => {
+      const parent = await usePanelDialogStore.getState().openPanelDialog({ kind: "review" });
+      addPanelMock.mockImplementationOnce(async (options: { requestedId?: string }) => {
+        // A plain open supersedes the whole stack while this push is in flight.
+        await usePanelDialogStore.getState().openPanelDialog({ kind: "file" });
+        return options.requestedId;
+      });
+
+      const pushed = await usePanelDialogStore
+        .getState()
+        .pushPanelDialog({ kind: "diff" }, parent!);
+
+      expect(pushed).toBeNull();
+      expect(stack()).toHaveLength(1);
+    });
+  });
+
+  describe("stack-aware close, reconcile and promote", () => {
+    async function openReviewWithDiff() {
+      const parent = await usePanelDialogStore.getState().openPanelDialog({ kind: "review" });
+      const child = await usePanelDialogStore.getState().pushPanelDialog({ kind: "diff" }, parent!);
+      return { parent: parent!, child: child! };
+    }
+
+    it("closePanelDialog pops only the top, revealing the parent", async () => {
+      const { parent, child } = await openReviewWithDiff();
+
+      usePanelDialogStore.getState().closePanelDialog();
+
+      expect(stack()).toEqual([parent]);
+      expect(removePanelMock).toHaveBeenCalledWith(child);
+      expect(removePanelMock).not.toHaveBeenCalledWith(parent);
+    });
+
+    it("closePanelDialogById closes a specific dialog wherever it sits", async () => {
+      const { parent, child } = await openReviewWithDiff();
+
+      usePanelDialogStore.getState().closePanelDialogById(parent);
+
+      expect(stack()).toEqual([child]);
+      expect(removePanelMock).toHaveBeenCalledWith(parent);
+    });
+
+    it("closePanelDialogById is a no-op for an id that is not presented", async () => {
+      const { parent, child } = await openReviewWithDiff();
+
+      usePanelDialogStore.getState().closePanelDialogById("not-open");
+
+      expect(stack()).toEqual([parent, child]);
+      expect(removePanelMock).not.toHaveBeenCalled();
+    });
+
+    it("reconcileRemovedPanel drops a suspended parent without touching the child", async () => {
+      const { parent, child } = await openReviewWithDiff();
+
+      usePanelDialogStore.getState().reconcileRemovedPanel(parent);
+
+      expect(stack()).toEqual([child]);
+    });
+
+    it("a plain open supersedes the entire stack", async () => {
+      const { parent, child } = await openReviewWithDiff();
+
+      const replacement = await usePanelDialogStore.getState().openPanelDialog({ kind: "file" });
+
+      expect(stack()).toEqual([replacement]);
+      expect(removePanelMock).toHaveBeenCalledWith(parent);
+      expect(removePanelMock).toHaveBeenCalledWith(child);
+    });
+
+    it("promoting the top diff reveals the review beneath it", async () => {
+      const { parent, child } = await openReviewWithDiff();
+
+      const promoted = usePanelDialogStore.getState().promoteToGrid();
+
+      expect(promoted).toBe(true);
+      expect(promoteMock).toHaveBeenCalledWith(child);
+      expect(stack()).toEqual([parent]);
+      // Promotion moves the record into the grid — it must not delete it.
+      expect(removePanelMock).not.toHaveBeenCalledWith(child);
+    });
+
+    it("leaves the stack untouched when promotion is refused at the limit", async () => {
+      const { parent, child } = await openReviewWithDiff();
+      promoteMock.mockReturnValue(false);
+
+      expect(usePanelDialogStore.getState().promoteToGrid()).toBe(false);
+      expect(stack()).toEqual([parent, child]);
     });
   });
 });

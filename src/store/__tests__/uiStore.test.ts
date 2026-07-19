@@ -78,32 +78,3 @@ describe("useUIStore overlay stack", () => {
     expect(useUIStore.getState().overlayStack.includes("project-switcher")).toBe(true);
   });
 });
-
-describe("useUIStore pendingReviewHubWorktreeId", () => {
-  beforeEach(() => {
-    useUIStore.setState({ pendingReviewHubWorktreeId: null });
-  });
-
-  it("starts as null", () => {
-    expect(useUIStore.getState().pendingReviewHubWorktreeId).toBeNull();
-  });
-
-  it("setPendingReviewHubWorktreeId records the target", () => {
-    useUIStore.getState().setPendingReviewHubWorktreeId("wt-1");
-    expect(useUIStore.getState().pendingReviewHubWorktreeId).toBe("wt-1");
-  });
-
-  it("clearPendingReviewHubWorktreeId resets to null", () => {
-    useUIStore.getState().setPendingReviewHubWorktreeId("wt-1");
-    useUIStore.getState().clearPendingReviewHubWorktreeId();
-    expect(useUIStore.getState().pendingReviewHubWorktreeId).toBeNull();
-  });
-
-  it("clearPendingReviewHubWorktreeId is idempotent when already null", () => {
-    const before = useUIStore.getState();
-    useUIStore.getState().clearPendingReviewHubWorktreeId();
-    const after = useUIStore.getState();
-    // Returning the same state reference ensures Zustand skips re-renders.
-    expect(after.pendingReviewHubWorktreeId).toBe(before.pendingReviewHubWorktreeId);
-  });
-});

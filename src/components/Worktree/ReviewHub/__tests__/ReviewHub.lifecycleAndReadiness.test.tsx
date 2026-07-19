@@ -100,13 +100,7 @@ vi.mock("@/utils/debounce", () => ({
   },
 }));
 
-vi.mock("react-dom", async () => {
-  const actual = await vi.importActual<typeof import("react-dom")>("react-dom");
-  return { ...actual, createPortal: (children: ReactNode) => children };
-});
-
 vi.mock("@/hooks", () => ({
-  useOverlayState: vi.fn(),
   useTruncationDetection: vi.fn(() => ({ ref: vi.fn(), isTruncated: false })),
 }));
 
@@ -272,7 +266,7 @@ vi.mock("@/components/ui/EmptyState", () => ({
   ),
 }));
 
-import { ReviewHub } from "../ReviewHub";
+import { ReviewHubContent } from "../ReviewHubContent";
 import { useUIStore } from "@/store/uiStore";
 import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
@@ -320,10 +314,19 @@ const makeWorktreeState = (path = WORKTREE_PATH): WorktreeState =>
 const openPanelDialogMock = vi.hoisted(() =>
   vi.fn<(options: Record<string, unknown>) => Promise<string>>(async () => "diff-panel-1")
 );
+const EMPTY_DIALOG_STACK = vi.hoisted(() => [] as string[]);
+
 vi.mock("@/store/panelDialogStore", () => ({
   usePanelDialogStore: Object.assign(
-    (selector: (s: unknown) => unknown) => selector({ panelId: null }),
-    { getState: () => ({ openPanelDialog: openPanelDialogMock, closePanelDialog: vi.fn() }) }
+    (selector: (s: unknown) => unknown) => selector({ dialogStack: EMPTY_DIALOG_STACK }),
+    {
+      getState: () => ({
+        dialogStack: EMPTY_DIALOG_STACK,
+        openPanelDialog: openPanelDialogMock,
+        closePanelDialog: vi.fn(),
+        closePanelDialogById: vi.fn(),
+      }),
+    }
   ),
 }));
 
@@ -453,7 +456,7 @@ describe("ReviewHub", () => {
         })
       );
       render(
-        <ReviewHub
+        <ReviewHubContent
           isOpen={true}
           worktreePath={WORKTREE_PATH}
           onClose={vi.fn()}
@@ -480,7 +483,7 @@ describe("ReviewHub", () => {
         })
       );
       render(
-        <ReviewHub
+        <ReviewHubContent
           isOpen={true}
           worktreePath={WORKTREE_PATH}
           onClose={vi.fn()}
@@ -502,7 +505,7 @@ describe("ReviewHub", () => {
           unstaged: [{ path: "src/a.ts", status: "modified", insertions: 1, deletions: 0 }],
         })
       );
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => expect(getStagingStatusMock).toHaveBeenCalled());
       await act(async () => {
         await Promise.resolve();
@@ -514,7 +517,7 @@ describe("ReviewHub", () => {
   describe("initialCommitMessage (issue #7886)", () => {
     it("seeds the commit textarea on open with the provided message", async () => {
       render(
-        <ReviewHub
+        <ReviewHubContent
           isOpen={true}
           worktreePath={WORKTREE_PATH}
           onClose={vi.fn()}
@@ -528,7 +531,7 @@ describe("ReviewHub", () => {
 
     it("does not overwrite user edits when the prop changes while open", async () => {
       const { rerender } = render(
-        <ReviewHub
+        <ReviewHubContent
           isOpen={true}
           worktreePath={WORKTREE_PATH}
           onClose={vi.fn()}
@@ -539,7 +542,7 @@ describe("ReviewHub", () => {
       const textarea = screen.getByPlaceholderText("Commit message…") as HTMLTextAreaElement;
       fireEvent.change(textarea, { target: { value: "human override" } });
       rerender(
-        <ReviewHub
+        <ReviewHubContent
           isOpen={true}
           worktreePath={WORKTREE_PATH}
           onClose={vi.fn()}
@@ -556,7 +559,7 @@ describe("ReviewHub", () => {
       // working-tree loading branch renders for the duration of the test.
       getStagingStatusMock.mockReturnValue(new Promise<StagingStatus>(() => {}));
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       // Before the Doherty threshold elapses, nothing renders (no flash).
       expect(screen.queryByRole("status", { name: /loading review changes/i })).toBeNull();
@@ -573,7 +576,7 @@ describe("ReviewHub", () => {
         new Promise<{ branch1: string; branch2: string; files: never[] }>(() => {})
       );
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("index.ts"));
 
       act(() => fireEvent.click(screen.getByRole("button", { name: /vs main/i })));
@@ -591,7 +594,7 @@ describe("ReviewHub", () => {
       );
 
       const { rerender } = render(
-        <ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
+        <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
       );
       await waitFor(() => screen.getByText("index.ts"));
 
@@ -599,8 +602,8 @@ describe("ReviewHub", () => {
       await waitFor(() => expect(compareWorktreesMock).toHaveBeenCalledTimes(1));
 
       // Close mid-load, then reopen.
-      rerender(<ReviewHub isOpen={false} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
-      rerender(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      rerender(<ReviewHubContent isOpen={false} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      rerender(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("index.ts"));
 
       // Switching to base-branch again must trigger a fresh fetch, proving
@@ -617,7 +620,7 @@ describe("ReviewHub", () => {
     });
 
     const renderHub = async () => {
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("index.ts"));
       return screen.getByRole("listbox", { name: "Changed files" });
     };
@@ -710,7 +713,7 @@ describe("ReviewHub", () => {
       // The disclosure defaults to collapsed; rows (and the listbox) aren't
       // rendered, so keys must not mutate the index or fire git side effects.
       useUIStore.getState().setReviewHubFileListExpanded(WORKTREE_PATH, false);
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => expect(getStagingStatusMock).toHaveBeenCalledTimes(1));
       await act(async () => {});
 
@@ -737,7 +740,7 @@ describe("ReviewHub", () => {
 
     it("clears keyboard focus when the hub closes", async () => {
       const { rerender } = render(
-        <ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
+        <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
       );
       await waitFor(() => screen.getByText("index.ts"));
 
@@ -746,8 +749,8 @@ describe("ReviewHub", () => {
         screen.getByRole("listbox", { name: "Changed files" }).getAttribute("aria-activedescendant")
       ).toBe("review-hub-row-0");
 
-      rerender(<ReviewHub isOpen={false} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
-      rerender(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      rerender(<ReviewHubContent isOpen={false} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      rerender(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("index.ts"));
 
       expect(
@@ -764,13 +767,13 @@ describe("ReviewHub", () => {
 
     it("stays hidden until staging status resolves", async () => {
       getStagingStatusMock.mockReturnValue(new Promise(() => {}));
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await act(async () => {});
       expect(screen.queryByTestId("review-readiness-rail")).toBeNull();
     });
 
     it("reports Ready for the default fixture and surfaces the no-remote info", async () => {
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByTestId("review-readiness-rail"));
       expect(screen.getByTestId("review-readiness-level").dataset.level).toBe("ready");
       expect(screen.getByTestId("readiness-item-no-remote")).toBeDefined();
@@ -785,7 +788,7 @@ describe("ReviewHub", () => {
           conflictedFiles: [{ path: "src/broken.ts", xy: "UU", label: "both modified" }],
         })
       );
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByTestId("review-readiness-rail"));
 
       expect(screen.getByTestId("review-readiness-level").dataset.level).toBe("blocked");
@@ -798,7 +801,7 @@ describe("ReviewHub", () => {
     it("offers pull-and-rebase behind the existing confirm dialog when behind the remote", async () => {
       setWorktreeDivergence({ behindCount: 2, aheadCount: 1 });
       getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByTestId("readiness-item-behind-remote"));
 
       expect(screen.getByTestId("review-readiness-level").dataset.level).toBe("needs-review");
@@ -830,7 +833,7 @@ describe("ReviewHub", () => {
         },
       });
       getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByTestId("readiness-item-ci-failing"));
 
       act(() => void fireEvent.click(screen.getByTestId("readiness-cta-ci-failing")));
@@ -839,20 +842,22 @@ describe("ReviewHub", () => {
 
     it("hides the rail while switching worktrees so readiness never mixes two worktrees", async () => {
       const { rerender } = render(
-        <ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
+        <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
       );
       await waitFor(() => screen.getByTestId("review-readiness-rail"));
 
       // The next worktree's staging status never resolves — the previous
       // worktree's summary must not linger against the new path's selectors.
       getStagingStatusMock.mockReturnValue(new Promise(() => {}));
-      rerender(<ReviewHub isOpen={true} worktreePath="/home/user/other" onClose={vi.fn()} />);
+      rerender(
+        <ReviewHubContent isOpen={true} worktreePath="/home/user/other" onClose={vi.fn()} />
+      );
       await act(async () => {});
       expect(screen.queryByTestId("review-readiness-rail")).toBeNull();
     });
 
     it("updates readiness from a worktree port refresh without losing filter state", async () => {
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("index.ts"));
       expect(screen.queryByTestId("readiness-item-conflicts")).toBeNull();
 
@@ -892,7 +897,7 @@ describe("ReviewHub", () => {
       getStagingStatusMock.mockResolvedValue(
         makeStatus({ staged: [], unstaged: [], hasRemote, repoState: "CLEAN" })
       );
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
     }
 
     it("names the unpushed commits and gates Push behind the D2 preview dialog", async () => {

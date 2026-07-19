@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { WorktreeState } from "@/types";
 import { isStandardBranch } from "@shared/config/branchPrefixes";
-
-const MAIN_WORKTREE_NOTE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+import { MAIN_WORKTREE_NOTE_TTL_MS, deriveEffectiveNote } from "@/lib/worktreeAiNote";
 
 export type SpineState = "dirty" | "current" | "stale" | "idle";
 
@@ -96,19 +95,18 @@ export function useWorktreeStatus({
     return () => clearTimeout(timer);
   }, [isMainWorktree, worktree.aiNote, worktree.aiNoteTimestamp]);
 
-  const effectiveNote = useMemo(() => {
-    const trimmed = worktree.aiNote?.trim();
-    if (!trimmed) return undefined;
-
-    if (isMainWorktree && worktree.aiNoteTimestamp) {
-      const age = now - worktree.aiNoteTimestamp;
-      if (age > MAIN_WORKTREE_NOTE_TTL_MS) {
-        return undefined;
-      }
-    }
-
-    return trimmed;
-  }, [worktree.aiNote, isMainWorktree, worktree.aiNoteTimestamp, now]);
+  const effectiveNote = useMemo(
+    () =>
+      deriveEffectiveNote(
+        {
+          aiNote: worktree.aiNote,
+          aiNoteTimestamp: worktree.aiNoteTimestamp,
+          isMainWorktree,
+        },
+        now
+      ),
+    [worktree.aiNote, isMainWorktree, worktree.aiNoteTimestamp, now]
+  );
 
   const isMainOnStandardBranch = !!(
     isMainWorktree &&

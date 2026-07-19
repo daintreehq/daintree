@@ -100,13 +100,7 @@ vi.mock("@/utils/debounce", () => ({
   },
 }));
 
-vi.mock("react-dom", async () => {
-  const actual = await vi.importActual<typeof import("react-dom")>("react-dom");
-  return { ...actual, createPortal: (children: ReactNode) => children };
-});
-
 vi.mock("@/hooks", () => ({
-  useOverlayState: vi.fn(),
   useTruncationDetection: vi.fn(() => ({ ref: vi.fn(), isTruncated: false })),
 }));
 
@@ -272,7 +266,7 @@ vi.mock("@/components/ui/EmptyState", () => ({
   ),
 }));
 
-import { ReviewHub } from "../ReviewHub";
+import { ReviewHubContent } from "../ReviewHubContent";
 import { useUIStore } from "@/store/uiStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 
@@ -434,7 +428,7 @@ describe("ReviewHub", () => {
   });
 
   it("fetches status once on open", async () => {
-    render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+    render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
     await waitFor(() => {
       expect(getStagingStatusMock).toHaveBeenCalledTimes(1);
@@ -443,7 +437,7 @@ describe("ReviewHub", () => {
   });
 
   it("renders staged and unstaged files after initial load", async () => {
-    render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+    render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
     await waitFor(() => {
       screen.getByText("index.ts");
@@ -452,14 +446,14 @@ describe("ReviewHub", () => {
   });
 
   it("subscribes to worktree updates on open", async () => {
-    render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+    render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
     await waitFor(() => expect(onUpdateMock).toHaveBeenCalledTimes(1));
     expect(capturedUpdateCallback).not.toBeNull();
   });
 
   it("triggers background refresh when matching worktree emits update", async () => {
-    render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+    render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
     await waitFor(() => expect(getStagingStatusMock).toHaveBeenCalledTimes(1));
 
     const updatedStatus = makeStatus({
@@ -480,7 +474,7 @@ describe("ReviewHub", () => {
   });
 
   it("ignores worktree update events for a different path", async () => {
-    render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+    render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
     await waitFor(() => expect(getStagingStatusMock).toHaveBeenCalledTimes(1));
 
     await act(async () => {
@@ -492,7 +486,7 @@ describe("ReviewHub", () => {
   });
 
   it("preserves commit message during a background resync", async () => {
-    render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+    render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
     await waitFor(() => screen.getByPlaceholderText("Commit message…"));
 
     const textarea = screen.getByPlaceholderText("Commit message…");
@@ -510,7 +504,7 @@ describe("ReviewHub", () => {
   });
 
   it("keeps existing file rows visible during background refresh (no blank flash)", async () => {
-    render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+    render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
     await waitFor(() => screen.getByText("index.ts"));
 
     let resolveRefresh!: (value: StagingStatus) => void;
@@ -534,17 +528,17 @@ describe("ReviewHub", () => {
 
   it("unsubscribes when closed", async () => {
     const { rerender } = render(
-      <ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
+      <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
     );
     await waitFor(() => expect(onUpdateMock).toHaveBeenCalled());
 
-    rerender(<ReviewHub isOpen={false} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+    rerender(<ReviewHubContent isOpen={false} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
     expect(mockUnsubscribe).toHaveBeenCalled();
   });
 
   it("cancels debounce before explicit stage actions", async () => {
-    render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+    render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
     await waitFor(() => screen.getByText("app.ts"));
 
     // Click the "Stage src/app.ts" button (unstaged file) — aria-label starts with "Stage"
@@ -555,7 +549,7 @@ describe("ReviewHub", () => {
   });
 
   it("manual refresh button still works independently", async () => {
-    render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+    render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
     await waitFor(() => expect(getStagingStatusMock).toHaveBeenCalledTimes(1));
 
     const refreshButton = screen.getByRole("button", { name: /refresh/i });
@@ -566,7 +560,7 @@ describe("ReviewHub", () => {
 
   it("resets commit message on close then reopen", async () => {
     const { rerender } = render(
-      <ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
+      <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
     );
     await waitFor(() => screen.getByPlaceholderText("Commit message…"));
 
@@ -574,8 +568,8 @@ describe("ReviewHub", () => {
     fireEvent.change(textarea, { target: { value: "draft message" } });
     expect((textarea as HTMLTextAreaElement).value).toBe("draft message");
 
-    rerender(<ReviewHub isOpen={false} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
-    rerender(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+    rerender(<ReviewHubContent isOpen={false} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+    rerender(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
     await waitFor(() => {
       const ta = screen.getByPlaceholderText("Commit message…") as HTMLTextAreaElement;
@@ -584,7 +578,7 @@ describe("ReviewHub", () => {
   });
 
   it("background refresh error keeps existing file list visible", async () => {
-    render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+    render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
     await waitFor(() => screen.getByText("index.ts"));
 
     getStagingStatusMock.mockRejectedValue(new Error("network error"));
@@ -601,7 +595,7 @@ describe("ReviewHub", () => {
   });
 
   it("removes old rows after background refresh replaces status", async () => {
-    render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+    render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
     await waitFor(() => screen.getByText("index.ts"));
 
     const statusWithNewFiles = makeStatus({
@@ -622,7 +616,7 @@ describe("ReviewHub", () => {
 
   it("background refresh clears a prior loadError on success", async () => {
     getStagingStatusMock.mockRejectedValue(new Error("git error"));
-    render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+    render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
     await waitFor(() => screen.getByText("git error"));
 
     getStagingStatusMock.mockResolvedValue(makeStatus());
@@ -639,7 +633,7 @@ describe("ReviewHub", () => {
   });
 
   it("foreground and background requests use independent IDs, neither suppresses the other", async () => {
-    render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+    render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
     await waitFor(() => screen.getByText("index.ts"));
 
     // Trigger a background refresh (fires immediately due to mocked debounce)
@@ -662,7 +656,7 @@ describe("ReviewHub", () => {
   describe("file row chrome (issue #7783)", () => {
     it("separates stage and inspect click targets — toggling stage does not open the diff", async () => {
       // Render via ReviewHub so the row is wired into the real component.
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("app.ts"));
 
       // The stage toggle is `aria-label="Stage src/app.ts"`. Clicking it must
@@ -688,7 +682,7 @@ describe("ReviewHub", () => {
         })
       );
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("big.ts"));
 
       const churn = screen.getByTestId("file-stage-row-churn");
@@ -704,7 +698,7 @@ describe("ReviewHub", () => {
         })
       );
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("new.ts"));
 
       const churn = screen.getByTestId("file-stage-row-churn");
@@ -722,7 +716,7 @@ describe("ReviewHub", () => {
         })
       );
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("untracked.ts"));
 
       expect(screen.queryByTestId("file-stage-row-churn")).toBeNull();
@@ -738,7 +732,7 @@ describe("ReviewHub", () => {
         })
       );
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("package-lock.json"));
 
       const baseSpan = screen.getByTestId("file-stage-row-base");
@@ -760,7 +754,7 @@ describe("ReviewHub", () => {
         })
       );
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("component.tsx"));
 
       const baseSpan = screen.getByTestId("file-stage-row-base");
@@ -770,7 +764,7 @@ describe("ReviewHub", () => {
 
   describe("base-branch diff mode", () => {
     it("defaults to working-tree mode showing staged and unstaged sections", async () => {
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("index.ts"));
 
       expect(
@@ -782,14 +776,14 @@ describe("ReviewHub", () => {
     });
 
     it("does not call compareWorktrees on initial open", async () => {
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("index.ts"));
 
       expect(compareWorktreesMock).not.toHaveBeenCalled();
     });
 
     it("calls compareWorktrees with useMergeBase when switching to base-branch mode", async () => {
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("index.ts"));
 
       const toggle = screen.getByRole("button", { name: /vs main/i });
@@ -816,7 +810,7 @@ describe("ReviewHub", () => {
         ],
       });
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("index.ts"));
 
       const toggle = screen.getByRole("button", { name: /vs main/i });
@@ -835,7 +829,7 @@ describe("ReviewHub", () => {
         files: [],
       });
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("index.ts"));
 
       const toggle = screen.getByRole("button", { name: /vs main/i });
@@ -849,7 +843,7 @@ describe("ReviewHub", () => {
     it("shows error message when compareWorktrees fails", async () => {
       compareWorktreesMock.mockRejectedValue(new Error("branch not found"));
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("index.ts"));
 
       const toggle = screen.getByRole("button", { name: /vs main/i });
@@ -861,7 +855,7 @@ describe("ReviewHub", () => {
     });
 
     it("does not show commit panel in base-branch mode", async () => {
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByPlaceholderText("Commit message…"));
 
       const toggle = screen.getByRole("button", { name: /vs main/i });
@@ -874,7 +868,7 @@ describe("ReviewHub", () => {
 
     it("resets to working-tree mode when closed and reopened", async () => {
       const { rerender } = render(
-        <ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
+        <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
       );
       await waitFor(() => screen.getByText("index.ts"));
 
@@ -883,8 +877,8 @@ describe("ReviewHub", () => {
       await waitFor(() => expect(compareWorktreesMock).toHaveBeenCalled());
 
       // Close and reopen
-      rerender(<ReviewHub isOpen={false} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
-      rerender(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      rerender(<ReviewHubContent isOpen={false} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      rerender(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => {
         expect(
@@ -896,7 +890,7 @@ describe("ReviewHub", () => {
     it("disables vs-branch button when current branch matches main branch", async () => {
       getStagingStatusMock.mockResolvedValue(makeStatus({ currentBranch: "main" }));
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("index.ts"));
 
       const toggle = screen.getByRole("button", { name: /vs main/i });
@@ -906,7 +900,7 @@ describe("ReviewHub", () => {
     it("does not call compareWorktrees when current branch matches main branch", async () => {
       getStagingStatusMock.mockResolvedValue(makeStatus({ currentBranch: "main" }));
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("index.ts"));
 
       const toggle = screen.getByRole("button", { name: /vs main/i });
@@ -916,7 +910,7 @@ describe("ReviewHub", () => {
     });
 
     it("does not refetch base-branch diff on repeated toggle to base-branch mode", async () => {
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("index.ts"));
 
       // First toggle
@@ -937,7 +931,7 @@ describe("ReviewHub", () => {
   describe("focus retention", () => {
     it("commit textarea retains focus during background resync", async () => {
       const onClose = vi.fn();
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={onClose} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={onClose} />);
       await waitFor(() => screen.getByPlaceholderText("Commit message…"));
       await act(async () => {});
 
@@ -958,7 +952,7 @@ describe("ReviewHub", () => {
 
     it("Escape reads latest state through useEffectEvent", async () => {
       const onClose = vi.fn();
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={onClose} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={onClose} />);
       await waitFor(() => screen.getByText("index.ts"));
 
       // Click the file row button to open its diff (sets selectedFile)
@@ -978,52 +972,6 @@ describe("ReviewHub", () => {
       });
 
       expect(onClose).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  describe("focus restore on close (#9217)", () => {
-    function renderWithOpener(isOpen: boolean) {
-      return (
-        <>
-          <button type="button" data-testid="opener">
-            open
-          </button>
-          <ReviewHub isOpen={isOpen} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
-        </>
-      );
-    }
-
-    it("returns focus to the element that opened the hub", async () => {
-      const { rerender } = render(renderWithOpener(false));
-      const opener = screen.getByTestId("opener") as HTMLButtonElement;
-      act(() => opener.focus());
-      expect(document.activeElement).toBe(opener);
-
-      // Open captures the opener as the previously-focused element.
-      rerender(renderWithOpener(true));
-      await waitFor(() => screen.getByText("index.ts"));
-
-      // Close restores focus to the opener.
-      act(() => {
-        rerender(renderWithOpener(false));
-      });
-      expect(document.activeElement).toBe(opener);
-    });
-
-    it("does not throw when the opener was removed before close", async () => {
-      const { rerender } = render(renderWithOpener(false));
-      const opener = screen.getByTestId("opener") as HTMLButtonElement;
-      act(() => opener.focus());
-
-      rerender(renderWithOpener(true));
-      await waitFor(() => screen.getByText("index.ts"));
-
-      // Drop the opener from the tree, then close — restore must guard on
-      // document.contains and skip the detached node without throwing.
-      act(() => {
-        rerender(<ReviewHub isOpen={false} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
-      });
-      expect(document.contains(opener)).toBe(false);
     });
   });
 });

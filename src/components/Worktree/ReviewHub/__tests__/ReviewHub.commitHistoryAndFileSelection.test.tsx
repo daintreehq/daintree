@@ -100,13 +100,7 @@ vi.mock("@/utils/debounce", () => ({
   },
 }));
 
-vi.mock("react-dom", async () => {
-  const actual = await vi.importActual<typeof import("react-dom")>("react-dom");
-  return { ...actual, createPortal: (children: ReactNode) => children };
-});
-
 vi.mock("@/hooks", () => ({
-  useOverlayState: vi.fn(),
   useTruncationDetection: vi.fn(() => ({ ref: vi.fn(), isTruncated: false })),
 }));
 
@@ -272,7 +266,7 @@ vi.mock("@/components/ui/EmptyState", () => ({
   ),
 }));
 
-import { ReviewHub } from "../ReviewHub";
+import { ReviewHubContent } from "../ReviewHubContent";
 import { useUIStore } from "@/store/uiStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useDiffViewedStore } from "@/store/diffViewedStore";
@@ -346,15 +340,41 @@ const closePanelDialogMock = vi.hoisted(() => vi.fn<() => void>());
 
 vi.mock("@/store/panelDialogStore", async () => {
   const { useSyncExternalStore } = await import("react");
+  // This harness models a single dialog slot, which is what a grid-hosted hub
+  // sees: it opens the diff with `openPanelDialog` (replace), so the stack
+  // never grows past one. Layering is exercised in panelDialogStore's own suite.
+  // The stack array must be referentially stable for a given id, or
+  // useSyncExternalStore sees a new snapshot on every call and re-renders
+  // forever. Cache it and rebuild only when the underlying id changes.
+  const EMPTY: string[] = [];
+  let cachedId: string | null = null;
+  let cachedStack: string[] = EMPTY;
+  const stackOf = (id: string | null) => {
+    if (id !== cachedId) {
+      cachedId = id;
+      cachedStack = id ? [id] : EMPTY;
+    }
+    return cachedStack;
+  };
+  const snapshot = () => ({ dialogStack: stackOf(dialogStore.get()) });
   return {
     usePanelDialogStore: Object.assign(
-      (selector: (s: { panelId: string | null }) => unknown) =>
-        useSyncExternalStore(dialogStore.subscribe, () => selector({ panelId: dialogStore.get() })),
+      (selector: (s: { dialogStack: string[] }) => unknown) =>
+        useSyncExternalStore(dialogStore.subscribe, () =>
+          selector({ dialogStack: stackOf(dialogStore.get()) })
+        ),
       {
         getState: () => ({
-          panelId: dialogStore.get(),
+          ...snapshot(),
           openPanelDialog: openPanelDialogMock,
           closePanelDialog: closePanelDialogMock,
+          // Mirrors the real store's membership guard: closing an id that is
+          // not presented is a no-op, so it can't tear down another surface's
+          // dialog.
+          closePanelDialogById: (id: string) => {
+            if (dialogStore.get() !== id) return;
+            closePanelDialogMock();
+          },
         }),
       }
     ),
@@ -492,7 +512,7 @@ describe("ReviewHub", () => {
 
   describe("commit message subject counter", () => {
     it("shows subject line length counter", async () => {
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByPlaceholderText("Commit message…"));
 
       const textarea = screen.getByPlaceholderText("Commit message…");
@@ -504,7 +524,7 @@ describe("ReviewHub", () => {
     });
 
     it("counter reflects subject length past the 72-char limit", async () => {
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByPlaceholderText("Commit message…"));
 
       const textarea = screen.getByPlaceholderText("Commit message…");
@@ -517,7 +537,9 @@ describe("ReviewHub", () => {
 
   describe("commit history arrow-key cycling", () => {
     function renderOpen() {
-      return render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      return render(
+        <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
+      );
     }
 
     function focusTextareaAt(textarea: HTMLTextAreaElement, start: number, end = start) {
@@ -770,7 +792,7 @@ describe("ReviewHub", () => {
 
   describe("per-file Viewed checkbox", () => {
     it("renders an unchecked Viewed checkbox next to each file row", async () => {
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByText("index.ts"));
 
@@ -783,7 +805,7 @@ describe("ReviewHub", () => {
     });
 
     it("toggles a file's Viewed state when its checkbox is clicked", async () => {
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByText("index.ts"));
 
@@ -802,7 +824,7 @@ describe("ReviewHub", () => {
     });
 
     it("does not open the diff panel when the Viewed checkbox is clicked", async () => {
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByText("index.ts"));
 
@@ -827,7 +849,7 @@ describe("ReviewHub", () => {
         })
       );
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getAllByText("dual.ts"));
 
@@ -853,15 +875,15 @@ describe("ReviewHub", () => {
       // review survives closing the hub (and shows in the diff workspace's
       // sidebar); only an app restart clears them.
       const { rerender } = render(
-        <ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
+        <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
       );
 
       await waitFor(() => screen.getByText("index.ts"));
 
       fireEvent.click(screen.getByRole("checkbox", { name: "Mark src/index.ts as viewed" }));
 
-      rerender(<ReviewHub isOpen={false} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
-      rerender(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      rerender(<ReviewHubContent isOpen={false} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      rerender(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByText("index.ts"));
 
@@ -889,7 +911,7 @@ describe("ReviewHub", () => {
 
     const renderHub = async () => {
       getStagingStatusMock.mockResolvedValue(makeMultiFileStatus());
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByTestId("file-stage-row-src/x.ts"));
     };
 
@@ -1109,7 +1131,7 @@ describe("ReviewHub", () => {
     it("Escape clears an active selection before closing the modal", async () => {
       const onClose = vi.fn();
       getStagingStatusMock.mockResolvedValue(makeMultiFileStatus());
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={onClose} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={onClose} />);
       await waitFor(() => screen.getByTestId("file-stage-row-src/x.ts"));
 
       fireEvent.click(screen.getByTestId("file-stage-row-src/x.ts"), { metaKey: true });
@@ -1242,7 +1264,7 @@ describe("ReviewHub", () => {
   describe("diff panel ownership", () => {
     /** Opens the diff for a file row and settles the open promise. */
     async function openDiffFor(fileName: string): Promise<void> {
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText(fileName));
       openPanelDialogMock.mockClear();
       await act(async () => {

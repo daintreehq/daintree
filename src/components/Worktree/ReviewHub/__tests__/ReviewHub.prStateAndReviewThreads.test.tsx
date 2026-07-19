@@ -100,13 +100,7 @@ vi.mock("@/utils/debounce", () => ({
   },
 }));
 
-vi.mock("react-dom", async () => {
-  const actual = await vi.importActual<typeof import("react-dom")>("react-dom");
-  return { ...actual, createPortal: (children: ReactNode) => children };
-});
-
 vi.mock("@/hooks", () => ({
-  useOverlayState: vi.fn(),
   useTruncationDetection: vi.fn(() => ({ ref: vi.fn(), isTruncated: false })),
 }));
 
@@ -272,7 +266,7 @@ vi.mock("@/components/ui/EmptyState", () => ({
   ),
 }));
 
-import { ReviewHub } from "../ReviewHub";
+import { ReviewHubContent } from "../ReviewHubContent";
 import { useUIStore } from "@/store/uiStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 
@@ -466,7 +460,7 @@ describe("ReviewHub", () => {
       });
       getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => {
         screen.getByRole("button", { name: /view pull request #42/i });
@@ -483,7 +477,7 @@ describe("ReviewHub", () => {
       });
       getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByRole("button", { name: /view pull request #42/i }));
 
@@ -500,7 +494,7 @@ describe("ReviewHub", () => {
     it("shows 'No PR' when branch has remote but no PR", async () => {
       getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => {
         screen.getByText("No PR");
@@ -515,7 +509,7 @@ describe("ReviewHub", () => {
       });
       getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: false }));
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByText("index.ts"));
       expect(screen.queryByText("No PR")).toBeNull();
@@ -530,7 +524,7 @@ describe("ReviewHub", () => {
       });
       getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => {
         screen.getByText("#77");
@@ -546,7 +540,7 @@ describe("ReviewHub", () => {
       });
       getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => {
         screen.getByText("#99");
@@ -563,7 +557,7 @@ describe("ReviewHub", () => {
       });
       getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => {
         screen.getByText("failing");
@@ -579,7 +573,7 @@ describe("ReviewHub", () => {
       });
       getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByText("#42"));
       expect(screen.queryByText("passing")).toBeNull();
@@ -633,7 +627,7 @@ describe("ReviewHub", () => {
       setWorktreePRWithLink();
       getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("index.ts"));
 
       act(() => {

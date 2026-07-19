@@ -573,14 +573,30 @@ export interface DevPreviewPanelData extends BasePanelData {
 }
 
 /**
- * Review panel — mounts the worktree's Review & Commit surface inside a grid
- * cell instead of (or in addition to) the modal `ReviewHub`. Carries no
- * kind-specific persisted fields: `worktreeId` from `BasePanelData` is the
- * sole binding, and the worktree path is resolved fresh from the worktree
- * store at render time so renames or moves don't leave a stale reference.
+ * Review panel — mounts the worktree's Review & Commit surface, in a grid cell
+ * or as a dialog. Carries no kind-specific *persisted* fields: `worktreeId`
+ * from `BasePanelData` is the sole binding, and the worktree path is resolved
+ * fresh from the worktree store at render time so renames or moves don't leave
+ * a stale reference. The two fields below are open-time hints, deliberately
+ * absent from `serializeReview`.
  */
 export interface ReviewPanelData extends BasePanelData {
   kind: "review";
+  /**
+   * Commit message to seed the composer with on first open — the worktree
+   * card's AI-note first line. An open-time hint only; never persisted, so a
+   * restored panel opens with an empty composer rather than a stale message.
+   *
+   * Deliberately has no fallback anywhere in its chain: a silently substituted
+   * commit message caused a real bad push (#7884). Empty means empty.
+   */
+  initialCommitMessage?: string;
+  /**
+   * Stage all unstaged files on open when nothing is staged yet, so opening
+   * from the worktree card lands in a ready-to-commit state. An open-time hint
+   * only; never persisted, so a restored panel never re-stages behind the user.
+   */
+  autoStageOnOpen?: boolean;
 }
 
 /**
