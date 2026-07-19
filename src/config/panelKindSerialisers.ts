@@ -1,5 +1,6 @@
 import type { BuiltInPanelKind, PanelKind, ViewportPresetId } from "@/types";
-import type { FileViewMode } from "@shared/types/panel";
+import type { FileViewMode, DiffSource } from "@shared/types/panel";
+import type { GitStatus } from "@shared/types/git";
 import type { AddTerminalArgs, SavedTerminalData } from "@/utils/stateHydration/statePatcher";
 import { VIEWPORT_PRESETS } from "@/panels/dev-preview/viewportPresets";
 
@@ -15,6 +16,29 @@ function sanitizeViewportPreset(value: string | undefined): ViewportPresetId | u
 /** Coerce a persisted file view mode, dropping unknown on-disk values. */
 function sanitizeFileViewMode(value: string | undefined): FileViewMode | undefined {
   return value === "rendered" || value === "source" ? value : undefined;
+}
+
+const GIT_STATUSES: readonly string[] = [
+  "modified",
+  "added",
+  "deleted",
+  "untracked",
+  "ignored",
+  "renamed",
+  "copied",
+  "conflicted",
+];
+
+/** Coerce a persisted git status, dropping unknown on-disk values. */
+function sanitizeGitStatus(value: string | undefined): GitStatus | undefined {
+  return value !== undefined && GIT_STATUSES.includes(value) ? (value as GitStatus) : undefined;
+}
+
+const DIFF_SOURCES: readonly string[] = ["working-tree", "staged", "unstaged", "base-branch"];
+
+/** Coerce a persisted diff source, dropping unknown on-disk values. */
+function sanitizeDiffSource(value: string | undefined): DiffSource | undefined {
+  return value !== undefined && DIFF_SOURCES.includes(value) ? (value as DiffSource) : undefined;
 }
 
 /**
@@ -55,6 +79,12 @@ const BUILT_IN_DESERIALIZERS = {
   file: (saved) => ({
     filePath: saved.filePath ?? saved.markdownFilePath,
     fileViewMode: sanitizeFileViewMode(saved.fileViewMode ?? saved.markdownViewMode),
+  }),
+  diff: (saved) => ({
+    filePath: saved.filePath,
+    fileStatus: sanitizeGitStatus(saved.fileStatus),
+    diffSource: sanitizeDiffSource(saved.diffSource),
+    baseBranch: saved.baseBranch,
   }),
 } as const satisfies Record<BuiltInPanelKind, PanelKindDeserializer | null>;
 

@@ -4,6 +4,7 @@ import type {
   BrowserPanelData,
   BuiltInPanelKind,
   FilePanelData,
+  DiffPanelData,
   PanelExitBehavior,
 } from "@shared/types/panel";
 import type { BrowserHistory } from "@shared/types/browser";
@@ -227,6 +228,36 @@ const FILE_FIELD_CLASSIFICATION = {
   initialLine: false,
 } as const satisfies Record<keyof FilePanelData, boolean>;
 
+// ── Diff field classification ────────────────────────────────────────
+
+const DIFF_FIELD_CLASSIFICATION = {
+  // BasePanelData — persisted by the base serialization layer
+  id: false,
+  kind: false,
+  title: false,
+  titleMode: false,
+  location: false,
+  worktreeId: false,
+  isVisible: false,
+  extensionState: false,
+  pluginId: false,
+  // DiffPanelData persisted fields — the reconstruction recipe, not the content
+  filePath: true,
+  fileStatus: true,
+  diffSource: true,
+  baseBranch: true,
+  // BasePanelData carrier-bookkeeping timestamps — written by the base
+  // serialization layer in panelToSnapshot, not per-kind serializers.
+  createdAt: false,
+  lastActiveAt: false,
+  // Ephemerality flag: consumed by the persistence filter to decide whether a
+  // panel is written at all, so it is never part of a snapshot's payload.
+  excludeFromPersistence: false,
+  // Rebuilt live by whichever surface owns the review, so a restored panel
+  // never replays a change set whose files have since been committed.
+  changeSet: false,
+} as const satisfies Record<keyof DiffPanelData, boolean>;
+
 // ── Built-in kind exhaustiveness ─────────────────────────────────────
 
 const BUILT_IN_KINDS = [
@@ -235,6 +266,7 @@ const BUILT_IN_KINDS = [
   "dev-preview",
   "review",
   "file",
+  "diff",
 ] as const satisfies readonly BuiltInPanelKind[];
 
 // Compile-time exhaustiveness pin: if a new BuiltInPanelKind is added and not
@@ -382,6 +414,26 @@ const savedFile: SavedTerminalData = {
   fileViewMode: "source",
 };
 
+const diffFixture: DiffPanelData = {
+  id: "panel-diff",
+  title: "Panel",
+  location: "grid",
+  kind: "diff",
+  filePath: "src/app.ts",
+  fileStatus: "modified",
+  diffSource: "base-branch",
+  baseBranch: "develop",
+};
+
+const savedDiff: SavedTerminalData = {
+  id: "panel-diff",
+  kind: "diff",
+  filePath: "src/app.ts",
+  fileStatus: "modified",
+  diffSource: "base-branch",
+  baseBranch: "develop",
+};
+
 const savedDevPreview: SavedTerminalData = {
   id: "panel-dev-preview",
   kind: "dev-preview",
@@ -451,6 +503,20 @@ describe("panel serializer field coverage", () => {
     const output = getPanelKindConfig("file")!.serialize!(fileFixture) as Record<string, unknown>;
     assertCovers("file serializer", output, persistedKeys(FILE_FIELD_CLASSIFICATION));
   });
+
+  it("diff serializer covers every persisted diff field", () => {
+    const output = getPanelKindConfig("diff")!.serialize!(diffFixture) as Record<string, unknown>;
+    assertCovers("diff serializer", output, persistedKeys(DIFF_FIELD_CLASSIFICATION));
+  });
+
+  it("diff serializer omits the runtime change set", () => {
+    const withChangeSet: DiffPanelData = {
+      ...diffFixture,
+      changeSet: [{ path: "src/app.ts", status: "modified", viewedKey: "modified:src/app.ts" }],
+    };
+    const output = getPanelKindConfig("diff")!.serialize!(withChangeSet) as Record<string, unknown>;
+    expect(output).not.toHaveProperty("changeSet");
+  });
 });
 
 // ── Deserializer coverage ────────────────────────────────────────────
@@ -499,6 +565,25 @@ describe("panel deserializer field coverage", () => {
     expect(deserializer, "file deserializer must be registered").toBeDefined();
     const output = deserializer!(savedFile) as Record<string, unknown>;
     assertCovers("file deserializer", output, persistedKeys(FILE_FIELD_CLASSIFICATION));
+  });
+
+  it("diff deserializer covers every persisted diff field", () => {
+    const deserializer = getDeserializer("diff");
+    expect(deserializer, "diff deserializer must be registered").toBeDefined();
+    const output = deserializer!(savedDiff) as Record<string, unknown>;
+    assertCovers("diff deserializer", output, persistedKeys(DIFF_FIELD_CLASSIFICATION));
+  });
+
+  it("diff deserializer drops unknown persisted status and source values", () => {
+    const output = getDeserializer("diff")!({
+      id: "panel-diff",
+      kind: "diff",
+      filePath: "src/app.ts",
+      fileStatus: "not-a-status",
+      diffSource: "not-a-source",
+    }) as Record<string, unknown>;
+    expect(output.fileStatus).toBeUndefined();
+    expect(output.diffSource).toBeUndefined();
   });
 
   it("file deserializer drops unknown persisted view modes", () => {

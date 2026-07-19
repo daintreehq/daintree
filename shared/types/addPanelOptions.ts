@@ -5,7 +5,9 @@ import type {
   PanelTitleMode,
   ViewportPresetId,
   FileViewMode,
+  DiffSource,
 } from "./panel.js";
+import type { GitStatus, DiffChangeSetEntry } from "./git.js";
 import type { BrowserHistory } from "./browser.js";
 import type { AgentState, AgentId, WaitingReason } from "./agent.js";
 import type { TerminalSpawnSource, AddPanelFocusPolicy } from "./panel.js";
@@ -248,6 +250,29 @@ export interface FilePanelOptions extends AddPanelOptionsBase {
 }
 
 /**
+ * Options for creating a diff panel. `filePath` is worktree-relative (the
+ * worktree root comes from `worktreeId`) so a worktree move can't strand the
+ * panel on a dead absolute path. The change set is not passed in — the panel
+ * derives it live from the worktree store using `diffSource`.
+ */
+export interface DiffPanelOptions extends AddPanelOptionsBase {
+  kind: "diff";
+  /** Worktree-relative path of the file to diff */
+  filePath?: string;
+  /** Status the diff is opened against; defaults to "modified" */
+  fileStatus?: GitStatus;
+  /** Which change set to review; defaults to "working-tree" */
+  diffSource?: DiffSource;
+  /** Base ref, required when `diffSource` is "base-branch" */
+  baseBranch?: string;
+  /**
+   * Files the review workspace steps through. Runtime-only; the opener keeps
+   * it current via `setDiffPanelChangeSet` for as long as the panel is open.
+   */
+  changeSet?: DiffChangeSetEntry[];
+}
+
+/**
  * Options for extension-provided panel kinds.
  *
  * NOTE: intentionally excluded from the `AddPanelOptions` union below. Including
@@ -267,4 +292,5 @@ export type AddPanelOptions =
   | BrowserPanelOptions
   | DevPreviewPanelOptions
   | ReviewPanelOptions
-  | FilePanelOptions;
+  | FilePanelOptions
+  | DiffPanelOptions;

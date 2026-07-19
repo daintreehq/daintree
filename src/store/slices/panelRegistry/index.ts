@@ -10,6 +10,7 @@ import { createOrderingActions } from "./ordering";
 import { createRestartActions } from "./restart";
 import { createBrowserActions } from "./browser";
 import { createFilePanelActions } from "./file";
+import { createDiffPanelActions } from "./diff";
 import { createTabGroupActions } from "./tabGroups";
 
 // Re-exports for backward compatibility
@@ -50,6 +51,7 @@ export const createPanelRegistrySlice =
       ...createRestartActions(set, get),
       ...createBrowserActions(set),
       ...createFilePanelActions(set),
+      ...createDiffPanelActions(set),
       ...createTabGroupActions(set, get),
     };
   };

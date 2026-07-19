@@ -8,8 +8,10 @@ import type {
   PanelExitBehavior,
   ViewportPresetId,
   FileViewMode,
+  DiffSource,
 } from "./panel.js";
 import type { CommandOverride } from "./commands.js";
+import type { GitStatus } from "./git.js";
 import type { EditorConfig } from "./editor.js";
 import type { NotificationSettings } from "./ipc/api.js";
 
@@ -151,6 +153,12 @@ export interface PanelSnapshot {
   filePath?: string;
   /** Active view mode for a file panel */
   fileViewMode?: FileViewMode;
+  /** Status a diff panel was opened against */
+  fileStatus?: GitStatus;
+  /** Which change set a diff panel reviews */
+  diffSource?: DiffSource;
+  /** Base ref for a diff panel with `diffSource: "base-branch"` */
+  baseBranch?: string;
   /** Legacy pre-file-panel field: absolute path shown in a markdown panel */
   markdownFilePath?: string;
   /** Legacy pre-file-panel field: markdown panel view mode */

@@ -1,4 +1,4 @@
-import { SquareTerminal, Globe, MonitorPlay, GitPullRequest, FileText } from "lucide-react";
+import { SquareTerminal, Globe, MonitorPlay, GitPullRequest, FileText, FileDiff } from "lucide-react";
 import { useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { BrandMark } from "@/components/icons";
@@ -92,6 +92,13 @@ export function TerminalIcon({
   if (kind === "file" || resolvedChrome.iconId === "file-text") {
     return withIconMarker(
       <FileText {...finalProps} className={cn(finalProps.className, "text-category-amber")} />
+    );
+  }
+
+  // Diff panes get a file-diff icon
+  if (kind === "diff" || resolvedChrome.iconId === "file-diff") {
+    return withIconMarker(
+      <FileDiff {...finalProps} className={cn(finalProps.className, "text-category-green")} />
     );
   }
 

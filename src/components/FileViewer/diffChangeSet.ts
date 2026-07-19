@@ -1,24 +1,10 @@
 import type { GitStatus } from "@shared/types";
+import type { DiffChangeSetEntry } from "@shared/types/git";
 
-/**
- * One file of the changeset a diff modal was opened from. Leaf module (no
- * component imports) so the sidebar, the modal, and its openers can all share
- * the shape without creating an import cycle through FileDiffModal.
- */
-export interface DiffChangeSetEntry {
-  /** Repo-relative path */
-  path: string;
-  status: GitStatus;
-  insertions?: number | null;
-  deletions?: number | null;
-  /**
-   * Caller-owned key for the viewed-marker store (scoped per worktree).
-   * Callers keep their existing conventions: `staged:{path}` /
-   * `unstaged:{path}` (Review Hub), `{status}:{path}` (change list),
-   * `base:{path}` (base-branch review).
-   */
-  viewedKey: string;
-}
+// The entry shape moved to shared types when it became a field on
+// `DiffPanelData` (shared/ cannot import from src/). Re-exported here so the
+// sidebar, the pane, and every opener keep importing it from one place.
+export type { DiffChangeSetEntry };
 
 export const DIFF_STATUS_CONFIG: Record<GitStatus, { label: string; color: string }> = {
   modified: { label: "M", color: "text-status-warning" },

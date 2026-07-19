@@ -237,6 +237,15 @@ export interface PanelRegistrySlice {
   ) => void;
   setFilePanelPath: (id: string, filePath: string) => void;
   setFileViewMode: (id: string, viewMode: import("@shared/types/panel.js").FileViewMode) => void;
+  setDiffPanelFile: (
+    id: string,
+    filePath: string,
+    fileStatus: import("@shared/types/git.js").GitStatus
+  ) => void;
+  setDiffPanelChangeSet: (
+    id: string,
+    changeSet: import("@shared/types/git.js").DiffChangeSetEntry[]
+  ) => void;
   setDevServerState: (
     id: string,
     status: "stopped" | "starting" | "installing" | "running" | "error",
