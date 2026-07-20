@@ -729,9 +729,9 @@ describe("sweepDeletedWorktreeCleanup", () => {
     sweepDeletedWorktreeCleanup(makeDeps({ now: () => NOW + 61_000 }));
     expect(bulkTrashByWorktree).toHaveBeenCalledTimes(1);
     expect(bulkTrashByWorktree).toHaveBeenCalledWith("wt-1");
-    expect(
-      useWorktreeSelectionStore.getState().deletedWorktrees.get("wt-2")?.holdReason
-    ).toBe("agent");
+    expect(useWorktreeSelectionStore.getState().deletedWorktrees.get("wt-2")?.holdReason).toBe(
+      "agent"
+    );
   });
 
   it("does not let a re-recorded row inherit the previous row's hold", () => {

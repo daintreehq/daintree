@@ -40,7 +40,6 @@ function stop(): void {
   disposeCleanup = undefined;
 }
 
-
 function goCached(): void {
   latchedCached = true;
   for (const handler of cachedHandlers) handler();

@@ -158,7 +158,9 @@ describe("setDeletedWorktreeCleanupState", () => {
     store.addDeletedWorktree(makeDeleted({ expiresAt: 5_000, holdReason: "drag" }));
     store.setDeletedWorktreeCleanupState("wt-1", { expiresAt: 5_000, holdReason: null });
 
-    expect(useWorktreeSelectionStore.getState().deletedWorktrees.get("wt-1")?.holdReason).toBeNull();
+    expect(
+      useWorktreeSelectionStore.getState().deletedWorktrees.get("wt-1")?.holdReason
+    ).toBeNull();
   });
 
   it("leaves state untouched for an unknown id", () => {
