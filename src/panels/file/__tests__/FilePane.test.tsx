@@ -457,3 +457,117 @@ describe("FilePane HTML Source/Rendered (#11191)", () => {
     );
   });
 });
+
+// #11255: a dialog host sizes to its content every frame, so swapping markdown
+// source for the rendered chunk's skeleton collapsed the dialog and expanded it
+// again once the document landed. FilePane pins the body's height across the
+// swap. The MarkdownViewer mock above means the release path never runs here —
+// that lifecycle is covered directly in useHeightHold.test.tsx; these assert the
+// wiring, i.e. which toggles arm a pin at all.
+describe("FilePane rendered-swap height hold (#11255)", () => {
+  const SOURCE_HEIGHT = 640;
+
+  function renderPaneWithBody(filePath: string, location: "dialog" | "grid") {
+    panelsById["file-1"] = {
+      id: "file-1",
+      kind: "file",
+      filePath,
+      fileViewMode: "source",
+    };
+    const view = render(
+      <TooltipProvider>
+        <FilePane
+          id="file-1"
+          title="spec.md"
+          isFocused={true}
+          location={location}
+          onFocus={() => {}}
+          onClose={() => {}}
+        />
+      </TooltipProvider>
+    );
+    const body = screen.getByTestId("file-pane-body");
+    // jsdom lays nothing out; give the pane the height a real source view would
+    // have so the pin has something to measure.
+    body.getBoundingClientRect = vi.fn<() => DOMRect>(() => ({
+      height: SOURCE_HEIGHT,
+      width: 0,
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    }));
+    return { ...view, body };
+  }
+
+  async function clickToggle(label: string) {
+    const button = screen.getByRole("button", { name: label });
+    await act(async () => {
+      button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+  }
+
+  it("pins the source height when a dialog switches markdown to rendered", async () => {
+    const { body } = renderPaneWithBody("/repo/docs/spec.md", "dialog");
+
+    await clickToggle("Rendered");
+
+    expect(body.style.minHeight).toBe(`${SOURCE_HEIGHT}px`);
+  });
+
+  it("leaves a grid panel unpinned — its cell height is layout-owned, not content-driven", async () => {
+    const { body } = renderPaneWithBody("/repo/docs/spec.md", "grid");
+
+    await clickToggle("Rendered");
+
+    expect(body.style.minHeight).toBe("");
+  });
+
+  it("does not pin the reverse switch, which renders at its own height immediately", async () => {
+    panelsById["file-1"] = {
+      id: "file-1",
+      kind: "file",
+      filePath: "/repo/docs/spec.md",
+      fileViewMode: "rendered",
+    };
+    render(
+      <TooltipProvider>
+        <FilePane
+          id="file-1"
+          title="spec.md"
+          isFocused={true}
+          location="dialog"
+          onFocus={() => {}}
+          onClose={() => {}}
+        />
+      </TooltipProvider>
+    );
+    const body = screen.getByTestId("file-pane-body");
+    body.getBoundingClientRect = vi.fn<() => DOMRect>(() => ({
+      height: SOURCE_HEIGHT,
+      width: 0,
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    }));
+
+    await clickToggle("Source");
+
+    expect(body.style.minHeight).toBe("");
+  });
+
+  it("leaves HTML alone — its preview frame owns its own height", async () => {
+    const { body } = renderPaneWithBody("/repo/dist/report.html", "dialog");
+
+    await clickToggle("Rendered");
+
+    expect(body.style.minHeight).toBe("");
+  });
+});

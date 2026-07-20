@@ -69,6 +69,31 @@ describe("MarkdownDocument", () => {
     expect(container.textContent).toContain("plain body");
   });
 
+  it("reports its first commit so a pinned host height can be handed back", () => {
+    const onRendered = vi.fn();
+    render(<MarkdownDocument {...FIXTURE_PROPS} content="# Spec title" onRendered={onRendered} />);
+
+    expect(onRendered).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves fence text verbatim when highlighting, so the token swap can't resize the box", () => {
+    // The cold-grammar path renders the fence as plain text and re-renders with
+    // tokens once ensureLanguage resolves. That second render is only height-safe
+    // because tokenizing wraps the same characters — assert the invariant rather
+    // than the timing.
+    const code = 'const x: string = "hi";';
+    const { container } = render(
+      <MarkdownDocument {...FIXTURE_PROPS} content={`\`\`\`typescript\n${code}\n\`\`\``} />
+    );
+
+    const rendered = container.querySelector("code.language-typescript");
+    expect(rendered!.querySelector(".token")).not.toBeNull();
+    // Byte-identical to the plain fallback, trailing fence newline included —
+    // the `code` mapping strips it before either path renders, so the swap
+    // can't gain or lose a line.
+    expect(rendered!.textContent).toBe(code);
+  });
+
   it("drops raw HTML instead of rendering it", () => {
     const { container } = render(
       <MarkdownDocument
