@@ -242,17 +242,24 @@ export function DeletedWorktreeCard({ worktree }: DeletedWorktreeCardProps) {
         />
       </div>
       {/* The row separator and the countdown are one element, not two stacked
-          ones (#11262). A `border-b` on this card would paint at the border-box
-          edge while an absolutely positioned bar resolves `bottom-0` against
-          the *padding* edge — offset by exactly the border width, which read as
-          a doubled rule. So the track below owns the bottom edge outright: it
-          is the separator when unarmed, and the fill drains along it when
-          armed. Nudging the bar by a negative offset instead would only line up
+          ones (#11262). A `border-b` on this card paints at the border-box edge
+          while an absolutely positioned bar resolves `bottom-0` against the
+          *padding* edge — offset by exactly the border width, which read as a
+          doubled rule. So this track owns the bottom edge outright: it is the
+          separator when unarmed, and the fill drains along it when armed.
+          Nudging the bar by a negative offset instead would only line up
           coincidentally, and re-break under sub-pixel rounding at fractional
-          DPR. */}
+          DPR.
+
+          It sits behind the interaction plane (`-z-10`, contained by the root's
+          `isolate`) so it can't clip the overlay button's inset focus ring the
+          way a `z-10` track did along the bottom edge; it still paints above
+          the card's own background, and the content div carries none of its
+          own. No `title` either: a 1px decorative strip is an unhittable hover
+          target, and the seconds readout in the header already owns that
+          tooltip. */}
       <div
-        className="deleted-worktree-separator absolute inset-x-0 bottom-0 z-10 h-px bg-border-default"
-        title={hasCountdown ? `Closes automatically in ${remainingSeconds}s` : undefined}
+        className="deleted-worktree-separator pointer-events-none absolute inset-x-0 bottom-0 -z-10 h-px bg-border-default"
         data-testid="deleted-worktree-separator"
         aria-hidden="true"
       >

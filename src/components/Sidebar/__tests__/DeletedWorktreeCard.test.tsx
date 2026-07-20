@@ -65,13 +65,18 @@ function setPanels(
   });
 }
 
-// Classifies Tailwind bottom-border utilities (`border-b`, `border-b-2`, and
-// any variant-prefixed form like `hover:border-b`) rather than matching the
+// Classifies Tailwind bottom-border *width* utilities (`border-b`, `border-b-2`,
+// and variant-prefixed forms like `hover:border-b`) rather than matching the
 // class string, so the check keeps working as unrelated classes come and go.
+// `border-b-0` is excluded because it removes the border rather than painting
+// one, as are colour-only utilities like `border-b-border-default`.
 function hasBottomBorderUtility(element: Element): boolean {
   return [...element.classList].some((className) => {
     const utility = className.split(":").at(-1);
-    return utility === "border-b" || utility?.startsWith("border-b-") === true;
+    if (utility === "border-b") return true;
+    const width =
+      utility?.startsWith("border-b-") === true ? utility.slice("border-b-".length) : "";
+    return /^\d+$/.test(width) && width !== "0";
   });
 }
 
@@ -152,12 +157,8 @@ describe("DeletedWorktreeCard", () => {
     expect(selectWorktree).toHaveBeenCalledWith("wt-1", { source: "focus" });
   });
 
-  it("shows the auto-cleanup countdown bar when a deadline is armed", () => {
-    setPanels([{ id: "t1", worktreeId: "wt-1" }]);
-    const { container } = renderCard({ ...worktree, expiresAt: Date.now() + 60_000 });
-
-    expect(container.querySelector("[data-testid='deleted-worktree-countdown']")).toBeTruthy();
-  });
+  // Armed presence is owned by the bottom-edge-ownership block below, which
+  // asserts the same thing plus where the fill sits in the tree.
 
   it("shows the seconds readout next to the close button while armed", () => {
     setPanels([{ id: "t1", worktreeId: "wt-1" }]);
@@ -237,29 +238,66 @@ describe("DeletedWorktreeCard", () => {
       });
     }
 
-    it("exposes the countdown tooltip on the full-width track only while armed", () => {
+    it("keeps the track decorative rather than a second tooltip target", () => {
       setPanels([{ id: "t1", worktreeId: "wt-1" }]);
-      const armed = renderCard({ ...worktree, expiresAt: Date.now() + 60_000 });
-      const armedSeparator = armed.container.querySelector(
-        "[data-testid='deleted-worktree-separator']"
-      );
-      // The tooltip belongs to the track, not the fill — on the fill the hover
-      // target would shrink as the countdown drains.
-      expect(armedSeparator?.getAttribute("title")).toMatch(/^Closes automatically in \d+s$/);
-      expect(
-        armed.container
-          .querySelector("[data-testid='deleted-worktree-countdown']")
-          ?.hasAttribute("title")
-      ).toBe(false);
-      cleanup();
+      const { container } = renderCard({ ...worktree, expiresAt: Date.now() + 60_000 });
 
-      const unarmed = renderCard();
-      // Unarmed the track is just a separator, so it must not claim a tooltip.
+      const separator = container.querySelector("[data-testid='deleted-worktree-separator']");
+      // A 1px strip is an unhittable hover target, and the seconds readout in
+      // the header already carries the tooltip — a title here would be dead
+      // weight that screen readers skip anyway.
+      expect(separator?.getAttribute("aria-hidden")).toBe("true");
+      expect(separator?.hasAttribute("title")).toBe(false);
       expect(
-        unarmed.container
-          .querySelector("[data-testid='deleted-worktree-separator']")
-          ?.hasAttribute("title")
+        container.querySelector("[data-testid='deleted-worktree-countdown']")?.hasAttribute("title")
       ).toBe(false);
+      // The readout keeps its own tooltip, so the information is not lost.
+      expect(
+        container
+          .querySelector("[data-testid='deleted-worktree-countdown-seconds']")
+          ?.getAttribute("title")
+      ).toContain("Closes automatically");
+    });
+  });
+
+  // The fill's width is the only thing that makes the separator read as a
+  // countdown, and `remainingFraction` is not a straight ratio: it clamps to
+  // the configured TTL (the sweep re-extends the deadline out of phase with
+  // this component's tick) and snaps the top ~1.5s to exactly full so a
+  // deferred countdown holds steady instead of sawtoothing. Assert the
+  // computed width, since every structural test above passes even if the fill
+  // is permanently stuck at 0% or 100%.
+  describe("countdown fill width", () => {
+    function fillWidth(expiresAt: number, cleanupSeconds = 60): string | undefined {
+      setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+      usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: cleanupSeconds });
+      const { container } = renderCard({ ...worktree, expiresAt });
+      const fill = container.querySelector<HTMLElement>(
+        "[data-testid='deleted-worktree-countdown']"
+      );
+      return fill?.style.width;
+    }
+
+    it("holds at full while the sweep defers the deadline past the TTL", () => {
+      // Deadline beyond the TTL: the clamp must cap this at 100%, not overflow.
+      expect(fillWidth(Date.now() + 90_000)).toBe("100%");
+    });
+
+    it("snaps the opening moments to exactly full so a paused bar holds steady", () => {
+      // Inside the ~1.5s snap window — a raw ratio would render just under 100%.
+      expect(fillWidth(Date.now() + 59_200)).toBe("100%");
+    });
+
+    it("tracks the remaining fraction once the countdown is clear of the snap", () => {
+      const width = fillWidth(Date.now() + 30_000);
+      const percent = Number.parseFloat(width ?? "");
+      // Tolerance absorbs the ms that elapse between arming and asserting.
+      expect(percent).toBeGreaterThan(48);
+      expect(percent).toBeLessThan(52);
+    });
+
+    it("drains to empty once the deadline has passed", () => {
+      expect(fillWidth(Date.now() - 5_000)).toBe("0%");
     });
   });
 
