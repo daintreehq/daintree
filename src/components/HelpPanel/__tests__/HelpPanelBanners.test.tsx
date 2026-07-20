@@ -52,6 +52,7 @@ describe("HelpPanelBanners — launch error", () => {
     const kinds: LaunchErrorKind[] = [
       "mcp-server-not-started",
       "mcp-probe-failed",
+      "skills-sync-failed",
       "spawn-failed",
       "folder-unavailable",
     ];
@@ -77,7 +78,11 @@ describe("HelpPanelBanners — launch error", () => {
       unmount();
     }
 
-    const kindsWithoutSettings: LaunchErrorKind[] = ["spawn-failed", "folder-unavailable"];
+    const kindsWithoutSettings: LaunchErrorKind[] = [
+      "skills-sync-failed",
+      "spawn-failed",
+      "folder-unavailable",
+    ];
     for (const kind of kindsWithoutSettings) {
       const { queryByText, unmount } = render(
         <HelpPanelBanners {...baseProps()} launchError={{ agentId: "claude", kind }} />
@@ -138,6 +143,7 @@ describe("HelpPanelBanners — launch error", () => {
     const cases: { kind: LaunchErrorKind; labels: string[] }[] = [
       { kind: "mcp-server-not-started", labels: ["Retry", "Open settings"] },
       { kind: "mcp-probe-failed", labels: ["Retry", "Open settings"] },
+      { kind: "skills-sync-failed", labels: ["Retry"] },
       { kind: "spawn-failed", labels: ["Retry"] },
       { kind: "folder-unavailable", labels: ["Open logs", "Open installer page"] },
     ];

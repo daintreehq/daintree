@@ -875,10 +875,10 @@ export function DaintreeAssistantSettingsTab() {
         )}
       </SettingsSection>
 
-      {/* Custom commands */}
+      {/* Custom commands and skills */}
       <SettingsSection
         icon={FolderOpen}
-        title="Custom commands"
+        title="Custom commands and skills"
         description="Add your own commands and skills to every assistant session."
       >
         <div className="flex items-start gap-3">
@@ -887,7 +887,8 @@ export function DaintreeAssistantSettingsTab() {
             into each new assistant session. Claude Code picks up{" "}
             <code className="font-mono text-[11px]">.claude/commands</code> and{" "}
             <code className="font-mono text-[11px]">.claude/skills</code>; Codex picks up{" "}
-            <code className="font-mono text-[11px]">.agents/skills</code>; Copilot reads both skill
+            <code className="font-mono text-[11px]">.agents/skills</code> and{" "}
+            <code className="font-mono text-[11px]">.codex/skills</code>; Copilot reads both skill
             trees. A per-project variant in{" "}
             <code className="font-mono text-[11px]">&lt;project&gt;/.daintree/assistant</code> takes
             precedence and can be committed to git.

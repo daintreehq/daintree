@@ -149,6 +149,8 @@ const LAUNCH_ERROR_BODY: Record<LaunchErrorKind, string> = {
   "mcp-server-not-started":
     "Daintree's assistant services didn't start. Check assistant settings, then try again.",
   "mcp-probe-failed": "Daintree's assistant services didn't respond in time. Try again.",
+  "skills-sync-failed":
+    "Daintree couldn't refresh this project's assistant commands and skills, so the session didn't start. Try again.",
   "spawn-failed": "The agent didn't start. Try again.",
   "folder-unavailable":
     "Daintree's bundled assistant files are missing. Reinstall Daintree or check the logs.",
@@ -177,6 +179,7 @@ const LAUNCH_ERROR_CTAS: Record<LaunchErrorKind, LaunchErrorCta[]> = {
     { label: "Retry", handler: "retry", variant: "primary" },
     { label: "Open settings", handler: "settings", variant: "secondary" },
   ],
+  "skills-sync-failed": [{ label: "Retry", handler: "retry", variant: "primary" }],
   "spawn-failed": [{ label: "Retry", handler: "retry", variant: "primary" }],
   "folder-unavailable": [
     { label: "Open logs", handler: "logs", variant: "secondary" },

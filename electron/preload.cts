@@ -741,6 +741,29 @@ function _reconstructGitError(serialized: {
   return error;
 }
 
+/**
+ * Reconstruct `HelpSessionError` thrown by help-session provisioning. Same
+ * realm-boundary stripping as `_reconstructAppError`: contextBridge discards
+ * the custom `code`, so it rides an encoded message prefix that the renderer
+ * decodes via `extractHelpSessionErrorCode` (`src/utils/clientHelpSessionError.ts`).
+ *
+ * Format: `[HelpSessionError|<code>] <original message>`
+ */
+function _reconstructHelpSessionError(serialized: {
+  name: string;
+  message: string;
+  code?: string;
+}): Error {
+  const code = serialized.code ?? "UNKNOWN";
+  const error = new Error(`[HelpSessionError|${code}] ${serialized.message}`);
+  // Standard properties — set for callers in the same realm. They don't
+  // survive the contextBridge crossing; the message prefix is the source
+  // of truth on the renderer side.
+  error.name = "HelpSessionError";
+  (error as Error & { code: string }).code = code;
+  return error;
+}
+
 // Typed overload: when `channel` is a key of `IpcInvokeMap` and the args match,
 // the result is statically enforced against the central IPC contract. Calls
 // that don't match the typed overload — including the function-value
@@ -763,6 +786,9 @@ async function _unwrappingInvoke(channel: string, ...args: unknown[]): Promise<a
       }
       if (serialized.name === "GitOperationError" && typeof serialized.gitReason === "string") {
         throw _reconstructGitError(serialized);
+      }
+      if (serialized.name === "HelpSessionError" && typeof serialized.code === "string") {
+        throw _reconstructHelpSessionError(serialized);
       }
       throw deserializeError(serialized);
     }

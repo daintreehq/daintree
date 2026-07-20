@@ -17,6 +17,7 @@ import {
   LAUNCH_BLOCKED_NO_WORKSPACE,
 } from "@/controllers/LaunchNotifications";
 import { logError } from "@/utils/logger";
+import { extractHelpSessionErrorCode } from "@/utils/clientHelpSessionError";
 import { getDefaultAgentId } from "@/lib/resolveAgentId";
 import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
 
@@ -191,10 +192,9 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
         });
       } catch (err) {
         logError("Failed to provision help session", err);
-        const code =
-          err && typeof err === "object" && "code" in err
-            ? (err as Record<string, unknown>).code
-            : undefined;
+        // Decode BEFORE any message formatting: the contextBridge strips the
+        // custom `code` property, so it rides an encoded message prefix.
+        const code = extractHelpSessionErrorCode(err);
         let message = "Couldn't start the Daintree Assistant session.";
         if (code === "MCP_PROBE_FAILED") {
           message =
@@ -202,6 +202,9 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
         } else if (code === "MCP_SERVER_NOT_STARTED" || code === "MCP_NOT_READY") {
           message =
             "Daintree's assistant services didn't start. Check assistant settings, then try again.";
+        } else if (code === "USER_CONTENT_SYNC_FAILED") {
+          message =
+            "Daintree couldn't refresh this project's assistant commands and skills, so the session didn't start. Try again.";
         }
         // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
