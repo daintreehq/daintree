@@ -34,7 +34,7 @@ vi.mock("@/components/Terminal/TerminalIcon", () => ({
 }));
 
 import { usePanelStore } from "@/store/panelStore";
-import { usePreferencesStore } from "@/store/preferencesStore";
+import { usePreferencesStore, type DeletedWorktreeCleanupSeconds } from "@/store/preferencesStore";
 import { useTerminalPendingDestructiveActionStore } from "@/store/terminalPendingDestructiveActionStore";
 import { useWorktreeSelectionStore, type DeletedWorktree } from "@/store/worktreeStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -62,6 +62,24 @@ function setPanels(
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     panelsById: panelsById as never,
     panelIdsByWorktreeId,
+  });
+}
+
+// Classifies Tailwind bottom-border *width* utilities (`border-b`, `border-b-2`,
+// and variant-prefixed forms like `hover:border-b`) rather than matching the
+// class string, so the check keeps working as unrelated classes come and go.
+// `border-b-0` is excluded because it removes the border rather than painting
+// one, as are colour-only utilities like `border-b-border-default`.
+function hasBottomBorderUtility(element: Element): boolean {
+  return [...element.classList].some((className) => {
+    const utility = className.split(":").at(-1);
+    if (utility === "border-b") return true;
+    if (utility?.startsWith("border-b-") !== true) return false;
+    const value = utility.slice("border-b-".length);
+    // Arbitrary widths (`border-b-[1px]`) paint a rule of their own; arbitrary
+    // colours (`border-b-[#fff]`) only tint one some width utility declared.
+    if (value.startsWith("[")) return !value.startsWith("[#");
+    return /^\d+$/.test(value) && value !== "0";
   });
 }
 
@@ -142,12 +160,8 @@ describe("DeletedWorktreeCard", () => {
     expect(selectWorktree).toHaveBeenCalledWith("wt-1", { source: "focus" });
   });
 
-  it("shows the auto-cleanup countdown bar when a deadline is armed", () => {
-    setPanels([{ id: "t1", worktreeId: "wt-1" }]);
-    const { container } = renderCard({ ...worktree, expiresAt: Date.now() + 60_000 });
-
-    expect(container.querySelector("[data-testid='deleted-worktree-countdown']")).toBeTruthy();
-  });
+  // Armed presence is owned by the bottom-edge-ownership block below, which
+  // asserts the same thing plus where the fill sits in the tree.
 
   it("shows the seconds readout next to the close button while armed", () => {
     setPanels([{ id: "t1", worktreeId: "wt-1" }]);
@@ -168,6 +182,145 @@ describe("DeletedWorktreeCard", () => {
     usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: 0 });
     const off = renderCard({ ...worktree, expiresAt: Date.now() + 60_000 });
     expect(off.container.querySelector("[data-testid='deleted-worktree-countdown']")).toBeNull();
+  });
+
+  // #11262: the card used to carry a `border-b` *and* an absolutely positioned
+  // countdown bar. `bottom-0` resolves against the padding edge, so the bar
+  // landed one border-width above the border and the two painted as a doubled
+  // rule. The invariant these lock is structural, not cosmetic: exactly one
+  // element owns the bottom edge in every state, and the countdown lives inside
+  // it rather than beside it. jsdom can't measure the overlap that caused the
+  // bug, so we assert the arrangement that makes it unrepresentable.
+  describe("bottom-edge ownership (#11262)", () => {
+    const bottomEdgeStates: Array<{
+      name: string;
+      wt: DeletedWorktree;
+      cleanupSeconds: DeletedWorktreeCleanupSeconds;
+      armed: boolean;
+    }> = [
+      { name: "unarmed", wt: worktree, cleanupSeconds: 60, armed: false },
+      {
+        name: "armed",
+        wt: { ...worktree, expiresAt: Date.now() + 60_000 },
+        cleanupSeconds: 60,
+        armed: true,
+      },
+      {
+        name: "deadline set but auto-cleanup disabled",
+        wt: { ...worktree, expiresAt: Date.now() + 60_000 },
+        cleanupSeconds: 0,
+        armed: false,
+      },
+    ];
+
+    for (const { name, wt, cleanupSeconds, armed } of bottomEdgeStates) {
+      it(`keeps a single bottom rule while ${name}`, () => {
+        setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+        usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: cleanupSeconds });
+        const { container } = renderCard(wt);
+
+        const card = container.querySelector("[data-deleted-worktree-id='wt-1']");
+        if (!card) throw new Error("card did not render");
+
+        // The card must not paint a border of its own — that border plus the
+        // positioned track is precisely the doubling this fixes.
+        expect(hasBottomBorderUtility(card)).toBe(false);
+
+        const separators = card.querySelectorAll(
+          ":scope > [data-testid='deleted-worktree-separator']"
+        );
+        expect(separators).toHaveLength(1);
+
+        // The countdown must be nested in the separator. A regression that
+        // reintroduces it as a sibling would still satisfy a naive
+        // presence check, so assert the containment and the absence of a
+        // second top-level bar separately.
+        const separator = separators[0];
+        if (!separator) throw new Error("separator did not render");
+        expect(
+          separator.querySelectorAll(":scope > [data-testid='deleted-worktree-countdown']")
+        ).toHaveLength(armed ? 1 : 0);
+        expect(
+          card.querySelectorAll(":scope > [data-testid='deleted-worktree-countdown']")
+        ).toHaveLength(0);
+      });
+    }
+
+    it("keeps the track decorative rather than a second tooltip target", () => {
+      setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+      const { container } = renderCard({ ...worktree, expiresAt: Date.now() + 60_000 });
+
+      const separator = container.querySelector("[data-testid='deleted-worktree-separator']");
+      // A 1px strip is an unhittable hover target, and the seconds readout in
+      // the header already carries the tooltip — a title here would be dead
+      // weight that screen readers skip anyway.
+      expect(separator?.getAttribute("aria-hidden")).toBe("true");
+      expect(separator?.hasAttribute("title")).toBe(false);
+      expect(
+        container.querySelector("[data-testid='deleted-worktree-countdown']")?.hasAttribute("title")
+      ).toBe(false);
+      // The readout keeps its own tooltip, so the information is not lost.
+      expect(
+        container
+          .querySelector("[data-testid='deleted-worktree-countdown-seconds']")
+          ?.getAttribute("title")
+      ).toContain("Closes automatically");
+    });
+  });
+
+  // The fill's width is the only thing that makes the separator read as a
+  // countdown, and `remainingFraction` is not a straight ratio: it clamps to
+  // the configured TTL (the sweep re-extends the deadline out of phase with
+  // this component's tick) and snaps the top ~1.5s to exactly full so a
+  // deferred countdown holds steady instead of sawtoothing. Assert the
+  // computed width, since every structural test above passes even if the fill
+  // is permanently stuck at 0% or 100%.
+  describe("countdown fill width", () => {
+    function renderArmed(expiresAt: number, cleanupSeconds: DeletedWorktreeCleanupSeconds = 60) {
+      setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+      usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: cleanupSeconds });
+      const { container } = renderCard({ ...worktree, expiresAt });
+      return {
+        width: container.querySelector<HTMLElement>("[data-testid='deleted-worktree-countdown']")
+          ?.style.width,
+        readout: container.querySelector("[data-testid='deleted-worktree-countdown-seconds']")
+          ?.textContent,
+      };
+    }
+
+    function fillWidth(
+      expiresAt: number,
+      cleanupSeconds: DeletedWorktreeCleanupSeconds = 60
+    ): string | undefined {
+      return renderArmed(expiresAt, cleanupSeconds).width;
+    }
+
+    it("holds at full while the sweep defers the deadline past the TTL", () => {
+      // The sweep re-extends the deadline out of phase with this component's
+      // tick, so a deadline beyond the TTL is normal and must read as full.
+      // Assert the readout too: the width alone can't distinguish the clamp
+      // from the snap-to-full branch, which would also yield 100% here.
+      const { width, readout } = renderArmed(Date.now() + 90_000);
+      expect(width).toBe("100%");
+      expect(readout).toBe("60s");
+    });
+
+    it("snaps the opening moments to exactly full so a paused bar holds steady", () => {
+      // Inside the ~1.5s snap window — a raw ratio would render just under 100%.
+      expect(fillWidth(Date.now() + 59_200)).toBe("100%");
+    });
+
+    it("tracks the remaining fraction once the countdown is clear of the snap", () => {
+      const width = fillWidth(Date.now() + 30_000);
+      const percent = Number.parseFloat(width ?? "");
+      // Tolerance absorbs the ms that elapse between arming and asserting.
+      expect(percent).toBeGreaterThan(48);
+      expect(percent).toBeLessThan(52);
+    });
+
+    it("drains to empty once the deadline has passed", () => {
+      expect(fillWidth(Date.now() - 5_000)).toBe("0%");
+    });
   });
 
   it("marks the card active when it is the active worktree", () => {

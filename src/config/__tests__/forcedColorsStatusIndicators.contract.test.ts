@@ -7,6 +7,7 @@ const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(TEST_DIR, "../../..");
 const INDEX_CSS = path.join(REPO_ROOT, "src/index.css");
 const TOOLBAR_CSS = path.join(REPO_ROOT, "src/styles/components/toolbar.css");
+const SIDEBAR_CSS = path.join(REPO_ROOT, "src/styles/components/sidebar.css");
 
 // Issue #8936: status indicators (toolbar pips, ActivityLight) and the
 // SettingsSwitch toggle lose all state in forced-colors / Windows High Contrast
@@ -70,6 +71,19 @@ describe("forced-colors status-indicator contract (#8936)", () => {
     const block = readForcedColorsBlocks(INDEX_CSS);
     expect(block).toMatch(/span\[data-state="checked"\]\s*\{[^}]*HighlightText/);
     expect(block).toMatch(/span\[data-state="unchecked"\]\s*\{[^}]*ButtonText/);
+  });
+
+  // #11262: the deleted-worktree row's separator moved from a `border-b` to a
+  // painted element so the countdown could drain along the same 1px rule.
+  // Borders survive forced-colors; backgrounds are forced to Canvas — so
+  // without an explicit repaint the separator disappears for HC users, a
+  // regression the old border didn't have.
+  it("sidebar.css repaints the deleted-row separator and its countdown fill", () => {
+    const block = readForcedColorsBlocks(SIDEBAR_CSS);
+    expect(block).toMatch(/\.deleted-worktree-separator\s*\{[^}]*background-color:\s*CanvasText/);
+    expect(block).toMatch(
+      /\.deleted-worktree-countdown-fill\s*\{[^}]*background-color:\s*Highlight/
+    );
   });
 
   it("toolbar.css repaints every pip type with CanvasText", () => {
