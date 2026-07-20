@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { isAbsolute, join } from "@shared/utils/path";
 import { ClientAppError } from "@/utils/clientAppError";
 import { useDiffFileSource } from "../useDiffFileSource";
 
@@ -25,11 +26,24 @@ describe("useDiffFileSource", () => {
     expect(readMock).not.toHaveBeenCalled();
   });
 
-  it("reads the file against its worktree root once enabled", async () => {
+  // files:read throws INVALID_PATH unless both paths are absolute, but panels
+  // store the path relative to their worktree — so the hook has to resolve it.
+  it("resolves the worktree-relative path to an absolute one before reading", async () => {
     const { result } = renderHook(() => useDiffFileSource(SUBJECT, true));
 
     await waitFor(() => expect(result.current.source).toBe("file contents"));
-    expect(readMock).toHaveBeenCalledWith({ path: "src/a.ts", rootPath: "/repo" });
+    const payload = readMock.mock.calls[0][0];
+    expect(isAbsolute(payload.path)).toBe(true);
+    expect(payload.path).toBe(join(SUBJECT.worktreePath, SUBJECT.filePath));
+    expect(payload.rootPath).toBe(SUBJECT.worktreePath);
+  });
+
+  it("leaves an already-absolute path alone rather than doubling the root", async () => {
+    const absolute = { worktreePath: "/repo", filePath: "/repo/src/a.ts" };
+    const { result } = renderHook(() => useDiffFileSource(absolute, true));
+
+    await waitFor(() => expect(result.current.source).toBe("file contents"));
+    expect(readMock.mock.calls[0][0].path).toBe("/repo/src/a.ts");
   });
 
   it("starts reading when the scope is turned on mid-session", async () => {

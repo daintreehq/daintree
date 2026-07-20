@@ -102,11 +102,15 @@ export interface DiffViewerProps {
    */
   fullFile?: boolean;
   /**
-   * Fired when `fullFile` was requested but can't be honoured, with the reason.
-   * Lets the host surface one explanation in its own chrome instead of the
-   * viewer growing a second banner system.
+   * Fired when `fullFile` was requested but can't be honoured, with the reason
+   * and the `source` it was judged against. Lets the host surface one
+   * explanation in its own chrome instead of the viewer growing a second banner
+   * system, and lets it tell a current verdict from a superseded one.
    */
-  onFullFileUnavailable?: (reason: FullFileUnavailableReason) => void;
+  onFullFileUnavailable?: (
+    reason: FullFileUnavailableReason,
+    forSource: string | null | undefined
+  ) => void;
   /** Soft-wrap long lines instead of horizontal scrolling */
   wrapLines?: boolean;
   /** Case-insensitive plain-text query; matches render as .diff-search-match spans */
@@ -301,9 +305,23 @@ function estimateLineColumns(text: string): number {
  * belong to different code. Every hunk already carries its own new-side lines,
  * which gives a cheap way to check: they must appear verbatim at `newStart`.
  */
-function sourceMatchesHunks(newSource: string, hunks: HunkData[]): boolean {
+/**
+ * Split file content into its lines. A file ending in a newline splits with a
+ * trailing empty element that is not a line of the file — left in, it renders
+ * as a phantom blank row at the end of every expanded file and shifts the line
+ * count used for the size ceiling.
+ */
+function toSourceLines(source: string): string[] {
+  const lines = source.split("\n");
+  if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+  // A CRLF checkout leaves a carriage return on every line of the disk read
+  // that git's diff output doesn't carry. Left in, every line compares unequal
+  // and the whole feature reads as a permanent mismatch on Windows.
+  return lines.map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line));
+}
+
+function sourceMatchesHunks(newLines: string[], hunks: HunkData[]): boolean {
   if (!hunks.length) return false;
-  const newLines = newSource.split("\n");
   for (const hunk of hunks) {
     let lineNumber = hunk.newStart;
     for (const change of hunk.changes) {
@@ -326,9 +344,8 @@ function sourceMatchesHunks(newSource: string, hunks: HunkData[]): boolean {
  * insert/delete offset — and expansion only ever reads unchanged regions, so
  * positions inside hunks can stay empty.
  */
-function buildSyntheticOldSource(newSource: string, hunks: HunkData[]): string[] | null {
+function buildSyntheticOldSource(newLines: string[], hunks: HunkData[]): string[] | null {
   if (!hunks.length) return null;
-  const newLines = newSource.split("\n");
   let inserts = 0;
   let deletes = 0;
   for (const hunk of hunks) {
@@ -420,12 +437,21 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
       return { oldSource: null, reason: "unsupported" };
     }
     const hunks = file.hunks ?? [];
-    if (!sourceMatchesHunks(source, hunks)) {
+    // A diff with no hunks (a pure rename, a mode change) has no gaps to fill.
+    // Reporting that as a mismatch would tell the user their file changed.
+    if (!hunks.length) return { oldSource: null, reason: "unsupported" };
+    const newLines = toSourceLines(source);
+    if (!sourceMatchesHunks(newLines, hunks)) {
       return { oldSource: null, reason: "source-mismatch" };
     }
-    const built = buildSyntheticOldSource(source, hunks);
+    const built = buildSyntheticOldSource(newLines, hunks);
     if (built === null) return { oldSource: null, reason: "unsupported" };
-    if (built.length > FULL_FILE_MAX_LINES) return { oldSource: built, reason: "too-large" };
+    // Both sides are rendered, and they diverge: inserting 2,000 lines into a
+    // 4,000-line file leaves the old side under the ceiling while the new side
+    // is well past it. The larger side is what the table has to carry.
+    if (Math.max(built.length, newLines.length) > FULL_FILE_MAX_LINES) {
+      return { oldSource: built, reason: "too-large" };
+    }
     return { oldSource: built, reason: null };
   }, [source, files]);
   const oldSource = expansion.oldSource;
@@ -436,8 +462,8 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
   const effectiveFullFile = fullFile && !fullFileBlocked;
 
   useEffect(() => {
-    if (fullFile && expansion.reason !== null) onFullFileUnavailable?.(expansion.reason);
-  }, [fullFile, expansion.reason, onFullFileUnavailable]);
+    if (fullFile && expansion.reason !== null) onFullFileUnavailable?.(expansion.reason, source);
+  }, [fullFile, expansion.reason, onFullFileUnavailable, source]);
 
   if (!diff || diff === "NO_CHANGES") {
     return (

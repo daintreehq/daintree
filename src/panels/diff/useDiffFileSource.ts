@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { isAbsolute, join } from "@shared/utils/path";
 import { filesClient } from "@/clients/filesClient";
 import { isClientAppError } from "@/utils/clientAppError";
 import { toFileReadErrorCode } from "@/components/FileViewer/fileReadErrors";
@@ -6,6 +7,7 @@ import type { FileReadErrorCode } from "@shared/types/ipc/files";
 
 export interface DiffFileSourceSubject {
   worktreePath: string;
+  /** Worktree-relative, as `DiffPanelData` stores it. */
   filePath: string;
 }
 
@@ -63,7 +65,10 @@ export function useDiffFileSource(
     setErrorCode(null);
     setLoading(true);
     try {
-      const result = await filesClient.read({ path: filePath, rootPath: worktreePath });
+      // `files:read` rejects anything relative; panels store the path relative
+      // to their worktree, so it has to be resolved before it crosses IPC.
+      const absolutePath = isAbsolute(filePath) ? filePath : join(worktreePath, filePath);
+      const result = await filesClient.read({ path: absolutePath, rootPath: worktreePath });
       if (requestRef.current !== requestId) return;
       setSource(result.content);
       setLoading(false);

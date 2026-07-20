@@ -141,7 +141,8 @@ describe("DiffViewer full file scope", () => {
     // Same shape, different content — exactly what a file edited between the
     // diff and the source read looks like.
     const drifted = Array.from({ length: 12 }, (_, i) => `unrelated${i + 1}`).join("\n");
-    const onUnavailable = vi.fn<(reason: FullFileUnavailableReason) => void>();
+    const onUnavailable =
+      vi.fn<(reason: FullFileUnavailableReason, forSource: string | null | undefined) => void>();
 
     renderViewer({ diff, source: drifted, fullFile: true, onFullFileUnavailable: onUnavailable });
 
@@ -149,27 +150,29 @@ describe("DiffViewer full file scope", () => {
     // None of the drifted file's lines may leak in as context.
     expect(content.some((line) => line.startsWith("unrelated"))).toBe(false);
     expect(content).toContain("CHANGED");
-    expect(onUnavailable).toHaveBeenCalledWith("source-mismatch");
+    expect(onUnavailable).toHaveBeenCalledWith("source-mismatch", expect.any(String));
   });
 
   it("reports a truncated source as a mismatch rather than expanding past its end", () => {
     const { diff } = makeFixture(12, 5);
     const truncated = ["line1", "line2", "line3"].join("\n");
-    const onUnavailable = vi.fn<(reason: FullFileUnavailableReason) => void>();
+    const onUnavailable =
+      vi.fn<(reason: FullFileUnavailableReason, forSource: string | null | undefined) => void>();
 
     renderViewer({ diff, source: truncated, fullFile: true, onFullFileUnavailable: onUnavailable });
 
-    expect(onUnavailable).toHaveBeenCalledWith("source-mismatch");
+    expect(onUnavailable).toHaveBeenCalledWith("source-mismatch", expect.any(String));
   });
 
   it("falls back rather than committing more rows than the table can carry", () => {
     const totalLines = FULL_FILE_MAX_LINES + 1;
     const { diff, source } = makeFixture(totalLines, 100);
-    const onUnavailable = vi.fn<(reason: FullFileUnavailableReason) => void>();
+    const onUnavailable =
+      vi.fn<(reason: FullFileUnavailableReason, forSource: string | null | undefined) => void>();
 
     renderViewer({ diff, source, fullFile: true, onFullFileUnavailable: onUnavailable });
 
-    expect(onUnavailable).toHaveBeenCalledWith("too-large");
+    expect(onUnavailable).toHaveBeenCalledWith("too-large", expect.any(String));
     // The diff itself still renders — the fallback is to changed lines, never
     // to an empty pane.
     expect(renderedContent()).toContain("CHANGED");
@@ -177,7 +180,8 @@ describe("DiffViewer full file scope", () => {
 
   it("expands a file sitting exactly on the row ceiling", () => {
     const { diff, source } = makeFixture(FULL_FILE_MAX_LINES, 100);
-    const onUnavailable = vi.fn<(reason: FullFileUnavailableReason) => void>();
+    const onUnavailable =
+      vi.fn<(reason: FullFileUnavailableReason, forSource: string | null | undefined) => void>();
 
     renderViewer({ diff, source, fullFile: true, onFullFileUnavailable: onUnavailable });
 
@@ -187,13 +191,119 @@ describe("DiffViewer full file scope", () => {
 
   it("stays on the plain diff when no source is supplied", () => {
     const { diff } = makeFixture(12, 5);
-    const onUnavailable = vi.fn<(reason: FullFileUnavailableReason) => void>();
+    const onUnavailable =
+      vi.fn<(reason: FullFileUnavailableReason, forSource: string | null | undefined) => void>();
 
     renderViewer({ diff, fullFile: true, onFullFileUnavailable: onUnavailable });
 
     expect(renderedContent()).not.toContain("line1");
     // No source is a pending read, not a refusal — nothing to explain yet.
     expect(onUnavailable).not.toHaveBeenCalled();
+  });
+
+  // Files on disk almost always end in a newline; a fixture built by joining
+  // lines does not. The difference is invisible until it renders.
+  it("doesn't invent a trailing blank line for a file that ends in a newline", () => {
+    const totalLines = 12;
+    const { diff, source } = makeFixture(totalLines, 5);
+    renderViewer({ diff, source: `${source}\n`, fullFile: true });
+
+    const content = renderedContent();
+    expect(content).toContain("line12");
+    expect(content[content.length - 1]).toBe("line12");
+    expect(content.length).toBe(totalLines + 1); // +1 for the replaced line's delete row
+  });
+
+  it("counts lines for the size ceiling without the trailing newline's empty split", () => {
+    // Exactly at the ceiling once the trailing newline is discounted — a naive
+    // split would read this as one line over and refuse to expand.
+    const { diff, source } = makeFixture(FULL_FILE_MAX_LINES, 100);
+    const onUnavailable =
+      vi.fn<(reason: FullFileUnavailableReason, forSource: string | null | undefined) => void>();
+
+    renderViewer({
+      diff,
+      source: `${source}\n`,
+      fullFile: true,
+      onFullFileUnavailable: onUnavailable,
+    });
+
+    expect(onUnavailable).not.toHaveBeenCalled();
+  });
+
+  it("tolerates a CRLF checkout, where disk lines carry a return the diff doesn't", () => {
+    const { diff, source } = makeFixture(12, 5);
+    const crlf = source.split("\n").join("\r\n");
+    const onUnavailable = vi.fn<(reason: FullFileUnavailableReason, forSource: unknown) => void>();
+
+    renderViewer({ diff, source: crlf, fullFile: true, onFullFileUnavailable: onUnavailable });
+
+    expect(onUnavailable).not.toHaveBeenCalled();
+    expect(renderedContent()).toContain("line1");
+  });
+
+  it("measures the ceiling against the larger side, not just the old one", () => {
+    // A big insertion leaves the old side small while the new side — which is
+    // rendered too — blows past the ceiling.
+    const oldLines = 10;
+    const inserted = FULL_FILE_MAX_LINES + 1 - oldLines;
+    const body = [
+      " line1",
+      ...Array.from({ length: inserted }, (_, i) => `+new${i + 1}`),
+      " line2",
+    ];
+    const diff = [
+      "diff --git a/f.ts b/f.ts",
+      "index 1111111..2222222 100644",
+      "--- a/f.ts",
+      "+++ b/f.ts",
+      `@@ -1,2 +1,${inserted + 2} @@`,
+      ...body,
+    ].join("\n");
+    const source = [
+      "line1",
+      ...Array.from({ length: inserted }, (_, i) => `new${i + 1}`),
+      "line2",
+      ...Array.from({ length: oldLines - 2 }, (_, i) => `tail${i + 1}`),
+    ].join("\n");
+    const onUnavailable = vi.fn<(reason: FullFileUnavailableReason, forSource: unknown) => void>();
+
+    renderViewer({ diff, source, fullFile: true, onFullFileUnavailable: onUnavailable });
+
+    expect(onUnavailable).toHaveBeenCalledWith("too-large", expect.any(String));
+  });
+
+  it("calls a hunkless diff unsupported rather than claiming the file changed", () => {
+    // A pure rename carries no hunks; reporting a mismatch would tell the user
+    // their file changed when nothing did.
+    const renameDiff = [
+      "diff --git a/old.ts b/new.ts",
+      "similarity index 100%",
+      "rename from old.ts",
+      "rename to new.ts",
+    ].join("\n");
+    const onUnavailable = vi.fn<(reason: FullFileUnavailableReason, forSource: unknown) => void>();
+
+    renderViewer({
+      diff: renameDiff,
+      source: "line1\nline2\n",
+      fullFile: true,
+      onFullFileUnavailable: onUnavailable,
+    });
+
+    if (onUnavailable.mock.calls.length > 0) {
+      expect(onUnavailable).toHaveBeenCalledWith("unsupported", expect.anything());
+    }
+  });
+
+  it("reports the reason against the source it judged, so a host can tell verdicts apart", () => {
+    const { diff } = makeFixture(12, 5);
+    const drifted = Array.from({ length: 12 }, (_, i) => `unrelated${i + 1}`).join("\n");
+    const onUnavailable = vi.fn<(reason: FullFileUnavailableReason, forSource: unknown) => void>();
+
+    renderViewer({ diff, source: drifted, fullFile: true, onFullFileUnavailable: onUnavailable });
+
+    expect(onUnavailable.mock.calls[0][1]).toBe(drifted);
   });
 
   it("notifies once when the scope changes the rendered rows, and not on mount", () => {

@@ -283,11 +283,26 @@ export function DiffPane({
   // Whether this file *can* show its whole contents, independent of whether the
   // user currently wants to — the toggle stays visible either way so the option
   // is discoverable, and explains itself when it can't be used.
-  const fullFileAvailability = useMemo(
+  const sourceAvailability = useMemo(
     () => getFullFileAvailability(diffSource, fileStatus),
     [diffSource, fileStatus]
   );
-  const wantsFullFile = diffFullFile && fullFileAvailability.available && !isImageMode && hasDiff;
+  // An image diff already shows the whole asset, and a diff that hasn't loaded
+  // has nothing to expand — folding both into the availability verdict keeps
+  // the control from looking live while being inert.
+  const fullFileAvailability: typeof sourceAvailability = !sourceAvailability.available
+    ? sourceAvailability
+    : isImageMode
+      ? { available: false, reason: "This view already shows the whole image" }
+      : !hasDiff
+        ? { available: false, reason: "There's no diff to expand yet" }
+        : { available: true };
+
+  // The hunks and the file on disk must describe the same revision. Once the
+  // store reports the file changed, they demonstrably don't: the check inside
+  // the viewer only covers lines the hunks name, so a change in a hidden gap
+  // would otherwise be rendered as unchanged context.
+  const wantsFullFile = diffFullFile && fullFileAvailability.available && !stale;
 
   const sourceSubject = useMemo(
     () => (worktreePath && filePath ? { worktreePath, filePath } : null),
@@ -301,13 +316,22 @@ export function DiffPane({
 
   // Reported by the viewer once it has the parsed diff and the source side by
   // side — the mismatch and size checks can only be made there.
-  const [viewerFallback, setViewerFallback] = useState<FullFileUnavailableReason | null>(null);
-  useEffect(() => {
-    setViewerFallback(null);
-  }, [subject, source]);
-  const handleFullFileUnavailable = useCallback((reason: FullFileUnavailableReason) => {
-    setViewerFallback(reason);
-  }, []);
+  //
+  // Stamped with the source it describes rather than cleared by an effect:
+  // child effects run before parent ones, so a reset keyed on `source` would
+  // fire in the same commit that the viewer reported its reason and swallow it.
+  const [viewerFallback, setViewerFallback] = useState<{
+    source: string | undefined;
+    reason: FullFileUnavailableReason;
+  } | null>(null);
+  const handleFullFileUnavailable = useCallback(
+    (reason: FullFileUnavailableReason, forSource: string | undefined) => {
+      setViewerFallback({ source: forSource, reason });
+    },
+    []
+  );
+  const activeViewerFallback =
+    viewerFallback && viewerFallback.source === source ? viewerFallback.reason : null;
 
   const refreshAll = useCallback(() => {
     retry();
@@ -320,13 +344,21 @@ export function DiffPane({
   const fullFileNotice = wantsFullFile
     ? sourceErrorCode
       ? FILE_READ_ERROR_MESSAGES[sourceErrorCode]
-      : viewerFallback
-        ? FULL_FILE_FALLBACK_MESSAGES[viewerFallback]
+      : activeViewerFallback
+        ? FULL_FILE_FALLBACK_MESSAGES[activeViewerFallback]
         : null
     : null;
 
+  // The reason rides an aria-describedby rather than the tooltip alone: a
+  // disabled segment takes no focus, so a keyboard or screen-reader user would
+  // never reach a hover-only explanation.
+  const scopeReasonId = `${id}-full-file-reason`;
   const scopeToggle = (
-    <div role="group" aria-label="Diff content">
+    <div
+      role="group"
+      aria-label="Diff content"
+      aria-describedby={fullFileAvailability.available ? undefined : scopeReasonId}
+    >
       <SegmentedToggle<DiffContentScope>
         options={[
           { value: "changes", label: "Changes" },
@@ -339,6 +371,11 @@ export function DiffPane({
         value={wantsFullFile && !fullFileNotice ? "full-file" : "changes"}
         onChange={(next) => setDiffFullFile(next === "full-file")}
       />
+      {!fullFileAvailability.available && (
+        <span id={scopeReasonId} className="sr-only">
+          {fullFileAvailability.reason}
+        </span>
+      )}
     </div>
   );
 
