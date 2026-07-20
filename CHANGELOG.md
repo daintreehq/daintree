@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.28.1] - 2026-07-20
+
+A fast follow-up to 0.28.0 fixing two file viewer dialog regressions from the new panel-as-dialog model — long files now scroll, and markdown no longer collapses on the switch to rendered.
+
+### Bug Fixes
+
+- Long files opened in the file viewer dialog scroll instead of clipping past the first screen, in both Source and Rendered mode (#11254)
+- The markdown viewer no longer collapses and re-expands the dialog when switching from source to rendered (#11255)
+
 ## [0.28.0] - 2026-07-20
 
 The file viewer, diff viewer, review workspace and review hub all move onto one panel model — each opens as a dialog and can be promoted into the grid, retiring four hand-rolled modals along the way. Deleting a worktree no longer kills the agents running in it: their terminals stay alive on a deleted-worktree card you can drag them out of.
