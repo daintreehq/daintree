@@ -49,8 +49,26 @@ const {
   // ~/.daintree/assistant folder; mirroring behavior has its own suite in
   // AssistantContentMirror.test.ts.
   mockSyncAssistantContent:
-    vi.fn<(input: unknown) => Promise<{ copied: number; removed: number } | null>>(),
+    vi.fn<
+      (
+        input: unknown
+      ) => Promise<import("../AssistantContentMirror.js").AssistantContentSyncResult | null>
+    >(),
 }));
+
+function cleanSyncResult(
+  overrides: Partial<import("../AssistantContentMirror.js").AssistantContentSyncResult> = {}
+): import("../AssistantContentMirror.js").AssistantContentSyncResult {
+  return {
+    copied: 0,
+    removed: 0,
+    truncated: false,
+    omittedSkills: [],
+    failedCopies: [],
+    staleFailures: [],
+    ...overrides,
+  };
+}
 
 vi.mock("electron", () => ({
   app: {
@@ -184,7 +202,7 @@ describe("HelpSessionService", () => {
     mockProbeMcpSseServer.mockReset();
     mockProbeMcpSseServer.mockResolvedValue(undefined);
     mockSyncAssistantContent.mockReset();
-    mockSyncAssistantContent.mockResolvedValue({ copied: 0, removed: 0 });
+    mockSyncAssistantContent.mockResolvedValue(cleanSyncResult());
 
     service = new HelpSessionService();
     // The new `ensureMcpServerReady` path throws if no registry is wired —
@@ -247,12 +265,66 @@ describe("HelpSessionService", () => {
     });
   });
 
-  it("still provisions when the user content sync fails", async () => {
-    mockSyncAssistantContent.mockRejectedValue(new Error("bad user file"));
+  it("fails provisioning closed when the content sync throws", async () => {
+    mockSyncAssistantContent.mockRejectedValue(new Error("unreadable source dir"));
+
+    await expect(service.provisionSession(provisionInput())).rejects.toMatchObject({
+      name: "HelpSessionError",
+      code: "USER_CONTENT_SYNC_FAILED",
+    });
+  });
+
+  it("fails provisioning closed when stale mirrored content cannot be reconciled", async () => {
+    // The stale relpaths are only actionable alongside the directory holding
+    // them — clearing that dir by hand is the recovery for the permanent cases.
+    const clean = await service.provisionSession(provisionInput());
+    if (!clean) throw new Error("expected result");
+
+    mockSyncAssistantContent.mockResolvedValue(
+      cleanSyncResult({ staleFailures: [".agents/skills/old/SKILL.md"] })
+    );
+
+    await expect(service.provisionSession(provisionInput())).rejects.toMatchObject({
+      name: "HelpSessionError",
+      code: "USER_CONTENT_SYNC_FAILED",
+      message: expect.stringContaining(".agents/skills/old/SKILL.md"),
+    });
+    await expect(service.provisionSession(provisionInput())).rejects.toMatchObject({
+      message: expect.stringContaining(clean.sessionPath),
+    });
+  });
+
+  it("still provisions when invalid new skills were safely omitted", async () => {
+    mockSyncAssistantContent.mockResolvedValue(
+      cleanSyncResult({
+        omittedSkills: ["project:.codex/skills/broken"],
+        failedCopies: [".agents/skills/half/SKILL.md"],
+      })
+    );
 
     const result = await service.provisionSession(provisionInput());
 
     expect(result).not.toBeNull();
+  });
+
+  it("serializes concurrent provisions for the same project", async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    mockSyncAssistantContent.mockImplementation(async () => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      inFlight -= 1;
+      return cleanSyncResult();
+    });
+
+    await Promise.all([
+      service.provisionSession(provisionInput()),
+      service.provisionSession(provisionInput()),
+    ]);
+
+    expect(mockSyncAssistantContent).toHaveBeenCalledTimes(2);
+    expect(maxInFlight).toBe(1);
   });
 
   it("creates a session dir with a .mcp.json that bakes the literal session token into the Authorization header", async () => {

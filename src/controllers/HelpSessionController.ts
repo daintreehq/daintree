@@ -86,6 +86,7 @@ export interface TierMismatchState {
 export type LaunchErrorKind =
   | "mcp-server-not-started"
   | "mcp-probe-failed"
+  | "skills-sync-failed"
   | "spawn-failed"
   | "folder-unavailable";
 
