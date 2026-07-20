@@ -707,7 +707,11 @@ export function FilePane({
               <LazyDiffViewer
                 diff={diffContent}
                 viewType={diffViewType}
-                rootPath={worktreePath}
+                // The diff's paths are relative to the worktree the file
+                // physically lives in, not the one the panel is stamped with,
+                // so open-in-editor has to join against the same root the
+                // relative paths were derived from.
+                rootPath={diffWorktreePath}
                 wrapLines={diffWrapLines}
                 onRetry={retryDiff}
               />

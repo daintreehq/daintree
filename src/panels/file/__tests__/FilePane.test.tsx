@@ -112,14 +112,13 @@ interface DiffSubjectLike {
   status: string;
 }
 const { useDiffContentMock } = vi.hoisted(() => ({
-  useDiffContentMock:
-    vi.fn<
-      (subject: DiffSubjectLike | null) => {
-        content: string | undefined;
-        stale: boolean;
-        retry: () => void;
-      }
-    >(),
+  useDiffContentMock: vi.fn<
+    (subject: DiffSubjectLike | null) => {
+      content: string | undefined;
+      stale: boolean;
+      retry: () => void;
+    }
+  >(),
 }));
 vi.mock("@/panels/diff/useDiffContent", () => ({ useDiffContent: useDiffContentMock }));
 // FilePane lazy-loads the viewer, so assertions on it must await the chunk.
@@ -938,6 +937,51 @@ describe("FilePane diff mode (#11274)", () => {
       seedWorktree([{ path: "/repo/src/index.ts", status: "modified" }]);
       await renderPane({ filePath: "/repo/src/index.ts", fileViewMode: "source" });
       expect(lastSubject()).toBeNull();
+    });
+  });
+
+  // The viewer joins its rootPath with the diff's worktree-relative paths to
+  // build the open-in-editor target, so the root has to be the very worktree the
+  // diff was fetched against — never the one the panel happens to be stamped
+  // with, which containment resolution exists precisely to override.
+  describe("diff viewer root", () => {
+    function viewerRoot(): string | null {
+      return screen.getByTestId("diff-viewer-mock").getAttribute("data-root");
+    }
+
+    async function renderDiff(options: { filePath: string; worktreeId?: string | undefined }) {
+      useDiffContentMock.mockReturnValue({ content: "@@ -1 +1 @@", stale: false, retry: vi.fn() });
+      await renderPane({ ...options, fileViewMode: "diff" });
+      expect(await screen.findByTestId("diff-viewer-mock")).toBeTruthy();
+    }
+
+    it("roots the viewer at the resolved worktree, not the panel's stamped one", async () => {
+      // Panel is stamped with the outer worktree; the file lives in the nested
+      // one, so the relative paths in the diff are relative to the nested root.
+      worktreeState.worktrees.set(WORKTREE_ID, {
+        path: WORKTREE_PATH,
+        worktreeChanges: { changes: [] },
+      });
+      worktreeState.worktrees.set("wt-inner", {
+        path: "/repo/nested",
+        worktreeChanges: { changes: [{ path: "src/index.ts", status: "modified" }] },
+      });
+
+      await renderDiff({ filePath: "/repo/nested/src/index.ts" });
+
+      expect(viewerRoot()).toBe(lastSubject()?.worktreePath);
+      expect(viewerRoot()).not.toBe(WORKTREE_PATH);
+    });
+
+    it("roots the viewer by containment when the panel carries no worktree id", async () => {
+      seedWorktree([{ path: "/repo/src/index.ts", status: "modified" }]);
+
+      await renderDiff({ filePath: "/repo/src/index.ts", worktreeId: undefined });
+
+      // Without containment this would be the empty string, leaving the viewer
+      // to join a bare relative path.
+      expect(viewerRoot()).toBe(lastSubject()?.worktreePath);
+      expect(viewerRoot()).toBeTruthy();
     });
   });
 
