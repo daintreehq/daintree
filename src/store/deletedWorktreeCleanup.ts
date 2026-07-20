@@ -141,9 +141,7 @@ function notifySweepTrashed(swept: readonly SweptRow[]): void {
     priority: "low",
     // A multi-row sweep has no single worktree to attribute, and pinning one
     // member's id would make the entry navigate somewhere arbitrary.
-    context: single
-      ? { worktreeId: single.worktreeId, eventKind: "agent" }
-      : { eventKind: "agent" },
+    context: { ...(single ? { worktreeId: single.worktreeId } : {}), eventKind: "agent" },
   });
 }
 
