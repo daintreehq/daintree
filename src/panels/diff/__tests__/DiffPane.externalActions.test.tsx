@@ -198,6 +198,18 @@ describe("DiffPane toolbar — path resolution", () => {
     expect(dispatchMock.mock.calls[0][1]).toEqual({ path: "/elsewhere/vendored.ts" });
   });
 
+  it("recognises a Windows drive path as absolute rather than joining it to the root", async () => {
+    // A POSIX-only "starts with /" check would join this onto the worktree root.
+    seedPanel("C:\\vendor\\lib.ts");
+    renderPane();
+
+    await click(editorButton());
+
+    expect(dispatchMock.mock.calls[0][1]).not.toEqual({
+      path: `${WORKTREE_ROOT}/C:\\vendor\\lib.ts`,
+    });
+  });
+
   it("still offers the actions for an absolute path when the worktree no longer resolves", async () => {
     worktrees.clear();
     seedPanel("/elsewhere/vendored.ts");
@@ -274,27 +286,25 @@ describe("DiffPane toolbar — action routing", () => {
 });
 
 describe("DiffPane toolbar — platform naming", () => {
-  it("names the file manager differently on each platform", () => {
+  it("names the file manager for the platform it is actually running on", () => {
     seedPanel("src/index.ts");
 
-    isMacMock.mockReturnValue(true);
-    isWindowsMock.mockReturnValue(false);
-    const { unmount: unmountMac } = renderPane();
-    const macLabel = revealButton().getAttribute("aria-label");
-    unmountMac();
+    // Located by position rather than by name, so the name itself stays an
+    // assertion instead of being smuggled into the query.
+    const revealLabelFor = (mac: boolean, windows: boolean): string | null => {
+      isMacMock.mockReturnValue(mac);
+      isWindowsMock.mockReturnValue(windows);
+      const { unmount } = renderPane();
+      const label = screen
+        .getByLabelText("Open in editor")
+        .previousElementSibling?.getAttribute("aria-label") ?? null;
+      unmount();
+      return label;
+    };
 
-    isMacMock.mockReturnValue(false);
-    isWindowsMock.mockReturnValue(true);
-    const { unmount: unmountWin } = renderPane();
-    const winLabel = revealButton().getAttribute("aria-label");
-    unmountWin();
-
-    isMacMock.mockReturnValue(false);
-    isWindowsMock.mockReturnValue(false);
-    renderPane();
-    const linuxLabel = revealButton().getAttribute("aria-label");
-
-    expect(new Set([macLabel, winLabel, linuxLabel]).size).toBe(3);
+    expect(revealLabelFor(true, false)).toBe("Reveal in Finder");
+    expect(revealLabelFor(false, true)).toBe("Show in Explorer");
+    expect(revealLabelFor(false, false)).toBe("Show in folder");
   });
 
   it("keeps the failure title on the same platform as the button that failed", async () => {
@@ -338,30 +348,71 @@ describe("DiffPane toolbar — failure and recovery", () => {
     expect(dispatchMock.mock.calls[0][0]).toBe("file.showItemInFolder");
   });
 
-  it("clears the banner once a retry succeeds", async () => {
+  it("holds the banner open across a retry and clears it only once that retry succeeds", async () => {
     seedPanel("src/index.ts");
     dispatchMock.mockResolvedValue(fail("transient"));
     renderPane();
     await click(editorButton());
 
-    dispatchMock.mockResolvedValue(ok());
-    await click(screen.getByRole("button", { name: "Retry opening in editor" }));
+    // Deferred, so the in-between state is observable: clearing the banner up
+    // front would "pass" this test's end state while losing the retry's spinner.
+    const gate = deferred();
+    dispatchMock.mockReset();
+    dispatchMock.mockReturnValue(gate.promise);
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry opening in editor" }));
+    });
 
+    expect(screen.getByText("transient")).toBeTruthy();
+    expect(dispatchMock.mock.calls[0]).toEqual([
+      "file.openInEditor",
+      { path: `${WORKTREE_ROOT}/src/index.ts` },
+      { source: "user" },
+    ]);
+
+    await act(async () => {
+      gate.resolve(ok());
+      await gate.promise;
+    });
     expect(screen.queryByText("transient")).toBeNull();
   });
 
-  it("drops the other target's banner rather than lighting its retry spinner", async () => {
+  it("keeps a failed target's banner when the other target succeeds", async () => {
     seedPanel("src/index.ts");
-    dispatchMock.mockResolvedValue(fail("editor is down"));
+    dispatchMock.mockResolvedValue(fail("no editor configured"));
     renderPane();
     await click(editorButton());
 
-    // Both buttons share one pending flag, so the stale editor banner must not
-    // survive into a reveal attempt and claim that work as its own.
+    // Revealing the file did nothing to configure an editor, so the editor's
+    // failure is still true and still needs its Retry.
     dispatchMock.mockResolvedValue(ok());
     await click(revealButton());
 
-    expect(screen.queryByText("editor is down")).toBeNull();
+    expect(screen.getByText("no editor configured")).toBeTruthy();
+  });
+
+  it("disables Retry while its own attempt is in flight", async () => {
+    seedPanel("src/index.ts");
+    dispatchMock.mockResolvedValue(fail("boom"));
+    renderPane();
+    await click(editorButton());
+
+    const gate = deferred();
+    dispatchMock.mockReturnValue(gate.promise);
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry opening in editor" }));
+    });
+
+    const retry = screen.getByRole("button", { name: "Retry opening in editor" });
+    expect(retry.hasAttribute("disabled")).toBe(true);
+
+    await act(async () => {
+      gate.resolve(fail("boom"));
+      await gate.promise;
+    });
+    expect(
+      screen.getByRole("button", { name: "Retry opening in editor" }).hasAttribute("disabled")
+    ).toBe(false);
   });
 });
 
@@ -391,7 +442,9 @@ describe("DiffPane toolbar — banner precedence", () => {
 describe("DiffPane toolbar — concurrency", () => {
   it("collapses a double-click into one dispatch", async () => {
     const gate = deferred();
-    dispatchMock.mockReturnValue(gate.promise);
+    // Once-then-default, so the post-settlement click is a genuinely new
+    // operation rather than a replay of the already-resolved promise.
+    dispatchMock.mockReturnValueOnce(gate.promise).mockResolvedValue(ok());
     seedPanel("src/index.ts");
     renderPane();
 
@@ -443,10 +496,18 @@ describe("DiffPane toolbar — concurrency", () => {
     expect(screen.queryByText("stale failure")).toBeNull();
   });
 
-  it("re-aims at the new location when the worktree moves under an open file", async () => {
+  it("discards an in-flight result when the worktree moves, and re-aims at the new root", async () => {
+    const gate = deferred();
+    dispatchMock.mockReturnValueOnce(gate.promise).mockResolvedValue(ok());
     seedPanel("src/index.ts");
     const { rerender } = renderPane();
 
+    act(() => {
+      fireEvent.click(editorButton());
+    });
+
+    // A worktree move re-aims the buttons without `filePath` changing at all —
+    // which is why the reset keys on the resolved path, not the relative one.
     worktrees.set(WORKTREE_ID, { path: "/repo-moved", branch: "feature/x" });
     rerender(
       <DiffPane
@@ -459,8 +520,38 @@ describe("DiffPane toolbar — concurrency", () => {
         onClose={() => {}}
       />
     );
+
+    await act(async () => {
+      gate.resolve(fail("failed against the old root"));
+      await gate.promise;
+    });
+    expect(screen.queryByText("failed against the old root")).toBeNull();
+
+    // The move also released the guard, so the button works against the new root.
+    await click(editorButton());
+    expect(dispatchMock.mock.calls[1][1]).toEqual({ path: "/repo-moved/src/index.ts" });
+  });
+
+  it("lets one button run while the other is still in flight", async () => {
+    const gate = deferred();
+    dispatchMock.mockReturnValueOnce(gate.promise).mockResolvedValue(ok());
+    seedPanel("src/index.ts");
+    renderPane();
+
+    act(() => {
+      fireEvent.click(revealButton());
+    });
+    // A slow reveal must not swallow a click on the other button.
     await click(editorButton());
 
-    expect(dispatchMock.mock.calls[0][1]).toEqual({ path: "/repo-moved/src/index.ts" });
+    expect(dispatchMock.mock.calls.map(([id]) => id)).toEqual([
+      "file.showItemInFolder",
+      "file.openInEditor",
+    ]);
+
+    await act(async () => {
+      gate.resolve(ok());
+      await gate.promise;
+    });
   });
 });

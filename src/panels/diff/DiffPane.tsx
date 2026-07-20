@@ -33,6 +33,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { usePanelStore } from "@/store/panelStore";
 import { usePreferencesStore, type DiffFontSize } from "@/store/preferencesStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
+import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
 import { useDiffContent } from "./useDiffContent";
 import { useDiffFileSource } from "./useDiffFileSource";
@@ -302,55 +303,70 @@ export function DiffPane({
     message: string;
     target: ExternalTarget;
   } | null>(null);
-  const [isExternalPending, setIsExternalPending] = useState(false);
-  const externalAttemptRef = useRef(0);
+  // Tracked per target, not as one flag: revealing successfully says nothing
+  // about a missing editor, so the two must not clear or spin for each other.
+  const [pendingTargets, setPendingTargets] = useState<readonly ExternalTarget[]>([]);
+  // Bumped only by the reset below, so a still-running action is invalidated by
+  // the file moving out from under it — never by the sibling button starting.
+  const externalGenerationRef = useRef(0);
   // Synchronous re-entry guard: state can't stop a double-click in one tick.
-  const externalInFlightRef = useRef(false);
+  const externalInFlightRef = useRef<Set<ExternalTarget>>(new Set());
 
   // Keyed on the resolved absolute path, not the relative one — a worktree move
   // re-aims these buttons without changing `filePath`, and a result landing
   // after that belongs to the old location.
   useEffect(() => {
-    externalAttemptRef.current += 1;
-    externalInFlightRef.current = false;
+    externalGenerationRef.current += 1;
+    externalInFlightRef.current.clear();
     setExternalError(null);
-    setIsExternalPending(false);
+    setPendingTargets([]);
   }, [id, absolutePath]);
 
   const handleExternalAction = useCallback(
     async (target: ExternalTarget) => {
       if (!absolutePath) return;
-      if (externalInFlightRef.current) return;
-      externalInFlightRef.current = true;
-      const attempt = ++externalAttemptRef.current;
-      // Both buttons share one pending flag, so a banner left by the *other*
-      // target has to go: keeping it would light its Retry spinner for work
-      // that isn't its own. A retry of the same target keeps its banner so the
-      // spinner has somewhere to show.
-      setExternalError((current) => (current?.target === target ? current : null));
-      setIsExternalPending(true);
-      const result = await actionService.dispatch(
-        target === "reveal" ? "file.showItemInFolder" : "file.openInEditor",
-        { path: absolutePath },
-        { source: "user" }
+      if (externalInFlightRef.current.has(target)) return;
+      externalInFlightRef.current.add(target);
+      const generation = externalGenerationRef.current;
+      setPendingTargets((current) =>
+        current.includes(target) ? current : [...current, target]
       );
-      // A newer attempt (or a file/worktree switch) already reset the guard and
-      // owns the banner — an obsolete completion must not unlock it.
-      if (externalAttemptRef.current !== attempt) return;
-      externalInFlightRef.current = false;
-      setIsExternalPending(false);
-      if (result.ok) {
-        setExternalError(null);
-        return;
+      try {
+        const result = await actionService.dispatch(
+          target === "reveal" ? "file.showItemInFolder" : "file.openInEditor",
+          { path: absolutePath },
+          { source: "user" }
+        );
+        // The file (or its worktree) moved while this was in flight: the result
+        // describes a location the pane no longer shows.
+        if (externalGenerationRef.current !== generation) return;
+        if (result.ok) {
+          // Clears only its own failure — the other button's banner stands
+          // until that button's own retry succeeds.
+          setExternalError((current) => (current?.target === target ? null : current));
+          return;
+        }
+        logError(
+          `[DiffPane] ${target === "reveal" ? "showItemInFolder" : "openInEditor"} failed`,
+          result.error
+        );
+        setExternalError({ message: result.error.message, target });
+      } finally {
+        // Releasing in `finally` keeps a rejection from wedging the button for
+        // good; the generation check leaves a reset's clean slate alone.
+        if (externalGenerationRef.current === generation) {
+          externalInFlightRef.current.delete(target);
+          setPendingTargets((current) => current.filter((t) => t !== target));
+        }
       }
-      logError(
-        `[DiffPane] ${target === "reveal" ? "showItemInFolder" : "openInEditor"} failed`,
-        result.error
-      );
-      setExternalError({ message: result.error.message, target });
     },
     [absolutePath]
   );
+
+  const isErrorTargetPending = externalError !== null && pendingTargets.includes(externalError.target);
+  // Below the Doherty threshold a spinner is just a flash; `disabled` still
+  // blocks a double submit from the first millisecond.
+  const showRetrySpinner = useDohertyGate(isErrorTargetPending);
 
   const hasPrevFile = isWorkspace && currentIndex > 0;
   const hasNextFile =
@@ -578,7 +594,8 @@ export function DiffPane({
             label: "Retry",
             icon: RefreshCw,
             variant: "dangerFilled",
-            loading: isExternalPending,
+            loading: showRetrySpinner,
+            disabled: isErrorTargetPending,
             onClick: () => void handleExternalAction(externalError.target),
             ariaLabel:
               externalError.target === "reveal"
