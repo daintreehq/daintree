@@ -13,6 +13,7 @@ import {
   repoStatsAndPageSnapshotCache,
   forgeIssueListCache,
   forgePRListCache,
+  prRequiredStatusCache,
   issueListCache,
   prListCache,
   getRepoListEpoch,
@@ -22,6 +23,7 @@ import {
   MAX_REVIEW_THREAD_PAGES,
   REVIEW_THREADS_PER_PAGE,
 } from "../GitHubCaches.js";
+import { buildListCacheKey } from "../GitHubPRs.js";
 import type { Issue, PR, Page } from "../../../../../shared/types/forge.js";
 import type { GitHubIssue, GitHubPR, GitHubListResponse } from "../../shared/types.js";
 
@@ -114,6 +116,36 @@ describe("clearGitHubCaches / clearPRCaches symmetry", () => {
     clearGitHubCaches();
     expect(getETagCacheVersion()).toBeGreaterThan(before);
   });
+
+  // The PR list and the required-status cache jointly back one rendered CI
+  // status: `listPRsImpl` enriches its rows from `prRequiredStatusCache`
+  // before caching the page (#11251). Clearing one without the other would
+  // leave a refreshed list re-enriched from stale required-check entries, or a
+  // cleared status cache shadowed by an already-enriched page — the two-caches-
+  // out-of-step failure mode from #9061.
+  for (const [name, clear] of [
+    ["clearGitHubCaches", clearGitHubCaches],
+    ["clearPRCaches", clearPRCaches],
+  ] as const) {
+    it(`${name} clears the PR list and required-status caches together`, () => {
+      // Key shape must match buildListCacheKey's
+      // `${type}:${owner}/${repo}:${state}:${search}:${sortOrder}:${cursor}` —
+      // a malformed key would still pass under a global clear but would give a
+      // false green if clearing ever became prefix-scoped.
+      const listKey = buildListCacheKey("pr", "owner", "repo", "open", "", "created", "");
+      forgePRListCache.set(listKey, {
+        items: [],
+        nextCursor: null,
+        hasMore: false,
+      } as Page<PR>);
+      prRequiredStatusCache.set("owner/repo:1", { ciStatus: "SUCCESS", ciSummary: undefined });
+
+      clear();
+
+      expect(forgePRListCache.get(listKey)).toBeUndefined();
+      expect(prRequiredStatusCache.get("owner/repo:1")).toBeUndefined();
+    });
+  }
 });
 
 describe("polling-optimization caches (issues #8757, #9041)", () => {

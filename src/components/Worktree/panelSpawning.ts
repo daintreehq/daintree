@@ -6,6 +6,7 @@ import type { RecipeTerminal } from "@shared/types";
 import { preflightSpawnBatchLimit } from "@/store/panelLimitStore";
 import { isMcpSpawnFocusSuppressed } from "@/store/mcpSpawnFocusGuard";
 import { isAssistantFocused } from "@/store/macroFocusStore";
+import { countPanelsTowardLimit } from "@/store/slices/panelRegistry/panelCount";
 
 export interface SpawnPanelsOptions {
   terminals: RecipeTerminal[];
@@ -50,10 +51,7 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
   // path defers the `panelIds` append, so per-call limit checks would all read
   // the same stale count; gate the whole burst once and pass `bypassLimits` on
   // each call. (#9165)
-  const currentCount = store.panelIds.reduce(
-    (n, id) => (store.panelsById[id]?.location !== "trash" ? n + 1 : n),
-    0
-  );
+  const currentCount = countPanelsTowardLimit(store.panelsById, store.panelIds);
   const { allowed } = await preflightSpawnBatchLimit(currentCount, terminals.length);
   if (signal?.aborted) return;
 

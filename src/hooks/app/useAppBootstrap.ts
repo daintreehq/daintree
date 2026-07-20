@@ -35,7 +35,6 @@ import {
   preloadCrossWorktreeDiff,
   loadJetbrainsMono500,
   loadJetbrainsMono600,
-  preloadFileViewerModal,
 } from "@/lazyPanels";
 
 /**
@@ -160,11 +159,6 @@ export function useAppBootstrap() {
       void preloadCrossWorktreeDiff();
       loadJetbrainsMono500().catch(() => {});
       loadJetbrainsMono600().catch(() => {});
-      // Warm the FileViewerModal/DiffViewer chunk split out of the eager
-      // closure (#8626). It is reached through a lazy boundary in
-      // `Worktree/FileDiffModal.tsx`, so an explicit post-paint prefetch keeps
-      // it snappy on first use.
-      preloadFileViewerModal().catch(() => {});
       // Warm the shared Radix overlay primitives chunk (`radix-deferred`) so the
       // ProjectSwitcherPalette popover and context menus are ready on first
       // interaction in a freshly loaded project view. Otherwise this chunk is

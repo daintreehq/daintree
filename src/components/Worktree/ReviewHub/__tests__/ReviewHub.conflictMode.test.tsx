@@ -100,72 +100,8 @@ vi.mock("@/utils/debounce", () => ({
   },
 }));
 
-vi.mock("react-dom", async () => {
-  const actual = await vi.importActual<typeof import("react-dom")>("react-dom");
-  return { ...actual, createPortal: (children: ReactNode) => children };
-});
-
 vi.mock("@/hooks", () => ({
-  useOverlayState: vi.fn(),
   useTruncationDetection: vi.fn(() => ({ ref: vi.fn(), isTruncated: false })),
-}));
-
-interface CapturedNavProps {
-  filePath: string;
-  currentFileIndex?: number;
-  totalFileCount?: number;
-  onNavigateFile?: (delta: -1 | 1) => void;
-}
-
-const { fileDiffModalOpenHistory, fileDiffModalLastFilePath } = vi.hoisted(() => ({
-  fileDiffModalOpenHistory: { value: [] as boolean[] },
-  fileDiffModalLastFilePath: { value: null as string | null },
-}));
-const fileDiffModalNavCapture = vi.hoisted((): { value: CapturedNavProps | null } => ({
-  value: null,
-}));
-const baseBranchModalNavCapture = vi.hoisted((): { value: CapturedNavProps | null } => ({
-  value: null,
-}));
-vi.mock("../../FileDiffModal", () => ({
-  FileDiffModal: ({
-    isOpen,
-    filePath,
-    currentFileIndex,
-    totalFileCount,
-    onNavigateFile,
-  }: { isOpen: boolean } & CapturedNavProps) => {
-    fileDiffModalOpenHistory.value.push(isOpen);
-    if (isOpen) {
-      fileDiffModalLastFilePath.value = filePath;
-      fileDiffModalNavCapture.value = {
-        filePath,
-        currentFileIndex,
-        totalFileCount,
-        onNavigateFile,
-      };
-    }
-    return null;
-  },
-}));
-vi.mock("../BaseBranchDiffModal", () => ({
-  BaseBranchDiffModal: ({
-    isOpen,
-    filePath,
-    currentFileIndex,
-    totalFileCount,
-    onNavigateFile,
-  }: { isOpen: boolean } & CapturedNavProps) => {
-    if (isOpen) {
-      baseBranchModalNavCapture.value = {
-        filePath,
-        currentFileIndex,
-        totalFileCount,
-        onNavigateFile,
-      };
-    }
-    return null;
-  },
 }));
 
 vi.mock("@/hooks/useWorktreeStore", () => ({
@@ -330,7 +266,7 @@ vi.mock("@/components/ui/EmptyState", () => ({
   ),
 }));
 
-import { ReviewHub } from "../ReviewHub";
+import { ReviewHubContent } from "../ReviewHubContent";
 import { useUIStore } from "@/store/uiStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 
@@ -489,7 +425,7 @@ describe("ReviewHub", () => {
     it("renders the conflict panel instead of staging sections when merging", async () => {
       getStagingStatusMock.mockResolvedValue(makeMergingStatus());
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByTestId("conflict-panel"));
       screen.getByText(/Resolve Merge Conflicts/i);
@@ -506,7 +442,7 @@ describe("ReviewHub", () => {
         })
       );
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByTestId("conflict-rebase-progress"));
       expect(screen.getByTestId("conflict-rebase-progress").textContent).toMatch(/Step 3 of 8/);
@@ -530,7 +466,7 @@ describe("ReviewHub", () => {
         })
       );
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       const rail = await screen.findByTestId("conflict-rebase-sequence");
       expect(within(rail).getAllByTestId(/^rebase-entry-/)).toHaveLength(4);
@@ -548,7 +484,7 @@ describe("ReviewHub", () => {
         })
       );
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByTestId("conflict-rebase-progress"));
       expect(screen.queryByTestId("conflict-rebase-sequence")).toBeNull();
@@ -557,7 +493,7 @@ describe("ReviewHub", () => {
     it("disables Continue when conflicted files remain", async () => {
       getStagingStatusMock.mockResolvedValue(makeMergingStatus());
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByRole("button", { name: /^Continue /i }));
       expect(screen.getByRole("button", { name: /^Continue /i }).hasAttribute("disabled")).toBe(
@@ -574,7 +510,7 @@ describe("ReviewHub", () => {
         })
       );
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByRole("button", { name: /^Continue /i }));
       expect(screen.getByRole("button", { name: /^Continue /i }).hasAttribute("disabled")).toBe(
@@ -591,7 +527,7 @@ describe("ReviewHub", () => {
         })
       );
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByTestId("conflict-panel"));
       const resolvedTitle = screen.getByText("All conflicts resolved");
@@ -603,7 +539,7 @@ describe("ReviewHub", () => {
     it("stages a file when Mark resolved is clicked", async () => {
       getStagingStatusMock.mockResolvedValue(makeMergingStatus());
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByTestId("conflict-panel"));
       const resolveBtn = screen.getByRole("button", {
@@ -619,7 +555,7 @@ describe("ReviewHub", () => {
     it("opens the file in the external editor with the absolute path", async () => {
       getStagingStatusMock.mockResolvedValue(makeMergingStatus());
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByTestId("conflict-panel"));
       const openBtn = screen.getByRole("button", {
@@ -640,7 +576,7 @@ describe("ReviewHub", () => {
         { path: "src/app.ts", hunkCount: 2, firstMarkerLine: 17 },
       ]);
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByTestId("conflict-panel"));
       await waitFor(() =>
@@ -663,7 +599,7 @@ describe("ReviewHub", () => {
     it("checks out ours when Take ours is clicked", async () => {
       getStagingStatusMock.mockResolvedValue(makeMergingStatus());
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByTestId("conflict-panel"));
       const takeOurs = screen.getByRole("button", { name: /Take ours for src\/app\.ts/i });
@@ -678,7 +614,7 @@ describe("ReviewHub", () => {
     it("checks out theirs when Take theirs is clicked", async () => {
       getStagingStatusMock.mockResolvedValue(makeMergingStatus());
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByTestId("conflict-panel"));
       const takeTheirs = screen.getByRole("button", { name: /Take theirs for src\/app\.ts/i });
@@ -693,7 +629,7 @@ describe("ReviewHub", () => {
     it("does not call checkoutOursTheirs until the confirm dialog is accepted (#8242)", async () => {
       getStagingStatusMock.mockResolvedValue(makeMergingStatus());
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByTestId("conflict-panel"));
       fireEvent.click(screen.getByRole("button", { name: /Take ours for src\/app\.ts/i }));
@@ -706,7 +642,7 @@ describe("ReviewHub", () => {
     it("renders the Abort action inside the operation chrome, not the footer", async () => {
       getStagingStatusMock.mockResolvedValue(makeMergingStatus());
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByTestId("conflict-panel"));
       // The Abort control is now sized `xs` (text-[10px]); Continue is the
@@ -723,7 +659,7 @@ describe("ReviewHub", () => {
         })
       );
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByTestId("conflict-panel"));
       expect(screen.queryByTestId("conflict-resolved-list")).toBeNull();
@@ -746,7 +682,7 @@ describe("ReviewHub", () => {
         })
       );
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByRole("button", { name: /^Abort /i }));
       fireEvent.click(screen.getByRole("button", { name: /^Abort /i }));
@@ -761,7 +697,7 @@ describe("ReviewHub", () => {
       getStagingStatusMock.mockResolvedValue(makeMergingStatus());
       stageFileMock.mockRejectedValueOnce(new Error("permission denied"));
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByTestId("conflict-panel"));
       const resolveBtn = screen.getByRole("button", {
@@ -783,7 +719,7 @@ describe("ReviewHub", () => {
       getStagingStatusMock.mockResolvedValue(makeMergingStatus());
       checkoutOursTheirsMock.mockRejectedValueOnce(new Error("checkout failed"));
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByTestId("conflict-panel"));
       const takeOurs = screen.getByRole("button", { name: /Take ours for src\/app\.ts/i });
@@ -812,7 +748,7 @@ describe("ReviewHub", () => {
         () => new Promise<void>((resolve) => (resolveCheckout = () => resolve()))
       );
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByTestId("conflict-panel"));
       const takeOurs = screen.getByRole("button", { name: /Take ours for src\/app\.ts/i });
@@ -837,7 +773,7 @@ describe("ReviewHub", () => {
         { path: "src/app.ts", hunkCount: 3, firstMarkerLine: 12 },
       ]);
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByTestId("conflict-panel"));
       const badge = await screen.findByTestId("conflict-hunk-count-src/app.ts");
@@ -847,7 +783,7 @@ describe("ReviewHub", () => {
     it("opens confirm dialog before aborting and calls abort on confirm", async () => {
       getStagingStatusMock.mockResolvedValue(makeMergingStatus());
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByRole("button", { name: /^Abort /i }));
       fireEvent.click(screen.getByRole("button", { name: /^Abort /i }));
@@ -871,7 +807,7 @@ describe("ReviewHub", () => {
         })
       );
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByRole("button", { name: /^Continue /i }));
       fireEvent.click(screen.getByRole("button", { name: /^Continue /i }));
@@ -884,7 +820,7 @@ describe("ReviewHub", () => {
     it("renders cherry-pick operation labels", async () => {
       getStagingStatusMock.mockResolvedValue(makeMergingStatus({ repoState: "CHERRY_PICKING" }));
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByTestId("conflict-panel"));
       screen.getByText(/Resolve Cherry-pick Conflicts/i);
@@ -895,7 +831,7 @@ describe("ReviewHub", () => {
     it("renders revert operation labels", async () => {
       getStagingStatusMock.mockResolvedValue(makeMergingStatus({ repoState: "REVERTING" }));
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByTestId("conflict-panel"));
       screen.getByText(/Resolve Revert Conflicts/i);
@@ -912,7 +848,7 @@ describe("ReviewHub", () => {
         })
       );
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByText("index.ts"));
       expect(screen.queryByTestId("conflict-panel")).toBeNull();

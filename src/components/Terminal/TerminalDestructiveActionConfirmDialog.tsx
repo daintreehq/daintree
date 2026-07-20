@@ -82,6 +82,20 @@ function buildCopy(pending: TerminalPendingDestructiveActionSnapshot): DialogCop
         confirmLabel: `Trash ${pending.targetCount} ${noun}`,
       };
     }
+    case "deletedWorktreeDismiss": {
+      const noun = pending.targetCount === 1 ? "terminal" : "terminals";
+      const agentNote =
+        pending.runningAgentCount === 0
+          ? ""
+          : pending.runningAgentCount === 1
+            ? " 1 still has a running agent."
+            : ` ${pending.runningAgentCount} still have running agents.`;
+      return {
+        title: `Close ${pending.targetCount} ${noun}?`,
+        description: `These terminals outlived their deleted worktree. Closing them moves them to trash and ends their running processes; they can be restored from trash before garbage collection. Drag them to another worktree instead to keep them.${agentNote}`,
+        confirmLabel: `Close ${pending.targetCount} ${noun}`,
+      };
+    }
   }
 }
 
@@ -154,6 +168,21 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
         );
         const noun = pending.targetCount === 1 ? "session" : "sessions";
         announcement = `Trashed ${pending.targetCount} ${noun}`;
+        break;
+      }
+      case "deletedWorktreeDismiss": {
+        if (!pending.worktreeId) break;
+        // Same executor as `worktreeTrashAll` — the panels still carry the
+        // dead worktree's id, so the worktree-scoped trash reaches exactly
+        // the deleted-worktree row's terminals. Trashing the last one prunes the worktree
+        // row itself, so there is nothing else to clean up here (#11232).
+        void actionService.dispatch(
+          "worktree.sessions.trashAll",
+          { worktreeId: pending.worktreeId, confirmed: true },
+          { source: "user" }
+        );
+        const noun = pending.targetCount === 1 ? "terminal" : "terminals";
+        announcement = `Closed ${pending.targetCount} ${noun}`;
         break;
       }
     }

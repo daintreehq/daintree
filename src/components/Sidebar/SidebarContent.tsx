@@ -51,7 +51,9 @@ import { applyManualWorktreeReorder } from "@/lib/worktreeReorder";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { usePanelStore, useWorktreeSelectionStore, useProjectStore } from "@/store";
-import type { PendingCreation } from "@/store/worktreeStore";
+import type { PendingCreation, DeletedWorktree } from "@/store/worktreeStore";
+import { recordSidebarWorktreeOrder } from "@/store/worktreeStore";
+import { DeletedWorktreeCard } from "@/components/Sidebar/DeletedWorktreeCard";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import {
   selectSidebarVisiblePanelIds,
@@ -178,7 +180,14 @@ interface SidebarRowFlatItem {
   mode: "sortable" | "static";
 }
 
-type SidebarFlatItem = SidebarHeaderFlatItem | SidebarRowFlatItem;
+interface SidebarDeletedWorktreeFlatItem {
+  kind: "deletedWorktree";
+  id: string;
+  worktree: DeletedWorktree;
+  ariaRowIndex: number;
+}
+
+type SidebarFlatItem = SidebarHeaderFlatItem | SidebarRowFlatItem | SidebarDeletedWorktreeFlatItem;
 
 interface SidebarVirtuosoContext {
   activeWorktreeId: string | null;
@@ -248,6 +257,15 @@ function renderSidebarFlatItem(
   item: SidebarFlatItem,
   context: SidebarVirtuosoContext
 ) {
+  if (item.kind === "deletedWorktree") {
+    return (
+      <div role="row" aria-rowindex={item.ariaRowIndex}>
+        <div role="gridcell">
+          <DeletedWorktreeCard worktree={item.worktree} />
+        </div>
+      </div>
+    );
+  }
   if (item.kind === "header") {
     return (
       <div
@@ -530,6 +548,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // moment the dialog submits — defer would make the placeholder lag the
   // dialog close by a frame and lose the perceived-responsiveness win.
   const pendingCreations = useWorktreeSelectionStore((s) => s.pendingCreations);
+  const deletedWorktrees = useWorktreeSelectionStore((s) => s.deletedWorktrees);
   const openCreateDialog = useWorktreeSelectionStore((s) => s.openCreateDialog);
   const dismissPendingCreation = useWorktreeSelectionStore((s) => s.dismissPendingCreation);
 
@@ -1196,10 +1215,46 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // grouped path interleaves sticky header sentinels with static rows; the
   // ungrouped path emits sortable rows so dnd-kit's SortableContext can
   // wrap the whole Virtuoso surface.
+  // Publish the visible order so a worktree deleted later can pin its row to
+  // the slot it currently occupies (#11232). Recorded from an effect rather
+  // than during render because it is a write to module state — reading it
+  // happens once, at deletion, well after this has settled.
+  useEffect(() => {
+    recordSidebarWorktreeOrder(filteredWorktrees.map((w) => w.id));
+  }, [filteredWorktrees]);
+
   const sidebarItems = useMemo<SidebarFlatItem[]>(() => {
     const items: SidebarFlatItem[] = [];
     const pinnedSet = new Set(pinnedWorktrees);
     let nextRowIndex = firstScrollableRowIndex;
+
+    // Deleted worktrees hold the slot their row occupied when it was deleted,
+    // so the terminals the user is looking for stay where they left them
+    // instead of jumping to an edge of the list (#11232). Ties and unknown
+    // positions fall back to deletion order for a stable render.
+    const deletedList = Array.from(deletedWorktrees.values()).sort(
+      (a, b) => a.deletedAt - b.deletedAt
+    );
+    const deletedByIndex = new Map<number, DeletedWorktree[]>();
+    const trailingDeleted: DeletedWorktree[] = [];
+    for (const deleted of deletedList) {
+      if (deleted.pinnedIndex >= 0 && deleted.pinnedIndex < filteredWorktrees.length) {
+        const bucket = deletedByIndex.get(deleted.pinnedIndex);
+        if (bucket) bucket.push(deleted);
+        else deletedByIndex.set(deleted.pinnedIndex, [deleted]);
+      } else {
+        trailingDeleted.push(deleted);
+      }
+    }
+    const pushDeleted = (deleted: DeletedWorktree) => {
+      items.push({
+        kind: "deletedWorktree",
+        id: `deleted-${deleted.id}`,
+        worktree: deleted,
+        ariaRowIndex: nextRowIndex++,
+      });
+    };
+
     if (groupedSections) {
       const orderIndex = new Map(dragStartOrder.map((id, i) => [id, i]));
       for (const section of groupedSections) {
@@ -1223,20 +1278,27 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           });
         }
       }
-    } else {
-      for (let i = 0; i < filteredWorktrees.length; i++) {
-        const w = filteredWorktrees[i]!;
-        items.push({
-          kind: "row",
-          id: `row-${w.id}`,
-          worktreeId: w.id,
-          ariaRowIndex: nextRowIndex++,
-          rowIndex: i,
-          isPinned: pinnedSet.has(w.id),
-          mode: "sortable",
-        });
-      }
+      // Type grouping has no slot for a worktree that no longer has a type to
+      // group by, so deleted rows collect at the end rather than inventing a
+      // section for them.
+      for (const deleted of deletedList) pushDeleted(deleted);
+      return items;
     }
+
+    for (let i = 0; i < filteredWorktrees.length; i++) {
+      for (const deleted of deletedByIndex.get(i) ?? []) pushDeleted(deleted);
+      const w = filteredWorktrees[i]!;
+      items.push({
+        kind: "row",
+        id: `row-${w.id}`,
+        worktreeId: w.id,
+        ariaRowIndex: nextRowIndex++,
+        rowIndex: i,
+        isPinned: pinnedSet.has(w.id),
+        mode: "sortable",
+      });
+    }
+    for (const deleted of trailingDeleted) pushDeleted(deleted);
     return items;
   }, [
     groupedSections,
@@ -1244,6 +1306,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     firstScrollableRowIndex,
     pinnedWorktrees,
     dragStartOrder,
+    deletedWorktrees,
   ]);
 
   // Computed after `sidebarItems` because the indicator counts hidden worktree

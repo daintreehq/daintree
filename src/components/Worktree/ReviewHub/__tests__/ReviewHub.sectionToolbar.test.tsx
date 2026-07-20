@@ -100,72 +100,8 @@ vi.mock("@/utils/debounce", () => ({
   },
 }));
 
-vi.mock("react-dom", async () => {
-  const actual = await vi.importActual<typeof import("react-dom")>("react-dom");
-  return { ...actual, createPortal: (children: ReactNode) => children };
-});
-
 vi.mock("@/hooks", () => ({
-  useOverlayState: vi.fn(),
   useTruncationDetection: vi.fn(() => ({ ref: vi.fn(), isTruncated: false })),
-}));
-
-interface CapturedNavProps {
-  filePath: string;
-  currentFileIndex?: number;
-  totalFileCount?: number;
-  onNavigateFile?: (delta: -1 | 1) => void;
-}
-
-const { fileDiffModalOpenHistory, fileDiffModalLastFilePath } = vi.hoisted(() => ({
-  fileDiffModalOpenHistory: { value: [] as boolean[] },
-  fileDiffModalLastFilePath: { value: null as string | null },
-}));
-const fileDiffModalNavCapture = vi.hoisted((): { value: CapturedNavProps | null } => ({
-  value: null,
-}));
-const baseBranchModalNavCapture = vi.hoisted((): { value: CapturedNavProps | null } => ({
-  value: null,
-}));
-vi.mock("../../FileDiffModal", () => ({
-  FileDiffModal: ({
-    isOpen,
-    filePath,
-    currentFileIndex,
-    totalFileCount,
-    onNavigateFile,
-  }: { isOpen: boolean } & CapturedNavProps) => {
-    fileDiffModalOpenHistory.value.push(isOpen);
-    if (isOpen) {
-      fileDiffModalLastFilePath.value = filePath;
-      fileDiffModalNavCapture.value = {
-        filePath,
-        currentFileIndex,
-        totalFileCount,
-        onNavigateFile,
-      };
-    }
-    return null;
-  },
-}));
-vi.mock("../BaseBranchDiffModal", () => ({
-  BaseBranchDiffModal: ({
-    isOpen,
-    filePath,
-    currentFileIndex,
-    totalFileCount,
-    onNavigateFile,
-  }: { isOpen: boolean } & CapturedNavProps) => {
-    if (isOpen) {
-      baseBranchModalNavCapture.value = {
-        filePath,
-        currentFileIndex,
-        totalFileCount,
-        onNavigateFile,
-      };
-    }
-    return null;
-  },
 }));
 
 vi.mock("@/hooks/useWorktreeStore", () => ({
@@ -330,7 +266,7 @@ vi.mock("@/components/ui/EmptyState", () => ({
   ),
 }));
 
-import { ReviewHub } from "../ReviewHub";
+import { ReviewHubContent } from "../ReviewHubContent";
 import { useUIStore } from "@/store/uiStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 
@@ -488,7 +424,7 @@ describe("ReviewHub", () => {
     it("renders filter input in both section headers", async () => {
       getStagingStatusMock.mockResolvedValue(multiFileStatus());
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByText("index.ts"));
       const filters = screen.getAllByPlaceholderText("Filter…");
@@ -498,7 +434,7 @@ describe("ReviewHub", () => {
     it("renders view-options dropdown triggers in both section headers", async () => {
       getStagingStatusMock.mockResolvedValue(multiFileStatus());
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByText("index.ts"));
       const viewOptionBtns = screen.getAllByLabelText("View options");
@@ -508,7 +444,7 @@ describe("ReviewHub", () => {
     it("shows count chip with total file count", async () => {
       getStagingStatusMock.mockResolvedValue(multiFileStatus());
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByText("index.ts"));
       // Verify the section headers show "Staged" and "Changes" labels with counts
@@ -532,7 +468,7 @@ describe("ReviewHub", () => {
         })
       );
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByText("a.ts"));
       // Exact full-text match: catches misordered/duplicate/missing segments.
@@ -550,7 +486,7 @@ describe("ReviewHub", () => {
         })
       );
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("new.ts"));
       const stagedChip = screen.getByTestId("staged-section-count-chip");
       expect(stagedChip.textContent).toBe("1 file·+10");
@@ -559,7 +495,7 @@ describe("ReviewHub", () => {
     it("omits churn suffix when all insertions/deletions are null", async () => {
       getStagingStatusMock.mockResolvedValue(multiFileStatus());
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByText("index.ts"));
       const stagedChip = screen.getByTestId("staged-section-count-chip");
@@ -579,7 +515,7 @@ describe("ReviewHub", () => {
         ],
       });
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("index.ts"));
 
       act(() => fireEvent.click(screen.getByRole("button", { name: /vs main/i })));
@@ -606,7 +542,7 @@ describe("ReviewHub", () => {
         ],
       });
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("index.ts"));
 
       act(() => fireEvent.click(screen.getByRole("button", { name: /vs main/i })));
@@ -629,7 +565,7 @@ describe("ReviewHub", () => {
         files: [{ status: "M", path: "src/components/button.tsx" }],
       });
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("index.ts"));
 
       act(() => fireEvent.click(screen.getByRole("button", { name: /vs main/i })));
@@ -651,7 +587,7 @@ describe("ReviewHub", () => {
         files: [{ status: "M", path: "rootfile.md" }],
       });
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("index.ts"));
 
       act(() => fireEvent.click(screen.getByRole("button", { name: /vs main/i })));
@@ -669,7 +605,7 @@ describe("ReviewHub", () => {
     it("renders Stage all (N) button with correct count", async () => {
       getStagingStatusMock.mockResolvedValue(multiFileStatus());
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByText("index.ts"));
       screen.getByText("Stage all (3)");
@@ -679,7 +615,7 @@ describe("ReviewHub", () => {
     it("filters files when typing in filter input", async () => {
       getStagingStatusMock.mockResolvedValue(multiFileStatus());
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByText("index.ts"));
 
@@ -697,7 +633,7 @@ describe("ReviewHub", () => {
     it("shows Stage shown (N) when filter is active", async () => {
       getStagingStatusMock.mockResolvedValue(multiFileStatus());
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByText("index.ts"));
 
@@ -710,7 +646,7 @@ describe("ReviewHub", () => {
     it("shows filtered-empty state when no files match filter", async () => {
       getStagingStatusMock.mockResolvedValue(multiFileStatus());
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByText("index.ts"));
 
@@ -724,7 +660,7 @@ describe("ReviewHub", () => {
     it("shows Clear filter link in filtered-empty state", async () => {
       getStagingStatusMock.mockResolvedValue(multiFileStatus());
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByText("index.ts"));
 
@@ -737,7 +673,7 @@ describe("ReviewHub", () => {
     it("hides generated files when showGenerated is toggled off", async () => {
       getStagingStatusMock.mockResolvedValue(multiFileStatus());
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => {
         // package-lock.json should be visible by default
@@ -759,7 +695,7 @@ describe("ReviewHub", () => {
     it("uses stageAll IPC when no filter is active", async () => {
       getStagingStatusMock.mockResolvedValue(multiFileStatus());
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByText("index.ts"));
 
@@ -774,7 +710,7 @@ describe("ReviewHub", () => {
     it("uses batched stageFiles when filter is active", async () => {
       getStagingStatusMock.mockResolvedValue(multiFileStatus());
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByText("index.ts"));
 
@@ -795,7 +731,7 @@ describe("ReviewHub", () => {
     it("uses unstageAll IPC when no filter is active", async () => {
       getStagingStatusMock.mockResolvedValue(multiFileStatus());
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByText("index.ts"));
 
@@ -815,7 +751,7 @@ describe("ReviewHub", () => {
         })
       );
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       const allStagedTitle = await screen.findByText("All changes staged");
       const allStagedEmpty = allStagedTitle.closest('[data-testid="empty-state-user-cleared"]');
@@ -830,7 +766,7 @@ describe("ReviewHub", () => {
     it("filter input uses ref for typing (no re-render on each keystroke)", async () => {
       getStagingStatusMock.mockResolvedValue(multiFileStatus());
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByText("index.ts"));
 
@@ -851,7 +787,7 @@ describe("ReviewHub", () => {
         })
       );
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => {
         screen.getByText("Nothing staged");
@@ -877,7 +813,7 @@ describe("ReviewHub", () => {
         })
       );
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByText("aaa.ts"));
 
@@ -903,7 +839,7 @@ describe("ReviewHub", () => {
         })
       );
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => {
         screen.getByText("package-lock.json");

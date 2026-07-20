@@ -8,8 +8,6 @@ import { usePluginConfirmStore } from "@/store/pluginConfirmStore";
 import { usePluginMcpConfirmStore } from "@/store/pluginMcpConfirmStore";
 import { usePluginCapabilityConfirmStore } from "@/store/pluginCapabilityConfirmStore";
 import { useDiagnosticsReviewStore } from "@/store/diagnosticsReviewStore";
-import { stashViewFileRequest } from "@/components/FileViewer/pendingViewFileRequest";
-import { stashViewDiffRequest } from "@/components/Worktree/pendingViewDiffRequest";
 
 export interface ModalResetKeys {
   gitPushResetKey: number;
@@ -22,8 +20,6 @@ export interface ModalResetKeys {
   pluginCapabilityConfirmResetKey: string;
   diagnosticsReviewResetKey: number;
   terminalInfoResetKey: number;
-  fileViewerResetKey: number;
-  diffViewerResetKey: number;
 }
 
 /**
@@ -52,29 +48,11 @@ export function useModalResetKeys(): ModalResetKeys {
   );
   const diagnosticsReviewResetKey = useDiagnosticsReviewStore((s) => s.requestSeq);
   const [terminalInfoResetKey, setTerminalInfoResetKey] = useState(0);
-  const [fileViewerResetKey, setFileViewerResetKey] = useState(0);
-  const [diffViewerResetKey, setDiffViewerResetKey] = useState(0);
   useEffect(() => {
     const onTerminalInfo = () => setTerminalInfoResetKey((k) => k + 1);
-    const onViewFile = (e: Event) => {
-      // Stash for FileViewerModalHost's mount replay — the host's own listener
-      // lives in a lazy chunk and may not be registered yet.
-      stashViewFileRequest(e);
-      setFileViewerResetKey((k) => k + 1);
-    };
-    const onViewDiff = (e: Event) => {
-      // Stash for DiffViewerModalHost's mount replay — same lazy-chunk race as
-      // the file viewer above.
-      stashViewDiffRequest(e);
-      setDiffViewerResetKey((k) => k + 1);
-    };
     window.addEventListener("daintree:open-terminal-info", onTerminalInfo);
-    window.addEventListener("daintree:view-file", onViewFile);
-    window.addEventListener("daintree:view-diff", onViewDiff);
     return () => {
       window.removeEventListener("daintree:open-terminal-info", onTerminalInfo);
-      window.removeEventListener("daintree:view-file", onViewFile);
-      window.removeEventListener("daintree:view-diff", onViewDiff);
     };
   }, []);
 
@@ -89,7 +67,5 @@ export function useModalResetKeys(): ModalResetKeys {
     pluginCapabilityConfirmResetKey,
     diagnosticsReviewResetKey,
     terminalInfoResetKey,
-    fileViewerResetKey,
-    diffViewerResetKey,
   };
 }

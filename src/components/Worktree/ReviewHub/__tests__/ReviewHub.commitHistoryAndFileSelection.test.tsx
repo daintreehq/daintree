@@ -100,72 +100,8 @@ vi.mock("@/utils/debounce", () => ({
   },
 }));
 
-vi.mock("react-dom", async () => {
-  const actual = await vi.importActual<typeof import("react-dom")>("react-dom");
-  return { ...actual, createPortal: (children: ReactNode) => children };
-});
-
 vi.mock("@/hooks", () => ({
-  useOverlayState: vi.fn(),
   useTruncationDetection: vi.fn(() => ({ ref: vi.fn(), isTruncated: false })),
-}));
-
-interface CapturedNavProps {
-  filePath: string;
-  currentFileIndex?: number;
-  totalFileCount?: number;
-  onNavigateFile?: (delta: -1 | 1) => void;
-}
-
-const { fileDiffModalOpenHistory, fileDiffModalLastFilePath } = vi.hoisted(() => ({
-  fileDiffModalOpenHistory: { value: [] as boolean[] },
-  fileDiffModalLastFilePath: { value: null as string | null },
-}));
-const fileDiffModalNavCapture = vi.hoisted((): { value: CapturedNavProps | null } => ({
-  value: null,
-}));
-const baseBranchModalNavCapture = vi.hoisted((): { value: CapturedNavProps | null } => ({
-  value: null,
-}));
-vi.mock("../../FileDiffModal", () => ({
-  FileDiffModal: ({
-    isOpen,
-    filePath,
-    currentFileIndex,
-    totalFileCount,
-    onNavigateFile,
-  }: { isOpen: boolean } & CapturedNavProps) => {
-    fileDiffModalOpenHistory.value.push(isOpen);
-    if (isOpen) {
-      fileDiffModalLastFilePath.value = filePath;
-      fileDiffModalNavCapture.value = {
-        filePath,
-        currentFileIndex,
-        totalFileCount,
-        onNavigateFile,
-      };
-    }
-    return null;
-  },
-}));
-vi.mock("../BaseBranchDiffModal", () => ({
-  BaseBranchDiffModal: ({
-    isOpen,
-    filePath,
-    currentFileIndex,
-    totalFileCount,
-    onNavigateFile,
-  }: { isOpen: boolean } & CapturedNavProps) => {
-    if (isOpen) {
-      baseBranchModalNavCapture.value = {
-        filePath,
-        currentFileIndex,
-        totalFileCount,
-        onNavigateFile,
-      };
-    }
-    return null;
-  },
 }));
 
 vi.mock("@/hooks/useWorktreeStore", () => ({
@@ -330,7 +266,7 @@ vi.mock("@/components/ui/EmptyState", () => ({
   ),
 }));
 
-import { ReviewHub } from "../ReviewHub";
+import { ReviewHubContent } from "../ReviewHubContent";
 import { useUIStore } from "@/store/uiStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useDiffViewedStore } from "@/store/diffViewedStore";
@@ -375,6 +311,76 @@ const makeWorktreeState = (path = WORKTREE_PATH): WorktreeState =>
  * `Pull and rebase` confirm button is what reaches the IPC.
  */
 
+const HUB_PANEL_ID = "diff-panel-1";
+
+// Reactive stand-in for the real store's single dialog pointer. Every ownership
+// transition the hub has to survive — close, promote to grid, superseded by
+// another surface — is a move of that pointer, so a constant makes them
+// unobservable and lets a reopen loop hide behind a first-call assertion.
+const dialogStore = vi.hoisted(() => {
+  let panelId: string | null = null;
+  const listeners = new Set<() => void>();
+  return {
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    get: () => panelId,
+    set: (next: string | null) => {
+      panelId = next;
+      for (const listener of listeners) listener();
+    },
+  };
+});
+
+const openPanelDialogMock = vi.hoisted(() =>
+  vi.fn<(options: Record<string, unknown>) => Promise<string | null>>()
+);
+const closePanelDialogMock = vi.hoisted(() => vi.fn<() => void>());
+
+vi.mock("@/store/panelDialogStore", async () => {
+  const { useSyncExternalStore } = await import("react");
+  // This harness models a single dialog slot, which is what a grid-hosted hub
+  // sees: it opens the diff with `openPanelDialog` (replace), so the stack
+  // never grows past one. Layering is exercised in panelDialogStore's own suite.
+  // The stack array must be referentially stable for a given id, or
+  // useSyncExternalStore sees a new snapshot on every call and re-renders
+  // forever. Cache it and rebuild only when the underlying id changes.
+  const EMPTY: string[] = [];
+  let cachedId: string | null = null;
+  let cachedStack: string[] = EMPTY;
+  const stackOf = (id: string | null) => {
+    if (id !== cachedId) {
+      cachedId = id;
+      cachedStack = id ? [id] : EMPTY;
+    }
+    return cachedStack;
+  };
+  const snapshot = () => ({ dialogStack: stackOf(dialogStore.get()) });
+  return {
+    usePanelDialogStore: Object.assign(
+      (selector: (s: { dialogStack: string[] }) => unknown) =>
+        useSyncExternalStore(dialogStore.subscribe, () =>
+          selector({ dialogStack: stackOf(dialogStore.get()) })
+        ),
+      {
+        getState: () => ({
+          ...snapshot(),
+          openPanelDialog: openPanelDialogMock,
+          closePanelDialog: closePanelDialogMock,
+          // Mirrors the real store's membership guard: closing an id that is
+          // not presented is a no-op, so it can't tear down another surface's
+          // dialog.
+          closePanelDialogById: (id: string) => {
+            if (dialogStore.get() !== id) return;
+            closePanelDialogMock();
+          },
+        }),
+      }
+    ),
+  };
+});
+
 describe("ReviewHub", () => {
   let capturedUpdateCallback: ((state: WorktreeState) => void) | null = null;
   const mockUnsubscribe = vi.fn();
@@ -382,6 +388,14 @@ describe("ReviewHub", () => {
   beforeEach(() => {
     capturedUpdateCallback = null;
     debounceCancelSpy.mockReset();
+
+    // Mirror the real store: opening publishes the pointer, closing clears it.
+    dialogStore.set(null);
+    openPanelDialogMock.mockImplementation(async () => {
+      dialogStore.set(HUB_PANEL_ID);
+      return HUB_PANEL_ID;
+    });
+    closePanelDialogMock.mockImplementation(() => dialogStore.set(null));
 
     // The Review Hub's file-list disclosure defaults to collapsed (issue
     // #7886). Existing tests assume rows are visible — expand the disclosure
@@ -498,7 +512,7 @@ describe("ReviewHub", () => {
 
   describe("commit message subject counter", () => {
     it("shows subject line length counter", async () => {
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByPlaceholderText("Commit message…"));
 
       const textarea = screen.getByPlaceholderText("Commit message…");
@@ -510,7 +524,7 @@ describe("ReviewHub", () => {
     });
 
     it("counter reflects subject length past the 72-char limit", async () => {
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByPlaceholderText("Commit message…"));
 
       const textarea = screen.getByPlaceholderText("Commit message…");
@@ -523,7 +537,9 @@ describe("ReviewHub", () => {
 
   describe("commit history arrow-key cycling", () => {
     function renderOpen() {
-      return render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      return render(
+        <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
+      );
     }
 
     function focusTextareaAt(textarea: HTMLTextAreaElement, start: number, end = start) {
@@ -776,7 +792,7 @@ describe("ReviewHub", () => {
 
   describe("per-file Viewed checkbox", () => {
     it("renders an unchecked Viewed checkbox next to each file row", async () => {
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByText("index.ts"));
 
@@ -789,7 +805,7 @@ describe("ReviewHub", () => {
     });
 
     it("toggles a file's Viewed state when its checkbox is clicked", async () => {
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByText("index.ts"));
 
@@ -807,22 +823,20 @@ describe("ReviewHub", () => {
       expect(stillThere.checked).toBe(true);
     });
 
-    it("does not open the diff modal when the Viewed checkbox is clicked", async () => {
-      fileDiffModalOpenHistory.value = [];
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+    it("does not open the diff panel when the Viewed checkbox is clicked", async () => {
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByText("index.ts"));
 
       const indexCheckbox = screen.getByRole("checkbox", {
         name: "Mark src/index.ts as viewed",
       });
-      fileDiffModalOpenHistory.value = [];
+      openPanelDialogMock.mockClear();
 
       fireEvent.click(indexCheckbox);
 
-      // FileDiffModal is rendered with isOpen=true only when selectedFile is set.
-      // After the checkbox click, none of its renders should have isOpen=true.
-      expect(fileDiffModalOpenHistory.value.some((o) => o === true)).toBe(false);
+      // Marking a file viewed must not select it — only a row click does that.
+      expect(openPanelDialogMock).not.toHaveBeenCalled();
     });
 
     it("tracks Viewed state independently for staged and unstaged copies of the same path", async () => {
@@ -835,7 +849,7 @@ describe("ReviewHub", () => {
         })
       );
 
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getAllByText("dual.ts"));
 
@@ -861,15 +875,15 @@ describe("ReviewHub", () => {
       // review survives closing the hub (and shows in the diff workspace's
       // sidebar); only an app restart clears them.
       const { rerender } = render(
-        <ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
+        <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
       );
 
       await waitFor(() => screen.getByText("index.ts"));
 
       fireEvent.click(screen.getByRole("checkbox", { name: "Mark src/index.ts as viewed" }));
 
-      rerender(<ReviewHub isOpen={false} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
-      rerender(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      rerender(<ReviewHubContent isOpen={false} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      rerender(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByText("index.ts"));
 
@@ -897,7 +911,7 @@ describe("ReviewHub", () => {
 
     const renderHub = async () => {
       getStagingStatusMock.mockResolvedValue(makeMultiFileStatus());
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByTestId("file-stage-row-src/x.ts"));
     };
 
@@ -1117,7 +1131,7 @@ describe("ReviewHub", () => {
     it("Escape clears an active selection before closing the modal", async () => {
       const onClose = vi.fn();
       getStagingStatusMock.mockResolvedValue(makeMultiFileStatus());
-      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={onClose} />);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={onClose} />);
       await waitFor(() => screen.getByTestId("file-stage-row-src/x.ts"));
 
       fireEvent.click(screen.getByTestId("file-stage-row-src/x.ts"), { metaKey: true });
@@ -1244,6 +1258,84 @@ describe("ReviewHub", () => {
       expect(screen.getByTestId("review-hub-stage-section-button").textContent).toMatch(
         /Stage all/i
       );
+    });
+  });
+
+  describe("diff panel ownership", () => {
+    /** Opens the diff for a file row and settles the open promise. */
+    async function openDiffFor(fileName: string): Promise<void> {
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByText(fileName));
+      openPanelDialogMock.mockClear();
+      await act(async () => {
+        fireEvent.click(screen.getByText(fileName).closest("button")!);
+      });
+      await act(async () => {});
+      expect(openPanelDialogMock).toHaveBeenCalledTimes(1);
+      expect(dialogStore.get()).toBe(HUB_PANEL_ID);
+    }
+
+    it("does not reopen the dialog the user just closed", async () => {
+      await openDiffFor("index.ts");
+
+      // Closing clears the global pointer while the hub's row selection is
+      // still set — the exact state that used to read as "open a panel".
+      await act(async () => {
+        closePanelDialogMock();
+      });
+      await act(async () => {});
+
+      expect(openPanelDialogMock).toHaveBeenCalledTimes(1);
+      expect(dialogStore.get()).toBeNull();
+    });
+
+    it("does not open a duplicate after its panel is promoted into the grid", async () => {
+      await openDiffFor("index.ts");
+
+      // Promotion drops the pointer WITHOUT removing the panel: it now lives in
+      // the grid, so a second dialog would be a visible duplicate of it.
+      await act(async () => {
+        dialogStore.set(null);
+      });
+      await act(async () => {});
+
+      expect(openPanelDialogMock).toHaveBeenCalledTimes(1);
+      // And the promoted panel must survive — no close was issued for it.
+      expect(closePanelDialogMock).not.toHaveBeenCalled();
+    });
+
+    it("neither reopens nor closes anything when another surface takes the dialog", async () => {
+      await openDiffFor("index.ts");
+
+      await act(async () => {
+        dialogStore.set("some-other-surfaces-panel");
+      });
+      await act(async () => {});
+
+      expect(openPanelDialogMock).toHaveBeenCalledTimes(1);
+      // Dropping our selection must not reach for the global close: the pointer
+      // now names a panel we don't own.
+      expect(closePanelDialogMock).not.toHaveBeenCalled();
+      expect(dialogStore.get()).toBe("some-other-surfaces-panel");
+    });
+
+    it("reopens on a fresh row click after the dialog was closed", async () => {
+      await openDiffFor("index.ts");
+      await act(async () => {
+        closePanelDialogMock();
+      });
+      await act(async () => {});
+
+      // Clearing the selection on ownership loss must not strand the hub: a new
+      // click is a new intent and has to open again.
+      await act(async () => {
+        fireEvent.click(screen.getByText("app.ts").closest("button")!);
+      });
+      await act(async () => {});
+
+      expect(openPanelDialogMock).toHaveBeenCalledTimes(2);
+      expect(openPanelDialogMock.mock.calls[1]?.[0]).toMatchObject({ filePath: "src/app.ts" });
+      expect(dialogStore.get()).toBe(HUB_PANEL_ID);
     });
   });
 });

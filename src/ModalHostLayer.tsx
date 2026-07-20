@@ -50,8 +50,7 @@ import {
   LazyPluginInputBoxDialog,
   LazyPluginConfirmPromptDialog,
   LazyPluginCapabilityConfirmDialog,
-  LazyFileViewerModalHost,
-  LazyDiffViewerModalHost,
+  LazyPanelDialogHost,
   LazyGitInitDialog,
   LazyCreateProjectFolderDialog,
   LazyCloneRepoDialog,
@@ -128,8 +127,6 @@ interface ModalHostLayerProps {
   pluginConfirmResetKey: string;
   pluginMcpConfirmResetKey: string;
   pluginCapabilityConfirmResetKey: string;
-  fileViewerResetKey: number;
-  diffViewerResetKey: number;
   panelLimitResetKey: number;
   diagnosticsReviewResetKey: number;
   gitPushResetKey: number;
@@ -220,8 +217,6 @@ export function ModalHostLayer({
   pluginConfirmResetKey,
   pluginMcpConfirmResetKey,
   pluginCapabilityConfirmResetKey,
-  fileViewerResetKey,
-  diffViewerResetKey,
   panelLimitResetKey,
   diagnosticsReviewResetKey,
   gitPushResetKey,
@@ -736,24 +731,9 @@ export function ModalHostLayer({
         </ErrorBoundary>
       )}
       {isStateLoaded && (
-        <ErrorBoundary
-          variant="component"
-          componentName="FileViewerModalHost"
-          resetKeys={[fileViewerResetKey]}
-        >
+        <ErrorBoundary variant="component" componentName="PanelDialogHost">
           <Suspense fallback={null}>
-            <LazyFileViewerModalHost />
-          </Suspense>
-        </ErrorBoundary>
-      )}
-      {isStateLoaded && (
-        <ErrorBoundary
-          variant="component"
-          componentName="DiffViewerModalHost"
-          resetKeys={[diffViewerResetKey]}
-        >
-          <Suspense fallback={null}>
-            <LazyDiffViewerModalHost />
+            <LazyPanelDialogHost />
           </Suspense>
         </ErrorBoundary>
       )}

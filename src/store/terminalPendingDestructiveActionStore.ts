@@ -18,7 +18,12 @@ export type TerminalPendingDestructiveActionKind =
   | "killAll"
   | "restartAll"
   | "worktreeRestartAll"
-  | "worktreeTrashAll";
+  | "worktreeTrashAll"
+  // Closing the terminals held by a deleted worktree's deleted-worktree row (#11232).
+  // Executes through `worktree.sessions.trashAll` like `worktreeTrashAll`;
+  // it exists as its own kind purely so the copy can speak about a worktree
+  // that no longer exists rather than "this worktree".
+  | "deletedWorktreeDismiss";
 
 export interface TerminalPendingDestructiveActionSnapshot {
   kind: TerminalPendingDestructiveActionKind;

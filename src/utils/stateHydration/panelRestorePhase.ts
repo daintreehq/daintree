@@ -24,6 +24,11 @@ import {
   inferWorktreeIdFromCwd,
 } from "./statePatcher";
 import type { HydrationOptions } from "./";
+import { getAgentConfig } from "@/config/agents";
+import {
+  getCurrentLaunchCliDetail,
+  resolveAgentLaunchBaseCommand,
+} from "@/utils/agentLaunchCommand";
 
 type AddPanelFn = HydrationOptions["addPanel"];
 type RestoreTerminalOrderFn = NonNullable<HydrationOptions["restoreTerminalOrder"]>;
@@ -126,6 +131,43 @@ export async function restorePanelsPhase(
   const { batchSize: restoreBatchSize, delayMs: restoreBatchDelayMs } =
     getRestoreBatchParams(resourceProfile);
 
+  // A panel can outlive its worktree (#11232): deleting a worktree leaves its
+  // terminals running, and the sidebar row that holds them is in-memory only.
+  // So a saved panel may point at a worktree that no longer exists, and both
+  // the grid and the dock filter by the active worktree — restoring it as-is
+  // would leave a live PTY on screen nowhere, unreachable even to close.
+  // Re-home those to the active worktree instead.
+  //
+  // The id set is derived once and awaited at each use. `worktreesPromise` is
+  // already in flight (the orphan phase below awaits the same one), so this
+  // costs a microtask per panel once resolved — and unlike sampling a variable
+  // the loader may not have filled yet, it cannot silently skip the re-home.
+  //
+  // An empty list counts as unknown, not as "every worktree is gone" (#11234).
+  // Hydration races backend init by design, and `worktree.getAll()` answers []
+  // while the window's workspace host is still registering. A successful git
+  // enumeration never yields zero — `git worktree list` always reports the main
+  // worktree — so [] only ever means "not ready", never a real count. Treating
+  // it as authoritative re-homed every panel to the active worktree, and the
+  // save loop then persisted that, compounding across restarts.
+  let knownWorktreeIdsPromise: Promise<Set<string> | null> | null = null;
+  const getKnownWorktreeIds = (): Promise<Set<string> | null> => {
+    knownWorktreeIdsPromise ??= worktreesPromise.then((list) =>
+      list && list.length > 0 ? new Set(list.map((w) => w.id)) : null
+    );
+    return knownWorktreeIdsPromise;
+  };
+  const resolveRestoredWorktreeId = async (
+    worktreeId: string | undefined
+  ): Promise<string | undefined> => {
+    if (!worktreeId) return activeWorktreeId ?? worktreeId;
+    const known = await getKnownWorktreeIds();
+    // With no worktree list there is nothing to check the id against, so
+    // re-homing would be a guess — keep what was saved.
+    if (!known || known.has(worktreeId)) return worktreeId;
+    return activeWorktreeId ?? worktreeId;
+  };
+
   if (savedPanels && savedPanels.length > 0) {
     // Build a single-pass map of worktreeId → highest lastActiveAt across saved
     // panels. The restore predicate uses this to promote each non-active
@@ -208,10 +250,9 @@ export async function restorePanelsPhase(
             logHydrationInfo(`Reconnecting to terminal: ${saved.id}`);
 
             const args = buildArgsForBackendTerminal(backendTerminal, saved, projectRoot || "");
-            // Assign to active worktree if terminal has no worktreeId
-            if (!args.worktreeId && activeWorktreeId) {
-              args.worktreeId = activeWorktreeId;
-            }
+            // Assign to the active worktree when the terminal has no worktree,
+            // or names one that no longer exists.
+            args.worktreeId = await resolveRestoredWorktreeId(args.worktreeId);
             const location = args.location as "grid" | "dock";
 
             logHydrationInfo(`[HYDRATION] Adding terminal from backend:`, {
@@ -284,11 +325,12 @@ export async function restorePanelsPhase(
                   saved,
                   projectRoot || ""
                 );
-                // Assign to active worktree when a legacy saved panel has
-                // no worktreeId (mirrors the matched-backend path).
-                if (!reconnectArgs.worktreeId && activeWorktreeId) {
-                  reconnectArgs.worktreeId = activeWorktreeId;
-                }
+                // Assign to the active worktree when a legacy saved panel has
+                // no worktreeId, or names a deleted one (mirrors the
+                // matched-backend path).
+                reconnectArgs.worktreeId = await resolveRestoredWorktreeId(
+                  reconnectArgs.worktreeId
+                );
                 const restoredTerminalId = await addPanel(reconnectArgs);
                 restoredIdsByIndex.set(capturedIndex, restoredTerminalId);
 
@@ -325,6 +367,13 @@ export async function restorePanelsPhase(
               } else {
                 // not_found on cold app restart means the PTY process was killed
                 // on quit and needs to be respawned.
+                const savedAgentId = resolveAgentId(saved.launchAgentId);
+                const resolvedAgentBaseCommand = savedAgentId
+                  ? resolveAgentLaunchBaseCommand(
+                      getAgentConfig(savedAgentId)?.command ?? savedAgentId,
+                      await getCurrentLaunchCliDetail(savedAgentId)
+                    )
+                  : undefined;
                 const respawnArgs = buildArgsForRespawn(
                   saved,
                   kind,
@@ -332,13 +381,14 @@ export async function restorePanelsPhase(
                   agentSettings,
                   reconnectTimedOut,
                   clipboardDirectory,
-                  projectPresetsByAgent
+                  projectPresetsByAgent,
+                  resolvedAgentBaseCommand
                 );
 
-                // Assign to active worktree if the saved terminal has no worktreeId
-                if (!respawnArgs.worktreeId && activeWorktreeId) {
-                  respawnArgs.worktreeId = activeWorktreeId;
-                }
+                // Assign to the active worktree when the saved terminal has no
+                // worktreeId, or names a deleted one — which also keeps the
+                // respawn's cwd pointing at a directory that still exists.
+                respawnArgs.worktreeId = await resolveRestoredWorktreeId(respawnArgs.worktreeId);
 
                 logHydrationInfo(
                   `Respawning PTY panel: ${saved.id} (${respawnArgs.launchAgentId ? "agent" : "terminal"})`

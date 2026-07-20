@@ -111,6 +111,12 @@ describe("buildResumeCommand", () => {
     expect(buildResumeCommand("claude", "abc-123", undefined)).toBe("claude --resume abc-123");
   });
 
+  it("uses an explicitly resolved executable", () => {
+    expect(buildResumeCommand("claude", "abc-123", undefined, "'C:\\fake bin\\claude.cmd'")).toBe(
+      "'C:\\fake bin\\claude.cmd' --resume abc-123"
+    );
+  });
+
   it("escapes non-flag launch flag values", () => {
     const cmd = buildResumeCommand("claude", "abc-123", [
       "--dangerously-skip-permissions",
@@ -206,6 +212,12 @@ describe("buildResumeLatestCommand", () => {
 
   it("handles undefined launch flags like no flags", () => {
     expect(buildResumeLatestCommand("claude", undefined)).toBe("claude --continue");
+  });
+
+  it("uses an explicitly resolved executable", () => {
+    expect(buildResumeLatestCommand("claude", undefined, "'C:\\fake bin\\claude.cmd'")).toBe(
+      "'C:\\fake bin\\claude.cmd' --continue"
+    );
   });
 
   it("escapes non-flag launch flag values", () => {

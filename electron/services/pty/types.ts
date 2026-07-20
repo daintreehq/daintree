@@ -277,12 +277,17 @@ export const WRITE_MAX_CHUNK_SIZE = 50;
 export const WRITE_INTERVAL_MS = 5;
 
 // Scrollback configuration
-// All PTY panels get the same scrollback; there is no "agent tier" scrollback
-// decision any more. Capped at the renderer's hard display ceiling (AGENT_POLICY
-// maxLines in src/utils/scrollbackConfig.ts — 5000 even for "unlimited") so the
-// headless analysis mirror never retains lines no renderer can show and no
-// consumer can read (terminal.getOutput caps at 1000). At ~12 bytes/cell this
-// halves the worst-case mirror cost per terminal versus the previous 10000.
+// All PTY panels get the same headless-mirror scrollback; there is no "agent
+// tier" scrollback decision any more. This is the pty-host analysis mirror, NOT
+// the renderer's display buffer — the two are sized independently on purpose.
+// The renderer agent ceiling is AGENT_POLICY maxLines (10000, in
+// src/utils/scrollbackConfig.ts); this mirror is deliberately kept lower to bound
+// pty-host heap (at ~12 bytes/cell, 5000 vs 10000 halves the worst-case mirror
+// cost per terminal). The mirror only feeds analysis (terminal.getOutput caps at
+// 1000) and serialize/restore, so the trade is: a live renderer scrolls back the
+// full 10000 lines, but a session restored after project-view eviction recovers
+// only the most recent ~5000. Raise this to match the renderer ceiling only with
+// a pty-host memory review (and a re-check of the persisted-snapshot size limit).
 export const DEFAULT_SCROLLBACK = 5000;
 
 // Preserved-snapshot eviction (issue #10839)

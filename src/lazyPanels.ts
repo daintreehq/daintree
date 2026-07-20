@@ -8,7 +8,6 @@ import { lazy } from "react";
 export const loadE2ENotificationBackdoor = () => import("./lib/e2eNotificationBackdoor");
 export const loadJetbrainsMono500 = () => import("@fontsource/jetbrains-mono/latin-500.css");
 export const loadJetbrainsMono600 = () => import("@fontsource/jetbrains-mono/latin-600.css");
-export const preloadFileViewerModal = () => import("@/components/FileViewer/FileViewerModal");
 
 export function preloadModalHostLayer() {
   return import("./ModalHostLayer");
@@ -179,18 +178,11 @@ export const LazyCelebrationConfetti = lazy(() =>
   preloadCelebrationConfetti().then((m) => ({ default: m.CelebrationConfetti }))
 );
 
-export function preloadFileViewerModalHost() {
-  return import("./components/FileViewer/FileViewerModalHost");
+export function preloadPanelDialogHost() {
+  return import("./components/Panel/PanelDialogHost");
 }
-export const LazyFileViewerModalHost = lazy(() =>
-  preloadFileViewerModalHost().then((m) => ({ default: m.FileViewerModalHost }))
-);
-
-export function preloadDiffViewerModalHost() {
-  return import("./components/Worktree/DiffViewerModalHost");
-}
-export const LazyDiffViewerModalHost = lazy(() =>
-  preloadDiffViewerModalHost().then((m) => ({ default: m.DiffViewerModalHost }))
+export const LazyPanelDialogHost = lazy(() =>
+  preloadPanelDialogHost().then((m) => ({ default: m.PanelDialogHost }))
 );
 
 export function preloadMcpConfirmDialog() {

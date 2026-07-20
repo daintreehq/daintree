@@ -951,6 +951,29 @@ export function DndProvider({ children }: DndProviderProps) {
         const actualOverId = parseAccordionDragId(overId) ?? overId;
         const overTerminal = freshTerminalsById[actualOverId];
 
+        // Cross-worktree drop: an accordion drag released over another
+        // worktree's card (either of its two stacked droppable ids) or over a
+        // terminal row inside another worktree's accordion moves the terminal
+        // there instead of reordering. This is the only exit path for
+        // terminals stranded on a deleted worktree's row. The target must be a
+        // LIVE worktree — a terminal row can also belong to a deleted-worktree
+        // row, and moving a terminal INTO a dead worktree would just strand it
+        // on another ghost.
+        const overCardWorktreeId =
+          overData?.type === "worktree" && overData.worktreeId
+            ? overData.worktreeId
+            : parseWorktreeSortDragId(overId);
+        const targetWorktreeId = overCardWorktreeId ?? overTerminal?.worktreeId ?? null;
+        if (targetWorktreeId && targetWorktreeId !== (accordionWorktreeId ?? null)) {
+          const draggedTerminal = freshTerminalsById[actualDraggedId];
+          const isLiveTarget = getCurrentViewStore().getState().worktrees.has(targetWorktreeId);
+          if (isLiveTarget && draggedTerminal && draggedTerminal.worktreeId !== targetWorktreeId) {
+            moveTerminalToWorktree(actualDraggedId, targetWorktreeId);
+            setFocused(null);
+          }
+          return;
+        }
+
         if (overTerminal && actualDraggedId !== actualOverId) {
           const containerTerminals: CarrierPanel[] = [];
           for (const tid of freshTerminalIds) {

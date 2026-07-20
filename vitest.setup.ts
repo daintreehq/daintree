@@ -4,11 +4,27 @@
 // that need to verify the throwing behavior (e.g. `ipcGuard.test.ts`) reset
 // the flag explicitly via `_resetIpcGuardForTesting()`.
 
+import os from "node:os";
+import path from "node:path";
 import { vi } from "vitest";
 import { markIpcSecurityReady } from "./electron/ipc/ipcGuard.js";
 import { primeRadix } from "./src/components/ui/radix-loader";
 
 markIpcSecurityReady();
+
+// `hardenedGit` resolves an app-owned `core.hooksPath` from DAINTREE_USER_DATA,
+// falling back to the real home directory when nothing else is available. Any
+// test that builds a git factory would otherwise create `~/.daintree/git-hooks`
+// on the developer's machine. Point it at a temp root instead; suites that
+// inspect the directory (hardenedGit's own) override this with their own
+// mkdtemp before their first factory call.
+//
+// Assigned unconditionally: an inherited empty or relative value would survive
+// `??=` and land right back on the home directory, and an inherited real
+// userData path would let a test suite write into the developer's own app data.
+// Keyed by pid so a stale hook file from an earlier run can't be dispatched by
+// a later one.
+process.env.DAINTREE_USER_DATA = path.join(os.tmpdir(), `daintree-vitest-userdata-${process.pid}`);
 
 // Tests render Radix wrappers synchronously, but our production wrappers
 // dynamic-import the Radix primitive chunk on demand. Prime the loader once

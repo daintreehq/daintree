@@ -6,7 +6,7 @@ interface ScrollbackPolicy {
   minLines: number;
 }
 
-const AGENT_POLICY: ScrollbackPolicy = { multiplier: 5, maxLines: 5000, minLines: 500 };
+const AGENT_POLICY: ScrollbackPolicy = { multiplier: 10, maxLines: 10000, minLines: 500 };
 const PLAIN_POLICY: ScrollbackPolicy = { multiplier: 0.3, maxLines: 2000, minLines: 200 };
 
 // Resource-profile ceiling on the agent policy. Pushed by useResourceProfile
@@ -28,7 +28,8 @@ export function getAgentScrollbackMaxLines(): number {
  * Get appropriate scrollback lines based on whether an agent is live in the
  * terminal. Agent terminals (or terminals launched to run an agent) get the
  * larger scrollback policy; plain shells get the smaller one. The agent
- * ceiling scales with the resource profile (efficiency halves it).
+ * ceiling scales with the resource profile (efficiency lowers it to 4k, ~40%
+ * of the 10k perf/balanced ceiling).
  */
 export function getScrollbackForType(isAgent: boolean, baseScrollback: number): number {
   const policy = isAgent ? AGENT_POLICY : PLAIN_POLICY;

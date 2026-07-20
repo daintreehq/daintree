@@ -12,21 +12,27 @@ vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: vi.fn() },
 }));
 
-const { capturedModalProps } = vi.hoisted(() => ({
-  capturedModalProps: {
-    isOpen: false as boolean,
-    filePath: "" as string,
-    restoreFocusTo: undefined as unknown,
-  },
+// The diff viewer is a dialog-presented `diff` panel now, so the observable
+// effect of "Open changes" is an openPanelDialog call, not a modal prop.
+const { openPanelDialogMock, setDiffPanelChangeSetMock } = vi.hoisted(() => ({
+  openPanelDialogMock: vi.fn<(options: Record<string, unknown>) => Promise<string>>(
+    async () => "diff-panel-1"
+  ),
+  setDiffPanelChangeSetMock: vi.fn(),
 }));
 
-vi.mock("../FileDiffModal", () => ({
-  FileDiffModal: (props: { isOpen: boolean; filePath: string; restoreFocusTo?: unknown }) => {
-    capturedModalProps.isOpen = props.isOpen;
-    capturedModalProps.filePath = props.filePath;
-    capturedModalProps.restoreFocusTo = props.restoreFocusTo;
-    return null;
-  },
+const EMPTY_DIALOG_STACK = vi.hoisted(() => [] as string[]);
+
+vi.mock("@/store/panelDialogStore", () => ({
+  usePanelDialogStore: Object.assign(
+    (selector: (state: unknown) => unknown) => selector({ dialogStack: EMPTY_DIALOG_STACK }),
+    { getState: () => ({ dialogStack: EMPTY_DIALOG_STACK, openPanelDialog: openPanelDialogMock }) }
+  ),
+}));
+vi.mock("@/store/panelStore", () => ({
+  usePanelStore: Object.assign((selector: (state: unknown) => unknown) => selector({}), {
+    getState: () => ({ setDiffPanelChangeSet: setDiffPanelChangeSetMock }),
+  }),
 }));
 
 const noop = () => {};
@@ -176,23 +182,20 @@ describe("WorktreeDetails — open changes button (#11041)", () => {
   };
 
   beforeEach(() => {
-    capturedModalProps.isOpen = false;
-    capturedModalProps.filePath = "";
-    capturedModalProps.restoreFocusTo = undefined;
+    openPanelDialogMock.mockClear();
   });
 
   it("shows the button when there are changes and opens the first file's diff from it", () => {
     renderDetails({ worktree: worktreeWithChanges, hasChanges: true });
-    const button = screen.getByRole("button", { name: "Open changes" });
 
-    fireEvent.click(button);
+    fireEvent.click(screen.getByRole("button", { name: "Open changes" }));
 
-    expect(capturedModalProps.isOpen).toBe(true);
+    expect(openPanelDialogMock).toHaveBeenCalledTimes(1);
     // a.ts has the higher churn (6 vs 2), so it sorts ahead of the raw-first b.ts.
-    expect(capturedModalProps.filePath).toBe("a.ts");
-    // Focus restores to the header button that opened the modal, not a row.
-    const restore = capturedModalProps.restoreFocusTo as { current: HTMLElement | null };
-    expect(restore.current).toBe(button);
+    expect(openPanelDialogMock.mock.calls[0]?.[0]).toMatchObject({
+      kind: "diff",
+      filePath: "a.ts",
+    });
   });
 
   it("does not bubble the click to the surrounding card (stops propagation)", () => {
@@ -210,7 +213,7 @@ describe("WorktreeDetails — open changes button (#11041)", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Open changes" }));
 
-    expect(capturedModalProps.isOpen).toBe(true);
+    expect(openPanelDialogMock).toHaveBeenCalledTimes(1);
     expect(onParentClick).not.toHaveBeenCalled();
   });
 

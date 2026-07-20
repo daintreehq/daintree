@@ -1,14 +1,5 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import {
-  Check,
-  ExternalLink,
-  FileText,
-  Globe,
-  RefreshCw,
-  Search,
-  WrapText,
-  XCircle,
-} from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ExternalLink, FileText, Globe, RefreshCw, Search, WrapText, XCircle } from "lucide-react";
 import type { FileViewMode } from "@shared/types/panel";
 import { isFilePanel } from "@shared/types/panel";
 import type { FileReadErrorCode } from "@shared/types/ipc/files";
@@ -20,10 +11,14 @@ import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
 import { HtmlViewer } from "@/components/Html/HtmlViewer";
 import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
 import { CodeViewer, type CodeViewerHandle } from "@/components/FileViewer/CodeViewer";
+import { FileViewerToolbar } from "@/components/FileViewer/FileViewerToolbar";
+import { FileImagePreview } from "@/components/FileViewer/FileImagePreview";
+import { isImageFilePath, isSvgFilePath } from "@/components/FileViewer/filePreviewKinds";
+import { sanitizeSvg } from "@shared/utils/svgSanitizer";
+import { formatBytes } from "@/lib/formatBytes";
 import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import {
   FILE_READ_ERROR_MESSAGES,
@@ -38,7 +33,6 @@ import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { isClientAppError } from "@/utils/clientAppError";
 import { logError } from "@/utils/logger";
-import { cn } from "@/lib/utils";
 
 export interface FilePaneProps extends BasePanelProps {
   tabs?: TabInfo[];
@@ -62,89 +56,10 @@ function isUnderRoot(filePath: string, rootPath: string): boolean {
   return toForwardSlashes(filePath).startsWith(root);
 }
 
-let measureContext: CanvasRenderingContext2D | null = null;
-
-function measureTextWidth(text: string, font: string): number {
-  measureContext ??= document.createElement("canvas").getContext("2d");
-  if (!measureContext) return text.length * 8;
-  measureContext.font = font;
-  return measureContext.measureText(text).width;
-}
-
-/**
- * Width-fitted middle truncation: keeps as many characters from the front and
- * the back as actually fit the element, collapsing the middle with a single
- * ellipsis. The basename is reserved first so the file name always survives.
- * Re-fits on resize; measurement uses canvas measureText with the element's
- * own computed font, so no layout thrash.
- */
-function useFittedPath(fullText: string | undefined): {
-  spanRef: React.RefObject<HTMLElement | null>;
-  display: string | undefined;
-} {
-  const spanRef = useRef<HTMLElement | null>(null);
-  const [display, setDisplay] = useState<string | undefined>(fullText);
-
-  useLayoutEffect(() => {
-    const el = spanRef.current;
-    if (!el || fullText === undefined) {
-      setDisplay(fullText);
-      return;
-    }
-
-    const fit = () => {
-      const style = getComputedStyle(el);
-      const font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
-      const available =
-        el.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
-      if (available <= 0) {
-        // Not measurable (hidden/zero-width): show the new text rather than a
-        // stale fit of the previous path; CSS truncate is the backstop.
-        setDisplay(fullText);
-        return;
-      }
-      if (measureTextWidth(fullText, font) <= available) {
-        setDisplay(fullText);
-        return;
-      }
-      const slashIdx = fullText.lastIndexOf("/");
-      const basename = slashIdx >= 0 ? fullText.slice(slashIdx) : fullText;
-      const head = fullText.slice(0, fullText.length - basename.length);
-      const build = (kept: number) => {
-        const front = Math.ceil(kept / 2);
-        const back = kept - front;
-        return `${head.slice(0, front)}…${back > 0 ? head.slice(head.length - back) : ""}${basename}`;
-      };
-      // Binary search the most head characters that still fit.
-      let lo = 0;
-      let hi = head.length;
-      while (lo < hi) {
-        const mid = Math.ceil((lo + hi) / 2);
-        if (measureTextWidth(build(mid), font) <= available) lo = mid;
-        else hi = mid - 1;
-      }
-      const candidate = build(lo);
-      if (measureTextWidth(candidate, font) <= available) {
-        setDisplay(candidate);
-        return;
-      }
-      // Very narrow pane: prefer the bare file name over "…/file.md"; if even
-      // that overflows, CSS truncate is the backstop.
-      const bare = basename.startsWith("/") ? basename.slice(1) : basename;
-      setDisplay(measureTextWidth(`…${basename}`, font) <= available ? `…${basename}` : bare);
-    };
-
-    fit();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(fit);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [fullText]);
-
-  return { spanRef, display };
-}
-
-type LoadState = "idle" | "loading" | "loaded" | "error";
+// "image" and "svg" are terminal preview states: an image is handed to the
+// `daintree-file://` protocol as an <img> src, and an SVG is read as text,
+// sanitized, then inlined. Neither has readable text content.
+type LoadState = "idle" | "loading" | "loaded" | "error" | "image" | "svg";
 
 const SEARCH_DEBOUNCE_MS = 150;
 const COPY_FEEDBACK_MS = 2000;
@@ -191,39 +106,6 @@ function useFileSearch(rootPath: string, query: string): PickerResult[] {
   }, [rootPath, query]);
 
   return results;
-}
-
-function ToolbarIconButton({
-  label,
-  onClick,
-  pressed,
-  children,
-}: {
-  label: string;
-  onClick: () => void;
-  /** Renders the button as a toggle with a pressed state. */
-  pressed?: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          onClick={onClick}
-          aria-label={label}
-          aria-pressed={pressed}
-          className={cn(
-            "toolbar-icon-button p-1.5 rounded",
-            pressed ? "text-daintree-text" : "text-daintree-text/60"
-          )}
-        >
-          {children}
-        </button>
-      </TooltipTrigger>
-      <TooltipContent side="bottom">{label}</TooltipContent>
-    </Tooltip>
-  );
 }
 
 export function FilePane({
@@ -288,8 +170,13 @@ export function FilePane({
   }, [filePath, worktreePath, projectPath]);
 
   const [content, setContent] = useState<string | null>(null);
+  const [sanitizedSvg, setSanitizedSvg] = useState<string | null>(null);
   const [loadState, setLoadState] = useState<LoadState>("idle");
   const [errorCode, setErrorCode] = useState<FileReadErrorCode | null>(null);
+  // Overrides the code-derived copy for failures that no `FileReadErrorCode`
+  // describes (a readable file whose SVG content the sanitizer rejects).
+  // Mirrors FileViewerModal's `displayErrorMessage`.
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [pathCopied, setPathCopied] = useState(false);
   // Sandboxed-iframe preview URL for HTML files (#11191), minted by files:read.
   const [htmlPreviewUrl, setHtmlPreviewUrl] = useState<string | null>(null);
@@ -297,6 +184,14 @@ export function FilePane({
   // re-navigates — a rewritten report re-renders on refresh/focus. Bumping on
   // every load, not just entry-file changes, keeps relative assets fresh too.
   const [reloadNonce, setReloadNonce] = useState(0);
+
+  const metadata = useMemo(() => {
+    if (loadState !== "loaded" || content === null) return null;
+    return {
+      lineCount: content.split("\n").length,
+      sizeLabel: formatBytes(new TextEncoder().encode(content).byteLength),
+    };
+  }, [loadState, content]);
   const requestRef = useRef(0);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const markdownViewerRef = useRef<MarkdownViewerHandle>(null);
@@ -321,7 +216,20 @@ export function FilePane({
       if (!silent) {
         setLoadState("loading");
         setErrorCode(null);
+        setErrorMessage(null);
       }
+
+      // Raster images are served straight to an <img> by the protocol handler —
+      // reading them as text would just hit the binary-file guard.
+      if (isImageFilePath(filePath) && !isSvgFilePath(filePath)) {
+        setContent(null);
+        setSanitizedSvg(null);
+        setLoadState("image");
+        setErrorCode(null);
+        setErrorMessage(null);
+        return;
+      }
+
       filesClient
         .read({
           path: filePath,
@@ -330,6 +238,26 @@ export function FilePane({
         })
         .then(({ content: fileContent, htmlPreviewUrl: previewUrl }) => {
           if (requestRef.current !== requestId) return;
+          // SVG is text on disk but a picture on screen: sanitize before it can
+          // be inlined, and surface a sanitizer rejection as a load error
+          // rather than silently rendering nothing.
+          if (isSvgFilePath(filePath)) {
+            const sanitized = sanitizeSvg(fileContent);
+            if (sanitized.ok) {
+              setSanitizedSvg(sanitized.svg);
+              setContent(null);
+              setLoadState("svg");
+              setErrorCode(null);
+              setErrorMessage(null);
+            } else {
+              // The file read fine; its contents just aren't safe to inline.
+              setErrorCode("INVALID_PATH");
+              setErrorMessage(sanitized.error);
+              setLoadState("error");
+            }
+            return;
+          }
+          setSanitizedSvg(null);
           setContent((previous) => (previous === fileContent ? previous : fileContent));
           setHtmlPreviewUrl(previewUrl ?? null);
           // Re-navigate the preview frame on every successful load so a rewritten
@@ -339,6 +267,7 @@ export function FilePane({
           setReloadNonce((nonce) => nonce + 1);
           setLoadState("loaded");
           setErrorCode(null);
+          setErrorMessage(null);
         })
         .catch((error: unknown) => {
           if (requestRef.current !== requestId) return;
@@ -350,6 +279,7 @@ export function FilePane({
             code === "NOT_FOUND" || code === "PERMISSION" || code === "OUTSIDE_ROOT";
           if (silent && !permanent) return;
           setErrorCode(code);
+          setErrorMessage(null);
           setLoadState("error");
         });
     },
@@ -473,11 +403,9 @@ export function FilePane({
     filePath && isUnderRoot(filePath, pickerRoot)
       ? toForwardSlashes(filePath).slice(toForwardSlashes(pickerRoot).replace(/\/$/, "").length + 1)
       : filePath && toForwardSlashes(filePath);
-  const { spanRef: pathSpanRef, display: fittedPath } = useFittedPath(displayPath);
-
   const toolbar = filePath ? (
     <>
-      <div className="flex items-center gap-1.5 px-2 py-1.5 bg-surface border-b border-overlay">
+      <FileViewerToolbar.Root>
         {isRenderable && (
           <SegmentedToggle<FileViewMode>
             options={[
@@ -488,49 +416,21 @@ export function FilePane({
             onChange={(mode) => setFileViewMode(id, mode)}
           />
         )}
-        {/* Path pill — mirrors the browser toolbar's address field. Click copies
-          the absolute path; the middle collapses to fit the available width
-          while the file name always survives. */}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              onClick={handleCopyPath}
-              aria-label="Copy file path"
-              className="relative flex items-center min-w-0 flex-1 group/path"
-            >
-              {pathCopied ? (
-                <Check className="absolute left-2 w-3.5 h-3.5 text-status-success pointer-events-none" />
-              ) : (
-                <FileText
-                  aria-hidden="true"
-                  className="absolute left-2 w-3.5 h-3.5 text-daintree-text/40 pointer-events-none"
-                />
-              )}
-              <span
-                ref={pathSpanRef}
-                className="w-full pl-7 pr-2 py-1 text-left text-xs font-mono rounded bg-daintree-bg border border-overlay text-daintree-text/70 truncate transition-colors group-hover/path:border-border-strong group-hover/path:text-daintree-text"
-              >
-                {fittedPath}
-              </span>
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">{pathCopied ? "Copied!" : "Click to copy"}</TooltipContent>
-        </Tooltip>
-        <div className="ml-auto flex items-center gap-1.5 shrink-0">
+        <FileViewerToolbar.Path path={displayPath} copied={pathCopied} onCopy={handleCopyPath} />
+        <FileViewerToolbar.Actions>
           {isMarkdown && viewMode === "source" && (
-            <ToolbarIconButton
+            <FileViewerToolbar.IconButton
               label="Wrap long lines"
               pressed={markdownWrapLines}
               onClick={() => setMarkdownWrapLines(!markdownWrapLines)}
             >
               <WrapText className="w-4 h-4" />
-            </ToolbarIconButton>
+            </FileViewerToolbar.IconButton>
           )}
-          <ToolbarIconButton label="Refresh" onClick={() => loadFile(false)}>
+          <FileViewerToolbar.IconButton label="Refresh" onClick={() => loadFile(false)}>
             <RefreshCw className="w-4 h-4" />
-          </ToolbarIconButton>
-          <ToolbarIconButton
+          </FileViewerToolbar.IconButton>
+          <FileViewerToolbar.IconButton
             label={openTarget === "browser" ? "Open in browser" : "Open in editor"}
             onClick={() => void handleOpenExternal(openTarget)}
           >
@@ -539,9 +439,9 @@ export function FilePane({
             ) : (
               <ExternalLink className="w-4 h-4" />
             )}
-          </ToolbarIconButton>
-        </div>
-      </div>
+          </FileViewerToolbar.IconButton>
+        </FileViewerToolbar.Actions>
+      </FileViewerToolbar.Root>
       {openError && (
         <InlineStatusBanner
           icon={XCircle}
@@ -652,7 +552,9 @@ export function FilePane({
 
         {filePath && loadState === "error" && errorCode && (
           <div className="flex h-full flex-col items-center justify-center gap-3 p-6">
-            <p className="text-sm text-muted-foreground">{FILE_READ_ERROR_MESSAGES[errorCode]}</p>
+            <p className="text-sm text-muted-foreground">
+              {errorMessage ?? FILE_READ_ERROR_MESSAGES[errorCode]}
+            </p>
             <button
               type="button"
               onClick={() => loadFile(false)}
@@ -662,6 +564,20 @@ export function FilePane({
               Retry
             </button>
           </div>
+        )}
+
+        {filePath && (loadState === "image" || loadState === "svg") && (
+          <FileImagePreview
+            filePath={filePath}
+            rootPath={effectiveRootPath}
+            alt={fileName ?? filePath}
+            sanitizedSvg={loadState === "svg" ? sanitizedSvg : null}
+            onError={() => {
+              setErrorCode("NOT_FOUND");
+              setLoadState("error");
+            }}
+            maxHeightClassName="max-h-full"
+          />
         )}
 
         {filePath &&
@@ -689,6 +605,17 @@ export function FilePane({
             // min-h-full column (mirrors FileViewerModal): the editor surface
             // stretches to the bottom of the pane even for files shorter than it.
             <div className="flex min-h-full flex-col">
+              {/* Source mode always carries the metadata bar, markdown included —
+                  it describes the bytes on disk, which is exactly what source
+                  mode shows. Rendered mode omits it (the document is the view). */}
+              {metadata && (
+                <div
+                  data-testid="file-viewer-metadata"
+                  className="px-3 py-1 border-b border-daintree-border text-xs text-muted-foreground font-mono shrink-0"
+                >
+                  {metadata.lineCount} lines · {metadata.sizeLabel} · UTF-8
+                </div>
+              )}
               {isMarkdown ? (
                 <MarkdownViewer
                   ref={markdownViewerRef}
@@ -696,6 +623,7 @@ export function FilePane({
                   filePath={filePath}
                   rootPath={effectiveRootPath}
                   viewMode="source"
+                  initialLine={panel?.initialLine}
                   wrapLines={markdownWrapLines}
                   className="flex-1"
                 />
@@ -704,6 +632,7 @@ export function FilePane({
                   ref={codeViewerRef}
                   content={content}
                   filePath={filePath}
+                  initialLine={panel?.initialLine}
                   className="flex-1"
                 />
               )}

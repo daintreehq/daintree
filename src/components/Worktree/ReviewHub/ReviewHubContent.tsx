@@ -1,6 +1,4 @@
 import {
-  Suspense,
-  lazy,
   useCallback,
   useDeferredValue,
   useEffect,
@@ -11,6 +9,7 @@ import {
   useState,
 } from "react";
 import type { StagingStatus, GitStatus } from "@shared/types";
+import type { PanelLocation } from "@shared/types/panel";
 import type { CrossWorktreeFile } from "@shared/types/ipc/git";
 import type { PushProgressEvent } from "@shared/types/ipc/gitPush";
 import { isClientAppError } from "@/utils/clientAppError";
@@ -26,7 +25,10 @@ import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
 import type { DiffChangeSetEntry } from "@/components/FileViewer/diffChangeSet";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
-import { useKeepMounted } from "@/hooks/useKeepMounted";
+import { basename } from "@shared/utils/path";
+import { usePanelDialogStore } from "@/store/panelDialogStore";
+import { usePanelStore } from "@/store/panelStore";
+import { useWorktreeIdForPath } from "@/panels/diff/useWorktreeIdForPath";
 import { type FileStageRowSection } from "./FileStageRow";
 import { FileSection } from "./FileSection";
 import { useReviewHubStagingActions } from "./useReviewHubStagingActions";
@@ -43,12 +45,6 @@ import { deriveReviewReadiness, type ReviewReadinessCta } from "./reviewReadines
 // list. The modals open only on row click, so the chunk fetch overlaps user
 // think-time; useKeepMounted gates the first mount so nothing is fetched (or
 // rendered) until a diff is actually opened.
-const LazyFileDiffModal = lazy(() =>
-  import("../FileDiffModal").then((m) => ({ default: m.FileDiffModal }))
-);
-const LazyBaseBranchDiffModal = lazy(() =>
-  import("./BaseBranchDiffModal").then((m) => ({ default: m.BaseBranchDiffModal }))
-);
 import { ForcePushConfirmDialog } from "./ForcePushConfirmDialog";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/button";
@@ -89,6 +85,19 @@ export interface ReviewHubContentProps {
   worktreePath: string;
   onClose: () => void;
   /**
+   * Id of the panel record hosting this content, when it has one. Used to layer
+   * a per-file diff above this surface instead of replacing it, so the staging
+   * state survives a drill-down.
+   */
+  panelId?: string;
+  /**
+   * Where this content is presented. At `"dialog"` the host already draws a
+   * title and close control, so this component suppresses its own rather than
+   * drawing them twice — mirroring `ContentPanel`'s handling of the same
+   * location. Defaults to `"grid"`.
+   */
+  location?: PanelLocation;
+  /**
    * Where to attach the Escape-key listener. Defaults to `document` so the
    * modal shell continues to capture Escape globally. Non-modal callers can
    * pass a scoped element to confine Escape to their panel. `undefined`/`null`
@@ -126,10 +135,13 @@ export function ReviewHubContent({
   isOpen,
   worktreePath,
   onClose,
+  panelId,
+  location = "grid",
   keyboardScope,
   initialCommitMessage,
   autoStageOnOpen,
 }: ReviewHubContentProps) {
+  const isDialog = location === "dialog";
   const [status, setStatus] = useState<StagingStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [isBackgroundRefreshing, setIsBackgroundRefreshing] = useState(false);
@@ -174,11 +186,56 @@ export function ReviewHubContent({
   const [selectedBaseBranchFile, setSelectedBaseBranchFile] = useState<CrossWorktreeFile | null>(
     null
   );
-  // First-open mount gates for the lazy diff modals (chunk fetch + mount are
-  // both deferred until a row is clicked; kept mounted after so the modal's
-  // own isOpen gate drives exit animations).
-  const mountFileDiffModal = useKeepMounted(selectedFile !== null);
-  const mountBaseBranchDiffModal = useKeepMounted(selectedBaseBranchFile !== null);
+  // Diff panels opened by this hub. The selection state above stays the record
+  // of "a diff is open" (the hub clears it on commit, worktree switch, and
+  // conflict-mode entry), but the panel itself owns stepping between files once
+  // open — so these effects only handle open, close, and keeping the change set
+  // in step with the live poll.
+  const [diffPanelId, setDiffPanelId] = useState<string | null>(null);
+  const worktreeId = useWorktreeIdForPath(worktreePath);
+  const hasWorkingTreeSelection = selectedFile !== null;
+  const hasBaseBranchSelection = selectedBaseBranchFile !== null;
+  const dialogStack = usePanelDialogStore((state) => state.dialogStack);
+
+  // Layer the diff above this hub when the hub is itself the presented dialog;
+  // a plain open would supersede it, destroying the staging surface (draft,
+  // selection, filters) the user is in the middle of using (#11243). Everywhere
+  // else the hub is grid-hosted and the diff is the only dialog, so the
+  // replacing open stays correct.
+  const openDiffDialog = useCallback(
+    (
+      store: ReturnType<typeof usePanelDialogStore.getState>,
+      options: Parameters<typeof store.openPanelDialog>[0]
+    ): Promise<string | null> =>
+      isDialog && panelId
+        ? store.pushPanelDialog(options, panelId)
+        : store.openPanelDialog(options),
+    [isDialog, panelId]
+  );
+
+  // Ownership loss: the user closed the dialog, promoted it into the grid, or
+  // another surface superseded it. The selection has to go with the pointer —
+  // it is the record of "a diff is open", and the open effects below key off
+  // it, so dropping only the pointer reads as "we want a panel" and instantly
+  // reopens the dialog the user just dismissed (or duplicates the promoted one).
+  //
+  // Membership, not top-of-stack: a diff opened from this hub stays ours even
+  // if something is layered above it.
+  useEffect(() => {
+    if (!diffPanelId || dialogStack.includes(diffPanelId)) return;
+    setDiffPanelId(null);
+    setSelectedFile(null);
+    setSelectedBaseBranchFile(null);
+  }, [dialogStack, diffPanelId]);
+
+  // Close the panel when the hub drops its selection for a reason of its own
+  // (commit, worktree switch, conflict mode). Targeted by id: closing the top
+  // of the stack from here would tear down whatever dialog currently sits
+  // there, which may not be ours.
+  useEffect(() => {
+    if (hasWorkingTreeSelection || hasBaseBranchSelection || !diffPanelId) return;
+    usePanelDialogStore.getState().closePanelDialogById(diffPanelId);
+  }, [hasWorkingTreeSelection, hasBaseBranchSelection, diffPanelId]);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(() => new Set());
   const [selectionSection, setSelectionSection] = useState<FileStageRowSection | null>(null);
   // Keyboard-navigation focus across the flat staged+unstaged file list. -1 means
@@ -349,15 +406,6 @@ export function ReviewHubContent({
     [navigableItems]
   );
 
-  const selectWorkingTreeFileAt = useCallback(
-    (index: number) => {
-      const item = navigableItems[index];
-      if (!item) return;
-      setSelectedFile({ path: item.file.path, status: item.file.status, section: item.section });
-    },
-    [navigableItems]
-  );
-
   const baseBranchChangeSet = useMemo((): DiffChangeSetEntry[] | undefined => {
     if (!sortedBaseBranchFiles) return undefined;
     const statusMap: Record<string, GitStatus> = {
@@ -377,45 +425,10 @@ export function ReviewHubContent({
     }));
   }, [sortedBaseBranchFiles]);
 
-  const selectBaseBranchFileAt = useCallback(
-    (index: number) => {
-      const file = sortedBaseBranchFiles?.[index];
-      if (file) setSelectedBaseBranchFile(file);
-    },
-    [sortedBaseBranchFiles]
-  );
-
   const lastSelectedFileIndexRef = useRef(0);
   useEffect(() => {
     if (selectedFileIndex !== null) lastSelectedFileIndexRef.current = selectedFileIndex;
   }, [selectedFileIndex]);
-
-  const navigateWorkingTreeFile = useCallback(
-    (delta: -1 | 1) => {
-      if (navigableItems.length === 0) return;
-      // Clamp against the live length — a refresh can shrink the list (or drop
-      // the open file) while the modal is open, leaving the index stale.
-      const current = Math.min(
-        selectedFileIndex ?? lastSelectedFileIndexRef.current,
-        navigableItems.length - 1
-      );
-      const next = Math.min(Math.max(current + delta, 0), navigableItems.length - 1);
-      const item = navigableItems[next];
-      if (item) {
-        setSelectedFile({ path: item.file.path, status: item.file.status, section: item.section });
-      }
-    },
-    [navigableItems, selectedFileIndex]
-  );
-
-  const getAdjacentWorkingTreeFile = useCallback(
-    (delta: -1 | 1) => {
-      if (selectedFileIndex === null) return null;
-      const item = navigableItems[selectedFileIndex + delta];
-      return item ? { path: item.file.path, status: item.file.status } : null;
-    },
-    [navigableItems, selectedFileIndex]
-  );
 
   const selectedBaseBranchIndex = useMemo(() => {
     if (!selectedBaseBranchFile || !sortedBaseBranchFiles) return null;
@@ -428,24 +441,107 @@ export function ReviewHubContent({
     if (selectedBaseBranchIndex !== null) lastBaseBranchIndexRef.current = selectedBaseBranchIndex;
   }, [selectedBaseBranchIndex]);
 
-  const navigateBaseBranchFile = useCallback(
-    (delta: -1 | 1) => {
-      if (!sortedBaseBranchFiles || sortedBaseBranchFiles.length === 0) return;
-      const current = Math.min(
-        selectedBaseBranchIndex ?? lastBaseBranchIndexRef.current,
-        sortedBaseBranchFiles.length - 1
-      );
-      const next = Math.min(Math.max(current + delta, 0), sortedBaseBranchFiles.length - 1);
-      const file = sortedBaseBranchFiles[next];
-      if (file) setSelectedBaseBranchFile(file);
-    },
-    [sortedBaseBranchFiles, selectedBaseBranchIndex]
-  );
-
   const mainBranch = useWorktreeStore(
     (state) =>
       Array.from(state.worktrees.values()).find((wt) => wt.isMainWorktree)?.branch ?? "main"
   );
+
+  // Both change sets are rebuilt on every poll, so the open effects below read
+  // them through this ref instead of depending on them — otherwise a quiet poll
+  // would retrigger the open. Seeded at mount and resynced ahead of those
+  // effects (effects in one commit run in declaration order); the panel's own
+  // copy is kept current by the sync effect further down.
+  const changeSetsRef = useRef({
+    workingTree: workingTreeChangeSet,
+    baseBranch: baseBranchChangeSet,
+  });
+  useEffect(() => {
+    changeSetsRef.current = { workingTree: workingTreeChangeSet, baseBranch: baseBranchChangeSet };
+  }, [workingTreeChangeSet, baseBranchChangeSet]);
+
+  // Open (or retarget) the working-tree diff panel as the hub's selection moves.
+  // Status follows the LIVE entry, not the open-time snapshot: a file that is
+  // staged or committed under the open panel must be re-fetched under its
+  // current status or the diff renders in the wrong mode.
+  const liveWorkingTreeItem =
+    selectedFileIndex !== null ? navigableItems[selectedFileIndex] : undefined;
+  const liveWorkingTreeStatus = liveWorkingTreeItem?.file.status ?? selectedFile?.status;
+  // Section-scoped, matching `workingTreeChangeSet`: it is the only thing that
+  // separates the staged and unstaged rows of a partially staged file, which
+  // otherwise share both path and status.
+  const liveWorkingTreeViewedKey = liveWorkingTreeItem
+    ? `${liveWorkingTreeItem.section}:${liveWorkingTreeItem.file.path}`
+    : selectedFile
+      ? `${selectedFile.section}:${selectedFile.path}`
+      : undefined;
+  useEffect(() => {
+    if (!selectedFile || !liveWorkingTreeStatus) return;
+    const store = usePanelDialogStore.getState();
+    if (diffPanelId) {
+      usePanelStore
+        .getState()
+        .setDiffPanelFile(
+          diffPanelId,
+          selectedFile.path,
+          liveWorkingTreeStatus,
+          liveWorkingTreeViewedKey
+        );
+      return;
+    }
+    void openDiffDialog(store, {
+      kind: "diff",
+      filePath: selectedFile.path,
+      fileStatus: liveWorkingTreeStatus,
+      diffSource: "working-tree",
+      changeSet: changeSetsRef.current.workingTree,
+      title: basename(selectedFile.path),
+      ...(liveWorkingTreeViewedKey && { viewedKey: liveWorkingTreeViewedKey }),
+      ...(worktreeId && { worktreeId }),
+    })
+      // A refused or superseded open resolves null. Drop the selection with it,
+      // or this effect sees "selection, no panel" and retries forever.
+      .then((newPanelId) => (newPanelId ? setDiffPanelId(newPanelId) : setSelectedFile(null)));
+  }, [
+    selectedFile,
+    liveWorkingTreeStatus,
+    liveWorkingTreeViewedKey,
+    diffPanelId,
+    worktreeId,
+    openDiffDialog,
+  ]);
+
+  useEffect(() => {
+    if (!selectedBaseBranchFile) return;
+    const store = usePanelDialogStore.getState();
+    const viewedKey = `base:${selectedBaseBranchFile.path}`;
+    if (diffPanelId) {
+      usePanelStore
+        .getState()
+        .setDiffPanelFile(diffPanelId, selectedBaseBranchFile.path, "modified", viewedKey);
+      return;
+    }
+    void openDiffDialog(store, {
+      kind: "diff",
+      filePath: selectedBaseBranchFile.path,
+      fileStatus: "modified",
+      diffSource: "base-branch",
+      baseBranch: mainBranch,
+      changeSet: changeSetsRef.current.baseBranch,
+      title: basename(selectedBaseBranchFile.path),
+      viewedKey,
+      ...(worktreeId && { worktreeId }),
+    }).then((newPanelId) =>
+      newPanelId ? setDiffPanelId(newPanelId) : setSelectedBaseBranchFile(null)
+    );
+  }, [selectedBaseBranchFile, diffPanelId, worktreeId, mainBranch, openDiffDialog]);
+
+  // Keep the open panel's change set in step with the live poll. The store
+  // bails on a value-equal set, so a quiet poll costs nothing.
+  useEffect(() => {
+    if (!diffPanelId) return;
+    const changeSet = selectedBaseBranchFile ? baseBranchChangeSet : workingTreeChangeSet;
+    if (changeSet) usePanelStore.getState().setDiffPanelChangeSet(diffPanelId, changeSet);
+  }, [diffPanelId, selectedBaseBranchFile, baseBranchChangeSet, workingTreeChangeSet]);
 
   const worktreePR = useWorktreeStore(
     useShallow((state) => {
@@ -1321,12 +1417,16 @@ export function ReviewHubContent({
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-divider shrink-0">
           <div className="flex items-center gap-2 min-w-0">
-            <h2
-              id="review-hub-title"
-              className="text-daintree-text font-semibold text-sm tracking-wide shrink-0"
-            >
-              Review & Commit
-            </h2>
+            {/* The dialog host already draws the title in AppDialog.Header —
+                drawing it again would stack two "Review & Commit" headings. */}
+            {!isDialog && (
+              <h2
+                id="review-hub-title"
+                className="text-daintree-text font-semibold text-sm tracking-wide shrink-0"
+              >
+                Review & Commit
+              </h2>
+            )}
             {status?.currentBranch && (
               <TruncatedTooltip content={status.currentBranch}>
                 <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-tint/[0.07] border border-tint/[0.08] text-[11px] text-daintree-text/60 font-mono truncate max-w-[200px]">
@@ -1407,18 +1507,22 @@ export function ReviewHubContent({
                 />
               </button>
             )}
-            <button
-              onClick={onClose}
-              className={cn(
-                "p-1.5 rounded transition-colors",
-                "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.06]",
-                "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
-              )}
-              aria-label="Close"
-              data-testid="review-hub-close"
-            >
-              <X className="w-4 h-4" />
-            </button>
+            {/* Same reason as the title: AppDialog.Header supplies the close
+                control at this location. */}
+            {!isDialog && (
+              <button
+                onClick={onClose}
+                className={cn(
+                  "p-1.5 rounded transition-colors",
+                  "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.06]",
+                  "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
+                )}
+                aria-label="Close"
+                data-testid="review-hub-close"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
           </div>
         </div>
 
@@ -1780,55 +1884,6 @@ export function ReviewHubContent({
             />
           )}
       </div>
-
-      {/* File diff modal — working-tree mode */}
-      {mountFileDiffModal && (
-        <Suspense fallback={null}>
-          <LazyFileDiffModal
-            isOpen={selectedFile !== null}
-            filePath={selectedFile?.path ?? ""}
-            // Status follows the LIVE entry — a file whose status flips under
-            // the open modal (stage/unstage, agent commit) must be re-fetched
-            // under its current status, not the open-time snapshot.
-            status={
-              (selectedFileIndex !== null
-                ? navigableItems[selectedFileIndex]?.file.status
-                : undefined) ??
-              selectedFile?.status ??
-              "modified"
-            }
-            worktreePath={worktreePath}
-            onClose={() => setSelectedFile(null)}
-            restoreFocusTo={diffTriggerRef}
-            currentFileIndex={selectedFileIndex ?? undefined}
-            totalFileCount={navigableItems.length}
-            onNavigateFile={navigateWorkingTreeFile}
-            getAdjacentFile={getAdjacentWorkingTreeFile}
-            changeSet={workingTreeChangeSet}
-            onSelectFile={selectWorkingTreeFileAt}
-          />
-        </Suspense>
-      )}
-
-      {/* File diff modal — base-branch mode */}
-      {mountBaseBranchDiffModal && (
-        <Suspense fallback={null}>
-          <LazyBaseBranchDiffModal
-            isOpen={selectedBaseBranchFile !== null}
-            filePath={selectedBaseBranchFile?.path ?? ""}
-            worktreePath={worktreePath}
-            mainBranch={mainBranch}
-            currentBranch={status?.currentBranch ?? "HEAD"}
-            onClose={() => setSelectedBaseBranchFile(null)}
-            restoreFocusTo={diffTriggerRef}
-            currentFileIndex={selectedBaseBranchIndex ?? undefined}
-            totalFileCount={sortedBaseBranchFiles?.length ?? 0}
-            onNavigateFile={navigateBaseBranchFile}
-            changeSet={baseBranchChangeSet}
-            onSelectFile={selectBaseBranchFileAt}
-          />
-        </Suspense>
-      )}
 
       {pushError?.leaseSha && pushError.branchName && (
         <ForcePushConfirmDialog

@@ -1,7 +1,7 @@
 {
   "name": "daintree",
   "productName": "Daintree",
-  "version": "0.27.0",
+  "version": "0.28.0",
   "description": "Daintree IDE - An Electron-based development environment",
   "license": "Apache-2.0",
   "sideEffects": [
@@ -159,7 +159,7 @@
     "safe-stable-stringify": "^2.5.0",
     "smol-toml": "^1.6.1",
     "win-job-object": "file:electron/native/win-job-object",
-    "yauzl": "^2.10.0"
+    "yauzl": "^3.4.0"
   },
   "optionalDependencies": {
     "ffmpeg-static": "^5.2.0"
@@ -235,7 +235,7 @@
     "@types/stopword": "^2.0.3",
     "@types/trusted-types": "^2.0.7",
     "@types/ws": "^8.18.1",
-    "@types/yauzl": "^2.10.3",
+    "@types/yauzl": "^3.4.0",
     "@uiw/codemirror-themes": "^4.25.8",
     "@uiw/react-codemirror": "^4.25.8",
     "@vitejs/plugin-react": "^6.0.0",
@@ -258,7 +258,7 @@
     "culori": "^4.0.2",
     "drizzle-kit": "^0.31.10",
     "drizzle-orm": "^0.45.1",
-    "electron": "^42.4.0",
+    "electron": "^42.7.0",
     "electron-builder": "^26.8.1",
     "electron-store": "^11.0.2",
     "electron-updater": "^6.8.3",

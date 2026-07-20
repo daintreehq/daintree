@@ -10,6 +10,7 @@ export function useActiveWorktreeSync() {
   const { worktrees, isInitialized } = useWorktrees();
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
   const selectWorktree = useWorktreeSelectionStore((s) => s.selectWorktree);
+  const deletedWorktrees = useWorktreeSelectionStore((s) => s.deletedWorktrees);
   const currentProject = useProjectStore((s) => s.currentProject);
   const currentScratch = useScratchStore((s) => s.currentScratch);
   const { homeDir } = useHomeDir();
@@ -27,12 +28,18 @@ export function useActiveWorktreeSync() {
   useEffect(() => {
     if (!isInitialized || worktrees.length === 0) return;
 
-    const worktreeExists = activeWorktreeId && worktrees.some((w) => w.id === activeWorktreeId);
+    // A deleted-worktree row (directory gone, terminals surviving) is a valid
+    // active selection — the user clicked it to view its terminals. Only snap
+    // back to main once the id is neither live nor a deleted row (e.g. its
+    // last terminal closed and the row was pruned).
+    const worktreeExists =
+      activeWorktreeId &&
+      (worktrees.some((w) => w.id === activeWorktreeId) || deletedWorktrees.has(activeWorktreeId));
     if (!worktreeExists) {
       const mainWorktree = worktrees.find((w) => w.isMainWorktree) ?? worktrees[0]!;
       selectWorktree(mainWorktree.id);
     }
-  }, [worktrees, activeWorktreeId, isInitialized, selectWorktree]);
+  }, [worktrees, activeWorktreeId, isInitialized, selectWorktree, deletedWorktrees]);
 
   useEffect(() => {
     const projectId = currentProject?.id ?? null;

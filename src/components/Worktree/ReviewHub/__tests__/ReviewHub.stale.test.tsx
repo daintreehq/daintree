@@ -45,18 +45,9 @@ vi.mock("@/utils/debounce", () => ({
   },
 }));
 
-vi.mock("react-dom", async () => {
-  const actual = await vi.importActual<typeof import("react-dom")>("react-dom");
-  return { ...actual, createPortal: (children: ReactNode) => children };
-});
-
 vi.mock("@/hooks", () => ({
-  useOverlayState: vi.fn(),
   useTruncationDetection: vi.fn(() => ({ ref: vi.fn(), isTruncated: false })),
 }));
-
-vi.mock("../../FileDiffModal", () => ({ FileDiffModal: () => null }));
-vi.mock("../BaseBranchDiffModal", () => ({ BaseBranchDiffModal: () => null }));
 
 vi.mock("@/hooks/useWorktreeStore", () => ({
   useWorktreeStore: (selector: (state: { worktrees: Map<string, WorktreeState> }) => unknown) =>
@@ -107,7 +98,7 @@ vi.mock("@/components/ui/tooltip", () => ({
   TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
 
-import { ReviewHub } from "../ReviewHub";
+import { ReviewHubContent } from "../ReviewHubContent";
 import { useUIStore } from "@/store/uiStore";
 
 const WORKTREE_PATH = "/home/user/project";
@@ -217,7 +208,7 @@ describe("ReviewHub stale visual", () => {
   });
 
   it("does not apply surface-stale or aria-busy when no background refresh is in flight", async () => {
-    render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+    render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
     await waitFor(() => screen.getByText("index.ts"));
 
     const scroll = findScrollContainer();
@@ -226,7 +217,7 @@ describe("ReviewHub stale visual", () => {
   });
 
   it("applies surface-stale and aria-busy=true while a background refresh is in flight", async () => {
-    render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+    render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
     await waitFor(() => screen.getByText("index.ts"));
 
     let resolveRefresh!: (value: StagingStatus) => void;
@@ -252,7 +243,7 @@ describe("ReviewHub stale visual", () => {
   });
 
   it("clears surface-stale and aria-busy when the background refresh rejects", async () => {
-    render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+    render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
     await waitFor(() => screen.getByText("index.ts"));
 
     let rejectRefresh!: (reason: unknown) => void;
@@ -284,7 +275,7 @@ describe("ReviewHub stale visual", () => {
   });
 
   it("clears surface-stale and aria-busy after the background refresh resolves", async () => {
-    render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+    render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
     await waitFor(() => screen.getByText("index.ts"));
 
     let resolveRefresh!: (value: StagingStatus) => void;

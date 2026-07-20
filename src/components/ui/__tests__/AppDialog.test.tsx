@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, act } from "@testing-library/react";
+import { render, screen, act, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { AppDialog } from "../AppDialog";
 import { _resetForTests } from "@/lib/escapeStack";
@@ -887,5 +887,178 @@ describe("AppDialog reduced-motion policy", () => {
     const backdrop = screen.getByTestId("test-dialog");
 
     expect(backdrop.style.transitionTimingFunction).not.toBe("");
+  });
+});
+
+describe("AppDialog header composition", () => {
+  beforeEach(() => {
+    mockPrevOpen = false;
+    _resetForTests();
+    // Earlier describes install fake timers and never restore them, so a
+    // whole-file run would otherwise leak them into `waitFor` below.
+    vi.useRealTimers();
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
+  });
+
+  afterEach(() => {
+    _resetForTests();
+  });
+
+  // Queried by accessible name rather than by comparing two nullable
+  // attributes: dropping the id, or the heading's text, has to fail these.
+  it("labels the dialog by its title heading", () => {
+    renderDialog({
+      children: (
+        <AppDialog.Header>
+          <AppDialog.Title>Named</AppDialog.Title>
+        </AppDialog.Header>
+      ),
+    });
+
+    expect(screen.getByRole("dialog", { name: "Named" })).toBe(screen.getByTestId("test-dialog"));
+  });
+
+  it("keeps the title wired when rendered as an h3", () => {
+    renderDialog({
+      children: (
+        <AppDialog.Header>
+          <AppDialog.Title as="h3">Section</AppDialog.Title>
+        </AppDialog.Header>
+      ),
+    });
+
+    // Settings renders its section title as an h3; the dialog must still
+    // resolve its accessible name to that heading.
+    expect(screen.getByRole("heading", { level: 3 }).textContent).toBe("Section");
+    expect(screen.getByRole("dialog", { name: "Section" })).toBe(screen.getByTestId("test-dialog"));
+  });
+
+  it("labels the dialog from a title mounted outside the header", () => {
+    renderDialog({
+      children: (
+        <AppDialog.Body>
+          <AppDialog.Title>Standalone</AppDialog.Title>
+        </AppDialog.Body>
+      ),
+    });
+
+    expect(screen.getByRole("dialog", { name: "Standalone" })).toBe(
+      screen.getByTestId("test-dialog")
+    );
+  });
+
+  it("forwards a header class override to the rendered frame", () => {
+    // CrossWorktreeDiff restyles its header entirely through this prop; the
+    // primitive's own tests would not catch the adapter dropping it.
+    renderDialog({
+      children: (
+        <AppDialog.Header className="px-4 border-border-subtle">
+          <AppDialog.Title>Named</AppDialog.Title>
+        </AppDialog.Header>
+      ),
+    });
+    const header = screen.getByRole("heading").parentElement;
+
+    expect(header?.className).toContain("px-4");
+    expect(header?.className).not.toContain("px-6");
+  });
+
+  it("forwards a title icon and class override", () => {
+    // Nine dialogs pass a leading icon; the file viewers shrink the title.
+    renderDialog({
+      children: (
+        <AppDialog.Header>
+          <AppDialog.Title icon={<span data-testid="icon">*</span>} className="text-sm">
+            Named
+          </AppDialog.Title>
+        </AppDialog.Header>
+      ),
+    });
+    const heading = screen.getByRole("heading");
+
+    expect(screen.queryByTestId("icon")).not.toBeNull();
+    expect(heading.textContent).toBe("*Named");
+    expect(heading.className).toContain("text-sm");
+    expect(heading.className).not.toContain("text-lg");
+  });
+
+  it("defaults the close button label", () => {
+    renderDialog({
+      children: (
+        <AppDialog.Header>
+          <AppDialog.CloseButton />
+        </AppDialog.Header>
+      ),
+    });
+
+    expect(screen.queryByRole("button", { name: "Close dialog" })).not.toBeNull();
+  });
+
+  it("lets a surface name its own close button", () => {
+    renderDialog({
+      children: (
+        <AppDialog.Header>
+          <AppDialog.CloseButton aria-label="Close settings" />
+        </AppDialog.Header>
+      ),
+    });
+
+    expect(screen.queryByRole("button", { name: "Close settings" })).not.toBeNull();
+  });
+
+  it("closes through the dialog's own close handler", () => {
+    const onClose = vi.fn();
+    renderDialog({
+      onClose,
+      children: (
+        <AppDialog.Header>
+          <AppDialog.CloseButton />
+        </AppDialog.Header>
+      ),
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Close dialog" }));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("routes the close button through onBeforeClose", async () => {
+    const onClose = vi.fn();
+    const onBeforeClose = vi.fn().mockResolvedValue(true);
+    render(
+      <>
+        <Dispatcher />
+        <AppDialog isOpen onClose={onClose} onBeforeClose={onBeforeClose} data-testid="test-dialog">
+          <AppDialog.Header>
+            <AppDialog.CloseButton />
+          </AppDialog.Header>
+        </AppDialog>
+      </>
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Close dialog" }));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    expect(onBeforeClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the dialog open when onBeforeClose vetoes", async () => {
+    const onClose = vi.fn();
+    const onBeforeClose = vi.fn().mockResolvedValue(false);
+    render(
+      <>
+        <Dispatcher />
+        <AppDialog isOpen onClose={onClose} onBeforeClose={onBeforeClose} data-testid="test-dialog">
+          <AppDialog.Header>
+            <AppDialog.CloseButton />
+          </AppDialog.Header>
+        </AppDialog>
+      </>
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Close dialog" }));
+
+    await waitFor(() => expect(onBeforeClose).toHaveBeenCalledTimes(1));
+    expect(onClose).not.toHaveBeenCalled();
   });
 });

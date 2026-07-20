@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { reduceMotionSelectors } from "./launcherMotionContract";
 
@@ -44,6 +44,7 @@ vi.mock("@/components/Pulse", () => ({
 }));
 
 import { ContentGridEmptyState } from "../ContentGridEmptyState";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
 const PROJECT_PROPS = {
   hasLaunchTarget: true,
@@ -407,5 +408,40 @@ describe("ContentGridEmptyState — workspace capabilities", () => {
         expect(screen.queryByText("Select a worktree")).toBeNull();
       }
     );
+  });
+
+  describe("an active deleted worktree", () => {
+    beforeEach(() => {
+      useWorktreeSelectionStore.getState().reset();
+      useWorktreeSelectionStore.getState().addDeletedWorktree({
+        id: "ghost-1",
+        title: "feature/gone",
+        path: "/repo-worktrees/gone",
+        deletedAt: 1000,
+        expiresAt: null,
+        pinnedIndex: -1,
+      });
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "ghost-1" });
+    });
+
+    afterEach(() => {
+      useWorktreeSelectionStore.getState().reset();
+    });
+
+    it("names the deleted worktree instead of claiming nothing is selected", () => {
+      render(
+        <ContentGridEmptyState
+          hasLaunchTarget={false}
+          hasProjectContext
+          hasWorktrees
+          isWorktreeInitialized
+          showProjectPulse={false}
+        />
+      );
+
+      expect(screen.getByText("Worktree deleted")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Go to main worktree" })).toBeTruthy();
+      expect(screen.queryByText("Select a worktree")).toBeNull();
+    });
   });
 });

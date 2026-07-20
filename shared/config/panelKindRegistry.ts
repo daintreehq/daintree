@@ -15,6 +15,7 @@ export const BUILT_IN_PANEL_KINDS = [
   "dev-preview",
   "review",
   "file",
+  "diff",
 ] as const;
 
 /** Built-in panel kinds — derived from `BUILT_IN_PANEL_KINDS` */
@@ -252,6 +253,28 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     lazyImportPath: "src/panels/file/FilePane.tsx",
     // Reading surface like review: focus returns to what the user was last
     // reading when the panel leaves the grid.
+    policy: { dockFallbackTarget: "previous-focused" },
+  },
+  diff: {
+    id: "diff",
+    name: "Diff Viewer",
+    iconId: "file-diff",
+    color: PANEL_KIND_BRAND_COLORS.diff,
+    hasPty: false,
+    canRestart: false,
+    canConvert: false,
+    // Not dockable: the dock's chip row has no meaningful compact form for a
+    // diff (review and dev-preview are non-dockable reading surfaces too).
+    usesTerminalUi: false,
+    keepAliveOnProjectSwitch: true,
+    // Opened against a specific file, so there is nothing sensible to spawn
+    // from a bare palette entry — the entry points all carry a file with them.
+    showInPalette: false,
+    searchAliases: ["diff", "changes", "compare", "review"],
+    firstRenderRestore: true,
+    lazyImportPath: "src/panels/diff/DiffPane.tsx",
+    // Reading surface like review and file: focus returns to what the user was
+    // last reading when the panel leaves the grid.
     policy: { dockFallbackTarget: "previous-focused" },
   },
 };

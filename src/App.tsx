@@ -279,8 +279,6 @@ function AppInner() {
     pluginCapabilityConfirmResetKey,
     diagnosticsReviewResetKey,
     terminalInfoResetKey,
-    fileViewerResetKey,
-    diffViewerResetKey,
   } = useModalResetKeys();
 
   const handlePreloadSettings = useCallback(() => {
@@ -577,8 +575,6 @@ function AppInner() {
                 pluginConfirmResetKey={pluginConfirmResetKey}
                 pluginMcpConfirmResetKey={pluginMcpConfirmResetKey}
                 pluginCapabilityConfirmResetKey={pluginCapabilityConfirmResetKey}
-                fileViewerResetKey={fileViewerResetKey}
-                diffViewerResetKey={diffViewerResetKey}
                 panelLimitResetKey={panelLimitResetKey}
                 diagnosticsReviewResetKey={diagnosticsReviewResetKey}
                 gitPushResetKey={gitPushResetKey}

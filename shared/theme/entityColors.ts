@@ -5,6 +5,7 @@ export const PANEL_KIND_BRAND_COLORS = {
   "dev-preview": "var(--theme-category-teal)",
   review: "var(--theme-category-violet)",
   file: "var(--theme-category-amber)",
+  diff: "var(--theme-category-green)",
   plugin: "var(--theme-category-orange)",
 } as const;
 

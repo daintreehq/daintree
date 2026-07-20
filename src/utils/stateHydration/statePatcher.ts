@@ -1,7 +1,13 @@
 import type { PanelKind, AgentState } from "@/types";
 import { coerceAgentState, coerceWaitingReason, type WaitingReason } from "@shared/types/agent";
 import type { BrowserHistory } from "@shared/types/browser";
-import type { FileViewMode, PanelExitBehavior, PanelTitleMode } from "@shared/types/panel";
+import type {
+  FileViewMode,
+  DiffSource,
+  PanelExitBehavior,
+  PanelTitleMode,
+} from "@shared/types/panel";
+import type { GitStatus } from "@shared/types/git";
 import type { AddPanelOptionsBase } from "@shared/types/addPanelOptions";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 import { getAgentConfig, sanitizeAgentEnv } from "@/config/agents";
@@ -50,6 +56,9 @@ export interface AddTerminalArgs extends AddPanelOptionsBase {
   devPreviewScrollPosition?: { url: string; scrollY: number };
   filePath?: string;
   fileViewMode?: FileViewMode;
+  fileStatus?: GitStatus;
+  diffSource?: DiffSource;
+  baseBranch?: string;
   /**
    * Preserved user-initiated focus timestamp from the saved snapshot. The
    * post-hydration focus picker in `useAppHydration` reads this off
@@ -98,6 +107,10 @@ export interface SavedTerminalData {
   markdownFilePath?: string;
   /** Legacy pre-file-panel field name for fileViewMode (untrusted on-disk string). */
   markdownViewMode?: string;
+  /** Untrusted on-disk strings — sanitized at the diff deserializer boundary. */
+  fileStatus?: string;
+  diffSource?: string;
+  baseBranch?: string;
   exitBehavior?: PanelExitBehavior;
   agentSessionId?: string;
   agentLaunchFlags?: string[];
@@ -430,7 +443,8 @@ export function buildArgsForRespawn(
   agentSettings: AgentSettingsData | undefined,
   reconnectTimedOut: boolean,
   clipboardDirectory: string | undefined,
-  projectPresetsByAgent?: Record<string, AgentPreset[]>
+  projectPresetsByAgent?: Record<string, AgentPreset[]>,
+  resolvedAgentBaseCommand?: string
 ): AddTerminalArgs {
   // Migrate legacy on-disk agentId/type to launchAgentId at the read boundary.
   const savedLaunchAgentId =
@@ -462,7 +476,7 @@ export function buildArgsForRespawn(
 
   if (agentId) {
     const agentConfig = getAgentConfig(agentId);
-    const baseCommand = agentConfig?.command || agentId;
+    const baseCommand = resolvedAgentBaseCommand ?? agentConfig?.command ?? agentId;
     const baseEntry = agentSettings?.agents?.[agentId] ?? {};
     const shareClipboardDirectory = baseEntry.shareClipboardDirectory as boolean | undefined;
     const ccrPresets = useCcrPresetsStore.getState().ccrPresetsByAgent[agentId];
@@ -522,7 +536,9 @@ export function buildArgsForRespawn(
       });
 
     if (saved.agentSessionId) {
-      const resumeCmd = buildResumeCommand(agentId, saved.agentSessionId, resumeFlags);
+      const resumeCmd = resolvedAgentBaseCommand
+        ? buildResumeCommand(agentId, saved.agentSessionId, resumeFlags, baseCommand)
+        : buildResumeCommand(agentId, saved.agentSessionId, resumeFlags);
       if (resumeCmd) {
         command = resumeCmd;
       } else if (hasPersistedFlags) {
@@ -542,7 +558,9 @@ export function buildArgsForRespawn(
       // No session ID was captured (graceful-shutdown pattern match missed or
       // timed out). Try the agent's resume-latest fallback before falling
       // through to a fresh launch so the user keeps their prior conversation.
-      const resumeLatestCmd = buildResumeLatestCommand(agentId, resumeFlags);
+      const resumeLatestCmd = resolvedAgentBaseCommand
+        ? buildResumeLatestCommand(agentId, resumeFlags, baseCommand)
+        : buildResumeLatestCommand(agentId, resumeFlags);
       if (resumeLatestCmd) {
         command = resumeLatestCmd;
       } else if (hasPersistedFlags) {

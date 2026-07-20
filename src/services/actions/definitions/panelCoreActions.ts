@@ -155,6 +155,10 @@ export function registerPanelCoreActions(
               p !== undefined &&
               p.kind === kind &&
               p.location !== "trash" &&
+              // Never reuse an ephemeral dialog panel as a grid/dock target —
+              // it is uncounted and unpersisted, so adopting it would leak a
+              // panel the grid can't account for.
+              p.location !== "dialog" &&
               (p.worktreeId ?? undefined) === (targetWorktreeId ?? undefined)
           );
         if (existing) {

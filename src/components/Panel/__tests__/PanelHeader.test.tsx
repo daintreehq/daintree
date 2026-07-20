@@ -4,6 +4,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { PanelHeader } from "../PanelHeader";
 import type { PanelHeaderProps } from "../PanelHeader";
+import { SurfaceHeader } from "@/components/ui/SurfaceHeader";
+import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 
 vi.mock("react-dom", async () => {
@@ -79,10 +81,12 @@ vi.mock("@/store/panelStore", () => {
 });
 
 let mockHasPty = false;
+let mockIsDockable = true;
 
 vi.mock("@shared/config/panelKindRegistry", () => ({
   panelKindCanRestart: () => false,
   panelKindHasPty: () => mockHasPty,
+  panelKindIsDockable: () => mockIsDockable,
   getPanelKindConfig: (kind: string) =>
     kind === "browser"
       ? { id: "browser", name: "Browser", iconId: "globe", color: "#38bdf8" }
@@ -191,6 +195,7 @@ describe("PanelHeader", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockHasPty = false;
+    mockIsDockable = true;
     mockHiddenTabIds = new Set();
     mockStoreState = {
       watchedPanels: new Set<string>(),
@@ -987,6 +992,231 @@ describe("PanelHeader", () => {
 
       rerender(<PanelHeader {...makeProps({ isFleetPreviewed: false })} />);
       expect(header?.hasAttribute("data-fleet-previewed")).toBe(false);
+    });
+  });
+
+  describe("shared surface header frame (#11241)", () => {
+    const overflowTabs = ["t1", "t2", "t3"].map((id, i) => ({
+      id,
+      title: `Tab ${i + 1}`,
+      kind: "terminal" as const,
+      chrome: deriveTerminalChrome(),
+      isActive: i === 0,
+    }));
+
+    // Classes are read off a live SurfaceHeader rather than copied here: this
+    // asserts the consumer/primitive relationship, so an intentional restyle of
+    // the frame follows automatically while a wrong density or a clobbered
+    // frame utility still fails.
+    function frameClassesOf(density: "compact" | "comfortable"): string[] {
+      const { container, unmount } = render(<SurfaceHeader density={density}>x</SurfaceHeader>);
+      const classes = classListOf(rootOf(container));
+      unmount();
+      return classes;
+    }
+
+    // Element, not HTMLElement: className is declared on Element, so the whole
+    // block stays cast-free.
+    function rootOf(container: HTMLElement): Element {
+      const root = container.firstElementChild;
+      if (!root) throw new Error("expected a rendered root element");
+      return root;
+    }
+
+    function classListOf(el: Element): string[] {
+      return el.className.split(/\s+/).filter(Boolean);
+    }
+
+    // Names what this proves: the rendered frame matches the primitive's
+    // compact output. It does not prove the component *delegates* to
+    // SurfaceHeader — a hand-copied div would satisfy it too. Its job is
+    // holding parity once ownership moved.
+    it("matches the shared compact frame", () => {
+      const frame = frameClassesOf("compact");
+      const { container } = render(<PanelHeader {...makeProps({ location: "grid" })} />);
+      const header = classListOf(rootOf(container));
+      for (const cls of frame) {
+        expect(header, `missing shared frame class ${cls}`).toContain(cls);
+      }
+    });
+
+    it("keeps vertical padding off the fixed-height frame", () => {
+      // Compact density is deliberately free of py-* so nothing fights the
+      // fixed height. A subset check alone would still pass if the panel
+      // layered padding back on, so assert the absence directly.
+      const { container } = render(<PanelHeader {...makeProps({ location: "grid" })} />);
+      const verticalPadding = classListOf(rootOf(container)).filter((c) => /^(py|pt|pb)-/.test(c));
+      expect(verticalPadding).toEqual([]);
+    });
+
+    it("adopts compact density rather than the dialog's comfortable frame", () => {
+      const compact = new Set(frameClassesOf("compact"));
+      const comfortableOnly = frameClassesOf("comfortable").filter((c) => !compact.has(c));
+      // Sanity: the two densities must actually differ, else the assertion below
+      // would pass vacuously.
+      expect(comfortableOnly.length).toBeGreaterThan(0);
+
+      const { container } = render(<PanelHeader {...makeProps({ location: "grid" })} />);
+      const header = new Set(classListOf(rootOf(container)));
+      for (const cls of comfortableOnly) {
+        expect(header.has(cls), `leaked comfortable-density class ${cls}`).toBe(false);
+      }
+    });
+
+    it("collapses the maximized height override against the frame height", () => {
+      // The frame supplies a height and the maximized branch overrides it. If
+      // the merge ever stops resolving them, both survive and the taller one
+      // silently wins by source order instead of by intent.
+      const heightsOf = (el: Element) => classListOf(el).filter((c) => /^h-/.test(c));
+
+      const { container: normal } = render(<PanelHeader {...makeProps({ location: "grid" })} />);
+      const { container: maximized } = render(
+        <PanelHeader {...makeProps({ location: "grid", isMaximized: true })} />
+      );
+      const normalHeight = heightsOf(rootOf(normal));
+      const maximizedHeight = heightsOf(rootOf(maximized));
+
+      expect(normalHeight).toHaveLength(1);
+      expect(maximizedHeight).toHaveLength(1);
+      expect(maximizedHeight[0]).not.toBe(normalHeight[0]);
+    });
+
+    it("collapses the maximized border colour against the frame divider", () => {
+      // Colour only: border-b/-2/-dashed and friends are width/style utilities,
+      // and counting them would fail this test for an unrelated border change.
+      const borderColorsOf = (el: Element) =>
+        classListOf(el).filter(
+          (c) =>
+            c.startsWith("border-") &&
+            !/^border-[trblxy]$/.test(c) &&
+            !/^border-(\d+|solid|dashed|dotted|double|hidden|none)$/.test(c) &&
+            !/^border-[trblxy]-/.test(c)
+        );
+
+      const { container: normal } = render(<PanelHeader {...makeProps({ location: "grid" })} />);
+      const { container: maximized } = render(
+        <PanelHeader {...makeProps({ location: "grid", isMaximized: true })} />
+      );
+      const normalBorder = borderColorsOf(rootOf(normal));
+      const maximizedBorder = borderColorsOf(rootOf(maximized));
+
+      expect(normalBorder).toHaveLength(1);
+      expect(maximizedBorder).toHaveLength(1);
+      expect(maximizedBorder[0]).not.toBe(normalBorder[0]);
+    });
+
+    it("keeps every inline control from arming the panel drag (#6928 guard)", () => {
+      // The whole header is the drag surface, so every inline control opts out
+      // via a pointerdown guard. Losing one makes that button intermittently
+      // register as a drag pickup instead of a click.
+      //
+      // Each scenario names the controls it must surface and looks them up with
+      // getBy* — a control that stops rendering fails loudly here instead of
+      // being silently skipped. The union is asserted against the full
+      // inventory below so a newly guarded control can't slip in uncovered.
+      const scenarios: {
+        props: Partial<PanelHeaderProps>;
+        setup?: () => void;
+        controls: Record<string, () => HTMLElement>;
+      }[] = [
+        {
+          props: { location: "grid", onToggleMaximize: vi.fn(), onMinimize: vi.fn() },
+          controls: {
+            "overflow menu": () => screen.getByLabelText("More panel actions"),
+            "move to dock": () => screen.getByTestId("panel-move-to-dock"),
+            maximize: () => screen.getByLabelText("Maximize"),
+            close: () => screen.getByTestId("panel-close"),
+          },
+        },
+        {
+          props: { location: "grid", isMaximized: true, onToggleMaximize: vi.fn() },
+          controls: { restore: () => screen.getByLabelText("Restore grid view") },
+        },
+        {
+          props: { location: "dock", onRestore: vi.fn(), showRestoreControl: true },
+          controls: { "move to grid": () => screen.getByTestId("panel-move-to-grid") },
+        },
+        {
+          props: { location: "grid", onAddTab: vi.fn() },
+          controls: {
+            "duplicate as tab": () => screen.getByLabelText("Duplicate panel as new tab"),
+          },
+        },
+        {
+          props: { location: "grid", tabs: overflowTabs, onTabClick: vi.fn() },
+          setup: () => {
+            mockHiddenTabIds = new Set(["t2"]);
+          },
+          controls: { "tabs overflow": () => screen.getByTestId("panel-tabs-overflow") },
+        },
+        {
+          props: { location: "grid" },
+          setup: () => {
+            useFleetFailureStore.getState().recordFailure("x", ["test-panel"]);
+          },
+          controls: { "fleet failure dot": () => screen.getByTestId("panel-fleet-failure-dot") },
+        },
+      ];
+
+      const dragPointerDown = vi.fn();
+      mockDragHandle = {
+        listeners: { onPointerDown: dragPointerDown },
+        setActivatorNodeRef: vi.fn(),
+      };
+      const covered = new Set<string>();
+      try {
+        for (const scenario of scenarios) {
+          scenario.setup?.();
+          const { unmount } = render(<PanelHeader {...makeProps(scenario.props)} />);
+          for (const [name, find] of Object.entries(scenario.controls)) {
+            const el = find();
+            covered.add(name);
+            dragPointerDown.mockClear();
+            fireEvent.pointerDown(el);
+            expect(dragPointerDown, `${name} armed the panel drag`).not.toHaveBeenCalled();
+          }
+          unmount();
+          mockHiddenTabIds = new Set();
+          useFleetFailureStore.getState().clear();
+        }
+      } finally {
+        mockDragHandle = null;
+        mockHiddenTabIds = new Set();
+        useFleetFailureStore.getState().clear();
+      }
+
+      // Pins coverage to the guard inventory in PanelHeader.tsx: adding a
+      // guarded control without covering it here fails on the mismatch.
+      expect([...covered].sort()).toEqual(
+        [
+          "close",
+          "duplicate as tab",
+          "fleet failure dot",
+          "maximize",
+          "move to dock",
+          "move to grid",
+          "overflow menu",
+          "restore",
+          "tabs overflow",
+        ].sort()
+      );
+    });
+
+    it("still forwards pointerdown on the header itself to the drag listener", () => {
+      // Counterpart to the guard test: proves the exclusions above are scoped to
+      // the controls and the frame swap did not sever the root drag wiring.
+      const dragPointerDown = vi.fn();
+      mockDragHandle = {
+        listeners: { onPointerDown: dragPointerDown },
+        setActivatorNodeRef: vi.fn(),
+      };
+      try {
+        const { container } = render(<PanelHeader {...makeProps({ location: "grid" })} />);
+        fireEvent.pointerDown(rootOf(container));
+        expect(dragPointerDown).toHaveBeenCalledTimes(1);
+      } finally {
+        mockDragHandle = null;
+      }
     });
   });
 });

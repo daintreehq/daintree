@@ -1,8 +1,10 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
 import zlib from "zlib";
+import { Readable } from "stream";
+import yauzl from "yauzl";
 import { packPluginArchive, extractPluginArchive, MAX_DNTR_ENTRIES } from "../PluginArchive.js";
 
 let tmpDir: string;
@@ -12,6 +14,10 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  // Restore any prototype spy even if a test bailed before its own `finally`
+  // ran (e.g. a Vitest timeout), so the mock can't leak into a sibling test on
+  // a reused worker.
+  vi.restoreAllMocks();
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -36,7 +42,9 @@ async function createFixture(baseDir: string, files: Record<string, string>): Pr
 // (`deflateOf` raw buffer) so a genuine, internally-consistent zip-bomb can be
 // built — large uncompressedSize, tiny compressed payload, valid CRC — that
 // yauzl accepts and only the installer's own size guard rejects.
-type RawEntry = { name: string; content: string } | { name: string; deflateOf: Buffer };
+type RawEntry =
+  | { name: string; content: string }
+  | { name: string; deflateOf: Buffer; declaredSize?: number };
 
 function buildRawZip(entries: RawEntry[]): Buffer {
   const chunks: Buffer[] = [];
@@ -51,7 +59,9 @@ function buildRawZip(entries: RawEntry[]): Buffer {
     if ("deflateOf" in e) {
       method = 8;
       stored = zlib.deflateRawSync(e.deflateOf);
-      uncompressedSize = e.deflateOf.length;
+      // `declaredSize` forges a header that lies about the uncompressed length,
+      // so a test can prove yauzl's `validateEntrySizes` rejects a mismatch.
+      uncompressedSize = e.declaredSize ?? e.deflateOf.length;
       crc = zlib.crc32(e.deflateOf) >>> 0;
     } else {
       method = 0;
@@ -140,19 +150,17 @@ describe("extractPluginArchive", () => {
     expect(escaped).toBe(false);
   });
 
-  it("rejects a backslash entry name", async () => {
+  it("rejects a backslash entry name even without a traversal segment", async () => {
+    // A benign backslash name (no `..`) must still be rejected: the `.dntr`
+    // contract is POSIX forward slashes, enforced by yauzl's `strictFileNames`.
+    // Without it, yauzl would silently rewrite `dist\index.js` to `dist/index.js`
+    // and extract it, so this proves the guard trips on the backslash itself.
     const archivePath = path.join(tmpDir, "backslash.dntr");
-    await fs.writeFile(
-      archivePath,
-      buildRawZip([
-        { name: "plugin.json", content: JSON.stringify(validManifest()) },
-        { name: "..\\escape.js", content: "pwned" },
-      ])
-    );
+    await fs.writeFile(archivePath, buildRawZip([{ name: "dist\\index.js", content: "x" }]));
     const dest = path.join(tmpDir, "extracted-bs");
     await fs.mkdir(dest, { recursive: true });
 
-    await expect(extractPluginArchive(archivePath, dest)).rejects.toThrow();
+    await expect(extractPluginArchive(archivePath, dest)).rejects.toThrow(/invalid characters/i);
   });
 
   it("rejects an absolute entry name", async () => {
@@ -251,5 +259,138 @@ describe("extractPluginArchive", () => {
     await fs.mkdir(dest, { recursive: true });
 
     await expect(extractPluginArchive(archivePath, dest)).rejects.toThrow(/exceeds/);
+  });
+
+  // Regression for #11227: a read stream that stops emitting without ever
+  // ending or erroring used to hang extraction forever (the caller's install
+  // lock and temp dir stayed held until the app quit). The inactivity guard now
+  // aborts and rejects instead. We can't reproduce the upstream Node/stream
+  // timing bug deterministically, so we inject a stalled stream via a
+  // prototype spy and drive the guard with a short override — no fake timers,
+  // so the real pipeline/stream machinery runs unmodified.
+  it("aborts and rejects when an entry stream stalls, without advancing to the next entry", async () => {
+    const archivePath = path.join(tmpDir, "stall.dntr");
+    await fs.writeFile(
+      archivePath,
+      buildRawZip([
+        { name: "dist/first.js", content: "a" },
+        { name: "dist/second.js", content: "b" },
+      ])
+    );
+    const dest = path.join(tmpDir, "extracted-stall");
+    await fs.mkdir(dest, { recursive: true });
+
+    const stalledStreams: Readable[] = [];
+    const openReadStreamSpy = vi
+      .spyOn(yauzl.ZipFile.prototype, "openReadStream")
+      .mockImplementation((_entry, callback) => {
+        const stalled = new Readable({ read() {} });
+        stalledStreams.push(stalled);
+        // Emit one chunk, then go silent forever — never end, never error. The
+        // single chunk also exercises the timer's reset-on-data path before the
+        // inactivity window elapses.
+        stalled.push(Buffer.from("partial"));
+        callback(null, stalled);
+      });
+
+    try {
+      await expect(
+        extractPluginArchive(archivePath, dest, { inactivityTimeoutMs: 50 })
+      ).rejects.toThrow(/dist\/first\.js.*stalled/);
+
+      // The abort reached `pipeline`, which destroyed the source stream...
+      expect(stalledStreams[0].destroyed).toBe(true);
+      // ...and extraction never advanced to the second entry (a single
+      // openReadStream call means readEntry() was never issued after the stall).
+      expect(openReadStreamSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      openReadStreamSpy.mockRestore();
+    }
+  });
+
+  it("extracts a real entry larger than the 64KiB stream watermark", async () => {
+    // The original #11227 stall only manifested on an entry big enough to cross
+    // the default 64KiB highWaterMark and exert backpressure. A tiny-file happy
+    // path never exercises that; this drives a real >64KiB entry through the
+    // yauzl 3.x + pipeline path and checks the bytes round-trip exactly.
+    const big = Buffer.alloc(100 * 1024);
+    for (let i = 0; i < big.length; i++) {
+      // Knuth multiplicative hash — a deterministic, varied fill. What matters
+      // for the repro is the 100KB *decompressed* size: it crosses the write
+      // stream's 64KiB highWaterMark and drives the backpressure the stall
+      // depended on. The bytes are also compared exactly on the way out.
+      big[i] = (i * 2654435761) >>> 24;
+    }
+    const archivePath = path.join(tmpDir, "big.dntr");
+    await fs.writeFile(archivePath, buildRawZip([{ name: "dist/big.bin", deflateOf: big }]));
+    const dest = path.join(tmpDir, "extracted-big");
+    await fs.mkdir(dest, { recursive: true });
+
+    await extractPluginArchive(archivePath, dest);
+
+    const written = await fs.readFile(path.join(dest, "dist/big.bin"));
+    expect(written.equals(big)).toBe(true);
+  });
+
+  it("rejects an entry whose data exceeds its declared uncompressed size", async () => {
+    // Declares 1 byte but the payload inflates to 200KB. The cumulative-size
+    // zip-bomb guard trusts the declared size, so its defense rests on yauzl's
+    // `validateEntrySizes` rejecting the mismatch mid-stream — this proves that
+    // option is active after the yauzl 2->3 bump.
+    const archivePath = path.join(tmpDir, "sizelie.dntr");
+    await fs.writeFile(
+      archivePath,
+      buildRawZip([
+        { name: "dist/lie.bin", deflateOf: Buffer.alloc(200 * 1024, 0x41), declaredSize: 1 },
+      ])
+    );
+    const dest = path.join(tmpDir, "extracted-sizelie");
+    await fs.mkdir(dest, { recursive: true });
+
+    await expect(extractPluginArchive(archivePath, dest)).rejects.toThrow(/too many bytes/i);
+  });
+
+  it("resets the inactivity timer on progress so a slow-but-live stream completes", async () => {
+    // A stream that keeps delivering data, just slower than the inactivity
+    // window would allow from a standing start, must NOT be aborted — the timer
+    // has to reset on every chunk. Total activity (10 * 40ms = 400ms) exceeds
+    // the 300ms window, so without a reset the timer would fire mid-stream;
+    // each 40ms gap sits well under 300ms, giving a wide margin against CI
+    // scheduling jitter.
+    const archivePath = path.join(tmpDir, "slow.dntr");
+    await fs.writeFile(archivePath, buildRawZip([{ name: "dist/slow.js", content: "unused" }]));
+    const dest = path.join(tmpDir, "extracted-slow");
+    await fs.mkdir(dest, { recursive: true });
+
+    const CHUNKS = 10;
+    const GAP_MS = 40;
+    const payload = Buffer.from("x".repeat(1024));
+    const openReadStreamSpy = vi
+      .spyOn(yauzl.ZipFile.prototype, "openReadStream")
+      .mockImplementation((_entry, callback) => {
+        const src = new Readable({ read() {} });
+        let n = 0;
+        const step = () => {
+          if (n < CHUNKS) {
+            src.push(payload);
+            n += 1;
+            setTimeout(step, GAP_MS);
+          } else {
+            src.push(null);
+          }
+        };
+        setTimeout(step, GAP_MS);
+        callback(null, src);
+      });
+
+    try {
+      await expect(
+        extractPluginArchive(archivePath, dest, { inactivityTimeoutMs: 300 })
+      ).resolves.toBeUndefined();
+      const written = await fs.readFile(path.join(dest, "dist/slow.js"));
+      expect(written.length).toBe(CHUNKS * payload.length);
+    } finally {
+      openReadStreamSpy.mockRestore();
+    }
   });
 });

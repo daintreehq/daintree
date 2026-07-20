@@ -182,105 +182,20 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
     expect(store.getState().worktrees.get("wt-1")?.prCiStatus).toBeUndefined();
   });
 
-  it("updates the GitHub PR cache so the dropdown stays in sync", async () => {
+  it("leaves the dropdown's PR cache untouched", async () => {
+    // This handler used to one-way-patch the renderer's forge cache to keep the
+    // sidebar badge and the dropdown row aligned. It couldn't: the patch never
+    // reached main's forgePRListCache, so the next revalidate restored the
+    // coarse rollup and the surfaces disagreed again. Both now derive CI status
+    // from one place — listPRsImpl enriches through the same
+    // getCIStatusesImpl/prRequiredStatusCache this event's status comes from —
+    // so the handler owns the worktree store only (#11251). Reinstating a
+    // cache write here would rebuild the drift this test guards against.
     const store = await renderProvider();
     act(() => {
       store.getState().applyUpdate(makeWorktree("wt-1"), nextV());
     });
 
-    const key = buildCacheKey("/repo/proj", "pr", "open", "created");
-    setCache(key, {
-      items: [makePR(42, "pending"), makePR(43, "success")],
-      nextCursor: null,
-      hasMore: false,
-      timestamp: 1,
-    });
-    const genBefore = getGeneration(key);
-
-    act(() => {
-      emit("pr-detected", {
-        type: "pr-detected",
-        worktreeId: "wt-1",
-        prNumber: 42,
-        prUrl: "https://example.test/pr/42",
-        prState: "open",
-        prCiStatus: "failure",
-      });
-    });
-
-    const entry = getCache(key);
-    const pr42 = entry?.items.find((it) => (it as PR).number === 42) as PR;
-    const pr43 = entry?.items.find((it) => (it as PR).number === 43) as PR;
-    expect(pr42.ciStatus).toBe("failure");
-    expect(pr43.ciStatus).toBe("success");
-    expect(getGeneration(key)).toBe(genBefore + 1);
-  });
-
-  it("does not bump the cache generation when the CI status is unchanged", async () => {
-    const store = await renderProvider();
-    act(() => {
-      store.getState().applyUpdate(makeWorktree("wt-1"), nextV());
-    });
-
-    const key = buildCacheKey("/repo/proj", "pr", "open", "created");
-    setCache(key, {
-      items: [makePR(42, "success")],
-      nextCursor: null,
-      hasMore: false,
-      timestamp: 1,
-    });
-    const genBefore = getGeneration(key);
-
-    act(() => {
-      emit("pr-detected", {
-        type: "pr-detected",
-        worktreeId: "wt-1",
-        prNumber: 42,
-        prUrl: "https://example.test/pr/42",
-        prState: "open",
-        prCiStatus: "success",
-      });
-    });
-
-    expect(getGeneration(key)).toBe(genBefore);
-  });
-
-  it("clears the cached ciStatus when prCiStatus is undefined (full-replace)", async () => {
-    const store = await renderProvider();
-    act(() => {
-      store.getState().applyUpdate(makeWorktree("wt-1"), nextV());
-    });
-
-    const key = buildCacheKey("/repo/proj", "pr", "open", "created");
-    setCache(key, {
-      items: [makePR(42, "success")],
-      nextCursor: null,
-      hasMore: false,
-      timestamp: 1,
-    });
-    const genBefore = getGeneration(key);
-
-    act(() => {
-      emit("pr-detected", {
-        type: "pr-detected",
-        worktreeId: "wt-1",
-        prNumber: 42,
-        prUrl: "https://example.test/pr/42",
-        prState: "open",
-      });
-    });
-
-    expect((getCache(key)?.items[0] as PR).ciStatus).toBeUndefined();
-    expect(getGeneration(key)).toBe(genBefore + 1);
-  });
-
-  it("skips the cache mutation when there is no current project", async () => {
-    const store = await renderProvider();
-    act(() => {
-      store.getState().applyUpdate(makeWorktree("wt-1"), nextV());
-    });
-
-    setCurrentProject(null);
     const key = buildCacheKey("/repo/proj", "pr", "open", "created");
     setCache(key, {
       items: [makePR(42, "pending")],
@@ -296,35 +211,39 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
         worktreeId: "wt-1",
         prNumber: 42,
         prUrl: "https://example.test/pr/42",
-        prState: "open",
+        prState: "closed",
         prCiStatus: "failure",
       });
     });
 
+    // The worktree store still takes the update...
+    expect(store.getState().worktrees.get("wt-1")?.prCiStatus).toBe("failure");
+    // ...while the cached row keeps both its CI status and its slot. A stale
+    // row is corrected by the dropdown's own revalidate, not from here.
     expect((getCache(key)?.items[0] as PR).ciStatus).toBe("pending");
+    expect(getCache(key)?.items).toHaveLength(1);
     expect(getGeneration(key)).toBe(genBefore);
   });
 
-  it("targets the cache slot for the current project, not a sibling", async () => {
+  it("leaves the cache untouched when only the CI status changes", async () => {
+    // The state-change case above would still pass against a narrower
+    // reintroduction that patched CI only when the row's state still matched
+    // the event. This covers that branch: same state, different CI, and the
+    // cached row must still be untouched.
     const store = await renderProvider();
     act(() => {
       store.getState().applyUpdate(makeWorktree("wt-1"), nextV());
     });
 
-    const sameProj = buildCacheKey("/repo/proj", "pr", "open", "created");
-    const otherProj = buildCacheKey("/repo/other", "pr", "open", "created");
-    setCache(sameProj, {
-      items: [makePR(42, "pending")],
+    const key = buildCacheKey("/repo/proj", "pr", "open", "created");
+    const cachedRow = makePR(42, "pending");
+    setCache(key, {
+      items: [cachedRow],
       nextCursor: null,
       hasMore: false,
       timestamp: 1,
     });
-    setCache(otherProj, {
-      items: [makePR(42, "pending")],
-      nextCursor: null,
-      hasMore: false,
-      timestamp: 1,
-    });
+    const genBefore = getGeneration(key);
 
     act(() => {
       emit("pr-detected", {
@@ -333,26 +252,19 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
         prNumber: 42,
         prUrl: "https://example.test/pr/42",
         prState: "open",
-        prCiStatus: "success",
+        prCiStatus: "failure",
       });
     });
 
-    expect((getCache(sameProj)?.items[0] as PR).ciStatus).toBe("success");
-    expect((getCache(otherProj)?.items[0] as PR).ciStatus).toBe("pending");
+    expect(store.getState().worktrees.get("wt-1")?.prCiStatus).toBe("failure");
+    expect(getCache(key)?.items[0]).toBe(cachedRow);
+    expect(getGeneration(key)).toBe(genBefore);
   });
 
   it("applies last-write-wins across rapid successive events for the same PR", async () => {
     const store = await renderProvider();
     act(() => {
       store.getState().applyUpdate(makeWorktree("wt-1"), nextV());
-    });
-
-    const key = buildCacheKey("/repo/proj", "pr", "open", "created");
-    setCache(key, {
-      items: [makePR(42, "pending")],
-      nextCursor: null,
-      hasMore: false,
-      timestamp: 1,
     });
 
     act(() => {
@@ -369,7 +281,6 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
     });
 
     expect(store.getState().worktrees.get("wt-1")?.prCiStatus).toBe("success");
-    expect((getCache(key)?.items[0] as PR).ciStatus).toBe("success");
   });
 
   it("does nothing when the worktree is not in the store", async () => {
@@ -525,240 +436,6 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
     });
 
     expect(store.getState().worktrees.get("wt-1")?.prCiStatus).toBe("success");
-  });
-
-  it("uses the project path read at event time so closures cannot go stale", async () => {
-    const store = await renderProvider();
-    act(() => {
-      store.getState().applyUpdate(makeWorktree("wt-1"), nextV());
-    });
-
-    // Project switches AFTER the provider mounts; the handler must read the
-    // new path at fire time, not the path captured at mount.
-    setCurrentProject("/repo/proj-new");
-    const newKey = buildCacheKey("/repo/proj-new", "pr", "open", "created");
-    const oldKey = buildCacheKey("/repo/proj", "pr", "open", "created");
-    setCache(newKey, {
-      items: [makePR(42, "pending")],
-      nextCursor: null,
-      hasMore: false,
-      timestamp: 1,
-    });
-    setCache(oldKey, {
-      items: [makePR(42, "pending")],
-      nextCursor: null,
-      hasMore: false,
-      timestamp: 1,
-    });
-
-    act(() => {
-      emit("pr-detected", {
-        type: "pr-detected",
-        worktreeId: "wt-1",
-        prNumber: 42,
-        prUrl: "https://example.test/pr/42",
-        prState: "open",
-        prCiStatus: "success",
-      });
-    });
-
-    expect((getCache(newKey)?.items[0] as PR).ciStatus).toBe("success");
-    expect((getCache(oldKey)?.items[0] as PR).ciStatus).toBe("pending");
-  });
-
-  it("evicts a PR from the 'open' slot once it closes", async () => {
-    const store = await renderProvider();
-    act(() => {
-      store.getState().applyUpdate(makeWorktree("wt-1"), nextV());
-    });
-
-    const key = buildCacheKey("/repo/proj", "pr", "open", "created");
-    setCache(key, {
-      items: [
-        { ...makePR(42, "pending"), state: "open" },
-        { ...makePR(43, "success"), state: "open" },
-      ],
-      nextCursor: null,
-      hasMore: false,
-      timestamp: 1,
-    });
-    const genBefore = getGeneration(key);
-
-    act(() => {
-      emit("pr-detected", {
-        type: "pr-detected",
-        worktreeId: "wt-1",
-        prNumber: 42,
-        prUrl: "https://example.test/pr/42",
-        prState: "closed",
-        prCiStatus: "failure",
-      });
-    });
-
-    const items = getCache(key)?.items as PR[];
-    expect(items.find((it) => it.number === 42)).toBeUndefined();
-    expect(items.find((it) => it.number === 43)).toBeDefined();
-    expect(getGeneration(key)).toBe(genBefore + 1);
-  });
-
-  it("evicts a closed PR from every 'open' sort slot in one event", async () => {
-    const store = await renderProvider();
-    act(() => {
-      store.getState().applyUpdate(makeWorktree("wt-1"), nextV());
-    });
-
-    const createdKey = buildCacheKey("/repo/proj", "pr", "open", "created");
-    const updatedKey = buildCacheKey("/repo/proj", "pr", "open", "updated");
-    for (const key of [createdKey, updatedKey]) {
-      setCache(key, {
-        items: [{ ...makePR(42, "pending"), state: "open" }],
-        nextCursor: null,
-        hasMore: false,
-        timestamp: 1,
-      });
-    }
-    const genCreatedBefore = getGeneration(createdKey);
-    const genUpdatedBefore = getGeneration(updatedKey);
-
-    act(() => {
-      emit("pr-detected", {
-        type: "pr-detected",
-        worktreeId: "wt-1",
-        prNumber: 42,
-        prUrl: "https://example.test/pr/42",
-        prState: "closed",
-        prCiStatus: "failure",
-      });
-    });
-
-    expect((getCache(createdKey)?.items as PR[]).find((it) => it.number === 42)).toBeUndefined();
-    expect((getCache(updatedKey)?.items as PR[]).find((it) => it.number === 42)).toBeUndefined();
-    expect(getGeneration(createdKey)).toBe(genCreatedBefore + 1);
-    expect(getGeneration(updatedKey)).toBe(genUpdatedBefore + 1);
-  });
-
-  it("evicts a PR from the 'open' slot once it merges", async () => {
-    const store = await renderProvider();
-    act(() => {
-      store.getState().applyUpdate(makeWorktree("wt-1"), nextV());
-    });
-
-    const key = buildCacheKey("/repo/proj", "pr", "open", "created");
-    setCache(key, {
-      items: [{ ...makePR(42, "success"), state: "open" }],
-      nextCursor: null,
-      hasMore: false,
-      timestamp: 1,
-    });
-    const genBefore = getGeneration(key);
-
-    act(() => {
-      emit("pr-detected", {
-        type: "pr-detected",
-        worktreeId: "wt-1",
-        prNumber: 42,
-        prUrl: "https://example.test/pr/42",
-        prState: "merged",
-        prCiStatus: "success",
-      });
-    });
-
-    expect((getCache(key)?.items as PR[]).find((it) => it.number === 42)).toBeUndefined();
-    expect(getGeneration(key)).toBe(genBefore + 1);
-  });
-
-  it("evicts a PR from the 'closed' slot once it reopens", async () => {
-    const store = await renderProvider();
-    act(() => {
-      store.getState().applyUpdate(makeWorktree("wt-1"), nextV());
-    });
-
-    const key = buildCacheKey("/repo/proj", "pr", "closed", "created");
-    setCache(key, {
-      items: [{ ...makePR(42, "failure"), state: "closed" }],
-      nextCursor: null,
-      hasMore: false,
-      timestamp: 1,
-    });
-    const genBefore = getGeneration(key);
-
-    act(() => {
-      emit("pr-detected", {
-        type: "pr-detected",
-        worktreeId: "wt-1",
-        prNumber: 42,
-        prUrl: "https://example.test/pr/42",
-        prState: "open",
-        prCiStatus: "pending",
-      });
-    });
-
-    expect((getCache(key)?.items as PR[]).find((it) => it.number === 42)).toBeUndefined();
-    expect(getGeneration(key)).toBe(genBefore + 1);
-  });
-
-  it("keeps the row in a CI-only rollup where the state is unchanged", async () => {
-    const store = await renderProvider();
-    act(() => {
-      store.getState().applyUpdate(makeWorktree("wt-1"), nextV());
-    });
-
-    const key = buildCacheKey("/repo/proj", "pr", "open", "created");
-    setCache(key, {
-      items: [{ ...makePR(42, "pending"), state: "open" }],
-      nextCursor: null,
-      hasMore: false,
-      timestamp: 1,
-    });
-    const genBefore = getGeneration(key);
-
-    act(() => {
-      emit("pr-detected", {
-        type: "pr-detected",
-        worktreeId: "wt-1",
-        prNumber: 42,
-        prUrl: "https://example.test/pr/42",
-        prState: "open",
-        prCiStatus: "success",
-      });
-    });
-
-    const pr42 = (getCache(key)?.items as PR[]).find((it) => it.number === 42);
-    expect(pr42).toBeDefined();
-    expect(pr42?.ciStatus).toBe("success");
-    expect(getGeneration(key)).toBe(genBefore + 1);
-  });
-
-  it("keeps a state-changed PR in the 'all' slot, only patching CI", async () => {
-    const store = await renderProvider();
-    act(() => {
-      store.getState().applyUpdate(makeWorktree("wt-1"), nextV());
-    });
-
-    const key = buildCacheKey("/repo/proj", "pr", "all", "created");
-    setCache(key, {
-      items: [{ ...makePR(42, "pending"), state: "open" }],
-      nextCursor: null,
-      hasMore: false,
-      timestamp: 1,
-    });
-    const genBefore = getGeneration(key);
-
-    act(() => {
-      emit("pr-detected", {
-        type: "pr-detected",
-        worktreeId: "wt-1",
-        prNumber: 42,
-        prUrl: "https://example.test/pr/42",
-        prState: "merged",
-        prCiStatus: "success",
-      });
-    });
-
-    const pr42 = (getCache(key)?.items as PR[]).find((it) => it.number === 42);
-    expect(pr42).toBeDefined();
-    expect(pr42?.ciStatus).toBe("success");
-    expect(getGeneration(key)).toBe(genBefore + 1);
   });
 });
 

@@ -7,7 +7,6 @@ import type { FileChangeDetail } from "../../../types";
 import type { FileDecoration } from "@shared/types/forge";
 
 // The diff modal and tooltip are irrelevant to the decoration rendering under test.
-vi.mock("../FileDiffModal", () => ({ FileDiffModal: () => null }));
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,

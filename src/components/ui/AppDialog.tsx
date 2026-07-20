@@ -32,7 +32,11 @@ import {
   UI_SCRIM_EASING,
   getUiTransitionDuration,
 } from "@/lib/animationUtils";
-import { X } from "lucide-react";
+import {
+  SurfaceHeader,
+  SurfaceHeaderTitle,
+  SurfaceHeaderCloseButton,
+} from "@/components/ui/SurfaceHeader";
 import { Button } from "./button";
 
 type DialogSize = "sm" | "md" | "lg" | "4xl" | "5xl" | "6xl" | "7xl" | "workspace";
@@ -440,56 +444,43 @@ interface AppDialogHeaderProps {
 }
 
 AppDialog.Header = function AppDialogHeader({ children, className }: AppDialogHeaderProps) {
-  return (
-    <div
-      className={cn(
-        "px-6 py-4 border-b border-border-strong dialog-header flex items-center justify-between shrink-0",
-        className
-      )}
-    >
-      {children}
-    </div>
-  );
+  // `density` is deliberately not forwarded: every dialog header is comfortable,
+  // and exposing it would widen AppDialog's public surface for no caller.
+  return <SurfaceHeader className={className}>{children}</SurfaceHeader>;
 };
 
 interface AppDialogTitleProps {
   children: React.ReactNode;
   icon?: React.ReactNode;
   className?: string;
+  as?: "h2" | "h3";
 }
 
-AppDialog.Title = function AppDialogTitle({ children, icon, className }: AppDialogTitleProps) {
+AppDialog.Title = function AppDialogTitle({ children, icon, className, as }: AppDialogTitleProps) {
   const context = useContext(AppDialogContext);
   return (
-    <h2
-      id={context?.titleId}
-      className={cn("text-lg font-semibold text-daintree-text flex items-center gap-2", className)}
-    >
-      {icon}
+    <SurfaceHeaderTitle as={as} id={context?.titleId} icon={icon} className={className}>
       {children}
-    </h2>
+    </SurfaceHeaderTitle>
   );
 };
 
 interface AppDialogCloseButtonProps {
   className?: string;
+  "aria-label"?: string;
 }
 
-AppDialog.CloseButton = function AppDialogCloseButton({ className }: AppDialogCloseButtonProps) {
+AppDialog.CloseButton = function AppDialogCloseButton({
+  className,
+  "aria-label": ariaLabel = "Close dialog",
+}: AppDialogCloseButtonProps) {
   const context = useContext(AppDialogContext);
   return (
-    <button
-      type="button"
+    <SurfaceHeaderCloseButton
       onClick={context?.onClose}
-      className={cn(
-        "text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-raised transition-colors p-1 rounded",
-        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
-        className
-      )}
-      aria-label="Close dialog"
-    >
-      <X className="h-5 w-5" />
-    </button>
+      className={className}
+      aria-label={ariaLabel}
+    />
   );
 };
 

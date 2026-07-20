@@ -13,6 +13,7 @@ import { panelKindHasPty, panelKindIsDockable } from "@shared/config/panelKindRe
 import {
   isBrowserPanel,
   isDevPreviewPanel,
+  isDiffPanel,
   isFilePanel,
   isPtyPanel,
   isReviewPanel,
@@ -517,7 +518,17 @@ export function TerminalContextMenu({
   const isDevPreview = isDevPreviewPanel(terminal);
   const isReview = isReviewPanel(terminal);
   const isFile = isFilePanel(terminal);
+  const isDiff = isDiffPanel(terminal);
   const hasPty = terminal.kind ? panelKindHasPty(terminal.kind) : true;
+  // A non-PTY plugin kind matches none of the built-in guards, so without this
+  // it falls through to the terminal menu and is offered "Duplicate terminal",
+  // "Kill terminal", and friends — none of which apply (#11228). `pluginId` is
+  // stamped at creation and survives the plugin going missing, which is why it
+  // beats a registry lookup here. The `!hasPty` half is load-bearing: plugins
+  // may also contribute PTY-backed kinds that render through TerminalPane and
+  // are stamped with pluginId too (addPanel.ts) — those are genuine terminals
+  // and must keep copy/paste, redraw, restart, and the rest of the PTY menu.
+  const isPlugin = Boolean(terminal.pluginId) && !hasPty;
 
   const layoutSection = (
     <>
@@ -744,7 +755,10 @@ export function TerminalContextMenu({
     );
   }
 
-  if (isFile) {
+  // Diff joins the file/plugin branch: all three are non-PTY reading surfaces
+  // whose menu is the generic panel one. Without an early return here the PTY
+  // menu below would narrow against DiffPanelData and lose `isInputLocked`.
+  if (isFile || isDiff || isPlugin) {
     return (
       <ContextMenu>
         <MenuActionSourceContext.Consumer>

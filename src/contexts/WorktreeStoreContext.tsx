@@ -6,10 +6,16 @@ import {
   type WorktreeViewStoreApi,
 } from "@/store/createWorktreeStore";
 import type { WorktreeSnapshot, WorktreeEventVersion } from "@shared/types";
-import type { CIStatusState, PR } from "@shared/types/forge";
+import type { CIStatusState } from "@shared/types/forge";
 import type { PluginWorktreeLinked } from "@shared/types/plugin";
-import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import {
+  useWorktreeSelectionStore,
+  getDeletedWorktreeTerminalIds,
+  getPinnedDeletedWorktreeIndex,
+} from "@/store/worktreeStore";
 import { usePanelStore } from "@/store/panelStore";
+import { usePreferencesStore } from "@/store/preferencesStore";
+import { startDeletedWorktreeCleanup } from "@/store/deletedWorktreeCleanup";
 import { usePulseStore } from "@/store/pulseStore";
 import { useProjectStore } from "@/store/projectStore";
 import { usePRCircuitBreakerStore } from "@/store/prCircuitBreakerStore";
@@ -18,7 +24,6 @@ import {
   wakeActiveWorktreeTerminals,
 } from "@/store/wakeActiveWorktreeTerminals";
 import { worktreeClient } from "@/clients/worktreeClient";
-import { mutateCacheEntries } from "@/lib/forgeResourceCache";
 import { notify } from "@/lib/notify";
 import { actionService } from "@/services/ActionService";
 
@@ -376,29 +381,108 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
         store.getState().applyRemove(event.worktreeId, { epoch: event.epoch, seq: event.seq });
         if (epochChanged) fetchInitialState();
 
+        // applyRemove version-gates internally but returns void: a stale
+        // same-epoch replay leaves the worktree in the map. Selection and
+        // ghost side effects must not run on a rejected event — a replay
+        // would otherwise demote the restore target or clear the selection
+        // for a worktree that still exists. Cross-epoch events keep the old
+        // behavior: the refetch reconciles the map, and the ghost row must
+        // still be recorded for survivors of a removal across a host restart.
+        if (!epochChanged && store.getState().worktrees.has(event.worktreeId)) {
+          return;
+        }
+
         // Side effect: invalidate pulse cache
         usePulseStore.getState().invalidate(event.worktreeId);
 
-        // Side effect: clear active selection if removed
+        // Side effect: selection handling for the removed worktree. When
+        // terminals survive, the id lives on as a ghost row and the user may
+        // be mid-cleanup on it — deleting must NOT yank them away, so the
+        // selection stays put and useActiveWorktreeSync falls back to main
+        // only once the ghost row itself is gone (last terminal closed, row
+        // dismissed, or auto-cleanup fired). Only the durable restore target
+        // is demoted (below) — a deleted id must never persist across
+        // restarts. With no survivors there is nothing left to look at, so
+        // the selection clears immediately as before.
         const selectionStore = useWorktreeSelectionStore.getState();
-        if (selectionStore.activeWorktreeId === event.worktreeId) {
+        const willBecomeGhost =
+          !!worktree && getDeletedWorktreeTerminalIds(event.worktreeId).length > 0;
+        // A removed id must never remain the durable restore target — ghost
+        // or not, it can't be restored after a restart. No-ops unless the id
+        // IS the restore target (or its fleet-parked snapshot).
+        selectionStore.clearRestoreTarget(event.worktreeId);
+        // `deletedWorktrees.has` guards a duplicate removal event for an id
+        // that is already a ghost (snapshot lookup misses → willBecomeGhost
+        // false): the live ghost row must not lose the selection to a replay.
+        if (
+          selectionStore.activeWorktreeId === event.worktreeId &&
+          !willBecomeGhost &&
+          !selectionStore.deletedWorktrees.has(event.worktreeId)
+        ) {
           selectionStore.setActiveWorktree(null);
         }
 
-        // Side effect: kill associated terminals
-        const terminalStore = usePanelStore.getState();
-        const idsToKill: string[] = [];
-        for (const id of terminalStore.panelIds) {
-          const t = terminalStore.panelsById[id];
-          if (t && (t.worktreeId ?? undefined) === event.worktreeId) {
-            idsToKill.push(id);
-          }
-        }
-        for (const id of idsToKill) {
-          terminalStore.removePanel(id);
+        // Side effect: hand surviving terminals to a deleted-worktree row (#11232).
+        //
+        // Removing the worktree used to remove every panel that belonged to
+        // it, which destroyed live agent sessions — worst of all when an agent
+        // deleted its own worktree mid-conversation via `worktree.delete` and
+        // killed itself. "Worktree gone" and "PTY dead" are independent facts
+        // with independent owners (#11083), so the panels are left completely
+        // untouched here: their processes keep running, and the deleted-worktree row only
+        // gives them somewhere to live in the sidebar until the user drags
+        // them to another worktree, dismisses the row, or its auto-cleanup
+        // countdown moves them to trash (deletedWorktreeCleanup.ts).
+        //
+        // Metadata is snapshotted from `worktree`, read above *before*
+        // `applyRemove` dropped it from the live map. Both delete entry points
+        // (the delete dialog and the `worktree.delete` action) funnel through
+        // this event, so they get identical behaviour from this one change.
+        if (willBecomeGhost) {
+          const cleanupSeconds = usePreferencesStore.getState().deletedWorktreeCleanupSeconds;
+          selectionStore.addDeletedWorktree({
+            id: event.worktreeId,
+            // Detached-HEAD worktrees have no branch; fall back to the folder
+            // name so the row always carries a recognisable last-known title.
+            title:
+              worktree.branch ?? worktree.path.split(/[/\\]/).filter(Boolean).pop() ?? "Unknown",
+            path: worktree.path,
+            deletedAt: Date.now(),
+            // Armed HERE, not by the sweep's next tick — deletion starts the
+            // countdown even if this view is hidden and its sweep throttled.
+            // The sweep owns it from now on (defers, re-arms on preference
+            // change, fires into the trash).
+            expiresAt: cleanupSeconds > 0 ? Date.now() + cleanupSeconds * 1000 : null,
+            pinnedIndex: getPinnedDeletedWorktreeIndex(event.worktreeId),
+          });
         }
       })
     );
+
+    // Deleted-worktree rows are derived state: they exist only while at least one panel
+    // still points at the dead worktree. Watching the panel store (rather than
+    // terminal lifecycle events) means every exit route prunes the row —
+    // moved, trashed, killed, or exited alike. `agent:exited` notably never
+    // fires for a killed terminal (#11110), so an event-driven version of this
+    // would strand a deleted-worktree row holding zero terminals.
+    cleanups.push(
+      usePanelStore.subscribe((state, prevState) => {
+        if (
+          state.panelIdsByWorktreeId === prevState.panelIdsByWorktreeId &&
+          state.panelsById === prevState.panelsById
+        ) {
+          return;
+        }
+        if (useWorktreeSelectionStore.getState().deletedWorktrees.size === 0) return;
+        useWorktreeSelectionStore
+          .getState()
+          .pruneDeletedWorktrees(new Set(store.getState().worktrees.keys()));
+      })
+    );
+
+    // Age-based auto-cleanup for deleted-worktree rows: arms/defers/fires each
+    // row's countdown per the user's preference (see deletedWorktreeCleanup.ts).
+    cleanups.push(startDeletedWorktreeCleanup());
 
     // Pulse-cache pruning backstop: the `worktree-removed` event invalidates a
     // single worktree, but `applySnapshot` on a host restart can replace the
@@ -421,6 +505,14 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
             usePulseStore.getState().invalidate(id);
           }
         }
+        // A host restart can re-hydrate a worktree we had already deleted
+        // (#11232). The real row wins — its terminals were never detached, so
+        // the row would otherwise render a duplicate row for the same id.
+        if (useWorktreeSelectionStore.getState().deletedWorktrees.size > 0) {
+          useWorktreeSelectionStore
+            .getState()
+            .pruneDeletedWorktrees(new Set(state.worktrees.keys()));
+        }
       })
     );
 
@@ -441,6 +533,26 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
         // preceding `worktree-removed` event.
         if (selectionStore.activeWorktreeId === event.worktreeId) {
           return;
+        }
+        // Deleting the active worktree makes the host auto-switch to main and
+        // echo that switch here — but a user standing on a worktree whose
+        // terminals survive must stay on its ghost row, not get yanked to
+        // main mid-cleanup. Two orderings exist: UI deletes emit
+        // activated(main) BEFORE worktree-removed (the active worktree is
+        // then mid-delete: `deletingIds`); external removals emit it AFTER
+        // (the active id is then already a ghost row). Both suppress only
+        // while terminals actually survive — a deletion with nothing left
+        // follows the auto-switch as before.
+        const activeId = selectionStore.activeWorktreeId;
+        if (activeId !== null) {
+          const isActiveGhost = selectionStore.deletedWorktrees.has(activeId);
+          const isActiveDeleting = store.getState().deletingIds.has(activeId);
+          if (
+            (isActiveGhost || isActiveDeleting) &&
+            getDeletedWorktreeTerminalIds(activeId).length > 0
+          ) {
+            return;
+          }
         }
         selectionStore.setPendingWorktree(event.worktreeId);
         selectionStore.selectWorktree(event.worktreeId);
@@ -482,60 +594,14 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
           overlayVersion(store.getState().version)
         );
 
-        // Sync the PR dropdown cache so the sidebar PRBadge and the
-        // dropdown row can't drift. Read the project path at event time —
-        // capturing it in the effect closure would corrupt cache slots after
-        // a project switch (#4670).
-        const projectPath = useProjectStore.getState().currentProject?.path;
-        if (!projectPath) return;
-        // The dropdown cache stores normalized forge rows whose ciStatus is
-        // the same CIStatusState vocabulary as the detection wire. Only the
-        // three render-bearing states are written; neutral/unknown collapse to
-        // undefined ("no checks") to match the row badge's vocabulary.
-        const cacheCiStatus: CIStatusState | undefined =
-          event.prCiStatus === "success" ||
-          event.prCiStatus === "failure" ||
-          event.prCiStatus === "pending"
-            ? event.prCiStatus
-            : undefined;
-        mutateCacheEntries(projectPath, "pr", (entry, keyRemainder) => {
-          // keyRemainder is `${filterState}:${sortOrder}`; filterState values
-          // ("open" | "closed" | "merged" | "all") contain no colons. Unknown
-          // values fall back to "all" semantics (keep the row, only patch CI)
-          // so a malformed key can never silently evict a PR.
-          const filterState = keyRemainder.split(":")[0];
-          const isFilteredSlot =
-            filterState === "open" || filterState === "closed" || filterState === "merged";
-
-          let changed = false;
-          const items: (typeof entry.items)[number][] = [];
-          for (const item of entry.items) {
-            const pr = item as PR;
-            if (pr.number !== event.prNumber) {
-              items.push(item);
-              continue;
-            }
-            // The PR's state no longer matches this filtered slot (e.g. a
-            // closed PR still sitting in the "open" slot). Drop the row so the
-            // sidebar badge and dropdown converge on the next filter switch
-            // instead of waiting out the 45s TTL. This eviction branch must
-            // stay ahead of the CI-only branch below: it sets changed=true on
-            // removal even when ciStatus is unchanged, which is what triggers
-            // the generation bump in mutateCacheEntries.
-            if (isFilteredSlot && pr.state && pr.state !== event.prState) {
-              changed = true;
-              continue;
-            }
-            if (pr.ciStatus === cacheCiStatus) {
-              items.push(item);
-              continue;
-            }
-            changed = true;
-            items.push({ ...pr, ciStatus: cacheCiStatus });
-          }
-          if (!changed) return null;
-          return { ...entry, items };
-        });
+        // No dropdown-cache patch here on purpose. This handler used to
+        // one-way-write the renderer's forgeResourceCache to stop the sidebar
+        // badge and the dropdown row drifting, but it never reached main's
+        // forgePRListCache, so the next revalidate overwrote it with the coarse
+        // rollup and the two surfaces disagreed again. Both now derive CI
+        // status from one place — `listPRsImpl` enriches through the same
+        // `getCIStatusesImpl`/`prRequiredStatusCache` this event's status comes
+        // from — so the dropdown's own fetch already agrees (#11251).
       })
     );
 

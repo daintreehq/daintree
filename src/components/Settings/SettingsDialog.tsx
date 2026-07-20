@@ -373,9 +373,19 @@ function SettingsDialogInner({
   const flushRegistry = useContext(SettingsFlushContext);
   const flushAllTabs = flushRegistry?.flushAll;
 
-  const flushDialog = async () => {
-    if (flushAllTabs) await flushAllTabs();
-    await projectForm.flush();
+  // Coalesced: a visibility change landing mid-close would otherwise re-issue
+  // every registered tab flusher alongside the one already in flight.
+  const flushInFlightRef = useRef<Promise<void> | null>(null);
+  const flushDialog = () => {
+    if (flushInFlightRef.current) return flushInFlightRef.current;
+    const pending = (async () => {
+      if (flushAllTabs) await flushAllTabs();
+      await projectForm.flush();
+    })();
+    flushInFlightRef.current = pending;
+    return pending.finally(() => {
+      flushInFlightRef.current = null;
+    });
   };
 
   // Electron 41 WebContentsView detach (project switch, window close) does not
@@ -402,6 +412,17 @@ function SettingsDialogInner({
     return true;
   };
 
+  // AppDialog-mediated closes (Escape, backdrop, the header's close button) have
+  // already flushed via onBeforeClose, so this only dismisses. Flushing again
+  // would re-issue every tab's persistence IPC and the full project save.
+  const handleDialogClose = () => {
+    onClose();
+  };
+
+  // Handed to tab content via the registry's `needsOnClose` flag. That route
+  // never passes through onBeforeClose, so it keeps its own flush — no tab
+  // invokes it today (AppThemePicker only tests it for presence), but a caller
+  // that did would otherwise close without persisting.
   const handleClose = async () => {
     await flushDialog();
     onClose();
@@ -557,7 +578,7 @@ function SettingsDialogInner({
   return (
     <AppDialog
       isOpen={isOpen}
-      onClose={handleClose}
+      onClose={handleDialogClose}
       onBeforeClose={handleBeforeClose}
       size="4xl"
       maxHeight="h-[75vh]"
@@ -680,28 +701,23 @@ function SettingsDialogInner({
         </div>
 
         <div className="settings-shell flex-1 flex flex-col min-w-0">
-          <div className="dialog-header flex items-center justify-between px-6 py-4 border-b border-border-strong shrink-0">
-            <h3 className="text-lg font-semibold text-daintree-text flex items-center gap-2">
-              {isSearching ? (
-                <>
+          <AppDialog.Header>
+            {/* h3, not the default h2: the sidebar's "Settings" h2 is the shell
+                heading and this labels the active section beneath it. */}
+            <AppDialog.Title
+              as="h3"
+              icon={
+                isSearching ? (
                   <Search className="w-5 h-5 text-text-secondary" />
-                  Search Results
-                </>
-              ) : (
-                <>
-                  {tabIcons[activeTab]}
-                  {tabTitles[activeTab]}
-                </>
-              )}
-            </h3>
-            <button
-              onClick={handleClose}
-              className="text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-raised transition-colors p-1 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
-              aria-label="Close settings"
+                ) : (
+                  tabIcons[activeTab]
+                )
+              }
             >
-              <X className="h-5 w-5" />
-            </button>
-          </div>
+              {isSearching ? "Search Results" : tabTitles[activeTab]}
+            </AppDialog.Title>
+            <AppDialog.CloseButton aria-label="Close settings" />
+          </AppDialog.Header>
 
           <ScrollShadow className="flex-1" scrollClassName="p-6">
             {isSearching ? (

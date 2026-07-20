@@ -1,0 +1,7 @@
+/* Comfortable-density surface header background. Single-level var() fallback:
+   Chromium 148 sends multi-layer fallback chains inside color-mix() to
+   invalid-at-computed-value-time, collapsing the declaration to transparent. */
+.dialog-header {
+  --_bg: var(--dialog-header-bg, color-mix(in srgb, var(--theme-surface-sidebar) 50%, transparent));
+  background: var(--_bg);
+}

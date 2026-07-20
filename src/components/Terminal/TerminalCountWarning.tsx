@@ -3,6 +3,7 @@ import { AlertTriangle, Trash2 } from "lucide-react";
 import { BANNER_ENTER_DURATION } from "@/lib/animationUtils";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel } from "@shared/types/panel";
+import { countsTowardPanelLimit } from "@/store/slices/panelRegistry/panelCount";
 import { useShallow } from "zustand/react/shallow";
 import { usePanelLimitStore, shouldShowSoftWarning } from "@/store/panelLimitStore";
 import { InlineStatusBanner } from "./InlineStatusBanner";
@@ -20,9 +21,11 @@ export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalC
       let completed = 0;
       for (const id of state.panelIds) {
         const t = state.panelsById[id];
-        if (!t || t.location === "trash") continue;
-        const pty = isPtyPanel(t) ? t : undefined;
-        if (pty?.excludeFromPersistence === true) continue;
+        // Shared predicate so the banner's count matches the ceiling it warns
+        // about — reading the ephemeral flag through a PTY narrowing here let a
+        // non-PTY dialog panel inflate the count.
+        if (!countsTowardPanelLimit(t)) continue;
+        const pty = t && isPtyPanel(t) ? t : undefined;
         active++;
         if (pty?.agentState === "completed" || pty?.agentState === "exited") completed++;
       }
@@ -85,9 +88,8 @@ export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalC
       const idsToClose: string[] = [];
       for (const id of panelIds) {
         const t = panelsById[id];
-        if (!t || t.location === "trash") continue;
+        if (!t || !countsTowardPanelLimit(t)) continue;
         const pty = isPtyPanel(t) ? t : undefined;
-        if (pty?.excludeFromPersistence === true) continue;
         if (pty?.agentState === "completed" || pty?.agentState === "exited") {
           idsToClose.push(t.id);
         }

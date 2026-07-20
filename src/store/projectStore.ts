@@ -25,7 +25,7 @@ import {
 } from "./storeAccessors";
 import type { ProjectSwitchOutgoingState } from "@shared/types/ipc/project";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
-import { isPtyPanel } from "@shared/types/panel";
+import { isEphemeralPanel } from "./slices/panelRegistry/panelCount";
 
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 
@@ -37,7 +37,7 @@ function shouldPersistTerminal(t: NonNullable<CarrierPanel>): boolean {
     // runtime can still hand us an assistant panel whose kind escapes the
     // declared union, so widen to string before comparing.
     (t.kind as string) !== "assistant" &&
-    !(isPtyPanel(t) && t.excludeFromPersistence === true) &&
+    !isEphemeralPanel(t) &&
     !isSmokeTestTerminalId(t.id)
   );
 }

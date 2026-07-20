@@ -52,9 +52,17 @@ describe("resolveStorePath", () => {
 
   it("uses Daintree capitalization on macOS", () => {
     const platformSpy = vi.spyOn(os, "platform").mockReturnValue("darwin");
+    // The platform default only applies with no env override, which the test
+    // setup now always provides — unset it explicitly rather than relying on
+    // it being absent from the ambient environment.
+    const prev = process.env.DAINTREE_USER_DATA;
+    delete process.env.DAINTREE_USER_DATA;
+
     // Can't easily mock os.homedir() but check the path ends correctly
     const result = resolveStorePath();
     expect(normalize(result)).toContain("Library/Application Support/Daintree/config.json");
+
+    if (prev) process.env.DAINTREE_USER_DATA = prev;
     platformSpy.mockRestore();
   });
 

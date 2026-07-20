@@ -8,13 +8,16 @@ import { useWorktreeTerminals } from "../../hooks/useWorktreeTerminals";
 
 import { useDroppable } from "@dnd-kit/core";
 import type { SyntheticListenerMap } from "@dnd-kit/core/dist/hooks/utilities";
-import { useIsWorktreeSortDragging, type WorktreeDragData } from "../DragDrop/DndProvider";
+import {
+  useDndPlaceholder,
+  useIsWorktreeSortDragging,
+  type WorktreeDragData,
+} from "../DragDrop/DndProvider";
 import { getWorktreeSortDragId } from "../DragDrop/SortableWorktreeCard";
 import { GripVertical } from "lucide-react";
 import { useErrorStore, usePanelStore, type RetryAction } from "../../store";
 import type { PtyPanelData } from "@shared/types/panel";
 import { useRecipeStore } from "../../store/recipeStore";
-import { useUIStore } from "../../store/uiStore";
 import { useWorktreeSelectionStore } from "../../store/worktreeStore";
 import {
   useProjectSettingsStore,
@@ -485,42 +488,17 @@ export function WorktreeCard({
   };
 
   const [showIssuePicker, setShowIssuePicker] = useState(false);
-  const [showReviewHub, setShowReviewHub] = useState(false);
   const [showPlanViewer, setShowPlanViewer] = useState(false);
 
-  const onCloseReviewHub = () => setShowReviewHub(false);
   const onClosePlanViewer = () => setShowPlanViewer(false);
 
-  const pendingReviewHubWorktreeId = useUIStore((s) => s.pendingReviewHubWorktreeId);
-  useEffect(() => {
-    if (pendingReviewHubWorktreeId !== worktree.id) return;
-    setShowReviewHub(true);
-    useUIStore.getState().clearPendingReviewHubWorktreeId();
-  }, [pendingReviewHubWorktreeId, worktree.id]);
-
-  // All Review Hub open paths (banner button, menu, header, terminal section)
-  // route through this window-scoped event so any open also dismisses pane
-  // completion banners for the same worktree. TerminalPane is rendered via
-  // the panel registry — not in this component's React tree — so an event
-  // bridge is the only practical channel.
+  // Every Review Hub entry point (banner button, menu, header, terminal
+  // section) dispatches the action, which presents the review panel as a
+  // dialog through the global host. The action owns the commit-message seed,
+  // so no card-local state or window event bridges it any more.
   const openReviewHubForThisWorktree = () => {
-    window.dispatchEvent(
-      new CustomEvent("daintree:open-review-hub", { detail: { worktreeId: worktree.id } })
-    );
+    void actionService.dispatch("worktree.openReviewHub", { worktreeId: worktree.id });
   };
-
-  useEffect(() => {
-    const handler = (event: Event) => {
-      const detail = (event as CustomEvent<{ worktreeId?: string }>).detail;
-      if (detail?.worktreeId === worktree.id) {
-        setShowReviewHub(true);
-      }
-    };
-    window.addEventListener("daintree:open-review-hub", handler);
-    return () => window.removeEventListener("daintree:open-review-hub", handler);
-  }, [worktree.id]);
-
-  const aiNoteFirstLine = effectiveNote?.split("\n")[0]?.trim() ?? "";
 
   // Route attach/detach through the resilient mutation outbox (#9163) instead
   // of a fire-and-forget IPC. The store applies the local association only once
@@ -608,33 +586,47 @@ export function WorktreeCard({
     hasActiveAgent: terminalCounts.byState.working > 0,
   });
 
+  // The active card used to opt out of being a drop target entirely — every
+  // panel drag originated from the active worktree, so it could only ever be a
+  // no-op self-drop. Accordion drags broke that assumption: dragging a
+  // terminal out of an inactive (or deleted) worktree's sidebar row onto the
+  // ACTIVE card is the most common rescue flow, so the droppable stays
+  // registered and only disables when the dragged panel already lives here.
+  const { activeTerminal: draggedPanel } = useDndPlaceholder();
+  const isCrossWorktreePanelDrag =
+    draggedPanel !== null && (draggedPanel.worktreeId ?? null) !== worktree.id;
+
   const { setNodeRef, isOver, over, active } = useDroppable({
     id: `worktree-drop-${worktree.id}`,
     data: {
       type: "worktree",
       worktreeId: worktree.id,
     },
-    disabled: isActive || isWorktreeSortDragging,
+    disabled: (isActive && !isCrossWorktreePanelDrag) || isWorktreeSortDragging,
   });
 
   const droppableRef = (node: HTMLElement | null) => {
-    if (!isActive) setNodeRef(node);
+    setNodeRef(node);
   };
 
   const activeDragData = active?.data.current as Partial<WorktreeDragData> | undefined;
   // Only drops handleDragEnd will actually accept: a single-panel drag —
-  // group drags are rejected by cancelDrop, accordion drags never reach the
-  // worktree-drop branch, and worktree-sort drags carry no terminal.
+  // group drags are rejected by cancelDrop, and worktree-sort drags carry no
+  // terminal. Accordion drags count only when they come from a *different*
+  // worktree (a cross-worktree move); within their own worktree they are
+  // reorders and the card must not light up as a drop target.
   const isMovablePanelDrag =
     activeDragData?.terminal !== undefined &&
-    activeDragData.origin !== "accordion" &&
+    (activeDragData.origin !== "accordion" || activeDragData.worktreeId !== worktree.id) &&
     !(activeDragData.groupId && (activeDragData.groupPanelIds?.length ?? 0) > 1);
   // The sidebar row stacks two same-size droppables (this drop target inside
   // the SortableWorktreeCard sortable), and pointerWithin resolves their tie
   // by registration order — `over` can be either id, so match both. Mirrors
   // the dual-id handling in DndProvider's handleDragEnd.
   const isPanelDropTarget =
-    !isActive && isMovablePanelDrag && (isOver || over?.id === getWorktreeSortDragId(worktree.id));
+    (!isActive || isCrossWorktreePanelDrag) &&
+    isMovablePanelDrag &&
+    (isOver || over?.id === getWorktreeSortDragId(worktree.id));
 
   const isMuted =
     (isIdleCard || isStaleCard) && !isWaitingCard && !isActive && !isFocused && !isPanelDropTarget;
@@ -1114,10 +1106,6 @@ export function WorktreeCard({
                 onCloseIssuePicker={() => setShowIssuePicker(false)}
                 onAttachIssue={handleAttachIssue}
                 onDetachIssue={handleDetachIssue}
-                showReviewHub={showReviewHub}
-                onCloseReviewHub={onCloseReviewHub}
-                reviewHubInitialCommitMessage={aiNoteFirstLine}
-                reviewHubAutoStageOnOpen={true}
                 showPlanViewer={showPlanViewer}
                 onClosePlanViewer={onClosePlanViewer}
               />
