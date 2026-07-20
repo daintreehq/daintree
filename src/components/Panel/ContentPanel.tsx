@@ -510,7 +510,15 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
           : undefined),
       }}
       className={cn(
-        "flex flex-col h-full overflow-hidden group/panel",
+        // Three host contexts, one class set. Grid and maximized parents are
+        // block-level `h-full` wrappers, so the percentage height is what fills
+        // the cell there and `flex-1` is inert. The dialog body is a flex
+        // column, where `h-full` resolves against an indefinite parent and
+        // collapses to `auto` — the panel then sizes to its content and the
+        // pane's own scroller never overflows, so a long file just clips
+        // (#11254). `flex-1` sizes it from the flex line instead, and `min-h-0`
+        // releases the automatic minimum size so it can actually shrink.
+        "flex flex-col h-full flex-1 min-h-0 overflow-hidden group/panel",
         location === "grid" && !isMaximized && "bg-surface",
         // Dialog joins the dock/maximized bucket: AppDialog already draws the
         // surface, border, radius, and shadow, so a second set here would
