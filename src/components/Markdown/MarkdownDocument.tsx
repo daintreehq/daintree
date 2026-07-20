@@ -23,6 +23,11 @@ export interface MarkdownDocumentProps {
   /** Containment root for daintree-file:// image loads */
   rootPath: string;
   className?: string;
+  /**
+   * Fired once the document has committed. Hosts that pinned their height
+   * across the swap into rendered mode use this to release the pin (#11255).
+   */
+  onRendered?: () => void;
 }
 
 /**
@@ -111,7 +116,16 @@ export function MarkdownDocument({
   filePath,
   rootPath,
   className,
+  onRendered,
 }: MarkdownDocumentProps) {
+  // Runs after the first commit, which is the point the host's height pin can
+  // hand the box back to the document. Cold fence grammars land later and swap
+  // plain text for span-wrapped identical text — same characters, same line
+  // count, so they can't shrink the box and don't gate this.
+  useEffect(() => {
+    onRendered?.();
+  }, [onRendered]);
+
   const urlTransform = useMemo(() => {
     return (url: string, key: string): string | null | undefined => {
       if (key === "src") {

@@ -33,6 +33,7 @@ import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { isClientAppError } from "@/utils/clientAppError";
 import { logError } from "@/utils/logger";
+import { useHeightHold } from "./useHeightHold";
 
 export interface FilePaneProps extends BasePanelProps {
   tabs?: TabInfo[];
@@ -142,12 +143,40 @@ export function FilePane({
   const markdownWrapLines = usePreferencesStore((state) => state.markdownWrapLines);
   const setMarkdownWrapLines = usePreferencesStore((state) => state.setMarkdownWrapLines);
 
+  const heightHold = useHeightHold();
+
   const filePath = panel?.filePath;
   const isMarkdown = filePath !== undefined && isMarkdownFilePath(filePath);
   const isHtml = filePath !== undefined && isHtmlFilePath(filePath);
   // Markdown and HTML get a Source/Rendered toggle; every other file is source-only.
   const isRenderable = isMarkdown || isHtml;
   const viewMode: FileViewMode = isRenderable ? (panel?.fileViewMode ?? "source") : "source";
+
+  // A dialog host sizes to its content every frame, so swapping markdown source
+  // for the rendered chunk's skeleton collapses the dialog and expands it again
+  // once the document lands. Pin the source height before the swap; the
+  // rendered document releases it on its first commit (#11255). Measured here,
+  // synchronously, because a layout effect only runs once the box has already
+  // shrunk. Only this direction can collapse — source renders at its own height
+  // immediately, so the reverse just drops any stale pin.
+  const handleViewModeChange = useCallback(
+    (mode: FileViewMode) => {
+      if (location === "dialog" && isMarkdown && viewMode === "source" && mode === "rendered") {
+        heightHold.hold();
+      } else {
+        heightHold.cancel();
+      }
+      setFileViewMode(id, mode);
+    },
+    [location, isMarkdown, viewMode, heightHold, setFileViewMode, id]
+  );
+
+  // A file swapped underneath an active pin would hold the new document at the
+  // old one's height, and a pane promoted out of the dialog would carry a
+  // content-sized floor into a layout-sized host.
+  useEffect(() => {
+    heightHold.cancel();
+  }, [filePath, location, heightHold]);
 
   const worktreeId = panel?.worktreeId;
   const worktreePath = useWorktreeStore(
@@ -413,7 +442,7 @@ export function FilePane({
               { value: "rendered", label: "Rendered" },
             ]}
             value={viewMode}
-            onChange={(mode) => setFileViewMode(id, mode)}
+            onChange={handleViewModeChange}
           />
         )}
         <FileViewerToolbar.Path path={displayPath} copied={pathCopied} onCopy={handleCopyPath} />
@@ -494,7 +523,11 @@ export function FilePane({
       onTabRename={onTabRename}
       onAddTab={onAddTab}
     >
-      <div className="flex-1 min-h-0 overflow-auto bg-daintree-bg" data-testid="file-pane-body">
+      <div
+        ref={heightHold.bodyRef}
+        className="flex-1 min-h-0 overflow-auto bg-daintree-bg"
+        data-testid="file-pane-body"
+      >
         {!filePath && (
           <div className="flex h-full w-full flex-col items-center justify-center gap-4 p-6">
             <EmptyState
@@ -591,6 +624,7 @@ export function FilePane({
               rootPath={effectiveRootPath}
               viewMode="rendered"
               wrapLines={markdownWrapLines}
+              onRendered={heightHold.handleRendered}
             />
           ) : viewMode === "rendered" && isHtml ? (
             // Rendered HTML fills the pane in a sandboxed iframe rather than the

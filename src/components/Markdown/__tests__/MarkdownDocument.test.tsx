@@ -69,6 +69,40 @@ describe("MarkdownDocument", () => {
     expect(container.textContent).toContain("plain body");
   });
 
+  it("reports only once the document is in the DOM, so a host can hand back a pinned height", () => {
+    // A host releases a height pin on this signal, so it has to fire after the
+    // commit — reporting during render would release against a box that hasn't
+    // laid out yet. Capture what the DOM looked like at call time rather than
+    // just the call count, which a render-phase call would also satisfy.
+    let headingAtReport: string | null = null;
+    const onRendered = vi.fn(() => {
+      headingAtReport = document.querySelector("h1")?.textContent ?? null;
+    });
+
+    render(<MarkdownDocument {...FIXTURE_PROPS} content="# Spec title" onRendered={onRendered} />);
+
+    expect(onRendered).toHaveBeenCalledTimes(1);
+    expect(headingAtReport).toBe("Spec title");
+  });
+
+  it("keeps fence text byte-identical when highlighting, trailing newline included", () => {
+    // The cold-grammar path renders a fence as plain text and re-renders with
+    // token spans once ensureLanguage resolves. That swap is only height-safe if
+    // it wraps the same characters — this pins the text invariant on the warm
+    // path. It does not prove equal box height: jsdom performs no layout, so
+    // only Chromium can establish that.
+    const code = 'const x: string = "hi";';
+    const { container } = render(
+      <MarkdownDocument {...FIXTURE_PROPS} content={`\`\`\`typescript\n${code}\n\`\`\``} />
+    );
+
+    const rendered = container.querySelector("code.language-typescript");
+    expect(rendered!.querySelector(".token")).not.toBeNull();
+    // The `code` mapping strips the fence's trailing newline before either path
+    // renders, so neither can gain or lose a line relative to the other.
+    expect(rendered!.textContent).toBe(code);
+  });
+
   it("drops raw HTML instead of rendering it", () => {
     const { container } = render(
       <MarkdownDocument

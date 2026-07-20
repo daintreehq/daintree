@@ -27,6 +27,12 @@ export interface MarkdownViewerProps {
   /** Source-mode only: soft-wrap long lines */
   wrapLines?: boolean;
   className?: string;
+  /**
+   * Rendered-mode only: fired once the rendered document has committed. Hosts
+   * that size to their content pin their height across the swap and release it
+   * here, so the lazy chunk's skeleton can't collapse them first (#11255).
+   */
+  onRendered?: () => void;
 }
 
 /**
@@ -36,7 +42,7 @@ export interface MarkdownViewerProps {
  */
 export const MarkdownViewer = forwardRef<MarkdownViewerHandle, MarkdownViewerProps>(
   function MarkdownViewer(
-    { content, filePath, rootPath, viewMode, initialLine, wrapLines, className },
+    { content, filePath, rootPath, viewMode, initialLine, wrapLines, className, onRendered },
     ref
   ) {
     const codeViewerRef = useRef<CodeViewerHandle>(null);
@@ -77,6 +83,7 @@ export const MarkdownViewer = forwardRef<MarkdownViewerHandle, MarkdownViewerPro
           filePath={filePath}
           rootPath={rootPath}
           className={cn("px-6 py-5", className)}
+          onRendered={onRendered}
         />
       </Suspense>
     );
