@@ -261,6 +261,89 @@ describe("sweepDeletedWorktreeCleanup", () => {
     expect(notify).not.toHaveBeenCalled();
   });
 
+  it("collapses a same-tick burst into one inbox entry (#11260)", () => {
+    setPanels([
+      { id: "t1", worktreeId: "wt-1" },
+      { id: "t2", worktreeId: "wt-2" },
+      { id: "t3", worktreeId: "wt-2" },
+      { id: "t4", worktreeId: "wt-3" },
+    ]);
+    usePanelStore.setState({ bulkTrashByWorktree });
+    addRow({ id: "wt-1", title: "feature/a", expiresAt: NOW - 1 });
+    addRow({ id: "wt-2", title: "feature/b", expiresAt: NOW - 1 });
+    addRow({ id: "wt-3", title: "feature/c", expiresAt: NOW - 1 });
+    sweepDeletedWorktreeCleanup(makeDeps());
+
+    expect(bulkTrashByWorktree).toHaveBeenCalledTimes(3);
+    expect(notify).toHaveBeenCalledTimes(1);
+    const payload = vi.mocked(notify).mock.calls[0]![0];
+    expect(payload.priority).toBe("low");
+    expect(payload.message).toContain("3 deleted worktrees");
+    expect(payload.message).toContain("4 terminals");
+    // No single worktree owns a multi-row sweep, so the entry must not pin one.
+    expect(payload.context?.worktreeId).toBeUndefined();
+  });
+
+  it("counts only the rows that actually expired on this tick", () => {
+    setPanels([
+      { id: "t1", worktreeId: "wt-1" },
+      { id: "t2", worktreeId: "wt-2" },
+    ]);
+    usePanelStore.setState({ bulkTrashByWorktree });
+    addRow({ id: "wt-1", title: "feature/a", expiresAt: NOW - 1 });
+    // Still counting down — it must not appear in this tick's summary.
+    addRow({ id: "wt-2", title: "feature/b", expiresAt: NOW + 30_000 });
+    sweepDeletedWorktreeCleanup(makeDeps());
+
+    expect(notify).toHaveBeenCalledTimes(1);
+    const message = vi.mocked(notify).mock.calls[0]![0].message;
+    expect(message).toContain("feature/a");
+    expect(message).not.toContain("feature/b");
+  });
+
+  it("holds every previewed row while the grouped clear dialog is open", () => {
+    setPanels([
+      { id: "t1", worktreeId: "wt-1" },
+      { id: "t2", worktreeId: "wt-2" },
+    ]);
+    usePanelStore.setState({ bulkTrashByWorktree });
+    addRow({ id: "wt-1", title: "feature/a", expiresAt: NOW - 1 });
+    addRow({ id: "wt-2", title: "feature/b", expiresAt: NOW - 1 });
+    useTerminalPendingDestructiveActionStore.getState().request({
+      kind: "deletedWorktreeGroupDismiss",
+      targetCount: 2,
+      runningAgentCount: 0,
+      preview: [
+        { worktreeId: "wt-1", worktreeTitle: "feature/a", terminals: [] },
+        { worktreeId: "wt-2", worktreeTitle: "feature/b", terminals: [] },
+      ],
+    });
+    sweepDeletedWorktreeCleanup(makeDeps());
+
+    expect(bulkTrashByWorktree).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("only holds rows the grouped clear is actually previewing", () => {
+    setPanels([
+      { id: "t1", worktreeId: "wt-1" },
+      { id: "t2", worktreeId: "wt-2" },
+    ]);
+    usePanelStore.setState({ bulkTrashByWorktree });
+    addRow({ id: "wt-1", title: "feature/a", expiresAt: NOW - 1 });
+    addRow({ id: "wt-2", title: "feature/b", expiresAt: NOW - 1 });
+    useTerminalPendingDestructiveActionStore.getState().request({
+      kind: "deletedWorktreeGroupDismiss",
+      targetCount: 1,
+      runningAgentCount: 0,
+      preview: [{ worktreeId: "wt-1", worktreeTitle: "feature/a", terminals: [] }],
+    });
+    sweepDeletedWorktreeCleanup(makeDeps());
+
+    expect(bulkTrashByWorktree).toHaveBeenCalledTimes(1);
+    expect(bulkTrashByWorktree).toHaveBeenCalledWith("wt-2");
+  });
+
   it("re-arms a disarmed row when cleanup is turned back on", () => {
     usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: 0 });
     addRow({ expiresAt: NOW - 1 });

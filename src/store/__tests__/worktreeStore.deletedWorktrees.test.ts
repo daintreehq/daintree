@@ -227,3 +227,60 @@ describe("clearRestoreTarget", () => {
     expect(useWorktreeSelectionStore.getState()._previousRestoreWorktreeId).toBeNull();
   });
 });
+
+describe("deleted-worktree group expansion (#11260)", () => {
+  function addRows(count: number): void {
+    setPanels(Array.from({ length: count }, (_, i) => ({ id: `t${i}`, worktreeId: `wt-${i}` })));
+    for (let i = 0; i < count; i++) {
+      useWorktreeSelectionStore
+        .getState()
+        .addDeletedWorktree(makeDeleted({ id: `wt-${i}`, title: `feature/${i}` }));
+    }
+  }
+
+  it("starts collapsed so a burst never opens to a wall of cards", () => {
+    addRows(3);
+
+    expect(useWorktreeSelectionStore.getState().deletedWorktreeGroupExpanded).toBe(false);
+  });
+
+  it("toggles expansion", () => {
+    addRows(3);
+    useWorktreeSelectionStore.getState().toggleDeletedWorktreeGroupExpanded();
+
+    expect(useWorktreeSelectionStore.getState().deletedWorktreeGroupExpanded).toBe(true);
+  });
+
+  it("latches shut once dismissals drop the cohort below the threshold", () => {
+    addRows(3);
+    useWorktreeSelectionStore.getState().toggleDeletedWorktreeGroupExpanded();
+
+    useWorktreeSelectionStore.getState().dismissDeletedWorktree("wt-0");
+    // Two rows still form a group, so the expansion the user chose survives.
+    expect(useWorktreeSelectionStore.getState().deletedWorktreeGroupExpanded).toBe(true);
+
+    useWorktreeSelectionStore.getState().dismissDeletedWorktree("wt-1");
+    expect(useWorktreeSelectionStore.getState().deletedWorktreeGroupExpanded).toBe(false);
+  });
+
+  it("latches shut when pruning empties the cohort", () => {
+    addRows(3);
+    useWorktreeSelectionStore.getState().toggleDeletedWorktreeGroupExpanded();
+    setPanels([{ id: "t0", worktreeId: "wt-0" }]);
+    useWorktreeSelectionStore.getState().pruneDeletedWorktrees(new Set());
+
+    expect(useWorktreeSelectionStore.getState().deletedWorktrees.size).toBe(1);
+    expect(useWorktreeSelectionStore.getState().deletedWorktreeGroupExpanded).toBe(false);
+  });
+
+  it("does not inherit a stale expansion into the next burst", () => {
+    addRows(3);
+    useWorktreeSelectionStore.getState().toggleDeletedWorktreeGroupExpanded();
+    for (let i = 0; i < 3; i++) {
+      useWorktreeSelectionStore.getState().dismissDeletedWorktree(`wt-${i}`);
+    }
+    addRows(3);
+
+    expect(useWorktreeSelectionStore.getState().deletedWorktreeGroupExpanded).toBe(false);
+  });
+});

@@ -52,8 +52,13 @@ import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { usePanelStore, useWorktreeSelectionStore, useProjectStore } from "@/store";
 import type { PendingCreation, DeletedWorktree } from "@/store/worktreeStore";
-import { recordSidebarWorktreeOrder } from "@/store/worktreeStore";
+import {
+  recordSidebarWorktreeOrder,
+  DELETED_WORKTREE_GROUP_THRESHOLD,
+} from "@/store/worktreeStore";
+import { planDeletedWorktreePlacement } from "@/components/Sidebar/deletedWorktreePlacement";
 import { DeletedWorktreeCard } from "@/components/Sidebar/DeletedWorktreeCard";
+import { DeletedWorktreeGroup } from "@/components/Sidebar/DeletedWorktreeGroup";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import {
   selectSidebarVisiblePanelIds,
@@ -187,7 +192,23 @@ interface SidebarDeletedWorktreeFlatItem {
   ariaRowIndex: number;
 }
 
-type SidebarFlatItem = SidebarHeaderFlatItem | SidebarRowFlatItem | SidebarDeletedWorktreeFlatItem;
+/**
+ * Several deleted worktrees collapsed behind one summary row (#11260). One
+ * Virtuoso item regardless of expansion — the member cards render inside it —
+ * so it spans a variable number of ARIA rows while occupying a single index.
+ */
+interface SidebarDeletedWorktreeGroupFlatItem {
+  kind: "deletedWorktreeGroup";
+  id: string;
+  worktrees: DeletedWorktree[];
+  ariaRowIndex: number;
+}
+
+type SidebarFlatItem =
+  | SidebarHeaderFlatItem
+  | SidebarRowFlatItem
+  | SidebarDeletedWorktreeFlatItem
+  | SidebarDeletedWorktreeGroupFlatItem;
 
 interface SidebarVirtuosoContext {
   activeWorktreeId: string | null;
@@ -262,6 +283,18 @@ function renderSidebarFlatItem(
       <div role="row" aria-rowindex={item.ariaRowIndex}>
         <div role="gridcell">
           <DeletedWorktreeCard worktree={item.worktree} />
+        </div>
+      </div>
+    );
+  }
+  if (item.kind === "deletedWorktreeGroup") {
+    // One grid row whether collapsed or expanded: the group is a disclosure
+    // inside its own cell, so expanding changes the row's height rather than
+    // the grid's shape, and `aria-rowindex` stays stable for everything below.
+    return (
+      <div role="row" aria-rowindex={item.ariaRowIndex}>
+        <div role="gridcell">
+          <DeletedWorktreeGroup worktrees={item.worktrees} />
         </div>
       </div>
     );
@@ -1205,11 +1238,16 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
 
   // Total rows in the grid — pinned rows + group header rows + data rows.
   // Group header rows count toward aria-rowcount because they carry role="row".
+  // Deleted rows carry `role="row"` too, so they count — a collapsed group is
+  // one row no matter how many worktrees it holds.
+  const deletedRowCount =
+    deletedWorktrees.size >= DELETED_WORKTREE_GROUP_THRESHOLD ? 1 : deletedWorktrees.size;
   const ariaRowCount =
     integrationRowIndex +
     (groupedSections
       ? groupedSections.reduce((n, s) => n + 1 + s.worktrees.length, 0)
-      : filteredWorktrees.length);
+      : filteredWorktrees.length) +
+    deletedRowCount;
 
   // Build the flat item array that drives the virtualized scroll region. The
   // grouped path interleaves sticky header sentinels with static rows; the
@@ -1235,22 +1273,26 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     const deletedList = Array.from(deletedWorktrees.values()).sort(
       (a, b) => a.deletedAt - b.deletedAt
     );
-    const deletedByIndex = new Map<number, DeletedWorktree[]>();
-    const trailingDeleted: DeletedWorktree[] = [];
-    for (const deleted of deletedList) {
-      if (deleted.pinnedIndex >= 0 && deleted.pinnedIndex < filteredWorktrees.length) {
-        const bucket = deletedByIndex.get(deleted.pinnedIndex);
-        if (bucket) bucket.push(deleted);
-        else deletedByIndex.set(deleted.pinnedIndex, [deleted]);
-      } else {
-        trailingDeleted.push(deleted);
-      }
-    }
+    const {
+      isGrouped,
+      groupSlot,
+      byIndex: deletedByIndex,
+      trailing: trailingDeleted,
+    } = planDeletedWorktreePlacement(deletedList, filteredWorktrees.length);
+    const hasGroupSlot = groupSlot >= 0;
     const pushDeleted = (deleted: DeletedWorktree) => {
       items.push({
         kind: "deletedWorktree",
         id: `deleted-${deleted.id}`,
         worktree: deleted,
+        ariaRowIndex: nextRowIndex++,
+      });
+    };
+    const pushDeletedGroup = () => {
+      items.push({
+        kind: "deletedWorktreeGroup",
+        id: "deleted-worktree-group",
+        worktrees: deletedList,
         ariaRowIndex: nextRowIndex++,
       });
     };
@@ -1280,13 +1322,16 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       }
       // Type grouping has no slot for a worktree that no longer has a type to
       // group by, so deleted rows collect at the end rather than inventing a
-      // section for them.
-      for (const deleted of deletedList) pushDeleted(deleted);
+      // section for them. Piling up there is exactly what made a burst
+      // unreadable, so the group summary matters most in this path.
+      if (isGrouped) pushDeletedGroup();
+      else for (const deleted of deletedList) pushDeleted(deleted);
       return items;
     }
 
     for (let i = 0; i < filteredWorktrees.length; i++) {
-      for (const deleted of deletedByIndex.get(i) ?? []) pushDeleted(deleted);
+      if (hasGroupSlot && i === groupSlot) pushDeletedGroup();
+      if (!isGrouped) for (const deleted of deletedByIndex.get(i) ?? []) pushDeleted(deleted);
       const w = filteredWorktrees[i]!;
       items.push({
         kind: "row",
@@ -1298,7 +1343,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         mode: "sortable",
       });
     }
-    for (const deleted of trailingDeleted) pushDeleted(deleted);
+    if (isGrouped) {
+      if (!hasGroupSlot) pushDeletedGroup();
+    } else {
+      for (const deleted of trailingDeleted) pushDeleted(deleted);
+    }
     return items;
   }, [
     groupedSections,

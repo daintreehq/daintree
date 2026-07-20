@@ -23,7 +23,26 @@ export type TerminalPendingDestructiveActionKind =
   // Executes through `worktree.sessions.trashAll` like `worktreeTrashAll`;
   // it exists as its own kind purely so the copy can speak about a worktree
   // that no longer exists rather than "this worktree".
-  | "deletedWorktreeDismiss";
+  | "deletedWorktreeDismiss"
+  // Clearing every deleted-worktree row at once from the grouped summary
+  // (#11260). Fans the same `worktree.sessions.trashAll` executor over each
+  // member, and carries `preview` because D2 requires the dialog to list the
+  // terminals it is about to trash rather than just count them.
+  | "deletedWorktreeGroupDismiss";
+
+/** One terminal the group-dismiss confirm is about to trash. */
+export interface DeletedWorktreeGroupPreviewTerminal {
+  terminalId: string;
+  terminalTitle: string;
+  hasRunningAgent: boolean;
+}
+
+/** One deleted worktree in the group-dismiss confirm, with its terminals. */
+export interface DeletedWorktreeGroupPreviewWorktree {
+  worktreeId: string;
+  worktreeTitle: string;
+  terminals: DeletedWorktreeGroupPreviewTerminal[];
+}
 
 export interface TerminalPendingDestructiveActionSnapshot {
   kind: TerminalPendingDestructiveActionKind;
@@ -35,6 +54,13 @@ export interface TerminalPendingDestructiveActionSnapshot {
   worktreeId?: string;
   /** Terminal id for single-terminal actions (kill/restart). */
   terminalId?: string;
+  /**
+   * The actual terminals a `deletedWorktreeGroupDismiss` will trash, grouped by
+   * their deleted worktree. Required for that kind — D2 (#7880) wants the
+   * dialog to preview real content, and a bulk clear spanning several worktrees
+   * is the one case where a count tells the user nothing about what they lose.
+   */
+  preview?: DeletedWorktreeGroupPreviewWorktree[];
 }
 
 interface TerminalPendingDestructiveActionState {
