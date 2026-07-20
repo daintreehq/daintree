@@ -143,7 +143,7 @@ describe("HelpPanelBanners — launch error", () => {
     const cases: { kind: LaunchErrorKind; labels: string[] }[] = [
       { kind: "mcp-server-not-started", labels: ["Retry", "Open settings"] },
       { kind: "mcp-probe-failed", labels: ["Retry", "Open settings"] },
-      { kind: "skills-sync-failed", labels: ["Retry"] },
+      { kind: "skills-sync-failed", labels: ["Retry", "Open logs"] },
       { kind: "spawn-failed", labels: ["Retry"] },
       { kind: "folder-unavailable", labels: ["Open logs", "Open installer page"] },
     ];
@@ -192,6 +192,24 @@ describe("HelpPanelBanners — launch error", () => {
     fireEvent.click(getByText("Open installer page"));
     expect(onOpenInstallerPage).toHaveBeenCalledTimes(1);
     expect(onRetryLaunch).not.toHaveBeenCalled();
+  });
+
+  it("gives skills-sync-failed an escape hatch beyond Retry via Open logs", () => {
+    const onOpenLogs = vi.fn();
+    const onRetryLaunch = vi.fn();
+    const { getByText } = render(
+      <HelpPanelBanners
+        {...baseProps()}
+        launchError={{ agentId: "claude", kind: "skills-sync-failed" }}
+        onRetryLaunch={onRetryLaunch}
+        onOpenLogs={onOpenLogs}
+      />
+    );
+    fireEvent.click(getByText("Open logs"));
+    expect(onOpenLogs).toHaveBeenCalledTimes(1);
+    expect(onRetryLaunch).not.toHaveBeenCalled();
+    fireEvent.click(getByText("Retry"));
+    expect(onRetryLaunch).toHaveBeenCalledTimes(1);
   });
 
   it("renders nothing for the launch-error slot when launchError is null", () => {

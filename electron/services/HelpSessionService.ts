@@ -695,13 +695,24 @@ export class HelpSessionService {
       if (syncResult.omittedSkills.length > 0 || syncResult.failedCopies.length > 0) {
         console.warn(
           "[HelpSessionService] Assistant content partially mirrored; launching without:",
-          { omittedSkills: syncResult.omittedSkills, failedCopies: syncResult.failedCopies }
+          {
+            sessionPath,
+            omittedSkills: syncResult.omittedSkills,
+            failedCopies: syncResult.failedCopies,
+          }
         );
       }
       if (syncResult.staleFailures.length > 0) {
+        // Name the session dir: a stale file that survives removal (symlinked
+        // chain, or a directory where a managed file belongs) fails every
+        // retry identically, so clearing that path by hand is the only fix.
+        console.warn(
+          "[HelpSessionService] Assistant content sync left stale managed files; clear this session directory to recover:",
+          { sessionPath, staleFailures: syncResult.staleFailures }
+        );
         throw new HelpSessionError(
           "USER_CONTENT_SYNC_FAILED",
-          `Couldn't refresh the project's assistant commands and skills — outdated copies still present in the session directory: ${syncResult.staleFailures.join(", ")}`
+          `Couldn't refresh the project's assistant commands and skills — outdated copies still present in the session directory ${sessionPath}: ${syncResult.staleFailures.join(", ")}`
         );
       }
     }

@@ -275,6 +275,11 @@ describe("HelpSessionService", () => {
   });
 
   it("fails provisioning closed when stale mirrored content cannot be reconciled", async () => {
+    // The stale relpaths are only actionable alongside the directory holding
+    // them — clearing that dir by hand is the recovery for the permanent cases.
+    const clean = await service.provisionSession(provisionInput());
+    if (!clean) throw new Error("expected result");
+
     mockSyncAssistantContent.mockResolvedValue(
       cleanSyncResult({ staleFailures: [".agents/skills/old/SKILL.md"] })
     );
@@ -283,6 +288,9 @@ describe("HelpSessionService", () => {
       name: "HelpSessionError",
       code: "USER_CONTENT_SYNC_FAILED",
       message: expect.stringContaining(".agents/skills/old/SKILL.md"),
+    });
+    await expect(service.provisionSession(provisionInput())).rejects.toMatchObject({
+      message: expect.stringContaining(clean.sessionPath),
     });
   });
 
