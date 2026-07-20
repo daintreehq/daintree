@@ -64,6 +64,24 @@
   opacity: 0.5;
 }
 
+/* Applied to FilePane's body only while it hands back a height it pinned across
+ * the swap into rendered markdown (#11255). The pin itself is deliberately
+ * untransitioned — it has to take effect in the swap's own frame, or it
+ * animates the collapse instead of preventing it. Only the release is motion:
+ * a rendered document shorter than its source settles down rather than
+ * snapping. Panel-minimize tier, since this is a panel-sized box shrinking. */
+.file-pane-body-releasing {
+  transition-property: min-height;
+  transition-duration: var(--duration-120);
+  transition-timing-function: var(--ease-panel-minimize);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .file-pane-body-releasing {
+    transition-property: none;
+  }
+}
+
 /* Users with reduced-transparency preference still see the matched-pane
  * title-bar tint and the fleet ribbon's count — they don't need the dim
  * cue, which would just feel like the app went stale. Mirrors the

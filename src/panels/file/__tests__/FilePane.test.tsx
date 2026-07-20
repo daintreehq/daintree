@@ -31,9 +31,19 @@ vi.mock("@/components/Panel/ContentPanel", () => ({
 // therefore a toolbar) without disturbing the prop-forwarding tests.
 const panelsById: Record<string, unknown> = {};
 
+// Stable across selector calls so a test can assert which mode a toggle asked
+// for — a fresh vi.fn() per call records nothing observable.
+const { setFileViewModeMock, setFilePanelPathMock } = vi.hoisted(() => ({
+  setFileViewModeMock: vi.fn(),
+  setFilePanelPathMock: vi.fn(),
+}));
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: (selector: (state: unknown) => unknown) =>
-    selector({ panelsById, setFileViewMode: vi.fn(), setFilePanelPath: vi.fn() }),
+    selector({
+      panelsById,
+      setFileViewMode: setFileViewModeMock,
+      setFilePanelPath: setFilePanelPathMock,
+    }),
 }));
 vi.mock("@/store/projectStore", () => ({
   useProjectStore: (selector: (state: unknown) => unknown) => selector({ currentProject: null }),
@@ -65,8 +75,17 @@ vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: dispatchMock },
 }));
 vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
+// Captures the props FilePane hands the rendered viewer so the #11255 release
+// chain (FilePane → MarkdownViewer.onRendered → the height pin) is observable;
+// without this the wiring could be deleted with every test still green.
+const markdownViewerProps = vi.hoisted(() => ({
+  current: null as { onRendered?: () => void } | null,
+}));
 vi.mock("@/components/Markdown/MarkdownViewer", () => ({
-  MarkdownViewer: () => <div data-testid="markdown-viewer-mock" />,
+  MarkdownViewer: (props: { onRendered?: () => void }) => {
+    markdownViewerProps.current = props;
+    return <div data-testid="markdown-viewer-mock" />;
+  },
 }));
 vi.mock("@/components/FileViewer/CodeViewer", () => ({
   CodeViewer: () => <div data-testid="code-viewer-mock" />,
@@ -122,6 +141,9 @@ beforeEach(() => {
 afterEach(() => {
   contentPanelProps.length = 0;
   for (const key of Object.keys(panelsById)) delete panelsById[key];
+  setFileViewModeMock.mockReset();
+  setFilePanelPathMock.mockReset();
+  markdownViewerProps.current = null;
 });
 
 describe("FilePane restore-control wiring", () => {
@@ -455,5 +477,149 @@ describe("FilePane HTML Source/Rendered (#11191)", () => {
       { path: "/repo/dist/report.html" },
       { source: "user" }
     );
+  });
+});
+
+// #11255: a dialog host sizes to its content every frame, so swapping markdown
+// source for the rendered chunk's skeleton collapsed the dialog and expanded it
+// again once the document landed. FilePane pins the body's height across the
+// swap and the rendered document releases it. The pin's own lifecycle is
+// covered in useHeightHold.test.tsx; these cover FilePane's wiring — which
+// toggles arm a pin, and that the release signal actually reaches it.
+describe("FilePane rendered-swap height hold (#11255)", () => {
+  const SOURCE_HEIGHT = 640;
+
+  function stubHeight(node: HTMLElement) {
+    // jsdom lays nothing out; give the pane the height a real source view would
+    // have so the pin has something to measure.
+    node.getBoundingClientRect = vi.fn<() => DOMRect>(() => ({
+      height: SOURCE_HEIGHT,
+      width: 0,
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    }));
+  }
+
+  function seedPanel(filePath: string, fileViewMode: "source" | "rendered") {
+    panelsById["file-1"] = { id: "file-1", kind: "file", filePath, fileViewMode };
+  }
+
+  function paneElement(location: "dialog" | "grid") {
+    return (
+      <TooltipProvider>
+        <FilePane
+          id="file-1"
+          title="spec.md"
+          isFocused={true}
+          location={location}
+          onFocus={() => {}}
+          onClose={() => {}}
+        />
+      </TooltipProvider>
+    );
+  }
+
+  async function renderPane(
+    filePath: string,
+    location: "dialog" | "grid",
+    fileViewMode: "source" | "rendered" = "source"
+  ) {
+    seedPanel(filePath, fileViewMode);
+    const view = render(paneElement(location));
+    // Let files:read settle so the viewer branch is actually mounted.
+    await waitFor(() => expect(readMock).toHaveBeenCalled());
+    const body = await screen.findByTestId("file-pane-body");
+    stubHeight(body);
+    return { ...view, body };
+  }
+
+  async function clickToggle(label: string) {
+    const button = screen.getByRole("button", { name: label });
+    await act(async () => {
+      button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+  }
+
+  it("pins the source height when a dialog switches markdown to rendered", async () => {
+    const { body } = await renderPane("/repo/docs/spec.md", "dialog");
+
+    await clickToggle("Rendered");
+
+    expect(body.style.minHeight).toBe(`${SOURCE_HEIGHT}px`);
+  });
+
+  it("releases the pin once the rendered document reports its first commit", async () => {
+    const { body, rerender } = await renderPane("/repo/docs/spec.md", "dialog");
+    await clickToggle("Rendered");
+    expect(body.style.minHeight).toBe(`${SOURCE_HEIGHT}px`);
+
+    // The store mock is inert, so drive the mode change the way the real store
+    // would and re-render through the same FilePane instance.
+    seedPanel("/repo/docs/spec.md", "rendered");
+    rerender(paneElement("dialog"));
+    // The pin has to survive the swap itself — that is the whole point.
+    expect(body.style.minHeight).toBe(`${SOURCE_HEIGHT}px`);
+
+    const onRendered = markdownViewerProps.current?.onRendered;
+    expect(onRendered).toBeTypeOf("function");
+
+    vi.useFakeTimers();
+    try {
+      act(() => onRendered!());
+      expect(body.style.minHeight).toBe(`${SOURCE_HEIGHT}px`);
+      act(() => void vi.advanceTimersToNextFrame());
+      act(() => void vi.advanceTimersToNextFrame());
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(body.style.minHeight).toBe("");
+  });
+
+  it("drops the pin when the pane reverts to source before the document lands", async () => {
+    const { body, rerender } = await renderPane("/repo/docs/spec.md", "dialog");
+    await clickToggle("Rendered");
+    expect(body.style.minHeight).toBe(`${SOURCE_HEIGHT}px`);
+
+    seedPanel("/repo/docs/spec.md", "rendered");
+    rerender(paneElement("dialog"));
+    await clickToggle("Source");
+
+    expect(setFileViewModeMock).toHaveBeenLastCalledWith("file-1", "source");
+    expect(body.style.minHeight).toBe("");
+  });
+
+  it("drops the pin when the pane leaves the dialog for a layout-sized host", async () => {
+    const { body, rerender } = await renderPane("/repo/docs/spec.md", "dialog");
+    await clickToggle("Rendered");
+    expect(body.style.minHeight).toBe(`${SOURCE_HEIGHT}px`);
+
+    rerender(paneElement("grid"));
+
+    expect(body.style.minHeight).toBe("");
+  });
+
+  it("leaves a grid panel unpinned — its cell height is layout-owned, not content-driven", async () => {
+    const { body } = await renderPane("/repo/docs/spec.md", "grid");
+
+    await clickToggle("Rendered");
+
+    // The toggle still did its job; only the pin is scoped away.
+    expect(setFileViewModeMock).toHaveBeenLastCalledWith("file-1", "rendered");
+    expect(body.style.minHeight).toBe("");
+  });
+
+  it("leaves HTML alone — its preview frame owns its own height", async () => {
+    const { body } = await renderPane("/repo/dist/report.html", "dialog");
+
+    await clickToggle("Rendered");
+
+    expect(setFileViewModeMock).toHaveBeenLastCalledWith("file-1", "rendered");
+    expect(body.style.minHeight).toBe("");
   });
 });
