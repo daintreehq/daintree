@@ -21,6 +21,13 @@ vi.mock("@/components/ui/tooltip", () => ({
 
 vi.mock("@/components/Worktree/DiffViewer", () => ({
   DiffViewer: () => null,
+  FULL_FILE_MAX_LINES: 5000,
+}));
+
+// The full-file read is a real IPC call; the toolbar tests never exercise the
+// scope, so it stays inert rather than reaching for `window.electron`.
+vi.mock("../useDiffFileSource", () => ({
+  useDiffFileSource: () => ({ source: undefined, errorCode: null }),
 }));
 vi.mock("@/components/FileViewer/ImageDiffViewer", () => ({
   ImageDiffViewer: () => null,
@@ -72,6 +79,8 @@ vi.mock("@/store/preferencesStore", () => ({
       diffShowFileList: false,
       setDiffShowFileList: vi.fn(),
       diffFontSize: "m",
+      diffFullFile: false,
+      setDiffFullFile: vi.fn(),
     }),
 }));
 
@@ -159,7 +168,11 @@ beforeEach(() => {
   isWindowsMock.mockReturnValue(false);
   logErrorMock.mockReset();
   useDiffContentMock.mockReset();
-  useDiffContentMock.mockReturnValue({ content: "diff --git a/a.ts b/a.ts", stale: false, retry: vi.fn() });
+  useDiffContentMock.mockReturnValue({
+    content: "diff --git a/a.ts b/a.ts",
+    stale: false,
+    retry: vi.fn(),
+  });
   worktrees.clear();
   worktrees.set(WORKTREE_ID, { path: WORKTREE_ROOT, branch: "feature/x" });
   vi.stubGlobal(
@@ -295,9 +308,10 @@ describe("DiffPane toolbar — platform naming", () => {
       isMacMock.mockReturnValue(mac);
       isWindowsMock.mockReturnValue(windows);
       const { unmount } = renderPane();
-      const label = screen
-        .getByLabelText("Open in editor")
-        .previousElementSibling?.getAttribute("aria-label") ?? null;
+      const label =
+        screen
+          .getByLabelText("Open in editor")
+          .previousElementSibling?.getAttribute("aria-label") ?? null;
       unmount();
       return label;
     };

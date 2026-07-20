@@ -328,9 +328,7 @@ export function DiffPane({
       if (externalInFlightRef.current.has(target)) return;
       externalInFlightRef.current.add(target);
       const generation = externalGenerationRef.current;
-      setPendingTargets((current) =>
-        current.includes(target) ? current : [...current, target]
-      );
+      setPendingTargets((current) => (current.includes(target) ? current : [...current, target]));
       try {
         const result = await actionService.dispatch(
           target === "reveal" ? "file.showItemInFolder" : "file.openInEditor",
@@ -363,7 +361,8 @@ export function DiffPane({
     [absolutePath]
   );
 
-  const isErrorTargetPending = externalError !== null && pendingTargets.includes(externalError.target);
+  const isErrorTargetPending =
+    externalError !== null && pendingTargets.includes(externalError.target);
   // Below the Doherty threshold a spinner is just a flash; `disabled` still
   // blocks a double submit from the first millisecond.
   const showRetrySpinner = useDohertyGate(isErrorTargetPending);
@@ -598,9 +597,7 @@ export function DiffPane({
             disabled: isErrorTargetPending,
             onClick: () => void handleExternalAction(externalError.target),
             ariaLabel:
-              externalError.target === "reveal"
-                ? reveal.retryAriaLabel
-                : "Retry opening in editor",
+              externalError.target === "reveal" ? reveal.retryAriaLabel : "Retry opening in editor",
           }}
           onClose={() => setExternalError(null)}
           closeAriaLabel={
@@ -618,7 +615,12 @@ export function DiffPane({
               title="File changed since this diff loaded"
               role="status"
               ariaLive="polite"
-              action={{ id: "refresh-diff", label: "Refresh", icon: RefreshCw, onClick: refreshAll }}
+              action={{
+                id: "refresh-diff",
+                label: "Refresh",
+                icon: RefreshCw,
+                onClick: refreshAll,
+              }}
             />
           )}
           {/* Suppressed while the staleness banner is up: both would be pointing
@@ -633,7 +635,12 @@ export function DiffPane({
               ariaLive="polite"
               action={
                 fullFileNotice.recoverable
-                  ? { id: "refresh-full-file", label: "Retry", icon: RefreshCw, onClick: refreshAll }
+                  ? {
+                      id: "refresh-full-file",
+                      label: "Retry",
+                      icon: RefreshCw,
+                      onClick: refreshAll,
+                    }
                   : undefined
               }
             />
