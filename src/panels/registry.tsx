@@ -86,6 +86,11 @@ const LazyDiffPane = lazy(() => import("./diff/DiffPane").then((m) => ({ default
 // TerminalPane is intentionally NOT lazy/wrapped: it is the hottest panel kind,
 // open/close must feel instant, and a Suspense skeleton + 150ms fade on every
 // mount is a visible regression for a live text surface.
+// The fade wrapper is a real div, so for every lazy kind it — not the pane it
+// wraps — is the direct child of whatever hosts the panel. It therefore has to
+// carry the same sizing contract the pane roots do: `h-full` for the
+// block-level grid wrappers, `flex-1 min-h-0` so it can shrink inside the
+// dialog body's flex column instead of growing to fit a long file (#11254).
 // Browser/review/file fallbacks mirror their kind's content silhouette and all
 // bones pulse immediately — React's ~300ms fallback throttle already serves the
 // anti-flicker gate (#9040 note in useDeferredLoading.ts). Dev preview uses the
@@ -95,7 +100,7 @@ function BrowserPaneWrapper(props: ComponentProps<typeof LazyBrowserPane>) {
   return (
     <ErrorBoundary variant="component" componentName="BrowserPane">
       <Suspense fallback={<BrowserPaneSkeleton />}>
-        <ContentFadeIn className="flex flex-col h-full w-full">
+        <ContentFadeIn className="flex flex-col h-full w-full flex-1 min-h-0">
           <LazyBrowserPane {...props} />
         </ContentFadeIn>
       </Suspense>
@@ -117,7 +122,7 @@ function ReviewPaneWrapper(props: ComponentProps<typeof LazyReviewPane>) {
   return (
     <ErrorBoundary variant="component" componentName="ReviewPane">
       <Suspense fallback={<ReviewPaneSkeleton />}>
-        <ContentFadeIn className="flex flex-col h-full w-full">
+        <ContentFadeIn className="flex flex-col h-full w-full flex-1 min-h-0">
           <LazyReviewPane {...props} />
         </ContentFadeIn>
       </Suspense>
@@ -129,7 +134,7 @@ function FilePaneWrapper(props: ComponentProps<typeof LazyFilePane>) {
   return (
     <ErrorBoundary variant="component" componentName="FilePane">
       <Suspense fallback={<BrowserPaneSkeleton label="Loading file panel" />}>
-        <ContentFadeIn className="flex flex-col h-full w-full">
+        <ContentFadeIn className="flex flex-col h-full w-full flex-1 min-h-0">
           <LazyFilePane {...props} />
         </ContentFadeIn>
       </Suspense>
@@ -141,7 +146,7 @@ function DiffPaneWrapper(props: ComponentProps<typeof LazyDiffPane>) {
   return (
     <ErrorBoundary variant="component" componentName="DiffPane">
       <Suspense fallback={<BrowserPaneSkeleton label="Loading diff panel" />}>
-        <ContentFadeIn className="flex flex-col h-full w-full">
+        <ContentFadeIn className="flex flex-col h-full w-full flex-1 min-h-0">
           <LazyDiffPane {...props} />
         </ContentFadeIn>
       </Suspense>
