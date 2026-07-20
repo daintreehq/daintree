@@ -605,7 +605,7 @@ describe("terminal.moveToWorktree", () => {
 
     await run("terminal.moveToWorktree", { terminalId: "p1", worktreeId: "wt-2" });
 
-    expect(moveTerminalToWorktreeAndFollowRescueMock).toHaveBeenCalledWith("p1", "wt-2");
+    expect(moveTerminalToWorktreeAndFollowRescueMock).toHaveBeenCalledExactlyOnceWith("p1", "wt-2");
   });
 
   it("falls back to the focused panel when no terminal id is supplied", async () => {
@@ -617,7 +617,7 @@ describe("terminal.moveToWorktree", () => {
 
     await run("terminal.moveToWorktree", { worktreeId: "wt-2" });
 
-    expect(moveTerminalToWorktreeAndFollowRescueMock).toHaveBeenCalledWith("p-focused", "wt-2");
+    expect(moveTerminalToWorktreeAndFollowRescueMock).toHaveBeenCalledExactlyOnceWith("p-focused", "wt-2");
   });
 
   it("captures the undo snapshot before moving so the undo restores the origin", async () => {
@@ -626,6 +626,8 @@ describe("terminal.moveToWorktree", () => {
 
     await run("terminal.moveToWorktree", { terminalId: "p1", worktreeId: "wt-2" });
 
+    expect(pushLayoutSnapshotMock).toHaveBeenCalledTimes(1);
+    expect(moveTerminalToWorktreeAndFollowRescueMock).toHaveBeenCalledTimes(1);
     expect(pushLayoutSnapshotMock.mock.invocationCallOrder[0]).toBeLessThan(
       moveTerminalToWorktreeAndFollowRescueMock.mock.invocationCallOrder[0]!
     );

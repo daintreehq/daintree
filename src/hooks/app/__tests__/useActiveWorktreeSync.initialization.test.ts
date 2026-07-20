@@ -87,16 +87,18 @@ describe("useActiveWorktreeSync initialization", () => {
     expect(mocks.selectionState.selectWorktree).toHaveBeenCalledWith(mainWorktree.id);
   });
 
-  // The rescue-follow (#11273) lands the user on the destination before the row
-  // is pruned, so this generic fallback must keep owning every other way a
-  // deleted row can die — last terminal closed or trashed, dismissed, or
-  // auto-cleanup. The hook cannot tell those causes apart, so one case covers
-  // all of them.
+  // The rescue-follow (#11273) selects the destination after the row is pruned
+  // but before this effect runs, so it never reaches the branch below. Every
+  // other way a deleted row can die — last terminal closed or trashed, row
+  // dismissed, auto-cleanup — still lands here. The hook cannot tell those
+  // causes apart, so one case covers all of them.
   it("holds the selection on a deleted row and snaps to main only once it is gone", () => {
     mocks.selectionState.activeWorktreeId = "ghost";
     mocks.selectionState.deletedWorktrees = new Map([["ghost", {}]]);
+    // Feature first, so the assertion proves the fallback picks the designated
+    // main worktree rather than whatever happens to sit at index zero.
     mocks.useWorktrees.mockReturnValue({
-      worktrees: [mainWorktree, featureWorktree],
+      worktrees: [featureWorktree, mainWorktree],
       isInitialized: true,
     });
 
@@ -107,6 +109,6 @@ describe("useActiveWorktreeSync initialization", () => {
     mocks.selectionState.deletedWorktrees = new Map();
     rerender();
 
-    expect(mocks.selectionState.selectWorktree).toHaveBeenCalledWith(mainWorktree.id);
+    expect(mocks.selectionState.selectWorktree).toHaveBeenCalledExactlyOnceWith(mainWorktree.id);
   });
 });

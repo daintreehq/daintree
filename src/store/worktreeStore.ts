@@ -249,6 +249,7 @@ interface WorktreeSelectionState {
     next: { expiresAt: number | null; holdReason: DeletedWorktreeHoldReason | null }
   ) => void;
   clearRestoreTarget: (worktreeId: string) => void;
+  retargetParkedFleetSelection: (worktreeId: string) => void;
   pruneDeletedWorktrees: (liveWorktreeIds: ReadonlySet<string>) => void;
   toggleDeletedWorktreeGroupExpanded: () => void;
   toggleWorktreeExpanded: (id: string) => void;
@@ -898,6 +899,16 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     if (Object.keys(updates).length === 0) return;
     set(updates);
     persistActiveWorktree(null);
+  },
+
+  // Fleet scope parks the pre-scope selection and restores it verbatim on exit.
+  // A rescue performed while scoped (#11273) retires the parked id — its row is
+  // pruned the moment the last terminal leaves — so exiting would restore a
+  // worktree that no longer exists and hand the user back to main, undoing the
+  // follow. Retarget both slots so the destination survives the scope cycle.
+  retargetParkedFleetSelection: (worktreeId) => {
+    if (!get().isFleetScopeActive) return;
+    set({ _previousActiveWorktreeId: worktreeId, _previousRestoreWorktreeId: worktreeId });
   },
 
   pruneDeletedWorktrees: (liveWorktreeIds) => {

@@ -28,6 +28,14 @@ vi.mock("@/store/persistence/panelPersistence", () => ({
   },
 }));
 
+// The helper confirms the destination is live before following. Only that one
+// export is stubbed so the rest of the view-store module keeps its real shape.
+const liveWorktrees = new Map<string, unknown>();
+vi.mock("@/store/createWorktreeStore", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/store/createWorktreeStore")>()),
+  getCurrentViewStoreOrNull: () => ({ getState: () => ({ worktrees: liveWorktrees }) }),
+}));
+
 const { usePanelStore } = await import("@/store/panelStore");
 const { useWorktreeSelectionStore } = await import("@/store/worktreeStore");
 const { moveTerminalToWorktreeAndFollowRescue } = await import("../crossWorktreeMove");
@@ -78,7 +86,13 @@ function deletedRow(id: string): DeletedWorktree {
  * synchronously during the move. Without it the helper is being tested against
  * a world where rows never die.
  */
+function setLiveWorktrees(ids: string[]): void {
+  liveWorktrees.clear();
+  for (const id of ids) liveWorktrees.set(id, { id });
+}
+
 function wirePruneSubscriber(liveWorktreeIds: string[]): () => void {
+  setLiveWorktrees(liveWorktreeIds);
   return usePanelStore.subscribe((state, prevState) => {
     if (
       state.panelIdsByWorktreeId === prevState.panelIdsByWorktreeId &&
@@ -105,6 +119,7 @@ beforeEach(() => {
     commandQueue: [],
   });
   useWorktreeSelectionStore.getState().reset();
+  setLiveWorktrees([]);
   vi.clearAllMocks();
 });
 
@@ -146,14 +161,85 @@ describe("moveTerminalToWorktreeAndFollowRescue", () => {
   it("stays put when the deleted row still holds another terminal", () => {
     seedPanels([panel("t1", "wt-dead"), panel("t2", "wt-dead")]);
     useWorktreeSelectionStore.getState().addDeletedWorktree(deletedRow("wt-dead"));
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-dead", restoreWorktreeId: "wt-keep" });
+    unsubscribe = wirePruneSubscriber(["wt-live"]);
+
+    moveTerminalToWorktreeAndFollowRescue("t1", "wt-live");
+
+    const panels = usePanelStore.getState().panelsById;
+    expect(panels["t1"]?.worktreeId).toBe("wt-live");
+    expect(panels["t2"]?.worktreeId).toBe("wt-dead");
+    const selection = useWorktreeSelectionStore.getState();
+    expect(selection.deletedWorktrees.has("wt-dead")).toBe(true);
+    expect(selection.activeWorktreeId).toBe("wt-dead");
+    expect(selection.restoreWorktreeId).toBe("wt-keep");
+  });
+
+  it("follows once the row's only survivors are panels a dismiss would not close", () => {
+    // `getDeletedWorktreeTerminalIds` excludes trash/overlay/dialog, so a row
+    // holding only those is already empty as far as the prune is concerned.
+    seedPanels([
+      panel("t1", "wt-dead"),
+      panel("binned", "wt-dead", "trash"),
+      panel("assistant", "wt-dead", "overlay"),
+    ]);
+    useWorktreeSelectionStore.getState().addDeletedWorktree(deletedRow("wt-dead"));
     useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-dead" });
     unsubscribe = wirePruneSubscriber(["wt-live"]);
 
     moveTerminalToWorktreeAndFollowRescue("t1", "wt-live");
 
+    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-live");
+  });
+
+  it("keeps the follow alive across a fleet-scope cycle", () => {
+    seedPanels([panel("t1", "wt-dead")]);
+    useWorktreeSelectionStore.getState().addDeletedWorktree(deletedRow("wt-dead"));
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-dead" });
+    unsubscribe = wirePruneSubscriber(["wt-live"]);
+    const token = useWorktreeSelectionStore.getState().enterFleetScope();
+
+    moveTerminalToWorktreeAndFollowRescue("t1", "wt-live");
+    useWorktreeSelectionStore.getState().exitFleetScope(token);
+
+    // Exiting scope restores the parked pre-scope selection verbatim. Without
+    // retargeting it, that would hand the user back the pruned row and the
+    // fallback would strand the rescued session on main all over again.
     const selection = useWorktreeSelectionStore.getState();
-    expect(selection.deletedWorktrees.has("wt-dead")).toBe(true);
+    expect(selection.activeWorktreeId).toBe("wt-live");
+    expect(selection.restoreWorktreeId).toBe("wt-live");
+  });
+
+  it("does not follow to a destination the view store cannot vouch for", () => {
+    seedPanels([panel("t1", "wt-dead")]);
+    useWorktreeSelectionStore.getState().addDeletedWorktree(deletedRow("wt-dead"));
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-dead" });
+    // The row still empties, but "wt-ghost" is absent from the live map — the
+    // action layer accepts any string, and a bogus id must never become the
+    // durable restore target.
+    unsubscribe = wirePruneSubscriber(["wt-live"]);
+
+    moveTerminalToWorktreeAndFollowRescue("t1", "wt-ghost");
+
+    const selection = useWorktreeSelectionStore.getState();
     expect(selection.activeWorktreeId).toBe("wt-dead");
+    expect(selection.restoreWorktreeId).toBeNull();
+  });
+
+  it("moves a panel with no worktree of its own without touching selection", () => {
+    const orphan = { ...panel("t1", "wt-a"), worktreeId: undefined } as PtyPanelData;
+    usePanelStore.setState({
+      panelsById: { t1: orphan },
+      panelIds: ["t1"],
+      panelIdsByWorktreeId: {},
+    });
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-a" });
+    unsubscribe = wirePruneSubscriber(["wt-a", "wt-live"]);
+
+    moveTerminalToWorktreeAndFollowRescue("t1", "wt-live");
+
+    expect(usePanelStore.getState().panelsById["t1"]?.worktreeId).toBe("wt-live");
+    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-a");
   });
 
   it("never changes selection for a move between two live worktrees", () => {
@@ -195,7 +281,9 @@ describe("moveTerminalToWorktreeAndFollowRescue", () => {
     const panels = usePanelStore.getState().panelsById;
     expect(panels["t1"]?.worktreeId).toBe("wt-live");
     expect(panels["t2"]?.worktreeId).toBe("wt-live");
-    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-live");
+    const selection = useWorktreeSelectionStore.getState();
+    expect(selection.deletedWorktrees.has("wt-dead")).toBe(false);
+    expect(selection.activeWorktreeId).toBe("wt-live");
   });
 
   it("hands focus to the destination's last-focused terminal on a rescue", () => {
@@ -218,11 +306,15 @@ describe("moveTerminalToWorktreeAndFollowRescue", () => {
   it("clears focus without selecting anything when no rescue is involved", () => {
     seedPanels([panel("t1", "wt-a")]);
     usePanelStore.getState().setFocused("t1");
-    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-a" });
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-a", restoreWorktreeId: "wt-a" });
+    setLiveWorktrees(["wt-a", "wt-b"]);
 
     moveTerminalToWorktreeAndFollowRescue("t1", "wt-b");
 
     expect(usePanelStore.getState().focusedId).toBeNull();
+    const selection = useWorktreeSelectionStore.getState();
+    expect(selection.activeWorktreeId).toBe("wt-a");
+    expect(selection.restoreWorktreeId).toBe("wt-a");
   });
 
   it("leaves focus alone when the panel is already in the target worktree", () => {
