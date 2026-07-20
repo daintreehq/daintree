@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { useNotificationStore } from "@/store/notificationStore";
+import { useNotificationStore, type NotificationAction } from "@/store/notificationStore";
 import { logError } from "@/utils/logger";
 import { notify } from "@/lib/notify";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
@@ -7,6 +7,7 @@ import { useDistributionStore } from "@/store/distributionStore";
 
 const AVAILABLE_HINT = 'Use "Check for Updates..." to check again.';
 const UPDATE_CORRELATION_ID = "app-update";
+const RELEASE_NOTES_BASE_URL = "https://github.com/daintreehq/daintree/releases/tag";
 
 /** The stage of the update the user is currently being told about. */
 type UpdateStage = { version: string; downloaded: boolean };
@@ -45,6 +46,29 @@ function restartAction() {
   };
 }
 
+function releaseNotesAction(version: string): NotificationAction {
+  // `version` arrives as bare semver from the updater (AutoUpdaterService
+  // normalizes via semver.valid), while GitHub tags carry a leading `v`.
+  const url = `${RELEASE_NOTES_BASE_URL}/v${version}`;
+  return {
+    label: "View release notes",
+    // Secondary keeps "Restart to update" the single load-bearing CTA — this is
+    // an informational escape hatch, not a competing decision.
+    variant: "secondary",
+    // actionId + actionArgs (not bare onClick) so the button survives the
+    // inbox-history filter in notify.ts — actions without an actionId are
+    // silently dropped, leaving history text with no way to act on it.
+    actionId: "system.openExternal",
+    actionArgs: { url },
+    onClick: () => {
+      const promise = window.electron?.system?.openExternal(url);
+      if (promise) {
+        safeFireAndForget(promise, { context: "Open release notes" });
+      }
+    },
+  };
+}
+
 function surfaceAvailable(version: string): void {
   // Repeats and re-checks collapse onto the same toast via correlationId; no
   // bespoke dedup ref needed. The store's collapse path resets the auto-dismiss
@@ -60,8 +84,10 @@ function surfaceAvailable(version: string): void {
     // Explicit undefined: if a prior "Update ready" toast is live (stage
     // regression), clear its "Restart to update" action so the user does not
     // accidentally restart into a stale build while a newer one is still
-    // downloading.
+    // downloading, and clear its "View release notes" link so it cannot point
+    // at the superseded version's tag.
     action: undefined,
+    actions: undefined,
     // Forwarded to main only when the user explicitly closes the toast —
     // MAX_VISIBLE_TOASTS eviction and programmatic dismissals bypass this.
     onDismiss: () => {
@@ -88,6 +114,7 @@ function surfaceDownloaded(version: string): void {
       dismissed: false,
       onDismiss: undefined,
       action: restartAction(),
+      actions: [releaseNotesAction(version)],
     });
     return;
   }
@@ -108,6 +135,7 @@ function surfaceDownloaded(version: string): void {
     duration: 0,
     correlationId: UPDATE_CORRELATION_ID,
     action: restartAction(),
+    actions: [releaseNotesAction(version)],
   });
 }
 
