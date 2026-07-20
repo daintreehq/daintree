@@ -97,6 +97,7 @@ const worktree: DeletedWorktree = {
   path: "/repo/feature-login",
   deletedAt: 1000,
   expiresAt: null,
+  holdReason: null,
   pinnedIndex: 2,
 };
 
@@ -169,6 +170,70 @@ describe("DeletedWorktreeCard", () => {
 
     const readout = container.querySelector("[data-testid='deleted-worktree-countdown-seconds']");
     expect(readout?.textContent).toMatch(/^\d+s$/);
+  });
+
+  it("names the condition holding the countdown", () => {
+    setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+    const { container } = renderCard({
+      ...worktree,
+      expiresAt: Date.now() + 40_000,
+      holdReason: "agent",
+    });
+
+    const badge = container.querySelector("[data-testid='deleted-worktree-countdown-hold']");
+    // A row that simply stops counting down reads as broken — it has to say
+    // which condition is holding it.
+    expect(badge?.textContent).toBeTruthy();
+    expect(badge?.getAttribute("data-hold-reason")).toBe("agent");
+    // The remaining stays visible alongside it, so the row still shows what it
+    // is holding *at*.
+    const readout = container.querySelector("[data-testid='deleted-worktree-countdown-seconds']");
+    expect(readout?.textContent).toMatch(/^\d+s$/);
+  });
+
+  it("distinguishes the hold conditions from one another", () => {
+    setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+    const labelFor = (holdReason: DeletedWorktree["holdReason"]): string | undefined => {
+      const { container } = renderCard({
+        ...worktree,
+        expiresAt: Date.now() + 40_000,
+        holdReason,
+      });
+      const label = container.querySelector(
+        "[data-testid='deleted-worktree-countdown-hold']"
+      )?.textContent;
+      cleanup();
+      return label ?? undefined;
+    };
+
+    const labels = [labelFor("confirm"), labelFor("drag"), labelFor("agent")];
+    expect(labels.every((label) => label !== undefined && label.length > 0)).toBe(true);
+    expect(new Set(labels).size).toBe(labels.length);
+  });
+
+  it("shows no hold badge while the countdown is running", () => {
+    setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+    const { container } = renderCard({ ...worktree, expiresAt: Date.now() + 40_000 });
+
+    expect(container.querySelector("[data-testid='deleted-worktree-countdown-hold']")).toBeNull();
+    expect(
+      container
+        .querySelector("[data-testid='deleted-worktree-countdown']")
+        ?.getAttribute("data-held")
+    ).toBeNull();
+  });
+
+  it("hides the hold badge along with the countdown when auto-cleanup is off", () => {
+    setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+    usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: 0 });
+    const { container } = renderCard({
+      ...worktree,
+      expiresAt: Date.now() + 40_000,
+      holdReason: "drag",
+    });
+
+    expect(container.querySelector("[data-testid='deleted-worktree-countdown-hold']")).toBeNull();
+    expect(container.querySelector("[data-testid='deleted-worktree-countdown']")).toBeNull();
   });
 
   it("hides the countdown bar while auto-cleanup is off or the row is unarmed", () => {

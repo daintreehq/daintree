@@ -6,6 +6,7 @@ import {
   getDeletedWorktreeTerminalIds,
   useWorktreeSelectionStore,
   type DeletedWorktree,
+  type DeletedWorktreeHoldReason,
 } from "@/store/worktreeStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useTerminalPendingDestructiveActionStore } from "@/store/terminalPendingDestructiveActionStore";
@@ -25,6 +26,26 @@ interface DeletedWorktreeCardProps {
    */
   showDismissAction?: boolean;
 }
+
+/**
+ * What the row says while its countdown is held. The label has to survive a
+ * narrow sidebar next to the title and the "Deleted" pill, so it stays terse
+ * and the tooltip carries the explanation.
+ */
+const HOLD_COPY: Record<DeletedWorktreeHoldReason, { label: string; tooltip: string }> = {
+  confirm: {
+    label: "Confirming",
+    tooltip: "Auto-close is paused while you confirm closing this row",
+  },
+  drag: {
+    label: "Dragging",
+    tooltip: "Auto-close is paused while a drag is in progress",
+  },
+  agent: {
+    label: "Agent working",
+    tooltip: "Auto-close is paused while an agent here is still working",
+  },
+};
 
 /**
  * Sidebar row for a worktree whose directory is gone but whose terminals are
@@ -64,17 +85,21 @@ export function DeletedWorktreeCard({
 
   // Auto-cleanup countdown (deletedWorktreeCleanup.ts owns the deadline; this
   // is display only): a numeric seconds readout in the header plus the row's
-  // own bottom separator draining from full width to empty. Both hold at full
-  // while the sweep defers the deadline (drag in progress, agent still
-  // working, confirm dialog open).
+  // own bottom separator draining from full width to empty. While the sweep
+  // holds the countdown it pins the deadline to whatever remained when the hold
+  // began, so both freeze at that value — and `holdReason` says which condition
+  // is holding, because a row that just stops counting down reads as broken
+  // (#11259).
   const cleanupSeconds = usePreferencesStore((s) => s.deletedWorktreeCleanupSeconds);
   const [nowTick, setNowTick] = useState(() => Date.now());
   const expiresAt = worktree.expiresAt;
   const hasCountdown = expiresAt !== null && cleanupSeconds > 0;
+  const hold =
+    hasCountdown && worktree.holdReason !== null ? HOLD_COPY[worktree.holdReason] : undefined;
   useVisibilityAwareInterval(() => setNowTick(Date.now()), 1000, hasCountdown);
-  // The sweep (which re-extends the deadline while deferred) and this tick run
-  // on independent 1s phases — clamp remaining to the TTL (no "61s" flicker)
-  // and snap the top ~1.5s to exactly full so a paused bar holds steady
+  // The sweep (which re-pins the deadline while held) and this tick run on
+  // independent 1s phases — clamp remaining to the TTL (no "61s" flicker)
+  // and snap the top ~1.5s to exactly full so a held bar holds steady
   // instead of sawtoothing between full and full-minus-a-tick.
   const cleanupMs = cleanupSeconds * 1000;
   const rawRemainingMs = expiresAt !== null ? Math.max(0, expiresAt - nowTick) : 0;
@@ -211,10 +236,28 @@ export function DeletedWorktreeCard({
             </span>
           </span>
           <div className="flex items-center gap-2 shrink-0">
+            {hold !== undefined && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span
+                    className="shrink-0 rounded-full bg-overlay-soft px-1.5 py-0.5 text-[10px] font-medium text-text-muted"
+                    data-testid="deleted-worktree-countdown-hold"
+                    data-hold-reason={worktree.holdReason}
+                  >
+                    {hold.label}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="top">{hold.tooltip}</TooltipContent>
+              </Tooltip>
+            )}
             {hasCountdown && (
               <span
                 className="font-mono text-[11px] tabular-nums text-text-muted"
-                title={`Closes automatically in ${remainingSeconds}s`}
+                title={
+                  hold !== undefined
+                    ? `${hold.tooltip}, holding at ${remainingSeconds}s`
+                    : `Closes automatically in ${remainingSeconds}s`
+                }
                 data-testid="deleted-worktree-countdown-seconds"
               >
                 {remainingSeconds}s
@@ -280,9 +323,18 @@ export function DeletedWorktreeCard({
       >
         {hasCountdown && (
           <div
-            className="deleted-worktree-countdown-fill h-full bg-border-strong transition-[width] duration-1000 ease-linear motion-reduce:transition-none"
+            className={cn(
+              // The 1s linear sweep is the countdown's own tempo (it matches
+              // the tick that drives it), not a state-change tier. A held bar
+              // isn't moving, so animating it would only smear the moment it
+              // stops.
+              "deleted-worktree-countdown-fill h-full bg-border-strong",
+              hold === undefined && "transition-[width] duration-1000 ease-linear",
+              "motion-reduce:transition-none"
+            )}
             style={{ width: `${remainingFraction * 100}%` }}
             data-testid="deleted-worktree-countdown"
+            data-held={hold !== undefined ? "true" : undefined}
           />
         )}
       </div>

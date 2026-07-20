@@ -159,6 +159,26 @@ describe("WorktreeStoreProvider — surviving terminals on worktree removal", ()
     expect(usePanelStore.getState().panelIds).toContain("agent-a");
   });
 
+  it("records the ghost row unarmed and lets the cleanup sweep start the clock (#11259)", async () => {
+    const { store } = await renderProvider();
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-1")], nextV());
+    });
+    setPanels([{ id: "agent-a", worktreeId: "wt-1" }]);
+
+    act(() => {
+      emit("worktree-removed", removeEvent("wt-1"));
+    });
+
+    // Stamping a wall-clock deadline here charged the row for time a cached
+    // project view spent frozen, so it came back already expired with no
+    // window to rescue the surviving agents.
+    const row = useWorktreeSelectionStore.getState().deletedWorktrees.get("wt-1");
+    expect(row).toBeDefined();
+    expect(row?.expiresAt).toBeNull();
+    expect(row?.holdReason).toBeNull();
+  });
+
   it("keeps the deleted worktree active while its terminals survive", async () => {
     const { store } = await renderProvider();
     act(() => {
