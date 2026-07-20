@@ -9,15 +9,25 @@ export function getFilePath(file: File): string {
   return "";
 }
 
-export function estimateFileDiffBytes(file: File): number {
+/**
+ * Byte estimate for an arbitrary hunk set. Split out from
+ * `estimateFileDiffBytes` so the same measure can be taken of the hunks
+ * actually being rendered, which context expansion grows well past the parsed
+ * diff's own size.
+ */
+export function estimateHunksBytes(hunks: readonly File["hunks"][number][]): number {
   let bytes = 0;
-  for (const hunk of file.hunks ?? []) {
+  for (const hunk of hunks) {
     bytes += hunk.content.length;
     for (const change of hunk.changes) {
       bytes += change.content.length;
     }
   }
   return bytes;
+}
+
+export function estimateFileDiffBytes(file: File): number {
+  return estimateHunksBytes(file.hunks ?? []);
 }
 
 export function shouldCollapseByDefault(file: File): {

@@ -25,6 +25,7 @@ vi.mock("@/components/ui/tooltip", () => ({
 
 vi.mock("@/components/Worktree/DiffViewer", () => ({
   DiffViewer: () => <div data-testid="diff-viewer-mock" />,
+  FULL_FILE_MAX_LINES: 5000,
 }));
 vi.mock("@/components/FileViewer/ImageDiffViewer", () => ({
   ImageDiffViewer: () => <div data-testid="image-diff-mock" />,
@@ -77,6 +78,8 @@ const preferences = {
   setDiffWrapLines: vi.fn(),
   diffShowFileList: true,
   setDiffShowFileList: vi.fn(),
+  diffFullFile: false,
+  setDiffFullFile: vi.fn(),
 };
 vi.mock("@/store/preferencesStore", () => ({
   usePreferencesStore: (selector: (state: unknown) => unknown) => selector(preferences),
@@ -91,6 +94,17 @@ vi.mock("@/store/diffViewedStore", () => ({
 
 vi.mock("../useDiffContent", () => ({
   useDiffContent: useDiffContentMock,
+}));
+
+// The full-file read is a real IPC call; these tests never exercise the scope,
+// so it stays inert rather than reaching for `window.electron`.
+vi.mock("../useDiffFileSource", () => ({
+  useDiffFileSource: () => ({
+    source: undefined,
+    errorCode: null,
+    loading: false,
+    retry: vi.fn(),
+  }),
 }));
 
 import { DiffPane } from "../DiffPane";
