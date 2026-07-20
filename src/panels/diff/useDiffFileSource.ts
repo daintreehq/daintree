@@ -80,11 +80,14 @@ export function useDiffFileSource(
   }, [active, worktreePath, filePath]);
 
   useEffect(() => {
+    // The ref object is captured, not its value: the cleanup has to bump
+    // whatever the counter reads at teardown, which is the point.
+    const sequence = requestRef;
     void fetchSource();
     // Invalidate whatever is in flight when the file changes or the scope is
     // switched off, so a resolving read can't land on the next file.
     return () => {
-      requestRef.current++;
+      sequence.current++;
     };
   }, [fetchSource]);
 
