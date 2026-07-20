@@ -345,12 +345,17 @@ export function DiffPane({
 
   // One line explaining why a requested whole-file view isn't on screen. The
   // read failure wins over the viewer's verdict: without content the viewer
-  // never got far enough to have one.
-  const fullFileNotice = wantsFullFile
+  // never got far enough to have one. `recoverable` marks the notices a refresh
+  // can actually clear — a hunkless rename never grows hunks and an over-size
+  // file never shrinks, so those get no action rather than one that can't work.
+  const fullFileNotice: { message: string; recoverable: boolean } | null = wantsFullFile
     ? sourceErrorCode
-      ? FILE_READ_ERROR_MESSAGES[sourceErrorCode]
+      ? { message: FILE_READ_ERROR_MESSAGES[sourceErrorCode], recoverable: true }
       : activeViewerFallback
-        ? FULL_FILE_FALLBACK_MESSAGES[activeViewerFallback]
+        ? {
+            message: FULL_FILE_FALLBACK_MESSAGES[activeViewerFallback],
+            recoverable: activeViewerFallback === "source-mismatch",
+          }
         : null
     : null;
 
@@ -441,10 +446,14 @@ export function DiffPane({
           severity="warning"
           icon={FileDiffIcon}
           title="Showing changed lines only"
-          description={fullFileNotice}
+          description={fullFileNotice.message}
           role="status"
           ariaLive="polite"
-          action={{ id: "refresh-full-file", label: "Retry", icon: RefreshCw, onClick: refreshAll }}
+          action={
+            fullFileNotice.recoverable
+              ? { id: "refresh-full-file", label: "Retry", icon: RefreshCw, onClick: refreshAll }
+              : undefined
+          }
         />
       )}
     </>

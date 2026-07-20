@@ -16,15 +16,11 @@ export interface UseDiffFileSourceResult {
   source: string | undefined;
   /** Set when the read failed; `source` is undefined whenever this is set. */
   errorCode: FileReadErrorCode | null;
-  loading: boolean;
-  retry: () => void;
 }
 
 const IDLE: UseDiffFileSourceResult = {
   source: undefined,
   errorCode: null,
-  loading: false,
-  retry: () => {},
 };
 
 /**
@@ -44,7 +40,6 @@ export function useDiffFileSource(
 ): UseDiffFileSourceResult {
   const [source, setSource] = useState<string | undefined>(undefined);
   const [errorCode, setErrorCode] = useState<FileReadErrorCode | null>(null);
-  const [loading, setLoading] = useState(false);
   // IPC reads can't be aborted, so late responses are dropped by sequence
   // number instead — the same discipline `useDiffContent` uses.
   const requestRef = useRef(0);
@@ -58,12 +53,10 @@ export function useDiffFileSource(
     if (!active || worktreePath === undefined || filePath === undefined) {
       setSource(undefined);
       setErrorCode(null);
-      setLoading(false);
       return;
     }
     setSource(undefined);
     setErrorCode(null);
-    setLoading(true);
     try {
       // `files:read` rejects anything relative; panels store the path relative
       // to their worktree, so it has to be resolved before it crosses IPC.
@@ -71,11 +64,9 @@ export function useDiffFileSource(
       const result = await filesClient.read({ path: absolutePath, rootPath: worktreePath });
       if (requestRef.current !== requestId) return;
       setSource(result.content);
-      setLoading(false);
     } catch (error) {
       if (requestRef.current !== requestId) return;
       setErrorCode(isClientAppError(error) ? toFileReadErrorCode(error.code) : "INVALID_PATH");
-      setLoading(false);
     }
   }, [active, worktreePath, filePath]);
 
@@ -91,10 +82,6 @@ export function useDiffFileSource(
     };
   }, [fetchSource]);
 
-  const retry = useCallback(() => {
-    void fetchSource();
-  }, [fetchSource]);
-
   if (!active) return IDLE;
-  return { source, errorCode, loading, retry };
+  return { source, errorCode };
 }

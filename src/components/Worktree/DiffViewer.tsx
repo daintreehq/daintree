@@ -298,17 +298,6 @@ function estimateLineColumns(text: string): number {
 }
 
 /**
- * Confirm the supplied source really is the diff's new side before any of it is
- * shown as context.
- *
- * `buildSyntheticOldSource` trusts the source completely — it reconstructs the
- * old side by indexing into it at hunk offsets, so a source that has drifted
- * from the diff (the file edited between the two reads, or a revision the diff
- * was never generated against) yields believable-looking context lines that
- * belong to different code. Every hunk already carries its own new-side lines,
- * which gives a cheap way to check: they must appear verbatim at `newStart`.
- */
-/**
  * Split file content into its lines. A file ending in a newline splits with a
  * trailing empty element that is not a line of the file — left in, it renders
  * as a phantom blank row at the end of every expanded file and shifts the line
@@ -326,6 +315,17 @@ function toSourceLines(source: string): string[] {
   return lines.map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line));
 }
 
+/**
+ * Confirm the supplied source really is the diff's new side before any of it is
+ * shown as context.
+ *
+ * `buildSyntheticOldSource` trusts the source completely — it reconstructs the
+ * old side by indexing into it at hunk offsets, so a source that has drifted
+ * from the diff (the file edited between the two reads, or a revision the diff
+ * was never generated against) yields believable-looking context lines that
+ * belong to different code. Every hunk already carries its own new-side lines,
+ * which gives a cheap way to check: they must appear verbatim at `newStart`.
+ */
 function sourceMatchesHunks(newLines: string[], hunks: HunkData[]): boolean {
   if (!hunks.length) return false;
   for (const hunk of hunks) {

@@ -102,8 +102,6 @@ vi.mock("../useDiffFileSource", () => ({
   useDiffFileSource: () => ({
     source: undefined,
     errorCode: null,
-    loading: false,
-    retry: vi.fn(),
   }),
 }));
 

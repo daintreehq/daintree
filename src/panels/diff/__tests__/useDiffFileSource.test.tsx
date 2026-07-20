@@ -129,14 +129,19 @@ describe("useDiffFileSource", () => {
     expect(result.current.source).toBe("second file");
   });
 
-  it("re-reads on retry so a transient failure can recover", async () => {
+  // The panel recovers a failed read by retrying the diff, which drops the
+  // scope and re-enables it once the new diff lands — so that round trip, not a
+  // retry of its own, is what has to clear the error.
+  it("re-reads when the scope is switched off and back on so a transient failure can recover", async () => {
     readMock.mockRejectedValueOnce(new ClientAppError("NOT_FOUND", "gone"));
-    const { result } = renderHook(() => useDiffFileSource(SUBJECT, true));
+    const { result, rerender } = renderHook(
+      ({ enabled }: { enabled: boolean }) => useDiffFileSource(SUBJECT, enabled),
+      { initialProps: { enabled: true } }
+    );
     await waitFor(() => expect(result.current.errorCode).toBe("NOT_FOUND"));
 
-    await act(async () => {
-      result.current.retry();
-    });
+    rerender({ enabled: false });
+    rerender({ enabled: true });
 
     await waitFor(() => expect(result.current.source).toBe("file contents"));
     expect(result.current.errorCode).toBeNull();
@@ -145,7 +150,6 @@ describe("useDiffFileSource", () => {
   it("reports nothing for a null subject", () => {
     const { result } = renderHook(() => useDiffFileSource(null, true));
     expect(result.current.source).toBeUndefined();
-    expect(result.current.loading).toBe(false);
     expect(readMock).not.toHaveBeenCalled();
   });
 });
