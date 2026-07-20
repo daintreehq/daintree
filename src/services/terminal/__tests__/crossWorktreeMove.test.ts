@@ -1,5 +1,5 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
-import type { PtyPanelData } from "@shared/types/panel";
+import type { PanelLocation, PtyPanelData } from "@shared/types/panel";
 import type { DeletedWorktree } from "@/store/worktreeStore";
 
 vi.mock("@/clients", () => ({
@@ -40,7 +40,7 @@ const { usePanelStore } = await import("@/store/panelStore");
 const { useWorktreeSelectionStore } = await import("@/store/worktreeStore");
 const { moveTerminalToWorktreeAndFollowRescue } = await import("../crossWorktreeMove");
 
-function panel(id: string, worktreeId: string, location: "grid" | "dock" = "grid"): PtyPanelData {
+function panel(id: string, worktreeId: string, location: PanelLocation = "grid"): PtyPanelData {
   return {
     id,
     title: id,
@@ -80,17 +80,17 @@ function deletedRow(id: string): DeletedWorktree {
   };
 }
 
+function setLiveWorktrees(ids: string[]): void {
+  liveWorktrees.clear();
+  for (const id of ids) liveWorktrees.set(id, { id });
+}
+
 /**
  * Mirrors the panel-store subscriber `WorktreeStoreContext` installs in
  * production — the thing that makes an emptied deleted row prune itself
  * synchronously during the move. Without it the helper is being tested against
  * a world where rows never die.
  */
-function setLiveWorktrees(ids: string[]): void {
-  liveWorktrees.clear();
-  for (const id of ids) liveWorktrees.set(id, { id });
-}
-
 function wirePruneSubscriber(liveWorktreeIds: string[]): () => void {
   setLiveWorktrees(liveWorktreeIds);
   return usePanelStore.subscribe((state, prevState) => {
@@ -161,7 +161,10 @@ describe("moveTerminalToWorktreeAndFollowRescue", () => {
   it("stays put when the deleted row still holds another terminal", () => {
     seedPanels([panel("t1", "wt-dead"), panel("t2", "wt-dead")]);
     useWorktreeSelectionStore.getState().addDeletedWorktree(deletedRow("wt-dead"));
-    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-dead", restoreWorktreeId: "wt-keep" });
+    useWorktreeSelectionStore.setState({
+      activeWorktreeId: "wt-dead",
+      restoreWorktreeId: "wt-keep",
+    });
     unsubscribe = wirePruneSubscriber(["wt-live"]);
 
     moveTerminalToWorktreeAndFollowRescue("t1", "wt-live");
@@ -227,7 +230,7 @@ describe("moveTerminalToWorktreeAndFollowRescue", () => {
   });
 
   it("moves a panel with no worktree of its own without touching selection", () => {
-    const orphan = { ...panel("t1", "wt-a"), worktreeId: undefined } as PtyPanelData;
+    const orphan: PtyPanelData = { ...panel("t1", "wt-a"), worktreeId: undefined };
     usePanelStore.setState({
       panelsById: { t1: orphan },
       panelIds: ["t1"],

@@ -617,7 +617,10 @@ describe("terminal.moveToWorktree", () => {
 
     await run("terminal.moveToWorktree", { worktreeId: "wt-2" });
 
-    expect(moveTerminalToWorktreeAndFollowRescueMock).toHaveBeenCalledExactlyOnceWith("p-focused", "wt-2");
+    expect(moveTerminalToWorktreeAndFollowRescueMock).toHaveBeenCalledExactlyOnceWith(
+      "p-focused",
+      "wt-2"
+    );
   });
 
   it("captures the undo snapshot before moving so the undo restores the origin", async () => {
