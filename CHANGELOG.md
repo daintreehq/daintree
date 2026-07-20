@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.28.0] - 2026-07-20
+
+The file viewer, diff viewer, review workspace and review hub all move onto one panel model — each opens as a dialog and can be promoted into the grid, retiring four hand-rolled modals along the way. Deleting a worktree no longer kills the agents running in it: their terminals stay alive on a deleted-worktree card you can drag them out of.
+
+### Features
+
+**Panels**
+
+- Panels can present as dialogs, so the file viewer opens as a dialog and can be promoted into the grid (#11239)
+- The diff viewer, multi-file review workspace and image compare open as a diff panel from every entry point (#11242)
+- The review hub opens as a dialog-presented panel, and dialogs layer instead of replacing each other (#11243)
+
+**Worktrees**
+
+- Deleting a worktree keeps its agent terminals alive instead of killing them mid-session (#11232)
+- The deleted-worktree card accepts dragged-out terminals, matches the live card design, and clears itself on a countdown (#11237)
+
+**Terminal**
+
+- Agent scrollback ceiling raised from 5000 to 10000 lines (#11223)
+
+### Bug Fixes
+
+**Files & Plugins**
+
+- Images larger than 512 KB display in the file viewer instead of failing (#11222)
+- Installing a plugin archive can no longer hang forever holding the install lock (#11227)
+- Plugin panels take focus on click and carry the same pane chrome as every other panel kind (#11228)
+
+**Git & Forge**
+
+- git-lfs hooks no longer land as untracked files in every new worktree (#11226)
+- The PR dropdown derives CI status from required checks, matching the worktree sidebar (#11251)
+
+### Other Changes
+
+- Electron 42.7 picks up the Node descriptor-regression revert; Chrome stays on the 148 train (#11227)
+
 ## [0.27.0] - 2026-07-16
 
 This release hardens memory for long, multi-agent streaming sessions — renderer growth in project views is capped, idle cached views stop doing full-rate terminal work, and reclaim passes now free real memory. Alongside it, HTML files open in a proper in-app viewer with a Source/Rendered toggle, and a round of dock, plugin, and terminal fixes lands.
