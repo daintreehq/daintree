@@ -18,6 +18,12 @@ import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
 
 interface DeletedWorktreeCardProps {
   worktree: DeletedWorktree;
+  /**
+   * Grouped cards hide their own trash button (#11260) — the group's single
+   * bulk clear replaces N per-row ones, which is the point of grouping. A
+   * standalone card keeps it.
+   */
+  showDismissAction?: boolean;
 }
 
 /**
@@ -35,7 +41,10 @@ interface DeletedWorktreeCardProps {
  * terminals, and omitting that wrapper excludes it by construction rather than
  * by a flag `DndProvider` would have to check.
  */
-export function DeletedWorktreeCard({ worktree }: DeletedWorktreeCardProps) {
+export function DeletedWorktreeCard({
+  worktree,
+  showDismissAction = true,
+}: DeletedWorktreeCardProps) {
   const panelsById = usePanelStore((s) => s.panelsById);
   const panelIdsByWorktreeId = usePanelStore((s) => s.panelIdsByWorktreeId);
   const setFocused = usePanelStore((s) => s.setFocused);
@@ -211,22 +220,24 @@ export function DeletedWorktreeCard({ worktree }: DeletedWorktreeCardProps) {
                 {remainingSeconds}s
               </span>
             )}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleDismiss();
-                  }}
-                  className="sidebar-action-button shrink-0 p-1.5 -my-1.5 text-status-error/70 hover:text-status-error rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
-                  aria-label={closeLabel}
-                >
-                  <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="top">{closeLabel}</TooltipContent>
-            </Tooltip>
+            {showDismissAction && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDismiss();
+                    }}
+                    className="sidebar-action-button shrink-0 p-1.5 -my-1.5 text-status-error/70 hover:text-status-error rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                    aria-label={closeLabel}
+                  >
+                    <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top">{closeLabel}</TooltipContent>
+              </Tooltip>
+            )}
           </div>
         </div>
         <div className="truncate text-xs text-text-muted line-through mt-0.5" title={worktree.path}>

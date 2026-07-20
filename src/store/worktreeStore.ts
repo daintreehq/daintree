@@ -115,6 +115,37 @@ export function getDeletedWorktreeTerminalIds(worktreeId: string): string[] {
   });
 }
 
+/**
+ * Deleted rows collapse into a single summary row once this many pile up
+ * (#11260). A lone deleted worktree keeps the familiar full card; the second
+ * one forms the group, because two full-height ghost cards is already the
+ * point where the sidebar stops being readable.
+ */
+export const DELETED_WORKTREE_GROUP_THRESHOLD = 2;
+
+/**
+ * Latch the group shut once the cohort can no longer form one, so the next
+ * burst opens collapsed instead of inheriting an expansion from the last one.
+ */
+function collapseGroupBelowThreshold(
+  state: { deletedWorktreeGroupExpanded: boolean },
+  remaining: number
+): { deletedWorktreeGroupExpanded?: boolean } {
+  if (remaining >= DELETED_WORKTREE_GROUP_THRESHOLD) return {};
+  return state.deletedWorktreeGroupExpanded ? { deletedWorktreeGroupExpanded: false } : {};
+}
+
+/**
+ * Terminals held by several deleted rows at once, in the order the rows were
+ * given. Delegates per worktree so the `bulkTrashByWorktree` filter mirroring
+ * (#9699) holds for the group exactly as it does for a single row.
+ */
+export function getDeletedWorktreeTerminalIdsForWorktrees(
+  worktreeIds: readonly string[]
+): string[] {
+  return worktreeIds.flatMap((id) => getDeletedWorktreeTerminalIds(id));
+}
+
 interface QuickCreateState {
   isOpen: boolean;
   issue: Issue | null;
@@ -157,6 +188,14 @@ interface WorktreeSelectionState {
    * restore pipeline's cwd inference to resolve on the next launch.
    */
   deletedWorktrees: Map<string, DeletedWorktree>;
+  /**
+   * Whether the collapsed deleted-worktree group is showing its member cards
+   * (#11260). Session-only, like `expandedTerminals` — `deletedWorktrees` is
+   * itself in-memory, so persisting this would outlive everything it describes.
+   * Latches back to `false` whenever the cohort drops below the group
+   * threshold, so a later burst never inherits a stale expansion.
+   */
+  deletedWorktreeGroupExpanded: boolean;
   expandedWorktrees: Set<string>;
   expandedTerminals: Set<string>;
   createDialog: CreateDialogState;
@@ -201,6 +240,7 @@ interface WorktreeSelectionState {
   setDeletedWorktreeExpiry: (worktreeId: string, expiresAt: number | null) => void;
   clearRestoreTarget: (worktreeId: string) => void;
   pruneDeletedWorktrees: (liveWorktreeIds: ReadonlySet<string>) => void;
+  toggleDeletedWorktreeGroupExpanded: () => void;
   toggleWorktreeExpanded: (id: string) => void;
   setWorktreeExpanded: (id: string, expanded: boolean) => void;
   collapseAllWorktrees: () => void;
@@ -549,6 +589,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
   pendingWorktreeId: null,
   pendingCreations: new Map<string, PendingCreation>(),
   deletedWorktrees: new Map<string, DeletedWorktree>(),
+  deletedWorktreeGroupExpanded: false,
   expandedWorktrees: new Set<string>(),
   expandedTerminals: new Set<string>(),
   createDialog: {
@@ -815,7 +856,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       if (!state.deletedWorktrees.has(worktreeId)) return state;
       const next = new Map(state.deletedWorktrees);
       next.delete(worktreeId);
-      return { deletedWorktrees: next };
+      return { deletedWorktrees: next, ...collapseGroupBelowThreshold(state, next.size) };
     });
   },
 
@@ -861,9 +902,12 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       if (stale.length === 0) return state;
       const next = new Map(state.deletedWorktrees);
       for (const id of stale) next.delete(id);
-      return { deletedWorktrees: next };
+      return { deletedWorktrees: next, ...collapseGroupBelowThreshold(state, next.size) };
     });
   },
+
+  toggleDeletedWorktreeGroupExpanded: () =>
+    set((state) => ({ deletedWorktreeGroupExpanded: !state.deletedWorktreeGroupExpanded })),
 
   toggleWorktreeExpanded: (id) =>
     set((state) => {
@@ -1208,6 +1252,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       pendingWorktreeId: null,
       pendingCreations: new Map<string, PendingCreation>(),
       deletedWorktrees: new Map<string, DeletedWorktree>(),
+      deletedWorktreeGroupExpanded: false,
       expandedWorktrees: new Set<string>(),
       expandedTerminals: new Set<string>(),
       createDialog: {

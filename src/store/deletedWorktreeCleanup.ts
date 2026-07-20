@@ -69,6 +69,15 @@ function hasWorkingAgent(worktreeId: string): boolean {
 function isCountdownDeferred(worktreeId: string, deps: SweepDeps): boolean {
   const pending = useTerminalPendingDestructiveActionStore.getState().pending;
   if (pending?.kind === "deletedWorktreeDismiss" && pending.worktreeId === worktreeId) return true;
+  // The grouped clear previews several rows at once, so every previewed member
+  // holds while the user reads the dialog — expiring one mid-read would trash
+  // terminals the confirm is still offering to spare (#11260).
+  if (
+    pending?.kind === "deletedWorktreeGroupDismiss" &&
+    pending.preview?.some((entry) => entry.worktreeId === worktreeId)
+  ) {
+    return true;
+  }
   if (deps.isDragActive()) return true;
   return hasWorkingAgent(worktreeId);
 }
@@ -96,19 +105,45 @@ export function resetDeletedWorktreeCleanupState(): void {
  * only inverse (restore from trash). Inbox-only — the event is unattended by
  * definition, so a toast would interrupt whatever the user moved on to.
  */
-function notifySweepTrashed(title: string, count: number, worktreeId: string): void {
+interface SweptRow {
+  worktreeId: string;
+  title: string;
+  count: number;
+}
+
+/**
+ * One inbox entry per sweep pass, not per row (#11260). A burst of deletions is
+ * armed with the same TTL at the same moment, so its rows all expire on one
+ * tick — announcing each of them wrote N entries describing a single event. The
+ * low-priority inbox path skips `notify`'s rate limiter and coalescing
+ * entirely, so collapsing the burst has to happen here, at the call site.
+ */
+function notifySweepTrashed(swept: readonly SweptRow[]): void {
+  if (swept.length === 0) return;
+  const terminalCount = swept.reduce((n, row) => n + row.count, 0);
+  const terminalNoun = terminalCount === 1 ? "terminal" : "terminals";
+  const single = swept.length === 1 ? swept[0]! : null;
+  let message: string;
+  if (single === null) {
+    message = `${swept.length} deleted worktrees still had ${terminalCount} ${terminalNoun} open — they moved to trash and close shortly.`;
+  } else if (single.count === 1) {
+    message = `${single.title} still had 1 terminal open — it moved to trash and closes shortly.`;
+  } else {
+    message = `${single.title} still had ${single.count} terminals open — they moved to trash and close shortly.`;
+  }
   notify({
     type: "info",
-    title: "Deleted worktree cleaned up",
-    message:
-      count === 1
-        ? `${title} still had 1 terminal open — it moved to trash and closes shortly.`
-        : `${title} still had ${count} terminals open — they moved to trash and close shortly.`,
+    title: single ? "Deleted worktree cleaned up" : "Deleted worktrees cleaned up",
+    message,
     // `agent` is the right domain (these are agent sessions) but its policy
     // baseline is active/high; pin low so the unattended record stays a record
     // and never interrupts whatever the user moved on to.
     priority: "low",
-    context: { worktreeId, eventKind: "agent" },
+    // A multi-row sweep has no single worktree to attribute, and pinning one
+    // member's id would make the entry navigate somewhere arbitrary.
+    context: single
+      ? { worktreeId: single.worktreeId, eventKind: "agent" }
+      : { eventKind: "agent" },
   });
 }
 
@@ -126,6 +161,7 @@ export function sweepDeletedWorktreeCleanup(deps: SweepDeps = DEFAULT_DEPS): voi
 
   const ttlSeconds = usePreferencesStore.getState().deletedWorktreeCleanupSeconds;
   const now = deps.now();
+  const swept: SweptRow[] = [];
 
   for (const entry of deletedWorktrees.values()) {
     // An unarmed entry is a fresh (or re-recorded) row — any stale fired flag
@@ -164,9 +200,13 @@ export function sweepDeletedWorktreeCleanup(deps: SweepDeps = DEFAULT_DEPS): voi
       // the panels have already left the row.
       const trashedCount = getDeletedWorktreeTerminalIds(entry.id).length;
       usePanelStore.getState().bulkTrashByWorktree(entry.id);
-      if (trashedCount > 0) notifySweepTrashed(entry.title, trashedCount, entry.id);
+      if (trashedCount > 0) {
+        swept.push({ worktreeId: entry.id, title: entry.title, count: trashedCount });
+      }
     }
   }
+
+  notifySweepTrashed(swept);
 }
 
 /**

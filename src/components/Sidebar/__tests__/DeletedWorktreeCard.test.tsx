@@ -404,3 +404,28 @@ describe("DeletedWorktreeCard", () => {
     expect(container.querySelector("[data-worktree-drop-target]")).toBeNull();
   });
 });
+
+describe("DeletedWorktreeCard — grouped (#11260)", () => {
+  it("hides its own dismiss button so the group's bulk clear is the only one", () => {
+    setPanels([
+      { id: "t1", worktreeId: "wt-1" },
+      { id: "t2", worktreeId: "wt-1" },
+    ]);
+    render(
+      <TooltipProvider>
+        <DeletedWorktreeCard worktree={worktree} showDismissAction={false} />
+      </TooltipProvider>
+    );
+
+    expect(screen.queryByRole("button", { name: "Close 2 terminals" })).toBeNull();
+    // The rest of the card is unchanged — it still identifies its worktree.
+    expect(screen.getByText("feature/login")).toBeTruthy();
+  });
+
+  it("keeps the dismiss button by default", () => {
+    setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+    renderCard();
+
+    expect(screen.getByRole("button", { name: "Close 1 terminal" })).toBeTruthy();
+  });
+});
