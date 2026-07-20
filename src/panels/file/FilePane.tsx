@@ -172,10 +172,11 @@ export function FilePane({
   );
 
   // A file swapped underneath an active pin would hold the new document at the
-  // old one's height.
+  // old one's height, and a pane promoted out of the dialog would carry a
+  // content-sized floor into a layout-sized host.
   useEffect(() => {
     heightHold.cancel();
-  }, [filePath, heightHold]);
+  }, [filePath, location, heightHold]);
 
   const worktreeId = panel?.worktreeId;
   const worktreePath = useWorktreeStore(
