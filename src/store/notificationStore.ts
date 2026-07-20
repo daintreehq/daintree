@@ -208,6 +208,17 @@ export const useNotificationStore = create<NotificationStore>((set) => ({
           // onto a downloading-again state. Unset keys still preserve the
           // existing action (the default "missing = preserve" semantic).
           const actionResolved = "action" in notification ? notification.action : liveMatch.action;
+          // `actions` is tri-state, mirroring `action`'s explicit-clear escape
+          // hatch: an explicit `actions: undefined` clears the slot (same stage
+          // regression rationale as above), while an omitted key or an empty
+          // array still preserves the existing array — callers that pass `[]`
+          // mean "I have no actions to contribute", not "wipe the ones there".
+          const actionsResolved =
+            "actions" in notification && notification.actions === undefined
+              ? undefined
+              : incomingHasActions
+                ? notification.actions
+                : liveMatch.actions;
           const messageChanged = !messagesEqual(notification.message, liveMatch.message);
           return {
             notifications: state.notifications.map((n) =>
@@ -221,7 +232,7 @@ export const useNotificationStore = create<NotificationStore>((set) => ({
                     inboxMessage: notification.inboxMessage ?? n.inboxMessage,
                     duration: notification.duration ?? n.duration,
                     action: actionResolved,
-                    actions: incomingHasActions ? notification.actions : n.actions,
+                    actions: actionsResolved,
                     onDismiss: notification.onDismiss ?? n.onDismiss,
                     historyEntryId: notification.historyEntryId ?? n.historyEntryId,
                     count: (n.count ?? 1) + 1,
