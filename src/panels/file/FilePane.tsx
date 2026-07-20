@@ -1,7 +1,18 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ExternalLink, FileText, Globe, RefreshCw, Search, WrapText, XCircle } from "lucide-react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ExternalLink,
+  FileDiff as FileDiffIcon,
+  FileText,
+  Globe,
+  RefreshCw,
+  Search,
+  WrapText,
+  XCircle,
+} from "lucide-react";
 import type { FileViewMode } from "@shared/types/panel";
 import { isFilePanel } from "@shared/types/panel";
+import type { GitStatus } from "@shared/types/git";
+import { isPathInside, normalize, toWorktreeRelative } from "@shared/utils/path";
 import type { FileReadErrorCode } from "@shared/types/ipc/files";
 import type { BasePanelProps } from "@/components/Panel/ContentPanel";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
@@ -17,8 +28,10 @@ import { isImageFilePath, isSvgFilePath } from "@/components/FileViewer/filePrev
 import { sanitizeSvg } from "@shared/utils/svgSanitizer";
 import { formatBytes } from "@/lib/formatBytes";
 import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
+import { useDiffContent } from "@/panels/diff/useDiffContent";
+import type { DiffSubject } from "@/panels/diff/diffContentCache";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
+import { Skeleton, SkeletonBone, SkeletonHint, SkeletonText } from "@/components/ui/Skeleton";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import {
   FILE_READ_ERROR_MESSAGES,
@@ -41,6 +54,35 @@ export interface FilePaneProps extends BasePanelProps {
   onTabClose?: (tabId: string) => void;
   onTabRename?: (tabId: string, newTitle: string) => void;
   onAddTab?: () => void;
+}
+
+// Kept out of the file panel's chunk: it pulls react-diff-view, the tokenizer
+// and the diff stylesheet, none of which a plain file view needs. Mirrors how
+// the panel registry splits the panes themselves.
+const LazyDiffViewer = lazy(() =>
+  import("@/components/Worktree/DiffViewer").then((m) => ({ default: m.DiffViewer }))
+);
+
+const MODE_LABELS: Record<FileViewMode, string> = {
+  source: "Source",
+  rendered: "Rendered",
+  diff: "Diff",
+};
+
+// Shared by the fetch wait and the lazy-chunk wait so the two are
+// indistinguishable on screen. `Skeleton` carries the 400ms anti-flicker gate.
+function DiffLoadingSkeleton() {
+  return (
+    <div className="p-4 space-y-3">
+      <Skeleton label="Loading diff">
+        <SkeletonBone className="h-7 w-3/4" />
+        <SkeletonText lines={8} />
+      </Skeleton>
+      {/* Sibling, never nested: the wrapper's aria-busy silences mutations
+          inside its own subtree. */}
+      <SkeletonHint />
+    </div>
+  );
 }
 
 const toForwardSlashes = (p: string) => p.replace(/\\/g, "/");
@@ -142,15 +184,98 @@ export function FilePane({
   const setFilePanelPath = usePanelStore((state) => state.setFilePanelPath);
   const markdownWrapLines = usePreferencesStore((state) => state.markdownWrapLines);
   const setMarkdownWrapLines = usePreferencesStore((state) => state.setMarkdownWrapLines);
+  // Shared with the diff panel so a user's split/unified and wrap choices carry
+  // across every surface that shows a diff.
+  const diffViewType = usePreferencesStore((state) => state.diffViewType);
+  const diffWrapLines = usePreferencesStore((state) => state.diffWrapLines);
 
   const heightHold = useHeightHold();
 
   const filePath = panel?.filePath;
   const isMarkdown = filePath !== undefined && isMarkdownFilePath(filePath);
   const isHtml = filePath !== undefined && isHtmlFilePath(filePath);
-  // Markdown and HTML get a Source/Rendered toggle; every other file is source-only.
+  // Markdown and HTML get a Rendered mode; every other file is source-only.
   const isRenderable = isMarkdown || isHtml;
-  const viewMode: FileViewMode = isRenderable ? (panel?.fileViewMode ?? "source") : "source";
+
+  const worktreeId = panel?.worktreeId;
+  const worktreePath = useWorktreeStore(
+    useCallback(
+      (state) => (worktreeId ? (state.worktrees.get(worktreeId)?.path ?? "") : ""),
+      [worktreeId]
+    )
+  );
+
+  // Whether a file has local changes is a git fact about where it physically
+  // lives, not about the panel's binding: `file.openPanel` resolves an explicit
+  // rootPath but still stamps the *active* worktree id, so `panel.worktreeId`
+  // can name a worktree the file isn't in. Resolve by containment instead, with
+  // the deepest root winning so a nested worktree beats its parent. "" = the
+  // file is in no known worktree, so there's nothing to diff it against.
+  const diffWorktreePath = useWorktreeStore(
+    useCallback(
+      (state): string => {
+        if (!filePath) return "";
+        let best = "";
+        let bestLength = -1;
+        for (const worktree of state.worktrees.values()) {
+          if (!isPathInside(filePath, worktree.path)) continue;
+          const length = normalize(worktree.path).length;
+          if (length <= bestLength) continue;
+          best = worktree.path;
+          bestLength = length;
+        }
+        return best;
+      },
+      [filePath]
+    )
+  );
+
+  const relativeFilePath = useMemo(
+    () => (filePath && diffWorktreePath ? toWorktreeRelative(filePath, diffWorktreePath) : ""),
+    [filePath, diffWorktreePath]
+  );
+
+  // Scalar status, never the change entry: `changes` is rebuilt wholesale every
+  // poll tick, so returning the object would re-render the pane on each tick —
+  // the same Object.is bail-out `selectDiffFreshnessKey` relies on (#8635).
+  const localChangeStatus = useWorktreeStore(
+    useCallback(
+      (state): GitStatus | undefined => {
+        if (!diffWorktreePath || !relativeFilePath) return undefined;
+        for (const worktree of state.worktrees.values()) {
+          if (normalize(worktree.path) !== normalize(diffWorktreePath)) continue;
+          // Stored change paths are absolute today (electron/utils/git.ts keys
+          // changesMap by absolutePath) though the type says relative — fold
+          // both shapes to the same relative form before comparing.
+          return worktree.worktreeChanges?.changes?.find(
+            (change) =>
+              normalize(toWorktreeRelative(change.path, worktree.path)) === relativeFilePath
+          )?.status;
+        }
+        return undefined;
+      },
+      [diffWorktreePath, relativeFilePath]
+    )
+  );
+
+  // Rendered and Diff are independent capabilities. One derived list drives
+  // both the toggle and the clamp, so a persisted mode whose capability is gone
+  // falls back to Source — never written back, since a poll that transiently
+  // drops the change must not erase what the user picked.
+  const availableModes = useMemo<FileViewMode[]>(
+    () => [
+      "source",
+      ...(isRenderable ? (["rendered"] as const) : []),
+      ...(localChangeStatus !== undefined ? (["diff"] as const) : []),
+    ],
+    [isRenderable, localChangeStatus]
+  );
+  const requestedMode = panel?.fileViewMode ?? "source";
+  const viewMode: FileViewMode = availableModes.includes(requestedMode) ? requestedMode : "source";
+  const toggleOptions = useMemo(
+    () => availableModes.map((mode) => ({ value: mode, label: MODE_LABELS[mode] })),
+    [availableModes]
+  );
 
   // A dialog host sizes to its content every frame, so swapping markdown source
   // for the rendered chunk's skeleton collapses the dialog and expands it again
@@ -161,7 +286,11 @@ export function FilePane({
   // immediately, so the reverse just drops any stale pin.
   const handleViewModeChange = useCallback(
     (mode: FileViewMode) => {
-      if (location === "dialog" && isMarkdown && viewMode === "source" && mode === "rendered") {
+      // Diff collapses the same way: it swaps the document for an async
+      // skeleton. Its first content commit is the release signal, in place of
+      // the rendered document's onRendered.
+      const collapsesOnEntry = mode === "diff" || (mode === "rendered" && isMarkdown);
+      if (location === "dialog" && viewMode === "source" && collapsesOnEntry) {
         heightHold.hold();
       } else {
         heightHold.cancel();
@@ -178,13 +307,29 @@ export function FilePane({
     heightHold.cancel();
   }, [filePath, location, heightHold]);
 
-  const worktreeId = panel?.worktreeId;
-  const worktreePath = useWorktreeStore(
-    useCallback(
-      (state) => (worktreeId ? (state.worktrees.get(worktreeId)?.path ?? "") : ""),
-      [worktreeId]
-    )
+  // Only fetch while Diff is the live mode; a null subject also invalidates any
+  // response still in flight from a mode the user has since left.
+  const diffSubject = useMemo<DiffSubject | null>(
+    () =>
+      viewMode === "diff" && diffWorktreePath && relativeFilePath && localChangeStatus !== undefined
+        ? {
+            source: "working-tree",
+            worktreePath: diffWorktreePath,
+            filePath: relativeFilePath,
+            status: localChangeStatus,
+          }
+        : null,
+    [viewMode, diffWorktreePath, relativeFilePath, localChangeStatus]
   );
+  // No `nextSubject`: there's no file to step to from a single-file viewer.
+  const { content: diffContent, stale: diffStale, retry: retryDiff } = useDiffContent(diffSubject);
+
+  // The diff has no onRendered of its own; its first content commit (including
+  // the ERROR sentinel) is the equivalent signal for releasing a dialog pin.
+  useEffect(() => {
+    if (viewMode === "diff" && diffContent !== undefined) heightHold.handleRendered();
+  }, [viewMode, diffContent, heightHold]);
+
   const projectPath = useProjectStore((state) => state.currentProject?.path ?? "");
 
   // Containment root for files.read / daintree-file://: the worktree or
@@ -319,6 +464,15 @@ export function FilePane({
     loadFile(false);
   }, [loadFile]);
 
+  // Leaving Diff — by choice or because the change vanished — lands on source
+  // cached before the edit that prompted the diff in the first place. Re-read it
+  // silently, so a file deleted mid-view can't keep reading as present.
+  const wasDiffModeRef = useRef(viewMode === "diff");
+  useEffect(() => {
+    if (wasDiffModeRef.current && viewMode !== "diff") loadFile(true);
+    wasDiffModeRef.current = viewMode === "diff";
+  }, [viewMode, loadFile]);
+
   // Agents rewrite files while the user reads them: silently re-read when the
   // pane regains focus or the app window returns to the foreground.
   const wasFocusedRef = useRef(isFocused);
@@ -435,12 +589,9 @@ export function FilePane({
   const toolbar = filePath ? (
     <>
       <FileViewerToolbar.Root>
-        {isRenderable && (
+        {availableModes.length > 1 && (
           <SegmentedToggle<FileViewMode>
-            options={[
-              { value: "source", label: "Source" },
-              { value: "rendered", label: "Rendered" },
-            ]}
+            options={toggleOptions}
             value={viewMode}
             onChange={handleViewModeChange}
           />
@@ -456,7 +607,12 @@ export function FilePane({
               <WrapText className="w-4 h-4" />
             </FileViewerToolbar.IconButton>
           )}
-          <FileViewerToolbar.IconButton label="Refresh" onClick={() => loadFile(false)}>
+          {/* Refresh follows what's on screen — re-reading the file wouldn't
+              refetch a diff, and vice versa. */}
+          <FileViewerToolbar.IconButton
+            label="Refresh"
+            onClick={() => (viewMode === "diff" ? retryDiff() : loadFile(false))}
+          >
             <RefreshCw className="w-4 h-4" />
           </FileViewerToolbar.IconButton>
           <FileViewerToolbar.IconButton
@@ -471,6 +627,16 @@ export function FilePane({
           </FileViewerToolbar.IconButton>
         </FileViewerToolbar.Actions>
       </FileViewerToolbar.Root>
+      {viewMode === "diff" && diffStale && diffContent !== undefined && (
+        <InlineStatusBanner
+          severity="info"
+          icon={FileDiffIcon}
+          title="File changed since this diff loaded"
+          role="status"
+          ariaLive="polite"
+          action={{ id: "refresh-diff", label: "Refresh", icon: RefreshCw, onClick: retryDiff }}
+        />
+      )}
       {openError && (
         <InlineStatusBanner
           icon={XCircle}
@@ -525,9 +691,34 @@ export function FilePane({
     >
       <div
         ref={heightHold.bodyRef}
-        className="flex-1 min-h-0 overflow-auto bg-daintree-bg"
+        className={`flex-1 min-h-0 overflow-auto bg-daintree-bg${
+          viewMode === "diff" ? " diff-scroll-root" : ""
+        }`}
         data-testid="file-pane-body"
       >
+        {/* Ahead of every load-state branch on purpose: a deleted file fails
+            files.read, and images/binaries never load as text, yet their diff is
+            exactly what the user asked to see. */}
+        {filePath && viewMode === "diff" && (
+          <Suspense fallback={<DiffLoadingSkeleton />}>
+            {diffContent === undefined ? (
+              <DiffLoadingSkeleton />
+            ) : (
+              <LazyDiffViewer
+                diff={diffContent}
+                viewType={diffViewType}
+                // The diff's paths are relative to the worktree the file
+                // physically lives in, not the one the panel is stamped with,
+                // so open-in-editor has to join against the same root the
+                // relative paths were derived from.
+                rootPath={diffWorktreePath}
+                wrapLines={diffWrapLines}
+                onRetry={retryDiff}
+              />
+            )}
+          </Suspense>
+        )}
+
         {!filePath && (
           <div className="flex h-full w-full flex-col items-center justify-center gap-4 p-6">
             <EmptyState
@@ -574,7 +765,7 @@ export function FilePane({
           </div>
         )}
 
-        {filePath && loadState === "loading" && (
+        {filePath && viewMode !== "diff" && loadState === "loading" && (
           <div className="p-4 space-y-3">
             <Skeleton label="Loading file">
               <SkeletonBone className="h-5 w-1/3" />
@@ -583,7 +774,7 @@ export function FilePane({
           </div>
         )}
 
-        {filePath && loadState === "error" && errorCode && (
+        {filePath && viewMode !== "diff" && loadState === "error" && errorCode && (
           <div className="flex h-full flex-col items-center justify-center gap-3 p-6">
             <p className="text-sm text-muted-foreground">
               {errorMessage ?? FILE_READ_ERROR_MESSAGES[errorCode]}
@@ -599,7 +790,7 @@ export function FilePane({
           </div>
         )}
 
-        {filePath && (loadState === "image" || loadState === "svg") && (
+        {filePath && viewMode !== "diff" && (loadState === "image" || loadState === "svg") && (
           <FileImagePreview
             filePath={filePath}
             rootPath={effectiveRootPath}
@@ -614,6 +805,7 @@ export function FilePane({
         )}
 
         {filePath &&
+          viewMode !== "diff" &&
           loadState === "loaded" &&
           content !== null &&
           (viewMode === "rendered" && isMarkdown ? (

@@ -50,10 +50,23 @@ vi.mock("@/store/projectStore", () => ({
 }));
 vi.mock("@/store/preferencesStore", () => ({
   usePreferencesStore: (selector: (state: unknown) => unknown) =>
-    selector({ markdownWrapLines: false, setMarkdownWrapLines: vi.fn() }),
+    selector({
+      markdownWrapLines: false,
+      setMarkdownWrapLines: vi.fn(),
+      diffViewType: "unified",
+      diffWrapLines: false,
+      diffIgnoreWhitespace: false,
+    }),
 }));
+// Mutable so a test can seed a worktree whose change list makes the file
+// locally changed — the Diff option's only trigger (#11274).
+interface WorktreeLike {
+  path: string;
+  worktreeChanges?: { changes: Array<{ path: string; status: string }> } | null;
+}
+const worktreeState = vi.hoisted(() => ({ worktrees: new Map<string, unknown>() }));
 vi.mock("@/hooks/useWorktreeStore", () => ({
-  useWorktreeStore: (selector: (state: unknown) => unknown) => selector({ worktrees: new Map() }),
+  useWorktreeStore: (selector: (state: unknown) => unknown) => selector(worktreeState),
 }));
 vi.mock("@/store/accessibilityAnnouncerStore", () => ({
   useAnnouncerStore: { getState: () => ({ announce: vi.fn() }) },
@@ -90,6 +103,30 @@ vi.mock("@/components/Markdown/MarkdownViewer", () => ({
 vi.mock("@/components/FileViewer/CodeViewer", () => ({
   CodeViewer: () => <div data-testid="code-viewer-mock" />,
 }));
+// Typed rather than bare vi.fn() so reading .mock.calls needs no `as` cast
+// (which would regress the no-unsafe-type-assertion ratchet).
+interface DiffSubjectLike {
+  source: string;
+  worktreePath: string;
+  filePath: string;
+  status: string;
+}
+const { useDiffContentMock } = vi.hoisted(() => ({
+  useDiffContentMock: vi.fn<
+    (subject: DiffSubjectLike | null) => {
+      content: string | undefined;
+      stale: boolean;
+      retry: () => void;
+    }
+  >(),
+}));
+vi.mock("@/panels/diff/useDiffContent", () => ({ useDiffContent: useDiffContentMock }));
+// FilePane lazy-loads the viewer, so assertions on it must await the chunk.
+vi.mock("@/components/Worktree/DiffViewer", () => ({
+  DiffViewer: (props: { diff: string; rootPath?: string }) => (
+    <div data-testid="diff-viewer-mock" data-diff={props.diff} data-root={props.rootPath ?? ""} />
+  ),
+}));
 vi.mock("@/components/Html/HtmlViewer", () => ({
   HtmlViewer: (props: { previewUrl: string | null; reloadNonce: number }) => (
     <div
@@ -102,6 +139,7 @@ vi.mock("@/components/Html/HtmlViewer", () => ({
 
 import { FilePane } from "../FilePane";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { FILE_READ_ERROR_MESSAGES } from "@/components/FileViewer/fileReadErrors";
 
 function lastContentPanelProps(): Record<string, unknown> {
   const props = contentPanelProps.at(-1);
@@ -112,6 +150,9 @@ function lastContentPanelProps(): Record<string, unknown> {
 beforeEach(() => {
   dispatchMock.mockReset();
   dispatchMock.mockResolvedValue({ ok: true, result: undefined });
+  useDiffContentMock.mockReset();
+  useDiffContentMock.mockReturnValue({ content: undefined, stale: false, retry: vi.fn() });
+  worktreeState.worktrees.clear();
   // Reset per test so a prior test's read call can't satisfy a later
   // toHaveBeenCalledWith assertion (cross-test contamination).
   readMock.mockReset();
@@ -621,5 +662,427 @@ describe("FilePane rendered-swap height hold (#11255)", () => {
 
     expect(setFileViewModeMock).toHaveBeenLastCalledWith("file-1", "rendered");
     expect(body.style.minHeight).toBe("");
+  });
+});
+
+// #11274: a file with local worktree changes gets a third "Diff" option, so the
+// user can see what changed without leaving the viewer. Availability is derived
+// per file — Rendered and Diff are independent capabilities.
+describe("FilePane diff mode (#11274)", () => {
+  const WORKTREE_ID = "wt-1";
+  const WORKTREE_PATH = "/repo";
+
+  function seedWorktree(changes: Array<{ path: string; status: string }> | null) {
+    const worktree: WorktreeLike = {
+      path: WORKTREE_PATH,
+      worktreeChanges: changes === null ? null : { changes },
+    };
+    worktreeState.worktrees.set(WORKTREE_ID, worktree);
+  }
+
+  function paneElement() {
+    return (
+      <TooltipProvider>
+        <FilePane
+          id="file-1"
+          title="index.ts"
+          isFocused={false}
+          location="grid"
+          onFocus={() => {}}
+          onClose={() => {}}
+        />
+      </TooltipProvider>
+    );
+  }
+
+  async function renderPane(options: {
+    filePath?: string;
+    worktreeId?: string | undefined;
+    fileViewMode?: string;
+  }) {
+    const filePath = options.filePath ?? "/repo/src/index.ts";
+    panelsById["file-1"] = {
+      id: "file-1",
+      kind: "file",
+      filePath,
+      worktreeId: "worktreeId" in options ? options.worktreeId : WORKTREE_ID,
+      fileViewMode: options.fileViewMode,
+    };
+    const view = render(paneElement());
+    // Flush the file read and the lazy diff chunk so no state update lands
+    // outside act(). Can't wait on readMock — an image short-circuits before it.
+    await act(async () => {});
+    return view;
+  }
+
+  function toggleLabels(): string[] {
+    return screen
+      .getAllByRole("button")
+      .map((b) => b.textContent ?? "")
+      .filter((label) => label === "Source" || label === "Rendered" || label === "Diff");
+  }
+
+  function lastSubject(): DiffSubjectLike | null {
+    const call = useDiffContentMock.mock.calls.at(-1);
+    if (!call) throw new Error("useDiffContent was never called");
+    return call[0];
+  }
+
+  describe("capability matrix", () => {
+    it("offers no toggle for a plain unchanged file", async () => {
+      await renderPane({ filePath: "/repo/src/index.ts" });
+      expect(toggleLabels()).toEqual([]);
+    });
+
+    it("offers Source and Diff for a changed non-renderable file", async () => {
+      seedWorktree([{ path: "/repo/src/index.ts", status: "modified" }]);
+      await renderPane({ filePath: "/repo/src/index.ts" });
+      expect(toggleLabels()).toEqual(["Source", "Diff"]);
+    });
+
+    it("offers Source and Rendered for an unchanged markdown file", async () => {
+      await renderPane({ filePath: "/repo/docs/spec.md" });
+      expect(toggleLabels()).toEqual(["Source", "Rendered"]);
+    });
+
+    it("offers all three, Diff last, for a changed markdown file", async () => {
+      seedWorktree([{ path: "/repo/docs/spec.md", status: "modified" }]);
+      await renderPane({ filePath: "/repo/docs/spec.md" });
+      expect(toggleLabels()).toEqual(["Source", "Rendered", "Diff"]);
+    });
+  });
+
+  describe("change lookup", () => {
+    it("matches a change stored as an absolute path", async () => {
+      seedWorktree([{ path: "/repo/src/index.ts", status: "modified" }]);
+      await renderPane({ filePath: "/repo/src/index.ts" });
+      expect(toggleLabels()).toContain("Diff");
+    });
+
+    // The type says worktree-relative; the producer emits absolute today.
+    // Both shapes must resolve to the same file.
+    it("matches the same change stored as a worktree-relative path", async () => {
+      seedWorktree([{ path: "src/index.ts", status: "modified" }]);
+      await renderPane({ filePath: "/repo/src/index.ts" });
+      expect(toggleLabels()).toContain("Diff");
+    });
+
+    it("does not match a different file in the same worktree", async () => {
+      seedWorktree([{ path: "/repo/src/other.ts", status: "modified" }]);
+      await renderPane({ filePath: "/repo/src/index.ts" });
+      expect(toggleLabels()).toEqual([]);
+    });
+
+    // Whether a file has local changes is a fact about where it lives, not
+    // about the panel's binding — which file.openPanel stamps with the *active*
+    // worktree even when it resolved the path against a different root.
+    it("finds the change through containment when the panel carries no worktree id", async () => {
+      seedWorktree([{ path: "/repo/src/index.ts", status: "modified" }]);
+      await renderPane({ filePath: "/repo/src/index.ts", worktreeId: undefined });
+      expect(toggleLabels()).toContain("Diff");
+    });
+
+    it("finds the change when the panel is bound to a different worktree", async () => {
+      seedWorktree([{ path: "/repo/src/index.ts", status: "modified" }]);
+      worktreeState.worktrees.set("wt-other", { path: "/other", worktreeChanges: { changes: [] } });
+      await renderPane({ filePath: "/repo/src/index.ts", worktreeId: "wt-other" });
+      expect(toggleLabels()).toContain("Diff");
+    });
+
+    it("offers no Diff for a file inside no known worktree", async () => {
+      seedWorktree([{ path: "/repo/src/index.ts", status: "modified" }]);
+      await renderPane({ filePath: "/elsewhere/src/index.ts" });
+      expect(toggleLabels()).toEqual([]);
+    });
+
+    // Deepest root wins, so a file in a nested worktree diffs against that
+    // worktree rather than its parent — which may not list it as changed.
+    it("prefers the deepest containing worktree", async () => {
+      worktreeState.worktrees.set("wt-outer", {
+        path: "/repo",
+        worktreeChanges: { changes: [] },
+      });
+      worktreeState.worktrees.set("wt-inner", {
+        path: "/repo/nested",
+        worktreeChanges: { changes: [{ path: "src/index.ts", status: "added" }] },
+      });
+      await renderPane({ filePath: "/repo/nested/src/index.ts", fileViewMode: "diff" });
+
+      expect(lastSubject()).toEqual({
+        source: "working-tree",
+        worktreePath: "/repo/nested",
+        filePath: "src/index.ts",
+        status: "added",
+      });
+    });
+
+    // A sibling root that merely extends the worktree name must not read as
+    // "inside" it — the trap `isPathInside` exists to close.
+    it("offers no Diff for a file in a sibling directory sharing the root prefix", async () => {
+      seedWorktree([{ path: "/repo-other/src/index.ts", status: "modified" }]);
+      await renderPane({ filePath: "/repo-other/src/index.ts" });
+      expect(toggleLabels()).toEqual([]);
+    });
+
+    it("offers no Diff when the worktree reports a null change list", async () => {
+      seedWorktree(null);
+      await renderPane({ filePath: "/repo/src/index.ts" });
+      expect(toggleLabels()).toEqual([]);
+    });
+  });
+
+  describe("mode clamping", () => {
+    it("falls back to source when a persisted diff mode has no local change", async () => {
+      await renderPane({ filePath: "/repo/src/index.ts", fileViewMode: "diff" });
+      expect(await screen.findByTestId("code-viewer-mock")).toBeTruthy();
+      expect(screen.queryByTestId("diff-viewer-mock")).toBeNull();
+    });
+
+    it("falls back to source when a persisted rendered mode has no renderable file", async () => {
+      await renderPane({ filePath: "/repo/src/index.ts", fileViewMode: "rendered" });
+      expect(await screen.findByTestId("code-viewer-mock")).toBeTruthy();
+    });
+
+    // The two capabilities must not authorize each other: a renderable file is
+    // not thereby diffable, and a changed file is not thereby renderable.
+    it("falls back to source for a persisted diff mode on an unchanged markdown file", async () => {
+      await renderPane({ filePath: "/repo/docs/spec.md", fileViewMode: "diff" });
+      expect(screen.queryByTestId("diff-viewer-mock")).toBeNull();
+      expect(lastSubject()).toBeNull();
+    });
+
+    it("falls back to source for a persisted rendered mode on a changed non-renderable file", async () => {
+      seedWorktree([{ path: "/repo/src/index.ts", status: "modified" }]);
+      await renderPane({ filePath: "/repo/src/index.ts", fileViewMode: "rendered" });
+      expect(await screen.findByTestId("code-viewer-mock")).toBeTruthy();
+      expect(screen.queryByTestId("markdown-viewer-mock")).toBeNull();
+    });
+
+    // The clamp is derived, not written back: a poll that transiently drops the
+    // change must not erase the mode the user picked.
+    it("never writes the fallback back to panel state", async () => {
+      await renderPane({ filePath: "/repo/src/index.ts", fileViewMode: "diff" });
+      expect(setFileViewModeMock).not.toHaveBeenCalled();
+    });
+
+    it("honours a persisted diff mode once the file is locally changed", async () => {
+      seedWorktree([{ path: "/repo/src/index.ts", status: "modified" }]);
+      useDiffContentMock.mockReturnValue({
+        content: "@@ -1 +1 @@",
+        stale: false,
+        retry: vi.fn(),
+      });
+      await renderPane({ filePath: "/repo/src/index.ts", fileViewMode: "diff" });
+      expect(await screen.findByTestId("diff-viewer-mock")).toBeTruthy();
+    });
+  });
+
+  // Every other diff test seeds the mode directly, so a toggle that never
+  // dispatched "diff" would leave them all green.
+  describe("selecting the option", () => {
+    it("asks the store for diff mode when the Diff segment is clicked", async () => {
+      seedWorktree([{ path: "/repo/src/index.ts", status: "modified" }]);
+      await renderPane({ filePath: "/repo/src/index.ts" });
+
+      await act(async () => {
+        screen
+          .getByRole("button", { name: "Diff" })
+          .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(setFileViewModeMock).toHaveBeenLastCalledWith("file-1", "diff");
+    });
+  });
+
+  // Leaving diff lands on source cached before the edit that prompted it.
+  describe("returning to source", () => {
+    it("re-reads the file when the mode leaves diff", async () => {
+      seedWorktree([{ path: "/repo/src/index.ts", status: "modified" }]);
+      useDiffContentMock.mockReturnValue({ content: "@@ -1 +1 @@", stale: false, retry: vi.fn() });
+      const { rerender } = await renderPane({
+        filePath: "/repo/src/index.ts",
+        fileViewMode: "diff",
+      });
+      const readCallsBefore = readMock.mock.calls.length;
+
+      panelsById["file-1"] = {
+        id: "file-1",
+        kind: "file",
+        filePath: "/repo/src/index.ts",
+        worktreeId: WORKTREE_ID,
+        fileViewMode: "source",
+      };
+      await act(async () => {
+        rerender(paneElement());
+      });
+
+      expect(readMock.mock.calls.length).toBeGreaterThan(readCallsBefore);
+    });
+  });
+
+  describe("diff subject", () => {
+    it("passes the worktree-relative path and the exact stored status", async () => {
+      seedWorktree([{ path: "/repo/src/index.ts", status: "added" }]);
+      await renderPane({ filePath: "/repo/src/index.ts", fileViewMode: "diff" });
+
+      expect(lastSubject()).toEqual({
+        source: "working-tree",
+        worktreePath: WORKTREE_PATH,
+        filePath: "src/index.ts",
+        status: "added",
+      });
+    });
+
+    it("passes no subject while Source is the live mode", async () => {
+      seedWorktree([{ path: "/repo/src/index.ts", status: "modified" }]);
+      await renderPane({ filePath: "/repo/src/index.ts", fileViewMode: "source" });
+      expect(lastSubject()).toBeNull();
+    });
+  });
+
+  // The viewer joins its rootPath with the diff's worktree-relative paths to
+  // build the open-in-editor target, so the root has to be the very worktree the
+  // diff was fetched against — never the one the panel happens to be stamped
+  // with, which containment resolution exists precisely to override.
+  describe("diff viewer root", () => {
+    function viewerRoot(): string | null {
+      return screen.getByTestId("diff-viewer-mock").getAttribute("data-root");
+    }
+
+    async function renderDiff(options: { filePath: string; worktreeId?: string | undefined }) {
+      useDiffContentMock.mockReturnValue({ content: "@@ -1 +1 @@", stale: false, retry: vi.fn() });
+      await renderPane({ ...options, fileViewMode: "diff" });
+      expect(await screen.findByTestId("diff-viewer-mock")).toBeTruthy();
+    }
+
+    it("roots the viewer at the resolved worktree, not the panel's stamped one", async () => {
+      // Panel is stamped with the outer worktree; the file lives in the nested
+      // one, so the relative paths in the diff are relative to the nested root.
+      worktreeState.worktrees.set(WORKTREE_ID, {
+        path: WORKTREE_PATH,
+        worktreeChanges: { changes: [] },
+      });
+      worktreeState.worktrees.set("wt-inner", {
+        path: "/repo/nested",
+        worktreeChanges: { changes: [{ path: "src/index.ts", status: "modified" }] },
+      });
+
+      await renderDiff({ filePath: "/repo/nested/src/index.ts" });
+
+      expect(viewerRoot()).toBe(lastSubject()?.worktreePath);
+      expect(viewerRoot()).not.toBe(WORKTREE_PATH);
+    });
+
+    it("roots the viewer by containment when the panel carries no worktree id", async () => {
+      seedWorktree([{ path: "/repo/src/index.ts", status: "modified" }]);
+
+      await renderDiff({ filePath: "/repo/src/index.ts", worktreeId: undefined });
+
+      // Without containment this would be the empty string, leaving the viewer
+      // to join a bare relative path.
+      expect(viewerRoot()).toBe(lastSubject()?.worktreePath);
+      expect(viewerRoot()).toBeTruthy();
+    });
+  });
+
+  // The diff branch deliberately precedes every load-state branch: these files
+  // can never satisfy the source reader, yet their diff is the whole point.
+  describe("rendering ahead of the source read", () => {
+    it("renders the diff for a deleted file whose source read fails", async () => {
+      readMock.mockRejectedValue(
+        Object.assign(new Error("gone"), { code: "NOT_FOUND", isClientAppError: true })
+      );
+      seedWorktree([{ path: "/repo/src/index.ts", status: "deleted" }]);
+      useDiffContentMock.mockReturnValue({
+        content: "@@ -1 +0,0 @@",
+        stale: false,
+        retry: vi.fn(),
+      });
+      await renderPane({ filePath: "/repo/src/index.ts", fileViewMode: "diff" });
+
+      expect(await screen.findByTestId("diff-viewer-mock")).toBeTruthy();
+      // Exclusivity, not just presence: the read error must not render beside it.
+      expect(screen.queryByText(FILE_READ_ERROR_MESSAGES.NOT_FOUND)).toBeNull();
+    });
+
+    it("renders the diff for an image rather than its preview", async () => {
+      seedWorktree([{ path: "/repo/assets/logo.png", status: "modified" }]);
+      useDiffContentMock.mockReturnValue({
+        content: "Binary files differ",
+        stale: false,
+        retry: vi.fn(),
+      });
+      const { container } = await renderPane({
+        filePath: "/repo/assets/logo.png",
+        fileViewMode: "diff",
+      });
+
+      expect(await screen.findByTestId("diff-viewer-mock")).toBeTruthy();
+      expect(container.querySelector("img")).toBeNull();
+    });
+  });
+
+  describe("toolbar wiring", () => {
+    it("routes Refresh to the diff retry while Diff is live", async () => {
+      const retry = vi.fn();
+      seedWorktree([{ path: "/repo/src/index.ts", status: "modified" }]);
+      useDiffContentMock.mockReturnValue({ content: "@@ -1 +1 @@", stale: false, retry });
+      await renderPane({ filePath: "/repo/src/index.ts", fileViewMode: "diff" });
+      const readCallsBefore = readMock.mock.calls.length;
+
+      await act(async () => {
+        screen
+          .getByRole("button", { name: "Refresh" })
+          .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(retry).toHaveBeenCalled();
+      // Re-reading the file would not refetch the diff.
+      expect(readMock.mock.calls.length).toBe(readCallsBefore);
+    });
+
+    it("routes Refresh to the file read while Source is live", async () => {
+      const retry = vi.fn();
+      seedWorktree([{ path: "/repo/src/index.ts", status: "modified" }]);
+      useDiffContentMock.mockReturnValue({ content: undefined, stale: false, retry });
+      await renderPane({ filePath: "/repo/src/index.ts", fileViewMode: "source" });
+      const readCallsBefore = readMock.mock.calls.length;
+
+      await act(async () => {
+        screen
+          .getByRole("button", { name: "Refresh" })
+          .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(retry).not.toHaveBeenCalled();
+      expect(readMock.mock.calls.length).toBeGreaterThan(readCallsBefore);
+    });
+
+    it("surfaces a staleness banner with a refresh action once the file moves under the diff", async () => {
+      const retry = vi.fn();
+      seedWorktree([{ path: "/repo/src/index.ts", status: "modified" }]);
+      useDiffContentMock.mockReturnValue({ content: "@@ -1 +1 @@", stale: true, retry });
+      await renderPane({ filePath: "/repo/src/index.ts", fileViewMode: "diff" });
+
+      // By text, not role="status" — the loading skeleton carries that role too.
+      expect(await screen.findByText("File changed since this diff loaded")).toBeTruthy();
+
+      // The banner is only useful if its recovery actually refetches.
+      await act(async () => {
+        screen
+          .getAllByRole("button", { name: "Refresh" })
+          .at(-1)
+          ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      expect(retry).toHaveBeenCalled();
+    });
+
+    it("shows no staleness banner while the diff is still loading", async () => {
+      seedWorktree([{ path: "/repo/src/index.ts", status: "modified" }]);
+      useDiffContentMock.mockReturnValue({ content: undefined, stale: true, retry: vi.fn() });
+      await renderPane({ filePath: "/repo/src/index.ts", fileViewMode: "diff" });
+
+      expect(screen.queryByText("File changed since this diff loaded")).toBeNull();
+    });
   });
 });

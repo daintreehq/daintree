@@ -604,6 +604,19 @@ describe("panel deserializer field coverage", () => {
     expect(output.filePath).toBe("/home/project/docs/spec.md");
   });
 
+  // #11274: the sanitizer redeclares the mode union at runtime, so widening the
+  // type alone would silently drop a restored diff selection.
+  it("file deserializer restores a persisted diff view mode", () => {
+    const deserializer = getDeserializer("file")!;
+    const output = deserializer({
+      id: "panel-file",
+      kind: "file",
+      filePath: "/home/project/src/index.ts",
+      fileViewMode: "diff",
+    });
+    expect(output.fileViewMode).toBe("diff");
+  });
+
   it("file deserializer reads legacy markdown panel fields", () => {
     const deserializer = getDeserializer("file")!;
     const output = deserializer({
