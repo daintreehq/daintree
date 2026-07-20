@@ -114,9 +114,11 @@ describe("DiffViewer full file scope", () => {
     renderViewer({ diff, source, fullFile: true });
 
     const hunks = capturedDiffProps.hunks ?? [];
-    expect(hunks.length).toBeGreaterThan(0);
-    const first = hunks[0];
-    const last = hunks[hunks.length - 1];
+    const first = hunks.at(0);
+    const last = hunks.at(-1);
+    expect(first).toBeDefined();
+    expect(last).toBeDefined();
+    if (!first || !last) return;
     expect(first.oldStart).toBe(1);
     // Old and new sides are the same length here (one line replaced one line),
     // so full coverage means the last hunk reaches the final line.
@@ -342,7 +344,7 @@ describe("DiffViewer full file scope", () => {
 
     renderViewer({ diff, source: drifted, fullFile: true, onFullFileVerdict: onVerdict });
 
-    expect(onVerdict.mock.calls[0][1]).toBe(drifted);
+    expect(onVerdict).toHaveBeenLastCalledWith("source-mismatch", drifted);
   });
 
   it("notifies once when the scope changes the rendered rows, and not on mount", () => {

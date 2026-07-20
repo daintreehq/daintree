@@ -32,10 +32,11 @@ describe("useDiffFileSource", () => {
     const { result } = renderHook(() => useDiffFileSource(SUBJECT, true));
 
     await waitFor(() => expect(result.current.source).toBe("file contents"));
-    const payload = readMock.mock.calls[0][0];
-    expect(isAbsolute(payload.path)).toBe(true);
-    expect(payload.path).toBe(join(SUBJECT.worktreePath, SUBJECT.filePath));
-    expect(payload.rootPath).toBe(SUBJECT.worktreePath);
+    const payload = readMock.mock.calls[0]?.[0];
+    expect(payload).toBeDefined();
+    expect(isAbsolute(payload?.path ?? "")).toBe(true);
+    expect(payload?.path).toBe(join(SUBJECT.worktreePath, SUBJECT.filePath));
+    expect(payload?.rootPath).toBe(SUBJECT.worktreePath);
   });
 
   it("leaves an already-absolute path alone rather than doubling the root", async () => {
@@ -43,7 +44,7 @@ describe("useDiffFileSource", () => {
     const { result } = renderHook(() => useDiffFileSource(absolute, true));
 
     await waitFor(() => expect(result.current.source).toBe("file contents"));
-    expect(readMock.mock.calls[0][0].path).toBe("/repo/src/a.ts");
+    expect(readMock.mock.calls[0]?.[0]?.path).toBe("/repo/src/a.ts");
   });
 
   it("starts reading when the scope is turned on mid-session", async () => {

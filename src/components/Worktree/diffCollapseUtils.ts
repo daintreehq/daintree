@@ -10,12 +10,23 @@ export function getFilePath(file: File): string {
 }
 
 /**
+ * Only what a byte estimate reads. Typed structurally because the parsed diff
+ * and the rendered hunks come from different packages — gitdiff-parser's
+ * `Hunk` and react-diff-view's `HunkData` differ in their change shapes, and
+ * this measure applies to both.
+ */
+interface MeasurableHunk {
+  content: string;
+  changes: readonly { content: string }[];
+}
+
+/**
  * Byte estimate for an arbitrary hunk set. Split out from
  * `estimateFileDiffBytes` so the same measure can be taken of the hunks
  * actually being rendered, which context expansion grows well past the parsed
  * diff's own size.
  */
-export function estimateHunksBytes(hunks: readonly File["hunks"][number][]): number {
+export function estimateHunksBytes(hunks: readonly MeasurableHunk[]): number {
   let bytes = 0;
   for (const hunk of hunks) {
     bytes += hunk.content.length;
