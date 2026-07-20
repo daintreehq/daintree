@@ -114,9 +114,11 @@ interface DiffSubjectLike {
 const { useDiffContentMock } = vi.hoisted(() => ({
   useDiffContentMock:
     vi.fn<
-      (
-        subject: DiffSubjectLike | null
-      ) => { content: string | undefined; stale: boolean; retry: () => void }
+      (subject: DiffSubjectLike | null) => {
+        content: string | undefined;
+        stale: boolean;
+        retry: () => void;
+      }
     >(),
 }));
 vi.mock("@/panels/diff/useDiffContent", () => ({ useDiffContent: useDiffContentMock }));
