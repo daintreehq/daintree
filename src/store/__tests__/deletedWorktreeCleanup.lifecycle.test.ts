@@ -157,7 +157,11 @@ describe("startDeletedWorktreeCleanup view lifecycle", () => {
     goRevealed();
 
     expect(bulkTrashByWorktree).not.toHaveBeenCalled();
-    expect(remainingNow()).toBe(remainingWhenCached);
+    // The hour is credited back; only the interval every sweep always spends
+    // comes off, so the user still returns to a real rescue window.
+    const spentWhileAway = (remainingWhenCached ?? 0) - (remainingNow() ?? 0);
+    expect(spentWhileAway).toBeLessThanOrEqual(DELETED_WORKTREE_SWEEP_INTERVAL_MS);
+    expect(remainingNow()).toBeGreaterThan(0);
   });
 
   it("arms a row recorded while the view was cached instead of trashing it on wake", () => {
@@ -180,8 +184,9 @@ describe("startDeletedWorktreeCleanup view lifecycle", () => {
     const startRemaining = remainingNow() ?? 0;
     expect(startRemaining).toBeGreaterThan(0);
 
+    const cycles = 3;
     let awakeMs = 0;
-    for (let cycle = 0; cycle < 3; cycle++) {
+    for (let cycle = 0; cycle < cycles; cycle++) {
       advance(5_000);
       awakeMs += 5_000;
       goCached();
@@ -190,9 +195,13 @@ describe("startDeletedWorktreeCleanup view lifecycle", () => {
       goRevealed();
     }
 
-    // Each cycle spends its awake seconds and none of its cached ones, so the
-    // countdown neither stalls nor gets re-granted by switching projects.
-    expect(remainingNow()).toBe(startRemaining - awakeMs);
+    // An hour and a half of wall clock passed, of which 15s was watchable.
+    // Each cycle spends its awake seconds plus the one interval every sweep
+    // always spends, and none of its cached ones — so the countdown neither
+    // stalls nor gets re-granted by switching projects.
+    const spent = startRemaining - (remainingNow() ?? 0);
+    expect(spent).toBeGreaterThanOrEqual(awakeMs);
+    expect(spent).toBeLessThanOrEqual(awakeMs + cycles * DELETED_WORKTREE_SWEEP_INTERVAL_MS);
     expect(bulkTrashByWorktree).not.toHaveBeenCalled();
   });
 

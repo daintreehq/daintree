@@ -50,12 +50,11 @@ function holdCapMs(reason: DeletedWorktreeHoldReason): number {
  * - The row is recorded unarmed; this sweep arms it, so a project cached at
  *   deletion time is never charged for the hours it spent frozen before the
  *   countdown could be shown at all.
- * - Any gap between sweeps longer than `MAX_OBSERVED_SWEEP_GAP_MS` is time
- *   nobody could have watched the row — a cached view, a minimized window
- *   (Chromium throttles hidden timers to roughly one per minute), a sleeping
- *   machine — and is credited back to every armed deadline instead of spent.
- *   Repeated project switching still cannot extend a row: only observed
- *   seconds are ever charged, and those only ever accumulate.
+ * - The sweep refuses to run at all while the view is cached or the window is
+ *   hidden, and any gap it then finds on the way back is credited to every
+ *   armed deadline instead of spent. Every sweep still spends at least one
+ *   interval, so the countdown is strictly monotonic — neither project
+ *   switching nor a stalled renderer can hold a row open indefinitely.
  *
  * It holds the countdown (pinned at its current remaining, not reset to full)
  * only while firing would actively break something:
@@ -82,10 +81,10 @@ function holdCapMs(reason: DeletedWorktreeHoldReason): number {
  */
 /**
  * A gap between sweeps longer than this means time passed that the user could
- * not have been watching the countdown — the view was cached, the window was
- * minimized or occluded (Chromium throttles a hidden window's timers to about
- * one per minute), or the machine slept. Two intervals of slack keeps ordinary
- * event-loop jitter from counting as unobserved time.
+ * not have been watching the countdown — the machine slept, the renderer
+ * stalled, or a guarded state (cached / hidden) was left without the sweep
+ * running. Two intervals of slack keeps ordinary event-loop jitter from
+ * counting as unobserved time.
  */
 const MAX_OBSERVED_SWEEP_GAP_MS = DELETED_WORKTREE_SWEEP_INTERVAL_MS * 2;
 
@@ -93,6 +92,7 @@ interface SweepDeps {
   now: () => number;
   isDragActive: () => boolean;
   isViewCached: () => boolean;
+  isViewHidden: () => boolean;
   /**
    * Gap above which the time between two sweeps counts as unobserved. Tests
    * that step time coarsely to describe a state machine pass `Infinity` — "the
@@ -106,10 +106,15 @@ function defaultIsDragActive(): boolean {
   return document.documentElement.dataset.dragging === "true";
 }
 
+function defaultIsViewHidden(): boolean {
+  return typeof document !== "undefined" && document.hidden;
+}
+
 const DEFAULT_DEPS: SweepDeps = {
   now: () => Date.now(),
   isDragActive: defaultIsDragActive,
   isViewCached: isProjectViewCached,
+  isViewHidden: defaultIsViewHidden,
   maxObservedGapMs: MAX_OBSERVED_SWEEP_GAP_MS,
 };
 
@@ -276,11 +281,21 @@ export function sweepDeletedWorktreeCleanup(deps: SweepDeps = DEFAULT_DEPS): voi
     if (!deletedWorktrees.has(id)) forgetRow(id);
   }
 
-  // Guarded in the body, not just by stopping the interval: this is reachable
-  // from the visibility listener, and clearing an interval cannot retract a
-  // callback the event loop has already picked up. Nothing below this line may
-  // write a deadline or trash a terminal on behalf of a view nobody can see.
-  if (deps.isViewCached()) return;
+  // Nothing below this line may write a deadline or trash a terminal on behalf
+  // of a view nobody can see. Both signals are needed and neither implies the
+  // other (`viewCacheState`'s docstring spells this out): a cached view still
+  // reports `visible`, and a minimized window is hidden while its project stays
+  // active. Hidden especially — Chromium's first background tier throttles
+  // timers to 1 Hz, which is this interval exactly, so the sweep keeps firing
+  // on time and would spend the countdown at full speed behind a minimized
+  // window and trash the row where nobody could see it happen.
+  //
+  // Returning BEFORE `lastSweepAt` is updated is what makes this safe: the
+  // whole guarded stretch stays in the gap, so the first sweep back credits it.
+  // Guarded in the body rather than only by stopping the interval, because
+  // clearing an interval cannot retract a callback the event loop has already
+  // picked up, and the visibility listener reaches this too.
+  if (deps.isViewCached() || deps.isViewHidden()) return;
 
   const now = deps.now();
   const swept: SweptRow[] = [];
@@ -289,10 +304,17 @@ export function sweepDeletedWorktreeCleanup(deps: SweepDeps = DEFAULT_DEPS): voi
   // reachable "armed but never swept" state whose deadline would have to be
   // treated as unmeasurable.
   const sinceLastSweep = lastSweepAt === null ? 0 : now - lastSweepAt;
-  // Credit the whole gap, not the gap minus an interval: erring toward a
-  // longer rescue window is the safe direction when the alternative is
-  // trashing a live agent session.
-  const unobservedMs = sinceLastSweep > deps.maxObservedGapMs ? sinceLastSweep : 0;
+  // Credit the gap MINUS one interval, never the whole thing, so every sweep
+  // always spends at least one interval of countdown. Crediting in full would
+  // mean a run of gaps just over the threshold — a debugger pause, a renderer
+  // pegged under load, a project revealed for under a second between longer
+  // cached stretches — consumed exactly zero countdown forever, which is the
+  // never-fires half of this bug arriving by a different road. Against a
+  // genuinely long gap the difference is one second.
+  const unobservedMs =
+    sinceLastSweep > deps.maxObservedGapMs
+      ? sinceLastSweep - DELETED_WORKTREE_SWEEP_INTERVAL_MS
+      : 0;
   lastSweepAt = now;
   if (unobservedMs > 0) {
     // A hold's cap counts observed time too — otherwise a project left cached

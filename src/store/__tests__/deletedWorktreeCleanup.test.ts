@@ -22,6 +22,7 @@ function makeDeps(
     now: () => number;
     isDragActive: () => boolean;
     isViewCached: () => boolean;
+    isViewHidden: () => boolean;
     maxObservedGapMs: number;
   }> = {}
 ) {
@@ -29,6 +30,7 @@ function makeDeps(
     now: () => NOW,
     isDragActive: () => false,
     isViewCached: () => false,
+    isViewHidden: () => false,
     // These cases step time coarsely to describe the state machine, so every
     // gap is declared observed — the row was on screen the whole time. The
     // unobserved-gap credit has its own cases below and in the lifecycle suite.
@@ -589,10 +591,9 @@ describe("sweepDeletedWorktreeCleanup", () => {
   });
 
   it("credits a gap between sweeps back to the deadline instead of spending it", () => {
-    // The sweep runs at 1 Hz, so a gap this large means it did not run: the
-    // window was minimized (Chromium throttles hidden timers to roughly one a
-    // minute), the view was cached, or the machine slept. None of that is time
-    // the user could have watched the countdown in.
+    // The sweep runs at 1 Hz, so a gap this large means it did not run at all:
+    // the view was cached, the window was hidden, or the machine slept. None
+    // of that is time the user could have watched the countdown in.
     const observed = { maxObservedGapMs: DELETED_WORKTREE_SWEEP_INTERVAL_MS * 2 };
     addRow();
     sweepDeletedWorktreeCleanup(makeDeps({ ...observed }));
@@ -600,7 +601,62 @@ describe("sweepDeletedWorktreeCleanup", () => {
     sweepDeletedWorktreeCleanup(makeDeps({ ...observed, now: () => at }));
 
     expect(bulkTrashByWorktree).not.toHaveBeenCalled();
-    expect(getRemainingAt(at)).toBe(TTL_MS);
+    // All but the one interval every sweep always spends.
+    expect(getRemainingAt(at)).toBe(TTL_MS - DELETED_WORKTREE_SWEEP_INTERVAL_MS);
+  });
+
+  it("neither spends nor trashes while the window is hidden", () => {
+    // A minimized window keeps its project ACTIVE — it is never cached — and
+    // Chromium's first background tier throttles timers to 1 Hz, which is this
+    // interval exactly. So the sweep keeps firing on time behind the minimized
+    // window, and without this guard it would burn the countdown down and
+    // trash the terminals where nobody could see it.
+    addRow({ expiresAt: NOW - 1 });
+    const before = useWorktreeSelectionStore.getState().deletedWorktrees;
+
+    sweepDeletedWorktreeCleanup(makeDeps({ isViewHidden: () => true }));
+
+    expect(bulkTrashByWorktree).not.toHaveBeenCalled();
+    expect(useWorktreeSelectionStore.getState().deletedWorktrees).toBe(before);
+  });
+
+  it("credits the hidden stretch once the window comes back", () => {
+    const observed = { maxObservedGapMs: DELETED_WORKTREE_SWEEP_INTERVAL_MS * 2 };
+    addRow();
+    sweepDeletedWorktreeCleanup(makeDeps({ ...observed }));
+
+    // Ticks keep arriving at 1 Hz while hidden and are all refused, so the
+    // whole stretch stays in the gap for the first visible sweep to credit.
+    let at = NOW;
+    for (let tick = 0; tick < 120; tick++) {
+      at += DELETED_WORKTREE_SWEEP_INTERVAL_MS;
+      sweepDeletedWorktreeCleanup(
+        makeDeps({ ...observed, now: () => at, isViewHidden: () => true })
+      );
+    }
+    sweepDeletedWorktreeCleanup(makeDeps({ ...observed, now: () => at }));
+
+    expect(bulkTrashByWorktree).not.toHaveBeenCalled();
+    expect(getRemainingAt(at)).toBe(TTL_MS - DELETED_WORKTREE_SWEEP_INTERVAL_MS);
+  });
+
+  it("keeps spending the countdown when every gap sits just over the threshold", () => {
+    // Crediting a late gap in full would let a run of these consume exactly
+    // zero countdown forever — a debugger pause, or a renderer pegged under
+    // load, would hold every ghost row open indefinitely. Each sweep must
+    // still spend an interval.
+    const observed = { maxObservedGapMs: DELETED_WORKTREE_SWEEP_INTERVAL_MS * 2 };
+    const step = DELETED_WORKTREE_SWEEP_INTERVAL_MS * 2 + 1;
+    addRow();
+    sweepDeletedWorktreeCleanup(makeDeps({ ...observed }));
+
+    let at = NOW;
+    for (let tick = 0; tick < 80; tick++) {
+      at += step;
+      sweepDeletedWorktreeCleanup(makeDeps({ ...observed, now: () => at }));
+    }
+
+    expect(bulkTrashByWorktree).toHaveBeenCalledTimes(1);
   });
 
   it("still spends time across the ordinary tick-by-tick cadence", () => {
