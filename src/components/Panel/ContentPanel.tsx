@@ -510,14 +510,14 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
           : undefined),
       }}
       className={cn(
-        // Three host contexts, one class set. Grid and maximized parents are
-        // block-level `h-full` wrappers, so the percentage height is what fills
-        // the cell there and `flex-1` is inert. The dialog body is a flex
-        // column, where `h-full` resolves against an indefinite parent and
-        // collapses to `auto` — the panel then sizes to its content and the
-        // pane's own scroller never overflows, so a long file just clips
-        // (#11254). `flex-1` sizes it from the flex line instead, and `min-h-0`
-        // releases the automatic minimum size so it can actually shrink.
+        // Dual sizing contract, because the panel root is hosted under both
+        // block-level and flex parents. `h-full` fills the block wrappers the
+        // grid layouts use. `flex-1 min-h-0` covers the flex columns (dialog
+        // body, dock slot, the registry's fade wrapper): there `h-full`
+        // resolves against an indefinite parent and collapses to `auto`, so the
+        // panel sizes to its content, the pane's own scroller never overflows,
+        // and a long file just clips (#11254). Every wrapper between a host and
+        // a pane root has to carry this same pair — see panels/registry.tsx.
         "flex flex-col h-full flex-1 min-h-0 overflow-hidden group/panel",
         location === "grid" && !isMaximized && "bg-surface",
         // Dialog joins the dock/maximized bucket: AppDialog already draws the

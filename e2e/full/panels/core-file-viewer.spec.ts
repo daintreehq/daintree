@@ -58,22 +58,36 @@ async function expectScrollsWithinDialog(pane: Locator) {
   await expect
     .poll(
       () =>
-        pane.evaluate((el) => ({
-          scrollsInternally: el.scrollHeight > el.clientHeight,
-          paneBounded: el.clientHeight <= window.innerHeight,
-        })),
+        pane.evaluate((el) => {
+          const dialogRect = el.closest('[data-testid="panel-dialog"]')?.getBoundingClientRect();
+          return {
+            scrollsInternally: el.scrollHeight > el.clientHeight,
+            // A real scrollbar, not merely programmatic scrollability: an
+            // `overflow: hidden` element still accepts a `scrollTop` write, so
+            // the scroll check below would pass on a clipped pane.
+            scrollable: ["auto", "scroll"].includes(getComputedStyle(el).overflowY),
+            // Bounded by the dialog surface rather than the window: a pane
+            // taller than the 85vh dialog still fits the viewport while having
+            // its bottom edge — and its scrollbar — clipped away.
+            withinDialog:
+              dialogRect !== undefined &&
+              el.getBoundingClientRect().bottom <= dialogRect.bottom + 1,
+          };
+        }),
       { timeout: T_MEDIUM }
     )
-    .toEqual({ scrollsInternally: true, paneBounded: true });
+    .toEqual({ scrollsInternally: true, scrollable: true, withinDialog: true });
 
-  // Content past the first screen is actually reachable, not just measurable.
-  const scrolled = await pane.evaluate((el) => {
+  // Content past the first screen is reachable, and scrolling lands on the real
+  // bottom rather than some intermediate clamp.
+  const scroll = await pane.evaluate((el) => {
     el.scrollTop = el.scrollHeight;
     const reached = el.scrollTop;
     el.scrollTop = 0;
-    return reached;
+    return { reached, max: el.scrollHeight - el.clientHeight };
   });
-  expect(scrolled).toBeGreaterThan(0);
+  expect(scroll.reached).toBeGreaterThan(0);
+  expect(scroll.reached).toBeGreaterThanOrEqual(scroll.max - 2);
 }
 
 async function closeDialog(ctx: AppContext) {
@@ -153,6 +167,15 @@ test.describe.serial("Core: File Viewer Modal", () => {
       timeout: T_LONG,
     });
     await expectScrollsWithinDialog(pane);
+
+    // The symptom in the issue was the tail of the document being unreachable,
+    // so prove the last node actually comes into view. Rendered mode only:
+    // CodeMirror virtualizes its line list, so the source-mode tail is not in
+    // the DOM to assert against.
+    await pane.evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+    });
+    await expect(dialog.locator(".markdown-document h2")).toBeInViewport({ timeout: T_SHORT });
 
     await closeDialog(ctx);
   });

@@ -99,9 +99,9 @@ export function ReviewPane({
 
   return (
     // Review is the one built-in kind that renders no ContentPanel, so it
-    // carries that root's sizing contract itself: `h-full` for the block-level
-    // grid/dock wrappers, `flex-1 min-h-0` for the dialog body's flex column
-    // (see the same pairing in ContentPanel, #11254).
+    // carries that root's dual sizing contract itself — `h-full` for block
+    // wrappers, `flex-1 min-h-0` for flex ones (#11254). ReviewHubContent's own
+    // `flex-1 min-h-0` only bounds its scroller once this root is bounded too.
     <div
       ref={setContainerEl}
       tabIndex={-1}
