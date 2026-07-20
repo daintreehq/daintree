@@ -142,6 +142,21 @@ function editorButton(): HTMLElement {
   return screen.getByLabelText("Open in editor");
 }
 
+/**
+ * The nth dispatch, failing loudly if it never happened — `mock.calls[n]` is
+ * `T | undefined` under noUncheckedIndexedAccess, and a bare `!` would turn a
+ * missing dispatch into a confusing destructure error instead of this message.
+ */
+function dispatchCall(index: number): [string, unknown, unknown] {
+  const call = dispatchMock.mock.calls[index];
+  if (!call) {
+    throw new Error(
+      `expected a dispatch at index ${index}, but only ${dispatchMock.mock.calls.length} were made`
+    );
+  }
+  return call;
+}
+
 /** Click and let the dispatch promise settle. */
 async function click(el: HTMLElement): Promise<void> {
   await act(async () => {
@@ -197,7 +212,7 @@ describe("DiffPane toolbar — path resolution", () => {
 
     await click(editorButton());
 
-    const [, args] = dispatchMock.mock.calls[0];
+    const [, args] = dispatchCall(0);
     // Neither input alone is the answer: the root and the relative path combine.
     expect(args).toEqual({ path: `${WORKTREE_ROOT}/src/index.ts` });
   });
@@ -208,7 +223,7 @@ describe("DiffPane toolbar — path resolution", () => {
 
     await click(editorButton());
 
-    expect(dispatchMock.mock.calls[0][1]).toEqual({ path: "/elsewhere/vendored.ts" });
+    expect(dispatchCall(0)[1]).toEqual({ path: "/elsewhere/vendored.ts" });
   });
 
   it("recognises a Windows drive path as absolute rather than joining it to the root", async () => {
@@ -218,7 +233,7 @@ describe("DiffPane toolbar — path resolution", () => {
 
     await click(editorButton());
 
-    expect(dispatchMock.mock.calls[0][1]).not.toEqual({
+    expect(dispatchCall(0)[1]).not.toEqual({
       path: `${WORKTREE_ROOT}/C:\\vendor\\lib.ts`,
     });
   });
@@ -294,7 +309,7 @@ describe("DiffPane toolbar — action routing", () => {
 
     await click(editorButton());
 
-    expect(dispatchMock.mock.calls[0][2]).toEqual({ source: "user" });
+    expect(dispatchCall(0)[2]).toEqual({ source: "user" });
   });
 });
 
@@ -359,7 +374,7 @@ describe("DiffPane toolbar — failure and recovery", () => {
     dispatchMock.mockClear();
     await click(screen.getByRole("button", { name: "Retry revealing in Finder" }));
 
-    expect(dispatchMock.mock.calls[0][0]).toBe("file.showItemInFolder");
+    expect(dispatchCall(0)[0]).toBe("file.showItemInFolder");
   });
 
   it("holds the banner open across a retry and clears it only once that retry succeeds", async () => {
@@ -378,7 +393,7 @@ describe("DiffPane toolbar — failure and recovery", () => {
     });
 
     expect(screen.getByText("transient")).toBeTruthy();
-    expect(dispatchMock.mock.calls[0]).toEqual([
+    expect(dispatchCall(0)).toEqual([
       "file.openInEditor",
       { path: `${WORKTREE_ROOT}/src/index.ts` },
       { source: "user" },
@@ -543,7 +558,7 @@ describe("DiffPane toolbar — concurrency", () => {
 
     // The move also released the guard, so the button works against the new root.
     await click(editorButton());
-    expect(dispatchMock.mock.calls[1][1]).toEqual({ path: "/repo-moved/src/index.ts" });
+    expect(dispatchCall(1)[1]).toEqual({ path: "/repo-moved/src/index.ts" });
   });
 
   it("lets one button run while the other is still in flight, and still reports its result", async () => {
