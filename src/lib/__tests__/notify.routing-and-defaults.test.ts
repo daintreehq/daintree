@@ -372,32 +372,6 @@ describe("notify()", () => {
       expect(entry!.actions![0]!.actionArgs).toEqual({ panelId: "p2" });
       expect(entry!.actions![1]!.actionArgs).toEqual({ panelId: "p1" });
     });
-  });
-
-  describe("transient — toast only, no inbox entry", () => {
-    it("skips history entry when transient is true", () => {
-      vi.spyOn(document, "hasFocus").mockReturnValue(true);
-      notify({
-        type: "info",
-        title: "Path copied",
-        message: "/Users/me/project",
-        transient: true,
-      });
-      expect(useNotificationHistoryStore.getState().entries).toHaveLength(0);
-      expect(useNotificationHistoryStore.getState().unreadCount).toBe(0);
-    });
-
-    it("still shows the toast when transient is true", () => {
-      vi.spyOn(document, "hasFocus").mockReturnValue(true);
-      notify({
-        type: "success",
-        title: "Shortcuts exported",
-        message: "Saved.",
-        transient: true,
-      });
-      expect(useNotificationStore.getState().notifications).toHaveLength(1);
-      expect(useNotificationStore.getState().notifications[0]!.historyEntryId).toBeUndefined();
-    });
 
     it("forwards an explicit `actions: undefined` through to the store's collapse clear", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
@@ -425,6 +399,32 @@ describe("notify()", () => {
       const live = useNotificationStore.getState().notifications;
       expect(live).toHaveLength(1);
       expect(live[0]!.actions).toBeUndefined();
+    });
+  });
+
+  describe("transient — toast only, no inbox entry", () => {
+    it("skips history entry when transient is true", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({
+        type: "info",
+        title: "Path copied",
+        message: "/Users/me/project",
+        transient: true,
+      });
+      expect(useNotificationHistoryStore.getState().entries).toHaveLength(0);
+      expect(useNotificationHistoryStore.getState().unreadCount).toBe(0);
+    });
+
+    it("still shows the toast when transient is true", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({
+        type: "success",
+        title: "Shortcuts exported",
+        message: "Saved.",
+        transient: true,
+      });
+      expect(useNotificationStore.getState().notifications).toHaveLength(1);
+      expect(useNotificationStore.getState().notifications[0]!.historyEntryId).toBeUndefined();
     });
 
     it("skips history for grid-bar placement when transient", () => {
