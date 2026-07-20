@@ -99,6 +99,23 @@ export function isPathInside(child: string, parent: string): boolean {
   return normalizedChild.startsWith(parentWithSlash);
 }
 
+/**
+ * Strip the worktree root off an absolute path. `isPathInside` is what makes
+ * this safe: a raw `startsWith` accepts a sibling whose name merely extends the
+ * root (`/repo-other/x.ts` under `/repo`, which then mangles into `-other/x.ts`)
+ * and ignores separator normalization. A path outside the worktree passes
+ * through untouched — callers reject it downstream with a real error, which
+ * beats inventing a second failure mode here.
+ */
+export function toWorktreeRelative(path: string, worktreeRoot: string | undefined): string {
+  if (!worktreeRoot || !isPathInside(path, worktreeRoot)) return path;
+  const normalizedPath = normalize(path);
+  const normalizedRoot = normalize(worktreeRoot);
+  if (normalizedPath === normalizedRoot) return path;
+  const boundary = normalizedRoot.endsWith("/") ? normalizedRoot : `${normalizedRoot}/`;
+  return normalizedPath.slice(boundary.length);
+}
+
 export function basename(input: string): string {
   const normalized = normalize(input);
   if (

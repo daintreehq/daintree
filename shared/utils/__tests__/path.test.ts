@@ -1,5 +1,14 @@
 import { describe, it, expect } from "vitest";
-import { isAbsolute, isPathInside, normalize, basename, dirname, resolve, join } from "../path.js";
+import {
+  isAbsolute,
+  isPathInside,
+  normalize,
+  basename,
+  dirname,
+  resolve,
+  join,
+  toWorktreeRelative,
+} from "../path.js";
 
 describe("isAbsolute", () => {
   it("recognizes POSIX absolute paths", () => {
@@ -256,5 +265,47 @@ describe("isPathInside", () => {
   it("rejects relative '.' inputs outright", () => {
     expect(isPathInside(".", "/repo")).toBe(false);
     expect(isPathInside("/repo/file.md", ".")).toBe(false);
+  });
+});
+
+describe("toWorktreeRelative", () => {
+  it("strips the worktree root off a contained POSIX path", () => {
+    expect(toWorktreeRelative("/repo/src/index.ts", "/repo")).toBe("src/index.ts");
+  });
+
+  it("tolerates a trailing separator on the root", () => {
+    expect(toWorktreeRelative("/repo/src/index.ts", "/repo/")).toBe("src/index.ts");
+  });
+
+  it("normalizes Windows separators on both sides", () => {
+    expect(toWorktreeRelative("C:\\repo\\src\\index.ts", "C:\\repo")).toBe("src/index.ts");
+  });
+
+  it("collapses redundant segments before stripping", () => {
+    expect(toWorktreeRelative("/repo/./src/../src/index.ts", "/repo")).toBe("src/index.ts");
+  });
+
+  // The whole reason this uses isPathInside: a raw startsWith would turn
+  // "/repo-other/x.ts" into "-other/x.ts" and hand git a nonsense path.
+  it("passes a sibling root that merely extends the worktree name through untouched", () => {
+    expect(toWorktreeRelative("/repo-other/x.ts", "/repo")).toBe("/repo-other/x.ts");
+  });
+
+  it("passes a path outside the worktree through untouched", () => {
+    expect(toWorktreeRelative("/elsewhere/x.ts", "/repo")).toBe("/elsewhere/x.ts");
+  });
+
+  it("passes through when no root is supplied", () => {
+    expect(toWorktreeRelative("/repo/src/index.ts", undefined)).toBe("/repo/src/index.ts");
+  });
+
+  it("passes the root itself through rather than yielding an empty path", () => {
+    expect(toWorktreeRelative("/repo", "/repo")).toBe("/repo");
+  });
+
+  // Containment is deliberately case-sensitive; a future "fix" that lowercases
+  // would silently change behavior for every other consumer of isPathInside.
+  it("treats a differently-cased root as outside", () => {
+    expect(toWorktreeRelative("/Repo/src/index.ts", "/repo")).toBe("/Repo/src/index.ts");
   });
 });

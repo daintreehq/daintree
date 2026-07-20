@@ -15,7 +15,7 @@ function sanitizeViewportPreset(value: string | undefined): ViewportPresetId | u
 
 /** Coerce a persisted file view mode, dropping unknown on-disk values. */
 function sanitizeFileViewMode(value: string | undefined): FileViewMode | undefined {
-  return value === "rendered" || value === "source" ? value : undefined;
+  return value === "rendered" || value === "source" || value === "diff" ? value : undefined;
 }
 
 const GIT_STATUSES: readonly string[] = [

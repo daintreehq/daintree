@@ -600,17 +600,27 @@ export interface ReviewPanelData extends BasePanelData {
 }
 
 /**
- * View mode shared by the file viewer surfaces (panel + dialog). "rendered"
- * only applies to markdown files; every other file renders as source.
+ * The two modes that render the file's own bytes. Separate from `FileViewMode`
+ * so document viewers can't be handed "diff", which they'd silently treat as
+ * "rendered" (every non-"source" value takes their rendered branch).
  */
-export type FileViewMode = "rendered" | "source";
+export type FileRenderMode = "rendered" | "source";
 
 /**
- * File panel — read-only viewer for a repo file in a grid cell. Markdown
- * files additionally get a rendered-document mode. `filePath` is absolute;
- * the effective read root is resolved at render time (the panel's worktree
- * when the file is inside one, else the file's parent directory) so worktree
- * renames don't strand the panel.
+ * View mode shared by the file viewer surfaces (panel + dialog). "rendered"
+ * only applies to markdown and HTML files; "diff" only to files with local
+ * worktree changes. Every other file is source-only. Availability is derived
+ * per file at render time, so a persisted mode whose capability is gone falls
+ * back to "source" rather than being rewritten.
+ */
+export type FileViewMode = FileRenderMode | "diff";
+
+/**
+ * File panel — read-only viewer for a repo file in a grid cell. Markdown and
+ * HTML files additionally get a rendered-document mode, and locally changed
+ * files get a diff mode. `filePath` is absolute; the effective read root is
+ * resolved at render time (the panel's worktree when the file is inside one,
+ * else the file's parent directory) so worktree renames don't strand the panel.
  */
 export interface FilePanelData extends BasePanelData {
   kind: "file";
