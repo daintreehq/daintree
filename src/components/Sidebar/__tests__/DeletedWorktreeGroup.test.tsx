@@ -58,14 +58,20 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { DeletedWorktreeGroup } from "../DeletedWorktreeGroup";
 
 function setPanels(
-  entries: Array<{ id: string; worktreeId: string; location?: string; title?: string }>
+  entries: Array<{
+    id: string;
+    worktreeId: string;
+    location?: string;
+    title?: string;
+    kind?: string;
+  }>
 ): void {
   const panelsById: Record<string, unknown> = {};
   const panelIdsByWorktreeId: Record<string, string[]> = {};
   for (const entry of entries) {
     panelsById[entry.id] = {
       id: entry.id,
-      kind: "terminal",
+      kind: entry.kind ?? "terminal",
       title: entry.title ?? entry.id,
       worktreeId: entry.worktreeId,
       location: entry.location ?? "grid",
@@ -199,7 +205,7 @@ describe("DeletedWorktreeGroup", () => {
     ]);
     renderGroup();
 
-    expect(screen.getByRole("button", { name: "Clear 1 terminal" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Close 1 terminal" })).toBeTruthy();
   });
 
   it("shows the soonest member deadline while collapsed", () => {
@@ -239,7 +245,7 @@ describe("DeletedWorktreeGroup", () => {
     ]);
     renderGroup();
 
-    fireEvent.click(screen.getByRole("button", { name: "Clear 2 terminals" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close 2 terminals" }));
 
     const pending = useTerminalPendingDestructiveActionStore.getState().pending;
     expect(pending).toMatchObject({ kind: "deletedWorktreeGroupDismiss", targetCount: 2 });
@@ -263,9 +269,43 @@ describe("DeletedWorktreeGroup", () => {
     setPanels([{ id: "t1", worktreeId: "wt-1", title: "claude" }]);
     renderGroup();
 
-    fireEvent.click(screen.getByRole("button", { name: "Clear 1 terminal" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close 1 terminal" }));
 
     expect(useTerminalPendingDestructiveActionStore.getState().pending?.preview).toHaveLength(1);
+  });
+
+  it("previews every panel the clear would trash, not just the terminals", () => {
+    // `bulkTrashByWorktree` closes every non-trash/overlay/dialog panel, so a
+    // preview narrowed to PTY panels would under-report what confirming ends —
+    // the #9699 mismatch class, and a D2 consent violation besides.
+    setPanels([
+      { id: "t1", worktreeId: "wt-1", title: "claude" },
+      { id: "b1", worktreeId: "wt-1", title: "localhost:3000", kind: "browser" },
+      { id: "t2", worktreeId: "wt-2", title: "shell" },
+    ]);
+    renderGroup();
+
+    fireEvent.click(screen.getByRole("button", { name: "Close 3 terminals" }));
+
+    const preview = useTerminalPendingDestructiveActionStore.getState().pending?.preview;
+    expect(preview?.[0]?.terminals.map((t) => t.terminalTitle)).toEqual([
+      "claude",
+      "localhost:3000",
+    ]);
+    expect(useTerminalPendingDestructiveActionStore.getState().pending?.targetCount).toBe(3);
+  });
+
+  it("keeps a non-terminal panel out of the draggable rail", () => {
+    setPanels([
+      { id: "t1", worktreeId: "wt-1", title: "claude" },
+      { id: "b1", worktreeId: "wt-1", title: "localhost:3000", kind: "browser" },
+      { id: "t2", worktreeId: "wt-2", title: "shell" },
+    ]);
+    renderGroup();
+
+    // Only a terminal can ride the accordion drag, so the browser panel counts
+    // toward the clear but must not appear as a rescue chip.
+    expect(sortableProps.mock.calls.map((c) => c[0].terminalId)).toEqual(["t1", "t2"]);
   });
 
   it("renders nothing once no member has a terminal left", () => {

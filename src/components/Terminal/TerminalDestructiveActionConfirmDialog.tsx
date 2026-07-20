@@ -99,6 +99,9 @@ function buildCopy(pending: TerminalPendingDestructiveActionSnapshot): DialogCop
     }
     case "deletedWorktreeGroupDismiss": {
       const worktreeCount = pending.preview?.length ?? 0;
+      // A member whose terminals all left is dropped from the preview, so the
+      // group can be clearing a single worktree even though it holds several.
+      const worktreeNoun = worktreeCount === 1 ? "deleted worktree" : "deleted worktrees";
       const noun = pending.targetCount === 1 ? "terminal" : "terminals";
       const agentNote =
         pending.runningAgentCount === 0
@@ -107,7 +110,7 @@ function buildCopy(pending: TerminalPendingDestructiveActionSnapshot): DialogCop
             ? " 1 still has a running agent."
             : ` ${pending.runningAgentCount} still have running agents.`;
       return {
-        title: `Close ${pending.targetCount} ${noun} from ${worktreeCount} deleted worktrees?`,
+        title: `Close ${pending.targetCount} ${noun} from ${worktreeCount} ${worktreeNoun}?`,
         description: `These terminals outlived the worktrees they belonged to. Closing them moves them to trash and ends their running processes; they can be restored from trash before garbage collection. Drag them to another worktree instead to keep them.${agentNote}`,
         confirmLabel: `Close ${pending.targetCount} ${noun}`,
       };
@@ -276,6 +279,9 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
       description={copy.description}
       confirmLabel={copy.confirmLabel}
       variant="destructive"
+      // The grouped clear renders a scrollable preview list, which AppDialog
+      // must expose as a plain dialog rather than an alertdialog.
+      hasPreview={pending.kind === "deletedWorktreeGroupDismiss"}
       onConfirm={handleConfirm}
     >
       {pending.kind === "deletedWorktreeGroupDismiss" && pending.preview && (

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronRight, FolderX, GripVertical, Trash2 } from "lucide-react";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { cn } from "@/lib/utils";
@@ -23,10 +23,19 @@ import {
 } from "@/components/DragDrop/SortableWorktreeTerminal";
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
-import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
+import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
 
 interface GroupMember {
   worktree: DeletedWorktree;
+  /**
+   * Everything clearing this member would trash. Mirrors
+   * `getDeletedWorktreeTerminalIds` (and so `bulkTrashByWorktree`) without
+   * narrowing by kind — previewing only the PTY panels would under-report what
+   * the confirm is about to close, which is the #9699 mismatch class and a D2
+   * consent violation besides.
+   */
+  panels: PanelInstance[];
+  /** The rescuable subset — only a terminal can ride the accordion drag. */
   terminals: PtyPanelData[];
 }
 
@@ -64,15 +73,15 @@ export function DeletedWorktreeGroup({ worktrees }: DeletedWorktreeGroupProps) {
   // group shrinks it the same way it shrinks a single card (#11232).
   const members = useMemo<GroupMember[]>(() => {
     void panelIdsByWorktreeId;
-    return worktrees.map((worktree) => ({
-      worktree,
-      terminals: getDeletedWorktreeTerminalIds(worktree.id)
+    return worktrees.map((worktree) => {
+      const panels = getDeletedWorktreeTerminalIds(worktree.id)
         .map((id) => panelsById[id])
-        .filter((panel): panel is PtyPanelData => panel != null && isPtyPanel(panel)),
-    }));
+        .filter((panel): panel is PanelInstance => panel != null);
+      return { worktree, panels, terminals: panels.filter(isPtyPanel) };
+    });
   }, [worktrees, panelsById, panelIdsByWorktreeId]);
 
-  const terminalCount = members.reduce((n, m) => n + m.terminals.length, 0);
+  const terminalCount = members.reduce((n, m) => n + m.panels.length, 0);
 
   const cleanupSeconds = usePreferencesStore((s) => s.deletedWorktreeCleanupSeconds);
   const [nowTick, setNowTick] = useState(() => Date.now());
@@ -88,6 +97,11 @@ export function DeletedWorktreeGroup({ worktrees }: DeletedWorktreeGroupProps) {
   }, [members]);
   const hasCountdown = soonestExpiresAt !== null && cleanupSeconds > 0 && !isExpanded;
   useVisibilityAwareInterval(() => setNowTick(Date.now()), 1000, hasCountdown);
+  // The interval is off while expanded, so `nowTick` is stale on the way back:
+  // collapsing after a minute would flash the full TTL until the first tick.
+  useEffect(() => {
+    if (hasCountdown) setNowTick(Date.now());
+  }, [hasCountdown]);
   const cleanupMs = cleanupSeconds * 1000;
   const rawRemainingMs = soonestExpiresAt !== null ? Math.max(0, soonestExpiresAt - nowTick) : 0;
   const remainingSeconds = Math.ceil(
@@ -96,16 +110,16 @@ export function DeletedWorktreeGroup({ worktrees }: DeletedWorktreeGroupProps) {
 
   const handleClearAll = useCallback(() => {
     const preview: DeletedWorktreeGroupPreviewWorktree[] = members
-      .filter((m) => m.terminals.length > 0)
+      .filter((m) => m.panels.length > 0)
       .map((m) => ({
         worktreeId: m.worktree.id,
         worktreeTitle: m.worktree.title,
-        terminals: m.terminals.map((terminal) => ({
-          terminalId: terminal.id,
+        terminals: m.panels.map((panel) => ({
+          terminalId: panel.id,
           // The row's own title, matching what the accordion shows — the
           // derived chrome label is the terminal's kind, not its name.
-          terminalTitle: terminal.title,
-          hasRunningAgent: deriveTerminalChrome(terminal).isAgent,
+          terminalTitle: panel.title,
+          hasRunningAgent: deriveTerminalChrome(panel).isAgent,
         })),
       }));
     if (preview.length === 0) return;
@@ -144,7 +158,8 @@ export function DeletedWorktreeGroup({ worktrees }: DeletedWorktreeGroupProps) {
 
   const worktreeNoun = members.length === 1 ? "deleted worktree" : "deleted worktrees";
   const terminalNoun = terminalCount === 1 ? "terminal" : "terminals";
-  const clearLabel = `Clear ${terminalCount} ${terminalNoun}`;
+  // Same verb as a single card's dismiss — the group only changes the scope.
+  const clearLabel = `Close ${terminalCount} ${terminalNoun}`;
 
   return (
     <div className="border-b border-border-default" data-testid="deleted-worktree-group">
@@ -156,8 +171,9 @@ export function DeletedWorktreeGroup({ worktrees }: DeletedWorktreeGroupProps) {
           className="flex min-w-0 flex-1 items-center gap-1.5 rounded text-left outline-hidden focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent"
         >
           <ChevronRight
+            data-animated-chevron
             className={cn(
-              "w-3.5 h-3.5 shrink-0 text-text-muted transition-transform duration-150",
+              "w-3.5 h-3.5 shrink-0 text-text-muted transition-transform duration-150 ease-out",
               isExpanded && "rotate-90"
             )}
             aria-hidden="true"
@@ -207,10 +223,11 @@ export function DeletedWorktreeGroup({ worktrees }: DeletedWorktreeGroupProps) {
       ) : (
         <div className="pb-2 pl-6 pr-4">
           <SortableContext
+            id="deleted-worktree-group-rail"
             items={members.flatMap((m) => m.terminals.map((t) => getAccordionDragId(t.id)))}
             strategy={verticalListSortingStrategy}
           >
-            <div role="list" className="flex flex-col gap-0.5">
+            <div role="list" aria-label="Terminals to rescue" className="flex flex-col gap-0.5">
               {members.map(({ worktree, terminals }) =>
                 terminals.map((terminal, index) => (
                   <SortableWorktreeTerminal
@@ -256,8 +273,10 @@ function DeletedWorktreeTerminalChip({
   const chrome = deriveTerminalChrome(terminal);
   const label = `${terminal.title} in deleted worktree ${worktreeTitle}`;
 
+  // No `role="listitem"` here — `SortableWorktreeTerminal` already provides one
+  // around this chip, and nesting a second announces every entry twice.
   return (
-    <div role="listitem" className="group/chip flex items-center gap-1">
+    <div className="group/chip flex items-center gap-1">
       <button
         ref={dragHandle?.setActivatorNodeRef}
         type="button"

@@ -19,7 +19,6 @@ vi.mock("@/services/TerminalInstanceService", () => ({
 import {
   useWorktreeSelectionStore,
   getDeletedWorktreeTerminalIds,
-  getDeletedWorktreeTerminalIdsForWorktrees,
   getPinnedDeletedWorktreeIndex,
   recordSidebarWorktreeOrder,
   type DeletedWorktree,
@@ -283,27 +282,5 @@ describe("deleted-worktree group expansion (#11260)", () => {
     addRows(3);
 
     expect(useWorktreeSelectionStore.getState().deletedWorktreeGroupExpanded).toBe(false);
-  });
-});
-
-describe("getDeletedWorktreeTerminalIdsForWorktrees (#11260)", () => {
-  it("collects every member's terminals in the order the rows were given", () => {
-    setPanels([
-      { id: "a1", worktreeId: "wt-1" },
-      { id: "b1", worktreeId: "wt-2" },
-      { id: "b2", worktreeId: "wt-2" },
-    ]);
-
-    expect(getDeletedWorktreeTerminalIdsForWorktrees(["wt-2", "wt-1"])).toEqual(["b1", "b2", "a1"]);
-  });
-
-  it("applies the same location filter the single-worktree helper does", () => {
-    setPanels([
-      { id: "a1", worktreeId: "wt-1" },
-      { id: "a2", worktreeId: "wt-1", location: "trash" },
-      { id: "b1", worktreeId: "wt-2", location: "overlay" },
-    ]);
-
-    expect(getDeletedWorktreeTerminalIdsForWorktrees(["wt-1", "wt-2"])).toEqual(["a1"]);
   });
 });

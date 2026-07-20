@@ -56,6 +56,7 @@ import {
   recordSidebarWorktreeOrder,
   DELETED_WORKTREE_GROUP_THRESHOLD,
 } from "@/store/worktreeStore";
+import { planDeletedWorktreePlacement } from "@/components/Sidebar/deletedWorktreePlacement";
 import { DeletedWorktreeCard } from "@/components/Sidebar/DeletedWorktreeCard";
 import { DeletedWorktreeGroup } from "@/components/Sidebar/DeletedWorktreeGroup";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
@@ -1272,17 +1273,13 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     const deletedList = Array.from(deletedWorktrees.values()).sort(
       (a, b) => a.deletedAt - b.deletedAt
     );
-    const deletedByIndex = new Map<number, DeletedWorktree[]>();
-    const trailingDeleted: DeletedWorktree[] = [];
-    for (const deleted of deletedList) {
-      if (deleted.pinnedIndex >= 0 && deleted.pinnedIndex < filteredWorktrees.length) {
-        const bucket = deletedByIndex.get(deleted.pinnedIndex);
-        if (bucket) bucket.push(deleted);
-        else deletedByIndex.set(deleted.pinnedIndex, [deleted]);
-      } else {
-        trailingDeleted.push(deleted);
-      }
-    }
+    const {
+      isGrouped,
+      groupSlot,
+      byIndex: deletedByIndex,
+      trailing: trailingDeleted,
+    } = planDeletedWorktreePlacement(deletedList, filteredWorktrees.length);
+    const hasGroupSlot = groupSlot >= 0;
     const pushDeleted = (deleted: DeletedWorktree) => {
       items.push({
         kind: "deletedWorktree",
@@ -1291,15 +1288,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         ariaRowIndex: nextRowIndex++,
       });
     };
-    // Above the threshold every deleted row collapses into one summary item,
-    // wherever it would otherwise have gone (#11260). The group takes the
-    // earliest slot any member had pinned so it still lands near where the user
-    // was looking, and falls to the end when none of them were visible.
-    const isGrouped = deletedList.length >= DELETED_WORKTREE_GROUP_THRESHOLD;
-    const groupSlot = isGrouped
-      ? Math.min(...deletedList.map((d) => d.pinnedIndex).filter((i) => i >= 0), Infinity)
-      : Infinity;
-    const hasGroupSlot = isGrouped && Number.isFinite(groupSlot);
     const pushDeletedGroup = () => {
       items.push({
         kind: "deletedWorktreeGroup",

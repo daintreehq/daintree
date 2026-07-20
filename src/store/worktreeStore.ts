@@ -135,17 +135,6 @@ function collapseGroupBelowThreshold(
   return state.deletedWorktreeGroupExpanded ? { deletedWorktreeGroupExpanded: false } : {};
 }
 
-/**
- * Terminals held by several deleted rows at once, in the order the rows were
- * given. Delegates per worktree so the `bulkTrashByWorktree` filter mirroring
- * (#9699) holds for the group exactly as it does for a single row.
- */
-export function getDeletedWorktreeTerminalIdsForWorktrees(
-  worktreeIds: readonly string[]
-): string[] {
-  return worktreeIds.flatMap((id) => getDeletedWorktreeTerminalIds(id));
-}
-
 interface QuickCreateState {
   isOpen: boolean;
   issue: Issue | null;
