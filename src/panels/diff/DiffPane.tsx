@@ -1,8 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { ChevronLeft, ChevronRight, Check, PanelLeft, RefreshCw, WrapText } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Check,
+  ExternalLink,
+  PanelLeft,
+  RefreshCw,
+  WrapText,
+  XCircle,
+} from "lucide-react";
 import { FileDiff as FileDiffIcon } from "lucide-react";
 import type { GitStatus } from "@shared/types/git";
 import type { DiffPanelData } from "@shared/types/panel";
+import { isAbsolute, join } from "@shared/utils/path";
+import { FolderOpen } from "@/components/icons";
+import { isMac, isWindows } from "@/lib/platform";
+import { actionService } from "@/services/ActionService";
+import { logError } from "@/utils/logger";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
 import { FileViewerToolbar } from "@/components/FileViewer/FileViewerToolbar";
 import { DiffFileSidebar } from "@/components/FileViewer/DiffFileSidebar";
@@ -36,6 +50,9 @@ type DiffViewType = "split" | "unified";
  */
 type DiffContentScope = "changes" | "full-file";
 
+/** Which external surface a toolbar action aims the current file at. */
+type ExternalTarget = "reveal" | "editor";
+
 const FULL_FILE_FALLBACK_MESSAGES: Record<FullFileUnavailableReason, string> = {
   "source-mismatch": "The file changed after this diff loaded, so only changed lines are shown",
   "too-large": `Files over ${FULL_FILE_MAX_LINES.toLocaleString()} lines stay on changed lines to keep the diff responsive`,
@@ -45,6 +62,33 @@ const FULL_FILE_FALLBACK_MESSAGES: Record<FullFileUnavailableReason, string> = {
 // Mirrors the ladder the modal used, so the preference keeps meaning the same
 // sizes it always did.
 const DIFF_FONT_SIZE_PX: Record<DiffFontSize, string> = { s: "11px", m: "12px", l: "14px" };
+
+/**
+ * The file manager is named differently on every platform, and the button, its
+ * failure title and the retry's accessible name all have to agree — so the three
+ * strings are resolved together rather than as three ternaries that could drift.
+ */
+function revealCopy(): { label: string; errorTitle: string; retryAriaLabel: string } {
+  if (isMac()) {
+    return {
+      label: "Reveal in Finder",
+      errorTitle: "Couldn't reveal in Finder",
+      retryAriaLabel: "Retry revealing in Finder",
+    };
+  }
+  if (isWindows()) {
+    return {
+      label: "Show in Explorer",
+      errorTitle: "Couldn't show in Explorer",
+      retryAriaLabel: "Retry showing in Explorer",
+    };
+  }
+  return {
+    label: "Show in folder",
+    errorTitle: "Couldn't show in folder",
+    retryAriaLabel: "Retry showing in folder",
+  };
+}
 
 export interface DiffPaneProps extends BasePanelProps {
   tabs?: TabInfo[];
@@ -144,6 +188,17 @@ export function DiffPane({
   const setDiffShowFileList = usePreferencesStore((s) => s.setDiffShowFileList);
 
   const filePath = panel?.filePath;
+  // `filePath` is worktree-relative (unlike FilePanelData's), but both file
+  // actions want an absolute path. Null means there is nothing to aim them at:
+  // a relative path with no resolved worktree can't be made absolute, and
+  // dispatching the relative one would just fail inside the action.
+  const absolutePath = !filePath
+    ? null
+    : isAbsolute(filePath)
+      ? filePath
+      : worktreePath
+        ? join(worktreePath, filePath)
+        : null;
   const fileStatus = panel?.fileStatus;
   const changeSet = panel?.changeSet;
   const diffSource = panel?.diffSource;
@@ -238,6 +293,64 @@ export function DiffPane({
       window.setTimeout(() => setPathCopied(false), 1500);
     });
   }, [filePath]);
+
+  // dispatch() resolves an ActionDispatchResult and never rejects, so a failed
+  // open would otherwise vanish entirely (the #11114 bug FilePane already hit).
+  // Surface it on the pane that owns the button rather than through a toast.
+  // `target` rides along so Retry re-aims at what actually failed.
+  const [externalError, setExternalError] = useState<{
+    message: string;
+    target: ExternalTarget;
+  } | null>(null);
+  const [isExternalPending, setIsExternalPending] = useState(false);
+  const externalAttemptRef = useRef(0);
+  // Synchronous re-entry guard: state can't stop a double-click in one tick.
+  const externalInFlightRef = useRef(false);
+
+  // Keyed on the resolved absolute path, not the relative one — a worktree move
+  // re-aims these buttons without changing `filePath`, and a result landing
+  // after that belongs to the old location.
+  useEffect(() => {
+    externalAttemptRef.current += 1;
+    externalInFlightRef.current = false;
+    setExternalError(null);
+    setIsExternalPending(false);
+  }, [id, absolutePath]);
+
+  const handleExternalAction = useCallback(
+    async (target: ExternalTarget) => {
+      if (!absolutePath) return;
+      if (externalInFlightRef.current) return;
+      externalInFlightRef.current = true;
+      const attempt = ++externalAttemptRef.current;
+      // Both buttons share one pending flag, so a banner left by the *other*
+      // target has to go: keeping it would light its Retry spinner for work
+      // that isn't its own. A retry of the same target keeps its banner so the
+      // spinner has somewhere to show.
+      setExternalError((current) => (current?.target === target ? current : null));
+      setIsExternalPending(true);
+      const result = await actionService.dispatch(
+        target === "reveal" ? "file.showItemInFolder" : "file.openInEditor",
+        { path: absolutePath },
+        { source: "user" }
+      );
+      // A newer attempt (or a file/worktree switch) already reset the guard and
+      // owns the banner — an obsolete completion must not unlock it.
+      if (externalAttemptRef.current !== attempt) return;
+      externalInFlightRef.current = false;
+      setIsExternalPending(false);
+      if (result.ok) {
+        setExternalError(null);
+        return;
+      }
+      logError(
+        `[DiffPane] ${target === "reveal" ? "showItemInFolder" : "openInEditor"} failed`,
+        result.error
+      );
+      setExternalError({ message: result.error.message, target });
+    },
+    [absolutePath]
+  );
 
   const hasPrevFile = isWorkspace && currentIndex > 0;
   const hasNextFile =
@@ -392,6 +505,7 @@ export function DiffPane({
   const fileName = filePath?.split(/[/\\]/).filter(Boolean).pop();
   const displayTitle = panel?.titleMode === "user" ? title : (fileName ?? title);
 
+  const reveal = revealCopy();
   const toolbar = filePath ? (
     <>
       <FileViewerToolbar.Root>
@@ -431,34 +545,83 @@ export function DiffPane({
           <FileViewerToolbar.IconButton label="Refresh" onClick={retry}>
             <RefreshCw className="w-4 h-4" />
           </FileViewerToolbar.IconButton>
+          {absolutePath && (
+            <>
+              <FileViewerToolbar.IconButton
+                label={reveal.label}
+                onClick={() => void handleExternalAction("reveal")}
+              >
+                <FolderOpen className="w-4 h-4" />
+              </FileViewerToolbar.IconButton>
+              <FileViewerToolbar.IconButton
+                label="Open in editor"
+                onClick={() => void handleExternalAction("editor")}
+              >
+                <ExternalLink className="w-4 h-4" />
+              </FileViewerToolbar.IconButton>
+            </>
+          )}
         </FileViewerToolbar.Actions>
       </FileViewerToolbar.Root>
-      {stale && hasDiff && (
+      {/* A failed action carries a recovery the user just asked for, so it
+          outranks both ambient notices; they return once it is dismissed or a
+          retry succeeds. Below it, the existing stale-over-full-file order
+          stands. */}
+      {externalError ? (
         <InlineStatusBanner
-          severity="info"
-          icon={FileDiffIcon}
-          title="File changed since this diff loaded"
-          role="status"
-          ariaLive="polite"
-          action={{ id: "refresh-diff", label: "Refresh", icon: RefreshCw, onClick: refreshAll }}
-        />
-      )}
-      {/* Suppressed while the staleness banner is up: both would be pointing at
-          the same underlying change and offering the same refresh. */}
-      {fullFileNotice && !stale && (
-        <InlineStatusBanner
-          severity="warning"
-          icon={FileDiffIcon}
-          title="Showing changed lines only"
-          description={fullFileNotice.message}
-          role="status"
-          ariaLive="polite"
-          action={
-            fullFileNotice.recoverable
-              ? { id: "refresh-full-file", label: "Retry", icon: RefreshCw, onClick: refreshAll }
-              : undefined
+          icon={XCircle}
+          severity="error"
+          title={externalError.target === "reveal" ? reveal.errorTitle : "Couldn't open in editor"}
+          description={externalError.message}
+          action={{
+            id: "retry-external-action",
+            label: "Retry",
+            icon: RefreshCw,
+            variant: "dangerFilled",
+            loading: isExternalPending,
+            onClick: () => void handleExternalAction(externalError.target),
+            ariaLabel:
+              externalError.target === "reveal"
+                ? reveal.retryAriaLabel
+                : "Retry opening in editor",
+          }}
+          onClose={() => setExternalError(null)}
+          closeAriaLabel={
+            externalError.target === "reveal"
+              ? "Dismiss file manager error"
+              : "Dismiss editor error"
           }
         />
+      ) : (
+        <>
+          {stale && hasDiff && (
+            <InlineStatusBanner
+              severity="info"
+              icon={FileDiffIcon}
+              title="File changed since this diff loaded"
+              role="status"
+              ariaLive="polite"
+              action={{ id: "refresh-diff", label: "Refresh", icon: RefreshCw, onClick: refreshAll }}
+            />
+          )}
+          {/* Suppressed while the staleness banner is up: both would be pointing
+              at the same underlying change and offering the same refresh. */}
+          {fullFileNotice && !stale && (
+            <InlineStatusBanner
+              severity="warning"
+              icon={FileDiffIcon}
+              title="Showing changed lines only"
+              description={fullFileNotice.message}
+              role="status"
+              ariaLive="polite"
+              action={
+                fullFileNotice.recoverable
+                  ? { id: "refresh-full-file", label: "Retry", icon: RefreshCw, onClick: refreshAll }
+                  : undefined
+              }
+            />
+          )}
+        </>
       )}
     </>
   ) : undefined;
