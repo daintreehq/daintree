@@ -10,10 +10,15 @@ import type { DiffChangeSetEntry } from "@shared/types/git";
 // itself. These tests target that logic only, so the diff renderer, the
 // sidebar and the content fetch are all stubbed out.
 
-// The stub deliberately drops `toolbar` — nothing here asserts on it, and
-// leaving it unrendered keeps the toolbar's Radix/observer tree out of jsdom.
+// A fragment, so the toolbar stays a sibling of the keydown host rather than
+// wrapping it — the stepping shortcuts bubble through the same subtree as before.
 vi.mock("@/components/Panel/ContentPanel", () => ({
-  ContentPanel: (props: { children?: ReactNode }) => <>{props.children}</>,
+  ContentPanel: (props: { toolbar?: ReactNode; children?: ReactNode }) => (
+    <>
+      {props.toolbar}
+      {props.children}
+    </>
+  ),
 }));
 
 vi.mock("@/components/ui/tooltip", () => ({
@@ -27,9 +32,16 @@ vi.mock("@/components/Worktree/DiffViewer", () => ({
   DiffViewer: () => <div data-testid="diff-viewer-mock" />,
   FULL_FILE_MAX_LINES: 5000,
 }));
+
+// Controllable so a test can put the pane in image mode; `beforeEach` returns it
+// to text mode, which is what every other test in this file assumes.
+const { isImageDiffCandidateMock } = vi.hoisted(() => ({
+  isImageDiffCandidateMock:
+    vi.fn<typeof import("@/components/FileViewer/ImageDiffViewer").isImageDiffCandidate>(),
+}));
 vi.mock("@/components/FileViewer/ImageDiffViewer", () => ({
   ImageDiffViewer: () => <div data-testid="image-diff-mock" />,
-  isImageDiffCandidate: () => false,
+  isImageDiffCandidate: isImageDiffCandidateMock,
 }));
 vi.mock("@/components/ui/EmptyState", () => ({
   EmptyState: (props: { title: string }) => (
@@ -152,6 +164,8 @@ beforeEach(() => {
     retry: vi.fn(),
   });
   viewedKeys.clear();
+  isImageDiffCandidateMock.mockReset();
+  isImageDiffCandidateMock.mockReturnValue(false);
   preferences.diffShowFileList = true;
   worktrees.clear();
   worktrees.set(WORKTREE_ID, { path: WORKTREE_PATH, branch: "feature/x" });
@@ -421,6 +435,58 @@ describe("DiffPane — workspace chrome", () => {
     fireEvent.click(screen.getByLabelText("Viewed"));
 
     expect(toggleViewedMock).toHaveBeenCalledWith(WORKTREE_PATH, changeSet[1]!.viewedKey);
+  });
+});
+
+describe("DiffPane — content-aware toolbar", () => {
+  it("drops the text-diff controls for an image, keeping the ones that still act", () => {
+    isImageDiffCandidateMock.mockReturnValue(true);
+    seedPanel({ filePath: "assets/logo.png", fileStatus: "modified" });
+    renderPane();
+
+    // The image branch is the one under test, not just any non-text render —
+    // and it is this file's path that classified it, not a blanket true.
+    expect(screen.getByTestId("image-diff-mock")).toBeTruthy();
+    expect(isImageDiffCandidateMock).toHaveBeenCalledWith("assets/logo.png");
+
+    // Nothing to lay out side by side, and no lines to wrap.
+    expect(screen.queryByText("Unified")).toBeNull();
+    expect(screen.queryByText("Split")).toBeNull();
+    expect(screen.queryByLabelText("Wrap long lines")).toBeNull();
+
+    // Refresh and the path pill act on any file kind, so they stay.
+    expect(screen.getByLabelText("Copy file path")).toBeTruthy();
+    expect(screen.getByLabelText("Refresh")).toBeTruthy();
+  });
+
+  it("keeps the text-diff controls for a text file", () => {
+    seedPanel({ filePath: "src/a.ts", fileStatus: "modified" });
+    renderPane();
+
+    expect(screen.getByTestId("diff-viewer-mock")).toBeTruthy();
+    expect(screen.getByText("Unified")).toBeTruthy();
+    expect(screen.getByText("Split")).toBeTruthy();
+    expect(screen.getByLabelText("Wrap long lines")).toBeTruthy();
+  });
+
+  it("keeps them for a base-branch image, which the text viewer still handles", () => {
+    // ImageDiffViewer compares the working tree against HEAD, so it has nothing
+    // to show for a base-branch comparison — those stay on DiffViewer whatever
+    // the extension. Gating the toolbar on candidacy alone would strip the
+    // controls off a body that is still the text viewer.
+    isImageDiffCandidateMock.mockReturnValue(true);
+    seedPanel({
+      filePath: "assets/logo.png",
+      fileStatus: "modified",
+      diffSource: "base-branch",
+      baseBranch: "main",
+    });
+    renderPane();
+
+    expect(screen.queryByTestId("image-diff-mock")).toBeNull();
+    expect(screen.getByTestId("diff-viewer-mock")).toBeTruthy();
+    expect(screen.getByText("Unified")).toBeTruthy();
+    expect(screen.getByLabelText("Wrap long lines")).toBeTruthy();
   });
 });
 

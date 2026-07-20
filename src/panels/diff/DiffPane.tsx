@@ -395,16 +395,18 @@ export function DiffPane({
   const toolbar = filePath ? (
     <>
       <FileViewerToolbar.Root>
-        <div role="group" aria-label="Diff layout">
-          <SegmentedToggle<DiffViewType>
-            options={[
-              { value: "unified", label: "Unified" },
-              { value: "split", label: "Split" },
-            ]}
-            value={diffViewType}
-            onChange={setDiffViewType}
-          />
-        </div>
+        {!isImageMode && (
+          <div role="group" aria-label="Diff layout">
+            <SegmentedToggle<DiffViewType>
+              options={[
+                { value: "unified", label: "Unified" },
+                { value: "split", label: "Split" },
+              ]}
+              value={diffViewType}
+              onChange={setDiffViewType}
+            />
+          </div>
+        )}
         {fullFileAvailability.available ? (
           scopeToggle
         ) : (
@@ -417,13 +419,15 @@ export function DiffPane({
         )}
         <FileViewerToolbar.Path path={filePath} copied={pathCopied} onCopy={handleCopyPath} />
         <FileViewerToolbar.Actions>
-          <FileViewerToolbar.IconButton
-            label="Wrap long lines"
-            pressed={diffWrapLines}
-            onClick={() => setDiffWrapLines(!diffWrapLines)}
-          >
-            <WrapText className="w-4 h-4" />
-          </FileViewerToolbar.IconButton>
+          {!isImageMode && (
+            <FileViewerToolbar.IconButton
+              label="Wrap long lines"
+              pressed={diffWrapLines}
+              onClick={() => setDiffWrapLines(!diffWrapLines)}
+            >
+              <WrapText className="w-4 h-4" />
+            </FileViewerToolbar.IconButton>
+          )}
           <FileViewerToolbar.IconButton label="Refresh" onClick={retry}>
             <RefreshCw className="w-4 h-4" />
           </FileViewerToolbar.IconButton>
