@@ -191,24 +191,45 @@ describe("DeletedWorktreeCard", () => {
     expect(readout?.textContent).toMatch(/^\d+s$/);
   });
 
-  it("distinguishes the hold conditions from one another", () => {
+  it("names each hold condition in terms the user can act on", () => {
     setPanels([{ id: "t1", worktreeId: "wt-1" }]);
-    const labelFor = (holdReason: DeletedWorktree["holdReason"]): string | undefined => {
+    const copyFor = (holdReason: DeletedWorktree["holdReason"]) => {
       const { container } = renderCard({
         ...worktree,
         expiresAt: Date.now() + 40_000,
         holdReason,
       });
-      const label = container.querySelector(
-        "[data-testid='deleted-worktree-countdown-hold']"
-      )?.textContent;
+      const label =
+        container.querySelector("[data-testid='deleted-worktree-countdown-hold']")?.textContent ??
+        "";
+      const explanation =
+        container
+          .querySelector("[data-testid='deleted-worktree-countdown-seconds']")
+          ?.getAttribute("title") ?? "";
       cleanup();
-      return label ?? undefined;
+      return { label, explanation };
     };
 
-    const labels = [labelFor("confirm"), labelFor("drag"), labelFor("agent")];
-    expect(labels.every((label) => label !== undefined && label.length > 0)).toBe(true);
-    expect(new Set(labels).size).toBe(labels.length);
+    // The visible label is what carries the reason, so it has to actually name
+    // the condition — swapped or generic copy would leave the row as opaque as
+    // the bug being fixed.
+    const agent = copyFor("agent");
+    expect(agent.label.toLowerCase()).toContain("agent");
+    expect(agent.explanation.toLowerCase()).toContain("agent");
+
+    const drag = copyFor("drag");
+    expect(drag.label.toLowerCase()).toContain("drag");
+    expect(drag.explanation.toLowerCase()).toContain("drag");
+
+    const confirm = copyFor("confirm");
+    expect(confirm.label.toLowerCase()).toContain("confirm");
+    expect(confirm.explanation.toLowerCase()).toContain("confirm");
+
+    // Sentence case, no trailing period (CLAUDE.md microcopy).
+    for (const { label } of [agent, drag, confirm]) {
+      expect(label.endsWith(".")).toBe(false);
+      expect(label.slice(1)).toBe(label.slice(1).toLowerCase());
+    }
   });
 
   it("shows no hold badge while the countdown is running", () => {

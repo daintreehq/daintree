@@ -25,7 +25,8 @@ export const DELETED_WORKTREE_SWEEP_INTERVAL_MS = 1000;
  *   hatch is expensive here: trash holds a terminal for only TRASH_TTL_MS
  *   (20s) before killing the PTY, so force-trashing a live agent is closer to
  *   termination than to a reversible undo.
- * Both are measured from the start of one continuous hold — see `holdStartedAt`.
+ * Both are measured across one continuous hold, in observed time — see
+ * `holdStartedAt`, which is credited for unobserved gaps like any deadline.
  */
 export const DELETED_WORKTREE_TRANSIENT_HOLD_CAP_MS = 5 * 60_000;
 export const DELETED_WORKTREE_AGENT_HOLD_CAP_MS = 60 * 60_000;
@@ -46,12 +47,15 @@ function holdCapMs(reason: DeletedWorktreeHoldReason): number {
  * The row is a rescue surface: its visible countdown is the user's window to
  * drag surviving terminals somewhere else. So the countdown measures time the
  * user could actually have *seen* it, not wall time (#11259):
- * - The row is recorded unarmed; this sweep arms it, and the sweep only runs
- *   while the project view is awake. A view cached at deletion time is never
- *   charged for the hours it spent frozen.
- * - Going cached snapshots each row's remaining; coming back restores it. The
- *   deadline therefore only advances across awake seconds, and repeated
- *   project switching cannot extend a row (remaining only ever decreases).
+ * - The row is recorded unarmed; this sweep arms it, so a project cached at
+ *   deletion time is never charged for the hours it spent frozen before the
+ *   countdown could be shown at all.
+ * - Any gap between sweeps longer than `MAX_OBSERVED_SWEEP_GAP_MS` is time
+ *   nobody could have watched the row — a cached view, a minimized window
+ *   (Chromium throttles hidden timers to roughly one per minute), a sleeping
+ *   machine — and is credited back to every armed deadline instead of spent.
+ *   Repeated project switching still cannot extend a row: only observed
+ *   seconds are ever charged, and those only ever accumulate.
  *
  * It holds the countdown (pinned at its current remaining, not reset to full)
  * only while firing would actively break something:
@@ -76,10 +80,26 @@ function holdCapMs(reason: DeletedWorktreeHoldReason): number {
  * manual close button — so auto-cleanup lands in the trash with its usual
  * restore window rather than hard-killing anything immediately.
  */
+/**
+ * A gap between sweeps longer than this means time passed that the user could
+ * not have been watching the countdown — the view was cached, the window was
+ * minimized or occluded (Chromium throttles a hidden window's timers to about
+ * one per minute), or the machine slept. Two intervals of slack keeps ordinary
+ * event-loop jitter from counting as unobserved time.
+ */
+const MAX_OBSERVED_SWEEP_GAP_MS = DELETED_WORKTREE_SWEEP_INTERVAL_MS * 2;
+
 interface SweepDeps {
   now: () => number;
   isDragActive: () => boolean;
   isViewCached: () => boolean;
+  /**
+   * Gap above which the time between two sweeps counts as unobserved. Tests
+   * that step time coarsely to describe a state machine pass `Infinity` — "the
+   * view was awake for all of it" — so the countdown advances the way it does
+   * across the real 1 Hz cadence.
+   */
+  maxObservedGapMs: number;
 }
 
 function defaultIsDragActive(): boolean {
@@ -90,6 +110,7 @@ const DEFAULT_DEPS: SweepDeps = {
   now: () => Date.now(),
   isDragActive: defaultIsDragActive,
   isViewCached: isProjectViewCached,
+  maxObservedGapMs: MAX_OBSERVED_SWEEP_GAP_MS,
 };
 
 function hasWorkingAgent(worktreeId: string): boolean {
@@ -153,25 +174,30 @@ interface RemainingSnapshot {
 // a held row re-arm to full forever.
 const heldRemaining = new Map<string, RemainingSnapshot>();
 
-// Captured when the view goes cached, consumed by the first sweep after it
-// wakes. Separate from `heldRemaining` because a row can be both held and
-// cached, and the two release on different signals.
-const cachedRemaining = new Map<string, RemainingSnapshot>();
-
-// Start of the current *continuous* hold. Cleared only when no hold condition
-// is true at all, which is what latches an exhausted hold: a condition that
-// stays true past its cap can never restart the clock and hold again.
+// Start of the current *continuous* hold, in observed time. Cleared only when
+// no hold condition is true at all, which is what latches an exhausted hold: a
+// condition that stays true past its cap can never restart the clock and hold
+// again.
 const holdStartedAt = new Map<string, number>();
 
-// Set on the cached→awake edge. One cache cycle's obligation to restore
-// snapshots, not standing permission to re-grant time.
-let resumeRestorePending = false;
+/**
+ * When the last sweep actually ran. The gap to the next one is time nobody
+ * could have watched the countdown, and it is credited back to every armed row
+ * rather than spent.
+ *
+ * This is measured rather than driven off lifecycle edges on purpose: an edge
+ * you miss is a row that thaws already expired, and there are several ways to
+ * miss one (a view cached before this module evaluated, a switch superseded
+ * mid-flight, a minimized window that never goes `cached` at all, the machine
+ * sleeping). A gap is impossible to miss — if the sweep did not run, the gap is
+ * there to be seen on the next tick.
+ */
+let lastSweepAt: number | null = null;
 
 function forgetRow(id: string): void {
   firedIds.delete(id);
   armedTtlMs.delete(id);
   heldRemaining.delete(id);
-  cachedRemaining.delete(id);
   holdStartedAt.delete(id);
 }
 
@@ -179,33 +205,8 @@ export function resetDeletedWorktreeCleanupState(): void {
   firedIds.clear();
   armedTtlMs.clear();
   heldRemaining.clear();
-  cachedRemaining.clear();
   holdStartedAt.clear();
-  resumeRestorePending = false;
-}
-
-/**
- * Snapshot how much of each row's countdown was left, so the time this view
- * spends cached is not charged against it. Called on the `cached` edge, while
- * the renderer is still live (main sends it before throttling/freezing).
- */
-function captureRemainingForCache(deps: SweepDeps = DEFAULT_DEPS): void {
-  const { deletedWorktrees } = useWorktreeSelectionStore.getState();
-  const ttlSeconds = usePreferencesStore.getState().deletedWorktreeCleanupSeconds;
-  resumeRestorePending = true;
-  if (ttlSeconds === 0) return;
-  const ttlMs = ttlSeconds * 1000;
-  const now = deps.now();
-  for (const entry of deletedWorktrees.values()) {
-    if (entry.expiresAt === null || firedIds.has(entry.id)) continue;
-    // An earlier unconsumed snapshot is the truer one: it predates whatever
-    // aging happened between the two cached edges.
-    if (cachedRemaining.has(entry.id)) continue;
-    cachedRemaining.set(entry.id, {
-      remainingMs: clampRemaining(entry.expiresAt - now, ttlMs),
-      ttlMs,
-    });
-  }
+  lastSweepAt = null;
 }
 
 function clampRemaining(remainingMs: number, ttlMs: number): number {
@@ -264,13 +265,12 @@ export function sweepDeletedWorktreeCleanup(deps: SweepDeps = DEFAULT_DEPS): voi
   const { deletedWorktrees, setDeletedWorktreeCleanupState } = selection;
 
   // Prune first, and even while cached: a row removed while this view was
-  // frozen must not leave its snapshots behind to be inherited by a later row
-  // reusing the id.
+  // frozen must not leave its bookkeeping behind to be inherited by a later
+  // row reusing the id.
   for (const id of [
     ...firedIds,
     ...armedTtlMs.keys(),
     ...heldRemaining.keys(),
-    ...cachedRemaining.keys(),
     ...holdStartedAt.keys(),
   ]) {
     if (!deletedWorktrees.has(id)) forgetRow(id);
@@ -284,11 +284,24 @@ export function sweepDeletedWorktreeCleanup(deps: SweepDeps = DEFAULT_DEPS): voi
 
   const now = deps.now();
   const swept: SweptRow[] = [];
+  // A row can only be armed by a sweep (they are recorded unarmed), so an
+  // armed row implies a sweep has run and `lastSweepAt` is set. There is no
+  // reachable "armed but never swept" state whose deadline would have to be
+  // treated as unmeasurable.
+  const sinceLastSweep = lastSweepAt === null ? 0 : now - lastSweepAt;
+  // Credit the whole gap, not the gap minus an interval: erring toward a
+  // longer rescue window is the safe direction when the alternative is
+  // trashing a live agent session.
+  const unobservedMs = sinceLastSweep > deps.maxObservedGapMs ? sinceLastSweep : 0;
+  lastSweepAt = now;
+  if (unobservedMs > 0) {
+    // A hold's cap counts observed time too — otherwise a project left cached
+    // overnight comes back with its agent's protection already spent.
+    for (const [id, startedAt] of holdStartedAt) {
+      holdStartedAt.set(id, startedAt + unobservedMs);
+    }
+  }
   const ttlSeconds = usePreferencesStore.getState().deletedWorktreeCleanupSeconds;
-  // Consume the resume obligation for this sweep only. Held to the end so a
-  // row delivered after the cached edge still gets its restore.
-  const isResumeSweep = resumeRestorePending;
-  resumeRestorePending = false;
 
   for (const entry of deletedWorktrees.values()) {
     // An unarmed entry is a fresh (or re-recorded) row — any stale state from a
@@ -308,31 +321,22 @@ export function sweepDeletedWorktreeCleanup(deps: SweepDeps = DEFAULT_DEPS): voi
     const armedWith = armedTtlMs.get(entry.id);
     const ttlChanged = armedWith !== undefined && armedWith !== ttlMs;
     if (ttlChanged) {
-      // Every preserved remaining was measured against the old TTL and means
+      // A preserved remaining was measured against the old TTL and means
       // nothing now. The hold *clock* survives on purpose: toggling the
       // preference must not reset the cap and re-open an indefinite hold.
       heldRemaining.delete(entry.id);
-      cachedRemaining.delete(entry.id);
     }
     armedTtlMs.set(entry.id, ttlMs);
 
     // Resolve this row's deadline before any hold or expiry decision.
     let expiresAt: number;
-    const restorable = isResumeSweep ? cachedRemaining.get(entry.id) : undefined;
-    cachedRemaining.delete(entry.id);
     if (entry.expiresAt === null || ttlChanged) {
       // Fresh row, or one whose TTL just changed: a full window from now.
       expiresAt = now + ttlMs;
-    } else if (restorable !== undefined && restorable.ttlMs === ttlMs) {
-      expiresAt = now + restorable.remainingMs;
-    } else if (isResumeSweep) {
-      // Armed, but we have no idea how much of its countdown was visible —
-      // the cached edge was missed (this module armed lazily inside a cached
-      // window). Charging it for unobserved time is exactly the bug, so grant
-      // one full window; the snapshot path covers every ordinary cycle.
-      expiresAt = now + ttlMs;
     } else {
-      expiresAt = entry.expiresAt;
+      // Push the deadline out by whatever went unobserved, so the countdown
+      // only ever spends time the row was actually on screen.
+      expiresAt = entry.expiresAt + unobservedMs;
     }
 
     const reasons = activeHoldReasons(entry.id, deps);
@@ -396,10 +400,14 @@ export function sweepDeletedWorktreeCleanup(deps: SweepDeps = DEFAULT_DEPS): voi
  * A cached project view keeps reporting `visibilityState === "visible"` while
  * main has it detached, CPU-throttled and (absent a live agent) frozen, so the
  * `visibilitychange` catch-up this used to rely on is dead code for exactly the
- * case that matters (#11212). Main's lifecycle broadcast is the only signal
- * that tracks it, so the sweep stops while cached and catches up on the way
- * back — mirroring `TerminalReconciliationWatchdog`. The visibility listener
- * stays for the case it does still cover: a minimized or occluded window.
+ * case that matters (#11212). The sweep therefore stops while cached and
+ * catches up on the way back, mirroring `TerminalReconciliationWatchdog`; the
+ * visibility listener stays for the case it does still cover, a minimized or
+ * occluded window.
+ *
+ * Neither signal is load-bearing for correctness. Both are prompts to sweep
+ * sooner; the deadline itself is protected by the sweep-gap credit, which
+ * needs no edge to arrive.
  */
 export function startDeletedWorktreeCleanup(): () => void {
   let interval: ReturnType<typeof setInterval> | undefined;
@@ -420,23 +428,18 @@ export function startDeletedWorktreeCleanup(): () => void {
   };
 
   startSweeping();
-  if (isProjectViewCached()) {
-    // Armed inside a cached window: rows carry deadlines of unknown provenance
-    // and there was no live edge to snapshot them at, so the first awake sweep
-    // must re-grant rather than trust them.
-    resumeRestorePending = true;
-  }
 
   const offViewLifecycle = subscribeProjectViewLifecycle((phase) => {
     if (phase === "cached") {
-      captureRemainingForCache();
+      // Purely a cost saving — correctness rides on the sweep-gap measurement,
+      // not on this edge arriving.
       stopSweeping();
       return;
     }
     startSweeping();
-    // Reveal is when a stale deadline is most likely and most visible — the
-    // restore has to land before the user can see a wrong number, so catch up
-    // now rather than waiting out the rest of the interval.
+    // Reveal is when a stale deadline is most likely and most visible: the
+    // credit has to land before the user can read a wrong number off the row,
+    // so catch up now rather than waiting out the rest of the interval.
     if (phase === "revealed") sweepDeletedWorktreeCleanup();
   });
 

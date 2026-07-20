@@ -28,9 +28,10 @@ interface DeletedWorktreeCardProps {
 }
 
 /**
- * What the row says while its countdown is held. The label has to survive a
- * narrow sidebar next to the title and the "Deleted" pill, so it stays terse
- * and the tooltip carries the explanation.
+ * What the row says while its countdown is held. The visible label is what
+ * carries the reason — it has to survive a narrow sidebar beside the title and
+ * the "Deleted" pill, so it stays terse, and the tooltip expands it for anyone
+ * who wants the whole sentence.
  */
 const HOLD_COPY: Record<DeletedWorktreeHoldReason, { label: string; tooltip: string }> = {
   confirm: {
@@ -323,15 +324,12 @@ export function DeletedWorktreeCard({
       >
         {hasCountdown && (
           <div
-            className={cn(
-              // The 1s linear sweep is the countdown's own tempo (it matches
-              // the tick that drives it), not a state-change tier. A held bar
-              // isn't moving, so animating it would only smear the moment it
-              // stops.
-              "deleted-worktree-countdown-fill h-full bg-border-strong",
-              hold === undefined && "transition-[width] duration-1000 ease-linear",
-              "motion-reduce:transition-none"
-            )}
+            // The 1s linear sweep is the countdown's own tempo (it matches the
+            // tick that drives it), not a state-change tier. It stays on while
+            // held: the sweep re-pins the deadline on its own 1s phase,
+            // independent of this component's tick, so a held bar still gets
+            // sub-second width jitter — the transition is what absorbs it.
+            className="deleted-worktree-countdown-fill h-full bg-border-strong transition-[width] duration-1000 ease-linear motion-reduce:transition-none"
             style={{ width: `${remainingFraction * 100}%` }}
             data-testid="deleted-worktree-countdown"
             data-held={hold !== undefined ? "true" : undefined}

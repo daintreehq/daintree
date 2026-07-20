@@ -125,14 +125,21 @@ describe("dismissDeletedWorktree", () => {
 });
 
 describe("setDeletedWorktreeCleanupState", () => {
-  it("moves the deadline and the hold reason together", () => {
+  it("moves the deadline and the hold reason in a single update", () => {
     const store = useWorktreeSelectionStore.getState();
     store.addDeletedWorktree(makeDeleted());
-    store.setDeletedWorktreeCleanupState("wt-1", { expiresAt: 5_000, holdReason: "drag" });
 
-    const row = useWorktreeSelectionStore.getState().deletedWorktrees.get("wt-1");
-    expect(row?.expiresAt).toBe(5_000);
-    expect(row?.holdReason).toBe("drag");
+    const seen: Array<{ expiresAt: number | null; holdReason: string | null }> = [];
+    const unsubscribe = useWorktreeSelectionStore.subscribe((state) => {
+      const row = state.deletedWorktrees.get("wt-1");
+      if (row) seen.push({ expiresAt: row.expiresAt, holdReason: row.holdReason });
+    });
+    store.setDeletedWorktreeCleanupState("wt-1", { expiresAt: 5_000, holdReason: "drag" });
+    unsubscribe();
+
+    // One emission carrying both fields — two sequential writes would publish a
+    // torn frame (new deadline, stale reason) to every sidebar subscriber.
+    expect(seen).toEqual([{ expiresAt: 5_000, holdReason: "drag" }]);
   });
 
   it("returns the same state when neither field changes", () => {

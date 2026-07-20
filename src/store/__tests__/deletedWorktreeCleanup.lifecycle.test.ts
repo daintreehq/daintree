@@ -13,7 +13,8 @@ import {
 vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 
 const NOW = 1_700_000_000_000;
-const TTL_MS = 60_000;
+const TTL_SECONDS = 60;
+const TTL_MS = TTL_SECONDS * 1000;
 
 /**
  * The cached-view half of #11259 is a *lifecycle* bug, so these drive the real
@@ -27,6 +28,18 @@ let warmHandlers: Array<() => void>;
 let revealedHandlers: Array<() => void>;
 let latchedCached: boolean;
 let bulkTrashByWorktree: ReturnType<typeof vi.fn<(worktreeId: string) => void>>;
+let disposeCleanup: (() => void) | undefined;
+
+/** Start the sweep and register its disposer, so a failing assertion can't leak it. */
+function start(): void {
+  disposeCleanup = startDeletedWorktreeCleanup();
+}
+
+function stop(): void {
+  disposeCleanup?.();
+  disposeCleanup = undefined;
+}
+
 
 function goCached(): void {
   latchedCached = true;
@@ -77,7 +90,7 @@ beforeEach(() => {
   resetDeletedWorktreeCleanupState();
   __resetProjectViewCacheStateForTests();
   useWorktreeSelectionStore.getState().reset();
-  usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: TTL_MS / 1000 });
+  usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: TTL_SECONDS });
 
   cachedHandlers = [];
   warmHandlers = [];
@@ -116,6 +129,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Before the timers and globals go away, or a failed assertion leaves the
+  // interval and the document listener behind for the next test.
+  stop();
   vi.useRealTimers();
   vi.unstubAllGlobals();
   __resetProjectViewCacheStateForTests();
@@ -124,11 +140,14 @@ afterEach(() => {
 
 describe("startDeletedWorktreeCleanup view lifecycle", () => {
   it("does not trash a row whose deadline elapsed while the view was cached", () => {
-    const stop = startDeletedWorktreeCleanup();
+    start();
     addRow();
     advance(DELETED_WORKTREE_SWEEP_INTERVAL_MS);
     advance(10_000);
     const remainingWhenCached = remainingNow();
+    // Guard the guard: if arming ever broke, `null === null` below would still
+    // "pass" while proving nothing.
+    expect(remainingWhenCached).toBeGreaterThan(0);
 
     goCached();
     // Away far longer than the whole TTL — this is the case that used to trash
@@ -139,11 +158,10 @@ describe("startDeletedWorktreeCleanup view lifecycle", () => {
 
     expect(bulkTrashByWorktree).not.toHaveBeenCalled();
     expect(remainingNow()).toBe(remainingWhenCached);
-    stop();
   });
 
   it("arms a row recorded while the view was cached instead of trashing it on wake", () => {
-    const stop = startDeletedWorktreeCleanup();
+    start();
     goCached();
     // Main keeps broadcasting worktree-removed to a cached view.
     addRow();
@@ -153,14 +171,14 @@ describe("startDeletedWorktreeCleanup view lifecycle", () => {
 
     expect(bulkTrashByWorktree).not.toHaveBeenCalled();
     expect(remainingNow()).toBe(TTL_MS);
-    stop();
   });
 
   it("charges only awake time across repeated cache cycles", () => {
-    const stop = startDeletedWorktreeCleanup();
+    start();
     addRow();
     advance(DELETED_WORKTREE_SWEEP_INTERVAL_MS);
     const startRemaining = remainingNow() ?? 0;
+    expect(startRemaining).toBeGreaterThan(0);
 
     let awakeMs = 0;
     for (let cycle = 0; cycle < 3; cycle++) {
@@ -176,71 +194,136 @@ describe("startDeletedWorktreeCleanup view lifecycle", () => {
     // countdown neither stalls nor gets re-granted by switching projects.
     expect(remainingNow()).toBe(startRemaining - awakeMs);
     expect(bulkTrashByWorktree).not.toHaveBeenCalled();
-    stop();
   });
 
-  it("stops sweeping while cached and resumes on activation", () => {
-    const stop = startDeletedWorktreeCleanup();
-    addRow();
-    advance(DELETED_WORKTREE_SWEEP_INTERVAL_MS);
+  it("owns exactly one interval across cache, repeated activation, and disposal", () => {
+    // Asserted on timer ownership rather than on the deadline: an absolute
+    // deadline is idempotent, so stacked intervals cannot be detected by
+    // watching how fast the countdown moves.
+    const idle = vi.getTimerCount();
+    start();
+    expect(vi.getTimerCount()).toBe(idle + 1);
 
     goCached();
-    const expiryWhenCached = getRow()?.expiresAt;
-    advance(10 * DELETED_WORKTREE_SWEEP_INTERVAL_MS);
-    // No sweep ran: the deadline is untouched despite ten intervals passing.
-    expect(getRow()?.expiresAt).toBe(expiryWhenCached);
-
-    goActive();
-    advance(DELETED_WORKTREE_SWEEP_INTERVAL_MS);
-    expect(getRow()?.expiresAt).not.toBe(expiryWhenCached);
-    stop();
-  });
-
-  it("does not stack intervals when activation fires repeatedly", () => {
-    const stop = startDeletedWorktreeCleanup();
-    addRow();
-    advance(DELETED_WORKTREE_SWEEP_INTERVAL_MS);
+    expect(vi.getTimerCount()).toBe(idle);
 
     goActive();
     goActive();
     goRevealed();
-    advance(5_000);
+    expect(vi.getTimerCount()).toBe(idle + 1);
 
-    // A stacked interval would spend the countdown several times per second.
-    expect(remainingNow()).toBe(TTL_MS - 5_000);
     stop();
+    expect(vi.getTimerCount()).toBe(idle);
   });
 
-  it("grants a fresh window to an armed row when the module started already cached", () => {
-    // No `cached` edge is ever delivered here, so there is no snapshot to
-    // restore — the row's deadline is of unknown provenance and may have aged
-    // entirely while nobody could see it.
+  it("arms no interval when the module starts inside a cached window", () => {
     latchedCached = true;
-    addRow({ expiresAt: NOW - 1 });
-    const stop = startDeletedWorktreeCleanup();
-    advance(10 * DELETED_WORKTREE_SWEEP_INTERVAL_MS);
-    expect(bulkTrashByWorktree).not.toHaveBeenCalled();
+    const idle = vi.getTimerCount();
+    start();
+
+    // No `cached` phase is ever delivered in this case, so the arm has to
+    // consult the seeded latch itself.
+    expect(vi.getTimerCount()).toBe(idle);
+  });
+
+  it("arms a row added during a cached start only once the view is back", () => {
+    // The switch-storm case: the view was already cached before this module
+    // evaluated, so no `cached` phase is ever delivered and the latch is the
+    // only thing that knows.
+    latchedCached = true;
+    start();
+    addRow();
+    advance(60 * 60_000);
+    expect(getRow()?.expiresAt).toBeNull();
 
     goActive();
     goRevealed();
 
     expect(bulkTrashByWorktree).not.toHaveBeenCalled();
     expect(remainingNow()).toBe(TTL_MS);
-    stop();
+  });
+
+  it("keeps a hold's remaining and its cap across a long cache", () => {
+    start();
+    addRow();
+    advance(DELETED_WORKTREE_SWEEP_INTERVAL_MS);
+    advance(10_000);
+    // An agent starts working, so the row holds.
+    usePanelStore.setState({
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      panelsById: {
+        t1: {
+          id: "t1",
+          kind: "terminal",
+          title: "t1",
+          worktreeId: "wt-1",
+          location: "grid",
+          agentState: "working",
+        },
+      } as never,
+    });
+    advance(DELETED_WORKTREE_SWEEP_INTERVAL_MS);
+    const heldRemaining = remainingNow();
+    expect(getRow()?.holdReason).toBe("agent");
+
+    goCached();
+    advance(90 * 60_000);
+    goActive();
+    goRevealed();
+
+    // The agent is still working, and the hour and a half spent cached is not
+    // charged against either the countdown or the hold's cap — otherwise the
+    // agent's protection would be gone the moment the user came back.
+    expect(getRow()?.holdReason).toBe("agent");
+    expect(remainingNow()).toBe(heldRemaining);
+    expect(bulkTrashByWorktree).not.toHaveBeenCalled();
+  });
+
+  it("re-arms to the new TTL when the preference changed while cached", () => {
+    start();
+    addRow();
+    advance(DELETED_WORKTREE_SWEEP_INTERVAL_MS);
+    advance(10_000);
+
+    goCached();
+    usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: 30 });
+    advance(30 * 60_000);
+    goActive();
+    goRevealed();
+
+    // A remaining measured against the old 60s TTL would overflow the card's
+    // bar, which divides by the current one.
+    expect(remainingNow()).toBe(30_000);
+    expect(bulkTrashByWorktree).not.toHaveBeenCalled();
+  });
+
+  it("leaves rows disarmed across a cache cycle when cleanup is off", () => {
+    usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: 0 });
+    start();
+    addRow({ expiresAt: NOW + 20_000 });
+    advance(DELETED_WORKTREE_SWEEP_INTERVAL_MS);
+    expect(getRow()?.expiresAt).toBeNull();
+
+    goCached();
+    advance(60 * 60_000);
+    goActive();
+    goRevealed();
+
+    expect(getRow()?.expiresAt).toBeNull();
+    expect(bulkTrashByWorktree).not.toHaveBeenCalled();
   });
 
   it("still fires once the countdown is genuinely spent while awake", () => {
-    const stop = startDeletedWorktreeCleanup();
+    start();
     addRow();
     advance(DELETED_WORKTREE_SWEEP_INTERVAL_MS);
     advance(TTL_MS + DELETED_WORKTREE_SWEEP_INTERVAL_MS);
 
     expect(bulkTrashByWorktree).toHaveBeenCalledTimes(1);
-    stop();
   });
 
   it("stops sweeping after disposal", () => {
-    const stop = startDeletedWorktreeCleanup();
+    start();
     addRow();
     advance(DELETED_WORKTREE_SWEEP_INTERVAL_MS);
     stop();
