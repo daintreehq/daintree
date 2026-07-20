@@ -98,17 +98,20 @@ export interface DiffViewerProps {
   /**
    * Expand every gap so the rendered diff covers the whole file. Requires
    * `source`; without a usable one the diff renders unexpanded and
-   * `onFullFileUnavailable` fires so the host can explain why.
+   * `onFullFileVerdict` fires so the host can explain why.
    */
   fullFile?: boolean;
   /**
-   * Fired when `fullFile` was requested but can't be honoured, with the reason
-   * and the `source` it was judged against. Lets the host surface one
-   * explanation in its own chrome instead of the viewer growing a second banner
-   * system, and lets it tell a current verdict from a superseded one.
+   * The verdict on a requested `fullFile`, with the `source` it was judged
+   * against. Lets the host surface one explanation in its own chrome instead of
+   * the viewer growing a second banner system.
+   *
+   * Fires with `null` on success too: a host that only heard about failures
+   * couldn't tell a current verdict from a superseded one, and would keep
+   * showing the last refusal after a refresh made the expansion work.
    */
-  onFullFileUnavailable?: (
-    reason: FullFileUnavailableReason,
+  onFullFileVerdict?: (
+    reason: FullFileUnavailableReason | null,
     forSource: string | null | undefined
   ) => void;
   /** Soft-wrap long lines instead of horizontal scrolling */
@@ -312,6 +315,9 @@ function estimateLineColumns(text: string): number {
  * count used for the size ceiling.
  */
 function toSourceLines(source: string): string[] {
+  // A zero-byte file has no lines; splitting it would claim one empty line and
+  // push the reconstructed old side one line long.
+  if (source === "") return [];
   const lines = source.split("\n");
   if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
   // A CRLF checkout leaves a carriage return on every line of the disk read
@@ -380,7 +386,7 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
     rootPath,
     source,
     fullFile = false,
-    onFullFileUnavailable,
+    onFullFileVerdict,
     wrapLines = false,
     searchQuery,
     onRetry,
@@ -462,8 +468,8 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
   const effectiveFullFile = fullFile && !fullFileBlocked;
 
   useEffect(() => {
-    if (fullFile && expansion.reason !== null) onFullFileUnavailable?.(expansion.reason, source);
-  }, [fullFile, expansion.reason, onFullFileUnavailable, source]);
+    if (fullFile) onFullFileVerdict?.(expansion.reason, source);
+  }, [fullFile, expansion.reason, onFullFileVerdict, source]);
 
   if (!diff || diff === "NO_CHANGES") {
     return (

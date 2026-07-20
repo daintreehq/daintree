@@ -276,9 +276,16 @@ export function DiffPane({
   const isImageMode = Boolean(
     filePath && fileStatus && isImageDiffCandidate(filePath) && panel?.diffSource !== "base-branch"
   );
-  const hasDiff = Boolean(
-    content && content.trim() && content !== "NO_CHANGES" && content !== "ERROR"
-  );
+  // Sentinels the viewer turns into empty states rather than a rendered diff.
+  // `NO_CHANGES`/`ERROR` gate the pane's own branches below; the binary and
+  // oversized ones matter to the full-file scope, which has nothing to expand
+  // when no hunks were rendered in the first place.
+  const isDiffSentinel =
+    content === "NO_CHANGES" ||
+    content === "ERROR" ||
+    content === "BINARY_FILE" ||
+    content === "FILE_TOO_LARGE";
+  const hasDiff = Boolean(content && content.trim() && !isDiffSentinel);
 
   // Whether this file *can* show its whole contents, independent of whether the
   // user currently wants to — the toggle stays visible either way so the option
@@ -308,11 +315,7 @@ export function DiffPane({
     () => (worktreePath && filePath ? { worktreePath, filePath } : null),
     [worktreePath, filePath]
   );
-  const {
-    source,
-    errorCode: sourceErrorCode,
-    retry: retrySource,
-  } = useDiffFileSource(sourceSubject, wantsFullFile);
+  const { source, errorCode: sourceErrorCode } = useDiffFileSource(sourceSubject, wantsFullFile);
 
   // Reported by the viewer once it has the parsed diff and the source side by
   // side — the mismatch and size checks can only be made there.
@@ -320,23 +323,25 @@ export function DiffPane({
   // Stamped with the source it describes rather than cleared by an effect:
   // child effects run before parent ones, so a reset keyed on `source` would
   // fire in the same commit that the viewer reported its reason and swallow it.
-  const [viewerFallback, setViewerFallback] = useState<{
-    source: string | undefined;
-    reason: FullFileUnavailableReason;
+  const [viewerVerdict, setViewerVerdict] = useState<{
+    source: string | null | undefined;
+    reason: FullFileUnavailableReason | null;
   } | null>(null);
-  const handleFullFileUnavailable = useCallback(
-    (reason: FullFileUnavailableReason, forSource: string | undefined) => {
-      setViewerFallback({ source: forSource, reason });
+  const handleFullFileVerdict = useCallback(
+    (reason: FullFileUnavailableReason | null, forSource: string | null | undefined) => {
+      setViewerVerdict({ source: forSource, reason });
     },
     []
   );
   const activeViewerFallback =
-    viewerFallback && viewerFallback.source === source ? viewerFallback.reason : null;
+    viewerVerdict && viewerVerdict.source === source ? viewerVerdict.reason : null;
 
+  // Only the diff is retried: clearing it drops `hasDiff`, which disables the
+  // source hook and invalidates its read, and the source is fetched again when
+  // the new diff lands. Retrying both here would issue that read twice.
   const refreshAll = useCallback(() => {
     retry();
-    retrySource();
-  }, [retry, retrySource]);
+  }, [retry]);
 
   // One line explaining why a requested whole-file view isn't on screen. The
   // read failure wins over the viewer's verdict: without content the viewer
@@ -537,7 +542,7 @@ export function DiffPane({
                 rootPath={worktreePath}
                 source={wantsFullFile ? source : undefined}
                 fullFile={wantsFullFile}
-                onFullFileUnavailable={handleFullFileUnavailable}
+                onFullFileVerdict={handleFullFileVerdict}
                 wrapLines={diffWrapLines}
                 onRetry={retry}
               />

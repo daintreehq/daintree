@@ -141,38 +141,44 @@ describe("DiffViewer full file scope", () => {
     // Same shape, different content — exactly what a file edited between the
     // diff and the source read looks like.
     const drifted = Array.from({ length: 12 }, (_, i) => `unrelated${i + 1}`).join("\n");
-    const onUnavailable =
-      vi.fn<(reason: FullFileUnavailableReason, forSource: string | null | undefined) => void>();
+    const onVerdict =
+      vi.fn<
+        (reason: FullFileUnavailableReason | null, forSource: string | null | undefined) => void
+      >();
 
-    renderViewer({ diff, source: drifted, fullFile: true, onFullFileUnavailable: onUnavailable });
+    renderViewer({ diff, source: drifted, fullFile: true, onFullFileVerdict: onVerdict });
 
     const content = renderedContent();
     // None of the drifted file's lines may leak in as context.
     expect(content.some((line) => line.startsWith("unrelated"))).toBe(false);
     expect(content).toContain("CHANGED");
-    expect(onUnavailable).toHaveBeenCalledWith("source-mismatch", expect.any(String));
+    expect(onVerdict).toHaveBeenCalledWith("source-mismatch", expect.any(String));
   });
 
   it("reports a truncated source as a mismatch rather than expanding past its end", () => {
     const { diff } = makeFixture(12, 5);
     const truncated = ["line1", "line2", "line3"].join("\n");
-    const onUnavailable =
-      vi.fn<(reason: FullFileUnavailableReason, forSource: string | null | undefined) => void>();
+    const onVerdict =
+      vi.fn<
+        (reason: FullFileUnavailableReason | null, forSource: string | null | undefined) => void
+      >();
 
-    renderViewer({ diff, source: truncated, fullFile: true, onFullFileUnavailable: onUnavailable });
+    renderViewer({ diff, source: truncated, fullFile: true, onFullFileVerdict: onVerdict });
 
-    expect(onUnavailable).toHaveBeenCalledWith("source-mismatch", expect.any(String));
+    expect(onVerdict).toHaveBeenCalledWith("source-mismatch", expect.any(String));
   });
 
   it("falls back rather than committing more rows than the table can carry", () => {
     const totalLines = FULL_FILE_MAX_LINES + 1;
     const { diff, source } = makeFixture(totalLines, 100);
-    const onUnavailable =
-      vi.fn<(reason: FullFileUnavailableReason, forSource: string | null | undefined) => void>();
+    const onVerdict =
+      vi.fn<
+        (reason: FullFileUnavailableReason | null, forSource: string | null | undefined) => void
+      >();
 
-    renderViewer({ diff, source, fullFile: true, onFullFileUnavailable: onUnavailable });
+    renderViewer({ diff, source, fullFile: true, onFullFileVerdict: onVerdict });
 
-    expect(onUnavailable).toHaveBeenCalledWith("too-large", expect.any(String));
+    expect(onVerdict).toHaveBeenCalledWith("too-large", expect.any(String));
     // The diff itself still renders — the fallback is to changed lines, never
     // to an empty pane.
     expect(renderedContent()).toContain("CHANGED");
@@ -180,25 +186,29 @@ describe("DiffViewer full file scope", () => {
 
   it("expands a file sitting exactly on the row ceiling", () => {
     const { diff, source } = makeFixture(FULL_FILE_MAX_LINES, 100);
-    const onUnavailable =
-      vi.fn<(reason: FullFileUnavailableReason, forSource: string | null | undefined) => void>();
+    const onVerdict =
+      vi.fn<
+        (reason: FullFileUnavailableReason | null, forSource: string | null | undefined) => void
+      >();
 
-    renderViewer({ diff, source, fullFile: true, onFullFileUnavailable: onUnavailable });
+    renderViewer({ diff, source, fullFile: true, onFullFileVerdict: onVerdict });
 
-    expect(onUnavailable).not.toHaveBeenCalled();
+    expect(onVerdict).toHaveBeenLastCalledWith(null, expect.any(String));
     expect(renderedContent()).toContain("line1");
   });
 
   it("stays on the plain diff when no source is supplied", () => {
     const { diff } = makeFixture(12, 5);
-    const onUnavailable =
-      vi.fn<(reason: FullFileUnavailableReason, forSource: string | null | undefined) => void>();
+    const onVerdict =
+      vi.fn<
+        (reason: FullFileUnavailableReason | null, forSource: string | null | undefined) => void
+      >();
 
-    renderViewer({ diff, fullFile: true, onFullFileUnavailable: onUnavailable });
+    renderViewer({ diff, fullFile: true, onFullFileVerdict: onVerdict });
 
     expect(renderedContent()).not.toContain("line1");
-    // No source is a pending read, not a refusal — nothing to explain yet.
-    expect(onUnavailable).not.toHaveBeenCalled();
+    // No source is a pending read, not a refusal — there's nothing to explain.
+    expect(onVerdict).toHaveBeenLastCalledWith(null, undefined);
   });
 
   // Files on disk almost always end in a newline; a fixture built by joining
@@ -218,27 +228,30 @@ describe("DiffViewer full file scope", () => {
     // Exactly at the ceiling once the trailing newline is discounted — a naive
     // split would read this as one line over and refuse to expand.
     const { diff, source } = makeFixture(FULL_FILE_MAX_LINES, 100);
-    const onUnavailable =
-      vi.fn<(reason: FullFileUnavailableReason, forSource: string | null | undefined) => void>();
+    const onVerdict =
+      vi.fn<
+        (reason: FullFileUnavailableReason | null, forSource: string | null | undefined) => void
+      >();
 
     renderViewer({
       diff,
       source: `${source}\n`,
       fullFile: true,
-      onFullFileUnavailable: onUnavailable,
+      onFullFileVerdict: onVerdict,
     });
 
-    expect(onUnavailable).not.toHaveBeenCalled();
+    expect(onVerdict).toHaveBeenLastCalledWith(null, expect.any(String));
   });
 
   it("tolerates a CRLF checkout, where disk lines carry a return the diff doesn't", () => {
     const { diff, source } = makeFixture(12, 5);
     const crlf = source.split("\n").join("\r\n");
-    const onUnavailable = vi.fn<(reason: FullFileUnavailableReason, forSource: unknown) => void>();
+    const onVerdict =
+      vi.fn<(reason: FullFileUnavailableReason | null, forSource: unknown) => void>();
 
-    renderViewer({ diff, source: crlf, fullFile: true, onFullFileUnavailable: onUnavailable });
+    renderViewer({ diff, source: crlf, fullFile: true, onFullFileVerdict: onVerdict });
 
-    expect(onUnavailable).not.toHaveBeenCalled();
+    expect(onVerdict).toHaveBeenLastCalledWith(null, expect.any(String));
     expect(renderedContent()).toContain("line1");
   });
 
@@ -266,11 +279,12 @@ describe("DiffViewer full file scope", () => {
       "line2",
       ...Array.from({ length: oldLines - 2 }, (_, i) => `tail${i + 1}`),
     ].join("\n");
-    const onUnavailable = vi.fn<(reason: FullFileUnavailableReason, forSource: unknown) => void>();
+    const onVerdict =
+      vi.fn<(reason: FullFileUnavailableReason | null, forSource: unknown) => void>();
 
-    renderViewer({ diff, source, fullFile: true, onFullFileUnavailable: onUnavailable });
+    renderViewer({ diff, source, fullFile: true, onFullFileVerdict: onVerdict });
 
-    expect(onUnavailable).toHaveBeenCalledWith("too-large", expect.any(String));
+    expect(onVerdict).toHaveBeenCalledWith("too-large", expect.any(String));
   });
 
   it("calls a hunkless diff unsupported rather than claiming the file changed", () => {
@@ -282,28 +296,53 @@ describe("DiffViewer full file scope", () => {
       "rename from old.ts",
       "rename to new.ts",
     ].join("\n");
-    const onUnavailable = vi.fn<(reason: FullFileUnavailableReason, forSource: unknown) => void>();
+    const onVerdict =
+      vi.fn<(reason: FullFileUnavailableReason | null, forSource: unknown) => void>();
 
     renderViewer({
       diff: renameDiff,
       source: "line1\nline2\n",
       fullFile: true,
-      onFullFileUnavailable: onUnavailable,
+      onFullFileVerdict: onVerdict,
     });
 
-    if (onUnavailable.mock.calls.length > 0) {
-      expect(onUnavailable).toHaveBeenCalledWith("unsupported", expect.anything());
-    }
+    expect(onVerdict).toHaveBeenLastCalledWith("unsupported", expect.any(String));
+  });
+
+  it("clears a fallback verdict once a refreshed diff makes the same source usable", () => {
+    // A host that only heard about failures would keep the explanation up while
+    // the file below it silently rendered fully expanded.
+    const { diff, source } = makeFixture(12, 5);
+    const staleDiff = makeFixture(12, 9).diff;
+    const onVerdict =
+      vi.fn<(reason: FullFileUnavailableReason | null, forSource: unknown) => void>();
+
+    const { rerender } = render(
+      <TooltipProvider>
+        <DiffViewer diff={staleDiff} source={source} fullFile onFullFileVerdict={onVerdict} />
+      </TooltipProvider>
+    );
+    expect(onVerdict).toHaveBeenLastCalledWith("source-mismatch", source);
+
+    // The diff is refreshed and now matches, while the source string is
+    // unchanged — so the verdict, not the source, is what has to move.
+    rerender(
+      <TooltipProvider>
+        <DiffViewer diff={diff} source={source} fullFile onFullFileVerdict={onVerdict} />
+      </TooltipProvider>
+    );
+    expect(onVerdict).toHaveBeenLastCalledWith(null, source);
   });
 
   it("reports the reason against the source it judged, so a host can tell verdicts apart", () => {
     const { diff } = makeFixture(12, 5);
     const drifted = Array.from({ length: 12 }, (_, i) => `unrelated${i + 1}`).join("\n");
-    const onUnavailable = vi.fn<(reason: FullFileUnavailableReason, forSource: unknown) => void>();
+    const onVerdict =
+      vi.fn<(reason: FullFileUnavailableReason | null, forSource: unknown) => void>();
 
-    renderViewer({ diff, source: drifted, fullFile: true, onFullFileUnavailable: onUnavailable });
+    renderViewer({ diff, source: drifted, fullFile: true, onFullFileVerdict: onVerdict });
 
-    expect(onUnavailable.mock.calls[0][1]).toBe(drifted);
+    expect(onVerdict.mock.calls[0][1]).toBe(drifted);
   });
 
   it("notifies once when the scope changes the rendered rows, and not on mount", () => {
