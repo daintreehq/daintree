@@ -532,7 +532,7 @@ describe("DiffPane toolbar — concurrency", () => {
     expect(dispatchMock.mock.calls[1][1]).toEqual({ path: "/repo-moved/src/index.ts" });
   });
 
-  it("lets one button run while the other is still in flight", async () => {
+  it("lets one button run while the other is still in flight, and still reports its result", async () => {
     const gate = deferred();
     dispatchMock.mockReturnValueOnce(gate.promise).mockResolvedValue(ok());
     seedPanel("src/index.ts");
@@ -548,6 +548,77 @@ describe("DiffPane toolbar — concurrency", () => {
       "file.showItemInFolder",
       "file.openInEditor",
     ]);
+
+    // The sibling starting must not invalidate this one: a per-dispatch counter
+    // would have marked the reveal stale here and eaten its failure silently.
+    await act(async () => {
+      gate.resolve(fail("reveal came back after the editor started"));
+      await gate.promise;
+    });
+    expect(screen.getByText("reveal came back after the editor started")).toBeTruthy();
+  });
+
+  it("won't let a superseded result unlock the attempt that replaced it", async () => {
+    const stale = deferred();
+    const live = deferred();
+    dispatchMock.mockReturnValueOnce(stale.promise).mockReturnValueOnce(live.promise);
+    seedPanel("src/index.ts");
+    const { rerender } = renderPane();
+
+    act(() => {
+      fireEvent.click(editorButton());
+    });
+
+    seedPanel("src/other.ts");
+    rerender(
+      <DiffPane
+        id={PANEL_ID}
+        title="pane"
+        isFocused
+        location="dialog"
+        worktreeId={WORKTREE_ID}
+        onFocus={() => {}}
+        onClose={() => {}}
+      />
+    );
+    act(() => {
+      fireEvent.click(editorButton());
+    });
+    expect(dispatchMock).toHaveBeenCalledTimes(2);
+
+    // The first file's result lands last. Releasing the guard on its way out
+    // would hand the second file's in-flight attempt a free slot.
+    await act(async () => {
+      stale.resolve(ok());
+      await stale.promise;
+    });
+    await click(editorButton());
+
+    expect(dispatchMock).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      live.resolve(ok());
+      await live.promise;
+    });
+  });
+
+  it("leaves a retry usable while only the other target is pending", async () => {
+    seedPanel("src/index.ts");
+    dispatchMock.mockResolvedValue(fail("no editor configured"));
+    renderPane();
+    await click(editorButton());
+
+    const gate = deferred();
+    dispatchMock.mockReturnValue(gate.promise);
+    act(() => {
+      fireEvent.click(revealButton());
+    });
+
+    // Pending is per target: a slow reveal says nothing about the editor, so
+    // the editor's own Retry must stay live.
+    expect(
+      screen.getByRole("button", { name: "Retry opening in editor" }).hasAttribute("disabled")
+    ).toBe(false);
 
     await act(async () => {
       gate.resolve(ok());
