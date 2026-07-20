@@ -55,6 +55,7 @@ import {
   getFilePath,
   shouldCollapseByDefault,
   estimateFileDiffBytes,
+  estimateHunksBytes,
 } from "./diffCollapseUtils";
 import { detectMovedLines } from "./diffMovedUtils";
 import { computeSearchRanges, computeTrailingWsRanges } from "./diffTokenRanges";
@@ -64,6 +65,24 @@ import { diffTokenizeClient } from "@/services/DiffTokenizeService";
 import { formatBytes } from "@/lib/formatBytes";
 
 export { _resetLangStateForTests, _flushLangLoadsForTests } from "./diffRefractor";
+
+/**
+ * Why a requested full-file view fell back to the plain diff.
+ * - `source-mismatch`: the supplied source isn't the diff's new side, so its
+ *   lines would be context from different code.
+ * - `too-large`: expanding would commit more rows than the un-virtualized
+ *   table can render responsively.
+ * - `unsupported`: the diff has no expandable single-file modify shape.
+ */
+export type FullFileUnavailableReason = "source-mismatch" | "too-large" | "unsupported";
+
+/**
+ * Row ceiling for full-file expansion. `expandFromRawCode` merges adjacent
+ * hunks, so a fully expanded file becomes one hunk that the per-hunk
+ * progressive reveal can no longer stage — every row commits in a single
+ * layout pass. Until the table is virtualized this is the backstop.
+ */
+export const FULL_FILE_MAX_LINES = 5000;
 
 export interface DiffViewerProps {
   diff: string;
@@ -76,6 +95,25 @@ export interface DiffViewerProps {
    * loaded file may not match the diff's new side.
    */
   source?: string | null;
+  /**
+   * Expand every gap so the rendered diff covers the whole file. Requires
+   * `source`; without a usable one the diff renders unexpanded and
+   * `onFullFileVerdict` fires so the host can explain why.
+   */
+  fullFile?: boolean;
+  /**
+   * The verdict on a requested `fullFile`, with the `source` it was judged
+   * against. Lets the host surface one explanation in its own chrome instead of
+   * the viewer growing a second banner system.
+   *
+   * Fires with `null` on success too: a host that only heard about failures
+   * couldn't tell a current verdict from a superseded one, and would keep
+   * showing the last refusal after a refresh made the expansion work.
+   */
+  onFullFileVerdict?: (
+    reason: FullFileUnavailableReason | null,
+    forSource: string | null | undefined
+  ) => void;
   /** Soft-wrap long lines instead of horizontal scrolling */
   wrapLines?: boolean;
   /** Case-insensitive plain-text query; matches render as .diff-search-match spans */
@@ -260,15 +298,60 @@ function estimateLineColumns(text: string): number {
 }
 
 /**
+ * Split file content into its lines. A file ending in a newline splits with a
+ * trailing empty element that is not a line of the file — left in, it renders
+ * as a phantom blank row at the end of every expanded file and shifts the line
+ * count used for the size ceiling.
+ */
+function toSourceLines(source: string): string[] {
+  // A zero-byte file has no lines; splitting it would claim one empty line and
+  // push the reconstructed old side one line long.
+  if (source === "") return [];
+  const lines = source.split("\n");
+  if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+  // A CRLF checkout leaves a carriage return on every line of the disk read
+  // that git's diff output doesn't carry. Left in, every line compares unequal
+  // and the whole feature reads as a permanent mismatch on Windows.
+  return lines.map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line));
+}
+
+/**
+ * Confirm the supplied source really is the diff's new side before any of it is
+ * shown as context.
+ *
+ * `buildSyntheticOldSource` trusts the source completely — it reconstructs the
+ * old side by indexing into it at hunk offsets, so a source that has drifted
+ * from the diff (the file edited between the two reads, or a revision the diff
+ * was never generated against) yields believable-looking context lines that
+ * belong to different code. Every hunk already carries its own new-side lines,
+ * which gives a cheap way to check: they must appear verbatim at `newStart`.
+ */
+function sourceMatchesHunks(newLines: string[], hunks: HunkData[]): boolean {
+  if (!hunks.length) return false;
+  for (const hunk of hunks) {
+    let lineNumber = hunk.newStart;
+    for (const change of hunk.changes) {
+      // Deletes exist only on the old side and occupy no new-side line.
+      if (change.type === "delete") continue;
+      if (newLines[lineNumber - 1] !== change.content) return false;
+      lineNumber++;
+    }
+    // A hunk claiming more new-side lines than it listed means the diff and the
+    // source disagree about the file's shape.
+    if (lineNumber !== hunk.newStart + hunk.newLines) return false;
+  }
+  return true;
+}
+
+/**
  * Build an old-side source (indexed by old line numbers, as
  * `expandFromRawCode` expects) from the new-side file content. Unchanged
  * regions are byte-identical between revisions, differing only by the running
  * insert/delete offset — and expansion only ever reads unchanged regions, so
  * positions inside hunks can stay empty.
  */
-function buildSyntheticOldSource(newSource: string, hunks: HunkData[]): string[] | null {
+function buildSyntheticOldSource(newLines: string[], hunks: HunkData[]): string[] | null {
   if (!hunks.length) return null;
-  const newLines = newSource.split("\n");
   let inserts = 0;
   let deletes = 0;
   for (const hunk of hunks) {
@@ -302,6 +385,8 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
     viewType = "split",
     rootPath,
     source,
+    fullFile = false,
+    onFullFileVerdict,
     wrapLines = false,
     searchQuery,
     onRetry,
@@ -341,13 +426,50 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
   }, [diff, files]);
 
   // Context expansion is only sound when the supplied source is the diff's
-  // new side, which callers guarantee only for single-file diffs.
-  const oldSource = useMemo(() => {
-    if (!source || files.length !== 1) return null;
+  // new side, which callers guarantee only for single-file diffs — and which
+  // `sourceMatchesHunks` then verifies, since a caller's guarantee can still be
+  // defeated by the file changing between the diff and the source read.
+  //
+  // The rejection reason is carried alongside so a requested full-file view can
+  // say why it fell back rather than silently rendering the plain diff.
+  const expansion = useMemo<{
+    oldSource: string[] | null;
+    reason: FullFileUnavailableReason | null;
+  }>(() => {
+    if (source == null) return { oldSource: null, reason: null };
+    if (files.length !== 1) return { oldSource: null, reason: "unsupported" };
     const file = files[0];
-    if (file.type !== "modify" && file.type !== "rename" && file.type !== "copy") return null;
-    return buildSyntheticOldSource(source, file.hunks ?? []);
+    if (file.type !== "modify" && file.type !== "rename" && file.type !== "copy") {
+      return { oldSource: null, reason: "unsupported" };
+    }
+    const hunks = file.hunks ?? [];
+    // A diff with no hunks (a pure rename, a mode change) has no gaps to fill.
+    // Reporting that as a mismatch would tell the user their file changed.
+    if (!hunks.length) return { oldSource: null, reason: "unsupported" };
+    const newLines = toSourceLines(source);
+    if (!sourceMatchesHunks(newLines, hunks)) {
+      return { oldSource: null, reason: "source-mismatch" };
+    }
+    const built = buildSyntheticOldSource(newLines, hunks);
+    if (built === null) return { oldSource: null, reason: "unsupported" };
+    // Both sides are rendered, and they diverge: inserting 2,000 lines into a
+    // 4,000-line file leaves the old side under the ceiling while the new side
+    // is well past it. The larger side is what the table has to carry.
+    if (Math.max(built.length, newLines.length) > FULL_FILE_MAX_LINES) {
+      return { oldSource: built, reason: "too-large" };
+    }
+    return { oldSource: built, reason: null };
   }, [source, files]);
+  const oldSource = expansion.oldSource;
+
+  // A file past the row ceiling keeps its per-gap expanders (the user can still
+  // reveal context deliberately) but never auto-expands wholesale.
+  const fullFileBlocked = expansion.reason !== null;
+  const effectiveFullFile = fullFile && !fullFileBlocked;
+
+  useEffect(() => {
+    if (fullFile) onFullFileVerdict?.(expansion.reason, source);
+  }, [fullFile, expansion.reason, onFullFileVerdict, source]);
 
   if (!diff || diff === "NO_CHANGES") {
     return (
@@ -444,6 +566,7 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
           searchQuery={deferredSearchQuery}
           rootPath={rootPath}
           oldSource={files.length === 1 ? oldSource : null}
+          fullFile={effectiveFullFile}
           onToggleCollapse={onToggleCollapse}
           onTokensRendered={onTokensRendered}
         />
@@ -562,6 +685,8 @@ interface FileDiffProps {
   rootPath?: string;
   /** Synthetic old-side source enabling context expansion (single-file diffs only) */
   oldSource: string[] | null;
+  /** Render every line of the file rather than the changed regions and their context */
+  fullFile: boolean;
   /** Fired whenever this file's rendered hunk rows change (collapse, expansion, reveal) */
   onToggleCollapse?: () => void;
   /** Fired after this file's token pass commits */
@@ -576,6 +701,7 @@ function FileDiff({
   searchQuery,
   rootPath,
   oldSource,
+  fullFile,
   onToggleCollapse,
   onTokensRendered,
 }: FileDiffProps) {
@@ -587,7 +713,10 @@ function FileDiff({
   const diffType: DiffType = file.type as DiffType;
 
   const fileBytes = useMemo(() => estimateFileDiffBytes(file), [file]);
-  const isLargeFile = fileBytes > DIFF_SOFT_COLLAPSE_BYTES;
+  // Whether the diff *as authored* is large. Drives the collapse-by-default and
+  // progressive-reveal decisions, which are statements about the change itself
+  // and must not shift when the user expands context.
+  const isLargeDiff = fileBytes > DIFF_SOFT_COLLAPSE_BYTES;
 
   const collapseDecision = useMemo(() => shouldCollapseByDefault(file), [file]);
   const [isCollapsed, setIsCollapsed] = useState(collapseDecision.collapse);
@@ -596,33 +725,60 @@ function FileDiff({
     setIsCollapsed(collapseDecision.collapse);
   }, [collapseDecision.collapse]);
 
-  // Context expansion mutates the rendered hunk set; reset when the file changes.
+  // Manual per-gap expansion. Reset when the file changes, and when the source
+  // changes under it — context revealed from a previous revision must not
+  // survive into a newly loaded one.
   const [hunks, setHunks] = useState<HunkData[]>(file.hunks ?? []);
   useEffect(() => {
     setHunks(file.hunks ?? []);
-  }, [file]);
+  }, [file, oldSource]);
+
+  // Full file is derived from the file's own hunks rather than folded into
+  // `hunks`, so toggling it off restores whatever the user had manually
+  // expanded instead of discarding it.
+  const renderedHunks = useMemo(() => {
+    if (!fullFile || !oldSource) return hunks;
+    try {
+      // `end` is exclusive, so the last line needs length + 1.
+      return expandFromRawCode(file.hunks ?? [], oldSource, 1, oldSource.length + 1);
+    } catch {
+      return hunks;
+    }
+  }, [fullFile, oldSource, file, hunks]);
 
   // Progressive reveal for very large expanded files: committing tens of
   // thousands of table cells at once forces a full-table layout pass under
   // width: max-content.
   const [visibleHunkCount, setVisibleHunkCount] = useState(() =>
-    isLargeFile ? INITIAL_VISIBLE_HUNKS : Number.POSITIVE_INFINITY
+    isLargeDiff ? INITIAL_VISIBLE_HUNKS : Number.POSITIVE_INFINITY
   );
   useEffect(() => {
-    setVisibleHunkCount(isLargeFile ? INITIAL_VISIBLE_HUNKS : Number.POSITIVE_INFINITY);
-  }, [file, isLargeFile]);
+    setVisibleHunkCount(isLargeDiff ? INITIAL_VISIBLE_HUNKS : Number.POSITIVE_INFINITY);
+  }, [file, isLargeDiff]);
 
   const visibleHunks = useMemo(
-    () => (hunks.length > visibleHunkCount ? hunks.slice(0, visibleHunkCount) : hunks),
-    [hunks, visibleHunkCount]
+    () =>
+      renderedHunks.length > visibleHunkCount
+        ? renderedHunks.slice(0, visibleHunkCount)
+        : renderedHunks,
+    [renderedHunks, visibleHunkCount]
   );
-  const hiddenHunkCount = hunks.length - visibleHunks.length;
+  const hiddenHunkCount = renderedHunks.length - visibleHunks.length;
+
+  // Measured from what is actually being rendered, not from the parsed diff:
+  // expansion merges hunks and grows them without end, so a small diff in a
+  // large file would otherwise keep the cheap-to-highlight verdict it earned
+  // while collapsed.
+  const isLargeRender = useMemo(
+    () => estimateHunksBytes(visibleHunks) > DIFF_SOFT_COLLAPSE_BYTES,
+    [visibleHunks]
+  );
 
   // Moved-block detection shares the large-file gate with syntax highlighting:
   // past the soft-collapse threshold the diff is churn, not review material.
   const movedKeys = useMemo(
-    () => (isCollapsed || isLargeFile ? null : detectMovedLines(visibleHunks)),
-    [visibleHunks, isCollapsed, isLargeFile]
+    () => (isCollapsed || isLargeRender ? null : detectMovedLines(visibleHunks)),
+    [visibleHunks, isCollapsed, isLargeRender]
   );
 
   const renderGutter = useMemo(
@@ -664,13 +820,26 @@ function FileDiff({
     visibleHunks,
     language,
     !isCollapsed,
-    !isLargeFile,
+    !isLargeRender,
     extraRanges
   );
 
   useEffect(() => {
     onTokensRendered?.();
   }, [tokens, onTokensRendered]);
+
+  // Single notification point for the rendered row set changing — manual gap
+  // expansion, progressive reveal, the full-file scope, and a source arriving
+  // after the diff all land here, so each fires exactly once and none can be
+  // forgotten. Collapse/expand is separate: it changes visibility, not rows,
+  // and notifies from its own handler. The first commit is the initial render
+  // rather than a transition, so the ref starts already-notified.
+  const lastNotifiedHunksRef = useRef(visibleHunks);
+  useEffect(() => {
+    if (lastNotifiedHunksRef.current === visibleHunks) return;
+    lastNotifiedHunksRef.current = visibleHunks;
+    onToggleCollapse?.();
+  }, [visibleHunks, onToggleCollapse]);
 
   // Gutter columns get an explicit width sized to the widest line number plus
   // the +/- marker, published as a CSS var that also positions the second
@@ -862,6 +1031,9 @@ function FileDiff({
     setIsCollapsed((prev) => !prev);
   };
 
+  // Both of these change the rendered row set, so the effect above issues the
+  // `onToggleCollapse` notification — notifying here too would double-fire, and
+  // would also fire when an expansion failed and changed nothing.
   const handleExpandContext = useCallback(
     (start: number, end: number) => {
       if (!oldSource) return;
@@ -872,14 +1044,12 @@ function FileDiff({
           return prev;
         }
       });
-      onToggleCollapse?.();
     },
-    [oldSource, onToggleCollapse]
+    [oldSource]
   );
 
   const handleShowMoreHunks = () => {
     setVisibleHunkCount((count) => count + SHOW_MORE_HUNKS_STEP);
-    onToggleCollapse?.();
   };
 
   const fileStyle: CSSProperties & Record<"--diff-gutter-width" | "--diff-max-line", string> = {
@@ -989,9 +1159,9 @@ function FileDiff({
               Plain text
             </span>
           )}
-          {!langLoadFailed && isLargeFile && !isCollapsed && (
+          {!langLoadFailed && isLargeRender && !isCollapsed && (
             <span className="text-xs text-text-muted" data-testid="diff-highlight-off-badge">
-              Highlighting off for large diff
+              {fullFile ? "Highlighting off for large file" : "Highlighting off for large diff"}
             </span>
           )}
           <div className="flex items-center gap-2 shrink-0 text-daintree-text/60">

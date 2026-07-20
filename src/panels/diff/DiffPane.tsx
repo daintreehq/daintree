@@ -7,7 +7,9 @@ import { ContentPanel } from "@/components/Panel/ContentPanel";
 import { FileViewerToolbar } from "@/components/FileViewer/FileViewerToolbar";
 import { DiffFileSidebar } from "@/components/FileViewer/DiffFileSidebar";
 import { ImageDiffViewer, isImageDiffCandidate } from "@/components/FileViewer/ImageDiffViewer";
-import { DiffViewer } from "@/components/Worktree/DiffViewer";
+import { DiffViewer, FULL_FILE_MAX_LINES } from "@/components/Worktree/DiffViewer";
+import type { FullFileUnavailableReason } from "@/components/Worktree/DiffViewer";
+import { FILE_READ_ERROR_MESSAGES } from "@/components/FileViewer/fileReadErrors";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { IconToggle } from "@/components/FileViewer/IconToggle";
 import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
@@ -19,11 +21,26 @@ import { usePreferencesStore, type DiffFontSize } from "@/store/preferencesStore
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
 import { useDiffContent } from "./useDiffContent";
+import { useDiffFileSource } from "./useDiffFileSource";
+import { getFullFileAvailability } from "./fullFileAvailability";
 import type { DiffSubject } from "./diffContentCache";
 import type { BasePanelProps } from "@/components/Panel/ContentPanel";
 import type { TabInfo } from "@/components/Panel/TabButton";
 
 type DiffViewType = "split" | "unified";
+
+/**
+ * How much of the file the diff renders. Kept separate from `DiffViewType`:
+ * layout and content scope are independent, and full file stays meaningful in
+ * both unified and split.
+ */
+type DiffContentScope = "changes" | "full-file";
+
+const FULL_FILE_FALLBACK_MESSAGES: Record<FullFileUnavailableReason, string> = {
+  "source-mismatch": "The file changed after this diff loaded, so only changed lines are shown",
+  "too-large": `Files over ${FULL_FILE_MAX_LINES.toLocaleString()} lines stay on changed lines to keep the diff responsive`,
+  unsupported: "The whole file can't be shown for this diff",
+};
 
 // Mirrors the ladder the modal used, so the preference keeps meaning the same
 // sizes it always did.
@@ -117,6 +134,8 @@ export function DiffPane({
   const setDiffViewType = usePreferencesStore((s) => s.setDiffViewType);
   const diffWrapLines = usePreferencesStore((s) => s.diffWrapLines);
   const setDiffWrapLines = usePreferencesStore((s) => s.setDiffWrapLines);
+  const diffFullFile = usePreferencesStore((s) => s.diffFullFile);
+  const setDiffFullFile = usePreferencesStore((s) => s.setDiffFullFile);
   const diffShowFileList = usePreferencesStore((s) => s.diffShowFileList);
   const diffFontSize = usePreferencesStore((s) => s.diffFontSize);
   const diffFontStyle: CSSProperties & Record<"--diff-font-size", string> = {
@@ -257,8 +276,117 @@ export function DiffPane({
   const isImageMode = Boolean(
     filePath && fileStatus && isImageDiffCandidate(filePath) && panel?.diffSource !== "base-branch"
   );
-  const hasDiff = Boolean(
-    content && content.trim() && content !== "NO_CHANGES" && content !== "ERROR"
+  // Sentinels the viewer turns into empty states rather than a rendered diff.
+  // `NO_CHANGES`/`ERROR` gate the pane's own branches below; the binary and
+  // oversized ones matter to the full-file scope, which has nothing to expand
+  // when no hunks were rendered in the first place.
+  const isDiffSentinel =
+    content === "NO_CHANGES" ||
+    content === "ERROR" ||
+    content === "BINARY_FILE" ||
+    content === "FILE_TOO_LARGE";
+  const hasDiff = Boolean(content && content.trim() && !isDiffSentinel);
+
+  // Whether this file *can* show its whole contents, independent of whether the
+  // user currently wants to — the toggle stays visible either way so the option
+  // is discoverable, and explains itself when it can't be used.
+  const sourceAvailability = useMemo(
+    () => getFullFileAvailability(diffSource, fileStatus),
+    [diffSource, fileStatus]
+  );
+  // An image diff already shows the whole asset, and a diff that hasn't loaded
+  // has nothing to expand — folding both into the availability verdict keeps
+  // the control from looking live while being inert.
+  const fullFileAvailability: typeof sourceAvailability = !sourceAvailability.available
+    ? sourceAvailability
+    : isImageMode
+      ? { available: false, reason: "This view already shows the whole image" }
+      : !hasDiff
+        ? { available: false, reason: "There's no diff to expand yet" }
+        : { available: true };
+
+  // The hunks and the file on disk must describe the same revision. Once the
+  // store reports the file changed, they demonstrably don't: the check inside
+  // the viewer only covers lines the hunks name, so a change in a hidden gap
+  // would otherwise be rendered as unchanged context.
+  const wantsFullFile = diffFullFile && fullFileAvailability.available && !stale;
+
+  const sourceSubject = useMemo(
+    () => (worktreePath && filePath ? { worktreePath, filePath } : null),
+    [worktreePath, filePath]
+  );
+  const { source, errorCode: sourceErrorCode } = useDiffFileSource(sourceSubject, wantsFullFile);
+
+  // Reported by the viewer once it has the parsed diff and the source side by
+  // side — the mismatch and size checks can only be made there.
+  //
+  // Stamped with the source it describes rather than cleared by an effect:
+  // child effects run before parent ones, so a reset keyed on `source` would
+  // fire in the same commit that the viewer reported its reason and swallow it.
+  const [viewerVerdict, setViewerVerdict] = useState<{
+    source: string | null | undefined;
+    reason: FullFileUnavailableReason | null;
+  } | null>(null);
+  const handleFullFileVerdict = useCallback(
+    (reason: FullFileUnavailableReason | null, forSource: string | null | undefined) => {
+      setViewerVerdict({ source: forSource, reason });
+    },
+    []
+  );
+  const activeViewerFallback =
+    viewerVerdict && viewerVerdict.source === source ? viewerVerdict.reason : null;
+
+  // Only the diff is retried: clearing it drops `hasDiff`, which disables the
+  // source hook and invalidates its read, and the source is fetched again when
+  // the new diff lands. Retrying both here would issue that read twice.
+  const refreshAll = useCallback(() => {
+    retry();
+  }, [retry]);
+
+  // One line explaining why a requested whole-file view isn't on screen. The
+  // read failure wins over the viewer's verdict: without content the viewer
+  // never got far enough to have one. `recoverable` marks the notices a refresh
+  // can actually clear — a hunkless rename never grows hunks and an over-size
+  // file never shrinks, so those get no action rather than one that can't work.
+  const fullFileNotice: { message: string; recoverable: boolean } | null = wantsFullFile
+    ? sourceErrorCode
+      ? { message: FILE_READ_ERROR_MESSAGES[sourceErrorCode], recoverable: true }
+      : activeViewerFallback
+        ? {
+            message: FULL_FILE_FALLBACK_MESSAGES[activeViewerFallback],
+            recoverable: activeViewerFallback === "source-mismatch",
+          }
+        : null
+    : null;
+
+  // The reason rides an aria-describedby rather than the tooltip alone: a
+  // disabled segment takes no focus, so a keyboard or screen-reader user would
+  // never reach a hover-only explanation.
+  const scopeReasonId = `${id}-full-file-reason`;
+  const scopeToggle = (
+    <div
+      role="group"
+      aria-label="Diff content"
+      aria-describedby={fullFileAvailability.available ? undefined : scopeReasonId}
+    >
+      <SegmentedToggle<DiffContentScope>
+        options={[
+          { value: "changes", label: "Changes" },
+          {
+            value: "full-file",
+            label: "Full file",
+            disabled: !fullFileAvailability.available,
+          },
+        ]}
+        value={wantsFullFile && !fullFileNotice ? "full-file" : "changes"}
+        onChange={(next) => setDiffFullFile(next === "full-file")}
+      />
+      {!fullFileAvailability.available && (
+        <span id={scopeReasonId} className="sr-only">
+          {fullFileAvailability.reason}
+        </span>
+      )}
+    </div>
   );
 
   const fileName = filePath?.split(/[/\\]/).filter(Boolean).pop();
@@ -267,14 +395,26 @@ export function DiffPane({
   const toolbar = filePath ? (
     <>
       <FileViewerToolbar.Root>
-        <SegmentedToggle<DiffViewType>
-          options={[
-            { value: "unified", label: "Unified" },
-            { value: "split", label: "Split" },
-          ]}
-          value={diffViewType}
-          onChange={setDiffViewType}
-        />
+        <div role="group" aria-label="Diff layout">
+          <SegmentedToggle<DiffViewType>
+            options={[
+              { value: "unified", label: "Unified" },
+              { value: "split", label: "Split" },
+            ]}
+            value={diffViewType}
+            onChange={setDiffViewType}
+          />
+        </div>
+        {fullFileAvailability.available ? (
+          scopeToggle
+        ) : (
+          // A disabled segment can't host a tooltip trigger of its own
+          // (pointer-events are off), so the explanation hangs off the wrapper.
+          <Tooltip>
+            <TooltipTrigger asChild>{scopeToggle}</TooltipTrigger>
+            <TooltipContent side="bottom">{fullFileAvailability.reason}</TooltipContent>
+          </Tooltip>
+        )}
         <FileViewerToolbar.Path path={filePath} copied={pathCopied} onCopy={handleCopyPath} />
         <FileViewerToolbar.Actions>
           <FileViewerToolbar.IconButton
@@ -296,7 +436,24 @@ export function DiffPane({
           title="File changed since this diff loaded"
           role="status"
           ariaLive="polite"
-          action={{ id: "refresh-diff", label: "Refresh", icon: RefreshCw, onClick: retry }}
+          action={{ id: "refresh-diff", label: "Refresh", icon: RefreshCw, onClick: refreshAll }}
+        />
+      )}
+      {/* Suppressed while the staleness banner is up: both would be pointing at
+          the same underlying change and offering the same refresh. */}
+      {fullFileNotice && !stale && (
+        <InlineStatusBanner
+          severity="warning"
+          icon={FileDiffIcon}
+          title="Showing changed lines only"
+          description={fullFileNotice.message}
+          role="status"
+          ariaLive="polite"
+          action={
+            fullFileNotice.recoverable
+              ? { id: "refresh-full-file", label: "Retry", icon: RefreshCw, onClick: refreshAll }
+              : undefined
+          }
         />
       )}
     </>
@@ -392,6 +549,9 @@ export function DiffPane({
                 diff={content}
                 viewType={diffViewType}
                 rootPath={worktreePath}
+                source={wantsFullFile ? source : undefined}
+                fullFile={wantsFullFile}
+                onFullFileVerdict={handleFullFileVerdict}
                 wrapLines={diffWrapLines}
                 onRetry={retry}
               />

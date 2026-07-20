@@ -43,6 +43,13 @@ interface PreferencesState {
   /** Show the changed-files sidebar in the diff workspace (multi-file review). */
   diffShowFileList: boolean;
   setDiffShowFileList: (value: boolean) => void;
+  /**
+   * Expand every hunk to cover the whole file instead of showing changed
+   * regions with their context. Orthogonal to `diffViewType` — full file is a
+   * content scope, and stays meaningful in both unified and split layouts.
+   */
+  diffFullFile: boolean;
+  setDiffFullFile: (value: boolean) => void;
   diffFontSize: DiffFontSize;
   setDiffFontSize: (value: DiffFontSize) => void;
   /** Soft-wrap long lines in markdown Source view (panel + file viewer). */
@@ -107,6 +114,7 @@ function sanitizePersistedPreferences(
   if (typeof sanitized.diffWrapLines !== "boolean") sanitized.diffWrapLines = false;
   if (typeof sanitized.diffIgnoreWhitespace !== "boolean") sanitized.diffIgnoreWhitespace = false;
   if (typeof sanitized.diffShowFileList !== "boolean") sanitized.diffShowFileList = true;
+  if (typeof sanitized.diffFullFile !== "boolean") sanitized.diffFullFile = false;
   if (!isDiffFontSize(sanitized.diffFontSize)) sanitized.diffFontSize = "m";
   if (typeof sanitized.markdownWrapLines !== "boolean") sanitized.markdownWrapLines = true;
   if (typeof sanitized.showAgentTaskTitles !== "boolean") sanitized.showAgentTaskTitles = true;
@@ -154,6 +162,8 @@ export const usePreferencesStore = create<PreferencesState>()(
       setDiffIgnoreWhitespace: (value) => set({ diffIgnoreWhitespace: value }),
       diffShowFileList: true,
       setDiffShowFileList: (value) => set({ diffShowFileList: value }),
+      diffFullFile: false,
+      setDiffFullFile: (value) => set({ diffFullFile: value }),
       diffFontSize: "m",
       setDiffFontSize: (value) => set({ diffFontSize: value }),
       markdownWrapLines: true,
@@ -309,5 +319,5 @@ registerPersistedStore({
   storeId: "preferencesStore",
   store: usePreferencesStore,
   persistedStateType:
-    "{ showProjectPulse: boolean; showDeveloperTools: boolean; showGridAgentHighlights: boolean; showDockAgentHighlights: boolean; showAgentTaskTitles: boolean; dockDensity: DockDensity; assignWorktreeToSelf: boolean; reduceAnimations: boolean; diffViewType: DiffViewType; diffWrapLines: boolean; diffIgnoreWhitespace: boolean; diffShowFileList: boolean; diffFontSize: DiffFontSize; markdownWrapLines: boolean; lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>; skipPushConfirmByWorktreePath: Record<string, boolean>; deletedWorktreeCleanupSeconds: DeletedWorktreeCleanupSeconds }",
+    "{ showProjectPulse: boolean; showDeveloperTools: boolean; showGridAgentHighlights: boolean; showDockAgentHighlights: boolean; showAgentTaskTitles: boolean; dockDensity: DockDensity; assignWorktreeToSelf: boolean; reduceAnimations: boolean; diffViewType: DiffViewType; diffWrapLines: boolean; diffIgnoreWhitespace: boolean; diffShowFileList: boolean; diffFullFile: boolean; diffFontSize: DiffFontSize; markdownWrapLines: boolean; lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>; skipPushConfirmByWorktreePath: Record<string, boolean>; deletedWorktreeCleanupSeconds: DeletedWorktreeCleanupSeconds }",
 });
