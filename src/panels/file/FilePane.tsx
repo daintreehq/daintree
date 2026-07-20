@@ -9,7 +9,7 @@ import {
   WrapText,
   XCircle,
 } from "lucide-react";
-import type { FileRenderMode, FileViewMode } from "@shared/types/panel";
+import type { FileViewMode } from "@shared/types/panel";
 import { isFilePanel } from "@shared/types/panel";
 import type { GitStatus } from "@shared/types/git";
 import { isPathInside, normalize, toWorktreeRelative } from "@shared/utils/path";
@@ -31,7 +31,7 @@ import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
 import { useDiffContent } from "@/panels/diff/useDiffContent";
 import type { DiffSubject } from "@/panels/diff/diffContentCache";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
+import { Skeleton, SkeletonBone, SkeletonHint, SkeletonText } from "@/components/ui/Skeleton";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import {
   FILE_READ_ERROR_MESSAGES,
@@ -78,6 +78,9 @@ function DiffLoadingSkeleton() {
         <SkeletonBone className="h-7 w-3/4" />
         <SkeletonText lines={8} />
       </Skeleton>
+      {/* Sibling, never nested: the wrapper's aria-busy silences mutations
+          inside its own subtree. */}
+      <SkeletonHint />
     </div>
   );
 }
@@ -202,16 +205,34 @@ export function FilePane({
     )
   );
 
-  // Worktree-relative path the diff machinery expects, or "" when the file
-  // isn't inside the panel's worktree — no worktree resolved (worktreeId is
-  // genuinely optional) or a file opened from elsewhere on disk. Both mean
-  // there's no working tree to diff it against.
+  // Whether a file has local changes is a git fact about where it physically
+  // lives, not about the panel's binding: `file.openPanel` resolves an explicit
+  // rootPath but still stamps the *active* worktree id, so `panel.worktreeId`
+  // can name a worktree the file isn't in. Resolve by containment instead, with
+  // the deepest root winning so a nested worktree beats its parent. "" = the
+  // file is in no known worktree, so there's nothing to diff it against.
+  const diffWorktreePath = useWorktreeStore(
+    useCallback(
+      (state): string => {
+        if (!filePath) return "";
+        let best = "";
+        let bestLength = -1;
+        for (const worktree of state.worktrees.values()) {
+          if (!isPathInside(filePath, worktree.path)) continue;
+          const length = normalize(worktree.path).length;
+          if (length <= bestLength) continue;
+          best = worktree.path;
+          bestLength = length;
+        }
+        return best;
+      },
+      [filePath]
+    )
+  );
+
   const relativeFilePath = useMemo(
-    () =>
-      filePath && worktreePath && isPathInside(filePath, worktreePath)
-        ? toWorktreeRelative(filePath, worktreePath)
-        : "",
-    [filePath, worktreePath]
+    () => (filePath && diffWorktreePath ? toWorktreeRelative(filePath, diffWorktreePath) : ""),
+    [filePath, diffWorktreePath]
   );
 
   // Scalar status, never the change entry: `changes` is rebuilt wholesale every
@@ -220,17 +241,20 @@ export function FilePane({
   const localChangeStatus = useWorktreeStore(
     useCallback(
       (state): GitStatus | undefined => {
-        if (!worktreeId || !relativeFilePath) return undefined;
-        const worktree = state.worktrees.get(worktreeId);
-        if (!worktree) return undefined;
-        // Stored change paths are absolute today (electron/utils/git.ts keys
-        // changesMap by absolutePath) though the type says relative — fold both
-        // shapes to the same relative form before comparing.
-        return worktree.worktreeChanges?.changes?.find(
-          (change) => normalize(toWorktreeRelative(change.path, worktree.path)) === relativeFilePath
-        )?.status;
+        if (!diffWorktreePath || !relativeFilePath) return undefined;
+        for (const worktree of state.worktrees.values()) {
+          if (normalize(worktree.path) !== normalize(diffWorktreePath)) continue;
+          // Stored change paths are absolute today (electron/utils/git.ts keys
+          // changesMap by absolutePath) though the type says relative — fold
+          // both shapes to the same relative form before comparing.
+          return worktree.worktreeChanges?.changes?.find(
+            (change) =>
+              normalize(toWorktreeRelative(change.path, worktree.path)) === relativeFilePath
+          )?.status;
+        }
+        return undefined;
       },
-      [worktreeId, relativeFilePath]
+      [diffWorktreePath, relativeFilePath]
     )
   );
 
@@ -262,7 +286,11 @@ export function FilePane({
   // immediately, so the reverse just drops any stale pin.
   const handleViewModeChange = useCallback(
     (mode: FileViewMode) => {
-      if (location === "dialog" && isMarkdown && viewMode === "source" && mode === "rendered") {
+      // Diff collapses the same way: it swaps the document for an async
+      // skeleton. Its first content commit is the release signal, in place of
+      // the rendered document's onRendered.
+      const collapsesOnEntry = mode === "diff" || (mode === "rendered" && isMarkdown);
+      if (location === "dialog" && viewMode === "source" && collapsesOnEntry) {
         heightHold.hold();
       } else {
         heightHold.cancel();
@@ -283,18 +311,24 @@ export function FilePane({
   // response still in flight from a mode the user has since left.
   const diffSubject = useMemo<DiffSubject | null>(
     () =>
-      viewMode === "diff" && worktreePath && relativeFilePath && localChangeStatus !== undefined
+      viewMode === "diff" && diffWorktreePath && relativeFilePath && localChangeStatus !== undefined
         ? {
             source: "working-tree",
-            worktreePath,
+            worktreePath: diffWorktreePath,
             filePath: relativeFilePath,
             status: localChangeStatus,
           }
         : null,
-    [viewMode, worktreePath, relativeFilePath, localChangeStatus]
+    [viewMode, diffWorktreePath, relativeFilePath, localChangeStatus]
   );
   // No `nextSubject`: there's no file to step to from a single-file viewer.
   const { content: diffContent, stale: diffStale, retry: retryDiff } = useDiffContent(diffSubject);
+
+  // The diff has no onRendered of its own; its first content commit (including
+  // the ERROR sentinel) is the equivalent signal for releasing a dialog pin.
+  useEffect(() => {
+    if (viewMode === "diff" && diffContent !== undefined) heightHold.handleRendered();
+  }, [viewMode, diffContent, heightHold]);
 
   const projectPath = useProjectStore((state) => state.currentProject?.path ?? "");
 
@@ -429,6 +463,15 @@ export function FilePane({
   useEffect(() => {
     loadFile(false);
   }, [loadFile]);
+
+  // Leaving Diff — by choice or because the change vanished — lands on source
+  // cached before the edit that prompted the diff in the first place. Re-read it
+  // silently, so a file deleted mid-view can't keep reading as present.
+  const wasDiffModeRef = useRef(viewMode === "diff");
+  useEffect(() => {
+    if (wasDiffModeRef.current && viewMode !== "diff") loadFile(true);
+    wasDiffModeRef.current = viewMode === "diff";
+  }, [viewMode, loadFile]);
 
   // Agents rewrite files while the user reads them: silently re-read when the
   // pane regains focus or the app window returns to the foreground.
