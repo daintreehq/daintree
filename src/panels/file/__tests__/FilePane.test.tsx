@@ -480,7 +480,6 @@ describe("FilePane HTML Source/Rendered (#11191)", () => {
   });
 });
 
-
 // #11255: a dialog host sizes to its content every frame, so swapping markdown
 // source for the rendered chunk's skeleton collapsed the dialog and expanded it
 // again once the document landed. FilePane pins the body's height across the
