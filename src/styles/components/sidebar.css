@@ -178,4 +178,18 @@ html[data-dragging="true"]
     outline: 2px dashed Highlight;
     outline-offset: -2px;
   }
+
+  /* The deleted row's bottom separator is a painted 1px element rather than a
+     `border-b` (#11262 — a real border and the countdown bar rendered as two
+     stacked rules). Backgrounds are forced to Canvas here, so without these the
+     separator would vanish for HC users where the old border survived. Repaint
+     the track as CanvasText and the draining fill as Highlight so the two stay
+     distinguishable. */
+  .deleted-worktree-separator {
+    background-color: CanvasText;
+  }
+
+  .deleted-worktree-countdown-fill {
+    background-color: Highlight;
+  }
 }

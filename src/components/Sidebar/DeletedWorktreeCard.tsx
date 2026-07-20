@@ -54,9 +54,10 @@ export function DeletedWorktreeCard({ worktree }: DeletedWorktreeCardProps) {
   const { counts, terminals } = useWorktreeTerminals(worktree.id);
 
   // Auto-cleanup countdown (deletedWorktreeCleanup.ts owns the deadline; this
-  // is display only): a numeric seconds readout in the header plus a depleting
-  // bar along the bottom edge. Both hold at full while the sweep defers the
-  // deadline (drag in progress, agent still working, confirm dialog open).
+  // is display only): a numeric seconds readout in the header plus the row's
+  // own bottom separator draining from full width to empty. Both hold at full
+  // while the sweep defers the deadline (drag in progress, agent still
+  // working, confirm dialog open).
   const cleanupSeconds = usePreferencesStore((s) => s.deletedWorktreeCleanupSeconds);
   const [nowTick, setNowTick] = useState(() => Date.now());
   const expiresAt = worktree.expiresAt;
@@ -154,7 +155,7 @@ export function DeletedWorktreeCard({ worktree }: DeletedWorktreeCardProps) {
   return (
     <div
       data-deleted-worktree-id={worktree.id}
-      className="sidebar-worktree-card group/card relative isolate transition-colors duration-150 border-b border-border-default"
+      className="sidebar-worktree-card group/card relative isolate transition-colors duration-150"
       data-active={isActive ? "true" : undefined}
       data-hoverable={!isActive ? "true" : undefined}
       aria-label={`Deleted worktree: ${worktree.title}`}
@@ -240,19 +241,29 @@ export function DeletedWorktreeCard({ worktree }: DeletedWorktreeCardProps) {
           onTerminalSelect={handleTerminalSelect}
         />
       </div>
-      {hasCountdown && (
-        <div
-          className="absolute inset-x-0 bottom-0 z-10 h-[2px]"
-          title={`Closes automatically in ${remainingSeconds}s`}
-          data-testid="deleted-worktree-countdown"
-          aria-hidden="true"
-        >
+      {/* The row separator and the countdown are one element, not two stacked
+          ones (#11262). A `border-b` on this card would paint at the border-box
+          edge while an absolutely positioned bar resolves `bottom-0` against
+          the *padding* edge — offset by exactly the border width, which read as
+          a doubled rule. So the track below owns the bottom edge outright: it
+          is the separator when unarmed, and the fill drains along it when
+          armed. Nudging the bar by a negative offset instead would only line up
+          coincidentally, and re-break under sub-pixel rounding at fractional
+          DPR. */}
+      <div
+        className="deleted-worktree-separator absolute inset-x-0 bottom-0 z-10 h-px bg-border-default"
+        title={hasCountdown ? `Closes automatically in ${remainingSeconds}s` : undefined}
+        data-testid="deleted-worktree-separator"
+        aria-hidden="true"
+      >
+        {hasCountdown && (
           <div
-            className="h-full bg-border-strong transition-[width] duration-1000 ease-linear motion-reduce:transition-none"
+            className="deleted-worktree-countdown-fill h-full bg-border-strong transition-[width] duration-1000 ease-linear motion-reduce:transition-none"
             style={{ width: `${remainingFraction * 100}%` }}
+            data-testid="deleted-worktree-countdown"
           />
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

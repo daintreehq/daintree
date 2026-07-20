@@ -65,6 +65,16 @@ function setPanels(
   });
 }
 
+// Classifies Tailwind bottom-border utilities (`border-b`, `border-b-2`, and
+// any variant-prefixed form like `hover:border-b`) rather than matching the
+// class string, so the check keeps working as unrelated classes come and go.
+function hasBottomBorderUtility(element: Element): boolean {
+  return [...element.classList].some((className) => {
+    const utility = className.split(":").at(-1);
+    return utility === "border-b" || utility?.startsWith("border-b-") === true;
+  });
+}
+
 function renderCard(wt: DeletedWorktree = worktree) {
   return render(
     <TooltipProvider>
@@ -168,6 +178,89 @@ describe("DeletedWorktreeCard", () => {
     usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: 0 });
     const off = renderCard({ ...worktree, expiresAt: Date.now() + 60_000 });
     expect(off.container.querySelector("[data-testid='deleted-worktree-countdown']")).toBeNull();
+  });
+
+  // #11262: the card used to carry a `border-b` *and* an absolutely positioned
+  // countdown bar. `bottom-0` resolves against the padding edge, so the bar
+  // landed one border-width above the border and the two painted as a doubled
+  // rule. The invariant these lock is structural, not cosmetic: exactly one
+  // element owns the bottom edge in every state, and the countdown lives inside
+  // it rather than beside it. jsdom can't measure the overlap that caused the
+  // bug, so we assert the arrangement that makes it unrepresentable.
+  describe("bottom-edge ownership (#11262)", () => {
+    const bottomEdgeStates = [
+      { name: "unarmed", wt: worktree, cleanupSeconds: 60, armed: false },
+      {
+        name: "armed",
+        wt: { ...worktree, expiresAt: Date.now() + 60_000 },
+        cleanupSeconds: 60,
+        armed: true,
+      },
+      {
+        name: "deadline set but auto-cleanup disabled",
+        wt: { ...worktree, expiresAt: Date.now() + 60_000 },
+        cleanupSeconds: 0,
+        armed: false,
+      },
+    ];
+
+    for (const { name, wt, cleanupSeconds, armed } of bottomEdgeStates) {
+      it(`keeps a single bottom rule while ${name}`, () => {
+        setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+        usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: cleanupSeconds });
+        const { container } = renderCard(wt);
+
+        const card = container.querySelector("[data-deleted-worktree-id='wt-1']");
+        if (!card) throw new Error("card did not render");
+
+        // The card must not paint a border of its own — that border plus the
+        // positioned track is precisely the doubling this fixes.
+        expect(hasBottomBorderUtility(card)).toBe(false);
+
+        const separators = card.querySelectorAll(
+          ":scope > [data-testid='deleted-worktree-separator']"
+        );
+        expect(separators).toHaveLength(1);
+
+        // The countdown must be nested in the separator. A regression that
+        // reintroduces it as a sibling would still satisfy a naive
+        // presence check, so assert the containment and the absence of a
+        // second top-level bar separately.
+        const separator = separators[0];
+        if (!separator) throw new Error("separator did not render");
+        expect(
+          separator.querySelectorAll(":scope > [data-testid='deleted-worktree-countdown']")
+        ).toHaveLength(armed ? 1 : 0);
+        expect(
+          card.querySelectorAll(":scope > [data-testid='deleted-worktree-countdown']")
+        ).toHaveLength(0);
+      });
+    }
+
+    it("exposes the countdown tooltip on the full-width track only while armed", () => {
+      setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+      const armed = renderCard({ ...worktree, expiresAt: Date.now() + 60_000 });
+      const armedSeparator = armed.container.querySelector(
+        "[data-testid='deleted-worktree-separator']"
+      );
+      // The tooltip belongs to the track, not the fill — on the fill the hover
+      // target would shrink as the countdown drains.
+      expect(armedSeparator?.getAttribute("title")).toMatch(/^Closes automatically in \d+s$/);
+      expect(
+        armed.container
+          .querySelector("[data-testid='deleted-worktree-countdown']")
+          ?.hasAttribute("title")
+      ).toBe(false);
+      cleanup();
+
+      const unarmed = renderCard();
+      // Unarmed the track is just a separator, so it must not claim a tooltip.
+      expect(
+        unarmed.container
+          .querySelector("[data-testid='deleted-worktree-separator']")
+          ?.hasAttribute("title")
+      ).toBe(false);
+    });
   });
 
   it("marks the card active when it is the active worktree", () => {
