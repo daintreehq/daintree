@@ -9,6 +9,10 @@ const mocks = vi.hoisted(() => ({
   selectionState: {
     activeWorktreeId: null as string | null,
     selectWorktree: vi.fn(),
+    // Only unread today because every active id here is also a live worktree,
+    // which short-circuits the `||`. One absent-worktree fixture away from a
+    // TypeError without it.
+    deletedWorktrees: new Map<string, unknown>(),
   },
   projectState: {
     currentProject: null as { id: string; path: string } | null,
@@ -69,6 +73,7 @@ const cwdOf = () => renderHook(() => useActiveWorktreeSync()).result.current.def
 describe("useActiveWorktreeSync defaultTerminalCwd", () => {
   beforeEach(() => {
     mocks.selectionState.activeWorktreeId = worktree.id;
+    mocks.selectionState.deletedWorktrees = new Map();
     mocks.projectState.currentProject = null;
     mocks.scratchState.currentScratch = null;
     mocks.homeDir.homeDir = "/home/user";

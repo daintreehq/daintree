@@ -4,6 +4,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { useLayoutUndoStore } from "@/store/layoutUndoStore";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 import { flushOptimisticCloses } from "@/services/terminal/optimisticPanelClose";
+import { moveTerminalToWorktreeAndFollowRescue } from "@/services/terminal/crossWorktreeMove";
 import { buildResumePanelOptions } from "@/services/agentResume";
 import { getDefaultTitle } from "@/store/slices/panelRegistry/helpers";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
@@ -259,8 +260,7 @@ export function registerTerminalSpawnActions(
         }
 
         useLayoutUndoStore.getState().pushLayoutSnapshot();
-        state.setFocused(null);
-        state.moveTerminalToWorktree(targetId, worktreeId);
+        moveTerminalToWorktreeAndFollowRescue(targetId, worktreeId);
       }
     },
   }));
