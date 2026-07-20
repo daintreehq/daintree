@@ -251,15 +251,19 @@ export function DeletedWorktreeCard({ worktree }: DeletedWorktreeCardProps) {
           coincidentally, and re-break under sub-pixel rounding at fractional
           DPR.
 
-          It sits behind the interaction plane (`-z-10`, contained by the root's
-          `isolate`) so it can't clip the overlay button's inset focus ring the
-          way a `z-10` track did along the bottom edge; it still paints above
-          the card's own background, and the content div carries none of its
-          own. No `title` either: a 1px decorative strip is an unhittable hover
-          target, and the seconds readout in the header already owns that
+          It stays above the interaction plane on purpose. Behind it (`-z-10`)
+          the overlay button's bottom edge would cover it in contrast modes,
+          where every button picks up a 1px/2px border (`src/index.css`
+          forced-colors and prefers-contrast blocks) — the separator would
+          disappear for exactly the users the forced-colors fallback below is
+          meant to serve. The cost is that it clips the outermost pixel of that
+          button's inset focus ring along the bottom; the ring stays visible on
+          all four sides, and the armed countdown already did this before
+          #11262. No `title` either: a 1px decorative strip is an unhittable
+          hover target, and the seconds readout in the header already owns that
           tooltip. */}
       <div
-        className="deleted-worktree-separator pointer-events-none absolute inset-x-0 bottom-0 -z-10 h-px bg-border-default"
+        className="deleted-worktree-separator pointer-events-none absolute inset-x-0 bottom-0 z-10 h-px bg-border-default"
         data-testid="deleted-worktree-separator"
         aria-hidden="true"
       >

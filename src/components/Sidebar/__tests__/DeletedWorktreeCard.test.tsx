@@ -74,9 +74,12 @@ function hasBottomBorderUtility(element: Element): boolean {
   return [...element.classList].some((className) => {
     const utility = className.split(":").at(-1);
     if (utility === "border-b") return true;
-    const width =
-      utility?.startsWith("border-b-") === true ? utility.slice("border-b-".length) : "";
-    return /^\d+$/.test(width) && width !== "0";
+    if (utility?.startsWith("border-b-") !== true) return false;
+    const value = utility.slice("border-b-".length);
+    // Arbitrary widths (`border-b-[1px]`) paint a rule of their own; arbitrary
+    // colours (`border-b-[#fff]`) only tint one some width utility declared.
+    if (value.startsWith("[")) return !value.startsWith("[#");
+    return /^\d+$/.test(value) && value !== "0";
   });
 }
 
@@ -268,19 +271,30 @@ describe("DeletedWorktreeCard", () => {
   // computed width, since every structural test above passes even if the fill
   // is permanently stuck at 0% or 100%.
   describe("countdown fill width", () => {
-    function fillWidth(expiresAt: number, cleanupSeconds = 60): string | undefined {
+    function renderArmed(expiresAt: number, cleanupSeconds = 60) {
       setPanels([{ id: "t1", worktreeId: "wt-1" }]);
       usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: cleanupSeconds });
       const { container } = renderCard({ ...worktree, expiresAt });
-      const fill = container.querySelector<HTMLElement>(
-        "[data-testid='deleted-worktree-countdown']"
-      );
-      return fill?.style.width;
+      return {
+        width: container.querySelector<HTMLElement>("[data-testid='deleted-worktree-countdown']")
+          ?.style.width,
+        readout: container.querySelector("[data-testid='deleted-worktree-countdown-seconds']")
+          ?.textContent,
+      };
+    }
+
+    function fillWidth(expiresAt: number, cleanupSeconds = 60): string | undefined {
+      return renderArmed(expiresAt, cleanupSeconds).width;
     }
 
     it("holds at full while the sweep defers the deadline past the TTL", () => {
-      // Deadline beyond the TTL: the clamp must cap this at 100%, not overflow.
-      expect(fillWidth(Date.now() + 90_000)).toBe("100%");
+      // The sweep re-extends the deadline out of phase with this component's
+      // tick, so a deadline beyond the TTL is normal and must read as full.
+      // Assert the readout too: the width alone can't distinguish the clamp
+      // from the snap-to-full branch, which would also yield 100% here.
+      const { width, readout } = renderArmed(Date.now() + 90_000);
+      expect(width).toBe("100%");
+      expect(readout).toBe("60s");
     });
 
     it("snaps the opening moments to exactly full so a paused bar holds steady", () => {
