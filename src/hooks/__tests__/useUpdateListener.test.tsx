@@ -304,10 +304,9 @@ describe("useUpdateListener", () => {
     });
 
     const patch = updateNotificationMock.mock.calls[0]![1];
-    // Restart stays the single primary CTA in the singular `action` slot; the
-    // release-notes link rides `actions[]`, which the toaster renders to its
-    // left as muted secondary text.
-    expect(patch.action).toEqual(expect.objectContaining({ label: "Restart to update" }));
+    // Restart stays the single primary CTA in the singular `action` slot (asserted
+    // by the preceding test); the release-notes link rides `actions[]`, which the
+    // toaster renders to its left as muted secondary text.
     expect(patch.actions).toHaveLength(1);
 
     const notes = patch.actions![0]!;
@@ -325,6 +324,30 @@ describe("useUpdateListener", () => {
     expect(openExternalMock).toHaveBeenCalledWith(
       "https://github.com/daintreehq/daintree/releases/tag/v2.5.0"
     );
+  });
+
+  it("strips both update controls when progress lands on a ready toast", () => {
+    renderHook(() => useUpdateListener());
+
+    act(() => {
+      capturedAvailable!({ version: "2.5.0" });
+    });
+    act(() => {
+      capturedDownloaded!({ version: "2.5.0" });
+    });
+
+    // A newer build starts downloading. surfaceAvailable() would normally clear
+    // both controls, but notify() drops the payload while suppressed, so the
+    // progress patch is the backstop: a download in flight means there is
+    // nothing ready to install and no notes worth linking.
+    act(() => {
+      capturedProgress!({ percent: 12 });
+    });
+
+    const progressPatch = updateNotificationMock.mock.calls.at(-1)![1];
+    expect(progressPatch.title).toBe("Downloading update");
+    expect(progressPatch).toHaveProperty("action", undefined);
+    expect(progressPatch).toHaveProperty("actions", undefined);
   });
 
   it("skips progress when toast was not created (quiet period)", () => {

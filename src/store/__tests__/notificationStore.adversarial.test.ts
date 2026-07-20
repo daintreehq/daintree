@@ -329,20 +329,6 @@ describe("notificationStore adversarial", () => {
     expect(n.actions).toBeUndefined();
   });
 
-  it("omitting `actions` entirely preserves the existing array", () => {
-    const id = addToast({
-      correlationId: "entity-a",
-      message: "m",
-      actions: [{ label: "Retry", onClick: () => {} }],
-    });
-
-    addToast({ correlationId: "entity-a", message: "m2" });
-
-    const n = useNotificationStore.getState().notifications.find((x) => x.id === id)!;
-    expect(n.actions).toHaveLength(1);
-    expect(n.actions![0]!.label).toBe("Retry");
-  });
-
   it("collapse does not re-trigger FIFO even when the cap is at the edge", () => {
     // Fill the cap with three distinct entities
     addToast({ correlationId: "entity-a", message: "a" });

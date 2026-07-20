@@ -47,9 +47,12 @@ function restartAction() {
 }
 
 function releaseNotesAction(version: string): NotificationAction {
-  // `version` arrives as bare semver from the updater (AutoUpdaterService
-  // normalizes via semver.valid), while GitHub tags carry a leading `v`.
-  const url = `${RELEASE_NOTES_BASE_URL}/v${version}`;
+  // `version` arrives as bare semver from the updater while GitHub tags carry a
+  // leading `v`. It is NOT pre-validated: AutoUpdaterService runs semver.valid
+  // only to gate the persisted pendingUpdateVersion and broadcasts the raw
+  // string, so encode it as a single path segment — a stray `/`, `?` or `#`
+  // would otherwise retarget the URL elsewhere on github.com.
+  const url = `${RELEASE_NOTES_BASE_URL}/v${encodeURIComponent(version)}`;
   return {
     label: "View release notes",
     // Secondary keeps "Restart to update" the single load-bearing CTA — this is
@@ -205,6 +208,14 @@ export function useUpdateListener(suppressToasts = false): void {
         title: "Downloading update",
         message: <DownloadProgress percent={info.percent} />,
         inboxMessage: `Downloading update: ${Math.round(info.percent)}%`,
+        // A download in flight means there is nothing ready to install, so
+        // neither control can be valid here. surfaceAvailable() normally clears
+        // them on the stage regression, but it routes through notify(), which
+        // drops the payload entirely while suppressed (quiet hours, blurred,
+        // rate-limited). Without this the previous version's restart button and
+        // release-notes link ride along onto the downloading toast.
+        action: undefined,
+        actions: undefined,
       });
     });
 

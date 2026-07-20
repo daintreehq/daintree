@@ -399,6 +399,34 @@ describe("notify()", () => {
       expect(useNotificationStore.getState().notifications[0]!.historyEntryId).toBeUndefined();
     });
 
+    it("forwards an explicit `actions: undefined` through to the store's collapse clear", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({
+        type: "success",
+        title: "Update ready",
+        message: "Version 2.5.0 is ready to install.",
+        correlationId: "collapse-clear",
+        duration: 0,
+        actions: [{ label: "View release notes", onClick: () => {} }],
+      });
+      notify({
+        type: "info",
+        title: "Update available",
+        message: "Version 2.5.1 is downloading...",
+        correlationId: "collapse-clear",
+        duration: 0,
+        actions: undefined,
+      });
+
+      // The store's clear branch keys off `"actions" in payload`, so this only
+      // works if notify() forwards an own key whose value is undefined. A future
+      // normalization that strips undefined fields would silently resurrect
+      // stale actions while the hook and store unit tests both stayed green.
+      const live = useNotificationStore.getState().notifications;
+      expect(live).toHaveLength(1);
+      expect(live[0]!.actions).toBeUndefined();
+    });
+
     it("skips history for grid-bar placement when transient", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       notify({
