@@ -6,6 +6,9 @@ import { useTerminalPendingDestructiveActionStore } from "@/store/terminalPendin
 import { useWorktreeSelectionStore, type DeletedWorktree } from "@/store/worktreeStore";
 import { notify } from "@/lib/notify";
 import {
+  DELETED_WORKTREE_AGENT_HOLD_CAP_MS,
+  DELETED_WORKTREE_SWEEP_INTERVAL_MS,
+  DELETED_WORKTREE_TRANSIENT_HOLD_CAP_MS,
   resetDeletedWorktreeCleanupState,
   sweepDeletedWorktreeCleanup,
 } from "../deletedWorktreeCleanup";
@@ -18,11 +21,20 @@ function makeDeps(
   overrides: Partial<{
     now: () => number;
     isDragActive: () => boolean;
+    isViewCached: () => boolean;
+    isViewHidden: () => boolean;
+    maxObservedGapMs: number;
   }> = {}
 ) {
   return {
     now: () => NOW,
     isDragActive: () => false,
+    isViewCached: () => false,
+    isViewHidden: () => false,
+    // These cases step time coarsely to describe the state machine, so every
+    // gap is declared observed — the row was on screen the whole time. The
+    // unobserved-gap credit has its own cases below and in the lifecycle suite.
+    maxObservedGapMs: Number.POSITIVE_INFINITY,
     ...overrides,
   };
 }
@@ -34,10 +46,40 @@ function addRow(overrides: Partial<DeletedWorktree> = {}): void {
     path: "/repo/x",
     deletedAt: 0,
     expiresAt: null,
+    holdReason: null,
     pinnedIndex: -1,
     ...overrides,
   });
 }
+
+function getRow(): DeletedWorktree | undefined {
+  return useWorktreeSelectionStore.getState().deletedWorktrees.get("wt-1");
+}
+
+function getHoldReason(): DeletedWorktree["holdReason"] | undefined {
+  return getRow()?.holdReason;
+}
+
+/** Remaining the row would display at `now` — the value the countdown shows. */
+function getRemainingAt(now: number): number | null {
+  const expiresAt = getRow()?.expiresAt;
+  return expiresAt == null ? null : expiresAt - now;
+}
+
+/**
+ * Arm a row with no hold condition active and run it down `consumedMs` into
+ * its countdown. Returns that instant, so a test can begin a hold at a known
+ * time rather than inferring when the sweep first saw the condition.
+ */
+function armAndAdvance(consumedMs: number): number {
+  addRow();
+  sweepDeletedWorktreeCleanup(makeDeps());
+  const at = NOW + consumedMs;
+  sweepDeletedWorktreeCleanup(makeDeps({ now: () => at }));
+  return at;
+}
+
+const TTL_MS = 60_000;
 
 function setPanels(
   entries: Array<{
@@ -127,12 +169,22 @@ describe("sweepDeletedWorktreeCleanup", () => {
     expect(bulkTrashByWorktree).toHaveBeenCalledTimes(2);
   });
 
-  it("holds the countdown while any drag is in progress", () => {
-    addRow({ expiresAt: NOW - 1 });
-    sweepDeletedWorktreeCleanup(makeDeps({ isDragActive: () => true }));
+  it("holds the countdown at its remaining while any drag is in progress", () => {
+    // Two thirds spent before the drag starts: the hold must preserve the
+    // third that is left, not hand back a fresh full window.
+    const held = armAndAdvance(40_000);
+    const deps = { isDragActive: () => true };
+
+    sweepDeletedWorktreeCleanup(makeDeps({ ...deps, now: () => held }));
+    const pinned = getRemainingAt(held);
+    sweepDeletedWorktreeCleanup(makeDeps({ ...deps, now: () => held + 5_000 }));
 
     expect(bulkTrashByWorktree).not.toHaveBeenCalled();
-    expect(getExpiry()).toBe(NOW + 60_000);
+    // Frozen where it stood, and demonstrably not snapped back to full — the
+    // re-arm-to-full is what held rows open forever.
+    expect(getRemainingAt(held + 5_000)).toBe(pinned);
+    expect(pinned).toBeLessThan(TTL_MS);
+    expect(getHoldReason()).toBe("drag");
   });
 
   it("fires even while the deleted worktree is the active selection", () => {
@@ -145,28 +197,38 @@ describe("sweepDeletedWorktreeCleanup", () => {
     expect(bulkTrashByWorktree).toHaveBeenCalledTimes(1);
   });
 
-  it("holds the countdown while an agent in the row is still working", () => {
+  it("holds the countdown at its remaining while an agent in the row is still working", () => {
+    const held = armAndAdvance(40_000);
+
     setPanels([{ id: "t1", worktreeId: "wt-1", agentState: "working" }]);
     usePanelStore.setState({ bulkTrashByWorktree });
-    addRow({ expiresAt: NOW - 1 });
-    sweepDeletedWorktreeCleanup(makeDeps());
+    sweepDeletedWorktreeCleanup(makeDeps({ now: () => held }));
+    const pinned = getRemainingAt(held);
+    sweepDeletedWorktreeCleanup(makeDeps({ now: () => held + 5_000 }));
 
     expect(bulkTrashByWorktree).not.toHaveBeenCalled();
-    expect(getExpiry()).toBe(NOW + 60_000);
+    expect(getRemainingAt(held + 5_000)).toBe(pinned);
+    expect(pinned).toBeLessThan(TTL_MS);
+    expect(getHoldReason()).toBe("agent");
   });
 
-  it("holds the countdown while the row's close-confirm dialog is open", () => {
-    addRow({ expiresAt: NOW - 1 });
+  it("holds the countdown at its remaining while the row's close-confirm dialog is open", () => {
+    const held = armAndAdvance(40_000);
+
     useTerminalPendingDestructiveActionStore.getState().request({
       kind: "deletedWorktreeDismiss",
       targetCount: 1,
       runningAgentCount: 0,
       worktreeId: "wt-1",
     });
-    sweepDeletedWorktreeCleanup(makeDeps());
+    sweepDeletedWorktreeCleanup(makeDeps({ now: () => held }));
+    const pinned = getRemainingAt(held);
+    sweepDeletedWorktreeCleanup(makeDeps({ now: () => held + 5_000 }));
 
     expect(bulkTrashByWorktree).not.toHaveBeenCalled();
-    expect(getExpiry()).toBe(NOW + 60_000);
+    expect(getRemainingAt(held + 5_000)).toBe(pinned);
+    expect(pinned).toBeLessThan(TTL_MS);
+    expect(getHoldReason()).toBe("confirm");
   });
 
   it("does not defer on a stale working state whose runtime already exited", () => {
@@ -254,11 +316,12 @@ describe("sweepDeletedWorktreeCleanup", () => {
     expect(notify).not.toHaveBeenCalled();
   });
 
-  it("stays silent while the countdown is only being deferred", () => {
-    addRow({ expiresAt: NOW - 1 });
-    sweepDeletedWorktreeCleanup(makeDeps({ isDragActive: () => true }));
+  it("stays silent while the countdown is only being held", () => {
+    const held = armAndAdvance(59_000);
+    sweepDeletedWorktreeCleanup(makeDeps({ now: () => held + 5_000, isDragActive: () => true }));
 
     expect(notify).not.toHaveBeenCalled();
+    expect(bulkTrashByWorktree).not.toHaveBeenCalled();
   });
 
   it("collapses a same-tick burst into one inbox entry (#11260)", () => {
@@ -352,5 +415,350 @@ describe("sweepDeletedWorktreeCleanup", () => {
     sweepDeletedWorktreeCleanup(makeDeps());
 
     expect(getExpiry()).toBe(NOW + 60_000);
+  });
+
+  it("resumes from the preserved remaining once the hold clears", () => {
+    const held = armAndAdvance(40_000);
+
+    sweepDeletedWorktreeCleanup(makeDeps({ now: () => held, isDragActive: () => true }));
+    const pinned = getRemainingAt(held);
+    const releasedAt = held + 10_000;
+    sweepDeletedWorktreeCleanup(makeDeps({ now: () => releasedAt }));
+
+    // Picks up where it stopped — the 10s spent held is not charged, and the
+    // row is not handed a fresh window either.
+    expect(getRemainingAt(releasedAt)).toBe(pinned);
+    expect(getHoldReason()).toBeNull();
+  });
+
+  it("gives up on a drag that never clears and fires once its cap is spent", () => {
+    const held = armAndAdvance(40_000);
+    const deps = { isDragActive: () => true };
+
+    // Still inside the transient cap: holding, nothing trashed.
+    sweepDeletedWorktreeCleanup(makeDeps({ ...deps, now: () => held }));
+    const pinned = getRemainingAt(held) ?? 0;
+    const beforeCap = held + DELETED_WORKTREE_TRANSIENT_HOLD_CAP_MS - 1_000;
+    sweepDeletedWorktreeCleanup(makeDeps({ ...deps, now: () => beforeCap }));
+    expect(bulkTrashByWorktree).not.toHaveBeenCalled();
+    expect(getHoldReason()).toBe("drag");
+
+    // Past the cap the hold gives up: the preserved countdown resumes rather
+    // than the row being trashed on the spot.
+    const afterCap = held + DELETED_WORKTREE_TRANSIENT_HOLD_CAP_MS + 1_000;
+    sweepDeletedWorktreeCleanup(makeDeps({ ...deps, now: () => afterCap }));
+    expect(bulkTrashByWorktree).not.toHaveBeenCalled();
+    expect(getHoldReason()).toBeNull();
+    expect(getRemainingAt(afterCap)).toBe(pinned);
+
+    // ...and then it actually fires, even though the drag flag never cleared.
+    sweepDeletedWorktreeCleanup(makeDeps({ ...deps, now: () => afterCap + pinned }));
+    expect(bulkTrashByWorktree).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a working agent hold far longer than a drag before giving up", () => {
+    const held = armAndAdvance(40_000);
+    setPanels([{ id: "t1", worktreeId: "wt-1", agentState: "working" }]);
+    usePanelStore.setState({ bulkTrashByWorktree });
+    sweepDeletedWorktreeCleanup(makeDeps({ now: () => held }));
+
+    // A drag would have surrendered by now; a working agent must not, because
+    // trash only holds a terminal for TRASH_TTL_MS before killing the PTY.
+    const pastTransientCap = held + DELETED_WORKTREE_TRANSIENT_HOLD_CAP_MS + 60_000;
+    sweepDeletedWorktreeCleanup(makeDeps({ now: () => pastTransientCap }));
+    expect(getHoldReason()).toBe("agent");
+
+    sweepDeletedWorktreeCleanup(
+      makeDeps({ now: () => held + DELETED_WORKTREE_AGENT_HOLD_CAP_MS + 1_000 })
+    );
+    expect(getHoldReason()).toBeNull();
+  });
+
+  it("does not let an exhausted hold restart itself on the next tick", () => {
+    const held = armAndAdvance(40_000);
+    const deps = { isDragActive: () => true };
+    sweepDeletedWorktreeCleanup(makeDeps({ ...deps, now: () => held }));
+    const pinned = getRemainingAt(held) ?? 0;
+    expect(getHoldReason()).toBe("drag");
+
+    // The condition is still true, so the hold clock must not be cleared and
+    // restarted — that is what let a permanent condition hold forever.
+    const afterCap = held + DELETED_WORKTREE_TRANSIENT_HOLD_CAP_MS + 1_000;
+    sweepDeletedWorktreeCleanup(makeDeps({ ...deps, now: () => afterCap }));
+    sweepDeletedWorktreeCleanup(makeDeps({ ...deps, now: () => afterCap + 1_000 }));
+    expect(getHoldReason()).toBeNull();
+    // Released, not fired: the row still owes its preserved countdown.
+    expect(bulkTrashByWorktree).not.toHaveBeenCalled();
+    // And the countdown is genuinely running again, not re-pinned.
+    expect(getRemainingAt(afterCap + 1_000)).toBe(pinned - 1_000);
+
+    sweepDeletedWorktreeCleanup(makeDeps({ ...deps, now: () => afterCap + pinned }));
+    sweepDeletedWorktreeCleanup(makeDeps({ ...deps, now: () => afterCap + pinned + 1_000 }));
+    expect(bulkTrashByWorktree).toHaveBeenCalledTimes(1);
+  });
+
+  it("eventually trashes a row an agent held past its cap", () => {
+    const held = armAndAdvance(40_000);
+    setPanels([{ id: "t1", worktreeId: "wt-1", agentState: "working" }]);
+    usePanelStore.setState({ bulkTrashByWorktree });
+    sweepDeletedWorktreeCleanup(makeDeps({ now: () => held }));
+    const pinned = getRemainingAt(held) ?? 0;
+
+    const afterCap = held + DELETED_WORKTREE_AGENT_HOLD_CAP_MS + 1_000;
+    sweepDeletedWorktreeCleanup(makeDeps({ now: () => afterCap }));
+    expect(bulkTrashByWorktree).not.toHaveBeenCalled();
+
+    // The agent never stops working, and the row still goes — that is the
+    // whole "eventually gives up" guarantee.
+    sweepDeletedWorktreeCleanup(makeDeps({ now: () => afterCap + pinned }));
+    expect(bulkTrashByWorktree).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledTimes(1);
+  });
+
+  it("eventually trashes a row an abandoned close-confirm held past its cap", () => {
+    const held = armAndAdvance(40_000);
+    useTerminalPendingDestructiveActionStore.getState().request({
+      kind: "deletedWorktreeDismiss",
+      targetCount: 1,
+      runningAgentCount: 0,
+      worktreeId: "wt-1",
+    });
+    sweepDeletedWorktreeCleanup(makeDeps({ now: () => held }));
+    const pinned = getRemainingAt(held) ?? 0;
+    expect(getHoldReason()).toBe("confirm");
+
+    // The dialog is never answered — the sweep must not wait on it forever.
+    const afterCap = held + DELETED_WORKTREE_TRANSIENT_HOLD_CAP_MS + 1_000;
+    sweepDeletedWorktreeCleanup(makeDeps({ now: () => afterCap }));
+    sweepDeletedWorktreeCleanup(makeDeps({ now: () => afterCap + pinned }));
+
+    expect(bulkTrashByWorktree).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls through an exhausted drag to a still-eligible working agent", () => {
+    const held = armAndAdvance(40_000);
+    setPanels([{ id: "t1", worktreeId: "wt-1", agentState: "working" }]);
+    usePanelStore.setState({ bulkTrashByWorktree });
+    const deps = { isDragActive: () => true };
+
+    sweepDeletedWorktreeCleanup(makeDeps({ ...deps, now: () => held }));
+    expect(getHoldReason()).toBe("drag");
+
+    // Drag outranks agent while both are eligible; once the drag's shorter cap
+    // is spent the agent keeps holding under its own, longer one.
+    const afterDragCap = held + DELETED_WORKTREE_TRANSIENT_HOLD_CAP_MS + 1_000;
+    sweepDeletedWorktreeCleanup(makeDeps({ ...deps, now: () => afterDragCap }));
+    expect(getHoldReason()).toBe("agent");
+    expect(bulkTrashByWorktree).not.toHaveBeenCalled();
+  });
+
+  it("bounds the total hold even as the reason changes underneath it", () => {
+    const held = armAndAdvance(40_000);
+    setPanels([{ id: "t1", worktreeId: "wt-1", agentState: "working" }]);
+    usePanelStore.setState({ bulkTrashByWorktree });
+
+    // Alternating conditions must not each restart the clock: the whole
+    // continuous hold is measured from when it began.
+    sweepDeletedWorktreeCleanup(makeDeps({ now: () => held, isDragActive: () => true }));
+    sweepDeletedWorktreeCleanup(
+      makeDeps({ now: () => held + DELETED_WORKTREE_AGENT_HOLD_CAP_MS - 1_000 })
+    );
+    expect(getHoldReason()).toBe("agent");
+
+    sweepDeletedWorktreeCleanup(
+      makeDeps({
+        now: () => held + DELETED_WORKTREE_AGENT_HOLD_CAP_MS + 1_000,
+        isDragActive: () => true,
+      })
+    );
+    expect(getHoldReason()).toBeNull();
+  });
+
+  it("re-captures the held remaining against the new TTL when the preference changes", () => {
+    const held = armAndAdvance(40_000);
+    const deps = { isDragActive: () => true };
+    sweepDeletedWorktreeCleanup(makeDeps({ ...deps, now: () => held + 1_000 }));
+
+    usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: 30 });
+    const at = held + 2_000;
+    sweepDeletedWorktreeCleanup(makeDeps({ ...deps, now: () => at }));
+
+    // A remaining captured against the old TTL is meaningless under the new
+    // one — and would make the card's bar (which divides by the current TTL)
+    // overflow. The row re-arms to a full window of the new TTL instead.
+    expect(getRemainingAt(at)).toBe(30_000);
+    expect(getHoldReason()).toBe("drag");
+  });
+
+  it("credits a gap between sweeps back to the deadline instead of spending it", () => {
+    // The sweep runs at 1 Hz, so a gap this large means it did not run at all:
+    // the view was cached, the window was hidden, or the machine slept. None
+    // of that is time the user could have watched the countdown in.
+    const observed = { maxObservedGapMs: DELETED_WORKTREE_SWEEP_INTERVAL_MS * 2 };
+    addRow();
+    sweepDeletedWorktreeCleanup(makeDeps({ ...observed }));
+    const at = NOW + 30 * 60_000;
+    sweepDeletedWorktreeCleanup(makeDeps({ ...observed, now: () => at }));
+
+    expect(bulkTrashByWorktree).not.toHaveBeenCalled();
+    // All but the one interval every sweep always spends.
+    expect(getRemainingAt(at)).toBe(TTL_MS - DELETED_WORKTREE_SWEEP_INTERVAL_MS);
+  });
+
+  it("neither spends nor trashes while the window is hidden", () => {
+    // A minimized window keeps its project ACTIVE — it is never cached — and
+    // Chromium's first background tier throttles timers to 1 Hz, which is this
+    // interval exactly. So the sweep keeps firing on time behind the minimized
+    // window, and without this guard it would burn the countdown down and
+    // trash the terminals where nobody could see it.
+    addRow({ expiresAt: NOW - 1 });
+    const before = useWorktreeSelectionStore.getState().deletedWorktrees;
+
+    sweepDeletedWorktreeCleanup(makeDeps({ isViewHidden: () => true }));
+
+    expect(bulkTrashByWorktree).not.toHaveBeenCalled();
+    expect(useWorktreeSelectionStore.getState().deletedWorktrees).toBe(before);
+  });
+
+  it("credits the hidden stretch once the window comes back", () => {
+    const observed = { maxObservedGapMs: DELETED_WORKTREE_SWEEP_INTERVAL_MS * 2 };
+    addRow();
+    sweepDeletedWorktreeCleanup(makeDeps({ ...observed }));
+
+    // Ticks keep arriving at 1 Hz while hidden and are all refused, so the
+    // whole stretch stays in the gap for the first visible sweep to credit.
+    let at = NOW;
+    for (let tick = 0; tick < 120; tick++) {
+      at += DELETED_WORKTREE_SWEEP_INTERVAL_MS;
+      sweepDeletedWorktreeCleanup(
+        makeDeps({ ...observed, now: () => at, isViewHidden: () => true })
+      );
+    }
+    sweepDeletedWorktreeCleanup(makeDeps({ ...observed, now: () => at }));
+
+    expect(bulkTrashByWorktree).not.toHaveBeenCalled();
+    expect(getRemainingAt(at)).toBe(TTL_MS - DELETED_WORKTREE_SWEEP_INTERVAL_MS);
+  });
+
+  it("keeps spending the countdown when every gap sits just over the threshold", () => {
+    // Crediting a late gap in full would let a run of these consume exactly
+    // zero countdown forever — a debugger pause, or a renderer pegged under
+    // load, would hold every ghost row open indefinitely. Each sweep must
+    // still spend an interval.
+    const observed = { maxObservedGapMs: DELETED_WORKTREE_SWEEP_INTERVAL_MS * 2 };
+    const step = DELETED_WORKTREE_SWEEP_INTERVAL_MS * 2 + 1;
+    addRow();
+    sweepDeletedWorktreeCleanup(makeDeps({ ...observed }));
+
+    let at = NOW;
+    for (let tick = 0; tick < 80; tick++) {
+      at += step;
+      sweepDeletedWorktreeCleanup(makeDeps({ ...observed, now: () => at }));
+    }
+
+    expect(bulkTrashByWorktree).toHaveBeenCalledTimes(1);
+  });
+
+  it("still spends time across the ordinary tick-by-tick cadence", () => {
+    // The mirror of the case above: normal 1 Hz sweeps must not be mistaken for
+    // unobserved gaps, or the countdown would never move at all.
+    const observed = { maxObservedGapMs: DELETED_WORKTREE_SWEEP_INTERVAL_MS * 2 };
+    addRow();
+    sweepDeletedWorktreeCleanup(makeDeps({ ...observed }));
+    let at = NOW;
+    for (let tick = 0; tick < 5; tick++) {
+      at += DELETED_WORKTREE_SWEEP_INTERVAL_MS;
+      sweepDeletedWorktreeCleanup(makeDeps({ ...observed, now: () => at }));
+    }
+
+    expect(getRemainingAt(at)).toBe(TTL_MS - 5 * DELETED_WORKTREE_SWEEP_INTERVAL_MS);
+  });
+
+  it("does not let an unobserved gap spend a hold's cap", () => {
+    const observed = { maxObservedGapMs: DELETED_WORKTREE_SWEEP_INTERVAL_MS * 2 };
+    setPanels([{ id: "t1", worktreeId: "wt-1", agentState: "working" }]);
+    usePanelStore.setState({ bulkTrashByWorktree });
+    addRow();
+    sweepDeletedWorktreeCleanup(makeDeps({ ...observed }));
+    expect(getHoldReason()).toBe("agent");
+
+    // Cached for longer than the agent cap. If the cap counted that, the row
+    // would wake with its protection already gone and trash a working agent.
+    const at = NOW + DELETED_WORKTREE_AGENT_HOLD_CAP_MS + 60_000;
+    sweepDeletedWorktreeCleanup(makeDeps({ ...observed, now: () => at }));
+
+    expect(getHoldReason()).toBe("agent");
+    expect(bulkTrashByWorktree).not.toHaveBeenCalled();
+  });
+
+  it("performs no store write and no trash while the project view is cached", () => {
+    addRow({ expiresAt: NOW - 1 });
+    const before = useWorktreeSelectionStore.getState().deletedWorktrees;
+
+    sweepDeletedWorktreeCleanup(makeDeps({ isViewCached: () => true }));
+
+    expect(bulkTrashByWorktree).not.toHaveBeenCalled();
+    // Same map reference — nothing about a view nobody can see was touched.
+    expect(useWorktreeSelectionStore.getState().deletedWorktrees).toBe(before);
+  });
+
+  it("holds one row without touching another row's countdown", () => {
+    // Everything the sweep remembers lives in module-level maps keyed by row
+    // id, so a leak between rows would be silent — and an app-wide drag holds
+    // every ghost row at once, which is exactly when it would bite.
+    setPanels([
+      { id: "t1", worktreeId: "wt-1" },
+      { id: "t2", worktreeId: "wt-2", agentState: "working" },
+    ]);
+    usePanelStore.setState({ bulkTrashByWorktree });
+    addRow();
+    addRow({ id: "wt-2", title: "feature/y", path: "/repo/y" });
+    sweepDeletedWorktreeCleanup(makeDeps());
+
+    // wt-2 holds on its working agent; wt-1 has nothing holding it.
+    const at = NOW + 30_000;
+    sweepDeletedWorktreeCleanup(makeDeps({ now: () => at }));
+    const rows = useWorktreeSelectionStore.getState().deletedWorktrees;
+    expect(rows.get("wt-1")?.holdReason).toBeNull();
+    expect(rows.get("wt-2")?.holdReason).toBe("agent");
+    expect((rows.get("wt-1")?.expiresAt ?? 0) - at).toBeLessThan(
+      (rows.get("wt-2")?.expiresAt ?? 0) - at
+    );
+
+    // The unheld row expires on schedule while the held one stays.
+    sweepDeletedWorktreeCleanup(makeDeps({ now: () => NOW + 61_000 }));
+    expect(bulkTrashByWorktree).toHaveBeenCalledTimes(1);
+    expect(bulkTrashByWorktree).toHaveBeenCalledWith("wt-1");
+    expect(useWorktreeSelectionStore.getState().deletedWorktrees.get("wt-2")?.holdReason).toBe(
+      "agent"
+    );
+  });
+
+  it("does not let a re-recorded row inherit the previous row's hold", () => {
+    const held = armAndAdvance(40_000);
+    sweepDeletedWorktreeCleanup(makeDeps({ now: () => held, isDragActive: () => true }));
+    expect(getHoldReason()).toBe("drag");
+
+    useWorktreeSelectionStore.getState().dismissDeletedWorktree("wt-1");
+    addRow();
+    const at = held + 1_000;
+    sweepDeletedWorktreeCleanup(makeDeps({ now: () => at }));
+
+    // A fresh row under a reused id starts from a clean full window, not the
+    // remaining its predecessor was holding.
+    expect(getRemainingAt(at)).toBe(TTL_MS);
+    expect(getHoldReason()).toBeNull();
+  });
+
+  it("clears hold state when cleanup is switched off mid-hold", () => {
+    const held = armAndAdvance(40_000);
+    sweepDeletedWorktreeCleanup(makeDeps({ now: () => held + 1_000, isDragActive: () => true }));
+    expect(getHoldReason()).toBe("drag");
+
+    usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: 0 });
+    sweepDeletedWorktreeCleanup(makeDeps({ now: () => held + 2_000, isDragActive: () => true }));
+
+    expect(getExpiry()).toBeNull();
+    expect(getHoldReason()).toBeNull();
   });
 });

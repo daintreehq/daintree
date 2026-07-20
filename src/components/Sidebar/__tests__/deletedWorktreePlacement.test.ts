@@ -12,7 +12,15 @@ import { planDeletedWorktreePlacement } from "../deletedWorktreePlacement";
 import type { DeletedWorktree } from "@/store/worktreeStore";
 
 function deleted(id: string, pinnedIndex: number): DeletedWorktree {
-  return { id, title: id, path: `/repo/${id}`, deletedAt: 1000, expiresAt: null, pinnedIndex };
+  return {
+    id,
+    title: id,
+    path: `/repo/${id}`,
+    deletedAt: 1000,
+    expiresAt: null,
+    holdReason: null,
+    pinnedIndex,
+  };
 }
 
 describe("planDeletedWorktreePlacement", () => {

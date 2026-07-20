@@ -42,6 +42,13 @@ export interface PendingCreation {
  * any route — moved, trashed, killed, or exited — shrinks the row without
  * this store having to observe terminal lifecycle events at all.
  */
+/**
+ * Why a deleted-worktree row's auto-cleanup countdown is holding. Ordered by
+ * the precedence the sweep evaluates them in: an open confirm dialog outranks
+ * a drag, which outranks a still-working agent.
+ */
+export type DeletedWorktreeHoldReason = "confirm" | "drag" | "agent";
+
 export interface DeletedWorktree {
   id: string;
   /**
@@ -56,9 +63,20 @@ export interface DeletedWorktree {
    * When the row's auto-cleanup fires (terminals move to trash, row goes).
    * `null` while cleanup is off or the countdown hasn't been armed yet. Owned
    * entirely by the cleanup sweep (`deletedWorktreeCleanup.ts`), which arms,
-   * pauses (by re-extending), and fires it — nothing else writes this.
+   * holds, and fires it — nothing else writes this.
+   *
+   * A row is recorded UNARMED and the sweep arms it on its first tick with the
+   * view awake, so a project cached at deletion time is never charged for the
+   * wall time it spent frozen (#11259).
    */
   expiresAt: number | null;
+  /**
+   * Why the countdown is currently held, or `null` while it is running. The
+   * sweep pins `expiresAt` to the remaining it had when the hold began, so the
+   * row's readout freezes instead of snapping back to full; this field is what
+   * lets the card say *why* rather than just appearing stuck (#11259).
+   */
+  holdReason: DeletedWorktreeHoldReason | null;
   /**
    * Index the row occupied in the sidebar's scrollable list when it was
    * deleted, so the row holds its slot instead of jumping to an edge.
@@ -226,7 +244,10 @@ interface WorktreeSelectionState {
   dismissPendingCreation: (path: string) => void;
   addDeletedWorktree: (worktree: DeletedWorktree) => void;
   dismissDeletedWorktree: (worktreeId: string) => void;
-  setDeletedWorktreeExpiry: (worktreeId: string, expiresAt: number | null) => void;
+  setDeletedWorktreeCleanupState: (
+    worktreeId: string,
+    next: { expiresAt: number | null; holdReason: DeletedWorktreeHoldReason | null }
+  ) => void;
   clearRestoreTarget: (worktreeId: string) => void;
   pruneDeletedWorktrees: (liveWorktreeIds: ReadonlySet<string>) => void;
   toggleDeletedWorktreeGroupExpanded: () => void;
@@ -849,12 +870,16 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     });
   },
 
-  setDeletedWorktreeExpiry: (worktreeId, expiresAt) => {
+  // Deadline and hold reason move together: a held tick rewrites the pinned
+  // expiry every second, and splitting these into two mutators would re-render
+  // the sidebar twice for what is one logical state change.
+  setDeletedWorktreeCleanupState: (worktreeId, { expiresAt, holdReason }) => {
     set((state) => {
       const entry = state.deletedWorktrees.get(worktreeId);
-      if (!entry || entry.expiresAt === expiresAt) return state;
+      if (!entry) return state;
+      if (entry.expiresAt === expiresAt && entry.holdReason === holdReason) return state;
       const next = new Map(state.deletedWorktrees);
-      next.set(worktreeId, { ...entry, expiresAt });
+      next.set(worktreeId, { ...entry, expiresAt, holdReason });
       return { deletedWorktrees: next };
     });
   },

@@ -14,7 +14,6 @@ import {
   getPinnedDeletedWorktreeIndex,
 } from "@/store/worktreeStore";
 import { usePanelStore } from "@/store/panelStore";
-import { usePreferencesStore } from "@/store/preferencesStore";
 import { startDeletedWorktreeCleanup } from "@/store/deletedWorktreeCleanup";
 import { usePulseStore } from "@/store/pulseStore";
 import { useProjectStore } from "@/store/projectStore";
@@ -439,7 +438,6 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
         // (the delete dialog and the `worktree.delete` action) funnel through
         // this event, so they get identical behaviour from this one change.
         if (willBecomeGhost) {
-          const cleanupSeconds = usePreferencesStore.getState().deletedWorktreeCleanupSeconds;
           selectionStore.addDeletedWorktree({
             id: event.worktreeId,
             // Detached-HEAD worktrees have no branch; fall back to the folder
@@ -448,11 +446,13 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
               worktree.branch ?? worktree.path.split(/[/\\]/).filter(Boolean).pop() ?? "Unknown",
             path: worktree.path,
             deletedAt: Date.now(),
-            // Armed HERE, not by the sweep's next tick — deletion starts the
-            // countdown even if this view is hidden and its sweep throttled.
-            // The sweep owns it from now on (defers, re-arms on preference
-            // change, fires into the trash).
-            expiresAt: cleanupSeconds > 0 ? Date.now() + cleanupSeconds * 1000 : null,
+            // Recorded UNARMED on purpose: the sweep arms it on its first tick
+            // with this view awake, and only ever advances it across awake
+            // seconds. Stamping a wall-clock deadline here instead meant a
+            // project cached at deletion time came back with the countdown
+            // already spent and no window to rescue anything (#11259).
+            expiresAt: null,
+            holdReason: null,
             pinnedIndex: getPinnedDeletedWorktreeIndex(event.worktreeId),
           });
         }

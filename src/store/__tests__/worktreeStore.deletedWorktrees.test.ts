@@ -31,6 +31,7 @@ function makeDeleted(overrides: Partial<DeletedWorktree> = {}): DeletedWorktree 
     path: "/repo/wt-1",
     deletedAt: 1000,
     expiresAt: null,
+    holdReason: null,
     pinnedIndex: 0,
     ...overrides,
   };
@@ -119,6 +120,54 @@ describe("dismissDeletedWorktree", () => {
     store.addDeletedWorktree(makeDeleted());
     const before = useWorktreeSelectionStore.getState().deletedWorktrees;
     store.dismissDeletedWorktree("nope");
+    expect(useWorktreeSelectionStore.getState().deletedWorktrees).toBe(before);
+  });
+});
+
+describe("setDeletedWorktreeCleanupState", () => {
+  it("moves the deadline and the hold reason in a single update", () => {
+    const store = useWorktreeSelectionStore.getState();
+    store.addDeletedWorktree(makeDeleted());
+
+    const seen: Array<{ expiresAt: number | null; holdReason: string | null }> = [];
+    const unsubscribe = useWorktreeSelectionStore.subscribe((state) => {
+      const row = state.deletedWorktrees.get("wt-1");
+      if (row) seen.push({ expiresAt: row.expiresAt, holdReason: row.holdReason });
+    });
+    store.setDeletedWorktreeCleanupState("wt-1", { expiresAt: 5_000, holdReason: "drag" });
+    unsubscribe();
+
+    // One emission carrying both fields — two sequential writes would publish a
+    // torn frame (new deadline, stale reason) to every sidebar subscriber.
+    expect(seen).toEqual([{ expiresAt: 5_000, holdReason: "drag" }]);
+  });
+
+  it("returns the same state when neither field changes", () => {
+    const store = useWorktreeSelectionStore.getState();
+    store.addDeletedWorktree(makeDeleted({ expiresAt: 5_000, holdReason: "agent" }));
+    const before = useWorktreeSelectionStore.getState().deletedWorktrees;
+    store.setDeletedWorktreeCleanupState("wt-1", { expiresAt: 5_000, holdReason: "agent" });
+
+    // The sweep calls this every second; an unconditional clone would re-render
+    // the whole sidebar at 1 Hz.
+    expect(useWorktreeSelectionStore.getState().deletedWorktrees).toBe(before);
+  });
+
+  it("writes when only the hold reason changes", () => {
+    const store = useWorktreeSelectionStore.getState();
+    store.addDeletedWorktree(makeDeleted({ expiresAt: 5_000, holdReason: "drag" }));
+    store.setDeletedWorktreeCleanupState("wt-1", { expiresAt: 5_000, holdReason: null });
+
+    expect(
+      useWorktreeSelectionStore.getState().deletedWorktrees.get("wt-1")?.holdReason
+    ).toBeNull();
+  });
+
+  it("leaves state untouched for an unknown id", () => {
+    const store = useWorktreeSelectionStore.getState();
+    store.addDeletedWorktree(makeDeleted());
+    const before = useWorktreeSelectionStore.getState().deletedWorktrees;
+    store.setDeletedWorktreeCleanupState("nope", { expiresAt: 1, holdReason: null });
     expect(useWorktreeSelectionStore.getState().deletedWorktrees).toBe(before);
   });
 });
