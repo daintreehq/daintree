@@ -34,7 +34,7 @@ vi.mock("@/components/Terminal/TerminalIcon", () => ({
 }));
 
 import { usePanelStore } from "@/store/panelStore";
-import { usePreferencesStore } from "@/store/preferencesStore";
+import { usePreferencesStore, type DeletedWorktreeCleanupSeconds } from "@/store/preferencesStore";
 import { useTerminalPendingDestructiveActionStore } from "@/store/terminalPendingDestructiveActionStore";
 import { useWorktreeSelectionStore, type DeletedWorktree } from "@/store/worktreeStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -192,7 +192,12 @@ describe("DeletedWorktreeCard", () => {
   // it rather than beside it. jsdom can't measure the overlap that caused the
   // bug, so we assert the arrangement that makes it unrepresentable.
   describe("bottom-edge ownership (#11262)", () => {
-    const bottomEdgeStates = [
+    const bottomEdgeStates: Array<{
+      name: string;
+      wt: DeletedWorktree;
+      cleanupSeconds: DeletedWorktreeCleanupSeconds;
+      armed: boolean;
+    }> = [
       { name: "unarmed", wt: worktree, cleanupSeconds: 60, armed: false },
       {
         name: "armed",
@@ -271,7 +276,7 @@ describe("DeletedWorktreeCard", () => {
   // computed width, since every structural test above passes even if the fill
   // is permanently stuck at 0% or 100%.
   describe("countdown fill width", () => {
-    function renderArmed(expiresAt: number, cleanupSeconds = 60) {
+    function renderArmed(expiresAt: number, cleanupSeconds: DeletedWorktreeCleanupSeconds = 60) {
       setPanels([{ id: "t1", worktreeId: "wt-1" }]);
       usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: cleanupSeconds });
       const { container } = renderCard({ ...worktree, expiresAt });
@@ -283,7 +288,10 @@ describe("DeletedWorktreeCard", () => {
       };
     }
 
-    function fillWidth(expiresAt: number, cleanupSeconds = 60): string | undefined {
+    function fillWidth(
+      expiresAt: number,
+      cleanupSeconds: DeletedWorktreeCleanupSeconds = 60
+    ): string | undefined {
       return renderArmed(expiresAt, cleanupSeconds).width;
     }
 
