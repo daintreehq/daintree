@@ -375,6 +375,7 @@ describe("notify()", () => {
 
     it("forwards an explicit `actions: undefined` through to the store's collapse clear", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      // eslint-disable-next-line no-restricted-syntax -- notify-event-kind: ok
       notify({
         type: "success",
         title: "Update ready",
@@ -383,6 +384,7 @@ describe("notify()", () => {
         duration: 0,
         actions: [{ label: "View release notes", onClick: () => {} }],
       });
+      // eslint-disable-next-line no-restricted-syntax -- notify-event-kind: ok
       notify({
         type: "info",
         title: "Update available",
