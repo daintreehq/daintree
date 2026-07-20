@@ -90,6 +90,7 @@ import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { TerminalDragPreview, TERMINAL_DRAG_PREVIEW_WIDTH } from "./TerminalDragPreview";
 import { WorktreeDragPreview } from "./WorktreeDragPreview";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { moveTerminalToWorktreeAndFollowRescue } from "@/services/terminal/crossWorktreeMove";
 import { parseAccordionDragId } from "./SortableWorktreeTerminal";
 import { isWorktreeSortDragData, parseWorktreeSortDragId } from "./SortableWorktreeCard";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
@@ -664,7 +665,6 @@ export function DndProvider({ children }: DndProviderProps) {
   const reorderTabGroups = usePanelStore((s) => s.reorderTabGroups);
   const moveTerminalToPosition = usePanelStore((s) => s.moveTerminalToPosition);
   const moveTabGroupToLocation = usePanelStore((s) => s.moveTabGroupToLocation);
-  const moveTerminalToWorktree = usePanelStore((s) => s.moveTerminalToWorktree);
   const setFocused = usePanelStore((s) => s.setFocused);
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
 
@@ -968,8 +968,7 @@ export function DndProvider({ children }: DndProviderProps) {
           const draggedTerminal = freshTerminalsById[actualDraggedId];
           const isLiveTarget = getCurrentViewStore().getState().worktrees.has(targetWorktreeId);
           if (isLiveTarget && draggedTerminal && draggedTerminal.worktreeId !== targetWorktreeId) {
-            moveTerminalToWorktree(actualDraggedId, targetWorktreeId);
-            setFocused(null);
+            moveTerminalToWorktreeAndFollowRescue(actualDraggedId, targetWorktreeId);
           }
           return;
         }
@@ -1006,8 +1005,7 @@ export function DndProvider({ children }: DndProviderProps) {
         if (isGroupDrag) return; // Defensive: cancelDrop should catch this
         const currentTerminal = freshTerminalsById[draggedId];
         if (currentTerminal && currentTerminal.worktreeId !== overData.worktreeId) {
-          moveTerminalToWorktree(draggedId, overData.worktreeId!);
-          setFocused(null);
+          moveTerminalToWorktreeAndFollowRescue(draggedId, overData.worktreeId!);
         }
         // Don't return - fall through to stabilization
       }
@@ -1268,7 +1266,6 @@ export function DndProvider({ children }: DndProviderProps) {
       reorderTabGroups,
       moveTerminalToPosition,
       moveTabGroupToLocation,
-      moveTerminalToWorktree,
       setFocused,
       activeWorktreeId,
     ]

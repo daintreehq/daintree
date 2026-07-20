@@ -3,9 +3,11 @@ import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../..
 import type { AddPanelOptions } from "@/store/slices/panelRegistry/types";
 
 const panelStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
+const pushLayoutSnapshotMock = vi.hoisted(() => vi.fn());
 const layoutUndoMock = vi.hoisted(() => ({
-  getState: vi.fn(() => ({ pushLayoutSnapshot: vi.fn() })),
+  getState: vi.fn(() => ({ pushLayoutSnapshot: pushLayoutSnapshotMock })),
 }));
+const moveTerminalToWorktreeAndFollowRescueMock = vi.hoisted(() => vi.fn());
 const buildPanelDuplicateOptionsMock = vi.hoisted(() => vi.fn());
 const flushOptimisticClosesMock = vi.hoisted(() => vi.fn());
 const buildResumePanelOptionsMock = vi.hoisted(() => vi.fn());
@@ -18,6 +20,9 @@ vi.mock("@/services/terminal/panelDuplicationService", () => ({
 }));
 vi.mock("@/services/terminal/optimisticPanelClose", () => ({
   flushOptimisticCloses: flushOptimisticClosesMock,
+}));
+vi.mock("@/services/terminal/crossWorktreeMove", () => ({
+  moveTerminalToWorktreeAndFollowRescue: moveTerminalToWorktreeAndFollowRescueMock,
 }));
 vi.mock("@/services/agentResume", () => ({
   buildResumePanelOptions: buildResumePanelOptionsMock,
@@ -590,5 +595,59 @@ describe("terminal.reopenLast journal fallback", () => {
 
     expect(activateTerminal).not.toHaveBeenCalled();
     expect(addPanel).toHaveBeenCalledWith(resumeOptions);
+  });
+});
+
+describe("terminal.moveToWorktree", () => {
+  it("delegates the move to the rescue-aware helper", async () => {
+    setPanelState({ panels: [{ id: "p1", location: "grid", worktreeId: "wt-1" }] });
+    const run = setupActions();
+
+    await run("terminal.moveToWorktree", { terminalId: "p1", worktreeId: "wt-2" });
+
+    expect(moveTerminalToWorktreeAndFollowRescueMock).toHaveBeenCalledWith("p1", "wt-2");
+  });
+
+  it("falls back to the focused panel when no terminal id is supplied", async () => {
+    setPanelState({
+      focusedId: "p-focused",
+      panels: [{ id: "p-focused", location: "grid", worktreeId: "wt-1" }],
+    });
+    const run = setupActions();
+
+    await run("terminal.moveToWorktree", { worktreeId: "wt-2" });
+
+    expect(moveTerminalToWorktreeAndFollowRescueMock).toHaveBeenCalledWith("p-focused", "wt-2");
+  });
+
+  it("captures the undo snapshot before moving so the undo restores the origin", async () => {
+    setPanelState({ panels: [{ id: "p1", location: "grid", worktreeId: "wt-1" }] });
+    const run = setupActions();
+
+    await run("terminal.moveToWorktree", { terminalId: "p1", worktreeId: "wt-2" });
+
+    expect(pushLayoutSnapshotMock.mock.invocationCallOrder[0]).toBeLessThan(
+      moveTerminalToWorktreeAndFollowRescueMock.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("does nothing when the panel is already in the target worktree", async () => {
+    setPanelState({ panels: [{ id: "p1", location: "grid", worktreeId: "wt-2" }] });
+    const run = setupActions();
+
+    await run("terminal.moveToWorktree", { terminalId: "p1", worktreeId: "wt-2" });
+
+    expect(moveTerminalToWorktreeAndFollowRescueMock).not.toHaveBeenCalled();
+    expect(pushLayoutSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it("does nothing when the panel does not exist", async () => {
+    setPanelState({ panels: [] });
+    const run = setupActions();
+
+    await run("terminal.moveToWorktree", { terminalId: "ghost", worktreeId: "wt-2" });
+
+    expect(moveTerminalToWorktreeAndFollowRescueMock).not.toHaveBeenCalled();
+    expect(pushLayoutSnapshotMock).not.toHaveBeenCalled();
   });
 });
