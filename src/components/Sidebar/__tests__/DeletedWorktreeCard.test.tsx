@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, cleanup, fireEvent } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, act } from "@testing-library/react";
 import type { ReactNode } from "react";
 
 vi.mock("react-dom", async () => {
@@ -189,6 +189,69 @@ describe("DeletedWorktreeCard", () => {
     // is holding *at*.
     const readout = container.querySelector("[data-testid='deleted-worktree-countdown-seconds']");
     expect(readout?.textContent).toMatch(/^\d+s$/);
+  });
+
+  it("holds the readout on one value while the countdown is held", () => {
+    vi.useFakeTimers();
+    try {
+      setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+      const base = 1_700_000_000_000;
+      vi.setSystemTime(base);
+
+      // A held row is pinned at whatever remained when the hold began, so every
+      // sweep re-pins the deadline to `now + remaining`. `now` has advanced, so
+      // that write is never a no-op and re-renders the card at the *sweep's*
+      // phase, while the card's own 1Hz tick renders at its own. Deriving the
+      // readout from the deadline therefore alternates between N and N+1
+      // forever, which reads as broken in exactly the way this PR set out to
+      // fix. Neither the TTL clamp nor the full-width snap absorbs it: a hold
+      // pins mid-countdown, not at full.
+      const pinnedRemainingMs = 38_000;
+      const sweptAt = (at: number): DeletedWorktree => ({
+        ...worktree,
+        expiresAt: at + pinnedRemainingMs,
+        holdReason: "agent",
+      });
+
+      const { container, rerender } = render(
+        <TooltipProvider>
+          <DeletedWorktreeCard worktree={sweptAt(base)} />
+        </TooltipProvider>
+      );
+      const seconds = () =>
+        container.querySelector("[data-testid='deleted-worktree-countdown-seconds']")?.textContent;
+      const width = () =>
+        container
+          .querySelector("[data-testid='deleted-worktree-countdown']")
+          ?.getAttribute("style");
+
+      const steadySeconds = seconds();
+      const steadyWidth = width();
+      expect(steadySeconds).toMatch(/^\d+s$/);
+
+      // Sweep phase 600ms, card-tick phase 0ms — advancing through both is what
+      // makes the alternation observable.
+      for (let cycle = 1; cycle <= 4; cycle += 1) {
+        act(() => {
+          vi.advanceTimersByTime(600);
+        });
+        rerender(
+          <TooltipProvider>
+            <DeletedWorktreeCard worktree={sweptAt(base + (cycle - 1) * 1000 + 600)} />
+          </TooltipProvider>
+        );
+        expect(seconds()).toBe(steadySeconds);
+        expect(width()).toBe(steadyWidth);
+
+        act(() => {
+          vi.advanceTimersByTime(400);
+        });
+        expect(seconds()).toBe(steadySeconds);
+        expect(width()).toBe(steadyWidth);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("names each hold condition in terms the user can act on", () => {

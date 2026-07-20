@@ -89,7 +89,15 @@ function setPanels(
 }
 
 function makeDeleted(id: string, title: string, expiresAt: number | null = null): DeletedWorktree {
-  return { id, title, path: `/repo/${id}`, deletedAt: 1000, expiresAt, pinnedIndex: -1 };
+  return {
+    id,
+    title,
+    path: `/repo/${id}`,
+    deletedAt: 1000,
+    expiresAt,
+    holdReason: null,
+    pinnedIndex: -1,
+  };
 }
 
 const worktrees = [makeDeleted("wt-1", "feature/alpha"), makeDeleted("wt-2", "feature/beta")];

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type MouseEvent } from "react";
+import { useCallback, useMemo, useRef, useState, type MouseEvent } from "react";
 import { FolderX, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePanelStore } from "@/store/panelStore";
@@ -98,14 +98,30 @@ export function DeletedWorktreeCard({
   const hold =
     hasCountdown && worktree.holdReason !== null ? HOLD_COPY[worktree.holdReason] : undefined;
   useVisibilityAwareInterval(() => setNowTick(Date.now()), 1000, hasCountdown);
-  // The sweep (which re-pins the deadline while held) and this tick run on
-  // independent 1s phases — clamp remaining to the TTL (no "61s" flicker)
-  // and snap the top ~1.5s to exactly full so a held bar holds steady
-  // instead of sawtoothing between full and full-minus-a-tick.
+  // Clamp to the TTL: the sweep arms the deadline off its own clock, so the
+  // first tick after arming can otherwise read a whole second past full ("61s").
   const cleanupMs = cleanupSeconds * 1000;
   const rawRemainingMs = expiresAt !== null ? Math.max(0, expiresAt - nowTick) : 0;
-  const remainingMs = cleanupMs > 0 ? Math.min(rawRemainingMs, cleanupMs) : rawRemainingMs;
+  const derivedRemainingMs = cleanupMs > 0 ? Math.min(rawRemainingMs, cleanupMs) : rawRemainingMs;
+  // While held, render the remaining captured when the hold began rather than
+  // re-deriving it from the deadline. The sweep re-pins `expiresAt` to
+  // `now + remaining` on every pass, and its phase is independent of this
+  // component's tick, so each pins a value exactly one interval apart and the
+  // readout alternates between N and N+1 forever — a held row visibly flips
+  // 38s/37s/38s. Freezing is also the honest reading: a held countdown is not
+  // advancing. The key re-captures if the TTL preference changes underneath the
+  // hold, which is the one case where the sweep re-pins a genuinely new value.
+  const heldRemainingRef = useRef<{ key: string; remainingMs: number } | null>(null);
+  const holdKey = hold === undefined ? null : `${worktree.holdReason}:${cleanupMs}`;
+  if (holdKey === null) heldRemainingRef.current = null;
+  else if (heldRemainingRef.current?.key !== holdKey) {
+    heldRemainingRef.current = { key: holdKey, remainingMs: derivedRemainingMs };
+  }
+  const remainingMs = heldRemainingRef.current?.remainingMs ?? derivedRemainingMs;
   const remainingSeconds = Math.ceil(remainingMs / 1000);
+  // Snap the top of the range to exactly full: the tick that arms the row lands
+  // somewhere inside the sweep's first second, so a bar that should read "just
+  // deleted" would otherwise start a sliver short.
   const remainingFraction = hasCountdown
     ? remainingMs >= cleanupMs - 1500
       ? 1
@@ -324,12 +340,15 @@ export function DeletedWorktreeCard({
       >
         {hasCountdown && (
           <div
-            // The 1s linear sweep is the countdown's own tempo (it matches the
-            // tick that drives it), not a state-change tier. It stays on while
-            // held: the sweep re-pins the deadline on its own 1s phase,
-            // independent of this component's tick, so a held bar still gets
-            // sub-second width jitter — the transition is what absorbs it.
-            className="deleted-worktree-countdown-fill h-full bg-border-strong transition-[width] duration-1000 ease-linear motion-reduce:transition-none"
+            className={cn(
+              // The 1s linear sweep is the countdown's own tempo (it matches
+              // the tick that drives it), not a state-change tier. A held bar
+              // holds one frozen width, so there is nothing to interpolate —
+              // leaving the transition on would only smear the moment it stops.
+              "deleted-worktree-countdown-fill h-full bg-border-strong",
+              hold === undefined && "transition-[width] duration-1000 ease-linear",
+              "motion-reduce:transition-none"
+            )}
             style={{ width: `${remainingFraction * 100}%` }}
             data-testid="deleted-worktree-countdown"
             data-held={hold !== undefined ? "true" : undefined}
