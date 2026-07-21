@@ -23,7 +23,6 @@
     "electron/ipc/handlers/pluginMcp.ts",
     "electron/ipc/handlers/privacy.ts",
     "electron/ipc/handlers/shortcutHints.ts",
-    "electron/ipc/handlers/systemShell.ts",
     "electron/ipc/handlers/terminalConfig.ts",
     "electron/ipc/handlers/voiceInput.ts",
     "electron/ipc/handlers/worktree/lifecycle.ts",
@@ -320,11 +319,6 @@
     {
       "file": "electron/ipc/handlers/shortcutHints.ts",
       "line": 14,
-      "pattern": "sync-store-get"
-    },
-    {
-      "file": "electron/ipc/handlers/systemShell.ts",
-      "line": 88,
       "pattern": "sync-store-get"
     },
     {
