@@ -517,6 +517,32 @@ describe("system path-allowlist: tracked worktree roots", () => {
     expect(shellMock.openPath).not.toHaveBeenCalled();
   });
 
+  // pathGuard treats the filesystem root as containing every absolute path, so
+  // a record pointing there would hand out the whole disk.
+  it("rejects a worktree record pointing at the filesystem root", async () => {
+    gitServiceMock.listWorktrees.mockResolvedValue([worktreeRecord(TEST_ROOT)]);
+
+    const handler = getHandler(CHANNELS.SYSTEM_OPEN_PATH);
+    await expect(handler(fakeEvent, { path: "/etc/passwd" })).rejects.toMatchObject({
+      code: "OUTSIDE_ROOT",
+    });
+    expect(shellMock.openPath).not.toHaveBeenCalled();
+  });
+
+  // Git reported this worktree; a permission or I/O failure while probing says
+  // nothing about whether it is one, so it must not lock the user out.
+  it("still admits a worktree whose .git probe fails for a non-existence reason", async () => {
+    gitServiceMock.listWorktrees.mockResolvedValue([worktreeRecord(UNPREDICTED_WORKTREE)]);
+    fsMock.promises.access.mockImplementation(() =>
+      Promise.reject(Object.assign(new Error("EACCES"), { code: "EACCES" }))
+    );
+
+    const handler = getHandler(CHANNELS.SYSTEM_OPEN_PATH);
+    const filePath = path.join(UNPREDICTED_WORKTREE, "src", "index.ts");
+    await handler(fakeEvent, { path: filePath });
+    expect(shellMock.openPath).toHaveBeenCalledWith(filePath);
+  });
+
   // A linked checkout backed by a bare repository reports that repository.
   // Granting it would hand out the object store, refs, config and hooks.
   it("rejects the bare repository backing a linked worktree", async () => {

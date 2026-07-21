@@ -106,7 +106,7 @@ async function collectTrackedWorktreeRoots(projectRoots: readonly string[]): Pro
   const candidates = [
     ...new Set(
       perProject.flatMap((worktrees) =>
-        worktrees.filter((worktree) => !worktree.bare).map((worktree) => worktree.path)
+        worktrees.filter(isAdmissibleRecord).map((worktree) => worktree.path)
       )
     ),
   ];
@@ -115,13 +115,29 @@ async function collectTrackedWorktreeRoots(projectRoots: readonly string[]): Pro
   return candidates.filter((_, index) => live[index]);
 }
 
-/** True when `candidate` still looks like a git working tree we can trust. */
+function isAdmissibleRecord(worktree: { path: string; bare: boolean }): boolean {
+  if (worktree.bare) return false;
+  // pathGuard treats the filesystem root as containing every absolute path, so
+  // a record pointing there would silently grant the whole disk.
+  return nodePath.parse(worktree.path).root !== worktree.path;
+}
+
+/**
+ * True when `candidate` still looks like a working tree worth trusting.
+ *
+ * Only a definitively absent `.git` disqualifies it. Any other error — a
+ * permission failure while traversing, an unreachable network volume, a
+ * transient I/O fault — says nothing about whether this is a worktree, and git
+ * just told us it is; rejecting on those would lock a user out of a perfectly
+ * good worktree for an unrelated reason.
+ */
 async function isLiveWorkingTree(candidate: string): Promise<boolean> {
   try {
     await nodeFs.promises.access(nodePath.join(candidate, ".git"));
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code !== "ENOENT" && code !== "ENOTDIR";
   }
 }
 
