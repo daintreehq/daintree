@@ -764,7 +764,11 @@ function PanelHeaderComponent({
           </span>
 
           {isEditingTitle ? (
+            // [data-no-dnd] opts the rename field out of the header drag
+            // surface: without it, drag-selecting the title text travels past
+            // DRAG_ACTIVATION_DISTANCE and picks the panel up instead.
             <input
+              data-no-dnd
               ref={titleInputRef}
               type="text"
               value={editingValue}

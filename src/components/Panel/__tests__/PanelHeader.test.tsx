@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import React from "react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { PanelHeader } from "../PanelHeader";
 import type { PanelHeaderProps } from "../PanelHeader";
 import { SurfaceHeader } from "@/components/ui/SurfaceHeader";
+import { NoDndMouseSensor, NoDndTouchSensor } from "@/components/DragDrop/DndProvider";
 import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 
@@ -921,6 +922,65 @@ describe("PanelHeader", () => {
       const cls = getRenameInput().className;
       expect(cls).not.toMatch(/(outline|ring|border)-daintree-accent/);
       expect(cls).toContain("focus:outline-hidden");
+    });
+  });
+
+  describe("rename input drag suppression", () => {
+    // Drag-selecting text in the rename input used to travel past the sensor's
+    // 8px activation distance and pick the whole panel up instead of selecting.
+    // These wire the REAL sensor activators as the header's drag listeners,
+    // exactly as DndProvider does, so they assert the actual activation
+    // decision rather than a DOM-shape proxy for it.
+    const renderWithRealSensors = () => {
+      const onActivation = vi.fn();
+      const results: boolean[] = [];
+      const mouseActivator = NoDndMouseSensor.activators[0]!;
+      const touchActivator = NoDndTouchSensor.activators[0]!;
+      mockDragHandle = {
+        listeners: {
+          onMouseDown: (e) =>
+            void results.push(
+              mouseActivator.handler(e as React.MouseEvent, { onActivation } as never)
+            ),
+          onTouchStart: (e) =>
+            void results.push(
+              touchActivator.handler(e as React.TouchEvent, { onActivation } as never)
+            ),
+        },
+      };
+      const utils = render(
+        <PanelHeader
+          {...makeProps({ isEditingTitle: true, editingValue: "Test", location: "grid" })}
+        />
+      );
+      return { ...utils, onActivation, results };
+    };
+
+    afterEach(() => {
+      mockDragHandle = null;
+    });
+
+    it("refuses to arm the panel drag when a mousedown lands in the rename input", () => {
+      const { onActivation, results } = renderWithRealSensors();
+      fireEvent.mouseDown(screen.getByLabelText("Edit terminal title"));
+      expect(results).toEqual([false]);
+      expect(onActivation).not.toHaveBeenCalled();
+    });
+
+    it("refuses to arm the panel drag on a long-press in the rename input", () => {
+      const { onActivation, results } = renderWithRealSensors();
+      fireEvent.touchStart(screen.getByLabelText("Edit terminal title"), {
+        touches: [{ clientX: 0, clientY: 0 }],
+      });
+      expect(results).toEqual([false]);
+      expect(onActivation).not.toHaveBeenCalled();
+    });
+
+    it("still arms the panel drag from the surrounding header while renaming", () => {
+      const { container, onActivation, results } = renderWithRealSensors();
+      fireEvent.mouseDown(container.firstElementChild as HTMLElement);
+      expect(results).toEqual([true]);
+      expect(onActivation).toHaveBeenCalledTimes(1);
     });
   });
 

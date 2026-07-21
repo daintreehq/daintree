@@ -254,6 +254,54 @@ describe("DeletedWorktreeCard", () => {
     }
   });
 
+  // The freeze is captured during render, so releasing a hold is where the
+  // capture can linger — the steady-state test above never releases, and a
+  // snapshot that outlived its hold would pin the row forever.
+  it("resumes counting down from the live deadline once the hold is released", () => {
+    vi.useFakeTimers();
+    try {
+      setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+      const base = 1_700_000_000_000;
+      vi.setSystemTime(base);
+      const held: DeletedWorktree = {
+        ...worktree,
+        expiresAt: base + 38_000,
+        holdReason: "agent",
+      };
+
+      const { container, rerender } = renderCard(held);
+      const secondsValue = () =>
+        Number.parseInt(
+          container
+            .querySelector("[data-testid='deleted-worktree-countdown-seconds']")
+            ?.textContent?.replace("s", "") ?? "NaN",
+          10
+        );
+
+      const frozen = secondsValue();
+      act(() => {
+        vi.advanceTimersByTime(5000);
+      });
+      expect(secondsValue()).toBe(frozen);
+
+      // Release: the captured snapshot must be dropped, not linger and keep the
+      // row pinned at a value the deadline has long since moved past.
+      rerender(
+        <TooltipProvider>
+          <DeletedWorktreeCard worktree={{ ...held, holdReason: null }} />
+        </TooltipProvider>
+      );
+      expect(secondsValue()).toBeLessThan(frozen);
+
+      act(() => {
+        vi.advanceTimersByTime(2000);
+      });
+      expect(secondsValue()).toBeLessThan(frozen - 5);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("names each hold condition in terms the user can act on", () => {
     setPanels([{ id: "t1", worktreeId: "wt-1" }]);
     const copyFor = (holdReason: DeletedWorktree["holdReason"]) => {
