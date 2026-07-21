@@ -578,6 +578,15 @@ describe("syncAssistantContent", () => {
     expect(await readSession(".claude/commands/evil:colon.md")).toBeNull();
   });
 
+  it("ignores non-markdown files in command source directories", async () => {
+    await writeSource(globalDir, ".claude/commands/notes.txt", "x");
+
+    const result = await sync("claude");
+
+    expect(result).toMatchObject({ copied: 0, staleFailures: [] });
+    expect(await readSession(".claude/commands/notes.txt")).toBeNull();
+  });
+
   it("collapses case-colliding skill names to the highest-precedence spelling", async () => {
     await writeSource(globalDir, ".agents/skills/Dupe/SKILL.md", "global spelling");
     const projectContent = getProjectAssistantContentDir(projectPath);

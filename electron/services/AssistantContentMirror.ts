@@ -432,6 +432,7 @@ export async function syncAssistantContent(
       truncated ||= walk.truncated;
       if (mapping.granularity === "file") {
         for (const [rel, abs] of walk.files) {
+          if (!rel.endsWith(".md")) continue;
           desired.set(`${mapping.destDir}/${rel}`, abs);
         }
         continue;
