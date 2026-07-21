@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState, type MouseEvent } from "react";
+import { useCallback, useMemo, useState, type MouseEvent } from "react";
 import { FolderX, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePanelStore } from "@/store/panelStore";
@@ -111,13 +111,27 @@ export function DeletedWorktreeCard({
   // 38s/37s/38s. Freezing is also the honest reading: a held countdown is not
   // advancing. The key re-captures if the TTL preference changes underneath the
   // hold, which is the one case where the sweep re-pins a genuinely new value.
-  const heldRemainingRef = useRef<{ key: string; remainingMs: number } | null>(null);
+  // Captured in state, not a ref: this value IS render output, and refs may not
+  // be read or written during render (React Compiler enforces it). This is the
+  // documented "adjust state when a prop changes" pattern — React re-runs the
+  // component immediately, before paint, so no torn frame is observable.
   const holdKey = hold === undefined ? null : `${worktree.holdReason}:${cleanupMs}`;
-  if (holdKey === null) heldRemainingRef.current = null;
-  else if (heldRemainingRef.current?.key !== holdKey) {
-    heldRemainingRef.current = { key: holdKey, remainingMs: derivedRemainingMs };
+  const [heldRemaining, setHeldRemaining] = useState<{
+    key: string;
+    remainingMs: number;
+  } | null>(null);
+  if (holdKey === null) {
+    if (heldRemaining !== null) setHeldRemaining(null);
+  } else if (heldRemaining?.key !== holdKey) {
+    setHeldRemaining({ key: holdKey, remainingMs: derivedRemainingMs });
   }
-  const remainingMs = heldRemainingRef.current?.remainingMs ?? derivedRemainingMs;
+  // Falls back to the derived value on the capture render, where `heldRemaining`
+  // still holds the previous key — that fallback is the very value being
+  // captured, so the readout never flickers through an underived frame.
+  const remainingMs =
+    heldRemaining !== null && heldRemaining.key === holdKey
+      ? heldRemaining.remainingMs
+      : derivedRemainingMs;
   const remainingSeconds = Math.ceil(remainingMs / 1000);
   // Snap the top of the range to exactly full: the tick that arms the row lands
   // somewhere inside the sweep's first second, so a bar that should read "just

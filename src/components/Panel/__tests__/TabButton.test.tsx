@@ -606,5 +606,32 @@ describe("TabButton", () => {
       fireEvent.pointerDown(screen.getByRole("tab"));
       expect(parentPointerDown).not.toHaveBeenCalled();
     });
+
+    // Selecting text in the rename field must never pick a tab up. The tab
+    // sortable listens on BOTH pointerdown and touchstart (its DndContext pairs
+    // PointerSensor with a raw TouchSensor that ignores the strip's
+    // [data-no-dnd]), so the input has to stop each one.
+    it.each([
+      ["pointerdown", (el: HTMLElement) => fireEvent.pointerDown(el), "onPointerDown"],
+      ["touchstart", (el: HTMLElement) => fireEvent.touchStart(el), "onTouchStart"],
+    ])("does not arm a tab drag from a %s inside the rename input", (_name, fire, listener) => {
+      const parentHandler = vi.fn();
+      const sensorHandler = vi.fn();
+      render(
+        <div onPointerDown={parentHandler} onTouchStart={parentHandler}>
+          <TabButton
+            {...defaultProps}
+            onRename={vi.fn()}
+            sortableListeners={{ [listener]: sensorHandler }}
+          />
+        </div>
+      );
+
+      fireEvent.doubleClick(screen.getByText("Test Agent"));
+      fire(screen.getByTestId("motion-input"));
+
+      expect(sensorHandler).not.toHaveBeenCalled();
+      expect(parentHandler).not.toHaveBeenCalled();
+    });
   });
 });
