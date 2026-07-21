@@ -79,9 +79,19 @@ function assertExtensionAllowed(candidate: string): void {
  * Each returned path is a root in its own right; the parent is never admitted.
  * Enumeration runs concurrently and per-project failures degrade to an empty
  * list, so one broken or deleted repository can't suppress healthy ones — the
- * project root itself stays allowed regardless. Stale ("prunable") entries are
- * harmless: `resolveContainedPath` skips any root whose realpath fails, so we
- * never mutate repository state to tidy them.
+ * project root itself stays allowed regardless.
+ *
+ * Git reports more than live working trees, so every candidate is confirmed to
+ * still be one before it earns containment. Bare entries are excluded outright:
+ * a linked checkout backed by a bare repository reports that repository, and
+ * granting it would hand out its object store and hooks. The rest are checked
+ * for a `.git` entry, which every working tree has (a directory in the main
+ * one, a gitdir pointer file in linked ones). That check is what makes stale
+ * "prunable" records safe — git keeps reporting a worktree directory the user
+ * deleted behind its back, and if that path is later reused by something
+ * unrelated, the absent `.git` is the only thing separating it from a granted
+ * root. Recreation is exactly the case a realpath-only test misses. We never
+ * prune: this is a read-time authorization check, not worktree lifecycle code.
  */
 async function collectTrackedWorktreeRoots(projectRoots: readonly string[]): Promise<string[]> {
   const perProject = await Promise.all(
@@ -93,7 +103,26 @@ async function collectTrackedWorktreeRoots(projectRoots: readonly string[]): Pro
     )
   );
 
-  return perProject.flatMap((worktrees) => worktrees.map((worktree) => worktree.path));
+  const candidates = [
+    ...new Set(
+      perProject.flatMap((worktrees) =>
+        worktrees.filter((worktree) => !worktree.bare).map((worktree) => worktree.path)
+      )
+    ),
+  ];
+  const live = await Promise.all(candidates.map((candidate) => isLiveWorkingTree(candidate)));
+
+  return candidates.filter((_, index) => live[index]);
+}
+
+/** True when `candidate` still looks like a git working tree we can trust. */
+async function isLiveWorkingTree(candidate: string): Promise<boolean> {
+  try {
+    await nodeFs.promises.access(nodePath.join(candidate, ".git"));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
