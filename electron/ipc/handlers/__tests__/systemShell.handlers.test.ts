@@ -42,12 +42,26 @@ vi.mock("../../../services/ProjectStore.js", () => ({
   projectStore: projectStoreMock,
 }));
 
-const storeMock = vi.hoisted(() => ({
-  get: vi.fn<(key: string) => unknown>(() => undefined),
+type WorktreeRecord = {
+  path: string;
+  branch: string;
+  bare: boolean;
+  isMainWorktree: boolean;
+};
+
+const gitServiceMock = vi.hoisted(() => ({
+  listWorktrees:
+    vi.fn<
+      () => Promise<Array<{ path: string; branch: string; bare: boolean; isMainWorktree: boolean }>>
+    >(),
 }));
 
-vi.mock("../../../store.js", () => ({
-  store: storeMock,
+const gitServiceCacheMock = vi.hoisted(() => ({
+  getGitService: vi.fn<(root: string) => { listWorktrees: () => Promise<unknown[]> }>(),
+}));
+
+vi.mock("../../../services/GitServiceCache.js", () => ({
+  gitServiceCache: gitServiceCacheMock,
 }));
 
 const openFileMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
@@ -94,13 +108,33 @@ function getHandler(channel: string): Handler {
 const fakeEvent = {};
 const TEST_ROOT = path.parse(process.cwd()).root;
 const PROJECT_ROOT = path.join(TEST_ROOT, "Users", "me", "project");
-// Derived from the default pattern `{parent-dir}/{base-folder}-worktrees/{branch-slug}`
-// applied to PROJECT_ROOT.
-const WORKTREE_PARENT = path.join(
+// The parent dir the retired path-pattern heuristic used to predict from
+// PROJECT_ROOT (`{parent-dir}/{base-folder}-worktrees/{branch-slug}`). Kept
+// only as a negative fixture: living under it earns a path nothing anymore —
+// containment now follows what `git worktree list` actually reports.
+const LEGACY_PATTERN_PARENT = path.join(
   path.dirname(PROJECT_ROOT),
   `${path.basename(PROJECT_ROOT)}-worktrees`
 );
 const USERDATA_PARENT = path.join(TEST_ROOT, "userdata");
+
+function worktreeRecord(worktreePath: string, overrides: Partial<WorktreeRecord> = {}) {
+  return {
+    path: worktreePath,
+    branch: "feature",
+    bare: false,
+    isMainWorktree: false,
+    ...overrides,
+  };
+}
+
+// `vi.clearAllMocks()` wipes call history but leaves implementations set by a
+// previous test in place, so every suite re-establishes the default of "this
+// project tracks no linked worktrees".
+function resetGitMocks() {
+  gitServiceMock.listWorktrees.mockResolvedValue([]);
+  gitServiceCacheMock.getGitService.mockReturnValue(gitServiceMock);
+}
 const deniedLauncherName =
   process.platform === "win32"
     ? "launcher.exe"
@@ -117,7 +151,7 @@ describe("system:open-path containment", () => {
     fsMock.promises.realpath.mockImplementation(realpathEcho);
     projectStoreMock.getAllProjects.mockReturnValue([{ path: PROJECT_ROOT }]);
     appMock.getPath.mockImplementation((name: string) => path.join(USERDATA_PARENT, name));
-    storeMock.get.mockReturnValue(undefined);
+    resetGitMocks();
     cleanup = registerSystemShellHandlers({} as HandlerDependencies);
   });
 
@@ -214,7 +248,7 @@ describe("system:open-in-editor containment", () => {
     fsMock.promises.realpath.mockImplementation(realpathEcho);
     projectStoreMock.getAllProjects.mockReturnValue([{ path: PROJECT_ROOT }]);
     appMock.getPath.mockImplementation((name: string) => path.join(USERDATA_PARENT, name));
-    storeMock.get.mockReturnValue(undefined);
+    resetGitMocks();
     cleanup = registerSystemShellHandlers({} as HandlerDependencies);
   });
 
@@ -261,7 +295,7 @@ describe("system:show-item-in-folder containment", () => {
     fsMock.promises.realpath.mockImplementation(realpathEcho);
     projectStoreMock.getAllProjects.mockReturnValue([{ path: PROJECT_ROOT }]);
     appMock.getPath.mockImplementation((name: string) => path.join(USERDATA_PARENT, name));
-    storeMock.get.mockReturnValue(undefined);
+    resetGitMocks();
     cleanup = registerSystemShellHandlers({} as HandlerDependencies);
   });
 
@@ -333,7 +367,7 @@ describe("system:show-item-in-folder containment", () => {
   });
 });
 
-describe("system path-allowlist: worktree parent dirs", () => {
+describe("system path-allowlist: tracked worktree roots", () => {
   let cleanup: () => void;
 
   beforeEach(() => {
@@ -341,7 +375,7 @@ describe("system path-allowlist: worktree parent dirs", () => {
     fsMock.promises.realpath.mockImplementation(realpathEcho);
     projectStoreMock.getAllProjects.mockReturnValue([{ path: PROJECT_ROOT }]);
     appMock.getPath.mockImplementation((name: string) => path.join(USERDATA_PARENT, name));
-    storeMock.get.mockReturnValue(undefined);
+    resetGitMocks();
     cleanup = registerSystemShellHandlers({} as HandlerDependencies);
   });
 
@@ -349,57 +383,142 @@ describe("system path-allowlist: worktree parent dirs", () => {
     cleanup();
   });
 
-  it("opens a path inside the default worktree parent dir (Reveal in Finder on worktree card)", async () => {
+  it("opens a worktree root that git reports (Reveal in Finder on worktree card)", async () => {
+    const worktreePath = path.join(LEGACY_PATTERN_PARENT, "feature-issue-9149");
+    gitServiceMock.listWorktrees.mockResolvedValue([
+      worktreeRecord(PROJECT_ROOT, { isMainWorktree: true, branch: "develop" }),
+      worktreeRecord(worktreePath),
+    ]);
+
     const handler = getHandler(CHANNELS.SYSTEM_OPEN_PATH);
-    const worktreePath = path.join(WORKTREE_PARENT, "feature-issue-9149");
     await handler(fakeEvent, { path: worktreePath });
     expect(shellMock.openPath).toHaveBeenCalledWith(worktreePath);
   });
 
-  it("opens a file inside a worktree (ReviewHub file-open click)", async () => {
+  // The per-project `worktreePathPattern` override was invisible to the old
+  // global-pattern heuristic, so worktrees created under it were rejected.
+  // Git reports the real path regardless of which pattern produced it.
+  it("opens a file inside a worktree created under a custom per-project pattern", async () => {
+    const customWorktree = path.join(
+      path.dirname(PROJECT_ROOT),
+      `${path.basename(PROJECT_ROOT)}.wt`,
+      "feature-x"
+    );
+    gitServiceMock.listWorktrees.mockResolvedValue([
+      worktreeRecord(PROJECT_ROOT, { isMainWorktree: true }),
+      worktreeRecord(customWorktree),
+    ]);
+
     const handler = getHandler(CHANNELS.SYSTEM_OPEN_IN_EDITOR);
-    const filePath = path.join(WORKTREE_PARENT, "feature-issue-9149", "src", "index.ts");
+    const filePath = path.join(customWorktree, "src", "index.ts");
     await handler(fakeEvent, { path: filePath, line: 1, col: 1 });
     expect(openFileMock).toHaveBeenCalledWith(filePath, 1, 1, null);
   });
 
-  it("honors a globally-configured worktree pattern in addition to the default", async () => {
-    // Configure an alternative pattern. Both the configured and the default
-    // parent should be admitted (so changing the pattern doesn't lock the
-    // user out of previously-created worktrees).
-    storeMock.get.mockImplementation((key: string) =>
-      key === "worktreeConfig.pathPattern"
-        ? "{parent-dir}/{base-folder}.wt/{branch-slug}"
-        : undefined
-    );
-    // Re-register so the handler picks up the mock (the handler itself reads
-    // the store on each call, so this is technically unnecessary — but kept
-    // explicit to mirror the production startup order).
-    cleanup();
-    cleanup = registerSystemShellHandlers({} as HandlerDependencies);
+  // `git worktree add ~/scratch/hotfix` puts the worktree somewhere no pattern
+  // predicts. Enumerating instead of predicting is what makes this case work.
+  it("reveals a file inside a manually-created worktree outside any pattern", async () => {
+    const manualWorktree = path.join(TEST_ROOT, "tmp", "scratch", "hotfix");
+    gitServiceMock.listWorktrees.mockResolvedValue([
+      worktreeRecord(PROJECT_ROOT, { isMainWorktree: true }),
+      worktreeRecord(manualWorktree),
+    ]);
 
-    const handler = getHandler(CHANNELS.SYSTEM_OPEN_PATH);
-    const customParent = path.join(path.dirname(PROJECT_ROOT), `${path.basename(PROJECT_ROOT)}.wt`);
-    const customWorktree = path.join(customParent, "feature-x");
-    await handler(fakeEvent, { path: customWorktree });
-    expect(shellMock.openPath).toHaveBeenCalledWith(customWorktree);
-
-    // The default parent stays admitted too.
-    shellMock.openPath.mockClear();
-    const legacyWorktree = path.join(WORKTREE_PARENT, "legacy-branch");
-    await handler(fakeEvent, { path: legacyWorktree });
-    expect(shellMock.openPath).toHaveBeenCalledWith(legacyWorktree);
+    const handler = getHandler(CHANNELS.SYSTEM_SHOW_ITEM_IN_FOLDER);
+    const filePath = path.join(manualWorktree, "src", "app.ts");
+    await handler(fakeEvent, { path: filePath });
+    expect(shellMock.showItemInFolder).toHaveBeenCalledWith(filePath);
   });
 
-  it("still rejects sibling-prefix paths that share a worktree-parent prefix", async () => {
+  // The deliberate tightening: the pattern-derived parent used to admit every
+  // child wholesale, including directories that were never worktrees.
+  it("rejects a predicted-pattern sibling that git does not track", async () => {
+    gitServiceMock.listWorktrees.mockResolvedValue([
+      worktreeRecord(PROJECT_ROOT, { isMainWorktree: true }),
+      worktreeRecord(path.join(LEGACY_PATTERN_PARENT, "real-worktree")),
+    ]);
+
     const handler = getHandler(CHANNELS.SYSTEM_OPEN_PATH);
-    // `/Users/me/project-worktrees-evil/...` shares a string prefix with the
-    // worktree parent dir but isn't actually contained — the realpath +
-    // separator check in pathGuard must still reject it.
     await expect(
-      handler(fakeEvent, { path: `${WORKTREE_PARENT}-evil${path.sep}secret.txt` })
+      handler(fakeEvent, {
+        path: path.join(LEGACY_PATTERN_PARENT, "never-a-worktree", "src", "index.ts"),
+      })
     ).rejects.toMatchObject({ code: "OUTSIDE_ROOT" });
     expect(shellMock.openPath).not.toHaveBeenCalled();
+  });
+
+  it("rejects a sibling-prefix path that shares a tracked worktree's prefix", async () => {
+    const worktreePath = path.join(LEGACY_PATTERN_PARENT, "feature-x");
+    gitServiceMock.listWorktrees.mockResolvedValue([worktreeRecord(worktreePath)]);
+
+    const handler = getHandler(CHANNELS.SYSTEM_OPEN_PATH);
+    // Shares a string prefix with the tracked root but isn't contained — the
+    // realpath + separator check in pathGuard must still reject it.
+    await expect(
+      handler(fakeEvent, { path: `${worktreePath}-evil${path.sep}secret.txt` })
+    ).rejects.toMatchObject({ code: "OUTSIDE_ROOT" });
+    expect(shellMock.openPath).not.toHaveBeenCalled();
+  });
+
+  // Git keeps externally-deleted worktrees listed as "prunable" until someone
+  // runs `git worktree prune`. Containment must tolerate them rather than
+  // mutate repository state to tidy up, so the stale root is simply skipped.
+  it("skips an orphaned worktree root and still admits a healthy one", async () => {
+    const orphaned = path.join(LEGACY_PATTERN_PARENT, "deleted-branch");
+    const healthy = path.join(LEGACY_PATTERN_PARENT, "live-branch");
+    gitServiceMock.listWorktrees.mockResolvedValue([
+      worktreeRecord(PROJECT_ROOT, { isMainWorktree: true }),
+      worktreeRecord(orphaned),
+      worktreeRecord(healthy),
+    ]);
+    fsMock.promises.realpath.mockImplementation((p: string) =>
+      path.normalize(p) === path.normalize(orphaned)
+        ? Promise.reject(Object.assign(new Error("ENOENT"), { code: "ENOENT" }))
+        : realpathEcho(p)
+    );
+
+    const handler = getHandler(CHANNELS.SYSTEM_OPEN_PATH);
+    const filePath = path.join(healthy, "src", "index.ts");
+    await handler(fakeEvent, { path: filePath });
+    expect(shellMock.openPath).toHaveBeenCalledWith(filePath);
+  });
+
+  // One unreadable repository must not suppress the others — each enumeration
+  // fails independently to an empty list.
+  it("isolates a failing project's enumeration from a healthy project", async () => {
+    const otherRoot = path.join(TEST_ROOT, "Users", "me", "other-project");
+    const otherWorktree = path.join(TEST_ROOT, "Users", "me", "other-worktrees", "feature-y");
+    projectStoreMock.getAllProjects.mockReturnValue([{ path: PROJECT_ROOT }, { path: otherRoot }]);
+    gitServiceCacheMock.getGitService.mockImplementation((root: string) =>
+      root === PROJECT_ROOT
+        ? { listWorktrees: () => Promise.reject(new Error("not a git repository")) }
+        : { listWorktrees: () => Promise.resolve([worktreeRecord(otherWorktree)]) }
+    );
+
+    const handler = getHandler(CHANNELS.SYSTEM_OPEN_PATH);
+    const filePath = path.join(otherWorktree, "src", "index.ts");
+    await handler(fakeEvent, { path: filePath });
+    expect(shellMock.openPath).toHaveBeenCalledWith(filePath);
+  });
+
+  // Enumeration shells out to git, so it must stay off the common path where
+  // the target already sits inside a registered project root.
+  it("does not enumerate worktrees when the target is inside a project root", async () => {
+    const handler = getHandler(CHANNELS.SYSTEM_OPEN_PATH);
+    await handler(fakeEvent, { path: path.join(PROJECT_ROOT, "src", "index.ts") });
+    expect(shellMock.openPath).toHaveBeenCalled();
+    expect(gitServiceCacheMock.getGitService).not.toHaveBeenCalled();
+    expect(gitServiceMock.listWorktrees).not.toHaveBeenCalled();
+  });
+
+  // A path that can't be resolved at all fails identically against every root
+  // set, so it must short-circuit before paying for enumeration.
+  it("does not enumerate worktrees for a non-absolute path", async () => {
+    const handler = getHandler(CHANNELS.SYSTEM_OPEN_PATH);
+    await expect(handler(fakeEvent, { path: "relative/file.txt" })).rejects.toMatchObject({
+      code: "INVALID_PATH",
+    });
+    expect(gitServiceMock.listWorktrees).not.toHaveBeenCalled();
   });
 });
 
@@ -412,7 +531,7 @@ describe("system:show-item-in-folder-unconfined (out-of-root reveal recovery)", 
     fsMock.promises.stat.mockResolvedValue({ isFile: () => true, isDirectory: () => false });
     projectStoreMock.getAllProjects.mockReturnValue([{ path: PROJECT_ROOT }]);
     appMock.getPath.mockImplementation((name: string) => path.join(USERDATA_PARENT, name));
-    storeMock.get.mockReturnValue(undefined);
+    resetGitMocks();
     cleanup = registerSystemShellHandlers({} as HandlerDependencies);
   });
 
