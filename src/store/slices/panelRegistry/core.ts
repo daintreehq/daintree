@@ -621,6 +621,13 @@ export const createCorePanelActions = (
     let promoted = false;
     let atLimit = false;
 
+    // A dialog panel opened for a path outside every registered worktree has
+    // no worktreeId; promoting it into the grid without one strands it outside
+    // the active worktree's rendered bucket (#11290), same as a dock
+    // promotion. Adopt the active worktree; a real attribution is kept.
+    const activeWorktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null;
+    let backfilledWorktreeId: string | null = null;
+
     set((state) => {
       // Re-read inside the updater: the panel may have been closed or already
       // promoted between the host's click handler and this commit.
@@ -639,8 +646,12 @@ export const createCorePanelActions = (
       // Drop `excludeFromPersistence` rather than setting it false: the field is
       // optional, and a lingering `false` would read as a deliberate opt-in.
       const { excludeFromPersistence: _ephemeral, ...persistable } = panel;
+      const adoptedWorktreeId =
+        panel.worktreeId == null && activeWorktreeId !== null ? activeWorktreeId : null;
+      backfilledWorktreeId = adoptedWorktreeId;
       const updatedPanel = {
         ...persistable,
+        ...(adoptedWorktreeId !== null && { worktreeId: adoptedWorktreeId }),
         location: "grid" as const,
         isVisible: true,
       } as PanelInstance;
@@ -648,8 +659,32 @@ export const createCorePanelActions = (
       const newById = { ...state.panelsById, [id]: updatedPanel };
       saveNormalized(newById, state.panelIds);
       promoted = true;
-      return { panelsById: newById };
+      return {
+        panelsById: newById,
+        ...(adoptedWorktreeId !== null && {
+          panelIdsByWorktreeId: transferBetweenWorktreeIndex(
+            state.panelIdsByWorktreeId,
+            panel.worktreeId,
+            adoptedWorktreeId,
+            id
+          ),
+        }),
+      };
     });
+
+    // A user-initiated promotion is explicit worktree attribution — recorded
+    // so later cwd-based inference can never silently re-home the panel.
+    if (backfilledWorktreeId !== null) {
+      const ledgerGeneration = agentLifecycleLedger.currentGeneration(id);
+      if (ledgerGeneration !== undefined) {
+        agentLifecycleLedger.recordWorktreeAttribution(
+          id,
+          ledgerGeneration,
+          backfilledWorktreeId,
+          "explicit"
+        );
+      }
+    }
 
     if (atLimit) {
       notify({

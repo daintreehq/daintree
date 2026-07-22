@@ -154,8 +154,7 @@ export const createOrderingActions = (
         saveTabGroups(groupPrune.tabGroups);
       }
       // Rebuild bucket order so per-worktree selectors observe the new order
-      // (issue #7451). The panel's worktreeId field is unchanged here, but its
-      // position within the bucket may have shifted.
+      // (issue #7451) and any adopted worktreeId lands in the right bucket.
       return {
         panelsById: newById,
         panelIds: newIds,
