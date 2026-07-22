@@ -476,6 +476,22 @@ export const CopyTreeGetFileTreePayloadSchema = z.object({
   dirPath: z.string().optional(),
 });
 
+// Both strings are capped: they cross the boundary as untrusted input and end
+// up in path joins and a `git check-ignore` argv, neither of which should ever
+// see a megabyte-long value.
+export const FileBrowserListDirectoryPayloadSchema = z.object({
+  worktreeId: z.string().min(1).max(4096),
+  dirPath: z.string().max(4096).optional(),
+  includeIgnored: z.boolean().optional(),
+});
+
+// Batch-capped: one call validates the directory candidates of a single
+// hovered terminal line, which is a handful of tokens, never hundreds.
+export const FileBrowserStatPathsPayloadSchema = z.object({
+  worktreeId: z.string().min(1).max(4096),
+  paths: z.array(z.string().min(1).max(4096)).max(32),
+});
+
 export const FileReadPayloadSchema = z.object({
   path: z
     .string()

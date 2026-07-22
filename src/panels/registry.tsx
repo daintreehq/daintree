@@ -7,6 +7,7 @@ import type {
   DevPreviewPanelData,
   ReviewPanelData,
   FilePanelData,
+  FileBrowserPanelData,
   DiffPanelData,
 } from "@shared/types/panel";
 import { isBuiltInPanelKind, type BuiltInPanelKind } from "@shared/types/panel";
@@ -16,6 +17,7 @@ import type {
   DevPreviewPanelOptions,
   ReviewPanelOptions,
   FilePanelOptions,
+  FileBrowserPanelOptions,
   DiffPanelOptions,
 } from "@shared/types/addPanelOptions";
 import type { PanelSnapshot } from "@shared/types/project";
@@ -39,6 +41,8 @@ import { serializeFile } from "./file/serializer";
 import { createFileDefaults } from "./file/defaults";
 import { serializeDiff } from "./diff/serializer";
 import { createDiffDefaults } from "./diff/defaults";
+import { serializeFileBrowser } from "./file-browser/serializer";
+import { createFileBrowserDefaults } from "./file-browser/defaults";
 
 export interface PanelComponentProps {
   id: string;
@@ -78,6 +82,9 @@ const LazyReviewPane = lazy(() =>
 );
 const LazyFilePane = lazy(() => import("./file/FilePane").then((m) => ({ default: m.FilePane })));
 const LazyDiffPane = lazy(() => import("./diff/DiffPane").then((m) => ({ default: m.DiffPane })));
+const LazyFileBrowserPane = lazy(() =>
+  import("./file-browser/FileBrowserPane").then((m) => ({ default: m.FileBrowserPane }))
+);
 
 // Wrapper providing Suspense fallback for the lazy dynamic import and
 // correct componentName attribution on chunk-load failures. The per-panel
@@ -154,6 +161,18 @@ function DiffPaneWrapper(props: ComponentProps<typeof LazyDiffPane>) {
   );
 }
 
+function FileBrowserPaneWrapper(props: ComponentProps<typeof LazyFileBrowserPane>) {
+  return (
+    <ErrorBoundary variant="component" componentName="FileBrowserPane">
+      <Suspense fallback={<BrowserPaneSkeleton label="Loading file browser" />}>
+        <ContentFadeIn className="flex flex-col h-full w-full flex-1 min-h-0">
+          <LazyFileBrowserPane {...props} />
+        </ContentFadeIn>
+      </Suspense>
+    </ErrorBoundary>
+  );
+}
+
 /**
  * Maps each built-in panel kind to its panel data variant. `createdAt` is
  * intentionally widened on the PTY and dev-preview entries so serializers can
@@ -165,6 +184,7 @@ interface BuiltInPanelMap {
   "dev-preview": DevPreviewPanelData & { createdAt?: number };
   review: ReviewPanelData;
   file: FilePanelData;
+  "file-browser": FileBrowserPanelData;
   diff: DiffPanelData;
 }
 
@@ -174,6 +194,7 @@ interface BuiltInPanelOptionsMap {
   "dev-preview": DevPreviewPanelOptions;
   review: ReviewPanelOptions;
   file: FilePanelOptions;
+  "file-browser": FileBrowserPanelOptions;
   diff: DiffPanelOptions;
 }
 
@@ -190,6 +211,10 @@ const BUILT_IN_SERIALIZE_DEFAULTS = {
   "dev-preview": { serialize: serializeDevPreview, createDefaults: createDevPreviewDefaults },
   review: { serialize: serializeReview, createDefaults: createReviewDefaults },
   file: { serialize: serializeFile, createDefaults: createFileDefaults },
+  "file-browser": {
+    serialize: serializeFileBrowser,
+    createDefaults: createFileBrowserDefaults,
+  },
   diff: { serialize: serializeDiff, createDefaults: createDiffDefaults },
 } satisfies BuiltInSerializeDefaults;
 
@@ -225,6 +250,10 @@ const PANEL_KIND_DEFINITION_REGISTRY: Record<string, PanelKindDefinition> = {
   "dev-preview": { ...requirePanelKindConfig("dev-preview"), component: DevPreviewPaneWrapper },
   review: { ...requirePanelKindConfig("review"), component: ReviewPaneWrapper },
   file: { ...requirePanelKindConfig("file"), component: FilePaneWrapper },
+  "file-browser": {
+    ...requirePanelKindConfig("file-browser"),
+    component: FileBrowserPaneWrapper,
+  },
   diff: { ...requirePanelKindConfig("diff"), component: DiffPaneWrapper },
 } satisfies Record<BuiltInPanelKind, PanelKindDefinition>;
 

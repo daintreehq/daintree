@@ -138,12 +138,19 @@ export function registerWorktreeContextActions(
           worktreeId: z.string().optional(),
           format: z.enum(["xml", "json", "markdown", "tree", "ndjson", "sarif"]).optional(),
           modified: z.boolean().optional(),
+          includePaths: z
+            .array(z.string())
+            .optional()
+            .describe(
+              "Worktree-relative minimatch patterns to scope the context to. Patterns match file paths, so a folder needs a glob: pass 'src/panels/**', not 'src/panels'."
+            ),
         })
         .optional(),
       run: async (args, ctx: ActionContext) => {
         const worktreeId = args?.worktreeId;
         const explicitFormat = args?.format;
         const modified = args?.modified;
+        const includePaths = args?.includePaths;
         const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
         if (!targetWorktreeId) return null;
 
@@ -152,6 +159,7 @@ export function registerWorktreeContextActions(
         const result = await copyTreeClient.generateAndCopyFile(targetWorktreeId, {
           format,
           modified,
+          ...(includePaths && includePaths.length > 0 ? { includePaths } : {}),
         });
 
         if (result.error) {
@@ -293,6 +301,67 @@ export function registerWorktreeContextActions(
           // to a shared branch (#7884).
           initialCommitMessage: deriveCommitMessageSeed(worktree, Date.now()),
           autoStageOnOpen: true,
+        });
+      },
+    })
+  );
+
+  actions.set("worktree.openFileBrowser", () =>
+    defineAction({
+      id: "worktree.openFileBrowser",
+      title: "Browse Files",
+      description: "Open a read-only file browser for a worktree",
+      category: "worktree",
+      kind: "command",
+      danger: "safe",
+      scope: "renderer",
+      argsSchema: z
+        .object({
+          worktreeId: z.string().optional(),
+          /** Worktree-relative path to select and scroll into view on open. */
+          revealPath: z.string().optional(),
+          /**
+           * What `revealPath` points at. A directory is also expanded so its
+           * children are visible; the caller knows (it validated the path),
+           * and re-statting here would be a second round-trip for one bit.
+           */
+          revealKind: z.enum(["file", "directory"]).optional(),
+        })
+        .optional(),
+      run: async (args, ctx: ActionContext) => {
+        const worktreeId = args?.worktreeId;
+        const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
+        if (!targetWorktreeId) return;
+
+        const worktree = getCurrentViewStore().getState().worktrees.get(targetWorktreeId);
+        if (!worktree) return;
+
+        // Lazily imported for the same reason as the review hub above: a static
+        // import drags panelStore -> panelPersistence in, which reads
+        // `projectClient` from `@/clients` at module scope and breaks every
+        // action test that mocks `@/clients` without it.
+        const { usePanelDialogStore } = await import("@/store/panelDialogStore");
+
+        // Normalized to "/" regardless of caller: the tree's row keys and
+        // `ancestorDirectories` both speak forward slashes, and a
+        // Windows-shaped reveal path would otherwise select nothing.
+        const revealPath = args?.revealPath?.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+        let reveal: { browserSelectedPath: string; browserExpandedPaths: string[] } | undefined;
+        if (revealPath) {
+          const { ancestorDirectories } = await import("@/panels/file-browser/fileBrowserTree");
+          const expanded = new Set(ancestorDirectories(revealPath));
+          if (args?.revealKind === "directory") expanded.add(revealPath);
+          reveal = {
+            browserSelectedPath: revealPath,
+            browserExpandedPaths: [...expanded].sort(),
+          };
+        }
+
+        await usePanelDialogStore.getState().openPanelDialog({
+          kind: "file-browser",
+          title: `Files — ${worktree.branch ?? worktree.name}`,
+          worktreeId: targetWorktreeId,
+          ...reveal,
         });
       },
     })

@@ -27,7 +27,7 @@ export function formatCopyResultMessage(payload: {
 export async function copyContextWithFeedback(
   worktreeId: string,
   source: ActionSource,
-  options?: { modified?: boolean }
+  options?: { modified?: boolean; includePaths?: string[] }
 ): Promise<void> {
   // Direct store call: this is a spinner-then-update pattern that depends on
   // an unconditional toast id. notify() returns "" when notifications are
@@ -37,7 +37,11 @@ export async function copyContextWithFeedback(
   const store = useNotificationStore.getState();
   const toastId = store.addNotification({
     type: "info",
-    message: options?.modified ? "Copying modified files…" : "Copying context…",
+    message: options?.modified
+      ? "Copying modified files…"
+      : options?.includePaths?.length
+        ? "Copying folder context…"
+        : "Copying context…",
     priority: "high",
     duration: 0,
   });
@@ -45,7 +49,7 @@ export async function copyContextWithFeedback(
   try {
     const result = await actionService.dispatch(
       "worktree.copyTree",
-      { worktreeId, modified: options?.modified },
+      { worktreeId, modified: options?.modified, includePaths: options?.includePaths },
       { source }
     );
 

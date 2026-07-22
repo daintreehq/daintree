@@ -16,6 +16,36 @@ export const FILE_PATH_REGEX =
 
 const WINDOWS_ABS = /^(?:[a-zA-Z]:[\\/]|\\\\)/;
 
+// Directory-shaped tokens: multi-segment paths with NO extension requirement,
+// optionally slash-terminated. Deliberately loose — `and/or` matches — because
+// candidates are validated against the filesystem before they ever become
+// links; the regex proposes, the stat disposes. Single-segment absolute tokens
+// (`/help`) are syntactically included for the same reason: slash-commands
+// don't exist on disk, so validation drops them. Alternatives mirror
+// FILE_PATH_REGEX's envelope (POSIX-absolute, drive-absolute, dot-relative,
+// bare-relative) minus the `.ext` requirement.
+export const DIR_PATH_REGEX =
+  /(?:^|[\s(])((?:\/[\w./-]+|[a-zA-Z]:[\\/][\w./\\-]+|(?:\.\.?[\\/])+[\w./\\-]+|[\w.-]+[\\/][\w./\\-]+)[\\/]?)(?=$|[\s):,'"])/g;
+
+/**
+ * Resolve a directory-shaped token to an absolute path. No `:line[:col]`
+ * handling — that suffix marks a file location, and a token carrying one is
+ * the file regex's business. A trailing slash is stripped so `src/panels/`
+ * and `src/panels` resolve identically.
+ */
+export function resolveDirPathCandidate(text: string, cwd: string): string | null {
+  const trimmed = text.replace(/[\\/]+$/, "");
+  if (!trimmed) return null;
+
+  if (isAbsolute(trimmed)) return trimmed;
+  if (!cwd) return null;
+  if (WINDOWS_ABS.test(cwd)) {
+    const sep = cwd.includes("\\") ? "\\" : "/";
+    return `${cwd.replace(/[\\/]+$/, "")}${sep}${trimmed.replace(/[\\/]+/g, sep)}`;
+  }
+  return resolve(cwd, trimmed);
+}
+
 /** URLs and embedded escape sequences look path-ish but aren't files. */
 export function isPathExcluded(text: string): boolean {
   return text.includes("://") || text.includes("\x1b");

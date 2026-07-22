@@ -14,11 +14,11 @@ import type { GitStatus } from "@shared/types/git";
 import type { DiffPanelData } from "@shared/types/panel";
 import { isAbsolute, join } from "@shared/utils/path";
 import { FolderOpen } from "@/components/icons";
-import { isMac, isWindows } from "@/lib/platform";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
 import { FileViewerToolbar } from "@/components/FileViewer/FileViewerToolbar";
+import { revealCopy } from "@/components/FileViewer/revealCopy";
 import { DiffFileSidebar } from "@/components/FileViewer/DiffFileSidebar";
 import { ImageDiffViewer, isImageDiffCandidate } from "@/components/FileViewer/ImageDiffViewer";
 import { DiffViewer, FULL_FILE_MAX_LINES } from "@/components/Worktree/DiffViewer";
@@ -63,33 +63,6 @@ const FULL_FILE_FALLBACK_MESSAGES: Record<FullFileUnavailableReason, string> = {
 // Mirrors the ladder the modal used, so the preference keeps meaning the same
 // sizes it always did.
 const DIFF_FONT_SIZE_PX: Record<DiffFontSize, string> = { s: "11px", m: "12px", l: "14px" };
-
-/**
- * The file manager is named differently on every platform, and the button, its
- * failure title and the retry's accessible name all have to agree — so the three
- * strings are resolved together rather than as three ternaries that could drift.
- */
-function revealCopy(): { label: string; errorTitle: string; retryAriaLabel: string } {
-  if (isMac()) {
-    return {
-      label: "Reveal in Finder",
-      errorTitle: "Couldn't reveal in Finder",
-      retryAriaLabel: "Retry revealing in Finder",
-    };
-  }
-  if (isWindows()) {
-    return {
-      label: "Show in Explorer",
-      errorTitle: "Couldn't show in Explorer",
-      retryAriaLabel: "Retry showing in Explorer",
-    };
-  }
-  return {
-    label: "Show in folder",
-    errorTitle: "Couldn't show in folder",
-    retryAriaLabel: "Retry showing in folder",
-  };
-}
 
 export interface DiffPaneProps extends BasePanelProps {
   tabs?: TabInfo[];

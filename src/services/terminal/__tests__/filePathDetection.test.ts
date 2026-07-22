@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
+  DIR_PATH_REGEX,
   FILE_PATH_REGEX,
   isPathExcluded,
+  resolveDirPathCandidate,
   resolveFilePathCandidate,
   resolveSelectedFilePath,
 } from "../filePathDetection";
@@ -119,5 +121,59 @@ describe("FILE_PATH_REGEX (terminal line scanning)", () => {
   it("finds a path token embedded in a log line", () => {
     const matches = [..." at /home/app.js:10:5 threw".matchAll(FILE_PATH_REGEX)];
     expect(matches.map((m) => m[1])).toEqual(["/home/app.js:10:5"]);
+  });
+});
+
+describe("DIR_PATH_REGEX (directory candidates)", () => {
+  const scan = (line: string) => [...line.matchAll(DIR_PATH_REGEX)].map((m) => m[1]);
+
+  it("matches extensionless multi-segment tokens", () => {
+    expect(scan("wrote files under src/panels today")).toEqual(["src/panels"]);
+  });
+
+  it("matches a trailing-slash folder at the end of an agent sentence", () => {
+    const line =
+      "The chosen full-resolution raw result will be copied into assets/reference/art/bearer_animation/";
+    expect(scan(line)).toEqual(["assets/reference/art/bearer_animation/"]);
+    expect(resolveDirPathCandidate("assets/reference/art/bearer_animation/", "/repo")).toBe(
+      "/repo/assets/reference/art/bearer_animation"
+    );
+  });
+
+  it("matches absolute and dot-relative tokens, keeping a trailing slash", () => {
+    expect(scan("ls /tmp/scratch and ./out/dist/")).toEqual(["/tmp/scratch", "./out/dist/"]);
+  });
+
+  it("stops before a colon suffix so file:line tokens keep their meaning", () => {
+    expect(scan("moved to src/panels: done")).toEqual(["src/panels"]);
+  });
+
+  it("matches file-shaped tokens too — overlap dedup is the caller's job", () => {
+    // `src/file.ts` satisfies both regexes; the addon drops directory
+    // candidates whose range a file link already claimed.
+    expect(scan("see src/file.ts")).toEqual(["src/file.ts"]);
+  });
+
+  it("ignores tokens with no separator", () => {
+    expect(scan("plain words only here")).toEqual([]);
+  });
+});
+
+describe("resolveDirPathCandidate", () => {
+  it("keeps absolute tokens and strips the trailing slash", () => {
+    expect(resolveDirPathCandidate("/a/b/", "/cwd")).toBe("/a/b");
+  });
+
+  it("resolves relative tokens against the cwd", () => {
+    expect(resolveDirPathCandidate("src/panels", "/repo")).toBe("/repo/src/panels");
+    expect(resolveDirPathCandidate("../sibling", "/repo/app")).toBe("/repo/sibling");
+  });
+
+  it("returns null for a relative token with no cwd to resolve against", () => {
+    expect(resolveDirPathCandidate("src/panels", "")).toBeNull();
+  });
+
+  it("joins against a Windows cwd with the drive's separator", () => {
+    expect(resolveDirPathCandidate("src/panels", "C:\\repo")).toBe("C:\\repo\\src\\panels");
   });
 });

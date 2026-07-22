@@ -258,6 +258,23 @@ export interface FilePanelOptions extends AddPanelOptionsBase {
 }
 
 /**
+ * Options for creating a file browser panel. Everything is optional — the
+ * browser only needs the `worktreeId` from `AddPanelOptionsBase` to open on a
+ * worktree root, and the rest are seeds for restoring a remembered view.
+ */
+export interface FileBrowserPanelOptions extends AddPanelOptionsBase {
+  kind: "file-browser";
+  /** Worktree-relative path to select on open */
+  browserSelectedPath?: string;
+  /** Worktree-relative directory paths to expand on open */
+  browserExpandedPaths?: string[];
+  /** Whether gitignored entries start visible; defaults to false */
+  browserShowIgnored?: boolean;
+  /** Worktree-relative directory to root the tree at; "" or absent = worktree root */
+  browserRootPath?: string;
+}
+
+/**
  * Options for creating a diff panel. `filePath` is worktree-relative (the
  * worktree root comes from `worktreeId`) so a worktree move can't strand the
  * panel on a dead absolute path. The change set is not passed in — the panel
@@ -307,4 +324,5 @@ export type AddPanelOptions =
   | DevPreviewPanelOptions
   | ReviewPanelOptions
   | FilePanelOptions
+  | FileBrowserPanelOptions
   | DiffPanelOptions;

@@ -19,6 +19,7 @@ import {
   Copy,
   FileText,
   Folder,
+  FolderTree,
   GitCommitHorizontal,
   GitCompare,
   GitPullRequest,
@@ -110,6 +111,7 @@ export interface WorktreeMenuItemsProps {
   onAttachIssue?: () => void;
   onViewPlan?: () => void;
   onOpenReviewHub?: () => void;
+  onOpenFileBrowser?: () => void;
   onCompareDiff?: () => void;
   onRunRecipe: (recipeId: string) => void;
   onSaveLayout?: () => void;
@@ -165,6 +167,7 @@ export function WorktreeMenuItems({
   onAttachIssue,
   onViewPlan,
   onOpenReviewHub,
+  onOpenFileBrowser,
   onCompareDiff,
   onRunRecipe,
   onSaveLayout,
@@ -481,6 +484,12 @@ export function WorktreeMenuItems({
         <Code className="w-3.5 h-3.5 mr-2" />
         Open in Editor
       </C.Item>
+      {onOpenFileBrowser && (
+        <C.Item onSelect={onOpenFileBrowser}>
+          <FolderTree className="w-3.5 h-3.5 mr-2" />
+          Browse Files
+        </C.Item>
+      )}
       <C.Item onSelect={onRevealInFinder}>
         <Folder className="w-3.5 h-3.5 mr-2" />
         Reveal in Finder

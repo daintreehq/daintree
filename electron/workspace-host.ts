@@ -764,9 +764,11 @@ port.on("message", async (rawMsg: any) => {
         break;
 
       case "get-file-tree": {
-        const { requestId, worktreePath, dirPath } = request;
+        const { requestId, worktreePath, dirPath, includeIgnored } = request;
         try {
-          const nodes = await fileTreeService.getFileTree(worktreePath, dirPath);
+          const nodes = await fileTreeService.getFileTree(worktreePath, dirPath, {
+            includeIgnored,
+          });
           sendEvent({
             type: "file-tree-result",
             requestId,

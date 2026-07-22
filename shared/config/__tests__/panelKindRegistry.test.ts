@@ -463,6 +463,7 @@ describe("getFirstRenderSeeds", () => {
       "src/components/Browser/BrowserPane.tsx",
       "src/components/DevPreview/DevPreviewPane.tsx",
       "src/panels/diff/DiffPane.tsx",
+      "src/panels/file-browser/FileBrowserPane.tsx",
       "src/panels/file/FilePane.tsx",
       "src/panels/review/ReviewPane.tsx",
     ]);

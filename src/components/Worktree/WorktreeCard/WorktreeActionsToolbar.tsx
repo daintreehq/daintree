@@ -79,6 +79,7 @@ interface WorktreeActionsToolbarProps {
     onAttachIssue?: () => void;
     onViewPlan?: () => void;
     onOpenReviewHub?: () => void;
+    onOpenFileBrowser?: () => void;
     onCompareDiff?: () => void;
     onOpenPanelPalette?: () => void;
     onDeleteWorktree?: () => void;
@@ -243,6 +244,7 @@ export function WorktreeActionsToolbar({
             onAttachIssue={menu.onAttachIssue}
             onViewPlan={menu.onViewPlan}
             onOpenReviewHub={menu.onOpenReviewHub}
+            onOpenFileBrowser={menu.onOpenFileBrowser}
             onCompareDiff={menu.onCompareDiff}
             onRunRecipe={menu.onRunRecipe}
             onSaveLayout={menu.onSaveLayout}

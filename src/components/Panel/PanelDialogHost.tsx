@@ -96,6 +96,9 @@ function PanelDialogFrame({
       onClose={handleClose}
       size="6xl"
       maxHeight="max-h-[85vh]"
+      // Full-height kinds pin the surface at the max rather than sizing to
+      // content, so the dialog doesn't grow and shrink as the tree loads.
+      {...(definition.dialogFullHeight ? { className: "h-[85vh]" } : {})}
       zIndex={isNested ? "nested" : "modal"}
       data-testid="panel-dialog"
     >
