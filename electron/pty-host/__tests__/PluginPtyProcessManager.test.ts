@@ -265,32 +265,66 @@ describe("PluginPtyProcessManager", () => {
   });
 
   it("releases the master fd via destroy() before kill() on every teardown route", () => {
-    for (const teardown of ["exit", "sigkill", "dispose"] as const) {
+    // Unix semantics: Windows has no master fd and takes destroyPty's
+    // single-kill branch, asserted separately above.
+    const platform = process.platform;
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+    try {
+      for (const teardown of ["exit", "sigkill", "dispose"] as const) {
+        const fake = makeFakePty();
+        spawnMock.mockReturnValue(fake.pty);
+        const { manager } = makeManager();
+        manager.spawn("p1", 0, options());
+        if (teardown === "exit") fake.emitExit(0);
+        else if (teardown === "sigkill") manager.kill("p1", 0, "SIGKILL");
+        else manager.disposeAll();
+        // A bare kill() leaks the master fd — destroy() must come first. The
+        // SIGKILL route additionally names the signal up front (node-pty's bare
+        // kill() is SIGHUP), so its sequence carries a leading kill.
+        const expected = teardown === "sigkill" ? ["kill", "destroy", "kill"] : ["destroy", "kill"];
+        expect(fake.calls).toEqual(expected);
+        expect(fake.disposedListeners).toBe(2);
+      }
+    } finally {
+      Object.defineProperty(process, "platform", { value: platform, configurable: true });
+    }
+  });
+
+  it("SIGKILL sends a real SIGKILL on Unix, not node-pty's SIGHUP default", () => {
+    const platform = process.platform;
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+    try {
       const fake = makeFakePty();
       spawnMock.mockReturnValue(fake.pty);
       const { manager } = makeManager();
       manager.spawn("p1", 0, options());
-      if (teardown === "exit") fake.emitExit(0);
-      else if (teardown === "sigkill") manager.kill("p1", 0, "SIGKILL");
-      else manager.disposeAll();
-      // A bare kill() leaks the master fd — destroy() must come first. The
-      // SIGKILL route additionally names the signal up front (node-pty's bare
-      // kill() is SIGHUP), so its sequence carries a leading kill.
-      const expected = teardown === "sigkill" ? ["kill", "destroy", "kill"] : ["destroy", "kill"];
-      expect(fake.calls).toEqual(expected);
-      expect(fake.disposedListeners).toBe(2);
+      manager.kill("p1", 0, "SIGKILL");
+      // destroyPty's bare kill() defaults to SIGHUP in node-pty, which a child
+      // that ignores HUP survives — the escalation has to name the signal.
+      expect(fake.kills[0]).toBe("SIGKILL");
+    } finally {
+      Object.defineProperty(process, "platform", { value: platform, configurable: true });
     }
   });
 
-  it("SIGKILL sends a real SIGKILL, not node-pty's SIGHUP default", () => {
-    const fake = makeFakePty();
-    spawnMock.mockReturnValue(fake.pty);
-    const { manager } = makeManager();
-    manager.spawn("p1", 0, options());
-    manager.kill("p1", 0, "SIGKILL");
-    // destroyPty's bare kill() defaults to SIGHUP in node-pty, which a child
-    // that ignores HUP survives — the escalation has to name the signal.
-    expect(fake.kills[0]).toBe("SIGKILL");
+  it("issues only one native kill on Windows, where a second double-frees ConPTY", () => {
+    const platform = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      const fake = makeFakePty();
+      // A real WindowsTerminal exposes `_agent`; destroyPty keys its
+      // single-kill guard on it, and mocks without it take the Unix path.
+      (fake.pty as unknown as { _agent: object })._agent = {};
+      spawnMock.mockReturnValue(fake.pty);
+      const { manager } = makeManager();
+      manager.spawn("p1", 0, options());
+      manager.kill("p1", 0, "SIGKILL");
+      // Two native kills on one pseudoconsole is STATUS_HEAP_CORRUPTION (#9551).
+      expect(fake.calls.filter((c) => c === "kill")).toHaveLength(1);
+      expect(fake.calls).not.toContain("destroy");
+    } finally {
+      Object.defineProperty(process, "platform", { value: platform, configurable: true });
+    }
   });
 
   it("acknowledges a forced teardown so Main is not left waiting for an exit", () => {

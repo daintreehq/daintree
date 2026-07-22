@@ -153,15 +153,24 @@ export class PluginPtyProcessManager {
       }
       return;
     }
-    // SIGKILL is Main's escalation after the grace window, so it must actually
-    // be SIGKILL. `destroyPty`'s bare `kill()` defaults to SIGHUP in node-pty
-    // (`process.kill(pid, signal || "SIGHUP")`), which a child that ignores HUP
-    // survives — it would then outlive the map entry and its listeners with
-    // nothing tracking it. Send the real signal first, then release the handle.
-    try {
-      entry.pty.kill("SIGKILL");
-    } catch {
-      // Already gone.
+    // SIGKILL is Main's escalation after the grace window, so on Unix it must
+    // actually be SIGKILL: `destroyPty`'s bare `kill()` is
+    // `process.kill(pid, signal || "SIGHUP")` in node-pty, and a child that
+    // ignores HUP would survive, outliving the map entry and its listeners with
+    // nothing tracking it.
+    //
+    // NOT on Windows. ConPTY has no signals — `WindowsTerminal.kill()` ignores
+    // the argument and routes into the same deferred native kill `destroyPty`
+    // is about to issue, so an extra call here would double-free the
+    // pseudoconsole and crash the pty-host with STATUS_HEAP_CORRUPTION (#9551).
+    // There, `destroyPty`'s single guarded kill is both sufficient and the safe
+    // maximum.
+    if (process.platform !== "win32") {
+      try {
+        entry.pty.kill("SIGKILL");
+      } catch {
+        // Already gone.
+      }
     }
     this.teardownEntry(entry, "kill");
   }

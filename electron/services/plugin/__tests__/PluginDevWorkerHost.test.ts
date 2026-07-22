@@ -146,7 +146,11 @@ describe("PluginDevWorkerHost", () => {
       HTTPS_PROXY: process.env.HTTPS_PROXY,
       NO_PROXY: process.env.NO_PROXY,
       NODE_EXTRA_CA_CERTS: process.env.NODE_EXTRA_CA_CERTS,
+      https_proxy: process.env.https_proxy,
+      NODE_USE_SYSTEM_CA: process.env.NODE_USE_SYSTEM_CA,
     };
+    process.env.https_proxy = "http://lower-proxy:8080";
+    process.env.NODE_USE_SYSTEM_CA = "1";
     process.env.HTTPS_PROXY = "http://corp-proxy:8080";
     process.env.NO_PROXY = "localhost";
     process.env.NODE_EXTRA_CA_CERTS = "/etc/ssl/corp-ca.pem";
@@ -158,6 +162,11 @@ describe("PluginDevWorkerHost", () => {
 
       const [, , options] = forkMock.mock.calls[0];
       expect(options.env.HTTPS_PROXY).toBe("http://corp-proxy:8080");
+      // POSIX tooling conventionally uses the lowercase names, and env lookup
+      // is case-sensitive there — carrying only one form drops the other user.
+      expect(options.env.https_proxy).toBe("http://lower-proxy:8080");
+      // The other branch of Daintree's own TLS recovery hint.
+      expect(options.env.NODE_USE_SYSTEM_CA).toBe("1");
       expect(options.env.NO_PROXY).toBe("localhost");
       expect(options.env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/corp-ca.pem");
       host.dispose();

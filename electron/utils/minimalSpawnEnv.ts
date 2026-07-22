@@ -64,11 +64,23 @@ export function minimalSpawnEnv(extra: Readonly<Record<string, string>> = {}): N
  * `NODE_EXTRA_CA_CERTS` when it sees one).
  */
 const NETWORK_ENV_KEYS = [
+  // Both cases on purpose. The POSIX convention for these is lowercase (curl,
+  // and most Node proxy agents, read `https_proxy` first), while Windows tooling
+  // uses uppercase — and env lookup here is case-sensitive on POSIX, so
+  // carrying only one form silently drops the other user's configuration.
   "HTTPS_PROXY",
+  "https_proxy",
   "HTTP_PROXY",
+  "http_proxy",
   "NO_PROXY",
+  "no_proxy",
   "ALL_PROXY",
+  "all_proxy",
   "NODE_EXTRA_CA_CERTS",
+  // The other half of Daintree's own TLS recovery hint (`errorClassification.ts`
+  // offers `NODE_EXTRA_CA_CERTS=…` *or* `NODE_USE_SYSTEM_CA=1`) — a user who
+  // follows the second branch must not be worse off than one who follows the first.
+  "NODE_USE_SYSTEM_CA",
   "SSL_CERT_FILE",
   "SSL_CERT_DIR",
 ] as const;

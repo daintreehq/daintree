@@ -24,6 +24,15 @@ export { minimalSpawnEnv };
  */
 export const PLUGIN_PROCESS_EARLY_DATA_CAP_BYTES = 64 * 1024;
 
+/**
+ * How long a terminated process keeps its unreplayed output. Covers the worker's
+ * `onData` subscription round-trip (milliseconds) with room to spare, while
+ * bounding what a plugin running many short jobs can accumulate — exited records
+ * live until the plugin unloads, so without an expiry each one would hold up to
+ * {@link PLUGIN_PROCESS_EARLY_DATA_CAP_BYTES} forever.
+ */
+export const PLUGIN_PROCESS_EARLY_DATA_RETENTION_MS = 30_000;
+
 /** Default PTY geometry when a plugin does not pin one. */
 export const PLUGIN_PTY_DEFAULT_COLS = 80;
 export const PLUGIN_PTY_DEFAULT_ROWS = 24;
@@ -167,6 +176,8 @@ interface ManagedProcess {
   /** Output produced before the first `onData` subscriber attached; replayed once, then dropped. */
   earlyData: PluginProcessDataChunk[];
   earlyDataBytes: number;
+  /** Bounds how long a terminated process holds unreplayed output. */
+  earlyDataExpiry: ReturnType<typeof setTimeout> | null;
   /** Latches true on the first `onData` subscription — after that, delivery is live-only. */
   hadDataSubscriber: boolean;
 }
@@ -303,6 +314,7 @@ export class PluginProcessManager {
       dataCallbacks: new Set(),
       earlyData: [],
       earlyDataBytes: 0,
+      earlyDataExpiry: null,
       hadDataSubscriber: false,
     };
     // Registered before any await so the concurrency cap counts this process
@@ -371,6 +383,10 @@ export class PluginProcessManager {
       const replay = managed.earlyData;
       managed.earlyData = [];
       managed.earlyDataBytes = 0;
+      if (managed.earlyDataExpiry) {
+        clearTimeout(managed.earlyDataExpiry);
+        managed.earlyDataExpiry = null;
+      }
       // Replay on the next microtask so the handler runs after `spawn()`
       // resolves, matching live-subscription timing.
       queueMicrotask(() => {
@@ -761,11 +777,21 @@ export class PluginProcessManager {
     // Output subscribers die with the process — an exited handle produces no
     // further chunks, and holding the closures would pin plugin scope after unload.
     managed.dataCallbacks.clear();
-    // `earlyData` deliberately SURVIVES here. A short-lived process can produce
-    // its whole output and exit before the worker's `onData` subscription has
-    // round-tripped; clearing the buffer on exit would make the documented
-    // replay contract fail for exactly the processes that need it most. It is
-    // byte-capped and dies with the record.
+    // `earlyData` deliberately outlives the exit for a short grace: a fast
+    // process can produce its whole output and exit before the worker's
+    // `onData` subscription has round-tripped, and clearing on exit would break
+    // the replay contract for exactly those processes. The grace is bounded
+    // because exited records are not removed until the plugin unloads — a
+    // long-lived plugin running many short jobs would otherwise retain up to
+    // the cap per completed job, without limit.
+    if (managed.earlyData.length > 0 && !managed.earlyDataExpiry) {
+      managed.earlyDataExpiry = setTimeout(() => {
+        managed.earlyDataExpiry = null;
+        managed.earlyData = [];
+        managed.earlyDataBytes = 0;
+      }, PLUGIN_PROCESS_EARLY_DATA_RETENTION_MS);
+      managed.earlyDataExpiry.unref?.();
+    }
   }
 
   /**

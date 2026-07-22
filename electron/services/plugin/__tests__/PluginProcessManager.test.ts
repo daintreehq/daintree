@@ -6,6 +6,7 @@ import {
   PluginProcessConcurrencyError,
   PluginProcessManager,
   PLUGIN_PROCESS_EARLY_DATA_CAP_BYTES,
+  PLUGIN_PROCESS_EARLY_DATA_RETENTION_MS,
   type ManagedChildProcess,
   type ResolvedProcessSpawn,
   type ResolvedPtySpawn,
@@ -551,6 +552,24 @@ describe("PluginProcessManager", () => {
       handle.onData((c) => chunks.push(c));
       await flushMicrotasks();
       expect(chunks).toEqual([{ stream: "stdout", chunk: "all-of-it" }]);
+    });
+
+    it("releases the post-exit replay buffer after its retention window", async () => {
+      // Exited records live until the plugin unloads, so an unbounded buffer
+      // would let a plugin running many short jobs accumulate the cap per job.
+      const h = makeHarness();
+      const handle = await h.manager.spawn("acme.tool", pipeConfig());
+      h.fakes[0]!.writeStdout("never-read");
+      await flushMicrotasks();
+      vi.useFakeTimers();
+      h.fakes[0]!.emitExit(0, null);
+      await vi.advanceTimersByTimeAsync(PLUGIN_PROCESS_EARLY_DATA_RETENTION_MS + 1);
+      vi.useRealTimers();
+
+      const chunks: PluginProcessDataChunk[] = [];
+      handle.onData((c) => chunks.push(c));
+      await flushMicrotasks();
+      expect(chunks).toHaveLength(0);
     });
 
     it("does not replay to a subscriber disposed before the replay ran", async () => {
