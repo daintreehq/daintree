@@ -16,7 +16,9 @@ for (const [path, component] of Object.entries(modules)) {
 const FallbackIcon = ICON_MAP["claude"]!;
 
 export function resolveAgentIcon(iconId: string): ComponentType<AgentIconProps> {
-  return ICON_MAP[iconId] ?? FallbackIcon;
+  // Own-key check: `iconId` can come from a plugin manifest, and a bare index
+  // would hand back an inherited `Object.prototype` method as a "component".
+  return Object.hasOwn(ICON_MAP, iconId) ? ICON_MAP[iconId]! : FallbackIcon;
 }
 
 export { ICON_MAP as AGENT_ICON_MAP };

@@ -168,12 +168,12 @@ describe("runValidate", () => {
       version: "1.0.0",
       engines: { daintree: ">=0.11.0" },
       contributes: {
-        panels: [{ id: "main", name: "Main", iconId: "layout-panel-top", color: "var(--x)" }],
+        panels: [{ id: "main", name: "Main", iconId: "not-a-real-icon", color: "var(--x)" }],
       },
     });
     const result = await runValidate({ dir: tmpDir });
     expect(result.ok).toBe(true);
-    expect(result.warnings.join("\n")).toMatch(/iconId "layout-panel-top".*terminal icon/);
+    expect(result.warnings.join("\n")).toMatch(/iconId "not-a-real-icon".*terminal icon/);
   });
 
   it("does not warn on a recognized panel iconId (#10513)", async () => {
@@ -188,6 +188,78 @@ describe("runValidate", () => {
     const result = await runValidate({ dir: tmpDir });
     expect(result.ok).toBe(true);
     expect(result.warnings.join("\n")).not.toMatch(/iconId/);
+  });
+
+  it("warns (non-fatally) on an unrecognized toolbar button iconId (#11298)", async () => {
+    await writeManifest({
+      name: "acme.demo",
+      version: "1.0.0",
+      engines: { daintree: ">=0.11.0" },
+      contributes: {
+        toolbarButtons: [
+          { id: "plan", label: "Plan", iconId: "not-a-real-icon", actionId: "acme.demo.plan" },
+        ],
+      },
+    });
+    const result = await runValidate({ dir: tmpDir });
+    expect(result.ok).toBe(true);
+    expect(result.warnings.join("\n")).toMatch(/toolbarButtons\[0\].iconId.*package icon/);
+  });
+
+  it("does not warn on a recognized toolbar button iconId (#11298)", async () => {
+    await writeManifest({
+      name: "acme.demo",
+      version: "1.0.0",
+      engines: { daintree: ">=0.11.0" },
+      contributes: {
+        toolbarButtons: [
+          { id: "plan", label: "Plan", iconId: "list", actionId: "acme.demo.plan" },
+        ],
+      },
+    });
+    const result = await runValidate({ dir: tmpDir });
+    expect(result.ok).toBe(true);
+    expect(result.warnings.join("\n")).not.toMatch(/iconId/);
+  });
+
+  it("warns on a toolbar iconId that is only an agent brand id (#11298)", async () => {
+    // The agent-id exemption is panel-only — toolbar buttons never resolve
+    // brand marks, so `claude` really would render the package fallback there.
+    await writeManifest({
+      name: "acme.demo",
+      version: "1.0.0",
+      engines: { daintree: ">=0.11.0" },
+      contributes: {
+        toolbarButtons: [
+          { id: "plan", label: "Plan", iconId: "claude", actionId: "acme.demo.plan" },
+        ],
+      },
+    });
+    const result = await runValidate({ dir: tmpDir });
+    expect(result.ok).toBe(true);
+    expect(result.warnings.join("\n")).toMatch(/toolbarButtons\[0\].iconId "claude"/);
+  });
+
+  it("tells the author a view iconId is ignored rather than merely unrecognized (#11298)", async () => {
+    await writeManifest({
+      name: "acme.demo",
+      version: "1.0.0",
+      engines: { daintree: ">=0.11.0" },
+      contributes: {
+        panels: [{ id: "main", name: "Main", iconId: "puzzle", color: "var(--x)" }],
+        views: [
+          {
+            id: "main",
+            componentPath: "./dist/main.js",
+            location: "panel",
+            iconId: "not-a-real-icon",
+          },
+        ],
+      },
+    });
+    const result = await runValidate({ dir: tmpDir });
+    expect(result.ok).toBe(true);
+    expect(result.warnings.join("\n")).toMatch(/views\[0\].iconId.*ignored at runtime/);
   });
 
   it("rejects a setting id outside the safe-id grammar (#10513)", async () => {

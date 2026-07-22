@@ -28,7 +28,9 @@ import {
   X,
 } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
-import { Folders, McpServerIcon } from "@/components/icons";
+import { Folders } from "@/components/icons";
+import { resolvePluginIcon } from "@/components/icons/pluginIconRegistry";
+import { buildPluginToolbarMeta } from "./pluginToolbarMeta";
 import { TOOLBAR_BUTTON_METADATA, isToolbarButtonVisible } from "./toolbarButtonMetadata";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { cn } from "@/lib/utils";
@@ -165,6 +167,7 @@ export function PluginToolbarButton({
 }) {
   const hover = useShortcutHintHover(config.actionId);
   const ariaShortcut = useAriaKeyshortcuts(config.actionId);
+  const Icon = resolvePluginIcon(config.iconId);
 
   return (
     <ContextMenu>
@@ -187,7 +190,7 @@ export function PluginToolbarButton({
               aria-label={config?.label ?? pluginId}
               aria-keyshortcuts={ariaShortcut}
             >
-              <McpServerIcon />
+              <Icon />
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">{config?.label ?? pluginId}</TooltipContent>
@@ -1294,19 +1297,10 @@ export function Toolbar({
     return withDividers;
   };
 
-  const pluginOverflowMeta = useMemo(() => {
-    const meta: Record<
-      string,
-      { label: string; icon: React.ComponentType<{ className?: string }> }
-    > = {};
-    for (const id of pluginButtonIds) {
-      const config = pluginConfigs.get(id);
-      if (config) {
-        meta[id] = { label: config.label, icon: McpServerIcon };
-      }
-    }
-    return meta;
-  }, [pluginButtonIds, pluginConfigs]);
+  const pluginOverflowMeta = useMemo(
+    () => buildPluginToolbarMeta(pluginButtonIds, pluginConfigs),
+    [pluginButtonIds, pluginConfigs]
+  );
 
   const overflowActions = useMemo<Partial<Record<AnyToolbarButtonId, () => void>>>(
     () => ({

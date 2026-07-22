@@ -4,10 +4,7 @@ import {
   DEPRECATED_CONTRIBUTION_ALIASES,
   getPluginManifestSchema,
 } from "../../../../electron/schemas/plugin.js";
-import {
-  VALID_PANEL_ICON_IDS,
-  isValidPanelIconId,
-} from "../../../../shared/config/panelIconIds.js";
+import { PLUGIN_ICON_IDS, isPluginIconId } from "../../../../shared/config/pluginIconIds.js";
 import { isBuiltInAgentId } from "../../../../shared/config/agentIds.js";
 
 export interface ValidateOptions {
@@ -152,24 +149,34 @@ export async function runValidate(opts: ValidateOptions = {}): Promise<ValidateR
     }
   }
 
-  // Advisory icon check: a panel/view `iconId` outside the recognized set renders
-  // as the generic terminal icon (the renderers do no dynamic Lucide-by-name
-  // lookup). Built-in agent ids are exempt — `PanelKindIcon` resolves them via
-  // `getAgentConfig` to the agent's brand icon before the fallback. Non-fatal:
-  // the schema accepts any string and the renderer is the runtime authority.
-  const isUnrenderableIcon = (iconId: string): boolean =>
-    !isValidPanelIconId(iconId) && !isBuiltInAgentId(iconId);
+  // Advisory icon check: an `iconId` outside the shared registry renders as a
+  // generic fallback glyph (the renderers do no dynamic Lucide-by-name lookup).
+  // Non-fatal: the schema accepts any string and the renderer is the runtime
+  // authority. Panel surfaces additionally exempt built-in agent ids —
+  // `PanelKindIcon` resolves those via `getAgentConfig` to the agent's brand
+  // icon before consulting the registry. Toolbar surfaces get no such
+  // exemption: they never resolve agent brand icons.
+  const knownIds = PLUGIN_ICON_IDS.join(", ");
+  const isUnrenderablePanelIcon = (iconId: string): boolean =>
+    !isPluginIconId(iconId) && !isBuiltInAgentId(iconId);
   for (const [index, panel] of manifest.contributes.panels.entries()) {
-    if (panel.iconId && isUnrenderableIcon(panel.iconId)) {
+    if (panel.iconId && isUnrenderablePanelIcon(panel.iconId)) {
       warnings.push(
-        `panels[${index}].iconId "${panel.iconId}" isn't a recognized panel icon — it will render as the default terminal icon. Known ids: ${VALID_PANEL_ICON_IDS.join(", ")}`
+        `panels[${index}].iconId "${panel.iconId}" isn't a recognized panel icon — it will render as the default terminal icon. Known ids: ${knownIds}`
       );
     }
   }
   for (const [index, view] of manifest.contributes.views.entries()) {
-    if (view.iconId && isUnrenderableIcon(view.iconId)) {
+    if (view.iconId && isUnrenderablePanelIcon(view.iconId)) {
       warnings.push(
-        `views[${index}].iconId "${view.iconId}" isn't a recognized panel icon — it will render as the default terminal icon. Known ids: ${VALID_PANEL_ICON_IDS.join(", ")}`
+        `views[${index}].iconId "${view.iconId}" isn't a recognized panel icon. This field is ignored at runtime — set iconId on the matching panels entry instead. Known ids: ${knownIds}`
+      );
+    }
+  }
+  for (const [index, button] of manifest.contributes.toolbarButtons.entries()) {
+    if (button.iconId && !isPluginIconId(button.iconId)) {
+      warnings.push(
+        `toolbarButtons[${index}].iconId "${button.iconId}" isn't a recognized plugin icon — it will render as the default package icon. Known ids: ${knownIds}`
       );
     }
   }

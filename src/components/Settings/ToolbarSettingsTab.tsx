@@ -37,7 +37,8 @@ import {
 } from "@/components/Layout/toolbarButtonMetadata";
 import { getAgentConfig } from "@/config/agents";
 import { usePluginToolbarButtons } from "@/hooks/usePluginToolbarButtons";
-import { McpServerIcon } from "@/components/icons";
+import { DEFAULT_PLUGIN_ICON } from "@/components/icons/pluginIconRegistry";
+import { buildPluginToolbarMeta } from "@/components/Layout/pluginToolbarMeta";
 import { cn } from "@/lib/utils";
 import { DRAG_GHOST_OPACITY, EASE_OUT_EXPO, UI_ANIMATION_DURATION } from "@/lib/animationUtils";
 import { dispatchToolbarVisibility } from "@/lib/toolbarVisibilityDispatch";
@@ -309,20 +310,14 @@ export function ToolbarSettingsTab() {
 
   const { buttonIds: pluginButtonIds, configs: pluginConfigs } = usePluginToolbarButtons();
 
-  const allMetadata = useMemo(() => {
-    const pluginMeta: Record<string, ToolbarButtonMetadata> = {};
-    for (const id of pluginButtonIds) {
-      const config = pluginConfigs.get(id);
-      if (config) {
-        pluginMeta[id] = {
-          label: config.label,
-          icon: McpServerIcon,
-          description: `Plugin button (${config.pluginId})`,
-        };
-      }
-    }
-    return { ...TOOLBAR_BUTTON_METADATA, ...pluginMeta } as AllMetadata;
-  }, [pluginButtonIds, pluginConfigs]);
+  const allMetadata = useMemo(
+    () =>
+      ({
+        ...TOOLBAR_BUTTON_METADATA,
+        ...buildPluginToolbarMeta(pluginButtonIds, pluginConfigs),
+      }) as AllMetadata,
+    [pluginButtonIds, pluginConfigs]
+  );
 
   const getToolbarButtonLabel = useCallback(
     (id: UniqueIdentifier) => allMetadata[toButtonId(id)]?.label,
@@ -524,7 +519,7 @@ export function ToolbarSettingsTab() {
 
       {pluginButtonIds.length > 0 && (
         <SettingsSection
-          icon={McpServerIcon}
+          icon={DEFAULT_PLUGIN_ICON}
           title="Plugin buttons"
           description={`Toggle to show or hide. ${pluginButtonIds.filter((id) => isVisible(id)).length} of ${pluginButtonIds.length} visible.`}
         >

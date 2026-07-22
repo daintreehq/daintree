@@ -1,6 +1,6 @@
-import { Package } from "lucide-react";
 import type { ComponentType, SVGProps } from "react";
 import { GitHubIcon, GitPullRequest, LayoutPanelTop, Plug } from "@/components/icons";
+import { DEFAULT_PLUGIN_ICON } from "@/components/icons/pluginIconRegistry";
 import { isPluginCategoryId, resolvePluginCategory } from "@shared/config/pluginCategoryRegistry";
 import type { PluginCategoryId, PluginManifest } from "@shared/types/plugin";
 import { cn } from "@/lib/utils";
@@ -22,7 +22,9 @@ const CATEGORY_FALLBACK_ICONS: Record<PluginCategoryId, IconComponent> = {
   forge: GitPullRequest,
   ai: Plug,
   workspace: LayoutPanelTop,
-  other: Package,
+  // Shared with the toolbar/settings surfaces so an uncategorized plugin reads
+  // the same everywhere it appears.
+  other: DEFAULT_PLUGIN_ICON,
 };
 
 export function pluginIconFor(manifest: PluginManifest): IconComponent {

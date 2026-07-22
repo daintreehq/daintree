@@ -2,11 +2,29 @@
 import { describe, expect, it } from "vitest";
 import { render } from "@testing-library/react";
 import { TerminalIcon } from "../TerminalIcon";
-import { deriveTerminalChrome } from "@/utils/terminalChrome";
+import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
+import { PLUGIN_ICON_IDS } from "@/components/icons/pluginIconRegistry";
 
 function renderDefaultTerminalIcon(): string {
   return render(<TerminalIcon kind="terminal" chrome={deriveTerminalChrome()} />).container
     .innerHTML;
+}
+
+/** A plugin-panel chrome descriptor carrying an explicit `iconId`. */
+function pluginChrome(iconId: string): TerminalChromeDescriptor {
+  return {
+    iconId,
+    label: "Plugin panel",
+    isAgent: false,
+    agentId: null,
+    processId: null,
+    runtimeKind: "panel",
+    hasExited: false,
+  };
+}
+
+function renderIcon(iconId: string): string {
+  return render(<TerminalIcon chrome={pluginChrome(iconId)} />).container.innerHTML;
 }
 
 describe("TerminalIcon", () => {
@@ -179,5 +197,85 @@ describe("TerminalIcon", () => {
     const generic = renderDefaultTerminalIcon();
 
     expect(stickyExited).toBe(generic);
+  });
+
+  describe("shared plugin icon registry (#11298)", () => {
+    it("renders a distinct glyph for every advertised icon id", () => {
+      const seen = new Map<string, string>();
+      for (const id of PLUGIN_ICON_IDS) {
+        const html = renderIcon(id);
+        expect(html, `"${id}" rendered no svg`).toContain("<svg");
+        const clash = seen.get(html);
+        expect(clash, `"${id}" renders identically to "${clash}"`).toBeUndefined();
+        seen.set(html, id);
+      }
+    });
+
+    it("renders ids that used to fall through to the terminal glyph", () => {
+      // These lived only in the palette's map, so panel headers, tabs, and the
+      // dock all showed a terminal icon for them instead.
+      const fallback = renderIcon("no-such-icon");
+      for (const id of ["puzzle", "git-branch", "sticky-note", "daintree", "gauge"]) {
+        expect(renderIcon(id), `"${id}" still falls back`).not.toBe(fallback);
+      }
+    });
+
+    it("gives monitor and monitor-play different glyphs", () => {
+      // The old id conditionals aliased both onto MonitorPlay.
+      expect(renderIcon("monitor")).not.toBe(renderIcon("monitor-play"));
+    });
+
+    it("keeps the category color on the semantic panel-kind icons", () => {
+      expect(renderIcon("file-diff")).toContain("text-category-green");
+      expect(renderIcon("git-pull-request")).toContain("text-category-violet");
+      expect(renderIcon("file-text")).toContain("text-category-amber");
+      expect(renderIcon("globe")).toContain("text-status-info");
+    });
+
+    it("renders non-semantic registry ids without a category color", () => {
+      expect(renderIcon("puzzle")).not.toContain("text-category-");
+    });
+
+    it("lets a built-in kind pin its glyph over the chrome's icon id", () => {
+      const { container } = render(<TerminalIcon kind="browser" chrome={pluginChrome("puzzle")} />);
+
+      expect(container.innerHTML).toContain("text-status-info");
+      expect(container.innerHTML).not.toBe(renderIcon("puzzle"));
+    });
+
+    it("still resolves agent brand icons ahead of the generic registry", () => {
+      // `claude` is not a registry id — it must reach the brand-icon path.
+      const agent = render(
+        <TerminalIcon chrome={deriveTerminalChrome({ detectedAgentId: "claude" })} />
+      ).container.innerHTML;
+
+      expect(agent).not.toBe(renderIcon("no-such-icon"));
+      expect(agent).toContain("<svg");
+    });
+
+    it("treats inherited object keys as unknown ids", () => {
+      // `iconId` is untrusted manifest input; a bare `in`/index lookup would
+      // resolve these to functions off Object.prototype.
+      const fallback = renderIcon("no-such-icon");
+      for (const id of ["toString", "constructor", "hasOwnProperty", "__proto__"]) {
+        expect(renderIcon(id), `"${id}" leaked an inherited value`).toBe(fallback);
+      }
+    });
+
+    it("marks an unknown id as the terminal fallback", () => {
+      const { container } = render(<TerminalIcon chrome={pluginChrome("no-such-icon")} />);
+
+      expect(
+        container.querySelector("[data-terminal-icon-id]")?.getAttribute("data-terminal-icon-id")
+      ).toBe("terminal");
+    });
+
+    it("keeps the author's id on the marker when the glyph resolves", () => {
+      const { container } = render(<TerminalIcon chrome={pluginChrome("puzzle")} />);
+
+      expect(
+        container.querySelector("[data-terminal-icon-id]")?.getAttribute("data-terminal-icon-id")
+      ).toBe("puzzle");
+    });
   });
 });

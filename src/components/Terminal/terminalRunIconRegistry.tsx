@@ -60,5 +60,8 @@ export const TERMINAL_RUN_ICON_MAP: Record<string, ComponentType<TerminalRunIcon
 export function resolveTerminalRunIcon(
   iconId: string | null | undefined
 ): ComponentType<TerminalRunIconProps> | undefined {
-  return iconId ? TERMINAL_RUN_ICON_MAP[iconId] : undefined;
+  // Own-key check: `iconId` can come from a plugin manifest, and a bare index
+  // would hand back an inherited `Object.prototype` method as a "component".
+  if (!iconId || !Object.hasOwn(TERMINAL_RUN_ICON_MAP, iconId)) return undefined;
+  return TERMINAL_RUN_ICON_MAP[iconId];
 }
