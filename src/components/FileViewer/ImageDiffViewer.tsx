@@ -310,10 +310,16 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
     );
   }
 
-  if (loadState === "error" || (versions !== null && !versions.head.ok && !versions.working.ok)) {
+  // Single-pane statuses (added/deleted) always render their dedicated pane —
+  // its per-side message covers a missing version; the aggregate error is
+  // reserved for comparisons where both sides genuinely failed.
+  const bothSidesFailed = versions !== null && !versions.head.ok && !versions.working.ok;
+
+  if (loadState === "error" || (singleSide === null && bothSidesFailed)) {
     return (
       <div className="flex h-full min-h-0 w-full flex-col items-center justify-center">
         <EmptyState
+          className="self-stretch"
           variant="zero-data"
           scale="canvas"
           icon={<ImageOff />}

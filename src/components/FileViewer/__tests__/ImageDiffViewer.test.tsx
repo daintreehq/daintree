@@ -91,6 +91,20 @@ describe("ImageDiffViewer", () => {
     expect(screen.queryByRole("button", { name: "Swipe" })).toBeNull();
   });
 
+  it("keeps the single-pane layout for a deleted file with no readable prior version", async () => {
+    mockReadFileVersions.mockResolvedValue({
+      head: { ok: false, error: "NOT_FOUND" },
+      working: { ok: false, error: "NOT_FOUND" },
+    } satisfies DiffMediaFileVersions);
+
+    render(<ImageDiffViewer relPath="gone.png" worktreePath="/repo" status="deleted" />);
+
+    expect(await screen.findByText("Deleted — no working version")).toBeDefined();
+    expect(screen.getByText("No version to show")).toBeDefined();
+    expect(screen.queryByText("Couldn't load image versions")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
   it("shows a per-side message and hides compare modes when one side is too large", async () => {
     mockReadFileVersions.mockResolvedValue({
       head: { ok: false, error: "TOO_LARGE" },

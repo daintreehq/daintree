@@ -73,9 +73,13 @@ function validatePayload(payload: DiffMediaReadFileVersionsPayload): void {
 
 async function readHeadSide(cwd: string, filePath: string, mime: string): Promise<DiffMediaSide> {
   try {
-    const result = await gitServiceCache
-      .getGitService(cwd)
-      .readFileAtHead(filePath, DIFF_MEDIA_MAX_BYTES);
+    const gitService = gitServiceCache.getGitService(cwd);
+    let result = await gitService.readFileAtHead(filePath, DIFF_MEDIA_MAX_BYTES);
+    if (!result.ok && result.reason === "NOT_FOUND") {
+      // An already-committed deletion has no blob at literal HEAD — fall back
+      // to the last commit whose tree still contained the path.
+      result = await gitService.readPreviousFileVersion(filePath, DIFF_MEDIA_MAX_BYTES);
+    }
     if (!result.ok) {
       return { ok: false, error: result.reason };
     }

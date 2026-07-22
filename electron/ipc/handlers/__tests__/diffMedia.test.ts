@@ -8,6 +8,7 @@ const ipcMainMock = vi.hoisted(() => ({
 }));
 
 const readFileAtHeadMock = vi.hoisted(() => vi.fn());
+const readPreviousFileVersionMock = vi.hoisted(() => vi.fn());
 const getGitServiceMock = vi.hoisted(() => vi.fn());
 
 const fileHandleMock = vi.hoisted(() => ({
@@ -67,8 +68,12 @@ describe("diffMedia readFileVersions", () => {
     vi.clearAllMocks();
     _resetRateLimitQueuesForTest();
 
-    getGitServiceMock.mockReturnValue({ readFileAtHead: readFileAtHeadMock });
+    getGitServiceMock.mockReturnValue({
+      readFileAtHead: readFileAtHeadMock,
+      readPreviousFileVersion: readPreviousFileVersionMock,
+    });
     readFileAtHeadMock.mockResolvedValue({ ok: true, content: HEAD_BUFFER });
+    readPreviousFileVersionMock.mockResolvedValue({ ok: false, reason: "NOT_FOUND" });
 
     fsMock.realpath.mockImplementation(async (p: string) => p);
     fsMock.stat.mockResolvedValue({ size: WORKING_BUFFER.byteLength, isFile: () => true });
@@ -141,6 +146,46 @@ describe("diffMedia readFileVersions", () => {
     });
   });
 
+  it("falls back to the prior committed version when HEAD lacks the file", async () => {
+    const previousBuffer = Buffer.from("previous-image-bytes");
+    readFileAtHeadMock.mockResolvedValue({ ok: false, reason: "NOT_FOUND" });
+    readPreviousFileVersionMock.mockResolvedValue({ ok: true, content: previousBuffer });
+
+    const result = await invoke({ cwd: REPO_ROOT, filePath: "img.png" });
+
+    expect(result.head).toEqual({
+      ok: true,
+      dataUrl: `data:image/png;base64,${previousBuffer.toString("base64")}`,
+      byteSize: previousBuffer.byteLength,
+    });
+  });
+
+  it("does not consult history when HEAD has the file", async () => {
+    await invoke({ cwd: REPO_ROOT, filePath: "img.png" });
+
+    expect(readPreviousFileVersionMock).not.toHaveBeenCalled();
+  });
+
+  it("does not consult history for a TOO_LARGE HEAD blob", async () => {
+    readFileAtHeadMock.mockResolvedValue({ ok: false, reason: "TOO_LARGE" });
+
+    const result = await invoke({ cwd: REPO_ROOT, filePath: "img.png" });
+
+    expect(result.head).toEqual({ ok: false, error: "TOO_LARGE" });
+    expect(readPreviousFileVersionMock).not.toHaveBeenCalled();
+  });
+
+  it("maps a fallback failure to a HEAD-side ERROR instead of rejecting", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    readFileAtHeadMock.mockResolvedValue({ ok: false, reason: "NOT_FOUND" });
+    readPreviousFileVersionMock.mockRejectedValue(new Error("git exploded"));
+
+    const result = await invoke({ cwd: REPO_ROOT, filePath: "img.png" });
+
+    expect(result.head).toEqual({ ok: false, error: "ERROR" });
+    expect(result.working.ok).toBe(true);
+  });
+
   it("maps a missing working-tree file to NOT_FOUND", async () => {
     fsMock.realpath.mockImplementation(async (p: string) => {
       if (p === REPO_ROOT) return REPO_ROOT;
@@ -179,6 +224,7 @@ describe("diffMedia readFileVersions", () => {
 
     expect(result.head).toEqual({ ok: false, error: "ERROR" });
     expect(result.working.ok).toBe(true);
+    expect(readPreviousFileVersionMock).not.toHaveBeenCalled();
   });
 
   it("returns ERROR for a working-tree file that escapes the root via symlink", async () => {

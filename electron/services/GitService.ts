@@ -27,6 +27,10 @@ export type HeadFileReadResult =
 const MISSING_AT_HEAD_RE =
   /does not exist in|exists on disk, but not in|invalid object name|not a valid object name|bad revision|bad file/i;
 
+// Git error text when a revision argument cannot resolve at all — an unborn
+// HEAD (empty repo) has no commits to walk, so there is no prior version.
+const UNRESOLVABLE_REVISION_RE = /unknown revision|ambiguous argument|bad default revision/i;
+
 export class GitService {
   private git: Promise<SimpleGit> | null = null;
   private rootPath: string;
@@ -314,12 +318,9 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     }
   }
 
-  /**
-   * Read a file's blob content at HEAD. Size-checks via `cat-file -s` before
-   * reading so an oversized blob is never loaded, and reads the content with
-   * `binaryCatFile` (Buffer-safe — `raw()` is utf8-lossy for binary blobs).
-   */
-  async readFileAtHead(filePath: string, maxBytes: number): Promise<HeadFileReadResult> {
+  // Reject absolute, NUL-byte, and traversal paths, and return the path in
+  // git object-spec form (forward slashes, even on Windows).
+  private normalizeTreePath(filePath: string): string {
     if (isAbsolute(filePath)) {
       throw new Error("Absolute paths are not allowed");
     }
@@ -333,11 +334,18 @@ ${lines.map((l) => "+" + l).join("\n")}`;
       throw new Error("Path traversal detected");
     }
 
-    // Git object specs always use forward slashes, even on Windows. The
-    // `HEAD:` prefix also guarantees the spec never starts with a dash.
-    const objectSpec = `HEAD:${normalizedPath.replaceAll("\\", "/")}`;
-    const git = await this.getGit();
+    return normalizedPath.replaceAll("\\", "/");
+  }
 
+  // Size-probe then read a blob at `<rev>:<path>`. The rev prefix keeps the
+  // spec from ever starting with a dash (`binaryCatFile` has no
+  // `--end-of-options`).
+  private async readBlobAtSpec(
+    git: SimpleGit,
+    objectSpec: string,
+    maxBytes: number,
+    op: string
+  ): Promise<HeadFileReadResult> {
     let sizeRaw: string;
     try {
       sizeRaw = await git.raw(["cat-file", "-s", "--end-of-options", objectSpec]);
@@ -345,7 +353,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
       if (MISSING_AT_HEAD_RE.test((error as Error).message ?? "")) {
         return { ok: false, reason: "NOT_FOUND" };
       }
-      throw toGitOperationError(error, { cwd: this.rootPath, op: "read-file-at-head" });
+      throw toGitOperationError(error, { cwd: this.rootPath, op });
     }
 
     const size = Number.parseInt(sizeRaw.trim(), 10);
@@ -360,13 +368,73 @@ ${lines.map((l) => "+" + l).join("\n")}`;
       if (MISSING_AT_HEAD_RE.test((error as Error).message ?? "")) {
         return { ok: false, reason: "NOT_FOUND" };
       }
-      throw toGitOperationError(error, { cwd: this.rootPath, op: "read-file-at-head" });
+      throw toGitOperationError(error, { cwd: this.rootPath, op });
     }
 
     if (content.byteLength > maxBytes) {
       return { ok: false, reason: "TOO_LARGE" };
     }
     return { ok: true, content };
+  }
+
+  /**
+   * Read a file's blob content at HEAD. Size-checks via `cat-file -s` before
+   * reading so an oversized blob is never loaded, and reads the content with
+   * `binaryCatFile` (Buffer-safe — `raw()` is utf8-lossy for binary blobs).
+   */
+  async readFileAtHead(filePath: string, maxBytes: number): Promise<HeadFileReadResult> {
+    const treePath = this.normalizeTreePath(filePath);
+    const git = await this.getGit();
+    return this.readBlobAtSpec(git, `HEAD:${treePath}`, maxBytes, "read-file-at-head");
+  }
+
+  /**
+   * Read the last committed version of a file that no longer exists at HEAD —
+   * the blob from the newest commit whose tree still contains the path.
+   * Renames are not followed (`rev-list` has no `--follow`), matching
+   * `readFileAtHead`'s limitation.
+   */
+  async readPreviousFileVersion(filePath: string, maxBytes: number): Promise<HeadFileReadResult> {
+    const treePath = this.normalizeTreePath(filePath);
+    const git = await this.getGit();
+
+    let revListRaw: string;
+    try {
+      revListRaw = await git.raw(["rev-list", "-2", "--end-of-options", "HEAD", "--", treePath]);
+    } catch (error) {
+      const message = (error as Error).message ?? "";
+      if (UNRESOLVABLE_REVISION_RE.test(message) || MISSING_AT_HEAD_RE.test(message)) {
+        return { ok: false, reason: "NOT_FOUND" };
+      }
+      throw toGitOperationError(error, { cwd: this.rootPath, op: "read-previous-file-version" });
+    }
+
+    // commits[0] removed (or last touched) the path; commits[1] is the newest
+    // commit whose tree still contains it. Fewer than two commits means no
+    // prior version exists (never tracked, or added and deleted in one
+    // commit).
+    const commits = revListRaw
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (commits.length < 2) {
+      return { ok: false, reason: "NOT_FOUND" };
+    }
+
+    const previousCommit = commits[1];
+    if (!/^([0-9a-f]{40}|[0-9a-f]{64})$/i.test(previousCommit)) {
+      throw toGitOperationError(new Error("Unexpected rev-list output"), {
+        cwd: this.rootPath,
+        op: "read-previous-file-version",
+      });
+    }
+
+    return this.readBlobAtSpec(
+      git,
+      `${previousCommit}:${treePath}`,
+      maxBytes,
+      "read-previous-file-version"
+    );
   }
 
   async compareWorktrees(
