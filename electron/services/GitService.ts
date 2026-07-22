@@ -614,6 +614,34 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     }, "removeWorktree");
   }
 
+  /**
+   * Re-links this repository with its linked worktrees after the main worktree
+   * has moved on disk (#11282).
+   *
+   * A move breaks a pointer *pair*: each linked worktree's `.git` file still
+   * names the old main location, and `.git/worktrees/<id>/gitdir` still names
+   * the old linked location. Run from the main worktree's new path, `git
+   * worktree repair` fixes the linked worktrees git can still find on its own,
+   * which covers the common case where only the main folder moved. When the
+   * linked worktrees moved too, git has no anchor to infer them from and their
+   * new paths must be passed explicitly.
+   *
+   * Note this does not repair nested submodule gitlinks — those need
+   * `git submodule absorbgitdirs` and are not handled here.
+   */
+  async repairWorktrees(worktreePaths: string[] = []): Promise<void> {
+    logDebug("Repairing worktrees", { rootPath: this.rootPath, worktreePaths });
+
+    const args = ["worktree", "repair"];
+    if (worktreePaths.length > 0) {
+      args.push("--end-of-options", ...worktreePaths);
+    }
+
+    return this.handleGitOperation(async () => {
+      await (await this.getGit()).raw(args);
+    }, "repairWorktrees");
+  }
+
   async findAvailableBranchName(baseName: string): Promise<string> {
     const branches = await this.listBranches();
     // Only check local branches for conflicts (remote branches don't prevent local creation)

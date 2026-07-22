@@ -10,7 +10,7 @@ import fs from "fs/promises";
 import { createHash } from "crypto";
 import { z } from "zod";
 import { resilientAtomicWriteFile } from "../utils/fs.js";
-import { UTF8_BOM } from "./projectStorePaths.js";
+import { UTF8_BOM, isValidProjectId } from "./projectStorePaths.js";
 import { safeRecipeFilename } from "../utils/recipeFilename.js";
 import { TerminalRecipeSchema } from "../schemas/ipc.js";
 import {
@@ -97,7 +97,7 @@ function buildShareableTerminalSettings(
 export class ProjectIdentityFiles {
   async readInRepoProjectIdentity(
     projectPath: string
-  ): Promise<{ name?: string; emoji?: string; color?: string; found: boolean }> {
+  ): Promise<{ id?: string; name?: string; emoji?: string; color?: string; found: boolean }> {
     const filePath = path.join(projectPath, DAINTREE_PROJECT_JSON);
     try {
       let content = await fs.readFile(filePath, "utf-8");
@@ -114,9 +114,17 @@ export class ProjectIdentityFiles {
         return { found: false };
       }
 
-      const result: { name?: string; emoji?: string; color?: string; found: boolean } = {
-        found: true,
-      };
+      const result: { id?: string; name?: string; emoji?: string; color?: string; found: boolean } =
+        {
+          found: true,
+        };
+
+      // The move anchor (#11282). A malformed id is dropped without discarding
+      // the rest of the identity — a hand-edited or truncated value must not
+      // cost the user their project name/emoji/color.
+      if (typeof parsed.id === "string" && isValidProjectId(parsed.id)) {
+        result.id = parsed.id;
+      }
 
       if (typeof parsed.name === "string" && parsed.name.trim().length > 0) {
         result.name = parsed.name.trim().slice(0, MAX_PROJECT_NAME_LENGTH);
@@ -153,13 +161,26 @@ export class ProjectIdentityFiles {
 
   async writeInRepoProjectIdentity(
     projectPath: string,
-    data: { name?: string; emoji?: string; color?: string }
+    data: { id?: string; name?: string; emoji?: string; color?: string }
   ): Promise<void> {
     await this.assertDaintreeDirNotSymlink(projectPath);
     const daintreeDir = path.join(projectPath, DAINTREE_DIR);
     const filePath = path.join(projectPath, DAINTREE_PROJECT_JSON);
 
-    const payload: { version: 1; name?: string; emoji?: string; color?: string } = { version: 1 };
+    // This function rebuilds the envelope from scratch, so an `id` the caller
+    // does not supply would be *erased* by any ordinary name/emoji/color edit —
+    // silently disarming move detection (#11282). Carry the on-disk value
+    // forward whenever the caller doesn't name one.
+    let id = data.id !== undefined && isValidProjectId(data.id) ? data.id : undefined;
+    if (id === undefined) {
+      const existing = await this.readInRepoProjectIdentity(projectPath);
+      id = existing.id;
+    }
+
+    const payload: { version: 1; id?: string; name?: string; emoji?: string; color?: string } = {
+      version: 1,
+    };
+    if (id !== undefined) payload.id = id;
     if (data.name !== undefined) payload.name = data.name;
     if (data.emoji !== undefined) payload.emoji = data.emoji;
     if (data.color !== undefined) payload.color = data.color;

@@ -96,6 +96,7 @@ export function registerProjectInRepoSettingsHandlers(_deps: HandlerDependencies
     }
     const settings = await projectStore.getProjectSettings(projectId);
     await projectStore.writeInRepoProjectIdentity(project.path, {
+      id: project.id,
       name: project.name,
       emoji: project.emoji,
       color: project.color,
