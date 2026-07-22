@@ -946,6 +946,8 @@ export const CHANNELS = {
   PLUGIN_PANEL_KINDS_GET: "plugin:panel-kinds-get",
   /** Lazy activation: force the plugin owning a contributed panel view to `activate()` before its module loads. */
   PLUGIN_ACTIVATE_FOR_VIEW: "plugin:activate-for-view",
+  /** Renderer reports plugin panel lifecycle transitions (mounted/hidden/trashed/removed) for worker delivery. */
+  PLUGIN_REPORT_PANEL_LIFECYCLE: "plugin:report-panel-lifecycle",
   PLUGIN_AGENTS_GET: "plugin:agents-get",
   PLUGIN_FORGE_PROVIDERS_GET: "plugin:forge-providers-get",
   PLUGIN_FILE_DECORATIONS_GET: "plugin:file-decorations-get",

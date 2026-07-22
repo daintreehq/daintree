@@ -295,6 +295,73 @@ describe("PluginDevWorkerHostProxy host.process (#10526)", () => {
   });
 });
 
+describe("PluginDevWorkerHostProxy panel lifecycle (#11301)", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.restoreAllMocks());
+
+  it("opens a panel-lifecycle subscription and routes events to the callback", async () => {
+    const { proxy, sent } = makeProxy();
+    const onEvent = vi.fn();
+    const dispose = await proxy.host.onDidChangePanelLifecycle(onEvent);
+
+    // The kind is the routing key on main — a wrong or missing one would fall
+    // through the bridge's chain and be wired to an unrelated host event.
+    const sub = sent.find((m) => m.type === "subscribe" && m.kind === "panel-lifecycle");
+    expect(sub).toBeDefined();
+
+    proxy.handleMessage({
+      type: "subscription-event",
+      subscriptionId: sub.subscriptionId,
+      payload: {
+        panelId: "p1",
+        panelKindId: "acme.demo.dash",
+        pluginId: "acme.demo",
+        phase: "removed",
+      },
+    } as any);
+
+    expect(onEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ panelId: "p1", phase: "removed" })
+    );
+
+    dispose();
+    expect(
+      sent.find((m) => m.type === "unsubscribe" && m.subscriptionId === sub.subscriptionId)
+    ).toBeDefined();
+  });
+
+  it("freezes the delivered event even though the port hop strips main's freeze", async () => {
+    const { proxy, sent } = makeProxy();
+    const received: any[] = [];
+    await proxy.host.onDidChangePanelLifecycle((e) => received.push(e));
+    const sub = sent.find((m) => m.type === "subscribe" && m.kind === "panel-lifecycle");
+
+    // A structured-clone payload arrives mutable no matter what main did to it,
+    // so the SDK's "events are frozen" contract has to be re-established here or
+    // it silently holds only for in-process built-ins.
+    proxy.handleMessage({
+      type: "subscription-event",
+      subscriptionId: sub.subscriptionId,
+      payload: {
+        panelId: "p1",
+        panelKindId: "acme.demo.dash",
+        pluginId: "acme.demo",
+        phase: "hidden",
+      },
+    } as any);
+
+    expect(Object.isFrozen(received[0])).toBe(true);
+  });
+
+  it("rejects a subscription opened after the activation window closes", async () => {
+    const { proxy } = makeProxy();
+    proxy.revoke();
+    expect(() => proxy.host.onDidChangePanelLifecycle(vi.fn())).toThrow(
+      /onDidChangePanelLifecycle/
+    );
+  });
+});
+
 describe("PluginDevWorkerHostProxy host.fs.watch (#10526)", () => {
   beforeEach(() => vi.clearAllMocks());
   afterEach(() => vi.restoreAllMocks());

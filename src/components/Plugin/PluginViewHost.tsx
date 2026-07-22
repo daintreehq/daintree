@@ -1,4 +1,4 @@
-import { useEffect, type ComponentType } from "react";
+import { useCallback, useEffect, type ComponentType } from "react";
 import type { PanelKindConfig } from "@shared/config/panelKindRegistry";
 import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import type { TabInfo } from "@/components/Panel/TabButton";
@@ -72,6 +72,13 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Plugi
   });
 
   function PluginViewHost({ extensionState, ...panelProps }: PluginViewHostProps) {
+    const { onClose } = panelProps;
+    // `ContentPanel`'s own close control already sits in the header; this hands
+    // the same action to the diagnostics fallback so a crashed view offers the
+    // way out where the failure is actually shown (#11301). Wrapped to drop
+    // `ContentPanel`'s `force` argument — the fallback's button is the ordinary
+    // recoverable close, never a forced one.
+    const handleRequestClose = useCallback(() => onClose(), [onClose]);
     return (
       // ContentPanel owns click-to-focus, the focus-registry entry, and the pane
       // chrome, exactly as it does for every other non-PTY kind (#11228). It sits
@@ -91,7 +98,11 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Plugi
         {/* `extensionState` is how the panel store persists a view's spawn
             arguments; the content layer speaks the SDK's presentation-neutral
             `initialArgs` instead, so the mapping happens here at the seam. */}
-        <PluginViewContent panelId={panelProps.id} initialArgs={extensionState} />
+        <PluginViewContent
+          panelId={panelProps.id}
+          initialArgs={extensionState}
+          onRequestClose={handleRequestClose}
+        />
       </ContentPanel>
     );
   }

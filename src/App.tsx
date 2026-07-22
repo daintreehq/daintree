@@ -19,6 +19,7 @@ import {
 import { useActionRegistry } from "./hooks/useActionRegistry";
 import { usePluginActions } from "./hooks/usePluginActions";
 import { usePluginPanelKinds } from "./hooks/usePluginPanelKinds";
+import { usePluginPanelLifecycle } from "./hooks/usePluginPanelLifecycle";
 import { usePluginAgents } from "./hooks/usePluginAgents";
 import { usePluginKeybindings } from "./hooks/usePluginKeybindings";
 import { usePluginMcpConsentBridge } from "./hooks/usePluginMcpConsentBridge";
@@ -370,6 +371,7 @@ function AppInner() {
 
   usePluginActions();
   usePluginPanelKinds();
+  usePluginPanelLifecycle();
   usePluginAgents();
   usePluginKeybindings();
   usePluginMcpConsentBridge();

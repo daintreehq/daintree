@@ -1028,6 +1028,10 @@ export interface GeneratedIpcInvokeMap {
     args: [pluginId: string, request: import("../plugin.js").PluginPickPathRequest];
     result: string | null;
   };
+  "plugin:report-panel-lifecycle": {
+    args: [events: import("../plugin.js").PluginPanelLifecycleEvent[]];
+    result: void;
+  };
   "plugin:set-audit-enabled": {
     args: [enabled: boolean];
     result: import("./pluginAudit.js").PluginAuditConfig;

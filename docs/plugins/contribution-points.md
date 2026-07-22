@@ -223,10 +223,34 @@ export default function Dashboard(props) {
 | --- | --- | --- |
 | `panelId` | `string` | Runtime id of this panel instance. Useful as a key for plugin-local panel-scoped state, and the routing key for per-instance pushes: the plugin's main side targets one instance with `host.postToPanel(channel, payload, panelId)` (omit or pass `null` to broadcast to every instance of the kind). To receive only the targeted pushes, subscribe with `usePluginPanelEvent(pluginId, channel, panelId, cb)` (or raw `plugin.onPanel(pluginId, channel, panelId, cb)`) and pass this prop. `usePluginEvent` / `plugin.on` receive broadcast pushes, not per-instance ones. |
 | `pluginId` | `string` | The plugin's manifest `name`. Stable for the lifetime of the host — useful for namespacing storage keys and log lines. |
-| `disposeSignal` | `AbortSignal` | Aborts on unmount and when the host receives a `plugin:panel-kinds-changed` push that omits this kind. The broadcast fires before main tears down plugin IPC handlers, so signal-driven cleanup runs while host APIs are still live. |
+| `disposeSignal` | `AbortSignal` | Lifetime of **this mounted view attempt**. Aborts on unmount, on "Try again", and when the host receives a `plugin:panel-kinds-changed` push that omits this kind. The broadcast fires before main tears down plugin IPC handlers, so signal-driven cleanup runs while host APIs are still live. A **temporary** unmount aborts it too — maximizing a sibling pane, leaving a dock tab, or caching a background project view. Tie only view-scoped work to it. |
+| `panelRemovedSignal` | `AbortSignal` | Lifetime of **the panel record**. The same object is handed to every mount of a given `panelId`, so it survives remounts, retries, trash-then-restore, and plugin upgrades. Aborts exactly once, when the panel is permanently removed. |
 | `initialArgs` | `Record<string, unknown>` \| `undefined` | The argument bag the panel was spawned with — set when the panel is opened via the `panel.openPluginPanel` action's `initialArgs` (e.g. dispatched from a context menu with a file path). It rides the panel's save/restore-surviving extension state, so a restored panel sees the same args it was spawned with. `undefined` when the panel was opened without args. |
 
-The view is wrapped in an error boundary by the host. An unhandled render error shows an inline "Try again" affordance; clicking it produces a fresh `lazy()` reference so the dynamic import is re-evaluated rather than returning the cached failed promise.
+The view is wrapped in an error boundary by the host. An unhandled render error shows a diagnostics pane with "Try again" — which produces a fresh `lazy()` reference so the dynamic import is re-evaluated rather than returning the cached failed promise — alongside "Close panel", "Copy diagnostics", and "View logs".
+
+### Which signal to use
+
+A panel outlives its views. Maximizing a different pane unmounts every other grid panel, so `disposeSignal` fires for a teardown the user experiences as "I'll be right back", identically to one they experience as "I'm done with this". Deciding deletion from `disposeSignal` alone is how a plugin ends up killing a running dev-server session because the user maximized a neighbouring pane.
+
+- **View-scoped work** — in-flight `fetch`es, DOM observers, `postToPanel` subscriptions, timers driving the UI → `disposeSignal`.
+- **Panel-scoped work** — anything that should survive being backgrounded but not survive the panel itself → `panelRemovedSignal`.
+- **Durable resources** — spawned processes, long-lived sessions, anything expensive to restart → keep them in the **worker** and release them from `host.onDidChangePanelLifecycle` on the `"removed"` phase. The worker observes the panel across every remount; the view cannot, because it is gone during exactly the teardown that matters. See [Host API → `onDidChangePanelLifecycle`](./host-api.md#ondidchangepanellifecycle).
+
+### Worker reload vs. view-module replacement
+
+These are two different reloads, and a plugin author debugging "my change didn't show up" is usually confusing them:
+
+- **Worker reload** replaces the plugin's _backend_ Realm. `activate()` runs again against a fresh module graph, so edits to your main entry take effect on the next reload.
+- **View-module replacement** is the _renderer_ half. Chromium caches ESM module records by URL with no eviction API, so re-importing the same `plugin://` specifier returns the module already in memory no matter how thoroughly the panel remounts.
+
+Daintree bridges the gap by stamping a per-load generation into the view URL — `plugin://<id>/__dtv-<n>/dist/view.js`. Every time the plugin is **loaded** — an install, a replacement install, an enable, or an app start — it mints a new `<n>`, which is a specifier the renderer has never imported, so the new bundle is genuinely fetched and evaluated. Open panels remount onto it automatically; no Force Reload, and no need to hand-version your bundle filename each release.
+
+The `daintree-plugin dev` hot-reload path is the exception: it respawns the plugin's **worker** without re-registering contributions, so your backend changes take effect but the generation does not advance and open views keep the module already in memory. Reopen the plugin (disable/enable, or reinstall) — or Force Reload the window — to pick up view changes during a dev session.
+
+Two consequences worth knowing. Relative imports inside your entry module inherit the generation namespace (they resolve against the entry's URL), so multi-chunk bundles refresh as a unit — but an **absolute** `plugin://` import you write by hand does not, and will keep resolving to the first version imported in that session. And because each generation is a distinct module record, a long dev session with many reloads accumulates them in the renderer's memory; that is bounded by how many times you reloaded, and a window reload clears it.
+
+The `__dtv-<n>` segment is virtual — it never exists on disk, and the protocol handler strips it before resolving your file. Treat `__dtv-` as a reserved top-level directory name.
 
 ## Toolbar buttons — _Shipped_
 

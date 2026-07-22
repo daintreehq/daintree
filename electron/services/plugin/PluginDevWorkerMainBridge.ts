@@ -691,6 +691,8 @@ export class PluginDevWorkerMainBridge {
         });
       } else if (kind === "agent-state") {
         dispose = await this.host.onDidChangeAgentState((snapshot) => push(snapshot));
+      } else if (kind === "panel-lifecycle") {
+        dispose = await this.host.onDidChangePanelLifecycle((event) => push(event));
       } else if (kind === "process-exit" || kind === "process-crash") {
         if (!msg.processId) {
           logger.warn(`[${this.pluginId}] ${kind} subscribe missing processId`);
