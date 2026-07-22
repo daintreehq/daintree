@@ -175,7 +175,7 @@ describe("makePluginViewContent", () => {
       const Content = makePluginViewContent(makeContentConfig());
 
       const initialArgs = { path: "/repo/src/index.ts", line: 12 };
-      render(<Content panelId="panel-args" initialArgs={initialArgs} />);
+      render(<Content panelId="panel-args" initialArgs={initialArgs} worktreeId="wt-7" />);
 
       await waitFor(() => expect(screen.queryByTestId("plugin-view")).toBeTruthy());
       const props = capturedProps[capturedProps.length - 1]!;
@@ -183,6 +183,10 @@ describe("makePluginViewContent", () => {
       expect(props.pluginId).toBe("acme");
       // The bag is forwarded by reference, not reconstructed.
       expect(props.initialArgs).toBe(initialArgs);
+      // #11297: the owning worktree reaches the view so it can reconstruct its
+      // own context instead of dispatching worktree.getCurrent, which resolves
+      // the *visible* worktree rather than the panel's.
+      expect(props.worktreeId).toBe("wt-7");
       expect(props.disposeSignal).toBeInstanceOf(AbortSignal);
     } finally {
       vi.doUnmock("react");

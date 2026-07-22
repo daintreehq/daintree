@@ -124,6 +124,30 @@ export class PluginRendererDispatcher {
   }
 
   /**
+   * The visible project view of the focused window, or `null`.
+   *
+   * Deliberately stricter than {@link resolveActiveWebContents}, which falls
+   * back to scanning every window in insertion order. Dispatch has to land
+   * somewhere — a UI action that reaches no renderer is a failed command — so
+   * a best-effort target beats nothing. Scope resolution has the opposite
+   * requirement: naming the wrong window's project silently misroutes
+   * filesystem roots, plugin storage and worktree reads, which is the bug in
+   * #11297 wearing a different hat. Here "no answer" beats "a plausible one".
+   */
+  resolveScopeWebContents(): Electron.WebContents | null {
+    const primary = getWindowRegistry()?.getPrimary();
+    if (primary) {
+      if (primary.browserWindow.isDestroyed()) return null;
+      const webContents = primary.services.projectViewManager?.getActiveView()?.webContents;
+      return webContents && !webContents.isDestroyed() ? webContents : null;
+    }
+    // No window registry (single-window / pre-registry boot): the process-wide
+    // ProjectViewManager is unambiguous because there is only one window.
+    const fallback = getProjectViewManager()?.getActiveView()?.webContents;
+    return fallback && !fallback.isDestroyed() ? fallback : null;
+  }
+
+  /**
    * Lazily register the single `ipcMain` listener that resolves plugin dispatch
    * responses. Registered on first `host.dispatch()` and torn down in
    * {@link dispose}. The handler validates `event.sender.id` against the

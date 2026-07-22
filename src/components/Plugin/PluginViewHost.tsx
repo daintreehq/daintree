@@ -102,6 +102,7 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Plugi
           panelId={panelProps.id}
           initialArgs={extensionState}
           onRequestClose={handleRequestClose}
+          worktreeId={panelProps.worktreeId}
         />
       </ContentPanel>
     );

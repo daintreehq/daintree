@@ -314,6 +314,45 @@ describe("makePluginViewHost", () => {
     }
   });
 
+  it("passes the panel's own worktreeId to the mounted view (#11297)", async () => {
+    const capturedProps: Array<Record<string, unknown>> = [];
+    vi.doMock("react", async () => {
+      const actual = await vi.importActual<typeof import("react")>("react");
+      return {
+        ...actual,
+        lazy: () =>
+          function CapturingView(props: Record<string, unknown>) {
+            capturedProps.push(props);
+            return <div data-testid="plugin-view" />;
+          },
+      };
+    });
+
+    try {
+      const { makePluginViewHost } = await import("../PluginViewHost");
+      const Host = makePluginViewHost(makeConfig());
+
+      render(
+        <Host
+          id="panel-wt"
+          title="Dashboard"
+          isFocused={false}
+          onFocus={(): void => {}}
+          onClose={(): void => {}}
+          worktreeId="wt-owning"
+        />
+      );
+
+      await waitFor(() => expect(screen.queryByTestId("plugin-view")).toBeTruthy());
+      // The value already rides the panel instance; before #11297 the host
+      // dropped it on the floor, leaving a view opened from the generic New
+      // Panel palette with no way to know which worktree it belonged to.
+      expect(capturedProps[capturedProps.length - 1]!.worktreeId).toBe("wt-owning");
+    } finally {
+      vi.doUnmock("react");
+    }
+  });
+
   it("keeps the plugin view mounted across panel prop changes (#11240)", async () => {
     // The content component type must be created once, at factory-construction
     // scope. Constructing it during the host's render mints a new type per

@@ -105,6 +105,7 @@ import type {
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
 import { toPluginWorktreeStatus } from "../../shared/utils/pluginWorktreeSnapshot.js";
 import { getPtyClient } from "../window/serviceRefs.js";
+import { getWindowForWebContents } from "../window/webContentsRegistry.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
 import {
   registerPanelKind,
@@ -2435,14 +2436,75 @@ export class PluginService {
     return { path: suffix.length > 0 ? path.join(base, suffix) : base, rootClass: "project" };
   }
 
+  /**
+   * Worktree snapshots for the project the plugin is acting on behalf of.
+   *
+   * The host APIs this feeds (`getActiveWorktree` / `getWorktrees` /
+   * `getWorktreeStatus`, plus worktree-scoped storage, `${worktree}`/`${project}`
+   * allowlist roots and the `process.spawn` cwd default) hang off a single
+   * long-lived closure per plugin — `createHost()` runs once at activation and
+   * its methods take no arguments — so there is no per-call sender to key off.
+   * Scoping to the focused window is the only resolution structurally available
+   * without redesigning the utility-process RPC bridge, which #11297 does not
+   * ask for. It is genuinely weaker than a real per-invocation context: a plugin
+   * acting from a timer observes whichever project is focused *then*, not the
+   * one it was invoked from.
+   *
+   * Returns `[]` when no window resolves rather than falling back to the
+   * cross-project aggregate. This is not merely narrowing — the selected root
+   * can change from one project to another, which is the point — but the empty
+   * case fails closed: `getActiveWorktree` → `null`, worktree storage → no
+   * target, and token-rooted allowlist entries drop so containment denies
+   * (#9492). An aggregate would instead answer confidently with an arbitrary
+   * project's worktree, which is exactly the bug being fixed.
+   */
   private async fetchAllWorktreeSnapshots(): Promise<WorktreeSnapshot[]> {
     const client = this.workspaceClient;
     if (!client) return [];
+    const windowId = this.resolveScopeWindowId();
+    if (windowId === undefined) return [];
     try {
-      return await client.getAllStatesAsync();
+      return await client.getAllStatesAsync(windowId);
     } catch (err) {
       console.error("[PluginService] Failed to fetch worktree snapshots:", err);
       return [];
+    }
+  }
+
+  /**
+   * The BrowserWindow id whose visible project the plugin is acting on, or
+   * `undefined` when none resolves. Uses the dispatcher's strict scope resolver,
+   * not its dispatch-targeting one — the latter scans every window in insertion
+   * order, which would reintroduce "some other project's worktree" here.
+   */
+  private resolveScopeWindowId(): number | undefined {
+    const webContents = this.dispatcher.resolveScopeWebContents();
+    if (!webContents) return undefined;
+    return getWindowForWebContents(webContents)?.id;
+  }
+
+  /**
+   * The active worktree id for a specific window, for `plugin:invoke`'s IPC
+   * context (#11297). Unlike {@link fetchAllWorktreeSnapshots} this is
+   * sender-precise: the IPC handler has the real invoking `webContents`, so it
+   * resolves the window that actually made the call rather than the focused
+   * one. The asymmetry is deliberate — use real sender scope wherever one
+   * exists.
+   *
+   * Returns `null` for an unresolved window instead of widening to the
+   * cross-project aggregate, and swallows lookup failures: this sits on the
+   * critical path of every plugin invocation, so a wedged or crashed workspace
+   * host must degrade the context rather than fail the invoke.
+   */
+  async getActiveWorktreeIdForWindow(windowId: number | undefined): Promise<string | null> {
+    const client = this.workspaceClient;
+    if (!client || windowId === undefined) return null;
+    try {
+      const snapshots = await client.getAllStatesAsync(windowId);
+      return snapshots.find((s) => s.isCurrent === true)?.id ?? null;
+    } catch (err) {
+      console.error("[PluginService] Failed to resolve active worktree for window:", err);
+      return null;
     }
   }
 

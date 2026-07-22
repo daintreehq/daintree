@@ -218,6 +218,14 @@ export interface PanelViewProps {
    * host never mutates it; plugins should treat the contents as read-only.
    */
   readonly initialArgs?: Record<string, unknown>;
+  /**
+   * The worktree the panel instance belongs to, as recorded on the panel at
+   * spawn time. Lets a view reconstruct its own context without dispatching
+   * `worktree.getCurrent` — which resolves the *visible* worktree, not the
+   * one that owns the panel, and so returns the wrong answer for a background
+   * or restored panel. `undefined` for a panel spawned without a worktree.
+   */
+  readonly worktreeId?: string;
 }
 
 /**

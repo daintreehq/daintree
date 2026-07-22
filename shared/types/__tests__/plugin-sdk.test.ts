@@ -453,6 +453,8 @@ describe("plugin-sdk boundary", () => {
       // panel record. A view that only ever sees one of them cannot tell a
       // temporary unmount from a permanent close.
       expectTypeOf(props.panelRemovedSignal).toEqualTypeOf<AbortSignal>();
+      // Optional: a panel can be spawned without a worktree (#11297).
+      expectTypeOf(props.worktreeId).toEqualTypeOf<string | undefined>();
     });
 
     it("exposes the panel lifecycle contract as named SDK types", () => {

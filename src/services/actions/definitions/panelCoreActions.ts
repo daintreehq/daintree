@@ -128,7 +128,7 @@ export function registerPanelCoreActions(
     id: "panel.openPluginPanel",
     title: "Open Plugin Panel",
     description:
-      "Spawn (or focus an existing) plugin-contributed panel kind, handing it an initial argument. Args: `kind` (required) — the plugin panel kind id from `contributes.panels`; `initialArgs` (optional) — an opaque bag delivered to the view as `PanelViewProps.initialArgs` (e.g. `{ path }` to open a file); `worktreeId` (optional) — target worktree; `reuseExisting` (optional, default true) — focus an existing panel of this kind in the worktree instead of spawning a second one. Returns `{ panelId }`. Errors when `kind` is not a registered plugin panel kind.",
+      "Spawn (or focus an existing) plugin-contributed panel kind, handing it an initial argument. Args: `kind` (required) — the plugin panel kind id from `contributes.panels`; `initialArgs` (optional) — an opaque bag delivered to the view as `PanelViewProps.initialArgs` (e.g. `{ path }` to open a file); `worktreeId` (optional) — target worktree, which must belong to the current project; `reuseExisting` (optional, default true) — focus an existing panel of this kind in the worktree instead of spawning a second one. Returns `{ panelId }`. Errors when `kind` is not a registered plugin panel kind, when `worktreeId` belongs to another project, or — transiently, retry — when the project's worktrees haven't loaded yet.",
     category: "panel",
     kind: "command",
     danger: "safe",
@@ -142,6 +142,28 @@ export function registerPanelCoreActions(
       // no `extensionId` and have their own dedicated spawn actions.
       if (!kindConfig || kindConfig.extensionId === undefined) {
         throw new Error(`"${kind}" is not a registered plugin panel kind`);
+      }
+
+      // A supplied worktreeId must belong to the dispatching renderer's own
+      // project. This action runs in the invoking project's V8 context, so
+      // `getWorktrees()` is already the right scope. Without the check a
+      // cross-project id is persisted verbatim onto the panel, which then
+      // spawns under a project the user isn't looking at and reads as "the
+      // command did nothing" (#11297). Reject rather than silently substituting
+      // the active worktree — a silent fallback on a named target is the class
+      // of bug #7880 banned. An unloaded worktree list can't establish
+      // membership either, so it also rejects, but says so distinctly: that one
+      // is transient and worth retrying, a foreign id never will be.
+      if (worktreeId !== undefined) {
+        const projectWorktrees = callbacks.getWorktrees();
+        if (projectWorktrees.length === 0) {
+          throw new Error(
+            `Can't verify worktree "${worktreeId}": the project's worktrees haven't loaded yet`
+          );
+        }
+        if (!projectWorktrees.some((w) => w.id === worktreeId)) {
+          throw new Error(`Worktree "${worktreeId}" does not belong to the current project`);
+        }
       }
 
       const state = usePanelStore.getState();
