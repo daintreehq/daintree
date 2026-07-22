@@ -182,7 +182,11 @@ export class ProjectStateManager {
       }
     }
 
-    this.setProjectStateCache(projectId, validatedState);
+    // Stamp the id we actually saved under, so a cached read and a fresh disk
+    // read agree. The disk path treats the state directory as authoritative, and
+    // a caller passing a stale embedded id must not get a different answer just
+    // because the cache happened to be warm.
+    this.setProjectStateCache(projectId, { ...validatedState, projectId });
   }
 
   async getProjectState(projectId: string): Promise<ProjectState | null> {
@@ -243,7 +247,12 @@ export class ProjectStateManager {
       );
 
       const state: ProjectState = {
-        projectId: parsed.projectId || projectId,
+        // The state directory this was read from is the authority. An embedded
+        // id can be stale — older builds copied the state dir wholesale when a
+        // relocation minted a new id, leaving the previous id inside the file
+        // (#11282) — and trusting it hands callers an id that no longer names
+        // any project.
+        projectId,
         activeWorktreeId: parsed.activeWorktreeId,
         sidebarWidth: typeof parsed.sidebarWidth === "number" ? parsed.sidebarWidth : 350,
         terminals: validTerminals,

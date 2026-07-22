@@ -219,6 +219,32 @@ function cancelProjectReadRequests(): void {
   currentProjectRequestId++;
 }
 
+/**
+ * Moves a hibernated Assistant conversation from one project id to another,
+ * repointing its recorded working directory.
+ *
+ * Only reachable if main breaks the immutable-id invariant (#11282), so it is
+ * strictly a safety net: it must never take the relocation down with it, hence
+ * the swallowed failure. Losing the resume pointer costs one conversation;
+ * throwing here would abort the caller's project-list refresh too.
+ */
+function migrateHibernateSession(fromProjectId: string, toProjectId: string, newCwd: string): void {
+  try {
+    const helpPanel = useHelpPanelStore.getState();
+    const orphaned = helpPanel.hibernateSessions?.[fromProjectId];
+    if (orphaned) {
+      helpPanel.setHibernateSession(toProjectId, { ...orphaned, cwd: newCwd });
+    }
+    helpPanel.clearHibernateSession(fromProjectId);
+  } catch (error) {
+    logErrorWithContext(error, {
+      operation: "migrate_hibernate_session",
+      component: "projectStore",
+      details: { fromProjectId, toProjectId },
+    });
+  }
+}
+
 function getLocationProjectId(): string | null {
   return getViewWorkspaceId();
 }
@@ -858,11 +884,13 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     try {
       const updated = await projectClient.locate(projectId);
       if (updated) {
-        // Relocation regenerates the project id from its new path (sha256(path)),
-        // so the pre-relocation id is now dead. GC its orphaned hibernate session.
-        // Skip when the id is unchanged (canonicalization produced the same hash).
+        // Reattaching preserves the project id (#11282), so the hibernated
+        // Assistant conversation is still addressable and must be kept — this
+        // used to clear it, which is what made a folder move lose the
+        // conversation. Only a main-process invariant break could change the id
+        // here; carry the entry over rather than silently dropping it.
         if (updated.id !== projectId) {
-          useHelpPanelStore.getState().clearHibernateSession(projectId);
+          migrateHibernateSession(projectId, updated.id, updated.path);
         }
         const projects = await projectClient.getAll();
         set({ projects });

@@ -127,6 +127,7 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
     ) {
       projectStore
         .writeInRepoProjectIdentity(updated.path, {
+          id: updated.id,
           name: updated.name,
           emoji: updated.emoji,
           color: updated.color,

@@ -94,7 +94,10 @@ vi.mock("../events.js", () => ({
 }));
 
 vi.mock("../ProjectStore.js", () => ({
-  projectStore: { getProjectSettings: vi.fn().mockResolvedValue({ runCommands: [] }) },
+  projectStore: {
+    getProjectSettings: vi.fn().mockResolvedValue({ runCommands: [] }),
+    resolveProjectIdForPath: vi.fn((p: string) => `id-for-${p}`),
+  },
 }));
 
 vi.mock("../../store.js", () => ({

@@ -26,7 +26,12 @@ import {
   type ProjectRow,
 } from "./persistence/schema.js";
 import { eq, desc } from "drizzle-orm";
-import { generateProjectId, getProjectStateDir } from "./projectStorePaths.js";
+import {
+  generateProjectId,
+  mintProjectId,
+  isValidProjectId,
+  getProjectStateDir,
+} from "./projectStorePaths.js";
 import { ProjectSettingsManager } from "./ProjectSettingsManager.js";
 import { ProjectStateManager, type ProjectStateReadResult } from "./ProjectStateManager.js";
 import { invalidatePrefetchCache } from "./prefetchHydrateCache.js";
@@ -45,6 +50,37 @@ import { computeFrecencyScore, FRECENCY_COLD_START } from "./frecency.js";
 import { getWritesSuppressed } from "./diskPressureState.js";
 
 export const DEFAULT_PROJECT_EMOJI = "🌲";
+
+/**
+ * The single spelling of a project path used for identity comparisons. Separator
+ * normalization and Unicode normalization are independent problems: a
+ * Finder-dragged NFD path and a typed NFC path denote the same folder on macOS
+ * but are different strings, so both operands of any path comparison have to go
+ * through here.
+ */
+export function normalizeProjectPath(projectPath: string): string {
+  return path.normalize(projectPath).normalize("NFC");
+}
+
+function isEnoent(error: unknown): boolean {
+  return (
+    typeof error === "object" && error !== null && (error as { code?: string }).code === "ENOENT"
+  );
+}
+
+/**
+ * Best-effort re-link of a moved project's linked worktrees. Deliberately never
+ * throws: a project whose folder moved is still perfectly usable on its own, so
+ * a repair failure must not fail the relocation and strand the user with an
+ * unregistered project.
+ */
+async function repairLinkedWorktrees(projectPath: string): Promise<void> {
+  try {
+    await new GitService(projectPath).repairWorktrees();
+  } catch (error) {
+    logError(`Failed to repair linked worktrees for ${projectPath}`, error);
+  }
+}
 
 /**
  * Read a persisted count back, rejecting anything a corrupt row could hold.
@@ -70,27 +106,6 @@ function rowToRepoStats(row: ProjectRow): ProjectRepoStats | null {
     prCount: readPersistedCount(row.statsPrCount),
     providerId: typeof row.statsProviderId === "string" ? row.statsProviderId : null,
     lastUpdated: readPersistedCount(row.statsLastUpdated),
-  };
-}
-
-/**
- * Inverse of {@link rowToRepoStats}, for the insert paths that rebuild a row
- * from a `Project` (relocation). Without this the last-known counts would be
- * dropped on the floor and the toolbar would shift once after every relocate.
- */
-function repoStatsToColumns(stats: ProjectRepoStats | undefined): {
-  statsCommitCount: number | null;
-  statsIssueCount: number | null;
-  statsPrCount: number | null;
-  statsProviderId: string | null;
-  statsLastUpdated: number | null;
-} {
-  return {
-    statsCommitCount: stats ? readPersistedCount(stats.commitCount) : null,
-    statsIssueCount: stats ? readPersistedCount(stats.issueCount) : null,
-    statsPrCount: stats ? readPersistedCount(stats.prCount) : null,
-    statsProviderId: stats?.providerId ?? null,
-    statsLastUpdated: stats ? readPersistedCount(stats.lastUpdated) : null,
   };
 }
 
@@ -173,13 +188,13 @@ export class ProjectStore {
 
   async readInRepoProjectIdentity(
     projectPath: string
-  ): Promise<{ name?: string; emoji?: string; color?: string; found: boolean }> {
+  ): Promise<{ id?: string; name?: string; emoji?: string; color?: string; found: boolean }> {
     return this.identityFiles.readInRepoProjectIdentity(projectPath);
   }
 
   async writeInRepoProjectIdentity(
     projectPath: string,
-    data: { name?: string; emoji?: string; color?: string }
+    data: { id?: string; name?: string; emoji?: string; color?: string }
   ): Promise<void> {
     return this.identityFiles.writeInRepoProjectIdentity(projectPath, data);
   }
@@ -375,9 +390,25 @@ export class ProjectStore {
 
     const inRepo = await this.readInRepoProjectIdentity(normalizedPath);
 
+    // The folder may be a project we already know that simply moved. `inRepo.id`
+    // is the anchor written into `.daintree/project.json`; if it names a row
+    // whose registered path is gone, this is that project at its new home and
+    // its identity — and therefore every id-keyed piece of state — is preserved
+    // in place (#11282).
+    const relocated = await this.tryAdoptMovedProject(inRepo.id, normalizedPath);
+    if (relocated) return relocated;
+
+    // Re-check under the same tick as the insert. Several awaits have happened
+    // since the lookup above, and a concurrent `addProject` for this same folder
+    // would otherwise get past that stale check, find the path-derived id taken,
+    // mint a *random* one and insert a second row for one directory — the path
+    // column has no unique index to catch it.
+    const raced = await this.getProjectByPath(normalizedPath);
+    if (raced) return raced;
+
     const now = Date.now();
     const project: Project = {
-      id: generateProjectId(normalizedPath),
+      id: mintProjectId(normalizedPath, (candidate) => this.isProjectIdTaken(candidate)),
       path: normalizedPath,
       name: inRepo.name ?? path.basename(normalizedPath),
       emoji: inRepo.emoji ?? DEFAULT_PROJECT_EMOJI,
@@ -407,6 +438,77 @@ export class ProjectStore {
       .run();
 
     return project;
+  }
+
+  /**
+   * True if `candidate` may not be handed to a new project.
+   *
+   * A registered row is the obvious case, but a leftover *state directory* is
+   * just as disqualifying: cleanup after a removed project is best-effort, so an
+   * orphaned directory can outlive its row. Reusing its id would silently serve
+   * a dead project's panels, settings and secure-env keys to an unrelated
+   * repository.
+   */
+  private isProjectIdTaken(candidate: string): boolean {
+    if (this.getProjectById(candidate) !== null) return true;
+    const stateDir = getProjectStateDir(this.projectsConfigDir, candidate);
+    return stateDir !== null && existsSync(stateDir);
+  }
+
+  /**
+   * Decides whether the folder now at `normalizedPath` is an already-registered
+   * project that moved, and if so repoints it in place.
+   *
+   * `.daintree/project.json` is git-tracked, so a clone or fork inherits the
+   * anchor of the repository it was copied from. The discriminator is whether
+   * the anchored project's registered path is *still there*: if it is, this
+   * folder is a copy living alongside the original and must get its own
+   * identity; only a vanished original means "the same project moved here".
+   *
+   * Every uncertain case returns `null`, which falls through to registering a
+   * brand-new project — today's behavior. Failing that direction costs the user
+   * a re-link; the opposite failure would silently hand one project's panels,
+   * settings and Assistant history to a different repository.
+   */
+  private async tryAdoptMovedProject(
+    anchorId: string | undefined,
+    normalizedPath: string
+  ): Promise<Project | null> {
+    if (!anchorId || !isValidProjectId(anchorId)) return null;
+
+    const anchored = this.getProjectById(anchorId);
+    if (!anchored) return null;
+
+    // Already registered here; the caller's path lookup should have caught it.
+    if (normalizeProjectPath(anchored.path) === normalizedPath) return null;
+
+    // Repointing the project a window is currently displaying would strand that
+    // view, its workspace host and its PTYs on the old path — the same reason
+    // `relocateProject` refuses it. Rebinding a live project needs the
+    // quiesce/rebind sequence that doesn't exist yet, so decline the adoption
+    // and let this register as an ordinary new project.
+    if (anchorId === this.getCurrentProjectId()) return null;
+
+    let originalIsGone: boolean;
+    try {
+      await fs.access(anchored.path);
+      originalIsGone = false;
+    } catch (error) {
+      // Only a genuinely absent original proves a move. A permissions or I/O
+      // failure tells us nothing, so it must not be read as "gone".
+      originalIsGone = isEnoent(error);
+    }
+    if (!originalIsGone) return null;
+
+    const adopted = this.updateProject(anchorId, {
+      path: normalizedPath,
+      status: "closed",
+    });
+
+    this.pruneInRepoRecipeHashes(anchored.path);
+    await repairLinkedWorktrees(normalizedPath);
+
+    return adopted;
   }
 
   async removeProject(projectId: string): Promise<void> {
@@ -681,6 +783,23 @@ export class ProjectStore {
     return row ? rowToProject(row) : null;
   }
 
+  /**
+   * Resolves the id of the project registered at `projectPath`.
+   *
+   * Prefer this over `generateProjectId(path)` anywhere the answer is used to
+   * look something up: ids survive a folder move, so a relocated project's id
+   * no longer equals the hash of its current path and hashing would silently
+   * resolve to a project that does not exist (#11282). Falls back to the hash
+   * for paths that were never registered, preserving the previous behavior for
+   * callers that run before/without a project row.
+   */
+  resolveProjectIdForPath(projectPath: string): string {
+    const normalizedPath = normalizeProjectPath(projectPath);
+    const db = getSharedDb();
+    const row = db.select().from(projectsTable).where(eq(projectsTable.path, normalizedPath)).get();
+    return row?.id ?? generateProjectId(normalizedPath);
+  }
+
   getProjectById(projectId: string): Project | null {
     const db = getSharedDb();
     const row = db.select().from(projectsTable).where(eq(projectsTable.id, projectId)).get();
@@ -730,96 +849,29 @@ export class ProjectStore {
     }
 
     const canonicalNewPath = await this.getGitRoot(newPath);
-    const newProjectId = generateProjectId(canonicalNewPath);
 
-    if (newProjectId === projectId) {
-      return this.updateProject(projectId, { path: canonicalNewPath, status: "closed" });
-    }
-
-    const existingAtNewPath = this.getProjectById(newProjectId);
-    if (existingAtNewPath) {
+    // A project id is immutable once registered, so reattaching a folder is a
+    // path update on the existing row — not a new identity (#11282). Everything
+    // keyed by the id (state dir, settings, secure env, panel/terminal ids,
+    // Assistant hibernation, session journal) therefore stays reachable with no
+    // copying, re-keying or cleanup at all, and there is no half-migrated state
+    // for a failure to strand.
+    const existingAtNewPath = await this.getProjectByPath(canonicalNewPath);
+    if (existingAtNewPath && existingAtNewPath.id !== projectId) {
       throw new Error(`A project already exists at that location: ${existingAtNewPath.name}`);
     }
 
-    const oldStateDir = getProjectStateDir(this.projectsConfigDir, projectId);
-    const newStateDir = getProjectStateDir(this.projectsConfigDir, newProjectId);
-
-    if (oldStateDir && newStateDir && existsSync(oldStateDir)) {
-      await fs.cp(oldStateDir, newStateDir, { recursive: true });
-    }
-
-    const projects = this.getAllProjects();
-    const index = projects.findIndex((p) => p.id === projectId);
-    if (index === -1) {
-      if (newStateDir && existsSync(newStateDir)) {
-        await fs.rm(newStateDir, { recursive: true, force: true }).catch(() => {});
-      }
-      throw new Error(`Project not found: ${projectId}`);
-    }
-
-    const oldProject = projects[index];
-    const updatedProject: Project = {
-      ...oldProject,
-      id: newProjectId,
+    const oldPath = project.path;
+    const updatedProject = this.updateProject(projectId, {
       path: canonicalNewPath,
       status: "closed",
-    };
+    });
 
-    const db = getSharedDb();
-    try {
-      db.delete(projectsTable).where(eq(projectsTable.id, projectId)).run();
-      db.insert(projectsTable)
-        .values({
-          id: updatedProject.id,
-          path: updatedProject.path,
-          name: updatedProject.name,
-          emoji: updatedProject.emoji,
-          lastOpened: updatedProject.lastOpened,
-          color: updatedProject.color ?? null,
-          status: updatedProject.status ?? null,
-          daintreeConfigPresent: updatedProject.daintreeConfigPresent ?? null,
-          inRepoSettings: updatedProject.inRepoSettings ?? null,
-          pinned: updatedProject.pinned ? 1 : 0,
-          frecencyScore: updatedProject.frecencyScore ?? FRECENCY_COLD_START,
-          lastAccessedAt: updatedProject.lastAccessedAt ?? 0,
-          ...repoStatsToColumns(updatedProject.lastKnownStats),
-        })
-        .run();
-      this.settingsManager.migrateEnvForProject(projectId, newProjectId);
-      this.stateManager.invalidateProjectStateCache(projectId);
-      this.stateManager.invalidateProjectStateCache(newProjectId);
-    } catch (error) {
-      db.delete(projectsTable).where(eq(projectsTable.id, newProjectId)).run();
-      db.insert(projectsTable)
-        .values({
-          id: oldProject.id,
-          path: oldProject.path,
-          name: oldProject.name,
-          emoji: oldProject.emoji,
-          lastOpened: oldProject.lastOpened,
-          color: oldProject.color ?? null,
-          status: oldProject.status ?? null,
-          daintreeConfigPresent: oldProject.daintreeConfigPresent ?? null,
-          inRepoSettings: oldProject.inRepoSettings ?? null,
-          pinned: oldProject.pinned ? 1 : 0,
-          frecencyScore: oldProject.frecencyScore ?? FRECENCY_COLD_START,
-          lastAccessedAt: oldProject.lastAccessedAt ?? 0,
-          ...repoStatsToColumns(oldProject.lastKnownStats),
-        })
-        .run();
-      if (newStateDir && existsSync(newStateDir)) {
-        await fs.rm(newStateDir, { recursive: true, force: true }).catch(() => {});
-      }
-      throw error;
-    }
-
-    // The old path is gone — drop its cached recipe hashes so they don't linger.
-    this.pruneInRepoRecipeHashes(oldProject.path);
-
-    if (oldStateDir && existsSync(oldStateDir)) {
-      await fs.rm(oldStateDir, { recursive: true, force: true }).catch((err) => {
-        logError(`Failed to clean up old state dir for project ${projectId}`, err);
-      });
+    if (normalizeProjectPath(oldPath) !== normalizeProjectPath(canonicalNewPath)) {
+      // The old path no longer backs this project — drop its cached recipe
+      // hashes so they don't linger.
+      this.pruneInRepoRecipeHashes(oldPath);
+      await repairLinkedWorktrees(canonicalNewPath);
     }
 
     return updatedProject;

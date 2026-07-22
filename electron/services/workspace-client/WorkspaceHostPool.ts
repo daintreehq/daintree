@@ -11,7 +11,6 @@ import { type ProcessEntry, sendToEntryWindows } from "./types.js";
 import type { WorkspaceClientConfig } from "../../../shared/types/workspace-host.js";
 import type { ForgeProviderMatcher } from "../../../shared/utils/forgeHostnames.js";
 import { projectStore } from "../ProjectStore.js";
-import { generateProjectId } from "../projectStorePaths.js";
 import { normalizeProviderId } from "../../../shared/utils/forgeProviderIds.js";
 
 const CLEANUP_GRACE_MS = 180_000;
@@ -40,7 +39,7 @@ async function readForgeSettingsForProject(projectPath: string): Promise<{
   let forgeProviderOverride: string | null = null;
   let forgeRemote: string | null = null;
   try {
-    const projectId = generateProjectId(projectPath);
+    const projectId = projectStore.resolveProjectIdForPath(projectPath);
     const settings = await projectStore.getProjectSettings(projectId).catch(() => null);
     forgeProviderOverride = settings?.forgeProviderOverride ?? null;
     forgeRemote = settings?.forgeRemote ?? settings?.githubRemote ?? null;

@@ -1,0 +1,385 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import Database from "better-sqlite3";
+import { drizzle } from "drizzle-orm/better-sqlite3";
+import fs from "fs";
+import os from "os";
+import path from "path";
+import * as schema from "../persistence/schema.js";
+
+const CREATE_TABLES_SQL = `
+  CREATE TABLE IF NOT EXISTS projects (
+    id TEXT PRIMARY KEY,
+    path TEXT NOT NULL,
+    name TEXT NOT NULL,
+    emoji TEXT NOT NULL,
+    last_opened INTEGER NOT NULL,
+    color TEXT,
+    status TEXT,
+    daintree_config_present INTEGER,
+    in_repo_settings INTEGER,
+    pinned INTEGER NOT NULL DEFAULT 0,
+    frecency_score REAL NOT NULL DEFAULT 3.0,
+    last_accessed_at INTEGER NOT NULL DEFAULT 0,
+    auto_parked_at INTEGER,
+    stats_commit_count INTEGER,
+    stats_issue_count INTEGER,
+    stats_pr_count INTEGER,
+    stats_provider_id TEXT,
+    stats_last_updated INTEGER
+  );
+  CREATE TABLE IF NOT EXISTS app_state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
+`;
+
+let sqlite: Database.Database;
+let db: ReturnType<typeof drizzle<typeof schema>>;
+let tmpRoot: string;
+
+const repairWorktrees = vi.fn(async () => {});
+
+vi.mock("../persistence/db.js", () => ({
+  getSharedDb: () => db,
+  openDb: vi.fn(),
+}));
+
+vi.mock("electron", () => ({
+  app: { getPath: () => "/tmp/daintree-identity-test" },
+}));
+
+vi.mock("../GitService.js", () => ({
+  GitService: class {
+    async getRepositoryRoot(p: string): Promise<string> {
+      return p;
+    }
+    repairWorktrees(...args: string[][]) {
+      return repairWorktrees(...(args as []));
+    }
+  },
+}));
+
+const migrateEnvForProject = vi.fn();
+
+vi.mock("../ProjectSettingsManager.js", () => ({
+  ProjectSettingsManager: class {
+    deleteAllEnvForProject() {}
+    migrateEnvForProject(...args: string[]) {
+      migrateEnvForProject(...args);
+    }
+    getEffectiveNotificationSettings() {
+      return {};
+    }
+  },
+}));
+
+vi.mock("../ProjectStateManager.js", () => ({
+  ProjectStateManager: class {
+    invalidateProjectStateCache() {}
+  },
+}));
+
+vi.mock("../ProjectFileStore.js", () => ({ ProjectFileStore: class {} }));
+vi.mock("../GlobalFileStore.js", () => ({ GlobalFileStore: class {} }));
+vi.mock("../projectQuarantineCleanup.js", () => ({
+  cleanupQuarantinedProjectFiles: vi.fn(),
+}));
+
+import { ProjectStore } from "../ProjectStore.js";
+import { mintProjectId, isValidProjectId, generateProjectId } from "../projectStorePaths.js";
+import { ProjectIdentityFiles } from "../ProjectIdentityFiles.js";
+
+/** Creates a real directory and returns its canonicalized path. */
+async function makeDir(name: string): Promise<string> {
+  const dir = path.join(tmpRoot, name);
+  await fs.promises.mkdir(dir, { recursive: true });
+  return fs.promises.realpath(dir);
+}
+
+async function writeAnchor(projectPath: string, id: string): Promise<void> {
+  await new ProjectIdentityFiles().writeInRepoProjectIdentity(projectPath, {
+    id,
+    name: "Anchored",
+  });
+}
+
+describe("project identity across folder moves", () => {
+  let store: ProjectStore;
+
+  beforeEach(async () => {
+    tmpRoot = await fs.promises.realpath(
+      fs.mkdtempSync(path.join(os.tmpdir(), "daintree-identity-"))
+    );
+    sqlite = new Database(":memory:");
+    sqlite.exec(CREATE_TABLES_SQL);
+    db = drizzle(sqlite, { schema });
+    repairWorktrees.mockClear();
+    migrateEnvForProject.mockClear();
+    store = new ProjectStore();
+  });
+
+  afterEach(() => {
+    sqlite.close();
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  describe("addProject move detection", () => {
+    it("keeps the original id when an anchored folder has moved", async () => {
+      const original = await makeDir("original");
+      const registered = await store.addProject(original);
+      await writeAnchor(original, registered.id);
+
+      // Simulate the user renaming the folder outside Daintree.
+      const moved = path.join(tmpRoot, "renamed");
+      await fs.promises.rename(original, moved);
+      const canonicalMoved = await fs.promises.realpath(moved);
+
+      const reopened = await store.addProject(canonicalMoved);
+
+      expect(reopened.id).toBe(registered.id);
+      expect(reopened.path).toBe(canonicalMoved);
+      // One project, not two — the old row was repointed, not orphaned.
+      expect(store.getAllProjects()).toHaveLength(1);
+    });
+
+    it("does not copy or re-key state when adopting a moved folder", async () => {
+      const original = await makeDir("original");
+      const registered = await store.addProject(original);
+      await writeAnchor(original, registered.id);
+
+      const moved = path.join(tmpRoot, "renamed");
+      await fs.promises.rename(original, moved);
+      await store.addProject(await fs.promises.realpath(moved));
+
+      // Identity never changes, so there is nothing to migrate. A call here
+      // would mean the id had been re-keyed behind our back.
+      expect(migrateEnvForProject).not.toHaveBeenCalled();
+    });
+
+    it("repairs linked worktrees after adopting a moved folder", async () => {
+      const original = await makeDir("original");
+      const registered = await store.addProject(original);
+      await writeAnchor(original, registered.id);
+
+      const moved = path.join(tmpRoot, "renamed");
+      await fs.promises.rename(original, moved);
+      await store.addProject(await fs.promises.realpath(moved));
+
+      expect(repairWorktrees).toHaveBeenCalledTimes(1);
+    });
+
+    it("mints a distinct id for a copy whose original still exists", async () => {
+      const original = await makeDir("original");
+      const registered = await store.addProject(original);
+      await writeAnchor(original, registered.id);
+
+      // A clone inherits the tracked anchor, but the original is still there.
+      const clone = await makeDir("clone");
+      await writeAnchor(clone, registered.id);
+
+      const added = await store.addProject(clone);
+
+      expect(added.id).not.toBe(registered.id);
+      expect(store.getProjectById(registered.id)?.path).toBe(original);
+      expect(store.getAllProjects()).toHaveLength(2);
+    });
+
+    it("registers a new project when the anchor names nothing known", async () => {
+      const dir = await makeDir("unknown-anchor");
+      const unknownAnchor = "a".repeat(64);
+      await writeAnchor(dir, unknownAnchor);
+
+      const added = await store.addProject(dir);
+
+      // An anchor with no local row must not be trusted as this project's id.
+      expect(added.id).not.toBe(unknownAnchor);
+      expect(added.path).toBe(dir);
+      expect(store.getAllProjects()).toHaveLength(1);
+    });
+
+    it.each([
+      ["EACCES", "EACCES"],
+      ["EIO", "EIO"],
+    ])("does not treat an unreadable original (%s) as a move", async (_label, code) => {
+      const original = await makeDir("original");
+      const registered = await store.addProject(original);
+      await writeAnchor(original, registered.id);
+
+      const candidate = await makeDir("candidate");
+      await writeAnchor(candidate, registered.id);
+
+      // The original may still be sitting there behind a permissions or I/O
+      // failure. Only a provably absent original means "moved".
+      const accessSpy = vi.spyOn(fs.promises, "access").mockImplementation(async (target) => {
+        if (target === original) {
+          throw Object.assign(new Error(`${code}: cannot read`), { code });
+        }
+      });
+
+      try {
+        const added = await store.addProject(candidate);
+
+        expect(added.id).not.toBe(registered.id);
+        expect(store.getProjectById(registered.id)?.path).toBe(original);
+        expect(store.getAllProjects()).toHaveLength(2);
+        expect(repairWorktrees).not.toHaveBeenCalled();
+      } finally {
+        accessSpy.mockRestore();
+      }
+    });
+
+    it("declines to adopt the currently active project", async () => {
+      const original = await makeDir("original");
+      const registered = await store.addProject(original);
+      await writeAnchor(original, registered.id);
+      db.insert(schema.appState).values({ key: "currentProjectId", value: registered.id }).run();
+
+      const moved = path.join(tmpRoot, "renamed");
+      await fs.promises.rename(original, moved);
+      const canonicalMoved = await fs.promises.realpath(moved);
+
+      const added = await store.addProject(canonicalMoved);
+
+      // Repointing a live project would strand its view and PTYs on the old
+      // path, so it registers separately instead.
+      expect(added.id).not.toBe(registered.id);
+      expect(store.getProjectById(registered.id)?.path).toBe(original);
+    });
+
+    it("ignores a malformed anchor without losing the rest of the identity", async () => {
+      const dir = await makeDir("bad-anchor");
+      await fs.promises.mkdir(path.join(dir, ".daintree"), { recursive: true });
+      await fs.promises.writeFile(
+        path.join(dir, ".daintree", "project.json"),
+        JSON.stringify({ version: 1, id: "not-a-valid-id", name: "Kept" }),
+        "utf-8"
+      );
+
+      const identity = await new ProjectIdentityFiles().readInRepoProjectIdentity(dir);
+
+      expect(identity.id).toBeUndefined();
+      expect(identity.name).toBe("Kept");
+    });
+  });
+
+  describe("relocateProject", () => {
+    it("preserves the project id when reattaching a folder", async () => {
+      const original = await makeDir("original");
+      const registered = await store.addProject(original);
+
+      const moved = path.join(tmpRoot, "elsewhere");
+      await fs.promises.rename(original, moved);
+      const canonicalMoved = await fs.promises.realpath(moved);
+
+      const relocated = await store.relocateProject(registered.id, canonicalMoved);
+
+      expect(relocated.id).toBe(registered.id);
+      expect(relocated.path).toBe(canonicalMoved);
+      expect(migrateEnvForProject).not.toHaveBeenCalled();
+    });
+
+    it("carries project metadata across a reattachment", async () => {
+      const original = await makeDir("original");
+      const registered = await store.addProject(original);
+      store.updateProject(registered.id, { name: "Renamed", emoji: "🚀", pinned: true });
+
+      const moved = path.join(tmpRoot, "elsewhere");
+      await fs.promises.rename(original, moved);
+      const relocated = await store.relocateProject(
+        registered.id,
+        await fs.promises.realpath(moved)
+      );
+
+      expect(relocated.name).toBe("Renamed");
+      expect(relocated.emoji).toBe("🚀");
+      expect(relocated.pinned).toBe(true);
+    });
+
+    it("rejects reattaching onto a folder another project already owns", async () => {
+      const a = await makeDir("project-a");
+      const b = await makeDir("project-b");
+      const projectA = await store.addProject(a);
+      await store.addProject(b);
+
+      await expect(store.relocateProject(projectA.id, b)).rejects.toThrow(/already exists/i);
+      expect(store.getProjectById(projectA.id)?.path).toBe(a);
+    });
+
+    it("gives a new repository at a vacated path its own identity", async () => {
+      // The end-to-end shape of the collision mintProjectId guards against: a
+      // project keeps sha256(oldPath) after moving away, so a different repo
+      // created at that same path must not inherit its row.
+      const original = await makeDir("original");
+      const registered = await store.addProject(original);
+      const preferredForOriginal = generateProjectId(original);
+      expect(registered.id).toBe(preferredForOriginal);
+
+      const moved = path.join(tmpRoot, "elsewhere");
+      await fs.promises.rename(original, moved);
+      await store.relocateProject(registered.id, await fs.promises.realpath(moved));
+
+      // A brand-new repository now occupies the vacated path.
+      const reborn = await makeDir("original");
+      const added = await store.addProject(reborn);
+
+      expect(added.id).not.toBe(registered.id);
+      expect(isValidProjectId(added.id)).toBe(true);
+      expect(store.getProjectById(registered.id)?.id).toBe(preferredForOriginal);
+    });
+
+    it("skips worktree repair when the path did not actually change", async () => {
+      const dir = await makeDir("unchanged");
+      const registered = await store.addProject(dir);
+
+      const relocated = await store.relocateProject(registered.id, dir);
+
+      expect(relocated.path).toBe(dir);
+      expect(repairWorktrees).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("mintProjectId", () => {
+    it("prefers the path-derived id when it is free", () => {
+      const isTaken = vi.fn(() => false);
+      const id = mintProjectId("/some/path", isTaken);
+
+      // Compared against the independent derivation, not another call to the
+      // function under test.
+      expect(id).toBe(generateProjectId("/some/path"));
+      expect(isTaken).toHaveBeenCalledWith(generateProjectId("/some/path"));
+    });
+
+    it("falls back to a fresh id when the path-derived id is taken", () => {
+      // A project that moved away from this path keeps its original id, so the
+      // hash of the path can already be claimed when a new repo appears there.
+      const preferred = generateProjectId("/some/path");
+      const id = mintProjectId("/some/path", (candidate) => candidate === preferred);
+
+      expect(id).not.toBe(preferred);
+      expect(isValidProjectId(id)).toBe(true);
+    });
+
+    it("treats Unicode-equivalent paths as the same project", () => {
+      const composed = "/Users/foo/café";
+      const decomposed = composed.normalize("NFD");
+
+      expect(mintProjectId(composed, () => false)).toBe(mintProjectId(decomposed, () => false));
+    });
+  });
+
+  describe("in-repo anchor durability", () => {
+    it("keeps the anchor when an unrelated metadata edit rewrites the file", async () => {
+      const dir = await makeDir("durable");
+      const identityFiles = new ProjectIdentityFiles();
+      const anchorId = "b".repeat(64);
+      await identityFiles.writeInRepoProjectIdentity(dir, { id: anchorId, name: "Before" });
+
+      // A plain rename goes through the same writer without naming an id.
+      await identityFiles.writeInRepoProjectIdentity(dir, { name: "After", emoji: "🌲" });
+
+      const identity = await identityFiles.readInRepoProjectIdentity(dir);
+      expect(identity.id).toBe(anchorId);
+      expect(identity.name).toBe("After");
+    });
+  });
+});

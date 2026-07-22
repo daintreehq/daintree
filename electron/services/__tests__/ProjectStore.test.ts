@@ -523,38 +523,26 @@ describe("ProjectSettings validation", () => {
   });
 });
 
-describe("relocateProject — ID derivation helpers (smoke tests only)", () => {
-  it("new path produces a valid project ID", () => {
-    const newPath = "/Users/foo/moved-repo";
-    const newId = generateProjectId(newPath);
-    expect(isValidProjectId(newId)).toBe(true);
+// Relocation itself no longer derives an id from the path — a project id is
+// immutable once registered (#11282), so the behavioral coverage lives in
+// ProjectStore.identity.test.ts. What remains here is the state-directory
+// containment guarantee every id must satisfy.
+describe("state directory resolution", () => {
+  it("confines a project's state directory to the projects config root", () => {
+    const projectsConfigDir = path.resolve("/home/user/.config/daintree/projects");
+    const id = generateProjectId("/Users/foo/new-location");
+
+    const stateDir = getProjectStateDir(projectsConfigDir, id);
+
+    expect(stateDir).toBe(path.join(projectsConfigDir, id));
+    expect(stateDir!.startsWith(projectsConfigDir + path.sep)).toBe(true);
   });
 
-  it("different paths produce different project IDs", () => {
-    const oldPath = "/Users/foo/old-location";
-    const newPath = "/Users/foo/new-location";
-    const oldId = generateProjectId(oldPath);
-    const newId = generateProjectId(newPath);
-    expect(oldId).not.toBe(newId);
-  });
-
-  it("same path produces same project ID (no-op relocation path)", () => {
-    const path1 = "/Users/foo/my-project";
-    const id1 = generateProjectId(path1);
-    const id2 = generateProjectId(path1);
-    expect(id1).toBe(id2);
-  });
-
-  it("state dir path is computed correctly for new project ID", () => {
+  it("refuses ids that are not well-formed", () => {
     const projectsConfigDir = path.resolve("/home/user/.config/daintree/projects");
 
-    const newPath = "/Users/foo/new-location";
-    const newId = generateProjectId(newPath);
-    const newStateDir = getProjectStateDir(projectsConfigDir, newId);
-
-    expect(newStateDir).not.toBeNull();
-    expect(newStateDir!.startsWith(projectsConfigDir)).toBe(true);
-    expect(newStateDir).toBe(path.join(projectsConfigDir, newId));
+    expect(isValidProjectId("../escape")).toBe(false);
+    expect(getProjectStateDir(projectsConfigDir, "../escape")).toBeNull();
   });
 });
 
