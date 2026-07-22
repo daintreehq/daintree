@@ -219,13 +219,7 @@ export interface PanelViewProps {
  * renderer's diagnostics pane; only the fact of failure crosses to the worker.
  */
 export type PluginPanelLifecyclePhase =
-  | "mounted"
-  | "hidden"
-  | "backgrounded"
-  | "trashed"
-  | "restored"
-  | "removed"
-  | "render-failed";
+  "mounted" | "hidden" | "backgrounded" | "trashed" | "restored" | "removed" | "render-failed";
 
 /**
  * One panel lifecycle transition delivered to a plugin worker (#11301).
