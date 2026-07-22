@@ -153,6 +153,16 @@ export class PluginPtyProcessManager {
       }
       return;
     }
+    // SIGKILL is Main's escalation after the grace window, so it must actually
+    // be SIGKILL. `destroyPty`'s bare `kill()` defaults to SIGHUP in node-pty
+    // (`process.kill(pid, signal || "SIGHUP")`), which a child that ignores HUP
+    // survives — it would then outlive the map entry and its listeners with
+    // nothing tracking it. Send the real signal first, then release the handle.
+    try {
+      entry.pty.kill("SIGKILL");
+    } catch {
+      // Already gone.
+    }
     this.teardownEntry(entry, "kill");
   }
 
@@ -184,6 +194,21 @@ export class PluginPtyProcessManager {
   private teardownEntry(entry: PluginPtyEntry, reason: string): void {
     if (entry.tornDown) return;
     entry.tornDown = true;
+    // A forced teardown disposes the `onExit` listener before node-pty would
+    // have fired it, so nothing else will ever tell Main this process ended.
+    // Without this ack the managed record sits in `running` forever: `onExit`
+    // never fires and its concurrency slot is never released. The `exited` latch
+    // keeps it exactly-once against a real exit that already reported.
+    if (!entry.exited) {
+      entry.exited = true;
+      this.sendEvent({
+        type: "plugin-pty-exit",
+        id: entry.id,
+        generation: entry.generation,
+        exitCode: null,
+        signal: 9,
+      });
+    }
     for (const disposable of entry.disposables) {
       try {
         disposable.dispose();

@@ -7,6 +7,13 @@ import type {
 /** How long to wait for a `plugin-pty-spawn-result` before giving up on the host. */
 export const PLUGIN_PTY_SPAWN_TIMEOUT_MS = 10_000;
 
+/**
+ * Cap on output held between the host emitting it and the manager subscribing.
+ * Small — this window is a single IPC round-trip, not a user-visible wait; the
+ * plugin-facing replay buffer in `PluginProcessManager` is the larger one.
+ */
+export const PLUGIN_PTY_PRE_ADOPTION_CAP_BYTES = 64 * 1024;
+
 /** Terminal outcome of a plugin PTY, shaped like the pipe path's exit info. */
 export interface PluginPtyExit {
   exitCode: number | null;
@@ -76,6 +83,14 @@ export class PluginPtyTransport {
     this.onHostEvent = (event) => this.handleEvent(event);
     this.onHostCrash = () => this.handleHostCrash();
     this.client.on("plugin-pty", this.onHostEvent as (...args: unknown[]) => void);
+    // BOTH crash signals, because they mean different things and only their
+    // union covers us. `host-crash-details` fires on every classified default-
+    // shard crash — the common case, where the host dies and is restarted;
+    // `host-crash` fires only once the restart budget is exhausted. Listening to
+    // the latter alone would leave a plugin's PTYs wedged in `running` (slot
+    // pinned, no `onCrash`) through the first crashes, which are the ones that
+    // actually happen. `settleExit` is idempotent, so the overlap is harmless.
+    this.client.on("host-crash-details", this.onHostCrash as (...args: unknown[]) => void);
     this.client.on("host-crash", this.onHostCrash as (...args: unknown[]) => void);
   }
 
@@ -100,10 +115,22 @@ export class PluginPtyTransport {
       exited: false,
       dataListeners: new Set(),
       exitListeners: new Set(),
+      preAdoptionData: [],
+      preAdoptionBytes: 0,
       pending: null,
     };
     // Registered BEFORE the send: `plugin-pty-spawn-result` can arrive on the
     // same tick, and an unregistered entry would drop it on the floor.
+    // A displaced entry (two restarts issued without awaiting the first) would
+    // otherwise never see its result — every later event filters on the new
+    // generation — and its promise would hang until the spawn timeout. Settle it
+    // now instead, and force-kill its generation so a late allocation for it
+    // can't survive unowned.
+    const displaced = this.live.get(id);
+    if (displaced && displaced !== entry) {
+      this.client.killPluginPty(displaced.id, displaced.generation, "SIGKILL");
+      this.settleExit(displaced, { exitCode: null, signal: "SIGKILL" });
+    }
     this.live.set(id, entry);
 
     try {
@@ -167,7 +194,25 @@ export class PluginPtyTransport {
         this.client.killPluginPty(entry.id, entry.generation, signal);
       },
       onData: (listener) => {
+        const first = entry.dataListeners.size === 0;
         entry.dataListeners.add(listener);
+        if (first && entry.preAdoptionData.length > 0) {
+          const buffered = entry.preAdoptionData;
+          entry.preAdoptionData = [];
+          entry.preAdoptionBytes = 0;
+          // Synchronous and in order: this is output the child already produced,
+          // and it must reach the plugin ahead of anything that arrives next.
+          for (const data of buffered) {
+            try {
+              listener(data);
+            } catch (error) {
+              console.error(
+                `[PluginPtyTransport] buffered data listener for "${entry.id}" threw:`,
+                formatErrorMessage(error, "listener error")
+              );
+            }
+          }
+        }
         return () => entry.dataListeners.delete(listener);
       },
       onExit: (listener) => {
@@ -201,6 +246,23 @@ export class PluginPtyTransport {
       }
       case "plugin-pty-data": {
         if (entry.exited) return;
+        // The host wires its `onData` before announcing the spawn (so an eager
+        // greeting isn't lost there), which means data can legitimately arrive
+        // BEFORE `spawn()` resolves and the manager subscribes. Hold it until
+        // the first listener attaches, or a `--machine` daemon's handshake dies
+        // in the gap between the two.
+        if (entry.dataListeners.size === 0) {
+          entry.preAdoptionData.push(event.data);
+          entry.preAdoptionBytes += Buffer.byteLength(event.data, "utf-8");
+          while (
+            entry.preAdoptionBytes > PLUGIN_PTY_PRE_ADOPTION_CAP_BYTES &&
+            entry.preAdoptionData.length > 0
+          ) {
+            const dropped = entry.preAdoptionData.shift();
+            entry.preAdoptionBytes -= dropped ? Buffer.byteLength(dropped, "utf-8") : 0;
+          }
+          return;
+        }
         for (const listener of [...entry.dataListeners]) {
           try {
             listener(event.data);
@@ -246,6 +308,8 @@ export class PluginPtyTransport {
     const listeners = [...entry.exitListeners];
     entry.dataListeners.clear();
     entry.exitListeners.clear();
+    entry.preAdoptionData = [];
+    entry.preAdoptionBytes = 0;
     for (const listener of listeners) {
       try {
         listener(info);
@@ -263,6 +327,7 @@ export class PluginPtyTransport {
     if (this.disposed) return;
     this.disposed = true;
     this.client.off("plugin-pty", this.onHostEvent as (...args: unknown[]) => void);
+    this.client.off("host-crash-details", this.onHostCrash as (...args: unknown[]) => void);
     this.client.off("host-crash", this.onHostCrash as (...args: unknown[]) => void);
     for (const entry of [...this.live.values()]) {
       this.client.killPluginPty(entry.id, entry.generation, "SIGKILL");
@@ -279,6 +344,9 @@ interface LiveEntry {
   exited: boolean;
   dataListeners: Set<(data: string) => void>;
   exitListeners: Set<(info: PluginPtyExit) => void>;
+  /** Output that arrived before the manager adopted the backend and subscribed. */
+  preAdoptionData: string[];
+  preAdoptionBytes: number;
   pending: { resolve: (pid: number | null) => void; reject: (error: Error) => void } | null;
 }
 

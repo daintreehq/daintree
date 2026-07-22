@@ -710,6 +710,98 @@ describe("createHost — host.process (managed processes, #9234)", () => {
     expect(bridge).not.toHaveBeenCalled();
   });
 
+  it("rejects invalid mode/panelId/geometry before spending a consent prompt (#11300)", async () => {
+    await writePlugin("proc-args", {
+      name: "acme.proc-args",
+      version: "1.0.0",
+      capabilities: ["shell:exec"],
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const bridge = vi.fn(async () => "approved-and-pin" as const);
+    getPluginCapabilityConsentService().setConsentBridge(bridge);
+    const spawner = vi.fn(() => makeFakeChild().child);
+    const manager = new PluginProcessManager({ streamSink: () => {}, spawner, killGraceMs: 10 });
+    service._setProcessManagerForTests(manager);
+
+    const { host } = (service as unknown as { createHost: ProcessHostShape }).createHost(
+      "acme.proc-args"
+    );
+    const spawn = host.process.spawn as (command: string, options?: unknown) => Promise<unknown>;
+
+    await expect(spawn("node", { mode: "interactive" })).rejects.toThrow(/mode must be/);
+    // An empty panelId would silently match no subscriber — reject, don't coerce.
+    await expect(spawn("node", { panelId: "" })).rejects.toThrow(/panelId must be/);
+    await expect(spawn("node", { mode: "pty", cols: 0 })).rejects.toThrow(/cols must be/);
+    await expect(spawn("node", { mode: "pty", rows: 10.5 })).rejects.toThrow(/rows must be/);
+
+    // None of these reached consent or the manager.
+    expect(bridge).not.toHaveBeenCalled();
+    expect(spawner).not.toHaveBeenCalled();
+  });
+
+  it("accepts null/undefined panelId and defaults to pipe mode (#11300)", async () => {
+    await writePlugin("proc-defaults", {
+      name: "acme.proc-defaults",
+      version: "1.0.0",
+      capabilities: ["shell:exec"],
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const configs: Array<{ mode: string; panelId: string | null }> = [];
+    const manager = new PluginProcessManager({
+      streamSink: () => {},
+      spawner: (config) => {
+        configs.push({ mode: config.mode, panelId: config.panelId });
+        return makeFakeChild().child;
+      },
+      killGraceMs: 10,
+    });
+    service._setProcessManagerForTests(manager);
+
+    const { host } = (service as unknown as { createHost: ProcessHostShape }).createHost(
+      "acme.proc-defaults"
+    );
+    const spawn = host.process.spawn as (command: string, options?: unknown) => Promise<unknown>;
+
+    await spawn("node");
+    await spawn("node", { panelId: null });
+    await spawn("node", { panelId: "panel-3" });
+
+    expect(configs).toEqual([
+      { mode: "pipe", panelId: null },
+      { mode: "pipe", panelId: null },
+      { mode: "pipe", panelId: "panel-3" },
+    ]);
+  });
+
+  it("rejects interactive mode when the host has no PTY backend (#11300)", async () => {
+    await writePlugin("proc-nopty", {
+      name: "acme.proc-nopty",
+      version: "1.0.0",
+      capabilities: ["shell:exec"],
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    // No ptySpawner injected — the manager must refuse rather than silently
+    // downgrading an interactive request to a pipe child with no stdin.
+    const manager = new PluginProcessManager({
+      streamSink: () => {},
+      spawner: () => makeFakeChild().child,
+      killGraceMs: 10,
+    });
+    service._setProcessManagerForTests(manager);
+
+    const { host } = (service as unknown as { createHost: ProcessHostShape }).createHost(
+      "acme.proc-nopty"
+    );
+    const spawn = host.process.spawn as (command: string, options?: unknown) => Promise<unknown>;
+    await expect(spawn("flutter", { mode: "pty" })).rejects.toThrow(/unavailable/);
+  });
+
   it("kills outstanding processes when the plugin is unloaded", async () => {
     await writePlugin("proc-unload", {
       name: "acme.proc-unload",

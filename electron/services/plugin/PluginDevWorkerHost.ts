@@ -6,7 +6,7 @@ import path from "path";
 import os from "os";
 import { fileURLToPath, pathToFileURL } from "url";
 import { createLogger } from "../../utils/logger.js";
-import { minimalSpawnEnv } from "../../utils/minimalSpawnEnv.js";
+import { minimalWorkerEnv } from "../../utils/minimalSpawnEnv.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
   PLUGIN_DEV_WORKER_KIND,
@@ -418,7 +418,7 @@ export class PluginDevWorkerHost extends EventEmitter {
         // scrubs secrets specifically to keep them away from it — inheriting them
         // one level up made the "safe" path a formality. A plugin that needs a
         // credential passes it explicitly or goes through a scoped host API.
-        env: minimalSpawnEnv({
+        env: minimalWorkerEnv({
           DAINTREE_USER_DATA: app.getPath("userData"),
           DAINTREE_UTILITY_PROCESS_KIND: this.workerKind,
           // io_uring disabled on Linux for utility-process stability (#6081).

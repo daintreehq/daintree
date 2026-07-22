@@ -273,10 +273,63 @@ describe("PluginPtyProcessManager", () => {
       if (teardown === "exit") fake.emitExit(0);
       else if (teardown === "sigkill") manager.kill("p1", 0, "SIGKILL");
       else manager.disposeAll();
-      // A bare kill() leaks the master fd — destroy() must come first.
-      expect(fake.calls).toEqual(["destroy", "kill"]);
+      // A bare kill() leaks the master fd — destroy() must come first. The
+      // SIGKILL route additionally names the signal up front (node-pty's bare
+      // kill() is SIGHUP), so its sequence carries a leading kill.
+      const expected = teardown === "sigkill" ? ["kill", "destroy", "kill"] : ["destroy", "kill"];
+      expect(fake.calls).toEqual(expected);
       expect(fake.disposedListeners).toBe(2);
     }
+  });
+
+  it("SIGKILL sends a real SIGKILL, not node-pty's SIGHUP default", () => {
+    const fake = makeFakePty();
+    spawnMock.mockReturnValue(fake.pty);
+    const { manager } = makeManager();
+    manager.spawn("p1", 0, options());
+    manager.kill("p1", 0, "SIGKILL");
+    // destroyPty's bare kill() defaults to SIGHUP in node-pty, which a child
+    // that ignores HUP survives — the escalation has to name the signal.
+    expect(fake.kills[0]).toBe("SIGKILL");
+  });
+
+  it("acknowledges a forced teardown so Main is not left waiting for an exit", () => {
+    const fake = makeFakePty();
+    spawnMock.mockReturnValue(fake.pty);
+    const { manager, events } = makeManager();
+    manager.spawn("p1", 4, options());
+    manager.kill("p1", 4, "SIGKILL");
+    // A forced teardown disposes node-pty's onExit before it fires, so without
+    // this ack the managed record never leaves `running` and its concurrency
+    // slot is never released.
+    expect(events.filter((e) => e.type === "plugin-pty-exit")).toEqual([
+      { type: "plugin-pty-exit", id: "p1", generation: 4, exitCode: null, signal: 9 },
+    ]);
+  });
+
+  it("emits exactly one exit when a forced kill races the child's own exit", () => {
+    const fake = makeFakePty();
+    spawnMock.mockReturnValue(fake.pty);
+    const { manager, events } = makeManager();
+    manager.spawn("p1", 0, options());
+    fake.emitExit(0);
+    manager.kill("p1", 0, "SIGKILL");
+    manager.disposeAll();
+    expect(events.filter((e) => e.type === "plugin-pty-exit")).toHaveLength(1);
+  });
+
+  it("acknowledges every live PTY on host disposal", () => {
+    const a = makeFakePty();
+    const b = makeFakePty();
+    spawnMock.mockReturnValueOnce(a.pty).mockReturnValueOnce(b.pty);
+    const { manager, events } = makeManager();
+    manager.spawn("p1", 0, options());
+    manager.spawn("p2", 0, options());
+    manager.disposeAll();
+    expect(events.filter((e) => e.type === "plugin-pty-exit").map((e) => e.id)).toEqual([
+      "p1",
+      "p2",
+    ]);
   });
 
   it("teardown is idempotent when a kill races the child's own exit", () => {
@@ -287,7 +340,9 @@ describe("PluginPtyProcessManager", () => {
     fake.emitExit(0);
     manager.kill("p1", 0, "SIGKILL");
     manager.disposeAll();
-    // Exactly one destroy/kill pair — a double free would crash the host.
+    // Exactly one destroy/kill pair — a double free would crash the host. The
+    // kill after the child already exited is a no-op lookup, not a second free.
+    expect(fake.calls.filter((c) => c === "destroy")).toHaveLength(1);
     expect(fake.calls).toEqual(["destroy", "kill"]);
   });
 

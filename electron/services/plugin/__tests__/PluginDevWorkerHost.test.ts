@@ -137,6 +137,38 @@ describe("PluginDevWorkerHost", () => {
     }
   });
 
+  it("keeps proxy and CA settings so plugin HTTPS calls survive the scrub (#11300)", async () => {
+    // Plugins make network calls from inside this worker (the built-in GitHub
+    // forge provider talks to api.github.com). Proxy endpoints and CA bundles
+    // are transport config, not credentials — dropping them fails every HTTPS
+    // call behind a corporate TLS-inspecting proxy, at runtime, silently.
+    const prev = {
+      HTTPS_PROXY: process.env.HTTPS_PROXY,
+      NO_PROXY: process.env.NO_PROXY,
+      NODE_EXTRA_CA_CERTS: process.env.NODE_EXTRA_CA_CERTS,
+    };
+    process.env.HTTPS_PROXY = "http://corp-proxy:8080";
+    process.env.NO_PROXY = "localhost";
+    process.env.NODE_EXTRA_CA_CERTS = "/etc/ssl/corp-ca.pem";
+    try {
+      const { PluginDevWorkerHost } = await loadModule();
+      const host = new PluginDevWorkerHost(OPTS);
+      host.waitForReady().catch(() => {});
+      void host.start();
+
+      const [, , options] = forkMock.mock.calls[0];
+      expect(options.env.HTTPS_PROXY).toBe("http://corp-proxy:8080");
+      expect(options.env.NO_PROXY).toBe("localhost");
+      expect(options.env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/corp-ca.pem");
+      host.dispose();
+    } finally {
+      for (const [key, value] of Object.entries(prev)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   it("forks the worker with a V8 heap cap in execArgv", async () => {
     const { PluginDevWorkerHost } = await loadModule();
     const host = new PluginDevWorkerHost(OPTS);

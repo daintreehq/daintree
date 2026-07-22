@@ -281,6 +281,68 @@ describe("PluginDevWorkerHostProxy host.process (#10526)", () => {
     expect(sub).toMatchObject({ processId: "p1" });
   });
 
+  it("builds a pipe handle with no writable input when the host reports pipe mode", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.process.spawn("node");
+    resolveCall(proxy, sent, "process.spawn", { id: "p1", mode: "pipe" });
+    const handle: any = await promise;
+    // The shape is what PluginDevWorkerMainBridge's structural check reads, so a
+    // pipe handle carrying write/resize would let a fabricated write through.
+    expect(handle.write).toBeUndefined();
+    expect(handle.resize).toBeUndefined();
+    expect(typeof handle.onData).toBe("function");
+  });
+
+  it("builds an interactive handle whose write/resize post fire-and-forget notifies", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.process.spawn("flutter", { mode: "pty" });
+    resolveCall(proxy, sent, "process.spawn", { id: "p1", mode: "pty" });
+    const handle: any = await promise;
+
+    handle.write("q\n");
+    handle.resize(120, 40);
+    expect(
+      sent.find((m) => m.type === "host-notify" && m.method === "process.write")
+    ).toMatchObject({ params: { processId: "p1", data: "q\n" } });
+    expect(
+      sent.find((m) => m.type === "host-notify" && m.method === "process.resize")
+    ).toMatchObject({ params: { processId: "p1", cols: 120, rows: 40 } });
+  });
+
+  it("trusts the host's reported mode over what the plugin asked for", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.process.spawn("flutter", { mode: "pty" });
+    // The host says it allocated a pipe. Handing back write() anyway would give
+    // the plugin a method that silently goes nowhere.
+    resolveCall(proxy, sent, "process.spawn", { id: "p1", mode: "pipe" });
+    const handle: any = await promise;
+    expect(handle.write).toBeUndefined();
+  });
+
+  it("onData opens a process-data subscription and delivers chunks", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.process.spawn("node");
+    resolveCall(proxy, sent, "process.spawn", { id: "p1", mode: "pipe" });
+    const handle = await promise;
+
+    const onData = vi.fn();
+    const dispose = handle.onData(onData);
+    const sub = sent.find((m) => m.type === "subscribe" && m.kind === "process-data");
+    expect(sub).toMatchObject({ processId: "p1" });
+
+    proxy.handleMessage({
+      type: "subscription-event",
+      subscriptionId: sub.subscriptionId,
+      payload: { stream: "stdout", chunk: "hello" },
+    });
+    expect(onData).toHaveBeenCalledWith({ stream: "stdout", chunk: "hello" });
+
+    dispose();
+    expect(
+      sent.find((m) => m.type === "unsubscribe" && m.subscriptionId === sub.subscriptionId)
+    ).toBeDefined();
+  });
+
   it("propagates a spawn rejection (e.g. missing shell:exec capability)", async () => {
     const { proxy, sent } = makeProxy();
     const promise = proxy.host.process.spawn("node");

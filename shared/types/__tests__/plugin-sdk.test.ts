@@ -420,7 +420,10 @@ describe("plugin-sdk boundary", () => {
           await api.spawn("cmd", { mode: "pty" })
         ).toEqualTypeOf<PluginPtyProcessHandle>();
       };
-      expect(typeof assertTypes).toBe("function");
+      // Compile-time only: `assertTypes` is deliberately never invoked (its
+      // `expectTypeOf` arguments would be evaluated against an empty object).
+      // `void` keeps it referenced without asserting something trivially true.
+      void assertTypes;
     });
 
     it("only the interactive handle carries write/resize", () => {
@@ -430,7 +433,7 @@ describe("plugin-sdk boundary", () => {
         // @ts-expect-error — a pipe-mode process has no writable stdin
         handle.write("x");
       };
-      expect(typeof assertNoPipeWrite).toBe("function");
+      void assertNoPipeWrite;
       expectTypeOf(ptyHandle.write).toEqualTypeOf<(data: string) => void>();
       expectTypeOf(ptyHandle.resize).toEqualTypeOf<(cols: number, rows: number) => void>();
       // onData is on the BASE handle: a pipe-mode plugin must be able to read

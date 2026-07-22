@@ -359,9 +359,14 @@ export class PluginProcessManager {
     if (typeof cb !== "function") {
       throw new Error(`Plugin "${managed.pluginId}" process.onData: callback must be a function`);
     }
+    let disposed = false;
     const first = !managed.hadDataSubscriber;
     managed.hadDataSubscriber = true;
-    managed.dataCallbacks.add(cb);
+    // Not added to the live set once the process has terminated — there is
+    // nothing further to deliver, and holding the closure would pin plugin scope
+    // past unload. The buffered replay below still runs, which is the whole
+    // point for a process that finished before its subscriber attached.
+    if (!managed.terminalOutcome) managed.dataCallbacks.add(cb);
     if (first && managed.earlyData.length > 0) {
       const replay = managed.earlyData;
       managed.earlyData = [];
@@ -369,12 +374,16 @@ export class PluginProcessManager {
       // Replay on the next microtask so the handler runs after `spawn()`
       // resolves, matching live-subscription timing.
       queueMicrotask(() => {
+        // The disposer can run before this microtask does (`const off =
+        // onData(cb); off();`), and delivering afterwards would be a
+        // use-after-dispose. Gate on the closure's own flag rather than set
+        // membership — a terminated process never entered the set at all.
+        if (disposed) return;
         for (const chunk of replay) {
           this.invokeDataCallback(managed, cb, chunk);
         }
       });
     }
-    let disposed = false;
     return () => {
       if (disposed) return;
       disposed = true;
@@ -408,14 +417,17 @@ export class PluginProcessManager {
     this.streamSink(managed.pluginId, { kind: stream, id: managed.id, chunk }, managed.panelId);
     const payload: PluginProcessDataChunk = { stream, chunk };
     if (!managed.hadDataSubscriber) {
+      // Measured in BYTES, not `chunk.length`: a PTY streaming UTF-8 (box
+      // drawing, CJK, emoji) is 2-4x its code-unit count, so a code-unit budget
+      // would let the buffer grow several times past the cap it advertises.
       managed.earlyData.push(payload);
-      managed.earlyDataBytes += chunk.length;
+      managed.earlyDataBytes += Buffer.byteLength(chunk, "utf-8");
       while (
         managed.earlyDataBytes > PLUGIN_PROCESS_EARLY_DATA_CAP_BYTES &&
         managed.earlyData.length > 0
       ) {
         const dropped = managed.earlyData.shift();
-        managed.earlyDataBytes -= dropped?.chunk.length ?? 0;
+        managed.earlyDataBytes -= dropped ? Buffer.byteLength(dropped.chunk, "utf-8") : 0;
       }
       return;
     }
@@ -572,6 +584,9 @@ export class PluginProcessManager {
   }
 
   private handlePtyExit(managed: ManagedProcess, info: PluginPtyExit): void {
+    // Two routes can reach here for one incarnation — a real backend exit and
+    // `startPty`'s orphan-adoption guard — so settle at most once.
+    if (managed.terminalOutcome) return;
     if (managed.killTimer) {
       clearTimeout(managed.killTimer);
       managed.killTimer = null;
@@ -613,7 +628,12 @@ export class PluginProcessManager {
    * `running` forever. Mirrors the pipe path's synchronous-spawn-failure branch.
    */
   private recordStartFailure(managed: ManagedProcess, err: unknown): void {
-    managed.status = "exited";
+    if (managed.terminalOutcome) return;
+    // An allocation that fails AFTER the host asked this process down is not a
+    // crash — the plugin requested the teardown, so reporting `onCrash` would
+    // misattribute an unload to the command.
+    const crashed = !managed.killRequested;
+    managed.status = managed.killRequested ? "killed" : "exited";
     managed.exitCode = null;
     managed.signal = null;
     managed.pid = null;
@@ -623,7 +643,7 @@ export class PluginProcessManager {
       `[PluginProcessManager] spawn for "${managed.pluginId}" threw:`,
       formatErrorMessage(err, "spawn failed")
     );
-    queueMicrotask(() => this.emitTerminal(managed, { exitCode: null, signal: null }, true));
+    queueMicrotask(() => this.emitTerminal(managed, { exitCode: null, signal: null }, crashed));
   }
 
   private startChild(managed: ManagedProcess): void {
@@ -741,8 +761,11 @@ export class PluginProcessManager {
     // Output subscribers die with the process — an exited handle produces no
     // further chunks, and holding the closures would pin plugin scope after unload.
     managed.dataCallbacks.clear();
-    managed.earlyData = [];
-    managed.earlyDataBytes = 0;
+    // `earlyData` deliberately SURVIVES here. A short-lived process can produce
+    // its whole output and exit before the worker's `onData` subscription has
+    // round-tripped; clearing the buffer on exit would make the documented
+    // replay contract fail for exactly the processes that need it most. It is
+    // byte-capped and dies with the record.
   }
 
   /**
@@ -877,12 +900,15 @@ export class PluginProcessManager {
       managed.killTimer = null;
     }
     managed.generation++;
-    const old = managed.ptyBackend;
+    const previous = managed.ptyBackend;
+    // Kill BEFORE releasing: the backend's own guards go false once `dispose()`
+    // drops its transport entry, so a kill issued afterwards is silently swallowed
+    // and the predecessor survives unowned. Force-kill rather than
+    // SIGTERM-then-escalate — the successor is allocating right now, and a
+    // detached predecessor lingering past the grace window would sit outside the
+    // concurrency cap with nothing tracking it.
+    previous?.kill("SIGKILL");
     this.releasePty(managed);
-    // Force-kill rather than SIGTERM-then-escalate: the successor is allocating
-    // right now, and a detached predecessor lingering past the grace window
-    // would sit outside the concurrency cap with nothing tracking it.
-    old?.kill("SIGKILL");
 
     managed.restartCount++;
     managed.killRequested = false;

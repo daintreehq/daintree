@@ -440,6 +440,9 @@ describe("PluginProcessManager", () => {
       await h.manager.spawn("acme.tool", pipeConfig());
       h.fakes[0]!.writeStdout("out");
       await flushMicrotasks();
+      // Assert a specific event exists first — `every` on an empty array is
+      // vacuously true and would pass with the feature removed.
+      expect(h.events.some((e) => e.event.kind === "stdout")).toBe(true);
       expect(h.events.every((e) => e.panelId === null)).toBe(true);
     });
 
@@ -531,6 +534,56 @@ describe("PluginProcessManager", () => {
       // The oldest chunks were dropped, so the newest one survived.
       expect(chunks.at(-1)?.chunk.startsWith(String(chunkCount - 1))).toBe(true);
       expect(chunks[0]?.chunk.startsWith("0")).toBe(false);
+    });
+
+    it("still replays to a subscriber that attaches after the process exited", async () => {
+      // A short-lived process can produce its whole output and exit before the
+      // worker's onData subscription has round-tripped. Clearing the buffer on
+      // exit would break the replay contract for exactly those processes.
+      const h = makeHarness();
+      const handle = await h.manager.spawn("acme.tool", pipeConfig());
+      h.fakes[0]!.writeStdout("all-of-it");
+      await flushMicrotasks();
+      h.fakes[0]!.emitExit(0, null);
+      await flushMicrotasks();
+
+      const chunks: PluginProcessDataChunk[] = [];
+      handle.onData((c) => chunks.push(c));
+      await flushMicrotasks();
+      expect(chunks).toEqual([{ stream: "stdout", chunk: "all-of-it" }]);
+    });
+
+    it("does not replay to a subscriber disposed before the replay ran", async () => {
+      const h = makeHarness();
+      const handle = await h.manager.spawn("acme.tool", pipeConfig());
+      h.fakes[0]!.writeStdout("buffered");
+      await flushMicrotasks();
+
+      const chunks: PluginProcessDataChunk[] = [];
+      // Subscribe and immediately dispose — the replay is queued in a microtask,
+      // so delivering it would be a use-after-dispose.
+      const off = handle.onData((c) => chunks.push(c));
+      off();
+      await flushMicrotasks();
+      expect(chunks).toHaveLength(0);
+    });
+
+    it("measures the replay cap in BYTES, not UTF-16 code units", async () => {
+      // "界".repeat(n) has length n but 3n bytes in UTF-8. A code-unit budget
+      // would let the buffer grow ~3x past the cap it advertises.
+      const h = makeHarness();
+      const handle = await h.manager.spawn("acme.tool", pipeConfig());
+      const wide = "界".repeat(8 * 1024);
+      const chunkCount = Math.ceil(PLUGIN_PROCESS_EARLY_DATA_CAP_BYTES / (wide.length * 3)) + 3;
+      for (let i = 0; i < chunkCount; i++) h.fakes[0]!.writeStdout(wide);
+      await flushMicrotasks();
+
+      const chunks: PluginProcessDataChunk[] = [];
+      handle.onData((c) => chunks.push(c));
+      await flushMicrotasks();
+
+      const bytes = chunks.reduce((n, c) => n + Buffer.byteLength(c.chunk, "utf-8"), 0);
+      expect(bytes).toBeLessThanOrEqual(PLUGIN_PROCESS_EARLY_DATA_CAP_BYTES);
     });
 
     it("stops delivering after the disposer runs", async () => {
@@ -747,6 +800,65 @@ describe("PluginProcessManager", () => {
       expect(h.manager.list("acme.tool")[0]?.status).toBe("killed");
       // The backend was released, so its host-side entry can be torn down.
       expect(h.ptys[0]!.disposed).toBe(true);
+    });
+
+    it("force-kills the predecessor BEFORE releasing it on restart", async () => {
+      // The backend's own guards go false once dispose() drops its transport
+      // entry, so a kill issued afterwards is silently swallowed and the
+      // predecessor survives unowned, outside the concurrency cap.
+      const killOrder: string[] = [];
+      const ptys: ReturnType<typeof makeFakePty>[] = [];
+      const manager = new PluginProcessManager({
+        streamSink: () => {},
+        ptySpawner: () => {
+          const fake = makeFakePty();
+          const backend = fake.backend;
+          ptys.push(fake);
+          return Promise.resolve({
+            ...backend,
+            kill: (signal) => {
+              killOrder.push(`kill:${signal}`);
+              backend.kill(signal);
+            },
+            dispose: () => {
+              killOrder.push("dispose");
+              backend.dispose();
+            },
+          });
+        },
+      });
+      const handle = await manager.spawn("acme.tool", ptyConfig());
+      killOrder.length = 0;
+      await handle.restart();
+      expect(killOrder.slice(0, 2)).toEqual(["kill:SIGKILL", "dispose"]);
+    });
+
+    it("does not report a crash when an allocation fails after the host asked it down", async () => {
+      let release: ((error: Error) => void) | undefined;
+      const manager = new PluginProcessManager({
+        streamSink: () => {},
+        ptySpawner: () =>
+          new Promise<ManagedPtyBackend>((_resolve, reject) => {
+            release = reject;
+          }),
+      });
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const pending = manager.spawn("acme.tool", ptyConfig());
+      manager.killAll("acme.tool");
+      release?.(new Error("host gone"));
+      const handle = await pending;
+      const crashes: unknown[] = [];
+      const exits: unknown[] = [];
+      handle.onCrash(() => crashes.push(true));
+      handle.onExit(() => exits.push(true));
+      await flushMicrotasks();
+
+      // The plugin requested the teardown — reporting onCrash would blame the
+      // command for an unload.
+      expect(crashes).toHaveLength(0);
+      expect(exits).toHaveLength(1);
+      expect(manager.list("acme.tool")[0]?.status).toBe("killed");
+      errorSpy.mockRestore();
     });
 
     it("kills a PTY that finishes allocating after the process was torn down", async () => {

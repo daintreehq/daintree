@@ -70,8 +70,13 @@ function makeClient(opts?: { respondOnSpawn?: boolean }) {
     },
     emit: (event: PluginPtyHostEvent) => emitter.emit("plugin-pty", event),
     emitHostCrash: (code = -1) => emitter.emit("host-crash", code),
+    emitHostCrashDetails: () => emitter.emit("host-crash-details", { crashType: "crashed" }),
     get listenerCount() {
-      return emitter.listenerCount("plugin-pty") + emitter.listenerCount("host-crash");
+      return (
+        emitter.listenerCount("plugin-pty") +
+        emitter.listenerCount("host-crash") +
+        emitter.listenerCount("host-crash-details")
+      );
     },
   };
 }
@@ -191,6 +196,68 @@ describe("PluginPtyTransport", () => {
     backend.resize(80, 0);
     backend.resize(80.5, 24);
     expect(c.sent.filter((m) => m.kind === "resize")).toHaveLength(0);
+  });
+
+  it("settles on a recoverable host crash, not only on give-up", async () => {
+    // PtyClient emits `host-crash` ONLY after the restart budget is exhausted;
+    // an ordinary crash-and-restart emits `host-crash-details`. Listening to the
+    // former alone leaves every plugin PTY wedged in `running` through the
+    // crashes that actually happen.
+    const c = makeClient();
+    const transport = new PluginPtyTransport(c.client);
+    const backend = await transport.spawn("p1", 0, options());
+    const exits: unknown[] = [];
+    backend.onExit((info) => exits.push(info));
+
+    c.emitHostCrashDetails();
+    expect(exits).toHaveLength(1);
+  });
+
+  it("holds output that arrives before the caller subscribes, then drains it in order", async () => {
+    // The host wires its onData before announcing the spawn, so a daemon that
+    // greets immediately emits before `spawn()` resolves and the manager
+    // subscribes. Dropping it would lose a `--machine` handshake.
+    const c = makeClient({ respondOnSpawn: false });
+    const transport = new PluginPtyTransport(c.client);
+    const pending = transport.spawn("p1", 0, options());
+    c.emit({ type: "plugin-pty-data", id: "p1", generation: 0, data: "greet-1" });
+    c.emit({ type: "plugin-pty-data", id: "p1", generation: 0, data: "greet-2" });
+    c.emit({
+      type: "plugin-pty-spawn-result",
+      id: "p1",
+      generation: 0,
+      result: { success: true, pid: 1 },
+    });
+    const backend = await pending;
+
+    const chunks: string[] = [];
+    backend.onData((d) => chunks.push(d));
+    expect(chunks).toEqual(["greet-1", "greet-2"]);
+
+    c.emit({ type: "plugin-pty-data", id: "p1", generation: 0, data: "live" });
+    expect(chunks).toEqual(["greet-1", "greet-2", "live"]);
+  });
+
+  it("settles a displaced allocation immediately instead of leaving it to time out", async () => {
+    // Two restarts issued without awaiting the first: generation 1's result is
+    // filtered out by generation 2, so nothing would ever settle its promise.
+    vi.useFakeTimers();
+    const c = makeClient({ respondOnSpawn: false });
+    const transport = new PluginPtyTransport(c.client, 10_000);
+    const firstAttempt = transport.spawn("p1", 1, options());
+    const secondAttempt = transport.spawn("p1", 2, options());
+    c.emit({
+      type: "plugin-pty-spawn-result",
+      id: "p1",
+      generation: 2,
+      result: { success: true, pid: 7 },
+    });
+
+    await expect(firstAttempt).rejects.toThrow();
+    await expect(secondAttempt).resolves.toBeDefined();
+    // The displaced incarnation is force-killed so a late allocation for it
+    // can't survive unowned.
+    expect(c.sent).toContainEqual({ kind: "kill", id: "p1", generation: 1, payload: "SIGKILL" });
   });
 
   it("synthesizes an exit for every live PTY when the pty-host crashes", async () => {
