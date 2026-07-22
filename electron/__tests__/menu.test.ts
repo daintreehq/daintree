@@ -1015,7 +1015,11 @@ describe("handleDirectoryOpen non-repository folders", () => {
   });
 
   it("sends to the window the open came from, not a global one", async () => {
-    const otherWindowContents = { isDestroyed: () => false, isLoadingMainFrame: () => false, send: vi.fn() };
+    const otherWindowContents = {
+      isDestroyed: () => false,
+      isLoadingMainFrame: () => false,
+      send: vi.fn(),
+    };
     getAppWebContentsMock.mockImplementation((win: { id: number }) =>
       win.id === 3 ? mockWebContents : otherWindowContents
     );
