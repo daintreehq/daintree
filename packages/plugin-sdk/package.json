@@ -34,9 +34,17 @@
     "prepare": "tsup"
   },
   "peerDependencies": {
+    "react": "^19.0.0",
     "zod": "^4.0.0"
   },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "@types/react": "^19.0.0",
+    "react": "^19.2.1",
     "tsup": "^8.5.0",
     "zod": "^4.3.6"
   }

@@ -47,6 +47,15 @@ describe("scaffoldPlugin", () => {
       expect((pkg.scripts as Record<string, string>).package).toContain("daintree-plugin package");
       await expect(fs.access(path.join(result.dir, "src", "index.ts"))).resolves.toBeUndefined();
       await expect(fs.access(path.join(result.dir, ".gitignore"))).resolves.toBeUndefined();
+
+      // The starter .dntrignore documents the mechanism but must not actually
+      // drop anything from a fresh plugin — every rule ships commented out.
+      const dntrignore = await fs.readFile(path.join(result.dir, ".dntrignore"), "utf8");
+      const activeRules = dntrignore
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line && !line.startsWith("#"));
+      expect(activeRules).toEqual([]);
     });
   }
 

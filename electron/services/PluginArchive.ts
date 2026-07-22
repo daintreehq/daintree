@@ -79,6 +79,11 @@ const SOURCEMAP_EXTS = new Set([".js.map", ".mjs.map"]);
 // declared assets, so these are excluded from packing AND rejected by
 // {@link verifyPluginArchive}.
 const ROOT_DEV_FILE_NAMES: ReadonlySet<string> = new Set([
+  // The author's own shipping-policy ignore file (see the CLI packager). It
+  // describes what to leave out; shipping it would be pointless noise, and it
+  // has to be named here because this packer walks the tree with `readdir` and
+  // so — unlike the CLI's globby pass — does not skip dotfiles.
+  ".dntrignore",
   "package.json",
   "package-lock.json",
   "npm-shrinkwrap.json",

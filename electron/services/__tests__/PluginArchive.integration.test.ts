@@ -603,6 +603,14 @@ describe("isExcludedArchiveEntry (shared CLI exclusion predicate)", () => {
     expect(isExcludedArchiveEntry("tsconfig.build.json")).toBe(true);
   });
 
+  it("excludes the author's root-level .dntrignore but not a nested one", () => {
+    // It states what to leave out, so shipping it is pointless — and this
+    // packer walks with readdir, so unlike the CLI's globby pass it would
+    // otherwise include the dotfile.
+    expect(isExcludedArchiveEntry(".dntrignore")).toBe(true);
+    expect(isExcludedArchiveEntry("dist/.dntrignore")).toBe(false);
+  });
+
   it("excludes root-level build configs", () => {
     expect(isExcludedArchiveEntry("vite.config.ts")).toBe(true);
     expect(isExcludedArchiveEntry("vite.config.server.ts")).toBe(true);
