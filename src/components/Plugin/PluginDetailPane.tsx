@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AlertCircle, AlertTriangle, RefreshCw, Trash2 } from "lucide-react";
 import {
   getPluginCategoryMeta,
@@ -297,6 +297,15 @@ export function PluginDetailPane({
   // guard can't drift apart the way they did before.
   const isVisibleTab = (id: string): id is PluginDetailTab => tabs.some((t) => t.id === id);
   const currentTab: PluginDetailTab = isVisibleTab(activeTab) ? activeTab : "overview";
+
+  // The derivation above keeps the RENDER correct, but `activeTab` itself would
+  // stay pointing at the vanished tab — so a later reinstall that restores it
+  // would teleport the user back there without them asking. Fold the fallback
+  // into state once the tab set has actually changed. Ordinary local UI state
+  // sync, unrelated to the single-data-loading-effect rule (#4958).
+  useEffect(() => {
+    if (currentTab !== activeTab) setActiveTab(currentTab);
+  }, [currentTab, activeTab]);
 
   return (
     <div className="text-daintree-text">

@@ -1,5 +1,5 @@
 import { ipcMain, dialog, BrowserWindow, net } from "electron";
-import { open, writeFile, rm, access } from "node:fs/promises";
+import { open, writeFile, rm, access, stat } from "node:fs/promises";
 import { createWriteStream } from "node:fs";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -145,6 +145,18 @@ async function validateDntrArchivePath(archivePath: string): Promise<PluginInsta
   if (extname(archivePath).toLowerCase() !== ".dntr") {
     return fail("Only .dntr files can be installed");
   }
+  // Require a REGULAR file before opening it. `open()` on a FIFO blocks forever
+  // when no writer exists, and the extension check alone doesn't stop someone
+  // dropping a `pipe.dntr` — that would wedge the IPC call and strand its
+  // install job with no timeout to rescue it. `stat` follows symlinks, so a
+  // symlink to a real archive still installs.
+  try {
+    if (!(await stat(archivePath)).isFile()) {
+      return fail("That path isn't a regular file");
+    }
+  } catch {
+    return fail("Couldn't read the dropped file");
+  }
   let header: Buffer;
   try {
     const fh = await open(archivePath, "r");
@@ -200,19 +212,27 @@ const INSTALL_JOB_ID_PATTERN = /^[0-9a-fA-F-]{8,64}$/;
  * The `finally` is the only place a record is dropped — cancellation merely
  * aborts the signal, and the install's own `finally` still owns the staging
  * directory and the install lock.
+ *
+ * `run` receives the id to actually use, which is `undefined` whenever the job
+ * could not be registered. That matters: the installer resolves its signal by
+ * looking the id up in the process-wide registry, so running with an id owned
+ * by a DIFFERENT live install would splice the two together — cancelling one
+ * would abort the other, either could commit the other's record, and progress
+ * would be pushed to the wrong window. Better to install without progress than
+ * to install under someone else's job.
  */
 async function withInstallJob(
   ctx: IpcContext,
   jobId: string | undefined,
-  run: () => Promise<PluginInstallResult>
+  run: (effectiveJobId: string | undefined) => Promise<PluginInstallResult>
 ): Promise<PluginInstallResult> {
-  if (!jobId || !INSTALL_JOB_ID_PATTERN.test(jobId)) return run();
+  if (!jobId || !INSTALL_JOB_ID_PATTERN.test(jobId)) return run(undefined);
   const registered = pluginInstallJobs.begin(jobId, (event) => {
     sendToRendererContext(ctx, CHANNELS.PLUGIN_INSTALL_PROGRESS, event);
   });
-  if (!registered) return run();
+  if (!registered) return run(undefined);
   try {
-    return await run();
+    return await run(jobId);
   } finally {
     pluginInstallJobs.end(jobId);
   }
@@ -252,7 +272,7 @@ async function handleInstallFromFile(
   }
   // The job starts once a path exists — time spent in the native picker isn't
   // install progress, and a Cancel button for it would duplicate the picker's own.
-  return withInstallJob(ctx, jobId, () => handleInstallFromPath(result.filePaths[0]!, jobId));
+  return withInstallJob(ctx, jobId, (id) => handleInstallFromPath(result.filePaths[0]!, id));
 }
 
 // Bounded download limits for install-from-URL (F24). Mirrors the spec in
@@ -305,7 +325,7 @@ async function handleInstallFromPathOp(
   path: string,
   jobId?: string
 ): Promise<PluginInstallResult> {
-  return withInstallJob(ctx, jobId, () => handleInstallFromPath(path, jobId));
+  return withInstallJob(ctx, jobId, (id) => handleInstallFromPath(path, id));
 }
 
 /** Namespace entry for install-from-URL — registers the job, then delegates. */
@@ -314,7 +334,7 @@ async function handleInstallFromUrlOp(
   url: string,
   jobId?: string
 ): Promise<PluginInstallResult> {
-  return withInstallJob(ctx, jobId, () => handleInstallFromUrl(url, jobId));
+  return withInstallJob(ctx, jobId, (id) => handleInstallFromUrl(url, id));
 }
 
 /**

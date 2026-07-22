@@ -440,17 +440,6 @@ export async function extractPluginArchive(
 ): Promise<void> {
   const inactivityMs = opts?.inactivityTimeoutMs ?? PLUGIN_ARCHIVE_ENTRY_INACTIVITY_MS;
   const totalMs = opts?.totalDeadlineMs ?? PLUGIN_ARCHIVE_TOTAL_DEADLINE_MS;
-  const stat = await fs.stat(archivePath);
-  if (stat.size > MAX_DNTR_BYTES) {
-    throw new Error(`Archive size ${stat.size} exceeds ${MAX_DNTR_BYTES} byte limit`);
-  }
-
-  const root = path.resolve(destDir);
-  const zipfile = await openZip(archivePath);
-  if (zipfile.entryCount > MAX_DNTR_ENTRIES) {
-    zipfile.close();
-    throw new Error(`Archive exceeds ${MAX_DNTR_ENTRIES} entry limit`);
-  }
 
   // Absolute deadline + caller cancellation, composed once for the whole
   // extraction. A dedicated controller (rather than `AbortSignal.timeout`) so
@@ -459,6 +448,14 @@ export async function extractPluginArchive(
   // and would fall through the `reason instanceof Error` unwrap below. Cleared
   // in the `finally` so a fast extraction doesn't leave a 2-minute timer
   // holding the event loop.
+  //
+  // Armed BEFORE the first archive I/O: `fs.stat` and `openZip` on a stalled
+  // network/FUSE mount are themselves unbounded, and the caller is already
+  // holding `install.lock` and a staging dir by the time we get here. Neither
+  // call takes a signal, so the deadline can't interrupt one mid-flight — but
+  // checking either side of them bounds the damage to a single hung syscall
+  // instead of the whole extraction, and honours a cancel that landed while we
+  // were queued.
   const deadlineController = new AbortController();
   const deadlineTimer = setTimeout(
     () =>
@@ -473,7 +470,34 @@ export async function extractPluginArchive(
     ? AbortSignal.any([deadlineController.signal, opts.signal])
     : deadlineController.signal;
 
+  /** The abort reason as an Error, for throwing out of the pre-flight checks. */
+  const abortError = (): Error =>
+    outerSignal.reason instanceof Error
+      ? outerSignal.reason
+      : new Error("Extraction was cancelled");
+
   try {
+    if (outerSignal.aborted) throw abortError();
+
+    const stat = await fs.stat(archivePath);
+    if (stat.size > MAX_DNTR_BYTES) {
+      throw new Error(`Archive size ${stat.size} exceeds ${MAX_DNTR_BYTES} byte limit`);
+    }
+    if (outerSignal.aborted) throw abortError();
+
+    const root = path.resolve(destDir);
+    const zipfile = await openZip(archivePath);
+    // Anything that throws past this point must close the zip, or the archive's
+    // file descriptor leaks for the life of the process.
+    if (zipfile.entryCount > MAX_DNTR_ENTRIES) {
+      zipfile.close();
+      throw new Error(`Archive exceeds ${MAX_DNTR_ENTRIES} entry limit`);
+    }
+    if (outerSignal.aborted) {
+      zipfile.close();
+      throw abortError();
+    }
+
     return await runExtraction(zipfile, root, {
       inactivityMs,
       outerSignal,
@@ -534,6 +558,13 @@ function runExtraction(
     outerSignal.addEventListener("abort", onOuterAbort, { once: true });
 
     zipfile.on("entry", (entry: yauzl.Entry) => {
+      // yauzl's `close()` only flips its `isOpen` flag — a central-directory
+      // read already in flight when we aborted still emits its entry. Without
+      // this guard a cancelled extraction would keep reporting progress and,
+      // worse, `mkdir` a staging directory the installer's cleanup had already
+      // removed, resurrecting `.install-tmp-*` after the install gave up.
+      if (settled) return;
+
       const name = normalizePath(entry.fileName);
 
       if (++entryCount > MAX_DNTR_ENTRIES) {
@@ -571,17 +602,32 @@ function runExtraction(
         return fail(new Error(`Entry "${name}" escapes the extraction directory`));
       }
 
-      // Directory entry — create and advance.
+      // Directory entry — create and advance. The `settled` recheck stops a
+      // cancelled extraction from recreating directories under a staging tree
+      // the caller has already reaped.
       if (name.endsWith("/")) {
-        fs.mkdir(resolved, { recursive: true }).then(() => zipfile.readEntry(), fail);
+        fs.mkdir(resolved, { recursive: true }).then(() => {
+          if (!settled) zipfile.readEntry();
+        }, fail);
         return;
       }
 
-      onEntry?.(name);
+      // Progress reporting must never be able to kill the extraction. This runs
+      // from a yauzl EventEmitter callback, OUTSIDE the promise executor, so an
+      // uncaught throw here would escape as a main-process exception (which
+      // Daintree's global handler turns into a relaunch) rather than a rejection.
+      try {
+        onEntry?.(name);
+      } catch (err) {
+        return fail(err instanceof Error ? err : new Error(String(err)));
+      }
 
       fs.mkdir(path.dirname(resolved), { recursive: true }).then(() => {
+        // The abort may have landed while the mkdir was in flight.
+        if (settled) return;
         zipfile.openReadStream(entry, (err, stream) => {
           if (err) return fail(err);
+          if (settled) return stream.destroy();
           const out = createWriteStream(resolved, { mode: 0o644 });
 
           // Abort the transfer if the entry stalls. `pipeline` destroys both

@@ -527,8 +527,9 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
       {/* Top-level, not inside the install controls: a drop-install and a URL
           install start from different surfaces but report to the same place. */}
       <PluginInstallProgressBanner
-        isInstalling={pm.isInstalling}
+        isInstalling={pm.hasActiveInstallJob}
         progress={pm.installProgress}
+        cancelRequested={pm.cancelRequested}
         onCancel={pm.cancelActiveInstall}
       />
 

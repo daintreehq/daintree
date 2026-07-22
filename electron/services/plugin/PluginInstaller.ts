@@ -246,10 +246,23 @@ export class PluginInstaller {
     archivePath: string,
     opts?: PluginInstallOptions
   ): Promise<PluginInstallResult> {
-    const fail = (code: PluginInstallErrorCode, message: string): PluginInstallResult => ({
-      status: "failed",
-      errors: [{ code, message }],
-    });
+    // Progress + cancellation ride an optional caller-minted job (#11302). With
+    // no `jobId` every registry call below is a no-op and the install behaves
+    // exactly as it did before, minus the extraction deadline, which applies
+    // unconditionally.
+    const jobId = opts?.jobId;
+    const jobSignal = pluginInstallJobs.signal(jobId);
+    const cancelled: PluginInstallResult = { status: "cancelled" };
+
+    // A cancel the user already asked for outranks whatever error the
+    // now-doomed operation happens to surface. Without this, cancelling during
+    // (say) `computeArchiveHash` and having the underlying read then fail with
+    // EIO would report `hash_failed` — blaming the archive for something the
+    // user deliberately stopped. Safe past the commit point too: `commit()`
+    // refuses once aborted, so reaching the post-swap failure paths proves no
+    // cancel was ever accepted.
+    const fail = (code: PluginInstallErrorCode, message: string): PluginInstallResult =>
+      jobSignal?.aborted === true ? cancelled : { status: "failed", errors: [{ code, message }] };
 
     await fs.mkdir(this.pluginsRoot, { recursive: true });
 
@@ -286,13 +299,6 @@ export class PluginInstaller {
         `Couldn't acquire the plugin install lock: ${(err as Error).message}`
       );
     }
-
-    // Progress + cancellation ride an optional caller-minted job (#11302). With
-    // no `jobId` every call below is a no-op and the install behaves exactly as
-    // it did before, minus the extraction deadline, which applies unconditionally.
-    const jobId = opts?.jobId;
-    const jobSignal = pluginInstallJobs.signal(jobId);
-    const cancelled: PluginInstallResult = { status: "cancelled" };
 
     let tmpDir: string | null = null;
     try {

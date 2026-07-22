@@ -16,12 +16,21 @@ export const PLUGIN_INSTALL_PROGRESS_THROTTLE_MS = 150;
  * `AbortSignal.any` composition so the installer can tell "cancelled" apart
  * from a stall or the extraction deadline and return `{ status: "cancelled" }`
  * instead of a failure the user never caused.
+ *
+ * A distinct class, not a sentinel message: the extraction seam surfaces
+ * archive-controlled errors, and identifying a cancel by string equality would
+ * let one whose message happened to match be reported as the user's own doing.
  */
-export const PLUGIN_INSTALL_CANCELLED_REASON = "plugin-install-cancelled";
+export class PluginInstallCancelledError extends Error {
+  constructor() {
+    super("Plugin install was cancelled");
+    this.name = "PluginInstallCancelledError";
+  }
+}
 
 /** True when `err` is the abort reason {@link PluginInstallJobRegistry.cancel} raises. */
 export function isInstallCancellation(err: unknown): boolean {
-  return err instanceof Error && err.message === PLUGIN_INSTALL_CANCELLED_REASON;
+  return err instanceof PluginInstallCancelledError;
 }
 
 type Emit = (event: PluginInstallProgressEvent) => void;
@@ -153,7 +162,7 @@ export class PluginInstallJobRegistry {
     if (!job || !job.cancellable) return false;
     if (job.controller.signal.aborted) return false;
     this.clearTimer(job);
-    job.controller.abort(new Error(PLUGIN_INSTALL_CANCELLED_REASON));
+    job.controller.abort(new PluginInstallCancelledError());
     return true;
   }
 

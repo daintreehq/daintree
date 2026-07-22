@@ -371,6 +371,25 @@ describe("PluginDetailPane content-gated tabs (#11302)", () => {
     expect(screen.getByRole("tab", { name: "Overview" }).getAttribute("aria-selected")).toBe(
       "true"
     );
+
+    // The vanished tab must not resurrect as active when a later version brings
+    // it back — deriving the rendered tab alone would leave `activeTab` pointing
+    // at "settings", teleporting the user there without them asking.
+    rerender(
+      <TooltipProvider>
+        <PluginDetailPane
+          plugin={withSettings}
+          checkingUpdate={false}
+          upToDate={false}
+          onUninstall={vi.fn()}
+          onCheckForUpdate={vi.fn()}
+        />
+      </TooltipProvider>
+    );
+    expect(screen.getByRole("tab", { name: "Settings" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Overview" }).getAttribute("aria-selected")).toBe(
+      "true"
+    );
   });
 });
 
@@ -425,7 +444,12 @@ describe("PluginDetailPane overview contributions (#11302)", () => {
     // Only the host's effectiveDanger is authoritative; rendering the plugin's
     // own claim here would read as a host guarantee it never made.
     renderOverview(withContributes({ commands: [{ ...COMMAND, danger: "confirm" }] }));
-    expect(screen.queryByText(/confirm/i)).toBeNull();
+    // Anchor on the row actually existing first — a bare "no /confirm/ anywhere"
+    // assertion would also pass if commands stopped rendering entirely.
+    const row = screen.getByText("Say hello").closest("li");
+    expect(row).toBeTruthy();
+    if (!row) return;
+    expect(within(row).queryByText(/confirm/i)).toBeNull();
   });
 
   it("names each contributed panel and how to open it", () => {

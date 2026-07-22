@@ -2171,13 +2171,52 @@ describe("plugin install jobs (#11302)", () => {
   it("ignores a malformed jobId rather than registering it", async () => {
     const file = join(tmpdir(), `plugin-job-bad-${process.pid}.dntr`);
     await writeFile(file, Buffer.from([0x50, 0x4b, 0x03, 0x04]));
-    mockInstallPlugin.mockResolvedValue({ status: "installed", pluginId: "acme.job" });
+    const BAD_ID = "../../etc/passwd";
+    // Inspect DURING the install: the wrapper's `finally` reaps the record
+    // either way, so checking after the handler returns would pass even if the
+    // malformed id had been accepted.
+    let registeredDuringInstall: AbortSignal | undefined;
+    let optsDuringInstall: unknown;
+    mockInstallPlugin.mockImplementation((_p: string, opts: unknown) => {
+      registeredDuringInstall = pluginInstallJobs.signal(BAD_ID);
+      optsDuringInstall = opts;
+      return Promise.resolve({ status: "installed", pluginId: "acme.job" });
+    });
     try {
       const handler = getHandler("plugin:install-from-path");
       // Not UUID-shaped: a compromised renderer must not be able to push
       // arbitrary strings into the registry or the progress payload.
-      await handler({ sender: { id: 1 } }, file, "../../etc/passwd");
-      expect(pluginInstallJobs.signal("../../etc/passwd")).toBeUndefined();
+      await handler({ sender: { id: 1 } }, file, BAD_ID);
+      expect(registeredDuringInstall).toBeUndefined();
+      // ...and the rejected id must not reach the installer either.
+      expect(optsDuringInstall).toBeUndefined();
+    } finally {
+      await rm(file, { force: true });
+    }
+  });
+
+  it("installs without a job rather than joining an id another install already owns", async () => {
+    // Two installs under one id would share a controller and an emitter:
+    // cancelling one would abort the other, either could commit the other's
+    // record, and progress would be pushed to the wrong window. The second must
+    // therefore run detached — no progress — rather than latch onto the first.
+    const file = join(tmpdir(), `plugin-job-dup-${process.pid}.dntr`);
+    await writeFile(file, Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+    const firstEmit = vi.fn();
+    pluginInstallJobs.begin(JOB_ID, firstEmit);
+    let optsDuringInstall: unknown = "unset";
+    mockInstallPlugin.mockImplementation((_p: string, opts: unknown) => {
+      optsDuringInstall = opts;
+      return Promise.resolve({ status: "installed", pluginId: "acme.job" });
+    });
+    try {
+      const handler = getHandler("plugin:install-from-path");
+      await handler({ sender: { id: 1 } }, file, JOB_ID);
+      expect(optsDuringInstall).toBeUndefined();
+      // The pre-existing owner's emitter never saw the interloper's progress.
+      expect(firstEmit).not.toHaveBeenCalled();
+      // ...and its job survived the second install's teardown.
+      expect(pluginInstallJobs.signal(JOB_ID)).toBeDefined();
     } finally {
       await rm(file, { force: true });
     }

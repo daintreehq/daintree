@@ -278,10 +278,13 @@ describe("installPlugin — cancellation (#11302)", () => {
     const service = new PluginService(pluginsRoot, "0.0.0");
     const jobId = "cancel-mid";
 
-    // Cancel the instant extraction reports its first entry, so the abort lands
-    // inside `extractPluginArchive` rather than at a checkpoint between steps.
+    // Cancel on the first ENTRY report, not the phase transition. The
+    // `extracting` phase is emitted BEFORE `extractPluginArchive` is called, so
+    // cancelling there would be caught by the post-extraction checkpoint and the
+    // test would pass even if the signal were never threaded into extraction at
+    // all. An entry event only exists once extraction is genuinely under way.
     pluginInstallJobs.begin(jobId, (event) => {
-      if (event.phase === "extracting") pluginInstallJobs.cancel(jobId);
+      if (event.entry !== undefined) pluginInstallJobs.cancel(jobId);
     });
     const result = await service.installPlugin(archive, { jobId });
     pluginInstallJobs.end(jobId);

@@ -173,6 +173,19 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   // state, so the subscription below can stay mounted-once and never re-bind.
   const installJobIdRef = useRef<string | null>(null);
   const [installProgress, setInstallProgress] = useState<PluginInstallProgressEvent | null>(null);
+  // Whether ANY install job is in flight. The banner gates on this rather than
+  // on `isInstalling`, because the pre-existing activity booleans are per-entry-
+  // point (`isInstalling` for file/URL/drop, `isReinstalling` for an update) and
+  // are cleared unconditionally by whichever call settles first — so a
+  // reinstall would show no banner at all, and a superseded install's `finally`
+  // could hide its successor's. This one is owned solely by `runInstallJob` and
+  // cleared under the same job-identity guard as the progress state.
+  const [hasActiveInstallJob, setHasActiveInstallJob] = useState(false);
+  // Set the moment the user clicks Cancel, so the button stops accepting
+  // clicks before main answers. Never unset here: either the install ends (and
+  // `runInstallJob` clears it) or main refused because the install already
+  // committed — in which case there is nothing left to cancel either way.
+  const [cancelRequested, setCancelRequested] = useState(false);
 
   // Progress subscription. Its own mount-once effect with no dependencies —
   // folding it into the `refreshKey` loading effect would resubscribe on every
@@ -196,26 +209,31 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     const jobId = crypto.randomUUID();
     installJobIdRef.current = jobId;
     setInstallProgress(null);
+    setCancelRequested(false);
+    setHasActiveInstallJob(true);
     try {
       return await run(jobId);
     } finally {
       if (installJobIdRef.current === jobId) {
         installJobIdRef.current = null;
         setInstallProgress(null);
+        setCancelRequested(false);
+        setHasActiveInstallJob(false);
       }
     }
   };
 
   /**
-   * Ask main to abort the in-flight install. Deliberately does NOT clear local
-   * state: the original install promise is still pending and owns the teardown,
-   * and main may refuse (the install has passed its commit point) — in which
-   * case the banner should keep showing the real state rather than a cancel that
-   * didn't happen.
+   * Ask main to abort the in-flight install. Deliberately does NOT clear the
+   * install state: the original install promise is still pending and owns the
+   * teardown, and main may refuse (the install has passed its commit point) —
+   * in which case the banner should keep showing the real state rather than a
+   * cancel that didn't happen.
    */
   const cancelActiveInstall = () => {
     const jobId = installJobIdRef.current;
-    if (!jobId) return;
+    if (!jobId || cancelRequested) return;
+    setCancelRequested(true);
     safeFireAndForget(window.electron.plugin.cancelInstall(jobId), {
       context: "usePluginManager.cancelActiveInstall",
     });
@@ -772,6 +790,12 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     }
     reinstallingRef.current = true;
     setIsReinstalling(true);
+    // Dismiss the update confirm before the download starts. It has served its
+    // purpose (the user accepted), and leaving it up would stack a modal over
+    // the progress banner — burying the Cancel button behind the very dialog
+    // the user just dismissed. `advanceUpdateQueue` below still drives the
+    // batch; it sets the next `pendingUpdate` itself and never reads this one.
+    setPendingUpdate(null);
     try {
       setError(null);
       const result = await runInstallJob((jobId) =>
@@ -816,7 +840,9 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     urlInput,
     setUrlInput,
     isInstalling,
+    hasActiveInstallJob,
     installProgress,
+    cancelRequested,
     cancelActiveInstall,
     handleInstallFromFile,
     handleInstallFromUrl,

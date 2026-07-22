@@ -460,21 +460,34 @@ describe("extractPluginArchive cancellation and absolute deadline (#11302)", () 
     // A stream that keeps emitting just often enough to reset the per-entry
     // watchdog forever — exactly the case the inactivity timer cannot catch.
     const timers: ReturnType<typeof setInterval>[] = [];
+    let chunksPushed = 0;
     const spy = vi
       .spyOn(yauzl.ZipFile.prototype, "openReadStream")
       .mockImplementation((_entry, callback) => {
         const trickle = new Readable({ read() {} });
-        timers.push(setInterval(() => trickle.push(Buffer.from("x")), 5));
+        timers.push(
+          setInterval(() => {
+            chunksPushed++;
+            trickle.push(Buffer.from("x"));
+          }, 10)
+        );
         callback(null, trickle);
       });
 
     try {
       await expect(
         extractPluginArchive(archivePath, dest, {
-          inactivityTimeoutMs: 5_000,
-          totalDeadlineMs: 60,
+          // Deliberately far apart: the inactivity watchdog must never be what
+          // fires, and the budget must be wide enough that the trickle has
+          // demonstrably started before the deadline lands. A budget so tight it
+          // expires before the first chunk would pass without proving anything.
+          inactivityTimeoutMs: 10_000,
+          totalDeadlineMs: 300,
         })
       ).rejects.toThrow(PluginArchiveDeadlineError);
+      // Proof the stream was alive throughout — a dead stream would have been
+      // the inactivity watchdog's job, not the deadline's.
+      expect(chunksPushed).toBeGreaterThan(1);
     } finally {
       for (const t of timers) clearInterval(t);
       spy.mockRestore();
@@ -497,17 +510,22 @@ describe("extractPluginArchive cancellation and absolute deadline (#11302)", () 
     }
   });
 
-  it("still reports a genuine stream failure that races a cancel", async () => {
+  it("still reports a genuine stream failure that beats a real cancel", async () => {
     // Regression guard for the pre-existing discrimination rule: a real error
     // must win over an abort reason, or a broken archive would be misreported
-    // as a user cancellation.
+    // as a user cancellation. The cancel here is genuinely fired — a test that
+    // built a controller and never aborted it would pass with all of the
+    // cancel/error discrimination deleted.
     const { archivePath, dest } = await stallingArchive("race");
     const controller = new AbortController();
     const spy = vi
       .spyOn(yauzl.ZipFile.prototype, "openReadStream")
       .mockImplementation((_entry, callback) => {
         const failing = new Readable({ read() {} });
-        setTimeout(() => failing.destroy(new Error("disk-exploded")), 5);
+        // Destroy first, then cancel on the next macrotask, so the stream error
+        // is unambiguously the first cause.
+        failing.destroy(new Error("disk-exploded"));
+        setTimeout(() => controller.abort(new Error("user-said-stop")), 0);
         callback(null, failing);
       });
 
@@ -535,16 +553,56 @@ describe("extractPluginArchive cancellation and absolute deadline (#11302)", () 
     const seen: string[] = [];
     await extractPluginArchive(archivePath, dest, { onEntry: (n) => seen.push(n) });
 
-    expect(seen).toContain("plugin.json");
-    expect(seen).toContain("dist/index.js");
-    expect(seen).toContain("dist/nested/deep.js");
+    // plugin.json is the mandated first entry of the format, and a nested file
+    // can't precede its own parent directory's sibling — assert the sequence,
+    // not just membership, so a reordered or duplicated report is caught.
+    expect(seen[0]).toBe("plugin.json");
+    expect(seen.indexOf("dist/index.js")).toBeGreaterThan(0);
+    expect(seen.indexOf("dist/nested/deep.js")).toBeGreaterThan(seen.indexOf("dist/index.js"));
+    expect(new Set(seen).size).toBe(seen.length);
     // Directory entries are created, not streamed, so they are not progress.
     expect(seen.some((n) => n.endsWith("/"))).toBe(false);
   });
 
-  it("leaves no pending deadline timer behind on a fast, successful extraction", async () => {
-    // The 2-minute default would otherwise keep the event loop alive long after
-    // a sub-second install finished.
+  it("does not report entries once the extraction has already been cancelled", async () => {
+    // yauzl's `close()` only flips a flag — a central-directory read in flight
+    // still emits its entry. Without the `settled` guard those late entries
+    // would report progress for a dead install and `mkdir` a staging dir the
+    // caller's cleanup had already removed.
+    const src = path.join(tmpDir, "src-latefire");
+    await createFixture(src, {
+      "plugin.json": JSON.stringify(validManifest()),
+      "dist/a.js": "1",
+      "dist/b.js": "2",
+      "dist/c.js": "3",
+    });
+    const archivePath = path.join(tmpDir, "latefire.dntr");
+    await packPluginArchive(src, archivePath);
+    const dest = path.join(tmpDir, "extracted-latefire");
+    await fs.mkdir(dest, { recursive: true });
+
+    const controller = new AbortController();
+    const seen: string[] = [];
+    await expect(
+      extractPluginArchive(archivePath, dest, {
+        signal: controller.signal,
+        onEntry: (n) => {
+          seen.push(n);
+          // Cancel from inside the very first report.
+          if (seen.length === 1) controller.abort(new Error("stop-now"));
+        },
+      })
+    ).rejects.toThrow("stop-now");
+
+    expect(seen).toEqual(["plugin.json"]);
+  });
+
+  it("clears the deadline timer on a fast, successful extraction", async () => {
+    // The 2-minute default would otherwise hold the event loop open long after a
+    // sub-second install finished. Identify the deadline timer specifically by
+    // its unique delay — the pre-existing per-entry inactivity watchdog also
+    // calls setTimeout/clearTimeout, so a bare "clearTimeout was called" would
+    // pass even if the deadline timer were never cleared at all.
     const src = path.join(tmpDir, "src-timer");
     await createFixture(src, { "plugin.json": JSON.stringify(validManifest()) });
     const archivePath = path.join(tmpDir, "timer.dntr");
@@ -552,8 +610,27 @@ describe("extractPluginArchive cancellation and absolute deadline (#11302)", () 
     const dest = path.join(tmpDir, "extracted-timer");
     await fs.mkdir(dest, { recursive: true });
 
+    const DEADLINE = 987_654;
+    const realSetTimeout = globalThis.setTimeout;
+    let deadlineHandle: unknown;
+    const setSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+      fn: () => void,
+      ms?: number,
+      ...rest: unknown[]
+    ) => {
+      const handle = realSetTimeout(fn, ms, ...rest);
+      if (ms === DEADLINE) deadlineHandle = handle;
+      return handle;
+    }) as unknown as typeof globalThis.setTimeout);
     const clearSpy = vi.spyOn(globalThis, "clearTimeout");
-    await extractPluginArchive(archivePath, dest);
-    expect(clearSpy).toHaveBeenCalled();
+
+    try {
+      await extractPluginArchive(archivePath, dest, { totalDeadlineMs: DEADLINE });
+      expect(deadlineHandle).toBeDefined();
+      expect(clearSpy.mock.calls.some(([h]) => h === deadlineHandle)).toBe(true);
+    } finally {
+      setSpy.mockRestore();
+      clearSpy.mockRestore();
+    }
   });
 });
