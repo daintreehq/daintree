@@ -49,7 +49,13 @@ export const FILE_LINK_ACTIVATION_COALESCE_KEY = "filelink-activate-fail";
  * key is split by affordance — otherwise a mixed OUTSIDE_ROOT / INVALID_PATH
  * burst would flip a coalesced toast's button between Reveal and Copy path.
  */
-export function reportFileLinkFailure(reason: string, error: unknown, absolutePath: string): void {
+export function reportFileLinkFailure(
+  reason: string,
+  error: unknown,
+  absolutePath: string,
+  /** What the link pointed at — folder links must not fail as "file". */
+  subject: "file" | "folder" = "file"
+): void {
   const code = isClientAppError(error) ? error.code : undefined;
   const userMessage = isClientAppError(error) ? error.userMessage : undefined;
 
@@ -59,10 +65,10 @@ export function reportFileLinkFailure(reason: string, error: unknown, absolutePa
       body = "Path is outside your project roots";
       break;
     case "INVALID_PATH":
-      body = "Path is not a valid file";
+      body = `Path is not a valid ${subject}`;
       break;
     default:
-      body = userMessage ?? formatErrorMessage(error, "Couldn't open this file");
+      body = userMessage ?? formatErrorMessage(error, `Couldn't open this ${subject}`);
   }
 
   const name = basename(absolutePath) || absolutePath || "file";
@@ -105,15 +111,17 @@ export function reportFileLinkFailure(reason: string, error: unknown, absolutePa
 
   notify({
     type: "error",
-    title: "Couldn't open file link",
+    title: `Couldn't open ${subject} link`,
     message: singleMessage,
     priority: "high",
     context: { eventKind: "uiFeedback" },
     coalesce: {
       key: coalesceKey,
       windowMs: 1500,
+      // The coalesced form says "links" without a noun: the batch can mix
+      // file and folder failures, and the shared key must not lie about it.
       buildTitle: (count) =>
-        count <= 1 ? "Couldn't open file link" : `Couldn't open ${count} file links`,
+        count <= 1 ? `Couldn't open ${subject} link` : `Couldn't open ${count} links`,
       // Per-failure bodies don't compose on coalesce: each call only sees one
       // error, so the first failure's reason would otherwise leak across the
       // whole batch. Drop the body in the batch case; the per-failure inbox
@@ -143,17 +151,27 @@ interface ScopedDirCandidate extends DirCandidate {
 /**
  * Cheap validation memo for directory candidates, keyed
  * `worktreeId\nrelativePath`. Hover re-fires for the same line constantly, so
- * without this every pointer crossing would re-stat the same tokens. Cleared
- * wholesale at the cap — hover-driven lookups repopulate what still matters,
- * and real LRU bookkeeping isn't worth it for a cache this cheap to rebuild.
+ * without this every pointer crossing would re-stat the same tokens. Entries
+ * expire on a short TTL — an agent deleting or creating a directory should
+ * change what's clickable within seconds, in both directions (a stale
+ * "directory" stays clickable; a stale `null` keeps a new directory dead).
+ * Cleared wholesale at the cap — hover-driven lookups repopulate what still
+ * matters, and real LRU bookkeeping isn't worth it for a cache this cheap.
  */
-const dirKindCache = new Map<string, "file" | "directory" | null>();
+const dirKindCache = new Map<string, { kind: "file" | "directory" | null; at: number }>();
 const DIR_KIND_CACHE_CAP = 500;
+const DIR_KIND_CACHE_TTL_MS = 15_000;
+
+// A stalled stat must not wedge the line's links forever: xterm serializes
+// provider replies per line, so an unresolved callback blocks file links and
+// every lower-priority provider. Past this deadline the file links ship alone.
+const DIR_VALIDATION_TIMEOUT_MS = 1_500;
 
 export class FileLinksAddon implements ILinkProvider {
   private _terminal: Terminal;
   private _getCwd: () => string;
   private _onHover?: HoverCallback;
+  private _disposed = false;
 
   constructor(terminal: Terminal, getCwd: () => string, onHover?: HoverCallback) {
     this._terminal = terminal;
@@ -238,8 +256,28 @@ export class FileLinksAddon implements ILinkProvider {
     // browser onto nothing teaches the user to stop clicking. The callback is
     // deferred until validation lands — xterm's Linkifier tolerates async
     // providers, and a hover-scale stat batch resolves in milliseconds.
-    void this._validateDirCandidates(candidates)
-      .then((confirmed) => {
+    //
+    // Two-handler `.then(onOk, onErr)`, not `.then().catch()`: a chained catch
+    // would also trap an exception thrown by `callback` itself and invoke it a
+    // second time. An error (evicted view, IPC teardown, timeout) only costs
+    // the directory links; the file links this line produced still stand.
+    const timeout = new Promise<ScopedDirCandidate[]>((resolve) =>
+      setTimeout(() => resolve([]), DIR_VALIDATION_TIMEOUT_MS)
+    );
+    void Promise.race([this._validateDirCandidates(candidates), timeout]).then(
+      (confirmed) => {
+        // Disposed while validating (terminal closed): the registration is
+        // gone, so a late reply has no linkifier to serve.
+        if (this._disposed) return;
+        // The line may have been rewritten under the pointer while validation
+        // was in flight (streaming agent output). xterm caches replies by the
+        // pointer's current line, so links computed for the OLD text would
+        // paint on the new one — drop the whole reply instead.
+        const current = this._terminal.buffer.active.getLine(bufferLineNumber - 1);
+        if (!current || current.translateToString(true) !== lineText) {
+          callback(undefined);
+          return;
+        }
         for (const candidate of confirmed) {
           const range: IBufferRange = {
             start: { x: candidate.startIndex + 1, y: bufferLineNumber },
@@ -257,12 +295,12 @@ export class FileLinksAddon implements ILinkProvider {
           );
         }
         callback(links.length > 0 ? links : undefined);
-      })
-      .catch(() => {
-        // Validation failing (evicted view, IPC teardown) only costs the
-        // directory links; the file links this line produced still stand.
+      },
+      () => {
+        if (this._disposed) return;
         callback(links.length > 0 ? links : undefined);
-      });
+      }
+    );
   }
 
   private _collectDirCandidates(
@@ -312,8 +350,11 @@ export class FileLinksAddon implements ILinkProvider {
         continue;
       }
       const cached = dirKindCache.get(cacheKey(scoped));
-      if (cached === "directory") confirmed.push(scoped);
-      else if (cached === undefined) toStat.push(scoped);
+      if (cached !== undefined && Date.now() - cached.at < DIR_KIND_CACHE_TTL_MS) {
+        if (cached.kind === "directory") confirmed.push(scoped);
+      } else {
+        toStat.push(scoped);
+      }
     }
 
     // One batched call per worktree present on the line (nearly always one).
@@ -333,7 +374,7 @@ export class FileLinksAddon implements ILinkProvider {
       batch.forEach((candidate, index) => {
         const kind = kinds[index] ?? null;
         if (dirKindCache.size >= DIR_KIND_CACHE_CAP) dirKindCache.clear();
-        dirKindCache.set(cacheKey(candidate), kind);
+        dirKindCache.set(cacheKey(candidate), { kind, at: Date.now() });
         if (kind === "directory") confirmed.push(candidate);
       });
     }
@@ -342,7 +383,11 @@ export class FileLinksAddon implements ILinkProvider {
     return confirmed;
   }
 
-  dispose(): void {}
+  dispose(): void {
+    // Read by the deferred validation reply: a reply landing after disposal
+    // has no live linkifier registration to serve and must not call back.
+    this._disposed = true;
+  }
 }
 
 function cacheKey(candidate: ScopedDirCandidate): string {
@@ -359,17 +404,38 @@ function resolveWorktreeScope(
   absolutePath: string,
   worktrees: ReadonlyMap<string, { id: string; path: string }>
 ): { worktreeId: string; relativePath: string } | null {
+  // Separators are normalized to "/" on BOTH sides before comparing, and the
+  // relative path is emitted with "/" only: `ancestorDirectories` and the
+  // stat-paths op both speak forward slashes, and a Windows cwd would
+  // otherwise produce a backslashed rel path that expands nothing.
+  const target = absolutePath.replace(/\\/g, "/");
   let best: { worktreeId: string; relativePath: string } | null = null;
   let bestLength = -1;
   for (const worktree of worktrees.values()) {
-    const root = worktree.path.replace(/[\\/]+$/, "");
-    if (absolutePath !== root && !absolutePath.startsWith(`${root}/`)) continue;
+    const root = worktree.path.replace(/\\/g, "/").replace(/\/+$/, "");
+    if (target !== root && !target.startsWith(`${root}/`)) continue;
     if (root.length <= bestLength) continue;
+
+    // Canonicalized segment-by-segment: `/repo/src/./docs` and `/repo//src`
+    // stat fine but as raw strings they never match the tree's `src/docs`
+    // keys, and a lingering `..` (which `resolve` should have collapsed, but
+    // Windows-joined paths bypass resolve) would make the stat op reject the
+    // whole batch. `..` here means the token escapes the root — skip it.
+    const segments = target.slice(root.length).split("/").filter(Boolean);
+    const canonical: string[] = [];
+    let escapes = false;
+    for (const segment of segments) {
+      if (segment === ".") continue;
+      if (segment === "..") {
+        escapes = true;
+        break;
+      }
+      canonical.push(segment);
+    }
+    if (escapes) continue;
+
     bestLength = root.length;
-    best = {
-      worktreeId: worktree.id,
-      relativePath: absolutePath.slice(root.length).replace(/^[\\/]+/, ""),
-    };
+    best = { worktreeId: worktree.id, relativePath: canonical.join("/") };
   }
   return best;
 }
@@ -481,7 +547,12 @@ class DirectoryLink implements ILink {
         throw result.error;
       })
       .catch((error) => {
-        reportFileLinkFailure("Failed to open folder in file browser", error, this._absolutePath);
+        reportFileLinkFailure(
+          "Failed to open folder in file browser",
+          error,
+          this._absolutePath,
+          "folder"
+        );
       });
   }
 

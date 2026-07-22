@@ -334,7 +334,10 @@ export function registerWorktreeContextActions(
         // action test that mocks `@/clients` without it.
         const { usePanelDialogStore } = await import("@/store/panelDialogStore");
 
-        const revealPath = args?.revealPath;
+        // Normalized to "/" regardless of caller: the tree's row keys and
+        // `ancestorDirectories` both speak forward slashes, and a
+        // Windows-shaped reveal path would otherwise select nothing.
+        const revealPath = args?.revealPath?.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
         let reveal: { browserSelectedPath: string; browserExpandedPaths: string[] } | undefined;
         if (revealPath) {
           const { ancestorDirectories } = await import("@/panels/file-browser/fileBrowserTree");

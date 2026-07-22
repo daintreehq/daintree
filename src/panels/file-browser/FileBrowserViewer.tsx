@@ -19,6 +19,7 @@ import {
 } from "@/components/FileViewer/fileReadErrors";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
+import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { filesClient } from "@/clients/filesClient";
 import { isClientAppError } from "@/utils/clientAppError";
 import { sanitizeSvg } from "@shared/utils/svgSanitizer";
@@ -162,13 +163,18 @@ export function FileBrowserViewer({
     message: string;
     target: ExternalTarget;
   } | null>(null);
-  const [pendingTarget, setPendingTarget] = useState<ExternalTarget | null>(null);
+  // Tracked per target, not as one flag: revealing successfully says nothing
+  // about a missing editor, so the two must not clear or spin for each other.
+  const [pendingTargets, setPendingTargets] = useState<readonly ExternalTarget[]>([]);
   const externalGenerationRef = useRef(0);
+  // Synchronous re-entry guard: state can't stop a double-click in one tick.
+  const externalInFlightRef = useRef<Set<ExternalTarget>>(new Set());
 
   useEffect(() => {
     externalGenerationRef.current += 1;
+    externalInFlightRef.current.clear();
     setExternalError(null);
-    setPendingTarget(null);
+    setPendingTargets([]);
     setPathCopied(false);
   }, [filePath]);
 
@@ -195,8 +201,10 @@ export function FileBrowserViewer({
   const handleExternalAction = useCallback(
     async (target: ExternalTarget) => {
       if (!filePath) return;
+      if (externalInFlightRef.current.has(target)) return;
+      externalInFlightRef.current.add(target);
       const generation = externalGenerationRef.current;
-      setPendingTarget((current) => current ?? target);
+      setPendingTargets((current) => (current.includes(target) ? current : [...current, target]));
       try {
         const result = await actionService.dispatch(
           target === "reveal" ? "file.showItemInFolder" : "file.openInEditor",
@@ -214,13 +222,22 @@ export function FileBrowserViewer({
         );
         setExternalError({ message: result.error.message, target });
       } finally {
+        // Releasing in `finally` keeps a rejection from wedging the button for
+        // good; the generation check leaves a reset's clean slate alone.
         if (externalGenerationRef.current === generation) {
-          setPendingTarget((current) => (current === target ? null : current));
+          externalInFlightRef.current.delete(target);
+          setPendingTargets((current) => current.filter((t) => t !== target));
         }
       }
     },
     [filePath]
   );
+
+  const isErrorTargetPending =
+    externalError !== null && pendingTargets.includes(externalError.target);
+  // Below the Doherty threshold a spinner is just a flash; `disabled` still
+  // blocks a double submit from the first millisecond.
+  const showRetrySpinner = useDohertyGate(isErrorTargetPending);
 
   const reveal = revealCopy();
 
@@ -273,7 +290,8 @@ export function FileBrowserViewer({
             label: "Retry",
             icon: RefreshCw,
             variant: "dangerFilled",
-            disabled: pendingTarget === externalError.target,
+            loading: showRetrySpinner,
+            disabled: isErrorTargetPending,
             onClick: () => void handleExternalAction(externalError.target),
             ariaLabel:
               externalError.target === "reveal" ? reveal.retryAriaLabel : "Retry opening in editor",

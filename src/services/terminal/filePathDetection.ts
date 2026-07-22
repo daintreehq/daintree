@@ -21,9 +21,11 @@ const WINDOWS_ABS = /^(?:[a-zA-Z]:[\\/]|\\\\)/;
 // candidates are validated against the filesystem before they ever become
 // links; the regex proposes, the stat disposes. Single-segment absolute tokens
 // (`/help`) are syntactically included for the same reason: slash-commands
-// don't exist on disk, so validation drops them.
+// don't exist on disk, so validation drops them. Alternatives mirror
+// FILE_PATH_REGEX's envelope (POSIX-absolute, drive-absolute, dot-relative,
+// bare-relative) minus the `.ext` requirement.
 export const DIR_PATH_REGEX =
-  /(?:^|[\s(])((?:\/[\w./-]+|(?:\.\.?[\\/])+[\w./\\-]+|[\w.-]+[\\/][\w./\\-]+)\/?)(?=$|[\s):,'"])/g;
+  /(?:^|[\s(])((?:\/[\w./-]+|[a-zA-Z]:[\\/][\w./\\-]+|(?:\.\.?[\\/])+[\w./\\-]+|[\w.-]+[\\/][\w./\\-]+)[\\/]?)(?=$|[\s):,'"])/g;
 
 /**
  * Resolve a directory-shaped token to an absolute path. No `:line[:col]`

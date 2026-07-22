@@ -169,10 +169,25 @@ export function buildFileBrowserNamespace(deps: HandlerDependencies) {
     // A per-path failure (missing, permission, dangling symlink) is data, not
     // an error: the caller is asking "which of these tokens are real?", and a
     // throw for one bad token would discard the whole batch's answer.
+    //
+    // Realpath equality, not a bare stat: stat follows symlinks — including
+    // INTERMEDIATE ones — so `escape/etc` through an in-root `escape → /`
+    // symlink would report the target's kind, an existence probe beyond the
+    // root that FileTreeService's realpath containment otherwise keeps shut.
+    // Requiring `realpath(root + candidate) === realpath(root) + candidate`
+    // rejects any symlink component, which also matches what the tree can
+    // actually render (it omits symlink entries).
+    const rootRealPath = await fs.realpath(worktree.path).catch(() => null);
+    if (rootRealPath === null) {
+      return payload.paths.map(() => null);
+    }
+
     return Promise.all(
       payload.paths.map(async (candidate): Promise<"file" | "directory" | null> => {
         try {
-          const stats = await fs.stat(path.join(worktree.path, candidate));
+          const realPath = await fs.realpath(path.join(worktree.path, candidate));
+          if (realPath !== path.join(rootRealPath, candidate)) return null;
+          const stats = await fs.stat(realPath);
           if (stats.isDirectory()) return "directory";
           if (stats.isFile()) return "file";
           return null;

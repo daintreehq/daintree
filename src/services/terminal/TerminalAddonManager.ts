@@ -142,7 +142,16 @@ export function createFileLinksAddon(
   onHover?: HoverCallback
 ): IDisposable {
   const addon = new FileLinksAddon(terminal, getCwd, onHover);
-  return terminal.registerLinkProvider(addon);
+  const registration = terminal.registerLinkProvider(addon);
+  // Composed, not just the registration: the addon defers link replies across
+  // an async validation, and its dispose() is what tells an in-flight reply
+  // the linkifier is gone. xterm's registration disposable never calls it.
+  return {
+    dispose: () => {
+      registration.dispose();
+      addon.dispose();
+    },
+  };
 }
 
 export function createImageLinksAddon(
