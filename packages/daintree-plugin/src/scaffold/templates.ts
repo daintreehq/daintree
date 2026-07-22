@@ -186,6 +186,19 @@ dist/
 .dev-marker
 `;
 
+// Ships commented-out so a fresh plugin excludes nothing extra — it exists to
+// make the mechanism discoverable, since `.gitignore` alone can't express
+// "tracked in the repo, but not shipped to users".
+const DNTRIGNORE = `# Files to keep OUT of the packaged .dntr, in .gitignore syntax.
+# Applies on top of .gitignore, and unlike .gitignore it also applies inside
+# dist/ — so build output you don't want to distribute can be excluded here.
+# Run \`daintree-plugin package --dry-run\` to audit the resulting file list.
+
+# docs/
+# screenshots/
+# dist/*.stats.html
+`;
+
 function commandEntry(ctx: ScaffoldContext): string {
   const title = q(`${ctx.displayName}: Run`);
   const description = q(`Run the ${ctx.displayName} command.`);
@@ -311,6 +324,7 @@ export function buildTemplateFiles(ctx: ScaffoldContext): Record<string, string>
         "tsconfig.json": tsconfig(false),
         "vite.config.ts": viteConfig({ index: "src/index.ts" }),
         ".gitignore": GITIGNORE,
+        ".dntrignore": DNTRIGNORE,
         "src/index.ts": commandEntry(ctx),
       };
     }
@@ -330,6 +344,7 @@ export function buildTemplateFiles(ctx: ScaffoldContext): Record<string, string>
         "tsconfig.json": tsconfig(true),
         "vite.config.ts": viteConfig({ index: "src/index.ts", panel: "src/panel.tsx" }),
         ".gitignore": GITIGNORE,
+        ".dntrignore": DNTRIGNORE,
         "src/index.ts": viewEntry(ctx),
         "src/panel.tsx": panelComponent(ctx),
       };
@@ -351,6 +366,7 @@ export function buildTemplateFiles(ctx: ScaffoldContext): Record<string, string>
         "vite.config.ts": viteConfig({ index: "src/index.ts" }),
         "vite.config.server.ts": viteServerConfig({ server: "src/server.ts" }),
         ".gitignore": GITIGNORE,
+        ".dntrignore": DNTRIGNORE,
         "src/index.ts": mcpEntry(ctx),
         "src/server.ts": mcpServer(ctx),
       };
@@ -394,6 +410,7 @@ export function buildTemplateFiles(ctx: ScaffoldContext): Record<string, string>
         }),
         "vite.config.server.ts": viteServerConfig({ server: "src/server.ts" }),
         ".gitignore": GITIGNORE,
+        ".dntrignore": DNTRIGNORE,
         "src/index.ts": commandEntry(ctx),
         "src/panel.tsx": panelComponent(ctx),
         "src/server.ts": mcpServer(ctx),

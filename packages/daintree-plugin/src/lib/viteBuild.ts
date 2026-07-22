@@ -37,7 +37,77 @@ export async function runViteBuild(dir: string, args: string[] = ["build"]): Pro
  * NOT `async`: it returns execa's `ResultPromise`, which is both awaitable and a
  * live child handle. Wrapping it in `async` would await the process to *exit*.
  */
-export function spawnViteWatch(dir: string): ResultPromise {
+export function spawnViteWatch(dir: string, args: string[] = ["build", "--watch"]): ResultPromise {
   const bin = resolveViteBin(dir);
-  return execa(bin, ["build", "--watch"], { cwd: dir, stdio: "inherit" });
+  return execa(bin, args, { cwd: dir, stdio: "inherit" });
+}
+
+// A plugin with a Node entry (stdio MCP server) is built by a second Vite pass
+// against its own config, because one `vite build` runs one config object at a
+// time. The scaffold names that file `vite.config.server.ts`; the other
+// extensions are accepted so a hand-rolled project isn't locked out.
+const SERVER_CONFIG_NAMES = [
+  "vite.config.server.ts",
+  "vite.config.server.mts",
+  "vite.config.server.js",
+  "vite.config.server.mjs",
+] as const;
+
+/** The plugin's server-target Vite config filename, or null if it has none. */
+export function findServerConfig(dir: string): string | null {
+  return SERVER_CONFIG_NAMES.find((name) => existsSync(path.join(dir, name))) ?? null;
+}
+
+export interface VitePlan {
+  /** Whether this project has a second, server-target config. */
+  dualConfig: boolean;
+  /** Arg sets for a one-shot build, in order. Run these sequentially. */
+  oneShot: string[][];
+  /** Arg sets to spawn concurrently as watchers. */
+  watch: string[][];
+}
+
+/**
+ * Work out how many Vite passes this plugin needs and with which flags.
+ *
+ * One-shot builds run sequentially, so the default `emptyOutDir: true` on the
+ * browser config is right: the first pass cleans `dist/`, and the server config
+ * (which the scaffold gives `emptyOutDir: false`) then appends to it.
+ *
+ * Watch mode can't rely on that ordering. Vite's `prepareOutDirPlugin` drops the
+ * environment from its `rendered` set on every `watchChange`, so `renderStart`
+ * re-empties `outDir` on *every* incremental rebuild — not just the first. With
+ * two watchers on a shared `dist/`, each browser save would delete the server
+ * bundle (and the server watcher wouldn't rebuild it until its own sources
+ * changed). `--no-emptyOutDir` is Vite's cac-negated form of the `--emptyOutDir`
+ * flag; it isn't in `vite build --help`, but it does reach
+ * `build.emptyOutDir = false` and inline CLI options win over the config file,
+ * so it fixes already-scaffolded plugins without touching an author's config.
+ *
+ * The flag is applied only in dual-config mode. A single-config project keeps
+ * plain `vite build --watch` so its rebuilds still sweep away stale chunks —
+ * the cost of `--no-emptyOutDir` is exactly that stale output lingers for the
+ * session, which is only worth paying when the alternative is deleting a
+ * sibling target's bundle.
+ */
+export function resolveVitePlan(dir: string): VitePlan {
+  const serverConfig = findServerConfig(dir);
+  if (!serverConfig) {
+    return { dualConfig: false, oneShot: [["build"]], watch: [["build", "--watch"]] };
+  }
+  return {
+    dualConfig: true,
+    oneShot: [["build"], ["build", "--config", serverConfig]],
+    watch: [
+      ["build", "--watch", "--no-emptyOutDir"],
+      ["build", "--watch", "--config", serverConfig, "--no-emptyOutDir"],
+    ],
+  };
+}
+
+/** Run every pass of a one-shot build, in order. */
+export async function runVitePlanBuild(dir: string, plan: VitePlan): Promise<void> {
+  for (const args of plan.oneShot) {
+    await runViteBuild(dir, args);
+  }
 }

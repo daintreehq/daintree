@@ -6,8 +6,17 @@ import {
   isExcludedArchiveEntry,
   verifyPluginArchive,
 } from "../../../../electron/services/PluginArchive.js";
-import { runViteBuild } from "../lib/viteBuild.js";
+import { resolveVitePlan, runVitePlanBuild } from "../lib/viteBuild.js";
 import { runValidate } from "./validate.js";
+
+/**
+ * Per-plugin shipping-policy ignore file, `.gitignore` syntax. Only the archive
+ * root is consulted — this is package-level policy (the `.npmignore` analogue),
+ * and honoring nested copies would let a vendored asset directory silently
+ * rewrite what ships. The file itself never lands in the archive: it's excluded
+ * normatively in `PluginArchive.ts` so the host's own packer drops it too.
+ */
+const DNTRIGNORE_FILENAME = ".dntrignore";
 
 export interface PackageOptions {
   dir?: string;
@@ -58,8 +67,9 @@ function protectedDirs(manifest: MinimalManifest): string[] {
 }
 
 /**
- * Build (unless `--skip-build`), collect files honoring `.gitignore` plus the
- * normative `.dntr` exclusion list, and write a deterministic
+ * Build (unless `--skip-build`), collect files honoring `.gitignore`, the
+ * author's `.dntrignore`, and the normative `.dntr` exclusion list, and write a
+ * deterministic
  * `{pluginId}-{version}.dntr`. Reuses the host's archive writer so CLI output
  * is byte-identical to Daintree's own packer on the same OS.
  */
@@ -76,22 +86,31 @@ export async function runPackage(opts: PackageOptions = {}): Promise<PackageResu
   ) as MinimalManifest;
 
   // A dry run is a no-side-effects preview — never trigger the Vite build.
+  // A plugin with a Node server entry needs both passes, or `dist/server.js`
+  // ships stale (or missing) while the browser bundle is fresh.
   if (!opts.skipBuild && !opts.dryRun) {
-    await runViteBuild(dir);
+    await runVitePlanBuild(dir, resolveVitePlan(dir));
   }
 
-  // Candidate set honoring .gitignore (drops cruft like .env, coverage/).
+  // Candidate set honoring .gitignore (drops cruft like .env, coverage/) plus
+  // the author's own `.dntrignore`. globby merges the two pattern sets, so
+  // `.dntrignore` adds to `.gitignore` rather than replacing it.
   const gitignored = await globby("**/*", {
     cwd: dir,
     gitignore: true,
+    ignoreFiles: [DNTRIGNORE_FILENAME],
     dot: false,
     onlyFiles: true,
   });
 
   // Build output / manifest-referenced dirs must ship even if gitignored.
+  // `.dntrignore` still applies here: `.gitignore` states repo policy (which is
+  // why build output is deliberately un-ignored above), but `.dntrignore`
+  // states shipping policy, so it has to be able to drop stray files that live
+  // *inside* a protected dir — `dist/docs/**` being the motivating case.
   const preserved = await globby(
     protectedDirs(manifest).map((d) => `${d}/**/*`),
-    { cwd: dir, dot: false, onlyFiles: true }
+    { cwd: dir, ignoreFiles: [DNTRIGNORE_FILENAME], dot: false, onlyFiles: true }
   );
 
   const candidates = new Set<string>([...gitignored, ...preserved, "plugin.json"]);

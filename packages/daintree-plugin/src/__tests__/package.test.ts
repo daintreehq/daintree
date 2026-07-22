@@ -117,6 +117,50 @@ describe("runPackage", () => {
     await expect(runPackage({ dir: tmpDir, skipBuild: true })).rejects.toThrow(/validation failed/);
   });
 
+  describe(".dntrignore", () => {
+    it("excludes files that .gitignore keeps tracked", async () => {
+      await fixture();
+      await writeFile("README.md", "# docs");
+      await writeFile("notes/design.md", "# notes");
+      await writeFile(".dntrignore", "notes/\n");
+
+      const result = await runPackage({ dir: tmpDir, dryRun: true, skipBuild: true });
+      expect(result.files.some((f) => f.startsWith("notes/"))).toBe(false);
+      // Un-ignored siblings still ship — this prunes, it doesn't allowlist.
+      expect(result.files).toContain("README.md");
+    });
+
+    it("prunes stray files inside protected build output", async () => {
+      await fixture();
+      await writeFile("dist/docs/internal.md", "# internal");
+      await writeFile(".dntrignore", "dist/docs/\n");
+
+      const result = await runPackage({ dir: tmpDir, dryRun: true, skipBuild: true });
+      // dist/ is force-included against .gitignore, so this is the case that
+      // fails if .dntrignore is applied only to the gitignore-aware pass.
+      expect(result.files).not.toContain("dist/docs/internal.md");
+      expect(result.files).toContain("dist/index.js");
+    });
+
+    it("cannot drop the manifest", async () => {
+      await fixture();
+      await writeFile(".dntrignore", "plugin.json\n");
+
+      const result = await runPackage({ dir: tmpDir, dryRun: true, skipBuild: true });
+      expect(result.files).toContain("plugin.json");
+    });
+
+    it("keeps itself out of the archive", async () => {
+      await fixture();
+      await writeFile(".dntrignore", "notes/\n");
+
+      const result = await runPackage({ dir: tmpDir, skipBuild: true });
+      expect(result.files).not.toContain(".dntrignore");
+      const verify = await verifyPluginArchive(result.outputPath!);
+      expect(verify.valid).toBe(true);
+    });
+  });
+
   it("dry run never invokes the Vite build (no vite in fixture)", async () => {
     await fixture();
     // No node_modules/.bin/vite exists; if dry-run tried to build it would throw.

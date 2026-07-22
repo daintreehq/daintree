@@ -3,11 +3,23 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-vi.mock("../lib/viteBuild.js", () => ({
-  runViteBuild: vi.fn(async () => {}),
-  // Synchronous like the real helper: returns a live child handle, not a Promise.
-  spawnViteWatch: vi.fn(() => ({ kill: vi.fn(), catch: vi.fn() })),
-}));
+vi.mock("../lib/viteBuild.js", async (importOriginal) => {
+  // `resolveVitePlan` stays real: it's pure filesystem inspection, and it's
+  // what decides how many watchers spawn, so stubbing it would hide the
+  // behavior these tests exist to pin. `runVitePlanBuild` must be mocked
+  // rather than spread through from the original — it calls `runViteBuild`
+  // via its own module-local binding, which no mock of the export can
+  // intercept, so a real one would shell out to a Vite that isn't installed
+  // in the fixture. What the plan *contains* is covered in viteBuild.test.ts;
+  // here we assert dev.ts hands the resolved plan to the builder.
+  const actual = await importOriginal<typeof import("../lib/viteBuild.js")>();
+  return {
+    ...actual,
+    runVitePlanBuild: vi.fn(async () => {}),
+    // Synchronous like the real helper: returns a live child handle, not a Promise.
+    spawnViteWatch: vi.fn(() => ({ kill: vi.fn(), catch: vi.fn() })),
+  };
+});
 vi.mock("../ipc/client.js", () => ({
   sendCliRequest: vi.fn(async () => ({ status: "ok" })),
   DaintreeUnavailableError: class extends Error {},
@@ -17,7 +29,7 @@ vi.mock("../commands/validate.js", () => ({
 }));
 
 import { linkDevPlugin, cleanupDevLink, runDev, type DevLink } from "../commands/dev.js";
-import { runViteBuild, spawnViteWatch } from "../lib/viteBuild.js";
+import { runVitePlanBuild, spawnViteWatch } from "../lib/viteBuild.js";
 import { sendCliRequest } from "../ipc/client.js";
 
 let tmpDir: string;
@@ -123,8 +135,11 @@ describe("runDev", () => {
 
     await runDev({ dir: pluginDir, pluginsRoot, keepAliveSignal: controller.signal });
 
-    expect(runViteBuild).toHaveBeenCalledWith(pluginDir);
-    expect(spawnViteWatch).toHaveBeenCalledWith(pluginDir);
+    expect(runVitePlanBuild).toHaveBeenCalledWith(
+      pluginDir,
+      expect.objectContaining({ dualConfig: false })
+    );
+    expect(spawnViteWatch).toHaveBeenCalledWith(pluginDir, ["build", "--watch"]);
     const calls = vi.mocked(sendCliRequest).mock.calls.map((c) => c[0]);
     expect(calls).toContain("plugin.dev.start");
     expect(calls).toContain("plugin.dev.stop");
@@ -170,7 +185,7 @@ describe("runDev", () => {
       skipBuild: true,
       keepAliveSignal: controller.signal,
     });
-    expect(runViteBuild).not.toHaveBeenCalled();
+    expect(runVitePlanBuild).not.toHaveBeenCalled();
     expect(vi.mocked(sendCliRequest).mock.calls.map((c) => c[0])).toContain("plugin.dev.start");
   });
 
@@ -185,6 +200,70 @@ describe("runDev", () => {
 
     expect(spawnViteWatch).not.toHaveBeenCalled();
     expect(await lstatSafe(path.join(pluginsRoot, "acme.demo"))).toBeNull();
+  });
+
+  describe("with a server config (dual-target plugin)", () => {
+    beforeEach(async () => {
+      await fs.writeFile(path.join(pluginDir, "vite.config.server.ts"), "export default {};");
+    });
+
+    it("builds both targets before handing the plugin to Daintree", async () => {
+      const controller = new AbortController();
+      controller.abort();
+      await runDev({ dir: pluginDir, pluginsRoot, keepAliveSignal: controller.signal });
+
+      // The server bundle has to exist before plugin.dev.start, or the marker
+      // is in place with no worker entry for the host to import.
+      const plan = vi.mocked(runVitePlanBuild).mock.calls[0][1];
+      expect(plan.dualConfig).toBe(true);
+      expect(plan.oneShot).toHaveLength(2);
+    });
+
+    it("watches both targets with output-clearing disabled", async () => {
+      const controller = new AbortController();
+      controller.abort();
+      await runDev({ dir: pluginDir, pluginsRoot, keepAliveSignal: controller.signal });
+
+      // Without --no-emptyOutDir each watcher re-empties the shared dist/ on
+      // every incremental rebuild, so a browser save deletes the worker bundle.
+      const watchArgs = vi.mocked(spawnViteWatch).mock.calls.map((c) => c[1]);
+      expect(watchArgs).toEqual([
+        ["build", "--watch", "--no-emptyOutDir"],
+        ["build", "--watch", "--config", "vite.config.server.ts", "--no-emptyOutDir"],
+      ]);
+    });
+
+    it("kills every watcher on teardown", async () => {
+      const controller = new AbortController();
+      controller.abort();
+      await runDev({ dir: pluginDir, pluginsRoot, keepAliveSignal: controller.signal });
+
+      const spawned = vi.mocked(spawnViteWatch).mock.results.map((r) => r.value);
+      expect(spawned).toHaveLength(2);
+      for (const watch of spawned) {
+        expect(watch.kill).toHaveBeenCalled();
+      }
+    });
+
+    it("kills the first watcher when the second fails to spawn", async () => {
+      const first = { kill: vi.fn(), catch: vi.fn() };
+      vi.mocked(spawnViteWatch)
+        .mockImplementationOnce(() => first)
+        .mockImplementationOnce(() => {
+          throw new Error("Couldn't find Vite");
+        });
+      const controller = new AbortController();
+      controller.abort();
+
+      await expect(
+        runDev({ dir: pluginDir, pluginsRoot, keepAliveSignal: controller.signal })
+      ).rejects.toThrow(/Vite/);
+
+      // A half-started session must not leak a live Vite process.
+      expect(first.kill).toHaveBeenCalled();
+      expect(vi.mocked(sendCliRequest).mock.calls.map((c) => c[0])).toContain("plugin.dev.stop");
+      expect(await lstatSafe(path.join(pluginsRoot, "acme.demo"))).toBeNull();
+    });
   });
 
   it("rejects a plugin with no main entry", async () => {

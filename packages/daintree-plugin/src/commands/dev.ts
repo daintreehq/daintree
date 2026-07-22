@@ -3,7 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import type { ResultPromise } from "execa";
 import { runValidate } from "./validate.js";
-import { runViteBuild, spawnViteWatch } from "../lib/viteBuild.js";
+import { resolveVitePlan, runVitePlanBuild, spawnViteWatch } from "../lib/viteBuild.js";
 import { sendCliRequest } from "../ipc/client.js";
 
 // Mirrors the (unexported) DEV_MARKER_FILENAME in
@@ -121,13 +121,24 @@ async function sendDevStop(pluginId: string): Promise<void> {
   }
 }
 
-/** Stop the build watcher, ask Daintree to unload, and remove the dev artifacts. */
-async function stopDev(pluginId: string, link: DevLink, watch: ResultPromise): Promise<void> {
-  try {
-    watch.kill();
-  } catch {
-    // already exited
+/** Kill every watcher, best-effort and independently — one throw must not strand the rest. */
+function killWatchers(watchers: readonly ResultPromise[]): void {
+  for (const watch of watchers) {
+    try {
+      watch.kill();
+    } catch {
+      // already exited
+    }
   }
+}
+
+/** Stop the build watchers, ask Daintree to unload, and remove the dev artifacts. */
+async function stopDev(
+  pluginId: string,
+  link: DevLink,
+  watchers: readonly ResultPromise[]
+): Promise<void> {
+  killWatchers(watchers);
   await sendDevStop(pluginId);
   await cleanupDevLink(link);
 }
@@ -135,9 +146,10 @@ async function stopDev(pluginId: string, link: DevLink, watch: ResultPromise): P
 /**
  * Run the hot-reload dev loop for the plugin in `dir`: build once, symlink it
  * into the plugins root with a `.dev-marker`, tell the running Daintree to load
- * + activate it, then keep a `vite build --watch` alive so saves rebuild
- * `dist/` (Daintree's dev worker watches `dist/` and reloads). Ctrl-C tears
- * everything back down.
+ * + activate it, then keep `vite build --watch` alive so saves rebuild `dist/`
+ * (Daintree's dev worker watches `dist/` and reloads). A plugin with a Node
+ * server entry gets a watcher per config, so worker sources rebuild too.
+ * Ctrl-C tears everything back down.
  */
 export async function runDev(opts: DevOptions = {}): Promise<void> {
   const dir = path.resolve(opts.dir ?? process.cwd());
@@ -157,10 +169,12 @@ export async function runDev(opts: DevOptions = {}): Promise<void> {
   const pluginId = manifest.name;
   const pluginsRoot = opts.pluginsRoot ?? defaultPluginsRoot();
 
+  const plan = resolveVitePlan(dir);
+
   // Build once so dist/<main> exists before Daintree loads the plugin —
   // otherwise the marker is present but the worker has no bundle to import.
   if (!opts.skipBuild) {
-    await runViteBuild(dir);
+    await runVitePlanBuild(dir, plan);
   }
 
   const link = await linkDevPlugin({ pluginDir: dir, pluginsRoot, pluginId });
@@ -175,18 +189,25 @@ export async function runDev(opts: DevOptions = {}): Promise<void> {
   // `spawnViteWatch` returns the live child handle synchronously (do NOT await
   // it — awaiting the ResultPromise would block until the watcher exits). If it
   // throws (Vite missing), the plugin is already loaded in Daintree, so unload
-  // it and remove the dev artifacts before surfacing the error.
-  let watch: ResultPromise;
+  // it and remove the dev artifacts before surfacing the error. A throw on the
+  // second spawn must also kill the first, or the failed session leaks a live
+  // Vite process.
+  const watchers: ResultPromise[] = [];
   try {
-    watch = spawnViteWatch(dir);
+    for (const args of plan.watch) {
+      watchers.push(spawnViteWatch(dir, args));
+    }
   } catch (err) {
+    killWatchers(watchers);
     await sendDevStop(pluginId);
     await cleanupDevLink(link);
     throw err;
   }
   // A watch crash is informational, not fatal to the session — surface it via
   // its inherited stdio; don't let the rejection bubble as unhandled.
-  watch.catch(() => {});
+  for (const watch of watchers) {
+    watch.catch(() => {});
+  }
 
   console.log(`Watching ${pluginId} for changes. Press Ctrl-C to stop.`);
 
@@ -194,7 +215,7 @@ export async function runDev(opts: DevOptions = {}): Promise<void> {
   const stopOnce = async (exitAfter: boolean): Promise<void> => {
     if (stopping) return;
     stopping = true;
-    await stopDev(pluginId, link, watch);
+    await stopDev(pluginId, link, watchers);
     if (exitAfter) process.exit(0);
   };
 
