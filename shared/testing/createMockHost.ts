@@ -1250,6 +1250,10 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       },
       async writeImage(pngData) {
         clipboardWriteImageCalls.push(pngData.byteLength);
+        // A real image write replaces the clipboard, so text no longer reads
+        // back — leaving the buffer intact would let a test pass that the
+        // real host would fail.
+        clipboardText = "";
       },
       async readText() {
         return clipboardText;

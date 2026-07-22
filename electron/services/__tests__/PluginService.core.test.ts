@@ -842,6 +842,40 @@ describe("PluginService manifest command contributions (#9281)", () => {
     expect(byId.get("acme.cmd-intent.run-build")?.effectiveDanger).toBe("confirm");
   });
 
+  it("elevates a manifest command that omits requires under a high-risk manifest", async () => {
+    // The backward-compatibility half: a command written before #11299 must
+    // keep the conservative verdict through the manifest path too, not just
+    // the runtime one.
+    await writePluginWithSrc(
+      "cmd-legacy",
+      {
+        name: "acme.cmd-legacy",
+        version: "1.0.0",
+        capabilities: ["shell:exec"],
+        contributes: {
+          commands: [
+            {
+              id: "do-thing",
+              title: "Do Thing",
+              description: "Runs",
+              category: "Test",
+              kind: "command",
+              danger: "safe",
+            },
+          ],
+        },
+      },
+      { "do-thing.ts": `export default () => "ok"` }
+    );
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    expect(
+      service.listPluginActions().find((a) => a.id === "acme.cmd-legacy.do-thing")?.effectiveDanger
+    ).toBe("confirm");
+  });
+
   it("fails a manifest command whose requires names an undeclared capability", async () => {
     await writePluginWithSrc(
       "cmd-overclaim",
@@ -851,6 +885,15 @@ describe("PluginService manifest command contributions (#9281)", () => {
         capabilities: ["fs:project-read"],
         contributes: {
           commands: [
+            {
+              id: "fine",
+              title: "Fine",
+              description: "Runs",
+              category: "Test",
+              kind: "command",
+              danger: "safe",
+              requires: ["fs:project-read"],
+            },
             {
               id: "do-thing",
               title: "Do Thing",
@@ -863,17 +906,20 @@ describe("PluginService manifest command contributions (#9281)", () => {
           ],
         },
       },
-      { "do-thing.ts": `export default () => "ok"` }
+      { "fine.ts": `export default () => "ok"`, "do-thing.ts": `export default () => "ok"` }
     );
 
     const service = new PluginService(tmpDir);
     await service.initialize();
 
-    // Fail-closed: the action does not register rather than silently falling
-    // back to whole-manifest derivation, so the author's mistake is visible.
-    expect(service.listPluginActions().find((a) => a.id.startsWith("acme.cmd-overclaim"))).toBe(
-      undefined
-    );
+    // Fail-closed: the over-claiming action does not register rather than
+    // silently falling back to whole-manifest derivation, so the author's
+    // mistake is visible. The valid sibling pins that this is a targeted
+    // rejection — without it the assertion would also pass if command
+    // loading broke entirely.
+    const ids = service.listPluginActions().map((a) => a.id);
+    expect(ids).toContain("acme.cmd-overclaim.fine");
+    expect(ids).not.toContain("acme.cmd-overclaim.do-thing");
   });
 
   it("lazily imports and invokes the handler on first dispatch", async () => {

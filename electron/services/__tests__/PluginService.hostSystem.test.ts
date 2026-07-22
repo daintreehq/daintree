@@ -3,11 +3,14 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 import { mkdtempSync, rmSync, mkdirSync } from "node:fs";
 import fs from "node:fs/promises";
 import os, { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 
+// Typed explicitly rather than inferred: a bare `vi.fn(async () => "")` infers
+// a zero-argument signature, so asserting on `mock.calls[0][0]` — the whole
+// point of the "hands the resolved path to the shell" test — fails to compile.
 const shellMock = vi.hoisted(() => ({
-  openPath: vi.fn(async () => ""),
-  showItemInFolder: vi.fn(),
+  openPath: vi.fn<(targetPath: string) => Promise<string>>(async () => ""),
+  showItemInFolder: vi.fn<(targetPath: string) => void>(),
 }));
 
 vi.mock("electron", () => ({
@@ -137,8 +140,7 @@ describe("host.system plugin-data namespace", () => {
     const target = await writeInDataDir("shot.png");
 
     await host.system.openPath(target);
-    const passed = shellMock.openPath.mock.calls[0][0] as unknown as string;
-    expect(passed).toBe(await fs.realpath(target));
+    expect(shellMock.openPath).toHaveBeenCalledWith(await fs.realpath(target));
   });
 });
 
@@ -149,11 +151,13 @@ describe("host.system capability gating", () => {
     await expect(host.system.openPath(target)).resolves.toBeUndefined();
   });
 
-  it("accepts the write capability for the matched root class", async () => {
+  it("accepts a project-class write capability for a declared project root", async () => {
     // A plugin that could legitimately create the file shouldn't also have to
-    // declare read access just to show the user where it landed.
-    const host = registerPlugin(["fs:user-data-write"]);
-    const target = await writeInDataDir("a.txt");
+    // declare read access just to show the user where it landed — and the
+    // class is resolved per root, so this must hold for project roots too.
+    const host = registerPlugin(["fs:project-write"], [allowed]);
+    const target = join(allowed, "built.txt");
+    await fs.writeFile(target, "x");
     await expect(host.system.openPath(target)).resolves.toBeUndefined();
   });
 
@@ -195,7 +199,10 @@ describe("host.system containment", () => {
     const outside = join(baseDir, "outside.txt");
     await fs.writeFile(outside, "x");
 
-    await expect(host.system.openPath(join(allowed, "..", "outside.txt"))).rejects.toThrow();
+    // Built by string concatenation, not path.join: join() normalizes the
+    // ".." away before the host ever sees it, which would silently turn this
+    // into a plain outside-the-root test.
+    await expect(host.system.openPath(`${allowed}${sep}..${sep}outside.txt`)).rejects.toThrow();
     expect(shellMock.openPath).not.toHaveBeenCalled();
   });
 

@@ -690,16 +690,18 @@ export const PluginAllowedSocketPathSchema = z
     if (isWindowsPipe) {
       if (value.length <= "\\\\.\\pipe\\".length) {
         addIssue("Windows named pipe must include a pipe name");
+        return;
       }
-      return;
-    }
-    if (!value.startsWith("/")) {
+    } else if (!value.startsWith("/")) {
       addIssue(
         "Socket path must be an absolute Unix-domain path (/var/run/docker.sock) or a Windows named pipe (\\\\.\\pipe\\name)"
       );
       return;
     }
-    if (value.split("/").includes("..")) {
+    // Traversal is rejected for both forms. Splitting on either separator
+    // matters because the check has to hold for a Windows pipe name parsed on
+    // a POSIX host, where `path` would never treat `\` as a separator.
+    if (value.split(/[/\\]/).includes("..")) {
       addIssue("Socket path must not contain a '..' segment");
     }
   });

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   MCP_ARGS_INLINE_STRING_LIMIT,
   MCP_ARGS_SUMMARY_LIMIT,
@@ -18,9 +18,12 @@ describe("summarizeMcpArgs", () => {
   });
 
   it("keeps the no-arguments summary empty even with a scrubber attached", () => {
-    // The audit path always passes a scrubber; it must not resurrect a
-    // placeholder for the empty case.
-    expect(summarizeMcpArgs(undefined, (s) => s.replace(/x/g, "y"))).toBe("");
+    // The audit path always passes a scrubber. A scrubber that returns a
+    // sentinel proves the empty case never reaches it — a scrubber mapping
+    // "" to "" would pass whether or not it ran.
+    const scrub = vi.fn(() => "SCRUBBED");
+    expect(summarizeMcpArgs(undefined, scrub)).toBe("");
+    expect(scrub).not.toHaveBeenCalled();
   });
 
   it("collapses long strings to a length placeholder", () => {

@@ -3655,8 +3655,12 @@ export class PluginService {
 
     // Omitted (not merely empty) means "no intent declared" — fall back to the
     // whole manifest so pre-#11299 plugins keep today's conservative
-    // elevation. An explicit `[]` is a real declaration and must survive the
-    // check, which is why this is `=== undefined` and not `??`.
+    // elevation. An explicit `[]` is a real declaration meaning "this action
+    // exercises nothing" and must reach the checks below as an empty set.
+    // The trap to avoid is any emptiness test (`requires.length > 0 ? … : …`)
+    // that folds `[]` back into the omitted case and silently re-elevates
+    // every opted-in action; `??` would be equivalent to this ternary, since
+    // validateActionRequires rejects a null.
     const dangerCapabilities = requires === undefined ? manifestCapabilities : requires;
     const hasHighRiskCapability = dangerCapabilities.some((p) =>
       CONFIRM_TRIGGERING_CAPABILITIES.has(p)

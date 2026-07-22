@@ -3,7 +3,7 @@ import path from "path";
 import { watch as fsWatch, type FSWatcher } from "node:fs";
 import { clipboard, shell } from "electron";
 import { decodeClipboardPng, MAX_CLIPBOARD_IMAGE_BYTES } from "../../utils/clipboardImage.js";
-import { assertExtensionAllowed } from "../../ipc/handlers/pathGuard.js";
+import { assertExtensionAllowed } from "../../utils/executablePathGuard.js";
 
 import { getPluginCapabilityConsentService } from "../plugin-capability/instances.js";
 import { resolveContainedPath, PluginPathNotAllowedError } from "./pluginFsContainment.js";
@@ -1515,24 +1515,8 @@ function buildFsApi(deps: PluginHostFactoryDeps, pluginId: string): PluginFsApi 
       );
     }
   };
-  // Contain against the call-time-expanded roots and report which root class
-  // matched. We contain per-entry so the matched entry's class is exact (the
-  // first containing root wins, same "any allowed root" semantics as before).
-  const containWithClass = async (
-    targetPath: string
-  ): Promise<{ resolved: string; rootClass: FsRootClass }> => {
-    const entries = await deps.expandAllowedPathEntries(pluginId, { includeDataDir: true });
-    let lastErr: unknown;
-    for (const entry of entries) {
-      try {
-        const resolved = await resolveContainedPath(pluginId, targetPath, [entry.path]);
-        return { resolved, rootClass: entry.rootClass };
-      } catch (err) {
-        lastErr = err;
-      }
-    }
-    throw lastErr instanceof Error ? lastErr : new PluginPathNotAllowedError(pluginId, targetPath);
-  };
+  const containWithClass = (targetPath: string) =>
+    containToDeclaredRoots(deps, pluginId, targetPath);
 
   return {
     readFile: async (filePath, options) => {
@@ -1844,6 +1828,38 @@ function buildGitApi(deps: PluginHostFactoryDeps, pluginId: string): PluginGitAp
 }
 
 /**
+ * Contain a plugin-supplied path against the plugin's call-time-expanded
+ * allowed roots and report which root class matched.
+ *
+ * Containment runs per entry rather than against the union so the matched
+ * entry's class is exact — the union would only tell us "some root", and the
+ * capability gate needs to know *which*. The first containing root wins; when
+ * a path sits inside two roots of different classes the earlier declaration
+ * decides, which is the same "any allowed root" semantics the fs API has
+ * always had.
+ *
+ * Shared by `host.fs` and `host.system` so the two can never drift into
+ * disagreeing about what a plugin may reach or which capability guards it.
+ */
+async function containToDeclaredRoots(
+  deps: PluginHostFactoryDeps,
+  pluginId: string,
+  targetPath: string
+): Promise<{ resolved: string; rootClass: FsRootClass }> {
+  const entries = await deps.expandAllowedPathEntries(pluginId, { includeDataDir: true });
+  let lastErr: unknown;
+  for (const entry of entries) {
+    try {
+      const resolved = await resolveContainedPath(pluginId, targetPath, [entry.path]);
+      return { resolved, rootClass: entry.rootClass };
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new PluginPathNotAllowedError(pluginId, targetPath);
+}
+
+/**
  * Host-mediated OS clipboard surface backing the `clipboard:read` /
  * `clipboard:write` tokens. Text reads/writes plus bounded PNG writes
  * (#11299); every method runs here in the main
@@ -1983,24 +1999,8 @@ function buildSystemApi(deps: PluginHostFactoryDeps, pluginId: string): PluginSy
       );
     }
   };
-  // Contain against the call-time-expanded roots, reporting which class
-  // matched — same per-entry loop as buildFsApi's containWithClass, so the
-  // matched entry's class is exact rather than the union's.
-  const containWithClass = async (
-    targetPath: string
-  ): Promise<{ resolved: string; rootClass: FsRootClass }> => {
-    const entries = await deps.expandAllowedPathEntries(pluginId, { includeDataDir: true });
-    let lastErr: unknown;
-    for (const entry of entries) {
-      try {
-        const resolved = await resolveContainedPath(pluginId, targetPath, [entry.path]);
-        return { resolved, rootClass: entry.rootClass };
-      } catch (err) {
-        lastErr = err;
-      }
-    }
-    throw lastErr instanceof Error ? lastErr : new PluginPathNotAllowedError(pluginId, targetPath);
-  };
+  const containWithClass = (targetPath: string) =>
+    containToDeclaredRoots(deps, pluginId, targetPath);
   // The plugin path resolver deliberately admits a non-existent final
   // component so `fs.writeFile` can create a new file inside an allowed root.
   // That is wrong for these sinks: `shell.showItemInFolder` silently no-ops on
@@ -2010,10 +2010,16 @@ function buildSystemApi(deps: PluginHostFactoryDeps, pluginId: string): PluginSy
   const requireExists = async (op: string, resolved: string): Promise<void> => {
     try {
       await fs.stat(resolved);
-    } catch {
-      throw new Error(
-        `INVALID_PATH: plugin "${pluginId}" system.${op}: path does not exist: ${resolved}`
-      );
+    } catch (err) {
+      // Report only a genuine absence as absence. A permissions or I/O error
+      // says the path is unreadable, not missing, and collapsing the two sends
+      // an author hunting for a file that is sitting right there.
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      const reason =
+        code === "ENOENT" || code === "ENOTDIR" ? "path does not exist" : `stat failed (${code})`;
+      throw new Error(`INVALID_PATH: plugin "${pluginId}" system.${op}: ${reason}: ${resolved}`, {
+        cause: err,
+      });
     }
   };
 

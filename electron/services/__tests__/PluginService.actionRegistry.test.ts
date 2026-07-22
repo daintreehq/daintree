@@ -849,6 +849,26 @@ describe("Plugin action registry — per-action capability intent (requires)", (
     expect(descriptor?.requires).toEqual(["fs:project-read"]);
   });
 
+  it("does not elevate an action for the disclosure-only socket:connect", async () => {
+    // socket:connect is deliberately outside CONFIRM_TRIGGERING_CAPABILITIES:
+    // the host has no interception point for node:net, so elevating on a
+    // token it cannot enforce buys friction without buying safety. Asserted
+    // behaviourally — a membership check against the set would simply follow
+    // the set if someone changed it.
+    const svc = await riskyService(["socket:connect"]);
+    svc.registerPluginAction("acme.intent", contribution("acme.intent"));
+    expect(dangerOf(svc)).toBe("safe");
+  });
+
+  it("does not elevate an action that names socket:connect in requires", async () => {
+    const svc = await riskyService(["socket:connect", "shell:exec"]);
+    svc.registerPluginAction(
+      "acme.intent",
+      contribution("acme.intent", { requires: ["socket:connect"] })
+    );
+    expect(dangerOf(svc)).toBe("safe");
+  });
+
   it("leaves requires undefined on the descriptor when the action declared none", async () => {
     // Distinguishable from `[]` downstream — the renderer's descriptor
     // equality and any future consumer must see "not declared", not "empty".
