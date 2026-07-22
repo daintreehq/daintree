@@ -103,7 +103,8 @@ export function TerminalIcon({
   // A built-in kind pins its glyph; otherwise the chrome's own id selects one.
   // Both resolve through the shared registry, so an id renders the same glyph
   // here as it does in the panel palette.
-  const semanticIconId = (kind ? KIND_ICON_ID[kind] : undefined) ?? semanticId(resolvedChrome.iconId);
+  const semanticIconId =
+    (kind ? KIND_ICON_ID[kind] : undefined) ?? semanticId(resolvedChrome.iconId);
   if (semanticIconId) {
     const SemanticIcon = PLUGIN_ICON_COMPONENTS[semanticIconId];
     return withIconMarker(

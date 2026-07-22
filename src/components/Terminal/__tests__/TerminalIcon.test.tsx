@@ -38,8 +38,7 @@ function renderIcon(iconId: string): string {
  * renderer that drew the same glyph for everything would still look "distinct".
  */
 function glyph(iconId: string): string {
-  return render(<TerminalIcon chrome={pluginChrome(iconId)} />)
-    .container.querySelector("svg")!
+  return render(<TerminalIcon chrome={pluginChrome(iconId)} />).container.querySelector("svg")!
     .innerHTML;
 }
 
@@ -267,8 +266,9 @@ describe("TerminalIcon", () => {
       ["file", "file-text"],
       ["diff", "file-diff"],
     ] as const)("lets kind=%s pin its glyph over a conflicting icon id", (kind, expectedId) => {
-      const pinned = render(<TerminalIcon kind={kind} chrome={pluginChrome("puzzle")} />)
-        .container.querySelector("svg")!.innerHTML;
+      const pinned = render(
+        <TerminalIcon kind={kind} chrome={pluginChrome("puzzle")} />
+      ).container.querySelector("svg")!.innerHTML;
 
       expect(pinned).toBe(registryGlyph(expectedId));
       expect(pinned).not.toBe(glyph("puzzle"));

@@ -212,9 +212,7 @@ describe("runValidate", () => {
       version: "1.0.0",
       engines: { daintree: ">=0.11.0" },
       contributes: {
-        toolbarButtons: [
-          { id: "plan", label: "Plan", iconId: "list", actionId: "acme.demo.plan" },
-        ],
+        toolbarButtons: [{ id: "plan", label: "Plan", iconId: "list", actionId: "acme.demo.plan" }],
       },
     });
     const result = await runValidate({ dir: tmpDir });
