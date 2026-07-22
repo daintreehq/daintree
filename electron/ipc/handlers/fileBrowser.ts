@@ -11,16 +11,21 @@ import type {
 } from "../../../shared/types/ipc/fileBrowser.js";
 
 /**
- * Sized for how a lazily-expanding tree actually behaves: opening a deep path
- * fires one call per level, and a live refresh re-lists every expanded folder.
- * `copytree:get-file-tree`'s 5-per-10s budget — correct for a picker the user
- * touches occasionally — would reject an ordinary browsing session within the
- * first few clicks.
+ * Sized against the worst *legitimate* burst, not a guess.
  *
- * The renderer caps its own concurrency well below this, so the limit is a
- * backstop against a refresh loop rather than the thing shaping normal traffic.
+ * Hydration caps a restored panel at 500 expanded directories, so one refresh
+ * of the widest tree the app can produce is 501 listings. Anything at or below
+ * that has to succeed — a limit that rejects a normal restore would leave the
+ * tree permanently half-loaded, which is worse than no limit at all.
+ * `copytree:get-file-tree`'s 5-per-10s budget is correct for a picker the user
+ * touches occasionally and hopeless here.
+ *
+ * It is still a real ceiling: the renderer holds itself to a handful of
+ * concurrent listings, so sustained traffic past this rate means a refresh
+ * loop, not a user. The budget is shared across windows, which is why the
+ * renderer — not this limit — is what shapes normal traffic.
  */
-const LIST_DIRECTORY_MAX_CALLS = 240;
+const LIST_DIRECTORY_MAX_CALLS = 600;
 const LIST_DIRECTORY_WINDOW_MS = 10_000;
 
 /**
@@ -94,6 +99,19 @@ export function buildFileBrowserNamespace(deps: HandlerDependencies) {
     // view can be evicted while the workspace call is in flight, and a binding
     // that vanishes mid-request would silently widen the scope.
     const senderWindowId = ctx.senderWindow?.id;
+
+    // An unresolvable sender is refused rather than passed through as
+    // `undefined`, which `getAllStatesAsync` reads as "every host" — a wildcard
+    // is exactly the scope this gate exists to deny. `getWindowForWebContents`
+    // falls back to the WebContents registry, so a real project view always
+    // resolves; nothing legitimate lands here.
+    if (senderWindowId === undefined) {
+      throw new AppError({
+        code: "INVALID_PATH",
+        message: "Unable to resolve the requesting window",
+        context: {},
+      });
+    }
 
     // Scoped by sender rather than `getMonitorAsync`, which scans every live
     // workspace host and would happily resolve a worktree belonging to another

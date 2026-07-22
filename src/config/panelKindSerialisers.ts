@@ -63,8 +63,9 @@ const MAX_RESTORED_PATH_LENGTH = 4096;
 function isSafeRelativePath(value: unknown): value is string {
   if (typeof value !== "string") return false;
   if (value.length === 0 || value.length > MAX_RESTORED_PATH_LENGTH) return false;
+  // C0, DEL and C1 — a path is never legitimately built from any of them.
   // eslint-disable-next-line no-control-regex -- rejecting control characters is the point
-  if (/[\u0000-\u001f]/.test(value)) return false;
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(value)) return false;
   if (value.startsWith("/") || value.startsWith("\\")) return false;
   if (/^[a-zA-Z]:/.test(value)) return false;
   return !value.split(/[\\/]+/).includes("..");

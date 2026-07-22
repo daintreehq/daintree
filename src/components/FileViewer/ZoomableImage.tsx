@@ -10,6 +10,12 @@ export interface ZoomableImageProps {
   rootPath: string;
   /** Alt text — the file name, so a broken image still names its file. */
   alt: string;
+  /**
+   * Opaque token appended to the URL so a rewritten file is refetched. Changing
+   * it reloads the bytes without remounting, which is what preserves the
+   * current zoom and pan.
+   */
+  cacheBust?: string;
   onError?: () => void;
 }
 
@@ -41,7 +47,13 @@ export function zoomForWheel(currentZoom: number, deltaY: number): number {
  * and giving it a pan/zoom mode would put an interaction surface into two
  * places that deliberately have none.
  */
-export function ZoomableImage({ filePath, rootPath, alt, onError }: ZoomableImageProps) {
+export function ZoomableImage({
+  filePath,
+  rootPath,
+  alt,
+  cacheBust,
+  onError,
+}: ZoomableImageProps) {
   const [zoom, setZoom] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
@@ -120,7 +132,11 @@ export function ZoomableImage({ filePath, rootPath, alt, onError }: ZoomableImag
           // Keyed by path so switching files remounts rather than showing the
           // previous image until the new one decodes.
           key={filePath}
-          src={buildDaintreeFileUrl(filePath, rootPath)}
+          src={
+            cacheBust === undefined
+              ? buildDaintreeFileUrl(filePath, rootPath)
+              : `${buildDaintreeFileUrl(filePath, rootPath)}&v=${encodeURIComponent(cacheBust)}`
+          }
           alt={alt}
           draggable={false}
           onError={onError}

@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { EyeOff, FolderTree, RefreshCw } from "lucide-react";
 import type { BasePanelProps } from "@/components/Panel/ContentPanel";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
@@ -95,7 +95,7 @@ export function FileBrowserPane({
 
   const stableExpandedPaths = useMemo(() => expandedPaths ?? EMPTY_PATHS, [expandedPaths]);
 
-  const { rows, isInitialLoading, rootError, ensureLoaded, refresh, revision } = useFileBrowserTree({
+  const { rows, isInitialLoading, rootError, ensureLoaded, refresh } = useFileBrowserTree({
     worktreeId,
     expandedPaths: stableExpandedPaths,
     showIgnored,
@@ -130,6 +130,19 @@ export function FileBrowserPane({
     },
     [id, setFileBrowserView]
   );
+
+  // Counted separately from the change tick so the toolbar's Refresh also
+  // re-reads the open file, not just the tree.
+  const [manualRefreshNonce, setManualRefreshNonce] = useState(0);
+  const handleRefresh = useCallback(() => {
+    setManualRefreshNonce((nonce) => nonce + 1);
+    refresh();
+  }, [refresh]);
+
+  // One value per refresh *cycle*, not per directory listed. Deriving it from
+  // the tree's per-listing commits would make a 500-directory refresh re-read
+  // the open file 500 times.
+  const viewerRevision = `${changeTick ?? 0}:${manualRefreshNonce}`;
 
   const handleToggleIgnored = useCallback(() => {
     setFileBrowserView(id, { browserShowIgnored: !showIgnored });
@@ -180,7 +193,7 @@ export function FileBrowserPane({
       </button>
       <button
         type="button"
-        onClick={refresh}
+        onClick={handleRefresh}
         aria-label="Refresh"
         className="flex items-center rounded px-2 py-1 text-xs text-muted-foreground transition-colors duration-150 ease-out hover:bg-overlay-subtle"
       >
@@ -221,7 +234,7 @@ export function FileBrowserPane({
             filePath={selectedFilePath}
             rootPath={worktreePath}
             fileName={selectedFileName}
-            revision={revision}
+            revision={viewerRevision}
           />
         </div>
       </div>
@@ -250,7 +263,7 @@ export function FileBrowserPane({
             icon={FolderTree}
             title="Couldn't read this worktree"
             description={rootError}
-            action={{ id: "retry", label: "Retry", onClick: refresh }}
+            action={{ id: "retry", label: "Retry", onClick: handleRefresh }}
           />
         </div>
       );

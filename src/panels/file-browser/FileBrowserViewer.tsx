@@ -27,11 +27,11 @@ export interface FileBrowserViewerProps {
   /** File name, used for accessible labels. */
   fileName: string;
   /**
-   * Bumped by the tree whenever a listing is committed — a live change tick or
-   * an explicit refresh. Re-reads the open file, so an agent rewriting it in
-   * place is reflected instead of leaving stale bytes on screen.
+   * Changes once per refresh cycle — a live worktree change tick or an explicit
+   * Refresh. Re-reads the open file, so an agent rewriting it in place is
+   * reflected instead of leaving stale bytes on screen.
    */
-  revision: number;
+  revision: string;
 }
 
 type ViewerState =
@@ -186,14 +186,15 @@ export function FileBrowserViewer({
 
     case "image":
       return (
-        // Deliberately not re-keyed on `revision`: the protocol URL is stable,
-        // so a rewritten raster image can render stale until reselected. That
-        // is the better trade — re-keying would remount on every worktree tick
-        // and throw away the user's zoom and pan mid-inspection.
+        // `cacheBust` rather than a new `key`: the protocol URL is otherwise
+        // stable, so Chromium has no reason to refetch a rewritten image — but
+        // remounting to force it would throw away the user's zoom and pan
+        // mid-inspection. Changing the src reloads the bytes in place.
         <ZoomableImage
           filePath={filePath}
           rootPath={rootPath}
           alt={fileName}
+          cacheBust={revision}
           onError={() => setState({ status: "error", message: "Couldn't load this image" })}
         />
       );

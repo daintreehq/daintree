@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { FileTreeNode } from "@shared/types";
 import { fileBrowserClient } from "@/clients/fileBrowserClient";
 import { logError } from "@/utils/logger";
@@ -39,12 +39,6 @@ export interface UseFileBrowserTreeResult {
   ensureLoaded: (dirPath: string) => void;
   /** Re-list the root and every reachable expanded directory. */
   refresh: () => void;
-  /**
-   * Increments on every committed listing change. The viewer re-reads its file
-   * when this moves, so an agent rewriting the open file in place is reflected
-   * rather than leaving stale content on screen.
-   */
-  revision: number;
 }
 
 interface QueueEntry {
@@ -70,7 +64,6 @@ export function useFileBrowserTree({
   const [loadingPaths, setLoadingPaths] = useState<ReadonlySet<string>>(new Set());
   const [rootError, setRootError] = useState<string | null>(null);
   const [hasLoadedRoot, setHasLoadedRoot] = useState(false);
-  const [revision, setRevision] = useState(0);
 
   // Generation counter, bumped whenever the identity of what we are listing
   // changes (worktree switch, ignored-filter flip). Every in-flight response
@@ -79,7 +72,6 @@ export function useFileBrowserTree({
   // new one's tree.
   const generationRef = useRef(0);
   const listingsRef = useRef(listings);
-  listingsRef.current = listings;
 
   // Keyed by directory path, valued by the generation that issued the request.
   // A bare Set would let a stale generation's cleanup delete the *current*
@@ -88,9 +80,19 @@ export function useFileBrowserTree({
   const inFlightRef = useRef<Map<string, number>>(new Map());
   const queueRef = useRef<QueueEntry[]>([]);
 
+  // Requests physically outstanding, regardless of generation. `inFlightRef` is
+  // cleared on an identity reset while those requests are still running, so
+  // counting it would let a worktree switch start a second full batch on top of
+  // the one still in the air.
+  const physicalInFlightRef = useRef(0);
+
+  // Set on unmount. Closing or promoting a panel with a deep queue would
+  // otherwise keep pumping it — spending the channel's shared budget on a tree
+  // nobody is looking at, and racing the replacement panel's own requests.
+  const disposedRef = useRef(false);
+
   const expandedSet = useMemo(() => new Set(expandedPaths), [expandedPaths]);
   const expandedSetRef = useRef(expandedSet);
-  expandedSetRef.current = expandedSet;
 
   // Set when a refresh could not run because its targets were already in
   // flight. Without it, a tick that arrives mid-flight is consumed by a request
@@ -106,8 +108,9 @@ export function useFileBrowserTree({
 
   const fetchDirectory = useCallback(
     async (dirPath: string, generation: number): Promise<void> => {
-      if (!worktreeId) return;
+      if (!worktreeId || disposedRef.current) return;
       inFlightRef.current.set(dirPath, generation);
+      physicalInFlightRef.current += 1;
       setLoadingPaths((previous) => {
         const next = new Set(previous);
         next.add(dirPath);
@@ -133,7 +136,6 @@ export function useFileBrowserTree({
           next.set(dirPath, nodes);
           return next;
         });
-        setRevision((value) => value + 1);
         if (dirPath === "") {
           setRootError(null);
           setHasLoadedRoot(true);
@@ -151,6 +153,7 @@ export function useFileBrowserTree({
           logError("[fileBrowser] failed to list directory", error);
         }
       } finally {
+        physicalInFlightRef.current -= 1;
         // Only clear our own marker: a newer generation may have re-requested
         // this directory while we were in flight.
         if (inFlightRef.current.get(dirPath) === generation) {
@@ -179,7 +182,8 @@ export function useFileBrowserTree({
   }, []);
 
   const pump = useCallback((): void => {
-    while (inFlightRef.current.size < MAX_CONCURRENT_LISTINGS) {
+    if (disposedRef.current) return;
+    while (physicalInFlightRef.current < MAX_CONCURRENT_LISTINGS) {
       const next = queueRef.current.shift();
       if (!next) break;
       // Dropped rather than run: the queue can outlive the identity it was
@@ -193,7 +197,7 @@ export function useFileBrowserTree({
     // A refresh that collided with in-flight work runs once the queue drains.
     if (
       refreshPendingRef.current &&
-      inFlightRef.current.size === 0 &&
+      physicalInFlightRef.current === 0 &&
       queueRef.current.length === 0
     ) {
       refreshPendingRef.current = false;
@@ -203,9 +207,28 @@ export function useFileBrowserTree({
     }
   }, [fetchDirectory, enqueueTargets]);
 
-  // Assigned during render rather than in an effect so a request that settles
-  // before effects have run still finds the current pump.
-  pumpRef.current = pump;
+  // Published in a layout effect, never during render: an abandoned concurrent
+  // render would otherwise publish a pump (and an expansion set) belonging to a
+  // worktree the committed UI never switched to, and a request settling in that
+  // window would act on it. Layout effects run before the passive effects that
+  // start any request, so the refs are always current by the time one settles.
+  useLayoutEffect(() => {
+    listingsRef.current = listings;
+    expandedSetRef.current = expandedSet;
+    pumpRef.current = pump;
+  }, [listings, expandedSet, pump]);
+
+  useEffect(() => {
+    disposedRef.current = false;
+    return () => {
+      disposedRef.current = true;
+      queueRef.current = [];
+      refreshPendingRef.current = false;
+      // Invalidate everything still in the air so a late response can't commit
+      // into a store the panel no longer owns.
+      generationRef.current += 1;
+    };
+  }, []);
 
   const ensureLoaded = useCallback(
     (dirPath: string): void => {
@@ -299,7 +322,6 @@ export function useFileBrowserTree({
     rootError,
     ensureLoaded,
     refresh,
-    revision,
   };
 }
 

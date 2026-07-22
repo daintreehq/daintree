@@ -416,26 +416,36 @@ describe("useFileBrowserTree", () => {
     );
   });
 
-  it("bumps the revision on every committed listing so the viewer can re-read", async () => {
-    listDirectory.mockResolvedValue([file("a.ts")]);
+  it("stops pumping its queue once the panel unmounts", async () => {
+    const rootEntries = Array.from({ length: 30 }, (_, index) => dir(`d${index}`));
+    const releases: Array<() => void> = [];
+    listDirectory.mockImplementation((payload) => {
+      if (payload.dirPath === undefined) return Promise.resolve(rootEntries);
+      const pending = deferred<FileTreeNode[]>();
+      releases.push(() => pending.resolve([]));
+      return pending.promise;
+    });
 
-    const { result, rerender } = renderHook(
-      (props: { changeTick: number }) =>
-        useFileBrowserTree({
-          worktreeId: "wt-1",
-          expandedPaths: [],
-          showIgnored: false,
-          changeTick: props.changeTick,
-        }),
-      { initialProps: { changeTick: 1 } }
+    const { unmount } = renderHook(() =>
+      useFileBrowserTree({
+        worktreeId: "wt-1",
+        expandedPaths: rootEntries.map((node) => node.path),
+        showIgnored: false,
+        changeTick: undefined,
+      })
     );
 
-    await waitFor(() => expect(result.current.isInitialLoading).toBe(false));
-    const afterFirstLoad = result.current.revision;
+    await waitFor(() => expect(releases.length).toBeGreaterThan(0));
+    unmount();
 
-    rerender({ changeTick: 2 });
+    const callsAtUnmount = listDirectory.mock.calls.length;
+    await act(async () => {
+      for (const release of releases.splice(0)) release();
+    });
 
-    await waitFor(() => expect(result.current.revision).toBeGreaterThan(afterFirstLoad));
+    // A closed panel must not keep spending the channel's shared budget on a
+    // tree nobody is looking at.
+    expect(listDirectory.mock.calls.length).toBe(callsAtUnmount);
   });
 
   it("drops a slow listing from a previous worktree instead of showing it in the new one", async () => {
