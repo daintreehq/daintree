@@ -2869,7 +2869,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "panel",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Spawn (or focus an existing) plugin-contributed panel kind, handing it an initial argument. Args: \`kind\` (required) — the plugin panel kind id from \`contributes.panels\`; \`initialArgs\` (optional) — an opaque bag delivered to the view as \`PanelViewProps.initialArgs\` (e.g. \`{ path }\` to open a file); \`worktreeId\` (optional) — target worktree; \`reuseExisting\` (optional, default true) — focus an existing panel of this kind in the worktree instead of spawning a second one. Returns \`{ panelId }\`. Errors when \`kind\` is not a registered plugin panel kind.",
+    "description": "Spawn (or focus an existing) plugin-contributed panel kind, handing it an initial argument. Args: \`kind\` (required) — the plugin panel kind id from \`contributes.panels\`; \`initialArgs\` (optional) — an opaque bag delivered to the view as \`PanelViewProps.initialArgs\` (e.g. \`{ path }\` to open a file); \`worktreeId\` (optional) — target worktree, which must belong to the current project; \`reuseExisting\` (optional, default true) — focus an existing panel of this kind in the worktree instead of spawning a second one. Returns \`{ panelId }\`. Errors when \`kind\` is not a registered plugin panel kind, when \`worktreeId\` belongs to another project, or — transiently, retry — when the project's worktrees haven't loaded yet.",
     "examples": undefined,
     "id": "panel.openPluginPanel",
     "keywords": undefined,
