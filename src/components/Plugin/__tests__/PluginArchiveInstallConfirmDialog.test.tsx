@@ -35,8 +35,6 @@ vi.stubGlobal(
 
 const installFromPath = vi.fn<(p: string) => Promise<PluginInstallResult>>();
 
-const COOLDOWN_MS = 1_200;
-
 function intent(overrides: Partial<PluginArchiveInstallIntent> = {}): PluginArchiveInstallIntent {
   return {
     intentId: "i1",
@@ -61,10 +59,15 @@ function confirmButton(): HTMLButtonElement {
   return screen.getByRole("button", { name: "Install plugin" }) as HTMLButtonElement;
 }
 
-/** Elapse the ConfirmDialog read-time cooldown so the primary button arms. */
+/**
+ * Elapse the ConfirmDialog read-time cooldown so the primary button arms.
+ * Deliberately advances far past any plausible cooldown rather than mirroring
+ * the component's constant — the assertions are about the disabled→enabled
+ * transition, not the specific duration.
+ */
 function armConfirm() {
   act(() => {
-    vi.advanceTimersByTime(COOLDOWN_MS + 100);
+    vi.advanceTimersByTime(60_000);
   });
 }
 
@@ -234,6 +237,40 @@ describe("PluginArchiveInstallConfirmDialog", () => {
     await act(async () => {
       release?.({ status: "installed", pluginId: "acme.tool" });
     });
+  });
+
+  it("resolves the archive it approved, not whatever is current when it settles", async () => {
+    // Regression: resolving "the current intent" meant an install settling after
+    // a remount (ErrorBoundary reset) advanced past — and silently discarded —
+    // the archive promoted in the meantime.
+    let release: ((r: PluginInstallResult) => void) | undefined;
+    installFromPath.mockImplementation(
+      () =>
+        new Promise<PluginInstallResult>((resolve) => {
+          release = resolve;
+        })
+    );
+
+    const { unmount } = render(<PluginArchiveInstallConfirmDialog />);
+    enqueue(intent());
+    enqueue(
+      intent({ intentId: "i2", archivePath: "/tmp/beta.dntr", archiveFileName: "beta.dntr" })
+    );
+    armConfirm();
+
+    click(confirmButton());
+    // The dialog goes away mid-install and comes back — the in-flight promise
+    // for i1 outlives the component instance that started it.
+    unmount();
+    render(<PluginArchiveInstallConfirmDialog />);
+
+    await act(async () => {
+      release?.({ status: "installed", pluginId: "acme.tool" });
+    });
+    await flush();
+
+    // i1 resolved; i2 must still be awaiting its own decision.
+    expect(usePluginArchiveInstallStore.getState().current?.intentId).toBe("i2");
   });
 
   it("keeps the dialog open with the reason when the install fails", async () => {

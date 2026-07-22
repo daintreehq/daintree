@@ -873,7 +873,9 @@ export async function initGlobalServices(
       // for the install-confirmation prompt, never installed outright (#11280).
       // Fire-and-forget — previewing runs concurrently with the remaining
       // deferred tasks. #9293
-      void activateOpenFileInstaller();
+      void activateOpenFileInstaller().catch((err) =>
+        console.error("[MAIN] Failed to activate the open-file archive queue:", err)
+      );
       // Fire-and-forget — activations fan out in parallel and report errors
       // via the per-plugin `loadError` provenance record. Awaiting here would
       // delay subsequent deferred tasks behind the slowest plugin's activate().

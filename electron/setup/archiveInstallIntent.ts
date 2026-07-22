@@ -65,20 +65,36 @@ function showToast(payload: MainProcessToastPayload): void {
  */
 function surfaceArchiveError(fileName: string, detail: string): void {
   const message = `Couldn't read "${fileName}": ${detail}. Nothing was installed.`;
-  if (hasLiveRenderer()) {
-    showToast({ type: "error", title: "Plugin install blocked", message });
-    return;
+  // Reporting is best-effort and must never throw: an exception here would
+  // reject the shared worker promise, strand every job still queued behind this
+  // one, and surface as an unhandled rejection in the fire-and-forget callers.
+  try {
+    if (hasLiveRenderer()) {
+      showToast({ type: "error", title: "Plugin install blocked", message });
+      return;
+    }
+    const record: ErrorRecord = {
+      id: `plugin-archive-preview-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      timestamp: Date.now(),
+      type: "validation",
+      message,
+      source: "main-process",
+      retryability: "none",
+      dismissed: false,
+    };
+    appendPendingError(record);
+  } catch (err) {
+    console.error("[MAIN] Failed to surface a plugin-archive preview error:", err);
   }
-  const record: ErrorRecord = {
-    id: `plugin-archive-preview-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    timestamp: Date.now(),
-    type: "validation",
-    message,
-    source: "main-process",
-    retryability: "none",
-    dismissed: false,
-  };
-  appendPendingError(record);
+}
+
+// Manifest strings are attacker-controlled and only bounded by the archive size
+// cap, so clamp what crosses IPC into the dialog. The full value still reaches
+// the installer, which does its own validation.
+const PREVIEW_TEXT_MAX = 200;
+
+function clampPreviewText(value: string): string {
+  return value.length > PREVIEW_TEXT_MAX ? `${value.slice(0, PREVIEW_TEXT_MAX)}…` : value;
 }
 
 /**
@@ -115,52 +131,79 @@ registerPaintedFlushListener(flushArchiveInstallIntents);
  * keep `yauzl` and the manifest schema off the startup path (#9285).
  */
 async function runPreviewWorker(): Promise<void> {
-  while (previewQueue.length > 0) {
-    const job = previewQueue.shift()!;
-    const fileName = path.basename(job.archivePath);
-    try {
-      const { readArchiveManifest } = await import("../services/PluginArchive.js");
-      const manifest = await readArchiveManifest(job.archivePath);
-      pendingIntents.push({
-        intentId: randomUUID(),
-        archivePath: job.archivePath,
-        archiveFileName: fileName,
-        manifest: {
-          name: manifest.name,
-          displayName: manifest.displayName,
-          version: manifest.version,
-          authors: manifest.authors ?? [],
-          capabilities: manifest.capabilities ?? [],
-        },
-      });
-      flushArchiveInstallIntents();
-    } catch (err) {
-      // Fail closed: an unreadable, oversized, or schema-invalid archive never
-      // reaches a renderer, so there is no path the user could approve. The
-      // next job still runs — one bad file in a multi-select shouldn't strand
-      // the rest.
-      activeKeys.delete(job.dedupeKey);
-      surfaceArchiveError(fileName, formatErrorMessage(err, "it isn't a valid plugin archive"));
+  try {
+    while (previewQueue.length > 0) {
+      const job = previewQueue.shift()!;
+      const fileName = path.basename(job.archivePath);
+      try {
+        const { readArchiveManifest } = await import("../services/PluginArchive.js");
+        const manifest = await readArchiveManifest(job.archivePath);
+        pendingIntents.push({
+          intentId: randomUUID(),
+          archivePath: job.archivePath,
+          archiveFileName: fileName,
+          manifest: {
+            name: manifest.name,
+            displayName: manifest.displayName && clampPreviewText(manifest.displayName),
+            version: manifest.version,
+            authors: (manifest.authors ?? []).map((author) => ({
+              ...author,
+              name: clampPreviewText(author.name),
+            })),
+            capabilities: manifest.capabilities ?? [],
+          },
+        });
+        flushArchiveInstallIntents();
+      } catch (err) {
+        // Fail closed: an unreadable, oversized, or schema-invalid archive never
+        // reaches a renderer, so there is no path the user could approve. The
+        // next job still runs — one bad file in a multi-select shouldn't strand
+        // the rest.
+        activeKeys.delete(job.dedupeKey);
+        surfaceArchiveError(fileName, formatErrorMessage(err, "it isn't a valid plugin archive"));
+      }
     }
+  } finally {
+    // Cleared here, not in a `.finally()` on the returned promise: that runs a
+    // microtask later, and a job appended in the gap would see a non-null
+    // `workerPromise`, start no worker, and sit unprocessed until an unrelated
+    // archive arrived. Nothing awaits between the loop test and this line, so
+    // an enqueue always either joins the running loop or starts a fresh one.
+    workerPromise = null;
   }
 }
 
-/**
- * Queue one `.dntr` archive for install confirmation. Resolves once the preview
- * worker has drained, so callers sequencing several archives keep their order.
- * Never throws — every failure is surfaced to the user instead.
- */
-export async function enqueueArchiveInstallIntent(archivePath: string): Promise<void> {
+/** Resolve, dedupe and queue one path. Returns false when it was a duplicate. */
+function queueJob(archivePath: string): boolean {
   const resolved = path.resolve(archivePath);
   const dedupeKey = dedupeKeyFor(resolved);
-  if (activeKeys.has(dedupeKey)) return;
+  if (activeKeys.has(dedupeKey)) return false;
   activeKeys.add(dedupeKey);
   previewQueue.push({ archivePath: resolved, dedupeKey });
+  return true;
+}
 
-  workerPromise ??= runPreviewWorker().finally(() => {
-    workerPromise = null;
-  });
-  await workerPromise;
+/**
+ * Queue a batch of `.dntr` archives for install confirmation. The whole batch is
+ * appended before the worker is awaited, so a live event arriving mid-drain
+ * queues *behind* the batch instead of splitting it — the prompts then follow
+ * the order the archives actually arrived in.
+ *
+ * Never throws — every failure is surfaced to the user instead.
+ */
+export async function enqueueArchiveInstallIntents(archivePaths: readonly string[]): Promise<void> {
+  let queued = false;
+  for (const archivePath of archivePaths) {
+    if (queueJob(archivePath)) queued = true;
+  }
+  if (!queued) return;
+  const pending = (workerPromise ??= runPreviewWorker());
+  await pending;
+}
+
+/** Queue a single `.dntr` archive for install confirmation. */
+export function enqueueArchiveInstallIntent(archivePath: string): Promise<void> {
+  return enqueueArchiveInstallIntents([archivePath]);
 }
 
 /** Test-only: reset module state between cases. */

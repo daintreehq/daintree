@@ -1,5 +1,11 @@
+import nodePath from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifest } from "../../../shared/types/plugin.js";
+
+// Production resolves every path through `path.resolve`, which turns P("x")
+// into a drive-qualified path on Windows. Resolve the expected values the same
+// way so assertions and mock branches match on every platform.
+const P = (name: string) => nodePath.resolve("/tmp", name);
 
 const archiveMock = vi.hoisted(() => ({
   readArchiveManifest: vi.fn<(p: string) => Promise<PluginManifest>>(),
@@ -91,11 +97,11 @@ describe("archiveInstallIntent", () => {
     );
 
     const { enqueueArchiveInstallIntent } = await importFresh();
-    await enqueueArchiveInstallIntent("/tmp/acme.dntr");
+    await enqueueArchiveInstallIntent(P("acme.dntr"));
 
     const [intent] = intentsFrom(painted.sent);
     expect(intent).toMatchObject({
-      archivePath: "/tmp/acme.dntr",
+      archivePath: P("acme.dntr"),
       archiveFileName: "acme.dntr",
       manifest: {
         name: "acme.tool",
@@ -113,7 +119,7 @@ describe("archiveInstallIntent", () => {
     deepLinkMock.painted = painted.wc;
 
     const { enqueueArchiveInstallIntent } = await importFresh();
-    await enqueueArchiveInstallIntent("/tmp/bare.dntr");
+    await enqueueArchiveInstallIntent(P("bare.dntr"));
 
     const [intent] = intentsFrom(painted.sent) as Array<{
       manifest: { authors: unknown[]; capabilities: unknown[] };
@@ -128,8 +134,8 @@ describe("archiveInstallIntent", () => {
       manifest({ name: `pkg${p.replace(/\D/g, "")}` })
     );
 
-    await enqueueArchiveInstallIntent("/tmp/1.dntr");
-    await enqueueArchiveInstallIntent("/tmp/2.dntr");
+    await enqueueArchiveInstallIntent(P("1.dntr"));
+    await enqueueArchiveInstallIntent(P("2.dntr"));
 
     const painted = makePainted();
     deepLinkMock.painted = painted.wc;
@@ -140,13 +146,13 @@ describe("archiveInstallIntent", () => {
 
     expect(
       intentsFrom(painted.sent).map((i) => (i as { archivePath: string }).archivePath)
-    ).toEqual(["/tmp/1.dntr", "/tmp/2.dntr"]);
+    ).toEqual([P("1.dntr"), P("2.dntr")]);
   });
 
   it("preserves arrival order even when an earlier manifest resolves last", async () => {
     let releaseSlow: ((m: PluginManifest) => void) | undefined;
     archiveMock.readArchiveManifest.mockImplementation(async (p: string) => {
-      if (p === "/tmp/slow.dntr") {
+      if (p === P("slow.dntr")) {
         return new Promise<PluginManifest>((resolve) => {
           releaseSlow = resolve;
         });
@@ -158,8 +164,8 @@ describe("archiveInstallIntent", () => {
     deepLinkMock.painted = painted.wc;
     const { enqueueArchiveInstallIntent } = await importFresh();
 
-    const slow = enqueueArchiveInstallIntent("/tmp/slow.dntr");
-    const fast = enqueueArchiveInstallIntent("/tmp/fast.dntr");
+    const slow = enqueueArchiveInstallIntent(P("slow.dntr"));
+    const fast = enqueueArchiveInstallIntent(P("fast.dntr"));
     // The worker awaits a dynamic import before the manifest read, so spin the
     // microtask queue until the slow read is actually in flight.
     await vi.waitFor(() => expect(releaseSlow).toBeTypeOf("function"));
@@ -170,7 +176,7 @@ describe("archiveInstallIntent", () => {
 
     expect(
       intentsFrom(painted.sent).map((i) => (i as { archivePath: string }).archivePath)
-    ).toEqual(["/tmp/slow.dntr", "/tmp/fast.dntr"]);
+    ).toEqual([P("slow.dntr"), P("fast.dntr")]);
   });
 
   it("fails closed on an unreadable archive — no intent, an error instead", async () => {
@@ -179,7 +185,7 @@ describe("archiveInstallIntent", () => {
     deepLinkMock.painted = painted.wc;
 
     const { enqueueArchiveInstallIntent } = await importFresh();
-    await enqueueArchiveInstallIntent("/tmp/bad.dntr");
+    await enqueueArchiveInstallIntent(P("bad.dntr"));
 
     expect(painted.sent).toHaveLength(0);
     expect(utilsMock.broadcastToRenderer).toHaveBeenCalledWith(
@@ -193,19 +199,19 @@ describe("archiveInstallIntent", () => {
 
   it("keeps previewing the rest of a batch after one archive fails", async () => {
     archiveMock.readArchiveManifest.mockImplementation(async (p: string) => {
-      if (p === "/tmp/bad.dntr") throw new Error("Archive size exceeds limit");
+      if (p === P("bad.dntr")) throw new Error("Archive size exceeds limit");
       return manifest({ name: "good" });
     });
     const painted = makePainted();
     deepLinkMock.painted = painted.wc;
 
     const { enqueueArchiveInstallIntent } = await importFresh();
-    await enqueueArchiveInstallIntent("/tmp/bad.dntr");
-    await enqueueArchiveInstallIntent("/tmp/good.dntr");
+    await enqueueArchiveInstallIntent(P("bad.dntr"));
+    await enqueueArchiveInstallIntent(P("good.dntr"));
 
     expect(
       intentsFrom(painted.sent).map((i) => (i as { archivePath: string }).archivePath)
-    ).toEqual(["/tmp/good.dntr"]);
+    ).toEqual([P("good.dntr")]);
   });
 
   it("persists the failure durably when no renderer is live", async () => {
@@ -213,7 +219,7 @@ describe("archiveInstallIntent", () => {
     registryMock.getAllAppWebContents.mockReturnValue([]);
 
     const { enqueueArchiveInstallIntent } = await importFresh();
-    await enqueueArchiveInstallIntent("/tmp/bad.dntr");
+    await enqueueArchiveInstallIntent(P("bad.dntr"));
 
     expect(utilsMock.broadcastToRenderer).not.toHaveBeenCalled();
     expect(pendingErrorsMock.appendPendingError).toHaveBeenCalledWith(
@@ -224,8 +230,8 @@ describe("archiveInstallIntent", () => {
   it("ignores a duplicate path that is still awaiting a decision", async () => {
     const { enqueueArchiveInstallIntent } = await importFresh();
 
-    await enqueueArchiveInstallIntent("/tmp/dup.dntr");
-    await enqueueArchiveInstallIntent("/tmp/dup.dntr");
+    await enqueueArchiveInstallIntent(P("dup.dntr"));
+    await enqueueArchiveInstallIntent(P("dup.dntr"));
 
     expect(archiveMock.readArchiveManifest).toHaveBeenCalledTimes(1);
   });
@@ -235,8 +241,8 @@ describe("archiveInstallIntent", () => {
     deepLinkMock.painted = painted.wc;
     const { enqueueArchiveInstallIntent } = await importFresh();
 
-    await enqueueArchiveInstallIntent("/tmp/again.dntr");
-    await enqueueArchiveInstallIntent("/tmp/again.dntr");
+    await enqueueArchiveInstallIntent(P("again.dntr"));
+    await enqueueArchiveInstallIntent(P("again.dntr"));
 
     expect(archiveMock.readArchiveManifest).toHaveBeenCalledTimes(2);
     expect(painted.sent).toHaveLength(2);
@@ -253,15 +259,95 @@ describe("archiveInstallIntent", () => {
     };
 
     const { enqueueArchiveInstallIntent } = await importFresh();
-    await enqueueArchiveInstallIntent("/tmp/retry.dntr");
+    await enqueueArchiveInstallIntent(P("retry.dntr"));
     expect(sent).toHaveLength(0);
 
     failSend = false;
     for (const listener of deepLinkMock.listeners) listener();
 
     expect(intentsFrom(sent).map((i) => (i as { archivePath: string }).archivePath)).toEqual([
-      "/tmp/retry.dntr",
+      P("retry.dntr"),
     ]);
+  });
+
+  it("keeps a batch contiguous when a live archive arrives mid-drain", async () => {
+    // Regression: awaiting each path in turn let a live arrival split a captured
+    // batch, so prompts came out a, c, b instead of a, b, c.
+    const painted = makePainted();
+    deepLinkMock.painted = painted.wc;
+    const mod = await importFresh();
+
+    let fireLive: (() => void) | undefined;
+    archiveMock.readArchiveManifest.mockImplementation(async (p: string) => {
+      if (p === P("a.dntr")) fireLive?.();
+      return manifest({ name: "pkg" });
+    });
+    fireLive = () => void mod.enqueueArchiveInstallIntent(P("c.dntr"));
+
+    await mod.enqueueArchiveInstallIntents([P("a.dntr"), P("b.dntr")]);
+
+    expect(
+      intentsFrom(painted.sent).map((i) => (i as { archivePath: string }).archivePath)
+    ).toEqual([P("a.dntr"), P("b.dntr"), P("c.dntr")]);
+  });
+
+  it("starts a fresh worker for an archive queued as the previous drain ends", async () => {
+    // Regression: nulling the worker handle a microtask late left a path queued
+    // with no worker running — it sat unprocessed until an unrelated archive
+    // happened to arrive.
+    const painted = makePainted();
+    deepLinkMock.painted = painted.wc;
+    const mod = await importFresh();
+
+    await mod.enqueueArchiveInstallIntent(P("first.dntr"));
+    await mod.enqueueArchiveInstallIntent(P("second.dntr"));
+
+    expect(
+      intentsFrom(painted.sent).map((i) => (i as { archivePath: string }).archivePath)
+    ).toEqual([P("first.dntr"), P("second.dntr")]);
+  });
+
+  it("keeps draining when error reporting itself throws", async () => {
+    // A throwing error sink must not reject the shared worker promise and
+    // strand every archive queued behind the bad one.
+    registryMock.getAllAppWebContents.mockReturnValue([]);
+    pendingErrorsMock.appendPendingError.mockImplementation(() => {
+      throw new Error("store is corrupt");
+    });
+    archiveMock.readArchiveManifest.mockImplementation(async (p: string) => {
+      if (p === P("bad.dntr")) throw new Error("invalid");
+      return manifest({ name: "good" });
+    });
+
+    const mod = await importFresh();
+    await expect(
+      mod.enqueueArchiveInstallIntents([P("bad.dntr"), P("good.dntr")])
+    ).resolves.toBeUndefined();
+
+    const painted = makePainted();
+    deepLinkMock.painted = painted.wc;
+    for (const listener of deepLinkMock.listeners) listener();
+
+    expect(
+      intentsFrom(painted.sent).map((i) => (i as { archivePath: string }).archivePath)
+    ).toEqual([P("good.dntr")]);
+  });
+
+  it("clamps attacker-controlled preview strings before they cross IPC", async () => {
+    const painted = makePainted();
+    deepLinkMock.painted = painted.wc;
+    archiveMock.readArchiveManifest.mockResolvedValue(
+      manifest({ displayName: "x".repeat(5_000), authors: [{ name: "y".repeat(5_000) }] })
+    );
+
+    const mod = await importFresh();
+    await mod.enqueueArchiveInstallIntent(P("huge.dntr"));
+
+    const [intent] = intentsFrom(painted.sent) as Array<{
+      manifest: { displayName: string; authors: Array<{ name: string }> };
+    }>;
+    expect(intent.manifest.displayName.length).toBeLessThan(500);
+    expect(intent.manifest.authors[0]!.name.length).toBeLessThan(500);
   });
 
   it("registers itself as a paint-flush listener on import", async () => {

@@ -1,4 +1,7 @@
-import { enqueueArchiveInstallIntent } from "./archiveInstallIntent.js";
+import {
+  enqueueArchiveInstallIntent,
+  enqueueArchiveInstallIntents,
+} from "./archiveInstallIntent.js";
 import {
   clearPendingOpenFilePaths,
   getPendingOpenFilePaths,
@@ -19,12 +22,14 @@ export async function activateOpenFileInstaller(): Promise<void> {
   // Take over live events first, so an event arriving mid-drain routes through
   // the consumer instead of landing in a queue we've already snapshotted.
   setOpenFileConsumer((filePath) => {
-    void enqueueArchiveInstallIntent(filePath);
+    void enqueueArchiveInstallIntent(filePath).catch((err) =>
+      console.error("[MAIN] Failed to queue an opened .dntr archive:", err)
+    );
   });
 
+  // Queued as one batch: awaiting each path in turn would let a live event
+  // arriving mid-drain jump ahead of the paths still to be queued.
   const pending = getPendingOpenFilePaths();
   clearPendingOpenFilePaths();
-  for (const filePath of pending) {
-    await enqueueArchiveInstallIntent(filePath);
-  }
+  await enqueueArchiveInstallIntents(pending);
 }

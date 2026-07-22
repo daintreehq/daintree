@@ -49,9 +49,16 @@ vi.mock("../windowRecreationState.js", () => ({
 // assertable. `archiveInstallIntent` is dynamically imported inside
 // queueDntrPath.
 vi.mock("../../ipc/utils.js", () => ({ broadcastToRenderer: vi.fn() }));
-const enqueueArchiveInstallIntentMock = vi.hoisted(() => vi.fn(async () => {}));
+const enqueueArchiveInstallIntentsMock = vi.hoisted(() =>
+  vi.fn<(p: readonly string[]) => Promise<void>>(async () => {})
+);
 vi.mock("../../setup/archiveInstallIntent.js", () => ({
-  enqueueArchiveInstallIntent: enqueueArchiveInstallIntentMock,
+  enqueueArchiveInstallIntents: enqueueArchiveInstallIntentsMock,
+}));
+// Tripwire: no lifecycle path may reach the installer directly any more.
+const installPluginMock = vi.hoisted(() => vi.fn());
+vi.mock("../../services/PluginService.js", () => ({
+  pluginService: { installPlugin: installPluginMock },
 }));
 
 import fs from "node:fs";
@@ -778,28 +785,33 @@ describe("extractDntrPaths", () => {
   );
 });
 
-describe("queueDntrPath", () => {
+describe("queueDntrPaths", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    enqueueArchiveInstallIntentMock.mockResolvedValue(undefined);
+    enqueueArchiveInstallIntentsMock.mockResolvedValue(undefined);
   });
 
-  it("routes the archive to the confirmation queue instead of installing it", async () => {
-    const { queueDntrPath } = await import("../appLifecycle.js");
+  it("routes archives to the confirmation queue instead of installing them", async () => {
+    const { queueDntrPaths } = await import("../appLifecycle.js");
 
-    await queueDntrPath("/tmp/acme.dntr");
+    await queueDntrPaths(["/tmp/acme.dntr", "/tmp/beta.dntr"]);
 
-    expect(enqueueArchiveInstallIntentMock).toHaveBeenCalledExactlyOnceWith("/tmp/acme.dntr");
+    expect(enqueueArchiveInstallIntentsMock).toHaveBeenCalledExactlyOnceWith([
+      "/tmp/acme.dntr",
+      "/tmp/beta.dntr",
+    ]);
+    expect(installPluginMock).not.toHaveBeenCalled();
     // No install toast: the renderer owns the outcome once the user approves.
     expect(broadcastToRenderer).not.toHaveBeenCalled();
   });
 
   it("does not pre-screen the archive — the manifest preview is the gate", async () => {
-    const { queueDntrPath } = await import("../appLifecycle.js");
+    const { queueDntrPaths } = await import("../appLifecycle.js");
 
-    await queueDntrPath(nodePath.join(os.tmpdir(), "does-not-exist.dntr"));
+    await queueDntrPaths([nodePath.join(os.tmpdir(), "does-not-exist.dntr")]);
 
-    expect(enqueueArchiveInstallIntentMock).toHaveBeenCalledOnce();
+    expect(enqueueArchiveInstallIntentsMock).toHaveBeenCalledOnce();
+    expect(installPluginMock).not.toHaveBeenCalled();
   });
 });
 
@@ -821,7 +833,7 @@ describe("registerAppLifecycleHandlers – second-instance .dntr handling", () =
     vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
     dntrFile = nodePath.join(os.tmpdir(), `dntr-handler-${process.pid}.dntr`);
     fs.writeFileSync(dntrFile, Buffer.from([0x50, 0x4b, 0x03, 0x04]));
-    enqueueArchiveInstallIntentMock.mockResolvedValue(undefined);
+    enqueueArchiveInstallIntentsMock.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -848,9 +860,9 @@ describe("registerAppLifecycleHandlers – second-instance .dntr handling", () =
 
     getHandler()({}, ["daintree", dntrFile], "/work");
     // Let the fire-and-forget queueing IIFE resolve.
-    await vi.waitFor(() => expect(enqueueArchiveInstallIntentMock).toHaveBeenCalled());
+    await vi.waitFor(() => expect(enqueueArchiveInstallIntentsMock).toHaveBeenCalled());
 
-    expect(enqueueArchiveInstallIntentMock).toHaveBeenCalledWith(dntrFile);
+    expect(enqueueArchiveInstallIntentsMock).toHaveBeenCalledWith([dntrFile]);
     expect(mainWindow.focus).toHaveBeenCalled();
   });
 
@@ -861,7 +873,9 @@ describe("registerAppLifecycleHandlers – second-instance .dntr handling", () =
     getHandler()({}, ["daintree", dntrFile], "/work");
     // The intent queue holds the preview until a window paints, so there is no
     // separate windowless path here.
-    await vi.waitFor(() => expect(enqueueArchiveInstallIntentMock).toHaveBeenCalledWith(dntrFile));
+    await vi.waitFor(() =>
+      expect(enqueueArchiveInstallIntentsMock).toHaveBeenCalledWith([dntrFile])
+    );
   });
 
   it("queues several archives from one launch in argv order", async () => {
@@ -872,10 +886,10 @@ describe("registerAppLifecycleHandlers – second-instance .dntr handling", () =
       registerAppLifecycleHandlers(makeOpts({ getMainWindow: vi.fn(() => null) }));
 
       getHandler()({}, ["daintree", dntrFile, second], "/work");
-      await vi.waitFor(() => expect(enqueueArchiveInstallIntentMock).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(enqueueArchiveInstallIntentsMock).toHaveBeenCalled());
 
-      expect(enqueueArchiveInstallIntentMock).toHaveBeenNthCalledWith(1, dntrFile);
-      expect(enqueueArchiveInstallIntentMock).toHaveBeenNthCalledWith(2, second);
+      // One batch preserving argv order — never split into separate calls.
+      expect(enqueueArchiveInstallIntentsMock).toHaveBeenCalledExactlyOnceWith([dntrFile, second]);
     } finally {
       fs.unlinkSync(second);
     }
@@ -893,9 +907,9 @@ describe("registerAppLifecycleHandlers – second-instance .dntr handling", () =
     );
 
     getHandler()({}, ["daintree", "--cli-path", "/repo", dntrFile], "/work");
-    await vi.waitFor(() => expect(enqueueArchiveInstallIntentMock).toHaveBeenCalled());
+    await vi.waitFor(() => expect(enqueueArchiveInstallIntentsMock).toHaveBeenCalled());
 
     expect(onCreateWindowForPath).toHaveBeenCalledWith("/repo");
-    expect(enqueueArchiveInstallIntentMock).toHaveBeenCalledWith(dntrFile);
+    expect(enqueueArchiveInstallIntentsMock).toHaveBeenCalledWith([dntrFile]);
   });
 });

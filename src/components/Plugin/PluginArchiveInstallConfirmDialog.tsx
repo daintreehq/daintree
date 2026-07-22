@@ -27,7 +27,7 @@ const CONFIRM_COOLDOWN_MS = 1_200;
  */
 export function PluginArchiveInstallConfirmDialog() {
   const current = usePluginArchiveInstallStore((state) => state.current);
-  const resolveCurrent = usePluginArchiveInstallStore((state) => state.resolveCurrent);
+  const drop = usePluginArchiveInstallStore((state) => state.drop);
 
   const [isInstalling, setIsInstalling] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -36,12 +36,18 @@ export function PluginArchiveInstallConfirmDialog() {
   // immediately approve whichever archive the queue promotes next.
   const inFlightRef = useRef(false);
 
-  const dismiss = useCallback(() => {
-    setError(null);
-    setIsInstalling(false);
-    inFlightRef.current = false;
-    resolveCurrent();
-  }, [resolveCurrent]);
+  // Always resolve by id, never "whatever is current". An install that settles
+  // after this component remounted (ErrorBoundary reset) would otherwise
+  // advance — and silently discard — the archive promoted in the meantime.
+  const dismiss = useCallback(
+    (intentId: string) => {
+      setError(null);
+      setIsInstalling(false);
+      inFlightRef.current = false;
+      drop(intentId);
+    },
+    [drop]
+  );
 
   const handleConfirm = useCallback(async () => {
     if (inFlightRef.current || current === null) return;
@@ -49,16 +55,17 @@ export function PluginArchiveInstallConfirmDialog() {
     setIsInstalling(true);
     setError(null);
 
-    const label = current.manifest.displayName || current.manifest.name;
+    const { intentId, archivePath, manifest } = current;
+    const label = manifest.displayName || manifest.name;
     try {
-      const result = await window.electron.plugin.installFromPath(current.archivePath);
+      const result = await window.electron.plugin.installFromPath(archivePath);
       if (result.status === "installed") {
         notify({
           type: "success",
           title: "Plugin installed",
-          message: `${label} v${current.manifest.version} is ready to use.`,
+          message: `${label} v${manifest.version} is ready to use.`,
         });
-        dismiss();
+        dismiss(intentId);
         return;
       }
       // Anything other than `installed` — including the `cancelled` /
@@ -95,7 +102,7 @@ export function PluginArchiveInstallConfirmDialog() {
   return (
     <ConfirmDialog
       isOpen={true}
-      onClose={isInstalling ? undefined : dismiss}
+      onClose={isInstalling ? undefined : () => dismiss(current.intentId)}
       title={`Install '${label}'?`}
       description={`This writes v${current.manifest.version} from "${current.archiveFileName}" into Daintree's plugins folder, replacing any installed plugin with the ID ${current.manifest.name}. Plugins run with full Node.js privileges — there's no sandbox and no signature check.`}
       confirmLabel="Install plugin"

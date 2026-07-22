@@ -35,7 +35,7 @@ import {
   getPendingCliPath,
   setPendingCliPath,
   extractDntrPaths,
-  queueDntrPath,
+  queueDntrPaths,
 } from "../lifecycle/appLifecycle.js";
 import type { WindowContext, WindowRegistry } from "./WindowRegistry.js";
 import { getWindowRegistry } from "./windowRef.js";
@@ -746,11 +746,9 @@ export async function setupWindowServices(
     : [];
   if (firstLaunchDntrPaths.length > 0) {
     setProcessArgvDntrHandled(true);
-    void (async () => {
-      for (const archivePath of firstLaunchDntrPaths) {
-        await queueDntrPath(archivePath);
-      }
-    })().catch((err) => console.error("[MAIN] Failed to queue .dntr plugin(s):", err));
+    void queueDntrPaths(firstLaunchDntrPaths).catch((err) =>
+      console.error("[MAIN] Failed to queue .dntr plugin(s):", err)
+    );
   }
 
   // ── Last-window-close: reset per-window deferred queue ──

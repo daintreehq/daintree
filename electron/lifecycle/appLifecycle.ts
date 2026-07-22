@@ -66,9 +66,9 @@ export function extractDntrPaths(argv: string[], workingDirectory: string): stri
 // prompt reaches the installer. That module owns the no-window case too — an
 // intent is held until a window paints — so this file no longer keeps its own
 // pending-path queue.
-export async function queueDntrPath(archivePath: string): Promise<void> {
-  const { enqueueArchiveInstallIntent } = await import("../setup/archiveInstallIntent.js");
-  await enqueueArchiveInstallIntent(archivePath);
+export async function queueDntrPaths(archivePaths: readonly string[]): Promise<void> {
+  const { enqueueArchiveInstallIntents } = await import("../setup/archiveInstallIntent.js");
+  await enqueueArchiveInstallIntents(archivePaths);
 }
 
 export interface AppLifecycleOptions {
@@ -173,11 +173,9 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): void {
       // preview until the primary window paints, so there is no separate
       // windowless path to keep in sync.
       console.log("[MAIN] Queuing .dntr paths for install confirmation:", dntrPaths);
-      void (async () => {
-        for (const archivePath of dntrPaths) {
-          await queueDntrPath(archivePath);
-        }
-      })().catch((err) => console.error("[MAIN] Failed to queue .dntr plugin(s):", err));
+      void queueDntrPaths(dntrPaths).catch((err) =>
+        console.error("[MAIN] Failed to queue .dntr plugin(s):", err)
+      );
     }
 
     // Bring the primary window to the front for `.dntr` installs and for plain

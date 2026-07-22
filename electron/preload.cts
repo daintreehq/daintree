@@ -903,6 +903,13 @@ function _ensureEventBusWired(): void {
   });
 }
 
+// Wired eagerly, not lazily on first subscribe: the replay buffer above only
+// catches a pre-subscriber event if the underlying `EVENTS_PUSH` listener is
+// already attached. Deferring it to the first `_eventBusOn` call made the
+// buffer depend on some unrelated hook having subscribed first — exactly the
+// slow-cold-launch case it exists to cover (#11280).
+_ensureEventBusWired();
+
 function _eventBusOn<K extends keyof IpcEventBusMap>(
   name: K,
   callback: (payload: IpcEventBusMap[K]) => void
