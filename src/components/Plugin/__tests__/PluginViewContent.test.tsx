@@ -69,6 +69,13 @@ vi.mock("@/components/ErrorBoundary", async () => {
     render(): React.ReactNode {
       boundaryProps.last = this.props;
       if (this.state.hasError) {
+        // Deliberately does NOT render `props.fallback`. Tests here reach the
+        // error state incidentally — `#11207` lets the real `lazy` attempt a
+        // `plugin://` import that jsdom cannot resolve — and rendering the
+        // fallback would paint a diagnostics pane alongside the one those tests
+        // render explicitly, so `getByTestId` finds two. The close-action seam,
+        // which does need a rendered fallback, lives in
+        // `PluginViewContent.closeAction.test.tsx` with its own stub.
         return (
           <button
             data-testid="reset"
@@ -504,6 +511,88 @@ describe("makePluginViewContent", () => {
 
       unmount();
       expect(signal.aborted).toBe(true);
+    } finally {
+      vi.doUnmock("react");
+    }
+  });
+
+  it("gives the view a panel-scoped removal signal that a temporary unmount does not abort (#11301)", async () => {
+    interface LifecycleProps {
+      disposeSignal: AbortSignal;
+      panelRemovedSignal: AbortSignal;
+    }
+    const captured: LifecycleProps[] = [];
+    vi.doMock("react", async () => {
+      const actual = await vi.importActual<typeof import("react")>("react");
+      return {
+        ...actual,
+        lazy: () =>
+          function CapturingView(props: LifecycleProps) {
+            captured.push(props);
+            return <div data-testid="plugin-view" />;
+          },
+      };
+    });
+
+    try {
+      const { makePluginViewContent } = await import("../PluginViewContent");
+      const Content = makePluginViewContent(makeContentConfig());
+
+      const { unmount } = render(<Content panelId="panel-removal-signal" />);
+      await waitFor(() => expect(captured).not.toHaveLength(0));
+      const { disposeSignal, panelRemovedSignal } = captured[captured.length - 1]!;
+
+      expect(panelRemovedSignal).toBeInstanceOf(AbortSignal);
+      expect(panelRemovedSignal).not.toBe(disposeSignal);
+
+      // The whole point of the split: maximizing a sibling pane unmounts this
+      // subtree, which must not read as "the panel was deleted". A plugin that
+      // ties a running process to `panelRemovedSignal` keeps it alive here.
+      unmount();
+      expect(disposeSignal.aborted).toBe(true);
+      expect(panelRemovedSignal.aborted).toBe(false);
+    } finally {
+      vi.doUnmock("react");
+    }
+  });
+
+  it("keeps the removal signal identical across a retry while the dispose signal is replaced", async () => {
+    interface LifecycleProps {
+      disposeSignal: AbortSignal;
+      panelRemovedSignal: AbortSignal;
+    }
+    const captured: LifecycleProps[] = [];
+    vi.doMock("react", async () => {
+      const actual = await vi.importActual<typeof import("react")>("react");
+      return {
+        ...actual,
+        lazy: () =>
+          function CapturingView(props: LifecycleProps) {
+            captured.push(props);
+            return <div data-testid="plugin-view" />;
+          },
+      };
+    });
+
+    try {
+      const { makePluginViewContent } = await import("../PluginViewContent");
+      const Content = makePluginViewContent(makeContentConfig());
+
+      render(<Content panelId="panel-removal-retry" />);
+      await waitFor(() => expect(captured).not.toHaveLength(0));
+      const first = captured[0]!;
+
+      act(() => boundaryProps.last!.onReset!());
+      await waitFor(() =>
+        expect(captured.some((p) => p.disposeSignal !== first.disposeSignal)).toBe(true)
+      );
+      const second = captured.find((p) => p.disposeSignal !== first.disposeSignal)!;
+
+      expect(second.disposeSignal).not.toBe(first.disposeSignal);
+      // Identity across attempts is the contract — a plugin holding this signal
+      // from its first mount must still see the same object after a retry.
+      expect(second.panelRemovedSignal).toBe(first.panelRemovedSignal);
+      expect(second.panelRemovedSignal.aborted).toBe(false);
     } finally {
       vi.doUnmock("react");
     }

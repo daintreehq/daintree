@@ -633,3 +633,194 @@ describe("GitService.readFileAtHead", () => {
     });
   });
 });
+
+describe("GitService.readPreviousFileVersion", () => {
+  let tempDir: string;
+  const binaryCatFileMock = vi.fn();
+  const DELETING_SHA = "a".repeat(40);
+  const PREVIOUS_SHA = "b".repeat(40);
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-git-prev-"));
+    vi.clearAllMocks();
+    createHardenedGitMock.mockImplementation(() => ({
+      ...gitClientMock,
+      binaryCatFile: binaryCatFileMock,
+    }));
+    gitClientMock.raw.mockResolvedValue("");
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  function mockRevList(output: string): void {
+    gitClientMock.raw.mockImplementation(async (args: string[]) =>
+      args.includes("rev-list") ? output : "10\n"
+    );
+  }
+
+  it("rejects absolute paths before touching git", async () => {
+    const service = new GitService(tempDir);
+    await expect(service.readPreviousFileVersion("/etc/passwd.png", 1024)).rejects.toThrow(
+      /absolute/i
+    );
+    expect(gitClientMock.raw).not.toHaveBeenCalled();
+  });
+
+  it("rejects traversal that only appears after normalization", async () => {
+    const service = new GitService(tempDir);
+    await expect(service.readPreviousFileVersion("assets/../../outside.png", 1024)).rejects.toThrow(
+      /traversal/i
+    );
+    expect(gitClientMock.raw).not.toHaveBeenCalled();
+  });
+
+  it("walks history behind --end-of-options and reads the second commit's blob", async () => {
+    mockRevList(`${DELETING_SHA}\n${PREVIOUS_SHA}\n`);
+    binaryCatFileMock.mockResolvedValue(Buffer.from("old-bytes"));
+    const service = new GitService(tempDir);
+
+    const result = await service.readPreviousFileVersion("-flag.png", 1024);
+
+    expect(gitClientMock.raw).toHaveBeenCalledWith([
+      "--literal-pathspecs",
+      "rev-list",
+      "-2",
+      "--end-of-options",
+      "HEAD",
+      "--",
+      "-flag.png",
+    ]);
+    expect(gitClientMock.raw).toHaveBeenCalledWith([
+      "cat-file",
+      "-s",
+      "--end-of-options",
+      `${PREVIOUS_SHA}:-flag.png`,
+    ]);
+    expect(binaryCatFileMock).toHaveBeenCalledWith(["blob", `${PREVIOUS_SHA}:-flag.png`]);
+    expect(result).toEqual({ ok: true, content: Buffer.from("old-bytes") });
+  });
+
+  it("converts backslash separators to git's forward-slash path", async () => {
+    mockRevList(`${DELETING_SHA}\n${PREVIOUS_SHA}\n`);
+    binaryCatFileMock.mockResolvedValue(Buffer.from("data"));
+    const service = new GitService(tempDir);
+
+    await service.readPreviousFileVersion("assets\\logo.png", 1024);
+
+    expect(gitClientMock.raw).toHaveBeenCalledWith([
+      "--literal-pathspecs",
+      "rev-list",
+      "-2",
+      "--end-of-options",
+      "HEAD",
+      "--",
+      "assets/logo.png",
+    ]);
+  });
+
+  it("passes glob metacharacters through as a literal pathspec", async () => {
+    mockRevList(`${DELETING_SHA}\n${PREVIOUS_SHA}\n`);
+    binaryCatFileMock.mockResolvedValue(Buffer.from("data"));
+    const service = new GitService(tempDir);
+
+    await service.readPreviousFileVersion("image[1].png", 1024);
+
+    expect(gitClientMock.raw).toHaveBeenCalledWith([
+      "--literal-pathspecs",
+      "rev-list",
+      "-2",
+      "--end-of-options",
+      "HEAD",
+      "--",
+      "image[1].png",
+    ]);
+    expect(binaryCatFileMock).toHaveBeenCalledWith(["blob", `${PREVIOUS_SHA}:image[1].png`]);
+  });
+
+  it("returns NOT_FOUND when only the deleting commit is reachable for the path", async () => {
+    mockRevList(`${DELETING_SHA}\n`);
+    const service = new GitService(tempDir);
+
+    await expect(service.readPreviousFileVersion("once.png", 1024)).resolves.toEqual({
+      ok: false,
+      reason: "NOT_FOUND",
+    });
+    expect(binaryCatFileMock).not.toHaveBeenCalled();
+  });
+
+  it("returns NOT_FOUND for a never-tracked file", async () => {
+    mockRevList("");
+    const service = new GitService(tempDir);
+
+    await expect(service.readPreviousFileVersion("untracked.png", 1024)).resolves.toEqual({
+      ok: false,
+      reason: "NOT_FOUND",
+    });
+    expect(binaryCatFileMock).not.toHaveBeenCalled();
+  });
+
+  it("returns NOT_FOUND for an unborn HEAD in an empty repository", async () => {
+    gitClientMock.raw.mockRejectedValue(
+      new Error(
+        "fatal: ambiguous argument 'HEAD': unknown revision or working tree path not in the working tree."
+      )
+    );
+    const service = new GitService(tempDir);
+
+    await expect(service.readPreviousFileVersion("img.png", 1024)).resolves.toEqual({
+      ok: false,
+      reason: "NOT_FOUND",
+    });
+  });
+
+  it("maps a path missing at the prior commit to NOT_FOUND", async () => {
+    gitClientMock.raw.mockImplementation(async (args: string[]) => {
+      if (args.includes("rev-list")) return `${DELETING_SHA}\n${PREVIOUS_SHA}\n`;
+      throw new Error(`fatal: path 'img.png' does not exist in '${PREVIOUS_SHA}'`);
+    });
+    const service = new GitService(tempDir);
+
+    await expect(service.readPreviousFileVersion("img.png", 1024)).resolves.toEqual({
+      ok: false,
+      reason: "NOT_FOUND",
+    });
+    expect(binaryCatFileMock).not.toHaveBeenCalled();
+  });
+
+  it("never passes malformed rev-list output to cat-file", async () => {
+    mockRevList("--flag-injection\nnot-a-sha\n");
+    const service = new GitService(tempDir);
+
+    await expect(service.readPreviousFileVersion("img.png", 1024)).rejects.toThrow(
+      GitOperationError
+    );
+    expect(gitClientMock.raw).toHaveBeenCalledTimes(1);
+    expect(binaryCatFileMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects an oversized prior blob from the size probe without reading content", async () => {
+    gitClientMock.raw.mockImplementation(async (args: string[]) =>
+      args.includes("rev-list")
+        ? `${DELETING_SHA}\n${PREVIOUS_SHA}\n`
+        : `${String(5 * 1024 * 1024)}\n`
+    );
+    const service = new GitService(tempDir);
+
+    await expect(service.readPreviousFileVersion("big.png", 1024)).resolves.toEqual({
+      ok: false,
+      reason: "TOO_LARGE",
+    });
+    expect(binaryCatFileMock).not.toHaveBeenCalled();
+  });
+
+  it("surfaces unexpected rev-list failures as git operation errors", async () => {
+    gitClientMock.raw.mockRejectedValue(new Error("git exploded"));
+    const service = new GitService(tempDir);
+
+    await expect(service.readPreviousFileVersion("img.png", 1024)).rejects.toThrow(
+      GitOperationError
+    );
+  });
+});

@@ -32,6 +32,7 @@ import {
   isSafeNavigationUrl,
 } from "../../shared/utils/urlUtils.js";
 import { isBrowserPartition } from "../../shared/utils/partitionUtils.js";
+import { stripPluginViewGeneration } from "../../shared/utils/pluginViewUrl.js";
 import { getWebviewDialogService } from "../services/WebviewDialogService.js";
 import { looksLikeOAuthUrl } from "../services/OAuthLoopbackService.js";
 import { CHANNELS } from "../ipc/channels.js";
@@ -681,6 +682,20 @@ export function createPluginProtocolHandler(getPluginDir: GetPluginDir) {
         headers: buildPluginErrorHeaders(),
       });
     }
+
+    // Drop the virtual view-generation namespace (#11301) before anything is
+    // resolved against disk. It exists only to vary the ESM specifier across
+    // plugin upgrades, so `__dtv-7/dist/view.js` and `__dtv-8/dist/view.js`
+    // serve the same file — while a malformed reserved segment 404s rather than
+    // reaching a real `__dtv-…` directory.
+    const stripped = stripPluginViewGeneration(decodedPath);
+    if (!stripped) {
+      return new Response("Not Found", {
+        status: 404,
+        headers: buildPluginErrorHeaders(),
+      });
+    }
+    decodedPath = stripped.path;
 
     // Normalize and re-check for '..'. The leading-slash normalize collapses
     // every `..` against the root, so the segment scan is redundant for

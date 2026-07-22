@@ -66,9 +66,11 @@ interface ImagePaneProps {
   side: DiffMediaSide;
   relPath: string;
   caption?: string;
+  /** Offered only for transient read failures, not genuinely absent versions */
+  onRetry?: () => void;
 }
 
-function ImagePane({ label, side, relPath, caption }: ImagePaneProps) {
+function ImagePane({ label, side, relPath, caption, onRetry }: ImagePaneProps) {
   const [dims, setDims] = useState<{ width: number; height: number } | null>(null);
   const [decodeFailed, setDecodeFailed] = useState(false);
   const src = side.ok ? side.dataUrl : null;
@@ -103,9 +105,16 @@ function ImagePane({ label, side, relPath, caption }: ImagePaneProps) {
             onError={() => setDecodeFailed(true)}
           />
         ) : (
-          <p className="px-4 text-center text-xs text-muted-foreground">
-            {side.ok ? "Couldn't display this version" : sideErrorMessage(side.error)}
-          </p>
+          <div className="flex flex-col items-center gap-2 px-4">
+            <p className="text-center text-xs text-muted-foreground">
+              {side.ok ? "Couldn't display this version" : sideErrorMessage(side.error)}
+            </p>
+            {!side.ok && side.error === "ERROR" && onRetry ? (
+              <Button variant="outline" size="sm" onClick={onRetry}>
+                Retry
+              </Button>
+            ) : null}
+          </div>
         )}
       </div>
       {side.ok && !decodeFailed ? (
@@ -310,10 +319,16 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
     );
   }
 
-  if (loadState === "error" || (versions !== null && !versions.head.ok && !versions.working.ok)) {
+  // Single-pane statuses (added/deleted) always render their dedicated pane —
+  // its per-side message covers a missing version; the aggregate error is
+  // reserved for comparisons where both sides genuinely failed.
+  const bothSidesFailed = versions !== null && !versions.head.ok && !versions.working.ok;
+
+  if (loadState === "error" || (singleSide === null && bothSidesFailed)) {
     return (
       <div className="flex h-full min-h-0 w-full flex-col items-center justify-center">
         <EmptyState
+          className="self-stretch"
           variant="zero-data"
           scale="canvas"
           icon={<ImageOff />}
@@ -341,6 +356,7 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
           side={versions[singleSide]}
           relPath={relPath}
           caption={caption}
+          onRetry={retry}
         />
       </div>
     );

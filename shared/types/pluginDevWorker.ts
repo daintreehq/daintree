@@ -81,6 +81,8 @@ export type PluginHostNotifyMethod =
  * Event subscriptions the worker proxy can open against the host. The
  * `process-exit` / `process-crash` kinds wire a spawned process's lifecycle
  * callbacks back to the worker, keyed by the handle id carried in `processId`.
+ * `panel-lifecycle` streams this plugin's own panel transitions (#11301) —
+ * the host replays each live panel's current phase at subscribe time.
  */
 export type PluginWorkerSubscriptionKind =
   | "active-worktree"
@@ -88,6 +90,7 @@ export type PluginWorkerSubscriptionKind =
   | "settings"
   | "storage"
   | "agent-state"
+  | "panel-lifecycle"
   | "process-exit"
   | "process-crash";
 

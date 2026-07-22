@@ -2041,6 +2041,59 @@ describe("createPluginProtocolHandler", () => {
     expect(openArgs[1]).toBe(fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
   });
 
+  it("resolves a view-generation namespace to the same file on disk (#11301)", async () => {
+    const fs = await import("fs/promises");
+    const handler = buildHandler();
+
+    const first = await handler(makeRequest("plugin://my-plugin/__dtv-1/dist/index.js"));
+    const second = await handler(makeRequest("plugin://my-plugin/__dtv-42/dist/index.js"));
+
+    // Two specifiers V8 has never seen before, backed by identical bytes — that
+    // is the entire mechanism by which an upgraded plugin's view actually loads.
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    const opened = vi.mocked(fs.open).mock.calls.map((c) => c[0]);
+    expect(opened).toEqual([
+      path.join(PLUGIN_ROOT, "dist", "index.js"),
+      path.join(PLUGIN_ROOT, "dist", "index.js"),
+    ]);
+  });
+
+  it("keeps a relative chunk inside its entry's generation namespace", async () => {
+    const fs = await import("fs/promises");
+    const handler = buildHandler();
+
+    // `./chunk.js` resolved against `.../__dtv-3/dist/index.js` produces this.
+    const response = await handler(makeRequest("plugin://my-plugin/__dtv-3/dist/chunk.js"));
+
+    expect(response.status).toBe(200);
+    expect(vi.mocked(fs.open).mock.calls[0]?.[0]).toBe(path.join(PLUGIN_ROOT, "dist", "chunk.js"));
+  });
+
+  it.each([
+    "plugin://my-plugin/__dtv-/dist/index.js",
+    "plugin://my-plugin/__dtv-abc/dist/index.js",
+    "plugin://my-plugin/__dtv-7",
+  ])("404s a malformed generation namespace (%s) instead of hitting disk", async (url) => {
+    const fs = await import("fs/promises");
+    const handler = buildHandler();
+
+    const response = await handler(makeRequest(url));
+
+    expect(response.status).toBe(404);
+    expect(fs.open).not.toHaveBeenCalled();
+  });
+
+  it("still contains encoded traversal that follows a generation namespace", async () => {
+    const fs = await import("fs/promises");
+    const handler = buildHandler();
+    // Stripping the namespace must not hand an un-normalized remainder to the
+    // resolver — `..` after the prefix stays subject to the same containment.
+    await handler(makeRequest("plugin://my-plugin/__dtv-2/%2e%2e/%2e%2e/secret"));
+
+    expect(vi.mocked(fs.open).mock.calls[0]?.[0]).toBe(path.join(PLUGIN_ROOT, "secret"));
+  });
+
   it("emits the hardened response header set with cross-origin CORP", async () => {
     const handler = buildHandler();
     const response = await handler(makeRequest("plugin://my-plugin/dist/index.js"));

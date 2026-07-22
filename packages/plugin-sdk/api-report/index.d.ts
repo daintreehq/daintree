@@ -1539,11 +1539,38 @@ interface ViewContribution {
  *   broadcast fires before the main process tears down plugin IPC handlers,
  *   so signal-driven cleanup (fetch aborts, subscription teardown) runs
  *   while the plugin host APIs are still live.
+ * - `panelRemovedSignal` aborts ONLY when the panel is permanently gone.
  */
 interface PanelViewProps {
     readonly panelId: string;
     readonly pluginId: string;
+    /**
+     * Lifetime of THIS mounted view attempt — not of the panel (#11301).
+     *
+     * Aborts on React unmount, on "Try again", and when a
+     * `plugin:panel-kinds-changed` push drops this kind. Crucially, a temporary
+     * unmount aborts it too: maximizing a sibling pane, switching away from a
+     * dock tab, or caching a background project view all tear the subtree down
+     * while the panel itself lives on. Tie only view-scoped work to it — in-flight
+     * `fetch`es, DOM observers, `postToPanel` subscriptions.
+     *
+     * NEVER tie a durable resource (a spawned process, a long-lived session) to
+     * this signal: it will be killed the first time the user maximizes another
+     * pane. Durable resources belong in the plugin's worker, which observes the
+     * panel across every remount via `host.onDidChangePanelLifecycle`.
+     */
     readonly disposeSignal: AbortSignal;
+    /**
+     * Lifetime of the PANEL RECORD (#11301). The same `AbortSignal` object is
+     * handed to every mount of a given `panelId`, so it survives remounts,
+     * retries, trash-then-restore, and plugin view upgrades.
+     *
+     * Aborts exactly once, when the panel is permanently removed from the panel
+     * store — never for a temporary unmount and never while a trashed panel is
+     * still restorable. This is the signal to use for cleanup that must happen
+     * once and only when the user is genuinely done with the panel.
+     */
+    readonly panelRemovedSignal: AbortSignal;
     /**
      * Opaque argument bag handed to the view when the panel is spawned with one
      * — e.g. `{ path }` from a "open file in plugin panel" intent. Sourced from
@@ -1553,6 +1580,41 @@ interface PanelViewProps {
      * host never mutates it; plugins should treat the contents as read-only.
      */
     readonly initialArgs?: Record<string, unknown>;
+}
+/**
+ * What just happened to one plugin panel instance (#11301). The renderer owns
+ * the transitions; the worker observes them through
+ * `host.onDidChangePanelLifecycle`.
+ *
+ * `mounted` / `hidden` are the two *view* states — a panel whose React subtree
+ * is currently rendered vs. one whose subtree has been torn down while the panel
+ * record lives on (sibling maximize, an inactive dock tab, a cached project
+ * view). `hidden` explicitly does NOT mean the user closed anything.
+ *
+ * `backgrounded` / `trashed` / `restored` / `removed` are *panel record* states
+ * read off `PanelLocation`: `backgrounded` is `location: "background"`,
+ * `trashed` is the recoverable soft close, `restored` is the one-shot edge out
+ * of trash (a transition, never a resting state), and `removed` is the terminal
+ * event — the panel is gone and will never come back under this id.
+ *
+ * `render-failed` means the current view attempt reached the host's error
+ * boundary. It is cleared by a successful retry. The failure detail stays in the
+ * renderer's diagnostics pane; only the fact of failure crosses to the worker.
+ */
+type PluginPanelLifecyclePhase = "mounted" | "hidden" | "backgrounded" | "trashed" | "restored" | "removed" | "render-failed";
+/**
+ * One panel lifecycle transition delivered to a plugin worker (#11301).
+ * Deliberately minimal and frozen before delivery: it carries identity and
+ * phase, never renderer internals, error text, or user paths.
+ */
+interface PluginPanelLifecycleEvent {
+    /** Runtime panel instance id — matches `PanelViewProps.panelId`. */
+    readonly panelId: string;
+    /** Namespaced panel kind, i.e. `${pluginId}.${panel.id}`. */
+    readonly panelKindId: string;
+    /** Owning plugin's manifest `name`. Always this plugin's own id. */
+    readonly pluginId: string;
+    readonly phase: PluginPanelLifecyclePhase;
 }
 /**
  * Lazily-spawned MCP server contribution (#9235). The declared `command` is
@@ -2620,6 +2682,34 @@ interface PluginActivationApi {
      *   out (the host is revoked).
      */
     onDidChangeAgentState(callback: (snapshot: PluginAgentSnapshot) => void): Promise<() => void>;
+    /**
+     * Subscribe to panel lifecycle transitions for this plugin's own contributed
+     * panels (#11301). No capability is required — a plugin only ever sees events
+     * for panel instances of kinds it contributed itself.
+     *
+     * This is how a worker learns the difference a view's `disposeSignal` cannot
+     * express: that signal aborts for a temporary unmount (sibling maximize,
+     * inactive dock tab, cached project view) exactly as it does for a permanent
+     * close, so a worker that treats it as deletion tears down durable resources
+     * the user still wants. Keep those resources in the worker and release them on
+     * `"removed"` — the terminal phase — rather than guessing from the view.
+     *
+     * On subscribe the host replays the current phase of every live panel of this
+     * plugin, so a plugin that activated lazily *because* a view opened still sees
+     * that panel's state. One-shot transitions (`"restored"`) are not replayed.
+     *
+     * Callbacks receive a frozen {@link PluginPanelLifecycleEvent}. Resolves to a
+     * disposer; calling it more than once is a no-op, and all subscriptions are
+     * disposed automatically when the plugin is unloaded.
+     *
+     * Subscribing is revoke-guarded — call it during `activate()`. The callback
+     * itself fires for the plugin's whole lifetime; only the act of subscribing
+     * is restricted to the activation window.
+     *
+     * @throws {Error} If called after activation resolves or times out — the host
+     *   is revoked and the subscription is rejected.
+     */
+    onDidChangePanelLifecycle(callback: (event: PluginPanelLifecycleEvent) => void): Promise<() => void>;
 }
 /**
  * The full host surface handed to a plugin's `activate()`. Extends
@@ -3036,4 +3126,4 @@ type PluginProcessStreamEvent = {
     signal: string | null;
 };
 
-export { type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, type PR, type Page, type PanelContribution, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsScope, type PluginFsStat, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginProcessApi, type PluginProcessHandle, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginSettingsScope, type PluginStorageScope, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, localAuthStubs };
+export { type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, type PR, type Page, type PanelContribution, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsScope, type PluginFsStat, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginProcessApi, type PluginProcessHandle, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginSettingsScope, type PluginStorageScope, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, localAuthStubs };

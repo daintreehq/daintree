@@ -65,6 +65,11 @@ interface PluginHostApi {
   getAgentState(): Promise<PluginAgentSnapshot | null>;
   onDidChangeAgentState(callback: (snapshot: PluginAgentSnapshot) => void): Promise<() => void>;
 
+  // Panel lifecycle for this plugin's own contributed panels — no capability
+  onDidChangePanelLifecycle(
+    callback: (event: PluginPanelLifecycleEvent) => void
+  ): Promise<() => void>;
+
   // Forge / file-decoration providers
   registerForgeProvider(
     descriptor: ForgeProviderDescriptor,
@@ -118,7 +123,7 @@ The authoritative definition is in `shared/types/plugin.ts` in the Daintree repo
 
 Nearly every host method now returns a Promise — the API became fully async in the move to the out-of-process worker model, so `registerAction`, `postToPanel`, `setPanelBadge`, and the rest resolve `Promise<void>`, and the subscription methods resolve `Promise<() => void>`. Always `await` a registration before assuming it took effect, and `await` the subscription methods to get the disposer. The synchronous `logger` accessor is the lone exception — its `info`/`warn`/`error` calls return `void`.
 
-The revoke-guarded methods — `registerAction`, `registerHandler`, `broadcastToRenderer`, `registerForgeProvider`, `registerFileDecorationProvider`, `onDidChangeActiveWorktree`, `onDidChangeWorktrees`, `onDidChangeAgentState`, and `settings.onDidChange` — must be called during `activate()` and throw once the host is revoked. Subscribing counts as an activation-window operation even though the callback fires later: register all your subscriptions during `activate()`, then react to them for the plugin's lifetime. `postToPanel`, `setPanelBadge`, `getActiveWorktree`, `getWorktrees`, `getWorktreeStatus`, `getAgentState`, `invalidateFileDecorations`, `showToast`, `dispatch`, `sendToActiveAgent`, `process.spawn`, `fs.*`, `git.*`, `settings.get`/`settings.set`, and `logger` are deliberately NOT revoke-guarded: plugins call them from post-activation subscription callbacks and timers, so they stay callable for the plugin's lifetime and become a silent no-op (or, for `process.spawn`/`fs.*`/`git.*`, a rejection) after unload. This split is the load-bearing distinction between the activation-window registration surface and the live runtime surface — `postToPanel` is the canonical post-activation push: a plugin's `activate()` subscribes once (revoke-guarded `registerHandler`/worktree subscriptions), then streams live data into its panels with `postToPanel` for the rest of its lifetime.
+The revoke-guarded methods — `registerAction`, `registerHandler`, `broadcastToRenderer`, `registerForgeProvider`, `registerFileDecorationProvider`, `onDidChangeActiveWorktree`, `onDidChangeWorktrees`, `onDidChangeAgentState`, `onDidChangePanelLifecycle`, and `settings.onDidChange` — must be called during `activate()` and throw once the host is revoked. Subscribing counts as an activation-window operation even though the callback fires later: register all your subscriptions during `activate()`, then react to them for the plugin's lifetime. `postToPanel`, `setPanelBadge`, `getActiveWorktree`, `getWorktrees`, `getWorktreeStatus`, `getAgentState`, `invalidateFileDecorations`, `showToast`, `dispatch`, `sendToActiveAgent`, `process.spawn`, `fs.*`, `git.*`, `settings.get`/`settings.set`, and `logger` are deliberately NOT revoke-guarded: plugins call them from post-activation subscription callbacks and timers, so they stay callable for the plugin's lifetime and become a silent no-op (or, for `process.spawn`/`fs.*`/`git.*`, a rejection) after unload. This split is the load-bearing distinction between the activation-window registration surface and the live runtime surface — `postToPanel` is the canonical post-activation push: a plugin's `activate()` subscribes once (revoke-guarded `registerHandler`/worktree subscriptions), then streams live data into its panels with `postToPanel` for the rest of its lifetime.
 
 **Where validation errors surface.** The two groups report errors differently. A revoke-guarded activation-window method (`registerAction`, `registerHandler`, the subscriptions) throws synchronously at the call site on a bad descriptor or a revoked host — wrap the `activate()` body in `try`/`catch` if you want to handle it. The post-activation runtime-surface methods (`postToPanel`, `setPanelBadge`, `invalidateFileDecorations`, `broadcastToRenderer` on an invalid channel) instead reject the returned Promise rather than throwing synchronously, so handle their validation errors with `await` + `.catch()`:
 
@@ -331,6 +336,41 @@ if (status) {
 ```
 
 Returns the same `PluginWorktreeStatus` carried on `PluginWorktreeSnapshot.status` for the worktree at the given absolute `path`, or `null` when no worktree matches or the host hasn't polled a status yet. Use it when you have a path in hand (e.g. from a context-menu dispatch arg) and don't want to scan `getWorktrees()`. Like the snapshot field it reads the host's already-polled status — it never triggers a fresh `git status`. It is NOT revoke-guarded: callable from timers and subscription callbacks, degrading to `null` once the plugin is unloaded.
+
+## `onDidChangePanelLifecycle`
+
+Observe what happens to your plugin's own panel instances. No capability is required — the host resolves panel ownership from its own kind registry, so you only ever receive events for kinds your plugin contributed.
+
+```ts
+export async function activate(host: PluginHostApi) {
+  const servers = new Map<string, DevServer>();
+
+  await host.onDidChangePanelLifecycle((event) => {
+    if (event.phase === "removed") {
+      servers.get(event.panelId)?.stop();
+      servers.delete(event.panelId);
+    }
+  });
+}
+```
+
+| Phase | Meaning |
+| --- | --- |
+| `mounted` | A view for this panel is rendered. |
+| `hidden` | The panel record is live but no view is mounted — a sibling pane was maximized, its dock tab is inactive, its project view is cached, or a retry is loading. **Not** a close. |
+| `backgrounded` | The panel is at `location: "background"`. |
+| `trashed` | Soft close. Recoverable from the trash bin, so it is not permanent disposal. |
+| `restored` | One-shot edge out of the trash, emitted immediately before the phase the panel landed in. |
+| `removed` | Terminal. The panel is gone and will not return under this id. |
+| `render-failed` | The current view attempt hit the host's error boundary. Cleared by a successful retry. The failure detail stays in the renderer's diagnostics pane; only the fact of failure reaches you. |
+
+**This is where durable resources belong.** A view's `disposeSignal` aborts for a temporary unmount exactly as it does for a permanent close, so a plugin that treats it as deletion tears down work the user still wants back. Keep spawned processes and long-lived sessions in the worker, keyed by `panelId`, and release them on `"removed"`.
+
+On subscribe the host **replays the current phase of every live panel** of your plugin. That matters because plugins activate lazily — opening a view is usually what triggers `activate()`, so without replay you would never see that panel's `mounted`. One-shot transitions (`restored`) and terminal ones (`removed`) are not replayed.
+
+A renderer being destroyed or evicted never synthesizes `removed`: a cached project view says nothing about whether the user closed the panel, and a false terminal event is the exact misreading this API exists to prevent.
+
+Like the other `onDidChange*` methods this is revoke-guarded — subscribe during `activate()`. Events themselves fire for the plugin's whole lifetime and fall silent after unload. Events are frozen before delivery.
 
 ## `registerForgeProvider`
 

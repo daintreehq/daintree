@@ -8,6 +8,7 @@ import { optimizeForDock } from "./layout";
 import { deriveRuntimeStatus, removePanelIdsFromTabGroups } from "./helpers";
 import { buildWorktreeIndex } from "./worktreeIndex";
 import { getNarrowPanel } from "./selectors";
+import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
 
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 
@@ -78,6 +79,8 @@ export const createOrderingActions = (
   },
 
   moveTerminalToPosition: (id, toIndex, location, worktreeId) => {
+    let backfilledWorktreeId: string | null = null;
+
     set((state) => {
       const terminal = state.panelsById[id];
       if (!terminal) return state;
@@ -118,9 +121,19 @@ export const createOrderingActions = (
 
       const isVisible = location === "grid";
       const ptyTerminal = isPtyPanel(terminal) ? terminal : undefined;
+      // A worktree-less dock panel dropped into the grid adopts the drop
+      // target's worktree — the grid renders only that worktree's index
+      // bucket, so an unset worktreeId would strand it off-screen (#11290).
+      // The rebuild below re-buckets the panel; a real attribution is kept.
+      const adoptedWorktreeId =
+        location === "grid" && terminal.worktreeId == null && targetWorktreeId != null
+          ? targetWorktreeId
+          : null;
+      backfilledWorktreeId = adoptedWorktreeId;
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- spread preserves the panel's discriminant; overrides are base-field-compatible
       const updatedTerminal = {
         ...terminal,
+        ...(adoptedWorktreeId !== null && { worktreeId: adoptedWorktreeId }),
         location,
         isVisible,
         runtimeStatus: deriveRuntimeStatus(
@@ -141,8 +154,7 @@ export const createOrderingActions = (
         saveTabGroups(groupPrune.tabGroups);
       }
       // Rebuild bucket order so per-worktree selectors observe the new order
-      // (issue #7451). The panel's worktreeId field is unchanged here, but its
-      // position within the bucket may have shifted.
+      // (issue #7451) and any adopted worktreeId lands in the right bucket.
       return {
         panelsById: newById,
         panelIds: newIds,
@@ -150,6 +162,20 @@ export const createOrderingActions = (
         ...(groupPrune.changed && { tabGroups: groupPrune.tabGroups }),
       };
     });
+
+    // A user-initiated promotion is explicit worktree attribution — recorded
+    // so later cwd-based inference can never silently re-home the panel.
+    if (backfilledWorktreeId !== null) {
+      const ledgerGeneration = agentLifecycleLedger.currentGeneration(id);
+      if (ledgerGeneration !== undefined) {
+        agentLifecycleLedger.recordWorktreeAttribution(
+          id,
+          ledgerGeneration,
+          backfilledWorktreeId,
+          "explicit"
+        );
+      }
+    }
 
     const terminal = get().panelsById[id];
     if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {

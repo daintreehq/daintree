@@ -182,6 +182,38 @@ describe("PluginViewDiagnosticsFallback", () => {
     expect(resetError).toHaveBeenCalledTimes(1);
   });
 
+  it("offers Close panel when the host supplies a close callback (#11301)", () => {
+    const onRequestClose = vi.fn();
+    renderFallback({ onRequestClose });
+
+    fireEvent.click(screen.getByTestId("plugin-view-diagnostics-close"));
+
+    // Without this the pane is a dead end: `panel.openPluginPanel` defaults to
+    // `reuseExisting: true`, so re-running the plugin's own open command just
+    // refocuses the panel that is already failing.
+    expect(onRequestClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits Close panel entirely when the host offers no close", () => {
+    renderFallback();
+
+    // Rendered-and-inert would read as a broken button; the host decides.
+    expect(screen.queryByTestId("plugin-view-diagnostics-close")).toBeNull();
+    expect(screen.getByTestId("plugin-view-diagnostics-retry")).toBeTruthy();
+  });
+
+  it("places Close panel next to Try again rather than off in the trace", () => {
+    renderFallback({ onRequestClose: vi.fn() });
+
+    const retry = screen.getByTestId("plugin-view-diagnostics-retry");
+    const close = screen.getByTestId("plugin-view-diagnostics-close");
+    // The issue's ask is specifically that the escape hatch sits where the
+    // failure is shown, beside the recovery action — not that it carries any
+    // particular class.
+    expect(close.parentElement).toBe(retry.parentElement);
+    expect(retry.compareDocumentPosition(close) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("substitutes placeholders when the error carries no stacks", () => {
     renderFallback({ error: makeError("boom", undefined), errorInfo: undefined });
 

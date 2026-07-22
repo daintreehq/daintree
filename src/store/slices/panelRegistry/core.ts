@@ -24,8 +24,9 @@ import {
   consumeBatch,
 } from "./hydrationBatch";
 import type { HydrationBatchToken } from "./types";
-import { removeFromWorktreeIndex } from "./worktreeIndex";
+import { removeFromWorktreeIndex, transferBetweenWorktreeIndex } from "./worktreeIndex";
 import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
+import { getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 import { countPanelsTowardLimit } from "./panelCount";
 import { usePanelLimitStore } from "@/store/panelLimitStore";
 import { notify } from "@/lib/notify";
@@ -538,6 +539,13 @@ export const createCorePanelActions = (
     let moveSucceeded = false;
     let terminal: PanelInstance | undefined;
 
+    // A worktree-less dock panel is visible in every worktree's dock, but the
+    // grid renders only the active worktree's index bucket — landing there
+    // without a worktreeId strands it off-screen (#11290). Promotion adopts
+    // the active worktree; a real existing attribution is never changed.
+    const activeWorktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null;
+    let backfilledWorktreeId: string | null = null;
+
     set((state) => {
       terminal = state.panelsById[id];
       if (!terminal || terminal.location === "grid") return state;
@@ -547,14 +555,23 @@ export const createCorePanelActions = (
       moveSucceeded = true;
       const groupPrune = removePanelIdsFromTabGroups(state.tabGroups, new Set([id]));
       const t = terminal!;
+      const adoptedWorktreeId =
+        t.worktreeId == null && activeWorktreeId !== null ? activeWorktreeId : null;
+      backfilledWorktreeId = adoptedWorktreeId;
       const updatedPanel = isPtyPanel(t)
         ? {
             ...t,
+            ...(adoptedWorktreeId !== null && { worktreeId: adoptedWorktreeId }),
             location: "grid" as const,
             isVisible: true,
             runtimeStatus: deriveRuntimeStatus(true, t.flowStatus, t.runtimeStatus),
           }
-        : { ...t, location: "grid" as const, isVisible: true };
+        : {
+            ...t,
+            ...(adoptedWorktreeId !== null && { worktreeId: adoptedWorktreeId }),
+            location: "grid" as const,
+            isVisible: true,
+          };
       const newById = { ...state.panelsById, [id]: updatedPanel };
       saveNormalized(newById, state.panelIds);
       if (groupPrune.changed) {
@@ -562,9 +579,31 @@ export const createCorePanelActions = (
       }
       return {
         panelsById: newById,
+        ...(adoptedWorktreeId !== null && {
+          panelIdsByWorktreeId: transferBetweenWorktreeIndex(
+            state.panelIdsByWorktreeId,
+            t.worktreeId,
+            adoptedWorktreeId,
+            id
+          ),
+        }),
         ...(groupPrune.changed && { tabGroups: groupPrune.tabGroups }),
       };
     });
+
+    // A user-initiated promotion is explicit worktree attribution — recorded
+    // so later cwd-based inference can never silently re-home the panel.
+    if (backfilledWorktreeId !== null) {
+      const ledgerGeneration = agentLifecycleLedger.currentGeneration(id);
+      if (ledgerGeneration !== undefined) {
+        agentLifecycleLedger.recordWorktreeAttribution(
+          id,
+          ledgerGeneration,
+          backfilledWorktreeId,
+          "explicit"
+        );
+      }
+    }
 
     // Only apply renderer policy for PTY-backed panels if move succeeded
     if (moveSucceeded && terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
@@ -581,6 +620,13 @@ export const createCorePanelActions = (
     const { hardLimit } = usePanelLimitStore.getState();
     let promoted = false;
     let atLimit = false;
+
+    // A dialog panel opened for a path outside every registered worktree has
+    // no worktreeId; promoting it into the grid without one strands it outside
+    // the active worktree's rendered bucket (#11290), same as a dock
+    // promotion. Adopt the active worktree; a real attribution is kept.
+    const activeWorktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null;
+    let backfilledWorktreeId: string | null = null;
 
     set((state) => {
       // Re-read inside the updater: the panel may have been closed or already
@@ -600,8 +646,12 @@ export const createCorePanelActions = (
       // Drop `excludeFromPersistence` rather than setting it false: the field is
       // optional, and a lingering `false` would read as a deliberate opt-in.
       const { excludeFromPersistence: _ephemeral, ...persistable } = panel;
+      const adoptedWorktreeId =
+        panel.worktreeId == null && activeWorktreeId !== null ? activeWorktreeId : null;
+      backfilledWorktreeId = adoptedWorktreeId;
       const updatedPanel = {
         ...persistable,
+        ...(adoptedWorktreeId !== null && { worktreeId: adoptedWorktreeId }),
         location: "grid" as const,
         isVisible: true,
       } as PanelInstance;
@@ -609,8 +659,32 @@ export const createCorePanelActions = (
       const newById = { ...state.panelsById, [id]: updatedPanel };
       saveNormalized(newById, state.panelIds);
       promoted = true;
-      return { panelsById: newById };
+      return {
+        panelsById: newById,
+        ...(adoptedWorktreeId !== null && {
+          panelIdsByWorktreeId: transferBetweenWorktreeIndex(
+            state.panelIdsByWorktreeId,
+            panel.worktreeId,
+            adoptedWorktreeId,
+            id
+          ),
+        }),
+      };
     });
+
+    // A user-initiated promotion is explicit worktree attribution — recorded
+    // so later cwd-based inference can never silently re-home the panel.
+    if (backfilledWorktreeId !== null) {
+      const ledgerGeneration = agentLifecycleLedger.currentGeneration(id);
+      if (ledgerGeneration !== undefined) {
+        agentLifecycleLedger.recordWorktreeAttribution(
+          id,
+          ledgerGeneration,
+          backfilledWorktreeId,
+          "explicit"
+        );
+      }
+    }
 
     if (atLimit) {
       notify({
