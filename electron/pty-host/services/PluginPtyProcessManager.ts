@@ -122,7 +122,7 @@ export class PluginPtyProcessManager {
     } catch (error) {
       console.warn(
         `[PluginPty] write to "${id}" failed:`,
-        formatErrorMessage(error, "write failed"),
+        formatErrorMessage(error, "write failed")
       );
     }
   }
@@ -141,7 +141,7 @@ export class PluginPtyProcessManager {
     } catch (error) {
       console.warn(
         `[PluginPty] resize of "${id}" failed:`,
-        formatErrorMessage(error, "resize failed"),
+        formatErrorMessage(error, "resize failed")
       );
     }
   }
@@ -241,7 +241,7 @@ export class PluginPtyProcessManager {
     } catch (error) {
       console.warn(
         `[PluginPty] teardown (${reason}) of "${entry.id}" failed:`,
-        formatErrorMessage(error, "teardown failed"),
+        formatErrorMessage(error, "teardown failed")
       );
     }
     // Only drop the map entry if it still points at this incarnation — a
@@ -266,4 +266,3 @@ interface PluginPtyEntry {
 function isPositiveInt(value: number): boolean {
   return Number.isInteger(value) && value > 0;
 }
-
