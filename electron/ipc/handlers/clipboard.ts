@@ -9,6 +9,7 @@ import { CLIPBOARD_METHOD_CHANNELS } from "./clipboard.preload.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { resolveContainedPath } from "./pathGuard.js";
+import { decodeClipboardPng, MAX_CLIPBOARD_IMAGE_BYTES } from "../../utils/clipboardImage.js";
 
 const CLIPBOARD_DIR_NAME = "daintree-clipboard";
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -20,9 +21,10 @@ const MAX_FILE_COUNT = 20;
 // electron/setup/security.ts) because containsBinary() skips the JSON-size
 // check for typed arrays, so these handler-level caps are the backstop
 // against a hostile or runaway renderer exhausting the main-process heap
-// below Mojo's 128 MiB ceiling. 20 MiB comfortably covers a 6K-display PNG.
+// below Mojo's 128 MiB ceiling. The image cap is shared with the plugin
+// host's writeImage (electron/utils/clipboardImage.ts).
 const MAX_TEXT_BYTES = 8 * 1024 * 1024;
-const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+const MAX_IMAGE_BYTES = MAX_CLIPBOARD_IMAGE_BYTES;
 
 function getClipboardDir(): string {
   return path.join(os.tmpdir(), CLIPBOARD_DIR_NAME);
@@ -212,9 +214,8 @@ async function handleWriteImage(pngData: Uint8Array): Promise<void> {
       context: { byteLength: pngData.byteLength, limit: MAX_IMAGE_BYTES },
     });
   }
-  const buffer = Buffer.from(pngData.buffer, pngData.byteOffset, pngData.byteLength);
-  const image = nativeImage.createFromBuffer(buffer);
-  if (image.isEmpty()) {
+  const image = decodeClipboardPng(pngData);
+  if (image === null) {
     throw new AppError({
       code: "CLIPBOARD_INVALID",
       message: "Invalid image data",

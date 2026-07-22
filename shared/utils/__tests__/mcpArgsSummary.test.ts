@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   MCP_ARGS_INLINE_STRING_LIMIT,
   MCP_ARGS_SUMMARY_LIMIT,
@@ -8,9 +8,22 @@ import {
 } from "../mcpArgsSummary.js";
 
 describe("summarizeMcpArgs", () => {
-  it("returns null for null and undefined inputs", () => {
+  it("distinguishes no arguments from an explicit null argument", () => {
+    // Callers render this as a preview and gate the block on emptiness, so
+    // "this call takes no arguments" must be empty rather than the word
+    // "null" — which is what users were shown for every no-arg action
+    // (#11299). An argument that genuinely *is* null keeps its own summary.
+    expect(summarizeMcpArgs(undefined)).toBe("");
     expect(summarizeMcpArgs(null)).toBe("null");
-    expect(summarizeMcpArgs(undefined)).toBe("null");
+  });
+
+  it("keeps the no-arguments summary empty even with a scrubber attached", () => {
+    // The audit path always passes a scrubber. A scrubber that returns a
+    // sentinel proves the empty case never reaches it — a scrubber mapping
+    // "" to "" would pass whether or not it ran.
+    const scrub = vi.fn(() => "SCRUBBED");
+    expect(summarizeMcpArgs(undefined, scrub)).toBe("");
+    expect(scrub).not.toHaveBeenCalled();
   });
 
   it("collapses long strings to a length placeholder", () => {

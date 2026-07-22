@@ -305,11 +305,29 @@ describe("PluginConfirmDialog", () => {
     expect(screen.getByText('{"key":"value"}')).toBeTruthy();
   });
 
-  it("shows (none) for empty args summary", () => {
+  it("omits the Arguments section entirely for an action with no arguments", () => {
+    // Previously this rendered the literal word "null": summarizeMcpArgs
+    // serialized `undefined` to the string "null", which is truthy, so the
+    // `|| "(none)"` fallback never fired (#11299). Now the summary is empty
+    // and the whole block is dropped — the description above already says
+    // what will run.
     void enqueue({ argsSummary: "" });
     render(<PluginConfirmDialog />);
 
-    expect(screen.getByText("(none)")).toBeTruthy();
+    expect(screen.queryByText("Arguments")).toBeNull();
+    expect(screen.queryByText("(none)")).toBeNull();
+    expect(screen.queryByText("null")).toBeNull();
+  });
+
+  it("still shows the section for an argument that is genuinely null", () => {
+    // "takes no arguments" and "one argument whose value is null" are
+    // different facts; suppressing both would hide a real argument from the
+    // person being asked to approve the call.
+    void enqueue({ argsSummary: "null" });
+    render(<PluginConfirmDialog />);
+
+    expect(screen.getByText("Arguments")).toBeTruthy();
+    expect(screen.getByText("null")).toBeTruthy();
   });
 
   it("rejects when cancel is clicked", async () => {

@@ -2,6 +2,8 @@ import * as nodePath from "path";
 import * as nodeFs from "fs";
 import { AppError } from "../../utils/errorTypes.js";
 
+export { assertExtensionAllowed } from "../../utils/executablePathGuard.js";
+
 /**
  * Resolve a renderer-supplied path and assert it is contained within one of
  * the allowed roots. Both the target and each root are run through

@@ -59,6 +59,10 @@ export function PluginConfirmDialog() {
 
   const isDestructive = current.effectiveDanger === "confirm";
   const variant = isDestructive ? "destructive" : "default";
+  // A no-argument action has nothing to preview, so the whole block is
+  // dropped rather than shown holding a placeholder — matching
+  // PluginMcpConfirmDialog. The description above already says what runs.
+  const hasArgs = current.argsSummary.length > 0;
 
   return (
     <ErrorBoundary variant="component" componentName="PluginConfirmDialog" resetKeys={[resetKey]}>
@@ -77,14 +81,16 @@ export function PluginConfirmDialog() {
         confirmCooldownMs={isDestructive ? CONFIRM_COOLDOWN_MS : undefined}
         cooldownKey={current.requestId}
       >
-        <div className="space-y-2">
-          <div className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60">
-            Arguments
+        {hasArgs ? (
+          <div className="space-y-2">
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60">
+              Arguments
+            </div>
+            <pre className="text-xs font-mono whitespace-pre-wrap break-words bg-overlay-subtle rounded px-2 py-1.5 text-daintree-text/80">
+              {current.argsSummary}
+            </pre>
           </div>
-          <pre className="text-xs font-mono whitespace-pre-wrap break-words bg-overlay-subtle rounded px-2 py-1.5 text-daintree-text/80">
-            {current.argsSummary || "(none)"}
-          </pre>
-        </div>
+        ) : null}
       </ConfirmDialog>
     </ErrorBoundary>
   );

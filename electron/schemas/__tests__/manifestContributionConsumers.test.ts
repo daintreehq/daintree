@@ -401,6 +401,13 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       consumers: [{ file: PLUGIN_SERVICE, symbol: "validateAndBuildActionDescriptor" }],
       note: "Copied into the action descriptor inputSchema for arg validation.",
     },
+    requires: {
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_SERVICE, symbol: "validateAndBuildActionDescriptor (effectiveDanger)" },
+      ],
+      note: "Per-action capability intent (#11299): validated as a subset of manifest.capabilities, then narrows which capabilities effectiveDanger consults. Grants no access — never a capability check input.",
+    },
   },
   views: {
     id: {

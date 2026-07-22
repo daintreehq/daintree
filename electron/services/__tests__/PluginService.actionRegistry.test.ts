@@ -691,6 +691,195 @@ describe("Plugin action registry", () => {
   });
 });
 
+/**
+ * Per-action capability intent (#11299). The whole point is that a plugin
+ * holding `shell:exec` for one action shouldn't have every *other* action
+ * inherit a destructive confirmation — while keeping the host, not the plugin,
+ * the one deciding.
+ */
+describe("Plugin action registry — per-action capability intent (requires)", () => {
+  const contribution = (pluginId: string, extra: Record<string, unknown> = {}) => ({
+    id: `${pluginId}.doThing`,
+    title: "Do Thing",
+    description: "Does a thing",
+    category: "plugin",
+    kind: "command" as const,
+    danger: "safe" as const,
+    ...extra,
+  });
+
+  /** A plugin holding a high-risk capability plus a benign read. */
+  async function riskyService(
+    capabilities: string[] = ["shell:exec", "fs:project-read"],
+    scopes?: Record<string, unknown>
+  ): Promise<PluginService> {
+    await writePlugin("intent", {
+      name: "acme.intent",
+      version: "1.0.0",
+      capabilities,
+      ...(scopes ? { scopes } : {}),
+    });
+    const svc = new PluginService(tmpDir);
+    await svc.initialize();
+    return svc;
+  }
+
+  const dangerOf = (svc: PluginService): string | undefined =>
+    svc.listPluginActions().find((a) => a.id === "acme.intent.doThing")?.effectiveDanger;
+
+  it("omitting requires still elevates from the whole manifest", async () => {
+    // The backward-compatibility guarantee: a plugin written before this field
+    // existed must keep today's conservative verdict, so shipping the feature
+    // can't silently de-escalate anyone's existing actions.
+    const svc = await riskyService();
+    svc.registerPluginAction("acme.intent", contribution("acme.intent"));
+    expect(dangerOf(svc)).toBe("confirm");
+  });
+
+  it("requires: [] keeps an action safe even when the manifest grants shell:exec", async () => {
+    // The headline case from the issue: a no-authority "open the tools panel"
+    // command in a plugin that also runs shell commands.
+    const svc = await riskyService();
+    svc.registerPluginAction("acme.intent", contribution("acme.intent", { requires: [] }));
+    expect(dangerOf(svc)).toBe("safe");
+  });
+
+  it("a read-only requires subset ignores an unrelated shell:exec", async () => {
+    const svc = await riskyService();
+    svc.registerPluginAction(
+      "acme.intent",
+      contribution("acme.intent", { requires: ["fs:project-read"] })
+    );
+    expect(dangerOf(svc)).toBe("safe");
+  });
+
+  it("a requires subset that names the high-risk capability still elevates", async () => {
+    const svc = await riskyService();
+    svc.registerPluginAction(
+      "acme.intent",
+      contribution("acme.intent", { requires: ["shell:exec"] })
+    );
+    expect(dangerOf(svc)).toBe("confirm");
+  });
+
+  it("narrows the compound-capability lattice to the declared subset", async () => {
+    // fs:project-read + network:fetch is an exfiltration pair that elevates
+    // manifest-wide; an action touching only the read half is not that pair.
+    const svc = await riskyService(["fs:project-read", "network:fetch"]);
+    svc.registerPluginAction(
+      "acme.intent",
+      contribution("acme.intent", { requires: ["fs:project-read"] })
+    );
+    expect(dangerOf(svc)).toBe("safe");
+  });
+
+  it("still elevates when the declared subset itself forms a compound pair", async () => {
+    const svc = await riskyService(["fs:project-read", "network:fetch"]);
+    svc.registerPluginAction(
+      "acme.intent",
+      contribution("acme.intent", { requires: ["fs:project-read", "network:fetch"] })
+    );
+    expect(dangerOf(svc)).toBe("confirm");
+  });
+
+  it("a tight network scope still attenuates a compound pair named in requires", async () => {
+    // Scope attenuation is a manifest-level property, so narrowing the
+    // capability set must not lose it.
+    const svc = await riskyService(["fs:project-read", "network:fetch"], {
+      network: { allowedUrls: ["https://api.example.com/v2"] },
+    });
+    svc.registerPluginAction(
+      "acme.intent",
+      contribution("acme.intent", { requires: ["fs:project-read", "network:fetch"] })
+    );
+    expect(dangerOf(svc)).toBe("safe");
+  });
+
+  it("never lowers a self-declared danger: 'confirm'", async () => {
+    // requires narrows what the host *derives*; it is not an escape hatch from
+    // the plugin's own declaration.
+    const svc = await riskyService();
+    svc.registerPluginAction(
+      "acme.intent",
+      contribution("acme.intent", { requires: [], danger: "confirm" as const })
+    );
+    expect(dangerOf(svc)).toBe("confirm");
+  });
+
+  it("rejects a capability the manifest never declared", async () => {
+    const svc = await riskyService(["fs:project-read"]);
+    expect(() =>
+      svc.registerPluginAction(
+        "acme.intent",
+        contribution("acme.intent", { requires: ["shell:exec"] })
+      )
+    ).toThrow(/PERMISSION_REQUIRED/);
+    expect(svc.listPluginActions()).toHaveLength(0);
+  });
+
+  it("rejects an unknown capability token", async () => {
+    const svc = await riskyService();
+    expect(() =>
+      svc.registerPluginAction(
+        "acme.intent",
+        contribution("acme.intent", { requires: ["fs:teleport"] })
+      )
+    ).toThrow(/unknown capability/i);
+  });
+
+  it("rejects a non-array requires", async () => {
+    const svc = await riskyService();
+    expect(() =>
+      svc.registerPluginAction(
+        "acme.intent",
+        contribution("acme.intent", { requires: "shell:exec" })
+      )
+    ).toThrow(/invalid "requires"/);
+  });
+
+  it("descriptor keeps a defensive copy of requires", async () => {
+    // The descriptor is broadcast and cached; sharing the plugin's array would
+    // let it mutate a host-authoritative record after validation passed.
+    const svc = await riskyService();
+    const requires = ["fs:project-read"];
+    svc.registerPluginAction("acme.intent", contribution("acme.intent", { requires }));
+    requires.push("shell:exec");
+
+    const descriptor = svc.listPluginActions().find((a) => a.id === "acme.intent.doThing");
+    expect(descriptor?.requires).toEqual(["fs:project-read"]);
+  });
+
+  it("does not elevate an action for the disclosure-only socket:connect", async () => {
+    // socket:connect is deliberately outside CONFIRM_TRIGGERING_CAPABILITIES:
+    // the host has no interception point for node:net, so elevating on a
+    // token it cannot enforce buys friction without buying safety. Asserted
+    // behaviourally — a membership check against the set would simply follow
+    // the set if someone changed it.
+    const svc = await riskyService(["socket:connect"]);
+    svc.registerPluginAction("acme.intent", contribution("acme.intent"));
+    expect(dangerOf(svc)).toBe("safe");
+  });
+
+  it("does not elevate an action that names socket:connect in requires", async () => {
+    const svc = await riskyService(["socket:connect", "shell:exec"]);
+    svc.registerPluginAction(
+      "acme.intent",
+      contribution("acme.intent", { requires: ["socket:connect"] })
+    );
+    expect(dangerOf(svc)).toBe("safe");
+  });
+
+  it("leaves requires undefined on the descriptor when the action declared none", async () => {
+    // Distinguishable from `[]` downstream — the renderer's descriptor
+    // equality and any future consumer must see "not declared", not "empty".
+    const svc = await riskyService();
+    svc.registerPluginAction("acme.intent", contribution("acme.intent"));
+    expect(
+      svc.listPluginActions().find((a) => a.id === "acme.intent.doThing")?.requires
+    ).toBeUndefined();
+  });
+});
+
 type ActionDescriptorInput = {
   id: string;
   title: string;

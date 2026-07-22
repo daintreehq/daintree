@@ -7,7 +7,7 @@ import { openExternalUrl } from "../../utils/openExternal.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { gitServiceCache } from "../../services/GitServiceCache.js";
 import { AppError } from "../../utils/errorTypes.js";
-import { resolveContainedPath } from "./pathGuard.js";
+import { resolveContainedPath, assertExtensionAllowed } from "./pathGuard.js";
 import {
   SystemOpenExternalPayloadSchema,
   SystemOpenPathPayloadSchema,
@@ -23,47 +23,6 @@ import type {
   SystemShowItemInFolderUnconfinedPayload,
   SystemOpenInEditorPayload,
 } from "../../schemas/ipc.js";
-
-// Extensions that shell.openPath / the OS would execute rather than reveal.
-// On macOS, opening a .app (or .command/.scpt) launches it; on Windows a
-// .exe/.bat/.lnk runs; on Linux a .desktop/.sh/.AppImage executes. We deny
-// these for renderer-supplied paths regardless of containment, since a
-// malicious file dropped inside an allowed root must not become a launch
-// primitive. Selected per-platform at module init.
-const DENIED_EXTENSIONS_BY_PLATFORM: Record<string, readonly string[]> = {
-  darwin: [".app", ".command", ".terminal", ".scpt", ".scptd", ".pkg", ".dmg", ".desktop"],
-  linux: [".desktop", ".sh", ".appimage", ".run"],
-  win32: [
-    ".exe",
-    ".bat",
-    ".cmd",
-    ".com",
-    ".scr",
-    ".pif",
-    ".vbs",
-    ".ps1",
-    ".msi",
-    ".lnk",
-    ".jar",
-    ".reg",
-    ".cpl",
-    ".wsf",
-    ".hta",
-  ],
-};
-
-const DENIED_EXTENSIONS = new Set<string>(DENIED_EXTENSIONS_BY_PLATFORM[process.platform] ?? []);
-
-function assertExtensionAllowed(candidate: string): void {
-  const ext = nodePath.extname(candidate).toLowerCase();
-  if (DENIED_EXTENSIONS.has(ext)) {
-    throw new AppError({
-      code: "INVALID_PATH",
-      message: `Refusing to open executable file type: ${ext}`,
-      context: { candidate, ext },
-    });
-  }
-}
 
 /**
  * Collect the worktree roots git actually tracks for each project.

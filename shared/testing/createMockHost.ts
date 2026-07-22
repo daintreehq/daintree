@@ -166,6 +166,17 @@ export interface MockHostState {
   readonly gitCommitCalls: ReadonlyArray<GitCommitRecord>;
   /** Captured `host.clipboard.writeText(text)` calls, in order. */
   readonly clipboardWriteCalls: ReadonlyArray<string>;
+  /**
+   * Captured `host.clipboard.writeImage(pngData)` calls, in order. Records the
+   * byte length rather than the bytes: a test asserts that an image of the
+   * right size was written, and holding multi-MiB buffers alive for the
+   * lifetime of the mock is a memory trap in a suite that builds many hosts.
+   */
+  readonly clipboardWriteImageCalls: ReadonlyArray<number>;
+  /** Captured `host.system.openPath(path)` calls, in order. */
+  readonly systemOpenPathCalls: ReadonlyArray<string>;
+  /** Captured `host.system.showItemInFolder(path)` calls, in order. */
+  readonly systemShowItemCalls: ReadonlyArray<string>;
 
   /**
    * Replace the active worktree and notify every `onDidChangeActiveWorktree`
@@ -455,6 +466,9 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const fsWriteCalls: FsWriteRecord[] = [];
   const gitCommitCalls: GitCommitRecord[] = [];
   const clipboardWriteCalls: string[] = [];
+  const clipboardWriteImageCalls: number[] = [];
+  const systemOpenPathCalls: string[] = [];
+  const systemShowItemCalls: string[] = [];
   let clipboardText = "";
 
   const activeWorktreeSubs = new Set<(snapshot: PluginWorktreeSnapshot | null) => void>();
@@ -1234,8 +1248,27 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         clipboardWriteCalls.push(text);
         clipboardText = text;
       },
+      async writeImage(pngData) {
+        clipboardWriteImageCalls.push(pngData.byteLength);
+        // A real image write replaces the clipboard, so text no longer reads
+        // back — leaving the buffer intact would let a test pass that the
+        // real host would fail.
+        clipboardText = "";
+      },
       async readText() {
         return clipboardText;
+      },
+    },
+    // Records only — a mock must never actually launch a file or open a
+    // Finder window, which is exactly what the real implementation does.
+    // Containment and capability gating live in PluginService and are unit
+    // tested there, matching the fs/git/clipboard mocks.
+    system: {
+      async openPath(targetPath) {
+        systemOpenPathCalls.push(targetPath);
+      },
+      async showItemInFolder(targetPath) {
+        systemShowItemCalls.push(targetPath);
       },
     },
     settings,
@@ -1264,6 +1297,9 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     fsWriteCalls,
     gitCommitCalls,
     clipboardWriteCalls,
+    clipboardWriteImageCalls,
+    systemOpenPathCalls,
+    systemShowItemCalls,
 
     simulateActiveWorktreeChange(snapshot) {
       activeWorktree = snapshot;

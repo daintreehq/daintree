@@ -1483,7 +1483,7 @@ type PluginPanelBadge = {
 };
 type MenuItemLocation = "terminal" | "file" | "view" | "help";
 type ContextMenuLocation = "worktree" | "terminal" | "file";
-declare const BUILT_IN_PLUGIN_CAPABILITIES: readonly ["fs:project-read", "fs:project-write", "fs:user-data-read", "fs:user-data-write", "network:fetch", "agent:invoke", "agent:read", "agent:register", "agent:input", "git:read", "git:write", "clipboard:read", "clipboard:write", "shell:exec"];
+declare const BUILT_IN_PLUGIN_CAPABILITIES: readonly ["fs:project-read", "fs:project-write", "fs:user-data-read", "fs:user-data-write", "network:fetch", "agent:invoke", "agent:read", "agent:register", "agent:input", "git:read", "git:write", "clipboard:read", "clipboard:write", "shell:exec", "socket:connect"];
 type BuiltInPluginCapability = (typeof BUILT_IN_PLUGIN_CAPABILITIES)[number];
 type PluginCapability = BuiltInPluginCapability;
 interface MenuItemContribution {
@@ -1695,9 +1695,28 @@ interface PluginFsScope {
      */
     allowedPaths: string[];
 }
+/**
+ * Optional path intent for the `socket:connect` capability (#11299). Purely
+ * declarative: unlike {@link PluginFsScope}, nothing enforces it, because a
+ * plugin's `main` reaches `node:net` directly and the host has no interception
+ * point. Its job is disclosure — the Permissions tab renders these entries so
+ * "connects to local sockets" reads as "connects to `/var/run/docker.sock`".
+ *
+ * Entries are validated for shape only (a Unix-domain path or a Windows
+ * `\\.\pipe\…` name, no globs), and validated identically on every platform so
+ * a cross-platform manifest parses on all of them.
+ */
+interface PluginLocalSocketScope {
+    /**
+     * Declared local endpoints the plugin intends to connect to — Unix-domain
+     * socket paths and/or Windows named pipes. Advisory, not enforced.
+     */
+    allowedPaths: string[];
+}
 interface PluginManifestScopes {
     network?: PluginNetworkScope;
     fs?: PluginFsScope;
+    socket?: PluginLocalSocketScope;
 }
 /**
  * A plugin-contributed agent entry (#9560). Lets a plugin teach Daintree about
@@ -2589,11 +2608,14 @@ interface PluginGitApi {
 }
 /**
  * Host-mediated access to the OS clipboard, backing the `clipboard:read` /
- * `clipboard:write` capability tokens. Text-only — the surface deliberately
- * omits image/HTML/file-list variants so a plugin cannot read or smuggle
- * richer payloads than it declared. Both methods run in the main process
- * (Electron's `clipboard` module is unavailable in the plugin utility worker),
- * so they remain callable from a headless plugin with no mounted panel.
+ * `clipboard:write` capability tokens. The *read* surface is deliberately
+ * text-only — omitting image/HTML/file-list reads is what stops a plugin
+ * smuggling out richer payloads than it declared. Writes carry no such risk
+ * (the plugin already has the bytes), so a bounded {@link writeImage} is
+ * offered alongside {@link writeText}; there is still no HTML or file-list
+ * write. Every method runs in the main process (Electron's `clipboard` module
+ * is unavailable in the plugin utility worker), so they remain callable from a
+ * headless plugin with no mounted panel.
  *
  * Like {@link PluginFsApi} and {@link PluginGitApi} this is NOT revoke-guarded:
  * plugins read/write from post-activation timers and callbacks. Once the plugin
@@ -2607,11 +2629,71 @@ interface PluginClipboardApi {
      */
     writeText(text: string): Promise<void>;
     /**
+     * Replace the clipboard's contents with a PNG image. Gated on the same
+     * `clipboard:write` token as {@link writeText} — putting an image on the
+     * clipboard is no less reversible than putting text there, so it earns no
+     * separate capability and does not elevate action danger.
+     *
+     * `pngData` must be the raw PNG bytes. Rejects with a `PAYLOAD_TOO_LARGE:`
+     * prefix above 20 MiB (matching the renderer IPC clipboard guard) and with a
+     * `VALIDATION:` prefix when the bytes don't decode to a non-empty image —
+     * Electron's `nativeImage.createFromBuffer` reports malformed input by
+     * returning an empty image rather than throwing, so the emptiness check is
+     * the only signal available. Successful writes append an audit record
+     * carrying the byte count only, never the image bytes.
+     *
+     * Decoding happens in the main process by necessity: the renderer's
+     * `navigator.clipboard.write()` path crashes on Linux with binary PNG
+     * payloads (#4900), so this is the only safe route for image writes.
+     */
+    writeImage(pngData: Uint8Array): Promise<void>;
+    /**
      * Read the clipboard's text contents. Gated on `clipboard:read`. Resolves to
      * `""` when the clipboard is empty or holds non-text content (image, file
      * list) — it never rejects on content type.
      */
     readText(): Promise<string>;
+}
+/**
+ * Host-mediated OS "reveal / open with the default app" surface (#11299).
+ *
+ * Exists because the renderer's built-in `system.openPath` action validates
+ * against the *user's* roots — open projects, tracked worktrees, Electron's
+ * `userData` — and carries no caller identity, so a plugin dispatching it
+ * cannot reach the one directory that is unambiguously its own:
+ * `~/.daintree/plugin-data/<plugin-id>/`. A plugin that just wrote a
+ * screenshot there had no sanctioned way to reveal it, and shelled out to
+ * `/usr/bin/open` instead — trading a contained call for arbitrary execution.
+ *
+ * Both methods resolve paths against the calling plugin's *declared* filesystem
+ * scope (`scopes.fs.allowedPaths` plus its implicit plugin-data namespace), and
+ * the plugin id is bound at host construction rather than travelling as an
+ * argument, so one plugin can never name another's namespace. Containment is
+ * realpath-based, so a symlink cannot walk out of scope. Gated on the `fs:*`
+ * capability matching the resolved root's class: revealing something under the
+ * plugin-data namespace needs `fs:user-data-read` or `fs:user-data-write`,
+ * under a project root `fs:project-read` or `fs:project-write` — a plugin that
+ * could legitimately create the file can always reveal it.
+ *
+ * Like {@link PluginFsApi} this is NOT revoke-guarded, and every method rejects
+ * once the plugin is unloaded.
+ */
+interface PluginSystemApi {
+    /**
+     * Open `targetPath` with the OS default application. Rejects paths outside
+     * the plugin's declared scope (`OUTSIDE_ROOT:`), non-absolute or unresolvable
+     * paths (`INVALID_PATH:`), and executable file types (`.app`, `.exe`, `.sh`,
+     * … — checked on both the raw path and its realpath target, so a benignly
+     * named symlink cannot smuggle a launch primitive past the deny-list).
+     */
+    openPath(targetPath: string): Promise<void>;
+    /**
+     * Reveal `targetPath` in the OS file manager, selecting it. Same containment
+     * and capability rules as {@link openPath}, but without the executable
+     * deny-list: revealing a file in Finder/Explorer shows it, it does not run
+     * it. The path must exist.
+     */
+    showItemInFolder(targetPath: string): Promise<void>;
 }
 /**
  * The revoke-guarded slice of {@link PluginHostApi}: the registration methods
@@ -3106,12 +3188,24 @@ interface PluginHostApi extends PluginActivationApi {
     readonly git: PluginGitApi;
     /**
      * Host-mediated OS clipboard surface. Reads gated on `clipboard:read`, writes
-     * on `clipboard:write`. Text-only; runs in the main process so it works from a
-     * headless plugin. See {@link PluginClipboardApi}.
+     * on `clipboard:write`. Text reads/writes plus bounded PNG writes; runs in the
+     * main process so it works from a headless plugin. See
+     * {@link PluginClipboardApi}.
      *
      * NOT revoke-guarded — same membership lifetime as {@link fs}.
      */
     readonly clipboard: PluginClipboardApi;
+    /**
+     * Host-mediated "open with the default app" / "reveal in file manager"
+     * surface, scoped to the plugin's own declared filesystem roots — including
+     * its implicit `~/.daintree/plugin-data/<plugin-id>/` namespace, which the
+     * renderer's built-in `system.openPath` action cannot reach. Gated on the
+     * `fs:*` capability matching the resolved root's class. See
+     * {@link PluginSystemApi}.
+     *
+     * NOT revoke-guarded — same membership lifetime as {@link fs}.
+     */
+    readonly system: PluginSystemApi;
 }
 /**
  * Synchronous, fire-and-forget diagnostic logger handed to a plugin via
@@ -3151,6 +3245,30 @@ interface PluginActionContribution {
     danger: "safe" | "confirm";
     keywords?: string[];
     inputSchema?: Record<string, unknown>;
+    /**
+     * Per-action capability intent: the subset of the plugin's declared
+     * `manifest.capabilities` this specific action actually exercises. Mirrors
+     * {@link PluginChannelSchema.requires} in both spelling and enforcement — the
+     * host rejects registration if any entry is missing from the manifest, so an
+     * action can never claim authority the plugin never asked the user for.
+     *
+     * This narrows which capabilities the danger computation consults, so a
+     * no-authority action in a high-authority plugin stays one click:
+     *
+     * - **omitted** — every manifest capability is consulted (today's behavior,
+     *   preserved verbatim so existing plugins need no migration and a plugin
+     *   that never opts in cannot accidentally de-escalate).
+     * - **`[]`** — the action declares no capability intent and may stay `"safe"`
+     *   even when the plugin holds `shell:exec` elsewhere.
+     * - **non-empty** — only the listed capabilities are consulted, both for the
+     *   flat high-risk set and the compound-capability lattice.
+     *
+     * It is a *classification* input only: it never grants access. Host APIs
+     * still gate on `manifest.capabilities` at call time, so listing a capability
+     * here neither adds nor removes runtime authority. Declaring
+     * `danger: "confirm"` still pins the action to confirm regardless.
+     */
+    requires?: readonly BuiltInPluginCapability[];
 }
 
 /**
@@ -3230,4 +3348,4 @@ type PluginProcessStreamEvent = {
     signal: string | null;
 };
 
-export { type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, type PR, type Page, type PanelContribution, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsScope, type PluginFsStat, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginSettingsScope, type PluginStorageScope, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, localAuthStubs };
+export { type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, type PR, type Page, type PanelContribution, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsScope, type PluginFsStat, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, localAuthStubs };

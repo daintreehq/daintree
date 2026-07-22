@@ -98,6 +98,17 @@ export const CAPABILITY_META = {
     description: "Execute arbitrary commands on your machine",
     severity: "danger",
   },
+  // Warning, not danger: connecting to a local socket is a real escalation
+  // (the Docker socket is root-equivalent), but the tier here is about how
+  // loudly to render a declaration, and `danger` is reserved for the one
+  // capability that is unambiguously arbitrary execution. The honest caveat —
+  // that this is disclosure the host cannot enforce — belongs in the copy
+  // rather than in a colour.
+  "socket:connect": {
+    label: "Connect to local sockets",
+    description: "Talk to local services like the Docker socket",
+    severity: "warning",
+  },
 } satisfies Record<BuiltInPluginCapability, CapabilityMeta>;
 
 export const SEVERITY_TEXT_CLASS: Record<CapabilitySeverity, string> = {
@@ -109,12 +120,24 @@ export const SEVERITY_TEXT_CLASS: Record<CapabilitySeverity, string> = {
 export function CapabilityRow({
   capability,
   allowedUrls,
+  allowedSocketPaths,
 }: {
   capability: BuiltInPluginCapability;
   allowedUrls?: string[];
+  allowedSocketPaths?: string[];
 }) {
   const meta = CAPABILITY_META[capability];
-  const scoped = capability === "network:fetch" && allowedUrls && allowedUrls.length > 0;
+  // A capability with a declared scope renders the concrete endpoints beneath
+  // it: "connects to local sockets" is close to meaningless next to
+  // "/var/run/docker.sock". Each capability reads only its own scope bucket,
+  // so a network scope never decorates the socket row or vice versa.
+  const scopeEntries =
+    capability === "network:fetch"
+      ? allowedUrls
+      : capability === "socket:connect"
+        ? allowedSocketPaths
+        : undefined;
+  const scoped = scopeEntries !== undefined && scopeEntries.length > 0;
   return (
     <li className="flex items-start gap-2">
       {meta.severity === "danger" ? (
@@ -136,9 +159,9 @@ export function CapabilityRow({
         <div className="text-[11px] text-daintree-text/40">{meta.description}</div>
         {scoped && (
           <ul className="mt-0.5 space-y-0.5">
-            {allowedUrls.map((url) => (
-              <li key={url} className="text-[11px] font-mono text-daintree-text/50 break-all">
-                {url}
+            {scopeEntries.map((entry) => (
+              <li key={entry} className="text-[11px] font-mono text-daintree-text/50 break-all">
+                {entry}
               </li>
             ))}
           </ul>

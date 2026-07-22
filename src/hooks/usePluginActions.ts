@@ -112,7 +112,12 @@ function descriptorsEqual(a: PluginActionDescriptor, b: PluginActionDescriptor):
     a.danger === b.danger &&
     a.effectiveDanger === b.effectiveDanger &&
     JSON.stringify(a.keywords ?? null) === JSON.stringify(b.keywords ?? null) &&
-    JSON.stringify(a.inputSchema ?? null) === JSON.stringify(b.inputSchema ?? null)
+    JSON.stringify(a.inputSchema ?? null) === JSON.stringify(b.inputSchema ?? null) &&
+    // `requires` is compared so a re-registration that only changes capability
+    // intent still counts as a change. It feeds `effectiveDanger` on main, so
+    // the two usually move together — but a narrowing that happens not to flip
+    // the verdict must not leave a stale descriptor cached here.
+    JSON.stringify(a.requires ?? null) === JSON.stringify(b.requires ?? null)
   );
 }
 

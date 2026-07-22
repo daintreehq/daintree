@@ -55,8 +55,17 @@ export function summarizeMcpArgs(
   };
 
   let summary: unknown;
-  if (args === undefined || args === null) {
-    summary = args ?? null;
+  // `undefined` means "this call takes no arguments" and `null` means "the
+  // single argument was literally null" — different facts that both used to
+  // serialize to the string "null" (`undefined ?? null` is `null`). Consumers
+  // treat the summary as display/audit text, so the no-arguments case must be
+  // empty: an argument preview gated on `argsSummary.length > 0` was showing a
+  // bare `null` to users for every no-argument action (#11299).
+  if (args === undefined) {
+    return "";
+  }
+  if (args === null) {
+    summary = null;
   } else if (typeof args !== "object" || Array.isArray(args)) {
     summary = summarize(args);
   } else {

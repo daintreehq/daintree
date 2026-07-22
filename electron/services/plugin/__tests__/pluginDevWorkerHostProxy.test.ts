@@ -558,3 +558,79 @@ describe("PluginDevWorkerHostProxy host.postToPanel (#10618)", () => {
     expect(post).not.toHaveBeenCalled();
   });
 });
+
+describe("PluginDevWorkerHostProxy host.system / clipboard.writeImage (#11299)", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each([
+    ["openPath", "system.openPath"],
+    ["showItemInFolder", "system.showItemInFolder"],
+  ])("relays host.system.%s with the path intact", async (method, wireMethod) => {
+    const { proxy, sent } = makeProxy();
+    const promise = (proxy.host.system as any)[method]("/tmp/data/shot.png");
+
+    const call = sent.find((m) => m.type === "host-call" && m.method === wireMethod);
+    expect(call.params).toEqual({ targetPath: "/tmp/data/shot.png" });
+    resolveCall(proxy, sent, wireMethod, undefined);
+    await expect(promise).resolves.toBeUndefined();
+  });
+
+  it("relays clipboard.writeImage with the typed array's own bytes", async () => {
+    // A subarray is the case that breaks if anything copies `.buffer`
+    // wholesale — the wire payload must carry this view, not its backing
+    // store, or the host decodes the wrong 64 bytes.
+    const backing = new Uint8Array(64).fill(7);
+    const view = backing.subarray(16, 32);
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.clipboard.writeImage(view);
+
+    const call = sent.find((m) => m.type === "host-call" && m.method === "clipboard.writeImage");
+    expect(call.params.pngData.byteLength).toBe(16);
+    resolveCall(proxy, sent, "clipboard.writeImage", undefined);
+    await expect(promise).resolves.toBeUndefined();
+  });
+
+  it("carries an action's requires across the port, including an empty array", async () => {
+    // The bridge rebuilds the descriptor field by field, so a dropped
+    // `requires` wouldn't fail to compile — it would silently send a dev
+    // plugin's one-click action back to whole-manifest elevation, visible
+    // only in the dev loop.
+    const { proxy, sent } = makeProxy();
+    proxy.host.registerAction(
+      {
+        id: "open-panel",
+        title: "Open Panel",
+        description: "Opens it",
+        category: "Test",
+        kind: "command",
+        danger: "safe",
+        requires: [],
+      } as any,
+      async () => undefined
+    );
+
+    const notify = sent.find((m) => m.type === "host-notify" && m.method === "registerAction");
+    expect(notify.params.descriptor.requires).toEqual([]);
+  });
+
+  it("does not invent a requires array when the action declared none", async () => {
+    // Omitted must stay omitted: `[]` is the meaningful de-escalation, so
+    // manufacturing one here would silently relax every dev-plugin action.
+    const { proxy, sent } = makeProxy();
+    proxy.host.registerAction(
+      {
+        id: "run-build",
+        title: "Run Build",
+        description: "Builds",
+        category: "Test",
+        kind: "command",
+        danger: "safe",
+      } as any,
+      async () => undefined
+    );
+
+    const notify = sent.find((m) => m.type === "host-notify" && m.method === "registerAction");
+    expect(notify.params.descriptor.requires).toBeUndefined();
+  });
+});
