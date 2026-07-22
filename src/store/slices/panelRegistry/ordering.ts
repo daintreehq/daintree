@@ -6,7 +6,7 @@ import { TerminalRefreshTier } from "@/types";
 import { saveNormalized, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
 import { deriveRuntimeStatus, removePanelIdsFromTabGroups } from "./helpers";
-import { buildWorktreeIndex } from "./worktreeIndex";
+import { buildWorktreeIndex, panelMatchesWorktreeScope } from "./worktreeIndex";
 import { getNarrowPanel } from "./selectors";
 import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
 
@@ -27,9 +27,11 @@ export const createOrderingActions = (
 
     set((state) => {
       const hasWorktreeFilter = worktreeId !== undefined;
-      const targetWorktreeId = worktreeId ?? null;
+      // Location-aware scope: a worktree's dock renders global (worktree-less)
+      // panels too, so the commit-side list must include them or the indices
+      // diverge from the rendered order (#11289). Grid stays worktree-exact.
       const matchesWorktree = (t: CarrierPanel) =>
-        !hasWorktreeFilter || (t.worktreeId ?? null) === targetWorktreeId;
+        !hasWorktreeFilter || panelMatchesWorktreeScope(t.worktreeId, worktreeId, location);
       const matchesLocation = (t: CarrierPanel) =>
         location === "grid"
           ? t.location === "grid" || t.location === undefined
@@ -85,11 +87,14 @@ export const createOrderingActions = (
       const terminal = state.panelsById[id];
       if (!terminal) return state;
 
+      // Adoption target for worktree-less panels promoted to the grid (#11290).
       const targetWorktreeId =
         worktreeId !== undefined ? worktreeId : (terminal.worktreeId ?? null);
       const hasWorktreeFilter = worktreeId !== undefined;
+      // Same location-aware scope as reorderTerminals (#11289): a dock target
+      // must count global panels when computing the insertion slot.
       const matchesWorktree = (t: CarrierPanel) =>
-        !hasWorktreeFilter || (t.worktreeId ?? null) === (targetWorktreeId ?? null);
+        !hasWorktreeFilter || panelMatchesWorktreeScope(t.worktreeId, worktreeId, location);
       const matchesLocation = (t: CarrierPanel) =>
         location === "grid"
           ? t.location === "grid" || t.location === undefined

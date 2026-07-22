@@ -167,6 +167,36 @@ describe("filterTerminalsByContainer", () => {
     const result = filterTerminalsByContainer(byId, ["null"], "grid", null);
     expect(result.map((t) => t.id)).toEqual(["null"]);
   });
+
+  // #11289 — the dock renders global (worktree-less) panels in every
+  // worktree-scoped dock, so the drop-commit list must include them too.
+  it("includes global dock panels when a worktree is active (#11289)", () => {
+    const tG = makeTerminal("g", "dock", undefined);
+    const byId = { ...terminalsById, g: tG };
+    const result = filterTerminalsByContainer(byId, ["a", "b", "g", "c", "d"], "dock", "wt1");
+    expect(result.map((t) => t.id)).toEqual(["b", "g"]);
+  });
+
+  it("still excludes other worktrees' dock panels alongside global ones", () => {
+    const tG = makeTerminal("g", "dock", undefined);
+    const byId = { ...terminalsById, g: tG };
+    const result = filterTerminalsByContainer(byId, ["d", "g", "b"], "dock", "wt1");
+    expect(result.map((t) => t.id)).toEqual(["g", "b"]);
+  });
+
+  it("keeps the grid worktree-exact — global grid panels stay excluded", () => {
+    const tGG = makeTerminal("gg", "grid", undefined);
+    const byId = { ...terminalsById, gg: tGG };
+    const result = filterTerminalsByContainer(byId, [...panelIds, "gg"], "grid", "wt1");
+    expect(result.map((t) => t.id)).toEqual(["a", "c"]);
+  });
+
+  it("returns only global dock panels when no worktree is active", () => {
+    const tG = makeTerminal("g", "dock", undefined);
+    const byId = { ...terminalsById, g: tG };
+    const result = filterTerminalsByContainer(byId, ["b", "g", "d"], "dock", null);
+    expect(result.map((t) => t.id)).toEqual(["g"]);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -295,6 +325,15 @@ describe("resolveTargetIndex", () => {
     const ids = [...panelIds, "d"];
     // "d" is wt2 and won't appear when filtering for wt1
     expect(resolveTargetIndex(byId, ids, "wt1", "grid", "d", undefined, false)).toBe(3);
+  });
+
+  it("resolves dock indices over the rendered order including global chips (#11289)", () => {
+    const tG = makeTerminal("g", "dock", undefined);
+    const tH = makeTerminal("h", "dock", "wt1");
+    const byId = { g: tG, h: tH };
+    // Rendered dock for wt1 is [g, h]; dropping on "h" must yield index 1,
+    // not 0 over a globals-stripped list.
+    expect(resolveTargetIndex(byId, ["g", "h"], "wt1", "dock", "h", undefined, false)).toBe(1);
   });
 
   // Geometry-aware branch (dock→grid single-terminal drops). Over rect spans

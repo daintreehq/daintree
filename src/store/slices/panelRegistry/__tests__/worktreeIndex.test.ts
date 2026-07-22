@@ -4,6 +4,7 @@ import {
   removeFromWorktreeIndex,
   transferBetweenWorktreeIndex,
   buildWorktreeIndex,
+  panelMatchesWorktreeScope,
   type PanelIdsByWorktreeId,
 } from "../worktreeIndex";
 
@@ -124,6 +125,39 @@ describe("worktreeIndex", () => {
       };
       const after = transferBetweenWorktreeIndex(before, "wt-A", "wt-B", "panel-1");
       expect(after["wt-C"]).toBe(wtCBucket);
+    });
+  });
+
+  describe("panelMatchesWorktreeScope", () => {
+    it("matches exact worktree ids at both locations", () => {
+      expect(panelMatchesWorktreeScope("wt-A", "wt-A", "dock")).toBe(true);
+      expect(panelMatchesWorktreeScope("wt-A", "wt-A", "grid")).toBe(true);
+    });
+
+    it("rejects mismatched concrete worktree ids at both locations", () => {
+      expect(panelMatchesWorktreeScope("wt-A", "wt-B", "dock")).toBe(false);
+      expect(panelMatchesWorktreeScope("wt-A", "wt-B", "grid")).toBe(false);
+    });
+
+    it("includes a global panel in a concrete worktree's dock but not its grid (#11289)", () => {
+      expect(panelMatchesWorktreeScope(undefined, "wt-A", "dock")).toBe(true);
+      expect(panelMatchesWorktreeScope(undefined, "wt-A", "grid")).toBe(false);
+    });
+
+    it("matches a global panel against an empty scope at both locations", () => {
+      expect(panelMatchesWorktreeScope(undefined, undefined, "dock")).toBe(true);
+      expect(panelMatchesWorktreeScope(undefined, null, "grid")).toBe(true);
+    });
+
+    it("rejects a scoped panel against an empty scope", () => {
+      expect(panelMatchesWorktreeScope("wt-A", undefined, "dock")).toBe(false);
+      expect(panelMatchesWorktreeScope("wt-A", null, "grid")).toBe(false);
+    });
+
+    it("normalizes a null panel worktreeId like undefined", () => {
+      expect(panelMatchesWorktreeScope(null, "wt-A", "dock")).toBe(true);
+      expect(panelMatchesWorktreeScope(null, "wt-A", "grid")).toBe(false);
+      expect(panelMatchesWorktreeScope(null, undefined, "grid")).toBe(true);
     });
   });
 

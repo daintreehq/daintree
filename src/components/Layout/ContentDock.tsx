@@ -20,6 +20,7 @@ import {
 } from "@shared/types/panel";
 import { extractHostPort } from "@/components/Browser/browserUtils";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
+import { panelMatchesWorktreeScope } from "@/store/slices/panelRegistry/worktreeIndex";
 import type { TrashedTerminal } from "@/store/slices";
 import { DockedTerminalItem } from "./DockedTerminalItem";
 import { DockedNonPtyPanelItem } from "./DockedNonPtyPanelItem";
@@ -211,7 +212,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
     for (const terminal of dockTerminalsRaw) {
       if (
         terminal.id !== helpTerminalId &&
-        (terminal.worktreeId == null || terminal.worktreeId === activeWorktreeId)
+        panelMatchesWorktreeScope(terminal.worktreeId, activeWorktreeId, "dock")
       ) {
         result.push(terminal);
       }
