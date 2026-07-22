@@ -500,6 +500,13 @@ export function WorktreeCard({
     void actionService.dispatch("worktree.openReviewHub", { worktreeId: worktree.id });
   };
 
+  // Same shape as the Review Hub entry point: the action owns which surface the
+  // browser is presented on (dialog first, promotable to the grid), so the card
+  // only names the worktree.
+  const openFileBrowserForThisWorktree = () => {
+    void actionService.dispatch("worktree.openFileBrowser", { worktreeId: worktree.id });
+  };
+
   // Route attach/detach through the resilient mutation outbox (#9163) instead
   // of a fire-and-forget IPC. The store applies the local association only once
   // the Electron-store write lands, replays a mutation that was in flight when
@@ -968,6 +975,7 @@ export function WorktreeCard({
                   onAttachIssue: () => setShowIssuePicker(true),
                   onViewPlan: () => setShowPlanViewer(true),
                   onOpenReviewHub: openReviewHubForThisWorktree,
+                  onOpenFileBrowser: openFileBrowserForThisWorktree,
                   onCompareDiff: () =>
                     useWorktreeSelectionStore.getState().openCrossWorktreeDiff(worktree.id),
                   onRunRecipe: (recipeId) => void handleRunRecipe(recipeId),

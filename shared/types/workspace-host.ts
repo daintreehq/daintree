@@ -464,6 +464,8 @@ export type WorkspaceHostRequest =
       requestId: string;
       worktreePath: string;
       dirPath?: string;
+      /** Include gitignored entries, flagged `isIgnored`, instead of dropping them */
+      includeIgnored?: boolean;
     }
   // Project Pulse operations
   | {

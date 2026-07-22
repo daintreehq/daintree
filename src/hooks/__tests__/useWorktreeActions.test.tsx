@@ -171,6 +171,26 @@ describe("copyContextWithFeedback", () => {
     );
   });
 
+  it("forwards includePaths to dispatch and labels the progress toast for a folder", async () => {
+    dispatchMock.mockResolvedValueOnce({
+      ok: true,
+      result: { fileCount: 7, stats: null, format: "xml" },
+    });
+
+    await copyContextWithFeedback("wt-1", "context-menu", {
+      includePaths: ["src/panels/**"],
+    });
+
+    expect(addNotificationMock).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Copying folder context…" })
+    );
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "worktree.copyTree",
+      expect.objectContaining({ worktreeId: "wt-1", includePaths: ["src/panels/**"] }),
+      { source: "context-menu" }
+    );
+  });
+
   it("shows 'No files to copy' when result is null", async () => {
     dispatchMock.mockResolvedValueOnce({ ok: true, result: null });
 

@@ -53,6 +53,7 @@ export const BUILT_IN_ACTION_IDS = [
   "worktree.copyTree",
   "worktree.openEditor",
   "worktree.openReviewHub",
+  "worktree.openFileBrowser",
   "worktree.overview.open",
   "worktree.overview.close",
 

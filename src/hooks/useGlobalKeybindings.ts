@@ -73,9 +73,13 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       // Handle Shift+F10 and ContextMenu key for panel context menus.
       // Must be checked before the editable/terminal bailouts below.
       // Respects user overrides — if the binding is disabled, fall through.
+      // Target-guarded: a surface marked `data-row-menu` (the file-browser
+      // tree) routes these keys to its own row-level menu, and this capture
+      // handler consuming them first would make that menu mouse-only.
       if (
-        e.key === "ContextMenu" ||
-        (e.key === "F10" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey)
+        (e.key === "ContextMenu" ||
+          (e.key === "F10" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey)) &&
+        target.closest("[data-row-menu]") === null
       ) {
         const effectiveCombo = keybindingService.getEffectiveCombo("terminal.contextMenu");
         if (effectiveCombo !== undefined) {

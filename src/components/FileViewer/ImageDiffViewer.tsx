@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { formatBytes } from "@/lib/formatBytes";
 import { cn } from "@/lib/utils";
+import { TRANSPARENCY_CHECKERBOARD_STYLE } from "./transparencyCheckerboard";
 
 export interface ImageDiffViewerProps {
   /** Repo-relative path of the changed image */
@@ -32,13 +33,7 @@ const MODE_OPTIONS: Array<{ value: ImageDiffMode; label: string }> = [
 
 const SWIPE_KEYBOARD_STEP = 2;
 
-// Neutral checkerboard so transparency reads correctly on both themes — the
-// border token tracks theme polarity, and the low-alpha mix keeps it quiet.
-const CHECKERBOARD_STYLE: CSSProperties = {
-  backgroundImage:
-    "repeating-conic-gradient(color-mix(in oklab, var(--color-daintree-border) 45%, transparent) 0% 25%, transparent 0% 50%)",
-  backgroundSize: "16px 16px",
-};
+const CHECKERBOARD_STYLE: CSSProperties = TRANSPARENCY_CHECKERBOARD_STYLE;
 
 function sideErrorMessage(error: Extract<DiffMediaSide, { ok: false }>["error"]): string {
   switch (error) {

@@ -59,6 +59,7 @@ import { buildPrivacyPreloadBindings } from "./ipc/handlers/privacy.preload.js";
 import { buildTelemetryPreloadBindings } from "./ipc/handlers/telemetry.preload.js";
 import { buildConnectivityPreloadBindings } from "./ipc/handlers/connectivity.preload.js";
 import { buildDiffMediaPreloadBindings } from "./ipc/handlers/diffMedia.preload.js";
+import { buildFileBrowserPreloadBindings } from "./ipc/handlers/fileBrowser.preload.js";
 import { buildHibernationPreloadBindings } from "./ipc/handlers/hibernation.preload.js";
 import { buildIdleTerminalPreloadBindings } from "./ipc/handlers/idleTerminals.preload.js";
 import { buildIdleBackgroundAutoClosePreloadBindings } from "./ipc/handlers/idleBackgroundAutoClose.preload.js";
@@ -1356,6 +1357,9 @@ function buildElectronApi(): ElectronAPI {
 
     // Diff media API — HEAD vs working-tree image versions for image compare
     diffMedia: buildDiffMediaPreloadBindings(_unwrappingInvoke),
+
+    // File browser API — lazy directory listings for the read-only browser panel
+    fileBrowser: buildFileBrowserPreloadBindings(_unwrappingInvoke),
 
     // Watchdog API — surfaces the main-process deadlock detector's disabled
     // state to the renderer and exposes a manual restart path.

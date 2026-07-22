@@ -30,8 +30,26 @@ function _getBaseRealpath(resolvedBasePath: string): Promise<string> {
   return promise;
 }
 
+export interface GetFileTreeOptions {
+  /**
+   * Return gitignored entries too, each flagged `isIgnored: true`, instead of
+   * dropping them. Off by default so every existing caller (the copy-tree file
+   * picker) keeps the fail-closed listing it was written against.
+   *
+   * Note this deliberately does not weaken the check-ignore failure path: when
+   * `git check-ignore` errors, every checked path is still treated as ignored,
+   * so an opted-in caller sees them marked rather than silently presented as
+   * clean.
+   */
+  includeIgnored?: boolean;
+}
+
 export class FileTreeService {
-  async getFileTree(basePath: string, dirPath: string = ""): Promise<FileTreeNode[]> {
+  async getFileTree(
+    basePath: string,
+    dirPath: string = "",
+    options: GetFileTreeOptions = {}
+  ): Promise<FileTreeNode[]> {
     const resolvedBasePath = path.resolve(basePath);
 
     if (path.isAbsolute(dirPath)) {
@@ -116,12 +134,13 @@ export class FileTreeService {
           const relativePath = path.join(relativeDirPath, entry.name);
           const gitRelativePath = toGitPath(relativePath);
 
-          if (ignoredPaths.has(gitRelativePath)) return null;
+          const isIgnored = ignoredPaths.has(gitRelativePath);
+          if (isIgnored && !options.includeIgnored) return null;
 
           const absolutePath = path.join(resolvedBasePath, relativePath);
           try {
             const fileStat = await fs.lstat(absolutePath);
-            return { fileStat, name: entry.name, gitRelativePath };
+            return { fileStat, name: entry.name, gitRelativePath, isIgnored };
           } catch {
             return null;
           }
@@ -131,16 +150,25 @@ export class FileTreeService {
       const nodes: FileTreeNode[] = [];
       for (const result of statResults) {
         if (!result) continue;
-        const { fileStat, name, gitRelativePath } = result;
+        const { fileStat, name, gitRelativePath, isIgnored } = result;
+        // Omitted rather than set to `false` so the default listing serializes
+        // byte-for-byte as it did before the flag existed.
+        const ignoredField = isIgnored ? { isIgnored: true as const } : {};
 
         const isDirectory = fileStat.isDirectory();
         if (isDirectory) {
-          nodes.push({ name, path: gitRelativePath, isDirectory });
+          nodes.push({ name, path: gitRelativePath, isDirectory, ...ignoredField });
           continue;
         }
 
         try {
-          nodes.push({ name, path: gitRelativePath, isDirectory, size: fileStat.size });
+          nodes.push({
+            name,
+            path: gitRelativePath,
+            isDirectory,
+            size: fileStat.size,
+            ...ignoredField,
+          });
         } catch {
           // skip entries where size read fails
         }

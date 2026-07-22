@@ -412,14 +412,15 @@ class TerminalInstanceService {
 
   /**
    * Returns the resolved absolute path of the currently-hovered link when it's
-   * a file link (not a URL / OSC 8 link), else null. Used by the right-click
-   * context menu to show a "Reveal in Finder" item only for genuine file
-   * paths. Distinct from {@link getHoveredLinkText}, which returns the raw
-   * matched text for any link kind.
+   * a file or directory link (not a URL / OSC 8 link), else null. Used by the
+   * right-click context menu to show a "Reveal in Finder" item only for
+   * genuine on-disk paths — revealing works identically for both kinds.
+   * Distinct from {@link getHoveredLinkText}, which returns the raw matched
+   * text for any link kind.
    */
   getHoveredFilePath(id: string): string | null {
     const link = this.instances.get(id)?.hoveredLink;
-    return link?.kind === "file" ? (link.absolutePath ?? null) : null;
+    return link?.kind === "file" || link?.kind === "directory" ? (link.absolutePath ?? null) : null;
   }
 
   /**

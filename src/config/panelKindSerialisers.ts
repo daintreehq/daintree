@@ -3,6 +3,7 @@ import type { FileViewMode, DiffSource } from "@shared/types/panel";
 import type { GitStatus } from "@shared/types/git";
 import type { AddTerminalArgs, SavedTerminalData } from "@/utils/stateHydration/statePatcher";
 import { VIEWPORT_PRESETS } from "@/panels/dev-preview/viewportPresets";
+import { canonicalizeRootPath } from "@/panels/file-browser/fileBrowserTree";
 
 type PanelKindDeserializer = (saved: SavedTerminalData) => Partial<AddTerminalArgs>;
 
@@ -39,6 +40,64 @@ const DIFF_SOURCES: readonly string[] = ["working-tree", "staged", "unstaged", "
 /** Coerce a persisted diff source, dropping unknown on-disk values. */
 function sanitizeDiffSource(value: string | undefined): DiffSource | undefined {
   return value !== undefined && DIFF_SOURCES.includes(value) ? (value as DiffSource) : undefined;
+}
+
+/**
+ * Upper bound on restored expansions. A snapshot can hold anything, and every
+ * surviving entry becomes a directory the browser tries to re-list on each
+ * refresh — so this is a work bound, not just a size check.
+ */
+const MAX_RESTORED_EXPANDED_PATHS = 500;
+const MAX_RESTORED_PATH_LENGTH = 4096;
+
+/**
+ * Whether a persisted value is a worktree-relative path the browser can safely
+ * ask for. The value round-trips through JSON on disk, so a corrupted or
+ * hand-edited snapshot can hold anything; the IPC layer would reject an
+ * escaping path anyway, so it is cheaper to drop it here than to fire a request
+ * that can only fail.
+ *
+ * Both separators are rejected in traversal position regardless of platform,
+ * and drive-qualified/UNC forms are refused outright — a Windows-authored
+ * snapshot can be opened on POSIX and vice versa.
+ */
+function isSafeRelativePath(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  if (value.length === 0 || value.length > MAX_RESTORED_PATH_LENGTH) return false;
+  // C0, DEL and C1 — a path is never legitimately built from any of them.
+  // eslint-disable-next-line no-control-regex -- rejecting control characters is the point
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(value)) return false;
+  if (value.startsWith("/") || value.startsWith("\\")) return false;
+  if (/^[a-zA-Z]:/.test(value)) return false;
+  return !value.split(/[\\/]+/).includes("..");
+}
+
+/**
+ * Canonical forward-slash form of a safe relative path. Tree row keys are
+ * built from canonical listing paths, so a non-canonical restored value
+ * (`src/`, `./src`) would never prefix-match them. `.` and empty resolve to
+ * undefined — the worktree root is represented by the field's absence, never
+ * a sentinel.
+ */
+function canonicalRelativePath(value: unknown): string | undefined {
+  if (!isSafeRelativePath(value)) return undefined;
+  return canonicalizeRootPath(value) || undefined;
+}
+
+/**
+ * Coerce a persisted expanded-path list, dropping anything that isn't a plain
+ * list of safe relative strings. An empty array is preserved: "the user had
+ * nothing expanded" is a real state, distinct from "this panel predates the
+ * field".
+ */
+function sanitizeExpandedPaths(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const seen = new Set<string>();
+  for (const entry of value) {
+    if (seen.size >= MAX_RESTORED_EXPANDED_PATHS) break;
+    if (isSafeRelativePath(entry)) seen.add(entry);
+  }
+  return [...seen];
 }
 
 /**
@@ -79,6 +138,18 @@ const BUILT_IN_DESERIALIZERS = {
   file: (saved) => ({
     filePath: saved.filePath ?? saved.markdownFilePath,
     fileViewMode: sanitizeFileViewMode(saved.fileViewMode ?? saved.markdownViewMode),
+  }),
+  "file-browser": (saved) => ({
+    // Sanitized, not trusted: the snapshot schema passes unknown keys through,
+    // so a malformed value would otherwise reach the pane and be `.split()` as
+    // if it were a string.
+    browserSelectedPath: isSafeRelativePath(saved.browserSelectedPath)
+      ? saved.browserSelectedPath
+      : undefined,
+    browserExpandedPaths: sanitizeExpandedPaths(saved.browserExpandedPaths),
+    browserShowIgnored:
+      typeof saved.browserShowIgnored === "boolean" ? saved.browserShowIgnored : undefined,
+    browserRootPath: canonicalRelativePath(saved.browserRootPath),
   }),
   diff: (saved) => ({
     filePath: saved.filePath,
