@@ -1,7 +1,7 @@
 import { Package } from "lucide-react";
 import type { ComponentType, SVGProps } from "react";
 import { GitHubIcon, GitPullRequest, LayoutPanelTop, Plug } from "@/components/icons";
-import { resolvePluginCategory } from "@shared/config/pluginCategoryRegistry";
+import { isPluginCategoryId, resolvePluginCategory } from "@shared/config/pluginCategoryRegistry";
 import type { PluginCategoryId, PluginManifest } from "@shared/types/plugin";
 import { cn } from "@/lib/utils";
 
@@ -26,8 +26,22 @@ const CATEGORY_FALLBACK_ICONS: Record<PluginCategoryId, IconComponent> = {
 };
 
 export function pluginIconFor(manifest: PluginManifest): IconComponent {
+  return pluginIconForIdentity(manifest.name, resolvePluginCategory(manifest));
+}
+
+/**
+ * Icon resolution from bare identity, for callers that hold a manifest
+ * projection rather than the full manifest (the archive-install preview
+ * resolves its category on main, where `contributes` is available). The
+ * category is re-validated at runtime: a projection that crossed IPC (or a
+ * stale replay-buffer payload from a version-skewed build) could carry an
+ * unknown value, and an undefined icon component would crash the consuming
+ * dialog with a reset key that never changes — wedging its intent queue.
+ */
+export function pluginIconForIdentity(name: string, category: PluginCategoryId): IconComponent {
   return (
-    BRAND_PLUGIN_ICONS[manifest.name] ?? CATEGORY_FALLBACK_ICONS[resolvePluginCategory(manifest)]
+    BRAND_PLUGIN_ICONS[name] ??
+    CATEGORY_FALLBACK_ICONS[isPluginCategoryId(category) ? category : "other"]
   );
 }
 
@@ -61,7 +75,31 @@ export function PluginIconTile({
   dimmed?: boolean;
   className?: string;
 }) {
-  const Icon = pluginIconFor(manifest);
+  return (
+    <PluginGlyphTile
+      icon={pluginIconFor(manifest)}
+      size={size}
+      dimmed={dimmed}
+      className={className}
+    />
+  );
+}
+
+/**
+ * The tile shape with an explicit glyph, for surfaces that resolve the icon
+ * without a full manifest (see {@link pluginIconForIdentity}).
+ */
+export function PluginGlyphTile({
+  icon: Icon,
+  size,
+  dimmed = false,
+  className,
+}: {
+  icon: IconComponent;
+  size: keyof typeof TILE_SIZE_CLASS;
+  dimmed?: boolean;
+  className?: string;
+}) {
   return (
     <span
       aria-hidden="true"

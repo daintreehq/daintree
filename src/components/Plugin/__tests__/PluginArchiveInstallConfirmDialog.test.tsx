@@ -44,6 +44,7 @@ function intent(overrides: Partial<PluginArchiveInstallIntent> = {}): PluginArch
       name: "acme.tool",
       displayName: "Acme Tool",
       version: "1.2.3",
+      category: "other",
       authors: [{ name: "Ada Lovelace", role: "maintainer" }],
       capabilities: ["fs:project-read", "network:fetch"],
     },
@@ -122,30 +123,188 @@ describe("PluginArchiveInstallConfirmDialog", () => {
     expect(screen.getByText("acme.tool")).toBeTruthy();
     expect(screen.getByText("v1.2.3")).toBeTruthy();
     expect(screen.getByText("Ada Lovelace (maintainer)")).toBeTruthy();
-    expect(screen.getByText("fs:project-read, network:fetch")).toBeTruthy();
+    // Capabilities render as the detail pane's human-readable permission rows.
+    expect(screen.getByText("Read project files")).toBeTruthy();
+    expect(screen.getByText("Make network requests")).toBeTruthy();
+  });
+
+  it("orders permissions risk-first and flags a shell:exec archive", () => {
+    render(<PluginArchiveInstallConfirmDialog />);
+    enqueue(
+      intent({
+        manifest: {
+          name: "acme.tool",
+          version: "1.2.3",
+          category: "other",
+          authors: [],
+          capabilities: ["fs:project-read", "shell:exec", "network:fetch"],
+        },
+      })
+    );
+
+    expect(screen.getByText("Can run arbitrary commands on your machine")).toBeTruthy();
+    const labels = ["Run shell commands", "Make network requests", "Read project files"].map(
+      (label) => screen.getByText(label)
+    );
+    // danger → warning → neutral, regardless of declaration order.
+    expect(
+      labels[0]!.compareDocumentPosition(labels[1]!) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(
+      labels[1]!.compareDocumentPosition(labels[2]!) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
+  it("shows the warning strip — and no danger strip — for warning-tier capabilities", () => {
+    render(<PluginArchiveInstallConfirmDialog />);
+    enqueue(
+      intent({
+        manifest: {
+          name: "acme.tool",
+          version: "1.2.3",
+          category: "other",
+          authors: [],
+          capabilities: ["network:fetch", "git:write"],
+        },
+      })
+    );
+
+    expect(
+      screen.getByText("Requests sensitive permissions — review before installing")
+    ).toBeTruthy();
+    expect(screen.queryByText("Can run arbitrary commands on your machine")).toBeNull();
+  });
+
+  it("shows no strip at all when every capability is read-only", () => {
+    render(<PluginArchiveInstallConfirmDialog />);
+    enqueue(
+      intent({
+        manifest: {
+          name: "acme.tool",
+          version: "1.2.3",
+          category: "other",
+          authors: [],
+          capabilities: ["fs:project-read", "clipboard:read"],
+        },
+      })
+    );
+
+    expect(screen.getByText("Read project files")).toBeTruthy();
+    expect(
+      screen.queryByText("Requests sensitive permissions — review before installing")
+    ).toBeNull();
+    expect(screen.queryByText("Can run arbitrary commands on your machine")).toBeNull();
   });
 
   it("says so explicitly when no authors or capabilities are declared", () => {
     render(<PluginArchiveInstallConfirmDialog />);
     enqueue(
       intent({
-        manifest: { name: "bare.plugin", version: "0.1.0", authors: [], capabilities: [] },
+        manifest: {
+          name: "bare.plugin",
+          version: "0.1.0",
+          category: "other",
+          authors: [],
+          capabilities: [],
+        },
       })
     );
 
-    expect(screen.getByText("Not declared")).toBeTruthy();
-    expect(screen.getByText("None declared")).toBeTruthy();
+    expect(screen.getByText("No authors declared")).toBeTruthy();
+    expect(screen.getByText("No special permissions")).toBeTruthy();
   });
 
   it("falls back to the plugin ID when the manifest declares no display name", () => {
     render(<PluginArchiveInstallConfirmDialog />);
     enqueue(
       intent({
-        manifest: { name: "bare.plugin", version: "0.1.0", authors: [], capabilities: [] },
+        manifest: {
+          name: "bare.plugin",
+          version: "0.1.0",
+          category: "other",
+          authors: [],
+          capabilities: [],
+        },
       })
     );
 
     expect(screen.getByText("Install 'bare.plugin'?")).toBeTruthy();
+  });
+
+  it("clamps a hostile display name out of the title but keeps the real ID in the card", () => {
+    render(<PluginArchiveInstallConfirmDialog />);
+    enqueue(
+      intent({
+        manifest: {
+          name: "sketchy.publisher",
+          displayName: "x".repeat(200),
+          version: "1.0.0",
+          category: "other",
+          authors: [],
+          capabilities: [],
+        },
+      })
+    );
+
+    expect(screen.getByText(`Install '${"x".repeat(60)}…'?`)).toBeTruthy();
+    expect(screen.getByText("sketchy.publisher")).toBeTruthy();
+  });
+
+  it("leaves a display name at exactly the clamp length untouched", () => {
+    render(<PluginArchiveInstallConfirmDialog />);
+    enqueue(
+      intent({
+        manifest: {
+          name: "sketchy.publisher",
+          displayName: "y".repeat(60),
+          version: "1.0.0",
+          category: "other",
+          authors: [],
+          capabilities: [],
+        },
+      })
+    );
+
+    // 60 is the boundary: no ellipsis, nothing dropped.
+    expect(screen.getByText(`Install '${"y".repeat(60)}'?`)).toBeTruthy();
+  });
+
+  it("renders with a fallback icon when a version-skewed intent carries no category", () => {
+    render(<PluginArchiveInstallConfirmDialog />);
+    // A replay-buffered payload from an older build predates the `category`
+    // field — the dialog must degrade to the fallback tile, not crash.
+    enqueue(
+      intent({
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- deliberately drops `category` to model a pre-upgrade payload
+        manifest: {
+          name: "old.build",
+          version: "1.0.0",
+          authors: [],
+          capabilities: [],
+        } as unknown as PluginArchiveInstallIntent["manifest"],
+      })
+    );
+
+    expect(screen.getByText("Install 'old.build'?")).toBeTruthy();
+  });
+
+  it("caps the author list instead of rendering every hostile entry", () => {
+    render(<PluginArchiveInstallConfirmDialog />);
+    enqueue(
+      intent({
+        manifest: {
+          name: "acme.tool",
+          version: "1.2.3",
+          category: "other",
+          authors: Array.from({ length: 10 }, (_, i) => ({ name: `Author ${i + 1}` })),
+          capabilities: [],
+        },
+      })
+    );
+
+    expect(screen.getByText("Author 1, Author 2, Author 3 +7 more")).toBeTruthy();
+    // The cap must actually drop the tail, not merely append a count.
+    expect(screen.queryByText(/Author 4/)).toBeNull();
   });
 
   it("keeps the install disabled until the read-time cooldown elapses", () => {

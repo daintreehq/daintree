@@ -687,13 +687,19 @@ export type PluginDeepLinkIntent =
  * Manifest identity shown in the sideload confirmation dialog (#11280). A
  * narrow projection of {@link PluginManifest} read by `readArchiveManifest`
  * without extracting the archive — `contributes` and the rest of the manifest
- * tree never cross IPC. Arrays are normalized to `[]` so the dialog can say
- * "None declared" rather than omitting the row.
+ * tree never cross IPC. Arrays are normalized to `[]` so the dialog renders
+ * explicit empty states rather than omitting rows.
  */
 export interface PluginArchiveManifestPreview {
   name: string;
   displayName?: string;
   version: string;
+  /**
+   * Resolved on main from the full validated manifest (`resolvePluginCategory`
+   * needs `contributes`, which never crosses IPC) so the dialog can render the
+   * same category icon tile the catalog uses.
+   */
+  category: PluginCategoryId;
   authors: PluginAuthor[];
   capabilities: PluginCapability[];
 }

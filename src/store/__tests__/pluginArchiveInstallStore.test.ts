@@ -13,6 +13,7 @@ function intent(overrides: Partial<PluginArchiveInstallIntent> = {}): PluginArch
     manifest: {
       name: "acme.tool",
       version: "1.0.0",
+      category: "other",
       authors: [],
       capabilities: [],
     },

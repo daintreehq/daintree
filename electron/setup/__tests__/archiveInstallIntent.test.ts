@@ -44,7 +44,9 @@ vi.mock("../../ipc/channels.js", () => ({
 }));
 
 function manifest(overrides: Partial<PluginManifest> = {}): PluginManifest {
-  return { name: "acme.tool", version: "1.2.3", ...overrides } as PluginManifest;
+  // `category` short-circuits `resolvePluginCategory` so the fixture doesn't
+  // need the full normalized `contributes` tree a real parse guarantees.
+  return { name: "acme.tool", version: "1.2.3", category: "other", ...overrides } as PluginManifest;
 }
 
 /** A painted primary window that records everything pushed to it. */
@@ -112,6 +114,57 @@ describe("archiveInstallIntent", () => {
       },
     });
     expect(intent).toHaveProperty("intentId", expect.any(String));
+    // The projected category must cross IPC — the dialog's icon tile keys off it.
+    expect(intent).toMatchObject({ manifest: { category: "other" } });
+  });
+
+  it("derives the preview category from contributions when none is declared", async () => {
+    const painted = makePainted();
+    deepLinkMock.painted = painted.wc;
+    archiveMock.readArchiveManifest.mockResolvedValue(
+      manifest({
+        category: undefined,
+        contributes: {
+          forgeProviders: [{ id: "forge" }],
+          agents: [],
+          mcpServers: [],
+          skills: [],
+          panels: [],
+          views: [],
+        } as unknown as PluginManifest["contributes"],
+      })
+    );
+
+    const { enqueueArchiveInstallIntent } = await importFresh();
+    await enqueueArchiveInstallIntent(P("forge.dntr"));
+
+    const [intent] = intentsFrom(painted.sent);
+    expect(intent).toMatchObject({ manifest: { category: "forge" } });
+  });
+
+  it("strips Unicode format controls from every display field before IPC", async () => {
+    const painted = makePainted();
+    deepLinkMock.painted = painted.wc;
+    archiveMock.readArchiveManifest.mockResolvedValue(
+      manifest({
+        displayName: "Nice\u202ETool\u200Bt",
+        authors: [{ name: "A\u200Bda", role: "main\u202Etainer" }],
+      })
+    );
+
+    const { enqueueArchiveInstallIntent } = await importFresh();
+    await enqueueArchiveInstallIntent(P("bidi\u202E.dntr"));
+
+    const [intent] = intentsFrom(painted.sent) as Array<{
+      archivePath: string;
+      archiveFileName: string;
+      manifest: { displayName: string; authors: Array<{ name: string; role?: string }> };
+    }>;
+    expect(intent.manifest.displayName).toBe("NiceToolt");
+    expect(intent.manifest.authors[0]).toMatchObject({ name: "Ada", role: "maintainer" });
+    // Only the display copy is sanitized — the path must stay verbatim for the installer.
+    expect(intent.archiveFileName).toBe("bidi.dntr");
+    expect(intent.archivePath).toBe(P("bidi\u202E.dntr"));
   });
 
   it("normalizes absent authors and capabilities to empty arrays", async () => {

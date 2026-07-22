@@ -126,3 +126,6 @@ planning/
 
 # Unredacted raw captures left behind by pattern-discovery:redact-cast in-place mode
 *.cast.bak
+
+# Local-only design spot-check specs (see CLAUDE.md "Design spot-checks") — never committed
+e2e/**/tmp-*.spec.ts

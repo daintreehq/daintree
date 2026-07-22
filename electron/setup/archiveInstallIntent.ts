@@ -5,6 +5,7 @@ import { CHANNELS } from "../ipc/channels.js";
 import { appendPendingError } from "../ipc/pendingErrorsStore.js";
 import { getAllAppWebContents } from "../window/webContentsRegistry.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { resolvePluginCategory } from "../../shared/config/pluginCategoryRegistry.js";
 import { getPaintedPrimaryWebContents, registerPaintedFlushListener } from "./deepLinkInstall.js";
 import type { MainProcessToastPayload } from "../../shared/types/ipc/maps.js";
 import type { ErrorRecord } from "../../shared/types/ipc/errors.js";
@@ -93,8 +94,23 @@ function surfaceArchiveError(fileName: string, detail: string): void {
 // the installer, which does its own validation.
 const PREVIEW_TEXT_MAX = 200;
 
+// Unicode format controls (bidi overrides, zero-widths, line/paragraph
+// separators, C0/C1) can visually reorder or overpaint the trusted text beside
+// an interpolated field — U+202E flips everything rendered after it, which
+// would let a manifest spoof the dialog's own copy. Stripped before display;
+// RTL letters themselves pass through untouched. React text-node escaping
+// handles markup, not these.
+const UNSAFE_DISPLAY_CHARS =
+  // eslint-disable-next-line no-control-regex -- deliberately strips C0/C1 controls from attacker-controlled display text
+  /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u200B-\u200F\u2028-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/g;
+
+function sanitizePreviewText(value: string): string {
+  return value.replace(UNSAFE_DISPLAY_CHARS, "");
+}
+
 function clampPreviewText(value: string): string {
-  return value.length > PREVIEW_TEXT_MAX ? `${value.slice(0, PREVIEW_TEXT_MAX)}…` : value;
+  const clean = sanitizePreviewText(value);
+  return clean.length > PREVIEW_TEXT_MAX ? `${clean.slice(0, PREVIEW_TEXT_MAX)}…` : clean;
 }
 
 /**
@@ -141,14 +157,17 @@ async function runPreviewWorker(): Promise<void> {
         pendingIntents.push({
           intentId: randomUUID(),
           archivePath: job.archivePath,
-          archiveFileName: fileName,
+          // Display copy only — `archivePath` stays verbatim for the installer.
+          archiveFileName: sanitizePreviewText(fileName),
           manifest: {
             name: manifest.name,
             displayName: manifest.displayName && clampPreviewText(manifest.displayName),
             version: manifest.version,
+            category: resolvePluginCategory(manifest),
             authors: (manifest.authors ?? []).map((author) => ({
               ...author,
               name: clampPreviewText(author.name),
+              ...(author.role !== undefined ? { role: sanitizePreviewText(author.role) } : {}),
             })),
             capabilities: manifest.capabilities ?? [],
           },

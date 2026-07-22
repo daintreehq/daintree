@@ -31,7 +31,13 @@ function intent(overrides: Partial<PluginArchiveInstallIntent> = {}): PluginArch
     intentId: "i1",
     archivePath: "/tmp/a.dntr",
     archiveFileName: "a.dntr",
-    manifest: { name: "acme.tool", version: "1.0.0", authors: [], capabilities: [] },
+    manifest: {
+      name: "acme.tool",
+      version: "1.0.0",
+      category: "other",
+      authors: [],
+      capabilities: [],
+    },
     ...overrides,
   };
 }
