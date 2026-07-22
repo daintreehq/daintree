@@ -97,7 +97,10 @@ async function makeDir(name: string): Promise<string> {
 }
 
 async function writeAnchor(projectPath: string, id: string): Promise<void> {
-  await new ProjectIdentityFiles().writeInRepoProjectIdentity(projectPath, { id, name: "Anchored" });
+  await new ProjectIdentityFiles().writeInRepoProjectIdentity(projectPath, {
+    id,
+    name: "Anchored",
+  });
 }
 
 describe("project identity across folder moves", () => {
