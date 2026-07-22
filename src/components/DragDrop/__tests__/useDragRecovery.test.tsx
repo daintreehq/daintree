@@ -153,10 +153,12 @@ describe("useDragRecovery", () => {
     });
 
     it("is cleared by a new drag starting while the timer is pending", () => {
+      // The second drag is mouse-activated on purpose: were the stale timer
+      // left armed, its callback would still see a live mouse drag and fire.
       const { result } = renderHook(() => useDragRecovery());
       result.current.beginDrag(mouseActivator());
       dispatchMouseOut(null);
-      result.current.beginDrag(new KeyboardEvent("keydown", { code: "Enter" }));
+      result.current.beginDrag(mouseActivator());
 
       vi.advanceTimersByTime(DRAG_RECOVERY_GRACE_MS);
       expect(keydowns).toHaveLength(0);
