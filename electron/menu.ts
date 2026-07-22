@@ -705,8 +705,6 @@ export async function handleDirectoryOpen(
 
     createApplicationMenu(targetWindow, cliAvailabilityService);
   } catch (error) {
-    console.error("Failed to open project:", error);
-
     // A folder that isn't a repository yet is a guided-setup opportunity, not an
     // error: hand it to the renderer's existing GitInitDialog so the user can
     // confirm initializing it. Keyed to the structured AppError code rather than
@@ -724,15 +722,23 @@ export async function handleDirectoryOpen(
 
       // A send before `did-finish-load` is dropped with no queue, which is the
       // cold-launch Dock-drop case (the folder opens while the window is still
-      // loading). Read `isLoading()` here rather than before the await above so
-      // a load that finished during `addProject` isn't waited on forever.
-      if (rendererTarget.isLoading()) {
+      // loading). Gate on `isLoadingMainFrame()`, not `isLoading()`: the latter
+      // is true while *any* frame is loading (an HTML preview iframe, say), but
+      // `did-finish-load` only fires for the main frame — so a bare `isLoading()`
+      // could park the send on an event that never arrives. Read it here rather
+      // than before the await above, so a load that finished while `addProject`
+      // was running isn't waited on forever.
+      if (rendererTarget.isLoadingMainFrame()) {
         rendererTarget.once("did-finish-load", sendOpenGitInitDialog);
       } else {
         sendOpenGitInitDialog();
       }
       return;
     }
+
+    // Logged only after the guided path declines the error — a folder that just
+    // needs initializing is an expected user choice, not a failure.
+    console.error("Failed to open project:", error);
 
     let errorMessage = "An unknown error occurred";
     if (error instanceof Error) {

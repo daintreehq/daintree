@@ -11,7 +11,7 @@ const mockWebContents = vi.hoisted(() => ({
   getZoomLevel: vi.fn(() => 1.0),
   isDestroyed: vi.fn(() => false),
   send: vi.fn(),
-  isLoading: vi.fn(() => false),
+  isLoadingMainFrame: vi.fn(() => false),
   once: vi.fn(),
   undo: vi.fn(),
   redo: vi.fn(),
@@ -180,8 +180,12 @@ vi.mock("../services/pluginMenuRegistry.js", () => ({
   getPluginMenuItems: vi.fn(() => []),
 }));
 
+const getAppWebContentsMock = vi.hoisted(() =>
+  vi.fn((_win: { id: number }): unknown => mockWebContents)
+);
+
 vi.mock("../window/webContentsRegistry.js", () => ({
-  getAppWebContents: vi.fn(() => mockWebContents),
+  getAppWebContents: getAppWebContentsMock,
 }));
 
 const isWindowsStoreBuildMock = vi.hoisted(() => vi.fn(() => true));
@@ -929,8 +933,11 @@ describe("handleDirectoryOpen non-repository folders", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // `clearAllMocks` drops call history but keeps implementations, so restore
+    // the defaults the per-test overrides below replace.
     mockWebContents.isDestroyed.mockReturnValue(false);
-    mockWebContents.isLoading.mockReturnValue(false);
+    mockWebContents.isLoadingMainFrame.mockReturnValue(false);
+    getAppWebContentsMock.mockImplementation(() => mockWebContents);
     windowRefMock.getWindowRegistry.mockReturnValue(undefined);
   });
 
@@ -949,7 +956,7 @@ describe("handleDirectoryOpen non-repository folders", () => {
   });
 
   it("defers the send until the renderer finishes loading", async () => {
-    mockWebContents.isLoading.mockReturnValue(true);
+    mockWebContents.isLoadingMainFrame.mockReturnValue(true);
     projectStoreMock.addProject.mockRejectedValue(
       new AppError({ code: "NOT_A_GIT_REPO", message: "Not a git repository" })
     );
@@ -971,7 +978,7 @@ describe("handleDirectoryOpen non-repository folders", () => {
   });
 
   it("drops the deferred send if the renderer is destroyed before it fires", async () => {
-    mockWebContents.isLoading.mockReturnValue(true);
+    mockWebContents.isLoadingMainFrame.mockReturnValue(true);
     projectStoreMock.addProject.mockRejectedValue(
       new AppError({ code: "NOT_A_GIT_REPO", message: "Not a git repository" })
     );
@@ -986,14 +993,62 @@ describe("handleDirectoryOpen non-repository folders", () => {
   });
 
   it("still shows the native error box for unrelated failures", async () => {
+    projectStoreMock.addProject.mockRejectedValue(new Error("ENOENT: no such file or directory"));
+
+    await handleDirectoryOpen(FOLDER, targetWindowStub());
+
+    expect(mockWebContents.send).not.toHaveBeenCalled();
+    expect(dialog.showMessageBox).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not hijack unrelated structured errors", async () => {
+    // Guards the `error.code` half of the condition: matching on `isAppError`
+    // alone would route a genuine failure into git-init setup and swallow it.
     projectStoreMock.addProject.mockRejectedValue(
-      new Error("ENOENT: no such file or directory")
+      new AppError({ code: "INTERNAL", message: "Something else broke" })
     );
 
     await handleDirectoryOpen(FOLDER, targetWindowStub());
 
     expect(mockWebContents.send).not.toHaveBeenCalled();
     expect(dialog.showMessageBox).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends to the window the open came from, not a global one", async () => {
+    const otherWindowContents = { isDestroyed: () => false, isLoadingMainFrame: () => false, send: vi.fn() };
+    getAppWebContentsMock.mockImplementation((win: { id: number }) =>
+      win.id === 3 ? mockWebContents : otherWindowContents
+    );
+    projectStoreMock.addProject.mockRejectedValue(
+      new AppError({ code: "NOT_A_GIT_REPO", message: "Not a git repository" })
+    );
+
+    await handleDirectoryOpen(FOLDER, targetWindowStub());
+
+    expect(mockWebContents.send).toHaveBeenCalledTimes(1);
+    expect(otherWindowContents.send).not.toHaveBeenCalled();
+  });
+
+  it("gives up if the window closes while the folder is being resolved", async () => {
+    // `addProject` is async, so the user can close the window mid-flight; the
+    // renderer lookup must not run against a dead window.
+    let destroyed = false;
+    projectStoreMock.addProject.mockImplementation(() => {
+      destroyed = true;
+      return Promise.reject(
+        new AppError({ code: "NOT_A_GIT_REPO", message: "Not a git repository" })
+      );
+    });
+    const closingWindow = {
+      id: 3,
+      isDestroyed: () => destroyed,
+    } as unknown as Electron.BrowserWindow;
+
+    await handleDirectoryOpen(FOLDER, closingWindow);
+
+    expect(getAppWebContentsMock).not.toHaveBeenCalled();
+    expect(mockWebContents.send).not.toHaveBeenCalled();
+    expect(dialog.showMessageBox).not.toHaveBeenCalled();
   });
 
   it("keys the guided path to the error code, not the message text", async () => {

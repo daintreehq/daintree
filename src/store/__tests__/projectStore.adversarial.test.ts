@@ -306,6 +306,12 @@ describe("projectStore adversarial", () => {
     // Nothing is written until the user confirms in-dialog.
     expect(projectClientMock.add).not.toHaveBeenCalled();
 
+    // Dropping a second folder must not swap the path under the open dialog:
+    // mid-initialization that would init the first folder and then add the
+    // second, since the success handler rereads the store.
+    callbacks[0]!({ directoryPath: "/repos/second-folder" });
+    expect(useProjectStore.getState().gitInitDirectoryPath).toBe("/repos/not-a-repo");
+
     useProjectStore.getState().closeGitInitDialog();
     expect(useProjectStore.getState().gitInitDialogOpen).toBe(false);
     expect(useProjectStore.getState().gitInitDirectoryPath).toBeNull();

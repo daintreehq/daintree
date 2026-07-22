@@ -1006,7 +1006,14 @@ if (typeof window !== "undefined" && window.electron?.project) {
   // Main pushes this when the user tries to open a folder that isn't a repo yet
   // (Dock drop, Cmd+O, Recent Projects). It reuses the same dialog the renderer
   // opens for its own add-project flow, so confirm/cancel behave identically.
+  //
+  // Dropping several folders at once fires one event each, and the dialog holds
+  // a single path. Ignore arrivals while one is already open rather than
+  // swapping the path underneath it: mid-initialization, a swap would init the
+  // first folder but hand the second to `handleGitInitSuccess`, leaving the
+  // first initialized-but-not-added and the second added without being touched.
   listenerState.applyOpenGitInitDialog = ({ directoryPath }) => {
+    if (useProjectStore.getState().gitInitDialogOpen) return;
     useProjectStore.getState().openGitInitDialog(directoryPath);
   };
 
