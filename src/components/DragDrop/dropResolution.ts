@@ -112,6 +112,61 @@ export function isNonDockableDockDrop(
   return targetContainer === "dock" && !panelKindIsDockable(kind ?? "terminal");
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+/** Inputs for the cancel-drop verdict, straight off dnd-kit's DragEndEvent. */
+export interface CancelDropParams {
+  hasOver: boolean;
+  /** `active.data.current` — untrusted: the empty-dock placeholder registers `{ container, isPlaceholder }` with no `terminal` (#11291). */
+  activeData: unknown;
+  overData: OverDropData | undefined;
+  isWorktreeSort: boolean;
+}
+
+/**
+ * Total cancel-drop verdict for panel drags. dnd-kit awaits the `cancelDrop`
+ * callback with no try/catch before releasing its internal active lock, so a
+ * single throw here silently wedges every future drag until reload (#11291).
+ * This resolver never throws: drag data without a real `terminal` cancels
+ * instead of dereferencing, and any unexpected failure fails closed to cancel.
+ */
+export function shouldCancelDrop(params: CancelDropParams): boolean {
+  try {
+    const { hasOver, activeData, overData, isWorktreeSort } = params;
+    if (!hasOver) return true;
+
+    // Worktree-sort drags own their drop logic in handleDragEnd; let every
+    // drop through, even when the source row unmounted mid-drag.
+    if (isWorktreeSort) return false;
+
+    if (!isRecord(activeData) || !isRecord(activeData.terminal)) return true;
+    const { id, kind } = activeData.terminal;
+    if (typeof id !== "string") return true;
+
+    const groupPanelIds = activeData.groupPanelIds;
+    const isGroupDrag =
+      !!activeData.groupId && Array.isArray(groupPanelIds) && groupPanelIds.length > 1;
+    const isWorktreeDrop = overData?.type === "worktree" && !!overData.worktreeId;
+    if (isGroupDrag && isWorktreeDrop) return true;
+
+    // A panel whose kind the dock can't render must never commit into the
+    // dock — it would strand invisibly (#11054). `cursor-no-drop` already
+    // signals this during hover and `collisionDetection` keeps the dock out
+    // of the hover candidates; this is the defensive final gate.
+    const targetContainer =
+      overData?.container ??
+      (overData?.sortable?.containerId ? resolveContainerId(overData.sortable.containerId) : null);
+    return isNonDockableDockDrop(
+      targetContainer,
+      typeof kind === "string" ? (kind as PanelKind) : undefined
+    );
+  } catch {
+    return true;
+  }
+}
+
 /** Minimal dnd-kit droppable shape the dock collision filter reads. */
 interface DockCollisionCandidate {
   data: { current?: { container?: string; sortable?: { containerId?: string } } | null };
