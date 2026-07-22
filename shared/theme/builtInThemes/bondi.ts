@@ -90,7 +90,7 @@ export const theme: BuiltInThemeSource = {
   tokens: {
     "accent-muted": "rgba(23,132,99,0.30)",
     "accent-soft": "rgba(23,132,99,0.18)",
-    // De-aliased from accent/accentSecondary hues so worktree badges and
+    // De-aliased from accent/accentSecondary hues so worktree colors and
     // pills never read as the focus signal.
     "category-green": "oklch(0.53 0.15 142)",
     "category-teal": "oklch(0.5 0.075 187)",
