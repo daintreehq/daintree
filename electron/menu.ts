@@ -25,6 +25,7 @@ import { getAppWebContents } from "./window/webContentsRegistry.js";
 import { PROJECT_MENU_ITEM_IDS, resolveProjectIdForApplicationMenu } from "./projectMenuState.js";
 import { PRODUCT_NAME, PRODUCT_WEBSITE, PRODUCT_COPYRIGHT_ORG } from "./utils/productBranding.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
+import { isAppError } from "./utils/errorTypes.js";
 import { isWindowsStoreBuild, getBuildChannelLabel } from "../shared/config/distribution.js";
 
 // The About panel's build-version slot shows the release channel for
@@ -705,6 +706,33 @@ export async function handleDirectoryOpen(
     createApplicationMenu(targetWindow, cliAvailabilityService);
   } catch (error) {
     console.error("Failed to open project:", error);
+
+    // A folder that isn't a repository yet is a guided-setup opportunity, not an
+    // error: hand it to the renderer's existing GitInitDialog so the user can
+    // confirm initializing it. Keyed to the structured AppError code rather than
+    // message text — `addProject` is called in-process here, so the thrown
+    // AppError instance survives intact (no structured-clone boundary). Covers
+    // Dock drop, Cmd+O, and Recent Projects alike, since all three land here.
+    if (isAppError(error) && error.code === "NOT_A_GIT_REPO") {
+      if (targetWindow.isDestroyed()) return;
+
+      const rendererTarget = getAppWebContents(targetWindow);
+      const sendOpenGitInitDialog = (): void => {
+        if (rendererTarget.isDestroyed()) return;
+        rendererTarget.send(CHANNELS.PROJECT_OPEN_GIT_INIT_DIALOG, { directoryPath });
+      };
+
+      // A send before `did-finish-load` is dropped with no queue, which is the
+      // cold-launch Dock-drop case (the folder opens while the window is still
+      // loading). Read `isLoading()` here rather than before the await above so
+      // a load that finished during `addProject` isn't waited on forever.
+      if (rendererTarget.isLoading()) {
+        rendererTarget.once("did-finish-load", sendOpenGitInitDialog);
+      } else {
+        sendOpenGitInitDialog();
+      }
+      return;
+    }
 
     let errorMessage = "An unknown error occurred";
     if (error instanceof Error) {

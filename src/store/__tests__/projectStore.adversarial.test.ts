@@ -20,6 +20,7 @@ type StorageMock = {
 type ProjectApi = {
   onUpdated?: (callback: (project: ProjectShape) => void) => () => void;
   onRemoved?: (callback: (projectId: string) => void) => () => void;
+  onOpenGitInitDialog?: (callback: (payload: { directoryPath: string }) => void) => () => void;
 };
 
 const projectClientMock = vi.hoisted(() => ({
@@ -277,6 +278,38 @@ describe("projectStore adversarial", () => {
 
     updatedCallbacks[0]!(projectB);
     expect(useProjectStore.getState().projects).toEqual([projectB]);
+  });
+
+  // #11281: main pushes this when a folder opened via the Dock/Cmd+O/Recent
+  // isn't a repo yet. Registration lives at module scope so it is wired before
+  // the renderer finishes loading, which is when the cold-launch send arrives.
+  it("opens the git-init dialog when main pushes a non-repository folder", async () => {
+    const callbacks: Array<(payload: { directoryPath: string }) => void> = [];
+    const onOpenGitInitDialog = vi.fn((callback: (payload: { directoryPath: string }) => void) => {
+      callbacks.push(callback);
+      return vi.fn();
+    });
+    installProjectApi({ onOpenGitInitDialog });
+    installLocalStorage(createStorageMock());
+
+    await import("../projectStore");
+    vi.resetModules();
+    const { useProjectStore } = await import("../projectStore");
+
+    expect(onOpenGitInitDialog).toHaveBeenCalledTimes(1);
+    expect(useProjectStore.getState().gitInitDialogOpen).toBe(false);
+
+    callbacks[0]!({ directoryPath: "/repos/not-a-repo" });
+
+    expect(useProjectStore.getState().gitInitDialogOpen).toBe(true);
+    expect(useProjectStore.getState().gitInitDirectoryPath).toBe("/repos/not-a-repo");
+    // Nothing is written until the user confirms in-dialog.
+    expect(projectClientMock.add).not.toHaveBeenCalled();
+
+    useProjectStore.getState().closeGitInitDialog();
+    expect(useProjectStore.getState().gitInitDialogOpen).toBe(false);
+    expect(useProjectStore.getState().gitInitDirectoryPath).toBeNull();
+    expect(projectClientMock.add).not.toHaveBeenCalled();
   });
 
   it("ignores stale switch rejections once a newer switch has started", async () => {

@@ -1708,6 +1708,9 @@ function buildElectronApi(): ElectronAPI {
         callback: (payload: { projectId: string; worktreeLoadError: string | null }) => void
       ) => _typedOn(CHANNELS.PROJECT_WORKTREE_LOAD_STATUS, callback),
 
+      onOpenGitInitDialog: (callback: (payload: { directoryPath: string }) => void) =>
+        _typedOn(CHANNELS.PROJECT_OPEN_GIT_INIT_DIALOG, callback),
+
       onFocusOnActivate: (callback: (payload: { intent: "focus-next-waiting" }) => void) =>
         _typedOn(CHANNELS.PROJECT_FOCUS_ON_ACTIVATE, callback),
 

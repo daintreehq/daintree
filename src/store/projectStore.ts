@@ -199,9 +199,11 @@ interface ProjectStoreListenerState {
   applyWorktreeLoadStatus:
     | ((payload: { projectId: string; worktreeLoadError: string | null }) => void)
     | null;
+  applyOpenGitInitDialog: ((payload: { directoryPath: string }) => void) | null;
   updatedRegistered: boolean;
   removedRegistered: boolean;
   worktreeLoadStatusRegistered: boolean;
+  openGitInitDialogRegistered: boolean;
 }
 
 const PROJECT_STORE_LISTENER_STATE_KEY = "__daintreeProjectStoreListenerState";
@@ -271,9 +273,11 @@ function getProjectStoreListenerState(): ProjectStoreListenerState {
     applyUpdated: null,
     applyRemoved: null,
     applyWorktreeLoadStatus: null,
+    applyOpenGitInitDialog: null,
     updatedRegistered: false,
     removedRegistered: false,
     worktreeLoadStatusRegistered: false,
+    openGitInitDialogRegistered: false,
   };
   target[PROJECT_STORE_LISTENER_STATE_KEY] = created;
   return created;
@@ -999,6 +1003,13 @@ if (typeof window !== "undefined" && window.electron?.project) {
     });
   };
 
+  // Main pushes this when the user tries to open a folder that isn't a repo yet
+  // (Dock drop, Cmd+O, Recent Projects). It reuses the same dialog the renderer
+  // opens for its own add-project flow, so confirm/cancel behave identically.
+  listenerState.applyOpenGitInitDialog = ({ directoryPath }) => {
+    useProjectStore.getState().openGitInitDialog(directoryPath);
+  };
+
   const projectApi = window.electron.project;
   if (projectApi.onUpdated && !listenerState.updatedRegistered) {
     listenerState.updatedRegistered = true;
@@ -1022,6 +1033,18 @@ if (typeof window !== "undefined" && window.electron?.project) {
     listenerState.worktreeLoadStatusRegistered = true;
     projectClient.onWorktreeLoadStatus((payload) => {
       listenerState.applyWorktreeLoadStatus?.(payload);
+    });
+  }
+  // Registered at module scope (not in a React effect) so it is wired before the
+  // renderer finishes loading — main gates its cold-launch send on
+  // `did-finish-load`, which can fire before any component mounts.
+  if (
+    typeof projectApi.onOpenGitInitDialog === "function" &&
+    !listenerState.openGitInitDialogRegistered
+  ) {
+    listenerState.openGitInitDialogRegistered = true;
+    projectApi.onOpenGitInitDialog((payload) => {
+      listenerState.applyOpenGitInitDialog?.(payload);
     });
   }
 }
