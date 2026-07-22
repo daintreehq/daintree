@@ -1559,13 +1559,7 @@ export interface GeneratedIpcInvokeMap {
               focusedTerminalTitle?: string | undefined;
               isSettingsOpen?: boolean | undefined;
               dispatchSource?:
-                | "user"
-                | "menu"
-                | "keybinding"
-                | "agent"
-                | "context-menu"
-                | "plugin"
-                | undefined;
+                "user" | "menu" | "keybinding" | "agent" | "context-menu" | "plugin" | undefined;
             }
           | undefined;
       },
