@@ -61,7 +61,10 @@ import type {
 } from "../../shared/types/plugin.js";
 import { PluginInstalledRecordsStore } from "./plugin/PluginInstalledRecordsStore.js";
 import { PluginContributionBroadcaster } from "./plugin/PluginContributionBroadcaster.js";
-import { PluginPanelLifecycleBroker } from "./plugin/PluginPanelLifecycleBroker.js";
+import {
+  PluginPanelLifecycleBroker,
+  type PanelLifecycleSourceHandle,
+} from "./plugin/PluginPanelLifecycleBroker.js";
 import { PLUGIN_VIEW_GENERATION_PREFIX } from "../../shared/utils/pluginViewUrl.js";
 import { PluginRendererDispatcher } from "./plugin/PluginRendererDispatcher.js";
 import { PluginUIPromptDispatcher } from "./plugin/PluginUIPromptDispatcher.js";
@@ -606,6 +609,8 @@ export class PluginService {
    */
   private readonly broadcaster: PluginContributionBroadcaster;
   private readonly panelLifecycleBroker: PluginPanelLifecycleBroker;
+  /** sourceId → detach its `destroyed` listener. See `watchPanelLifecycleSource`. */
+  private readonly panelLifecycleSourceCleanups = new Map<number, () => void>();
   private disposed = false;
   private readonly disposeRegistrySubscriptions: () => void;
   /**
@@ -780,19 +785,49 @@ export class PluginService {
    * rather than the payload, so each project view's panels stay in their own
    * bucket and one view's teardown can't erase another's.
    */
-  ingestPanelLifecycleEvents(sourceId: number, events: readonly unknown[]): void {
+  ingestPanelLifecycleEvents(
+    sourceId: number,
+    events: readonly unknown[],
+    sender?: PanelLifecycleSourceHandle
+  ): void {
     if (this.disposed) return;
+    if (sender) this.watchPanelLifecycleSource(sourceId, sender);
     this.panelLifecycleBroker.ingest(sourceId, events);
   }
 
   /**
-   * Forget a renderer's reported panels — for a destroyed or evicted
-   * `WebContentsView`. Deliberately does NOT synthesize `removed`: a view being
-   * cached says nothing about whether the user closed the panel, and inventing
-   * a terminal event is the exact destructive misread this API exists to stop.
+   * Attach a one-shot `destroyed` listener the first time a renderer reports,
+   * so its panels are forgotten when its `WebContentsView` goes away. Without
+   * this the broker would keep a closed project view's panels forever and
+   * replay them to the next subscriber as though they were live.
+   *
+   * The handle is structurally typed rather than `Electron.WebContents` so this
+   * stays unit-testable without an Electron stub.
    */
-  clearPanelLifecycleSource(sourceId: number): void {
-    this.panelLifecycleBroker.clearSource(sourceId);
+  private watchPanelLifecycleSource(sourceId: number, sender: PanelLifecycleSourceHandle): void {
+    if (this.panelLifecycleSourceCleanups.has(sourceId)) return;
+    const onDestroyed = (): void => {
+      this.panelLifecycleSourceCleanups.delete(sourceId);
+      // Deliberately does NOT synthesize `removed`: a view being destroyed or
+      // evicted says nothing about whether the user closed the panel, and a
+      // false terminal event is the exact destructive misread this API exists
+      // to prevent.
+      this.panelLifecycleBroker.clearSource(sourceId);
+    };
+    try {
+      sender.once("destroyed", onDestroyed);
+    } catch {
+      // An already-torn-down WebContents can throw; nothing to track then.
+      return;
+    }
+    this.panelLifecycleSourceCleanups.set(sourceId, () => {
+      try {
+        sender.removeListener("destroyed", onDestroyed);
+      } catch {
+        // Electron throws if the WebContents is already gone — the listener
+        // died with it.
+      }
+    });
   }
 
   /**
@@ -824,6 +859,8 @@ export class PluginService {
     this.resolveInit = null;
     this.dispatcher.dispose();
     this.promptDispatcher.dispose();
+    for (const detach of this.panelLifecycleSourceCleanups.values()) detach();
+    this.panelLifecycleSourceCleanups.clear();
     this.panelLifecycleBroker.dispose();
   }
 

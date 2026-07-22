@@ -202,13 +202,16 @@ describe("PluginViewDiagnosticsFallback", () => {
     expect(screen.getByTestId("plugin-view-diagnostics-retry")).toBeTruthy();
   });
 
-  it("keeps Close panel a neutral action so Try again stays the only emphasis", () => {
+  it("places Close panel next to Try again rather than off in the trace", () => {
     renderFallback({ onRequestClose: vi.fn() });
 
-    const close = screen.getByTestId("plugin-view-diagnostics-close");
     const retry = screen.getByTestId("plugin-view-diagnostics-retry");
-    expect(close.className).not.toContain("bg-status-error");
-    expect(retry.className).toContain("bg-status-error");
+    const close = screen.getByTestId("plugin-view-diagnostics-close");
+    // The issue's ask is specifically that the escape hatch sits where the
+    // failure is shown, beside the recovery action — not that it carries any
+    // particular class.
+    expect(close.parentElement).toBe(retry.parentElement);
+    expect(retry.compareDocumentPosition(close) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("substitutes placeholders when the error carries no stacks", () => {

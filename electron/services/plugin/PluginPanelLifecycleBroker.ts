@@ -5,6 +5,15 @@ import type {
 
 export type PluginPanelLifecycleListener = (event: PluginPanelLifecycleEvent) => void;
 
+/**
+ * The slice of `Electron.WebContents` needed to notice a renderer going away.
+ * Structural so the owning service stays unit-testable without an Electron stub.
+ */
+export interface PanelLifecycleSourceHandle {
+  once(event: "destroyed", listener: () => void): unknown;
+  removeListener(event: "destroyed", listener: () => void): unknown;
+}
+
 /** Resolves a panel kind id to its owning plugin, or `undefined` if unknown. */
 export type PanelKindOwnerResolver = (panelKindId: string) => string | undefined;
 
@@ -141,8 +150,14 @@ export class PluginPanelLifecycleBroker {
     if (typeof phase !== "string" || !VALID_PHASES.has(phase as PluginPanelLifecyclePhase)) {
       return null;
     }
-    // Authoritative ownership — never the renderer-supplied `pluginId`.
-    const pluginId = this.resolveOwner(panelKindId);
+    // Authoritative ownership — never the renderer-supplied `pluginId`. Falling
+    // back to the owner we already recorded for this panel matters: while a
+    // plugin is disabled or mid-upgrade its kinds are unregistered, so a live
+    // registry lookup misses. Dropping those events would strand the panel's
+    // last known phase — typically `mounted` — and replay it to the next worker
+    // as though the panel were still open, which is the same false-liveness
+    // reading in reverse.
+    const pluginId = this.resolveOwner(panelKindId) ?? this.rememberedOwner(panelId, panelKindId);
     if (!pluginId) return null;
     return Object.freeze({
       panelId,
@@ -150,6 +165,19 @@ export class PluginPanelLifecycleBroker {
       pluginId,
       phase: phase as PluginPanelLifecyclePhase,
     });
+  }
+
+  /**
+   * The owner recorded the last time this exact panel resolved, used only when
+   * the live registry no longer knows the kind. Matching on `panelKindId` too
+   * keeps a recycled panel id from inheriting an unrelated plugin's ownership.
+   */
+  private rememberedOwner(panelId: string, panelKindId: string): string | undefined {
+    for (const panels of this.bySource.values()) {
+      const known = panels.get(panelId);
+      if (known && known.panelKindId === panelKindId) return known.pluginId;
+    }
+    return undefined;
   }
 
   private emit(event: PluginPanelLifecycleEvent): void {

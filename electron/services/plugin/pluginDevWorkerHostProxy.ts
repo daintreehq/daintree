@@ -451,8 +451,13 @@ export class PluginDevWorkerHostProxy {
         // Subscription wired synchronously; only the disposer is async. The
         // host replays live panels on its side, so a plugin activated by a view
         // opening still receives that panel's phase (#11301).
+        // Re-freeze on arrival: main freezes the event, but the port's
+        // structured clone reconstructs a plain mutable object — frozen
+        // descriptors do not survive the hop. Without this the documented
+        // "events are frozen" contract would hold in-process and silently not
+        // hold for every user-installed plugin, which all run in a worker.
         const dispose = this.subscribe("panel-lifecycle", (payload) =>
-          callback(payload as PluginPanelLifecycleEvent)
+          callback(Object.freeze(payload as PluginPanelLifecycleEvent))
         );
         return Promise.resolve(dispose);
       },

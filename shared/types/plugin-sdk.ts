@@ -42,6 +42,10 @@ export type {
 
 export type { PanelViewProps } from "./plugin.js";
 
+// ── Panel lifecycle (worker-facing) ─────────────────────────────────
+
+export type { PluginPanelLifecycleEvent, PluginPanelLifecyclePhase } from "./plugin.js";
+
 // ── Manifest root ───────────────────────────────────────────────────
 
 export type { PluginManifest, PluginAuthor } from "./plugin.js";

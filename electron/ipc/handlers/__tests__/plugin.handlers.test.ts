@@ -118,6 +118,10 @@ describe("registerPluginHandlers", () => {
     registerPluginHandlers();
     expect(mockIpcMainHandle).toHaveBeenCalledTimes(39);
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:list", expect.any(Function));
+    expect(mockIpcMainHandle).toHaveBeenCalledWith(
+      "plugin:report-panel-lifecycle",
+      expect.any(Function)
+    );
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:install", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:set-enabled", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith(

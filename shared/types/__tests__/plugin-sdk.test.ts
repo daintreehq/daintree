@@ -16,6 +16,8 @@ import type {
   ViewContribution,
   ViewLocation,
   PanelViewProps,
+  PluginPanelLifecycleEvent,
+  PluginPanelLifecyclePhase,
   McpServerContribution,
   PluginCapability,
   BuiltInPluginCapability,
@@ -411,6 +413,30 @@ describe("plugin-sdk boundary", () => {
       expectTypeOf(props.panelId).toEqualTypeOf<string>();
       expectTypeOf(props.pluginId).toEqualTypeOf<string>();
       expectTypeOf(props.disposeSignal).toEqualTypeOf<AbortSignal>();
+      // Two distinct lifetimes, both public (#11301): the view attempt and the
+      // panel record. A view that only ever sees one of them cannot tell a
+      // temporary unmount from a permanent close.
+      expectTypeOf(props.panelRemovedSignal).toEqualTypeOf<AbortSignal>();
+    });
+
+    it("exposes the panel lifecycle contract as named SDK types", () => {
+      // Named exports, not just structural presence: the docs tell authors to
+      // `import type { PluginPanelLifecycleEvent } from "@daintreehq/plugin-sdk"`.
+      const event = {} as PluginPanelLifecycleEvent;
+      expectTypeOf(event.panelId).toEqualTypeOf<string>();
+      expectTypeOf(event.panelKindId).toEqualTypeOf<string>();
+      expectTypeOf(event.pluginId).toEqualTypeOf<string>();
+      expectTypeOf(event.phase).toEqualTypeOf<PluginPanelLifecyclePhase>();
+      expectTypeOf<"removed">().toMatchTypeOf<PluginPanelLifecyclePhase>();
+      expectTypeOf<"hidden">().toMatchTypeOf<PluginPanelLifecyclePhase>();
+    });
+
+    it("PluginActivationApi revoke-guards the panel lifecycle subscription", () => {
+      const activation = {} as PluginActivationApi;
+      expectTypeOf(activation.onDidChangePanelLifecycle).toBeFunction();
+      expectTypeOf(activation.onDidChangePanelLifecycle).returns.toEqualTypeOf<
+        Promise<() => void>
+      >();
     });
 
     it("PluginIpcContext has required fields", () => {

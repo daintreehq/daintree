@@ -64,6 +64,19 @@ export function usePluginPanelLifecycle(): void {
     const electron = typeof window !== "undefined" ? window.electron : undefined;
     const stopKinds = electron?.plugin?.onPanelKindsChanged?.(() => collect());
 
+    // Pull-on-mount pairs with push-on-change, mirroring `usePluginPanelKinds`.
+    // A `WebContentsView` that missed the cold-start broadcast gets its kinds
+    // from that hook's pull, which fires no push — so without re-collecting
+    // here, a persisted panel whose plugin was still loading stays invisible
+    // until some unrelated panel-store write happens to wake the observer.
+    void electron?.plugin
+      ?.getPanelKinds?.()
+      .then(() => collect())
+      .catch(() => {
+        // The kinds hook already surfaces this failure; a lifecycle re-collect
+        // that never happens is not worth a second warning.
+      });
+
     lastPanelsById = usePanelStore.getState().panelsById;
     collect();
 

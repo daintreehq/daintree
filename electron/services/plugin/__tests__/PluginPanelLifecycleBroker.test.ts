@@ -192,6 +192,39 @@ describe("input validation", () => {
     expect(listener.mock.calls.map(([e]) => e.panelId)).toEqual(["good"]);
   });
 
+  it("keeps routing a known panel while its plugin's kinds are unregistered", () => {
+    const owners = new Map(Object.entries(OWNERS));
+    const broker = new PluginPanelLifecycleBroker((kindId) => owners.get(kindId));
+    broker.ingest(1, [event({ phase: "mounted" })]);
+
+    // Disable / upgrade: `unregisterPluginPanelKinds` has run, so a live
+    // registry lookup misses — but the renderer is still reporting real
+    // transitions for a panel that plainly exists.
+    owners.clear();
+    broker.ingest(1, [event({ phase: "removed" })]);
+
+    owners.set("acme.dash", "acme");
+    const listener = vi.fn();
+    broker.subscribe("acme", listener);
+    // Dropping the `removed` would have left `mounted` cached and replayed it to
+    // the re-enabled plugin's new worker as though the panel were still open.
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("does not let a recycled panel id inherit another plugin's ownership", () => {
+    const owners = new Map(Object.entries(OWNERS));
+    const broker = new PluginPanelLifecycleBroker((kindId) => owners.get(kindId));
+    broker.ingest(1, [event({ panelId: "p1", panelKindId: "acme.dash" })]);
+    owners.clear();
+
+    const acme = vi.fn();
+    broker.subscribe("acme", acme);
+    acme.mockClear();
+    // Same panel id, different kind — the remembered owner must not apply.
+    broker.ingest(1, [event({ panelId: "p1", panelKindId: "other.panel", phase: "hidden" })]);
+    expect(acme).not.toHaveBeenCalled();
+  });
+
   it("ignores a non-array payload", () => {
     const broker = makeBroker();
     const listener = vi.fn();

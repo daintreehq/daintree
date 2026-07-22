@@ -655,6 +655,13 @@ export function createHost(
       // kind registry, so a plugin can only ever be handed events for panel
       // instances of kinds it contributed itself (#11301).
       const failures = createListenerFailureState();
+      // Teardown lives in a holder rather than a closed-over binding because,
+      // unlike every other subscription here, `subscribe` REPLAYS synchronously
+      // — `handler` can run before the disposer below exists. A replayed event
+      // that exhausts the failure budget would otherwise touch that binding in
+      // its temporal dead zone and throw ReferenceError instead of quarantining
+      // the listener.
+      const teardown: { dispose?: () => void; unsub?: () => void } = {};
       const handler = (event: PluginPanelLifecycleEvent): void => {
         // Runtime delivery is membership-gated, never revoke-gated (#5596):
         // these events fire for the plugin's whole life, long after activate()
@@ -665,13 +672,21 @@ export function createHost(
           pluginId,
           "onDidChangePanelLifecycle",
           () => callback(event),
-          () => dispose()
+          () => {
+            // Mid-replay the tracked disposer does not exist yet, so fall back
+            // to unsubscribing directly.
+            if (teardown.dispose) teardown.dispose();
+            else teardown.unsub?.();
+          }
         );
       };
       // `subscribe` replays live panels synchronously, so a plugin activated BY
       // a view opening still sees that panel's `mounted` phase.
-      const unsub = deps.panelLifecycleBroker.subscribe(pluginId, handler);
-      const dispose = trackPluginDisposer(deps.pluginEventCleanups, pluginId, () => unsub());
+      teardown.unsub = deps.panelLifecycleBroker.subscribe(pluginId, handler);
+      const dispose = trackPluginDisposer(deps.pluginEventCleanups, pluginId, () =>
+        teardown.unsub?.()
+      );
+      teardown.dispose = dispose;
       return Promise.resolve(dispose);
     },
     registerForgeProvider: (descriptor, impl) => {

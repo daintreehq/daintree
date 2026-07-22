@@ -578,7 +578,14 @@ async function handleReportPanelLifecycle(
   ctx: IpcContext,
   events: PluginPanelLifecycleEvent[]
 ): Promise<void> {
-  (await getPluginService()).ingestPanelLifecycleEvents(ctx.webContentsId, events);
+  // `ctx.event.sender` lets the service forget this renderer's panels when its
+  // view is destroyed — otherwise a closed project view's panels linger and get
+  // replayed to the next subscriber as though they were still open.
+  (await getPluginService()).ingestPanelLifecycleEvents(
+    ctx.webContentsId,
+    events,
+    ctx.event.sender
+  );
 }
 
 async function handleForgeProvidersGet(): Promise<RegisteredForgeProvider[]> {
