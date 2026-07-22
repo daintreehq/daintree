@@ -69,19 +69,21 @@ vi.mock("@/components/ErrorBoundary", async () => {
     render(): React.ReactNode {
       boundaryProps.last = this.props;
       if (this.state.hasError) {
-        const resetError = (): void => {
-          this.setState({ hasError: false });
-          this.props.onReset?.();
-        };
-        // Render the supplied fallback, as the real boundary does — that is what
-        // lets a test observe anything the content passes down to it (e.g. the
-        // close callback, which travels by context). The bare button remains for
-        // the fallback-less case.
-        const Fallback = this.props.fallback;
-        return Fallback ? (
-          <Fallback error={new Error("boundary caught")} resetError={resetError} />
-        ) : (
-          <button data-testid="reset" onClick={resetError}>
+        // Deliberately does NOT render `props.fallback`. Tests here reach the
+        // error state incidentally — `#11207` lets the real `lazy` attempt a
+        // `plugin://` import that jsdom cannot resolve — and rendering the
+        // fallback would paint a diagnostics pane alongside the one those tests
+        // render explicitly, so `getByTestId` finds two. The close-action seam,
+        // which does need a rendered fallback, lives in
+        // `PluginViewContent.closeAction.test.tsx` with its own stub.
+        return (
+          <button
+            data-testid="reset"
+            onClick={(): void => {
+              this.setState({ hasError: false });
+              this.props.onReset?.();
+            }}
+          >
             Try again
           </button>
         );
