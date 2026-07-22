@@ -144,11 +144,23 @@ describe("diffMedia readFileVersions", () => {
       dataUrl: `data:image/png;base64,${WORKING_BUFFER.toString("base64")}`,
       byteSize: WORKING_BUFFER.byteLength,
     });
+    // A present working copy means untracked/re-added, not a committed
+    // deletion — no history walk.
+    expect(readPreviousFileVersionMock).not.toHaveBeenCalled();
   });
 
-  it("falls back to the prior committed version when HEAD lacks the file", async () => {
-    const previousBuffer = Buffer.from("previous-image-bytes");
+  // Committed deletion: nothing at literal HEAD and nothing on disk.
+  function mockCommittedDeletion(): void {
     readFileAtHeadMock.mockResolvedValue({ ok: false, reason: "NOT_FOUND" });
+    fsMock.realpath.mockImplementation(async (p: string) => {
+      if (p === REPO_ROOT) return REPO_ROOT;
+      throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    });
+  }
+
+  it("falls back to the prior committed version for a committed deletion", async () => {
+    const previousBuffer = Buffer.from("previous-image-bytes");
+    mockCommittedDeletion();
     readPreviousFileVersionMock.mockResolvedValue({ ok: true, content: previousBuffer });
 
     const result = await invoke({ cwd: REPO_ROOT, filePath: "img.png" });
@@ -158,6 +170,7 @@ describe("diffMedia readFileVersions", () => {
       dataUrl: `data:image/png;base64,${previousBuffer.toString("base64")}`,
       byteSize: previousBuffer.byteLength,
     });
+    expect(result.working).toEqual({ ok: false, error: "NOT_FOUND" });
   });
 
   it("does not consult history when HEAD has the file", async () => {
@@ -177,13 +190,13 @@ describe("diffMedia readFileVersions", () => {
 
   it("maps a fallback failure to a HEAD-side ERROR instead of rejecting", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
-    readFileAtHeadMock.mockResolvedValue({ ok: false, reason: "NOT_FOUND" });
+    mockCommittedDeletion();
     readPreviousFileVersionMock.mockRejectedValue(new Error("git exploded"));
 
     const result = await invoke({ cwd: REPO_ROOT, filePath: "img.png" });
 
     expect(result.head).toEqual({ ok: false, error: "ERROR" });
-    expect(result.working.ok).toBe(true);
+    expect(result.working).toEqual({ ok: false, error: "NOT_FOUND" });
   });
 
   it("maps a missing working-tree file to NOT_FOUND", async () => {

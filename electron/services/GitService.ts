@@ -398,9 +398,20 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     const treePath = this.normalizeTreePath(filePath);
     const git = await this.getGit();
 
+    // `--literal-pathspecs` because `--` only blocks option injection — a
+    // legal filename containing glob magic (`image[1].png`) would otherwise
+    // match unrelated files' history.
     let revListRaw: string;
     try {
-      revListRaw = await git.raw(["rev-list", "-2", "--end-of-options", "HEAD", "--", treePath]);
+      revListRaw = await git.raw([
+        "--literal-pathspecs",
+        "rev-list",
+        "-2",
+        "--end-of-options",
+        "HEAD",
+        "--",
+        treePath,
+      ]);
     } catch (error) {
       const message = (error as Error).message ?? "";
       if (UNRESOLVABLE_REVISION_RE.test(message) || MISSING_AT_HEAD_RE.test(message)) {
@@ -411,8 +422,8 @@ ${lines.map((l) => "+" + l).join("\n")}`;
 
     // commits[0] removed (or last touched) the path; commits[1] is the newest
     // commit whose tree still contains it. Fewer than two commits means no
-    // prior version exists (never tracked, or added and deleted in one
-    // commit).
+    // prior version is reachable (never tracked, or the deleting commit is
+    // the only one visible — e.g. shallow/truncated history).
     const commits = revListRaw
       .split(/\r?\n/)
       .map((line) => line.trim())

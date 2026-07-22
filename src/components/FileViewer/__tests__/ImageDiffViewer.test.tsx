@@ -105,6 +105,25 @@ describe("ImageDiffViewer", () => {
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
+  it("offers Retry in the deleted-file pane after a transient HEAD failure", async () => {
+    mockReadFileVersions.mockResolvedValueOnce({
+      head: { ok: false, error: "ERROR" },
+      working: { ok: false, error: "NOT_FOUND" },
+    } satisfies DiffMediaFileVersions);
+    mockReadFileVersions.mockResolvedValueOnce({
+      head: { ok: true, dataUrl: HEAD_URL, byteSize: 4 },
+      working: { ok: false, error: "NOT_FOUND" },
+    } satisfies DiffMediaFileVersions);
+
+    render(<ImageDiffViewer relPath="gone.png" worktreePath="/repo" status="deleted" />);
+
+    expect(await screen.findByText("Couldn't load this version")).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    await screen.findByAltText("HEAD version of gone.png");
+    expect(mockReadFileVersions).toHaveBeenCalledTimes(2);
+  });
+
   it("shows a per-side message and hides compare modes when one side is too large", async () => {
     mockReadFileVersions.mockResolvedValue({
       head: { ok: false, error: "TOO_LARGE" },

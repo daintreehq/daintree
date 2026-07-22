@@ -656,7 +656,7 @@ describe("GitService.readPreviousFileVersion", () => {
 
   function mockRevList(output: string): void {
     gitClientMock.raw.mockImplementation(async (args: string[]) =>
-      args[0] === "rev-list" ? output : "10\n"
+      args.includes("rev-list") ? output : "10\n"
     );
   }
 
@@ -684,6 +684,7 @@ describe("GitService.readPreviousFileVersion", () => {
     const result = await service.readPreviousFileVersion("-flag.png", 1024);
 
     expect(gitClientMock.raw).toHaveBeenCalledWith([
+      "--literal-pathspecs",
       "rev-list",
       "-2",
       "--end-of-options",
@@ -709,6 +710,7 @@ describe("GitService.readPreviousFileVersion", () => {
     await service.readPreviousFileVersion("assets\\logo.png", 1024);
 
     expect(gitClientMock.raw).toHaveBeenCalledWith([
+      "--literal-pathspecs",
       "rev-list",
       "-2",
       "--end-of-options",
@@ -718,7 +720,26 @@ describe("GitService.readPreviousFileVersion", () => {
     ]);
   });
 
-  it("returns NOT_FOUND when the file was added and deleted in a single commit", async () => {
+  it("passes glob metacharacters through as a literal pathspec", async () => {
+    mockRevList(`${DELETING_SHA}\n${PREVIOUS_SHA}\n`);
+    binaryCatFileMock.mockResolvedValue(Buffer.from("data"));
+    const service = new GitService(tempDir);
+
+    await service.readPreviousFileVersion("image[1].png", 1024);
+
+    expect(gitClientMock.raw).toHaveBeenCalledWith([
+      "--literal-pathspecs",
+      "rev-list",
+      "-2",
+      "--end-of-options",
+      "HEAD",
+      "--",
+      "image[1].png",
+    ]);
+    expect(binaryCatFileMock).toHaveBeenCalledWith(["blob", `${PREVIOUS_SHA}:image[1].png`]);
+  });
+
+  it("returns NOT_FOUND when only the deleting commit is reachable for the path", async () => {
     mockRevList(`${DELETING_SHA}\n`);
     const service = new GitService(tempDir);
 
@@ -756,7 +777,7 @@ describe("GitService.readPreviousFileVersion", () => {
 
   it("maps a path missing at the prior commit to NOT_FOUND", async () => {
     gitClientMock.raw.mockImplementation(async (args: string[]) => {
-      if (args[0] === "rev-list") return `${DELETING_SHA}\n${PREVIOUS_SHA}\n`;
+      if (args.includes("rev-list")) return `${DELETING_SHA}\n${PREVIOUS_SHA}\n`;
       throw new Error(`fatal: path 'img.png' does not exist in '${PREVIOUS_SHA}'`);
     });
     const service = new GitService(tempDir);
@@ -781,7 +802,9 @@ describe("GitService.readPreviousFileVersion", () => {
 
   it("rejects an oversized prior blob from the size probe without reading content", async () => {
     gitClientMock.raw.mockImplementation(async (args: string[]) =>
-      args[0] === "rev-list" ? `${DELETING_SHA}\n${PREVIOUS_SHA}\n` : `${String(5 * 1024 * 1024)}\n`
+      args.includes("rev-list")
+        ? `${DELETING_SHA}\n${PREVIOUS_SHA}\n`
+        : `${String(5 * 1024 * 1024)}\n`
     );
     const service = new GitService(tempDir);
 

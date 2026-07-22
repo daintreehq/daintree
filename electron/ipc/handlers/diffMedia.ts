@@ -73,13 +73,9 @@ function validatePayload(payload: DiffMediaReadFileVersionsPayload): void {
 
 async function readHeadSide(cwd: string, filePath: string, mime: string): Promise<DiffMediaSide> {
   try {
-    const gitService = gitServiceCache.getGitService(cwd);
-    let result = await gitService.readFileAtHead(filePath, DIFF_MEDIA_MAX_BYTES);
-    if (!result.ok && result.reason === "NOT_FOUND") {
-      // An already-committed deletion has no blob at literal HEAD — fall back
-      // to the last commit whose tree still contained the path.
-      result = await gitService.readPreviousFileVersion(filePath, DIFF_MEDIA_MAX_BYTES);
-    }
+    const result = await gitServiceCache
+      .getGitService(cwd)
+      .readFileAtHead(filePath, DIFF_MEDIA_MAX_BYTES);
     if (!result.ok) {
       return { ok: false, error: result.reason };
     }
@@ -88,6 +84,29 @@ async function readHeadSide(cwd: string, filePath: string, mime: string): Promis
     console.error("[IPC] diff-media HEAD read failed:", error);
     return { ok: false, error: "ERROR" };
   }
+}
+
+async function readPreviousSide(
+  cwd: string,
+  filePath: string,
+  mime: string
+): Promise<DiffMediaSide> {
+  try {
+    const result = await gitServiceCache
+      .getGitService(cwd)
+      .readPreviousFileVersion(filePath, DIFF_MEDIA_MAX_BYTES);
+    if (!result.ok) {
+      return { ok: false, error: result.reason };
+    }
+    return toImageSide(mime, result.content);
+  } catch (error) {
+    console.error("[IPC] diff-media prior-version read failed:", error);
+    return { ok: false, error: "ERROR" };
+  }
+}
+
+function isMissing(side: DiffMediaSide): boolean {
+  return !side.ok && side.error === "NOT_FOUND";
 }
 
 // Same containment discipline as files:read — realpath containment against the
@@ -192,10 +211,21 @@ async function handleReadFileVersions(
     };
   }
 
-  const [head, working] = await Promise.all([
+  const [headAtHead, working] = await Promise.all([
     readHeadSide(payload.cwd, payload.filePath, mime),
     readWorkingSide(payload.cwd, payload.filePath, mime),
   ]);
+
+  // Both sides missing is the signature of an already-committed deletion —
+  // literal HEAD has moved past the delete, so show the last committed
+  // version. Gated on the working side too: for a never-tracked path (a
+  // working copy exists) rev-list would scan the full history just to
+  // return nothing.
+  const head =
+    isMissing(headAtHead) && isMissing(working)
+      ? await readPreviousSide(payload.cwd, payload.filePath, mime)
+      : headAtHead;
+
   return { head, working };
 }
 
