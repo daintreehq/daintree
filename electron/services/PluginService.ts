@@ -28,6 +28,7 @@ import {
 } from "../schemas/plugin.js";
 import { getPluginMcpSupervisor } from "./PluginMcpSupervisor.js";
 import { PluginProcessManager } from "./plugin/PluginProcessManager.js";
+import { PluginPtyTransport } from "./plugin/PluginPtyTransport.js";
 import { PluginPathNotAllowedError } from "./plugin/pluginFsContainment.js";
 import { e2eSideloadPluginDir, isE2EMode } from "../setup/runtimeFlags.js";
 import type { HostGitFactory } from "./plugin/pluginHostGit.js";
@@ -552,6 +553,8 @@ export class PluginService {
    * each spawn in the plugin audit trail.
    */
   private processManager: PluginProcessManager | null = null;
+  /** Lazily built on the first interactive spawn; see {@link getPluginPtyTransport}. */
+  private pluginPtyTransport: PluginPtyTransport | null = null;
   /**
    * Active `host.fs.watch` watchers keyed by pluginId — each entry is a disposer
    * that closes the underlying `fs.watch` handle. Torn down on unload so a
@@ -862,6 +865,10 @@ export class PluginService {
     for (const detach of this.panelLifecycleSourceCleanups.values()) detach();
     this.panelLifecycleSourceCleanups.clear();
     this.panelLifecycleBroker.dispose();
+    // Drops the PtyClient subscriptions and force-kills any plugin PTY the
+    // unload cascade above left running.
+    this.pluginPtyTransport?.dispose();
+    this.pluginPtyTransport = null;
   }
 
   /**
@@ -2194,18 +2201,29 @@ export class PluginService {
   private getProcessManager(): PluginProcessManager {
     if (!this.processManager) {
       this.processManager = new PluginProcessManager({
-        streamSink: (pluginId, event) => {
+        streamSink: (pluginId, event, panelId) => {
           // Membership-gated like postToPanel: a late stream emit after the
           // plugin unloads is dropped rather than broadcast.
           if (!this.plugins.has(pluginId)) return;
           // Same per-instance envelope as host.postToPanel — the process stream
           // rides the same transport and is consumed by the same `plugin.on`
-          // dispatcher. Process events are not panel-scoped, so broadcast (null).
+          // dispatcher. `panelId` is the spawn-time routing target (#11300):
+          // non-null targets the panel that started the process, null keeps the
+          // historical broadcast to every panel the plugin owns.
           broadcastToRenderer(`plugin:${pluginId}:${PLUGIN_PROCESS_STREAM_CHANNEL}`, {
-            panelId: null,
+            panelId,
             payload: event,
           });
         },
+        ptySpawner: (config, context) =>
+          this.getPluginPtyTransport().spawn(context.id, context.generation, {
+            command: config.command,
+            args: config.args,
+            cwd: config.cwd,
+            env: config.env,
+            cols: config.cols,
+            rows: config.rows,
+          }),
         auditor: ({ pluginId, command, args, processId }) => {
           // Surface the spawn in the audit trail so process execution is
           // observable. Best-effort — an audit failure must never block a spawn.
@@ -2223,6 +2241,23 @@ export class PluginService {
       });
     }
     return this.processManager;
+  }
+
+  /**
+   * Lazily construct the interactive-process transport (#11300). Deferred until
+   * a plugin actually spawns a PTY so the plugin subsystem never forces the
+   * pty-host up on its own — the terminal path is what boots it, and this only
+   * borrows the crash-isolated process once it exists.
+   */
+  private getPluginPtyTransport(): PluginPtyTransport {
+    if (!this.pluginPtyTransport) {
+      const client = getPtyClient();
+      if (!client) {
+        throw new Error("process.spawn: interactive (pty) mode requires the terminal backend");
+      }
+      this.pluginPtyTransport = new PluginPtyTransport(client);
+    }
+    return this.pluginPtyTransport;
   }
 
   /** Read-only process snapshot for the `plugin-process:list` IPC, optionally scoped to one plugin. */

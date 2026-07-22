@@ -51,6 +51,7 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
   return {
     analysisWorkerPool: null,
     ptyManager,
+    pluginPtyManager: {} as HostContext["pluginPtyManager"],
     processTreeCache: { setPollInterval: vi.fn() } as unknown as HostContext["processTreeCache"],
     terminalResourceMonitor: {
       setEnabled: vi.fn(),

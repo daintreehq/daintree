@@ -70,6 +70,7 @@ import {
   type RendererConnection,
   type TerminalWorkerConnection,
 } from "./pty-host/handlers/index.js";
+import { PluginPtyProcessManager } from "./pty-host/services/PluginPtyProcessManager.js";
 import { PORT_BATCH_INTERACTIVE_INPUT_WINDOW_MS } from "./services/pty/types.js";
 import { isSmokeTestTerminalId } from "../shared/utils/smokeTestTerminals.js";
 import { startEventLoopMonitor } from "./pty-host/eventLoopMonitor.js";
@@ -1557,8 +1558,14 @@ function resumePausedTerminal(id: string): void {
 // always read the current value through the getter, so `init-buffers` and
 // `initialize()` reassignments propagate without each module having to
 // re-bind a local snapshot.
+// Raw plugin PTYs (#11300) live alongside — never inside — the terminal
+// PtyManager, so they inherit its crash isolation without any of its
+// panel semantics.
+const pluginPtyManager = new PluginPtyProcessManager(sendEvent);
+
 const hostContext: HostContext = {
   ptyManager,
+  pluginPtyManager,
   processTreeCache,
   terminalResourceMonitor,
   backpressureManager,
@@ -1662,6 +1669,10 @@ function cleanup(): void {
   terminalResourceMonitor.dispose();
   processTreeCache.stop();
   imagePathProbe.dispose();
+
+  // Release every plugin PTY's native handle through its teardown chokepoint —
+  // a bare process exit would leak the master fd for any still-running one.
+  pluginPtyManager.disposeAll();
 
   if (ptyPool) {
     ptyPool.dispose();

@@ -26,6 +26,8 @@ import type {
   PluginInputBoxOptions,
   PluginConfirmOptions,
   PluginProcessSpawnOptions,
+  PluginPtyProcessSpawnOptions,
+  PluginProcessMode,
   PluginPanelBadge,
 } from "./plugin.js";
 
@@ -75,14 +77,20 @@ export type PluginHostNotifyMethod =
   | "logger.info"
   | "logger.warn"
   | "logger.error"
-  | "process.kill";
+  | "process.kill"
+  // Interactive-process input (#11300). Fire-and-forget like `process.kill`:
+  // `write`/`resize` are void in the public handle contract, so there is no
+  // reply for the worker to await.
+  | "process.write"
+  | "process.resize";
 
 /**
  * Event subscriptions the worker proxy can open against the host. The
- * `process-exit` / `process-crash` kinds wire a spawned process's lifecycle
- * callbacks back to the worker, keyed by the handle id carried in `processId`.
- * `panel-lifecycle` streams this plugin's own panel transitions (#11301) —
- * the host replays each live panel's current phase at subscribe time.
+ * `process-exit` / `process-crash` / `process-data` kinds wire a spawned
+ * process's lifecycle and output callbacks back to the worker, keyed by the
+ * handle id carried in `processId`. `panel-lifecycle` streams this plugin's
+ * own panel transitions (#11301) — the host replays each live panel's current
+ * phase at subscribe time.
  */
 export type PluginWorkerSubscriptionKind =
   | "active-worktree"
@@ -92,7 +100,8 @@ export type PluginWorkerSubscriptionKind =
   | "agent-state"
   | "panel-lifecycle"
   | "process-exit"
-  | "process-crash";
+  | "process-crash"
+  | "process-data";
 
 /**
  * Callback kinds main invokes back in the worker. `file-decoration-method`
@@ -205,7 +214,7 @@ export type PluginWorkerToHostMessage =
        * Ignored for other kinds. Mirrors `PluginHostSubscriptionOptions.debounceMs`.
        */
       debounceMs?: number;
-      /** Handle id for `process-exit` / `process-crash` subscriptions. */
+      /** Handle id for `process-exit` / `process-crash` / `process-data` subscriptions. */
       processId?: string;
     }
   /** Close a previously opened subscription. */
@@ -405,21 +414,40 @@ export interface ClipboardWriteTextParams {
 /** Params for `process.spawn` (`host-call`). */
 export interface ProcessSpawnParams {
   command: string;
-  options?: PluginProcessSpawnOptions;
+  options?: PluginProcessSpawnOptions | PluginPtyProcessSpawnOptions;
 }
 
 /**
  * Result of `process.spawn` (`host-call`). The host-assigned handle id the
- * worker proxy uses to address `process.kill` / `process.restart` and to open
- * the `process-exit` / `process-crash` subscriptions.
+ * worker proxy uses to address `process.kill` / `process.restart` / `process.write`
+ * / `process.resize` and to open the `process-exit` / `process-crash` /
+ * `process-data` subscriptions.
+ *
+ * `mode` is authoritative, not an echo of what the worker asked for: the proxy
+ * builds the interactive handle shape only when the host actually allocated a
+ * PTY, so a plugin can never be handed a `write()` that silently goes nowhere.
  */
 export interface ProcessSpawnResult {
   id: string;
+  mode: PluginProcessMode;
 }
 
 /** Params for `process.kill` (`host-notify`) and `process.restart` (`host-call`). */
 export interface ProcessHandleRefParams {
   processId: string;
+}
+
+/** Params for `process.write` (`host-notify`) — interactive processes only. */
+export interface ProcessWriteParams {
+  processId: string;
+  data: string;
+}
+
+/** Params for `process.resize` (`host-notify`) — interactive processes only. */
+export interface ProcessResizeParams {
+  processId: string;
+  cols: number;
+  rows: number;
 }
 
 /**

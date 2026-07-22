@@ -116,10 +116,75 @@ export interface MemoryRollup {
 }
 
 /**
+ * Spawn config for a raw plugin PTY (#11300). Deliberately NOT
+ * {@link PtyHostSpawnOptions}: a plugin's interactive process is not a terminal
+ * panel, so it carries no agent hint, project id, title, session restore, or
+ * launch generation, and the host must never route it through `PtyManager` /
+ * `TerminalProcess` (no pooling, agent detection, resource governance, or
+ * session persistence). `env` arrives already reduced to the shared safe-key
+ * allowlist by Main; the host applies it verbatim.
+ */
+export interface PluginPtyHostSpawnOptions {
+  command: string;
+  args: string[];
+  cwd?: string;
+  env: Record<string, string>;
+  cols: number;
+  rows: number;
+}
+
+/**
+ * Main → Host messages for the raw plugin-PTY lane (#11300). `generation`
+ * distinguishes incarnations of the same handle id across `restart()`, so a
+ * late message from (or about) a replaced PTY is dropped instead of hitting its
+ * successor. The host is a dumb executor here: every capability check, consent
+ * prompt, plugin-liveness gate, and env reduction has already run in Main.
+ */
+export type PluginPtyHostRequest =
+  | {
+      type: "plugin-pty-spawn";
+      id: string;
+      generation: number;
+      options: PluginPtyHostSpawnOptions;
+    }
+  | { type: "plugin-pty-write"; id: string; generation: number; data: string }
+  | { type: "plugin-pty-resize"; id: string; generation: number; cols: number; rows: number }
+  | {
+      type: "plugin-pty-kill";
+      id: string;
+      generation: number;
+      signal: "SIGTERM" | "SIGKILL";
+    };
+
+/** Outcome of a `plugin-pty-spawn`. */
+export type PluginPtySpawnResult =
+  | { success: true; pid: number | null }
+  | { success: false; error: string };
+
+/** Host → Main events for the raw plugin-PTY lane (#11300). */
+export type PluginPtyHostEvent =
+  | {
+      type: "plugin-pty-spawn-result";
+      id: string;
+      generation: number;
+      result: PluginPtySpawnResult;
+    }
+  | { type: "plugin-pty-data"; id: string; generation: number; data: string }
+  | {
+      type: "plugin-pty-exit";
+      id: string;
+      generation: number;
+      exitCode: number | null;
+      /** Raw OS signal number from node-pty, or `null` when it exited normally. */
+      signal: number | null;
+    };
+
+/**
  * Requests sent from Main → Host.
  * Each request is a discriminated union type for compile-time safety.
  */
 export type PtyHostRequest =
+  | PluginPtyHostRequest
   | { type: "spawn"; id: string; options: PtyHostSpawnOptions }
   | { type: "resize"; id: string; cols: number; rows: number }
   | { type: "write"; id: string; data: string; traceId?: string }
@@ -401,6 +466,7 @@ export interface PtyHostTerminalSnapshot {
  * Forward processed events back to Main process.
  */
 export type PtyHostEvent =
+  | PluginPtyHostEvent
   | { type: "data"; id: string; data: string }
   // Main-process-only copy of a chunk the renderer already received on its
   // visual path (MessagePort) or that the background gate suppressed. Consumed

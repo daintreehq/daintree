@@ -32,6 +32,9 @@ import type {
   PluginIpcHandler,
   PluginProcessHandle,
   PluginProcessSpawnOptions,
+  PluginProcessApi,
+  PluginPtyProcessHandle,
+  PluginPtyProcessSpawnOptions,
   PluginQuickPickItem,
   PluginQuickPickOptions,
   PluginSettingsScope,
@@ -80,7 +83,7 @@ export interface ShownToastRecord {
 /** Captured `host.process.spawn(command, options)` calls. */
 export interface SpawnRecord {
   command: string;
-  options: PluginProcessSpawnOptions | undefined;
+  options: PluginProcessSpawnOptions | PluginPtyProcessSpawnOptions | undefined;
 }
 
 export interface DispatchedActionRecord {
@@ -1094,21 +1097,29 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       },
     },
     process: {
-      async spawn(command, options): Promise<PluginProcessHandle> {
+      async spawn(
+        command: string,
+        options?: PluginProcessSpawnOptions | PluginPtyProcessSpawnOptions
+      ): Promise<PluginProcessHandle | PluginPtyProcessHandle> {
         spawnCalls.push({ command, options });
         // A no-op handle: the mock records the call without spawning anything.
-        // Lifecycle callbacks never fire (no real process), and kill/restart
-        // are inert — tests that exercise real process behavior use
-        // PluginProcessManager directly with an injected fake spawner.
-        return {
+        // Lifecycle and data callbacks never fire (no real process), and
+        // kill/restart/write/resize are inert — tests that exercise real process
+        // behavior use PluginProcessManager directly with an injected fake spawner.
+        const base: PluginProcessHandle = {
           id: `mock-process-${spawnCalls.length}`,
           kill: () => {},
           restart: async () => {},
           onExit: () => () => {},
           onCrash: () => () => {},
+          onData: () => () => {},
         };
+        // Shape matches the real host: `write`/`resize` exist only for a PTY, so
+        // a test asserting "pipe mode has no writable input" stays honest.
+        if (options?.mode !== "pty") return base;
+        return { ...base, write: () => {}, resize: () => {} };
       },
-    },
+    } as PluginProcessApi,
     // In-memory fs mock: writes land in `fsFiles` and are recorded; reads return
     // a previously-written value or reject ENOENT. No containment is modeled
     // (containment lives in pluginFsContainment and is unit-tested directly) —

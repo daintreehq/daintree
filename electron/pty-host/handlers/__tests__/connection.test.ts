@@ -17,6 +17,7 @@ function makeCtx(stateRef: {
   return {
     analysisWorkerPool: null,
     ptyManager,
+    pluginPtyManager: {} as HostContext["pluginPtyManager"],
     processTreeCache: {} as HostContext["processTreeCache"],
     terminalResourceMonitor: {} as HostContext["terminalResourceMonitor"],
     backpressureManager: {} as HostContext["backpressureManager"],

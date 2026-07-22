@@ -35,6 +35,9 @@ import type {
   PluginGitStatus,
   PluginGitCommitResult,
   PluginProcessHandle,
+  PluginPtyProcessHandle,
+  PluginProcessDataChunk,
+  PluginProcessMode,
 } from "../../../shared/types/plugin.js";
 import type {
   FileDecorationProviderDescriptor,
@@ -628,10 +631,16 @@ export class PluginDevWorkerHostProxy {
         // addresses `kill` / `restart` and the exit/crash subscriptions. `kill`
         // is sync (a fire-and-forget notify); `restart` awaits the host. Late
         // exit/crash events ride the existing subscription-event channel.
-        spawn: async (command, options) => {
-          const { id } = await this.call<{ id: string }>("process.spawn", { command, options });
-          return this.buildProcessHandle(id);
-        },
+        // One implementation behind an overloaded signature: the public `spawn`
+        // narrows its return on the `mode` literal, which a single arrow
+        // function can't express — the cast is the standard overload-impl seam.
+        spawn: (async (command: string, options?: unknown) => {
+          const { id, mode } = await this.call<{ id: string; mode?: PluginProcessMode }>(
+            "process.spawn",
+            { command, options }
+          );
+          return this.buildProcessHandle(id, mode === "pty");
+        }) as PluginHostApi["process"]["spawn"],
       },
       // host.fs request/response methods are fully async, so they relay over the
       // port to the real (contained, capability-gated) host like settings/get.
@@ -770,9 +779,13 @@ export class PluginDevWorkerHostProxy {
     };
   }
 
-  /** Build a worker-side {@link PluginProcessHandle} proxy for a process the host
-   * spawned on our behalf, addressing it by the host-assigned `id`. */
-  private buildProcessHandle(id: string): PluginProcessHandle {
+  /**
+   * Build a worker-side {@link PluginProcessHandle} proxy for a process the host
+   * spawned on our behalf, addressing it by the host-assigned `id`. `interactive`
+   * comes from the host's reported mode, so `write`/`resize` exist only when
+   * there is a real PTY behind them.
+   */
+  private buildProcessHandle(id: string, interactive: boolean): PluginProcessHandle {
     const subscribeLifecycle = (
       kind: "process-exit" | "process-crash",
       callback: (info: { exitCode: number | null; signal: string | null }) => void
@@ -781,7 +794,7 @@ export class PluginDevWorkerHostProxy {
         { type: "subscribe", subscriptionId: `s${this.nextId++}`, kind, processId: id },
         (payload) => callback(payload as { exitCode: number | null; signal: string | null })
       );
-    return {
+    const base: PluginProcessHandle = {
       id,
       kill: () => {
         // Sync in the public contract — fire-and-forget over the port.
@@ -790,7 +803,25 @@ export class PluginDevWorkerHostProxy {
       restart: () => this.call<void>("process.restart", { processId: id }),
       onExit: (callback) => subscribeLifecycle("process-exit", callback),
       onCrash: (callback) => subscribeLifecycle("process-crash", callback),
+      onData: (callback) =>
+        this.openSubscription(
+          {
+            type: "subscribe",
+            subscriptionId: `s${this.nextId++}`,
+            kind: "process-data",
+            processId: id,
+          },
+          (payload) => callback(payload as PluginProcessDataChunk)
+        ),
     };
+    if (!interactive) return base;
+    const ptyHandle: PluginPtyProcessHandle = {
+      ...base,
+      // Void in the public contract, like `kill` — fire-and-forget over the port.
+      write: (data) => this.notify("process.write", { processId: id, data }),
+      resize: (cols, rows) => this.notify("process.resize", { processId: id, cols, rows }),
+    };
+    return ptyHandle;
   }
 }
 

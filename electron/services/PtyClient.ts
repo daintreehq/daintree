@@ -92,6 +92,7 @@ import type { PtyHostLifecycle } from "./pty/PtyHostLifecycle.js";
 import type {
   PtyHostEvent,
   PtyHostSpawnOptions,
+  PluginPtyHostSpawnOptions,
   PtyHostActivityTier,
   CrashType,
   SpawnResult,
@@ -1378,6 +1379,34 @@ export class PtyClient extends EventEmitter {
     this.terminalOwners.set(id, shard.key);
     this.pendingSpawns.set(id, resolvedOptions);
     shard.send({ type: "spawn", id, options: resolvedOptions });
+  }
+
+  /**
+   * Raw plugin-PTY lane (#11300). These four bypass every terminal concern this
+   * class otherwise owns — no project shard placement, no terminal-owner entry,
+   * no lifecycle ledger, no pendingSpawns cap, no DAINTREE_* metadata stamping.
+   * A plugin's interactive process is not a terminal panel; it rides the default
+   * shard purely to reuse the pty-host's crash isolation and native-module
+   * rebuild machinery.
+   *
+   * Like {@link spawn}, `spawnPluginPty` is void — the outcome arrives as a
+   * `"plugin-pty"` event, so the caller must attach its listener BEFORE calling
+   * and filter by `(id, generation)`.
+   */
+  spawnPluginPty(id: string, generation: number, options: PluginPtyHostSpawnOptions): void {
+    this.defaultShard.send({ type: "plugin-pty-spawn", id, generation, options });
+  }
+
+  writePluginPty(id: string, generation: number, data: string): void {
+    this.defaultShard.send({ type: "plugin-pty-write", id, generation, data });
+  }
+
+  resizePluginPty(id: string, generation: number, cols: number, rows: number): void {
+    this.defaultShard.send({ type: "plugin-pty-resize", id, generation, cols, rows });
+  }
+
+  killPluginPty(id: string, generation: number, signal: "SIGTERM" | "SIGKILL"): void {
+    this.defaultShard.send({ type: "plugin-pty-kill", id, generation, signal });
   }
 
   write(id: string, data: string, traceId?: string): void {

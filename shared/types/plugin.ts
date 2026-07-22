@@ -1352,19 +1352,74 @@ export interface PluginConfirmOptions {
 export type ActionHandler = (args: unknown) => unknown | Promise<unknown>;
 
 /**
- * Options for {@link PluginProcessApi.spawn}. All fields are optional; `command`
- * is the positional first argument. The host anchors a relative spawn against
- * `cwd` (defaulting to the active worktree path, then the process cwd) and
- * merges `env` over the host environment — a plugin cannot blank the inherited
- * env, only add to / override it.
+ * Execution backend for a managed process (#11300).
+ *
+ * - `pipe` (the default): a plain child process with stdin closed and
+ *   stdout/stderr piped. Output arrives split by stream.
+ * - `pty`: the command runs under a real pseudo-terminal, so it sees a TTY,
+ *   accepts input via {@link PluginPtyProcessHandle.write}, and can be resized.
+ *   A PTY merges stdout and stderr into one stream by construction.
+ */
+export type PluginProcessMode = "pipe" | "pty";
+
+/**
+ * One chunk of output from a managed process, delivered to
+ * {@link PluginProcessHandle.onData}.
+ */
+export interface PluginProcessDataChunk {
+  /**
+   * `stdout` / `stderr` in pipe mode. `data` in PTY mode — a pseudo-terminal
+   * has a single combined stream, so there is no split to report.
+   */
+  readonly stream: "stdout" | "stderr" | "data";
+  /** The decoded UTF-8 chunk. */
+  readonly chunk: string;
+}
+
+/**
+ * Options for {@link PluginProcessApi.spawn} in the default pipe mode. All
+ * fields are optional; `command` is the positional first argument. The host
+ * anchors a relative spawn against `cwd` (defaulting to the active worktree
+ * path, then the process cwd).
+ *
+ * The child does NOT inherit the host environment. It is built from a fixed
+ * allowlist of essentials (PATH, HOME, locale, temp dir, and the Windows keys a
+ * child cannot run without) plus whatever this call passes in {@link env} — so
+ * a plugin never receives the main process's tokens, and anything else the
+ * command needs must be handed to it explicitly.
  */
 export interface PluginProcessSpawnOptions {
   /** Argument vector. Each entry is passed verbatim — no shell interpolation. */
   args?: string[];
   /** Working directory for the child. Defaults to the active worktree, then the host cwd. */
   cwd?: string;
-  /** Extra environment variables, merged over (not replacing) the host environment. */
+  /**
+   * Environment entries applied over the host's safe-key allowlist. These are
+   * additions to a minimal base, NOT overrides on the full host environment —
+   * a key the plugin does not pass and the allowlist does not cover is absent.
+   */
   env?: Record<string, string>;
+  /** Execution backend. Omit (or pass `"pipe"`) for the default piped child. */
+  mode?: "pipe";
+  /**
+   * Route this process's stream events to a single panel instead of every panel
+   * the plugin owns. `undefined` / `null` broadcast, matching `postToPanel`.
+   */
+  panelId?: string | null;
+}
+
+/**
+ * Options for an interactive {@link PluginProcessApi.spawn}. Same anchoring and
+ * environment rules as {@link PluginProcessSpawnOptions}, plus the initial
+ * terminal size. Selecting `mode: "pty"` narrows the returned handle to
+ * {@link PluginPtyProcessHandle}.
+ */
+export interface PluginPtyProcessSpawnOptions extends Omit<PluginProcessSpawnOptions, "mode"> {
+  mode: "pty";
+  /** Initial column count. Defaults to 80. Must be a positive integer. */
+  cols?: number;
+  /** Initial row count. Defaults to 24. Must be a positive integer. */
+  rows?: number;
 }
 
 /**
@@ -1403,6 +1458,38 @@ export interface PluginProcessHandle {
    * code or a signal the plugin did not request via `kill()`). Returns a disposer.
    */
   onCrash(callback: (info: { exitCode: number | null; signal: string | null }) => void): () => void;
+  /**
+   * Receive the process's output in the plugin's own code (#11300) — the
+   * counterpart to the panel stream, for a plugin that needs to parse what it
+   * spawned (a `--machine`-mode daemon's line-delimited JSON, say) rather than
+   * just display it. Returns a disposer.
+   *
+   * Output produced before the first subscriber attaches is buffered (bounded)
+   * and replayed on subscription, so a daemon that greets immediately is not
+   * missed by a callback registered on the next tick. Once any subscriber has
+   * attached, delivery is live-only. Panel streaming is unaffected either way.
+   */
+  onData(callback: (chunk: PluginProcessDataChunk) => void): () => void;
+}
+
+/**
+ * A {@link PluginProcessHandle} for a process spawned with `mode: "pty"`. Adds
+ * the two operations a pseudo-terminal makes possible: writing to the child's
+ * input and telling it the window changed size.
+ *
+ * Both are no-ops once the process has exited, and both are safe to call
+ * immediately after `spawn()` resolves. A `resize()` issued while a `restart()`
+ * is still allocating the replacement PTY is retained (last write wins) and
+ * folded into that PTY's initial size rather than replayed as a late SIGWINCH.
+ */
+export interface PluginPtyProcessHandle extends PluginProcessHandle {
+  /**
+   * Write to the child's input. Passed through verbatim — the caller supplies
+   * its own line terminator (`"\n"`) when the command expects one.
+   */
+  write(data: string): void;
+  /** Report a new terminal size to the child. Both values must be positive integers. */
+  resize(cols: number, rows: number): void;
 }
 
 /**
@@ -1418,11 +1505,21 @@ export interface PluginProcessHandle {
  */
 export interface PluginProcessApi {
   /**
+   * Spawn the command under a real pseudo-terminal. The returned handle adds
+   * `write()` and `resize()`; output arrives as a single combined stream on
+   * `onData()` and as `{ kind: "data" }` panel events. The PTY is allocated in
+   * the crash-isolated pty-host utility process, so a native failure cannot
+   * take the app down with it.
+   */
+  spawn(command: string, options: PluginPtyProcessSpawnOptions): Promise<PluginPtyProcessHandle>;
+  /**
    * Spawn a child process on the plugin's behalf and return a live handle. The
    * child's stdout/stderr stream to the plugin's panels over
-   * `postToPanel("process", …)` keyed by the handle id. Rejects when the plugin
-   * lacks `shell:exec`, when the per-plugin concurrency cap is reached, or when
-   * the plugin has been unloaded.
+   * `postToPanel("process", …)` keyed by the handle id (targeted at
+   * `options.panelId` when given, broadcast otherwise), and to the plugin's own
+   * code via {@link PluginProcessHandle.onData}. Rejects when the plugin lacks
+   * `shell:exec`, when the per-plugin concurrency cap is reached, or when the
+   * plugin has been unloaded.
    */
   spawn(command: string, options?: PluginProcessSpawnOptions): Promise<PluginProcessHandle>;
 }

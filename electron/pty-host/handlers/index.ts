@@ -3,6 +3,7 @@ import { createBackpressureHandlers } from "./backpressure.js";
 import { createConnectionHandlers } from "./connection.js";
 import { createDiagnosticsHandlers } from "./diagnostics.js";
 import { createLifecycleHandlers } from "./lifecycle.js";
+import { createPluginPtyHandlers } from "./pluginPty.js";
 import { createResourceConfigHandlers } from "./resourceConfig.js";
 import { createStateConfigHandlers } from "./stateConfig.js";
 import { createTerminalIOHandlers } from "./terminalIO.js";
@@ -40,6 +41,7 @@ export function createPtyHostMessageDispatcher(
   const handlers: HandlerMap = Object.assign(Object.create(null) as HandlerMap, {
     ...createConnectionHandlers(ctx),
     ...createLifecycleHandlers(ctx),
+    ...createPluginPtyHandlers(ctx),
     ...createTerminalIOHandlers(ctx),
     ...createBackpressureHandlers(ctx),
     ...createDiagnosticsHandlers(ctx),

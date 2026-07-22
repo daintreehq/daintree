@@ -6,6 +6,7 @@ import path from "path";
 import os from "os";
 import { fileURLToPath, pathToFileURL } from "url";
 import { createLogger } from "../../utils/logger.js";
+import { minimalWorkerEnv } from "../../utils/minimalSpawnEnv.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
   PLUGIN_DEV_WORKER_KIND,
@@ -410,14 +411,19 @@ export class PluginDevWorkerHost extends EventEmitter {
         stdio: "pipe",
         cwd: this.pluginDir || os.homedir(),
         execArgv: ["--max-old-space-size=256", ...this.permissionExecArgv],
-        env: {
-          // env REPLACES process.env in a utility process (#6081) — spread first.
-          ...(process.env as Record<string, string>),
+        // env REPLACES process.env in a utility process (#6081), so everything
+        // the worker needs must be in this one object. It is built from the SAME
+        // safe-key allowlist as the children a plugin spawns (#11300) rather than
+        // the full host env: plugin code runs in here, and the managed-spawn path
+        // scrubs secrets specifically to keep them away from it — inheriting them
+        // one level up made the "safe" path a formality. A plugin that needs a
+        // credential passes it explicitly or goes through a scoped host API.
+        env: minimalWorkerEnv({
           DAINTREE_USER_DATA: app.getPath("userData"),
           DAINTREE_UTILITY_PROCESS_KIND: this.workerKind,
           // io_uring disabled on Linux for utility-process stability (#6081).
           ...(process.platform === "linux" ? { UV_USE_IO_URING: "0" } : {}),
-        },
+        }) as Record<string, string>,
       });
     } catch (error) {
       logger.error(`[${this.serviceName}] Failed to fork`, {

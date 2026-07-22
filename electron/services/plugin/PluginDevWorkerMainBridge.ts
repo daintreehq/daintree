@@ -19,6 +19,9 @@ import type {
   PluginHostApi,
   PluginIpcContext,
   PluginProcessHandle,
+  PluginPtyProcessHandle,
+  PluginProcessSpawnOptions,
+  PluginProcessMode,
   PluginSettingsScope,
   PluginStorageScope,
 } from "../../../shared/types/plugin.js";
@@ -53,10 +56,22 @@ import type {
   ClipboardWriteTextParams,
   ProcessSpawnParams,
   ProcessHandleRefParams,
+  ProcessWriteParams,
+  ProcessResizeParams,
 } from "../../../shared/types/pluginDevWorker.js";
 import type { PluginDevWorkerHost } from "./PluginDevWorkerHost.js";
 
 const logger = createLogger("main:PluginDevWorkerBridge");
+
+/**
+ * Structural narrowing for an interactive process handle (#11300). The host adds
+ * `write`/`resize` only for a real PTY, so their presence — not what the worker
+ * requested — is what decides whether the interactive relay is available.
+ */
+function isPtyHandle(handle: PluginProcessHandle): handle is PluginPtyProcessHandle {
+  const candidate = handle as Partial<PluginPtyProcessHandle>;
+  return typeof candidate.write === "function" && typeof candidate.resize === "function";
+}
 
 export interface PluginDevWorkerMainBridgeDeps {
   pluginId: string;
@@ -477,7 +492,14 @@ export class PluginDevWorkerMainBridge {
       case "process.spawn": {
         const p = params as ProcessSpawnParams;
         const generation = this.reloadGeneration;
-        const handle = await this.host.process.spawn(p.command, p.options);
+        const handle = await this.host.process.spawn(
+          p.command,
+          p.options as PluginProcessSpawnOptions
+        );
+        // Report the mode from the handle the host actually built, not from what
+        // the worker asked for, so the proxy can't hand a plugin `write()` on a
+        // process that has no writable input.
+        const mode: PluginProcessMode = isPtyHandle(handle) ? "pty" : "pipe";
         // Disposed or reloaded while the spawn was settling — the worker that
         // requested it is gone; kill the orphan rather than leak it.
         if (this.disposed || generation !== this.reloadGeneration) {
@@ -486,10 +508,10 @@ export class PluginDevWorkerMainBridge {
           } catch {
             // best-effort
           }
-          return { id: handle.id };
+          return { id: handle.id, mode };
         }
         this.processHandles.set(handle.id, handle);
-        return { id: handle.id };
+        return { id: handle.id, mode };
       }
       case "process.restart": {
         const p = params as ProcessHandleRefParams;
@@ -664,6 +686,30 @@ export class PluginDevWorkerMainBridge {
         this.processHandles.get(processId)?.kill();
         return;
       }
+      case "process.write": {
+        const p = params as ProcessWriteParams;
+        const handle = this.processHandles.get(p.processId);
+        // Silently ignored for a pipe-mode handle: the worker proxy only exposes
+        // `write` on an interactive handle, so reaching here means a plugin
+        // fabricated the call. Warn rather than throw — this is a notify.
+        if (!handle || !isPtyHandle(handle)) {
+          logger.warn(`[${this.pluginId}] process.write on non-interactive "${p.processId}"`);
+          return;
+        }
+        if (typeof p.data !== "string") return;
+        handle.write(p.data);
+        return;
+      }
+      case "process.resize": {
+        const p = params as ProcessResizeParams;
+        const handle = this.processHandles.get(p.processId);
+        if (!handle || !isPtyHandle(handle)) {
+          logger.warn(`[${this.pluginId}] process.resize on non-interactive "${p.processId}"`);
+          return;
+        }
+        handle.resize(p.cols, p.rows);
+        return;
+      }
       default:
         logger.warn(`[${this.pluginId}] unknown host-notify method "${method}"`);
     }
@@ -693,7 +739,7 @@ export class PluginDevWorkerMainBridge {
         dispose = await this.host.onDidChangeAgentState((snapshot) => push(snapshot));
       } else if (kind === "panel-lifecycle") {
         dispose = await this.host.onDidChangePanelLifecycle((event) => push(event));
-      } else if (kind === "process-exit" || kind === "process-crash") {
+      } else if (kind === "process-exit" || kind === "process-crash" || kind === "process-data") {
         if (!msg.processId) {
           logger.warn(`[${this.pluginId}] ${kind} subscribe missing processId`);
           return;
@@ -709,7 +755,9 @@ export class PluginDevWorkerMainBridge {
         dispose =
           kind === "process-exit"
             ? handle.onExit((info) => push(info))
-            : handle.onCrash((info) => push(info));
+            : kind === "process-crash"
+              ? handle.onCrash((info) => push(info))
+              : handle.onData((chunk) => push(chunk));
       } else if (kind === "storage") {
         if (!msg.key) {
           logger.warn(`[${this.pluginId}] storage subscribe missing key`);
