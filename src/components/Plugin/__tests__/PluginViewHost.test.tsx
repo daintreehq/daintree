@@ -211,6 +211,43 @@ describe("makePluginViewHost", () => {
     expect(onPanelKindsChangedMock).not.toHaveBeenCalled();
   });
 
+  it("hands the content a close callback that forwards no arguments (#11301)", async () => {
+    const captured = vi.hoisted(() => ({ onRequestClose: undefined as undefined | (() => void) }));
+    vi.doMock("@/components/Plugin/PluginViewContent", () => ({
+      makePluginViewContent: () => (props: { onRequestClose?: () => void }) => {
+        captured.onRequestClose = props.onRequestClose;
+        return <div data-testid="content-probe" />;
+      },
+    }));
+
+    try {
+      const { makePluginViewHost } = await import("../PluginViewHost");
+      const Host = makePluginViewHost(makeConfig());
+      const onClose = vi.fn();
+
+      render(
+        <Host
+          id="panel-close"
+          title="Dashboard"
+          isFocused={false}
+          onFocus={(): void => {}}
+          onClose={onClose}
+        />
+      );
+
+      expect(captured.onRequestClose).toBeTypeOf("function");
+      captured.onRequestClose!();
+
+      // `onClose(force?: boolean)`. Passing the panel's handler straight through
+      // to a button would hand it the click event as a truthy `force`, turning
+      // the fallback's recoverable close into a forced one.
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(onClose).toHaveBeenCalledWith();
+    } finally {
+      vi.doUnmock("@/components/Plugin/PluginViewContent");
+    }
+  });
+
   it("renders an inline error when extensionId is missing", async () => {
     const { makePluginViewHost } = await import("../PluginViewHost");
     const Host = makePluginViewHost(makeConfig({ extensionId: undefined }));

@@ -61,6 +61,8 @@ import type {
 } from "../../shared/types/plugin.js";
 import { PluginInstalledRecordsStore } from "./plugin/PluginInstalledRecordsStore.js";
 import { PluginContributionBroadcaster } from "./plugin/PluginContributionBroadcaster.js";
+import { PluginPanelLifecycleBroker } from "./plugin/PluginPanelLifecycleBroker.js";
+import { PLUGIN_VIEW_GENERATION_PREFIX } from "../../shared/utils/pluginViewUrl.js";
 import { PluginRendererDispatcher } from "./plugin/PluginRendererDispatcher.js";
 import { PluginUIPromptDispatcher } from "./plugin/PluginUIPromptDispatcher.js";
 import { PluginSettingsManager } from "./plugin/PluginSettingsManager.js";
@@ -104,6 +106,7 @@ import {
   unregisterPluginPanelKinds,
   onPanelKindRegistered,
   onPanelKindUnregistered,
+  getPanelKindConfig,
 } from "../../shared/config/panelKindRegistry.js";
 import {
   registerToolbarButton,
@@ -305,14 +308,45 @@ function safeArgsHash(args: unknown[]): string {
 }
 
 /**
- * Build the `plugin://{pluginId}/{path}` URL that `PluginViewHost` passes to
- * `import()`. Strips a single leading `./` so the host segment doesn't end up
- * with an awkward `./dist/view.js` path component — the URL handler accepts
- * either form, but the canonical shape matches the protocol docs.
+ * Monotonic counter behind the view-generation segment. Session-scoped and
+ * never reset: the renderer's module map is rebuilt whenever main restarts, so
+ * a generation only has to be unique within one main-process lifetime.
  */
-function buildPluginViewUrl(pluginId: string, componentPath: string): string {
+let nextPluginViewGeneration = 1;
+
+/** Allocate the generation stamped into a plugin's view URLs for this load. */
+export function allocatePluginViewGeneration(): number {
+  return nextPluginViewGeneration++;
+}
+
+/**
+ * Build the `plugin://{pluginId}/{PLUGIN_VIEW_GENERATION_PREFIX}{n}/{path}` URL
+ * that `PluginViewHost` passes to `import()`. Strips a single leading `./` so
+ * the host segment doesn't end up with an awkward `./dist/view.js` path
+ * component — the URL handler accepts either form, but the canonical shape
+ * matches the protocol docs.
+ *
+ * The generation segment is what makes a plugin upgrade visible without a Force
+ * Reload (#11301). V8 caches ESM module records by URL and Chromium has no
+ * eviction API, so a re-imported identical specifier returns the OLD module no
+ * matter how thoroughly the React tree remounts. A fresh segment is a specifier
+ * V8 has never seen, so the new bundle is actually fetched and evaluated.
+ *
+ * This is deliberately NOT a per-load cache-buster — that is the thing the
+ * renderer's own comment warns against, because one entry per panel open grows
+ * the module map without bound. The generation changes only when the plugin is
+ * (re)loaded in main: a genuine install, upgrade, or dev reload. That is the
+ * same bounded cost plugin authors already pay by hand-versioning their bundle
+ * filename every release, minus the manual step.
+ *
+ * A path SEGMENT rather than a `?v=` query on purpose: a relative import inside
+ * the entry module resolves against the entry's URL and inherits a path prefix,
+ * but drops the query — so a query would refresh the entry chunk and leave
+ * every secondary chunk stale.
+ */
+function buildPluginViewUrl(pluginId: string, componentPath: string, generation: number): string {
   const normalized = componentPath.startsWith("./") ? componentPath.slice(2) : componentPath;
-  return `plugin://${pluginId}/${normalized}`;
+  return `plugin://${pluginId}/${PLUGIN_VIEW_GENERATION_PREFIX}${generation}/${normalized}`;
 }
 
 /**
@@ -571,6 +605,7 @@ export class PluginService {
    * after {@link initPromise} is set, so it can await the init gate.
    */
   private readonly broadcaster: PluginContributionBroadcaster;
+  private readonly panelLifecycleBroker: PluginPanelLifecycleBroker;
   private disposed = false;
   private readonly disposeRegistrySubscriptions: () => void;
   /**
@@ -647,6 +682,13 @@ export class PluginService {
       listPluginActions: () => this.listPluginActions(),
       initPromise: this.initPromise,
     });
+
+    // Ownership is resolved against the live kind registry rather than trusted
+    // from the renderer's payload, so a plugin can never be addressed with
+    // another plugin's panel events (#11301).
+    this.panelLifecycleBroker = new PluginPanelLifecycleBroker(
+      (panelKindId) => getPanelKindConfig(panelKindId)?.extensionId
+    );
 
     this.dispatcher = new PluginRendererDispatcher({
       isDisposed: () => this.disposed,
@@ -733,6 +775,27 @@ export class PluginService {
   }
 
   /**
+   * Accept a renderer's batch of plugin panel lifecycle transitions (#11301).
+   * `sourceId` is the sender's `webContentsId`, taken from the IPC context
+   * rather than the payload, so each project view's panels stay in their own
+   * bucket and one view's teardown can't erase another's.
+   */
+  ingestPanelLifecycleEvents(sourceId: number, events: readonly unknown[]): void {
+    if (this.disposed) return;
+    this.panelLifecycleBroker.ingest(sourceId, events);
+  }
+
+  /**
+   * Forget a renderer's reported panels — for a destroyed or evicted
+   * `WebContentsView`. Deliberately does NOT synthesize `removed`: a view being
+   * cached says nothing about whether the user closed the panel, and inventing
+   * a terminal event is the exact destructive misread this API exists to stop.
+   */
+  clearPanelLifecycleSource(sourceId: number): void {
+    this.panelLifecycleBroker.clearSource(sourceId);
+  }
+
+  /**
    * Stop forwarding shared registry events to the renderer. Intended for
    * tests that need a clean teardown — production code holds a single
    * `pluginService` singleton for the app lifetime. Also drops any pending
@@ -761,6 +824,7 @@ export class PluginService {
     this.resolveInit = null;
     this.dispatcher.dispose();
     this.promptDispatcher.dispose();
+    this.panelLifecycleBroker.dispose();
   }
 
   /**
@@ -1136,6 +1200,11 @@ export class PluginService {
     // Index views by bare id so the panels loop can attach `componentPath` in
     // a single registerPanelKind pass (#9229). View ids are pre-namespace; the
     // runtime panel id is `${manifest.name}.${panel.id}`.
+    // One generation per load, shared by every view this plugin contributes, so
+    // a reload swaps the whole plugin's view modules together (#11301). Reading
+    // it here rather than per-panel also keeps a plugin's chunks in one virtual
+    // namespace, which is what lets relative imports inherit the generation.
+    const viewGeneration = allocatePluginViewGeneration();
     const viewsByBareId = new Map<string, ViewContribution>();
     const unmatchedViewIds = new Set<string>();
     for (const view of manifest.contributes.views) {
@@ -1170,7 +1239,7 @@ export class PluginService {
         showInPalette: panel.showInPalette,
         extensionId: manifest.name,
         ...(view && !panel.hasPty
-          ? { componentPath: buildPluginViewUrl(manifest.name, view.componentPath) }
+          ? { componentPath: buildPluginViewUrl(manifest.name, view.componentPath, viewGeneration) }
           : {}),
       });
       if (view && panel.hasPty) {
@@ -2038,6 +2107,7 @@ export class PluginService {
       pluginBadges: this.pluginBadges,
       pluginFsWatchers: this.pluginFsWatchers,
       broadcaster: this.broadcaster,
+      panelLifecycleBroker: this.panelLifecycleBroker,
       dispatcher: this.dispatcher,
       promptDispatcher: this.promptDispatcher,
       settings: this.settings,
@@ -2800,6 +2870,12 @@ export class PluginService {
     );
     runUnloadStep(pluginId, "unregisterPluginPanelKinds", () =>
       unregisterPluginPanelKinds(pluginId)
+    );
+    // Its own step (#9322): the per-subscription disposers already ran via
+    // `flushPluginEventCleanups`, but a disposer lost to an earlier throw would
+    // otherwise strand a listener holding this plugin's closure alive.
+    runUnloadStep(pluginId, "clearPanelLifecycleListeners", () =>
+      this.panelLifecycleBroker.clearPlugin(pluginId)
     );
     runUnloadStep(pluginId, "unregisterForgeProviders", () => unregisterForgeProviders(pluginId));
     runUnloadStep(pluginId, "unregisterForgeProviderImpls", () =>

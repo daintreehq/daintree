@@ -23,6 +23,7 @@ export const PLUGIN_METHOD_CHANNELS = {
   unregisterAction: "plugin:actions-unregister",
   getPanelKinds: "plugin:panel-kinds-get",
   activateForView: "plugin:activate-for-view",
+  reportPanelLifecycle: "plugin:report-panel-lifecycle",
   getAgents: "plugin:agents-get",
   getForgeProviders: "plugin:forge-providers-get",
   getDecorations: "plugin:file-decorations-get",

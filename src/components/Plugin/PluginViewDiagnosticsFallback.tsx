@@ -23,6 +23,12 @@ export interface PluginViewDiagnosticsFallbackProps {
   componentPath: string;
   /** The owning plugin loads from a dir outside the managed plugins dir. */
   devMode: boolean;
+  /**
+   * Close this panel, supplied by the presentation host. Omitted when the host
+   * offers no close, in which case the button is not rendered rather than
+   * rendered inert.
+   */
+  onRequestClose?: () => void;
 }
 
 const BUTTON_BASE = "rounded px-3 py-1.5 text-xs transition-colors";
@@ -61,6 +67,7 @@ export function PluginViewDiagnosticsFallback({
   panelDisplayName,
   componentPath,
   devMode,
+  onRequestClose,
 }: PluginViewDiagnosticsFallbackProps) {
   const { copied, copy } = useCopyWithFeedback({ announcement: "Diagnostics copied" });
   const message = error.message || "Unknown render error";
@@ -168,6 +175,20 @@ export function PluginViewDiagnosticsFallback({
         >
           Try again
         </button>
+        {onRequestClose && (
+          // No confirmation: the grid/dock close trashes the panel, which the
+          // trash bin restores — a D0 reversible action, same as the header's
+          // own close control. Neutral styling keeps "Try again" the single
+          // emphasized action in this region.
+          <button
+            type="button"
+            onClick={onRequestClose}
+            data-testid="plugin-view-diagnostics-close"
+            className={cn(BUTTON_BASE, NEUTRAL_BUTTON)}
+          >
+            Close panel
+          </button>
+        )}
         <button
           type="button"
           onClick={handleCopy}

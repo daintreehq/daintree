@@ -8,6 +8,7 @@ import { resolveContainedPath, PluginPathNotAllowedError } from "./pluginFsConta
 import { PluginHostGit, type HostGitFactory } from "./pluginHostGit.js";
 import type { PluginProcessManager } from "./PluginProcessManager.js";
 import type { PluginContributionBroadcaster } from "./PluginContributionBroadcaster.js";
+import type { PluginPanelLifecycleBroker } from "./PluginPanelLifecycleBroker.js";
 import type { PluginRendererDispatcher } from "./PluginRendererDispatcher.js";
 import type { PluginUIPromptDispatcher } from "./PluginUIPromptDispatcher.js";
 import { assertSettingsKey, type PluginSettingsManager } from "./PluginSettingsManager.js";
@@ -58,6 +59,7 @@ import type {
   PluginSettingsScope,
   PluginStorageScope,
   PluginAgentSnapshot,
+  PluginPanelLifecycleEvent,
   PluginProcessApi,
   PluginProcessHandle,
   PluginProcessSpawnOptions,
@@ -205,6 +207,7 @@ export interface PluginHostFactoryDeps {
   pluginBadges: Map<string, Map<string, PluginPanelBadge>>;
   pluginFsWatchers: Map<string, Set<() => void>>;
   broadcaster: PluginContributionBroadcaster;
+  panelLifecycleBroker: PluginPanelLifecycleBroker;
   dispatcher: PluginRendererDispatcher;
   promptDispatcher: PluginUIPromptDispatcher;
   settings: PluginSettingsManager;
@@ -639,6 +642,35 @@ export function createHost(
         );
       };
       const unsub = events.on("agent:state-changed", handler);
+      const dispose = trackPluginDisposer(deps.pluginEventCleanups, pluginId, () => unsub());
+      return Promise.resolve(dispose);
+    },
+    onDidChangePanelLifecycle: (callback) => {
+      if (revoked) {
+        throw new Error(
+          `Plugin "${pluginId}" host revoked: onDidChangePanelLifecycle called after activate() returned or timed out`
+        );
+      }
+      // No capability gate: the broker resolves panel ownership from main's own
+      // kind registry, so a plugin can only ever be handed events for panel
+      // instances of kinds it contributed itself (#11301).
+      const failures = createListenerFailureState();
+      const handler = (event: PluginPanelLifecycleEvent): void => {
+        // Runtime delivery is membership-gated, never revoke-gated (#5596):
+        // these events fire for the plugin's whole life, long after activate()
+        // returned, and must fall silent once it unloads.
+        if (!deps.plugins.has(pluginId)) return;
+        invokeTrackedListener(
+          failures,
+          pluginId,
+          "onDidChangePanelLifecycle",
+          () => callback(event),
+          () => dispose()
+        );
+      };
+      // `subscribe` replays live panels synchronously, so a plugin activated BY
+      // a view opening still sees that panel's `mounted` phase.
+      const unsub = deps.panelLifecycleBroker.subscribe(pluginId, handler);
       const dispose = trackPluginDisposer(deps.pluginEventCleanups, pluginId, () => unsub());
       return Promise.resolve(dispose);
     },

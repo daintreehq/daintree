@@ -182,6 +182,35 @@ describe("PluginViewDiagnosticsFallback", () => {
     expect(resetError).toHaveBeenCalledTimes(1);
   });
 
+  it("offers Close panel when the host supplies a close callback (#11301)", () => {
+    const onRequestClose = vi.fn();
+    renderFallback({ onRequestClose });
+
+    fireEvent.click(screen.getByTestId("plugin-view-diagnostics-close"));
+
+    // Without this the pane is a dead end: `panel.openPluginPanel` defaults to
+    // `reuseExisting: true`, so re-running the plugin's own open command just
+    // refocuses the panel that is already failing.
+    expect(onRequestClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits Close panel entirely when the host offers no close", () => {
+    renderFallback();
+
+    // Rendered-and-inert would read as a broken button; the host decides.
+    expect(screen.queryByTestId("plugin-view-diagnostics-close")).toBeNull();
+    expect(screen.getByTestId("plugin-view-diagnostics-retry")).toBeTruthy();
+  });
+
+  it("keeps Close panel a neutral action so Try again stays the only emphasis", () => {
+    renderFallback({ onRequestClose: vi.fn() });
+
+    const close = screen.getByTestId("plugin-view-diagnostics-close");
+    const retry = screen.getByTestId("plugin-view-diagnostics-retry");
+    expect(close.className).not.toContain("bg-status-error");
+    expect(retry.className).toContain("bg-status-error");
+  });
+
   it("substitutes placeholders when the error carries no stacks", () => {
     renderFallback({ error: makeError("boom", undefined), errorInfo: undefined });
 

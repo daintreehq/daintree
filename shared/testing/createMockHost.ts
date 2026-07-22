@@ -40,6 +40,7 @@ import type {
   PluginTypedIpcHandler,
   PluginWorktreeSnapshot,
   PluginAgentSnapshot,
+  PluginPanelLifecycleEvent,
   PluginGitCommitResult,
   PluginPanelBadge,
   SettingDefinition,
@@ -177,6 +178,14 @@ export interface MockHostState {
    * cache-then-notify behaviour.
    */
   simulateAgentStateChange(snapshot: PluginAgentSnapshot): void;
+
+  /**
+   * Push a panel lifecycle transition to every `onDidChangePanelLifecycle`
+   * subscriber. Use it to prove a plugin releases durable resources on
+   * `"removed"` and survives `"hidden"` — the distinction the single
+   * `disposeSignal` could not express (#11301).
+   */
+  simulatePanelLifecycleChange(event: PluginPanelLifecycleEvent): void;
 
   /**
    * Pre-seed a deterministic `dispatch()` result for one action id. Overrides
@@ -450,6 +459,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
 
   let lastAgentSnapshot: PluginAgentSnapshot | null = null;
   const agentStateSubs = new Set<(snapshot: PluginAgentSnapshot) => void>();
+  const panelLifecycleSubs = new Set<(event: PluginPanelLifecycleEvent) => void>();
 
   // Capability gating + active-agent presence for the agent APIs (#10617).
   // Default permissive so manifest-free tests are unaffected; restrict to assert
@@ -871,6 +881,18 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       };
       return Promise.resolve(dispose);
     },
+    onDidChangePanelLifecycle(callback) {
+      // No capability gate and no replay: the mock holds no panel registry, so
+      // tests drive phases explicitly via `simulatePanelLifecycleChange`.
+      panelLifecycleSubs.add(callback);
+      let disposed = false;
+      const dispose = () => {
+        if (disposed) return;
+        disposed = true;
+        panelLifecycleSubs.delete(callback);
+      };
+      return Promise.resolve(dispose);
+    },
     registerForgeProvider(descriptor, impl) {
       // Mirrors PluginService.createHost L1738-L1817. Validation order matches
       // production: non-object descriptor, non-empty string id, non-object impl.
@@ -1243,6 +1265,12 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     simulateAgentStateChange(snapshot) {
       lastAgentSnapshot = snapshot;
       for (const cb of agentStateSubs) cb(snapshot);
+    },
+    simulatePanelLifecycleChange(event) {
+      // Frozen like production delivery, so a plugin that mutates the event
+      // fails in tests rather than in the wild.
+      const frozen = Object.freeze({ ...event });
+      for (const cb of [...panelLifecycleSubs]) cb(frozen);
     },
     setDispatchResult(actionId, result) {
       dispatchOverrides.set(actionId, result);

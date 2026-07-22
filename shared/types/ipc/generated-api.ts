@@ -487,6 +487,9 @@ export interface GeneratedElectronAPI {
     registerAction(
       ...args: IpcInvokeMap["plugin:actions-register"]["args"]
     ): Promise<IpcInvokeMap["plugin:actions-register"]["result"]>;
+    reportPanelLifecycle(
+      ...args: IpcInvokeMap["plugin:report-panel-lifecycle"]["args"]
+    ): Promise<IpcInvokeMap["plugin:report-panel-lifecycle"]["result"]>;
     revealSecretSetting(
       ...args: IpcInvokeMap["plugin:settings-reveal-secret"]["args"]
     ): Promise<IpcInvokeMap["plugin:settings-reveal-secret"]["result"]>;

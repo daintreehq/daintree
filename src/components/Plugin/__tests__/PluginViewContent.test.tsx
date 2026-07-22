@@ -69,14 +69,19 @@ vi.mock("@/components/ErrorBoundary", async () => {
     render(): React.ReactNode {
       boundaryProps.last = this.props;
       if (this.state.hasError) {
-        return (
-          <button
-            data-testid="reset"
-            onClick={(): void => {
-              this.setState({ hasError: false });
-              this.props.onReset?.();
-            }}
-          >
+        const resetError = (): void => {
+          this.setState({ hasError: false });
+          this.props.onReset?.();
+        };
+        // Render the supplied fallback, as the real boundary does — that is what
+        // lets a test observe anything the content passes down to it (e.g. the
+        // close callback, which travels by context). The bare button remains for
+        // the fallback-less case.
+        const Fallback = this.props.fallback;
+        return Fallback ? (
+          <Fallback error={new Error("boundary caught")} resetError={resetError} />
+        ) : (
+          <button data-testid="reset" onClick={resetError}>
             Try again
           </button>
         );
@@ -506,6 +511,136 @@ describe("makePluginViewContent", () => {
       expect(signal.aborted).toBe(true);
     } finally {
       vi.doUnmock("react");
+    }
+  });
+
+  it("gives the view a panel-scoped removal signal that a temporary unmount does not abort (#11301)", async () => {
+    interface LifecycleProps {
+      disposeSignal: AbortSignal;
+      panelRemovedSignal: AbortSignal;
+    }
+    const captured: LifecycleProps[] = [];
+    vi.doMock("react", async () => {
+      const actual = await vi.importActual<typeof import("react")>("react");
+      return {
+        ...actual,
+        lazy: () =>
+          function CapturingView(props: LifecycleProps) {
+            captured.push(props);
+            return <div data-testid="plugin-view" />;
+          },
+      };
+    });
+
+    try {
+      const { makePluginViewContent } = await import("../PluginViewContent");
+      const Content = makePluginViewContent(makeContentConfig());
+
+      const { unmount } = render(<Content panelId="panel-removal-signal" />);
+      await waitFor(() => expect(captured).not.toHaveLength(0));
+      const { disposeSignal, panelRemovedSignal } = captured[captured.length - 1]!;
+
+      expect(panelRemovedSignal).toBeInstanceOf(AbortSignal);
+      expect(panelRemovedSignal).not.toBe(disposeSignal);
+
+      // The whole point of the split: maximizing a sibling pane unmounts this
+      // subtree, which must not read as "the panel was deleted". A plugin that
+      // ties a running process to `panelRemovedSignal` keeps it alive here.
+      unmount();
+      expect(disposeSignal.aborted).toBe(true);
+      expect(panelRemovedSignal.aborted).toBe(false);
+    } finally {
+      vi.doUnmock("react");
+    }
+  });
+
+  it("keeps the removal signal identical across a retry while the dispose signal is replaced", async () => {
+    interface LifecycleProps {
+      disposeSignal: AbortSignal;
+      panelRemovedSignal: AbortSignal;
+    }
+    const captured: LifecycleProps[] = [];
+    vi.doMock("react", async () => {
+      const actual = await vi.importActual<typeof import("react")>("react");
+      return {
+        ...actual,
+        lazy: () =>
+          function CapturingView(props: LifecycleProps) {
+            captured.push(props);
+            return <div data-testid="plugin-view" />;
+          },
+      };
+    });
+
+    try {
+      const { makePluginViewContent } = await import("../PluginViewContent");
+      const Content = makePluginViewContent(makeContentConfig());
+
+      render(<Content panelId="panel-removal-retry" />);
+      await waitFor(() => expect(captured).not.toHaveLength(0));
+      const first = captured[0]!;
+
+      act(() => boundaryProps.last!.onReset!());
+      await waitFor(() =>
+        expect(captured.some((p) => p.disposeSignal !== first.disposeSignal)).toBe(true)
+      );
+      const second = captured.find((p) => p.disposeSignal !== first.disposeSignal)!;
+
+      expect(second.disposeSignal).not.toBe(first.disposeSignal);
+      // Identity across attempts is the contract — a plugin holding this signal
+      // from its first mount must still see the same object after a retry.
+      expect(second.panelRemovedSignal).toBe(first.panelRemovedSignal);
+      expect(second.panelRemovedSignal.aborted).toBe(false);
+    } finally {
+      vi.doUnmock("react");
+    }
+  });
+
+  it("threads the host's close callback through to the diagnostics fallback (#11301)", async () => {
+    const closeProbe = vi.hoisted(() => ({
+      onRequestClose: undefined as undefined | (() => void),
+    }));
+    vi.doMock("@/components/Plugin/PluginViewDiagnosticsFallback", () => ({
+      PluginViewDiagnosticsFallback: (props: { onRequestClose?: () => void }) => {
+        closeProbe.onRequestClose = props.onRequestClose;
+        return <div data-testid="diagnostics-probe" />;
+      },
+    }));
+    vi.doMock("react", async () => {
+      const actual = await vi.importActual<typeof import("react")>("react");
+      return {
+        ...actual,
+        lazy: () =>
+          function ThrowingView() {
+            // Throw from an effect, not from render: a view that throws during
+            // the initial render trips React's concurrent-mount recovery, which
+            // discards the uncommitted tree and replays it (see the retry test's
+            // note). A post-commit throw reaches the boundary deterministically.
+            actual.useEffect(() => {
+              throw new Error("view exploded");
+            }, []);
+            return <div data-testid="plugin-view" />;
+          },
+      };
+    });
+
+    try {
+      const { makePluginViewContent } = await import("../PluginViewContent");
+      const Content = makePluginViewContent(makeContentConfig());
+      const onRequestClose = vi.fn();
+
+      render(<Content panelId="panel-close" onRequestClose={onRequestClose} />);
+
+      await waitFor(() => expect(screen.queryByTestId("diagnostics-probe")).toBeTruthy());
+      // The fallback is factory-scoped for identity stability, so the callback
+      // has to arrive by context — a closure would change the component type on
+      // every render and remount the diagnostics pane.
+      expect(closeProbe.onRequestClose).toBeTypeOf("function");
+      closeProbe.onRequestClose!();
+      expect(onRequestClose).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.doUnmock("react");
+      vi.doUnmock("@/components/Plugin/PluginViewDiagnosticsFallback");
     }
   });
 

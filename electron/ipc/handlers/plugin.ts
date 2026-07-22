@@ -75,6 +75,7 @@ import type {
   PluginPickPathRequest,
   PluginWorktreeStatus,
   PluginActivationResult,
+  PluginPanelLifecycleEvent,
 } from "../../../shared/types/plugin.js";
 import type { IpcContext } from "../types.js";
 import type { ToolbarButtonConfig } from "../../../shared/config/toolbarButtonRegistry.js";
@@ -562,6 +563,24 @@ async function handleActivateForView(panelKindId: string): Promise<void> {
   }
 }
 
+/**
+ * Ingest a renderer's batch of plugin panel lifecycle transitions (#11301).
+ *
+ * The renderer is the only process that can distinguish a temporary unmount
+ * (sibling maximize, inactive dock tab) from a permanent close, so it owns the
+ * phase. `sourceId` comes from the IPC context — never the payload — so each
+ * project view's panels stay in their own bucket. Per-event shape validation
+ * and ownership resolution happen in the broker; this handler stays a thin,
+ * non-throwing sink so a lifecycle report can never surface an error dialog on
+ * a background bookkeeping call.
+ */
+async function handleReportPanelLifecycle(
+  ctx: IpcContext,
+  events: PluginPanelLifecycleEvent[]
+): Promise<void> {
+  (await getPluginService()).ingestPanelLifecycleEvents(ctx.webContentsId, events);
+}
+
 async function handleForgeProvidersGet(): Promise<RegisteredForgeProvider[]> {
   // Same init-race guard as the surrounding pull-on-mount handlers (#9285) —
   // forge descriptors register during the deferred initialize().
@@ -988,6 +1007,11 @@ export const pluginNamespace = defineIpcNamespace({
     unregisterAction: op(PLUGIN_METHOD_CHANNELS.unregisterAction, handleActionsUnregister),
     getPanelKinds: op(PLUGIN_METHOD_CHANNELS.getPanelKinds, handlePanelKindsGet),
     activateForView: op(PLUGIN_METHOD_CHANNELS.activateForView, handleActivateForView),
+    reportPanelLifecycle: op(
+      PLUGIN_METHOD_CHANNELS.reportPanelLifecycle,
+      handleReportPanelLifecycle,
+      { withContext: true }
+    ),
     getAgents: op(PLUGIN_METHOD_CHANNELS.getAgents, handleAgentsGet),
     getForgeProviders: op(PLUGIN_METHOD_CHANNELS.getForgeProviders, handleForgeProvidersGet),
     getDecorations: op(PLUGIN_METHOD_CHANNELS.getDecorations, handleFileDecorationsGet),

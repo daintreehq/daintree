@@ -29,6 +29,7 @@ import type {
   PluginWorktreeSnapshot,
   PluginWorktreeStatus,
   PluginAgentSnapshot,
+  PluginPanelLifecycleEvent,
   PluginFsDirEntry,
   PluginFsStat,
   PluginGitStatus,
@@ -442,6 +443,16 @@ export class PluginDevWorkerHostProxy {
         // Subscription wired synchronously; only the disposer is async.
         const dispose = this.subscribe("agent-state", (payload) =>
           callback(payload as PluginAgentSnapshot)
+        );
+        return Promise.resolve(dispose);
+      },
+      onDidChangePanelLifecycle: (callback) => {
+        this.assertActivationOpen("onDidChangePanelLifecycle");
+        // Subscription wired synchronously; only the disposer is async. The
+        // host replays live panels on its side, so a plugin activated by a view
+        // opening still receives that panel's phase (#11301).
+        const dispose = this.subscribe("panel-lifecycle", (payload) =>
+          callback(payload as PluginPanelLifecycleEvent)
         );
         return Promise.resolve(dispose);
       },
