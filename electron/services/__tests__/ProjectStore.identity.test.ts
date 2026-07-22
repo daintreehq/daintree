@@ -86,7 +86,7 @@ vi.mock("../projectQuarantineCleanup.js", () => ({
 }));
 
 import { ProjectStore } from "../ProjectStore.js";
-import { mintProjectId, isValidProjectId } from "../projectStorePaths.js";
+import { mintProjectId, isValidProjectId, generateProjectId } from "../projectStorePaths.js";
 import { ProjectIdentityFiles } from "../ProjectIdentityFiles.js";
 
 /** Creates a real directory and returns its canonicalized path. */
@@ -183,12 +183,64 @@ describe("project identity across folder moves", () => {
 
     it("registers a new project when the anchor names nothing known", async () => {
       const dir = await makeDir("unknown-anchor");
-      await writeAnchor(dir, "a".repeat(64));
+      const unknownAnchor = "a".repeat(64);
+      await writeAnchor(dir, unknownAnchor);
 
       const added = await store.addProject(dir);
 
+      // An anchor with no local row must not be trusted as this project's id.
+      expect(added.id).not.toBe(unknownAnchor);
       expect(added.path).toBe(dir);
       expect(store.getAllProjects()).toHaveLength(1);
+    });
+
+    it.each([
+      ["EACCES", "EACCES"],
+      ["EIO", "EIO"],
+    ])("does not treat an unreadable original (%s) as a move", async (_label, code) => {
+      const original = await makeDir("original");
+      const registered = await store.addProject(original);
+      await writeAnchor(original, registered.id);
+
+      const candidate = await makeDir("candidate");
+      await writeAnchor(candidate, registered.id);
+
+      // The original may still be sitting there behind a permissions or I/O
+      // failure. Only a provably absent original means "moved".
+      const accessSpy = vi.spyOn(fs.promises, "access").mockImplementation(async (target) => {
+        if (target === original) {
+          throw Object.assign(new Error(`${code}: cannot read`), { code });
+        }
+      });
+
+      try {
+        const added = await store.addProject(candidate);
+
+        expect(added.id).not.toBe(registered.id);
+        expect(store.getProjectById(registered.id)?.path).toBe(original);
+        expect(store.getAllProjects()).toHaveLength(2);
+        expect(repairWorktrees).not.toHaveBeenCalled();
+      } finally {
+        accessSpy.mockRestore();
+      }
+    });
+
+    it("declines to adopt the currently active project", async () => {
+      const original = await makeDir("original");
+      const registered = await store.addProject(original);
+      await writeAnchor(original, registered.id);
+      db.insert(schema.appState).values({ key: "currentProjectId", value: registered.id }).run();
+
+      const moved = path.join(tmpRoot, "renamed");
+      await fs.promises.rename(original, moved);
+      const canonicalMoved = await fs.promises.realpath(moved);
+
+      const added = await store.addProject(canonicalMoved);
+
+      // Repointing a live project would strand its view and PTYs on the old
+      // path, so it registers separately instead.
+      expect(added.id).not.toBe(registered.id);
+      expect(store.getProjectById(registered.id)?.path).toBe(original);
     });
 
     it("ignores a malformed anchor without losing the rest of the identity", async () => {
@@ -250,6 +302,28 @@ describe("project identity across folder moves", () => {
       expect(store.getProjectById(projectA.id)?.path).toBe(a);
     });
 
+    it("gives a new repository at a vacated path its own identity", async () => {
+      // The end-to-end shape of the collision mintProjectId guards against: a
+      // project keeps sha256(oldPath) after moving away, so a different repo
+      // created at that same path must not inherit its row.
+      const original = await makeDir("original");
+      const registered = await store.addProject(original);
+      const preferredForOriginal = generateProjectId(original);
+      expect(registered.id).toBe(preferredForOriginal);
+
+      const moved = path.join(tmpRoot, "elsewhere");
+      await fs.promises.rename(original, moved);
+      await store.relocateProject(registered.id, await fs.promises.realpath(moved));
+
+      // A brand-new repository now occupies the vacated path.
+      const reborn = await makeDir("original");
+      const added = await store.addProject(reborn);
+
+      expect(added.id).not.toBe(registered.id);
+      expect(isValidProjectId(added.id)).toBe(true);
+      expect(store.getProjectById(registered.id)?.id).toBe(preferredForOriginal);
+    });
+
     it("skips worktree repair when the path did not actually change", async () => {
       const dir = await makeDir("unchanged");
       const registered = await store.addProject(dir);
@@ -263,18 +337,22 @@ describe("project identity across folder moves", () => {
 
   describe("mintProjectId", () => {
     it("prefers the path-derived id when it is free", () => {
-      const id = mintProjectId("/some/path", () => false);
-      expect(id).toBe(mintProjectId("/some/path", () => false));
-      expect(isValidProjectId(id)).toBe(true);
+      const isTaken = vi.fn(() => false);
+      const id = mintProjectId("/some/path", isTaken);
+
+      // Compared against the independent derivation, not another call to the
+      // function under test.
+      expect(id).toBe(generateProjectId("/some/path"));
+      expect(isTaken).toHaveBeenCalledWith(generateProjectId("/some/path"));
     });
 
     it("falls back to a fresh id when the path-derived id is taken", () => {
       // A project that moved away from this path keeps its original id, so the
       // hash of the path can already be claimed when a new repo appears there.
-      const taken = new Set([mintProjectId("/some/path", () => false)]);
-      const id = mintProjectId("/some/path", (candidate) => taken.has(candidate));
+      const preferred = generateProjectId("/some/path");
+      const id = mintProjectId("/some/path", (candidate) => candidate === preferred);
 
-      expect(taken.has(id)).toBe(false);
+      expect(id).not.toBe(preferred);
       expect(isValidProjectId(id)).toBe(true);
     });
 

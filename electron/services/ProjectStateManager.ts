@@ -182,7 +182,11 @@ export class ProjectStateManager {
       }
     }
 
-    this.setProjectStateCache(projectId, validatedState);
+    // Stamp the id we actually saved under, so a cached read and a fresh disk
+    // read agree. The disk path treats the state directory as authoritative, and
+    // a caller passing a stale embedded id must not get a different answer just
+    // because the cache happened to be warm.
+    this.setProjectStateCache(projectId, { ...validatedState, projectId });
   }
 
   async getProjectState(projectId: string): Promise<ProjectState | null> {

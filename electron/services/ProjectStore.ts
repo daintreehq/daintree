@@ -109,27 +109,6 @@ function rowToRepoStats(row: ProjectRow): ProjectRepoStats | null {
   };
 }
 
-/**
- * Inverse of {@link rowToRepoStats}, for the insert paths that rebuild a row
- * from a `Project` (relocation). Without this the last-known counts would be
- * dropped on the floor and the toolbar would shift once after every relocate.
- */
-function repoStatsToColumns(stats: ProjectRepoStats | undefined): {
-  statsCommitCount: number | null;
-  statsIssueCount: number | null;
-  statsPrCount: number | null;
-  statsProviderId: string | null;
-  statsLastUpdated: number | null;
-} {
-  return {
-    statsCommitCount: stats ? readPersistedCount(stats.commitCount) : null,
-    statsIssueCount: stats ? readPersistedCount(stats.issueCount) : null,
-    statsPrCount: stats ? readPersistedCount(stats.prCount) : null,
-    statsProviderId: stats?.providerId ?? null,
-    statsLastUpdated: stats ? readPersistedCount(stats.lastUpdated) : null,
-  };
-}
-
 function rowToProject(row: ProjectRow): Project {
   const project: Project = {
     id: row.id,
@@ -419,9 +398,17 @@ export class ProjectStore {
     const relocated = await this.tryAdoptMovedProject(inRepo.id, normalizedPath);
     if (relocated) return relocated;
 
+    // Re-check under the same tick as the insert. Several awaits have happened
+    // since the lookup above, and a concurrent `addProject` for this same folder
+    // would otherwise get past that stale check, find the path-derived id taken,
+    // mint a *random* one and insert a second row for one directory — the path
+    // column has no unique index to catch it.
+    const raced = await this.getProjectByPath(normalizedPath);
+    if (raced) return raced;
+
     const now = Date.now();
     const project: Project = {
-      id: mintProjectId(normalizedPath, (candidate) => this.getProjectById(candidate) !== null),
+      id: mintProjectId(normalizedPath, (candidate) => this.isProjectIdTaken(candidate)),
       path: normalizedPath,
       name: inRepo.name ?? path.basename(normalizedPath),
       emoji: inRepo.emoji ?? DEFAULT_PROJECT_EMOJI,
@@ -454,6 +441,21 @@ export class ProjectStore {
   }
 
   /**
+   * True if `candidate` may not be handed to a new project.
+   *
+   * A registered row is the obvious case, but a leftover *state directory* is
+   * just as disqualifying: cleanup after a removed project is best-effort, so an
+   * orphaned directory can outlive its row. Reusing its id would silently serve
+   * a dead project's panels, settings and secure-env keys to an unrelated
+   * repository.
+   */
+  private isProjectIdTaken(candidate: string): boolean {
+    if (this.getProjectById(candidate) !== null) return true;
+    const stateDir = getProjectStateDir(this.projectsConfigDir, candidate);
+    return stateDir !== null && existsSync(stateDir);
+  }
+
+  /**
    * Decides whether the folder now at `normalizedPath` is an already-registered
    * project that moved, and if so repoints it in place.
    *
@@ -479,6 +481,13 @@ export class ProjectStore {
 
     // Already registered here; the caller's path lookup should have caught it.
     if (normalizeProjectPath(anchored.path) === normalizedPath) return null;
+
+    // Repointing the project a window is currently displaying would strand that
+    // view, its workspace host and its PTYs on the old path — the same reason
+    // `relocateProject` refuses it. Rebinding a live project needs the
+    // quiesce/rebind sequence that doesn't exist yet, so decline the adoption
+    // and let this register as an ordinary new project.
+    if (anchorId === this.getCurrentProjectId()) return null;
 
     let originalIsGone: boolean;
     try {

@@ -608,6 +608,10 @@ describe("projectStore adversarial", () => {
     const { useProjectStore } = await import("../projectStore");
     await useProjectStore.getState().locateProject(projectA.id);
 
+    // The throwing setter must actually have been reached, and its failure must
+    // not cost the caller its list refresh or drop the surviving old entry.
+    expect(setHibernateSessionMock).toHaveBeenCalledTimes(1);
+    expect(clearHibernateSessionMock).not.toHaveBeenCalled();
     expect(useProjectStore.getState().projects).toEqual([relocated]);
   });
 

@@ -117,7 +117,10 @@ vi.mock("../events.js", () => ({
 // into the `load-project` payload (#8316). Stub the store so importing the
 // pool doesn't trigger ProjectStore's `app.getPath("userData")` constructor.
 vi.mock("../ProjectStore.js", () => ({
-  projectStore: { getProjectSettings: vi.fn().mockResolvedValue({ runCommands: [] }) },
+  projectStore: {
+    getProjectSettings: vi.fn().mockResolvedValue({ runCommands: [] }),
+    resolveProjectIdForPath: vi.fn((p: string) => `id-for-${p}`),
+  },
 }));
 
 vi.mock("../../store.js", () => ({
