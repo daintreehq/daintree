@@ -283,6 +283,8 @@ The `__dtv-<n>` segment is virtual — it never exists on disk, and the protocol
 
 Toolbar buttons dispatch an existing action from the main toolbar.
 
+Every contributed button is collected into the **plugin tray** — a single toolbar button, grouped by plugin — rather than claiming its own top-level slot. A user can promote any individual button to its own toolbar slot from the tray (hover the row and click the pin, or press <kbd>P</kbd>) or from Settings → Toolbar; a promoted button keeps its tray row as well. Placement is the user's call, not the manifest's: there is no field that requests a top-level slot.
+
 ```json
 {
   "contributes": {
@@ -307,7 +309,7 @@ Toolbar buttons dispatch an existing action from the main toolbar.
 | `label` | yes | Hover tooltip. |
 | `iconId` | yes | One of the shared plugin icon IDs listed in `shared/config/pluginIconIds.ts` — the same set panels use. An unrecognized ID falls back to a generic package glyph; `daintree-plugin validate` warns about it. Agent brand IDs (e.g. `claude`) don't resolve here. |
 | `actionId` | yes | Fully-qualified action ID, including plugin namespace. Built-in actions (e.g. `terminal.new`) also work. |
-| `priority` | no | `1`–`5`, lower = earlier in sort order. Default `3`. |
+| `priority` | no | `1`–`5`, lower = earlier. Orders your buttons within your plugin's tray group. Default `3`. |
 
 ## Menu items — _Shipped_
 

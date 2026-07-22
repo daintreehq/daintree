@@ -28,7 +28,7 @@ import { GripVertical, LayoutGrid, Rocket, RotateCcw } from "lucide-react";
 import { useToolbarPreferencesStore } from "@/store";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
-import type { AnyToolbarButtonId } from "@/../../shared/types/toolbar";
+import type { AnyToolbarButtonId, PluginToolbarButtonId } from "@/../../shared/types/toolbar";
 import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
 import {
   TOOLBAR_BUTTON_METADATA,
@@ -170,15 +170,16 @@ function SortableButtonItem({
 }
 
 interface PluginButtonRowProps {
-  buttonId: AnyToolbarButtonId;
+  buttonId: PluginToolbarButtonId;
   isVisible: boolean;
-  onToggle: (buttonId: AnyToolbarButtonId) => void;
+  onToggle: (buttonId: PluginToolbarButtonId) => void;
   metadata: ToolbarButtonMetadata | undefined;
 }
 
-// Plugin buttons are hide-only — they're never persisted into the position
-// arrays, so they get no drag handle and stay out of cross-side movement.
-// Reusing `SortableButtonItem` would call `useSortable` outside a
+// Plugin buttons toggle promotion, not visibility — they always remain
+// reachable in the plugin tray (#11304), and they're never persisted into the
+// position arrays, so they get no drag handle and stay out of cross-side
+// movement. Reusing `SortableButtonItem` would call `useSortable` outside a
 // `SortableContext` and crash; this is a plain non-sortable row.
 function PluginButtonRow({ buttonId, isVisible, onToggle, metadata }: PluginButtonRowProps) {
   if (!metadata) return null;
@@ -203,7 +204,7 @@ function PluginButtonRow({ buttonId, isVisible, onToggle, metadata }: PluginButt
       <SettingsSwitch
         checked={isVisible}
         onCheckedChange={() => onToggle(buttonId)}
-        aria-label={`Toggle ${metadata.label} visibility`}
+        aria-label={`Show ${metadata.label} in toolbar`}
         className="shrink-0"
       />
     </div>
@@ -284,6 +285,7 @@ export function ToolbarSettingsTab() {
   const setRightButtons = useToolbarPreferencesStore((s) => s.setRightButtons);
   const moveButton = useToolbarPreferencesStore((s) => s.moveButton);
   const toggleButtonVisibility = useToolbarPreferencesStore((s) => s.toggleButtonVisibility);
+  const setPluginButtonPromoted = useToolbarPreferencesStore((s) => s.setPluginButtonPromoted);
   const setAlwaysShowDevServer = useToolbarPreferencesStore((s) => s.setAlwaysShowDevServer);
   const setDefaultSelection = useToolbarPreferencesStore((s) => s.setDefaultSelection);
   const reset = useToolbarPreferencesStore((s) => s.reset);
@@ -330,8 +332,14 @@ export function ToolbarSettingsTab() {
 
   const isVisible = useCallback(
     (id: AnyToolbarButtonId) =>
-      isToolbarButtonVisible(id, layout.pinnedButtons, agentSettings, agentAvailability),
-    [layout.pinnedButtons, agentSettings, agentAvailability]
+      isToolbarButtonVisible(
+        id,
+        layout.pinnedButtons,
+        agentSettings,
+        agentAvailability,
+        pluginConfigs.has(id)
+      ),
+    [layout.pinnedButtons, agentSettings, agentAvailability, pluginConfigs]
   );
 
   const findContainer = (id: UniqueIdentifier, lists: SideLists): ToolbarSide | null => {
@@ -521,7 +529,7 @@ export function ToolbarSettingsTab() {
         <SettingsSection
           icon={DEFAULT_PLUGIN_ICON}
           title="Plugin buttons"
-          description={`Toggle to show or hide. ${pluginButtonIds.filter((id) => isVisible(id)).length} of ${pluginButtonIds.length} visible.`}
+          description={`Every plugin button lives in the plugin tray. Promote one to give it its own toolbar button too. ${pluginButtonIds.filter((id) => isVisible(id)).length} of ${pluginButtonIds.length} promoted.`}
         >
           <div className="space-y-2">
             {pluginButtonIds.map((buttonId) => (
@@ -529,7 +537,7 @@ export function ToolbarSettingsTab() {
                 key={buttonId}
                 buttonId={buttonId}
                 isVisible={isVisible(buttonId)}
-                onToggle={(id) => toggleButtonVisibility(id, "right")}
+                onToggle={(id) => setPluginButtonPromoted(id, !isVisible(id))}
                 metadata={allMetadata[buttonId]}
               />
             ))}

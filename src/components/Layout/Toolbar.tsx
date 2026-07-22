@@ -29,7 +29,6 @@ import {
 } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { Folders } from "@/components/icons";
-import { resolvePluginIcon } from "@/components/icons/pluginIconRegistry";
 import { buildPluginToolbarMeta } from "./pluginToolbarMeta";
 import { TOOLBAR_BUTTON_METADATA, isToolbarButtonVisible } from "./toolbarButtonMetadata";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
@@ -39,6 +38,7 @@ import { isMac, isLinux, isWindows } from "@/lib/platform";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { AgentButton } from "./AgentButton";
 import { AgentTrayButton, deriveAgentDominantStates } from "./AgentTrayButton";
+import { PluginToolbarButton, PluginTrayButton } from "./PluginTrayButton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
@@ -76,11 +76,7 @@ import { activeWorkspaceIdentity, branchChipState } from "@/lib/workspaceIdentit
 import { usePreferencesStore, useToolbarPreferencesStore, useVoiceRecordingStore } from "@/store";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
-import type {
-  ToolbarButtonId,
-  AnyToolbarButtonId,
-  PluginToolbarButtonId,
-} from "@/../../shared/types/toolbar";
+import type { ToolbarButtonId, AnyToolbarButtonId } from "@/../../shared/types/toolbar";
 import { usePluginToolbarButtons } from "@/hooks/usePluginToolbarButtons";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
@@ -153,53 +149,6 @@ function DevServerPlaceholder() {
       className={cn(toolbarIconButtonClass, "h-9 w-9 opacity-0 pointer-events-none")}
       aria-hidden="true"
     />
-  );
-}
-
-export function PluginToolbarButton({
-  pluginId,
-  config,
-  "data-toolbar-item": dataToolbarItem,
-}: {
-  pluginId: PluginToolbarButtonId;
-  config: NonNullable<ReturnType<ReturnType<typeof usePluginToolbarButtons>["configs"]["get"]>>;
-  "data-toolbar-item"?: string;
-}) {
-  const hover = useShortcutHintHover(config.actionId);
-  const ariaShortcut = useAriaKeyshortcuts(config.actionId);
-  const Icon = resolvePluginIcon(config.iconId);
-
-  return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              {...hover}
-              variant="ghost"
-              size="icon"
-              data-toolbar-item={dataToolbarItem}
-              onClick={() => {
-                void actionService.dispatch(
-                  config.actionId as Parameters<typeof actionService.dispatch>[0],
-                  undefined,
-                  { source: "user" }
-                );
-              }}
-              className={toolbarIconButtonClass}
-              aria-label={config?.label ?? pluginId}
-              aria-keyshortcuts={ariaShortcut}
-            >
-              <Icon />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">{config?.label ?? pluginId}</TooltipContent>
-        </Tooltip>
-      </ContextMenuTrigger>
-      <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
-        <ToolbarContextMenuItems buttonId={pluginId} side="right" />
-      </ContextMenuContent>
-    </ContextMenu>
   );
 }
 
@@ -1077,6 +1026,17 @@ export function Toolbar({
         render: () => <ToolbarPortalButton key="portal-toggle" data-toolbar-item="" />,
         isAvailable: true,
       },
+      "plugin-tray": {
+        render: () => (
+          <PluginTrayButton key="plugin-tray" configs={pluginConfigs} data-toolbar-item="" />
+        ),
+        // An empty tray is not a slot worth reserving — with no plugin
+        // contributions the button doesn't render at all (#11304).
+        isAvailable: pluginConfigs.size > 0,
+      },
+      // Individual contributions still need a top-level renderer, but only
+      // reach the toolbar once explicitly promoted — `isToolbarButtonVisible`
+      // gates that below, not `isAvailable`.
       ...Object.fromEntries(
         pluginButtonIds.map((pluginId) => {
           const config = pluginConfigs.get(pluginId);
@@ -1134,26 +1094,51 @@ export function Toolbar({
       // renders duplicate pills (#10937) — the store also heals this, this is
       // belt-and-suspenders at the render boundary.
       Array.from(new Set(toolbarLayout.leftButtons)).filter((id) =>
-        isToolbarButtonVisible(id, pinnedButtons, effectiveAgentSettings, agentAvailability)
+        isToolbarButtonVisible(
+          id,
+          pinnedButtons,
+          effectiveAgentSettings,
+          agentAvailability,
+          pluginConfigs.has(id)
+        )
       ),
-    [toolbarLayout.leftButtons, pinnedButtons, effectiveAgentSettings, agentAvailability]
+    [
+      toolbarLayout.leftButtons,
+      pinnedButtons,
+      effectiveAgentSettings,
+      agentAvailability,
+      pluginConfigs,
+    ]
   );
 
   const effectiveRightButtons = useMemo(() => {
     // Dedupe the persisted base before appending plugin extras, so duplicate
     // ids (e.g. repeated `forge-stats`, #10937) can't render twice.
     const base = Array.from(new Set(toolbarLayout.rightButtons));
-    const existing = new Set(base);
-    const extra = pluginButtonIds.filter((id) => !existing.has(id));
+    const positioned = new Set([...base, ...toolbarLayout.leftButtons]);
+    // Only *promoted* contributions append — plugin buttons reach the user
+    // through the tray by default now (#11304), so the pre-tray behavior of
+    // appending every registered id would resurrect the crowding this
+    // replaced. Buttons the user already dragged into a side list keep that
+    // position and are filtered on promotion below like any other id.
+    const extra = pluginButtonIds.filter((id) => !positioned.has(id) && pinnedButtons[id] === true);
     return [...base, ...extra].filter((id) =>
-      isToolbarButtonVisible(id, pinnedButtons, effectiveAgentSettings, agentAvailability)
+      isToolbarButtonVisible(
+        id,
+        pinnedButtons,
+        effectiveAgentSettings,
+        agentAvailability,
+        pluginConfigs.has(id)
+      )
     );
   }, [
     toolbarLayout.rightButtons,
+    toolbarLayout.leftButtons,
     pluginButtonIds,
     pinnedButtons,
     effectiveAgentSettings,
     agentAvailability,
+    pluginConfigs,
   ]);
 
   const availableLeftIds = useMemo(

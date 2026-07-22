@@ -11,9 +11,11 @@ import { T_MEDIUM } from "../../helpers/timeouts";
  * toolbar DOM, matched against the main-process registry as ground truth.
  *
  * The sample manifest declares one toolbar button (`id: "ping"`, label
- * "Hello ping"). CI display constraints can push lower-priority toolbar items
- * into overflow, so the rendering assertion accepts either direct visibility or
- * reachability through the toolbar overflow menu.
+ * "Hello ping"). Since #11304 plugin contributions render inside the plugin
+ * tray rather than claiming their own top-level slot, so the assertion opens
+ * the tray and looks for the grouped row. CI display constraints can push
+ * lower-priority toolbar items into overflow, so reaching the tray trigger
+ * accepts either direct visibility or the toolbar overflow menu.
  */
 test.describe.serial("Core: Plugin contributions", () => {
   let ctx: AppContext;
@@ -37,16 +39,24 @@ test.describe.serial("Core: Plugin contributions", () => {
     expect(buttonIds).toContain("daintree.hello.ping");
   });
 
-  test("renders the contributed toolbar button in the live toolbar", async () => {
+  test("renders the contributed toolbar button inside the plugin tray", async () => {
     const { window } = ctx;
     const toolbar = window.getByRole("toolbar", { name: "Main toolbar" });
-    const button = toolbar.getByRole("button", { name: "Hello ping", exact: true });
-    const menuItem = window.getByRole("menuitem", { name: "Hello ping", exact: true });
+    const trayTrigger = toolbar.getByRole("button", { name: "Plugin tray", exact: true });
+    const trayRow = window.getByRole("menuitem", { name: /Hello ping/ });
     const deadline = Date.now() + T_MEDIUM;
 
+    // The contribution no longer owns a top-level slot of its own (#11304).
+    await expect(toolbar.getByRole("button", { name: "Hello ping", exact: true })).toHaveCount(0);
+
     while (Date.now() < deadline) {
-      if (await button.isVisible({ timeout: 500 }).catch(() => false)) {
-        return;
+      if (await trayTrigger.isVisible({ timeout: 500 }).catch(() => false)) {
+        await trayTrigger.click({ timeout: 2_000 }).catch(() => undefined);
+        if (await trayRow.isVisible({ timeout: 1_000 }).catch(() => false)) {
+          await window.keyboard.press("Escape").catch(() => undefined);
+          return;
+        }
+        await window.keyboard.press("Escape").catch(() => undefined);
       }
 
       const overflowButtons = toolbar.getByRole("button", { name: /more toolbar items/i });
@@ -58,7 +68,12 @@ test.describe.serial("Core: Plugin contributions", () => {
         }
 
         await overflowButton.click({ timeout: 2_000 }).catch(() => undefined);
-        if (await menuItem.isVisible({ timeout: 500 }).catch(() => false)) {
+        if (
+          await window
+            .getByRole("menuitem", { name: /Plugin tray/ })
+            .isVisible({ timeout: 500 })
+            .catch(() => false)
+        ) {
           await window.keyboard.press("Escape").catch(() => undefined);
           return;
         }
@@ -68,6 +83,6 @@ test.describe.serial("Core: Plugin contributions", () => {
       await window.waitForTimeout(250);
     }
 
-    await expect(button).toBeVisible({ timeout: 1_000 });
+    await expect(trayTrigger).toBeVisible({ timeout: 1_000 });
   });
 });

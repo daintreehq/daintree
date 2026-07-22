@@ -16,6 +16,7 @@ const FIXED_TITLEBAR_IDS = new Set<AnyToolbarButtonId>([
 
 const CUSTOMIZABLE_BUTTON_IDS: AnyToolbarButtonId[] = [
   "agent-tray",
+  "plugin-tray",
   ...(BUILT_IN_AGENT_IDS as readonly string[] as AnyToolbarButtonId[]),
   "terminal",
   "browser",
@@ -99,9 +100,33 @@ describe("isToolbarButtonVisible", () => {
     expect(visible).toBe(false);
   });
 
-  it("treats plugin buttons as visible by default", () => {
-    const pluginId = "plugin.test.example" as AnyToolbarButtonId;
-    expect(isToolbarButtonVisible(pluginId, {}, null, undefined)).toBe(true);
+  describe("registered plugin contributions — tray-default (#11304)", () => {
+    const pluginId = "test.example" as AnyToolbarButtonId;
+
+    it("keeps a contribution out of the toolbar until it is explicitly promoted", () => {
+      // Contrast with the built-in default above: a missing entry means
+      // "visible" for a built-in but "tray only" for a plugin contribution.
+      expect(isToolbarButtonVisible(pluginId, {}, null, undefined, true)).toBe(false);
+      expect(isToolbarButtonVisible(pluginId, { [pluginId]: true }, null, undefined, true)).toBe(
+        true
+      );
+    });
+
+    it("treats a legacy hide entry the same as no entry", () => {
+      // Pre-#11304 profiles recorded hides as `false`; both now read as
+      // tray-only, so an upgrading user sees no ghost slot.
+      expect(isToolbarButtonVisible(pluginId, { [pluginId]: false }, null, undefined, true)).toBe(
+        false
+      );
+    });
+
+    it("uses registry membership, not the dotted id, to pick the default", () => {
+      // The same id resolves opposite ways depending on whether the caller
+      // says it is a live contribution — so a built-in that ever gains a dot
+      // can't be silently demoted into the tray.
+      expect(isToolbarButtonVisible(pluginId, {}, null, undefined, false)).toBe(true);
+      expect(isToolbarButtonVisible(pluginId, {}, null, undefined, true)).toBe(false);
+    });
   });
 
   it("never shows an assistant-only agent as a toolbar button, even when installed or pinned (#10634)", () => {

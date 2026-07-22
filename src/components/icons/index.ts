@@ -18,6 +18,7 @@ export {
   History, // resume closed session / session history
   Layers, // worktree overview (multiple worktrees, stacked)
   LayoutPanelTop, // workspace plugin category (panels, notes)
+  Package, // plugin (a packaged extension) — plugin tray, unresolved plugin glyphs
   Plug, // agent (integration that plugs into the host system)
   Sprout, // origin / first step (main worktree, first agent launch)
   Workflow, // terminal recipe / scripted command sequence

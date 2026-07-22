@@ -4,6 +4,7 @@ import type {
   ToolbarPreferences,
   ToolbarButtonId,
   AnyToolbarButtonId,
+  PluginToolbarButtonId,
   ToolbarPinnedState,
 } from "@/../../shared/types/toolbar";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
@@ -21,6 +22,7 @@ const DEFAULT_LEFT_BUTTONS: ToolbarButtonId[] = [
 const DEFAULT_RIGHT_BUTTONS: ToolbarButtonId[] = [
   "voice-recording",
   "forge-stats",
+  "plugin-tray",
   "notification-center",
   "copy-tree",
   "resume-sessions",
@@ -94,6 +96,22 @@ interface ToolbarPreferencesState extends ToolbarPreferences {
   ) => void;
   toggleButtonVisibility: (buttonId: AnyToolbarButtonId, side: "left" | "right") => void;
   /**
+   * Promote a plugin contribution to its own top-level toolbar button, or
+   * demote it back to tray-only (#11304).
+   *
+   * Plugin buttons live in the plugin tray by default, so — unlike
+   * `toggleButtonVisibility`, which only ever records a departure-from-visible
+   * as `false` — promotion has to persist an explicit `true`. Demoting deletes
+   * the key rather than writing `false`: both read as tray-only, and an absent
+   * key keeps the map sparse (and lets a legacy pre-#11304 `false` hide entry
+   * clear itself the first time a user toggles that button).
+   *
+   * Ordering arrays are deliberately untouched — a promoted button with no
+   * persisted position appends to the right side in `Toolbar.tsx`, matching
+   * how plugin buttons behaved before the tray landed.
+   */
+  setPluginButtonPromoted: (buttonId: PluginToolbarButtonId, promoted: boolean) => void;
+  /**
    * Prune `pinnedButtons` entries for plugin buttons that are no longer in
    * the loaded plugin set. `pinnedButtons` is renderer-local persisted state
    * with no main-process access, so an uninstalled plugin's stale hide entry
@@ -164,6 +182,20 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
             delete pinned[buttonId];
           } else {
             pinned[buttonId] = false;
+          }
+          return {
+            layout: { ...state.layout, pinnedButtons: pinned },
+          };
+        }),
+      setPluginButtonPromoted: (buttonId, promoted) =>
+        set((state) => {
+          const current = state.layout.pinnedButtons[buttonId];
+          if (promoted ? current === true : current === undefined) return state;
+          const pinned: ToolbarPinnedState = { ...state.layout.pinnedButtons };
+          if (promoted) {
+            pinned[buttonId] = true;
+          } else {
+            delete pinned[buttonId];
           }
           return {
             layout: { ...state.layout, pinnedButtons: pinned },

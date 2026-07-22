@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AnyToolbarButtonId } from "@/../../shared/types/toolbar";
+import type { AnyToolbarButtonId, PluginToolbarButtonId } from "@/../../shared/types/toolbar";
 
 // Mirror the production agent IDs so the v5 migration is exercised against
 // the real set, not a subset. Keeping the mock in sync guards against
@@ -173,6 +173,92 @@ describe("toolbarPreferencesStore", () => {
 
       expect(store.getState().launcher.defaultSelection).toBe(before);
       expect(store.getState().layout.pinnedButtons["acme.foo.btn"]).toBe(false);
+    });
+  });
+
+  describe("setPluginButtonPromoted (#11304)", () => {
+    const pluginButton = "acme.foo.btn" as PluginToolbarButtonId;
+
+    it("persists an explicit true, which toggleButtonVisibility can never write", async () => {
+      const store = await loadStore();
+      // The distinction is load-bearing: under tray-default only `true` grants
+      // a top-level slot, and the generic toggle records hides, never pins.
+      store.getState().toggleButtonVisibility(pluginButton, "right");
+      expect(store.getState().layout.pinnedButtons[pluginButton]).toBe(false);
+
+      store.getState().setPluginButtonPromoted(pluginButton, true);
+      expect(store.getState().layout.pinnedButtons[pluginButton]).toBe(true);
+    });
+
+    it("demotes by deleting the key, clearing a legacy hide entry too", async () => {
+      const store = await loadStore();
+      store.getState().toggleButtonVisibility(pluginButton, "right");
+
+      store.getState().setPluginButtonPromoted(pluginButton, false);
+
+      expect(store.getState().layout.pinnedButtons).not.toHaveProperty(pluginButton);
+    });
+
+    it("leaves the ordering arrays and launcher state alone", async () => {
+      const store = await loadStore();
+      store.getState().setDefaultSelection("terminal");
+      const before = {
+        left: [...store.getState().layout.leftButtons],
+        right: [...store.getState().layout.rightButtons],
+        selection: store.getState().launcher.defaultSelection,
+      };
+
+      store.getState().setPluginButtonPromoted(pluginButton, true);
+
+      const after = store.getState();
+      expect(after.layout.leftButtons).toEqual(before.left);
+      expect(after.layout.rightButtons).toEqual(before.right);
+      expect(after.launcher.defaultSelection).toBe(before.selection);
+    });
+
+    it("is a no-op (preserves layout reference) when the state already matches", async () => {
+      const store = await loadStore();
+      store.getState().setPluginButtonPromoted(pluginButton, true);
+      const layoutBefore = store.getState().layout;
+
+      store.getState().setPluginButtonPromoted(pluginButton, true);
+      expect(store.getState().layout).toBe(layoutBefore);
+
+      // Demoting an already-absent key must not churn the persist layer either.
+      store.getState().setPluginButtonPromoted("acme.foo.never" as PluginToolbarButtonId, false);
+      expect(store.getState().layout).toBe(layoutBefore);
+    });
+
+    it("lets the stale sweep reclaim a promotion whose plugin was uninstalled", async () => {
+      const store = await loadStore();
+      store.getState().setPluginButtonPromoted(pluginButton, true);
+
+      store.getState().sweepStalePluginPinnedButtons([]);
+
+      expect(store.getState().layout.pinnedButtons).not.toHaveProperty(pluginButton);
+    });
+  });
+
+  describe("plugin-tray default placement (#11304)", () => {
+    it("reaches an existing profile through merge, so no migration is needed", async () => {
+      // The tray is a new built-in id, and `mergeButtonList` inserts defaults
+      // the persisted list predates — proving the upgrade path without a v12.
+      setStoredState(
+        {
+          layout: {
+            leftButtons: ["terminal"],
+            rightButtons: ["settings"],
+            pinnedButtons: {},
+          },
+          launcher: { alwaysShowDevServer: false },
+        },
+        11
+      );
+
+      const store = await loadStore();
+      const { leftButtons, rightButtons } = store.getState().layout;
+      expect([...leftButtons, ...rightButtons]).toContain("plugin-tray");
+      expect(rightButtons).toContain("settings");
     });
   });
 
