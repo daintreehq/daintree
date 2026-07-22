@@ -231,7 +231,13 @@ function isAbortLikeError(err: unknown): boolean {
 export async function handleInstallFromPath(path: string): Promise<PluginInstallResult> {
   const invalid = await validateDntrArchivePath(path);
   if (invalid) return invalid;
-  return (await getPluginService()).installPlugin(path);
+  const service = await getPluginService();
+  // A double-clicked archive can be approved before the deferred plugin-service
+  // task finishes (#11280), and `initialize()` assumes no install overlaps it:
+  // its startup sweep deletes staging directories and the kill-switch blocklist
+  // is still unset. Wait it out — a no-op once init has settled.
+  await service.waitForInit();
+  return service.installPlugin(path);
 }
 
 /**

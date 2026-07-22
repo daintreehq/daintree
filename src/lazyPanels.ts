@@ -199,6 +199,12 @@ export const LazyPluginConfirmDialog = lazy(() =>
   preloadPluginConfirmDialog().then((m) => ({ default: m.PluginConfirmDialog }))
 );
 
+export const LazyPluginArchiveInstallConfirmDialog = lazy(() =>
+  import("./components/Plugin/PluginArchiveInstallConfirmDialog").then((m) => ({
+    default: m.PluginArchiveInstallConfirmDialog,
+  }))
+);
+
 export function preloadPluginMcpConfirmDialog() {
   return import("./components/Plugin/PluginMcpConfirmDialog");
 }

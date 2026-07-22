@@ -1904,6 +1904,13 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * a cleanup.
      */
     onDeepLink(callback: (intent: import("../plugin.js").PluginDeepLinkIntent) => void): () => void;
+    /**
+     * Subscribe to double-clicked `.dntr` archives awaiting install
+     * confirmation (#11280). One call per archive, in arrival order.
+     */
+    onArchiveInstallIntent(
+      callback: (intent: import("../plugin.js").PluginArchiveInstallIntent) => void
+    ): () => void;
     /** Subscribe to plugin panel kind registry changes. Returns a cleanup. */
     onPanelKindsChanged(
       callback: (payload: {

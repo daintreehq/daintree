@@ -48,7 +48,14 @@ const SurfaceHeaderTitle = React.forwardRef<HTMLHeadingElement, SurfaceHeaderTit
   ({ as: Heading = "h2", icon, className, children, ...props }, ref) => (
     <Heading
       ref={ref}
-      className={cn("text-lg font-semibold text-daintree-text flex items-center gap-2", className)}
+      // min-w-0: as a flex item of the justify-between header row, the title's
+      // default min-width:auto floor is its longest unbroken word — a hostile
+      // run would push the close button off-canvas and clip. Shrink permission
+      // only; titles that fit render identically.
+      className={cn(
+        "text-lg font-semibold text-daintree-text flex items-center gap-2 min-w-0",
+        className
+      )}
       {...props}
     >
       {icon}

@@ -35,9 +35,7 @@ import {
   getPendingCliPath,
   setPendingCliPath,
   extractDntrPaths,
-  getPendingDntrPaths,
-  drainPendingDntrPaths,
-  installDntrPath,
+  queueDntrPaths,
 } from "../lifecycle/appLifecycle.js";
 import type { WindowContext, WindowRegistry } from "./WindowRegistry.js";
 import { getWindowRegistry } from "./windowRef.js";
@@ -738,21 +736,19 @@ export async function setupWindowServices(
   drainPendingOpenDirs(win, openDirDeps);
 
   // `.dntr` plugin-archive handling — independent of project/CLI-path routing.
-  // First-launch (cold double-click) archives arrive in process.argv; second
-  // instances queue into pendingDntrPaths. Both are sideloaded once the first
-  // window is ready so install toasts have a live renderer target. Fire-and-
-  // forget: installs run sequentially through the installer's lock.
+  // First-launch (cold double-click) archives arrive in process.argv. Each is
+  // queued for the install-confirmation prompt (#11280), never installed
+  // outright; the intent queue holds previews until this window paints, so
+  // there is no separate windowless drain. Fire-and-forget: previews are read
+  // sequentially so the prompts keep argv order.
   const firstLaunchDntrPaths = !getProcessArgvDntrHandled()
     ? extractDntrPaths(process.argv, process.cwd())
     : [];
-  if (firstLaunchDntrPaths.length > 0) setProcessArgvDntrHandled(true);
-  if (firstLaunchDntrPaths.length > 0 || getPendingDntrPaths().length > 0) {
-    void (async () => {
-      for (const archivePath of firstLaunchDntrPaths) {
-        await installDntrPath(archivePath);
-      }
-      await drainPendingDntrPaths();
-    })().catch((err) => console.error("[MAIN] Failed to install .dntr plugin(s):", err));
+  if (firstLaunchDntrPaths.length > 0) {
+    setProcessArgvDntrHandled(true);
+    void queueDntrPaths(firstLaunchDntrPaths).catch((err) =>
+      console.error("[MAIN] Failed to queue .dntr plugin(s):", err)
+    );
   }
 
   // ── Last-window-close: reset per-window deferred queue ──

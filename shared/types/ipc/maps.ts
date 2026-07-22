@@ -1936,6 +1936,13 @@ export interface IpcEventMap {
   // installs through the existing manager flow keeps every security gate intact.
   "plugin:deep-link": import("../plugin.js").PluginDeepLinkIntent;
 
+  // Double-clicked `.dntr` archive awaiting install confirmation (main →
+  // renderer, #11280). Carries the manifest parsed without extracting, so the
+  // renderer can preview real identity/capabilities before anything is written.
+  // One event per archive; the renderer queues them FIFO so each gets its own
+  // decision.
+  "plugin:archive-install-intent": import("../plugin.js").PluginArchiveInstallIntent;
+
   // Resource profile change (main → renderer)
   "resource:profile-changed": import("../resourceProfile.js").ResourceProfilePayload;
 
@@ -2054,6 +2061,8 @@ export type IpcEventBusMap = Pick<
   | "run-history:update"
   // Plugin deep-link intent (targeted at the primary window)
   | "plugin:deep-link"
+  // Double-clicked `.dntr` archive awaiting confirmation (targeted at the primary window)
+  | "plugin:archive-install-intent"
   // Terminal lifecycle (non-data) — exit, spawn-result, backend crash/ready
   | "terminal:exit"
   | "terminal:backend-crashed"
