@@ -1,5 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { PanelInstance, PtyPanelData, TabGroup } from "@shared/types/panel";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { FilePanelData, PanelInstance, PtyPanelData, TabGroup } from "@shared/types/panel";
+import { setWorktreeSelectionAccessor } from "@/store/storeAccessors";
+import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
+import { buildWorktreeIndex, NO_WORKTREE } from "../worktreeIndex";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -46,9 +49,12 @@ vi.mock("@/store/layoutConfigStore", () => ({
 const { usePanelStore } = await import("../../../panelStore");
 
 function setTerminals(terminals: PtyPanelData[]) {
+  const panelsById = Object.fromEntries(terminals.map((t) => [t.id, t]));
+  const panelIds = terminals.map((t) => t.id);
   usePanelStore.setState({
-    panelsById: Object.fromEntries(terminals.map((t) => [t.id, t])),
-    panelIds: terminals.map((t) => t.id),
+    panelsById,
+    panelIds,
+    panelIdsByWorktreeId: buildWorktreeIndex(panelIds, panelsById),
   });
 }
 
@@ -96,9 +102,15 @@ describe("dock ↔ grid transitions", () => {
     usePanelStore.setState({
       panelsById: {},
       panelIds: [],
+      panelIdsByWorktreeId: {},
       tabGroups: new Map(),
       trashedTerminals: new Map(),
     });
+  });
+
+  afterEach(() => {
+    setWorktreeSelectionAccessor(() => ({ activeWorktreeId: null, restoreWorktreeId: null }));
+    vi.restoreAllMocks();
   });
 
   describe("moveTerminalToDock visibility parity", () => {
@@ -280,6 +292,323 @@ describe("dock ↔ grid transitions", () => {
       expect(updated!.isVisible).toBe(true);
       expect(updated!.runtimeStatus).toBe("running");
       expect(usePanelStore.getState().getTabGroups("dock", "wt-1")).toHaveLength(0);
+    });
+  });
+
+  describe("worktree-less panel promotion (#11290)", () => {
+    const activateWorktree = (id: string) => {
+      setWorktreeSelectionAccessor(() => ({ activeWorktreeId: id, restoreWorktreeId: null }));
+    };
+
+    it("assigns the active worktree and transfers the index bucket when promoting a worktree-less dock panel", () => {
+      const globalDocked = createGlobalMockTerminal("global-dock", "dock");
+      const globalSibling = createGlobalMockTerminal("global-2", "dock");
+      const existing = createMockTerminal("wt1-existing", "grid");
+      const unrelated = { ...createMockTerminal("wt2-panel", "grid"), worktreeId: "wt-2" };
+      setTerminals([globalDocked, globalSibling, existing, unrelated]);
+      activateWorktree("wt-1");
+
+      const bucketsBefore = usePanelStore.getState().panelIdsByWorktreeId;
+      const moved = usePanelStore.getState().moveTerminalToGrid("global-dock");
+
+      expect(moved).toBe(true);
+      const state = usePanelStore.getState();
+      expect(state.panelsById["global-dock"]!.worktreeId).toBe("wt-1");
+      expect(state.panelsById["global-dock"]!.location).toBe("grid");
+      expect(state.panelIdsByWorktreeId["wt-1"]).toEqual(["wt1-existing", "global-dock"]);
+      expect(state.panelIdsByWorktreeId[NO_WORKTREE]).toEqual(["global-2"]);
+      expect(state.panelIdsByWorktreeId["wt-2"]).toBe(bucketsBefore["wt-2"]);
+    });
+
+    it("adopts the active worktree for a non-PTY file panel promoted from the dock", () => {
+      usePanelStore.setState((state) => {
+        const filePanel: FilePanelData = {
+          id: "file-1",
+          kind: "file",
+          title: "spec.md",
+          location: "dock",
+          isVisible: false,
+          filePath: "/repo/spec.md",
+        };
+        const panelsById = { ...state.panelsById, "file-1": filePanel };
+        const panelIds = [...state.panelIds, "file-1"];
+        return {
+          panelsById,
+          panelIds,
+          panelIdsByWorktreeId: buildWorktreeIndex(panelIds, panelsById),
+        };
+      });
+      activateWorktree("wt-1");
+
+      const moved = usePanelStore.getState().moveTerminalToGrid("file-1");
+
+      expect(moved).toBe(true);
+      const state = usePanelStore.getState();
+      expect(state.panelsById["file-1"]!.worktreeId).toBe("wt-1");
+      expect(state.panelsById["file-1"]!.location).toBe("grid");
+      expect(state.panelIdsByWorktreeId["wt-1"]).toEqual(["file-1"]);
+      expect(state.panelIdsByWorktreeId[NO_WORKTREE]).toBeUndefined();
+    });
+
+    it("leaves a worktree-less panel unassigned when no worktree is active", () => {
+      const globalDocked = createGlobalMockTerminal("global-dock", "dock");
+      setTerminals([globalDocked]);
+      setWorktreeSelectionAccessor(() => ({ activeWorktreeId: null, restoreWorktreeId: null }));
+
+      const bucketsBefore = usePanelStore.getState().panelIdsByWorktreeId;
+      const moved = usePanelStore.getState().moveTerminalToGrid("global-dock");
+
+      expect(moved).toBe(true);
+      const state = usePanelStore.getState();
+      expect(state.panelsById["global-dock"]!.worktreeId).toBeUndefined();
+      expect(state.panelsById["global-dock"]!.location).toBe("grid");
+      expect(state.panelIdsByWorktreeId).toBe(bucketsBefore);
+      expect(state.panelIdsByWorktreeId[NO_WORKTREE]).toEqual(["global-dock"]);
+    });
+
+    it("never replaces a real worktree attribution on promotion", () => {
+      const docked = { ...createMockTerminal("t1", "dock"), worktreeId: "wt-2" };
+      setTerminals([docked]);
+      activateWorktree("wt-1");
+
+      const bucketsBefore = usePanelStore.getState().panelIdsByWorktreeId;
+      const moved = usePanelStore.getState().moveTerminalToGrid("t1");
+
+      expect(moved).toBe(true);
+      const state = usePanelStore.getState();
+      expect(state.panelsById["t1"]!.worktreeId).toBe("wt-2");
+      expect(state.panelIdsByWorktreeId).toBe(bucketsBefore);
+    });
+
+    const spyOnLedger = () => {
+      vi.spyOn(agentLifecycleLedger, "currentGeneration").mockReturnValue(3);
+      return vi
+        .spyOn(agentLifecycleLedger, "recordWorktreeAttribution")
+        .mockReturnValue({ accepted: true });
+    };
+
+    it("records explicit ledger attribution for a promoted ledger-tracked panel", () => {
+      const globalDocked = createGlobalMockTerminal("global-dock", "dock");
+      setTerminals([globalDocked]);
+      activateWorktree("wt-1");
+      const recordSpy = spyOnLedger();
+
+      usePanelStore.getState().moveTerminalToGrid("global-dock");
+
+      expect(recordSpy).toHaveBeenCalledWith("global-dock", 3, "wt-1", "explicit");
+    });
+
+    it("records explicit ledger attribution on a drag-style adoption", () => {
+      const globalDocked = createGlobalMockTerminal("t1", "dock");
+      setTerminals([globalDocked]);
+      const recordSpy = spyOnLedger();
+
+      usePanelStore.getState().moveTerminalToPosition("t1", 0, "grid", "wt-1");
+
+      expect(recordSpy).toHaveBeenCalledWith("t1", 3, "wt-1", "explicit");
+    });
+
+    it("records no ledger attribution when promotion adopts nothing", () => {
+      const globalDocked = createGlobalMockTerminal("global-dock", "dock");
+      setTerminals([globalDocked]);
+      setWorktreeSelectionAccessor(() => ({ activeWorktreeId: null, restoreWorktreeId: null }));
+      const recordSpy = spyOnLedger();
+
+      usePanelStore.getState().moveTerminalToGrid("global-dock");
+
+      expect(recordSpy).not.toHaveBeenCalled();
+    });
+
+    it("assigns the active worktree to a promoted worktree-less dock group and its members", () => {
+      const t1 = createGlobalMockTerminal("t1", "dock");
+      const t2 = createGlobalMockTerminal("t2", "dock");
+      const existing = createMockTerminal("wt1-existing", "grid");
+      const unrelated = { ...createMockTerminal("wt2-panel", "grid"), worktreeId: "wt-2" };
+      setTerminals([t1, t2, existing, unrelated]);
+      const group: TabGroup = {
+        ...createMockTabGroup("g1", ["t1", "t2"], "dock"),
+        worktreeId: undefined,
+      };
+      usePanelStore.setState({ tabGroups: new Map([["g1", group]]) });
+      activateWorktree("wt-1");
+      const recordSpy = spyOnLedger();
+
+      const bucketsBefore = usePanelStore.getState().panelIdsByWorktreeId;
+      const moved = usePanelStore.getState().moveTerminalToGrid("t1");
+
+      expect(moved).toBe(true);
+      const state = usePanelStore.getState();
+      expect(state.tabGroups.get("g1")!.worktreeId).toBe("wt-1");
+      expect(state.tabGroups.get("g1")!.location).toBe("grid");
+      for (const pid of ["t1", "t2"]) {
+        expect(state.panelsById[pid]!.worktreeId).toBe("wt-1");
+        expect(state.panelsById[pid]!.location).toBe("grid");
+        expect(state.panelsById[pid]!.isVisible).toBe(true);
+      }
+      expect(state.panelIdsByWorktreeId["wt-1"]).toEqual(["wt1-existing", "t1", "t2"]);
+      expect(state.panelIdsByWorktreeId[NO_WORKTREE]).toBeUndefined();
+      expect(state.panelIdsByWorktreeId["wt-2"]).toBe(bucketsBefore["wt-2"]);
+      expect(recordSpy.mock.calls).toEqual([
+        ["t1", 3, "wt-1", "explicit"],
+        ["t2", 3, "wt-1", "explicit"],
+      ]);
+    });
+
+    it("re-homes a drifted member indexed under another worktree when promoting a worktree-less group", () => {
+      const t1 = createGlobalMockTerminal("t1", "dock");
+      const drifted = { ...createMockTerminal("t2", "dock"), worktreeId: "wt-3" };
+      setTerminals([t1, drifted]);
+      const group: TabGroup = {
+        ...createMockTabGroup("g1", ["t1", "t2"], "dock"),
+        worktreeId: undefined,
+      };
+      usePanelStore.setState({ tabGroups: new Map([["g1", group]]) });
+      activateWorktree("wt-1");
+
+      const moved = usePanelStore.getState().moveTabGroupToLocation("g1", "grid");
+
+      expect(moved).toBe(true);
+      const state = usePanelStore.getState();
+      expect(state.panelsById["t1"]!.worktreeId).toBe("wt-1");
+      expect(state.panelsById["t2"]!.worktreeId).toBe("wt-1");
+      expect(state.panelIdsByWorktreeId["wt-1"]).toEqual(["t1", "t2"]);
+      expect(state.panelIdsByWorktreeId["wt-3"]).toBeUndefined();
+      expect(state.panelIdsByWorktreeId[NO_WORKTREE]).toBeUndefined();
+    });
+
+    it("adopts the active worktree when promoting a worktree-less dialog panel to the grid", () => {
+      usePanelStore.setState((state) => {
+        const dialogPanel: FilePanelData = {
+          id: "dlg-1",
+          kind: "file",
+          title: "outside.md",
+          location: "dialog",
+          isVisible: false,
+          filePath: "/outside/outside.md",
+          excludeFromPersistence: true,
+        };
+        const panelsById = { ...state.panelsById, "dlg-1": dialogPanel };
+        const panelIds = [...state.panelIds, "dlg-1"];
+        return {
+          panelsById,
+          panelIds,
+          panelIdsByWorktreeId: buildWorktreeIndex(panelIds, panelsById),
+        };
+      });
+      activateWorktree("wt-1");
+
+      const promoted = usePanelStore.getState().promoteDialogPanelToGrid("dlg-1");
+
+      expect(promoted).toBe(true);
+      const state = usePanelStore.getState();
+      expect(state.panelsById["dlg-1"]!.worktreeId).toBe("wt-1");
+      expect(state.panelsById["dlg-1"]!.location).toBe("grid");
+      expect(state.panelIdsByWorktreeId["wt-1"]).toEqual(["dlg-1"]);
+      expect(state.panelIdsByWorktreeId[NO_WORKTREE]).toBeUndefined();
+    });
+
+    it("skips trashed members when promoting a worktree-less dock group", () => {
+      const t1 = createGlobalMockTerminal("t1", "dock");
+      const t2 = createGlobalMockTerminal("t2", "trash");
+      setTerminals([t1, t2]);
+      const group: TabGroup = {
+        ...createMockTabGroup("g1", ["t1", "t2"], "dock"),
+        worktreeId: undefined,
+      };
+      usePanelStore.setState({ tabGroups: new Map([["g1", group]]) });
+      activateWorktree("wt-1");
+      const recordSpy = spyOnLedger();
+
+      const moved = usePanelStore.getState().moveTabGroupToLocation("g1", "grid");
+
+      expect(moved).toBe(true);
+      const state = usePanelStore.getState();
+      expect(state.panelsById["t1"]!.worktreeId).toBe("wt-1");
+      expect(state.panelsById["t2"]!.worktreeId).toBeUndefined();
+      expect(state.panelsById["t2"]!.location).toBe("trash");
+      expect(state.panelIdsByWorktreeId["wt-1"]).toEqual(["t1"]);
+      expect(state.panelIdsByWorktreeId[NO_WORKTREE]).toEqual(["t2"]);
+      expect(recordSpy.mock.calls).toEqual([["t1", 3, "wt-1", "explicit"]]);
+      // The group adopts while the trashed member keeps its old attribution
+      // and its membership slot — the same trade moveTabGroupToWorktree makes;
+      // every consumer filters trashed members out of live group reads.
+      expect(state.tabGroups.get("g1")!.worktreeId).toBe("wt-1");
+      expect(state.tabGroups.get("g1")!.panelIds).toEqual(["t1", "t2"]);
+    });
+
+    it("leaves a worktree-less dock group global when no worktree is active", () => {
+      const t1 = createGlobalMockTerminal("t1", "dock");
+      const t2 = createGlobalMockTerminal("t2", "dock");
+      setTerminals([t1, t2]);
+      const group: TabGroup = {
+        ...createMockTabGroup("g1", ["t1", "t2"], "dock"),
+        worktreeId: undefined,
+      };
+      usePanelStore.setState({ tabGroups: new Map([["g1", group]]) });
+      setWorktreeSelectionAccessor(() => ({ activeWorktreeId: null, restoreWorktreeId: null }));
+
+      const bucketsBefore = usePanelStore.getState().panelIdsByWorktreeId;
+      const moved = usePanelStore.getState().moveTerminalToGrid("t1");
+
+      expect(moved).toBe(true);
+      const state = usePanelStore.getState();
+      expect(state.tabGroups.get("g1")!.worktreeId).toBeUndefined();
+      expect(state.tabGroups.get("g1")!.location).toBe("grid");
+      expect(state.panelsById["t1"]!.worktreeId).toBeUndefined();
+      expect(state.panelsById["t2"]!.worktreeId).toBeUndefined();
+      expect(state.panelIdsByWorktreeId).toBe(bucketsBefore);
+      expect(state.panelIdsByWorktreeId[NO_WORKTREE]).toEqual(["t1", "t2"]);
+    });
+
+    it("adopts the drop target worktree on a drag-style dock-to-grid move", () => {
+      const existing = createMockTerminal("wt1-existing", "grid");
+      const globalDocked = createGlobalMockTerminal("t1", "dock");
+      const globalSibling = createGlobalMockTerminal("global-2", "dock");
+      setTerminals([existing, globalDocked, globalSibling]);
+
+      usePanelStore.getState().moveTerminalToPosition("t1", 0, "grid", "wt-1");
+
+      const state = usePanelStore.getState();
+      expect(state.panelsById["t1"]!.worktreeId).toBe("wt-1");
+      expect(state.panelsById["t1"]!.location).toBe("grid");
+      expect(state.panelIdsByWorktreeId["wt-1"]).toEqual(["t1", "wt1-existing"]);
+      expect(state.panelIdsByWorktreeId[NO_WORKTREE]).toEqual(["global-2"]);
+    });
+
+    it("keeps a worktree-less panel global on a drag-style move with no target worktree", () => {
+      const globalDocked = createGlobalMockTerminal("t1", "dock");
+      setTerminals([globalDocked]);
+
+      usePanelStore.getState().moveTerminalToPosition("t1", 0, "grid", null);
+
+      const state = usePanelStore.getState();
+      expect(state.panelsById["t1"]!.worktreeId).toBeUndefined();
+      expect(state.panelsById["t1"]!.location).toBe("grid");
+      expect(state.panelIdsByWorktreeId[NO_WORKTREE]).toEqual(["t1"]);
+    });
+
+    it("keeps a worktree-less panel global on a drag-style move with an omitted target worktree", () => {
+      const globalDocked = createGlobalMockTerminal("t1", "dock");
+      setTerminals([globalDocked]);
+
+      usePanelStore.getState().moveTerminalToPosition("t1", 0, "grid");
+
+      const state = usePanelStore.getState();
+      expect(state.panelsById["t1"]!.worktreeId).toBeUndefined();
+      expect(state.panelsById["t1"]!.location).toBe("grid");
+      expect(state.panelIdsByWorktreeId[NO_WORKTREE]).toEqual(["t1"]);
+    });
+
+    it("does not adopt a worktree when a drag-style move targets the dock", () => {
+      const globalGrid = createGlobalMockTerminal("t1", "grid");
+      setTerminals([globalGrid]);
+
+      usePanelStore.getState().moveTerminalToPosition("t1", 0, "dock", "wt-1");
+
+      const state = usePanelStore.getState();
+      expect(state.panelsById["t1"]!.worktreeId).toBeUndefined();
+      expect(state.panelsById["t1"]!.location).toBe("dock");
+      expect(state.panelIdsByWorktreeId[NO_WORKTREE]).toEqual(["t1"]);
     });
   });
 

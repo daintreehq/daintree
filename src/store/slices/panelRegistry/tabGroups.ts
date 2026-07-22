@@ -11,6 +11,8 @@ import { saveNormalized, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
 import { deriveRuntimeStatus, dissolvePanelFromGroup } from "./helpers";
 import { buildWorktreeIndex, NO_WORKTREE, transferBetweenWorktreeIndex } from "./worktreeIndex";
+import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
+import { getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 
 type Set = PanelRegistryStoreApi["setState"];
 type Get = PanelRegistryStoreApi["getState"];
@@ -405,13 +407,29 @@ export const createTabGroupActions = (
     // Scrollable grid (#8805): tab-group moves to the grid no longer gate on a
     // screen-fit cap. The grid scrolls vertically so the move always succeeds.
 
+    // A worktree-less dock group is visible in every worktree's dock, but the
+    // grid renders only the active worktree's index bucket — landing there
+    // without a worktreeId strands the whole group off-screen (#11290).
+    // Promotion adopts the active worktree for the group and every live
+    // member; a real existing group attribution is never changed.
+    const activeWorktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null;
+    const adoptedWorktreeId =
+      location === "grid" && group.worktreeId == null && activeWorktreeId !== null
+        ? activeWorktreeId
+        : null;
+    const backfilledPanelIds: string[] = [];
+
     set((state) => {
       const newTabGroups = new Map(state.tabGroups);
-      const updatedGroup: TabGroup = { ...group, location };
+      const updatedGroup: TabGroup =
+        adoptedWorktreeId !== null
+          ? { ...group, location, worktreeId: adoptedWorktreeId }
+          : { ...group, location };
       newTabGroups.set(groupId, updatedGroup);
 
       const panelIdSet = new Set(group.panelIds);
       const newById = { ...state.panelsById };
+      let newIndex = state.panelIdsByWorktreeId;
       for (const pid of panelIdSet) {
         const t = newById[pid];
         if (!t) continue;
@@ -419,6 +437,7 @@ export const createTabGroupActions = (
         const ptyT = isPtyPanel(t) ? t : undefined;
         newById[pid] = {
           ...t,
+          ...(adoptedWorktreeId !== null && { worktreeId: adoptedWorktreeId }),
           location,
           isVisible: location === "grid",
           runtimeStatus: deriveRuntimeStatus(
@@ -427,12 +446,36 @@ export const createTabGroupActions = (
             ptyT?.runtimeStatus
           ),
         } as PanelInstance;
+        if (adoptedWorktreeId !== null) {
+          newIndex = transferBetweenWorktreeIndex(newIndex, t.worktreeId, adoptedWorktreeId, pid);
+          backfilledPanelIds.push(pid);
+        }
       }
 
       saveNormalized(newById, state.panelIds);
       saveTabGroups(newTabGroups);
-      return { panelsById: newById, tabGroups: newTabGroups };
+      return {
+        panelsById: newById,
+        tabGroups: newTabGroups,
+        ...(adoptedWorktreeId !== null && { panelIdsByWorktreeId: newIndex }),
+      };
     });
+
+    // A user-initiated promotion is explicit worktree attribution — recorded
+    // so later cwd-based inference can never silently re-home the panels.
+    if (adoptedWorktreeId !== null) {
+      for (const pid of backfilledPanelIds) {
+        const ledgerGeneration = agentLifecycleLedger.currentGeneration(pid);
+        if (ledgerGeneration !== undefined) {
+          agentLifecycleLedger.recordWorktreeAttribution(
+            pid,
+            ledgerGeneration,
+            adoptedWorktreeId,
+            "explicit"
+          );
+        }
+      }
+    }
 
     for (const panelId of group.panelIds) {
       const terminal = get().panelsById[panelId];
