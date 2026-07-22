@@ -33,6 +33,17 @@ describe("buildPluginToolbarMeta", () => {
     expect(meta["acme.plan"]?.icon).toBe(PLUGIN_ICON_COMPONENTS.list);
   });
 
+  it("varies the icon with iconId alone, holding the button id fixed", () => {
+    // Same id, same label, same plugin — only `iconId` differs. A lookup keyed
+    // on anything but `iconId` would return the same glyph for both.
+    const asList = build([config({ iconId: "list" })]);
+    const asGauge = build([config({ iconId: "gauge" })]);
+
+    expect(asList["acme.plan"]?.icon).toBe(PLUGIN_ICON_COMPONENTS.list);
+    expect(asGauge["acme.plan"]?.icon).toBe(PLUGIN_ICON_COMPONENTS.gauge);
+    expect(asList["acme.plan"]?.icon).not.toBe(asGauge["acme.plan"]?.icon);
+  });
+
   it("resolves each button independently", () => {
     const meta = build([
       config({ id: "acme.plan" as ToolbarButtonConfig["id"], iconId: "list" }),

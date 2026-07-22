@@ -166,10 +166,14 @@ export async function runValidate(opts: ValidateOptions = {}): Promise<ValidateR
       );
     }
   }
+  // A view's `iconId` is ignored at runtime whatever its value — the matching
+  // panels entry owns the rendered icon — so warn on its presence rather than
+  // only when it's unrecognized. A recognized-but-ignored id is the more
+  // misleading case: it looks like it works.
   for (const [index, view] of manifest.contributes.views.entries()) {
-    if (view.iconId && isUnrenderablePanelIcon(view.iconId)) {
+    if (view.iconId) {
       warnings.push(
-        `views[${index}].iconId "${view.iconId}" isn't a recognized panel icon. This field is ignored at runtime — set iconId on the matching panels entry instead. Known ids: ${knownIds}`
+        `views[${index}].iconId "${view.iconId}" is ignored at runtime — the matching panels entry owns the rendered icon. Set iconId there instead.`
       );
     }
   }

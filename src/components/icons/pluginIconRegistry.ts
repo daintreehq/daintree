@@ -65,14 +65,14 @@ export const PLUGIN_ICON_COMPONENTS = {
  * the plugin catalog). A generic package reads as "some plugin contributed
  * this", which an unrelated app glyph does not.
  */
-export const DEFAULT_PLUGIN_ICON: PluginIconComponent = Package;
+export const DEFAULT_PLUGIN_ICON = Package;
 
 /**
  * Fallback for general panel chrome. Panel surfaces also render built-ins,
  * agents, processes, and resume entries, where a terminal glyph — not a
  * package — is the honest default.
  */
-export const DEFAULT_PANEL_ICON: PluginIconComponent = SquareTerminal;
+export const DEFAULT_PANEL_ICON = SquareTerminal;
 
 /**
  * The glyph for `id`, or `undefined` when `id` names no registered icon.

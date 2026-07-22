@@ -219,7 +219,8 @@ describe("runValidate", () => {
     });
     const result = await runValidate({ dir: tmpDir });
     expect(result.ok).toBe(true);
-    expect(result.warnings.join("\n")).not.toMatch(/iconId/);
+    // Stronger than a substring miss: this fixture should be warning-free.
+    expect(result.warnings).toEqual([]);
   });
 
   it("warns on a toolbar iconId that is only an agent brand id (#11298)", async () => {
@@ -240,26 +241,38 @@ describe("runValidate", () => {
     expect(result.warnings.join("\n")).toMatch(/toolbarButtons\[0\].iconId "claude"/);
   });
 
-  it("tells the author a view iconId is ignored rather than merely unrecognized (#11298)", async () => {
+  it.each(["not-a-real-icon", "puzzle"])(
+    "tells the author a view iconId is ignored, even a recognized one like %s (#11298)",
+    async (iconId) => {
+      // A recognized-but-ignored id is the more misleading case — it looks like
+      // it works — so presence, not membership, drives the warning.
+      await writeManifest({
+        name: "acme.demo",
+        version: "1.0.0",
+        engines: { daintree: ">=0.11.0" },
+        contributes: {
+          panels: [{ id: "main", name: "Main", iconId: "puzzle", color: "var(--x)" }],
+          views: [{ id: "main", componentPath: "./dist/main.js", location: "panel", iconId }],
+        },
+      });
+      const result = await runValidate({ dir: tmpDir });
+      expect(result.ok).toBe(true);
+      expect(result.warnings.join("\n")).toMatch(/views\[0\].iconId.*ignored at runtime/);
+    }
+  );
+
+  it("stays quiet when a view omits iconId (#11298)", async () => {
     await writeManifest({
       name: "acme.demo",
       version: "1.0.0",
       engines: { daintree: ">=0.11.0" },
       contributes: {
         panels: [{ id: "main", name: "Main", iconId: "puzzle", color: "var(--x)" }],
-        views: [
-          {
-            id: "main",
-            componentPath: "./dist/main.js",
-            location: "panel",
-            iconId: "not-a-real-icon",
-          },
-        ],
+        views: [{ id: "main", componentPath: "./dist/main.js", location: "panel" }],
       },
     });
     const result = await runValidate({ dir: tmpDir });
-    expect(result.ok).toBe(true);
-    expect(result.warnings.join("\n")).toMatch(/views\[0\].iconId.*ignored at runtime/);
+    expect(result.warnings.join("\n")).not.toMatch(/iconId/);
   });
 
   it("rejects a setting id outside the safe-id grammar (#10513)", async () => {

@@ -28,11 +28,18 @@ describe("pluginIconRegistry", () => {
     }
   });
 
-  it("gives distinct glyphs to ids the old split renderers conflated", () => {
-    // `TerminalIcon` used to alias `monitor` onto the `monitor-play` glyph.
-    expect(markup(PLUGIN_ICON_COMPONENTS.monitor)).not.toBe(
-      markup(PLUGIN_ICON_COMPONENTS["monitor-play"])
-    );
+  it("gives every advertised id its own glyph", () => {
+    // Two ids sharing a glyph would make them indistinguishable to a plugin
+    // author picking between them — including `monitor`/`monitor-play`, which
+    // `TerminalIcon` used to alias onto a single component.
+    const seen = new Map<string, string>();
+    for (const id of PLUGIN_ICON_IDS) {
+      const Icon = PLUGIN_ICON_COMPONENTS[id];
+      const geometry = render(<Icon />).container.querySelector("svg")!.innerHTML;
+      const clash = seen.get(geometry);
+      expect(clash, `"${id}" draws the same glyph as "${clash}"`).toBeUndefined();
+      seen.set(geometry, id);
+    }
   });
 
   it("falls back to the plugin glyph for unknown ids", () => {

@@ -3,7 +3,11 @@ import { describe, expect, it } from "vitest";
 import { render } from "@testing-library/react";
 import { TerminalIcon } from "../TerminalIcon";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
-import { PLUGIN_ICON_IDS } from "@/components/icons/pluginIconRegistry";
+import {
+  PLUGIN_ICON_COMPONENTS,
+  PLUGIN_ICON_IDS,
+  type PluginIconId,
+} from "@/components/icons/pluginIconRegistry";
 
 function renderDefaultTerminalIcon(): string {
   return render(<TerminalIcon kind="terminal" chrome={deriveTerminalChrome()} />).container
@@ -25,6 +29,24 @@ function pluginChrome(iconId: string): TerminalChromeDescriptor {
 
 function renderIcon(iconId: string): string {
   return render(<TerminalIcon chrome={pluginChrome(iconId)} />).container.innerHTML;
+}
+
+/**
+ * The rendered glyph's own geometry, excluding the wrapper's `data-terminal-*`
+ * markers and the svg's semantic color class. Comparing full `innerHTML` would
+ * make any two ids differ purely because the marker carries the id, so a
+ * renderer that drew the same glyph for everything would still look "distinct".
+ */
+function glyph(iconId: string): string {
+  return render(<TerminalIcon chrome={pluginChrome(iconId)} />)
+    .container.querySelector("svg")!
+    .innerHTML;
+}
+
+/** The same glyph rendered straight from the registry, as the oracle. */
+function registryGlyph(id: PluginIconId): string {
+  const Icon = PLUGIN_ICON_COMPONENTS[id];
+  return render(<Icon />).container.querySelector("svg")!.innerHTML;
 }
 
 describe("TerminalIcon", () => {
@@ -200,47 +222,56 @@ describe("TerminalIcon", () => {
   });
 
   describe("shared plugin icon registry (#11298)", () => {
-    it("renders a distinct glyph for every advertised icon id", () => {
-      const seen = new Map<string, string>();
-      for (const id of PLUGIN_ICON_IDS) {
-        const html = renderIcon(id);
-        expect(html, `"${id}" rendered no svg`).toContain("<svg");
-        const clash = seen.get(html);
-        expect(clash, `"${id}" renders identically to "${clash}"`).toBeUndefined();
-        seen.set(html, id);
-      }
+    it.each(PLUGIN_ICON_IDS)("draws %s from the shared registry", (id) => {
+      // Comparing against the registry's own output — not merely "different
+      // from the fallback" — is what proves this renderer stopped keeping its
+      // own map. A renderer drawing the wrong-but-distinct glyph fails here.
+      expect(glyph(id)).toBe(registryGlyph(id));
     });
 
     it("renders ids that used to fall through to the terminal glyph", () => {
       // These lived only in the palette's map, so panel headers, tabs, and the
       // dock all showed a terminal icon for them instead.
-      const fallback = renderIcon("no-such-icon");
-      for (const id of ["puzzle", "git-branch", "sticky-note", "daintree", "gauge"]) {
-        expect(renderIcon(id), `"${id}" still falls back`).not.toBe(fallback);
+      const fallback = glyph("no-such-icon");
+      for (const id of ["puzzle", "git-branch", "sticky-note", "daintree", "gauge"] as const) {
+        expect(glyph(id), `"${id}" still falls back`).not.toBe(fallback);
       }
     });
 
     it("gives monitor and monitor-play different glyphs", () => {
       // The old id conditionals aliased both onto MonitorPlay.
-      expect(renderIcon("monitor")).not.toBe(renderIcon("monitor-play"));
+      expect(glyph("monitor")).not.toBe(glyph("monitor-play"));
     });
 
-    it("keeps the category color on the semantic panel-kind icons", () => {
-      expect(renderIcon("file-diff")).toContain("text-category-green");
-      expect(renderIcon("git-pull-request")).toContain("text-category-violet");
-      expect(renderIcon("file-text")).toContain("text-category-amber");
-      expect(renderIcon("globe")).toContain("text-status-info");
+    it.each([
+      ["globe", "text-status-info"],
+      ["monitor", "text-status-info"],
+      ["monitor-play", "text-status-info"],
+      ["git-pull-request", "text-category-violet"],
+      ["file-text", "text-category-amber"],
+      ["file-diff", "text-category-green"],
+    ])("keeps %s's category color", (id, colorClass) => {
+      expect(renderIcon(id)).toContain(colorClass);
     });
 
-    it("renders non-semantic registry ids without a category color", () => {
-      expect(renderIcon("puzzle")).not.toContain("text-category-");
+    it("renders non-semantic registry ids with no color class at all", () => {
+      // Narrower than excluding `text-category-`: an errant `text-status-info`
+      // on a neutral id would slip past that.
+      expect(renderIcon("puzzle")).not.toMatch(/text-(category|status)-/);
     });
 
-    it("lets a built-in kind pin its glyph over the chrome's icon id", () => {
-      const { container } = render(<TerminalIcon kind="browser" chrome={pluginChrome("puzzle")} />);
+    it.each([
+      ["browser", "globe"],
+      ["dev-preview", "monitor-play"],
+      ["review", "git-pull-request"],
+      ["file", "file-text"],
+      ["diff", "file-diff"],
+    ] as const)("lets kind=%s pin its glyph over a conflicting icon id", (kind, expectedId) => {
+      const pinned = render(<TerminalIcon kind={kind} chrome={pluginChrome("puzzle")} />)
+        .container.querySelector("svg")!.innerHTML;
 
-      expect(container.innerHTML).toContain("text-status-info");
-      expect(container.innerHTML).not.toBe(renderIcon("puzzle"));
+      expect(pinned).toBe(registryGlyph(expectedId));
+      expect(pinned).not.toBe(glyph("puzzle"));
     });
 
     it("still resolves agent brand icons ahead of the generic registry", () => {
@@ -253,12 +284,20 @@ describe("TerminalIcon", () => {
       expect(agent).toContain("<svg");
     });
 
+    it("resolves an agent whose registry id differs from its icon id", () => {
+      // `daintree-assistant` registers under that id but its brand mark is
+      // keyed `daintreeassistant`. The palette accepted the registry id via
+      // `getAgentConfig` while headers/tabs fell back to the terminal glyph.
+      expect(glyph("daintree-assistant")).toBe(glyph("daintreeassistant"));
+      expect(glyph("daintree-assistant")).not.toBe(glyph("no-such-icon"));
+    });
+
     it("treats inherited object keys as unknown ids", () => {
       // `iconId` is untrusted manifest input; a bare `in`/index lookup would
       // resolve these to functions off Object.prototype.
-      const fallback = renderIcon("no-such-icon");
+      const fallback = glyph("no-such-icon");
       for (const id of ["toString", "constructor", "hasOwnProperty", "__proto__"]) {
-        expect(renderIcon(id), `"${id}" leaked an inherited value`).toBe(fallback);
+        expect(glyph(id), `"${id}" leaked an inherited value`).toBe(fallback);
       }
     });
 

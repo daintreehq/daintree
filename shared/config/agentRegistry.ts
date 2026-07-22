@@ -703,7 +703,9 @@ export function isEffectivelyRegisteredAgent(agentId: string): boolean {
 }
 
 export function isBuiltInAgent(agentId: string): boolean {
-  return agentId in AGENT_REGISTRY;
+  // Own-key check: a user agent legitimately named `toString` passes the
+  // safe-id rules, and `in` would falsely reject it as a built-in.
+  return Object.hasOwn(AGENT_REGISTRY, agentId);
 }
 
 export function getAgentModelConfig(

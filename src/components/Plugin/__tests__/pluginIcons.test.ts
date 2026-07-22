@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { categoryIconFor, pluginIconForIdentity } from "../pluginIcons";
 import { DEFAULT_PLUGIN_ICON } from "@/components/icons/pluginIconRegistry";
+import { GitHubIcon } from "@/components/icons";
+import { PLUGIN_CATEGORIES } from "@shared/config/pluginCategoryRegistry";
 import type { PluginCategoryId } from "@shared/types/plugin";
 
 describe("pluginIconForIdentity", () => {
@@ -17,7 +19,7 @@ describe("pluginIconForIdentity", () => {
   });
 
   it("prefers a brand mark over the category fallback", () => {
-    expect(pluginIconForIdentity("daintree.github", "other")).not.toBe(DEFAULT_PLUGIN_ICON);
+    expect(pluginIconForIdentity("daintree.github", "other")).toBe(GitHubIcon);
   });
 
   it("keeps the brand mark regardless of the resolved category", () => {
@@ -26,11 +28,22 @@ describe("pluginIconForIdentity", () => {
     );
   });
 
-  it("distinguishes the named categories from the generic fallback", () => {
-    for (const category of ["forge", "ai", "workspace"] as const) {
-      expect(categoryIconFor(category), `"${category}" reads as uncategorized`).not.toBe(
-        DEFAULT_PLUGIN_ICON
-      );
+  it("gives every category its own glyph", () => {
+    // The point of per-category icons is that no two adjacent categories read
+    // identically — "not the fallback" alone would let them all share one.
+    const seen = new Map<unknown, string>();
+    for (const { id } of PLUGIN_CATEGORIES) {
+      const icon = categoryIconFor(id);
+      const clash = seen.get(icon);
+      expect(clash, `"${id}" uses the same glyph as "${clash}"`).toBeUndefined();
+      seen.set(icon, id);
+    }
+  });
+
+  it("reserves the generic glyph for the uncategorized case", () => {
+    for (const { id } of PLUGIN_CATEGORIES) {
+      if (id === "other") continue;
+      expect(categoryIconFor(id), `"${id}" reads as uncategorized`).not.toBe(DEFAULT_PLUGIN_ICON);
     }
   });
 });
