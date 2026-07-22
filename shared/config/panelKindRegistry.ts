@@ -15,6 +15,7 @@ export const BUILT_IN_PANEL_KINDS = [
   "dev-preview",
   "review",
   "file",
+  "file-browser",
   "diff",
 ] as const;
 
@@ -253,6 +254,29 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     lazyImportPath: "src/panels/file/FilePane.tsx",
     // Reading surface like review: focus returns to what the user was last
     // reading when the panel leaves the grid.
+    policy: { dockFallbackTarget: "previous-focused" },
+  },
+  "file-browser": {
+    id: "file-browser",
+    name: "File Browser",
+    iconId: "folder-tree",
+    color: PANEL_KIND_BRAND_COLORS["file-browser"],
+    hasPty: false,
+    canRestart: false,
+    canConvert: false,
+    // Not dockable: the dock chip row shows one compact title per panel, and a
+    // two-pane browser has no meaningful compact form (review, diff and
+    // dev-preview are non-dockable reading surfaces for the same reason).
+    usesTerminalUi: false,
+    keepAliveOnProjectSwitch: true,
+    // Spawnable from a bare palette entry: unlike diff and file, the browser
+    // needs no target beyond the worktree it opens against.
+    showInPalette: true,
+    searchAliases: ["files", "browse", "explorer", "tree", "folder", "finder", "assets"],
+    firstRenderRestore: true,
+    lazyImportPath: "src/panels/file-browser/FileBrowserPane.tsx",
+    // Reading surface like review, file and diff: focus returns to what the
+    // user was last reading when the panel leaves the grid.
     policy: { dockFallbackTarget: "previous-focused" },
   },
   diff: {

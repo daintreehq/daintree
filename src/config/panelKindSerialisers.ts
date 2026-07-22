@@ -42,6 +42,25 @@ function sanitizeDiffSource(value: string | undefined): DiffSource | undefined {
 }
 
 /**
+ * Coerce a persisted expanded-path list, dropping anything that isn't a plain
+ * list of relative strings. The value round-trips through JSON on disk, so a
+ * corrupted or hand-edited snapshot can hold anything; an absolute path or one
+ * with a `..` segment would be rejected by the IPC layer anyway, so it is
+ * cheaper to drop it here than to fire a request that can only fail.
+ */
+function sanitizeExpandedPaths(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const cleaned = value.filter(
+    (entry): entry is string =>
+      typeof entry === "string" &&
+      entry.length > 0 &&
+      !entry.startsWith("/") &&
+      !entry.split("/").includes("..")
+  );
+  return cleaned.length > 0 ? cleaned : undefined;
+}
+
+/**
  * Built-in deserializer table ratcheted against `BuiltInPanelKind` so adding
  * a new built-in kind without an entry fails at compile time. `null` marks an
  * intentionally absent deserializer (terminal restores through the PTY backend;
@@ -79,6 +98,12 @@ const BUILT_IN_DESERIALIZERS = {
   file: (saved) => ({
     filePath: saved.filePath ?? saved.markdownFilePath,
     fileViewMode: sanitizeFileViewMode(saved.fileViewMode ?? saved.markdownViewMode),
+  }),
+  "file-browser": (saved) => ({
+    browserSelectedPath: saved.browserSelectedPath,
+    browserExpandedPaths: sanitizeExpandedPaths(saved.browserExpandedPaths),
+    browserShowIgnored:
+      typeof saved.browserShowIgnored === "boolean" ? saved.browserShowIgnored : undefined,
   }),
   diff: (saved) => ({
     filePath: saved.filePath,

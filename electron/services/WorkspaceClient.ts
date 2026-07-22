@@ -712,7 +712,11 @@ export class WorkspaceClient extends EventEmitter {
 
   // ── File tree ──
 
-  async getFileTree(worktreePath: string, dirPath?: string): Promise<FileTreeNode[]> {
+  async getFileTree(
+    worktreePath: string,
+    dirPath?: string,
+    options: { includeIgnored?: boolean } = {}
+  ): Promise<FileTreeNode[]> {
     const host = this.pool.resolveHostForPath(worktreePath);
     if (!host) throw new Error("No workspace host for path");
 
@@ -726,6 +730,7 @@ export class WorkspaceClient extends EventEmitter {
         requestId,
         worktreePath,
         dirPath,
+        includeIgnored: options.includeIgnored,
       },
       30000
     );

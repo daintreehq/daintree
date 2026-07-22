@@ -5,6 +5,7 @@ import {
   GitPullRequest,
   FileText,
   FileDiff,
+  FolderTree,
 } from "lucide-react";
 import { useEffect } from "react";
 import { cn } from "@/lib/utils";
@@ -99,6 +100,13 @@ export function TerminalIcon({
   if (kind === "file" || resolvedChrome.iconId === "file-text") {
     return withIconMarker(
       <FileText {...finalProps} className={cn(finalProps.className, "text-category-amber")} />
+    );
+  }
+
+  // File browser panes get a folder-tree icon
+  if (kind === "file-browser" || resolvedChrome.iconId === "folder-tree") {
+    return withIconMarker(
+      <FolderTree {...finalProps} className={cn(finalProps.className, "text-category-cyan")} />
     );
   }
 

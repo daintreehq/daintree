@@ -18,6 +18,7 @@ export * from "./git.js";
 export * from "./gitPush.js";
 export * from "./files.js";
 export * from "./diffMedia.js";
+export * from "./fileBrowser.js";
 export * from "./config.js";
 export * from "./devPreview.js";
 export * from "./connectivity.js";

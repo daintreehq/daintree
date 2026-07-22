@@ -101,6 +101,7 @@ export interface WorktreeHeaderProps {
     onAttachIssue?: () => void;
     onViewPlan?: () => void;
     onOpenReviewHub?: () => void;
+    onOpenFileBrowser?: () => void;
     onCompareDiff?: () => void;
     onOpenPanelPalette?: () => void;
     onDeleteWorktree?: () => void;

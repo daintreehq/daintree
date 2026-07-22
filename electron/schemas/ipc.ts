@@ -476,6 +476,12 @@ export const CopyTreeGetFileTreePayloadSchema = z.object({
   dirPath: z.string().optional(),
 });
 
+export const FileBrowserListDirectoryPayloadSchema = z.object({
+  worktreeId: z.string().min(1),
+  dirPath: z.string().optional(),
+  includeIgnored: z.boolean().optional(),
+});
+
 export const FileReadPayloadSchema = z.object({
   path: z
     .string()

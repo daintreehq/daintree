@@ -247,6 +247,10 @@ export interface PanelRegistrySlice {
     id: string,
     changeSet: import("@shared/types/git.js").DiffChangeSetEntry[]
   ) => void;
+  setFileBrowserView: (
+    id: string,
+    patch: import("./fileBrowser.js").FileBrowserViewPatch
+  ) => void;
   setDevServerState: (
     id: string,
     status: "stopped" | "starting" | "installing" | "running" | "error",

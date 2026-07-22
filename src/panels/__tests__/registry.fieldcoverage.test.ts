@@ -4,6 +4,7 @@ import type {
   BrowserPanelData,
   BuiltInPanelKind,
   FilePanelData,
+  FileBrowserPanelData,
   DiffPanelData,
   PanelExitBehavior,
 } from "@shared/types/panel";
@@ -260,6 +261,33 @@ const DIFF_FIELD_CLASSIFICATION = {
   viewedKey: false,
 } as const satisfies Record<keyof DiffPanelData, boolean>;
 
+// ── File browser field classification ────────────────────────────────
+
+const FILE_BROWSER_FIELD_CLASSIFICATION = {
+  // BasePanelData — persisted by the base serialization layer
+  id: false,
+  kind: false,
+  title: false,
+  titleMode: false,
+  location: false,
+  worktreeId: false,
+  isVisible: false,
+  extensionState: false,
+  pluginId: false,
+  // FileBrowserPanelData persisted fields — all three are user intent (where
+  // they are in the tree), which is exactly what a pinned panel must keep.
+  browserSelectedPath: true,
+  browserExpandedPaths: true,
+  browserShowIgnored: true,
+  // BasePanelData carrier-bookkeeping timestamps — written by the base
+  // serialization layer in panelToSnapshot, not per-kind serializers.
+  createdAt: false,
+  lastActiveAt: false,
+  // Ephemerality flag: consumed by the persistence filter to decide whether a
+  // panel is written at all, so it is never part of a snapshot's payload.
+  excludeFromPersistence: false,
+} as const satisfies Record<keyof FileBrowserPanelData, boolean>;
+
 // ── Built-in kind exhaustiveness ─────────────────────────────────────
 
 const BUILT_IN_KINDS = [
@@ -268,6 +296,7 @@ const BUILT_IN_KINDS = [
   "dev-preview",
   "review",
   "file",
+  "file-browser",
   "diff",
 ] as const satisfies readonly BuiltInPanelKind[];
 
@@ -416,6 +445,24 @@ const savedFile: SavedTerminalData = {
   fileViewMode: "source",
 };
 
+const fileBrowserFixture: FileBrowserPanelData = {
+  id: "panel-file-browser",
+  title: "Panel",
+  location: "grid",
+  kind: "file-browser",
+  browserSelectedPath: "src/app.ts",
+  browserExpandedPaths: ["src"],
+  browserShowIgnored: true,
+};
+
+const savedFileBrowser: SavedTerminalData = {
+  id: "panel-file-browser",
+  kind: "file-browser",
+  browserSelectedPath: "src/app.ts",
+  browserExpandedPaths: ["src"],
+  browserShowIgnored: true,
+};
+
 const diffFixture: DiffPanelData = {
   id: "panel-diff",
   title: "Panel",
@@ -506,6 +553,33 @@ describe("panel serializer field coverage", () => {
     assertCovers("file serializer", output, persistedKeys(FILE_FIELD_CLASSIFICATION));
   });
 
+  it("file browser serializer covers every persisted file browser field", () => {
+    const output = getPanelKindConfig("file-browser")!.serialize!(fileBrowserFixture) as Record<
+      string,
+      unknown
+    >;
+    assertCovers(
+      "file-browser serializer",
+      output,
+      persistedKeys(FILE_BROWSER_FIELD_CLASSIFICATION)
+    );
+  });
+
+  it("file browser serializer keeps an explicit false for the ignored toggle", () => {
+    const withIgnoredOff: FileBrowserPanelData = {
+      ...fileBrowserFixture,
+      browserShowIgnored: false,
+    };
+    const output = getPanelKindConfig("file-browser")!.serialize!(withIgnoredOff) as Record<
+      string,
+      unknown
+    >;
+
+    // Truthiness-based spreading would drop this, and the restored panel would
+    // silently pick up whatever the default becomes.
+    expect(output.browserShowIgnored).toBe(false);
+  });
+
   it("diff serializer covers every persisted diff field", () => {
     const output = getPanelKindConfig("diff")!.serialize!(diffFixture) as Record<string, unknown>;
     assertCovers("diff serializer", output, persistedKeys(DIFF_FIELD_CLASSIFICATION));
@@ -548,6 +622,43 @@ describe("panel deserializer field coverage", () => {
       {},
       ["cwd", "exitBehavior"]
     );
+  });
+
+  it("file browser deserializer covers every persisted file browser field", () => {
+    const deserializer = getDeserializer("file-browser");
+    expect(deserializer, "file-browser deserializer must be registered").toBeDefined();
+    const output = deserializer!(savedFileBrowser) as Record<string, unknown>;
+    assertCovers(
+      "file-browser deserializer",
+      output,
+      persistedKeys(FILE_BROWSER_FIELD_CLASSIFICATION)
+    );
+  });
+
+  it("file browser deserializer drops expanded paths that could escape the worktree root", () => {
+    const deserializer = getDeserializer("file-browser")!;
+
+    const output = deserializer({
+      ...savedFileBrowser,
+      browserExpandedPaths: ["src", "/etc", "../secrets", "a/../../b", 42],
+    }) as Record<string, unknown>;
+
+    // The list round-trips through JSON on disk, so a corrupted or hand-edited
+    // snapshot can hold anything. Only the safe relative entry survives.
+    expect(output.browserExpandedPaths).toEqual(["src"]);
+  });
+
+  it("file browser deserializer drops a non-boolean ignored toggle rather than coercing it", () => {
+    const deserializer = getDeserializer("file-browser")!;
+
+    const output = deserializer({
+      ...savedFileBrowser,
+      browserShowIgnored: "yes",
+    }) as Record<string, unknown>;
+
+    // Coercing would turn any stray on-disk string into "show every ignored
+    // file", which is the opposite of the safe default.
+    expect(output.browserShowIgnored).toBeUndefined();
   });
 
   it("terminal has no deserializer registry entry", () => {

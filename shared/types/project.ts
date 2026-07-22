@@ -159,6 +159,12 @@ export interface PanelSnapshot {
   diffSource?: DiffSource;
   /** Base ref for a diff panel with `diffSource: "base-branch"` */
   baseBranch?: string;
+  /** Worktree-relative path selected in a file browser panel */
+  browserSelectedPath?: string;
+  /** Worktree-relative directories expanded in a file browser panel */
+  browserExpandedPaths?: string[];
+  /** Whether a file browser panel shows gitignored entries */
+  browserShowIgnored?: boolean;
   /** Legacy pre-file-panel field: absolute path shown in a markdown panel */
   markdownFilePath?: string;
   /** Legacy pre-file-panel field: markdown panel view mode */

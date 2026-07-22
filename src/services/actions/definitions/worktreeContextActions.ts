@@ -298,6 +298,39 @@ export function registerWorktreeContextActions(
     })
   );
 
+  actions.set("worktree.openFileBrowser", () =>
+    defineAction({
+      id: "worktree.openFileBrowser",
+      title: "Browse Files",
+      description: "Open a read-only file browser for a worktree",
+      category: "worktree",
+      kind: "command",
+      danger: "safe",
+      scope: "renderer",
+      argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
+      run: async (args, ctx: ActionContext) => {
+        const worktreeId = args?.worktreeId;
+        const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
+        if (!targetWorktreeId) return;
+
+        const worktree = getCurrentViewStore().getState().worktrees.get(targetWorktreeId);
+        if (!worktree) return;
+
+        // Lazily imported for the same reason as the review hub above: a static
+        // import drags panelStore -> panelPersistence in, which reads
+        // `projectClient` from `@/clients` at module scope and breaks every
+        // action test that mocks `@/clients` without it.
+        const { usePanelDialogStore } = await import("@/store/panelDialogStore");
+
+        await usePanelDialogStore.getState().openPanelDialog({
+          kind: "file-browser",
+          title: `Files — ${worktree.branch ?? worktree.name}`,
+          worktreeId: targetWorktreeId,
+        });
+      },
+    })
+  );
+
   actions.set("worktree.reveal", () =>
     defineAction({
       id: "worktree.reveal",

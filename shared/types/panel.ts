@@ -698,12 +698,37 @@ export interface DiffPanelData extends BasePanelData {
   viewedKey?: string;
 }
 
+/**
+ * File browser panel — a lazily-expanded directory tree over one worktree with
+ * a read-only viewer beside it. Every field is worktree-relative rather than
+ * absolute (the root comes from `worktreeId`, like `DiffPanelData.filePath`),
+ * so moving or renaming the worktree can't strand the panel on a dead path.
+ *
+ * All three fields persist: the issue's contract is that a pinned panel keeps
+ * its expansion and selection, and `promoteDialogPanelToGrid` reuses the same
+ * panel record, so anything stored here also survives dialog → grid promotion
+ * without a side channel.
+ */
+export interface FileBrowserPanelData extends BasePanelData {
+  kind: "file-browser";
+  /** Worktree-relative path of the selected file; absent = nothing selected. */
+  browserSelectedPath?: string;
+  /**
+   * Worktree-relative directory paths the user has expanded. A list rather
+   * than a Set because panel data round-trips through JSON persistence.
+   */
+  browserExpandedPaths?: string[];
+  /** Whether gitignored entries are shown (dimmed). Absent defaults to false. */
+  browserShowIgnored?: boolean;
+}
+
 export type PanelInstance =
   | PtyPanelData
   | BrowserPanelData
   | DevPreviewPanelData
   | ReviewPanelData
   | FilePanelData
+  | FileBrowserPanelData
   | DiffPanelData;
 
 export function isPtyPanel(panel: PanelInstance | TerminalInstance): panel is PtyPanelData {
@@ -736,6 +761,14 @@ export function isFilePanel(panel: PanelInstance | TerminalInstance): panel is F
   const kind = panel.kind ?? "terminal";
 
   return kind === "file";
+}
+
+export function isFileBrowserPanel(
+  panel: PanelInstance | TerminalInstance
+): panel is FileBrowserPanelData {
+  const kind = panel.kind ?? "terminal";
+
+  return kind === "file-browser";
 }
 
 export function isDiffPanel(panel: PanelInstance | TerminalInstance): panel is DiffPanelData {
