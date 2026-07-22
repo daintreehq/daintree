@@ -513,26 +513,38 @@ describe("extractPluginArchive cancellation and absolute deadline (#11302)", () 
   it("still reports a genuine stream failure that beats a real cancel", async () => {
     // Regression guard for the pre-existing discrimination rule: a real error
     // must win over an abort reason, or a broken archive would be misreported
-    // as a user cancellation. The cancel here is genuinely fired — a test that
-    // built a controller and never aborted it would pass with all of the
-    // cancel/error discrimination deleted.
+    // as a user cancellation. The cancel is genuinely fired — a test that built
+    // a controller and never aborted it would pass with all of the cancel/error
+    // discrimination deleted.
+    //
+    // Ordering has to be unambiguous or this races on a loaded runner. Hand the
+    // live stream to `pipeline` FIRST, destroy it on the next tick (so the
+    // rejection is a real stream error, not a premature-close from a stream that
+    // was already dead at attach time), and fire the cancel a clear margin
+    // later. The cancel therefore always lands after the extraction has settled
+    // — which is exactly the "a real error wins" claim being asserted.
     const { archivePath, dest } = await stallingArchive("race");
     const controller = new AbortController();
+    let aborted = false;
     const spy = vi
       .spyOn(yauzl.ZipFile.prototype, "openReadStream")
       .mockImplementation((_entry, callback) => {
         const failing = new Readable({ read() {} });
-        // Destroy first, then cancel on the next macrotask, so the stream error
-        // is unambiguously the first cause.
-        failing.destroy(new Error("disk-exploded"));
-        setTimeout(() => controller.abort(new Error("user-said-stop")), 0);
         callback(null, failing);
+        process.nextTick(() => failing.destroy(new Error("disk-exploded")));
+        setTimeout(() => {
+          aborted = true;
+          controller.abort(new Error("user-said-stop"));
+        }, 250);
       });
 
     try {
       await expect(
         extractPluginArchive(archivePath, dest, { signal: controller.signal })
       ).rejects.toThrow("disk-exploded");
+      // The stream error resolved the extraction before the cancel even fired,
+      // so this also proves the failure wasn't a cancel misreported as an error.
+      expect(aborted).toBe(false);
     } finally {
       spy.mockRestore();
     }
