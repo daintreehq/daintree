@@ -134,7 +134,10 @@ describe("plugin view close action", () => {
   it("reports the render failure to the panel lifecycle service", async () => {
     const { resetPluginPanelLifecycleForTests, syncPluginPanels } =
       await import("@/services/plugin/pluginPanelLifecycle");
-    const report = vi.fn(() => Promise.resolve());
+    // Typed rather than bare: an untyped `vi.fn` infers zero parameters, so
+    // `mock.calls` comes back as `[][]` and destructuring it needs a cast that
+    // regresses the no-unsafe-type-assertion lint baseline.
+    const report = vi.fn<(events: { phase: string }[]) => Promise<void>>(() => Promise.resolve());
     resetPluginPanelLifecycleForTests();
     Object.defineProperty(window, "electron", {
       configurable: true,
@@ -159,9 +162,7 @@ describe("plugin view close action", () => {
 
     // A worker that only ever hears `mounted` cannot tell a wedged panel from a
     // working one, so the boundary has to surface the failure too.
-    const phases = report.mock.calls.flatMap(([events]: [{ phase: string }[]]) =>
-      events.map((e) => e.phase)
-    );
+    const phases = report.mock.calls.flatMap(([events]) => events.map((e) => e.phase));
     expect(phases).toContain("render-failed");
     resetPluginPanelLifecycleForTests();
   });
