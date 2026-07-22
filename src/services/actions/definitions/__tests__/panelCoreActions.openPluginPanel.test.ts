@@ -141,30 +141,27 @@ describe("panel.openPluginPanel", () => {
     expect(activateTerminal).not.toHaveBeenCalled();
   });
 
-  it("rejects rather than falling back to the active worktree", async () => {
-    await expect(setup({ kind: "acme.dash", worktreeId: "wt-other" })).rejects.toThrow();
-    expect(addPanel).not.toHaveBeenCalled();
-  });
-
-  it("rejects a supplied worktreeId when no worktrees have loaded yet", async () => {
+  it("distinguishes an unloaded worktree list from a foreign id", async () => {
     // Membership can't be established, so it can't be granted — bypassing the
-    // check on an empty list would re-admit arbitrary ids.
+    // check on an empty list would re-admit arbitrary ids. But this failure is
+    // transient and worth retrying, so it must not read as "wrong project".
     worktrees = [];
     await expect(setup({ kind: "acme.dash", worktreeId: "wt-1" })).rejects.toThrow(
-      /does not belong to the current project/
+      /haven't loaded yet/
     );
     expect(addPanel).not.toHaveBeenCalled();
   });
 
-  it("does not consult the worktree list when no worktreeId is supplied", async () => {
-    // The default path must keep working while a project is still loading.
+  it("still spawns with the active worktree when none is supplied and none have loaded", async () => {
+    // The default path must keep working while a project is still loading —
+    // the check applies only to a caller-named target.
     worktrees = [];
     await setup({ kind: "acme.dash" });
     expect(addPanel).toHaveBeenCalledTimes(1);
     expect(addPanel.mock.calls[0]![0].worktreeId).toBe("wt-active");
   });
 
-  it("does not reuse a panel in a foreign worktree by rejecting before the lookup", async () => {
+  it("does not reuse an existing panel that sits in a foreign worktree", async () => {
     panelStoreMock.getState.mockReturnValue({
       panelIds: ["p-foreign"],
       panelsById: {

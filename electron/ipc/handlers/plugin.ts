@@ -85,6 +85,7 @@ import { assertIpcSecurityReady } from "../ipcGuard.js";
 import {
   getProjectForWebContents,
   getWindowForWebContents,
+  isCachedViewWebContents,
 } from "../../window/webContentsRegistry.js";
 
 type PluginServiceSingleton = typeof PluginServiceModule.pluginService;
@@ -1198,7 +1199,18 @@ export function registerPluginHandlers(): () => void {
       // actually made the call.
       const senderWebContentsId = event.sender.id;
       const senderProjectId = getProjectForWebContents(senderWebContentsId);
-      const senderWindowId = getWindowForWebContents(event.sender)?.id;
+      // The worktree lookup is keyed by window, but a window's workspace binding
+      // tracks its *visible* project — so it only speaks for this sender when
+      // this sender is the visible view. A cached (deactivated) view stays
+      // registered to its own project while its window shows another, and an
+      // unregistered sender has no project to speak for at all; in both cases a
+      // window-keyed answer would pair one project's id with another project's
+      // worktree, which is the mismatch #11297 is about. Leave the window
+      // unresolved and take the null.
+      const senderWindowId =
+        senderProjectId !== null && !isCachedViewWebContents(senderWebContentsId)
+          ? getWindowForWebContents(event.sender)?.id
+          : undefined;
       const senderUrl = event.senderFrame?.url;
       if (!senderUrl || !isTrustedRendererUrl(senderUrl)) {
         // Trust check rejected — args are attacker-controlled and unvalidated,
@@ -1224,22 +1236,25 @@ export function registerPluginHandlers(): () => void {
       }
       try {
         const service = await getPluginService();
-        // Resolving the worktree needs a round-trip to the workspace host, so
-        // it can't be pinned synchronously like the ids above.
-        // `getActiveWorktreeIdForWindow` swallows its own failures — a wedged
-        // workspace host degrades the context to null rather than failing the
-        // invocation it sits in front of.
-        let worktreeId = await service.getActiveWorktreeIdForWindow(senderWindowId);
-        // The window id survives a project switch, so a rebind during the await
-        // would pair the sender's projectId with the *replacement* project's
-        // worktree. Snapshots carry no project id to filter on, so re-check the
-        // binding instead and drop to null on a mismatch: a null worktree is
-        // honest, a cross-project one is the bug this fixes.
-        if (
-          worktreeId !== null &&
-          getProjectForWebContents(senderWebContentsId) !== senderProjectId
-        ) {
-          worktreeId = null;
+        // No trustworthy window means no worktree — short-circuit rather than
+        // query, so the invariant holds here regardless of what the service
+        // would answer.
+        let worktreeId: string | null = null;
+        if (senderWindowId !== undefined) {
+          // Resolving the worktree needs a round-trip to the workspace host, so
+          // it can't be pinned synchronously like the ids above.
+          // `getActiveWorktreeIdForWindow` swallows its own failures — a wedged
+          // workspace host degrades the context rather than failing the
+          // invocation it sits in front of.
+          worktreeId = await service.getActiveWorktreeIdForWindow(senderWindowId);
+          // The window id survives a project switch, so a rebind during the
+          // await would pair the sender's projectId with the *replacement*
+          // project's worktree. Snapshots carry no project id to filter on, so
+          // re-check the binding instead and drop to null on a mismatch: a null
+          // worktree is honest, a cross-project one is the bug this fixes.
+          if (getProjectForWebContents(senderWebContentsId) !== senderProjectId) {
+            worktreeId = null;
+          }
         }
         const ctx: PluginIpcContext = {
           projectId: senderProjectId,

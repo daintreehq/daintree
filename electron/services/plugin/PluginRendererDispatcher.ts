@@ -94,13 +94,8 @@ export class PluginRendererDispatcher {
    * project view first, then fall back to the global `ProjectViewManager`.
    * Returns `null` (rather than throwing) when no renderer is available so
    * {@link sendDispatchToRenderer} can return an error result.
-   *
-   * Public because `PluginService.fetchAllWorktreeSnapshots()` needs the same
-   * targeting policy to window-scope the host worktree APIs (#11297). Both
-   * callers are answering the identical question — "which renderer is this
-   * plugin acting on behalf of?" — so they must not drift apart.
    */
-  resolveActiveWebContents(): Electron.WebContents | null {
+  private resolveActiveWebContents(): Electron.WebContents | null {
     const registry = getWindowRegistry();
     if (registry) {
       // Plugin dispatches carry no source window, so target the focused window
@@ -126,6 +121,30 @@ export class PluginRendererDispatcher {
       return fallback;
     }
     return null;
+  }
+
+  /**
+   * The visible project view of the focused window, or `null`.
+   *
+   * Deliberately stricter than {@link resolveActiveWebContents}, which falls
+   * back to scanning every window in insertion order. Dispatch has to land
+   * somewhere — a UI action that reaches no renderer is a failed command — so
+   * a best-effort target beats nothing. Scope resolution has the opposite
+   * requirement: naming the wrong window's project silently misroutes
+   * filesystem roots, plugin storage and worktree reads, which is the bug in
+   * #11297 wearing a different hat. Here "no answer" beats "a plausible one".
+   */
+  resolveScopeWebContents(): Electron.WebContents | null {
+    const primary = getWindowRegistry()?.getPrimary();
+    if (primary) {
+      if (primary.browserWindow.isDestroyed()) return null;
+      const webContents = primary.services.projectViewManager?.getActiveView()?.webContents;
+      return webContents && !webContents.isDestroyed() ? webContents : null;
+    }
+    // No window registry (single-window / pre-registry boot): the process-wide
+    // ProjectViewManager is unambiguous because there is only one window.
+    const fallback = getProjectViewManager()?.getActiveView()?.webContents;
+    return fallback && !fallback.isDestroyed() ? fallback : null;
   }
 
   /**

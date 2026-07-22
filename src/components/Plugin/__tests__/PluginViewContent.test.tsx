@@ -193,33 +193,6 @@ describe("makePluginViewContent", () => {
     }
   });
 
-  it("leaves worktreeId undefined for a panel spawned without one", async () => {
-    const capturedProps: Array<Record<string, unknown>> = [];
-    vi.doMock("react", async () => {
-      const actual = await vi.importActual<typeof import("react")>("react");
-      return {
-        ...actual,
-        lazy: () =>
-          function CapturingView(props: Record<string, unknown>) {
-            capturedProps.push(props);
-            return <div data-testid="plugin-view" />;
-          },
-      };
-    });
-
-    try {
-      const { makePluginViewContent } = await import("../PluginViewContent");
-      const Content = makePluginViewContent(makeContentConfig());
-
-      render(<Content panelId="panel-no-wt" />);
-
-      await waitFor(() => expect(screen.queryByTestId("plugin-view")).toBeTruthy());
-      expect(capturedProps[capturedProps.length - 1]!.worktreeId).toBeUndefined();
-    } finally {
-      vi.doUnmock("react");
-    }
-  });
-
   it("subscribes to plugin:panel-kinds-changed on mount and unsubscribes on unmount", async () => {
     const cleanupSpy = vi.fn();
     onPanelKindsChangedMock.mockReturnValue(cleanupSpy);

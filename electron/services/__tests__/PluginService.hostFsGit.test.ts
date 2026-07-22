@@ -47,7 +47,8 @@ vi.mock("../../window/windowRef.js", () => ({
   getMainWindow: vi.fn(() => null),
   setProjectViewManager: vi.fn(),
 }));
-vi.mock("../../window/webContentsRegistry.js", () => ({
+vi.mock("../../window/webContentsRegistry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../window/webContentsRegistry.js")>()),
   getWindowForWebContents: vi.fn(() => ({ id: 1 })),
 }));
 

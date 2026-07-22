@@ -14,17 +14,24 @@ const mockListPluginActions = vi.fn();
 const mockRegisterPluginAction = vi.fn();
 const mockUnregisterPluginAction = vi.fn();
 const mockActivatePluginForView = vi.fn();
-const mockGetActiveWorktreeIdForWindow = vi.fn<(windowId: number | undefined) => Promise<string | null>>();
+const mockGetActiveWorktreeIdForWindow =
+  vi.fn<(windowId: number | undefined) => Promise<string | null>>();
 const mockGetProjectForWebContents = vi.fn<(webContentsId: number) => string | null>();
 const mockGetWindowForWebContents = vi.fn<(wc: { id: number }) => { id: number } | null>();
+const mockIsCachedViewWebContents = vi.fn<(webContentsId: number) => boolean>();
 
 // plugin:invoke resolves the sender's project/worktree through the registry
 // (#11297). Mocked so a test can register a sender without standing up a real
 // BrowserWindow; unregistered senders fall through to null, which is what the
 // pre-existing null-context assertions below rely on.
-vi.mock("../../../window/webContentsRegistry.js", () => ({
+// Spread the real module rather than replacing it: a bare factory would drop
+// every other export, so any transitive importer reaching for one gets
+// `undefined` and fails far from here.
+vi.mock("../../../window/webContentsRegistry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../window/webContentsRegistry.js")>()),
   getProjectForWebContents: (...args: [number]) => mockGetProjectForWebContents(...args),
   getWindowForWebContents: (...args: [{ id: number }]) => mockGetWindowForWebContents(...args),
+  isCachedViewWebContents: (...args: [number]) => mockIsCachedViewWebContents(...args),
 }));
 
 vi.mock("../../../services/PluginService.js", () => ({
@@ -128,6 +135,7 @@ beforeEach(() => {
   // resolves a null project / no window — the pre-#11297 context shape.
   mockGetProjectForWebContents.mockReturnValue(null);
   mockGetWindowForWebContents.mockReturnValue(null);
+  mockIsCachedViewWebContents.mockReturnValue(false);
   mockGetActiveWorktreeIdForWindow.mockResolvedValue(null);
   _resetIpcGuardForTesting();
   markIpcSecurityReady();
@@ -1061,16 +1069,16 @@ describe("registerPluginHandlers", () => {
     });
   });
 
-  it("PLUGIN_INVOKE passes an undefined windowId when the sender has no window", async () => {
+  it("PLUGIN_INVOKE yields a null worktree when the sender has no window", async () => {
     mockDispatchHandler.mockResolvedValue(undefined);
     mockGetProjectForWebContents.mockReturnValue("proj-a");
     mockGetWindowForWebContents.mockReturnValue(null);
 
     await getInvokeHandler()(trustedSender(7), "acme.my-plugin", "get-data");
 
-    // Never a guessed window — the service is asked for `undefined` and
-    // answers null rather than widening to a cross-project aggregate.
-    expect(mockGetActiveWorktreeIdForWindow).toHaveBeenCalledWith(undefined);
+    // Never a guessed window: without one there is nothing to scope to, so the
+    // workspace is not consulted at all rather than widening to an aggregate.
+    expect(mockGetActiveWorktreeIdForWindow).not.toHaveBeenCalled();
     expect(mockDispatchHandler.mock.calls[0][2]).toMatchObject({
       projectId: "proj-a",
       worktreeId: null,
@@ -1080,14 +1088,26 @@ describe("registerPluginHandlers", () => {
   it("PLUGIN_INVOKE nulls the worktree when the sender's project rebinds mid-lookup", async () => {
     mockDispatchHandler.mockResolvedValue(undefined);
     mockGetWindowForWebContents.mockReturnValue({ id: 42 });
-    // Pinned at entry as proj-a; by the time the worktree lookup resolves the
-    // window has been rebound to proj-b. The worktree belongs to proj-b, so
-    // pairing it with proj-a would reintroduce exactly the cross-project
-    // mismatch #11297 is about.
-    mockGetProjectForWebContents.mockReturnValueOnce("proj-a").mockReturnValue("proj-b");
-    mockGetActiveWorktreeIdForWindow.mockResolvedValue("wt-b");
+    mockGetProjectForWebContents.mockReturnValue("proj-a");
 
-    await getInvokeHandler()(trustedSender(7), "acme.my-plugin", "get-data");
+    // Hold the worktree lookup open so the rebind provably lands *during* the
+    // await. Flipping the registry between two synchronous calls would pass
+    // even if both ran before the lookup started, leaving the real race open.
+    let releaseLookup!: (id: string) => void;
+    mockGetActiveWorktreeIdForWindow.mockReturnValue(
+      new Promise<string>((resolve) => {
+        releaseLookup = resolve;
+      })
+    );
+
+    const pending = getInvokeHandler()(trustedSender(7), "acme.my-plugin", "get-data");
+    await Promise.resolve();
+    // The window moved to proj-b while the lookup was in flight, so the
+    // worktree it returns is proj-b's. Pairing it with the pinned proj-a would
+    // recreate exactly the cross-project mismatch #11297 is about.
+    mockGetProjectForWebContents.mockReturnValue("proj-b");
+    releaseLookup("wt-b");
+    await pending;
 
     expect(mockDispatchHandler.mock.calls[0][2]).toEqual({
       projectId: "proj-a",
@@ -1097,18 +1117,44 @@ describe("registerPluginHandlers", () => {
     });
   });
 
-  it("PLUGIN_INVOKE keeps the worktree when the sender's project is unchanged", async () => {
+  it("PLUGIN_INVOKE never gives an unbound sender a worktree", async () => {
+    // A sender with no project binding has no project to speak for, so a
+    // window-keyed worktree would attach another project's state to a context
+    // whose projectId is null. Null is an identity here, not a wildcard.
     mockDispatchHandler.mockResolvedValue(undefined);
+    mockGetProjectForWebContents.mockReturnValue(null);
     mockGetWindowForWebContents.mockReturnValue({ id: 42 });
+    mockGetActiveWorktreeIdForWindow.mockResolvedValue("wt-somebody-elses");
+
+    await getInvokeHandler()(trustedSender(7), "acme.my-plugin", "get-data");
+
+    expect(mockDispatchHandler.mock.calls[0][2]).toEqual({
+      projectId: null,
+      worktreeId: null,
+      webContentsId: 7,
+      pluginId: "acme.my-plugin",
+    });
+    // Resolved to no window, so the workspace is never even asked.
+    expect(mockGetActiveWorktreeIdForWindow).not.toHaveBeenCalled();
+  });
+
+  it("PLUGIN_INVOKE never gives a cached background view a worktree", async () => {
+    // A deactivated project view stays registered to its own project while its
+    // window displays another, so the window's binding does not speak for it.
+    mockDispatchHandler.mockResolvedValue(undefined);
     mockGetProjectForWebContents.mockReturnValue("proj-a");
-    mockGetActiveWorktreeIdForWindow.mockResolvedValue("wt-a");
+    mockGetWindowForWebContents.mockReturnValue({ id: 42 });
+    mockIsCachedViewWebContents.mockReturnValue(true);
+    mockGetActiveWorktreeIdForWindow.mockResolvedValue("wt-b");
 
     await getInvokeHandler()(trustedSender(7), "acme.my-plugin", "get-data");
 
     expect(mockDispatchHandler.mock.calls[0][2]).toMatchObject({
       projectId: "proj-a",
-      worktreeId: "wt-a",
+      worktreeId: null,
     });
+    // A cached view resolves to no window, so the workspace is never asked.
+    expect(mockGetActiveWorktreeIdForWindow).not.toHaveBeenCalled();
   });
 
   it("PLUGIN_INVOKE handler propagates errors from dispatchHandler", async () => {

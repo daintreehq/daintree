@@ -62,7 +62,8 @@ vi.mock("../../window/windowRef.js", () => ({
   getMainWindow: vi.fn(() => null),
   setProjectViewManager: vi.fn(),
 }));
-vi.mock("../../window/webContentsRegistry.js", () => ({
+vi.mock("../../window/webContentsRegistry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../window/webContentsRegistry.js")>()),
   getWindowForWebContents: webContentsRegistryMock.getWindowForWebContents,
 }));
 vi.mock("../../ipc/utils.js", () => ({
@@ -528,7 +529,21 @@ describe("Plugin worktree host API", () => {
   function createMockClient(initial: WorktreeSnapshotLike[] = []) {
     const emitter = new EventEmitter();
     let states = initial;
-    const getAllStatesAsync = vi.fn(() => Promise.resolve(states));
+    // Answer ONLY for a resolved window id. An unscoped call yields a distinct
+    // "other project" snapshot so a regression back to the aggregate surfaces
+    // as wrong data rather than silently passing (#11297).
+    const foreign: WorktreeSnapshotLike[] = [
+      {
+        id: "foreign",
+        worktreeId: "foreign",
+        path: "/tmp/foreign",
+        name: "foreign",
+        isCurrent: true,
+      },
+    ];
+    const getAllStatesAsync = vi.fn((windowId?: number) =>
+      Promise.resolve(windowId === undefined ? foreign : states)
+    );
     const client = Object.assign(emitter, {
       getAllStatesAsync,
       setStates: (next: WorktreeSnapshotLike[]) => {
@@ -642,6 +657,26 @@ describe("Plugin worktree host API", () => {
       await (service as unknown as ServiceWithWindowLookup).getActiveWorktreeIdForWindow(undefined)
     ).toBeNull();
     expect(client.getAllStatesAsync).not.toHaveBeenCalled();
+  });
+
+  it("gives worktree-scoped storage no target when no window resolves", async () => {
+    // Storage resolves its backing file from the same snapshot fetch. If an
+    // unresolved window fell back to the aggregate, a plugin's worktree-scoped
+    // data would be read from — and written into — an arbitrary project's file.
+    const { service } = await setup([mkSnap({ id: "b", isCurrent: true })]);
+    const storage = (
+      service as unknown as {
+        storage: {
+          resolveStorageFilePath: (id: string, scope: string) => Promise<string | undefined>;
+        };
+      }
+    ).storage;
+
+    expect(await storage.resolveStorageFilePath("acme.wt-host", "worktree")).toContain("/tmp/b");
+
+    windowRefMock.getProjectViewManager.mockReturnValue(null);
+    // No target at all — `set` throws on undefined rather than picking a file.
+    expect(await storage.resolveStorageFilePath("acme.wt-host", "worktree")).toBeUndefined();
   });
 
   it("getActiveWorktreeIdForWindow degrades to null when the workspace host fails", async () => {
