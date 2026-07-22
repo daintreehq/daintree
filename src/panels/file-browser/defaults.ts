@@ -17,5 +17,8 @@ export function createFileBrowserDefaults(
     ...(options.browserShowIgnored != null && {
       browserShowIgnored: options.browserShowIgnored,
     }),
+    ...(options.browserRootPath != null && {
+      browserRootPath: options.browserRootPath,
+    }),
   };
 }

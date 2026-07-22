@@ -138,12 +138,15 @@ export function registerWorktreeContextActions(
           worktreeId: z.string().optional(),
           format: z.enum(["xml", "json", "markdown", "tree", "ndjson", "sarif"]).optional(),
           modified: z.boolean().optional(),
+          /** Worktree-relative files/folders to scope the context to. */
+          includePaths: z.array(z.string()).optional(),
         })
         .optional(),
       run: async (args, ctx: ActionContext) => {
         const worktreeId = args?.worktreeId;
         const explicitFormat = args?.format;
         const modified = args?.modified;
+        const includePaths = args?.includePaths;
         const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
         if (!targetWorktreeId) return null;
 
@@ -152,6 +155,7 @@ export function registerWorktreeContextActions(
         const result = await copyTreeClient.generateAndCopyFile(targetWorktreeId, {
           format,
           modified,
+          ...(includePaths && includePaths.length > 0 ? { includePaths } : {}),
         });
 
         if (result.error) {

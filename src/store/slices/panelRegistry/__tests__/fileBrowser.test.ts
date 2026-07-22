@@ -89,6 +89,24 @@ describe("setFileBrowserView", () => {
     expect(store.get().panelsById["panel-1"]).not.toBe(before);
   });
 
+  it("sets and clears the browse root", () => {
+    setFileBrowserView("panel-1", { browserRootPath: "src/panels" });
+    expect(store.get().panelsById["panel-1"]).toMatchObject({ browserRootPath: "src/panels" });
+
+    setFileBrowserView("panel-1", { browserRootPath: "" });
+    expect(store.get().panelsById["panel-1"]).toMatchObject({ browserRootPath: "" });
+  });
+
+  it("treats resetting a never-rooted panel as a no-op", () => {
+    // "" and absent are both "the worktree root" — writing "" onto a panel
+    // that never had a root would persist a snapshot for nothing.
+    const before = store.get().panelsById["panel-1"];
+
+    setFileBrowserView("panel-1", { browserRootPath: "" });
+
+    expect(store.get().panelsById["panel-1"]).toBe(before);
+  });
+
   it("records an explicit false for the ignored toggle", () => {
     setFileBrowserView("panel-1", { browserShowIgnored: true });
     setFileBrowserView("panel-1", { browserShowIgnored: false });

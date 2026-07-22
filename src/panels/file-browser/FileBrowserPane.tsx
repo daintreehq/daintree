@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
-import { EyeOff, FolderTree, RefreshCw } from "lucide-react";
+import { CornerLeftUp, EyeOff, FolderTree, RefreshCw } from "lucide-react";
 import { basename } from "@shared/utils/path";
 import type { BasePanelProps } from "@/components/Panel/ContentPanel";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
@@ -7,13 +7,19 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { FileViewerToolbar } from "@/components/FileViewer/FileViewerToolbar";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { Skeleton, SkeletonText } from "@/components/ui/Skeleton";
+import {
+  ContextMenuActionItem,
+  ContextMenuItem,
+  ContextMenuSeparator,
+} from "@/components/ui/context-menu";
+import { revealCopy } from "@/components/FileViewer/revealCopy";
+import { copyContextWithFeedback } from "@/hooks/useWorktreeActions";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
-import { cn } from "@/lib/utils";
 import { FileTreeView } from "./FileTreeView";
 import { FileBrowserViewer } from "./FileBrowserViewer";
 import { useFileBrowserTree } from "./useFileBrowserTree";
-import { ancestorDirectories } from "./fileBrowserTree";
+import { ancestorDirectories, type FlatTreeRow } from "./fileBrowserTree";
 
 export type FileBrowserPaneProps = BasePanelProps;
 
@@ -72,6 +78,15 @@ export function FileBrowserPane({
       [id]
     )
   );
+  const rootPath = usePanelStore(
+    useCallback(
+      (state) => {
+        const panel = state.panelsById[id];
+        return panel?.kind === "file-browser" ? (panel.browserRootPath ?? "") : "";
+      },
+      [id]
+    )
+  );
 
   // Resolved fresh from the worktree store rather than persisted, so a rename
   // or move is reflected without restarting the panel.
@@ -97,6 +112,7 @@ export function FileBrowserPane({
     worktreeId,
     expandedPaths: stableExpandedPaths,
     showIgnored,
+    rootPath,
     changeTick,
   });
 
@@ -146,6 +162,64 @@ export function FileBrowserPane({
     setFileBrowserView(id, { browserShowIgnored: !showIgnored });
   }, [id, showIgnored, setFileBrowserView]);
 
+  const handleSetRoot = useCallback(
+    (path: string) => {
+      setFileBrowserView(id, { browserRootPath: path });
+    },
+    [id, setFileBrowserView]
+  );
+
+  const handleResetRoot = useCallback(() => {
+    setFileBrowserView(id, { browserRootPath: "" });
+  }, [id, setFileBrowserView]);
+
+  const handleCopyFolderContext = useCallback(
+    (path: string) => {
+      if (!worktreeId) return;
+      // CopyTree's include list is minimatch patterns against file paths, so a
+      // bare folder matches nothing — the glob is what selects its contents.
+      void copyContextWithFeedback(worktreeId, "context-menu", { includePaths: [`${path}/**`] });
+    },
+    [worktreeId]
+  );
+
+  const handleCopyAbsolutePath = useCallback(
+    (path: string) => {
+      if (!worktreePath || !navigator.clipboard) return;
+      void navigator.clipboard.writeText(`${worktreePath}/${path}`).catch(() => {
+        /* clipboard unavailable — nothing to recover */
+      });
+    },
+    [worktreePath]
+  );
+
+  const reveal = useMemo(() => revealCopy(), []);
+  const rowContextMenu = useCallback(
+    (row: FlatTreeRow) => (
+      <>
+        {row.isDirectory && (
+          <>
+            <ContextMenuItem onSelect={() => handleSetRoot(row.path)}>Set as root</ContextMenuItem>
+            <ContextMenuItem onSelect={() => handleCopyFolderContext(row.path)}>
+              Copy context
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+          </>
+        )}
+        <ContextMenuItem onSelect={() => handleCopyAbsolutePath(row.path)}>
+          Copy path
+        </ContextMenuItem>
+        <ContextMenuActionItem
+          actionId="file.showItemInFolder"
+          args={{ path: `${worktreePath}/${row.path}` }}
+        >
+          {reveal.label}
+        </ContextMenuActionItem>
+      </>
+    ),
+    [handleSetRoot, handleCopyFolderContext, handleCopyAbsolutePath, worktreePath, reveal]
+  );
+
   // A restored panel remembers a selection whose ancestors may be collapsed.
   // Expanding them on demand is what makes the row appear; doing it here rather
   // than in an effect keeps it a response to the user opening the panel.
@@ -153,6 +227,10 @@ export function FileBrowserPane({
     () => selectedPath === null || rows.some((row) => row.path === selectedPath),
     [rows, selectedPath]
   );
+  // A selection outside the current root has no row to reveal — expanding its
+  // ancestors couldn't make one appear, so the reveal strip stays hidden.
+  const selectionInRoot =
+    selectedPath === null || rootPath === "" || selectedPath.startsWith(`${rootPath}/`);
   const revealSelection = useCallback(() => {
     if (selectedPath === null) return;
     const current = new Set(stableExpandedPaths);
@@ -190,23 +268,26 @@ export function FileBrowserPane({
       onRestore={onRestore}
       showRestoreControl={showRestoreControl}
     >
-      {/* The dialog presentation needs a definite height: the dialog sizes to
-          its content, and a chain of flex-1/min-h-0 against a content-sized
-          parent collapses to the tree's intrinsic height (the same trap the
-          diff workspace hit — its sidebar self-stretches for the same reason). */}
-      <div
-        className={cn(
-          "flex min-h-0 w-full bg-daintree-bg",
-          location === "dialog" ? "h-[75vh]" : "flex-1"
-        )}
-      >
+      {/* In both locations the parent provides a definite height — the grid
+          cell directly, the dialog via the registry's `dialogFullHeight` pin
+          on the AppDialog surface — so a plain flex-1/min-h-0 chain fills it
+          without the content-sized-parent collapse trap. */}
+      <div className="flex min-h-0 w-full flex-1 bg-daintree-bg">
         <div className="flex min-h-0 w-60 shrink-0 flex-col self-stretch border-r border-daintree-border bg-daintree-sidebar">
           <div className="flex shrink-0 items-center gap-0.5 border-b border-daintree-border py-1 pl-3 pr-1.5">
             {/* Root anchor mirrors the diff sidebar's header: what am I
                 looking at, then the controls that reshape it. */}
-            <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-daintree-text/40">
-              {worktreePath ? basename(worktreePath) : ""}
+            <span
+              className="min-w-0 flex-1 truncate font-mono text-[11px] text-daintree-text/40"
+              title={rootPath ? `${basename(worktreePath)}/${rootPath}` : worktreePath}
+            >
+              {rootPath || (worktreePath ? basename(worktreePath) : "")}
             </span>
+            {rootPath !== "" && (
+              <FileViewerToolbar.IconButton label="Back to worktree root" onClick={handleResetRoot}>
+                <CornerLeftUp className="h-3.5 w-3.5" />
+              </FileViewerToolbar.IconButton>
+            )}
             <FileViewerToolbar.IconButton
               label="Show ignored"
               pressed={showIgnored}
@@ -257,7 +338,7 @@ export function FileBrowserPane({
           <InlineStatusBanner
             severity="error"
             icon={FolderTree}
-            title="Couldn't read this worktree"
+            title={rootPath ? "Couldn't read this folder" : "Couldn't read this worktree"}
             description={rootError}
             action={{ id: "retry", label: "Retry", onClick: handleRefresh }}
           />
@@ -285,7 +366,13 @@ export function FileBrowserPane({
             scale="sidebar"
             className="w-full"
             {...(showIgnored ? { icon: <FolderTree className="h-5 w-5" /> } : {})}
-            title={showIgnored ? "This worktree is empty" : "Everything here is ignored"}
+            title={
+              showIgnored
+                ? rootPath
+                  ? "This folder is empty"
+                  : "This worktree is empty"
+                : "Everything here is ignored"
+            }
             action={
               showIgnored ? undefined : (
                 <button
@@ -304,7 +391,7 @@ export function FileBrowserPane({
 
     return (
       <>
-        {selectedPath !== null && !selectedIsReachable && (
+        {selectedPath !== null && selectionInRoot && !selectedIsReachable && (
           <button
             type="button"
             onClick={revealSelection}
@@ -318,6 +405,7 @@ export function FileBrowserPane({
           selectedPath={selectedPath}
           onSelect={handleSelect}
           onToggleExpanded={handleToggleExpanded}
+          rowContextMenu={rowContextMenu}
           label={`Files in ${title}`}
         />
       </>

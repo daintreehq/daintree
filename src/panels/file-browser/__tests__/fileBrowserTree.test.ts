@@ -50,6 +50,21 @@ describe("flattenTree", () => {
     expect(pathsOf(rows)).toEqual(["src", "src/index.ts", "src/util.ts", "README.md"]);
   });
 
+  it("renders from a browse root with depth 0 at its children", () => {
+    const listings = listingsOf({
+      "": [dir("src"), file("README.md")],
+      src: [dir("src/lib"), file("src/index.ts")],
+      "src/lib": [file("src/lib/util.ts")],
+    });
+
+    const rows = flattenTree(listings, new Set(["src/lib"]), new Set(), "src");
+
+    // Rows outside the root never appear, and depth restarts at the root:
+    // full worktree-relative paths, root-relative indentation.
+    expect(pathsOf(rows)).toEqual(["src/lib", "src/lib/util.ts", "src/index.ts"]);
+    expect(rows.map((row) => row.depth)).toEqual([0, 1, 0]);
+  });
+
   it("assigns depth by nesting level, not by path segment count", () => {
     const listings = listingsOf({
       "": [dir("a")],
@@ -271,6 +286,17 @@ describe("pruneListings", () => {
 
     expect([...pruneListings(listings, new Set()).keys()]).toEqual([""]);
   });
+
+  it("retains a non-root browse root the same way it retains the worktree root", () => {
+    const listings = listingsOf({
+      "src/panels": [dir("src/panels/diff")],
+      "src/panels/diff": [file("src/panels/diff/DiffPane.tsx")],
+    });
+
+    const pruned = pruneListings(listings, new Set(), "src/panels");
+
+    expect([...pruned.keys()]).toEqual(["src/panels"]);
+  });
 });
 
 describe("refreshTargets", () => {
@@ -297,5 +323,18 @@ describe("refreshTargets", () => {
 
     // `a/gone` survives in persisted panel data after the folder is deleted.
     expect(refreshTargets(listings, new Set(["a", "a/gone"]))).toEqual(["", "a"]);
+  });
+
+  it("walks from the browse root, ignoring expansions outside it", () => {
+    const listings = listingsOf({
+      "": [dir("a"), dir("src")],
+      a: [file("a/one.ts")],
+      src: [dir("src/lib")],
+      "src/lib": [file("src/lib/util.ts")],
+    });
+
+    // `a` is expanded but sits outside the root — a refresh scoped to `src`
+    // must not re-request it.
+    expect(refreshTargets(listings, new Set(["a", "src/lib"]), "src")).toEqual(["src", "src/lib"]);
   });
 });

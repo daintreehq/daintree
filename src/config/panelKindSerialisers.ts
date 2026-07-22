@@ -72,6 +72,19 @@ function isSafeRelativePath(value: unknown): value is string {
 }
 
 /**
+ * Canonical forward-slash form of a safe relative path: collapses duplicate
+ * separators, drops `.` segments and trailing slashes. Tree row keys are built
+ * from canonical listing paths, so a non-canonical restored value (`src/`,
+ * `./src`) would never prefix-match them. `.` and empty resolve to undefined —
+ * the worktree root is represented by the field's absence, never a sentinel.
+ */
+function canonicalRelativePath(value: unknown): string | undefined {
+  if (!isSafeRelativePath(value)) return undefined;
+  const segments = value.split(/[\\/]+/).filter((segment) => segment !== "" && segment !== ".");
+  return segments.length > 0 ? segments.join("/") : undefined;
+}
+
+/**
  * Coerce a persisted expanded-path list, dropping anything that isn't a plain
  * list of safe relative strings. An empty array is preserved: "the user had
  * nothing expanded" is a real state, distinct from "this panel predates the
@@ -136,6 +149,7 @@ const BUILT_IN_DESERIALIZERS = {
     browserExpandedPaths: sanitizeExpandedPaths(saved.browserExpandedPaths),
     browserShowIgnored:
       typeof saved.browserShowIgnored === "boolean" ? saved.browserShowIgnored : undefined,
+    browserRootPath: canonicalRelativePath(saved.browserRootPath),
   }),
   diff: (saved) => ({
     filePath: saved.filePath,

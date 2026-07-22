@@ -274,11 +274,12 @@ const FILE_BROWSER_FIELD_CLASSIFICATION = {
   isVisible: false,
   extensionState: false,
   pluginId: false,
-  // FileBrowserPanelData persisted fields — all three are user intent (where
+  // FileBrowserPanelData persisted fields — all four are user intent (where
   // they are in the tree), which is exactly what a pinned panel must keep.
   browserSelectedPath: true,
   browserExpandedPaths: true,
   browserShowIgnored: true,
+  browserRootPath: true,
   // BasePanelData carrier-bookkeeping timestamps — written by the base
   // serialization layer in panelToSnapshot, not per-kind serializers.
   createdAt: false,
@@ -453,6 +454,7 @@ const fileBrowserFixture: FileBrowserPanelData = {
   browserSelectedPath: "src/app.ts",
   browserExpandedPaths: ["src"],
   browserShowIgnored: true,
+  browserRootPath: "src",
 };
 
 const savedFileBrowser: SavedTerminalData = {
@@ -461,6 +463,7 @@ const savedFileBrowser: SavedTerminalData = {
   browserSelectedPath: "src/app.ts",
   browserExpandedPaths: ["src"],
   browserShowIgnored: true,
+  browserRootPath: "src",
 };
 
 const diffFixture: DiffPanelData = {
@@ -646,6 +649,25 @@ describe("panel deserializer field coverage", () => {
     // The list round-trips through JSON on disk, so a corrupted or hand-edited
     // snapshot can hold anything. Only the safe relative entry survives.
     expect(output.browserExpandedPaths).toEqual(["src"]);
+  });
+
+  it("file browser deserializer canonicalizes a non-canonical browse root", () => {
+    const deserializer = getDeserializer("file-browser")!;
+
+    // Tree row keys are canonical listing paths, so `src/` or `./src` would
+    // never prefix-match an expansion beneath them; `.` means the worktree
+    // root, which is represented by absence.
+    for (const [saved, restored] of [
+      ["src/", "src"],
+      ["./src//panels", "src/panels"],
+      [".", undefined],
+    ] as const) {
+      const output = deserializer({
+        ...savedFileBrowser,
+        browserRootPath: saved,
+      }) as Record<string, unknown>;
+      expect(output.browserRootPath).toBe(restored);
+    }
   });
 
   it("file browser deserializer drops a non-boolean ignored toggle rather than coercing it", () => {

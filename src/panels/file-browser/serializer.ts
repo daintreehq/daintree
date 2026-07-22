@@ -13,5 +13,8 @@ export function serializeFileBrowser(t: FileBrowserPanelData): Partial<PanelSnap
     ...(t.browserSelectedPath != null && { browserSelectedPath: t.browserSelectedPath }),
     ...(t.browserExpandedPaths != null && { browserExpandedPaths: t.browserExpandedPaths }),
     ...(t.browserShowIgnored != null && { browserShowIgnored: t.browserShowIgnored }),
+    // Truthiness, not `!= null`: "" is the worktree root, which is the same
+    // state as the field being absent — persisting it would be noise.
+    ...(t.browserRootPath ? { browserRootPath: t.browserRootPath } : {}),
   };
 }

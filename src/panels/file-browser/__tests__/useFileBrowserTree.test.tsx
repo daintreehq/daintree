@@ -481,4 +481,80 @@ describe("useFileBrowserTree", () => {
 
     expect(result.current.rows.map((row) => row.path)).toEqual(["second.ts"]);
   });
+
+  it("lists the browse root as its first request and renders from it", async () => {
+    listDirectory.mockImplementation(async (payload) =>
+      payload.dirPath === "src/panels" ? [file("src/panels/registry.tsx")] : [dir("src")]
+    );
+
+    const { result } = renderHook(() =>
+      useFileBrowserTree({
+        worktreeId: "wt-1",
+        expandedPaths: [],
+        showIgnored: false,
+        rootPath: "src/panels",
+        changeTick: undefined,
+      })
+    );
+
+    await waitFor(() => expect(result.current.isInitialLoading).toBe(false));
+    expect(listDirectory.mock.calls[0]?.[0]).toEqual({ worktreeId: "wt-1", dirPath: "src/panels" });
+    expect(result.current.rows.map((row) => row.path)).toEqual(["src/panels/registry.tsx"]);
+  });
+
+  it("resets and re-lists when the browse root changes", async () => {
+    listDirectory.mockImplementation(async (payload) =>
+      payload.dirPath === "src" ? [file("src/index.ts")] : [dir("src"), file("README.md")]
+    );
+
+    const { result, rerender } = renderHook(
+      (props: { rootPath: string }) =>
+        useFileBrowserTree({
+          worktreeId: "wt-1",
+          expandedPaths: [],
+          showIgnored: false,
+          rootPath: props.rootPath,
+          changeTick: undefined,
+        }),
+      { initialProps: { rootPath: "" } }
+    );
+
+    await waitFor(() =>
+      expect(result.current.rows.map((row) => row.path)).toEqual(["src", "README.md"])
+    );
+
+    rerender({ rootPath: "src" });
+
+    // The old identity's rows must not linger while the new root loads.
+    await waitFor(() =>
+      expect(result.current.rows.map((row) => row.path)).toEqual(["src/index.ts"])
+    );
+
+    rerender({ rootPath: "" });
+
+    await waitFor(() =>
+      expect(result.current.rows.map((row) => row.path)).toEqual(["src", "README.md"])
+    );
+  });
+
+  it("ignores a persisted expansion that lies outside the browse root", async () => {
+    listDirectory.mockImplementation(async (payload) =>
+      payload.dirPath === "src" ? [dir("src/lib")] : [file("other/one.ts")]
+    );
+
+    renderHook(() =>
+      useFileBrowserTree({
+        worktreeId: "wt-1",
+        // `other` survives in panel data from before the re-root; requesting it
+        // would spend the channel budget on rows that can never render.
+        expandedPaths: ["other"],
+        showIgnored: false,
+        rootPath: "src",
+        changeTick: undefined,
+      })
+    );
+
+    await waitFor(() => expect(listDirectory).toHaveBeenCalledTimes(1));
+    expect(listDirectory.mock.calls.map((call) => call[0]?.dirPath)).toEqual(["src"]);
+  });
 });

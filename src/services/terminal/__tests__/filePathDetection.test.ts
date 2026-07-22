@@ -131,6 +131,15 @@ describe("DIR_PATH_REGEX (directory candidates)", () => {
     expect(scan("wrote files under src/panels today")).toEqual(["src/panels"]);
   });
 
+  it("matches a trailing-slash folder at the end of an agent sentence", () => {
+    const line =
+      "The chosen full-resolution raw result will be copied into assets/reference/art/bearer_animation/";
+    expect(scan(line)).toEqual(["assets/reference/art/bearer_animation/"]);
+    expect(resolveDirPathCandidate("assets/reference/art/bearer_animation/", "/repo")).toBe(
+      "/repo/assets/reference/art/bearer_animation"
+    );
+  });
+
   it("matches absolute and dot-relative tokens, keeping a trailing slash", () => {
     expect(scan("ls /tmp/scratch and ./out/dist/")).toEqual(["/tmp/scratch", "./out/dist/"]);
   });

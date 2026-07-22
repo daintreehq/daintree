@@ -165,6 +165,8 @@ export interface PanelSnapshot {
   browserExpandedPaths?: string[];
   /** Whether a file browser panel shows gitignored entries */
   browserShowIgnored?: boolean;
+  /** Worktree-relative directory a file browser panel is rooted at */
+  browserRootPath?: string;
   /** Legacy pre-file-panel field: absolute path shown in a markdown panel */
   markdownFilePath?: string;
   /** Legacy pre-file-panel field: markdown panel view mode */

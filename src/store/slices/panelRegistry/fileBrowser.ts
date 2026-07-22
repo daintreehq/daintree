@@ -7,6 +7,8 @@ export interface FileBrowserViewPatch {
   browserSelectedPath?: string;
   browserExpandedPaths?: string[];
   browserShowIgnored?: boolean;
+  /** "" roots the tree back at the worktree root. */
+  browserRootPath?: string;
 }
 
 function sameStringList(a: string[] | undefined, b: string[]): boolean {
@@ -37,11 +39,16 @@ export const createFileBrowserPanelActions = (
       const ignoredUnchanged =
         patch.browserShowIgnored === undefined ||
         patch.browserShowIgnored === panel.browserShowIgnored;
+      // "" and absent are the same state (the worktree root), so resetting a
+      // never-rooted panel must not count as a change.
+      const rootUnchanged =
+        patch.browserRootPath === undefined ||
+        patch.browserRootPath === (panel.browserRootPath ?? "");
 
       // Bail on a no-op write. The tree calls this on every arrow key, and a
       // fresh panel object each time would re-render every panel-store
       // subscriber and re-write the persisted snapshot for nothing.
-      if (selectedUnchanged && expandedUnchanged && ignoredUnchanged) return state;
+      if (selectedUnchanged && expandedUnchanged && ignoredUnchanged && rootUnchanged) return state;
 
       const nextPanel = {
         ...panel,
@@ -53,6 +60,9 @@ export const createFileBrowserPanelActions = (
         }),
         ...(patch.browserShowIgnored !== undefined && {
           browserShowIgnored: patch.browserShowIgnored,
+        }),
+        ...(patch.browserRootPath !== undefined && {
+          browserRootPath: patch.browserRootPath,
         }),
       };
 

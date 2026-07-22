@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useMemo, useRef } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { ChevronDown, ChevronRight, File, Folder, FolderOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { resolveTreeKey, type FlatTreeRow } from "./fileBrowserTree";
 
 export interface FileTreeViewProps {
@@ -13,6 +14,12 @@ export interface FileTreeViewProps {
   onToggleExpanded: (path: string, expand: boolean) => void;
   /** Fired by Enter on a file row — the viewer already follows selection. */
   onActivate?: (path: string) => void;
+  /**
+   * Menu items for a row's right-click menu; return null for no menu. The
+   * view owns the Radix wiring (and selects the row on right-click so the
+   * menu visibly targets it); the pane owns what the items do.
+   */
+  rowContextMenu?: (row: FlatTreeRow) => React.ReactNode;
   /** Accessible name for the tree, since the panel header isn't part of it. */
   label: string;
 }
@@ -41,6 +48,7 @@ export function FileTreeView({
   onSelect,
   onToggleExpanded,
   onActivate,
+  rowContextMenu,
   label,
 }: FileTreeViewProps) {
   const virtuosoRef = useRef<VirtuosoHandle>(null);
@@ -103,8 +111,8 @@ export function FileTreeView({
   }, []);
 
   const context: TreeContext = useMemo(
-    () => ({ selectedPath, onSelect, onToggleExpanded, instanceId }),
-    [selectedPath, onSelect, onToggleExpanded, instanceId]
+    () => ({ selectedPath, onSelect, onToggleExpanded, rowContextMenu, instanceId }),
+    [selectedPath, onSelect, onToggleExpanded, rowContextMenu, instanceId]
   );
 
   // Only advertise an active descendant that is actually rendered. A selection
@@ -146,6 +154,7 @@ interface TreeContext {
   selectedPath: string | null;
   onSelect: (path: string) => void;
   onToggleExpanded: (path: string, expand: boolean) => void;
+  rowContextMenu?: ((row: FlatTreeRow) => React.ReactNode) | undefined;
   instanceId: string;
 }
 
@@ -185,6 +194,12 @@ function FileTreeRow({ row, isSelected, context }: FileTreeRowProps) {
     if (row.isDirectory) onToggleExpanded(row.path, !row.isExpanded);
   };
 
+  // Select on right-click, without toggling expansion: the menu acts on this
+  // row, and the selection highlight is what shows the user which one.
+  const handleContextMenu = () => {
+    onSelect(row.path);
+  };
+
   const handleChevronClick = (event: React.MouseEvent) => {
     // Toggling from the chevron must not move the selection: it is the
     // "peek inside without leaving where I am" affordance.
@@ -195,54 +210,66 @@ function FileTreeRow({ row, isSelected, context }: FileTreeRowProps) {
   const Chevron = row.isExpanded ? ChevronDown : ChevronRight;
   const FolderIcon = row.isExpanded ? FolderOpen : Folder;
 
+  const menuItems = context.rowContextMenu?.(row);
+  const rowSurface = (
+    <div
+      id={rowDomId(context.instanceId, row.path)}
+      role="treeitem"
+      aria-level={row.depth + 1}
+      aria-selected={isSelected}
+      {...(row.isDirectory && { "aria-expanded": row.isExpanded })}
+      onClick={handleClick}
+      style={{ paddingLeft: BASE_PADDING_PX + row.depth * INDENT_PER_DEPTH_PX }}
+      className={cn(
+        "flex h-6 w-full cursor-default select-none items-center gap-1 rounded pr-2 font-mono text-xs",
+        // Selection is a neutral surface lift, not an accent fill: the tree has
+        // hover, selection and container focus all live at once, and the accent
+        // is reserved for a single load-bearing signal per focus region.
+        "transition-colors duration-150 ease-out",
+        isSelected ? "bg-overlay-subtle text-daintree-text" : "text-daintree-text/70",
+        !isSelected && "hover:bg-tint/5",
+        row.isIgnored && "opacity-55"
+      )}
+    >
+      {row.isDirectory ? (
+        // A span, not a button: the row already exposes expansion through
+        // `aria-expanded`, and a focusable control marked `aria-hidden` is a
+        // node the keyboard can reach but a screen reader cannot describe.
+        <span
+          onClick={handleChevronClick}
+          aria-hidden="true"
+          className="flex h-4 w-4 shrink-0 items-center justify-center text-daintree-text/40"
+        >
+          <Chevron className="h-3 w-3" />
+        </span>
+      ) : (
+        <span className="h-4 w-4 shrink-0" />
+      )}
+      {row.isDirectory ? (
+        <FolderIcon className="h-3.5 w-3.5 shrink-0 text-daintree-text/40" aria-hidden="true" />
+      ) : (
+        <File className="h-3.5 w-3.5 shrink-0 text-daintree-text/30" aria-hidden="true" />
+      )}
+      <span className={cn("truncate", isSelected && "font-medium")}>{row.name}</span>
+      {row.isLoading && (
+        <span className="ml-1 shrink-0 text-[10px] text-daintree-text/40">Loading…</span>
+      )}
+    </div>
+  );
+
+  // Outer div stays full-bleed for Virtuoso's fixed row height; the inner
+  // surface is inset and rounded to match the diff sidebar's file rows, so
+  // the two file lists read as the same component family.
+  if (!menuItems) {
+    return <div className="h-6 w-full px-1">{rowSurface}</div>;
+  }
+
   return (
-    // Outer div stays full-bleed for Virtuoso's fixed row height; the inner
-    // surface is inset and rounded to match the diff sidebar's file rows, so
-    // the two file lists read as the same component family.
-    <div className="h-6 w-full px-1">
-      <div
-        id={rowDomId(context.instanceId, row.path)}
-        role="treeitem"
-        aria-level={row.depth + 1}
-        aria-selected={isSelected}
-        {...(row.isDirectory && { "aria-expanded": row.isExpanded })}
-        onClick={handleClick}
-        style={{ paddingLeft: BASE_PADDING_PX + row.depth * INDENT_PER_DEPTH_PX }}
-        className={cn(
-          "flex h-6 w-full cursor-default select-none items-center gap-1 rounded pr-2 font-mono text-xs",
-          // Selection is a neutral surface lift, not an accent fill: the tree has
-          // hover, selection and container focus all live at once, and the accent
-          // is reserved for a single load-bearing signal per focus region.
-          "transition-colors duration-150 ease-out",
-          isSelected ? "bg-overlay-subtle text-daintree-text" : "text-daintree-text/70",
-          !isSelected && "hover:bg-tint/5",
-          row.isIgnored && "opacity-55"
-        )}
-      >
-        {row.isDirectory ? (
-          // A span, not a button: the row already exposes expansion through
-          // `aria-expanded`, and a focusable control marked `aria-hidden` is a
-          // node the keyboard can reach but a screen reader cannot describe.
-          <span
-            onClick={handleChevronClick}
-            aria-hidden="true"
-            className="flex h-4 w-4 shrink-0 items-center justify-center text-daintree-text/40"
-          >
-            <Chevron className="h-3 w-3" />
-          </span>
-        ) : (
-          <span className="h-4 w-4 shrink-0" />
-        )}
-        {row.isDirectory ? (
-          <FolderIcon className="h-3.5 w-3.5 shrink-0 text-daintree-text/40" aria-hidden="true" />
-        ) : (
-          <File className="h-3.5 w-3.5 shrink-0 text-daintree-text/30" aria-hidden="true" />
-        )}
-        <span className={cn("truncate", isSelected && "font-medium")}>{row.name}</span>
-        {row.isLoading && (
-          <span className="ml-1 shrink-0 text-[10px] text-daintree-text/40">Loading…</span>
-        )}
-      </div>
+    <div className="h-6 w-full px-1" onContextMenu={handleContextMenu}>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>{rowSurface}</ContextMenuTrigger>
+        <ContextMenuContent>{menuItems}</ContextMenuContent>
+      </ContextMenu>
     </div>
   );
 }

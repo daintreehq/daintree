@@ -38,7 +38,8 @@ export type DirectoryListings = ReadonlyMap<string, readonly FileTreeNode[]>;
 export function flattenTree(
   listings: DirectoryListings,
   expandedPaths: ReadonlySet<string>,
-  loadingPaths: ReadonlySet<string>
+  loadingPaths: ReadonlySet<string>,
+  rootPath = ""
 ): FlatTreeRow[] {
   const rows: FlatTreeRow[] = [];
 
@@ -66,7 +67,7 @@ export function flattenTree(
     }
   };
 
-  walk("", 0);
+  walk(rootPath, 0);
   return rows;
 }
 
@@ -188,11 +189,12 @@ function findParentRow(rows: readonly FlatTreeRow[], index: number): FlatTreeRow
  */
 export function pruneListings(
   listings: DirectoryListings,
-  expandedPaths: ReadonlySet<string>
+  expandedPaths: ReadonlySet<string>,
+  rootPath = ""
 ): Map<string, readonly FileTreeNode[]> {
   const next = new Map<string, readonly FileTreeNode[]>();
   for (const [dirPath, nodes] of listings) {
-    if (dirPath === "" || expandedPaths.has(dirPath)) next.set(dirPath, nodes);
+    if (dirPath === rootPath || expandedPaths.has(dirPath)) next.set(dirPath, nodes);
   }
   return next;
 }
@@ -208,9 +210,10 @@ export function pruneListings(
  */
 export function refreshTargets(
   listings: DirectoryListings,
-  expandedPaths: ReadonlySet<string>
+  expandedPaths: ReadonlySet<string>,
+  rootPath = ""
 ): string[] {
-  const targets = [""];
+  const targets = [rootPath];
   const walk = (dirPath: string, depth: number): void => {
     if (depth > MAX_TREE_DEPTH) return;
     const children = listings.get(dirPath);
@@ -221,6 +224,6 @@ export function refreshTargets(
       walk(node.path, depth + 1);
     }
   };
-  walk("", 0);
+  walk(rootPath, 0);
   return targets;
 }

@@ -21,6 +21,12 @@ export interface UseFileBrowserTreeArgs {
   expandedPaths: readonly string[];
   showIgnored: boolean;
   /**
+   * Worktree-relative directory to root the tree at; "" = the worktree root.
+   * Changing it is an identity reset, the same as switching worktrees: every
+   * listing outside the new root is meaningless to the new tree.
+   */
+  rootPath?: string;
+  /**
    * Ticks whenever the worktree's change set is recomputed. Already coalesced
    * upstream by the worktree watcher's adaptive burst debounce, so a bulk write
    * (`npm install`, a generated asset batch) arrives as one tick rather than
@@ -58,6 +64,7 @@ export function useFileBrowserTree({
   worktreeId,
   expandedPaths,
   showIgnored,
+  rootPath = "",
   changeTick,
 }: UseFileBrowserTreeArgs): UseFileBrowserTreeResult {
   const [listings, setListings] = useState<Map<string, readonly FileTreeNode[]>>(new Map());
@@ -129,20 +136,20 @@ export function useFileBrowserTree({
         // been pruned; re-inserting it here would resurrect a cache entry the
         // user closed, and re-expanding later would show that stale snapshot
         // instead of re-reading.
-        if (dirPath !== "" && !expandedSetRef.current.has(dirPath)) return;
+        if (dirPath !== rootPath && !expandedSetRef.current.has(dirPath)) return;
 
         setListings((previous) => {
           const next = new Map(previous);
           next.set(dirPath, nodes);
           return next;
         });
-        if (dirPath === "") {
+        if (dirPath === rootPath) {
           setRootError(null);
           setHasLoadedRoot(true);
         }
       } catch (error) {
         if (generation !== generationRef.current) return;
-        if (dirPath === "") {
+        if (dirPath === rootPath) {
           // Only the root surfaces an error: it is the difference between "the
           // browser works" and "it doesn't". A single directory that failed
           // (deleted mid-expand, permissions) just stays unloaded, and the next
@@ -170,7 +177,7 @@ export function useFileBrowserTree({
         pumpRef.current();
       }
     },
-    [worktreeId, showIgnored]
+    [worktreeId, showIgnored, rootPath]
   );
 
   const enqueueTargets = useCallback((targets: readonly string[], generation: number): void => {
@@ -202,10 +209,13 @@ export function useFileBrowserTree({
     ) {
       refreshPendingRef.current = false;
       const generation = generationRef.current;
-      enqueueTargets(refreshTargets(listingsRef.current, expandedSetRef.current), generation);
+      enqueueTargets(
+        refreshTargets(listingsRef.current, expandedSetRef.current, rootPath),
+        generation
+      );
       pumpRef.current();
     }
-  }, [fetchDirectory, enqueueTargets]);
+  }, [fetchDirectory, enqueueTargets, rootPath]);
 
   // Published in a layout effect, never during render: an abandoned concurrent
   // render would otherwise publish a pump (and an expansion set) belonging to a
@@ -241,7 +251,7 @@ export function useFileBrowserTree({
 
   const refresh = useCallback((): void => {
     const generation = generationRef.current;
-    const targets = refreshTargets(listingsRef.current, expandedSetRef.current);
+    const targets = refreshTargets(listingsRef.current, expandedSetRef.current, rootPath);
     // A target already in flight read the filesystem before this refresh was
     // asked for, so its result may not reflect the change that triggered us.
     // Defer rather than accept that response as final.
@@ -250,7 +260,7 @@ export function useFileBrowserTree({
     }
     enqueueTargets(targets, generation);
     pump();
-  }, [enqueueTargets, pump]);
+  }, [enqueueTargets, pump, rootPath]);
 
   // Identity reset. Flipping the ignored filter changes what every listing
   // contains, not just the root, so the whole cache is dropped rather than
@@ -266,8 +276,8 @@ export function useFileBrowserTree({
     setRootError(null);
     setHasLoadedRoot(false);
     if (!worktreeId) return;
-    void fetchDirectory("", generationRef.current);
-  }, [worktreeId, showIgnored, fetchDirectory]);
+    void fetchDirectory(rootPath, generationRef.current);
+  }, [worktreeId, showIgnored, rootPath, fetchDirectory]);
 
   // Expanding a directory is what triggers its fetch; a restored panel expands
   // several at once, and each is requested the first time it becomes visible.
@@ -281,22 +291,22 @@ export function useFileBrowserTree({
       // Only fetch directories the tree can actually reach. A persisted
       // expansion whose parent is collapsed (or gone) would otherwise fire a
       // request for a folder the user cannot see.
-      if (!isReachable(listings, expandedSet, dirPath)) continue;
+      if (!isReachable(listings, expandedSet, dirPath, rootPath)) continue;
       pendingTargets.push(dirPath);
     }
     if (pendingTargets.length === 0) return;
     enqueueTargets(pendingTargets, generationRef.current);
     pump();
-  }, [expandedSet, listings, hasLoadedRoot, enqueueTargets, pump]);
+  }, [expandedSet, listings, hasLoadedRoot, rootPath, enqueueTargets, pump]);
 
   // Forget collapsed subtrees so re-expanding re-reads rather than replaying a
   // listing that may be minutes stale on an actively-written worktree.
   useEffect(() => {
     setListings((previous) => {
-      const next = pruneListings(previous, expandedSet);
+      const next = pruneListings(previous, expandedSet, rootPath);
       return next.size === previous.size ? previous : next;
     });
-  }, [expandedSet]);
+  }, [expandedSet, rootPath]);
 
   // Live updates. The tick is the worktree's own change signal, so this
   // inherits its coalescing.
@@ -312,8 +322,8 @@ export function useFileBrowserTree({
   }, [changeTick, hasLoadedRoot, refresh]);
 
   const rows = useMemo(
-    () => flattenTree(listings, expandedSet, loadingPaths),
-    [listings, expandedSet, loadingPaths]
+    () => flattenTree(listings, expandedSet, loadingPaths, rootPath),
+    [listings, expandedSet, loadingPaths, rootPath]
   );
 
   return {
@@ -333,14 +343,21 @@ export function useFileBrowserTree({
 function isReachable(
   listings: ReadonlyMap<string, readonly FileTreeNode[]>,
   expandedPaths: ReadonlySet<string>,
-  dirPath: string
+  dirPath: string,
+  rootPath: string
 ): boolean {
-  const segments = dirPath.split("/").filter(Boolean);
-  let parent = "";
+  // The root itself is fetched by the identity effect, never via expansion;
+  // and a persisted expansion outside the current root has no row to reach.
+  if (dirPath === rootPath) return false;
+  const prefix = rootPath === "" ? "" : `${rootPath}/`;
+  if (prefix !== "" && !dirPath.startsWith(prefix)) return false;
+
+  const segments = dirPath.slice(prefix.length).split("/").filter(Boolean);
+  let parent = rootPath;
   for (let i = 0; i < segments.length; i += 1) {
     const children = listings.get(parent);
     if (!children) return false;
-    const current = segments.slice(0, i + 1).join("/");
+    const current = prefix + segments.slice(0, i + 1).join("/");
     if (!children.some((node) => node.isDirectory && node.path === current)) return false;
     // Every directory on the way down except the target itself must also be
     // expanded, otherwise the target is hidden inside a collapsed branch.

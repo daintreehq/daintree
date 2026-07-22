@@ -78,6 +78,7 @@ export const CHANNELS = {
   DIFF_MEDIA_READ_FILE_VERSIONS: "diff-media:read-file-versions",
 
   FILE_BROWSER_LIST_DIRECTORY: "file-browser:list-directory",
+  FILE_BROWSER_STAT_PATHS: "file-browser:stat-paths",
 
   TERMINAL_ACTIVITY: "terminal:activity",
 

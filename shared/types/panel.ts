@@ -720,6 +720,11 @@ export interface FileBrowserPanelData extends BasePanelData {
   browserExpandedPaths?: string[];
   /** Whether gitignored entries are shown (dimmed). Absent defaults to false. */
   browserShowIgnored?: boolean;
+  /**
+   * Worktree-relative directory the tree is rooted at. Absent or "" = the
+   * worktree root itself.
+   */
+  browserRootPath?: string;
 }
 
 export type PanelInstance =

@@ -59,6 +59,17 @@ describe("serializeFileBrowser", () => {
 
     expect(serializeFileBrowser(panel)).toEqual({ browserExpandedPaths: [] });
   });
+
+  it("round-trips a non-root browse root but drops the worktree-root sentinel", () => {
+    const rooted: FileBrowserPanelData = { ...basePanel, browserRootPath: "src/panels" };
+    expect(createFileBrowserDefaults(asOptions(serializeFileBrowser(rooted)))).toEqual({
+      browserRootPath: "src/panels",
+    });
+
+    // "" and absent are the same state; persisting "" would be pure noise.
+    const reset: FileBrowserPanelData = { ...basePanel, browserRootPath: "" };
+    expect(serializeFileBrowser(reset)).toEqual({});
+  });
 });
 
 describe("createFileBrowserDefaults", () => {

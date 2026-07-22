@@ -270,6 +270,8 @@ export interface FileBrowserPanelOptions extends AddPanelOptionsBase {
   browserExpandedPaths?: string[];
   /** Whether gitignored entries start visible; defaults to false */
   browserShowIgnored?: boolean;
+  /** Worktree-relative directory to root the tree at; "" or absent = worktree root */
+  browserRootPath?: string;
 }
 
 /**
