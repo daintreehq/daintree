@@ -503,8 +503,11 @@ describe("useFileBrowserTree", () => {
   });
 
   it("resets and re-lists when the browse root changes", async () => {
-    listDirectory.mockImplementation(async (payload) =>
-      payload.dirPath === "src" ? [file("src/index.ts")] : [dir("src"), file("README.md")]
+    const rootedListing = deferred<FileTreeNode[]>();
+    listDirectory.mockImplementation((payload) =>
+      payload.dirPath === "src"
+        ? rootedListing.promise
+        : Promise.resolve([dir("src"), file("README.md")])
     );
 
     const { result, rerender } = renderHook(
@@ -525,7 +528,14 @@ describe("useFileBrowserTree", () => {
 
     rerender({ rootPath: "src" });
 
-    // The old identity's rows must not linger while the new root loads.
+    // The old identity's rows clear immediately — while the new root's listing
+    // is still in flight, stale rows must not remain clickable.
+    await waitFor(() => expect(result.current.rows).toEqual([]));
+    expect(result.current.isInitialLoading).toBe(true);
+
+    await act(async () => {
+      rootedListing.resolve([file("src/index.ts")]);
+    });
     await waitFor(() =>
       expect(result.current.rows.map((row) => row.path)).toEqual(["src/index.ts"])
     );
@@ -542,7 +552,7 @@ describe("useFileBrowserTree", () => {
       payload.dirPath === "src" ? [dir("src/lib")] : [file("other/one.ts")]
     );
 
-    renderHook(() =>
+    const { result } = renderHook(() =>
       useFileBrowserTree({
         worktreeId: "wt-1",
         // `other` survives in panel data from before the re-root; requesting it
@@ -554,7 +564,10 @@ describe("useFileBrowserTree", () => {
       })
     );
 
-    await waitFor(() => expect(listDirectory).toHaveBeenCalledTimes(1));
+    // Settle the root listing first: the expansion-driven fetch effect only
+    // runs once the root has landed, so asserting before that would pass even
+    // if the effect later requested the outside-root directory.
+    await waitFor(() => expect(result.current.isInitialLoading).toBe(false));
     expect(listDirectory.mock.calls.map((call) => call[0]?.dirPath)).toEqual(["src"]);
   });
 });

@@ -138,8 +138,12 @@ export function registerWorktreeContextActions(
           worktreeId: z.string().optional(),
           format: z.enum(["xml", "json", "markdown", "tree", "ndjson", "sarif"]).optional(),
           modified: z.boolean().optional(),
-          /** Worktree-relative files/folders to scope the context to. */
-          includePaths: z.array(z.string()).optional(),
+          includePaths: z
+            .array(z.string())
+            .optional()
+            .describe(
+              "Worktree-relative minimatch patterns to scope the context to. Patterns match file paths, so a folder needs a glob: pass 'src/panels/**', not 'src/panels'."
+            ),
         })
         .optional(),
       run: async (args, ctx: ActionContext) => {

@@ -63,6 +63,37 @@ export function FileTreeView({
   // a tree the user is no longer looking at.
   const handleKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
+      // Shift+F10 / the ContextMenu key open the selected row's menu — the
+      // rows never take focus, so without this the row menu would be
+      // mouse-only. Replayed as a synthetic contextmenu on the row's DOM node
+      // because Radix's ContextMenu has no imperative open. preventDefault
+      // also suppresses the browser's own contextmenu for the keypress, so
+      // the menu can't double-fire.
+      const isMenuKey =
+        event.key === "ContextMenu" ||
+        (event.key === "F10" &&
+          event.shiftKey &&
+          !event.ctrlKey &&
+          !event.metaKey &&
+          !event.altKey);
+      if (isMenuKey && rowContextMenu && selectedPath !== null) {
+        const rowElement = document.getElementById(rowDomId(instanceId, selectedPath));
+        if (rowElement) {
+          event.preventDefault();
+          event.stopPropagation();
+          const rect = rowElement.getBoundingClientRect();
+          rowElement.dispatchEvent(
+            new MouseEvent("contextmenu", {
+              bubbles: true,
+              cancelable: true,
+              clientX: rect.left + 8,
+              clientY: rect.top + rect.height / 2,
+            })
+          );
+          return;
+        }
+      }
+
       const intent = resolveTreeKey(event.key, rows, selectedPath);
       if (!intent) return;
       event.preventDefault();
@@ -82,7 +113,7 @@ export function FileTreeView({
           break;
       }
     },
-    [rows, selectedPath, onSelect, onToggleExpanded, onActivate]
+    [rows, selectedPath, onSelect, onToggleExpanded, onActivate, rowContextMenu, instanceId]
   );
 
   const selectedIndex = useMemo(
@@ -128,6 +159,9 @@ export function FileTreeView({
       aria-label={label}
       aria-activedescendant={activeDescendant}
       tabIndex={0}
+      // Tells the global Shift+F10/ContextMenu-key handler to stand down: this
+      // surface routes those keys to the selected row's own menu.
+      {...(rowContextMenu ? { "data-row-menu": "" } : {})}
       onKeyDown={handleKeyDown}
       onPointerDown={handlePointerDown}
       // Focus styling is deliberately left to the global `*:focus-visible`

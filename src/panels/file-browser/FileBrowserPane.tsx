@@ -1,19 +1,18 @@
 import { useCallback, useMemo, useState } from "react";
 import { CornerLeftUp, EyeOff, FolderTree, RefreshCw } from "lucide-react";
-import { basename } from "@shared/utils/path";
+import { basename, join } from "@shared/utils/path";
 import type { BasePanelProps } from "@/components/Panel/ContentPanel";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { FileViewerToolbar } from "@/components/FileViewer/FileViewerToolbar";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { Skeleton, SkeletonText } from "@/components/ui/Skeleton";
-import {
-  ContextMenuActionItem,
-  ContextMenuItem,
-  ContextMenuSeparator,
-} from "@/components/ui/context-menu";
+import { ContextMenuItem, ContextMenuSeparator } from "@/components/ui/context-menu";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
 import { copyContextWithFeedback } from "@/hooks/useWorktreeActions";
+import { folderIncludePattern } from "@/lib/copyTreeFormat";
+import { notify } from "@/lib/notify";
+import { actionService } from "@/services/ActionService";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { FileTreeView } from "./FileTreeView";
@@ -176,31 +175,75 @@ export function FileBrowserPane({
   const handleCopyFolderContext = useCallback(
     (path: string) => {
       if (!worktreeId) return;
-      // CopyTree's include list is minimatch patterns against file paths, so a
-      // bare folder matches nothing — the glob is what selects its contents.
-      void copyContextWithFeedback(worktreeId, "context-menu", { includePaths: [`${path}/**`] });
+      void copyContextWithFeedback(worktreeId, "context-menu", {
+        includePaths: [folderIncludePattern(path)],
+      });
     },
     [worktreeId]
   );
 
   const handleCopyAbsolutePath = useCallback(
     (path: string) => {
-      if (!worktreePath || !navigator.clipboard) return;
-      void navigator.clipboard.writeText(`${worktreePath}/${path}`).catch(() => {
-        /* clipboard unavailable — nothing to recover */
-      });
+      if (!worktreePath) return;
+      const write = () =>
+        navigator.clipboard.writeText(join(worktreePath, path)).catch((error: unknown) => {
+          // A silent failure leaves the previous clipboard contents in place,
+          // and the user's next paste would be the wrong path.
+          notify({
+            type: "error",
+            title: "Couldn't copy path",
+            message:
+              error instanceof Error && error.name === "NotAllowedError"
+                ? "The clipboard is unavailable while another app holds it."
+                : "The clipboard rejected the write.",
+            action: { label: "Retry", onClick: () => void write() },
+          });
+        });
+      void write();
     },
     [worktreePath]
   );
 
   const reveal = useMemo(() => revealCopy(), []);
+  const handleReveal = useCallback(
+    (path: string) => {
+      if (!worktreePath) return;
+      const run = async () => {
+        const result = await actionService.dispatch(
+          "file.showItemInFolder",
+          { path: join(worktreePath, path) },
+          { source: "context-menu" }
+        );
+        // The menu has already closed by the time this settles, so a failure
+        // here is invisible without a toast — e.g. the entry was deleted
+        // between listing and click.
+        if (!result.ok) {
+          notify({
+            type: "error",
+            title: reveal.errorTitle,
+            message: result.error.message,
+            action: { label: "Retry", onClick: () => void run() },
+          });
+        }
+      };
+      void run();
+    },
+    [worktreePath, reveal]
+  );
+
   const rowContextMenu = useCallback(
     (row: FlatTreeRow) => (
       <>
         {row.isDirectory && (
           <>
             <ContextMenuItem onSelect={() => handleSetRoot(row.path)}>Set as root</ContextMenuItem>
-            <ContextMenuItem onSelect={() => handleCopyFolderContext(row.path)}>
+            {/* Disabled rather than hidden for ignored folders: CopyTree's
+                discovery respects .gitignore, so the copy would always come
+                back empty — but the item vanishing would read as a bug. */}
+            <ContextMenuItem
+              disabled={row.isIgnored}
+              onSelect={() => handleCopyFolderContext(row.path)}
+            >
               Copy context
             </ContextMenuItem>
             <ContextMenuSeparator />
@@ -209,15 +252,10 @@ export function FileBrowserPane({
         <ContextMenuItem onSelect={() => handleCopyAbsolutePath(row.path)}>
           Copy path
         </ContextMenuItem>
-        <ContextMenuActionItem
-          actionId="file.showItemInFolder"
-          args={{ path: `${worktreePath}/${row.path}` }}
-        >
-          {reveal.label}
-        </ContextMenuActionItem>
+        <ContextMenuItem onSelect={() => handleReveal(row.path)}>{reveal.label}</ContextMenuItem>
       </>
     ),
-    [handleSetRoot, handleCopyFolderContext, handleCopyAbsolutePath, worktreePath, reveal]
+    [handleSetRoot, handleCopyFolderContext, handleCopyAbsolutePath, handleReveal, reveal]
   );
 
   // A restored panel remembers a selection whose ancestors may be collapsed.
@@ -247,7 +285,7 @@ export function FileBrowserPane({
   // that unknown node as a file makes the viewer try to read a directory.
   const selectedFilePath =
     selectedPath && worktreePath && selectedNode?.isDirectory === false
-      ? `${worktreePath}/${selectedPath}`
+      ? join(worktreePath, selectedPath)
       : null;
   const selectedFileName = selectedPath ? (selectedPath.split("/").pop() ?? selectedPath) : "";
 
