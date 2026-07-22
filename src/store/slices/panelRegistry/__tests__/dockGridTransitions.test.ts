@@ -718,16 +718,32 @@ describe("dock ↔ grid transitions", () => {
 
     it("rebuilds the per-worktree buckets after a global chip reorder", () => {
       const g1 = createGlobalMockTerminal("g1", "dock");
+      const g2 = createGlobalMockTerminal("g2", "dock");
       const a = createMockTerminal("a", "dock");
       const x = makeWt2Terminal("x", "dock");
-      seedPanels([g1, a, x]);
+      seedPanels([g1, g2, a, x]);
+
+      // Rendered dock for wt-1 is [g1, g2, a] — drag g2 to the front.
+      usePanelStore.getState().reorderTerminals(1, 0, "dock", "wt-1");
+
+      const buckets = usePanelStore.getState().panelIdsByWorktreeId;
+      expect(buckets["__none__"]).toEqual(["g2", "g1"]);
+      expect(buckets["wt-1"]).toEqual(["a"]);
+      expect(buckets["wt-2"]).toEqual(["x"]);
+    });
+
+    it("reorders a dock that contains only global chips while a worktree is active", () => {
+      // The literal issue repro: panels launched with no worktree active, then
+      // a worktree is selected — the exact-match scope saw an empty list and
+      // every drag silently no-opped.
+      const g1 = createGlobalMockTerminal("g1", "dock");
+      const g2 = createGlobalMockTerminal("g2", "dock");
+      seedPanels([g1, g2]);
 
       usePanelStore.getState().reorderTerminals(0, 1, "dock", "wt-1");
 
-      const buckets = usePanelStore.getState().panelIdsByWorktreeId;
-      expect(buckets["__none__"]).toEqual(["g1"]);
-      expect(buckets["wt-1"]).toEqual(["a"]);
-      expect(buckets["wt-2"]).toEqual(["x"]);
+      expect(dockOrder("wt-1")).toEqual(["g2", "g1"]);
+      expect(usePanelStore.getState().panelIds).toEqual(["g2", "g1"]);
     });
 
     it("counts global chips when inserting a grid panel into a dock slot", () => {
@@ -742,19 +758,42 @@ describe("dock ↔ grid transitions", () => {
       expect(dockOrder("wt-1")).toEqual(["g1", "t", "a"]);
     });
 
-    it("keeps a global member's committed position on group reorder", () => {
+    it("inserts at the dock front ahead of a leading global chip", () => {
       const g1 = createGlobalMockTerminal("g1", "dock");
       const a = createMockTerminal("a", "dock");
+      const t = createMockTerminal("t", "grid");
+      seedPanels([g1, a, t]);
+
+      usePanelStore.getState().moveTerminalToPosition("t", 0, "dock", "wt-1");
+
+      expect(dockOrder("wt-1")).toEqual(["t", "g1", "a"]);
+    });
+
+    it("keeps a global group's members in their committed position on group reorder", () => {
+      // A global tab group (worktreeId undefined, global members) is what the
+      // dock launcher produces with no worktree active — the realistic
+      // explicit-group shape that renders in every worktree's dock.
+      const g1 = createGlobalMockTerminal("g1", "dock");
+      const g2 = createGlobalMockTerminal("g2", "dock");
       const c = createMockTerminal("c", "dock");
-      seedPanels([g1, a, c]);
-      const group = createMockTabGroup("G", ["g1", "a"], "dock");
-      usePanelStore.setState({ tabGroups: new Map([["G", group]]) });
+      const d = createMockTerminal("d", "dock");
+      seedPanels([g1, g2, c, d]);
+      const globalGroup: TabGroup = {
+        id: "G",
+        panelIds: ["g1", "g2"],
+        activeTabId: "g1",
+        location: "dock",
+        worktreeId: undefined,
+      };
+      usePanelStore.setState({ tabGroups: new Map([["G", globalGroup]]) });
 
-      // Groups render as [G(g1, a), c] — move G after c.
-      usePanelStore.getState().reorderTabGroups(0, 1, "dock", "wt-1");
+      // Groups render as [G(g1, g2), c, d] — move c after d. The global
+      // group must hold position 0; the pre-fix tail eviction shoved its
+      // members to the end instead.
+      usePanelStore.getState().reorderTabGroups(1, 2, "dock", "wt-1");
 
-      expect(dockOrder("wt-1")).toEqual(["c", "g1", "a"]);
-      expect(usePanelStore.getState().panelIds).toEqual(["c", "g1", "a"]);
+      expect(dockOrder("wt-1")).toEqual(["g1", "g2", "d", "c"]);
+      expect(usePanelStore.getState().panelIds).toEqual(["g1", "g2", "d", "c"]);
     });
 
     it("reorders single-chip groups across a global chip correctly", () => {

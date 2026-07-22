@@ -983,16 +983,16 @@ export function DndProvider({ children }: DndProviderProps) {
         }
 
         if (overTerminal && actualDraggedId !== actualOverId) {
-          const containerTerminals: CarrierPanel[] = [];
-          for (const tid of freshTerminalIds) {
-            const t = freshTerminalsById[tid];
-            if (!t || (t.worktreeId ?? null) !== (accordionWorktreeId ?? null)) continue;
-            if (sourceLocation === "dock") {
-              if (t.location === "dock") containerTerminals.push(t);
-            } else {
-              if (t.location === "grid" || t.location === undefined) containerTerminals.push(t);
-            }
-          }
+          // Index in the same scope space reorderTerminals splices — for a dock
+          // location that space includes global (worktree-less) panels even
+          // though the accordion only lists the worktree's own terminals; an
+          // exact-scoped index here would move the wrong chip (#11289).
+          const containerTerminals = filterTerminalsByContainer(
+            freshTerminalsById,
+            freshTerminalIds,
+            sourceLocation ?? "grid",
+            accordionWorktreeId
+          );
 
           const oldIndex = containerTerminals.findIndex((t) => t.id === actualDraggedId);
           const newIndex = containerTerminals.findIndex((t) => t.id === actualOverId);
