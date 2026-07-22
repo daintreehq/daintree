@@ -1,6 +1,7 @@
 import * as pty from "node-pty";
 import { destroyPty } from "../../services/PtyPool.js";
 import { minimalSpawnEnv } from "../../utils/minimalSpawnEnv.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import type {
   PluginPtyHostEvent,
   PluginPtyHostSpawnOptions,
@@ -65,7 +66,10 @@ export class PluginPtyProcessManager {
         type: "plugin-pty-spawn-result",
         id,
         generation,
-        result: { success: false, error: errorText(error) },
+        result: {
+          success: false,
+          error: formatErrorMessage(error, "Failed to spawn plugin process"),
+        },
       });
       return;
     }
@@ -116,7 +120,10 @@ export class PluginPtyProcessManager {
     try {
       entry.pty.write(data);
     } catch (error) {
-      console.warn(`[PluginPty] write to "${id}" failed:`, errorText(error));
+      console.warn(
+        `[PluginPty] write to "${id}" failed:`,
+        formatErrorMessage(error, "write failed"),
+      );
     }
   }
 
@@ -132,7 +139,10 @@ export class PluginPtyProcessManager {
     try {
       entry.pty.resize(cols, rows);
     } catch (error) {
-      console.warn(`[PluginPty] resize of "${id}" failed:`, errorText(error));
+      console.warn(
+        `[PluginPty] resize of "${id}" failed:`,
+        formatErrorMessage(error, "resize failed"),
+      );
     }
   }
 
@@ -229,7 +239,10 @@ export class PluginPtyProcessManager {
     try {
       destroyPty(entry.pty);
     } catch (error) {
-      console.warn(`[PluginPty] teardown (${reason}) of "${entry.id}" failed:`, errorText(error));
+      console.warn(
+        `[PluginPty] teardown (${reason}) of "${entry.id}" failed:`,
+        formatErrorMessage(error, "teardown failed"),
+      );
     }
     // Only drop the map entry if it still points at this incarnation — a
     // supersede has already installed the successor by the time exit lands.
@@ -254,6 +267,3 @@ function isPositiveInt(value: number): boolean {
   return Number.isInteger(value) && value > 0;
 }
 
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
