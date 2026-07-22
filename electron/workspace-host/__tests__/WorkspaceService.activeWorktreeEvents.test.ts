@@ -197,8 +197,7 @@ describe("WorkspaceService active-worktree event emission (#9945)", () => {
     type: T
   ): Extract<WorkspaceHostEvent, { type: T }> | undefined {
     return sentEvents.find((e) => e.type === type) as
-      | Extract<WorkspaceHostEvent, { type: T }>
-      | undefined;
+      Extract<WorkspaceHostEvent, { type: T }> | undefined;
   }
 
   function indexOfEvent(type: WorkspaceHostEvent["type"]): number {

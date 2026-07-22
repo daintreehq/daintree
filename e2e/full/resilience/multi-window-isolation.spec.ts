@@ -128,8 +128,7 @@ test.describe.serial("Resilience: multi-window store isolation", () => {
     // per-window store assertions above.
     await ctx.app.evaluate(() => {
       const fn = (globalThis as Record<string, unknown>).__daintreeSimulateWatchdogDisabled as
-        | (() => void)
-        | undefined;
+        (() => void) | undefined;
       if (!fn) throw new Error("__daintreeSimulateWatchdogDisabled not present");
       fn();
     });

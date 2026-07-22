@@ -158,9 +158,7 @@ test.describe.serial("Nightly: Multi-project switching memory leak", () => {
       const gcAvailable =
         typeof g.__daintree_gc === "function" || typeof (g as { gc?: unknown }).gc === "function";
       const pvm = (g.__daintreeGetPvm as (() => unknown) | undefined)?.() as
-        | { getCacheConfig?: () => { maxCachedViews: number } }
-        | null
-        | undefined;
+        { getCacheConfig?: () => { maxCachedViews: number } } | null | undefined;
       return {
         gcAvailable,
         snapshotAvailable: typeof g.__daintreeWriteHeapSnapshot === "function",

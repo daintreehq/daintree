@@ -183,8 +183,7 @@ test.describe.serial("Nightly: Evicted project view leak detection", () => {
     await app.evaluate(async () => {
       const g = globalThis as unknown as Record<string, unknown>;
       const gcFn = (typeof g.__daintree_gc === "function" ? g.__daintree_gc : g.gc) as
-        | (() => void)
-        | undefined;
+        (() => void) | undefined;
       if (gcFn) {
         gcFn();
         await new Promise((r) => setTimeout(r, 100));

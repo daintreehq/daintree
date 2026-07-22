@@ -19,12 +19,7 @@ export type WorktreeReviewState = "conflicted" | "unpushed-clean" | "has-changes
 export type ResourceStatusColor = "green" | "yellow" | "red" | "neutral";
 
 export type GitStateKind =
-  | "conflicted"
-  | "rebasing"
-  | "merging"
-  | "cherry-picking"
-  | "reverting"
-  | "detached";
+  "conflicted" | "rebasing" | "merging" | "cherry-picking" | "reverting" | "detached";
 
 export interface GitStateIndicator {
   kind: GitStateKind;

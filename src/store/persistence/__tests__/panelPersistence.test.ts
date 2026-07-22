@@ -751,14 +751,12 @@ describe("PanelPersistence", () => {
       // is tied to the default transform (panelToSnapshot); custom transforms
       // own their own output entirely.
       const client = createMockProjectClient();
-      const customTransform = vi.fn(
-        (t: TerminalInstance): TerminalSnapshot => ({
-          id: t.id,
-          kind: t.kind,
-          title: t.title,
-          location: t.location === "trash" ? "grid" : t.location,
-        })
-      );
+      const customTransform = vi.fn((t: TerminalInstance): TerminalSnapshot => ({
+        id: t.id,
+        kind: t.kind,
+        title: t.title,
+        location: t.location === "trash" ? "grid" : t.location,
+      }));
       const persistence = new PanelPersistence(client, {
         debounceMs: 100,
         transform: customTransform,

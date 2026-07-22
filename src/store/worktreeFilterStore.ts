@@ -700,8 +700,7 @@ const _mergedApi = {
 };
 
 type SetStatePatch =
-  | Partial<WorktreeFilterStore>
-  | ((state: WorktreeFilterStore) => Partial<WorktreeFilterStore>);
+  Partial<WorktreeFilterStore> | ((state: WorktreeFilterStore) => Partial<WorktreeFilterStore>);
 
 function _routedSetState(update: SetStatePatch): void {
   const patch = typeof update === "function" ? update(_getMergedState()) : update;

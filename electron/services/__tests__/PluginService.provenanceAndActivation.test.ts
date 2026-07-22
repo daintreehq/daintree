@@ -512,8 +512,7 @@ describe("Plugin provenance persistence", () => {
 
     // Record stored under the dotted name without nesting
     const stored = storeMock._state.get("plugins") as
-      | { installed?: Record<string, unknown> }
-      | undefined;
+      { installed?: Record<string, unknown> } | undefined;
     expect(stored?.installed).toHaveProperty("acme.foo");
     expect(stored?.installed?.["acme.foo"]).toBeDefined();
   });

@@ -206,8 +206,7 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
         const state = persisted as Record<string, unknown>;
         if (version < 1) {
           const layout = state.layout as
-            | { leftButtons?: string[]; rightButtons?: string[] }
-            | undefined;
+            { leftButtons?: string[]; rightButtons?: string[] } | undefined;
           if (layout?.leftButtons) {
             layout.leftButtons = layout.leftButtons.filter((id) => id !== "dev-server");
           }
@@ -296,8 +295,7 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
           // visibility uses the same tri-state semantics as agent pinning
           // (#7666). Existing hides translate to explicit `false` entries.
           const layout = state.layout as
-            | { hiddenButtons?: unknown; pinnedButtons?: Record<string, boolean> }
-            | undefined;
+            { hiddenButtons?: unknown; pinnedButtons?: Record<string, boolean> } | undefined;
           if (layout) {
             const pinned: Record<string, boolean> = { ...(layout.pinnedButtons ?? {}) };
             const hidden = Array.isArray(layout.hiddenButtons) ? layout.hiddenButtons : [];
@@ -383,8 +381,7 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
           // the repair explicit and matches the per-version migration
           // convention. `pinnedButtons` is a map, so its keys can't duplicate.
           const layout = state.layout as
-            | { leftButtons?: string[]; rightButtons?: string[] }
-            | undefined;
+            { leftButtons?: string[]; rightButtons?: string[] } | undefined;
           const dedupe = (buttons?: string[]) =>
             Array.isArray(buttons) ? Array.from(new Set(buttons)) : buttons;
           if (layout) {

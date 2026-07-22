@@ -721,12 +721,10 @@ export class PluginMcpSupervisor {
     return {
       pluginId,
       serverId,
-      tools: capped.map(
-        (tool): PluginMcpToolSummary => ({
-          name: tool.name,
-          description: truncateToolDescription(tool.description),
-        })
-      ),
+      tools: capped.map((tool): PluginMcpToolSummary => ({
+        name: tool.name,
+        description: truncateToolDescription(tool.description),
+      })),
       truncated: capped.length < all.length,
       maxToolsPerSession: maxTools,
     };

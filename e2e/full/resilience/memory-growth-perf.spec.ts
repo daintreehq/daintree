@@ -197,8 +197,7 @@ async function forceGc(app: ElectronApplication): Promise<void> {
   await app.evaluate(async () => {
     const g = globalThis as Record<string, unknown>;
     const mainGc = (typeof g.__daintree_gc === "function" ? g.__daintree_gc : g.gc) as
-      | (() => void)
-      | undefined;
+      (() => void) | undefined;
     mainGc?.();
     mainGc?.();
 

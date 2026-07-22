@@ -202,9 +202,8 @@ export const onboardingNamespace = defineIpcNamespace({
       store.set("onboarding.setupBannerDismissed", true);
       return { ...getOnboardingState(), setupBannerDismissed: true };
     }),
-    getChecklist: op(
-      ONBOARDING_METHOD_CHANNELS.getChecklist,
-      (): ChecklistState => getChecklistState()
+    getChecklist: op(ONBOARDING_METHOD_CHANNELS.getChecklist, (): ChecklistState =>
+      getChecklistState()
     ),
     dismissChecklist: op(ONBOARDING_METHOD_CHANNELS.dismissChecklist, (): void => {
       store.set("onboarding.checklist.dismissed", true);

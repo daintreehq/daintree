@@ -686,12 +686,10 @@ describe("McpServerService", () => {
   });
 
   it("reuses the same Streamable HTTP session for follow-up tool calls", async () => {
-    const dispatchMock = vi.fn(
-      (payload: DispatchRequest): ActionDispatchResult => ({
-        ok: true,
-        result: { dispatched: payload.actionId },
-      })
-    );
+    const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => ({
+      ok: true,
+      result: { dispatched: payload.actionId },
+    }));
 
     const { window } = createMockWindow({
       getManifest: () => [

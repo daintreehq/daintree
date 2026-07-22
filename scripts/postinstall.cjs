@@ -10,16 +10,12 @@ const buildPath = path.resolve(__dirname, "..");
 async function runPostinstall() {
   const failures = [];
 
-  // better-sqlite3 is rebuilt from source against the Electron ABI alongside the
-  // other native modules. It previously skipped the rebuild via a dlopen ABI
-  // probe (load the binary under Node: success → Node ABI, rebuild; throw →
-  // Electron ABI, skip). That heuristic is dropped — always rebuilding from
-  // source guarantees the Electron ABI without depending on which binary
-  // prebuild-install fetched or on the CI runtime env vars, removing a fragile
-  // path for a ~30s build cost.
-  const rebuildModules = [...NATIVE_MODULES, "better-sqlite3"];
-
-  for (const mod of rebuildModules) {
+  // better-sqlite3 is intentionally NOT rebuilt: since v13 it is an N-API
+  // addon loaded from the prebuilds/ binaries shipped inside the package.
+  // N-API is ABI-stable, so the same prebuild works under Node and Electron,
+  // and v13's binding.gyp suppresses source compilation while a prebuild
+  // exists — a rebuild here would be a no-op that emits only gyp metadata.
+  for (const mod of NATIVE_MODULES) {
     try {
       await rebuild({
         buildPath,

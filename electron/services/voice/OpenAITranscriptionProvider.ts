@@ -755,8 +755,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         // The `?intent=transcription` endpoint creates the item shell here on
         // commit; the transcript arrives with `conversation.item.done`.
         const item = payload.item as
-          | { id?: string; content?: Array<{ type?: string; transcript?: string }> }
-          | undefined;
+          { id?: string; content?: Array<{ type?: string; transcript?: string }> } | undefined;
         logDebug(`${P} ← conversation.item.added`, {
           itemId: item?.id,
           contentTypes: item?.content?.map((part) => part.type),
@@ -770,8 +769,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         // `...input_audio_transcription.completed`. The text lives on the
         // item's `input_audio` content part.
         const item = payload.item as
-          | { id?: string; content?: Array<{ type?: string; transcript?: string }> }
-          | undefined;
+          { id?: string; content?: Array<{ type?: string; transcript?: string }> } | undefined;
         const audioPart = item?.content?.find((part) => part.type === "input_audio");
         const transcript = audioPart?.transcript ?? "";
         // Length only — dictated text is user content, kept out of logs.
@@ -794,8 +792,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
 
       case "error": {
         const errorPayload = payload.error as
-          | { message?: string; type?: string; code?: string; param?: string | null }
-          | undefined;
+          { message?: string; type?: string; code?: string; param?: string | null } | undefined;
         const classified = classifyOpenAIError(errorPayload ?? {});
         logError(`${P} ← server error event`, {
           severity: classified.severity,

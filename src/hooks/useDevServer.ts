@@ -6,13 +6,7 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
 export type DevPreviewStatus =
-  | "stopped"
-  | "starting"
-  | "installing"
-  | "running"
-  | "stopping"
-  | "error"
-  | "restored-stopped";
+  "stopped" | "starting" | "installing" | "running" | "stopping" | "error" | "restored-stopped";
 
 export interface UseDevServerOptions {
   panelId: string;

@@ -12,7 +12,6 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "node",
-    globalSetup: "./vitest.global-setup.ts",
     setupFiles: ["./vitest.setup.ts"],
     onConsoleLog: () => false,
     // Pool stays at the default (forks). The threads pool was tried for lower

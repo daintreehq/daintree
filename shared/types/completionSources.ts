@@ -46,10 +46,7 @@ export type CompletionKind = "command" | "skill" | "app" | "plugin";
  *    (fallback `.claude-plugin/plugin.json`) for the name/description.
  */
 export type CompletionParserName =
-  | "markdown-frontmatter"
-  | "toml"
-  | "skill-dir"
-  | "codex-plugin-registry";
+  "markdown-frontmatter" | "toml" | "skill-dir" | "codex-plugin-registry";
 
 /** Platforms a location applies to. Matches `process.platform` values. */
 export type CompletionPlatform = "darwin" | "win32" | "linux";
@@ -59,11 +56,7 @@ export type CompletionPlatform = "darwin" | "win32" | "linux";
  * so the schema stays inspectable and Main never reads an arbitrary env name.
  */
 export type CompletionEnvName =
-  | "CLAUDE_CONFIG_DIR"
-  | "GEMINI_CONFIG_DIR"
-  | "CODEX_HOME"
-  | "XDG_CONFIG_HOME"
-  | "ProgramData";
+  "CLAUDE_CONFIG_DIR" | "GEMINI_CONFIG_DIR" | "CODEX_HOME" | "XDG_CONFIG_HOME" | "ProgramData";
 
 /** A base directory with no environment indirection. */
 export type CompletionConcreteBase =
@@ -142,9 +135,7 @@ export interface CompletionRegistryDiscovery {
 }
 
 export type CompletionDiscovery =
-  | CompletionStaticDiscovery
-  | CompletionDirectoryDiscovery
-  | CompletionRegistryDiscovery;
+  CompletionStaticDiscovery | CompletionDirectoryDiscovery | CompletionRegistryDiscovery;
 
 /**
  * One completion source an agent declares. `sourcePrecedence` orders

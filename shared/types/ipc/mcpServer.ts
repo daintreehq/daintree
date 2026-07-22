@@ -522,10 +522,7 @@ export interface McpAuditStats {
 export type McpAnomalySeverity = "danger";
 
 export type McpAnomalyKind =
-  | "latency-drift"
-  | "first-seen-combination"
-  | "failure-cluster"
-  | "p95-z-score";
+  "latency-drift" | "first-seen-combination" | "failure-cluster" | "p95-z-score";
 
 export interface McpAnomalySignal {
   id: string;

@@ -261,8 +261,7 @@ describe("XtermAdapter lifecycle", () => {
     expect(secondOnReady).not.toHaveBeenCalled();
 
     const getOrCreateCall = mocks.terminalInstanceService.getOrCreate.mock.calls[0] as
-      | unknown[]
-      | undefined;
+      unknown[] | undefined;
     const cwdProvider = getOrCreateCall?.[5];
     expect(typeof cwdProvider).toBe("function");
     expect((cwdProvider as () => string)()).toBe("/repo/next");

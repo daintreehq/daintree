@@ -7,14 +7,12 @@ import { usePanelStore } from "@/store";
 import { __resetMcpAnomalyStoreForTesting, useMcpAnomalyStore } from "@/store/mcpAnomalyStore";
 import type { McpRuntimeSnapshot } from "@shared/types";
 
-const mcpReadiness: () => McpRuntimeSnapshot = vi.fn(
-  (): McpRuntimeSnapshot => ({
-    enabled: true,
-    state: "ready",
-    port: 0,
-    lastError: null,
-  })
-);
+const mcpReadiness: () => McpRuntimeSnapshot = vi.fn((): McpRuntimeSnapshot => ({
+  enabled: true,
+  state: "ready",
+  port: 0,
+  lastError: null,
+}));
 const mcpReadinessMock = mcpReadiness as ReturnType<typeof vi.fn>;
 
 vi.mock("@/components/ui/tooltip", () => ({

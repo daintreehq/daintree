@@ -148,8 +148,7 @@ describe("setDevPreviewScrollPosition", () => {
       .setDevPreviewScrollPosition("browser-1", { url: "https://example.com", scrollY: 200 });
 
     const stored = usePanelStore.getState().panelsById["browser-1"] as
-      | Record<string, unknown>
-      | undefined;
+      Record<string, unknown> | undefined;
     expect(stored?.devPreviewScrollPosition).toBeUndefined();
     expect(saveMock).not.toHaveBeenCalled();
   });

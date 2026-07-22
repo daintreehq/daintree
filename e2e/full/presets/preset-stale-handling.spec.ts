@@ -42,8 +42,7 @@ test.describe.serial("Presets: Stale Preset Handling (71–76)", () => {
     return ctx.window.evaluate(async (): Promise<string | null> => {
       const settings = await window.electron.agentSettings.get();
       const agents = settings.agents as
-        | Record<string, { presetId?: string } | undefined>
-        | undefined;
+        Record<string, { presetId?: string } | undefined> | undefined;
       return agents?.claude?.presetId ?? null;
     });
   };
@@ -68,8 +67,7 @@ test.describe.serial("Presets: Stale Preset Handling (71–76)", () => {
     return ctx.window.evaluate(async (): Promise<number> => {
       const settings = await window.electron.agentSettings.get();
       const agents = settings.agents as
-        | Record<string, { customPresets?: unknown[] } | undefined>
-        | undefined;
+        Record<string, { customPresets?: unknown[] } | undefined> | undefined;
       const presets = agents?.claude?.customPresets;
       return Array.isArray(presets) ? presets.length : 0;
     });

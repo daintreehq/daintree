@@ -22,8 +22,7 @@ async function readCustomPresets(
   return window.evaluate(async (id) => {
     const settings = await window.electron.agentSettings.get();
     const agents = settings.agents as
-      | Record<string, { customPresets?: { id: string; name: string }[] } | undefined>
-      | undefined;
+      Record<string, { customPresets?: { id: string; name: string }[] } | undefined> | undefined;
     const entry = agents?.[id];
     return Array.isArray(entry?.customPresets) ? entry.customPresets : [];
   }, agentId);

@@ -159,8 +159,7 @@ perfDescribe("Perf: agent-terminal launch latency", () => {
             )
           );
           const dispatch = (window as any).__daintreeDispatchAction as
-            | ((id: string, args?: unknown, opts?: unknown) => Promise<unknown>)
-            | undefined;
+            ((id: string, args?: unknown, opts?: unknown) => Promise<unknown>) | undefined;
           if (!dispatch) {
             return {
               dispatchResolvedMs: -1,

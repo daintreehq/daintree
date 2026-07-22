@@ -494,8 +494,7 @@ describe("KeybindingService", () => {
 
     const all = service.getAllBindingsWithEffectiveCombos();
     const binding = all.find((entry) => entry.actionId === "terminal.duplicate") as
-      | (RegisteredKeybindingConfig & { effectiveCombo: string })
-      | undefined;
+      (RegisteredKeybindingConfig & { effectiveCombo: string }) | undefined;
 
     expect(binding).toBeTruthy();
     expect(binding?.effectiveCombo).toBe("");

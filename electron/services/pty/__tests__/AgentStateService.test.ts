@@ -1180,8 +1180,7 @@ describe("AgentStateService", () => {
       expect(terminal.agentState).toBe("waiting");
       expect(payloads).toHaveLength(1);
       const result = payloads[0]?.lastCheckResult as
-        | { passed: boolean; command: string | null }
-        | undefined;
+        { passed: boolean; command: string | null } | undefined;
       expect(result?.passed).toBe(true);
       expect(result?.command).toContain("tsc");
       // Stored on the terminal for getPublicState() hydration.

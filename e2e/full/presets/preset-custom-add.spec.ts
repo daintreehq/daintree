@@ -66,8 +66,7 @@ async function getClaudeCustomPresetCount(window: Page): Promise<number> {
   return window.evaluate(async () => {
     const settings = await window.electron.agentSettings.get();
     const agents = settings.agents as
-      | Record<string, { customPresets?: unknown[] } | undefined>
-      | undefined;
+      Record<string, { customPresets?: unknown[] } | undefined> | undefined;
     const entry = agents?.claude;
     return Array.isArray(entry?.customPresets) ? entry.customPresets.length : 0;
   });

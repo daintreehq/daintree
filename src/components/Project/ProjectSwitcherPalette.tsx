@@ -647,9 +647,7 @@ function ScratchNameEditor({
 }
 
 type ScratchEditorState =
-  | { kind: "create" }
-  | { kind: "rename"; scratchId: string; name: string }
-  | null;
+  { kind: "create" } | { kind: "rename"; scratchId: string; name: string } | null;
 
 interface ScratchSectionProps {
   scratches: SearchableScratch[];

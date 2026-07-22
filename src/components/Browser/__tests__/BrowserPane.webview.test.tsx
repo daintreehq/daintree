@@ -2235,8 +2235,7 @@ describe("BrowserPane webview lifecycle regression", () => {
       expect(browserToolbarPropsSpy).toHaveBeenCalled();
       const props = browserToolbarPropsSpy.mock.calls.at(-1)![0] as Record<string, unknown>;
       const validateUrl = props.validateUrl as
-        | ((url: string) => { url?: string; error?: string })
-        | undefined;
+        ((url: string) => { url?: string; error?: string }) | undefined;
 
       expect(typeof validateUrl).toBe("function");
       // LAN host is implicitly allowed under the extended policy — no error.

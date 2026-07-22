@@ -311,8 +311,7 @@ describe("setupTerminalStoreListeners directing guard (#3217)", () => {
     });
 
     const terminal = usePanelStore.getState().panelsById["test-terminal-1"] as
-      | PtyPanelData
-      | undefined;
+      PtyPanelData | undefined;
     expect(shouldSuppressBackendState(terminal?.agentState, "waiting")).toBe(true);
   });
 
@@ -323,8 +322,7 @@ describe("setupTerminalStoreListeners directing guard (#3217)", () => {
     });
 
     const terminal = usePanelStore.getState().panelsById["test-terminal-1"] as
-      | PtyPanelData
-      | undefined;
+      PtyPanelData | undefined;
     expect(shouldSuppressBackendState(terminal?.agentState, "working")).toBe(false);
   });
 });

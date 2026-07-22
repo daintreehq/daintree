@@ -197,8 +197,7 @@ interface ProjectStoreListenerState {
   applyUpdated: ((project: Project) => void) | null;
   applyRemoved: ((projectId: string) => void) | null;
   applyWorktreeLoadStatus:
-    | ((payload: { projectId: string; worktreeLoadError: string | null }) => void)
-    | null;
+    ((payload: { projectId: string; worktreeLoadError: string | null }) => void) | null;
   applyOpenGitInitDialog: ((payload: { directoryPath: string }) => void) | null;
   updatedRegistered: boolean;
   removedRegistered: boolean;

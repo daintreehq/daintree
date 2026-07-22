@@ -81,8 +81,7 @@ async function workspaceHostHasLiveChild(
   return app.evaluate((_electron, id) => {
     const g = globalThis as Record<string, unknown>;
     const fn = g.__daintreeWorkspaceHostHasLiveChildForWindow as
-      | ((x: number) => boolean)
-      | undefined;
+      ((x: number) => boolean) | undefined;
     if (!fn) throw new Error("__daintreeWorkspaceHostHasLiveChildForWindow not present");
     return fn(id);
   }, windowId);

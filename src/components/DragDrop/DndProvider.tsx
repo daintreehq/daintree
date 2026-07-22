@@ -284,8 +284,7 @@ function getDragLabel(data: unknown): string {
 export function getOverDragLabel(over: Over): string {
   if (over.id === TRASH_DROPPABLE_ID) return "trash — drop to close panel";
   const overData = over.data.current as
-    | { container?: "grid" | "dock"; isPlaceholder?: boolean }
-    | undefined;
+    { container?: "grid" | "dock"; isPlaceholder?: boolean } | undefined;
   if (overData?.isPlaceholder) {
     return overData.container === "dock" ? "the dock" : "empty grid slot";
   }

@@ -33,12 +33,7 @@ import { McpActivityTracker } from "./McpActivityTracker";
 import { HibernationManager } from "./HibernationManager";
 
 export type HelpSessionPhase =
-  | "idle"
-  | "version-checking"
-  | "provisioning"
-  | "launching"
-  | "live"
-  | "hibernating";
+  "idle" | "version-checking" | "provisioning" | "launching" | "live" | "hibernating";
 
 export interface VersionTooOld {
   agentId: string;

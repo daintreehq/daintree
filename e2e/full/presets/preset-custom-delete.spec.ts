@@ -303,8 +303,7 @@ test.describe.serial("Presets: Custom Delete (45–52)", () => {
     const presetId = await ctx.window.evaluate(async () => {
       const settings = await window.electron.agentSettings.get();
       const agents = settings.agents as
-        | Record<string, { presetId?: string } | undefined>
-        | undefined;
+        Record<string, { presetId?: string } | undefined> | undefined;
       return agents?.claude?.presetId ?? null;
     });
     expect(presetId).not.toBeNull();

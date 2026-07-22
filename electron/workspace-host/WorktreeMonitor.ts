@@ -197,8 +197,7 @@ export class WorktreeMonitor {
 
   // Resource state
   private _resourceStatus:
-    | import("../../shared/types/worktree.js").WorktreeResourceStatus
-    | undefined;
+    import("../../shared/types/worktree.js").WorktreeResourceStatus | undefined;
   private _resourceConnectCommand: string | undefined;
   private _resourceProvider: string | undefined;
   private _hasResourceConfig: boolean = false;
@@ -1159,8 +1158,7 @@ export class WorktreeMonitor {
   }
 
   get resourceStatus():
-    | import("../../shared/types/worktree.js").WorktreeResourceStatus
-    | undefined {
+    import("../../shared/types/worktree.js").WorktreeResourceStatus | undefined {
     return this._resourceStatus;
   }
 

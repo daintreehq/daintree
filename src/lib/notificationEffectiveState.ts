@@ -34,12 +34,7 @@ const ALL_EVENT_KINDS: readonly NotificationEventKind[] = [
  * - `disabled` — global notifications are off, so nothing fires.
  */
 export type KindEffectiveStatus =
-  | "will-interrupt"
-  | "quiet-gated"
-  | "kind-off"
-  | "sound-off"
-  | "inbox-only"
-  | "disabled";
+  "will-interrupt" | "quiet-gated" | "kind-off" | "sound-off" | "inbox-only" | "disabled";
 
 export interface EffectiveStateInput {
   /** Global notifications enable toggle. */

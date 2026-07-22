@@ -480,9 +480,7 @@ export async function getIssueImpl(repo: RepoRef, number: number): Promise<Issue
       "GET_ISSUE_QUERY"
     );
     const issue = (response?.repository as Record<string, unknown> | undefined)?.issue as
-      | Record<string, unknown>
-      | null
-      | undefined;
+      Record<string, unknown> | null | undefined;
     if (!issue) return null;
     const forgeIssue = toForgeIssue(issue);
     // Warm the hover-tooltip cache as a side effect so a subsequent hover skips
@@ -507,9 +505,7 @@ export async function getPRImpl(repo: RepoRef, number: number): Promise<PR | nul
       "GET_PR_QUERY"
     );
     const pr = (response?.repository as Record<string, unknown> | undefined)?.pullRequest as
-      | Record<string, unknown>
-      | null
-      | undefined;
+      Record<string, unknown> | null | undefined;
     if (!pr) return null;
     const forgePR = toForgePR(pr);
     // Side-effect tooltip pre-warm (write-through only); guarded by the
@@ -573,9 +569,7 @@ export async function findPRsByBranchesImpl(
         // than silently recording "no PR found".
         if (!(`b${i}` in response)) continue;
         const aliasNode = response[`b${i}`] as
-          | { pullRequests?: { nodes?: unknown[] } }
-          | null
-          | undefined;
+          { pullRequests?: { nodes?: unknown[] } } | null | undefined;
         if (aliasNode == null) continue;
         const nodes = (aliasNode.pullRequests?.nodes ?? []) as Array<Record<string, unknown>>;
         const first = nodes.find(Boolean);
@@ -752,14 +746,11 @@ export async function getCIStatusImpl(repo: RepoRef, prNumber: number): Promise<
     );
 
     const pr = (response?.repository as Record<string, unknown> | undefined)?.pullRequest as
-      | Record<string, unknown>
-      | null
-      | undefined;
+      Record<string, unknown> | null | undefined;
     if (!pr) return null;
 
     const commits = pr.commits as
-      | { nodes?: Array<{ commit?: { statusCheckRollup?: unknown } }> }
-      | undefined;
+      { nodes?: Array<{ commit?: { statusCheckRollup?: unknown } }> } | undefined;
     const rollup = commits?.nodes?.[0]?.commit?.statusCheckRollup as
       | {
           state?: string;
@@ -804,8 +795,7 @@ export async function getRepoMetadataImpl(repo: RepoRef): Promise<RepoMetadata> 
   const repository = (response?.repository as Record<string, unknown> | undefined) ?? {};
   const defaultBranch =
     ((repository.defaultBranchRef as { name?: unknown } | null | undefined)?.name as
-      | string
-      | undefined) ?? "main";
+      string | undefined) ?? "main";
   const license =
     ((repository.licenseInfo as { name?: unknown } | null | undefined)?.name as string | null) ??
     null;

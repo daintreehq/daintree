@@ -1,11 +1,7 @@
 import type { FleetPendingActionKind } from "@/store/fleetPendingActionStore";
 
 export type FleetConfirmActionId =
-  | "fleet.reject"
-  | "fleet.interrupt"
-  | "fleet.restart"
-  | "fleet.kill"
-  | "fleet.trash";
+  "fleet.reject" | "fleet.interrupt" | "fleet.restart" | "fleet.kill" | "fleet.trash";
 
 export function buildConfirmMessage(
   kind: FleetPendingActionKind,

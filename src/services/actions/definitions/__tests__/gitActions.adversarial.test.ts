@@ -25,18 +25,20 @@ async function resolvePullRebaseConfirm(ok: boolean): Promise<void> {
 }
 
 type GitStub = {
-  [K in
-    | "stageAll"
-    | "unstageAll"
-    | "stageFile"
-    | "unstageFile"
-    | "commit"
-    | "push"
-    | "pullRebase"
-    | "getFileDiff"
-    | "listCommits"
-    | "getStagingStatus"
-    | "getProjectPulse"]: ReturnType<typeof vi.fn>;
+  [
+    K in
+      | "stageAll"
+      | "unstageAll"
+      | "stageFile"
+      | "unstageFile"
+      | "commit"
+      | "push"
+      | "pullRebase"
+      | "getFileDiff"
+      | "listCommits"
+      | "getStagingStatus"
+      | "getProjectPulse"
+  ]: ReturnType<typeof vi.fn>;
 };
 
 function makeGitStub(): GitStub {

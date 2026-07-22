@@ -206,8 +206,7 @@ export class PtyHostLifecycle {
   pendingChildProcessGoneReason: { reason: string; exitCode: number } | null = null;
 
   private childProcessGoneHandler:
-    | ((event: Electron.Event, details: Electron.Details) => void)
-    | null = null;
+    ((event: Electron.Event, details: Electron.Details) => void) | null = null;
 
   private hostStdoutBuffer = "";
   private hostStderrBuffer = "";

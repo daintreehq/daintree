@@ -232,8 +232,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
     sortableListeners ?? {};
   const sortableKeyDown = sortableKeyDownListener as ((e: React.KeyboardEvent) => void) | undefined;
   const sortablePointerDown = sortablePointerListeners.onPointerDown as
-    | ((e: React.PointerEvent) => void)
-    | undefined;
+    ((e: React.PointerEvent) => void) | undefined;
 
   // Composes the guard with dnd-kit's sortable activator. Spreading
   // `sortablePointerListeners` would clobber a plain onPointerDown prop, so the

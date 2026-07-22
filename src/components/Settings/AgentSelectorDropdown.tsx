@@ -21,8 +21,7 @@ interface AgentSelectorDropdownProps {
 }
 
 type DropdownItem =
-  | { kind: "general"; id: "general" }
-  | { kind: "agent"; id: string; agent: AgentOption };
+  { kind: "general"; id: "general" } | { kind: "agent"; id: string; agent: AgentOption };
 
 const GENERAL_ID = "general";
 

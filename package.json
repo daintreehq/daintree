@@ -139,14 +139,14 @@
     "prepare": "husky"
   },
   "dependencies": {
-    "@parcel/watcher": "2.5.6",
+    "@parcel/watcher": "2.6.0",
     "@radix-ui/react-select": "^2.2.6",
     "@xterm/addon-webgl": "0.20.0-beta.289",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
     "archiver": "^8.0.0",
     "avr-vad": "^1.0.10",
-    "better-sqlite3": "^12.11.1",
+    "better-sqlite3": "^13.0.1",
     "copytree": "^0.14.2",
     "httpxy": "^0.5.3",
     "ipaddr.js": "^2.4.0",
@@ -165,7 +165,6 @@
     "ffmpeg-static": "^5.2.0"
   },
   "overrides": {
-    "eslint-plugin-react-hooks": "$eslint-plugin-react-hooks",
     "@tailwindcss/vite": {
       "vite": "^8.0.0"
     }
@@ -266,7 +265,7 @@
     "eslint": "^10.0.3",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-react-compiler": "^19.1.0-rc.2",
-    "eslint-plugin-react-hooks": "7.1.0-canary-c80a0750-20260312",
+    "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-unicorn": "^64.0.0",
     "execa": "^9.6.0",
     "fast-check": "^4.8.0",
@@ -306,7 +305,7 @@
     "tw-animate-css": "1.4.0",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.60.0",
-    "vite": "^8.0.0",
+    "vite": "~8.0.14",
     "vitest": "^4.1.7",
     "wait-on": "^9.0.4",
     "ws": "^8.18.0",

@@ -139,7 +139,7 @@ module.exports = async function () {
     // real filesystem access for `require()` — they cannot live inside the
     // ASAR. This means `enableEmbeddedAsarIntegrityValidation` (below) does
     // not cover these unpacked files. `afterPack.cjs` validates binary
-    // presence (and ABI for better-sqlite3) as a partial mitigation.
+    // presence (and loadability for better-sqlite3) as a partial mitigation.
     asarUnpack: [
       "node_modules/node-pty/**/*",
       "node_modules/better-sqlite3/**/*",
@@ -179,8 +179,13 @@ module.exports = async function () {
     afterSign: "./scripts/notarize-macos.cjs",
     mac: {
       extraResources: [{ from: "scripts/daintree-cli.sh", to: "daintree-cli.sh" }],
+      // better-sqlite3 v13 ships prebuilds for every OS in one package; drop
+      // the foreign-platform binaries (~12MB). Both darwin arches stay — the
+      // universal build merges x64 and arm64 app trees, and the identical
+      // Mach-O prebuilds present in both are allowlisted via x64ArchFiles.
+      files: ["!node_modules/better-sqlite3/prebuilds/{linux,linuxmusl,win32}-*.node"],
       x64ArchFiles:
-        "Contents/Resources/app.asar.unpacked/node_modules/{node-pty/build/Release/**,better-sqlite3/build/Release/**,better-sqlite3/bin/darwin-*/better-sqlite3.node,win-job-object/bin/**,posix-pty-reaper/build/Release/**,onnxruntime-node/bin/**,@parcel/watcher-darwin-*/watcher.node,@parcel/watcher/bin/darwin-*/watcher.node}",
+        "Contents/Resources/app.asar.unpacked/node_modules/{node-pty/build/Release/**,better-sqlite3/prebuilds/darwin-*.node,win-job-object/bin/**,posix-pty-reaper/build/Release/**,onnxruntime-node/bin/**,@parcel/watcher-darwin-*/watcher.node,@parcel/watcher/bin/darwin-*/watcher.node}",
       forceCodeSigning: true,
       notarize: false,
       binaries: [
@@ -263,6 +268,8 @@ module.exports = async function () {
     },
     win: {
       icon: "build/icon.ico",
+      // Foreign-platform better-sqlite3 prebuilds — see the mac.files note.
+      files: ["!node_modules/better-sqlite3/prebuilds/{darwin,linux,linuxmusl}-*.node"],
       artifactName: "${productName}-${version}-${arch}-setup.${ext}",
       target: [
         { target: "appx", arch: ["x64"] },
@@ -307,6 +314,9 @@ module.exports = async function () {
     },
     linux: {
       icon: "build/icon.png",
+      // Foreign-platform better-sqlite3 prebuilds — see the mac.files note.
+      // Electron only runs on glibc, so the linuxmusl variants go too.
+      files: ["!node_modules/better-sqlite3/prebuilds/{darwin,win32,linuxmusl}-*.node"],
       executableName: "daintree",
       target: ["AppImage", "deb"],
       category: "Development",

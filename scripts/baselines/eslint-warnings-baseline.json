@@ -1,15 +1,15 @@
 {
-  "count": 1119,
+  "count": 1105,
   "byRule": {
     "@typescript-eslint/no-explicit-any": 51,
-    "@typescript-eslint/no-floating-promises": 86,
-    "@typescript-eslint/no-unsafe-type-assertion": 492,
+    "@typescript-eslint/no-floating-promises": 85,
+    "@typescript-eslint/no-unsafe-type-assertion": 485,
     "no-restricted-imports": 5,
     "no-restricted-syntax": 371,
-    "no-useless-assignment": 19,
+    "no-useless-assignment": 16,
     "preserve-caught-error": 42,
     "react-compiler/react-compiler": 15,
-    "react-hooks/exhaustive-deps": 38
+    "react-hooks/exhaustive-deps": 35
   },
-  "updatedAt": "2026-07-10T06:19:02.567Z"
+  "updatedAt": "2026-07-22T18:23:09.562Z"
 }

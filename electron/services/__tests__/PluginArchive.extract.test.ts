@@ -48,8 +48,7 @@ async function createFixture(baseDir: string, files: Record<string, string>): Pr
 // built — large uncompressedSize, tiny compressed payload, valid CRC — that
 // yauzl accepts and only the installer's own size guard rejects.
 type RawEntry =
-  | { name: string; content: string }
-  | { name: string; deflateOf: Buffer; declaredSize?: number };
+  { name: string; content: string } | { name: string; deflateOf: Buffer; declaredSize?: number };
 
 function buildRawZip(entries: RawEntry[]): Buffer {
   const chunks: Buffer[] = [];

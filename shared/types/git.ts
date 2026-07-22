@@ -1,13 +1,6 @@
 /** Git file status */
 export type GitStatus =
-  | "modified"
-  | "added"
-  | "deleted"
-  | "untracked"
-  | "ignored"
-  | "renamed"
-  | "copied"
-  | "conflicted";
+  "modified" | "added" | "deleted" | "untracked" | "ignored" | "renamed" | "copied" | "conflicted";
 
 /**
  * One file of the change set a diff surface was opened from. Lives in shared
@@ -113,14 +106,7 @@ export interface ConflictedFileEntry {
  * `update-ref`) fold into `other` so the renderer can de-emphasize them uniformly.
  */
 export type RebaseAction =
-  | "pick"
-  | "reword"
-  | "edit"
-  | "squash"
-  | "fixup"
-  | "drop"
-  | "exec"
-  | "other";
+  "pick" | "reword" | "edit" | "squash" | "fixup" | "drop" | "exec" | "other";
 
 /** Per-entry progress within an in-flight rebase. */
 export type RebaseEntryState = "done" | "current" | "pending";

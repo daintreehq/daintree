@@ -200,13 +200,7 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
         msg.id,
         msg.event as AgentEvent,
         msg.trigger as
-          | "input"
-          | "output"
-          | "heuristic"
-          | "ai-classification"
-          | "timeout"
-          | "exit"
-          | "title",
+          "input" | "output" | "heuristic" | "ai-classification" | "timeout" | "exit" | "title",
         msg.confidence,
         msg.spawnedAt
       );

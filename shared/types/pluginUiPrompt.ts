@@ -39,11 +39,7 @@ export interface PluginUiPromptRequest {
  * structured-clone IPC boundary (Electron serializes `undefined`).
  */
 export type PluginUiPromptResultValue =
-  | PluginQuickPickItem
-  | PluginQuickPickItem[]
-  | string
-  | boolean
-  | undefined;
+  PluginQuickPickItem | PluginQuickPickItem[] | string | boolean | undefined;
 
 /** Renderer → main reply carrying the user's answer (fire-and-forget). */
 export interface PluginUiPromptResponse {

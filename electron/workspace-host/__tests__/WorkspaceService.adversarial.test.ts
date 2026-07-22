@@ -544,12 +544,10 @@ describe("WorkspaceService adversarial", () => {
       // The monitor write and both outbound events keep success — no blink.
       expect(setPRInfo).toHaveBeenCalledWith(expect.objectContaining({ prCiStatus: "success" }));
       const prDetected = sentEvents.find((e) => e.type === "pr-detected") as
-        | (WorkspaceHostEvent & { prCiStatus?: string })
-        | undefined;
+        (WorkspaceHostEvent & { prCiStatus?: string }) | undefined;
       expect(prDetected?.prCiStatus).toBe("success");
       const wtUpdate = sentEvents.find((e) => e.type === "worktree-update") as
-        | (WorkspaceHostEvent & { worktree: { prCiStatus?: string } })
-        | undefined;
+        (WorkspaceHostEvent & { worktree: { prCiStatus?: string } }) | undefined;
       expect(wtUpdate?.worktree.prCiStatus).toBe("success");
     });
 
@@ -565,8 +563,7 @@ describe("WorkspaceService adversarial", () => {
 
       expect(setPRInfo).toHaveBeenCalledWith(expect.objectContaining({ prCiStatus: undefined }));
       const prDetected = sentEvents.find((e) => e.type === "pr-detected") as
-        | (WorkspaceHostEvent & { prCiStatus?: string })
-        | undefined;
+        (WorkspaceHostEvent & { prCiStatus?: string }) | undefined;
       expect(prDetected?.prCiStatus).toBeUndefined();
     });
 

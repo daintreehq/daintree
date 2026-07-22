@@ -31,13 +31,11 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
   const namespace = defineIpcNamespace({
     name: "scratch",
     ops: {
-      getAll: op(
-        SCRATCH_METHOD_CHANNELS.getAll,
-        async (): Promise<Scratch[]> => scratchStore.getAllScratches()
+      getAll: op(SCRATCH_METHOD_CHANNELS.getAll, async (): Promise<Scratch[]> =>
+        scratchStore.getAllScratches()
       ),
-      getCurrent: op(
-        SCRATCH_METHOD_CHANNELS.getCurrent,
-        async (): Promise<Scratch | null> => scratchStore.getCurrentScratch()
+      getCurrent: op(SCRATCH_METHOD_CHANNELS.getCurrent, async (): Promise<Scratch | null> =>
+        scratchStore.getCurrentScratch()
       ),
       create: op(SCRATCH_METHOD_CHANNELS.create, async (name?: string): Promise<Scratch> => {
         const scratch = await scratchStore.createScratch(name);

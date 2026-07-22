@@ -219,8 +219,7 @@ describe("ResourceProfileService adversarial", () => {
   describe("getSnapshot (#10500)", () => {
     function findPowerHandler(event: string): ((details?: unknown) => void) | undefined {
       return mockPowerMonitorOn.mock.calls.find((call: unknown[]) => call[0] === event)?.[1] as
-        | ((details?: unknown) => void)
-        | undefined;
+        ((details?: unknown) => void) | undefined;
     }
 
     it("reflects battery, thermal, and speed-limit transitions via power events", () => {

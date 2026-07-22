@@ -319,8 +319,7 @@ class GitHubRateLimitServiceImpl {
    */
   updateFromGraphQL(data: Record<string, unknown>, queryLabel?: string): void {
     const rateLimit = data?.rateLimit as
-      | { cost?: number; remaining?: number; resetAt?: string; limit?: number }
-      | undefined;
+      { cost?: number; remaining?: number; resetAt?: string; limit?: number } | undefined;
     if (!rateLimit) return;
 
     const remaining = rateLimit.remaining;

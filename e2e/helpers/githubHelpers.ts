@@ -31,8 +31,7 @@ export async function seedGitHubToken(
   await app.evaluate((_modules, t) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- E2E hook
     const seed = (globalThis as any).__daintreeSeedGitHubToken as
-      | ((token: string) => void)
-      | undefined;
+      ((token: string) => void) | undefined;
     if (!seed)
       throw new Error(
         "GitHub token seed hook not available — launch with DAINTREE_E2E_FAULT_MODE=1"

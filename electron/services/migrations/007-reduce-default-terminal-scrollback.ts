@@ -5,8 +5,7 @@ export const migration007: Migration = {
   description: "Reduce default terminal scrollback from 2500 to 1000",
   up: (store) => {
     const config = store.get("terminalConfig") as
-      | { scrollbackLines?: number; [key: string]: unknown }
-      | undefined;
+      { scrollbackLines?: number; [key: string]: unknown } | undefined;
 
     if (!config) {
       console.log("[Migration 007] No terminalConfig found, skipping");

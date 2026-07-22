@@ -9,10 +9,7 @@ export type ActionKind = "command" | "query";
 export type ActionDanger = "safe" | "confirm" | "restricted";
 
 export type RiskBand =
-  | "reversible"
-  | "external-effect"
-  | "destructive-local"
-  | "destructive-network";
+  "reversible" | "external-effect" | "destructive-local" | "destructive-network";
 
 export type McpVisibility = "core" | "discoverable" | "hidden";
 
@@ -282,8 +279,7 @@ export interface ActionDispatchError {
 }
 
 export type ActionDispatchResult<Result = unknown> =
-  | ActionDispatchSuccess<Result>
-  | ActionDispatchError;
+  ActionDispatchSuccess<Result> | ActionDispatchError;
 
 export type ActionErrorCode =
   | "NOT_FOUND"

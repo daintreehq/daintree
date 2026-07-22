@@ -42,8 +42,7 @@ export async function activateE2EPlugin(app: ElectronApplication, pluginId: stri
   await app.evaluate(async (_modules, id) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- E2E hook
     const activate = (globalThis as any).__daintreeActivateE2EPlugin as
-      | ((pluginId: string) => Promise<void>)
-      | undefined;
+      ((pluginId: string) => Promise<void>) | undefined;
     if (!activate) {
       throw new Error("E2E plugin activation hook not available");
     }

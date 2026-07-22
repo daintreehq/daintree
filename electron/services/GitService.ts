@@ -19,8 +19,7 @@ function escapeRegex(str: string): string {
 }
 
 export type HeadFileReadResult =
-  | { ok: true; content: Buffer }
-  | { ok: false; reason: "NOT_FOUND" | "TOO_LARGE" };
+  { ok: true; content: Buffer } | { ok: false; reason: "NOT_FOUND" | "TOO_LARGE" };
 
 // Git error text for a path/revision that cannot resolve to a blob at HEAD:
 // missing path, untracked path, empty repo (unborn HEAD), or a non-blob object.

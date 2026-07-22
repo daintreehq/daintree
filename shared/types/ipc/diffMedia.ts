@@ -8,8 +8,7 @@ export interface DiffMediaReadFileVersionsPayload {
 export type DiffMediaSideError = "NOT_FOUND" | "TOO_LARGE" | "UNSUPPORTED" | "ERROR";
 
 export type DiffMediaSide =
-  | { ok: true; dataUrl: string; byteSize: number }
-  | { ok: false; error: DiffMediaSideError };
+  { ok: true; dataUrl: string; byteSize: number } | { ok: false; error: DiffMediaSideError };
 
 export interface DiffMediaFileVersions {
   head: DiffMediaSide;

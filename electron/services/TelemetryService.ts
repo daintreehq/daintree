@@ -370,8 +370,7 @@ function deriveTelemetryPreviewLabel(event: Record<string, unknown>): string {
     return event.message;
   }
   const exception = event.exception as
-    | { values?: Array<{ type?: string; value?: string }> }
-    | undefined;
+    { values?: Array<{ type?: string; value?: string }> } | undefined;
   const first = exception?.values?.[0];
   if (first) {
     if (first.type && first.value) return `${first.type}: ${first.value}`;

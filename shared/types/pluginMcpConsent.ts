@@ -119,10 +119,7 @@ export type PluginMcpConsentLookup =
  * tell a deliberate refusal from a walked-away dialog.
  */
 export type PluginMcpConsentDecision =
-  | "approved-once"
-  | "approved-and-pin"
-  | "rejected"
-  | "timeout";
+  "approved-once" | "approved-and-pin" | "rejected" | "timeout";
 
 /**
  * How long a pushed plugin-MCP consent prompt may stay unanswered before the

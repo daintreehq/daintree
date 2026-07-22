@@ -111,8 +111,7 @@ export class WorkspaceHostPool {
    * seeded into hosts created after the last push so a project opened while
    * a non-balanced profile is active doesn't run the in-host defaults. */
   private monitorConfigCache:
-    | import("../../../shared/types/workspace-host.js").MonitorConfig
-    | null = null;
+    import("../../../shared/types/workspace-host.js").MonitorConfig | null = null;
 
   private emit: EmitFn;
   private onProjectSwitch?: (windowId: number) => void;

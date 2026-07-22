@@ -15,8 +15,8 @@ const onRateLimitChangedMock = vi.fn(
     return cleanupMock;
   }
 );
-const getRateLimitDetailsMock = vi.fn(
-  (_cwd: string): Promise<RateLimitDetails | null> => Promise.resolve(null)
+const getRateLimitDetailsMock = vi.fn((_cwd: string): Promise<RateLimitDetails | null> =>
+  Promise.resolve(null)
 );
 
 vi.mock("@/clients/forgeClient", () => ({

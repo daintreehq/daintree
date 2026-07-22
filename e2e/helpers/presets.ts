@@ -223,8 +223,7 @@ async function getCustomPresetState(window: Page, agentId: string): Promise<Cust
   return window.evaluate(async (id): Promise<CustomPresetState> => {
     const settings = await window.electron.agentSettings.get();
     const agents = settings.agents as
-      | Record<string, { customPresets?: unknown[]; presetId?: string } | undefined>
-      | undefined;
+      Record<string, { customPresets?: unknown[]; presetId?: string } | undefined> | undefined;
     const entry = agents?.[id];
     return {
       customCount: Array.isArray(entry?.customPresets) ? entry.customPresets.length : 0,

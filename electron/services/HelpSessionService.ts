@@ -247,10 +247,7 @@ async function readTemplateHashStamp(sessionPath: string): Promise<string | null
  * so provisioning fails closed and the renderer shows a retryable error.
  */
 export type HelpSessionErrorCode =
-  | "MCP_NOT_READY"
-  | "MCP_SERVER_NOT_STARTED"
-  | "MCP_PROBE_FAILED"
-  | "USER_CONTENT_SYNC_FAILED";
+  "MCP_NOT_READY" | "MCP_SERVER_NOT_STARTED" | "MCP_PROBE_FAILED" | "USER_CONTENT_SYNC_FAILED";
 
 export class HelpSessionError extends Error {
   readonly code: HelpSessionErrorCode;

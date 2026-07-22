@@ -219,13 +219,7 @@ export interface PanelViewProps {
  * renderer's diagnostics pane; only the fact of failure crosses to the worker.
  */
 export type PluginPanelLifecyclePhase =
-  | "mounted"
-  | "hidden"
-  | "backgrounded"
-  | "trashed"
-  | "restored"
-  | "removed"
-  | "render-failed";
+  "mounted" | "hidden" | "backgrounded" | "trashed" | "restored" | "removed" | "render-failed";
 
 /**
  * One panel lifecycle transition delivered to a plugin worker (#11301).
@@ -485,15 +479,7 @@ export interface PluginManifest {
  *   `mustExist` is set the form flags a stored path that no longer resolves.
  */
 export type SettingFieldType =
-  | "string"
-  | "number"
-  | "boolean"
-  | "enum"
-  | "json"
-  | "secret"
-  | "path"
-  | "directory"
-  | "file";
+  "string" | "number" | "boolean" | "enum" | "json" | "secret" | "path" | "directory" | "file";
 
 /**
  * Declaration for a single plugin setting under `contributes.settings` (#9301).
@@ -751,8 +737,7 @@ export type PluginInstallSource = "builtin" | "sideload" | "url" | "catalog";
  *   Manager scrolled to the named plugin.
  */
 export type PluginDeepLinkIntent =
-  | { action: "install"; url: string }
-  | { action: "open"; pluginId: string };
+  { action: "install"; url: string } | { action: "open"; pluginId: string };
 
 /**
  * Manifest identity shown in the sideload confirmation dialog (#11280). A

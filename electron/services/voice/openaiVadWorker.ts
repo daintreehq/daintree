@@ -36,8 +36,7 @@ const ns = avrVad as unknown as {
   default?: { RealTimeVAD?: typeof import("avr-vad").RealTimeVAD };
 };
 const RealTimeVAD = (ns.RealTimeVAD ?? ns.default?.RealTimeVAD) as unknown as
-  | typeof import("avr-vad").RealTimeVAD
-  | undefined;
+  typeof import("avr-vad").RealTimeVAD | undefined;
 
 /** Converts little-endian PCM16 samples to the Float32 [-1, 1) avr-vad wants. */
 function pcm16ToFloat32(pcm: ArrayBuffer): Float32Array {

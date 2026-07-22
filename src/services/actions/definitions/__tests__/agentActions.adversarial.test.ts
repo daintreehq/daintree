@@ -1174,8 +1174,7 @@ describe("agentSessionHistory.list (#10854)", () => {
 
   function getDef(): AnyActionDefinition {
     const def = setupActions(makeCallbacks()).get("agentSessionHistory.list")?.() as
-      | AnyActionDefinition
-      | undefined;
+      AnyActionDefinition | undefined;
     if (!def) throw new Error("agentSessionHistory.list not registered");
     return def;
   }
