@@ -14,6 +14,8 @@ export interface FileTreeViewProps {
   onToggleExpanded: (path: string, expand: boolean) => void;
   /** Fired by Enter on a file row — the viewer already follows selection. */
   onActivate?: (path: string) => void;
+  /** Fired by double-clicking a directory row: re-root the tree there. */
+  onRootFolder?: (path: string) => void;
   /**
    * Menu items for a row's right-click menu; return null for no menu. The
    * view owns the Radix wiring (and selects the row on right-click so the
@@ -48,6 +50,7 @@ export function FileTreeView({
   onSelect,
   onToggleExpanded,
   onActivate,
+  onRootFolder,
   rowContextMenu,
   label,
 }: FileTreeViewProps) {
@@ -141,9 +144,29 @@ export function FileTreeView({
     containerRef.current?.focus({ preventScroll: true });
   }, []);
 
+  // A listing with no folders at all doesn't need the chevron gutter — in a
+  // flat directory of files the empty slots read as wasted indentation.
+  const hasDirectories = useMemo(() => rows.some((row) => row.isDirectory), [rows]);
+
   const context: TreeContext = useMemo(
-    () => ({ selectedPath, onSelect, onToggleExpanded, rowContextMenu, instanceId }),
-    [selectedPath, onSelect, onToggleExpanded, rowContextMenu, instanceId]
+    () => ({
+      selectedPath,
+      onSelect,
+      onToggleExpanded,
+      onRootFolder,
+      rowContextMenu,
+      hasDirectories,
+      instanceId,
+    }),
+    [
+      selectedPath,
+      onSelect,
+      onToggleExpanded,
+      onRootFolder,
+      rowContextMenu,
+      hasDirectories,
+      instanceId,
+    ]
   );
 
   // Only advertise an active descendant that is actually rendered. A selection
@@ -188,7 +211,9 @@ interface TreeContext {
   selectedPath: string | null;
   onSelect: (path: string) => void;
   onToggleExpanded: (path: string, expand: boolean) => void;
+  onRootFolder?: ((path: string) => void) | undefined;
   rowContextMenu?: ((row: FlatTreeRow) => React.ReactNode) | undefined;
+  hasDirectories: boolean;
   instanceId: string;
 }
 
@@ -221,12 +246,22 @@ interface FileTreeRowProps {
 }
 
 function FileTreeRow({ row, isSelected, context }: FileTreeRowProps) {
-  const { onSelect, onToggleExpanded } = context;
+  const { onSelect, onToggleExpanded, onRootFolder } = context;
 
   const handleClick = () => {
     onSelect(row.path);
     if (row.isDirectory) onToggleExpanded(row.path, !row.isExpanded);
   };
+
+  // Double-click re-roots the tree at the folder. The two single clicks it
+  // contains toggle expansion twice — a net no-op — so the only observable
+  // effect is the re-root.
+  const handleDoubleClick =
+    row.isDirectory && onRootFolder
+      ? () => {
+          onRootFolder(row.path);
+        }
+      : undefined;
 
   // Select on right-click, without toggling expansion: the menu acts on this
   // row, and the selection highlight is what shows the user which one.
@@ -241,6 +276,12 @@ function FileTreeRow({ row, isSelected, context }: FileTreeRowProps) {
     onToggleExpanded(row.path, !row.isExpanded);
   };
 
+  // The chevron is the double-click's near-miss zone; rooting from it would
+  // punish a fast expand-collapse.
+  const handleChevronDoubleClick = (event: React.MouseEvent) => {
+    event.stopPropagation();
+  };
+
   const Chevron = row.isExpanded ? ChevronDown : ChevronRight;
   const FolderIcon = row.isExpanded ? FolderOpen : Folder;
 
@@ -253,6 +294,7 @@ function FileTreeRow({ row, isSelected, context }: FileTreeRowProps) {
       aria-selected={isSelected}
       {...(row.isDirectory && { "aria-expanded": row.isExpanded })}
       onClick={handleClick}
+      onDoubleClick={handleDoubleClick}
       style={{ paddingLeft: BASE_PADDING_PX + row.depth * INDENT_PER_DEPTH_PX }}
       className={cn(
         "flex h-6 w-full cursor-default select-none items-center gap-1 rounded pr-2 font-mono text-xs",
@@ -271,13 +313,14 @@ function FileTreeRow({ row, isSelected, context }: FileTreeRowProps) {
         // node the keyboard can reach but a screen reader cannot describe.
         <span
           onClick={handleChevronClick}
+          onDoubleClick={handleChevronDoubleClick}
           aria-hidden="true"
           className="flex h-4 w-4 shrink-0 items-center justify-center text-daintree-text/40"
         >
           <Chevron className="h-3 w-3" />
         </span>
       ) : (
-        <span className="h-4 w-4 shrink-0" />
+        context.hasDirectories && <span className="h-4 w-4 shrink-0" />
       )}
       {row.isDirectory ? (
         <FolderIcon className="h-3.5 w-3.5 shrink-0 text-daintree-text/40" aria-hidden="true" />

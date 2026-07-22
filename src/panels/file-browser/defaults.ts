@@ -1,5 +1,6 @@
 import type { FileBrowserPanelData } from "@shared/types/panel";
 import type { FileBrowserPanelOptions } from "@shared/types/addPanelOptions";
+import { canonicalizeRootPath } from "./fileBrowserTree";
 
 export function createFileBrowserDefaults(
   options: FileBrowserPanelOptions
@@ -17,8 +18,10 @@ export function createFileBrowserDefaults(
     ...(options.browserShowIgnored != null && {
       browserShowIgnored: options.browserShowIgnored,
     }),
+    // Canonicalized on the way in: tree row keys are canonical listing paths,
+    // and the up-one-level control does plain segment math on this value.
     ...(options.browserRootPath != null && {
-      browserRootPath: options.browserRootPath,
+      browserRootPath: canonicalizeRootPath(options.browserRootPath),
     }),
   };
 }

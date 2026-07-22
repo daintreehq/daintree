@@ -1,5 +1,5 @@
-import { useCallback, useMemo, useState } from "react";
-import { CornerLeftUp, EyeOff, FolderTree, RefreshCw } from "lucide-react";
+import { useCallback, useMemo, useRef, useState } from "react";
+import { CornerLeftUp, EyeOff, FolderRoot, FolderTree, RefreshCw } from "lucide-react";
 import { basename, join } from "@shared/utils/path";
 import type { BasePanelProps } from "@/components/Panel/ContentPanel";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
@@ -18,7 +18,7 @@ import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { FileTreeView } from "./FileTreeView";
 import { FileBrowserViewer } from "./FileBrowserViewer";
 import { useFileBrowserTree } from "./useFileBrowserTree";
-import { ancestorDirectories, type FlatTreeRow } from "./fileBrowserTree";
+import { ancestorDirectories, parentRootPath, type FlatTreeRow } from "./fileBrowserTree";
 
 export type FileBrowserPaneProps = BasePanelProps;
 
@@ -168,9 +168,25 @@ export function FileBrowserPane({
     [id, setFileBrowserView]
   );
 
+  // Reaching the worktree root unmounts both header buttons, and keyboard
+  // focus would fall to the document; hand it to the tree instead. rAF because
+  // the tree for the new root renders on the commit after the state write.
+  const treeColumnRef = useRef<HTMLDivElement>(null);
+  const focusTree = useCallback(() => {
+    requestAnimationFrame(() => {
+      treeColumnRef.current?.querySelector<HTMLElement>('[role="tree"]')?.focus();
+    });
+  }, []);
+
   const handleResetRoot = useCallback(() => {
     setFileBrowserView(id, { browserRootPath: "" });
-  }, [id, setFileBrowserView]);
+    focusTree();
+  }, [id, setFileBrowserView, focusTree]);
+
+  const handleUpOneLevel = useCallback(() => {
+    setFileBrowserView(id, { browserRootPath: parentRootPath(rootPath) });
+    focusTree();
+  }, [id, rootPath, setFileBrowserView, focusTree]);
 
   const handleCopyFolderContext = useCallback(
     (path: string) => {
@@ -311,10 +327,25 @@ export function FileBrowserPane({
           on the AppDialog surface — so a plain flex-1/min-h-0 chain fills it
           without the content-sized-parent collapse trap. */}
       <div className="flex min-h-0 w-full flex-1 bg-daintree-bg">
-        <div className="flex min-h-0 w-60 shrink-0 flex-col self-stretch border-r border-daintree-border bg-daintree-sidebar">
-          <div className="flex shrink-0 items-center gap-0.5 border-b border-daintree-border py-1 pl-3 pr-1.5">
-            {/* Root anchor mirrors the diff sidebar's header: what am I
-                looking at, then the controls that reshape it. */}
+        <div
+          ref={treeColumnRef}
+          className="flex min-h-0 w-72 shrink-0 flex-col self-stretch border-r border-daintree-border bg-daintree-sidebar"
+        >
+          <div className="flex shrink-0 items-center gap-0.5 border-b border-daintree-border px-1.5 py-1">
+            {/* Root anchor mirrors the diff sidebar's header: where am I
+                rooted, then the controls that reshape the view. The root icon
+                doubles as the way back when the tree is rooted somewhere. */}
+            {rootPath !== "" ? (
+              <FileViewerToolbar.IconButton label="Back to worktree root" onClick={handleResetRoot}>
+                <FolderRoot className="h-3.5 w-3.5" />
+              </FileViewerToolbar.IconButton>
+            ) : (
+              // Same footprint as the button so the path text doesn't shift
+              // when the tree is re-rooted.
+              <span className="shrink-0 p-1.5 text-daintree-text/40" aria-hidden="true">
+                <FolderRoot className="h-3.5 w-3.5" />
+              </span>
+            )}
             <span
               className="min-w-0 flex-1 truncate font-mono text-[11px] text-daintree-text/40"
               title={rootPath ? `${basename(worktreePath)}/${rootPath}` : worktreePath}
@@ -322,7 +353,7 @@ export function FileBrowserPane({
               {rootPath || (worktreePath ? basename(worktreePath) : "")}
             </span>
             {rootPath !== "" && (
-              <FileViewerToolbar.IconButton label="Back to worktree root" onClick={handleResetRoot}>
+              <FileViewerToolbar.IconButton label="Up one level" onClick={handleUpOneLevel}>
                 <CornerLeftUp className="h-3.5 w-3.5" />
               </FileViewerToolbar.IconButton>
             )}
@@ -429,23 +460,28 @@ export function FileBrowserPane({
 
     return (
       <>
-        {selectedPath !== null && selectionInRoot && !selectedIsReachable && (
-          <button
-            type="button"
-            onClick={revealSelection}
-            className="shrink-0 truncate border-b border-daintree-border px-3 py-1 text-left font-mono text-[11px] text-daintree-text/60 transition-colors duration-150 ease-out hover:bg-tint/5 hover:text-daintree-text"
-          >
-            Reveal {selectedFileName}
-          </button>
-        )}
         <FileTreeView
           rows={rows}
           selectedPath={selectedPath}
           onSelect={handleSelect}
           onToggleExpanded={handleToggleExpanded}
+          onRootFolder={handleSetRoot}
           rowContextMenu={rowContextMenu}
           label={`Files in ${title}`}
         />
+        {/* Below the tree, never above: the strip unmounts the instant a
+            click makes the selection reachable, and sitting above the rows it
+            would shift them mid-gesture — the second click of a double-click
+            would land one row off. */}
+        {selectedPath !== null && selectionInRoot && !selectedIsReachable && (
+          <button
+            type="button"
+            onClick={revealSelection}
+            className="shrink-0 truncate border-t border-daintree-border px-3 py-1 text-left font-mono text-[11px] text-daintree-text/60 transition-colors duration-150 ease-out hover:bg-tint/5 hover:text-daintree-text"
+          >
+            Reveal {selectedFileName}
+          </button>
+        )}
       </>
     );
   }

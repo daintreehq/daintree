@@ -94,6 +94,45 @@ describe("FileTreeView context-menu interactions", () => {
     expect(contextMenuSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("re-roots on double-clicking a folder but never a file", () => {
+    const onRootFolder = vi.fn();
+    const { getByRole } = renderTree({ onRootFolder });
+
+    fireEvent.doubleClick(getByRole("treeitem", { name: "src" }));
+    fireEvent.doubleClick(getByRole("treeitem", { name: "README.md" }));
+
+    expect(onRootFolder).toHaveBeenCalledTimes(1);
+    expect(onRootFolder).toHaveBeenCalledWith("src");
+  });
+
+  it("does not re-root from a double-click on the chevron", () => {
+    // The chevron is the double-click's near-miss zone: a fast expand-collapse
+    // there must not yank the user into a new root.
+    const onRootFolder = vi.fn();
+    const { getByRole } = renderTree({ onRootFolder });
+
+    const chevron = getByRole("treeitem", { name: "src" }).firstElementChild!;
+    fireEvent.doubleClick(chevron);
+
+    expect(onRootFolder).not.toHaveBeenCalled();
+  });
+
+  it("drops the chevron gutter when the listing holds no folders at all", () => {
+    const allFiles = renderTree({ rows: [row("a.ts"), row("b.ts")] });
+    // No spacer span before the file icon: the row starts straight at the
+    // <svg> so a flat directory of files doesn't carry ghost indentation.
+    expect(
+      allFiles.getByRole("treeitem", { name: "a.ts" }).firstElementChild?.tagName.toLowerCase()
+    ).toBe("svg");
+    allFiles.unmount();
+
+    // With any folder present the spacer returns, keeping files aligned.
+    const mixed = renderTree();
+    expect(
+      mixed.getByRole("treeitem", { name: "README.md" }).firstElementChild?.tagName.toLowerCase()
+    ).toBe("span");
+  });
+
   it("advertises data-row-menu only when rows actually have menus", () => {
     // The attribute is the contract with the global Shift+F10 handler: it
     // stands down inside surfaces that route the key to a row-level menu, so

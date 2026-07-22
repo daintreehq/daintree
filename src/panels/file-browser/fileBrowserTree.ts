@@ -74,6 +74,23 @@ export function flattenTree(
 export const MAX_TREE_DEPTH = 64;
 
 /**
+ * Canonical forward-slash form of a worktree-relative browse root: collapses
+ * duplicate separators, drops `.` segments and trailing slashes. Anything
+ * traversal-shaped falls back to "" (the worktree root) — a root that can't
+ * be trusted must fail toward showing more, never escaping.
+ */
+export function canonicalizeRootPath(value: string): string {
+  const segments = value.split(/[\\/]+/).filter((segment) => segment !== "" && segment !== ".");
+  if (segments.includes("..")) return "";
+  return segments.join("/");
+}
+
+/** One level up from a browse root; "" once the last segment is gone. */
+export function parentRootPath(rootPath: string): string {
+  return rootPath.split("/").slice(0, -1).join("/");
+}
+
+/**
  * Every ancestor directory of a worktree-relative path, root-first and
  * excluding the path itself. Used to reveal a remembered selection: the
  * directories on the way down have to be expanded before the row exists.

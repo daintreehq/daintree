@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { FileTreeNode } from "@shared/types";
 import {
   ancestorDirectories,
+  canonicalizeRootPath,
   flattenTree,
+  parentRootPath,
   pruneListings,
   refreshTargets,
   resolveTreeKey,
@@ -119,6 +121,29 @@ describe("flattenTree", () => {
 
     expect(rows.length).toBeGreaterThan(1);
     expect(rows.length).toBeLessThan(200);
+  });
+});
+
+describe("canonicalizeRootPath", () => {
+  it("normalizes separators, dots and duplicate slashes to row-key form", () => {
+    expect(canonicalizeRootPath("src/panels")).toBe("src/panels");
+    expect(canonicalizeRootPath("src/")).toBe("src");
+    expect(canonicalizeRootPath("./src//panels")).toBe("src/panels");
+    expect(canonicalizeRootPath("src\\panels")).toBe("src/panels");
+    expect(canonicalizeRootPath(".")).toBe("");
+  });
+
+  it("falls back to the worktree root for traversal-shaped input", () => {
+    // Fail toward showing more, never escaping: a root the tree can't trust
+    // must not survive as-is.
+    expect(canonicalizeRootPath("src/../..")).toBe("");
+  });
+});
+
+describe("parentRootPath", () => {
+  it("walks one level up until the worktree root", () => {
+    expect(parentRootPath("src/panels/diff")).toBe("src/panels");
+    expect(parentRootPath("src")).toBe("");
   });
 });
 

@@ -3,6 +3,7 @@ import type { FileViewMode, DiffSource } from "@shared/types/panel";
 import type { GitStatus } from "@shared/types/git";
 import type { AddTerminalArgs, SavedTerminalData } from "@/utils/stateHydration/statePatcher";
 import { VIEWPORT_PRESETS } from "@/panels/dev-preview/viewportPresets";
+import { canonicalizeRootPath } from "@/panels/file-browser/fileBrowserTree";
 
 type PanelKindDeserializer = (saved: SavedTerminalData) => Partial<AddTerminalArgs>;
 
@@ -72,16 +73,15 @@ function isSafeRelativePath(value: unknown): value is string {
 }
 
 /**
- * Canonical forward-slash form of a safe relative path: collapses duplicate
- * separators, drops `.` segments and trailing slashes. Tree row keys are built
- * from canonical listing paths, so a non-canonical restored value (`src/`,
- * `./src`) would never prefix-match them. `.` and empty resolve to undefined —
- * the worktree root is represented by the field's absence, never a sentinel.
+ * Canonical forward-slash form of a safe relative path. Tree row keys are
+ * built from canonical listing paths, so a non-canonical restored value
+ * (`src/`, `./src`) would never prefix-match them. `.` and empty resolve to
+ * undefined — the worktree root is represented by the field's absence, never
+ * a sentinel.
  */
 function canonicalRelativePath(value: unknown): string | undefined {
   if (!isSafeRelativePath(value)) return undefined;
-  const segments = value.split(/[\\/]+/).filter((segment) => segment !== "" && segment !== ".");
-  return segments.length > 0 ? segments.join("/") : undefined;
+  return canonicalizeRootPath(value) || undefined;
 }
 
 /**
