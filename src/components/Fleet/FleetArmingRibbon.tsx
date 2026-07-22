@@ -506,10 +506,9 @@ export function FleetArmingRibbon(): ReactElement | null {
           className={cn(
             "relative flex items-center gap-3 overflow-hidden border-b border-daintree-border px-3 py-2 text-[12px] text-daintree-text outline-hidden",
             "bg-category-amber-subtle",
-            // Non-color structural cue: 2px amber left-edge stripe. Mirrors the
-            // panel-worktree-identity idiom so the "mode surface" reads even
-            // with CVD / low-saturation themes where the amber tint alone
-            // might not register as a distinct surface.
+            // Non-color structural cue: 2px amber left-edge stripe, so the
+            // "mode surface" reads even with CVD / low-saturation themes where
+            // the amber tint alone might not register as a distinct surface.
             "before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-[var(--color-category-amber-border)]"
           )}
           data-testid="fleet-arming-ribbon"

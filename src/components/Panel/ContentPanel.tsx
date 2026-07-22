@@ -503,12 +503,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
       data-selected={isSelected || undefined}
       data-hibernated={isHibernated || undefined}
       data-fleet-dimmed={isFleetDimmed || undefined}
-      style={{
-        contain: "content",
-        ...(worktreeAccentColor
-          ? ({ "--worktree-color": worktreeAccentColor } as React.CSSProperties)
-          : undefined),
-      }}
+      style={{ contain: "content" }}
       className={cn(
         // Dual sizing contract, because the panel root is hosted under both
         // block-level and flex parents. `h-full` fills the block wrappers the
@@ -541,7 +536,6 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
                     ? "panel-state-hibernated"
                     : "border-overlay hover:border-tint/[0.08]"),
         location === "grid" && isMaximized && "border-0 rounded-none z-[var(--z-maximized)]",
-        worktreeAccentColor && location === "grid" && !isMaximized && "panel-worktree-identity",
         // Voice-dictation lock border overrides ambient state colours so the
         // pinned target stays unambiguously visible. Applied after the state
         // ternary so its border-color/box-shadow wins by source order.
