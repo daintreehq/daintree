@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { build, type RollupOutput } from "vite";
+import { build } from "vite";
 import { daintreePlugin } from "../../../plugin-vite/src/index.js";
 
 const execFileAsync = promisify(execFile);
@@ -135,10 +135,13 @@ describe("consumer panel build — React never reaches the bundle", () => {
       },
     });
 
-    // Vite 8 resolves `build()` to one RollupOutput per build environment, so
-    // the result is an array even for this single-target fixture.
-    const outputs = (Array.isArray(result) ? result : [result]) as RollupOutput[];
-    const entry = outputs.flatMap((o) => o.output).find((o) => o.type === "chunk" && o.isEntry);
+    // Vite 8 resolves `build()` to one bundle per build environment, so the
+    // result is an array even for this single-target fixture. The `"output" in`
+    // guard also discards the watcher arm of the return union.
+    const bundles = Array.isArray(result) ? result : [result];
+    const entry = bundles
+      .flatMap((bundle) => ("output" in bundle ? bundle.output : []))
+      .find((out) => out.type === "chunk" && out.isEntry);
     if (!entry || entry.type !== "chunk") throw new Error("fixture build emitted no entry chunk");
     chunk = { code: entry.code, imports: entry.imports, modules: entry.modules };
   }, 120_000);

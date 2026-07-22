@@ -3,6 +3,19 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+// Only `kill()` and `catch()` are exercised, so the fake stops there. It's
+// declared through `vi.hoisted` and referenced directly rather than through
+// `vi.mocked()` on the real export, so its type stays the fake's own shape:
+// routing it via the export's `ResultPromise` signature would force an unsafe
+// assertion on every `mockImplementationOnce`.
+const { spawnViteWatchMock } = vi.hoisted(() => ({
+  // Synchronous like the real helper: returns a live child handle, not a Promise.
+  spawnViteWatchMock: vi.fn((_dir: string, _args?: string[]) => ({
+    kill: vi.fn(),
+    catch: vi.fn(),
+  })),
+}));
+
 vi.mock("../lib/viteBuild.js", async (importOriginal) => {
   // `resolveVitePlan` stays real: it's pure filesystem inspection, and it's
   // what decides how many watchers spawn, so stubbing it would hide the
@@ -16,8 +29,7 @@ vi.mock("../lib/viteBuild.js", async (importOriginal) => {
   return {
     ...actual,
     runVitePlanBuild: vi.fn(async () => {}),
-    // Synchronous like the real helper: returns a live child handle, not a Promise.
-    spawnViteWatch: vi.fn(() => ({ kill: vi.fn(), catch: vi.fn() })),
+    spawnViteWatch: spawnViteWatchMock,
   };
 });
 vi.mock("../ipc/client.js", () => ({
@@ -29,7 +41,7 @@ vi.mock("../commands/validate.js", () => ({
 }));
 
 import { linkDevPlugin, cleanupDevLink, runDev, type DevLink } from "../commands/dev.js";
-import { runVitePlanBuild, spawnViteWatch } from "../lib/viteBuild.js";
+import { runVitePlanBuild } from "../lib/viteBuild.js";
 import { sendCliRequest } from "../ipc/client.js";
 
 let tmpDir: string;
@@ -139,12 +151,12 @@ describe("runDev", () => {
       pluginDir,
       expect.objectContaining({ dualConfig: false })
     );
-    expect(spawnViteWatch).toHaveBeenCalledWith(pluginDir, ["build", "--watch"]);
+    expect(spawnViteWatchMock).toHaveBeenCalledWith(pluginDir, ["build", "--watch"]);
     const calls = vi.mocked(sendCliRequest).mock.calls.map((c) => c[0]);
     expect(calls).toContain("plugin.dev.start");
     expect(calls).toContain("plugin.dev.stop");
 
-    const watch = await vi.mocked(spawnViteWatch).mock.results[0].value;
+    const watch = await spawnViteWatchMock.mock.results[0].value;
     expect(watch.kill).toHaveBeenCalled();
     // The dev artifacts are gone after teardown.
     expect(await lstatSafe(path.join(pluginsRoot, "acme.demo"))).toBeNull();
@@ -160,7 +172,7 @@ describe("runDev", () => {
   });
 
   it("unloads and cleans up when the build watcher fails to start", async () => {
-    vi.mocked(spawnViteWatch).mockImplementationOnce(() => {
+    spawnViteWatchMock.mockImplementationOnce(() => {
       throw new Error("Couldn't find Vite");
     });
     const controller = new AbortController();
@@ -198,7 +210,7 @@ describe("runDev", () => {
       runDev({ dir: pluginDir, pluginsRoot, keepAliveSignal: controller.signal })
     ).rejects.toThrow(/isn't running/);
 
-    expect(spawnViteWatch).not.toHaveBeenCalled();
+    expect(spawnViteWatchMock).not.toHaveBeenCalled();
     expect(await lstatSafe(path.join(pluginsRoot, "acme.demo"))).toBeNull();
   });
 
@@ -226,7 +238,7 @@ describe("runDev", () => {
 
       // Without --no-emptyOutDir each watcher re-empties the shared dist/ on
       // every incremental rebuild, so a browser save deletes the worker bundle.
-      const watchArgs = vi.mocked(spawnViteWatch).mock.calls.map((c) => c[1]);
+      const watchArgs = spawnViteWatchMock.mock.calls.map((c) => c[1]);
       expect(watchArgs).toEqual([
         ["build", "--watch", "--no-emptyOutDir"],
         ["build", "--watch", "--config", "vite.config.server.ts", "--no-emptyOutDir"],
@@ -238,7 +250,7 @@ describe("runDev", () => {
       controller.abort();
       await runDev({ dir: pluginDir, pluginsRoot, keepAliveSignal: controller.signal });
 
-      const spawned = vi.mocked(spawnViteWatch).mock.results.map((r) => r.value);
+      const spawned = spawnViteWatchMock.mock.results.map((r) => r.value);
       expect(spawned).toHaveLength(2);
       for (const watch of spawned) {
         expect(watch.kill).toHaveBeenCalled();
@@ -247,7 +259,7 @@ describe("runDev", () => {
 
     it("kills the first watcher when the second fails to spawn", async () => {
       const first = { kill: vi.fn(), catch: vi.fn() };
-      vi.mocked(spawnViteWatch)
+      spawnViteWatchMock
         .mockImplementationOnce(() => first)
         .mockImplementationOnce(() => {
           throw new Error("Couldn't find Vite");
