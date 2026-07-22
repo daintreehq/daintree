@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PanelInstance, PtyPanelData, TabGroup } from "@shared/types/panel";
+import type { FilePanelData, PanelInstance, PtyPanelData, TabGroup } from "@shared/types/panel";
 import { setWorktreeSelectionAccessor } from "@/store/storeAccessors";
 import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
 import { buildWorktreeIndex, NO_WORKTREE } from "../worktreeIndex";
@@ -322,17 +322,15 @@ describe("dock ↔ grid transitions", () => {
 
     it("adopts the active worktree for a non-PTY file panel promoted from the dock", () => {
       usePanelStore.setState((state) => {
-        const panelsById = {
-          ...state.panelsById,
-          "file-1": {
-            id: "file-1",
-            kind: "file",
-            title: "spec.md",
-            location: "dock",
-            isVisible: false,
-            filePath: "/repo/spec.md",
-          } as PanelInstance,
+        const filePanel: FilePanelData = {
+          id: "file-1",
+          kind: "file",
+          title: "spec.md",
+          location: "dock",
+          isVisible: false,
+          filePath: "/repo/spec.md",
         };
+        const panelsById = { ...state.panelsById, "file-1": filePanel };
         const panelIds = [...state.panelIds, "file-1"];
         return {
           panelsById,
@@ -480,18 +478,16 @@ describe("dock ↔ grid transitions", () => {
 
     it("adopts the active worktree when promoting a worktree-less dialog panel to the grid", () => {
       usePanelStore.setState((state) => {
-        const panelsById = {
-          ...state.panelsById,
-          "dlg-1": {
-            id: "dlg-1",
-            kind: "file",
-            title: "outside.md",
-            location: "dialog",
-            isVisible: false,
-            filePath: "/outside/outside.md",
-            excludeFromPersistence: true,
-          } as PanelInstance,
+        const dialogPanel: FilePanelData = {
+          id: "dlg-1",
+          kind: "file",
+          title: "outside.md",
+          location: "dialog",
+          isVisible: false,
+          filePath: "/outside/outside.md",
+          excludeFromPersistence: true,
         };
+        const panelsById = { ...state.panelsById, "dlg-1": dialogPanel };
         const panelIds = [...state.panelIds, "dlg-1"];
         return {
           panelsById,
@@ -533,6 +529,11 @@ describe("dock ↔ grid transitions", () => {
       expect(state.panelIdsByWorktreeId["wt-1"]).toEqual(["t1"]);
       expect(state.panelIdsByWorktreeId[NO_WORKTREE]).toEqual(["t2"]);
       expect(recordSpy.mock.calls).toEqual([["t1", 3, "wt-1", "explicit"]]);
+      // The group adopts while the trashed member keeps its old attribution
+      // and its membership slot — the same trade moveTabGroupToWorktree makes;
+      // every consumer filters trashed members out of live group reads.
+      expect(state.tabGroups.get("g1")!.worktreeId).toBe("wt-1");
+      expect(state.tabGroups.get("g1")!.panelIds).toEqual(["t1", "t2"]);
     });
 
     it("leaves a worktree-less dock group global when no worktree is active", () => {
