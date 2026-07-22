@@ -11,6 +11,8 @@ const mockWebContents = vi.hoisted(() => ({
   getZoomLevel: vi.fn(() => 1.0),
   isDestroyed: vi.fn(() => false),
   send: vi.fn(),
+  isLoadingMainFrame: vi.fn(() => false),
+  once: vi.fn(),
   undo: vi.fn(),
   redo: vi.fn(),
   cut: vi.fn(),
@@ -72,7 +74,10 @@ vi.mock("electron", () => ({
     setApplicationMenu: vi.fn(),
     getApplicationMenu: vi.fn(() => mockApplicationMenu),
   },
-  dialog: { showOpenDialog: vi.fn() },
+  dialog: {
+    showOpenDialog: vi.fn(),
+    showMessageBox: vi.fn(() => Promise.resolve({ response: 0, checkboxChecked: false })),
+  },
   BrowserWindow: vi.fn(),
   shell: { openExternal: vi.fn() },
   app: {
@@ -116,7 +121,10 @@ vi.mock("../window/portDistribution.js", () => ({
 }));
 
 vi.mock("../ipc/channels.js", () => ({
-  CHANNELS: { MENU_ACTION: "menu-action" },
+  CHANNELS: {
+    MENU_ACTION: "menu-action",
+    PROJECT_OPEN_GIT_INIT_DIALOG: "project:open-git-init-dialog",
+  },
 }));
 
 vi.mock("../../shared/config/agentRegistry.js", () => ({
@@ -172,8 +180,12 @@ vi.mock("../services/pluginMenuRegistry.js", () => ({
   getPluginMenuItems: vi.fn(() => []),
 }));
 
+const getAppWebContentsMock = vi.hoisted(() =>
+  vi.fn((_win: { id: number }): unknown => mockWebContents)
+);
+
 vi.mock("../window/webContentsRegistry.js", () => ({
-  getAppWebContents: vi.fn(() => mockWebContents),
+  getAppWebContents: getAppWebContentsMock,
 }));
 
 const isWindowsStoreBuildMock = vi.hoisted(() => vi.fn(() => true));
@@ -187,7 +199,9 @@ vi.mock("../../shared/config/distribution.js", async (importOriginal) => ({
 
 import { createApplicationMenu, handleDirectoryOpen, buildAboutPanelOptions } from "../menu.js";
 import { getBuildChannelLabel } from "../../shared/config/distribution.js";
-import { webContents, app, Menu } from "electron";
+import { webContents, app, Menu, dialog } from "electron";
+import { CHANNELS } from "../ipc/channels.js";
+import { AppError } from "../utils/errorTypes.js";
 
 function findMenuItem(
   template: Electron.MenuItemConstructorOptions[],
@@ -904,5 +918,152 @@ describe("handleDirectoryOpen window targeting", () => {
 
     expect(targetManager.switchTo).toHaveBeenCalledWith(PROJECT.id, PROJECT.path);
     expect(newestManager.switchTo).not.toHaveBeenCalled();
+  });
+});
+
+// #11281: a folder that isn't a repository yet must route to the renderer's
+// guided GitInitDialog instead of the dead-end native error box, for every entry
+// point that funnels through handleDirectoryOpen (Dock drop, Cmd+O, Recent).
+describe("handleDirectoryOpen non-repository folders", () => {
+  const FOLDER = "/repos/not-a-repo";
+
+  function targetWindowStub(): Electron.BrowserWindow {
+    return { id: 3, isDestroyed: () => false } as unknown as Electron.BrowserWindow;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // `clearAllMocks` drops call history but keeps implementations, so restore
+    // the defaults the per-test overrides below replace.
+    mockWebContents.isDestroyed.mockReturnValue(false);
+    mockWebContents.isLoadingMainFrame.mockReturnValue(false);
+    getAppWebContentsMock.mockImplementation(() => mockWebContents);
+    windowRefMock.getWindowRegistry.mockReturnValue(undefined);
+  });
+
+  it("opens the guided dialog instead of the native error box", async () => {
+    projectStoreMock.addProject.mockRejectedValue(
+      new AppError({ code: "NOT_A_GIT_REPO", message: `Not a git repository: ${FOLDER}` })
+    );
+
+    await handleDirectoryOpen(FOLDER, targetWindowStub());
+
+    expect(mockWebContents.send).toHaveBeenCalledTimes(1);
+    expect(mockWebContents.send).toHaveBeenCalledWith(CHANNELS.PROJECT_OPEN_GIT_INIT_DIALOG, {
+      directoryPath: FOLDER,
+    });
+    expect(dialog.showMessageBox).not.toHaveBeenCalled();
+  });
+
+  it("defers the send until the renderer finishes loading", async () => {
+    mockWebContents.isLoadingMainFrame.mockReturnValue(true);
+    projectStoreMock.addProject.mockRejectedValue(
+      new AppError({ code: "NOT_A_GIT_REPO", message: "Not a git repository" })
+    );
+
+    await handleDirectoryOpen(FOLDER, targetWindowStub());
+
+    // A cold-launch Dock drop opens the folder while the window is still
+    // loading; Electron drops sends made before `did-finish-load` with no queue.
+    expect(mockWebContents.send).not.toHaveBeenCalled();
+    expect(mockWebContents.once).toHaveBeenCalledTimes(1);
+
+    const [event, deferredSend] = mockWebContents.once.mock.calls[0] as [string, () => void];
+    expect(event).toBe("did-finish-load");
+
+    deferredSend();
+    expect(mockWebContents.send).toHaveBeenCalledWith(CHANNELS.PROJECT_OPEN_GIT_INIT_DIALOG, {
+      directoryPath: FOLDER,
+    });
+  });
+
+  it("drops the deferred send if the renderer is destroyed before it fires", async () => {
+    mockWebContents.isLoadingMainFrame.mockReturnValue(true);
+    projectStoreMock.addProject.mockRejectedValue(
+      new AppError({ code: "NOT_A_GIT_REPO", message: "Not a git repository" })
+    );
+
+    await handleDirectoryOpen(FOLDER, targetWindowStub());
+
+    const [, deferredSend] = mockWebContents.once.mock.calls[0] as [string, () => void];
+    mockWebContents.isDestroyed.mockReturnValue(true);
+    deferredSend();
+
+    expect(mockWebContents.send).not.toHaveBeenCalled();
+  });
+
+  it("still shows the native error box for unrelated failures", async () => {
+    projectStoreMock.addProject.mockRejectedValue(new Error("ENOENT: no such file or directory"));
+
+    await handleDirectoryOpen(FOLDER, targetWindowStub());
+
+    expect(mockWebContents.send).not.toHaveBeenCalled();
+    expect(dialog.showMessageBox).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not hijack unrelated structured errors", async () => {
+    // Guards the `error.code` half of the condition: matching on `isAppError`
+    // alone would route a genuine failure into git-init setup and swallow it.
+    projectStoreMock.addProject.mockRejectedValue(
+      new AppError({ code: "INTERNAL", message: "Something else broke" })
+    );
+
+    await handleDirectoryOpen(FOLDER, targetWindowStub());
+
+    expect(mockWebContents.send).not.toHaveBeenCalled();
+    expect(dialog.showMessageBox).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends to the window the open came from, not a global one", async () => {
+    const otherWindowContents = {
+      isDestroyed: () => false,
+      isLoadingMainFrame: () => false,
+      send: vi.fn(),
+    };
+    getAppWebContentsMock.mockImplementation((win: { id: number }) =>
+      win.id === 3 ? mockWebContents : otherWindowContents
+    );
+    projectStoreMock.addProject.mockRejectedValue(
+      new AppError({ code: "NOT_A_GIT_REPO", message: "Not a git repository" })
+    );
+
+    await handleDirectoryOpen(FOLDER, targetWindowStub());
+
+    expect(mockWebContents.send).toHaveBeenCalledTimes(1);
+    expect(otherWindowContents.send).not.toHaveBeenCalled();
+  });
+
+  it("gives up if the window closes while the folder is being resolved", async () => {
+    // `addProject` is async, so the user can close the window mid-flight; the
+    // renderer lookup must not run against a dead window.
+    let destroyed = false;
+    projectStoreMock.addProject.mockImplementation(() => {
+      destroyed = true;
+      return Promise.reject(
+        new AppError({ code: "NOT_A_GIT_REPO", message: "Not a git repository" })
+      );
+    });
+    const closingWindow = {
+      id: 3,
+      isDestroyed: () => destroyed,
+    } as unknown as Electron.BrowserWindow;
+
+    await handleDirectoryOpen(FOLDER, closingWindow);
+
+    expect(getAppWebContentsMock).not.toHaveBeenCalled();
+    expect(mockWebContents.send).not.toHaveBeenCalled();
+    expect(dialog.showMessageBox).not.toHaveBeenCalled();
+  });
+
+  it("keys the guided path to the error code, not the message text", async () => {
+    // An untyped error that merely mentions the phrase (e.g. surfaced by some
+    // other git call) must keep the old native-dialog behavior — only the
+    // structured NOT_A_GIT_REPO code means "this folder can be initialized".
+    projectStoreMock.addProject.mockRejectedValue(new Error("Not a git repository: elsewhere"));
+
+    await handleDirectoryOpen(FOLDER, targetWindowStub());
+
+    expect(mockWebContents.send).not.toHaveBeenCalled();
+    expect(dialog.showMessageBox).toHaveBeenCalledTimes(1);
   });
 });

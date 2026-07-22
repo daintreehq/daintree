@@ -235,6 +235,7 @@ export const CHANNELS = {
   PROJECT_INIT_GIT: "project:init-git",
   PROJECT_INIT_GIT_GUIDED: "project:init-git-guided",
   PROJECT_INIT_GIT_PROGRESS: "project:init-git-progress",
+  PROJECT_OPEN_GIT_INIT_DIALOG: "project:open-git-init-dialog",
   PROJECT_CLONE_REPO: "project:clone-repo",
   PROJECT_CLONE_PROGRESS: "project:clone-progress",
   PROJECT_CLONE_CANCEL: "project:clone-cancel",

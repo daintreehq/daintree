@@ -1638,6 +1638,10 @@ export interface IpcEventMap {
   "project:stats-updated": ProjectStatusMap;
   "project:updated": Project;
   "project:removed": string;
+  // Main asks the renderer to open the guided git-init dialog for a folder the
+  // user tried to open that isn't a repository yet (Dock drop, Cmd+O, Recent
+  // Projects). Nothing is written to disk until the user confirms in-dialog.
+  "project:open-git-init-dialog": { directoryPath: string };
 
   // Scratch events
   "scratch:on-switch": ScratchSwitchPayload;

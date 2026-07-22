@@ -558,6 +558,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onWorktreeLoadStatus(
       callback: (payload: { projectId: string; worktreeLoadError: string | null }) => void
     ): () => void;
+    onOpenGitInitDialog(callback: (payload: { directoryPath: string }) => void): () => void;
     onFocusOnActivate(callback: (payload: { intent: "focus-next-waiting" }) => void): () => void;
     onBackgroundResize(callback: (payload: { width: number; height: number }) => void): () => void;
     onUpdated(callback: (project: Project) => void): () => void;
