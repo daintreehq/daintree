@@ -45,6 +45,7 @@ import {
   type PluginTrayGroup,
 } from "./PluginTrayButton";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
+import { resolvePluginIcon } from "@/components/icons/pluginIconRegistry";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
@@ -220,7 +221,14 @@ function OverflowMenu({
   // captures them at the only moment they're about to become visible.
   const [repoStats, setRepoStats] = useState<ForgeRepositoryStats | null>(null);
   const handleOpenChange = (nextOpen: boolean) => {
-    if (nextOpen) setRepoStats(forgeStatsRef.current?.stats ?? null);
+    if (nextOpen) {
+      setRepoStats(forgeStatsRef.current?.stats ?? null);
+      // Same reason PluginTrayButton refreshes on open: a dev-attached plugin
+      // registers its buttons without broadcasting provenance, so its display
+      // name can be missing and the inlined groups would fall back to raw
+      // plugin ids.
+      if (pluginTrayGroups.length > 0) usePluginRuntimeStore.getState().refresh();
+    }
     setOpen(nextOpen);
   };
   const isEmpty = overflowIds.length === 0;
@@ -361,7 +369,7 @@ function OverflowMenu({
                 <DropdownMenuGroup key={`plugin-tray-${group.pluginId}`}>
                   <DropdownMenuLabel>{group.displayName}</DropdownMenuLabel>
                   {group.buttons.map((config) => {
-                    const Icon = pluginToolbarIconFor(config.iconId);
+                    const Icon = resolvePluginIcon(config.iconId);
                     return (
                       <DropdownMenuItem
                         key={config.id}

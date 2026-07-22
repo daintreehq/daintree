@@ -62,7 +62,7 @@ export function groupPluginToolbarButtons(
     else byPlugin.set(config.pluginId, [config]);
   }
 
-  const groups: PluginGroup[] = [];
+  const groups: PluginTrayGroup[] = [];
   for (const [pluginId, buttons] of byPlugin) {
     buttons.sort(
       (a, b) =>

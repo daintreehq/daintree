@@ -53,7 +53,14 @@ test.describe.serial("Core: Plugin contributions", () => {
     // over a broadcast that lands after the main-process registration the
     // fixture waits on, so asserting absence before this point would pass
     // simply because no plugin had rendered yet.
-    await expect(trayTrigger).toBeAttached({ timeout: T_MEDIUM });
+    //
+    // Structural locator, not the role one: a toolbar item evicted into
+    // overflow keeps an `aria-hidden` wrapper, which `getByRole` refuses to
+    // match — so a role-based gate would time out exactly when the tray is
+    // overflowed, which is the case the fallback below exists to cover.
+    await expect(toolbar.locator('[data-toolbar-button-id="plugin-tray"]')).toBeAttached({
+      timeout: T_MEDIUM,
+    });
 
     // The contribution no longer owns a top-level slot of its own (#11304).
     await expect(topLevelSlot).toHaveCount(0);

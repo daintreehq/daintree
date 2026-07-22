@@ -62,6 +62,12 @@ function toButtonId(id: UniqueIdentifier): AnyToolbarButtonId {
   return id as AnyToolbarButtonId;
 }
 
+// Plugin button ids are namespaced `{pluginId}.{buttonId}` by main, so the dot
+// is structural — this narrows without an unsafe assertion.
+function isPluginToolbarButtonId(id: AnyToolbarButtonId): id is PluginToolbarButtonId {
+  return id.includes(".");
+}
+
 interface ToolbarButtonCardProps {
   metadata: ToolbarButtonMetadata;
   isVisible: boolean;
@@ -474,8 +480,8 @@ export function ToolbarSettingsTab() {
     // through the promotion action: the generic toggle only alternates
     // `false`/absent, and under tray-default neither of those is promoted, so
     // the switch could never turn the button on (#11304).
-    if (pluginConfigs.has(buttonId)) {
-      setPluginButtonPromoted(buttonId as PluginToolbarButtonId, !isVisible(buttonId));
+    if (pluginConfigs.has(buttonId) && isPluginToolbarButtonId(buttonId)) {
+      setPluginButtonPromoted(buttonId, !isVisible(buttonId));
       return;
     }
     dispatchToolbarVisibility(buttonId, side, {
