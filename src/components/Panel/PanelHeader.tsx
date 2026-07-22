@@ -664,9 +664,7 @@ function PanelHeaderComponent({
                 ? "bg-tint/[0.05]"
                 : "bg-[var(--panel-header-bg,transparent)]",
         // Mirror the fleet ribbon's 2px amber left stripe on follower panes.
-        // Renders via `before:` so it stacks alongside the worktree-identity
-        // `after:` stripe on the panel container without conflicting. The
-        // stripe sits in the title bar — fovea-adjacent when reading the
+        // The stripe sits in the title bar — fovea-adjacent when reading the
         // pane body — so users don't have to look up at the ribbon to verify
         // which panes will receive their keystrokes.
         isFleetFollower &&
