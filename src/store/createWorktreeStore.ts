@@ -142,9 +142,7 @@ export interface DetachIssueOutboxEntry extends MutationOutboxEntryBase {
 }
 
 export type MutationOutboxEntry =
-  | DeleteWorktreeOutboxEntry
-  | AttachIssueOutboxEntry
-  | DetachIssueOutboxEntry;
+  DeleteWorktreeOutboxEntry | AttachIssueOutboxEntry | DetachIssueOutboxEntry;
 
 /** True for the issue-association mutation arms (#9163). */
 function isIssueMutation(

@@ -378,12 +378,10 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
           const current = await window.electron?.notification?.getSettings();
           if (current) {
             priorValue = (current as unknown as Record<string, unknown>)[settingKey] as
-              | boolean
-              | undefined;
+              boolean | undefined;
             priorGlobalSnapshot = {
               [settingKey]: (current as unknown as Record<string, unknown>)[settingKey] as
-                | boolean
-                | undefined,
+                boolean | undefined,
             };
             await window.electron.notification.setSettings({ [settingKey]: false });
           }

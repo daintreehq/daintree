@@ -30,10 +30,7 @@ export type { TerminalFlowStatus };
  * does NOT carry this discriminator; it only carries `success: boolean`.
  */
 export type AgentStateTransitionDropReason =
-  | "no-op"
-  | "hysteresis"
-  | "stale-session"
-  | "schema-invalid";
+  "no-op" | "hysteresis" | "stale-session" | "schema-invalid";
 
 /** Options for spawning a new PTY process (matches PtyManager interface) */
 export interface PtyHostSpawnOptions {
@@ -783,11 +780,7 @@ export interface SpawnError {
 
 /** Crash type classification based on exit codes */
 export type CrashType =
-  | "OUT_OF_MEMORY"
-  | "ASSERTION_FAILURE"
-  | "SIGNAL_TERMINATED"
-  | "UNKNOWN_CRASH"
-  | "CLEAN_EXIT";
+  "OUT_OF_MEMORY" | "ASSERTION_FAILURE" | "SIGNAL_TERMINATED" | "UNKNOWN_CRASH" | "CLEAN_EXIT";
 
 /** Payload for terminal status events (flow control) */
 export interface TerminalStatusPayload {

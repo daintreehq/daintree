@@ -15,9 +15,8 @@ const onTokenHealthChangedMock = vi.fn(
     return cleanupMock;
   }
 );
-const getTokenHealthMock = vi.fn(
-  (_providerId: string): Promise<ForgeTokenHealthState | null> =>
-    Promise.resolve({ status: "unknown", tokenVersion: 0, checkedAt: 0 })
+const getTokenHealthMock = vi.fn((_providerId: string): Promise<ForgeTokenHealthState | null> =>
+  Promise.resolve({ status: "unknown", tokenVersion: 0, checkedAt: 0 })
 );
 
 vi.mock("@/clients/forgeClient", () => ({

@@ -63,8 +63,7 @@ export type LedgerRejectReason =
   | "inferred-worktree-overwrite";
 
 export type LedgerVerdict =
-  | { accepted: true }
-  | { accepted: false; reason: LedgerRejectReason; detail?: string };
+  { accepted: true } | { accepted: false; reason: LedgerRejectReason; detail?: string };
 
 export interface LedgerAnomaly {
   terminalId: string;

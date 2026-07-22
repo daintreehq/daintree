@@ -98,8 +98,7 @@ vi.mock("../../../../../shared/utils/folderName.js", () => ({
 let capturedProgress: ((e: { stage: string; progress: number }) => void) | undefined;
 let capturedExtraConfig: string[] | undefined;
 let capturedSpawnAfter:
-  | ((data: unknown, ctx: { spawned?: { pid?: number } }) => unknown)
-  | undefined;
+  ((data: unknown, ctx: { spawned?: { pid?: number } }) => unknown) | undefined;
 let cloneImpl: () => Promise<unknown> = async () => undefined;
 
 const createAuthenticatedGitMock = vi.fn(

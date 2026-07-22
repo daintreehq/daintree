@@ -9,9 +9,7 @@ import type { Scratch } from "@shared/types/scratch";
  * no-workspace case.
  */
 export type EmptyCanvas =
-  | { kind: "project" }
-  | { kind: "scratch"; scratch: Scratch }
-  | { kind: "welcome" };
+  { kind: "project" } | { kind: "scratch"; scratch: Scratch } | { kind: "welcome" };
 
 /**
  * The two workspace pointers are mutually exclusive — switching to a scratch

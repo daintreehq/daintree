@@ -28,9 +28,7 @@ const CHECK_AGAIN_COOLDOWN_MS = 5_000;
  * silently dismiss the gate and auto-launch an outdated CLI.
  */
 type VersionProbeResult =
-  | { status: "ok" }
-  | { status: "indeterminate" }
-  | { status: "too-old"; block: VersionTooOld };
+  { status: "ok" } | { status: "indeterminate" } | { status: "too-old"; block: VersionTooOld };
 
 // `refresh=true` bypasses the 12h AgentVersionService cache — pass on retry
 // so a user who manually updates the CLI outside Daintree's update flow can

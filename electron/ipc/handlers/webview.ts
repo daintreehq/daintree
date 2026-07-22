@@ -850,8 +850,7 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     let fetchEnabled = false;
     let restoreScriptIdentifier: string | null = null;
     let interceptorListener:
-      | ((event: Electron.Event, method: string, params: unknown) => void)
-      | null = null;
+      ((event: Electron.Event, method: string, params: unknown) => void) | null = null;
     let navigationError: Error | null = null;
 
     try {

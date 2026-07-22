@@ -644,8 +644,7 @@ describe("kimi detection patterns", () => {
   function compilePatterns(key: string): RegExp[] {
     const config = getAgentConfig("kimi");
     const patterns = config?.detection?.[key as keyof typeof config.detection] as
-      | string[]
-      | undefined;
+      string[] | undefined;
     return (patterns ?? []).map((p: string) => new RegExp(p, "im"));
   }
 
@@ -819,8 +818,7 @@ describe("copilot detection patterns", () => {
   function compilePatterns(key: string): RegExp[] {
     const config = getAgentConfig("copilot");
     const patterns = config?.detection?.[key as keyof typeof config.detection] as
-      | string[]
-      | undefined;
+      string[] | undefined;
     return (patterns ?? []).map((p: string) => new RegExp(p, "im"));
   }
 
@@ -1205,8 +1203,7 @@ describe("cursor detection patterns", () => {
   function compileAgentPatterns(agentId: string, key: string): RegExp[] {
     const config = getAgentConfig(agentId);
     const patterns = config?.detection?.[key as keyof typeof config.detection] as
-      | string[]
-      | undefined;
+      string[] | undefined;
     return (patterns ?? []).map((p: string) => new RegExp(p, "im"));
   }
 
@@ -1362,8 +1359,7 @@ describe("opencode detection patterns", () => {
   function compileAgentPatterns(agentId: string, key: string): RegExp[] {
     const config = getAgentConfig(agentId);
     const patterns = config?.detection?.[key as keyof typeof config.detection] as
-      | string[]
-      | undefined;
+      string[] | undefined;
     return (patterns ?? []).map((p: string) => new RegExp(p, "im"));
   }
 
@@ -1483,8 +1479,7 @@ describe("goose detection patterns", () => {
   function compileAgentPatterns(agentId: string, key: string): RegExp[] {
     const config = getAgentConfig(agentId);
     const patterns = config?.detection?.[key as keyof typeof config.detection] as
-      | string[]
-      | undefined;
+      string[] | undefined;
     return (patterns ?? []).map((p: string) => new RegExp(p, "im"));
   }
 
@@ -1572,8 +1567,7 @@ describe("aider detection patterns", () => {
   function compileAgentPatterns(agentId: string, key: string): RegExp[] {
     const config = getAgentConfig(agentId);
     const patterns = config?.detection?.[key as keyof typeof config.detection] as
-      | string[]
-      | undefined;
+      string[] | undefined;
     return (patterns ?? []).map((p: string) => new RegExp(p, "im"));
   }
 

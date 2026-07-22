@@ -1223,12 +1223,10 @@ describe("McpServerService", () => {
 
   it("denies dispatch of non-allowlisted tools even with fullToolSurface enabled (#10701)", async () => {
     storeState.mcpServer.fullToolSurface = true;
-    const dispatchMock = vi.fn(
-      (payload: DispatchRequest): ActionDispatchResult => ({
-        ok: true,
-        result: { dispatched: payload.actionId },
-      })
-    );
+    const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => ({
+      ok: true,
+      result: { dispatched: payload.actionId },
+    }));
     const { window } = createMockWindow({
       getManifest: () => [
         createManifestEntry({
@@ -1285,12 +1283,10 @@ describe("McpServerService", () => {
   });
 
   it("denies non-allowlisted actions for the external tier (dispatch never reached)", async () => {
-    const dispatchMock = vi.fn(
-      (payload: DispatchRequest): ActionDispatchResult => ({
-        ok: true,
-        result: { dispatched: payload.actionId },
-      })
-    );
+    const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => ({
+      ok: true,
+      result: { dispatched: payload.actionId },
+    }));
 
     const { window } = createMockWindow({
       getManifest: () => [

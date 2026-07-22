@@ -161,8 +161,7 @@ describe("HttpLifecycle", () => {
       let capturedServer: http.Server | null = null;
       vi.spyOn(http, "createServer").mockImplementation(((...args: unknown[]) => {
         const handler = args.find((a) => typeof a === "function") as
-          | http.RequestListener
-          | undefined;
+          http.RequestListener | undefined;
         const s = mockServer();
         capturedServer = s;
         if (handler) s.on("request", handler);

@@ -282,8 +282,7 @@ export class ResourceActionExecutor {
 
     const commands = (
       resourceConfig[effectiveAction as "provision" | "teardown" | "resume" | "pause"] as
-        | string[]
-        | undefined
+        string[] | undefined
     )?.map(sub);
     if (!commands?.length) {
       this.ctx.sendEvent({

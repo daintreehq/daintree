@@ -154,12 +154,10 @@ describe("GitFileWatcher", () => {
     await expect(gitWatcher.start()).resolves.toBe(true);
 
     const dotGitCall = vi.mocked(watch).mock.calls.find(([path]) => path === gitDir) as
-      | [unknown, unknown, unknown]
-      | undefined;
+      [unknown, unknown, unknown] | undefined;
     expect(dotGitCall).toBeDefined();
     const dotGitCallback = dotGitCall?.[2] as
-      | ((eventType: string, filename: string | Buffer | null) => void)
-      | undefined;
+      ((eventType: string, filename: string | Buffer | null) => void) | undefined;
     expect(dotGitCallback).toBeDefined();
 
     // index.lock → index is the atomic-rename pattern git uses for index
@@ -187,12 +185,10 @@ describe("GitFileWatcher", () => {
     await expect(gitWatcher.start()).resolves.toBe(true);
 
     const dotGitCall = vi.mocked(watch).mock.calls.find(([path]) => path === gitDir) as
-      | [unknown, unknown, unknown]
-      | undefined;
+      [unknown, unknown, unknown] | undefined;
     expect(dotGitCall).toBeDefined();
     const dotGitCallback = dotGitCall?.[2] as
-      | ((eventType: string, filename: string | Buffer | null) => void)
-      | undefined;
+      ((eventType: string, filename: string | Buffer | null) => void) | undefined;
     expect(dotGitCallback).toBeDefined();
 
     dotGitCallback?.("rename", "description");
@@ -224,12 +220,10 @@ describe("GitFileWatcher", () => {
     await expect(gitWatcher.start()).resolves.toBe(true);
 
     const dotGitCall = vi.mocked(watch).mock.calls.find(([path]) => path === gitDir) as
-      | [unknown, unknown, unknown]
-      | undefined;
+      [unknown, unknown, unknown] | undefined;
     expect(dotGitCall).toBeDefined();
     const dotGitCallback = dotGitCall?.[2] as
-      | ((eventType: string, filename: string | Buffer | null) => void)
-      | undefined;
+      ((eventType: string, filename: string | Buffer | null) => void) | undefined;
 
     dotGitCallback?.("rename", "config");
     await vi.advanceTimersByTimeAsync(150);
@@ -257,8 +251,7 @@ describe("GitFileWatcher", () => {
       await expect(gitWatcher.start()).resolves.toBe(true);
 
       const dotGitCall = vi.mocked(watch).mock.calls.find(([path]) => path === gitDir) as
-        | [unknown, unknown, unknown]
-        | undefined;
+        [unknown, unknown, unknown] | undefined;
       expect(dotGitCall).toBeDefined();
       return dotGitCall?.[2] as (eventType: string, filename: string | Buffer | null) => void;
     }
@@ -359,12 +352,10 @@ describe("GitFileWatcher", () => {
     const logsCall = vi
       .mocked(watch)
       .mock.calls.find(([path]) => path === pathJoin(gitDir, "logs")) as
-      | [unknown, unknown, unknown]
-      | undefined;
+      [unknown, unknown, unknown] | undefined;
     expect(logsCall).toBeDefined();
     const logsCallback = logsCall?.[2] as
-      | ((eventType: string, filename: string | Buffer | null) => void)
-      | undefined;
+      ((eventType: string, filename: string | Buffer | null) => void) | undefined;
     expect(logsCallback).toBeDefined();
 
     logsCallback?.("rename", "HEAD");
@@ -402,12 +393,10 @@ describe("GitFileWatcher", () => {
     await expect(gitWatcher.start()).resolves.toBe(true);
 
     const originCall = vi.mocked(watch).mock.calls.find(([path]) => path === originDir) as
-      | [unknown, unknown, unknown]
-      | undefined;
+      [unknown, unknown, unknown] | undefined;
     expect(originCall).toBeDefined();
     const originCallback = originCall?.[2] as
-      | ((eventType: string, filename: string | Buffer | null) => void)
-      | undefined;
+      ((eventType: string, filename: string | Buffer | null) => void) | undefined;
     expect(originCallback).toBeDefined();
 
     // A fetch writing origin/main; the arm is filename-agnostic (any event here
@@ -542,11 +531,9 @@ describe("GitFileWatcher", () => {
     await expect(gitWatcher.start()).resolves.toBe(true);
 
     const dotGitCall = vi.mocked(watch).mock.calls.find(([path]) => path === gitDir) as
-      | [unknown, unknown, unknown]
-      | undefined;
+      [unknown, unknown, unknown] | undefined;
     const dotGitCallback = dotGitCall?.[2] as
-      | ((eventType: string, filename: string | Buffer | null) => void)
-      | undefined;
+      ((eventType: string, filename: string | Buffer | null) => void) | undefined;
     expect(dotGitCallback).toBeDefined();
 
     dotGitCallback?.("rename", "HEAD");
@@ -1361,8 +1348,7 @@ describe("GitFileWatcher", () => {
     >;
     expect(dotGitCalls).toHaveLength(1);
     const dotGitCallback = dotGitCalls[0][2] as
-      | ((eventType: string, filename: string | Buffer | null) => void)
-      | undefined;
+      ((eventType: string, filename: string | Buffer | null) => void) | undefined;
     expect(dotGitCallback).toBeDefined();
 
     for (const sentinel of [
@@ -1394,12 +1380,10 @@ describe("GitFileWatcher", () => {
     const refsCall = vi
       .mocked(watch)
       .mock.calls.find(([path]) => path === pathJoin(gitDir, "refs", "heads")) as
-      | [unknown, unknown, unknown]
-      | undefined;
+      [unknown, unknown, unknown] | undefined;
     expect(refsCall).toBeDefined();
     const refsCallback = refsCall?.[2] as
-      | ((eventType: string, filename: string | Buffer | null) => void)
-      | undefined;
+      ((eventType: string, filename: string | Buffer | null) => void) | undefined;
     expect(refsCallback).toBeDefined();
 
     refsCallback?.("rename", "main");

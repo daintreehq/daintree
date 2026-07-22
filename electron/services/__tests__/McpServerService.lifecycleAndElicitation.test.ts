@@ -790,12 +790,10 @@ describe("McpServerService", () => {
   });
 
   it("returns browser.captureScreenshot bytes as an MCP image content block", async () => {
-    const dispatchMock = vi.fn(
-      (): ActionDispatchResult => ({
-        ok: true,
-        result: { pngBase64: "aGVsbG8=", width: 1024, height: 768 },
-      })
-    );
+    const dispatchMock = vi.fn((): ActionDispatchResult => ({
+      ok: true,
+      result: { pngBase64: "aGVsbG8=", width: 1024, height: 768 },
+    }));
 
     const { window } = createMockWindow({
       getManifest: () => [
@@ -841,9 +839,10 @@ describe("McpServerService", () => {
     // McpServerService must forward the 4th `callerInfo` argument computed by
     // HttpLifecycle — dropping it silently broke the "Requested by" row while
     // every mocked unit test still passed.
-    const dispatchMock = vi.fn(
-      (): ActionDispatchResult => ({ ok: true, result: { listed: true } })
-    );
+    const dispatchMock = vi.fn((): ActionDispatchResult => ({
+      ok: true,
+      result: { listed: true },
+    }));
 
     const { window } = createMockWindow({
       getManifest: () => [
@@ -875,12 +874,10 @@ describe("McpServerService", () => {
   });
 
   it("strips legacy `_meta.confirmed=true` from arguments instead of bypassing confirmation", async () => {
-    const dispatchMock = vi.fn(
-      (): ActionDispatchResult => ({
-        ok: false,
-        error: { code: "CONFIRMATION_REQUIRED", message: "Need confirm" },
-      })
-    );
+    const dispatchMock = vi.fn((): ActionDispatchResult => ({
+      ok: false,
+      error: { code: "CONFIRMATION_REQUIRED", message: "Need confirm" },
+    }));
 
     const { window } = createMockWindow({
       getManifest: () => [
@@ -953,12 +950,10 @@ describe("McpServerService", () => {
 
     it("dispatches with confirmed=true after the client accepts the elicitation", async () => {
       const dispatchMock = createDestructiveDispatchMock();
-      const onElicit = vi.fn(
-        async (): Promise<ElicitResult> => ({
-          action: "accept",
-          content: {},
-        })
-      );
+      const onElicit = vi.fn(async (): Promise<ElicitResult> => ({
+        action: "accept",
+        content: {},
+      }));
       const { window } = createMockWindow({
         getManifest: () => [
           createManifestEntry({
@@ -1006,11 +1001,9 @@ describe("McpServerService", () => {
 
     it("returns USER_REJECTED without dispatching when the client declines", async () => {
       const dispatchMock = createDestructiveDispatchMock();
-      const onElicit = vi.fn(
-        async (): Promise<ElicitResult> => ({
-          action: "decline",
-        })
-      );
+      const onElicit = vi.fn(async (): Promise<ElicitResult> => ({
+        action: "decline",
+      }));
       const { window } = createMockWindow({
         getManifest: () => [
           createManifestEntry({
@@ -1050,11 +1043,9 @@ describe("McpServerService", () => {
 
     it("returns CONFIRMATION_TIMEOUT without dispatching when the client cancels", async () => {
       const dispatchMock = createDestructiveDispatchMock();
-      const onElicit = vi.fn(
-        async (): Promise<ElicitResult> => ({
-          action: "cancel",
-        })
-      );
+      const onElicit = vi.fn(async (): Promise<ElicitResult> => ({
+        action: "cancel",
+      }));
       const { window } = createMockWindow({
         getManifest: () => [
           createManifestEntry({
@@ -1094,12 +1085,10 @@ describe("McpServerService", () => {
 
     it("requests an empty-form elicitation so accept alone is the consent signal", async () => {
       const dispatchMock = createDestructiveDispatchMock();
-      const onElicit = vi.fn(
-        async (): Promise<ElicitResult> => ({
-          action: "accept",
-          content: {},
-        })
-      );
+      const onElicit = vi.fn(async (): Promise<ElicitResult> => ({
+        action: "accept",
+        content: {},
+      }));
       const { window } = createMockWindow({
         getManifest: () => [
           createManifestEntry({
@@ -1138,12 +1127,10 @@ describe("McpServerService", () => {
 
     it("includes a summary of tool arguments in the elicitation message", async () => {
       const dispatchMock = createDestructiveDispatchMock();
-      const onElicit = vi.fn(
-        async (): Promise<ElicitResult> => ({
-          action: "accept",
-          content: {},
-        })
-      );
+      const onElicit = vi.fn(async (): Promise<ElicitResult> => ({
+        action: "accept",
+        content: {},
+      }));
       const { window } = createMockWindow({
         getManifest: () => [
           createManifestEntry({
@@ -1217,18 +1204,14 @@ describe("McpServerService", () => {
     });
 
     it("preserves the approved confirmationDecision when dispatch fails after elicitation accepts", async () => {
-      const dispatchMock = vi.fn(
-        (): ActionDispatchResult => ({
-          ok: false,
-          error: { code: "EXECUTION_ERROR", message: "action exploded" },
-        })
-      );
-      const onElicit = vi.fn(
-        async (): Promise<ElicitResult> => ({
-          action: "accept",
-          content: {},
-        })
-      );
+      const dispatchMock = vi.fn((): ActionDispatchResult => ({
+        ok: false,
+        error: { code: "EXECUTION_ERROR", message: "action exploded" },
+      }));
+      const onElicit = vi.fn(async (): Promise<ElicitResult> => ({
+        action: "accept",
+        content: {},
+      }));
       const { window } = createMockWindow({
         getManifest: () => [
           createManifestEntry({
@@ -1271,12 +1254,10 @@ describe("McpServerService", () => {
     });
 
     it("does not invoke elicitation for non-destructive tools", async () => {
-      const dispatchMock = vi.fn(
-        (): ActionDispatchResult => ({
-          ok: true,
-          result: ["a", "b"],
-        })
-      );
+      const dispatchMock = vi.fn((): ActionDispatchResult => ({
+        ok: true,
+        result: ["a", "b"],
+      }));
       const onElicit = vi.fn();
       const { window } = createMockWindow({
         getManifest: () => [

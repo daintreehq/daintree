@@ -502,12 +502,10 @@ describe("McpServerService", () => {
     });
 
     it("records a successful dispatch with redacted args and a non-empty session id", async () => {
-      const dispatchMock = vi.fn(
-        (): ActionDispatchResult => ({
-          ok: true,
-          result: { ok: true },
-        })
-      );
+      const dispatchMock = vi.fn((): ActionDispatchResult => ({
+        ok: true,
+        result: { ok: true },
+      }));
       const { window } = createMockWindow({
         getManifest: () => [
           createManifestEntry({
@@ -622,12 +620,10 @@ describe("McpServerService", () => {
     });
 
     it("records confirmationDecision='rejected' when dispatch returns USER_REJECTED", async () => {
-      const dispatchMock = vi.fn(
-        (): ActionDispatchResult => ({
-          ok: false,
-          error: { code: "USER_REJECTED", message: "User rejected the confirmation request." },
-        })
-      );
+      const dispatchMock = vi.fn((): ActionDispatchResult => ({
+        ok: false,
+        error: { code: "USER_REJECTED", message: "User rejected the confirmation request." },
+      }));
       const { window } = createMockWindow({
         getManifest: () => [
           createManifestEntry({
@@ -654,15 +650,13 @@ describe("McpServerService", () => {
     });
 
     it("records confirmationDecision='timeout' when dispatch returns CONFIRMATION_TIMEOUT", async () => {
-      const dispatchMock = vi.fn(
-        (): ActionDispatchResult => ({
-          ok: false,
-          error: {
-            code: "CONFIRMATION_TIMEOUT",
-            message: "Confirmation request timed out before the user responded.",
-          },
-        })
-      );
+      const dispatchMock = vi.fn((): ActionDispatchResult => ({
+        ok: false,
+        error: {
+          code: "CONFIRMATION_TIMEOUT",
+          message: "Confirmation request timed out before the user responded.",
+        },
+      }));
       const { window } = createMockWindow({
         getManifest: () => [
           createManifestEntry({

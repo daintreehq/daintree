@@ -577,11 +577,10 @@ describe("registerDiagnosticsHandlers", () => {
           path.normalize(p) === logPath("daintree.log.2")
       );
       // Window cutoff = 5000ms. .1 is older (skip), .2 is newer (keep).
-      statMock.mockImplementation(
-        (p: string): Promise<{ mtimeMs: number }> =>
-          Promise.resolve({
-            mtimeMs: path.normalize(p) === logPath("daintree.log.1") ? 4000 : 6000,
-          })
+      statMock.mockImplementation((p: string): Promise<{ mtimeMs: number }> =>
+        Promise.resolve({
+          mtimeMs: path.normalize(p) === logPath("daintree.log.1") ? 4000 : 6000,
+        })
       );
       dialogMock.showSaveDialog.mockResolvedValueOnce({
         filePath: "/tmp/diagnostics.zip",

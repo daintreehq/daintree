@@ -30,5 +30,4 @@ export type DbWorkerOp =
 export type DbWorkerRequest = DbWorkerOp & { id: number; fence: number };
 
 export type DbWorkerResponse =
-  | { id: number; ok: true; result: unknown }
-  | { id: number; ok: false; error: string };
+  { id: number; ok: true; result: unknown } | { id: number; ok: false; error: string };

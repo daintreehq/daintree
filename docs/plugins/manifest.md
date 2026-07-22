@@ -73,42 +73,18 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
 
   // The plugin's UI and functional contributions.
   "contributes": {
-    "agents": [
-      /* requires the agent:register capability */
-    ],
-    "panels": [
-      /* ... */
-    ],
-    "toolbarButtons": [
-      /* ... */
-    ],
-    "menuItems": [
-      /* ... */
-    ],
-    "keybindings": [
-      /* ... */
-    ],
-    "contextMenus": [
-      /* ... */
-    ],
-    "commands": [
-      /* ... */
-    ],
-    "settings": [
-      /* ... */
-    ],
-    "views": [
-      /* ... */
-    ],
-    "mcpServers": [
-      /* ... */
-    ],
-    "forgeProviders": [
-      /* ... */
-    ],
-    "fileDecorationProviders": [
-      /* ... */
-    ],
+    "agents": [/* requires the agent:register capability */],
+    "panels": [/* ... */],
+    "toolbarButtons": [/* ... */],
+    "menuItems": [/* ... */],
+    "keybindings": [/* ... */],
+    "contextMenus": [/* ... */],
+    "commands": [/* ... */],
+    "settings": [/* ... */],
+    "views": [/* ... */],
+    "mcpServers": [/* ... */],
+    "forgeProviders": [/* ... */],
+    "fileDecorationProviders": [/* ... */],
   },
 }
 ```

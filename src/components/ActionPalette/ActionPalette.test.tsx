@@ -111,8 +111,7 @@ function fireKey(
   } = {}
 ) {
   const onKeyDown = lastSearchablePaletteProps.current?.onKeyDown as
-    | ((e: React.KeyboardEvent<HTMLInputElement>) => void)
-    | undefined;
+    ((e: React.KeyboardEvent<HTMLInputElement>) => void) | undefined;
   if (!onKeyDown) throw new Error("onKeyDown not forwarded to SearchablePalette");
   let prevented = false;
   const currentTarget = {
@@ -379,8 +378,7 @@ describe("ActionPalette", () => {
         />
       );
       const renderBody = lastSearchablePaletteProps.current?.renderBody as
-        | (() => React.ReactNode)
-        | undefined;
+        (() => React.ReactNode) | undefined;
       expect(typeof renderBody).toBe("function");
       const { container } = render(<>{renderBody!()}</>);
 

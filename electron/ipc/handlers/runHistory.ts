@@ -10,9 +10,8 @@ import { RUN_HISTORY_METHOD_CHANNELS } from "./runHistory.preload.js";
 export const runHistoryNamespace = defineIpcNamespace({
   name: "runHistory",
   ops: {
-    getRecords: op(
-      RUN_HISTORY_METHOD_CHANNELS.getRecords,
-      async (): Promise<RunHistoryRecord[]> => runHistoryLog.getRecords()
+    getRecords: op(RUN_HISTORY_METHOD_CHANNELS.getRecords, async (): Promise<RunHistoryRecord[]> =>
+      runHistoryLog.getRecords()
     ),
     append: op(
       RUN_HISTORY_METHOD_CHANNELS.append,

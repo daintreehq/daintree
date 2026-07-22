@@ -18,11 +18,7 @@
 
 /** Fixed set of services that are tracked. Dev-server connectivity is per-session and lives outside this snapshot. */
 export type ConnectivityServiceKey =
-  | "github"
-  | "agent:claude"
-  | "agent:gemini"
-  | "agent:codex"
-  | "mcp";
+  "github" | "agent:claude" | "agent:gemini" | "agent:codex" | "mcp";
 
 /** All known service keys in canonical order. */
 export const CONNECTIVITY_SERVICE_KEYS: readonly ConnectivityServiceKey[] = [

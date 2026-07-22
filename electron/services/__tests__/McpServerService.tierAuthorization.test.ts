@@ -599,12 +599,10 @@ describe("McpServerService", () => {
     }
 
     it("workbench tier: allows queries, denies mutations, and never reaches dispatch on denial", async () => {
-      const dispatchMock = vi.fn(
-        (payload: DispatchRequest): ActionDispatchResult => ({
-          ok: true,
-          result: { dispatched: payload.actionId },
-        })
-      );
+      const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => ({
+        ok: true,
+        result: { dispatched: payload.actionId },
+      }));
       const { window } = createMockWindow({
         getManifest: manifestForAllAllowlistedTools,
         dispatchAction: dispatchMock,
@@ -668,12 +666,10 @@ describe("McpServerService", () => {
     });
 
     it("external tier: backward compatibility for the apiKey-authenticated server", async () => {
-      const dispatchMock = vi.fn(
-        (payload: DispatchRequest): ActionDispatchResult => ({
-          ok: true,
-          result: { dispatched: payload.actionId },
-        })
-      );
+      const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => ({
+        ok: true,
+        result: { dispatched: payload.actionId },
+      }));
       const { window } = createMockWindow({
         getManifest: manifestForAllAllowlistedTools,
         dispatchAction: dispatchMock,
@@ -1465,9 +1461,10 @@ describe("McpServerService", () => {
 
     it("rejects callTool for actions outside the session tier with TIER_NOT_PERMITTED", async () => {
       paneTokenTiers.set("token-wb", "workbench");
-      const dispatchMock = vi.fn(
-        (): ActionDispatchResult => ({ ok: true, result: "should-not-run" })
-      );
+      const dispatchMock = vi.fn((): ActionDispatchResult => ({
+        ok: true,
+        result: "should-not-run",
+      }));
       const { window } = createMockWindow({
         getManifest: tierManifest,
         dispatchAction: dispatchMock,
@@ -1490,9 +1487,10 @@ describe("McpServerService", () => {
 
     it("rejects clipboard writes, git mutations, and worktree deletes at the action tier", async () => {
       paneTokenTiers.set("token-action", "action");
-      const dispatchMock = vi.fn(
-        (): ActionDispatchResult => ({ ok: true, result: "should-not-run" })
-      );
+      const dispatchMock = vi.fn((): ActionDispatchResult => ({
+        ok: true,
+        result: "should-not-run",
+      }));
       const { window } = createMockWindow({
         getManifest: tierManifest,
         dispatchAction: dispatchMock,
@@ -1521,9 +1519,10 @@ describe("McpServerService", () => {
 
     it("filters listTools and rejects callTool over the Streamable HTTP transport", async () => {
       paneTokenTiers.set("token-wb-http", "workbench");
-      const dispatchMock = vi.fn(
-        (): ActionDispatchResult => ({ ok: true, result: "should-not-run" })
-      );
+      const dispatchMock = vi.fn((): ActionDispatchResult => ({
+        ok: true,
+        result: "should-not-run",
+      }));
       const { window } = createMockWindow({
         getManifest: tierManifest,
         dispatchAction: dispatchMock,
@@ -1570,9 +1569,10 @@ describe("McpServerService", () => {
       paneTokenTiers.set("token-wb", "workbench");
       paneTokenTiers.set("token-action", "action");
       paneTokenTiers.set("token-sys", "system");
-      const dispatchMock = vi.fn(
-        (): ActionDispatchResult => ({ ok: true, result: "should-not-run" })
-      );
+      const dispatchMock = vi.fn((): ActionDispatchResult => ({
+        ok: true,
+        result: "should-not-run",
+      }));
       const { window } = createMockWindow({
         getManifest: tierManifest,
         dispatchAction: dispatchMock,

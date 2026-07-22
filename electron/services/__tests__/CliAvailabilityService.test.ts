@@ -37,8 +37,7 @@ const { defaultExecFileImpl } = vi.hoisted(() => ({
       queueMicrotask(() => {
         try {
           const out = execFileSync(file, fileArgs as readonly string[], options as never) as
-            | string
-            | Buffer;
+            string | Buffer;
           callback?.(null, typeof out === "string" ? out : out.toString("utf8"));
         } catch (err) {
           callback?.(err);

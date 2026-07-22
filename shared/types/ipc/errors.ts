@@ -120,13 +120,7 @@ export type ForbidIpcEnvelopeKeys<T> = T extends object
 
 /** Error type */
 export type ErrorType =
-  | "git"
-  | "process"
-  | "filesystem"
-  | "network"
-  | "config"
-  | "validation"
-  | "unknown";
+  "git" | "process" | "filesystem" | "network" | "config" | "validation" | "unknown";
 
 /**
  * Discriminated reason for a failed git operation. The classifier in

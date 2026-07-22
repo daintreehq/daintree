@@ -127,8 +127,7 @@ async function dispatchAction(page: AppContext["window"], id: string, args?: unk
   return page.evaluate(
     async ({ id, args }) => {
       const dispatch = (window as any).__daintreeDispatchAction as
-        | ((id: string, args?: unknown, opts?: unknown) => Promise<any>)
-        | undefined;
+        ((id: string, args?: unknown, opts?: unknown) => Promise<any>) | undefined;
       if (!dispatch) throw new Error("__daintreeDispatchAction missing");
       return dispatch(id, args, { source: "test" });
     },

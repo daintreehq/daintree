@@ -7,9 +7,7 @@ export interface InputTrackerConfig {
 }
 
 export type InputResult =
-  | { kind: "ignored" }
-  | { kind: "no-enter" }
-  | { kind: "enter"; hadText: boolean };
+  { kind: "ignored" } | { kind: "no-enter" } | { kind: "enter"; hadText: boolean };
 
 export class InputTracker {
   private inBracketedPaste = false;

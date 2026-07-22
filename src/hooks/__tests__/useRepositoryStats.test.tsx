@@ -678,8 +678,7 @@ describe("useRepositoryStats", () => {
       const delayedCurrent = createDeferred<typeof project>();
       getCurrentMock.mockResolvedValueOnce(project);
       let switchHandler:
-        | ((payload?: { project: typeof project; switchId: string }) => void)
-        | undefined;
+        ((payload?: { project: typeof project; switchId: string }) => void) | undefined;
       onSwitchMock.mockImplementation((cb: typeof switchHandler) => {
         switchHandler = cb;
         return () => {};

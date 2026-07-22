@@ -43,11 +43,7 @@ export interface SystemWakePayload {
  *   `ready` so the UI can show a "Login required" nudge without gating launch.
  */
 export type AgentAvailabilityState =
-  | "missing"
-  | "installed"
-  | "ready"
-  | "blocked"
-  | "unauthenticated";
+  "missing" | "installed" | "ready" | "blocked" | "unauthenticated";
 
 /** CLI availability status for AI agents */
 export type CliAvailability = Record<AgentId, AgentAvailabilityState>;

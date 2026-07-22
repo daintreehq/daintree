@@ -1474,14 +1474,12 @@ function buildFsApi(deps: PluginHostFactoryDeps, pluginId: string): PluginFsApi 
       requireLoaded("readdir");
       requireReadCapForClass("readdir", rootClass);
       const entries = await fs.readdir(resolved, { withFileTypes: true });
-      return entries.map(
-        (e): PluginFsDirEntry => ({
-          name: e.name,
-          isDirectory: e.isDirectory(),
-          isFile: e.isFile(),
-          isSymbolicLink: e.isSymbolicLink(),
-        })
-      );
+      return entries.map((e): PluginFsDirEntry => ({
+        name: e.name,
+        isDirectory: e.isDirectory(),
+        isFile: e.isFile(),
+        isSymbolicLink: e.isSymbolicLink(),
+      }));
     },
     stat: async (targetPath, options) => {
       options?.signal?.throwIfAborted();

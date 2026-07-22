@@ -105,8 +105,7 @@ export async function measureMainMemory(
     if (forceGc) {
       const g = globalThis as unknown as Record<string, unknown>;
       const gcFn = (typeof g.__daintree_gc === "function" ? g.__daintree_gc : g.gc) as
-        | (() => void)
-        | undefined;
+        (() => void) | undefined;
       if (gcFn) {
         gcFn();
         await new Promise((r) => setTimeout(r, 100));
@@ -467,8 +466,7 @@ export async function stopLoafProbe(page: Page): Promise<LoafProbeResult> {
   return page.evaluate(() => {
     const w = window as unknown as Record<string, unknown>;
     const probe = w.__daintreeLoafProbe as
-      | { supported: boolean; entries: LoafProbeEntry[]; stop: () => void }
-      | undefined;
+      { supported: boolean; entries: LoafProbeEntry[]; stop: () => void } | undefined;
     if (!probe) {
       return { supported: false, count: 0, maxDurationMs: 0, entries: [] };
     }

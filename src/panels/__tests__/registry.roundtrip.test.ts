@@ -37,10 +37,7 @@ type PersistedPtyFields =
   | "lastStateChange";
 
 type PersistedBrowserFields =
-  | "browserUrl"
-  | "browserHistory"
-  | "browserZoom"
-  | "browserConsoleOpen";
+  "browserUrl" | "browserHistory" | "browserZoom" | "browserConsoleOpen";
 
 type PersistedDevPreviewFields =
   | "cwd"

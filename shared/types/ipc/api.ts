@@ -2011,11 +2011,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
 }
 
 export type MicPermissionStatus =
-  | "granted"
-  | "denied"
-  | "not-determined"
-  | "restricted"
-  | "unknown";
+  "granted" | "denied" | "not-determined" | "restricted" | "unknown";
 
 export type VoiceTranscriptionModel = "gpt-realtime-whisper";
 

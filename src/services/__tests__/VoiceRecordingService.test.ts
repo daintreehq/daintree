@@ -381,8 +381,7 @@ describe("VoiceRecordingService — background recording", () => {
   it("stops recording when the active panel is moved to trash (panel-close regression)", async () => {
     // Capture the terminalStore subscribe callback so we can trigger it.
     let storeCallback:
-      | ((state: { panelsById: Record<string, unknown>; panelIds: string[] }) => void)
-      | null = null;
+      ((state: { panelsById: Record<string, unknown>; panelIds: string[] }) => void) | null = null;
     const { usePanelStore } = (await import("@/store/panelStore")) as unknown as {
       usePanelStore: { subscribe: ReturnType<typeof vi.fn> };
     };

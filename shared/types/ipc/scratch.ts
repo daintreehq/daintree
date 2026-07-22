@@ -22,5 +22,4 @@ export interface ScratchUpdateInput {
  * directory picker.
  */
 export type ScratchSaveAsProjectResult =
-  | { status: "saved"; project: Project; destinationPath: string }
-  | { status: "cancelled" };
+  { status: "saved"; project: Project; destinationPath: string } | { status: "cancelled" };

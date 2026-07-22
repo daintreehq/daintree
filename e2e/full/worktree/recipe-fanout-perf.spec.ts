@@ -630,8 +630,7 @@ async function measureInBrowser(
       startupDeadlineMs,
     }) => {
       const dispatch = (window as any).__daintreeDispatchAction as
-        | ((id: string, args?: unknown, options?: unknown) => Promise<any>)
-        | undefined;
+        ((id: string, args?: unknown, options?: unknown) => Promise<any>) | undefined;
       if (!dispatch) throw new Error("__daintreeDispatchAction is unavailable");
 
       const serializedErrorMessage = (error: unknown): string => {

@@ -1197,13 +1197,11 @@ function firstRenderModulePreloadPlugin(): Plugin {
       // Vite emits asset hrefs as base + fileName; match that exactly. The
       // `crossorigin` boolean attr mirrors Vite's own modulepreload links so the
       // preload matches the subsequent CORS module fetch instead of double-loading.
-      return files.map(
-        (fileName): HtmlTagDescriptor => ({
-          tag: "link",
-          attrs: { rel: "modulepreload", crossorigin: true, href: `./${fileName}` },
-          injectTo: "head",
-        })
-      );
+      return files.map((fileName): HtmlTagDescriptor => ({
+        tag: "link",
+        attrs: { rel: "modulepreload", crossorigin: true, href: `./${fileName}` },
+        injectTo: "head",
+      }));
     },
   };
 }

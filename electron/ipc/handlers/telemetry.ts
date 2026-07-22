@@ -109,10 +109,9 @@ export const telemetryNamespace = defineIpcNamespace({
         trackEvent(eventName, properties);
       }
     ),
-    previewGetState: op(
-      TELEMETRY_METHOD_CHANNELS.previewGetState,
-      (): TelemetryPreviewState => ({ active: isTelemetryPreviewActive() })
-    ),
+    previewGetState: op(TELEMETRY_METHOD_CHANNELS.previewGetState, (): TelemetryPreviewState => ({
+      active: isTelemetryPreviewActive(),
+    })),
     previewToggle: op(
       TELEMETRY_METHOD_CHANNELS.previewToggle,
       (active: boolean): TelemetryPreviewState => {

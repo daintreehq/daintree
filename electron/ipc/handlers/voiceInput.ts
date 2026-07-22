@@ -161,11 +161,7 @@ function cleanupActiveSubscription(): void {
 }
 
 export type MicPermissionStatus =
-  | "granted"
-  | "denied"
-  | "not-determined"
-  | "restricted"
-  | "unknown";
+  "granted" | "denied" | "not-determined" | "restricted" | "unknown";
 
 function checkMicPermission(): MicPermissionStatus {
   if (process.platform === "darwin" || process.platform === "win32") {

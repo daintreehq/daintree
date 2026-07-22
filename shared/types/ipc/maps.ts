@@ -148,10 +148,7 @@ import type {
 } from "./forge.js";
 
 export type ChecklistItemId =
-  | "openedProject"
-  | "launchedAgent"
-  | "createdWorktree"
-  | "ranSecondParallelAgent";
+  "openedProject" | "launchedAgent" | "createdWorktree" | "ranSecondParallelAgent";
 
 export interface ChecklistItems {
   openedProject: boolean;

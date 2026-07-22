@@ -967,8 +967,7 @@ export function normalizeAppColorScheme(
     fallback.type === resolvedType ? fallback : getBuiltInAppSchemeForType(resolvedType);
   const tint = resolvedType === "dark" ? "#ffffff" : "#000000";
   const rawTokens = (palette ? compilePaletteToTokens(palette) : maybeScheme.tokens) as
-    | Record<string, unknown>
-    | undefined;
+    Record<string, unknown> | undefined;
   const tokenOverrides = (maybeScheme.tokens as Record<string, unknown> | undefined) ?? {};
   const normalizedTokens = normalizeAppThemeTokens(rawTokens ?? {}, baseScheme.tokens);
   Object.assign(normalizedTokens, normalizeAppThemeTokens(tokenOverrides, normalizedTokens));

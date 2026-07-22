@@ -15,9 +15,8 @@ export function registerOsDndHandlers(_deps: HandlerDependencies): () => void {
   const namespace = defineIpcNamespace({
     name: "osDnd",
     ops: {
-      getState: op(
-        OS_DND_METHOD_CHANNELS.getState,
-        async (): Promise<boolean | undefined> => osDndService.getState()
+      getState: op(OS_DND_METHOD_CHANNELS.getState, async (): Promise<boolean | undefined> =>
+        osDndService.getState()
       ),
     },
   });

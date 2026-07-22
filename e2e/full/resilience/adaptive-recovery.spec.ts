@@ -32,9 +32,7 @@ async function readLowMemoryFloor(app: AppContext["app"]): Promise<number | null
     const g = globalThis as Record<string, unknown>;
     const getPvm = g.__daintreeGetPvm as (() => unknown) | undefined;
     const pvm = getPvm?.() as
-      | { getLowMemoryFreeThresholdMb: () => number | null }
-      | null
-      | undefined;
+      { getLowMemoryFreeThresholdMb: () => number | null } | null | undefined;
     return pvm?.getLowMemoryFreeThresholdMb() ?? null;
   });
 }

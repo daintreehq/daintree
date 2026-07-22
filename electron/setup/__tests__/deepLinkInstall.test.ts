@@ -229,8 +229,7 @@ describe("handleDaintreeUrl / notifyAppViewPainted", () => {
     // Paint, then capture the `did-start-loading` handler wired on first paint.
     mod.notifyAppViewPainted(wc as never);
     const didStartLoading = wc.on.mock.calls.find(([evt]) => evt === "did-start-loading")?.[1] as
-      | (() => void)
-      | undefined;
+      (() => void) | undefined;
     expect(didStartLoading).toBeTypeOf("function");
 
     // Reload: the renderer's listener unmounts; the id leaves the painted set.

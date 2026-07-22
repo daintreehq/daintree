@@ -579,7 +579,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       // result.content across the whole setImmediate-yielding loop. The
       // remoteComputeBlock — usually empty — is written as trailing chunks.
       const writeChunked = async (source: string): Promise<string | null> => {
-        for (let i = 0; i < source.length; ) {
+        for (let i = 0; i < source.length;) {
           if (contextInjectionTracker.isCancelled(injectionId)) {
             console.log(`[${traceId}] CopyTree inject cancelled by user`);
             return "Injection cancelled";

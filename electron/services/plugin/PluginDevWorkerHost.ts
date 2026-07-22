@@ -107,8 +107,7 @@ export class PluginDevWorkerHost extends EventEmitter {
 
   private pendingChildProcessGoneReason: { reason: string; exitCode: number } | null = null;
   private childProcessGoneHandler:
-    | ((event: Electron.Event, details: Electron.Details) => void)
-    | null = null;
+    ((event: Electron.Event, details: Electron.Details) => void) | null = null;
 
   private readyPromise: Promise<void>;
   private readyResolve: (() => void) | null = null;

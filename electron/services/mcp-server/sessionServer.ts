@@ -615,8 +615,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       | { kind: "throw"; error: unknown }
       | undefined;
     let confirmationDecision:
-      | import("../../../shared/types/ipc/mcpServer.js").McpConfirmationDecision
-      | undefined;
+      import("../../../shared/types/ipc/mcpServer.js").McpConfirmationDecision | undefined;
     // A native automation grant is an explicit user approval of the tool's
     // scope, so it authorizes a `danger: "confirm"` dispatch without surfacing
     // a per-call modal — exactly as if the user had just approved it.
