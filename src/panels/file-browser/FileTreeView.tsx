@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { ChevronDown, ChevronRight, File, Folder, FolderOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -42,6 +42,11 @@ export function FileTreeView({
   label,
 }: FileTreeViewProps) {
   const virtuosoRef = useRef<VirtuosoHandle>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  // Two browsers can be open on the same worktree, and both would otherwise
+  // mint `file-browser-row-src/index.ts` — duplicate DOM ids that make
+  // `aria-activedescendant` ambiguous.
+  const instanceId = useId();
 
   // The rows array changes identity on every listing update, so the handler is
   // rebuilt with it. Reading through a ref instead would let a keypress act on
@@ -75,30 +80,49 @@ export function FileTreeView({
     [rows, selectedPath]
   );
 
-  // Keep the selection on screen when it moves by keyboard. `auto` only scrolls
-  // when the row is actually outside the viewport, so clicking a visible row
-  // never yanks the list.
-  const previousIndexRef = useRef(selectedIndex);
-  if (selectedIndex !== previousIndexRef.current) {
-    previousIndexRef.current = selectedIndex;
-    if (selectedIndex >= 0) {
-      virtuosoRef.current?.scrollIntoView({ index: selectedIndex, behavior: "auto" });
-    }
-  }
+  // Keep the selection on screen when it moves by keyboard. Runs after commit,
+  // never during render: an abandoned concurrent render would otherwise scroll
+  // for state that never committed, and suppress the scroll on the render that
+  // did. `auto` only scrolls when the row is actually outside the viewport, so
+  // clicking a visible row never yanks the list.
+  //
+  // Keyed on the path as well as the index so a restored selection scrolls on
+  // mount, and so a live update that shifts a row's index re-reveals it.
+  useEffect(() => {
+    if (selectedIndex < 0) return;
+    virtuosoRef.current?.scrollIntoView({ index: selectedIndex, behavior: "auto" });
+  }, [selectedIndex, selectedPath]);
+
+  // Clicking a row selects it but can't focus it — rows are not focusable, by
+  // design, because virtualization unmounts them. Pull focus to the container
+  // so the arrow keys keep working after a click.
+  const handlePointerDown = useCallback(() => {
+    containerRef.current?.focus({ preventScroll: true });
+  }, []);
 
   const context: TreeContext = useMemo(
-    () => ({ selectedPath, onSelect, onToggleExpanded }),
-    [selectedPath, onSelect, onToggleExpanded]
+    () => ({ selectedPath, onSelect, onToggleExpanded, instanceId }),
+    [selectedPath, onSelect, onToggleExpanded, instanceId]
   );
+
+  // Only advertise an active descendant that is actually rendered. A selection
+  // scrolled out of the virtualized window — or deleted by a live update — has
+  // no DOM node, and pointing at a missing id is worse than pointing at none.
+  const activeDescendant =
+    selectedPath !== null && selectedIndex >= 0 ? rowDomId(instanceId, selectedPath) : undefined;
 
   return (
     <div
+      ref={containerRef}
       role="tree"
       aria-label={label}
-      aria-activedescendant={selectedPath ? rowDomId(selectedPath) : undefined}
+      aria-activedescendant={activeDescendant}
       tabIndex={0}
       onKeyDown={handleKeyDown}
-      className="h-full min-h-0 w-full overflow-hidden outline-none"
+      onPointerDown={handlePointerDown}
+      // No `outline-none`: the global `*:focus-visible` ring is the only focus
+      // indicator this container gets, and the rows themselves never take focus.
+      className="h-full min-h-0 w-full overflow-hidden"
     >
       <Virtuoso<FlatTreeRow, TreeContext>
         ref={virtuosoRef}
@@ -118,6 +142,7 @@ interface TreeContext {
   selectedPath: string | null;
   onSelect: (path: string) => void;
   onToggleExpanded: (path: string, expand: boolean) => void;
+  instanceId: string;
 }
 
 /**
@@ -129,8 +154,12 @@ function computeRowKey(_index: number, row: FlatTreeRow): string {
   return row.path;
 }
 
-function rowDomId(path: string): string {
-  return `file-browser-row-${path}`;
+/**
+ * Scoped by instance and encoded: a path can contain spaces, quotes and other
+ * characters that are not valid in an HTML id.
+ */
+function rowDomId(instanceId: string, path: string): string {
+  return `fb${instanceId}-${encodeURIComponent(path)}`;
 }
 
 function renderRow(_index: number, row: FlatTreeRow, context: TreeContext) {
@@ -164,7 +193,7 @@ function FileTreeRow({ row, isSelected, context }: FileTreeRowProps) {
 
   return (
     <div
-      id={rowDomId(row.path)}
+      id={rowDomId(context.instanceId, row.path)}
       role="treeitem"
       aria-level={row.depth + 1}
       aria-selected={isSelected}
@@ -183,15 +212,16 @@ function FileTreeRow({ row, isSelected, context }: FileTreeRowProps) {
       )}
     >
       {row.isDirectory ? (
-        <button
-          type="button"
-          tabIndex={-1}
-          aria-hidden="true"
+        // A span, not a button: the row already exposes expansion through
+        // `aria-expanded`, and a focusable control marked `aria-hidden` is a
+        // node the keyboard can reach but a screen reader cannot describe.
+        <span
           onClick={handleChevronClick}
+          aria-hidden="true"
           className="flex h-4 w-4 shrink-0 items-center justify-center"
         >
           <Chevron className="h-3 w-3" />
-        </button>
+        </span>
       ) : (
         <span className="h-4 w-4 shrink-0" />
       )}

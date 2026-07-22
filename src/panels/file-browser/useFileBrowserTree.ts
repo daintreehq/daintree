@@ -3,12 +3,18 @@ import type { FileTreeNode } from "@shared/types";
 import { fileBrowserClient } from "@/clients/fileBrowserClient";
 import { logError } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import {
-  flattenTree,
-  pruneListings,
-  refreshTargets,
-  type FlatTreeRow,
-} from "./fileBrowserTree";
+import { flattenTree, pruneListings, refreshTargets, type FlatTreeRow } from "./fileBrowserTree";
+
+/**
+ * Ceiling on directory listings in flight at once.
+ *
+ * A restored panel can carry hundreds of expanded directories, and firing all
+ * of them the instant the root lands would both blow past the IPC channel's
+ * rate limit — failing the overflow outright — and hand the workspace host a
+ * `git check-ignore` child process per request. Queuing keeps a wide tree slow
+ * rather than broken.
+ */
+const MAX_CONCURRENT_LISTINGS = 6;
 
 export interface UseFileBrowserTreeArgs {
   worktreeId: string | undefined;
@@ -33,6 +39,17 @@ export interface UseFileBrowserTreeResult {
   ensureLoaded: (dirPath: string) => void;
   /** Re-list the root and every reachable expanded directory. */
   refresh: () => void;
+  /**
+   * Increments on every committed listing change. The viewer re-reads its file
+   * when this moves, so an agent rewriting the open file in place is reflected
+   * rather than leaving stale content on screen.
+   */
+  revision: number;
+}
+
+interface QueueEntry {
+  dirPath: string;
+  generation: number;
 }
 
 /**
@@ -53,6 +70,7 @@ export function useFileBrowserTree({
   const [loadingPaths, setLoadingPaths] = useState<ReadonlySet<string>>(new Set());
   const [rootError, setRootError] = useState<string | null>(null);
   const [hasLoadedRoot, setHasLoadedRoot] = useState(false);
+  const [revision, setRevision] = useState(0);
 
   // Generation counter, bumped whenever the identity of what we are listing
   // changes (worktree switch, ignored-filter flip). Every in-flight response
@@ -62,16 +80,34 @@ export function useFileBrowserTree({
   const generationRef = useRef(0);
   const listingsRef = useRef(listings);
   listingsRef.current = listings;
-  const inFlightRef = useRef<Set<string>>(new Set());
+
+  // Keyed by directory path, valued by the generation that issued the request.
+  // A bare Set would let a stale generation's cleanup delete the *current*
+  // generation's marker, losing deduplication and letting two accepted
+  // responses for the same directory land out of order.
+  const inFlightRef = useRef<Map<string, number>>(new Map());
+  const queueRef = useRef<QueueEntry[]>([]);
 
   const expandedSet = useMemo(() => new Set(expandedPaths), [expandedPaths]);
   const expandedSetRef = useRef(expandedSet);
   expandedSetRef.current = expandedSet;
 
+  // Set when a refresh could not run because its targets were already in
+  // flight. Without it, a tick that arrives mid-flight is consumed by a request
+  // that had already read the filesystem, and the tree stays stale until the
+  // user touches it.
+  const refreshPendingRef = useRef(false);
+
+  // `pump` and `fetchDirectory` call each other: a settled request pumps the
+  // queue, and the queue starts requests. Routing one direction through a
+  // latest-value ref breaks the definition cycle without letting either side
+  // capture a stale closure.
+  const pumpRef = useRef<() => void>(() => {});
+
   const fetchDirectory = useCallback(
     async (dirPath: string, generation: number): Promise<void> => {
       if (!worktreeId) return;
-      inFlightRef.current.add(dirPath);
+      inFlightRef.current.set(dirPath, generation);
       setLoadingPaths((previous) => {
         const next = new Set(previous);
         next.add(dirPath);
@@ -86,11 +122,18 @@ export function useFileBrowserTree({
         });
         if (generation !== generationRef.current) return;
 
+        // A directory collapsed while its listing was in flight has already
+        // been pruned; re-inserting it here would resurrect a cache entry the
+        // user closed, and re-expanding later would show that stale snapshot
+        // instead of re-reading.
+        if (dirPath !== "" && !expandedSetRef.current.has(dirPath)) return;
+
         setListings((previous) => {
           const next = new Map(previous);
           next.set(dirPath, nodes);
           return next;
         });
+        setRevision((value) => value + 1);
         if (dirPath === "") {
           setRootError(null);
           setHasLoadedRoot(true);
@@ -108,7 +151,11 @@ export function useFileBrowserTree({
           logError("[fileBrowser] failed to list directory", error);
         }
       } finally {
-        inFlightRef.current.delete(dirPath);
+        // Only clear our own marker: a newer generation may have re-requested
+        // this directory while we were in flight.
+        if (inFlightRef.current.get(dirPath) === generation) {
+          inFlightRef.current.delete(dirPath);
+        }
         if (generation === generationRef.current) {
           setLoadingPaths((previous) => {
             if (!previous.has(dirPath)) return previous;
@@ -117,30 +164,70 @@ export function useFileBrowserTree({
             return next;
           });
         }
+        pumpRef.current();
       }
     },
     [worktreeId, showIgnored]
   );
 
+  const enqueueTargets = useCallback((targets: readonly string[], generation: number): void => {
+    for (const dirPath of targets) {
+      if (inFlightRef.current.has(dirPath)) continue;
+      if (queueRef.current.some((entry) => entry.dirPath === dirPath)) continue;
+      queueRef.current.push({ dirPath, generation });
+    }
+  }, []);
+
+  const pump = useCallback((): void => {
+    while (inFlightRef.current.size < MAX_CONCURRENT_LISTINGS) {
+      const next = queueRef.current.shift();
+      if (!next) break;
+      // Dropped rather than run: the queue can outlive the identity it was
+      // built for, and requesting the old worktree's directories would only
+      // produce responses the generation guard throws away.
+      if (next.generation !== generationRef.current) continue;
+      if (inFlightRef.current.has(next.dirPath)) continue;
+      void fetchDirectory(next.dirPath, next.generation);
+    }
+
+    // A refresh that collided with in-flight work runs once the queue drains.
+    if (
+      refreshPendingRef.current &&
+      inFlightRef.current.size === 0 &&
+      queueRef.current.length === 0
+    ) {
+      refreshPendingRef.current = false;
+      const generation = generationRef.current;
+      enqueueTargets(refreshTargets(listingsRef.current, expandedSetRef.current), generation);
+      pumpRef.current();
+    }
+  }, [fetchDirectory, enqueueTargets]);
+
+  // Assigned during render rather than in an effect so a request that settles
+  // before effects have run still finds the current pump.
+  pumpRef.current = pump;
+
   const ensureLoaded = useCallback(
     (dirPath: string): void => {
-      if (listingsRef.current.has(dirPath) || inFlightRef.current.has(dirPath)) return;
-      void fetchDirectory(dirPath, generationRef.current);
+      if (listingsRef.current.has(dirPath)) return;
+      enqueueTargets([dirPath], generationRef.current);
+      pump();
     },
-    [fetchDirectory]
+    [enqueueTargets, pump]
   );
 
   const refresh = useCallback((): void => {
     const generation = generationRef.current;
-    for (const target of refreshTargets(listingsRef.current, expandedSetRef.current)) {
-      // Bypasses `ensureLoaded`'s already-loaded check by design — a refresh is
-      // exactly the case where the cached listing is the thing being replaced.
-      // The in-flight check still applies, so a tick arriving mid-fetch does
-      // not stack a second request for the same directory.
-      if (inFlightRef.current.has(target)) continue;
-      void fetchDirectory(target, generation);
+    const targets = refreshTargets(listingsRef.current, expandedSetRef.current);
+    // A target already in flight read the filesystem before this refresh was
+    // asked for, so its result may not reflect the change that triggered us.
+    // Defer rather than accept that response as final.
+    if (targets.some((target) => inFlightRef.current.has(target))) {
+      refreshPendingRef.current = true;
     }
-  }, [fetchDirectory]);
+    enqueueTargets(targets, generation);
+    pump();
+  }, [enqueueTargets, pump]);
 
   // Identity reset. Flipping the ignored filter changes what every listing
   // contains, not just the root, so the whole cache is dropped rather than
@@ -149,6 +236,8 @@ export function useFileBrowserTree({
   useEffect(() => {
     generationRef.current += 1;
     inFlightRef.current.clear();
+    queueRef.current = [];
+    refreshPendingRef.current = false;
     setListings(new Map());
     setLoadingPaths(new Set());
     setRootError(null);
@@ -159,16 +248,23 @@ export function useFileBrowserTree({
 
   // Expanding a directory is what triggers its fetch; a restored panel expands
   // several at once, and each is requested the first time it becomes visible.
+  // Gated on the root having landed for this generation so an expansion can't
+  // be judged reachable against the previous identity's listings.
   useEffect(() => {
+    if (!hasLoadedRoot) return;
+    const pendingTargets: string[] = [];
     for (const dirPath of expandedSet) {
       if (listings.has(dirPath) || inFlightRef.current.has(dirPath)) continue;
       // Only fetch directories the tree can actually reach. A persisted
       // expansion whose parent is collapsed (or gone) would otherwise fire a
       // request for a folder the user cannot see.
       if (!isReachable(listings, expandedSet, dirPath)) continue;
-      void fetchDirectory(dirPath, generationRef.current);
+      pendingTargets.push(dirPath);
     }
-  }, [expandedSet, listings, fetchDirectory]);
+    if (pendingTargets.length === 0) return;
+    enqueueTargets(pendingTargets, generationRef.current);
+    pump();
+  }, [expandedSet, listings, hasLoadedRoot, enqueueTargets, pump]);
 
   // Forget collapsed subtrees so re-expanding re-reads rather than replaying a
   // listing that may be minutes stale on an actively-written worktree.
@@ -180,13 +276,15 @@ export function useFileBrowserTree({
   }, [expandedSet]);
 
   // Live updates. The tick is the worktree's own change signal, so this
-  // inherits its coalescing; the first tick is skipped because the identity
-  // effect has already issued the initial listing.
+  // inherits its coalescing.
   const lastTickRef = useRef(changeTick);
   useEffect(() => {
     if (changeTick === lastTickRef.current) return;
-    lastTickRef.current = changeTick;
+    // Deliberately does NOT record the tick: the initial listing is still in
+    // flight, so consuming it here would let that pre-change response stand as
+    // final. `hasLoadedRoot` is a dependency, so this re-runs when it lands.
     if (!hasLoadedRoot) return;
+    lastTickRef.current = changeTick;
     refresh();
   }, [changeTick, hasLoadedRoot, refresh]);
 
@@ -201,6 +299,7 @@ export function useFileBrowserTree({
     rootError,
     ensureLoaded,
     refresh,
+    revision,
   };
 }
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { FileText } from "lucide-react";
 import { CodeViewer } from "@/components/FileViewer/CodeViewer";
 import { FileImagePreview } from "@/components/FileViewer/FileImagePreview";
@@ -26,6 +26,12 @@ export interface FileBrowserViewerProps {
   rootPath: string;
   /** File name, used for accessible labels. */
   fileName: string;
+  /**
+   * Bumped by the tree whenever a listing is committed — a live change tick or
+   * an explicit refresh. Re-reads the open file, so an agent rewriting it in
+   * place is reflected instead of leaving stale bytes on screen.
+   */
+  revision: number;
 }
 
 type ViewerState =
@@ -46,14 +52,23 @@ type ViewerState =
  * chrome: the same leaf viewers, the same `files:read` path, the same error
  * copy, so a file looks identical in either surface.
  */
-export function FileBrowserViewer({ filePath, rootPath, fileName }: FileBrowserViewerProps) {
+export function FileBrowserViewer({
+  filePath,
+  rootPath,
+  fileName,
+  revision,
+}: FileBrowserViewerProps) {
   const [state, setState] = useState<ViewerState>({ status: "idle" });
   // Bumped on every load so `HtmlViewer` re-navigates its sandboxed frame when
   // an agent rewrites the file underneath it.
   const [reloadNonce, setReloadNonce] = useState(0);
+  // Which file the state on screen belongs to. A re-read triggered by a listing
+  // change is for the same file, so it must not clear what is already rendered.
+  const shownPathRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!filePath || !rootPath) {
+      shownPathRef.current = null;
       setState({ status: "idle" });
       return;
     }
@@ -61,6 +76,8 @@ export function FileBrowserViewer({ filePath, rootPath, fileName }: FileBrowserV
     let cancelled = false;
     const isImage = isImageFilePath(filePath);
     const isSvg = isSvgFilePath(filePath);
+    const isSameFile = shownPathRef.current === filePath;
+    shownPathRef.current = filePath;
 
     // Raster images never round-trip their bytes through IPC — the
     // `daintree-file://` protocol serves them straight to the <img>.
@@ -69,7 +86,12 @@ export function FileBrowserViewer({ filePath, rootPath, fileName }: FileBrowserV
       return;
     }
 
-    setState({ status: "loading" });
+    // Only the initial read of a file shows a skeleton. A background re-read
+    // after a worktree change keeps the current content on screen until the new
+    // bytes arrive — on a busy worktree the tick fires often, and blanking the
+    // pane (losing scroll position with it) every time would make the viewer
+    // unusable.
+    if (!isSameFile) setState({ status: "loading" });
     const wantsHtmlPreview = isHtmlFilePath(filePath);
 
     void filesClient
@@ -115,7 +137,10 @@ export function FileBrowserViewer({ filePath, rootPath, fileName }: FileBrowserV
     return () => {
       cancelled = true;
     };
-  }, [filePath, rootPath]);
+    // `revision` is a dependency, not a value this effect reads: a committed
+    // listing change means the open file may have been rewritten under the same
+    // path, which no other dependency would notice.
+  }, [filePath, rootPath, revision]);
 
   if (!filePath) {
     return (
@@ -160,7 +185,18 @@ export function FileBrowserViewer({ filePath, rootPath, fileName }: FileBrowserV
       );
 
     case "image":
-      return <ZoomableImage filePath={filePath} rootPath={rootPath} alt={fileName} />;
+      return (
+        // Deliberately not re-keyed on `revision`: the protocol URL is stable,
+        // so a rewritten raster image can render stale until reselected. That
+        // is the better trade — re-keying would remount on every worktree tick
+        // and throw away the user's zoom and pan mid-inspection.
+        <ZoomableImage
+          filePath={filePath}
+          rootPath={rootPath}
+          alt={fileName}
+          onError={() => setState({ status: "error", message: "Couldn't load this image" })}
+        />
+      );
 
     case "svg":
       return (

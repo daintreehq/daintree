@@ -95,7 +95,7 @@ export function FileBrowserPane({
 
   const stableExpandedPaths = useMemo(() => expandedPaths ?? EMPTY_PATHS, [expandedPaths]);
 
-  const { rows, isInitialLoading, rootError, ensureLoaded, refresh } = useFileBrowserTree({
+  const { rows, isInitialLoading, rootError, ensureLoaded, refresh, revision } = useFileBrowserTree({
     worktreeId,
     expandedPaths: stableExpandedPaths,
     showIgnored,
@@ -153,10 +153,11 @@ export function FileBrowserPane({
     () => rows.find((row) => row.path === selectedPath),
     [rows, selectedPath]
   );
-  // Directories are selectable but not viewable — keep the viewer on its empty
-  // state rather than trying to read a folder as a file.
+  // Positively a file, not merely "not known to be a directory": collapsing a
+  // parent hides the selected row without clearing the selection, and treating
+  // that unknown node as a file makes the viewer try to read a directory.
   const selectedFilePath =
-    selectedPath && worktreePath && selectedNode?.isDirectory !== true
+    selectedPath && worktreePath && selectedNode?.isDirectory === false
       ? `${worktreePath}/${selectedPath}`
       : null;
   const selectedFileName = selectedPath ? (selectedPath.split("/").pop() ?? selectedPath) : "";
@@ -220,6 +221,7 @@ export function FileBrowserPane({
             filePath={selectedFilePath}
             rootPath={worktreePath}
             fileName={selectedFileName}
+            revision={revision}
           />
         </div>
       </div>

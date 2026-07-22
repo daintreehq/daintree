@@ -476,9 +476,12 @@ export const CopyTreeGetFileTreePayloadSchema = z.object({
   dirPath: z.string().optional(),
 });
 
+// Both strings are capped: they cross the boundary as untrusted input and end
+// up in path joins and a `git check-ignore` argv, neither of which should ever
+// see a megabyte-long value.
 export const FileBrowserListDirectoryPayloadSchema = z.object({
-  worktreeId: z.string().min(1),
-  dirPath: z.string().optional(),
+  worktreeId: z.string().min(1).max(4096),
+  dirPath: z.string().max(4096).optional(),
   includeIgnored: z.boolean().optional(),
 });
 

@@ -114,8 +114,12 @@ export interface SavedTerminalData {
   fileStatus?: string;
   diffSource?: string;
   baseBranch?: string;
-  browserSelectedPath?: string;
-  /** Untrusted on-disk JSON — sanitized at the file-browser deserializer boundary. */
+  /**
+   * Untrusted on-disk JSON — the snapshot schema passes unknown keys through,
+   * so these are typed `unknown` and sanitized at the file-browser deserializer
+   * boundary rather than trusted as their eventual shapes.
+   */
+  browserSelectedPath?: unknown;
   browserExpandedPaths?: unknown;
   browserShowIgnored?: unknown;
   exitBehavior?: PanelExitBehavior;

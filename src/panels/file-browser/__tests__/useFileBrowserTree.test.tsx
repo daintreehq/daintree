@@ -278,6 +278,166 @@ describe("useFileBrowserTree", () => {
     expect(result.current.rows.map((row) => row.path)).toEqual(["src", "README.md"]);
   });
 
+  it("re-runs a change tick that arrived while the initial listing was still in flight", async () => {
+    const slowRoot = deferred<FileTreeNode[]>();
+    listDirectory.mockReturnValueOnce(slowRoot.promise);
+
+    const { result, rerender } = renderHook(
+      (props: { changeTick: number }) =>
+        useFileBrowserTree({
+          worktreeId: "wt-1",
+          expandedPaths: [],
+          showIgnored: false,
+          changeTick: props.changeTick,
+        }),
+      { initialProps: { changeTick: 1 } }
+    );
+
+    await waitFor(() => expect(listDirectory).toHaveBeenCalledTimes(1));
+
+    // A file changes while the very first listing is still reading the disk.
+    rerender({ changeTick: 2 });
+
+    listDirectory.mockResolvedValue([file("written-by-agent.ts")]);
+    await act(async () => {
+      slowRoot.resolve([]);
+    });
+
+    // The tick must not be consumed by a response that predates it — otherwise
+    // the tree shows an empty worktree forever.
+    await waitFor(() =>
+      expect(result.current.rows.map((row) => row.path)).toEqual(["written-by-agent.ts"])
+    );
+  });
+
+  it("re-runs a change tick that collided with an in-flight refresh", async () => {
+    listDirectory.mockResolvedValue([file("v1.ts")]);
+
+    const { result, rerender } = renderHook(
+      (props: { changeTick: number }) =>
+        useFileBrowserTree({
+          worktreeId: "wt-1",
+          expandedPaths: [],
+          showIgnored: false,
+          changeTick: props.changeTick,
+        }),
+      { initialProps: { changeTick: 1 } }
+    );
+
+    await waitFor(() => expect(result.current.isInitialLoading).toBe(false));
+
+    const slowRefresh = deferred<FileTreeNode[]>();
+    listDirectory.mockReturnValueOnce(slowRefresh.promise);
+    rerender({ changeTick: 2 });
+    await waitFor(() => expect(listDirectory).toHaveBeenCalledTimes(2));
+
+    // Second change lands while the first refresh is still reading.
+    rerender({ changeTick: 3 });
+
+    listDirectory.mockResolvedValue([file("v3.ts")]);
+    await act(async () => {
+      slowRefresh.resolve([file("v2.ts")]);
+    });
+
+    await waitFor(() => expect(result.current.rows.map((row) => row.path)).toEqual(["v3.ts"]));
+  });
+
+  it("never exceeds its concurrency ceiling when a wide tree is restored", async () => {
+    const rootEntries = Array.from({ length: 60 }, (_, index) => dir(`d${index}`));
+    let inFlight = 0;
+    let peakInFlight = 0;
+    const releases: Array<() => void> = [];
+
+    listDirectory.mockImplementation((payload) => {
+      if (payload.dirPath === undefined) return Promise.resolve(rootEntries);
+      inFlight += 1;
+      peakInFlight = Math.max(peakInFlight, inFlight);
+      const pending = deferred<FileTreeNode[]>();
+      releases.push(() => {
+        inFlight -= 1;
+        pending.resolve([]);
+      });
+      return pending.promise;
+    });
+
+    renderHook(() =>
+      useFileBrowserTree({
+        worktreeId: "wt-1",
+        expandedPaths: rootEntries.map((node) => node.path),
+        showIgnored: false,
+        changeTick: undefined,
+      })
+    );
+
+    await waitFor(() => expect(inFlight).toBeGreaterThan(0));
+
+    // Firing all 60 at once would blow the IPC channel's rate limit and hand the
+    // workspace host a git subprocess per request.
+    expect(peakInFlight).toBeLessThanOrEqual(6);
+
+    await act(async () => {
+      for (const release of releases.splice(0)) release();
+    });
+  });
+
+  it("does not cache a directory whose listing arrives after it was collapsed", async () => {
+    const slowChild = deferred<FileTreeNode[]>();
+    listDirectory.mockImplementation((payload) =>
+      payload.dirPath === "src" ? slowChild.promise : Promise.resolve([dir("src")])
+    );
+
+    const { result, rerender } = renderHook(
+      (props: { expandedPaths: string[] }) =>
+        useFileBrowserTree({
+          worktreeId: "wt-1",
+          expandedPaths: props.expandedPaths,
+          showIgnored: false,
+          changeTick: undefined,
+        }),
+      { initialProps: { expandedPaths: ["src"] as string[] } }
+    );
+
+    await waitFor(() => expect(listDirectory).toHaveBeenCalledTimes(2));
+
+    rerender({ expandedPaths: [] });
+    await act(async () => {
+      slowChild.resolve([file("src/stale.ts")]);
+    });
+
+    // Re-expanding must re-read rather than replay the listing captured before
+    // the collapse.
+    const callsAfterCollapse = listDirectory.mock.calls.length;
+    listDirectory.mockResolvedValue([file("src/fresh.ts")]);
+    rerender({ expandedPaths: ["src"] });
+
+    await waitFor(() => expect(listDirectory.mock.calls.length).toBeGreaterThan(callsAfterCollapse));
+    await waitFor(() =>
+      expect(result.current.rows.map((row) => row.path)).toEqual(["src", "src/fresh.ts"])
+    );
+  });
+
+  it("bumps the revision on every committed listing so the viewer can re-read", async () => {
+    listDirectory.mockResolvedValue([file("a.ts")]);
+
+    const { result, rerender } = renderHook(
+      (props: { changeTick: number }) =>
+        useFileBrowserTree({
+          worktreeId: "wt-1",
+          expandedPaths: [],
+          showIgnored: false,
+          changeTick: props.changeTick,
+        }),
+      { initialProps: { changeTick: 1 } }
+    );
+
+    await waitFor(() => expect(result.current.isInitialLoading).toBe(false));
+    const afterFirstLoad = result.current.revision;
+
+    rerender({ changeTick: 2 });
+
+    await waitFor(() => expect(result.current.revision).toBeGreaterThan(afterFirstLoad));
+  });
+
   it("drops a slow listing from a previous worktree instead of showing it in the new one", async () => {
     const slowFirst = deferred<FileTreeNode[]>();
     listDirectory.mockReturnValueOnce(slowFirst.promise);
