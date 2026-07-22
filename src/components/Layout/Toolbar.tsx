@@ -38,7 +38,13 @@ import { isMac, isLinux, isWindows } from "@/lib/platform";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { AgentButton } from "./AgentButton";
 import { AgentTrayButton, deriveAgentDominantStates } from "./AgentTrayButton";
-import { PluginToolbarButton, PluginTrayButton } from "./PluginTrayButton";
+import {
+  PluginToolbarButton,
+  PluginTrayButton,
+  groupPluginToolbarButtons,
+  type PluginTrayGroup,
+} from "./PluginTrayButton";
+import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
@@ -176,6 +182,10 @@ interface OverflowMenuProps {
   forgeProviderName: string | null;
   overflowActions: Partial<Record<AnyToolbarButtonId, () => void>>;
   pluginOverflowMeta: Record<string, OverflowMenuMeta>;
+  // Plugin contributions grouped by owning plugin. When `plugin-tray` itself
+  // overflows, its dropdown is unreachable, so the overflow menu inlines these
+  // groups instead — an un-promoted contribution has no other toolbar route.
+  pluginTrayGroups: PluginTrayGroup[];
   // Shortcut display strings keyed by toolbar button id, so each overflow item
   // shows the same hint its visible button does (issue #9821).
   shortcutById: Partial<Record<string, string | null>>;
@@ -199,6 +209,7 @@ function OverflowMenu({
   forgeProviderName,
   overflowActions,
   pluginOverflowMeta,
+  pluginTrayGroups,
   shortcutById,
 }: OverflowMenuProps) {
   const [open, setOpen] = useState(false);
@@ -336,6 +347,34 @@ function OverflowMenu({
                 </DropdownMenuItem>
               </DropdownMenuGroup>,
               ...(isLast ? [] : [<DropdownMenuSeparator key="forge-sep" />]),
+            ];
+          }
+          if (id === "plugin-tray") {
+            // The tray's own dropdown can't be opened from here, and an
+            // un-promoted contribution has no other toolbar route — so inline
+            // the grouped contributions rather than leaving a row that
+            // dismisses the menu and opens nothing.
+            if (pluginTrayGroups.length === 0) return [];
+            const isLast = idx === overflowIds.length - 1;
+            return [
+              ...pluginTrayGroups.map((group) => (
+                <DropdownMenuGroup key={`plugin-tray-${group.pluginId}`}>
+                  <DropdownMenuLabel>{group.displayName}</DropdownMenuLabel>
+                  {group.buttons.map((config) => {
+                    const Icon = pluginToolbarIconFor(config.iconId);
+                    return (
+                      <DropdownMenuItem
+                        key={config.id}
+                        onClick={() => overflowActions[config.id]?.()}
+                      >
+                        <Icon className="mr-2 h-3.5 w-3.5" />
+                        <span className="flex-1">{config.label}</span>
+                      </DropdownMenuItem>
+                    );
+                  })}
+                </DropdownMenuGroup>
+              )),
+              ...(isLast ? [] : [<DropdownMenuSeparator key="plugin-tray-sep" />]),
             ];
           }
           const meta = OVERFLOW_MENU_META[id] ?? pluginOverflowMeta[id];
@@ -785,6 +824,7 @@ export function Toolbar({
   const toolbarDividerClass = "toolbar-divider w-px h-5 mx-1";
 
   const { buttonIds: pluginButtonIds, configs: pluginConfigs } = usePluginToolbarButtons();
+  const pluginMetaById = usePluginRuntimeStore((s) => s.pluginMetaById);
 
   const buttonRegistry = useMemo<
     Record<string, { render: () => React.ReactNode; isAvailable: boolean }>
@@ -1044,7 +1084,12 @@ export function Toolbar({
             pluginId,
             {
               render: () => (
-                <PluginToolbarButton key={pluginId} pluginId={pluginId} config={config!} />
+                <PluginToolbarButton
+                  key={pluginId}
+                  pluginId={pluginId}
+                  config={config!}
+                  data-toolbar-item=""
+                />
               ),
               isAvailable: true,
             },
@@ -1282,6 +1327,12 @@ export function Toolbar({
     return withDividers;
   };
 
+  const pluginTrayGroups = useMemo(
+    () =>
+      groupPluginToolbarButtons(pluginConfigs, (id) => pluginMetaById.get(id)?.displayName ?? id),
+    [pluginConfigs, pluginMetaById]
+  );
+
   const pluginOverflowMeta = useMemo(
     () => buildPluginToolbarMeta(pluginButtonIds, pluginConfigs),
     [pluginButtonIds, pluginConfigs]
@@ -1366,6 +1417,7 @@ export function Toolbar({
       forgeProviderName={forgeProviderName}
       overflowActions={overflowActions}
       pluginOverflowMeta={pluginOverflowMeta}
+      pluginTrayGroups={pluginTrayGroups}
       shortcutById={overflowShortcutById}
     />
   );

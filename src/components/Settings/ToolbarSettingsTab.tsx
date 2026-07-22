@@ -468,13 +468,23 @@ export function ToolbarSettingsTab() {
     clearDrag();
   };
 
-  const handleToggle = (buttonId: AnyToolbarButtonId, side: ToolbarSide) =>
+  const handleToggle = (buttonId: AnyToolbarButtonId, side: ToolbarSide) => {
+    // A plugin id can still sit in a persisted side array (the v9 migration
+    // deliberately keeps ids a user dragged there). Its switch has to route
+    // through the promotion action: the generic toggle only alternates
+    // `false`/absent, and under tray-default neither of those is promoted, so
+    // the switch could never turn the button on (#11304).
+    if (pluginConfigs.has(buttonId)) {
+      setPluginButtonPromoted(buttonId as PluginToolbarButtonId, !isVisible(buttonId));
+      return;
+    }
     dispatchToolbarVisibility(buttonId, side, {
       agentSettings,
       agentAvailability,
       setAgentPinned,
       toggleButtonVisibility,
     });
+  };
 
   const activeMetadata = activeId ? allMetadata[activeId] : undefined;
 
@@ -537,7 +547,7 @@ export function ToolbarSettingsTab() {
                 key={buttonId}
                 buttonId={buttonId}
                 isVisible={isVisible(buttonId)}
-                onToggle={(id) => setPluginButtonPromoted(id, !isVisible(id))}
+                onToggle={(id) => handleToggle(id, "right")}
                 metadata={allMetadata[buttonId]}
               />
             ))}

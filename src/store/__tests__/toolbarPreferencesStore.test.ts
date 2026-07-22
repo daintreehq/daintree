@@ -216,6 +216,22 @@ describe("toolbarPreferencesStore", () => {
       expect(after.launcher.defaultSelection).toBe(before.selection);
     });
 
+    it("round-trips a promotion through storage so it survives a reload", async () => {
+      // In-memory state alone would stay green through a `partialize` or
+      // `merge` regression that drops the promotion on rehydration.
+      const store = await loadStore();
+      store.getState().setPluginButtonPromoted(pluginButton, true);
+
+      vi.resetModules();
+      const reloaded = await loadStore();
+      expect(reloaded.getState().layout.pinnedButtons[pluginButton]).toBe(true);
+
+      reloaded.getState().setPluginButtonPromoted(pluginButton, false);
+      vi.resetModules();
+      const afterDemote = await loadStore();
+      expect(afterDemote.getState().layout.pinnedButtons).not.toHaveProperty(pluginButton);
+    });
+
     it("is a no-op (preserves layout reference) when the state already matches", async () => {
       const store = await loadStore();
       store.getState().setPluginButtonPromoted(pluginButton, true);
@@ -229,13 +245,28 @@ describe("toolbarPreferencesStore", () => {
       expect(store.getState().layout).toBe(layoutBefore);
     });
 
-    it("lets the stale sweep reclaim a promotion whose plugin was uninstalled", async () => {
+    it("survives the stale sweep so a plugin update or disable cycle keeps the placement", async () => {
+      // `unloadPlugin` broadcasts `complete: true` for an update and for
+      // disable/re-enable, not just an uninstall — sweeping promotions would
+      // silently undo the user's placement on every plugin update.
       const store = await loadStore();
       store.getState().setPluginButtonPromoted(pluginButton, true);
 
       store.getState().sweepStalePluginPinnedButtons([]);
 
-      expect(store.getState().layout.pinnedButtons).not.toHaveProperty(pluginButton);
+      expect(store.getState().layout.pinnedButtons[pluginButton]).toBe(true);
+    });
+
+    it("still lets the sweep reclaim a stale hide entry alongside a kept promotion", async () => {
+      const store = await loadStore();
+      store.getState().toggleButtonVisibility("acme.foo.hidden" as AnyToolbarButtonId, "right");
+      store.getState().setPluginButtonPromoted(pluginButton, true);
+
+      store.getState().sweepStalePluginPinnedButtons([]);
+
+      const { pinnedButtons } = store.getState().layout;
+      expect(pinnedButtons).not.toHaveProperty("acme.foo.hidden");
+      expect(pinnedButtons[pluginButton]).toBe(true);
     });
   });
 
@@ -257,7 +288,10 @@ describe("toolbarPreferencesStore", () => {
 
       const store = await loadStore();
       const { leftButtons, rightButtons } = store.getState().layout;
-      expect([...leftButtons, ...rightButtons]).toContain("plugin-tray");
+      // Right side specifically — a combined check would pass even if the
+      // tray were inserted on the wrong side.
+      expect(rightButtons).toContain("plugin-tray");
+      expect(leftButtons).not.toContain("plugin-tray");
       expect(rightButtons).toContain("settings");
     });
   });

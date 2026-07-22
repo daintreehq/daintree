@@ -44,11 +44,21 @@ test.describe.serial("Core: Plugin contributions", () => {
     const toolbar = window.getByRole("toolbar", { name: "Main toolbar" });
     const trayTrigger = toolbar.getByRole("button", { name: "Plugin tray", exact: true });
     const trayRow = window.getByRole("menuitem", { name: /Hello ping/ });
-    const deadline = Date.now() + T_MEDIUM;
+    // Structural, not role-based: a top-level plugin button that overflowed is
+    // still in the DOM but hidden, so a role query would "prove" absence for
+    // the wrong reason.
+    const topLevelSlot = toolbar.locator('[data-toolbar-button-id="daintree.hello.ping"]');
+
+    // Gate on the tray existing FIRST. The renderer learns about contributions
+    // over a broadcast that lands after the main-process registration the
+    // fixture waits on, so asserting absence before this point would pass
+    // simply because no plugin had rendered yet.
+    await expect(trayTrigger).toBeAttached({ timeout: T_MEDIUM });
 
     // The contribution no longer owns a top-level slot of its own (#11304).
-    await expect(toolbar.getByRole("button", { name: "Hello ping", exact: true })).toHaveCount(0);
+    await expect(topLevelSlot).toHaveCount(0);
 
+    const deadline = Date.now() + T_MEDIUM;
     while (Date.now() < deadline) {
       if (await trayTrigger.isVisible({ timeout: 500 }).catch(() => false)) {
         await trayTrigger.click({ timeout: 2_000 }).catch(() => undefined);
@@ -59,6 +69,9 @@ test.describe.serial("Core: Plugin contributions", () => {
         await window.keyboard.press("Escape").catch(() => undefined);
       }
 
+      // Narrow windows can evict the tray into overflow, where the menu
+      // inlines the grouped contributions directly — the row itself must be
+      // reachable there, not just a "Plugin tray" label.
       const overflowButtons = toolbar.getByRole("button", { name: /more toolbar items/i });
       const count = await overflowButtons.count();
       for (let index = 0; index < count; index++) {
@@ -68,12 +81,7 @@ test.describe.serial("Core: Plugin contributions", () => {
         }
 
         await overflowButton.click({ timeout: 2_000 }).catch(() => undefined);
-        if (
-          await window
-            .getByRole("menuitem", { name: /Plugin tray/ })
-            .isVisible({ timeout: 500 })
-            .catch(() => false)
-        ) {
+        if (await trayRow.isVisible({ timeout: 500 }).catch(() => false)) {
           await window.keyboard.press("Escape").catch(() => undefined);
           return;
         }
@@ -83,6 +91,8 @@ test.describe.serial("Core: Plugin contributions", () => {
       await window.waitForTimeout(250);
     }
 
-    await expect(trayTrigger).toBeVisible({ timeout: 1_000 });
+    // Fail on the row — asserting only the trigger would let a tray that never
+    // lists its contributions pass.
+    await expect(trayRow).toBeVisible({ timeout: 1_000 });
   });
 });

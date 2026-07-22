@@ -2,7 +2,7 @@
 import { describe, it, expect } from "vitest";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { TOOLBAR_BUTTON_METADATA, isToolbarButtonVisible } from "../toolbarButtonMetadata";
-import type { AnyToolbarButtonId } from "@shared/types/toolbar";
+import { TOOLBAR_BUTTON_PRIORITIES, type AnyToolbarButtonId } from "@shared/types/toolbar";
 
 // IDs that intentionally have no entry in TOOLBAR_BUTTON_METADATA. The fixed
 // titlebar buttons (sidebar-toggle, assistant-toggle, portal-toggle) are
@@ -14,21 +14,13 @@ const FIXED_TITLEBAR_IDS = new Set<AnyToolbarButtonId>([
   "portal-toggle",
 ]);
 
-const CUSTOMIZABLE_BUTTON_IDS: AnyToolbarButtonId[] = [
-  "agent-tray",
-  "plugin-tray",
-  ...(BUILT_IN_AGENT_IDS as readonly string[] as AnyToolbarButtonId[]),
-  "terminal",
-  "browser",
-  "dev-server",
-  "voice-recording",
-  "forge-stats",
-  "notification-center",
-  "copy-tree",
-  "command-palette",
-  "settings",
-  "problems",
-];
+// Derived from the exhaustive `TOOLBAR_BUTTON_PRIORITIES` record rather than
+// hand-listed: a hand-listed set silently stops guarding whatever it forgets
+// (it had already drifted past `resume-sessions`), so every future addition to
+// the `ToolbarButtonId` union is now covered automatically.
+const CUSTOMIZABLE_BUTTON_IDS: AnyToolbarButtonId[] = (
+  Object.keys(TOOLBAR_BUTTON_PRIORITIES) as AnyToolbarButtonId[]
+).filter((id) => !FIXED_TITLEBAR_IDS.has(id));
 
 describe("TOOLBAR_BUTTON_METADATA — registry coverage", () => {
   it("has an entry for every customizable built-in button", () => {

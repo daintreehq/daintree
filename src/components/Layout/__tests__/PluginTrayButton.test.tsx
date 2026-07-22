@@ -234,7 +234,6 @@ describe("PluginTrayButton", () => {
 
     // Promotion adds a top-level access point; it must not remove the row.
     expect(getByTestId("plugin-tray-row-acme.a")).toBeTruthy();
-    expect(getByTestId("plugin-tray-pin-acme.a").getAttribute("data-pinned")).toBe("true");
   });
 
   it("dispatches the contribution's actionId when its row is chosen", () => {

@@ -32,7 +32,7 @@ import { cn } from "@/lib/utils";
 
 export type PluginToolbarConfigs = ReadonlyMap<string, ToolbarButtonConfig>;
 
-type PluginGroup = {
+export type PluginTrayGroup = {
   pluginId: string;
   displayName: string;
   buttons: ToolbarButtonConfig[];
@@ -54,7 +54,7 @@ type PluginGroup = {
 export function groupPluginToolbarButtons(
   configs: PluginToolbarConfigs,
   displayNameFor: (pluginId: string) => string
-): PluginGroup[] {
+): PluginTrayGroup[] {
   const byPlugin = new Map<string, ToolbarButtonConfig[]>();
   for (const config of configs.values()) {
     const bucket = byPlugin.get(config.pluginId);
@@ -124,9 +124,10 @@ export function PluginToolbarButton({
       </ContextMenuTrigger>
       <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
         {/*
-          Unpin has to demote rather than write a `false` hide entry: under
-          tray-default semantics only an explicit `true` grants the top-level
-          slot, so the store's generic toggle would leave the button pinned.
+          The generic toggle would also demote (it writes `false`, and only an
+          explicit `true` grants a top-level slot), but it would leave a
+          redundant key behind. Routing through the dedicated action deletes it,
+          keeping `pinnedButtons` sparse for the stale-plugin sweep.
         */}
         <ToolbarContextMenuItems
           buttonId={pluginId}
@@ -240,17 +241,14 @@ export function PluginTrayButton({
   const lastPinActionAt = useRef(0);
 
   const groups = useMemo(
-    () =>
-      groupPluginToolbarButtons(
-        configs,
-        (pluginId) => pluginMetaById.get(pluginId)?.displayName ?? pluginId
-      ),
+    () => groupPluginToolbarButtons(configs, (id) => pluginMetaById.get(id)?.displayName ?? id),
     [configs, pluginMetaById]
   );
 
-  // A plugin unloading while the tray is open would otherwise leave Radix
-  // holding roving focus on a menu whose trigger is about to unmount. Runs
-  // before the early return below so the hook order stays stable across the
+  // Defensive close for a direct consumer that keeps this mounted through the
+  // last plugin unloading. `Toolbar` gates the registry entry on the same
+  // condition and unmounts us first, so in the app this normally never fires.
+  // Runs before the early return below so hook order stays stable across the
   // has-contributions boundary.
   useEffect(() => {
     if (configs.size === 0) setOpen(false);

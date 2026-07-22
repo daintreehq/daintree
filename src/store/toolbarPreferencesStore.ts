@@ -122,6 +122,8 @@ interface ToolbarPreferencesState extends ToolbarPreferences {
    * hyphens or single tokens, never dots, so `key.includes(".")` cleanly
    * separates the two. No-ops (returns state unchanged) when nothing is
    * stale so the per-snapshot call doesn't churn the persist layer.
+   *
+   * Explicit promotions (`true`, #11304) are exempt — see the filter below.
    */
   sweepStalePluginPinnedButtons: (validIds: string[]) => void;
   setAlwaysShowDevServer: (value: boolean) => void;
@@ -205,7 +207,18 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
         set((state) => {
           const validSet = new Set(validIds);
           const staleKeys = Object.keys(state.layout.pinnedButtons).filter(
-            (key) => key.includes(".") && !validSet.has(key)
+            (key) =>
+              key.includes(".") &&
+              !validSet.has(key) &&
+              // Never reclaim an explicit promotion (#11304). A `complete`
+              // broadcast means "a plugin unloaded", not "a plugin was
+              // uninstalled" — `unloadPlugin` also runs for an update and for
+              // disable/re-enable, so sweeping promotions here would silently
+              // undo the user's placement every time a plugin updates. A
+              // promotion left behind by a genuine uninstall is inert (no
+              // registry entry means nothing renders) and restores the user's
+              // choice if they reinstall.
+              state.layout.pinnedButtons[key as AnyToolbarButtonId] !== true
           );
           if (staleKeys.length === 0) return state;
           const pinned: ToolbarPinnedState = { ...state.layout.pinnedButtons };
