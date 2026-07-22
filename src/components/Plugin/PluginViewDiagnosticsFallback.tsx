@@ -182,7 +182,13 @@ export function PluginViewDiagnosticsFallback({
           // emphasized action in this region.
           <button
             type="button"
-            onClick={onRequestClose}
+            // Wrapped, not passed through: `onRequestClose` is declared
+            // `() => void`, and handing it straight to onClick would call it
+            // with the MouseEvent. The grid host absorbs that today only
+            // because it wraps too — a host that forwarded a handler taking an
+            // optional first argument (ContentPanel's `onClose(force?)`) would
+            // silently receive a truthy one.
+            onClick={() => onRequestClose()}
             data-testid="plugin-view-diagnostics-close"
             className={cn(BUTTON_BASE, NEUTRAL_BUTTON)}
           >
