@@ -64,6 +64,13 @@ export function PluginArchiveInstallConfirmDialog() {
           type: "success",
           title: "Plugin installed",
           message: `${label} v${manifest.version} is ready to use.`,
+          // One-shot: the user just approved this in a modal, so the toast
+          // closes the loop without leaving an inbox row behind. `settings` is
+          // a passive kind, so the priority override is load-bearing — without
+          // it the transient toast would resolve to inbox-only and fire nowhere.
+          transient: true,
+          priority: "high",
+          context: { eventKind: "settings" },
         });
         dismiss(intentId);
         return;

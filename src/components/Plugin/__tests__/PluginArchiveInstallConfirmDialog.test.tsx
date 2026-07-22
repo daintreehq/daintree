@@ -96,7 +96,7 @@ describe("PluginArchiveInstallConfirmDialog", () => {
     vi.clearAllMocks();
     __resetPluginArchiveInstallStoreForTesting();
     installFromPath.mockResolvedValue({ status: "installed", pluginId: "acme.tool" });
-    (window as unknown as { electron: unknown }).electron = { plugin: { installFromPath } };
+    Object.assign(window, { electron: { plugin: { installFromPath } } });
   });
 
   afterEach(() => {

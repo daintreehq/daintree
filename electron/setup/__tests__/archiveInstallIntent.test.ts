@@ -277,12 +277,11 @@ describe("archiveInstallIntent", () => {
     deepLinkMock.painted = painted.wc;
     const mod = await importFresh();
 
-    let fireLive: (() => void) | undefined;
+    const fireLive = () => void mod.enqueueArchiveInstallIntent(P("c.dntr"));
     archiveMock.readArchiveManifest.mockImplementation(async (p: string) => {
-      if (p === P("a.dntr")) fireLive?.();
+      if (p === P("a.dntr")) fireLive();
       return manifest({ name: "pkg" });
     });
-    fireLive = () => void mod.enqueueArchiveInstallIntent(P("c.dntr"));
 
     await mod.enqueueArchiveInstallIntents([P("a.dntr"), P("b.dntr")]);
 

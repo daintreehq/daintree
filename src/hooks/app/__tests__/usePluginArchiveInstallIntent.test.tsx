@@ -41,9 +41,7 @@ describe("usePluginArchiveInstallIntent", () => {
     listeners.clear();
     vi.clearAllMocks();
     __resetPluginArchiveInstallStoreForTesting();
-    (window as unknown as { electron: unknown }).electron = {
-      plugin: { onArchiveInstallIntent },
-    };
+    Object.assign(window, { electron: { plugin: { onArchiveInstallIntent } } });
   });
 
   afterEach(() => cleanup());
