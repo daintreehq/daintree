@@ -795,6 +795,87 @@ describe("PluginService manifest command contributions (#9281)", () => {
     });
   });
 
+  it("honours a manifest command's requires when deriving effectiveDanger", async () => {
+    // The manifest path spreads the command into the same validator the
+    // runtime host.registerAction path uses, so `requires` has to survive that
+    // spread — a declared-in-JSON one-click action is the issue's actual case.
+    await writePluginWithSrc(
+      "cmd-intent",
+      {
+        name: "acme.cmd-intent",
+        version: "1.0.0",
+        capabilities: ["shell:exec", "fs:project-read"],
+        contributes: {
+          commands: [
+            {
+              id: "open-panel",
+              title: "Open Panel",
+              description: "Opens the panel",
+              category: "Test",
+              kind: "command",
+              danger: "safe",
+              requires: [],
+            },
+            {
+              id: "run-build",
+              title: "Run Build",
+              description: "Runs the build",
+              category: "Test",
+              kind: "command",
+              danger: "safe",
+              requires: ["shell:exec"],
+            },
+          ],
+        },
+      },
+      {
+        "open-panel.ts": `export default () => "ok"`,
+        "run-build.ts": `export default () => "ok"`,
+      }
+    );
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const byId = new Map(service.listPluginActions().map((a) => [a.id, a]));
+    expect(byId.get("acme.cmd-intent.open-panel")?.effectiveDanger).toBe("safe");
+    expect(byId.get("acme.cmd-intent.run-build")?.effectiveDanger).toBe("confirm");
+  });
+
+  it("fails a manifest command whose requires names an undeclared capability", async () => {
+    await writePluginWithSrc(
+      "cmd-overclaim",
+      {
+        name: "acme.cmd-overclaim",
+        version: "1.0.0",
+        capabilities: ["fs:project-read"],
+        contributes: {
+          commands: [
+            {
+              id: "do-thing",
+              title: "Do Thing",
+              description: "Runs",
+              category: "Test",
+              kind: "command",
+              danger: "safe",
+              requires: ["shell:exec"],
+            },
+          ],
+        },
+      },
+      { "do-thing.ts": `export default () => "ok"` }
+    );
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    // Fail-closed: the action does not register rather than silently falling
+    // back to whole-manifest derivation, so the author's mistake is visible.
+    expect(service.listPluginActions().find((a) => a.id.startsWith("acme.cmd-overclaim"))).toBe(
+      undefined
+    );
+  });
+
   it("lazily imports and invokes the handler on first dispatch", async () => {
     await writePluginWithSrc(
       "cmd-dispatch",

@@ -69,6 +69,7 @@ function PluginCapabilityList({
   granted: readonly PluginCapability[];
 }) {
   const allowedUrls = plugin.manifest.scopes?.network?.allowedUrls;
+  const allowedSocketPaths = plugin.manifest.scopes?.socket?.allowedPaths;
 
   return (
     <div className="space-y-2">
@@ -85,7 +86,12 @@ function PluginCapabilityList({
       )}
       <ul className="space-y-1.5">
         {granted.map((capability) => (
-          <CapabilityRow key={capability} capability={capability} allowedUrls={allowedUrls} />
+          <CapabilityRow
+            key={capability}
+            capability={capability}
+            allowedUrls={allowedUrls}
+            allowedSocketPaths={allowedSocketPaths}
+          />
         ))}
       </ul>
     </div>

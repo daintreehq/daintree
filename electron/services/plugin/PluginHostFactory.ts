@@ -1,7 +1,9 @@
 import fs from "fs/promises";
 import path from "path";
 import { watch as fsWatch, type FSWatcher } from "node:fs";
-import { clipboard } from "electron";
+import { clipboard, shell } from "electron";
+import { decodeClipboardPng, MAX_CLIPBOARD_IMAGE_BYTES } from "../../utils/clipboardImage.js";
+import { assertExtensionAllowed } from "../../ipc/handlers/pathGuard.js";
 
 import { getPluginCapabilityConsentService } from "../plugin-capability/instances.js";
 import { resolveContainedPath, PluginPathNotAllowedError } from "./pluginFsContainment.js";
@@ -72,6 +74,7 @@ import type {
   PluginFsStat,
   PluginGitApi,
   PluginClipboardApi,
+  PluginSystemApi,
   PluginGitStatus,
   PluginGitCommitOptions,
   PluginGitCommitResult,
@@ -1054,6 +1057,11 @@ export function createHost(
     // from a headless plugin with no mounted panel. NOT revoke-guarded —
     // liveness is plugin membership; once unloaded every method rejects.
     clipboard: buildClipboardApi(deps, pluginId),
+    // Host-mediated open/reveal, scoped to the plugin's own declared fs roots
+    // (including its implicit plugin-data namespace) rather than the user's
+    // project roots — the gap that pushed plugins into shelling out to
+    // /usr/bin/open. NOT revoke-guarded, same as fs/clipboard.
+    system: buildSystemApi(deps, pluginId),
     // NOT revoke-guarded: plugins read/write settings throughout their
     // lifetime (IPC handlers, timers), long after activate() resolves. The
     // store is the source of truth, so a late call is harmless.
@@ -1837,7 +1845,8 @@ function buildGitApi(deps: PluginHostFactoryDeps, pluginId: string): PluginGitAp
 
 /**
  * Host-mediated OS clipboard surface backing the `clipboard:read` /
- * `clipboard:write` tokens. Text-only; both methods run here in the main
+ * `clipboard:write` tokens. Text reads/writes plus bounded PNG writes
+ * (#11299); every method runs here in the main
  * process because Electron's `clipboard` module is undefined inside the
  * dev-worker utility process (a worker-side call would silently no-op). Like
  * {@link buildGitApi} the liveness check precedes the capability check so a
@@ -1875,6 +1884,50 @@ function buildClipboardApi(deps: PluginHostFactoryDeps, pluginId: string): Plugi
       }
       clipboard.writeText(text);
     },
+    writeImage: async (pngData): Promise<void> => {
+      requireLoaded("writeImage");
+      // Same token as writeText: putting an image on the clipboard is exactly
+      // as reversible as putting text there, so it earns no second capability
+      // and doesn't elevate the plugin's action danger.
+      if (!deps.declaredCapabilities(pluginId).has("clipboard:write")) {
+        throw new Error(
+          `PERMISSION_REQUIRED: plugin "${pluginId}" clipboard.writeImage requires the "clipboard:write" capability, which is not declared in manifest.capabilities`
+        );
+      }
+      if (!(pngData instanceof Uint8Array)) {
+        throw new Error(
+          `VALIDATION: plugin "${pluginId}" clipboard.writeImage requires a Uint8Array of PNG bytes`
+        );
+      }
+      // Size-check before decoding: createFromBuffer allocates a decoded
+      // bitmap several times the compressed size, so admitting the bytes
+      // first would defeat the cap it exists to enforce.
+      if (pngData.byteLength > MAX_CLIPBOARD_IMAGE_BYTES) {
+        throw new Error(
+          `PAYLOAD_TOO_LARGE: plugin "${pluginId}" clipboard.writeImage image exceeds the ${MAX_CLIPBOARD_IMAGE_BYTES} byte limit`
+        );
+      }
+      const image = decodeClipboardPng(pngData);
+      if (image === null) {
+        throw new Error(
+          `VALIDATION: plugin "${pluginId}" clipboard.writeImage could not decode the data as an image`
+        );
+      }
+      clipboard.writeImage(image);
+      // Audit the byte count only — never the bytes. An image write is
+      // user-visible state the plugin changed without a prompt, so it belongs
+      // in the trail even though it isn't destructive.
+      deps.safeAppendAudit({
+        pluginId,
+        actionId: "clipboard.writeImage",
+        recordType: "ipc-invoke",
+        channel: "plugin:clipboard-write-image",
+        result: "success",
+        errorMessage: "",
+        argsHash: deps.safeArgsHash([{ bytes: pngData.byteLength }]),
+        durationMs: 0,
+      });
+    },
     readText: async (): Promise<string> => {
       requireLoaded("readText");
       if (!deps.declaredCapabilities(pluginId).has("clipboard:read")) {
@@ -1884,6 +1937,140 @@ function buildClipboardApi(deps: PluginHostFactoryDeps, pluginId: string): Plugi
       }
       // Electron returns "" for empty or non-text clipboard content.
       return clipboard.readText();
+    },
+  };
+}
+
+/**
+ * Host-mediated "open / reveal" surface (#11299), scoped to the calling
+ * plugin's own filesystem roots.
+ *
+ * The renderer's built-in `system.openPath` action validates against the
+ * *user's* roots — open projects, tracked worktrees, `userData` — and carries
+ * no caller identity, so a plugin dispatching it could not reach
+ * `~/.daintree/plugin-data/<plugin-id>/`: the one directory that is
+ * unambiguously its own. Plugins worked around that by shelling out to
+ * `/usr/bin/open`, trading a contained call for arbitrary execution.
+ *
+ * `pluginId` is bound here at construction rather than travelling as an
+ * argument, which is what makes the scoping trustworthy — there is no
+ * parameter for one plugin to name another's namespace. That is also why this
+ * is a host API rather than plugin identity threaded through the generic
+ * ActionService dispatch payload, which every non-plugin caller shares.
+ *
+ * Stateless — no watchers or handles, so nothing to tear down on unload.
+ */
+function buildSystemApi(deps: PluginHostFactoryDeps, pluginId: string): PluginSystemApi {
+  const requireLoaded = (op: string): void => {
+    if (!deps.plugins.has(pluginId)) {
+      throw new Error(
+        `PLUGIN_UNLOADED: plugin "${pluginId}" system.${op}: plugin is no longer loaded`
+      );
+    }
+  };
+  // Accept either the read or the write capability for the matched root's
+  // class. Revealing a file is strictly less authority than the read that
+  // would let the plugin exfiltrate its contents, and a plugin that could
+  // legitimately *create* the file should not also have to declare read
+  // access just to show the user where it landed.
+  const requireCapForClass = (op: string, rootClass: FsRootClass): void => {
+    const read = rootClass === "project" ? "fs:project-read" : "fs:user-data-read";
+    const write = rootClass === "project" ? "fs:project-write" : "fs:user-data-write";
+    const held = deps.declaredCapabilities(pluginId);
+    if (!held.has(read) && !held.has(write)) {
+      throw new Error(
+        `PERMISSION_REQUIRED: plugin "${pluginId}" system.${op} requires the "${read}" or "${write}" capability for ${rootClass} paths, which is not declared in manifest.capabilities`
+      );
+    }
+  };
+  // Contain against the call-time-expanded roots, reporting which class
+  // matched — same per-entry loop as buildFsApi's containWithClass, so the
+  // matched entry's class is exact rather than the union's.
+  const containWithClass = async (
+    targetPath: string
+  ): Promise<{ resolved: string; rootClass: FsRootClass }> => {
+    const entries = await deps.expandAllowedPathEntries(pluginId, { includeDataDir: true });
+    let lastErr: unknown;
+    for (const entry of entries) {
+      try {
+        const resolved = await resolveContainedPath(pluginId, targetPath, [entry.path]);
+        return { resolved, rootClass: entry.rootClass };
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+    throw lastErr instanceof Error ? lastErr : new PluginPathNotAllowedError(pluginId, targetPath);
+  };
+  // The plugin path resolver deliberately admits a non-existent final
+  // component so `fs.writeFile` can create a new file inside an allowed root.
+  // That is wrong for these sinks: `shell.showItemInFolder` silently no-ops on
+  // a missing path, so without this gate a plugin revealing a deleted file
+  // would be told it succeeded while nothing opened. Checked after the
+  // capability gate so an unauthorized plugin can't probe for existence.
+  const requireExists = async (op: string, resolved: string): Promise<void> => {
+    try {
+      await fs.stat(resolved);
+    } catch {
+      throw new Error(
+        `INVALID_PATH: plugin "${pluginId}" system.${op}: path does not exist: ${resolved}`
+      );
+    }
+  };
+
+  return {
+    openPath: async (targetPath): Promise<void> => {
+      requireLoaded("openPath");
+      // Deny executables on the raw path before any I/O, then again on the
+      // realpath target below — a benignly named symlink inside an allowed
+      // root would otherwise be a launch primitive.
+      assertExtensionAllowed(targetPath);
+      const { resolved, rootClass } = await containWithClass(targetPath);
+      // Re-check liveness after the await: expansion and realpath are async,
+      // and the plugin can unload underneath them (#9533).
+      requireLoaded("openPath");
+      requireCapForClass("openPath", rootClass);
+      assertExtensionAllowed(resolved);
+      await requireExists("openPath", resolved);
+      requireLoaded("openPath");
+      // shell.openPath reports failure through a non-empty return string
+      // rather than by rejecting, so an unchecked call fails silently.
+      const error = await shell.openPath(resolved);
+      if (error !== "") {
+        throw new Error(`plugin "${pluginId}" system.openPath failed: ${error}`);
+      }
+      deps.safeAppendAudit({
+        pluginId,
+        actionId: `system.openPath:${resolved}`,
+        recordType: "ipc-invoke",
+        channel: "plugin:system-open-path",
+        result: "success",
+        errorMessage: "",
+        argsHash: deps.safeArgsHash([{ path: resolved }]),
+        durationMs: 0,
+      });
+    },
+    showItemInFolder: async (targetPath): Promise<void> => {
+      requireLoaded("showItemInFolder");
+      // No executable deny-list here: revealing a file in Finder/Explorer
+      // shows it, it does not run it. Containment still applies in full.
+      const { resolved, rootClass } = await containWithClass(targetPath);
+      requireLoaded("showItemInFolder");
+      requireCapForClass("showItemInFolder", rootClass);
+      await requireExists("showItemInFolder", resolved);
+      requireLoaded("showItemInFolder");
+      // Returns void and no-ops on a missing path — requireExists above is
+      // what turns that silent nothing into a reported failure.
+      shell.showItemInFolder(resolved);
+      deps.safeAppendAudit({
+        pluginId,
+        actionId: `system.showItemInFolder:${resolved}`,
+        recordType: "ipc-invoke",
+        channel: "plugin:system-show-item",
+        result: "success",
+        errorMessage: "",
+        argsHash: deps.safeArgsHash([{ path: resolved }]),
+        durationMs: 0,
+      });
     },
   };
 }

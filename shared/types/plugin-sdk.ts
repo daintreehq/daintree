@@ -36,6 +36,7 @@ export type {
   PluginManifestScopes,
   PluginNetworkScope,
   PluginFsScope,
+  PluginLocalSocketScope,
 } from "./plugin.js";
 
 // ── View component props ────────────────────────────────────────────
@@ -84,6 +85,7 @@ export type {
   PluginGitCommitOptions,
   PluginGitCommitResult,
   PluginClipboardApi,
+  PluginSystemApi,
 } from "./plugin.js";
 
 // ── Settings (host.settings) ────────────────────────────────────────

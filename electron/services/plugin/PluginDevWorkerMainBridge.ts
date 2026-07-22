@@ -54,6 +54,8 @@ import type {
   FsWatchParams,
   GitOpParams,
   ClipboardWriteTextParams,
+  ClipboardWriteImageParams,
+  SystemPathParams,
   ProcessSpawnParams,
   ProcessHandleRefParams,
   ProcessWriteParams,
@@ -539,6 +541,18 @@ export class PluginDevWorkerMainBridge {
       }
       case "clipboard.writeText": {
         await this.host.clipboard.writeText((params as ClipboardWriteTextParams).text);
+        return undefined;
+      }
+      case "clipboard.writeImage": {
+        await this.host.clipboard.writeImage((params as ClipboardWriteImageParams).pngData);
+        return undefined;
+      }
+      case "system.openPath": {
+        await this.host.system.openPath((params as SystemPathParams).targetPath);
+        return undefined;
+      }
+      case "system.showItemInFolder": {
+        await this.host.system.showItemInFolder((params as SystemPathParams).targetPath);
         return undefined;
       }
       case "clipboard.readText":

@@ -37,6 +37,7 @@ import {
   type PluginProcessInfo,
 } from "../../shared/types/ipc/pluginProcess.js";
 import { z } from "zod";
+import { isBuiltInPluginCapability } from "../../shared/types/plugin.js";
 import type {
   PluginManifest,
   PluginIpcHandler,
@@ -3643,10 +3644,24 @@ export class PluginService {
     // confirm/MRU/repeatLast gates.
     const manifest = this.plugins.get(pluginId)?.manifest;
     const manifestCapabilities = manifest?.capabilities ?? [];
-    const hasHighRiskCapability = manifestCapabilities.some((p) =>
+
+    // Per-action capability intent (#11299). `requires` narrows *which*
+    // capabilities the derivation below consults — it never changes who
+    // derives the verdict, and it grants no access (host APIs still gate on
+    // manifest.capabilities at call time). Validated fail-closed as a subset
+    // of the manifest, mirroring PluginChannelRegistry.registerHandler, so an
+    // action can't name authority the user was never asked to grant.
+    const requires = this.validateActionRequires(pluginId, id, contribution, manifestCapabilities);
+
+    // Omitted (not merely empty) means "no intent declared" — fall back to the
+    // whole manifest so pre-#11299 plugins keep today's conservative
+    // elevation. An explicit `[]` is a real declaration and must survive the
+    // check, which is why this is `=== undefined` and not `??`.
+    const dangerCapabilities = requires === undefined ? manifestCapabilities : requires;
+    const hasHighRiskCapability = dangerCapabilities.some((p) =>
       CONFIRM_TRIGGERING_CAPABILITIES.has(p)
     );
-    const hasCompoundElevation = manifestTriggersCompoundElevation(manifest, manifestCapabilities);
+    const hasCompoundElevation = manifestTriggersCompoundElevation(manifest, dangerCapabilities);
     const effectiveDanger: "safe" | "confirm" =
       danger === "confirm" || hasHighRiskCapability || hasCompoundElevation ? "confirm" : "safe";
 
@@ -3664,7 +3679,58 @@ export class PluginService {
         contribution.inputSchema && typeof contribution.inputSchema === "object"
           ? { ...contribution.inputSchema }
           : undefined,
+      requires,
     };
+  }
+
+  /**
+   * Validate a contribution's optional per-action capability intent (#11299)
+   * and return a defensive copy, or `undefined` when the action declared none.
+   *
+   * Fail-closed on every rejection path: an unknown token, a token the plugin
+   * never declared, or a malformed value throws rather than being dropped.
+   * Silently ignoring a bad `requires` would be the dangerous failure — the
+   * action would fall back to whole-manifest elevation, which is safe, but the
+   * author's typo would go unreported until someone wondered why their action
+   * still confirms. Throwing surfaces it at load, matching how
+   * `PluginChannelRegistry` handles the same mistake on channels.
+   *
+   * `requires` is copied because the descriptor is broadcast to renderers and
+   * cached; sharing the plugin's array would let a plugin mutate a
+   * host-authoritative record after validation.
+   */
+  private validateActionRequires(
+    pluginId: string,
+    actionId: string,
+    contribution: PluginActionContribution,
+    manifestCapabilities: readonly BuiltInPluginCapability[]
+  ): readonly BuiltInPluginCapability[] | undefined {
+    // Typed as `readonly BuiltInPluginCapability[]`, but the main-side
+    // `host.registerAction` path hands us whatever the plugin passed, so the
+    // runtime shape is genuinely unknown and every check below earns its keep.
+    const raw: unknown = contribution.requires;
+    if (raw === undefined) return undefined;
+    if (!Array.isArray(raw)) {
+      throw new Error(
+        `Plugin action "${actionId}" has invalid "requires": expected an array of capabilities`
+      );
+    }
+    const declared: ReadonlySet<string> = new Set(manifestCapabilities);
+    const validated: BuiltInPluginCapability[] = [];
+    for (const cap of raw) {
+      if (!isBuiltInPluginCapability(cap)) {
+        throw new Error(
+          `Plugin action "${actionId}" lists unknown capability "${String(cap)}" in "requires"`
+        );
+      }
+      if (!declared.has(cap)) {
+        throw new Error(
+          `PERMISSION_REQUIRED: action "${actionId}" requires capability "${cap}" which is not declared in plugin "${pluginId}" manifest.capabilities`
+        );
+      }
+      validated.push(cap);
+    }
+    return validated;
   }
 
   /**

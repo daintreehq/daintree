@@ -126,6 +126,13 @@ export const ContextMenuContributionSchema = z
   .strict();
 
 /**
+ * Declared here rather than beside the other manifest-level schemas because
+ * {@link CommandContributionSchema} below references it for `requires`, and a
+ * `const` referenced above its declaration is a TDZ error at module init.
+ */
+export const PluginCapabilitySchema = z.enum(BUILT_IN_PLUGIN_CAPABILITIES);
+
+/**
  * `contributes.commands` manifest entry. The bare command `id` is namespaced
  * by `PluginService` at load time as `{pluginId}.{id}` so the descriptor key
  * matches the {@link PluginActionDescriptor.id} format used by the imperative
@@ -144,6 +151,12 @@ export const CommandContributionSchema = z
     danger: z.enum(["safe", "confirm"]),
     keywords: z.array(z.string().min(1)).optional(),
     inputSchema: z.record(z.string(), z.unknown()).optional(),
+    // Per-action capability intent (#11299). Deliberately NOT `.min(1)`: an
+    // empty array is the meaningful "this command exercises no capability"
+    // declaration that keeps it one-click in an otherwise high-authority
+    // plugin. Omitting the field keeps whole-manifest danger derivation.
+    // PluginService re-checks the subset against manifest.capabilities.
+    requires: z.array(PluginCapabilitySchema).optional(),
   })
   .strict();
 
@@ -470,8 +483,6 @@ export const AgentContributionSchema = z
   })
   .strict();
 
-export const PluginCapabilitySchema = z.enum(BUILT_IN_PLUGIN_CAPABILITIES);
-
 /**
  * Shared per-entry validator body for manifest URL fields. Each entry must:
  *
@@ -638,6 +649,75 @@ export const PluginFsScopeSchema = z
   .strict();
 
 /**
+ * A declared local socket endpoint: a Unix-domain socket path or a Windows
+ * named pipe (`\\.\pipe\name`).
+ *
+ * Deliberately does NOT reuse {@link PluginAllowedPathSchema}: that validator
+ * leans on `path.isAbsolute`, which is platform-dependent, so a manifest
+ * declaring `\\.\pipe\docker_engine` would fail to parse on macOS and a
+ * manifest declaring `/var/run/docker.sock` would fail on Windows. A manifest
+ * must validate identically everywhere it's read — including when a Linux CI
+ * box parses a plugin authored for Windows — so both forms are accepted on
+ * every platform and the shape is checked explicitly.
+ *
+ * This is disclosure metadata, not an enforcement boundary (nothing intercepts
+ * `node:net`), so the checks target author mistakes and misleading UI rather
+ * than containment: no globs (a wildcard would render as a specific endpoint
+ * while meaning any), no traversal segments, no NUL, no relative paths.
+ */
+const LOCAL_SOCKET_PATH_MAX = 512;
+export const PluginAllowedSocketPathSchema = z
+  .string()
+  .min(1)
+  .max(LOCAL_SOCKET_PATH_MAX)
+  .superRefine((value, ctx) => {
+    const addIssue = (message: string): void => {
+      ctx.addIssue({ code: "custom", message });
+    };
+    if (value.trim() !== value) {
+      addIssue("Socket path must not have leading or trailing whitespace");
+      return;
+    }
+    if (value.includes("\0")) {
+      addIssue("Socket path must not contain a NUL character");
+      return;
+    }
+    if (value.includes("*")) {
+      addIssue("Socket path must not contain a wildcard — declare each endpoint literally");
+      return;
+    }
+    const isWindowsPipe = /^\\\\[.?]\\pipe\\/i.test(value);
+    if (isWindowsPipe) {
+      if (value.length <= "\\\\.\\pipe\\".length) {
+        addIssue("Windows named pipe must include a pipe name");
+      }
+      return;
+    }
+    if (!value.startsWith("/")) {
+      addIssue(
+        "Socket path must be an absolute Unix-domain path (/var/run/docker.sock) or a Windows named pipe (\\\\.\\pipe\\name)"
+      );
+      return;
+    }
+    if (value.split("/").includes("..")) {
+      addIssue("Socket path must not contain a '..' segment");
+    }
+  });
+
+/**
+ * `scopes.socket.allowedPaths` — optional path intent for `socket:connect`
+ * (#11299). Unlike `scopes.fs`, nothing enforces this: a plugin's `main` calls
+ * `node:net` directly with no host interception point. It exists so the
+ * Permissions tab can render "connects to /var/run/docker.sock" instead of the
+ * bare capability, which is the whole value of the disclosure.
+ */
+export const PluginLocalSocketScopeSchema = z
+  .object({
+    allowedPaths: z.array(PluginAllowedSocketPathSchema).min(1),
+  })
+  .strict();
+
+/**
  * Top-level `scopes` field on `PluginManifest`. Strict so a misspelled scope
  * bucket (e.g. `networking` instead of `network`) surfaces as a manifest error
  * rather than silently failing to attenuate the compound-capability lattice.
@@ -646,6 +726,7 @@ export const PluginManifestScopesSchema = z
   .object({
     network: PluginNetworkScopeSchema.optional(),
     fs: PluginFsScopeSchema.optional(),
+    socket: PluginLocalSocketScopeSchema.optional(),
   })
   .strict();
 

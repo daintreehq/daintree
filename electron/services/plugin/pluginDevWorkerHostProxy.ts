@@ -349,6 +349,7 @@ export class PluginDevWorkerHostProxy {
               danger: descriptor.danger,
               keywords: descriptor.keywords,
               inputSchema: descriptor.inputSchema,
+              requires: descriptor.requires,
             },
           },
           `action:${namespacedId}`
@@ -696,7 +697,16 @@ export class PluginDevWorkerHostProxy {
       },
       clipboard: {
         writeText: (text) => this.call<void>("clipboard.writeText", { text }),
+        // The typed array survives structured clone, so the bytes reach the
+        // real host unchanged and are validated there — the worker is the
+        // untrusted side, so no size check is worth doing here.
+        writeImage: (pngData) => this.call<void>("clipboard.writeImage", { pngData }),
         readText: () => this.call<string>("clipboard.readText", undefined),
+      },
+      system: {
+        openPath: (targetPath) => this.call<void>("system.openPath", { targetPath }),
+        showItemInFolder: (targetPath) =>
+          this.call<void>("system.showItemInFolder", { targetPath }),
       },
       settings: {
         // Forward an omitted scope as `undefined` (not a defaulted "user") so the

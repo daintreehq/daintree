@@ -29,6 +29,7 @@ import type {
   PluginPtyProcessSpawnOptions,
   PluginProcessMode,
   PluginPanelBadge,
+  BuiltInPluginCapability,
 } from "./plugin.js";
 
 /** Async host methods the worker proxy relays to main and awaits a reply for. */
@@ -57,7 +58,10 @@ export type PluginHostCallMethod =
   | "git.add"
   | "git.commit"
   | "clipboard.writeText"
+  | "clipboard.writeImage"
   | "clipboard.readText"
+  | "system.openPath"
+  | "system.showItemInFolder"
   | "showQuickPick"
   | "showInputBox"
   | "showConfirm"
@@ -234,6 +238,15 @@ export interface RegisterActionParams {
     danger: "safe" | "confirm";
     keywords?: string[];
     inputSchema?: Record<string, unknown>;
+    /**
+     * Per-action capability intent (#11299). Must cross the port explicitly:
+     * the bridge reconstructs the descriptor field by field, so an omitted
+     * field is silently dropped rather than failing to compile. Dropping it
+     * would send a dev plugin's one-click action back to whole-manifest
+     * elevation — the exact bug this field exists to fix, visible only in the
+     * dev loop.
+     */
+    requires?: readonly BuiltInPluginCapability[];
   };
 }
 
@@ -409,6 +422,21 @@ export interface GitOpParams {
 /** Params for `clipboard.writeText` (`host-call`). `clipboard.readText` takes no params. */
 export interface ClipboardWriteTextParams {
   text: string;
+}
+
+/**
+ * Params for `clipboard.writeImage` (`host-call`). The bytes ride the port as a
+ * `Uint8Array`; structured clone preserves the typed array, so the bridge hands
+ * the host the same view the plugin passed. The host re-checks the size cap on
+ * its side — the worker is the untrusted party here.
+ */
+export interface ClipboardWriteImageParams {
+  pngData: Uint8Array;
+}
+
+/** Params for `system.openPath` / `system.showItemInFolder` (`host-call`). */
+export interface SystemPathParams {
+  targetPath: string;
 }
 
 /** Params for `process.spawn` (`host-call`). */

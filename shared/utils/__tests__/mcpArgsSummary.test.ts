@@ -8,9 +8,19 @@ import {
 } from "../mcpArgsSummary.js";
 
 describe("summarizeMcpArgs", () => {
-  it("returns null for null and undefined inputs", () => {
+  it("distinguishes no arguments from an explicit null argument", () => {
+    // Callers render this as a preview and gate the block on emptiness, so
+    // "this call takes no arguments" must be empty rather than the word
+    // "null" — which is what users were shown for every no-arg action
+    // (#11299). An argument that genuinely *is* null keeps its own summary.
+    expect(summarizeMcpArgs(undefined)).toBe("");
     expect(summarizeMcpArgs(null)).toBe("null");
-    expect(summarizeMcpArgs(undefined)).toBe("null");
+  });
+
+  it("keeps the no-arguments summary empty even with a scrubber attached", () => {
+    // The audit path always passes a scrubber; it must not resurrect a
+    // placeholder for the empty case.
+    expect(summarizeMcpArgs(undefined, (s) => s.replace(/x/g, "y"))).toBe("");
   });
 
   it("collapses long strings to a length placeholder", () => {

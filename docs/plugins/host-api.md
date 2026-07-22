@@ -116,6 +116,8 @@ interface PluginHostApi {
 
   // Host-mediated OS clipboard — gated on `clipboard:read` / `clipboard:write`
   readonly clipboard: PluginClipboardApi;
+  // Open / reveal a file in the plugin's own declared fs scope
+  readonly system: PluginSystemApi;
 }
 ```
 
@@ -576,14 +578,35 @@ const { commit, preview } = await host.git.commit("/Users/me/project", {
 
 ## `clipboard` — host-mediated OS clipboard
 
-Text-only read/write of the OS clipboard, gated on `clipboard:read` / `clipboard:write`. Runs in the main process, so it works from a headless plugin (no renderer or focused document required).
+Read and write the OS clipboard, gated on `clipboard:read` / `clipboard:write`. Runs in the main process, so it works from a headless plugin (no renderer or focused document required).
 
 ```ts
 await host.clipboard.writeText("acme.linear-planner synced 12 issues"); // clipboard:write
+await host.clipboard.writeImage(pngBytes); // clipboard:write
 const text = await host.clipboard.readText(); // clipboard:read
 ```
 
 `writeText` rejects with a `PAYLOAD_TOO_LARGE:` prefix when the text exceeds 8 MiB by UTF-8 byte count (mirroring the renderer IPC clipboard guard). `readText` resolves to `""` when the clipboard is empty or holds non-text content (image, file list) — it never rejects on content type. A call without the matching capability rejects with a `PERMISSION_REQUIRED:` error. `host.clipboard` is NOT revoke-guarded.
+
+`writeImage` takes a `Uint8Array` of raw PNG bytes and shares the `clipboard:write` token — putting an image on the clipboard is exactly as reversible as putting text there, so it needs no second capability and doesn't elevate your actions to `confirm`. It rejects with `PAYLOAD_TOO_LARGE:` above 20 MiB and `VALIDATION:` when the bytes don't decode to an image. Successful writes are audited by byte count (never the bytes). Decoding happens in the main process by necessity — a renderer-side `navigator.clipboard.write()` with binary PNG data crashes on Linux — so this is the supported path for image writes.
+
+**Reads stay text-only.** There is no `readImage`/`readHtml`/`readFiles`: the read side is where richer payload types would let a plugin pull out more than it declared. Writes carry no such risk, since you already have the bytes.
+
+## `system` — open and reveal files in your own scope
+
+Hand a file to the OS default application, or reveal it in Finder/Explorer — scoped to your plugin's own filesystem roots.
+
+```ts
+const shot = `${dataDir}/screenshot.png`;
+await host.system.showItemInFolder(shot); // reveal it, selected
+await host.system.openPath(shot); // or open it in the default viewer
+```
+
+This exists because the built-in `system.openPath` action validates against the _user's_ roots — open projects, tracked worktrees, `userData` — and carries no caller identity, so dispatching it could never reach `~/.daintree/plugin-data/<plugin-id>/`, the one directory that is unambiguously yours. The workaround was shelling out to `/usr/bin/open`, trading a contained call for arbitrary execution.
+
+Paths resolve against your declared `scopes.fs.allowedPaths` plus your implicit plugin-data namespace, with realpath containment (a symlink can't walk out of scope). Your plugin id is bound when the host is built rather than passed as an argument, so one plugin can never name another's namespace. Both methods are gated on the `fs:*` capability matching the resolved root's class — `fs:user-data-read` _or_ `fs:user-data-write` for the plugin-data namespace, `fs:project-*` for a project root — so a plugin that could legitimately create the file can always reveal it.
+
+Errors carry prefixes: `OUTSIDE_ROOT:` for a path outside your scope, `INVALID_PATH:` for a relative, unresolvable, or non-existent path, `PERMISSION_REQUIRED:` for a missing capability, `PLUGIN_UNLOADED:` after unload. `openPath` additionally refuses executable file types (`.app`, `.exe`, `.sh`, …), checked on both the path you passed and its realpath target so a benignly-named symlink can't become a launch primitive; `showItemInFolder` has no such deny-list, since revealing a file shows it rather than running it. Both are audited. `host.system` is NOT revoke-guarded.
 
 ## React hooks — `@daintreehq/plugin-sdk/react`
 

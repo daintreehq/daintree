@@ -16,7 +16,16 @@ vi.mock("electron", () => ({
   webContents: { getAllWebContents: vi.fn(() => []) },
   clipboard: {
     writeText: vi.fn(),
+    writeImage: vi.fn(),
     readText: vi.fn(() => ""),
+  },
+  // Mirrors Electron's real contract: createFromBuffer never throws on
+  // malformed input, it returns an image whose isEmpty() is true. Bytes
+  // starting with the PNG magic number stand in for a decodable image.
+  nativeImage: {
+    createFromBuffer: vi.fn((buf: Buffer) => ({
+      isEmpty: () => !(buf.length >= 4 && buf[0] === 0x89 && buf[1] === 0x50),
+    })),
   },
 }));
 
@@ -71,7 +80,15 @@ function registerPlugin(capabilities: string[]): PluginHostApi {
   return seam._createHostForTests("acme.clip");
 }
 
+/** Bytes that the nativeImage mock decodes to a non-empty image. */
+function pngBytes(length = 8): Uint8Array {
+  const bytes = new Uint8Array(length);
+  bytes.set([0x89, 0x50, 0x4e, 0x47], 0);
+  return bytes;
+}
+
 beforeEach(() => {
+  mockClipboard.writeImage.mockClear();
   mockClipboard.writeText.mockClear();
   mockClipboard.readText.mockClear();
   mockClipboard.readText.mockReturnValue("");
@@ -181,5 +198,86 @@ describe("host.clipboard write size guard", () => {
     expect(payload.length).toBeLessThan(LIMIT); // under the limit by .length
     await expect(host.clipboard.writeText(payload)).rejects.toThrow(/PAYLOAD_TOO_LARGE/);
     expect(mockClipboard.writeText).not.toHaveBeenCalled();
+  });
+});
+
+describe("host.clipboard.writeImage", () => {
+  const LIMIT = 20 * 1024 * 1024;
+
+  it("writes a decodable PNG when clipboard:write is declared", async () => {
+    const host = registerPlugin(["clipboard:write"]);
+    await expect(host.clipboard.writeImage(pngBytes())).resolves.toBeUndefined();
+    expect(mockClipboard.writeImage).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses the clipboard:write token rather than requiring a separate one", async () => {
+    // Deliberate design choice: an image write is exactly as reversible as a
+    // text write, so it must not demand a capability a plugin already
+    // holding clipboard:write would have to add (and which would then elevate
+    // its actions to confirm).
+    const host = registerPlugin(["clipboard:write"]);
+    await expect(host.clipboard.writeImage(pngBytes())).resolves.toBeUndefined();
+  });
+
+  it("rejects without clipboard:write", async () => {
+    const host = registerPlugin(["clipboard:read"]);
+    await expect(host.clipboard.writeImage(pngBytes())).rejects.toThrow(/PERMISSION_REQUIRED/);
+    expect(mockClipboard.writeImage).not.toHaveBeenCalled();
+  });
+
+  it("rejects a non-Uint8Array payload", async () => {
+    const host = registerPlugin(["clipboard:write"]);
+    await expect(host.clipboard.writeImage("not-bytes" as unknown as Uint8Array)).rejects.toThrow(
+      /VALIDATION/
+    );
+    expect(mockClipboard.writeImage).not.toHaveBeenCalled();
+  });
+
+  it("rejects bytes that do not decode to an image", async () => {
+    // nativeImage.createFromBuffer returns an empty image rather than
+    // throwing, so without the isEmpty() check this would silently put a
+    // blank image on the clipboard and report success.
+    const host = registerPlugin(["clipboard:write"]);
+    await expect(host.clipboard.writeImage(new Uint8Array([1, 2, 3, 4]))).rejects.toThrow(
+      /VALIDATION/
+    );
+    expect(mockClipboard.writeImage).not.toHaveBeenCalled();
+  });
+
+  it("rejects a payload one byte over the 20 MiB limit without decoding it", async () => {
+    const host = registerPlugin(["clipboard:write"]);
+    await expect(host.clipboard.writeImage(pngBytes(LIMIT + 1))).rejects.toThrow(
+      /PAYLOAD_TOO_LARGE/
+    );
+    expect(mockClipboard.writeImage).not.toHaveBeenCalled();
+  });
+
+  it("accepts a payload exactly at the limit", async () => {
+    const host = registerPlugin(["clipboard:write"]);
+    await expect(host.clipboard.writeImage(pngBytes(LIMIT))).resolves.toBeUndefined();
+    expect(mockClipboard.writeImage).toHaveBeenCalledTimes(1);
+  });
+
+  it("decodes a subarray view's own bytes, not its whole backing buffer", async () => {
+    // Buffer.from(view.buffer) without the byteOffset/byteLength triple would
+    // hand over the wrong bytes for any caller whose data is a view — and
+    // would do so silently, since the leading bytes still look like a PNG.
+    const backing = new Uint8Array(64);
+    backing.set([0x89, 0x50, 0x4e, 0x47], 16);
+    const view = backing.subarray(16, 32);
+    const host = registerPlugin(["clipboard:write"]);
+    await expect(host.clipboard.writeImage(view)).resolves.toBeUndefined();
+
+    const { nativeImage } = await import("electron");
+    const passed = vi.mocked(nativeImage.createFromBuffer).mock.calls.at(-1)?.[0];
+    expect(passed?.length).toBe(16);
+    expect(passed?.[0]).toBe(0x89);
+  });
+
+  it("rejects with PLUGIN_UNLOADED after unload, before the capability check", async () => {
+    const host = registerPlugin(["clipboard:write"]);
+    svc.unloadPlugin("acme.clip");
+    await expect(host.clipboard.writeImage(pngBytes())).rejects.toThrow(/PLUGIN_UNLOADED/);
+    expect(mockClipboard.writeImage).not.toHaveBeenCalled();
   });
 });

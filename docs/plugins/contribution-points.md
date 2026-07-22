@@ -43,6 +43,29 @@ Commands are callable actions that appear in the command palette and can be boun
 | `danger` | yes | `"safe"` or `"confirm"`. `"restricted"` is rejected — plugins cannot self-register restricted actions. The host raises `"safe"` to `"confirm"` automatically when the plugin holds a high-risk capability. |
 | `keywords` | no | Extra search terms for the palette. |
 | `inputSchema` | no | JSON schema validated against the dispatched `args` payload. |
+| `requires` | no | The capabilities _this command_ actually uses — see below. |
+
+**`requires` — per-action capability intent:**
+
+By default the host derives a command's `effectiveDanger` from your plugin's _entire_ `capabilities` list, so declaring `shell:exec` for one command puts a destructive confirmation on all of them — including a no-argument "open the panel" command. Dropping the capability isn't an honest fix; `requires` is:
+
+```json
+{
+  "id": "open-panel",
+  "title": "Open Panel",
+  "description": "Opens the tools panel.",
+  "category": "Flutter Tools",
+  "kind": "command",
+  "danger": "safe",
+  "requires": []
+}
+```
+
+- **Omit `requires`** and nothing changes — the whole manifest is consulted, as before. Existing plugins need no migration.
+- **`"requires": []`** declares the command exercises no capability, so it stays one click even in a plugin holding `shell:exec`.
+- **`"requires": ["git:read"]`** consults only those capabilities, for both the high-risk set and the compound-capability lattice.
+
+Three things it does _not_ do. It grants no access: host APIs still gate on `manifest.capabilities` at call time, so listing a capability here neither adds nor removes runtime authority. It cannot lower a self-declared `"danger": "confirm"`. And every entry must appear in your `capabilities` — naming one you didn't declare fails the command's registration outright rather than falling back, so an author's typo surfaces at load instead of quietly reverting to the old behaviour.
 
 **Handler binding — two ways:**
 
