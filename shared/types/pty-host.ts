@@ -155,8 +155,7 @@ export type PluginPtyHostRequest =
 
 /** Outcome of a `plugin-pty-spawn`. */
 export type PluginPtySpawnResult =
-  | { success: true; pid: number | null }
-  | { success: false; error: string };
+  { success: true; pid: number | null } | { success: false; error: string };
 
 /** Host → Main events for the raw plugin-PTY lane (#11300). */
 export type PluginPtyHostEvent =
