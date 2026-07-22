@@ -63,6 +63,7 @@ describe("useModalResetKeys", () => {
       pluginConfirmResetKey: "plugin-1",
       pluginMcpConfirmResetKey: "",
       pluginCapabilityConfirmResetKey: "cap-1",
+      pluginArchiveInstallResetKey: "",
       diagnosticsReviewResetKey: 5,
       terminalInfoResetKey: 0,
     });

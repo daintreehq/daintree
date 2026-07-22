@@ -869,9 +869,11 @@ export async function initGlobalServices(
       setPluginDirResolver((pluginId) => pluginService.getPluginDir(pluginId));
       // macOS: drain any `.dntr` paths queued during cold launch (Finder
       // double-click / "Open With") and take over live open-file events now
-      // that PluginService can install them. Fire-and-forget — install runs
-      // concurrently with the remaining deferred tasks. #9293
-      void activateOpenFileInstaller(pluginService);
+      // that PluginService can install an approved archive. Each path is queued
+      // for the install-confirmation prompt, never installed outright (#11280).
+      // Fire-and-forget — previewing runs concurrently with the remaining
+      // deferred tasks. #9293
+      void activateOpenFileInstaller();
       // Fire-and-forget — activations fan out in parallel and report errors
       // via the per-plugin `loadError` provenance record. Awaiting here would
       // delay subsequent deferred tasks behind the slowest plugin's activate().

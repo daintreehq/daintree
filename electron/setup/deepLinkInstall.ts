@@ -101,11 +101,33 @@ const paintedWebContentsIds = new Set<number>();
 // duplicate `did-start-loading` / `destroyed` handlers.
 const wiredWebContentsIds = new Set<number>();
 
+// Flush callbacks run after every paint signal. Lets sibling OS-ingress queues
+// (the `.dntr` archive queue, #11280) share this module's painted/primary
+// bookkeeping without importing each other — registration points one way, so
+// there is no import cycle.
+const paintedFlushListeners = new Set<() => void>();
+
+/** Register a callback invoked whenever an app view reports first paint. */
+export function registerPaintedFlushListener(listener: () => void): void {
+  paintedFlushListeners.add(listener);
+}
+
 function primaryAppWebContents(): Electron.WebContents | null {
   const win = windowRegistry?.getPrimary()?.browserWindow;
   if (!win || win.isDestroyed()) return null;
   const wc = getAppWebContents(win);
   return wc && !wc.isDestroyed() ? wc : null;
+}
+
+/**
+ * The primary app view's webContents, but only once it has reported first
+ * paint — i.e. the one target that is safe to push a main-originated intent to.
+ * `null` while no primary exists or it hasn't painted, so callers hold their
+ * intent rather than dropping it.
+ */
+export function getPaintedPrimaryWebContents(): Electron.WebContents | null {
+  const wc = primaryAppWebContents();
+  return wc && paintedWebContentsIds.has(wc.id) ? wc : null;
 }
 
 /**
@@ -172,6 +194,14 @@ export function handleDaintreeUrl(raw: string): void {
 export function notifyAppViewPainted(webContents: Electron.WebContents): void {
   wireWebContentsLifecycle(webContents);
   paintedWebContentsIds.add(webContents.id);
+
+  for (const listener of [...paintedFlushListeners]) {
+    try {
+      listener();
+    } catch (err) {
+      console.error("[MAIN] Painted-flush listener threw:", err);
+    }
+  }
 
   if (!pendingIntent) return;
   const primary = primaryAppWebContents();

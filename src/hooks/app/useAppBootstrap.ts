@@ -11,6 +11,7 @@ import { useFocusOnActivateIntent } from "./useFocusOnActivateIntent";
 import { useBackgroundWindowResize } from "./useBackgroundWindowResize";
 import { useClearSwitchBusyStateOnReveal } from "./useClearSwitchBusyStateOnReveal";
 import { usePluginDeepLink } from "./usePluginDeepLink";
+import { usePluginArchiveInstallIntent } from "./usePluginArchiveInstallIntent";
 import { useNotificationHistoryPruning } from "./useNotificationHistoryPruning";
 import { useUpdateListener } from "@/hooks/useUpdateListener";
 import { removeStartupSkeleton } from "@/utils/removeStartupSkeleton";
@@ -91,6 +92,9 @@ export function useAppBootstrap() {
   // `daintree://` deep-link receiver (#9559). Surfaces the intent once hydration
   // settles; the effect below opens the Plugin Manager, which consumes it.
   const pluginDeepLink = usePluginDeepLink(isStateLoaded);
+  // Double-clicked `.dntr` archives (#11280). Queued on arrival — the
+  // confirmation dialog mounts behind hydration and reads the queue.
+  usePluginArchiveInstallIntent();
   useEffect(() => {
     if (!pluginDeepLink.intent) return;
     // Opening the manager also closes Settings via the open-transition effect

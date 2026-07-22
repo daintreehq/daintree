@@ -8,6 +8,7 @@ import { usePluginConfirmStore } from "@/store/pluginConfirmStore";
 import { usePluginMcpConfirmStore } from "@/store/pluginMcpConfirmStore";
 import { usePluginCapabilityConfirmStore } from "@/store/pluginCapabilityConfirmStore";
 import { useDiagnosticsReviewStore } from "@/store/diagnosticsReviewStore";
+import { usePluginArchiveInstallStore } from "@/store/pluginArchiveInstallStore";
 
 export interface ModalResetKeys {
   gitPushResetKey: number;
@@ -18,6 +19,7 @@ export interface ModalResetKeys {
   pluginConfirmResetKey: string;
   pluginMcpConfirmResetKey: string;
   pluginCapabilityConfirmResetKey: string;
+  pluginArchiveInstallResetKey: string;
   diagnosticsReviewResetKey: number;
   terminalInfoResetKey: number;
 }
@@ -46,6 +48,9 @@ export function useModalResetKeys(): ModalResetKeys {
   const pluginCapabilityConfirmResetKey = usePluginCapabilityConfirmStore(
     (s) => s.current?.requestId ?? ""
   );
+  const pluginArchiveInstallResetKey = usePluginArchiveInstallStore(
+    (s) => s.current?.intentId ?? ""
+  );
   const diagnosticsReviewResetKey = useDiagnosticsReviewStore((s) => s.requestSeq);
   const [terminalInfoResetKey, setTerminalInfoResetKey] = useState(0);
   useEffect(() => {
@@ -65,6 +70,7 @@ export function useModalResetKeys(): ModalResetKeys {
     pluginConfirmResetKey,
     pluginMcpConfirmResetKey,
     pluginCapabilityConfirmResetKey,
+    pluginArchiveInstallResetKey,
     diagnosticsReviewResetKey,
     terminalInfoResetKey,
   };

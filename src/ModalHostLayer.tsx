@@ -45,6 +45,7 @@ import {
   LazyPluginManagerView,
   LazyMcpConfirmDialog,
   LazyPluginConfirmDialog,
+  LazyPluginArchiveInstallConfirmDialog,
   LazyPluginMcpConfirmDialog,
   LazyPluginQuickPickDialog,
   LazyPluginInputBoxDialog,
@@ -127,6 +128,7 @@ interface ModalHostLayerProps {
   pluginConfirmResetKey: string;
   pluginMcpConfirmResetKey: string;
   pluginCapabilityConfirmResetKey: string;
+  pluginArchiveInstallResetKey: string;
   panelLimitResetKey: number;
   diagnosticsReviewResetKey: number;
   gitPushResetKey: number;
@@ -217,6 +219,7 @@ export function ModalHostLayer({
   pluginConfirmResetKey,
   pluginMcpConfirmResetKey,
   pluginCapabilityConfirmResetKey,
+  pluginArchiveInstallResetKey,
   panelLimitResetKey,
   diagnosticsReviewResetKey,
   gitPushResetKey,
@@ -695,6 +698,17 @@ export function ModalHostLayer({
         >
           <Suspense fallback={null}>
             <LazyPluginMcpConfirmDialog />
+          </Suspense>
+        </ErrorBoundary>
+      )}
+      {isStateLoaded && (
+        <ErrorBoundary
+          variant="component"
+          componentName="PluginArchiveInstallConfirmDialog"
+          resetKeys={[pluginArchiveInstallResetKey]}
+        >
+          <Suspense fallback={null}>
+            <LazyPluginArchiveInstallConfirmDialog />
           </Suspense>
         </ErrorBoundary>
       )}

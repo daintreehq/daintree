@@ -684,6 +684,38 @@ export type PluginDeepLinkIntent =
   | { action: "open"; pluginId: string };
 
 /**
+ * Manifest identity shown in the sideload confirmation dialog (#11280). A
+ * narrow projection of {@link PluginManifest} read by `readArchiveManifest`
+ * without extracting the archive — `contributes` and the rest of the manifest
+ * tree never cross IPC. Arrays are normalized to `[]` so the dialog can say
+ * "None declared" rather than omitting the row.
+ */
+export interface PluginArchiveManifestPreview {
+  name: string;
+  displayName?: string;
+  version: string;
+  authors: PluginAuthor[];
+  capabilities: PluginCapability[];
+}
+
+/**
+ * One `.dntr` archive awaiting the user's install decision (#11280). Raised
+ * when the OS hands the app a double-clicked archive — macOS `open-file`, or a
+ * Windows/Linux argv entry — and delivered to the primary window once it has
+ * painted. Carrying the parsed manifest (not just the path) is what makes the
+ * confirmation a D2 preview of actual content rather than a filename prompt.
+ *
+ * `archivePath` is the approval token: the renderer hands it back to
+ * `plugin.installFromPath`, which re-runs every trust gate in main.
+ */
+export interface PluginArchiveInstallIntent {
+  intentId: string;
+  archivePath: string;
+  archiveFileName: string;
+  manifest: PluginArchiveManifestPreview;
+}
+
+/**
  * Discriminant for {@link PluginCheckUpdateResult}. A manual update check
  * (`plugin:check-for-update`) re-fetches the plugin's `originalUrl`, hashes the
  * archive, and compares it against the installed `archiveHash` — the check is

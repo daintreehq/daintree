@@ -83,6 +83,7 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "plugin:bg-update-available": "external",
   "run-history:update": "external",
   "plugin:deep-link": "external",
+  "plugin:archive-install-intent": "external",
   "terminal:exit": "external",
   "terminal:spawn-result": "external",
 } as const satisfies Record<keyof IpcEventBusMap, "bus" | "external">;

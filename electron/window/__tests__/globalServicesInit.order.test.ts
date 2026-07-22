@@ -576,7 +576,7 @@ describe("initGlobalServices task ordering", () => {
     expect(pluginGetPluginDir).toHaveBeenCalledWith("acme.tool");
   });
 
-  it("plugin-service task drains queued open-file installs after initialize() (#10322)", async () => {
+  it("plugin-service task drains queued open-file archives after initialize() (#10322)", async () => {
     const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
     await initGlobalServices(fakeRegistry);
 
@@ -586,9 +586,11 @@ describe("initGlobalServices task ordering", () => {
 
     await run!();
 
+    // Activation still happens after initialize(), but the activator no longer
+    // takes the service: a double-clicked archive is queued for confirmation,
+    // never installed here (#11280).
     expect(activateOpenFileInstaller).toHaveBeenCalledTimes(1);
-    // Installer receives the initialized singleton (its PluginInstaller surface).
-    expect(activateOpenFileInstaller.mock.calls[0]![0]).toBeDefined();
+    expect(activateOpenFileInstaller.mock.calls[0]).toEqual([]);
   });
 
   it("plugin-service task still wires resolver + installer when initialize() rejects (#10322)", async () => {

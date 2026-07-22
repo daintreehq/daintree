@@ -46,11 +46,12 @@ vi.mock("../windowRecreationState.js", () => ({
 
 // `broadcastToRenderer` pulls a heavy main-process chain (windowRef, ipcMain);
 // mock it so importing appLifecycle in tests stays cheap and toasts are
-// assertable. `pluginService` is dynamically imported inside installDntrPath.
+// assertable. `archiveInstallIntent` is dynamically imported inside
+// queueDntrPath.
 vi.mock("../../ipc/utils.js", () => ({ broadcastToRenderer: vi.fn() }));
-const installPluginMock = vi.hoisted(() => vi.fn());
-vi.mock("../../services/PluginService.js", () => ({
-  pluginService: { installPlugin: installPluginMock },
+const enqueueArchiveInstallIntentMock = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock("../../setup/archiveInstallIntent.js", () => ({
+  enqueueArchiveInstallIntent: enqueueArchiveInstallIntentMock,
 }));
 
 import fs from "node:fs";
@@ -59,7 +60,6 @@ import nodePath from "node:path";
 import type { AppLifecycleOptions } from "../appLifecycle.js";
 import { handleDirectoryOpen } from "../../menu.js";
 import { broadcastToRenderer } from "../../ipc/utils.js";
-import { CHANNELS } from "../../ipc/channels.js";
 import { SAFETY_BELT_TIMEOUT_MS } from "../shutdownConfig.js";
 
 function makeOpts(overrides?: Partial<AppLifecycleOptions>): AppLifecycleOptions {
@@ -778,189 +778,28 @@ describe("extractDntrPaths", () => {
   );
 });
 
-describe("installDntrPath / drainPendingDntrPaths", () => {
-  const tmpFiles: string[] = [];
-
-  function makeDntrFile(magic: boolean): string {
-    const p = nodePath.join(os.tmpdir(), `dntr-test-${tmpFiles.length}-${process.pid}.dntr`);
-    const header = magic ? Buffer.from([0x50, 0x4b, 0x03, 0x04]) : Buffer.from("not a zip");
-    fs.writeFileSync(p, Buffer.concat([header, Buffer.from("rest")]));
-    tmpFiles.push(p);
-    return p;
-  }
-
-  beforeEach(async () => {
+describe("queueDntrPath", () => {
+  beforeEach(() => {
     vi.clearAllMocks();
-    const { clearPendingDntrPaths } = await import("../appLifecycle.js");
-    clearPendingDntrPaths();
+    enqueueArchiveInstallIntentMock.mockResolvedValue(undefined);
   });
 
-  afterEach(() => {
-    for (const p of tmpFiles.splice(0)) {
-      try {
-        fs.unlinkSync(p);
-      } catch {
-        // already gone
-      }
-    }
+  it("routes the archive to the confirmation queue instead of installing it", async () => {
+    const { queueDntrPath } = await import("../appLifecycle.js");
+
+    await queueDntrPath("/tmp/acme.dntr");
+
+    expect(enqueueArchiveInstallIntentMock).toHaveBeenCalledExactlyOnceWith("/tmp/acme.dntr");
+    // No install toast: the renderer owns the outcome once the user approves.
+    expect(broadcastToRenderer).not.toHaveBeenCalled();
   });
 
-  it("installs a valid archive as a sideload and shows a success toast", async () => {
-    const { installDntrPath } = await import("../appLifecycle.js");
-    installPluginMock.mockResolvedValue({ status: "installed", pluginId: "acme.tool" });
-    const file = makeDntrFile(true);
+  it("does not pre-screen the archive — the manifest preview is the gate", async () => {
+    const { queueDntrPath } = await import("../appLifecycle.js");
 
-    await installDntrPath(file);
+    await queueDntrPath(nodePath.join(os.tmpdir(), "does-not-exist.dntr"));
 
-    expect(installPluginMock).toHaveBeenCalledWith(file, {
-      source: "sideload",
-      originalUrl: undefined,
-    });
-    expect(broadcastToRenderer).toHaveBeenCalledWith(
-      CHANNELS.NOTIFICATION_SHOW_TOAST,
-      expect.objectContaining({ type: "success", title: "Plugin installed" })
-    );
-  });
-
-  it("shows an invalid-file error and never calls the installer for a non-zip file", async () => {
-    const { installDntrPath } = await import("../appLifecycle.js");
-    const file = makeDntrFile(false);
-
-    await installDntrPath(file);
-
-    expect(installPluginMock).not.toHaveBeenCalled();
-    expect(broadcastToRenderer).toHaveBeenCalledWith(
-      CHANNELS.NOTIFICATION_SHOW_TOAST,
-      expect.objectContaining({ type: "error", title: "Invalid plugin file" })
-    );
-  });
-
-  it("shows an invalid-file error for a missing path", async () => {
-    const { installDntrPath } = await import("../appLifecycle.js");
-
-    await installDntrPath(nodePath.join(os.tmpdir(), "does-not-exist.dntr"));
-
-    expect(installPluginMock).not.toHaveBeenCalled();
-    expect(broadcastToRenderer).toHaveBeenCalledWith(
-      CHANNELS.NOTIFICATION_SHOW_TOAST,
-      expect.objectContaining({ type: "error", title: "Invalid plugin file" })
-    );
-  });
-
-  it("rejects files shorter than the 4-byte magic without throwing", async () => {
-    const { installDntrPath } = await import("../appLifecycle.js");
-    for (const bytes of [[], [0x50], [0x50, 0x4b, 0x03]]) {
-      installPluginMock.mockClear();
-      const p = nodePath.join(os.tmpdir(), `dntr-short-${bytes.length}-${process.pid}.dntr`);
-      fs.writeFileSync(p, Buffer.from(bytes));
-      tmpFiles.push(p);
-
-      await expect(installDntrPath(p)).resolves.toBeUndefined();
-
-      expect(installPluginMock).not.toHaveBeenCalled();
-      expect(broadcastToRenderer).toHaveBeenCalledWith(
-        CHANNELS.NOTIFICATION_SHOW_TOAST,
-        expect.objectContaining({ type: "error", title: "Invalid plugin file" })
-      );
-    }
-  });
-
-  it("surfaces the installer's structured failure message", async () => {
-    const { installDntrPath } = await import("../appLifecycle.js");
-    installPluginMock.mockResolvedValue({
-      status: "failed",
-      errors: [{ code: "archive_invalid", message: "Archive is corrupt" }],
-    });
-    const file = makeDntrFile(true);
-
-    await installDntrPath(file);
-
-    expect(broadcastToRenderer).toHaveBeenCalledWith(
-      CHANNELS.NOTIFICATION_SHOW_TOAST,
-      expect.objectContaining({ type: "error", message: "Archive is corrupt" })
-    );
-  });
-
-  it("shows a generic error toast when the installer throws", async () => {
-    const { installDntrPath } = await import("../appLifecycle.js");
-    installPluginMock.mockRejectedValue(new Error("lock subsystem crashed"));
-    const file = makeDntrFile(true);
-
-    await installDntrPath(file);
-
-    expect(broadcastToRenderer).toHaveBeenCalledWith(
-      CHANNELS.NOTIFICATION_SHOW_TOAST,
-      expect.objectContaining({ type: "error", title: "Plugin install failed" })
-    );
-  });
-
-  it("drains queued paths sequentially through the installer and clears the queue", async () => {
-    const { registerAppLifecycleHandlers, drainPendingDntrPaths, getPendingDntrPaths } =
-      await import("../appLifecycle.js");
-    installPluginMock.mockResolvedValue({ status: "installed", pluginId: "p" });
-
-    const a = makeDntrFile(true);
-    const b = makeDntrFile(true);
-
-    // Seed the queue via a windowless second-instance event, then drain it.
-    vi.spyOn(process, "on").mockImplementation(() => process);
-    registerAppLifecycleHandlers(makeOpts({ getMainWindow: vi.fn(() => null) }));
-    const secondInstanceCall = appMock.on.mock.calls.find(
-      ([event]: string[]) => event === "second-instance"
-    );
-    const handler = secondInstanceCall![1] as (
-      event: unknown,
-      commandLine: string[],
-      workingDirectory: string
-    ) => void;
-    handler({}, ["daintree", a, b], "/work");
-
-    expect(getPendingDntrPaths()).toEqual([a, b]);
-
-    await drainPendingDntrPaths();
-
-    expect(installPluginMock).toHaveBeenCalledTimes(2);
-    expect(installPluginMock).toHaveBeenNthCalledWith(1, a, expect.any(Object));
-    expect(installPluginMock).toHaveBeenNthCalledWith(2, b, expect.any(Object));
-    expect(getPendingDntrPaths()).toEqual([]);
-  });
-
-  it("keeps a path that arrives mid-drain queued rather than dropping it", async () => {
-    const { registerAppLifecycleHandlers, drainPendingDntrPaths, getPendingDntrPaths } =
-      await import("../appLifecycle.js");
-    const a = makeDntrFile(true);
-    const b = makeDntrFile(true);
-    const c = makeDntrFile(true);
-
-    vi.spyOn(process, "on").mockImplementation(() => process);
-    registerAppLifecycleHandlers(makeOpts({ getMainWindow: vi.fn(() => null) }));
-    const secondInstanceCall = appMock.on.mock.calls.find(
-      ([event]: string[]) => event === "second-instance"
-    );
-    const handler = secondInstanceCall![1] as (
-      event: unknown,
-      commandLine: string[],
-      workingDirectory: string
-    ) => void;
-
-    // Seed the queue with a, b.
-    handler({}, ["daintree", a, b], "/work");
-
-    // While the first install is in flight, a fresh second-instance event pushes
-    // c. Because drain snapshots-and-clears up front, c lands in a fresh queue.
-    let pushed = false;
-    installPluginMock.mockImplementation(async () => {
-      if (!pushed) {
-        pushed = true;
-        handler({}, ["daintree", c], "/work");
-      }
-      return { status: "installed", pluginId: "p" };
-    });
-
-    await drainPendingDntrPaths();
-
-    expect(installPluginMock).toHaveBeenCalledTimes(2);
-    expect(getPendingDntrPaths()).toEqual([c]);
+    expect(enqueueArchiveInstallIntentMock).toHaveBeenCalledOnce();
   });
 });
 
@@ -980,11 +819,9 @@ describe("registerAppLifecycleHandlers – second-instance .dntr handling", () =
     vi.clearAllMocks();
     vi.spyOn(process, "on").mockImplementation(() => process);
     vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
-    const { clearPendingDntrPaths } = await import("../appLifecycle.js");
-    clearPendingDntrPaths();
     dntrFile = nodePath.join(os.tmpdir(), `dntr-handler-${process.pid}.dntr`);
     fs.writeFileSync(dntrFile, Buffer.from([0x50, 0x4b, 0x03, 0x04]));
-    installPluginMock.mockResolvedValue({ status: "installed", pluginId: "p" });
+    enqueueArchiveInstallIntentMock.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -1000,7 +837,7 @@ describe("registerAppLifecycleHandlers – second-instance .dntr handling", () =
     return call![1] as (event: unknown, commandLine: string[], workingDirectory: string) => void;
   }
 
-  it("installs a .dntr archive in a ready window and brings it to the front", async () => {
+  it("queues a .dntr archive for confirmation and brings the window to the front", async () => {
     const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
     const mainWindow = makeBrowserWindow();
     registerAppLifecycleHandlers(
@@ -1010,25 +847,38 @@ describe("registerAppLifecycleHandlers – second-instance .dntr handling", () =
     );
 
     getHandler()({}, ["daintree", dntrFile], "/work");
-    // Let the fire-and-forget install IIFE resolve.
-    await vi.waitFor(() => expect(installPluginMock).toHaveBeenCalled());
+    // Let the fire-and-forget queueing IIFE resolve.
+    await vi.waitFor(() => expect(enqueueArchiveInstallIntentMock).toHaveBeenCalled());
 
-    expect(installPluginMock).toHaveBeenCalledWith(dntrFile, {
-      source: "sideload",
-      originalUrl: undefined,
-    });
+    expect(enqueueArchiveInstallIntentMock).toHaveBeenCalledWith(dntrFile);
     expect(mainWindow.focus).toHaveBeenCalled();
   });
 
-  it("queues a .dntr archive when no window exists yet", async () => {
-    const { registerAppLifecycleHandlers, getPendingDntrPaths } =
-      await import("../appLifecycle.js");
+  it("queues a .dntr archive even when no window exists yet", async () => {
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
     registerAppLifecycleHandlers(makeOpts({ getMainWindow: vi.fn(() => null) }));
 
     getHandler()({}, ["daintree", dntrFile], "/work");
+    // The intent queue holds the preview until a window paints, so there is no
+    // separate windowless path here.
+    await vi.waitFor(() => expect(enqueueArchiveInstallIntentMock).toHaveBeenCalledWith(dntrFile));
+  });
 
-    expect(installPluginMock).not.toHaveBeenCalled();
-    expect(getPendingDntrPaths()).toEqual([dntrFile]);
+  it("queues several archives from one launch in argv order", async () => {
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    const second = nodePath.join(os.tmpdir(), `dntr-handler-2-${process.pid}.dntr`);
+    fs.writeFileSync(second, Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+    try {
+      registerAppLifecycleHandlers(makeOpts({ getMainWindow: vi.fn(() => null) }));
+
+      getHandler()({}, ["daintree", dntrFile, second], "/work");
+      await vi.waitFor(() => expect(enqueueArchiveInstallIntentMock).toHaveBeenCalledTimes(2));
+
+      expect(enqueueArchiveInstallIntentMock).toHaveBeenNthCalledWith(1, dntrFile);
+      expect(enqueueArchiveInstallIntentMock).toHaveBeenNthCalledWith(2, second);
+    } finally {
+      fs.unlinkSync(second);
+    }
   });
 
   it("honours a .dntr path and a CLI directory path in the same launch", async () => {
@@ -1043,12 +893,9 @@ describe("registerAppLifecycleHandlers – second-instance .dntr handling", () =
     );
 
     getHandler()({}, ["daintree", "--cli-path", "/repo", dntrFile], "/work");
-    await vi.waitFor(() => expect(installPluginMock).toHaveBeenCalled());
+    await vi.waitFor(() => expect(enqueueArchiveInstallIntentMock).toHaveBeenCalled());
 
     expect(onCreateWindowForPath).toHaveBeenCalledWith("/repo");
-    expect(installPluginMock).toHaveBeenCalledWith(dntrFile, {
-      source: "sideload",
-      originalUrl: undefined,
-    });
+    expect(enqueueArchiveInstallIntentMock).toHaveBeenCalledWith(dntrFile);
   });
 });

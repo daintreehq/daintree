@@ -151,6 +151,7 @@ import type {
   PluginActionDescriptor,
   PluginKeybindingDescriptor,
   ContextMenuContribution,
+  PluginArchiveInstallIntent,
   PluginDeepLinkIntent,
   PluginPanelBadge,
 } from "../shared/types/plugin.js";
@@ -858,8 +859,17 @@ let _eventBusWired = false;
 const _eventBusReplayable: ReadonlySet<keyof IpcEventBusMap> = new Set([
   "plugin:deep-link",
   "window:disk-space-status",
+  "plugin:archive-install-intent",
 ]);
-const _eventBusBuffered = new Map<keyof IpcEventBusMap, unknown>();
+// Replayable events that accumulate instead of superseding. A double-clicked
+// `.dntr` archive (#11280) is one decision per file, so collapsing two
+// pre-subscriber intents to the latest would silently drop an archive the user
+// asked to install — unlike the latest-wins signals above, where only the
+// current value matters. Buffered payloads replay in arrival order.
+const _eventBusFifoReplay: ReadonlySet<keyof IpcEventBusMap> = new Set([
+  "plugin:archive-install-intent",
+]);
+const _eventBusBuffered = new Map<keyof IpcEventBusMap, unknown[]>();
 
 function _ensureEventBusWired(): void {
   if (_eventBusWired) return;
@@ -872,7 +882,11 @@ function _ensureEventBusWired(): void {
       // No subscriber yet: buffer replayable events so a late-mounting
       // subscriber (e.g. one behind a Suspense boundary) still receives them.
       if (_eventBusReplayable.has(envelope.name)) {
-        _eventBusBuffered.set(envelope.name, envelope.payload);
+        const prior = _eventBusFifoReplay.has(envelope.name)
+          ? (_eventBusBuffered.get(envelope.name) ?? [])
+          : [];
+        prior.push(envelope.payload);
+        _eventBusBuffered.set(envelope.name, prior);
       }
       return;
     }
@@ -904,12 +918,14 @@ function _eventBusOn<K extends keyof IpcEventBusMap>(
   // Replay a buffered event to the first subscriber (see _eventBusReplayable) so
   // a signal delivered before this subscriber mounted isn't lost.
   if (_eventBusBuffered.has(name)) {
-    const buffered = _eventBusBuffered.get(name);
+    const buffered = _eventBusBuffered.get(name) ?? [];
     _eventBusBuffered.delete(name);
-    try {
-      wrapped(buffered);
-    } catch (err) {
-      console.error("[Preload] events:push replay threw for", name, err);
+    for (const payload of buffered) {
+      try {
+        wrapped(payload);
+      } catch (err) {
+        console.error("[Preload] events:push replay threw for", name, err);
+      }
     }
   }
   return () => {
@@ -3003,6 +3019,8 @@ function buildElectronApi(): ElectronAPI {
         _eventBusOn("plugin:panel-badges-cleared", callback),
       onDeepLink: (callback: (intent: PluginDeepLinkIntent) => void) =>
         _eventBusOn("plugin:deep-link", callback),
+      onArchiveInstallIntent: (callback: (intent: PluginArchiveInstallIntent) => void) =>
+        _eventBusOn("plugin:archive-install-intent", callback),
     },
 
     pluginMcp: buildPluginMcpPreloadBindings(_unwrappingInvoke),

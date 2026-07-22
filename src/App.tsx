@@ -277,6 +277,7 @@ function AppInner() {
     pluginConfirmResetKey,
     pluginMcpConfirmResetKey,
     pluginCapabilityConfirmResetKey,
+    pluginArchiveInstallResetKey,
     diagnosticsReviewResetKey,
     terminalInfoResetKey,
   } = useModalResetKeys();
@@ -575,6 +576,7 @@ function AppInner() {
                 pluginConfirmResetKey={pluginConfirmResetKey}
                 pluginMcpConfirmResetKey={pluginMcpConfirmResetKey}
                 pluginCapabilityConfirmResetKey={pluginCapabilityConfirmResetKey}
+                pluginArchiveInstallResetKey={pluginArchiveInstallResetKey}
                 panelLimitResetKey={panelLimitResetKey}
                 diagnosticsReviewResetKey={diagnosticsReviewResetKey}
                 gitPushResetKey={gitPushResetKey}
