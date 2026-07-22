@@ -1382,6 +1382,18 @@ export default defineConfig(({ command, mode }) => {
                 // this group, but the orphaned modules then fall into the eager
                 // catch-all `vendor` chunk. `entriesAwareMergeThreshold: 0`
                 // disables small-subgroup merging so the deferred split holds.
+                //
+                // vite is held at ~8.0.14 (package.json): 8.1.x (rolldown
+                // ~1.1.5) re-materializes this split but miscompiles it — the
+                // motionFeatures facade chunk re-exports the deferred
+                // subgroup's `domMax` binding without ever invoking that
+                // chunk's lazy-init function, so LazyMotion's features resolve
+                // to undefined and renderer boot dies with "Cannot destructure
+                // property 'renderer' of 'undefined'". Note the split is
+                // already inert on 8.0.x/rolldown 1.0.x (domMax currently
+                // merges into the eager vendor-motion chunk); verify both the
+                // init wiring and the restored deferral before lifting the
+                // pin.
                 name: "vendor-motion",
                 test: /node_modules[\\/](framer-motion|motion-dom|motion-utils)[\\/]/,
                 entriesAware: true,
