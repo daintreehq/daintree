@@ -24,7 +24,7 @@ vi.mock("@/components/ui/context-menu", () => ({
   ContextMenuSubTrigger: () => null,
 }));
 
-const { PluginToolbarButton } = await import("../Toolbar");
+const { PluginToolbarButton } = await import("../PluginTrayButton");
 
 function config(iconId: string): ToolbarButtonConfig {
   return {

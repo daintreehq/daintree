@@ -1,4 +1,7 @@
 // @vitest-environment jsdom
+import fs from "fs";
+import path from "path";
+import { z } from "zod";
 import { describe, expect, it } from "vitest";
 import { render } from "@testing-library/react";
 import {
@@ -64,5 +67,29 @@ describe("pluginIconRegistry", () => {
     // Guards against a prototype-chain hit leaking a function through the map.
     expect(getPluginIconComponent("toString")).toBeUndefined();
     expect(getPluginIconComponent("constructor")).toBeUndefined();
+  });
+
+  it("resolves every icon id the shipped sample manifest declares", () => {
+    // Read the shipped sample manifest rather than hardcoding its icon ids, so
+    // changing the sample can't leave this test green against a stale value.
+    // Before #11304 every contribution rendered the same generic glyph
+    // regardless of what its manifest asked for.
+    const manifest = z
+      .object({
+        contributes: z.object({ toolbarButtons: z.array(z.object({ iconId: z.string() })) }),
+      })
+      .parse(
+        JSON.parse(
+          fs.readFileSync(
+            path.resolve(__dirname, "../../../../plugins/sample/hello-daintree/plugin.json"),
+            "utf-8"
+          )
+        )
+      );
+    const declared = manifest.contributes.toolbarButtons.map((b) => b.iconId);
+    expect(declared.length).toBeGreaterThan(0);
+    for (const iconId of declared) {
+      expect(getPluginIconComponent(iconId), `sample iconId "${iconId}" fell back`).toBeDefined();
+    }
   });
 });

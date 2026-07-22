@@ -9,6 +9,7 @@ const SETTINGS_BUTTON_PATH = path.resolve(__dirname, "../ToolbarSettingsButton.t
 const LAUNCHER_BUTTON_PATH = path.resolve(__dirname, "../ToolbarLauncherButton.tsx");
 const AGENT_BUTTON_PATH = path.resolve(__dirname, "../AgentButton.tsx");
 const VOICE_RECORDING_PATH = path.resolve(__dirname, "../VoiceRecordingToolbarButton.tsx");
+const PLUGIN_TRAY_PATH = path.resolve(__dirname, "../PluginTrayButton.tsx");
 const TOOLBAR_CSS_PATH = path.resolve(__dirname, "../../../styles/components/toolbar.css");
 
 describe("Toolbar shortcut tooltips — issue #3443", () => {
@@ -19,6 +20,7 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
   let launcherSource: string;
   let agentSource: string;
   let voiceSource: string;
+  let pluginTraySource: string;
 
   beforeEach(async () => {
     [
@@ -29,6 +31,7 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       launcherSource,
       agentSource,
       voiceSource,
+      pluginTraySource,
     ] = await Promise.all([
       fs.readFile(TOOLBAR_PATH, "utf-8"),
       fs.readFile(PROBLEMS_BUTTON_PATH, "utf-8"),
@@ -37,6 +40,7 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       fs.readFile(LAUNCHER_BUTTON_PATH, "utf-8"),
       fs.readFile(AGENT_BUTTON_PATH, "utf-8"),
       fs.readFile(VOICE_RECORDING_PATH, "utf-8"),
+      fs.readFile(PLUGIN_TRAY_PATH, "utf-8"),
     ]);
   });
 
@@ -272,21 +276,19 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
     });
   });
 
+  // PluginToolbarButton moved to PluginTrayButton.tsx in #11304, alongside the
+  // tray that now owns un-promoted contributions.
   describe("PluginToolbarButton aria-keyshortcuts — issue #8938", () => {
     it("calls useAriaKeyshortcuts with the plugin actionId", () => {
-      expect(source).toContain("useAriaKeyshortcuts(config.actionId)");
+      expect(pluginTraySource).toContain("useAriaKeyshortcuts(config.actionId)");
     });
 
     it("renders aria-keyshortcuts on the plugin Button", () => {
-      // Other aria-keyshortcuts spreads in Toolbar.tsx use named locals
-      // (sidebarAriaShortcut, copyTreeAriaShortcut). Only PluginToolbarButton
-      // uses the plain `ariaShortcut` identifier, so this assertion is
-      // unambiguous without a function-block carve-out.
-      expect(source).toContain("aria-keyshortcuts={ariaShortcut}");
+      expect(pluginTraySource).toContain("aria-keyshortcuts={ariaShortcut}");
     });
 
     it("drops the redundant `as string` cast on the hover hook", () => {
-      expect(source).not.toContain("useShortcutHintHover(config.actionId as string)");
+      expect(pluginTraySource).not.toContain("useShortcutHintHover(config.actionId as string)");
     });
   });
 

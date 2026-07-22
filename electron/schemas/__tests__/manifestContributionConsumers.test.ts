@@ -245,8 +245,14 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
     },
     priority: {
       mode: "verbatim",
-      consumers: [{ file: PLUGIN_SERVICE, symbol: "loadPlugin (priority ?? 3)" }],
-      note: "Registered as the toolbar button ordering priority (defaulted to 3).",
+      consumers: [
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (priority ?? 3)" },
+        {
+          file: "src/components/Layout/PluginTrayButton.tsx",
+          symbol: "groupPluginToolbarButtons",
+        },
+      ],
+      note: "Registered as the toolbar button ordering priority (defaulted to 3), consumed by the plugin tray's within-group sort (#11304).",
     },
   },
   menuItems: {

@@ -29,7 +29,6 @@ import {
 } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { Folders } from "@/components/icons";
-import { resolvePluginIcon } from "@/components/icons/pluginIconRegistry";
 import { buildPluginToolbarMeta } from "./pluginToolbarMeta";
 import { TOOLBAR_BUTTON_METADATA, isToolbarButtonVisible } from "./toolbarButtonMetadata";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
@@ -39,6 +38,14 @@ import { isMac, isLinux, isWindows } from "@/lib/platform";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { AgentButton } from "./AgentButton";
 import { AgentTrayButton, deriveAgentDominantStates } from "./AgentTrayButton";
+import {
+  PluginToolbarButton,
+  PluginTrayButton,
+  groupPluginToolbarButtons,
+  type PluginTrayGroup,
+} from "./PluginTrayButton";
+import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
+import { resolvePluginIcon } from "@/components/icons/pluginIconRegistry";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
@@ -76,11 +83,7 @@ import { activeWorkspaceIdentity, branchChipState } from "@/lib/workspaceIdentit
 import { usePreferencesStore, useToolbarPreferencesStore, useVoiceRecordingStore } from "@/store";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
-import type {
-  ToolbarButtonId,
-  AnyToolbarButtonId,
-  PluginToolbarButtonId,
-} from "@/../../shared/types/toolbar";
+import type { ToolbarButtonId, AnyToolbarButtonId } from "@/../../shared/types/toolbar";
 import { usePluginToolbarButtons } from "@/hooks/usePluginToolbarButtons";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
@@ -156,53 +159,6 @@ function DevServerPlaceholder() {
   );
 }
 
-export function PluginToolbarButton({
-  pluginId,
-  config,
-  "data-toolbar-item": dataToolbarItem,
-}: {
-  pluginId: PluginToolbarButtonId;
-  config: NonNullable<ReturnType<ReturnType<typeof usePluginToolbarButtons>["configs"]["get"]>>;
-  "data-toolbar-item"?: string;
-}) {
-  const hover = useShortcutHintHover(config.actionId);
-  const ariaShortcut = useAriaKeyshortcuts(config.actionId);
-  const Icon = resolvePluginIcon(config.iconId);
-
-  return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              {...hover}
-              variant="ghost"
-              size="icon"
-              data-toolbar-item={dataToolbarItem}
-              onClick={() => {
-                void actionService.dispatch(
-                  config.actionId as Parameters<typeof actionService.dispatch>[0],
-                  undefined,
-                  { source: "user" }
-                );
-              }}
-              className={toolbarIconButtonClass}
-              aria-label={config?.label ?? pluginId}
-              aria-keyshortcuts={ariaShortcut}
-            >
-              <Icon />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">{config?.label ?? pluginId}</TooltipContent>
-        </Tooltip>
-      </ContextMenuTrigger>
-      <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
-        <ToolbarContextMenuItems buttonId={pluginId} side="right" />
-      </ContextMenuContent>
-    </ContextMenu>
-  );
-}
-
 // Adapter view over the unified `TOOLBAR_BUTTON_METADATA` registry.
 const overflowMenuMetaInit: Record<string, OverflowMenuMeta> = {};
 for (const [id, meta] of Object.entries(TOOLBAR_BUTTON_METADATA)) {
@@ -227,6 +183,10 @@ interface OverflowMenuProps {
   forgeProviderName: string | null;
   overflowActions: Partial<Record<AnyToolbarButtonId, () => void>>;
   pluginOverflowMeta: Record<string, OverflowMenuMeta>;
+  // Plugin contributions grouped by owning plugin. When `plugin-tray` itself
+  // overflows, its dropdown is unreachable, so the overflow menu inlines these
+  // groups instead — an un-promoted contribution has no other toolbar route.
+  pluginTrayGroups: PluginTrayGroup[];
   // Shortcut display strings keyed by toolbar button id, so each overflow item
   // shows the same hint its visible button does (issue #9821).
   shortcutById: Partial<Record<string, string | null>>;
@@ -250,6 +210,7 @@ function OverflowMenu({
   forgeProviderName,
   overflowActions,
   pluginOverflowMeta,
+  pluginTrayGroups,
   shortcutById,
 }: OverflowMenuProps) {
   const [open, setOpen] = useState(false);
@@ -260,7 +221,14 @@ function OverflowMenu({
   // captures them at the only moment they're about to become visible.
   const [repoStats, setRepoStats] = useState<ForgeRepositoryStats | null>(null);
   const handleOpenChange = (nextOpen: boolean) => {
-    if (nextOpen) setRepoStats(forgeStatsRef.current?.stats ?? null);
+    if (nextOpen) {
+      setRepoStats(forgeStatsRef.current?.stats ?? null);
+      // Same reason PluginTrayButton refreshes on open: a dev-attached plugin
+      // registers its buttons without broadcasting provenance, so its display
+      // name can be missing and the inlined groups would fall back to raw
+      // plugin ids.
+      if (pluginTrayGroups.length > 0) usePluginRuntimeStore.getState().refresh();
+    }
     setOpen(nextOpen);
   };
   const isEmpty = overflowIds.length === 0;
@@ -387,6 +355,34 @@ function OverflowMenu({
                 </DropdownMenuItem>
               </DropdownMenuGroup>,
               ...(isLast ? [] : [<DropdownMenuSeparator key="forge-sep" />]),
+            ];
+          }
+          if (id === "plugin-tray") {
+            // The tray's own dropdown can't be opened from here, and an
+            // un-promoted contribution has no other toolbar route — so inline
+            // the grouped contributions rather than leaving a row that
+            // dismisses the menu and opens nothing.
+            if (pluginTrayGroups.length === 0) return [];
+            const isLast = idx === overflowIds.length - 1;
+            return [
+              ...pluginTrayGroups.map((group) => (
+                <DropdownMenuGroup key={`plugin-tray-${group.pluginId}`}>
+                  <DropdownMenuLabel>{group.displayName}</DropdownMenuLabel>
+                  {group.buttons.map((config) => {
+                    const Icon = resolvePluginIcon(config.iconId);
+                    return (
+                      <DropdownMenuItem
+                        key={config.id}
+                        onClick={() => overflowActions[config.id]?.()}
+                      >
+                        <Icon className="mr-2 h-3.5 w-3.5" />
+                        <span className="flex-1">{config.label}</span>
+                      </DropdownMenuItem>
+                    );
+                  })}
+                </DropdownMenuGroup>
+              )),
+              ...(isLast ? [] : [<DropdownMenuSeparator key="plugin-tray-sep" />]),
             ];
           }
           const meta = OVERFLOW_MENU_META[id] ?? pluginOverflowMeta[id];
@@ -836,6 +832,7 @@ export function Toolbar({
   const toolbarDividerClass = "toolbar-divider w-px h-5 mx-1";
 
   const { buttonIds: pluginButtonIds, configs: pluginConfigs } = usePluginToolbarButtons();
+  const pluginMetaById = usePluginRuntimeStore((s) => s.pluginMetaById);
 
   const buttonRegistry = useMemo<
     Record<string, { render: () => React.ReactNode; isAvailable: boolean }>
@@ -1077,6 +1074,17 @@ export function Toolbar({
         render: () => <ToolbarPortalButton key="portal-toggle" data-toolbar-item="" />,
         isAvailable: true,
       },
+      "plugin-tray": {
+        render: () => (
+          <PluginTrayButton key="plugin-tray" configs={pluginConfigs} data-toolbar-item="" />
+        ),
+        // An empty tray is not a slot worth reserving — with no plugin
+        // contributions the button doesn't render at all (#11304).
+        isAvailable: pluginConfigs.size > 0,
+      },
+      // Individual contributions still need a top-level renderer, but only
+      // reach the toolbar once explicitly promoted — `isToolbarButtonVisible`
+      // gates that below, not `isAvailable`.
       ...Object.fromEntries(
         pluginButtonIds.map((pluginId) => {
           const config = pluginConfigs.get(pluginId);
@@ -1084,7 +1092,12 @@ export function Toolbar({
             pluginId,
             {
               render: () => (
-                <PluginToolbarButton key={pluginId} pluginId={pluginId} config={config!} />
+                <PluginToolbarButton
+                  key={pluginId}
+                  pluginId={pluginId}
+                  config={config!}
+                  data-toolbar-item=""
+                />
               ),
               isAvailable: true,
             },
@@ -1134,26 +1147,51 @@ export function Toolbar({
       // renders duplicate pills (#10937) — the store also heals this, this is
       // belt-and-suspenders at the render boundary.
       Array.from(new Set(toolbarLayout.leftButtons)).filter((id) =>
-        isToolbarButtonVisible(id, pinnedButtons, effectiveAgentSettings, agentAvailability)
+        isToolbarButtonVisible(
+          id,
+          pinnedButtons,
+          effectiveAgentSettings,
+          agentAvailability,
+          pluginConfigs.has(id)
+        )
       ),
-    [toolbarLayout.leftButtons, pinnedButtons, effectiveAgentSettings, agentAvailability]
+    [
+      toolbarLayout.leftButtons,
+      pinnedButtons,
+      effectiveAgentSettings,
+      agentAvailability,
+      pluginConfigs,
+    ]
   );
 
   const effectiveRightButtons = useMemo(() => {
     // Dedupe the persisted base before appending plugin extras, so duplicate
     // ids (e.g. repeated `forge-stats`, #10937) can't render twice.
     const base = Array.from(new Set(toolbarLayout.rightButtons));
-    const existing = new Set(base);
-    const extra = pluginButtonIds.filter((id) => !existing.has(id));
+    const positioned = new Set([...base, ...toolbarLayout.leftButtons]);
+    // Only *promoted* contributions append — plugin buttons reach the user
+    // through the tray by default now (#11304), so the pre-tray behavior of
+    // appending every registered id would resurrect the crowding this
+    // replaced. Buttons the user already dragged into a side list keep that
+    // position and are filtered on promotion below like any other id.
+    const extra = pluginButtonIds.filter((id) => !positioned.has(id) && pinnedButtons[id] === true);
     return [...base, ...extra].filter((id) =>
-      isToolbarButtonVisible(id, pinnedButtons, effectiveAgentSettings, agentAvailability)
+      isToolbarButtonVisible(
+        id,
+        pinnedButtons,
+        effectiveAgentSettings,
+        agentAvailability,
+        pluginConfigs.has(id)
+      )
     );
   }, [
     toolbarLayout.rightButtons,
+    toolbarLayout.leftButtons,
     pluginButtonIds,
     pinnedButtons,
     effectiveAgentSettings,
     agentAvailability,
+    pluginConfigs,
   ]);
 
   const availableLeftIds = useMemo(
@@ -1297,6 +1335,12 @@ export function Toolbar({
     return withDividers;
   };
 
+  const pluginTrayGroups = useMemo(
+    () =>
+      groupPluginToolbarButtons(pluginConfigs, (id) => pluginMetaById.get(id)?.displayName ?? id),
+    [pluginConfigs, pluginMetaById]
+  );
+
   const pluginOverflowMeta = useMemo(
     () => buildPluginToolbarMeta(pluginButtonIds, pluginConfigs),
     [pluginButtonIds, pluginConfigs]
@@ -1381,6 +1425,7 @@ export function Toolbar({
       forgeProviderName={forgeProviderName}
       overflowActions={overflowActions}
       pluginOverflowMeta={pluginOverflowMeta}
+      pluginTrayGroups={pluginTrayGroups}
       shortcutById={overflowShortcutById}
     />
   );

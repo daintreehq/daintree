@@ -2,7 +2,7 @@
 import { describe, it, expect } from "vitest";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { TOOLBAR_BUTTON_METADATA, isToolbarButtonVisible } from "../toolbarButtonMetadata";
-import type { AnyToolbarButtonId } from "@shared/types/toolbar";
+import { TOOLBAR_BUTTON_PRIORITIES, type AnyToolbarButtonId } from "@shared/types/toolbar";
 
 // IDs that intentionally have no entry in TOOLBAR_BUTTON_METADATA. The fixed
 // titlebar buttons (sidebar-toggle, assistant-toggle, portal-toggle) are
@@ -14,20 +14,13 @@ const FIXED_TITLEBAR_IDS = new Set<AnyToolbarButtonId>([
   "portal-toggle",
 ]);
 
-const CUSTOMIZABLE_BUTTON_IDS: AnyToolbarButtonId[] = [
-  "agent-tray",
-  ...(BUILT_IN_AGENT_IDS as readonly string[] as AnyToolbarButtonId[]),
-  "terminal",
-  "browser",
-  "dev-server",
-  "voice-recording",
-  "forge-stats",
-  "notification-center",
-  "copy-tree",
-  "command-palette",
-  "settings",
-  "problems",
-];
+// Derived from the exhaustive `TOOLBAR_BUTTON_PRIORITIES` record rather than
+// hand-listed: a hand-listed set silently stops guarding whatever it forgets
+// (it had already drifted past `resume-sessions`), so every future addition to
+// the `ToolbarButtonId` union is now covered automatically.
+const CUSTOMIZABLE_BUTTON_IDS: AnyToolbarButtonId[] = (
+  Object.keys(TOOLBAR_BUTTON_PRIORITIES) as AnyToolbarButtonId[]
+).filter((id) => !FIXED_TITLEBAR_IDS.has(id));
 
 describe("TOOLBAR_BUTTON_METADATA — registry coverage", () => {
   it("has an entry for every customizable built-in button", () => {
@@ -99,9 +92,33 @@ describe("isToolbarButtonVisible", () => {
     expect(visible).toBe(false);
   });
 
-  it("treats plugin buttons as visible by default", () => {
-    const pluginId = "plugin.test.example" as AnyToolbarButtonId;
-    expect(isToolbarButtonVisible(pluginId, {}, null, undefined)).toBe(true);
+  describe("registered plugin contributions — tray-default (#11304)", () => {
+    const pluginId = "test.example" as AnyToolbarButtonId;
+
+    it("keeps a contribution out of the toolbar until it is explicitly promoted", () => {
+      // Contrast with the built-in default above: a missing entry means
+      // "visible" for a built-in but "tray only" for a plugin contribution.
+      expect(isToolbarButtonVisible(pluginId, {}, null, undefined, true)).toBe(false);
+      expect(isToolbarButtonVisible(pluginId, { [pluginId]: true }, null, undefined, true)).toBe(
+        true
+      );
+    });
+
+    it("treats a legacy hide entry the same as no entry", () => {
+      // Pre-#11304 profiles recorded hides as `false`; both now read as
+      // tray-only, so an upgrading user sees no ghost slot.
+      expect(isToolbarButtonVisible(pluginId, { [pluginId]: false }, null, undefined, true)).toBe(
+        false
+      );
+    });
+
+    it("uses registry membership, not the dotted id, to pick the default", () => {
+      // The same id resolves opposite ways depending on whether the caller
+      // says it is a live contribution — so a built-in that ever gains a dot
+      // can't be silently demoted into the tray.
+      expect(isToolbarButtonVisible(pluginId, {}, null, undefined, false)).toBe(true);
+      expect(isToolbarButtonVisible(pluginId, {}, null, undefined, true)).toBe(false);
+    });
   });
 
   it("never shows an assistant-only agent as a toolbar button, even when installed or pinned (#10634)", () => {

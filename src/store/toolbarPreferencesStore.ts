@@ -4,6 +4,7 @@ import type {
   ToolbarPreferences,
   ToolbarButtonId,
   AnyToolbarButtonId,
+  PluginToolbarButtonId,
   ToolbarPinnedState,
 } from "@/../../shared/types/toolbar";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
@@ -21,6 +22,7 @@ const DEFAULT_LEFT_BUTTONS: ToolbarButtonId[] = [
 const DEFAULT_RIGHT_BUTTONS: ToolbarButtonId[] = [
   "voice-recording",
   "forge-stats",
+  "plugin-tray",
   "notification-center",
   "copy-tree",
   "resume-sessions",
@@ -94,6 +96,22 @@ interface ToolbarPreferencesState extends ToolbarPreferences {
   ) => void;
   toggleButtonVisibility: (buttonId: AnyToolbarButtonId, side: "left" | "right") => void;
   /**
+   * Promote a plugin contribution to its own top-level toolbar button, or
+   * demote it back to tray-only (#11304).
+   *
+   * Plugin buttons live in the plugin tray by default, so — unlike
+   * `toggleButtonVisibility`, which only ever records a departure-from-visible
+   * as `false` — promotion has to persist an explicit `true`. Demoting deletes
+   * the key rather than writing `false`: both read as tray-only, and an absent
+   * key keeps the map sparse (and lets a legacy pre-#11304 `false` hide entry
+   * clear itself the first time a user toggles that button).
+   *
+   * Ordering arrays are deliberately untouched — a promoted button with no
+   * persisted position appends to the right side in `Toolbar.tsx`, matching
+   * how plugin buttons behaved before the tray landed.
+   */
+  setPluginButtonPromoted: (buttonId: PluginToolbarButtonId, promoted: boolean) => void;
+  /**
    * Prune `pinnedButtons` entries for plugin buttons that are no longer in
    * the loaded plugin set. `pinnedButtons` is renderer-local persisted state
    * with no main-process access, so an uninstalled plugin's stale hide entry
@@ -104,6 +122,8 @@ interface ToolbarPreferencesState extends ToolbarPreferences {
    * hyphens or single tokens, never dots, so `key.includes(".")` cleanly
    * separates the two. No-ops (returns state unchanged) when nothing is
    * stale so the per-snapshot call doesn't churn the persist layer.
+   *
+   * Explicit promotions (`true`, #11304) are exempt — see the filter below.
    */
   sweepStalePluginPinnedButtons: (validIds: string[]) => void;
   setAlwaysShowDevServer: (value: boolean) => void;
@@ -169,11 +189,36 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
             layout: { ...state.layout, pinnedButtons: pinned },
           };
         }),
+      setPluginButtonPromoted: (buttonId, promoted) =>
+        set((state) => {
+          const current = state.layout.pinnedButtons[buttonId];
+          if (promoted ? current === true : current === undefined) return state;
+          const pinned: ToolbarPinnedState = { ...state.layout.pinnedButtons };
+          if (promoted) {
+            pinned[buttonId] = true;
+          } else {
+            delete pinned[buttonId];
+          }
+          return {
+            layout: { ...state.layout, pinnedButtons: pinned },
+          };
+        }),
       sweepStalePluginPinnedButtons: (validIds) =>
         set((state) => {
           const validSet = new Set(validIds);
           const staleKeys = Object.keys(state.layout.pinnedButtons).filter(
-            (key) => key.includes(".") && !validSet.has(key)
+            (key) =>
+              key.includes(".") &&
+              !validSet.has(key) &&
+              // Never reclaim an explicit promotion (#11304). A `complete`
+              // broadcast means "a plugin unloaded", not "a plugin was
+              // uninstalled" — `unloadPlugin` also runs for an update and for
+              // disable/re-enable, so sweeping promotions here would silently
+              // undo the user's placement every time a plugin updates. A
+              // promotion left behind by a genuine uninstall is inert (no
+              // registry entry means nothing renders) and restores the user's
+              // choice if they reinstall.
+              state.layout.pinnedButtons[key as AnyToolbarButtonId] !== true
           );
           if (staleKeys.length === 0) return state;
           const pinned: ToolbarPinnedState = { ...state.layout.pinnedButtons };
