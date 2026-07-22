@@ -158,6 +158,9 @@ export interface GeneratedElectronAPI {
     listDirectory(
       ...args: IpcInvokeMap["file-browser:list-directory"]["args"]
     ): Promise<IpcInvokeMap["file-browser:list-directory"]["result"]>;
+    statPaths(
+      ...args: IpcInvokeMap["file-browser:stat-paths"]["args"]
+    ): Promise<IpcInvokeMap["file-browser:stat-paths"]["result"]>;
   };
   forgeAudit: {
     clearLog(

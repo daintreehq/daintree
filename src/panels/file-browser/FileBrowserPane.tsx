@@ -1,8 +1,10 @@
 import { useCallback, useMemo, useState } from "react";
 import { EyeOff, FolderTree, RefreshCw } from "lucide-react";
+import { basename } from "@shared/utils/path";
 import type { BasePanelProps } from "@/components/Panel/ContentPanel";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { FileViewerToolbar } from "@/components/FileViewer/FileViewerToolbar";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { Skeleton, SkeletonText } from "@/components/ui/Skeleton";
 import { usePanelStore } from "@/store/panelStore";
@@ -14,8 +16,6 @@ import { useFileBrowserTree } from "./useFileBrowserTree";
 import { ancestorDirectories } from "./fileBrowserTree";
 
 export type FileBrowserPaneProps = BasePanelProps;
-
-const TREE_WIDTH_CLASS = "w-64";
 
 /**
  * Read-only file browser: a lazily-expanded tree over one worktree beside a
@@ -173,33 +173,6 @@ export function FileBrowserPane({
       : null;
   const selectedFileName = selectedPath ? (selectedPath.split("/").pop() ?? selectedPath) : "";
 
-  const toolbar = (
-    <div className="flex items-center gap-1">
-      <button
-        type="button"
-        onClick={handleToggleIgnored}
-        aria-pressed={showIgnored}
-        className={cn(
-          "flex items-center gap-1 rounded px-2 py-1 text-xs transition-colors duration-150 ease-out",
-          "hover:bg-overlay-subtle",
-          showIgnored ? "text-daintree-text" : "text-muted-foreground"
-        )}
-      >
-        <EyeOff className="h-3.5 w-3.5" aria-hidden="true" />
-        {/* Label never changes with state — the pressed state carries it. */}
-        Show ignored
-      </button>
-      <button
-        type="button"
-        onClick={handleRefresh}
-        aria-label="Refresh"
-        className="flex items-center rounded px-2 py-1 text-xs text-muted-foreground transition-colors duration-150 ease-out hover:bg-overlay-subtle"
-      >
-        <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
-      </button>
-    </div>
-  );
-
   return (
     <ContentPanel
       id={id}
@@ -216,15 +189,35 @@ export function FileBrowserPane({
       onMinimize={onMinimize}
       onRestore={onRestore}
       showRestoreControl={showRestoreControl}
-      toolbar={toolbar}
     >
-      <div className="flex min-h-0 w-full flex-1 bg-daintree-bg">
-        <div
-          className={cn(
-            "flex min-h-0 shrink-0 flex-col border-r border-daintree-border",
-            TREE_WIDTH_CLASS
-          )}
-        >
+      {/* The dialog presentation needs a definite height: the dialog sizes to
+          its content, and a chain of flex-1/min-h-0 against a content-sized
+          parent collapses to the tree's intrinsic height (the same trap the
+          diff workspace hit — its sidebar self-stretches for the same reason). */}
+      <div
+        className={cn(
+          "flex min-h-0 w-full bg-daintree-bg",
+          location === "dialog" ? "h-[75vh]" : "flex-1"
+        )}
+      >
+        <div className="flex min-h-0 w-60 shrink-0 flex-col self-stretch border-r border-daintree-border bg-daintree-sidebar">
+          <div className="flex shrink-0 items-center gap-0.5 border-b border-daintree-border py-1 pl-3 pr-1.5">
+            {/* Root anchor mirrors the diff sidebar's header: what am I
+                looking at, then the controls that reshape it. */}
+            <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-daintree-text/40">
+              {worktreePath ? basename(worktreePath) : ""}
+            </span>
+            <FileViewerToolbar.IconButton
+              label="Show ignored"
+              pressed={showIgnored}
+              onClick={handleToggleIgnored}
+            >
+              <EyeOff className="h-3.5 w-3.5" />
+            </FileViewerToolbar.IconButton>
+            <FileViewerToolbar.IconButton label="Refresh" onClick={handleRefresh}>
+              <RefreshCw className="h-3.5 w-3.5" />
+            </FileViewerToolbar.IconButton>
+          </div>
           {renderTree()}
         </div>
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
@@ -232,6 +225,7 @@ export function FileBrowserPane({
             filePath={selectedFilePath}
             rootPath={worktreePath}
             fileName={selectedFileName}
+            relativePath={selectedNode?.isDirectory === false ? (selectedPath ?? null) : null}
             revision={viewerRevision}
           />
         </div>
@@ -242,12 +236,16 @@ export function FileBrowserPane({
   function renderTree() {
     if (!worktreeId || !worktreePath) {
       return (
-        <div className="flex h-full items-center justify-center p-4">
+        <div className="flex min-h-0 flex-1 items-center justify-center p-4">
+          {/* w-full: EmptyState is a CSS container (inline-size containment),
+              so as a bare flex item its width collapses and the copy wraps
+              word-by-word. */}
           <EmptyState
             variant="zero-data"
             scale="sidebar"
             icon={<FolderTree className="h-5 w-5" />}
             title="Open a worktree to browse its files"
+            className="w-full"
           />
         </div>
       );
@@ -281,10 +279,11 @@ export function FileBrowserPane({
 
     if (rows.length === 0) {
       return (
-        <div className="flex h-full items-center justify-center p-4">
+        <div className="flex min-h-0 flex-1 items-center justify-center p-4">
           <EmptyState
             variant={showIgnored ? "zero-data" : "filtered-empty"}
             scale="sidebar"
+            className="w-full"
             {...(showIgnored ? { icon: <FolderTree className="h-5 w-5" /> } : {})}
             title={showIgnored ? "This worktree is empty" : "Everything here is ignored"}
             action={
@@ -309,7 +308,7 @@ export function FileBrowserPane({
           <button
             type="button"
             onClick={revealSelection}
-            className="shrink-0 truncate border-b border-daintree-border px-2 py-1 text-left text-[11px] text-muted-foreground transition-colors duration-150 ease-out hover:bg-overlay-subtle"
+            className="shrink-0 truncate border-b border-daintree-border px-3 py-1 text-left font-mono text-[11px] text-daintree-text/60 transition-colors duration-150 ease-out hover:bg-tint/5 hover:text-daintree-text"
           >
             Reveal {selectedFileName}
           </button>

@@ -1,13 +1,19 @@
 import path from "path";
+import fs from "fs/promises";
 import { defineIpcNamespace, opValidated } from "../define.js";
 import { checkRateLimit } from "../utils.js";
 import { FILE_BROWSER_METHOD_CHANNELS } from "./fileBrowser.preload.js";
-import { FileBrowserListDirectoryPayloadSchema } from "../../schemas/ipc.js";
+import {
+  FileBrowserListDirectoryPayloadSchema,
+  FileBrowserStatPathsPayloadSchema,
+} from "../../schemas/ipc.js";
 import { AppError } from "../../utils/errorTypes.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
 import type {
   FileBrowserListDirectoryPayload,
   FileBrowserListDirectoryResult,
+  FileBrowserStatPathsPayload,
+  FileBrowserStatPathsResult,
 } from "../../../shared/types/ipc/fileBrowser.js";
 
 /**
@@ -27,6 +33,11 @@ import type {
  */
 const LIST_DIRECTORY_MAX_CALLS = 600;
 const LIST_DIRECTORY_WINDOW_MS = 10_000;
+
+// One call per hovered terminal line (batched, ≤32 paths); even frantic mouse
+// travel across link-dense output stays well under this.
+const STAT_PATHS_MAX_CALLS = 300;
+const STAT_PATHS_WINDOW_MS = 10_000;
 
 /**
  * Structural validation happens in the schema; this adds the semantic path
@@ -76,6 +87,43 @@ function assertRelativeDirPath(dirPath: string | undefined): void {
 }
 
 export function buildFileBrowserNamespace(deps: HandlerDependencies) {
+  /**
+   * Resolve a worktree by id, scoped to the *sender's* window.
+   *
+   * Reads the sender's window synchronously, before the first await: the view
+   * can be evicted while the workspace call is in flight, and a binding that
+   * vanishes mid-request would silently widen the scope. An unresolvable
+   * sender is refused rather than passed through as `undefined`, which
+   * `getAllStatesAsync` reads as "every host" — a wildcard is exactly the
+   * scope this gate exists to deny. Scoped by sender rather than
+   * `getMonitorAsync`, which scans every live workspace host and would happily
+   * resolve a worktree belonging to another project — worktree ids are
+   * normalized absolute paths, so a renderer could guess one and enumerate a
+   * sibling project's tree.
+   */
+  const resolveSenderWorktree = async (ctx: IpcContext, worktreeId: string) => {
+    if (!deps.worktreeService) {
+      throw new Error("Worktree service not available");
+    }
+
+    const senderWindowId = ctx.senderWindow?.id;
+    if (senderWindowId === undefined) {
+      throw new AppError({
+        code: "INVALID_PATH",
+        message: "Unable to resolve the requesting window",
+        context: {},
+      });
+    }
+
+    const states = await deps.worktreeService.getAllStatesAsync(senderWindowId);
+    const worktree = states.find((state) => state.id === worktreeId);
+
+    if (!worktree) {
+      throw new Error(`Worktree not found: ${worktreeId}`);
+    }
+    return worktree;
+  };
+
   const handleListDirectory = async (
     ctx: IpcContext,
     payload: FileBrowserListDirectoryPayload
@@ -95,38 +143,44 @@ export function buildFileBrowserNamespace(deps: HandlerDependencies) {
       throw new Error("Worktree service not available");
     }
 
-    // Read the sender's window synchronously, before the first await: the
-    // view can be evicted while the workspace call is in flight, and a binding
-    // that vanishes mid-request would silently widen the scope.
-    const senderWindowId = ctx.senderWindow?.id;
-
-    // An unresolvable sender is refused rather than passed through as
-    // `undefined`, which `getAllStatesAsync` reads as "every host" — a wildcard
-    // is exactly the scope this gate exists to deny. `getWindowForWebContents`
-    // falls back to the WebContents registry, so a real project view always
-    // resolves; nothing legitimate lands here.
-    if (senderWindowId === undefined) {
-      throw new AppError({
-        code: "INVALID_PATH",
-        message: "Unable to resolve the requesting window",
-        context: {},
-      });
-    }
-
-    // Scoped by sender rather than `getMonitorAsync`, which scans every live
-    // workspace host and would happily resolve a worktree belonging to another
-    // project — worktree ids are normalized absolute paths, so a renderer could
-    // guess one and enumerate a sibling project's tree.
-    const states = await deps.worktreeService.getAllStatesAsync(senderWindowId);
-    const worktree = states.find((state) => state.id === payload.worktreeId);
-
-    if (!worktree) {
-      throw new Error(`Worktree not found: ${payload.worktreeId}`);
-    }
+    const worktree = await resolveSenderWorktree(ctx, payload.worktreeId);
 
     return deps.worktreeService.getFileTree(worktree.path, payload.dirPath, {
       includeIgnored: payload.includeIgnored,
     });
+  };
+
+  const handleStatPaths = async (
+    ctx: IpcContext,
+    payload: FileBrowserStatPathsPayload
+  ): Promise<FileBrowserStatPathsResult> => {
+    for (const candidate of payload.paths) {
+      assertRelativeDirPath(candidate);
+    }
+
+    checkRateLimit(
+      FILE_BROWSER_METHOD_CHANNELS.statPaths,
+      STAT_PATHS_MAX_CALLS,
+      STAT_PATHS_WINDOW_MS
+    );
+
+    const worktree = await resolveSenderWorktree(ctx, payload.worktreeId);
+
+    // A per-path failure (missing, permission, dangling symlink) is data, not
+    // an error: the caller is asking "which of these tokens are real?", and a
+    // throw for one bad token would discard the whole batch's answer.
+    return Promise.all(
+      payload.paths.map(async (candidate): Promise<"file" | "directory" | null> => {
+        try {
+          const stats = await fs.stat(path.join(worktree.path, candidate));
+          if (stats.isDirectory()) return "directory";
+          if (stats.isFile()) return "file";
+          return null;
+        } catch {
+          return null;
+        }
+      })
+    );
   };
 
   return defineIpcNamespace({
@@ -136,6 +190,12 @@ export function buildFileBrowserNamespace(deps: HandlerDependencies) {
         FILE_BROWSER_METHOD_CHANNELS.listDirectory,
         FileBrowserListDirectoryPayloadSchema,
         handleListDirectory,
+        { withContext: true }
+      ),
+      statPaths: opValidated(
+        FILE_BROWSER_METHOD_CHANNELS.statPaths,
+        FileBrowserStatPathsPayloadSchema,
+        handleStatPaths,
         { withContext: true }
       ),
     },

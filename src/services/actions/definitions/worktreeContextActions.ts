@@ -307,7 +307,19 @@ export function registerWorktreeContextActions(
       kind: "command",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
+      argsSchema: z
+        .object({
+          worktreeId: z.string().optional(),
+          /** Worktree-relative path to select and scroll into view on open. */
+          revealPath: z.string().optional(),
+          /**
+           * What `revealPath` points at. A directory is also expanded so its
+           * children are visible; the caller knows (it validated the path),
+           * and re-statting here would be a second round-trip for one bit.
+           */
+          revealKind: z.enum(["file", "directory"]).optional(),
+        })
+        .optional(),
       run: async (args, ctx: ActionContext) => {
         const worktreeId = args?.worktreeId;
         const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
@@ -322,10 +334,23 @@ export function registerWorktreeContextActions(
         // action test that mocks `@/clients` without it.
         const { usePanelDialogStore } = await import("@/store/panelDialogStore");
 
+        const revealPath = args?.revealPath;
+        let reveal: { browserSelectedPath: string; browserExpandedPaths: string[] } | undefined;
+        if (revealPath) {
+          const { ancestorDirectories } = await import("@/panels/file-browser/fileBrowserTree");
+          const expanded = new Set(ancestorDirectories(revealPath));
+          if (args?.revealKind === "directory") expanded.add(revealPath);
+          reveal = {
+            browserSelectedPath: revealPath,
+            browserExpandedPaths: [...expanded].sort(),
+          };
+        }
+
         await usePanelDialogStore.getState().openPanelDialog({
           kind: "file-browser",
           title: `Files — ${worktree.branch ?? worktree.name}`,
           worktreeId: targetWorktreeId,
+          ...reveal,
         });
       },
     })

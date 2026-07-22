@@ -6,7 +6,14 @@ import { logError } from "@/utils/logger";
 import { notify } from "@/lib/notify";
 import { isClientAppError } from "@/utils/clientAppError";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { FILE_PATH_REGEX, isPathExcluded, resolveFilePathCandidate } from "./filePathDetection";
+import {
+  DIR_PATH_REGEX,
+  FILE_PATH_REGEX,
+  isPathExcluded,
+  resolveDirPathCandidate,
+  resolveFilePathCandidate,
+} from "./filePathDetection";
+import { fileBrowserClient } from "@/clients/fileBrowserClient";
 import type { TerminalLink } from "./types";
 
 // Coalesce key for file-link activation failures. A user who scrolls a stack
@@ -122,6 +129,27 @@ export function reportFileLinkFailure(reason: string, error: unknown, absolutePa
 
 export type HoverCallback = (link: TerminalLink | null) => void;
 
+interface DirCandidate {
+  text: string;
+  startIndex: number;
+  absolutePath: string;
+}
+
+interface ScopedDirCandidate extends DirCandidate {
+  worktreeId: string;
+  relativePath: string;
+}
+
+/**
+ * Cheap validation memo for directory candidates, keyed
+ * `worktreeId\nrelativePath`. Hover re-fires for the same line constantly, so
+ * without this every pointer crossing would re-stat the same tokens. Cleared
+ * wholesale at the cap — hover-driven lookups repopulate what still matters,
+ * and real LRU bookkeeping isn't worth it for a cache this cheap to rebuild.
+ */
+const dirKindCache = new Map<string, "file" | "directory" | null>();
+const DIR_KIND_CACHE_CAP = 500;
+
 export class FileLinksAddon implements ILinkProvider {
   private _terminal: Terminal;
   private _getCwd: () => string;
@@ -158,6 +186,11 @@ export class FileLinksAddon implements ILinkProvider {
       return;
     }
 
+    // Byte ranges the file links occupy, so a directory candidate that merely
+    // re-matches a file token (`src/file.ts` satisfies both regexes) is
+    // dropped instead of stacking a second link on the same characters.
+    const claimed: Array<[number, number]> = [];
+
     // matchAll on the module-scope global regex clones it internally (per spec)
     // and never mutates lastIndex, so the regex is reused across hover calls
     // without the per-call `new RegExp(FILE_PATH_REGEX)` allocation.
@@ -174,6 +207,7 @@ export class FileLinksAddon implements ILinkProvider {
       }
 
       const startIndex = match.index + match[0]!.indexOf(fullMatch);
+      claimed.push([startIndex, startIndex + fullMatch.length]);
 
       const range: IBufferRange = {
         start: { x: startIndex + 1, y: bufferLineNumber },
@@ -193,10 +227,151 @@ export class FileLinksAddon implements ILinkProvider {
       );
     }
 
-    callback(links.length > 0 ? links : undefined);
+    const candidates = this._collectDirCandidates(lineText, claimed);
+    if (candidates.length === 0) {
+      callback(links.length > 0 ? links : undefined);
+      return;
+    }
+
+    // Directory links are validated against the filesystem before they exist:
+    // the regex is loose enough to match `and/or`, and a link that opens a
+    // browser onto nothing teaches the user to stop clicking. The callback is
+    // deferred until validation lands — xterm's Linkifier tolerates async
+    // providers, and a hover-scale stat batch resolves in milliseconds.
+    void this._validateDirCandidates(candidates)
+      .then((confirmed) => {
+        for (const candidate of confirmed) {
+          const range: IBufferRange = {
+            start: { x: candidate.startIndex + 1, y: bufferLineNumber },
+            end: { x: candidate.startIndex + candidate.text.length, y: bufferLineNumber },
+          };
+          links.push(
+            new DirectoryLink(
+              range,
+              candidate.text,
+              candidate.absolutePath,
+              candidate.worktreeId,
+              candidate.relativePath,
+              this._onHover
+            )
+          );
+        }
+        callback(links.length > 0 ? links : undefined);
+      })
+      .catch(() => {
+        // Validation failing (evicted view, IPC teardown) only costs the
+        // directory links; the file links this line produced still stand.
+        callback(links.length > 0 ? links : undefined);
+      });
+  }
+
+  private _collectDirCandidates(
+    lineText: string,
+    claimed: Array<[number, number]>
+  ): DirCandidate[] {
+    const candidates: DirCandidate[] = [];
+    for (const match of lineText.matchAll(DIR_PATH_REGEX)) {
+      const fullMatch = match[1];
+      if (fullMatch === undefined || isPathExcluded(fullMatch)) continue;
+
+      const startIndex = match.index + match[0]!.indexOf(fullMatch);
+      const endIndex = startIndex + fullMatch.length;
+      if (claimed.some(([start, end]) => startIndex < end && endIndex > start)) continue;
+
+      const absolutePath = resolveDirPathCandidate(fullMatch, this._getCwd());
+      if (!absolutePath) continue;
+
+      candidates.push({ text: fullMatch, startIndex, absolutePath });
+    }
+    return candidates;
+  }
+
+  private async _validateDirCandidates(candidates: DirCandidate[]): Promise<ScopedDirCandidate[]> {
+    // Imported here, not at module scope: the worktree store's module graph
+    // reaches `@/clients`, and the addon is consumed by tests (and potentially
+    // early-boot code) that mock or lack that surface. By the time a link is
+    // being validated the app is fully booted, so the import is settled.
+    const { getCurrentViewStoreOrNull } = await import("@/store/createWorktreeStore");
+    // Null before the WorktreeStoreProvider mounts — no worktrees means no
+    // directory links yet, which is the right answer for a still-booting view.
+    const worktrees: ReadonlyMap<string, { id: string; path: string }> =
+      getCurrentViewStoreOrNull()?.getState().worktrees ?? new Map();
+
+    const confirmed: ScopedDirCandidate[] = [];
+    const toStat: ScopedDirCandidate[] = [];
+
+    for (const candidate of candidates) {
+      const scope = resolveWorktreeScope(candidate.absolutePath, worktrees);
+      if (!scope) continue;
+      const scoped: ScopedDirCandidate = { ...candidate, ...scope };
+
+      // The worktree root itself is a known directory — no stat needed, and
+      // the batch op requires non-empty relative paths anyway.
+      if (scoped.relativePath === "") {
+        confirmed.push(scoped);
+        continue;
+      }
+      const cached = dirKindCache.get(cacheKey(scoped));
+      if (cached === "directory") confirmed.push(scoped);
+      else if (cached === undefined) toStat.push(scoped);
+    }
+
+    // One batched call per worktree present on the line (nearly always one).
+    const byWorktree = new Map<string, ScopedDirCandidate[]>();
+    for (const candidate of toStat) {
+      const bucket = byWorktree.get(candidate.worktreeId);
+      if (bucket) bucket.push(candidate);
+      else byWorktree.set(candidate.worktreeId, [candidate]);
+    }
+
+    for (const [worktreeId, bucket] of byWorktree) {
+      const batch = bucket.slice(0, 32);
+      const kinds = await fileBrowserClient.statPaths({
+        worktreeId,
+        paths: batch.map((candidate) => candidate.relativePath),
+      });
+      batch.forEach((candidate, index) => {
+        const kind = kinds[index] ?? null;
+        if (dirKindCache.size >= DIR_KIND_CACHE_CAP) dirKindCache.clear();
+        dirKindCache.set(cacheKey(candidate), kind);
+        if (kind === "directory") confirmed.push(candidate);
+      });
+    }
+
+    confirmed.sort((a, b) => a.startIndex - b.startIndex);
+    return confirmed;
   }
 
   dispose(): void {}
+}
+
+function cacheKey(candidate: ScopedDirCandidate): string {
+  return `${candidate.worktreeId}\n${candidate.relativePath}`;
+}
+
+/**
+ * Map an absolute path to the worktree that contains it, longest path first so
+ * a nested worktree wins over the repo that hosts it. Returns null for paths
+ * outside every known worktree — the file browser is worktree-scoped, so
+ * there is nothing to open them in.
+ */
+function resolveWorktreeScope(
+  absolutePath: string,
+  worktrees: ReadonlyMap<string, { id: string; path: string }>
+): { worktreeId: string; relativePath: string } | null {
+  let best: { worktreeId: string; relativePath: string } | null = null;
+  let bestLength = -1;
+  for (const worktree of worktrees.values()) {
+    const root = worktree.path.replace(/[\\/]+$/, "");
+    if (absolutePath !== root && !absolutePath.startsWith(`${root}/`)) continue;
+    if (root.length <= bestLength) continue;
+    bestLength = root.length;
+    best = {
+      worktreeId: worktree.id,
+      relativePath: absolutePath.slice(root.length).replace(/^[\\/]+/, ""),
+    };
+  }
+  return best;
 }
 
 class FileLink implements ILink {
@@ -256,6 +431,58 @@ class FileLink implements ILink {
           reportFileLinkFailure("Failed to view file", error, this._absolutePath);
         });
     }
+  }
+
+  hover?(_event: MouseEvent, _text: string): void {
+    this._onHover?.(this);
+  }
+
+  leave?(_event: MouseEvent, _text: string): void {
+    this._onHover?.(null);
+  }
+
+  dispose?(): void {}
+}
+
+/**
+ * A validated directory token. Activation opens the worktree's file browser
+ * revealed at this directory — the browsing surface is the right destination
+ * for a folder the way the file viewer is for a file.
+ */
+class DirectoryLink implements ILink {
+  readonly kind = "directory" as const;
+
+  constructor(
+    public range: IBufferRange,
+    public text: string,
+    private _absolutePath: string,
+    private _worktreeId: string,
+    private _relativePath: string,
+    private _onHover?: HoverCallback
+  ) {}
+
+  get absolutePath(): string {
+    return this._absolutePath;
+  }
+
+  activate(_event: MouseEvent, _text: string): void {
+    actionService
+      .dispatch(
+        "worktree.openFileBrowser",
+        {
+          worktreeId: this._worktreeId,
+          revealPath: this._relativePath === "" ? undefined : this._relativePath,
+          revealKind: "directory",
+        },
+        { source: "user" }
+      )
+      .then((result) => {
+        if (result.ok) return;
+        throw result.error;
+      })
+      .catch((error) => {
+        reportFileLinkFailure("Failed to open folder in file browser", error, this._absolutePath);
+      });
   }
 
   hover?(_event: MouseEvent, _text: string): void {

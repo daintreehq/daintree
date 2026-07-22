@@ -19,8 +19,8 @@ export type RefreshTierProvider = () => TerminalRefreshTier;
  * FileLinksAddon and synthetic link objects for URLs both land here.
  */
 export interface TerminalLink extends ILink {
-  kind: "file" | "url";
-  /** Resolved absolute path — present only when `kind === "file"`. */
+  kind: "file" | "directory" | "url";
+  /** Resolved absolute path — present for `kind === "file"` and `"directory"`. */
   absolutePath?: string;
 }
 

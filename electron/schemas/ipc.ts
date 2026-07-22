@@ -485,6 +485,13 @@ export const FileBrowserListDirectoryPayloadSchema = z.object({
   includeIgnored: z.boolean().optional(),
 });
 
+// Batch-capped: one call validates the directory candidates of a single
+// hovered terminal line, which is a handful of tokens, never hundreds.
+export const FileBrowserStatPathsPayloadSchema = z.object({
+  worktreeId: z.string().min(1).max(4096),
+  paths: z.array(z.string().min(1).max(4096)).max(32),
+});
+
 export const FileReadPayloadSchema = z.object({
   path: z
     .string()

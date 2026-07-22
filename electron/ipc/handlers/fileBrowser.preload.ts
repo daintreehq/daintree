@@ -2,6 +2,7 @@ import type { IpcInvokeMap } from "../../types/index.js";
 
 export const FILE_BROWSER_METHOD_CHANNELS = {
   listDirectory: "file-browser:list-directory",
+  statPaths: "file-browser:stat-paths",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof FILE_BROWSER_METHOD_CHANNELS;

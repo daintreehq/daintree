@@ -319,6 +319,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./fileBrowser.js").FileBrowserListDirectoryPayload];
     result: import("./fileBrowser.js").FileBrowserListDirectoryResult;
   };
+  "file-browser:stat-paths": {
+    args: [payload: import("./fileBrowser.js").FileBrowserStatPathsPayload];
+    result: import("./fileBrowser.js").FileBrowserStatPathsResult;
+  };
   "forge-audit:clear-log": {
     args: [];
     result: void;

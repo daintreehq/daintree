@@ -196,46 +196,53 @@ function FileTreeRow({ row, isSelected, context }: FileTreeRowProps) {
   const FolderIcon = row.isExpanded ? FolderOpen : Folder;
 
   return (
-    <div
-      id={rowDomId(context.instanceId, row.path)}
-      role="treeitem"
-      aria-level={row.depth + 1}
-      aria-selected={isSelected}
-      {...(row.isDirectory && { "aria-expanded": row.isExpanded })}
-      onClick={handleClick}
-      style={{ paddingLeft: BASE_PADDING_PX + row.depth * INDENT_PER_DEPTH_PX }}
-      className={cn(
-        "flex h-6 w-full cursor-default select-none items-center gap-1 pr-2 text-xs",
-        // Selection is a neutral surface lift, not an accent fill: the tree has
-        // hover, selection and container focus all live at once, and the accent
-        // is reserved for a single load-bearing signal per focus region.
-        "transition-colors duration-150 ease-out",
-        isSelected ? "bg-overlay-subtle text-daintree-text" : "text-muted-foreground",
-        !isSelected && "hover:bg-overlay-subtle/50",
-        row.isIgnored && "opacity-55"
-      )}
-    >
-      {row.isDirectory ? (
-        // A span, not a button: the row already exposes expansion through
-        // `aria-expanded`, and a focusable control marked `aria-hidden` is a
-        // node the keyboard can reach but a screen reader cannot describe.
-        <span
-          onClick={handleChevronClick}
-          aria-hidden="true"
-          className="flex h-4 w-4 shrink-0 items-center justify-center"
-        >
-          <Chevron className="h-3 w-3" />
-        </span>
-      ) : (
-        <span className="h-4 w-4 shrink-0" />
-      )}
-      {row.isDirectory ? (
-        <FolderIcon className="h-3.5 w-3.5 shrink-0 text-category-cyan" aria-hidden="true" />
-      ) : (
-        <File className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-      )}
-      <span className="truncate">{row.name}</span>
-      {row.isLoading && <span className="ml-1 shrink-0 text-[10px] opacity-60">Loading…</span>}
+    // Outer div stays full-bleed for Virtuoso's fixed row height; the inner
+    // surface is inset and rounded to match the diff sidebar's file rows, so
+    // the two file lists read as the same component family.
+    <div className="h-6 w-full px-1">
+      <div
+        id={rowDomId(context.instanceId, row.path)}
+        role="treeitem"
+        aria-level={row.depth + 1}
+        aria-selected={isSelected}
+        {...(row.isDirectory && { "aria-expanded": row.isExpanded })}
+        onClick={handleClick}
+        style={{ paddingLeft: BASE_PADDING_PX + row.depth * INDENT_PER_DEPTH_PX }}
+        className={cn(
+          "flex h-6 w-full cursor-default select-none items-center gap-1 rounded pr-2 font-mono text-xs",
+          // Selection is a neutral surface lift, not an accent fill: the tree has
+          // hover, selection and container focus all live at once, and the accent
+          // is reserved for a single load-bearing signal per focus region.
+          "transition-colors duration-150 ease-out",
+          isSelected ? "bg-overlay-subtle text-daintree-text" : "text-daintree-text/70",
+          !isSelected && "hover:bg-tint/5",
+          row.isIgnored && "opacity-55"
+        )}
+      >
+        {row.isDirectory ? (
+          // A span, not a button: the row already exposes expansion through
+          // `aria-expanded`, and a focusable control marked `aria-hidden` is a
+          // node the keyboard can reach but a screen reader cannot describe.
+          <span
+            onClick={handleChevronClick}
+            aria-hidden="true"
+            className="flex h-4 w-4 shrink-0 items-center justify-center text-daintree-text/40"
+          >
+            <Chevron className="h-3 w-3" />
+          </span>
+        ) : (
+          <span className="h-4 w-4 shrink-0" />
+        )}
+        {row.isDirectory ? (
+          <FolderIcon className="h-3.5 w-3.5 shrink-0 text-daintree-text/40" aria-hidden="true" />
+        ) : (
+          <File className="h-3.5 w-3.5 shrink-0 text-daintree-text/30" aria-hidden="true" />
+        )}
+        <span className={cn("truncate", isSelected && "font-medium")}>{row.name}</span>
+        {row.isLoading && (
+          <span className="ml-1 shrink-0 text-[10px] text-daintree-text/40">Loading…</span>
+        )}
+      </div>
     </div>
   );
 }
