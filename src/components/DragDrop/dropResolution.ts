@@ -2,6 +2,7 @@ import type { TabGroup } from "@shared/types";
 import type { PanelKind } from "@shared/types/panel";
 import { panelKindIsDockable } from "@shared/config/panelKindRegistry";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
+import { panelMatchesWorktreeScope } from "@/store/slices/panelRegistry/worktreeIndex";
 
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 
@@ -187,7 +188,12 @@ export function filterOutDockDroppables<T extends DockCollisionCandidate>(contai
   );
 }
 
-/** Filter terminals to those in a given container and worktree, preserving panelIds order. */
+/**
+ * Filter terminals to those in a given container and worktree, preserving
+ * panelIds order. Scope matching is shared with the dock render path so drop
+ * indices are computed over exactly the chips the dock shows — global panels
+ * included (#11289); grid stays worktree-exact.
+ */
 export function filterTerminalsByContainer(
   terminalsById: Record<string, CarrierPanel | undefined>,
   panelIds: readonly string[],
@@ -197,7 +203,7 @@ export function filterTerminalsByContainer(
   const result: CarrierPanel[] = [];
   for (const tid of panelIds) {
     const t = terminalsById[tid];
-    if (!t || (t.worktreeId ?? undefined) !== (worktreeId ?? undefined)) continue;
+    if (!t || !panelMatchesWorktreeScope(t.worktreeId, worktreeId, container)) continue;
     if (container === "dock") {
       if (t.location === "dock") result.push(t);
     } else {

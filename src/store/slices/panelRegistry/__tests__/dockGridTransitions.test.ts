@@ -665,4 +665,160 @@ describe("dock ↔ grid transitions", () => {
       expect(usePanelStore.getState().tabGroups.has("g1")).toBe(false);
     });
   });
+
+  describe("worktree-scoped dock ordering with global panels (#11289)", () => {
+    function seedPanels(terminals: PtyPanelData[]) {
+      const panelsById = Object.fromEntries(terminals.map((t) => [t.id, t]));
+      const panelIds = terminals.map((t) => t.id);
+      usePanelStore.setState({
+        panelsById,
+        panelIds,
+        panelIdsByWorktreeId: buildWorktreeIndex(panelIds, panelsById),
+      });
+    }
+
+    function makeWt2Terminal(id: string, location: "grid" | "dock"): PtyPanelData {
+      return { ...createMockTerminal(id, location), worktreeId: "wt-2" };
+    }
+
+    function dockOrder(worktreeId: string): string[] {
+      return usePanelStore
+        .getState()
+        .getTabGroups("dock", worktreeId)
+        .flatMap((g) => g.panelIds);
+    }
+
+    it("reorders a global chip among scoped chips instead of silently no-opping", () => {
+      const g1 = createGlobalMockTerminal("g1", "dock");
+      const a = createMockTerminal("a", "dock");
+      const b = createMockTerminal("b", "dock");
+      const x = makeWt2Terminal("x", "dock");
+      seedPanels([g1, a, b, x]);
+
+      // Rendered dock for wt-1 is [g1, a, b] — drag g1 to the end.
+      usePanelStore.getState().reorderTerminals(0, 2, "dock", "wt-1");
+
+      expect(dockOrder("wt-1")).toEqual(["a", "b", "g1"]);
+      expect(usePanelStore.getState().panelIds).toEqual(["a", "b", "g1", "x"]);
+    });
+
+    it("reorders a scoped chip past a global chip into the rendered slot", () => {
+      const g1 = createGlobalMockTerminal("g1", "dock");
+      const a = createMockTerminal("a", "dock");
+      const b = createMockTerminal("b", "dock");
+      const x = makeWt2Terminal("x", "dock");
+      seedPanels([g1, a, b, x]);
+
+      // Rendered dock for wt-1 is [g1, a, b] — drag "a" (index 1) to the front.
+      usePanelStore.getState().reorderTerminals(1, 0, "dock", "wt-1");
+
+      expect(dockOrder("wt-1")).toEqual(["a", "g1", "b"]);
+      expect(usePanelStore.getState().panelIds).toEqual(["a", "g1", "b", "x"]);
+    });
+
+    it("rebuilds the per-worktree buckets after a global chip reorder", () => {
+      const g1 = createGlobalMockTerminal("g1", "dock");
+      const g2 = createGlobalMockTerminal("g2", "dock");
+      const a = createMockTerminal("a", "dock");
+      const x = makeWt2Terminal("x", "dock");
+      seedPanels([g1, g2, a, x]);
+
+      // Rendered dock for wt-1 is [g1, g2, a] — drag g2 to the front.
+      usePanelStore.getState().reorderTerminals(1, 0, "dock", "wt-1");
+
+      const buckets = usePanelStore.getState().panelIdsByWorktreeId;
+      expect(buckets["__none__"]).toEqual(["g2", "g1"]);
+      expect(buckets["wt-1"]).toEqual(["a"]);
+      expect(buckets["wt-2"]).toEqual(["x"]);
+    });
+
+    it("reorders a dock that contains only global chips while a worktree is active", () => {
+      // The literal issue repro: panels launched with no worktree active, then
+      // a worktree is selected — the exact-match scope saw an empty list and
+      // every drag silently no-opped.
+      const g1 = createGlobalMockTerminal("g1", "dock");
+      const g2 = createGlobalMockTerminal("g2", "dock");
+      seedPanels([g1, g2]);
+
+      usePanelStore.getState().reorderTerminals(0, 1, "dock", "wt-1");
+
+      expect(dockOrder("wt-1")).toEqual(["g2", "g1"]);
+      expect(usePanelStore.getState().panelIds).toEqual(["g2", "g1"]);
+    });
+
+    it("counts global chips when inserting a grid panel into a dock slot", () => {
+      const g1 = createGlobalMockTerminal("g1", "dock");
+      const a = createMockTerminal("a", "dock");
+      const t = createMockTerminal("t", "grid");
+      seedPanels([g1, a, t]);
+
+      // Rendered dock for wt-1 is [g1, a]; slot 1 sits between them.
+      usePanelStore.getState().moveTerminalToPosition("t", 1, "dock", "wt-1");
+
+      expect(dockOrder("wt-1")).toEqual(["g1", "t", "a"]);
+    });
+
+    it("inserts at the dock front ahead of a leading global chip", () => {
+      const g1 = createGlobalMockTerminal("g1", "dock");
+      const a = createMockTerminal("a", "dock");
+      const t = createMockTerminal("t", "grid");
+      seedPanels([g1, a, t]);
+
+      usePanelStore.getState().moveTerminalToPosition("t", 0, "dock", "wt-1");
+
+      expect(dockOrder("wt-1")).toEqual(["t", "g1", "a"]);
+    });
+
+    it("keeps a global group's members in their committed position on group reorder", () => {
+      // A global tab group (worktreeId undefined, global members) is what the
+      // dock launcher produces with no worktree active — the realistic
+      // explicit-group shape that renders in every worktree's dock.
+      const g1 = createGlobalMockTerminal("g1", "dock");
+      const g2 = createGlobalMockTerminal("g2", "dock");
+      const c = createMockTerminal("c", "dock");
+      const d = createMockTerminal("d", "dock");
+      seedPanels([g1, g2, c, d]);
+      const globalGroup: TabGroup = {
+        id: "G",
+        panelIds: ["g1", "g2"],
+        activeTabId: "g1",
+        location: "dock",
+        worktreeId: undefined,
+      };
+      usePanelStore.setState({ tabGroups: new Map([["G", globalGroup]]) });
+
+      // Groups render as [G(g1, g2), c, d] — move c after d. The global
+      // group must hold position 0; the pre-fix tail eviction shoved its
+      // members to the end instead.
+      usePanelStore.getState().reorderTabGroups(1, 2, "dock", "wt-1");
+
+      expect(dockOrder("wt-1")).toEqual(["g1", "g2", "d", "c"]);
+      expect(usePanelStore.getState().panelIds).toEqual(["g1", "g2", "d", "c"]);
+    });
+
+    it("reorders single-chip groups across a global chip correctly", () => {
+      const g1 = createGlobalMockTerminal("g1", "dock");
+      const a = createMockTerminal("a", "dock");
+      const b = createMockTerminal("b", "dock");
+      seedPanels([g1, a, b]);
+
+      // Virtual groups render as [g1], [a], [b] — move b to the front.
+      usePanelStore.getState().reorderTabGroups(2, 0, "dock", "wt-1");
+
+      expect(dockOrder("wt-1")).toEqual(["b", "g1", "a"]);
+      expect(usePanelStore.getState().panelIds).toEqual(["b", "g1", "a"]);
+    });
+
+    it("keeps grid reorders worktree-exact — global grid panels stay out of scope", () => {
+      const gg = createGlobalMockTerminal("gg", "grid");
+      const a = createMockTerminal("a", "grid");
+      const b = createMockTerminal("b", "grid");
+      seedPanels([gg, a, b]);
+
+      // Grid scope for wt-1 is [a, b]; swapping them must not move gg.
+      usePanelStore.getState().reorderTerminals(0, 1, "grid", "wt-1");
+
+      expect(usePanelStore.getState().panelIds).toEqual(["gg", "b", "a"]);
+    });
+  });
 });

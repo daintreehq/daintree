@@ -10,7 +10,12 @@ import { TerminalRefreshTier } from "@/types";
 import { saveNormalized, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
 import { deriveRuntimeStatus, dissolvePanelFromGroup } from "./helpers";
-import { buildWorktreeIndex, NO_WORKTREE, transferBetweenWorktreeIndex } from "./worktreeIndex";
+import {
+  buildWorktreeIndex,
+  NO_WORKTREE,
+  panelMatchesWorktreeScope,
+  transferBetweenWorktreeIndex,
+} from "./worktreeIndex";
 import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
 import { getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 
@@ -77,17 +82,6 @@ function getPanelTabGroupLocation(
   )
     return null;
   return panel.location === "dock" ? "dock" : "grid";
-}
-
-function panelMatchesWorktreeScope(
-  panelWorktreeId: string | undefined,
-  worktreeId: string | undefined,
-  location: TabGroupLocation
-): boolean {
-  if ((panelWorktreeId ?? undefined) === worktreeId) return true;
-  // Docked global panels are intentionally visible in every worktree-scoped dock.
-  // Grid panels remain worktree-exact to avoid leaking global panels into every grid.
-  return location === "dock" && panelWorktreeId === undefined && worktreeId !== undefined;
 }
 
 export const createTabGroupActions = (
@@ -560,8 +554,6 @@ export const createTabGroupActions = (
     if (fromGroupIndex === toGroupIndex) return;
 
     set((state) => {
-      const targetWorktreeId = worktreeId ?? null;
-
       const allGroups = get().getTabGroups(location, worktreeId ?? undefined);
 
       if (fromGroupIndex < 0 || fromGroupIndex >= allGroups.length) return state;
@@ -585,7 +577,10 @@ export const createTabGroupActions = (
         const groupPanelIds = group.panelIds.filter((pid) => {
           const t = state.panelsById[pid];
           if (!t) return false;
-          if ((t.worktreeId ?? null) !== targetWorktreeId) return false;
+          // Same scope predicate as getTabGroups — an exact-match filter here
+          // would evict a global dock member into the tail bucket, discarding
+          // the position the drag just committed (#11289).
+          if (!panelMatchesWorktreeScope(t.worktreeId, worktreeId, location)) return false;
           if (t.location === "trash") return false;
           const effectiveLocation = t.location ?? "grid";
           return effectiveLocation === location;
@@ -602,15 +597,12 @@ export const createTabGroupActions = (
         }
       }
 
-      // Add terminals in this location but other worktrees
+      // Append every location-matched panel the group pass didn't place —
+      // other worktrees' panels, plus any in-scope edge case getTabGroups
+      // excluded. Unconditional so no panel is ever dropped from panelIds.
       for (const tid of state.panelIds) {
         const t = state.panelsById[tid];
-        if (
-          t &&
-          !processedIds.has(tid) &&
-          matchesLocation(t) &&
-          (t.worktreeId ?? null) !== targetWorktreeId
-        ) {
+        if (t && !processedIds.has(tid) && matchesLocation(t)) {
           newLocationIds.push(tid);
           processedIds.add(tid);
         }
