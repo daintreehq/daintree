@@ -53,24 +53,31 @@ export function useDragRecovery(): {
     (activatorEvent: Event | null | undefined) => {
       clearGraceTimer();
       liveDragRef.current = activatorEvent instanceof MouseEvent ? "mouse" : "other";
+      // eslint-disable-next-line react-compiler/react-compiler -- the webview shield must be up before React commits; the activeId-keyed effect lands a frame late, which is exactly the gap that loses the mouseup (#11291)
       document.documentElement.dataset.dragging = "true";
     },
     [clearGraceTimer]
   );
 
+  // Deliberately leaves data-dragging in place: useGlobalEscapeDispatcher
+  // reads it mid-propagation to keep a drag-canceling Escape from also
+  // popping the escape stack, so removal belongs to DndProvider's
+  // activeId-keyed effect, which runs after the event finishes.
   const finishDrag = useCallback(() => {
     liveDragRef.current = null;
     clearGraceTimer();
-    delete document.documentElement.dataset.dragging;
   }, [clearGraceTimer]);
 
   useEffect(() => {
     // Leaves liveDragRef set: a successful cancel lands in finishDrag via
     // onDragCancel, and an unheard Escape must not block a later retry.
+    // Dispatched on body, not document: capture-phase key handlers cast
+    // event.target to HTMLElement (`.closest`), which a Document target
+    // would break. It still bubbles to dnd-kit's document-level listener.
     const recover = () => {
       clearGraceTimer();
       if (liveDragRef.current !== "mouse") return;
-      document.dispatchEvent(
+      document.body.dispatchEvent(
         new KeyboardEvent("keydown", { code: "Escape", bubbles: true, cancelable: true })
       );
     };

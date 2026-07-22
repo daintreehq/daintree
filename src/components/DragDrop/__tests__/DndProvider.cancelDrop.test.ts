@@ -92,6 +92,10 @@ describe("shouldCancelDrop", () => {
       expect(run({ overData: { container: "grid" }, activeData: "panel-1" })).toBe(true);
     });
 
+    it("cancels placeholder data even on a data-less droppable like trash", () => {
+      expect(run({ hasOver: true, overData: null, activeData: placeholderData })).toBe(true);
+    });
+
     it("fails closed when reading the drag data throws", () => {
       const hostile = {
         get terminal(): never {
@@ -110,6 +114,25 @@ describe("shouldCancelDrop", () => {
         },
       };
       expect(run({ overData: { container: "grid" }, activeData: hostile })).toBe(true);
+    });
+
+    it("is total even when the params object itself throws on read", () => {
+      const hostile = {
+        get hasOver(): never {
+          throw new Error("boom");
+        },
+        get activeData(): never {
+          throw new Error("boom");
+        },
+        get overData(): never {
+          throw new Error("boom");
+        },
+        get isWorktreeSort(): never {
+          throw new Error("boom");
+        },
+      };
+      expect(() => shouldCancelDrop(hostile)).not.toThrow();
+      expect(shouldCancelDrop(hostile)).toBe(true);
     });
   });
 

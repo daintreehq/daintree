@@ -132,13 +132,9 @@ export interface CancelDropParams {
  * This resolver never throws: drag data without a real `terminal` cancels
  * instead of dereferencing, and any unexpected failure fails closed to cancel.
  */
-export function shouldCancelDrop({
-  hasOver,
-  activeData,
-  overData,
-  isWorktreeSort,
-}: CancelDropParams): boolean {
+export function shouldCancelDrop(params: CancelDropParams): boolean {
   try {
+    const { hasOver, activeData, overData, isWorktreeSort } = params;
     if (!hasOver) return true;
 
     // Worktree-sort drags own their drop logic in handleDragEnd; let every
@@ -162,7 +158,6 @@ export function shouldCancelDrop({
     const targetContainer =
       overData?.container ??
       (overData?.sortable?.containerId ? resolveContainerId(overData.sortable.containerId) : null);
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- kind comes off our own panel instances; an unknown string fails the dockable lookup closed
     return isNonDockableDockDrop(
       targetContainer,
       typeof kind === "string" ? (kind as PanelKind) : undefined
