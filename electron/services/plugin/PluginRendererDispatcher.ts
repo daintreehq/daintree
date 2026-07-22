@@ -94,8 +94,13 @@ export class PluginRendererDispatcher {
    * project view first, then fall back to the global `ProjectViewManager`.
    * Returns `null` (rather than throwing) when no renderer is available so
    * {@link sendDispatchToRenderer} can return an error result.
+   *
+   * Public because `PluginService.fetchAllWorktreeSnapshots()` needs the same
+   * targeting policy to window-scope the host worktree APIs (#11297). Both
+   * callers are answering the identical question — "which renderer is this
+   * plugin acting on behalf of?" — so they must not drift apart.
    */
-  private resolveActiveWebContents(): Electron.WebContents | null {
+  resolveActiveWebContents(): Electron.WebContents | null {
     const registry = getWindowRegistry();
     if (registry) {
       // Plugin dispatches carry no source window, so target the focused window

@@ -14,6 +14,18 @@ const mockListPluginActions = vi.fn();
 const mockRegisterPluginAction = vi.fn();
 const mockUnregisterPluginAction = vi.fn();
 const mockActivatePluginForView = vi.fn();
+const mockGetActiveWorktreeIdForWindow = vi.fn<(windowId: number | undefined) => Promise<string | null>>();
+const mockGetProjectForWebContents = vi.fn<(webContentsId: number) => string | null>();
+const mockGetWindowForWebContents = vi.fn<(wc: { id: number }) => { id: number } | null>();
+
+// plugin:invoke resolves the sender's project/worktree through the registry
+// (#11297). Mocked so a test can register a sender without standing up a real
+// BrowserWindow; unregistered senders fall through to null, which is what the
+// pre-existing null-context assertions below rely on.
+vi.mock("../../../window/webContentsRegistry.js", () => ({
+  getProjectForWebContents: (...args: [number]) => mockGetProjectForWebContents(...args),
+  getWindowForWebContents: (...args: [{ id: number }]) => mockGetWindowForWebContents(...args),
+}));
 
 vi.mock("../../../services/PluginService.js", () => ({
   pluginService: {
@@ -27,6 +39,8 @@ vi.mock("../../../services/PluginService.js", () => ({
     registerPluginAction: (...args: unknown[]) => mockRegisterPluginAction(...args),
     unregisterPluginAction: (...args: unknown[]) => mockUnregisterPluginAction(...args),
     activatePluginForView: (...args: unknown[]) => mockActivatePluginForView(...args),
+    getActiveWorktreeIdForWindow: (windowId: number | undefined) =>
+      mockGetActiveWorktreeIdForWindow(windowId),
     // No-op for tests that don't care about implicit activation; the IPC
     // handler awaits it before resolving the impl set.
     activatePluginsForFileDecorationScope: vi.fn().mockResolvedValue(undefined),
@@ -110,6 +124,11 @@ beforeEach(() => {
   mockShowOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] });
   mockInstallPlugin.mockResolvedValue({ status: "installed", pluginId: "acme.my-plugin" });
   mockNetFetch.mockReset();
+  // Default: the sender is not a registered project view, so plugin:invoke
+  // resolves a null project / no window — the pre-#11297 context shape.
+  mockGetProjectForWebContents.mockReturnValue(null);
+  mockGetWindowForWebContents.mockReturnValue(null);
+  mockGetActiveWorktreeIdForWindow.mockResolvedValue(null);
   _resetIpcGuardForTesting();
   markIpcSecurityReady();
 });
@@ -1008,6 +1027,87 @@ describe("registerPluginHandlers", () => {
       worktreeId: null,
       webContentsId: 7,
       pluginId: "acme.my-plugin",
+    });
+  });
+
+  // ── #11297: plugin:invoke carries the sender's real project/worktree ──
+
+  function getInvokeHandler(): (...args: unknown[]) => unknown {
+    registerPluginHandlers();
+    return mockIpcMainHandle.mock.calls.find((c: unknown[]) => c[0] === "plugin:invoke")![1] as (
+      ...args: unknown[]
+    ) => unknown;
+  }
+
+  const trustedSender = (id: number) => ({
+    senderFrame: { url: "app://daintree/" },
+    sender: { id },
+  });
+
+  it("PLUGIN_INVOKE resolves the sender's project and active worktree into ctx", async () => {
+    mockDispatchHandler.mockResolvedValue(undefined);
+    mockGetProjectForWebContents.mockReturnValue("proj-a");
+    mockGetWindowForWebContents.mockReturnValue({ id: 42 });
+    mockGetActiveWorktreeIdForWindow.mockResolvedValue("wt-a");
+
+    await getInvokeHandler()(trustedSender(7), "acme.my-plugin", "get-data");
+
+    expect(mockGetActiveWorktreeIdForWindow).toHaveBeenCalledWith(42);
+    expect(mockDispatchHandler.mock.calls[0][2]).toEqual({
+      projectId: "proj-a",
+      worktreeId: "wt-a",
+      webContentsId: 7,
+      pluginId: "acme.my-plugin",
+    });
+  });
+
+  it("PLUGIN_INVOKE passes an undefined windowId when the sender has no window", async () => {
+    mockDispatchHandler.mockResolvedValue(undefined);
+    mockGetProjectForWebContents.mockReturnValue("proj-a");
+    mockGetWindowForWebContents.mockReturnValue(null);
+
+    await getInvokeHandler()(trustedSender(7), "acme.my-plugin", "get-data");
+
+    // Never a guessed window — the service is asked for `undefined` and
+    // answers null rather than widening to a cross-project aggregate.
+    expect(mockGetActiveWorktreeIdForWindow).toHaveBeenCalledWith(undefined);
+    expect(mockDispatchHandler.mock.calls[0][2]).toMatchObject({
+      projectId: "proj-a",
+      worktreeId: null,
+    });
+  });
+
+  it("PLUGIN_INVOKE nulls the worktree when the sender's project rebinds mid-lookup", async () => {
+    mockDispatchHandler.mockResolvedValue(undefined);
+    mockGetWindowForWebContents.mockReturnValue({ id: 42 });
+    // Pinned at entry as proj-a; by the time the worktree lookup resolves the
+    // window has been rebound to proj-b. The worktree belongs to proj-b, so
+    // pairing it with proj-a would reintroduce exactly the cross-project
+    // mismatch #11297 is about.
+    mockGetProjectForWebContents.mockReturnValueOnce("proj-a").mockReturnValue("proj-b");
+    mockGetActiveWorktreeIdForWindow.mockResolvedValue("wt-b");
+
+    await getInvokeHandler()(trustedSender(7), "acme.my-plugin", "get-data");
+
+    expect(mockDispatchHandler.mock.calls[0][2]).toEqual({
+      projectId: "proj-a",
+      worktreeId: null,
+      webContentsId: 7,
+      pluginId: "acme.my-plugin",
+    });
+  });
+
+  it("PLUGIN_INVOKE keeps the worktree when the sender's project is unchanged", async () => {
+    mockDispatchHandler.mockResolvedValue(undefined);
+    mockGetWindowForWebContents.mockReturnValue({ id: 42 });
+    mockGetProjectForWebContents.mockReturnValue("proj-a");
+    mockGetActiveWorktreeIdForWindow.mockResolvedValue("wt-a");
+
+    await getInvokeHandler()(trustedSender(7), "acme.my-plugin", "get-data");
+
+    expect(mockDispatchHandler.mock.calls[0][2]).toMatchObject({
+      projectId: "proj-a",
+      worktreeId: "wt-a",
     });
   });
 

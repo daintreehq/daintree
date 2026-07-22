@@ -61,6 +61,9 @@ export interface PluginViewContentProps {
    * the button is not rendered.
    */
   onRequestClose?: () => void;
+  /** The worktree owning the panel instance, forwarded to the view as
+   * `PanelViewProps.worktreeId` so it can reconstruct its own context (#11297). */
+  worktreeId?: string;
 }
 
 /**
@@ -240,7 +243,12 @@ export function makePluginViewContent(
     return null;
   }
 
-  function PluginViewContent({ panelId, initialArgs, onRequestClose }: PluginViewContentProps) {
+  function PluginViewContent({
+    panelId,
+    initialArgs,
+    onRequestClose,
+    worktreeId,
+  }: PluginViewContentProps) {
     // Store the lazy component in state so retries can swap in a fresh ref
     // without a useMemo dependency array. Each `lazy()` wrapper caches its
     // import result on its own payload, so a chunk-load failure is sticky for
@@ -364,6 +372,7 @@ export function makePluginViewContent(
                 disposeSignal={controller.signal}
                 panelRemovedSignal={panelRemovedSignal}
                 initialArgs={initialArgs}
+                worktreeId={worktreeId}
               />
               <PluginViewMountReporter panelId={panelId} />
             </ContentFadeIn>

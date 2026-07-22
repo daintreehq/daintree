@@ -144,6 +144,21 @@ export function registerPanelCoreActions(
         throw new Error(`"${kind}" is not a registered plugin panel kind`);
       }
 
+      // A supplied worktreeId must belong to the dispatching renderer's own
+      // project. This action runs in the invoking project's V8 context, so
+      // `getWorktrees()` is already the right scope. Without the check a
+      // cross-project id is persisted verbatim onto the panel, which then
+      // spawns under a project the user isn't looking at and reads as "the
+      // command did nothing" (#11297). Reject rather than silently substituting
+      // the active worktree: a caller that named the wrong worktree wants to
+      // know, and a silent fallback is exactly the class of bug #7880 banned.
+      // An empty worktree list (project still loading) means membership can't
+      // be established, so it rejects too — bypassing the check there would
+      // re-admit arbitrary ids through the one window where it matters.
+      if (worktreeId !== undefined && !callbacks.getWorktrees().some((w) => w.id === worktreeId)) {
+        throw new Error(`Worktree "${worktreeId}" does not belong to the current project`);
+      }
+
       const state = usePanelStore.getState();
       const targetWorktreeId = worktreeId ?? callbacks.getActiveWorktreeId();
 

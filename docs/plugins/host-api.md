@@ -249,7 +249,8 @@ if (active) {
   console.log(active.name, active.branch, active.path);
 }
 
-// All worktrees across all projects
+// All worktrees in the project the plugin is acting on behalf of — the one
+// shown in the focused window. Empty when no window resolves (#11297).
 const all = await host.getWorktrees();
 
 // Subscribe to changes (await the disposer — the subscription methods are async)

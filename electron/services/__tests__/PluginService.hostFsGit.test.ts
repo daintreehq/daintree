@@ -26,6 +26,31 @@ vi.mock("../ProjectStore.js", () => ({
   },
 }));
 
+// `${worktree}` / `${project}` allowlist tokens expand from worktree snapshots,
+// which are now fetched scoped to the window the plugin is acting for (#11297).
+// With no resolvable window the fetch returns empty and every token-rooted path
+// is denied — correct in production (an unresolvable window must not widen the
+// allowlist), but these tests need a window to stand in for the visible one.
+const windowScopeMock = vi.hoisted(() => ({
+  /** Set to false to simulate "no renderer resolves" — see the deny test. */
+  hasActiveView: true,
+}));
+vi.mock("../../window/windowRef.js", () => ({
+  getWindowRegistry: vi.fn(() => null),
+  getProjectViewManager: vi.fn(() =>
+    windowScopeMock.hasActiveView
+      ? { getActiveView: () => ({ webContents: { id: 99, isDestroyed: () => false } }) }
+      : null
+  ),
+  setWindowRegistry: vi.fn(),
+  setMainWindow: vi.fn(),
+  getMainWindow: vi.fn(() => null),
+  setProjectViewManager: vi.fn(),
+}));
+vi.mock("../../window/webContentsRegistry.js", () => ({
+  getWindowForWebContents: vi.fn(() => ({ id: 1 })),
+}));
+
 const appendSpy = vi.fn();
 vi.mock("../PluginActionAuditService.js", () => ({
   getPluginActionAuditService: () => ({ append: appendSpy }),
@@ -270,6 +295,25 @@ describe("host.git capability gating + commit safeguard", () => {
 });
 
 describe("host.fs ${worktree}/${project} token expansion", () => {
+  afterEach(() => {
+    windowScopeMock.hasActiveView = true;
+  });
+
+  it("denies a token-rooted path when no window resolves (#11297)", async () => {
+    // Window scoping only ever narrows: with no resolvable renderer the
+    // snapshot fetch is empty, the token can't expand, and the entry drops so
+    // containment denies (#9492). It must never fall back to the cross-project
+    // aggregate, which could root the token in a project the user isn't in.
+    const worktree = join(baseDir, "wt-unscoped");
+    await fs.mkdir(worktree, { recursive: true });
+    setWorktrees([{ path: worktree, isCurrent: true }]);
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], ["${worktree}"]);
+
+    windowScopeMock.hasActiveView = false;
+
+    await expect(host.fs.readFile(join(worktree, "note.txt"))).rejects.toThrow(/PATH_NOT_ALLOWED/);
+  });
+
   it("expands ${worktree} to the active worktree and contains within it", async () => {
     const worktree = join(baseDir, "wt-feature");
     await fs.mkdir(worktree, { recursive: true });

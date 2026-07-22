@@ -82,6 +82,10 @@ import type {
 import type { IpcContext } from "../types.js";
 import type { ToolbarButtonConfig } from "../../../shared/config/toolbarButtonRegistry.js";
 import { assertIpcSecurityReady } from "../ipcGuard.js";
+import {
+  getProjectForWebContents,
+  getWindowForWebContents,
+} from "../../window/webContentsRegistry.js";
 
 type PluginServiceSingleton = typeof PluginServiceModule.pluginService;
 
@@ -1187,6 +1191,14 @@ export function registerPluginHandlers(): () => void {
     CHANNELS.PLUGIN_INVOKE,
     async (event, pluginId: string, channel: string, ...args: unknown[]) => {
       const start = Date.now();
+      // Pin the sender's scope synchronously, before any await: a project view
+      // can be evicted (LRU, under memory pressure) or rebound to another
+      // project while the dispatch is in flight, taking its registry binding
+      // with it. Resolved here, the context always describes the renderer that
+      // actually made the call.
+      const senderWebContentsId = event.sender.id;
+      const senderProjectId = getProjectForWebContents(senderWebContentsId);
+      const senderWindowId = getWindowForWebContents(event.sender)?.id;
       const senderUrl = event.senderFrame?.url;
       if (!senderUrl || !isTrustedRendererUrl(senderUrl)) {
         // Trust check rejected — args are attacker-controlled and unvalidated,
@@ -1210,14 +1222,32 @@ export function registerPluginHandlers(): () => void {
         });
         throw new Error(`plugin:invoke rejected: untrusted sender (url=${senderUrl ?? "unknown"})`);
       }
-      const ctx: PluginIpcContext = {
-        projectId: null,
-        worktreeId: null,
-        webContentsId: event.sender.id,
-        pluginId,
-      };
       try {
-        return await (await getPluginService()).dispatchHandler(pluginId, channel, ctx, args);
+        const service = await getPluginService();
+        // Resolving the worktree needs a round-trip to the workspace host, so
+        // it can't be pinned synchronously like the ids above.
+        // `getActiveWorktreeIdForWindow` swallows its own failures — a wedged
+        // workspace host degrades the context to null rather than failing the
+        // invocation it sits in front of.
+        let worktreeId = await service.getActiveWorktreeIdForWindow(senderWindowId);
+        // The window id survives a project switch, so a rebind during the await
+        // would pair the sender's projectId with the *replacement* project's
+        // worktree. Snapshots carry no project id to filter on, so re-check the
+        // binding instead and drop to null on a mismatch: a null worktree is
+        // honest, a cross-project one is the bug this fixes.
+        if (
+          worktreeId !== null &&
+          getProjectForWebContents(senderWebContentsId) !== senderProjectId
+        ) {
+          worktreeId = null;
+        }
+        const ctx: PluginIpcContext = {
+          projectId: senderProjectId,
+          worktreeId,
+          webContentsId: senderWebContentsId,
+          pluginId,
+        };
+        return await service.dispatchHandler(pluginId, channel, ctx, args);
       } catch (err) {
         // A throwing plugin handler is already audited at the dispatch
         // boundary (#10463); recording it again here would double-count the
