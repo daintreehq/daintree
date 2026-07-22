@@ -18,6 +18,15 @@ describe("agentIcons", () => {
     expect(fallback).toBe(resolveAgentIcon("claude"));
   });
 
+  it.each(["toString", "constructor", "hasOwnProperty", "valueOf", "__proto__"])(
+    "treats the inherited key %s as an unknown iconId",
+    (iconId) => {
+      // `iconId` reaches here from plugin manifests; a bare index lookup would
+      // return an `Object.prototype` member and render it as a component.
+      expect(resolveAgentIcon(iconId)).toBe(resolveAgentIcon("claude"));
+    }
+  );
+
   it("AGENT_ICON_MAP contains all expected agent icons", () => {
     expect(AGENT_ICON_MAP["claude"]).toBeDefined();
     expect(AGENT_ICON_MAP["gemini"]).toBeDefined();

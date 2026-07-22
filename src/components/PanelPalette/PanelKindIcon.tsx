@@ -1,29 +1,7 @@
-import {
-  SquareTerminal,
-  Globe,
-  FileText,
-  Monitor,
-  MonitorPlay,
-  StickyNote,
-  Puzzle,
-  LucideIcon,
-} from "lucide-react";
 import { cn } from "@/lib/utils";
-import { BrandMark, DaintreeIcon, FolderGit2 } from "@/components/icons";
+import { BrandMark } from "@/components/icons";
+import { DEFAULT_PANEL_ICON, resolvePluginIcon } from "@/components/icons/pluginIconRegistry";
 import { getAgentConfig } from "@/config/agents";
-import type { ComponentType } from "react";
-
-const ICON_MAP: Record<string, LucideIcon | ComponentType<Record<string, unknown>>> = {
-  terminal: SquareTerminal,
-  globe: Globe,
-  "file-text": FileText,
-  "git-branch": FolderGit2,
-  monitor: Monitor,
-  "monitor-play": MonitorPlay,
-  "sticky-note": StickyNote,
-  daintree: DaintreeIcon,
-  puzzle: Puzzle,
-};
 
 export interface PanelKindIconProps {
   iconId: string;
@@ -44,7 +22,9 @@ export function PanelKindIcon({ iconId, color, size = 16, className }: PanelKind
     );
   }
 
-  const Icon = ICON_MAP[iconId] ?? SquareTerminal;
+  // Panel chrome also renders built-ins and resume entries, so an unknown id
+  // falls back to the terminal glyph rather than the plugin package one.
+  const Icon = resolvePluginIcon(iconId, DEFAULT_PANEL_ICON);
   return (
     <Icon
       style={color ? { color } : undefined}

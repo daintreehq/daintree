@@ -1,19 +1,51 @@
-import {
-  SquareTerminal,
-  Globe,
-  MonitorPlay,
-  GitPullRequest,
-  FileText,
-  FileDiff,
-  FolderTree,
-} from "lucide-react";
 import { useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { BrandMark } from "@/components/icons";
+import {
+  DEFAULT_PANEL_ICON,
+  getPluginIconComponent,
+  PLUGIN_ICON_COMPONENTS,
+  PLUGIN_ICON_IDS,
+  type PluginIconId,
+} from "@/components/icons/pluginIconRegistry";
 import type { PanelKind } from "@/types";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import { resolveTerminalRunIcon } from "./terminalRunIconRegistry";
 import type { ReactNode } from "react";
+
+/** Built-in panel kinds pin their glyph regardless of the chrome's `iconId`. */
+const KIND_ICON_ID: Partial<Record<PanelKind, PluginIconId>> = {
+  browser: "globe",
+  "dev-preview": "monitor-play",
+  review: "git-pull-request",
+  file: "file-text",
+  diff: "file-diff",
+  "file-browser": "folder-tree",
+};
+
+/**
+ * Ids that carry a category color in panel chrome. Everything else in the
+ * registry renders neutral — the color is the panel-kind signal, not the icon.
+ */
+const SEMANTIC_ICON_CLASS: Partial<Record<PluginIconId, string>> = {
+  globe: "text-status-info",
+  monitor: "text-status-info",
+  "monitor-play": "text-status-info",
+  "git-pull-request": "text-category-violet",
+  "file-text": "text-category-amber",
+  "file-diff": "text-category-green",
+  "folder-tree": "text-category-cyan",
+};
+
+/**
+ * Narrows a manifest-supplied id to one that carries a category color.
+ * `Object.hasOwn` rather than `in`: `iconId` is untrusted manifest input, and
+ * `in` would match inherited keys like `toString`.
+ */
+function semanticId(iconId: string | null | undefined): PluginIconId | undefined {
+  if (!iconId || !Object.hasOwn(SEMANTIC_ICON_CLASS, iconId)) return undefined;
+  return PLUGIN_ICON_IDS.find((id) => id === iconId);
+}
 
 export interface TerminalIconProps {
   kind?: PanelKind;
@@ -68,52 +100,18 @@ export function TerminalIcon({
     </span>
   );
 
-  // Browser panes get a globe icon
-  if (kind === "browser" || resolvedChrome.iconId === "globe") {
+  // A built-in kind pins its glyph; otherwise the chrome's own id selects one.
+  // Both resolve through the shared registry, so an id renders the same glyph
+  // here as it does in the panel palette.
+  const semanticIconId =
+    (kind ? KIND_ICON_ID[kind] : undefined) ?? semanticId(resolvedChrome.iconId);
+  if (semanticIconId) {
+    const SemanticIcon = PLUGIN_ICON_COMPONENTS[semanticIconId];
     return withIconMarker(
-      <Globe {...finalProps} className={cn(finalProps.className, "text-status-info")} />
-    );
-  }
-
-  // Dev preview panes get a monitor-play icon
-  if (
-    kind === "dev-preview" ||
-    resolvedChrome.iconId === "monitor-play" ||
-    resolvedChrome.iconId === "monitor"
-  ) {
-    return withIconMarker(
-      <MonitorPlay {...finalProps} className={cn(finalProps.className, "text-status-info")} />
-    );
-  }
-
-  // Review panes get a git-pull-request icon
-  if (kind === "review" || resolvedChrome.iconId === "git-pull-request") {
-    return withIconMarker(
-      <GitPullRequest
+      <SemanticIcon
         {...finalProps}
-        className={cn(finalProps.className, "text-category-violet")}
+        className={cn(finalProps.className, SEMANTIC_ICON_CLASS[semanticIconId])}
       />
-    );
-  }
-
-  // File panes get a file-text icon
-  if (kind === "file" || resolvedChrome.iconId === "file-text") {
-    return withIconMarker(
-      <FileText {...finalProps} className={cn(finalProps.className, "text-category-amber")} />
-    );
-  }
-
-  // File browser panes get a folder-tree icon
-  if (kind === "file-browser" || resolvedChrome.iconId === "folder-tree") {
-    return withIconMarker(
-      <FolderTree {...finalProps} className={cn(finalProps.className, "text-category-cyan")} />
-    );
-  }
-
-  // Diff panes get a file-diff icon
-  if (kind === "diff" || resolvedChrome.iconId === "file-diff") {
-    return withIconMarker(
-      <FileDiff {...finalProps} className={cn(finalProps.className, "text-category-green")} />
     );
   }
 
@@ -131,6 +129,15 @@ export function TerminalIcon({
     );
   }
 
+  // Any other registered id renders neutrally — this is what plugin-contributed
+  // panels reach, and it's why `puzzle`/`git-branch`/`sticky-note` no longer
+  // fall through to the terminal glyph the way the old id conditionals did.
+  const RegisteredIcon = getPluginIconComponent(resolvedChrome.iconId);
+  if (RegisteredIcon) {
+    return withIconMarker(<RegisteredIcon {...finalProps} />);
+  }
+
   // Fallback to generic terminal icon
-  return withIconMarker(<SquareTerminal {...finalProps} />, "terminal");
+  const FallbackIcon = DEFAULT_PANEL_ICON;
+  return withIconMarker(<FallbackIcon {...finalProps} />, "terminal");
 }

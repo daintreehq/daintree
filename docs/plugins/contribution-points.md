@@ -140,12 +140,18 @@ Panels are full-sized workspaces in Daintree's grid (alongside terminal panels, 
 | --- | --- | --- |
 | `id` | yes | Namespaced at runtime as `{pluginId}.{id}`. |
 | `name` | yes | Display label in the panel header and palette. |
-| `iconId` | yes | Must match a registered icon ID — see the icon registry in `src/components/icons/`. |
+| `iconId` | yes | One of the shared plugin icon IDs listed in `shared/config/pluginIconIds.ts`. An unrecognized ID falls back to the generic terminal glyph on panel surfaces; `daintree-plugin validate` warns about it. |
 | `color` | yes | HSL string used for the panel tab accent. |
 | `hasPty` | no | `false` (default) for UI-only panels. `true` is reserved for PTY-backed panels, not available to plugins in v1. |
 | `canRestart` | no | Show a "restart" control in the panel header. |
 | `canConvert` | no | Allow conversion between compatible panel kinds. Rarely useful for plugins. |
 | `showInPalette` | no | Include in the "New Panel…" palette. Default `true`. |
+
+**Icon IDs** — one shared set backs every surface that renders a plugin icon (the panel palette, panel headers, tabs, the dock, toolbar buttons, and the toolbar overflow menu), so an ID looks the same everywhere it appears:
+
+`terminal`, `package`, `puzzle`, `globe`, `monitor`, `monitor-play`, `file-text`, `file-diff`, `folder-tree`, `git-branch`, `git-pull-request`, `sticky-note`, `gauge`, `list`, `sparkles`, `layout-panel-top`, `daintree`
+
+`shared/config/pluginIconIds.ts` is authoritative — run `daintree-plugin validate` to check a manifest against the set your installed host actually ships. Panel `iconId` also accepts a built-in agent ID (e.g. `claude`) to render that agent's brand mark.
 
 **Component registration** is covered by the **views** contribution point below — panels declare the slot, views provide the component.
 
@@ -162,10 +168,8 @@ Views are the React components that render inside a panel. A view binds to a pan
     "views": [
       {
         "id": "dashboard",
-        "name": "Cost Dashboard",
         "componentPath": "./dist/dashboard.js",
-        "location": "panel",
-        "iconId": "gauge"
+        "location": "panel"
       }
     ]
   }
@@ -179,11 +183,11 @@ Views are the React components that render inside a panel. A view binds to a pan
 | Field | Required | Notes |
 | --- | --- | --- |
 | `id` | yes | Matches the panel `id` it provides a component for. Namespaced at runtime as `{pluginId}.{id}`. |
-| `name` | yes | Display label, also used in the loading skeleton's accessible label. |
 | `componentPath` | yes | POSIX-relative path to an ESM module inside the plugin. The module's default export is a React component. Absolute paths, URL schemes, and `..` segments are rejected at manifest validation. |
 | `location` | yes | `"panel"` (docked in the grid). `"sidebar"` is rejected at manifest validation — the sidebar host does not exist yet. |
-| `iconId` | no | Override the panel's icon for this view. |
-| `description` | no | Surface text for palette/preferences. |
+| `iconId` | no | Accepted for compatibility but **ignored at runtime** — the matching `contributes.panels` entry owns the rendered icon. Set it there instead. |
+
+The view schema is strict and carries no `name` or `description`: the matching panel is the single source of truth for a view's display metadata, so those fields were removed (#10888) rather than validate values the runtime ignores.
 
 **Bundling** — plugin views ship as **pre-built ESM modules**. You don't compile TypeScript or JSX at plugin-load time. `@daintreehq/plugin-vite` produces the bundle with the correct externals for React 19 sharing. See [Architecture → Renderer host](./architecture.md#renderer-host) for the internals.
 
@@ -301,7 +305,7 @@ Toolbar buttons dispatch an existing action from the main toolbar.
 | --- | --- | --- |
 | `id` | yes | Namespaced at runtime as `{pluginId}.{id}` — matches the convention used by every other contribution surface. |
 | `label` | yes | Hover tooltip. |
-| `iconId` | yes | Registered icon ID. |
+| `iconId` | yes | One of the shared plugin icon IDs listed in `shared/config/pluginIconIds.ts` — the same set panels use. An unrecognized ID falls back to a generic package glyph; `daintree-plugin validate` warns about it. Agent brand IDs (e.g. `claude`) don't resolve here. |
 | `actionId` | yes | Fully-qualified action ID, including plugin namespace. Built-in actions (e.g. `terminal.new`) also work. |
 | `priority` | no | `1`–`5`, lower = earlier in sort order. Default `3`. |
 
@@ -619,7 +623,7 @@ Teaches Daintree about a launchable agent CLI it doesn't ship in-tree, so the CL
         "command": "acme",
         "args": ["--interactive"],
         "color": "#3366ff",
-        "iconId": "terminal",
+        "iconId": "claude",
         "supportsContextInjection": true
       }
     ]
@@ -636,7 +640,7 @@ Teaches Daintree about a launchable agent CLI it doesn't ship in-tree, so the CL
 | `command` | yes | CLI binary to launch. Same safe-id pattern as `id` (no shell metacharacters). Supports `${settings:settingId}` — see below. |
 | `args` | no | Default launch arguments (≤20 entries; no control characters). Supports `${settings:settingId}` — see below. |
 | `color` | yes | Brand color as a 6-digit hex (`#rrggbb`). |
-| `iconId` | yes | Icon id used for the agent. |
+| `iconId` | yes | **A different namespace from panel/toolbar icon IDs** — agents render bundled brand marks, so this must name one of Daintree's built-in agent IDs (`claude`, `codex`, `gemini`, …). A panel icon ID like `terminal` doesn't resolve here; unrecognized values silently fall back to the Claude mark. Shipping a custom icon asset isn't supported yet. |
 | `supportsContextInjection` | no | Whether copy-tree context injection targets this agent. Defaults to `false`. |
 
 A plugin agent is launchable and selectable as a named entry in the effective registry. It launches as a named terminal. Without a `detection` block it runs as a plain named terminal whose working/waiting state Daintree doesn't track; declare `detection` (below) to wire it into the agent-state UI like a built-in agent.

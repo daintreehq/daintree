@@ -691,7 +691,11 @@ export function getEffectiveAgentIds(): string[] {
 }
 
 export function getEffectiveAgentConfig(agentId: string): AgentConfig | undefined {
-  return getEffectiveRegistry()[agentId];
+  // Own-key check to match `isEffectivelyRegisteredAgent` below: `agentId` can
+  // come from a plugin manifest, and a bare index would return an inherited
+  // `Object.prototype` member (e.g. `toString`) as a truthy "config".
+  const registry = getEffectiveRegistry();
+  return Object.hasOwn(registry, agentId) ? registry[agentId] : undefined;
 }
 
 export function isEffectivelyRegisteredAgent(agentId: string): boolean {
@@ -699,7 +703,9 @@ export function isEffectivelyRegisteredAgent(agentId: string): boolean {
 }
 
 export function isBuiltInAgent(agentId: string): boolean {
-  return agentId in AGENT_REGISTRY;
+  // Own-key check: a user agent legitimately named `toString` passes the
+  // safe-id rules, and `in` would falsely reject it as a built-in.
+  return Object.hasOwn(AGENT_REGISTRY, agentId);
 }
 
 export function getAgentModelConfig(

@@ -2,11 +2,50 @@
 import { describe, expect, it } from "vitest";
 import { render } from "@testing-library/react";
 import { TerminalIcon } from "../TerminalIcon";
-import { deriveTerminalChrome } from "@/utils/terminalChrome";
+import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
+import {
+  PLUGIN_ICON_COMPONENTS,
+  PLUGIN_ICON_IDS,
+  type PluginIconId,
+} from "@/components/icons/pluginIconRegistry";
 
 function renderDefaultTerminalIcon(): string {
   return render(<TerminalIcon kind="terminal" chrome={deriveTerminalChrome()} />).container
     .innerHTML;
+}
+
+/** A plugin-panel chrome descriptor carrying an explicit `iconId`. */
+function pluginChrome(iconId: string): TerminalChromeDescriptor {
+  return {
+    iconId,
+    label: "Plugin panel",
+    isAgent: false,
+    agentId: null,
+    processId: null,
+    runtimeKind: "panel",
+    hasExited: false,
+  };
+}
+
+function renderIcon(iconId: string): string {
+  return render(<TerminalIcon chrome={pluginChrome(iconId)} />).container.innerHTML;
+}
+
+/**
+ * The rendered glyph's own geometry, excluding the wrapper's `data-terminal-*`
+ * markers and the svg's semantic color class. Comparing full `innerHTML` would
+ * make any two ids differ purely because the marker carries the id, so a
+ * renderer that drew the same glyph for everything would still look "distinct".
+ */
+function glyph(iconId: string): string {
+  return render(<TerminalIcon chrome={pluginChrome(iconId)} />).container.querySelector("svg")!
+    .innerHTML;
+}
+
+/** The same glyph rendered straight from the registry, as the oracle. */
+function registryGlyph(id: PluginIconId): string {
+  const Icon = PLUGIN_ICON_COMPONENTS[id];
+  return render(<Icon />).container.querySelector("svg")!.innerHTML;
 }
 
 describe("TerminalIcon", () => {
@@ -179,5 +218,103 @@ describe("TerminalIcon", () => {
     const generic = renderDefaultTerminalIcon();
 
     expect(stickyExited).toBe(generic);
+  });
+
+  describe("shared plugin icon registry (#11298)", () => {
+    it.each(PLUGIN_ICON_IDS)("draws %s from the shared registry", (id) => {
+      // Comparing against the registry's own output — not merely "different
+      // from the fallback" — is what proves this renderer stopped keeping its
+      // own map. A renderer drawing the wrong-but-distinct glyph fails here.
+      expect(glyph(id)).toBe(registryGlyph(id));
+    });
+
+    it("renders ids that used to fall through to the terminal glyph", () => {
+      // These lived only in the palette's map, so panel headers, tabs, and the
+      // dock all showed a terminal icon for them instead.
+      const fallback = glyph("no-such-icon");
+      for (const id of ["puzzle", "git-branch", "sticky-note", "daintree", "gauge"] as const) {
+        expect(glyph(id), `"${id}" still falls back`).not.toBe(fallback);
+      }
+    });
+
+    it("gives monitor and monitor-play different glyphs", () => {
+      // The old id conditionals aliased both onto MonitorPlay.
+      expect(glyph("monitor")).not.toBe(glyph("monitor-play"));
+    });
+
+    it.each([
+      ["globe", "text-status-info"],
+      ["monitor", "text-status-info"],
+      ["monitor-play", "text-status-info"],
+      ["git-pull-request", "text-category-violet"],
+      ["file-text", "text-category-amber"],
+      ["file-diff", "text-category-green"],
+    ])("keeps %s's category color", (id, colorClass) => {
+      expect(renderIcon(id)).toContain(colorClass);
+    });
+
+    it("renders non-semantic registry ids with no color class at all", () => {
+      // Narrower than excluding `text-category-`: an errant `text-status-info`
+      // on a neutral id would slip past that.
+      expect(renderIcon("puzzle")).not.toMatch(/text-(category|status)-/);
+    });
+
+    it.each([
+      ["browser", "globe"],
+      ["dev-preview", "monitor-play"],
+      ["review", "git-pull-request"],
+      ["file", "file-text"],
+      ["diff", "file-diff"],
+    ] as const)("lets kind=%s pin its glyph over a conflicting icon id", (kind, expectedId) => {
+      const pinned = render(
+        <TerminalIcon kind={kind} chrome={pluginChrome("puzzle")} />
+      ).container.querySelector("svg")!.innerHTML;
+
+      expect(pinned).toBe(registryGlyph(expectedId));
+      expect(pinned).not.toBe(glyph("puzzle"));
+    });
+
+    it("still resolves agent brand icons ahead of the generic registry", () => {
+      // `claude` is not a registry id — it must reach the brand-icon path.
+      const agent = render(
+        <TerminalIcon chrome={deriveTerminalChrome({ detectedAgentId: "claude" })} />
+      ).container.innerHTML;
+
+      expect(agent).not.toBe(renderIcon("no-such-icon"));
+      expect(agent).toContain("<svg");
+    });
+
+    it("resolves an agent whose registry id differs from its icon id", () => {
+      // `daintree-assistant` registers under that id but its brand mark is
+      // keyed `daintreeassistant`. The palette accepted the registry id via
+      // `getAgentConfig` while headers/tabs fell back to the terminal glyph.
+      expect(glyph("daintree-assistant")).toBe(glyph("daintreeassistant"));
+      expect(glyph("daintree-assistant")).not.toBe(glyph("no-such-icon"));
+    });
+
+    it("treats inherited object keys as unknown ids", () => {
+      // `iconId` is untrusted manifest input; a bare `in`/index lookup would
+      // resolve these to functions off Object.prototype.
+      const fallback = glyph("no-such-icon");
+      for (const id of ["toString", "constructor", "hasOwnProperty", "__proto__"]) {
+        expect(glyph(id), `"${id}" leaked an inherited value`).toBe(fallback);
+      }
+    });
+
+    it("marks an unknown id as the terminal fallback", () => {
+      const { container } = render(<TerminalIcon chrome={pluginChrome("no-such-icon")} />);
+
+      expect(
+        container.querySelector("[data-terminal-icon-id]")?.getAttribute("data-terminal-icon-id")
+      ).toBe("terminal");
+    });
+
+    it("keeps the author's id on the marker when the glyph resolves", () => {
+      const { container } = render(<TerminalIcon chrome={pluginChrome("puzzle")} />);
+
+      expect(
+        container.querySelector("[data-terminal-icon-id]")?.getAttribute("data-terminal-icon-id")
+      ).toBe("puzzle");
+    });
   });
 });
