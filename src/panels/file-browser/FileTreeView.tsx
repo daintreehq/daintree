@@ -122,8 +122,10 @@ export function FileTreeView({
       tabIndex={0}
       onKeyDown={handleKeyDown}
       onPointerDown={handlePointerDown}
-      // No `outline-none`: the global `*:focus-visible` ring is the only focus
-      // indicator this container gets, and the rows themselves never take focus.
+      // Focus styling is deliberately left to the global `*:focus-visible`
+      // ring: this container is the tree's only focus target (rows are
+      // virtualized and never take focus), so suppressing its outline would
+      // leave keyboard navigation with no visible anchor at all.
       className="h-full min-h-0 w-full overflow-hidden"
     >
       <Virtuoso<FlatTreeRow, TreeContext>
