@@ -111,6 +111,10 @@ vi.mock("../plugin-capability/instances.js", () => ({
 
 import { PluginService } from "../PluginService.js";
 import { packPluginArchive } from "../PluginArchive.js";
+// Namespace import so the extraction-deadline path can be forced via a spy —
+// reproducing a real 120s trickle in a unit test isn't practical.
+import * as PluginArchive from "../PluginArchive.js";
+import { pluginInstallJobs } from "../plugin/PluginInstallJobRegistry.js";
 import { resilientRename } from "../../utils/fs.js";
 import { PluginBlocklistService } from "../plugin/PluginBlocklistService.js";
 
@@ -226,6 +230,98 @@ describe("installPlugin — happy path", () => {
     expect(entries.filter((e) => e.startsWith(".install-tmp-"))).toHaveLength(0);
     expect(entries.filter((e) => e.includes(".old-"))).toHaveLength(0);
     expect(entries).toContain("acme.clean");
+
+    service.dispose();
+  });
+});
+
+// #11302: an install can now be given up on. The guarantee that matters is not
+// just that it stops — it's that stopping leaves the plugins root exactly as it
+// was and, critically, releases `install.lock` so the very next install works.
+// A cancel that stranded the lock would be worse than the silent install it
+// replaced. These run against the real lockfile and a real archive.
+describe("installPlugin — cancellation (#11302)", () => {
+  it("returns cancelled, writes nothing, and frees the lock for the next install", async () => {
+    const archive = await makeArchive(
+      { name: "acme.cancelled", version: "1.0.0" },
+      { "dist/index.js": "module.exports = {};" }
+    );
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const jobId = "cancel-me";
+
+    pluginInstallJobs.begin(jobId, () => {});
+    // Cancel before the installer reaches its first checkpoint, which is the
+    // point right after the lock is acquired — proper-lockfile can't be
+    // interrupted, so that checkpoint is the earliest a cancel can be honoured.
+    pluginInstallJobs.cancel(jobId);
+    const result = await service.installPlugin(archive, { jobId });
+    pluginInstallJobs.end(jobId);
+
+    expect(result).toEqual({ status: "cancelled" });
+    expect(await exists(path.join(pluginsRoot, "acme.cancelled"))).toBe(false);
+    const entries = await fs.readdir(pluginsRoot);
+    expect(entries.filter((e) => e.startsWith(".install-tmp-"))).toHaveLength(0);
+
+    // The real proof the lock was released: a second install through the same
+    // root succeeds instead of timing out on a stranded `install.lock`.
+    const followUp = await service.installPlugin(archive);
+    expect(followUp).toEqual({ status: "installed", pluginId: "acme.cancelled" });
+
+    service.dispose();
+  });
+
+  it("cancels mid-extraction and still leaves no staging directory behind", async () => {
+    const archive = await makeArchive(
+      { name: "acme.midcancel", version: "1.0.0" },
+      { "dist/index.js": "module.exports = {};" }
+    );
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const jobId = "cancel-mid";
+
+    // Cancel the instant extraction reports its first entry, so the abort lands
+    // inside `extractPluginArchive` rather than at a checkpoint between steps.
+    pluginInstallJobs.begin(jobId, (event) => {
+      if (event.phase === "extracting") pluginInstallJobs.cancel(jobId);
+    });
+    const result = await service.installPlugin(archive, { jobId });
+    pluginInstallJobs.end(jobId);
+
+    expect(result).toEqual({ status: "cancelled" });
+    expect(await exists(path.join(pluginsRoot, "acme.midcancel"))).toBe(false);
+    const entries = await fs.readdir(pluginsRoot);
+    expect(entries.filter((e) => e.startsWith(".install-tmp-"))).toHaveLength(0);
+
+    service.dispose();
+  });
+
+  it("reports extraction_timeout, not archive_invalid, when the deadline trips", async () => {
+    // A slow source is not a corrupt archive — the codes drive different advice.
+    const archive = await makeArchive({ name: "acme.slowpoke", version: "1.0.0" });
+    const service = new PluginService(pluginsRoot, "0.0.0");
+
+    const extractSpy = vi
+      .spyOn(PluginArchive, "extractPluginArchive")
+      .mockRejectedValueOnce(new PluginArchive.PluginArchiveDeadlineError("too slow"));
+
+    const result = await service.installPlugin(archive);
+    expect(result.status).toBe("failed");
+    if (result.status === "failed") {
+      expect(result.errors[0]?.code).toBe("extraction_timeout");
+    }
+    expect(await exists(path.join(pluginsRoot, "acme.slowpoke"))).toBe(false);
+
+    extractSpy.mockRestore();
+    service.dispose();
+  });
+
+  it("installs normally when no job is registered for the supplied id", async () => {
+    // A stale jobId (its registration already torn down) must not wedge the
+    // install — the registry is advisory, never a gate.
+    const archive = await makeArchive({ name: "acme.nojob", version: "1.0.0" });
+    const service = new PluginService(pluginsRoot, "0.0.0");
+
+    const result = await service.installPlugin(archive, { jobId: "never-registered" });
+    expect(result).toEqual({ status: "installed", pluginId: "acme.nojob" });
 
     service.dispose();
   });

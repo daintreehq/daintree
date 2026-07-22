@@ -1867,6 +1867,15 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      */
     onProvenanceChanged(callback: (payload: Record<string, never>) => void): () => void;
     /**
+     * Subscribe to phase/entry progress for installs started with a `jobId`
+     * (#11302). Only the window that started the install receives its events;
+     * filter by `jobId` anyway, since one window can start several in sequence.
+     * Returns a cleanup.
+     */
+    onInstallProgress(
+      callback: (event: import("../plugin.js").PluginInstallProgressEvent) => void
+    ): () => void;
+    /**
      * Subscribe to background update-check results (#10893). Fires with the
      * batched set of URL-installed plugins that have updates available. Returns
      * a cleanup.

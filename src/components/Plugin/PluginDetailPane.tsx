@@ -19,7 +19,10 @@ import { systemClient } from "@/clients/systemClient";
 import {
   BUILT_IN_PLUGIN_CAPABILITIES,
   type LoadedPluginInfo,
+  type PanelContribution,
+  type PluginActionContribution,
   type PluginAuthor,
+  type PluginCapability,
   type PluginInstallSource,
 } from "@shared/types/plugin";
 
@@ -39,14 +42,32 @@ const BADGE_CLASS =
   "inline-flex items-center px-1.5 py-0.5 rounded-sm text-[10px] font-medium bg-overlay-subtle border border-daintree-border/50 text-daintree-text/60 uppercase tracking-wide";
 
 /**
+ * Declared capabilities in the order {@link BUILT_IN_PLUGIN_CAPABILITIES} defines
+ * them, so the Permissions list reads the same for every plugin. Computed by the
+ * pane (not inside {@link PluginCapabilityList}) because the same emptiness that
+ * would render a bare "no permissions" line is what hides the tab entirely.
+ */
+function grantedCapabilities(plugin: LoadedPluginInfo) {
+  const declared = new Set(plugin.manifest.capabilities ?? []);
+  return BUILT_IN_PLUGIN_CAPABILITIES.filter((c) => declared.has(c));
+}
+
+/**
  * Surfaces a plugin's declared capabilities (#9556) as a labelled, risk-coloured
  * list with an effective-danger summary. Read-only — the data already rides on
  * `LoadedPluginInfo`; this only presents it so users can audit what an installed
  * plugin is allowed to do without re-opening the install dialog.
+ *
+ * Only rendered when `granted` is non-empty (#11302) — a plugin that declares no
+ * capabilities has no Permissions tab at all, so there's no empty branch here.
  */
-function PluginCapabilityList({ plugin }: { plugin: LoadedPluginInfo }) {
-  const declared = new Set(plugin.manifest.capabilities ?? []);
-  const granted = BUILT_IN_PLUGIN_CAPABILITIES.filter((c) => declared.has(c));
+function PluginCapabilityList({
+  plugin,
+  granted,
+}: {
+  plugin: LoadedPluginInfo;
+  granted: readonly PluginCapability[];
+}) {
   const allowedUrls = plugin.manifest.scopes?.network?.allowedUrls;
 
   return (
@@ -54,25 +75,87 @@ function PluginCapabilityList({ plugin }: { plugin: LoadedPluginInfo }) {
       <h4 className="text-[11px] font-medium uppercase tracking-wide text-daintree-text/40">
         Permissions
       </h4>
-      {granted.length === 0 ? (
-        <p className="text-xs text-daintree-text/40">No special permissions</p>
-      ) : (
-        <>
-          {plugin.pluginDanger === "confirm" && (
-            <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20">
-              <AlertTriangle className="w-3.5 h-3.5 text-status-warning shrink-0 mt-0.5" />
-              <p className="text-[11px] text-status-warning break-words">
-                Requests sensitive permissions — review before enabling
-              </p>
-            </div>
-          )}
-          <ul className="space-y-1.5">
-            {granted.map((capability) => (
-              <CapabilityRow key={capability} capability={capability} allowedUrls={allowedUrls} />
-            ))}
-          </ul>
-        </>
+      {plugin.pluginDanger === "confirm" && (
+        <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20">
+          <AlertTriangle className="w-3.5 h-3.5 text-status-warning shrink-0 mt-0.5" />
+          <p className="text-[11px] text-status-warning break-words">
+            Requests sensitive permissions — review before enabling
+          </p>
+        </div>
       )}
+      <ul className="space-y-1.5">
+        {granted.map((capability) => (
+          <CapabilityRow key={capability} capability={capability} allowedUrls={allowedUrls} />
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/**
+ * The commands a plugin contributes to the command palette (#11302). A minimal
+ * plugin's whole surface is often one command, and before this the Plugin
+ * Manager never named it — leaving no obvious entry point after install. Read
+ * straight off the loaded manifest; no IPC.
+ *
+ * Styled neutrally (no accent, no manifest-supplied colour): this is reference
+ * material, not a focus signal. `kind: "query"` commands are reachable by
+ * automation rather than the palette, so the hint distinguishes them. The
+ * manifest's self-declared `danger` is deliberately NOT shown — the host's
+ * `effectiveDanger` is the only authority on that, and echoing an unverified
+ * claim here would read as a host guarantee.
+ */
+function PluginContributedCommands({ commands }: { commands: PluginActionContribution[] }) {
+  return (
+    <div className="space-y-2">
+      <h4 className="text-[11px] font-medium uppercase tracking-wide text-daintree-text/40">
+        Commands
+      </h4>
+      <ul className="space-y-2">
+        {commands.map((command) => (
+          <li key={command.id} className="text-xs">
+            <div className="text-daintree-text/80">{command.title}</div>
+            {command.description && (
+              <div className="text-[11px] text-daintree-text/50 mt-0.5 break-words">
+                {command.description}
+              </div>
+            )}
+            <div className="text-[11px] text-daintree-text/40 mt-0.5">
+              {command.kind === "query"
+                ? "Available to agents and automation"
+                : "Run it from the command palette"}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/**
+ * The panel kinds a plugin contributes (#11302), so a freshly installed plugin
+ * names the panel you can open instead of leaving you to discover it. Panels
+ * hidden from the palette (`showInPalette: false`) are still listed — the plugin
+ * opens those itself — but labelled accurately so the row isn't a dead end.
+ */
+function PluginContributedPanels({ panels }: { panels: PanelContribution[] }) {
+  return (
+    <div className="space-y-2">
+      <h4 className="text-[11px] font-medium uppercase tracking-wide text-daintree-text/40">
+        Panels
+      </h4>
+      <ul className="space-y-2">
+        {panels.map((panel) => (
+          <li key={panel.id} className="text-xs">
+            <div className="text-daintree-text/80">{panel.name}</div>
+            <div className="text-[11px] text-daintree-text/40 mt-0.5">
+              {panel.showInPalette === false
+                ? "Opened by the plugin"
+                : "Open it from the new-panel menu"}
+            </div>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -174,6 +257,9 @@ export function PluginDetailPane({
   const hasSettings = (plugin.manifest.contributes.settings?.length ?? 0) > 0;
   const mcpServers = plugin.manifest.contributes.mcpServers ?? [];
   const hasMcpServers = mcpServers.length > 0;
+  const granted = grantedCapabilities(plugin);
+  const commands = plugin.manifest.contributes.commands ?? [];
+  const panels = plugin.manifest.contributes.panels ?? [];
   const [activeTab, setActiveTab] = useState<PluginDetailTab>("overview");
 
   // URL-installed plugins have an upstream to re-fetch and compare against;
@@ -188,14 +274,29 @@ export function PluginDetailPane({
       ? "Built-in plugins update with Daintree"
       : "No update URL — reinstall from a file to update";
 
+  // Every tab past Overview is earned by content (#11302). A minimal plugin that
+  // declares no settings and no capabilities used to get three tabs, two of them
+  // a single muted "nothing here" line — which reads as a half-finished install.
+  // The MCP-servers tab set this precedent; Settings and Permissions now follow
+  // it. Overview is unconditional so there is always somewhere to land.
   const tabs: SettingsSubtabItem[] = [
     { id: "overview", label: "Overview" },
-    { id: "settings", label: "Settings" },
-    { id: "capabilities", label: "Permissions" },
+    ...(hasSettings ? [{ id: "settings", label: "Settings" }] : []),
+    ...(granted.length > 0 ? [{ id: "capabilities", label: "Permissions" }] : []),
     // Only plugins that actually contribute MCP servers get the runtime tab —
     // it surfaces subprocess health and restart, which is meaningless otherwise.
     ...(hasMcpServers ? [{ id: "mcp-servers", label: "MCP servers" }] : []),
   ];
+
+  // Selecting a *different* plugin remounts this subtree (the scroll wrapper is
+  // keyed on `plugin.manifest.name`), which resets `activeTab`. Reinstalling the
+  // SAME plugin does not — the key is unchanged — so a version that drops its
+  // last setting can strand `activeTab` on a tab that no longer exists. Derive
+  // the rendered tab instead of syncing state in an effect: one expression, no
+  // extra render, and it doubles as the `onChange` guard so the tab list and the
+  // guard can't drift apart the way they did before.
+  const isVisibleTab = (id: string): id is PluginDetailTab => tabs.some((t) => t.id === id);
+  const currentTab: PluginDetailTab = isVisibleTab(activeTab) ? activeTab : "overview";
 
   return (
     <div className="text-daintree-text">
@@ -301,21 +402,14 @@ export function PluginDetailPane({
       <div className="mt-4">
         <SettingsSubtabBar
           subtabs={tabs}
-          activeId={activeTab}
+          activeId={currentTab}
           onChange={(id) => {
-            if (
-              id === "overview" ||
-              id === "settings" ||
-              id === "capabilities" ||
-              (id === "mcp-servers" && hasMcpServers)
-            ) {
-              setActiveTab(id);
-            }
+            if (isVisibleTab(id)) setActiveTab(id);
           }}
         />
       </div>
 
-      {activeTab === "overview" && (
+      {currentTab === "overview" && (
         <div className="space-y-4">
           {plugin.manifest.description ? (
             <p className="text-xs text-daintree-text/70 select-text">
@@ -324,6 +418,10 @@ export function PluginDetailPane({
           ) : (
             <p className="text-xs text-daintree-text/40">No description provided.</p>
           )}
+
+          {commands.length > 0 && <PluginContributedCommands commands={commands} />}
+
+          {panels.length > 0 && <PluginContributedPanels panels={panels} />}
 
           {plugin.manifest.authors && plugin.manifest.authors.length > 0 && (
             <PluginContributors authors={plugin.manifest.authors} />
@@ -352,17 +450,14 @@ export function PluginDetailPane({
 
       {/* Settings render whether or not the plugin is enabled — values persist
           independently of the plugin's runtime, so users can pre-configure a
-          plugin before turning it on, or keep editing it while it's off. */}
-      {activeTab === "settings" &&
-        (hasSettings ? (
-          <PluginSettingsForm plugin={plugin} />
-        ) : (
-          <p className="text-xs text-daintree-text/40">This plugin has no settings.</p>
-        ))}
+          plugin before turning it on, or keep editing it while it's off. The tab
+          only exists when the plugin declares settings, so there's no empty
+          branch to fall back to. */}
+      {currentTab === "settings" && <PluginSettingsForm plugin={plugin} />}
 
-      {activeTab === "capabilities" && <PluginCapabilityList plugin={plugin} />}
+      {currentTab === "capabilities" && <PluginCapabilityList plugin={plugin} granted={granted} />}
 
-      {activeTab === "mcp-servers" && hasMcpServers && (
+      {currentTab === "mcp-servers" && hasMcpServers && (
         <PluginMcpServersSection pluginId={plugin.manifest.name} declared={mcpServers} />
       )}
     </div>

@@ -409,6 +409,9 @@ export interface GeneratedElectronAPI {
     activateForView(
       ...args: IpcInvokeMap["plugin:activate-for-view"]["args"]
     ): Promise<IpcInvokeMap["plugin:activate-for-view"]["result"]>;
+    cancelInstall(
+      ...args: IpcInvokeMap["plugin:cancel-install"]["args"]
+    ): Promise<IpcInvokeMap["plugin:cancel-install"]["result"]>;
     checkForUpdate(
       ...args: IpcInvokeMap["plugin:check-for-update"]["args"]
     ): Promise<IpcInvokeMap["plugin:check-for-update"]["result"]>;

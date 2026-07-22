@@ -22,9 +22,47 @@ export const MAX_DNTR_ENTRIES = 4096;
 // every chunk, so a large archive isn't penalised for making steady progress.
 export const PLUGIN_ARCHIVE_ENTRY_INACTIVITY_MS = 30_000;
 
+/**
+ * Absolute ceiling on a single extraction, independent of the per-entry
+ * inactivity watchdog (#11302). A stream that trickles a byte every few seconds
+ * resets {@link PLUGIN_ARCHIVE_ENTRY_INACTIVITY_MS} forever and never trips it,
+ * so a hostile or pathological source could still hold `install.lock` and its
+ * staging dir indefinitely. Four times the inactivity window and generous for
+ * the 30 MB `MAX_DNTR_BYTES` cap — a legitimate local archive extracts in
+ * well under a second.
+ */
+export const PLUGIN_ARCHIVE_TOTAL_DEADLINE_MS = 120_000;
+
+/**
+ * Thrown (as the abort `reason`) when {@link PLUGIN_ARCHIVE_TOTAL_DEADLINE_MS}
+ * elapses. A distinct type rather than a message the installer greps for, so
+ * the "too slow" outcome maps to its own install error code without coupling to
+ * user-facing copy.
+ */
+export class PluginArchiveDeadlineError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PluginArchiveDeadlineError";
+  }
+}
+
 export interface ExtractOptions {
   /** Override the per-entry inactivity abort. Tests only — production uses the default. */
   inactivityTimeoutMs?: number;
+  /** Override the absolute extraction deadline. Tests only — production uses the default. */
+  totalDeadlineMs?: number;
+  /**
+   * Caller-owned cancellation (#11302). Aborting it fails the extraction with
+   * the signal's own `reason`, so "the user cancelled" stays distinguishable
+   * from a stall or the absolute deadline in the message the installer reports.
+   */
+  signal?: AbortSignal;
+  /**
+   * Called with each validated file entry's normalized path, just before it
+   * streams to disk. Progress reporting only — the extraction ignores what it
+   * returns and a throw from it is not caught, so keep it trivial.
+   */
+  onEntry?: (entryName: string) => void;
 }
 
 const REQUIRED_EXCLUSIONS: readonly string[] = ["node_modules/", ".git/"];
@@ -390,7 +428,10 @@ export async function readArchiveManifest(archivePath: string): Promise<PluginMa
  *
  * A file entry that goes quiet for {@link PLUGIN_ARCHIVE_ENTRY_INACTIVITY_MS}
  * aborts the whole extraction with a rejection rather than hanging, so the
- * caller's cleanup always runs.
+ * caller's cleanup always runs. {@link PLUGIN_ARCHIVE_TOTAL_DEADLINE_MS} bounds
+ * the extraction as a whole, catching the trickling stream that resets the
+ * per-entry timer forever, and `opts.signal` lets the caller cancel outright
+ * (#11302). All three abort sources reject with their own `Error` reason.
  */
 export async function extractPluginArchive(
   archivePath: string,
@@ -398,6 +439,7 @@ export async function extractPluginArchive(
   opts?: ExtractOptions
 ): Promise<void> {
   const inactivityMs = opts?.inactivityTimeoutMs ?? PLUGIN_ARCHIVE_ENTRY_INACTIVITY_MS;
+  const totalMs = opts?.totalDeadlineMs ?? PLUGIN_ARCHIVE_TOTAL_DEADLINE_MS;
   const stat = await fs.stat(archivePath);
   if (stat.size > MAX_DNTR_BYTES) {
     throw new Error(`Archive size ${stat.size} exceeds ${MAX_DNTR_BYTES} byte limit`);
@@ -410,6 +452,49 @@ export async function extractPluginArchive(
     throw new Error(`Archive exceeds ${MAX_DNTR_ENTRIES} entry limit`);
   }
 
+  // Absolute deadline + caller cancellation, composed once for the whole
+  // extraction. A dedicated controller (rather than `AbortSignal.timeout`) so
+  // the deadline rejects with a plain `Error` carrying a readable message —
+  // `AbortSignal.timeout` raises a DOMException that isn't an `Error` in Node
+  // and would fall through the `reason instanceof Error` unwrap below. Cleared
+  // in the `finally` so a fast extraction doesn't leave a 2-minute timer
+  // holding the event loop.
+  const deadlineController = new AbortController();
+  const deadlineTimer = setTimeout(
+    () =>
+      deadlineController.abort(
+        new PluginArchiveDeadlineError(
+          `Extraction exceeded the ${totalMs}ms limit before finishing`
+        )
+      ),
+    totalMs
+  );
+  const outerSignal = opts?.signal
+    ? AbortSignal.any([deadlineController.signal, opts.signal])
+    : deadlineController.signal;
+
+  try {
+    return await runExtraction(zipfile, root, {
+      inactivityMs,
+      outerSignal,
+      onEntry: opts?.onEntry,
+    });
+  } finally {
+    clearTimeout(deadlineTimer);
+  }
+}
+
+/**
+ * The entry pump for {@link extractPluginArchive}. Split out only so the
+ * deadline timer above has a `finally` to clear itself in without wrapping the
+ * whole promise body.
+ */
+function runExtraction(
+  zipfile: yauzl.ZipFile,
+  root: string,
+  opts: { inactivityMs: number; outerSignal: AbortSignal; onEntry?: (name: string) => void }
+): Promise<void> {
+  const { inactivityMs, outerSignal, onEntry } = opts;
   return new Promise<void>((resolve, reject) => {
     let settled = false;
     // Running total of declared uncompressed bytes. yauzl validates each
@@ -427,10 +512,26 @@ export async function extractPluginArchive(
     const fail = (err: Error) => {
       if (settled) return;
       settled = true;
+      outerSignal.removeEventListener("abort", onOuterAbort);
       activeTransfer?.abort();
       zipfile.close();
       reject(err);
     };
+
+    // A cancel or deadline that lands between entries (or during a directory
+    // mkdir) has no in-flight pipeline to reject, so tear down here instead.
+    // `fail` latches `settled` first, so whichever abort source fires first owns
+    // the reported reason — the `activeTransfer.abort()` it then issues can't
+    // overwrite it with the generic "was interrupted" message.
+    function onOuterAbort() {
+      const reason: unknown = outerSignal.reason;
+      fail(reason instanceof Error ? reason : new Error("Extraction was cancelled"));
+    }
+    if (outerSignal.aborted) {
+      onOuterAbort();
+      return;
+    }
+    outerSignal.addEventListener("abort", onOuterAbort, { once: true });
 
     zipfile.on("entry", (entry: yauzl.Entry) => {
       const name = normalizePath(entry.fileName);
@@ -476,6 +577,8 @@ export async function extractPluginArchive(
         return;
       }
 
+      onEntry?.(name);
+
       fs.mkdir(path.dirname(resolved), { recursive: true }).then(() => {
         zipfile.openReadStream(entry, (err, stream) => {
           if (err) return fail(err);
@@ -512,7 +615,13 @@ export async function extractPluginArchive(
             abort: () => controller.abort(new Error(`Extraction of "${name}" was interrupted`)),
           };
 
-          pipeline(stream, out, { signal: controller.signal }).then(
+          // The per-entry stall controller plus the extraction-wide deadline /
+          // cancel signal. `AbortSignal.any` preserves the `reason` of whichever
+          // source fires first, so the single unwrap below reports the true
+          // cause instead of collapsing all three into one message.
+          const entrySignal = AbortSignal.any([controller.signal, outerSignal]);
+
+          pipeline(stream, out, { signal: entrySignal }).then(
             () => {
               clearTimer();
               activeTransfer = null;
@@ -526,11 +635,11 @@ export async function extractPluginArchive(
               // `pipeline` surfaces a genuine stream/fs failure as-is and only
               // rejects with an AbortError when our abort was the sole cause —
               // and that AbortError drops the reason we passed, so recover the
-              // entry-naming stall/teardown error from the signal. Discriminate
-              // on the rejection itself (not `signal.aborted`): a real error
-              // that merely raced the inactivity deadline must still win over
-              // the stall message.
-              const reason = controller.signal.reason;
+              // stall / deadline / cancel error from the composed signal.
+              // Discriminate on the rejection itself (not `signal.aborted`): a
+              // real error that merely raced one of those deadlines must still
+              // win over their messages.
+              const reason: unknown = entrySignal.reason;
               fail(err.name === "AbortError" && reason instanceof Error ? reason : err);
             }
           );
@@ -541,6 +650,7 @@ export async function extractPluginArchive(
     zipfile.on("end", () => {
       if (!settled) {
         settled = true;
+        outerSignal.removeEventListener("abort", onOuterAbort);
         zipfile.close();
         resolve();
       }
