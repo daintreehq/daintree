@@ -1651,6 +1651,10 @@ export interface IpcEventMap {
   // Agent install progress events
   "setup:agent-install-progress": AgentInstallProgressEvent;
 
+  // Plugin install progress (#11302) — targeted at the window that started the
+  // install, not a global broadcast, so it is NOT an event-bus channel.
+  "plugin:install-progress": import("../plugin.js").PluginInstallProgressEvent;
+
   // System events
   "system:wake": SystemWakePayload;
 

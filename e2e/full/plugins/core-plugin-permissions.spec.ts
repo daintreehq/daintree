@@ -68,7 +68,7 @@ test.describe.serial("Core: Plugin permissions tab", () => {
     await closePluginManager(window);
   });
 
-  test("still reads 'No special permissions' for the capability-free sample", async () => {
+  test("hides the Permissions tab entirely for the capability-free sample (#11302)", async () => {
     const { window } = ctx;
     await openPluginManager(window);
 
@@ -78,8 +78,11 @@ test.describe.serial("Core: Plugin permissions tab", () => {
       .first()
       .click();
 
-    await window.locator(SEL.plugin.tabPermissions).click();
-    await expect(window.getByText("No special permissions")).toBeVisible({ timeout: T_SHORT });
+    // Overview must be present so the pane isn't just failing to render.
+    await expect(window.locator(SEL.plugin.tabOverview)).toBeVisible({ timeout: T_SHORT });
+    // A tab whose whole content was "No special permissions" is now absent.
+    await expect(window.locator(SEL.plugin.tabPermissions)).toHaveCount(0);
+    await expect(window.getByText("No special permissions")).toHaveCount(0);
 
     // The danger banner must NOT appear for a plugin with no capabilities.
     await expect(

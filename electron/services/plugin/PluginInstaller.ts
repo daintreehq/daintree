@@ -9,7 +9,13 @@ import {
   isPrivateOrLoopbackHostname,
   SCOPED_PLUGIN_NAME_PATTERN,
 } from "../../schemas/plugin.js";
-import { extractPluginArchive, computeArchiveHash, readArchiveManifest } from "../PluginArchive.js";
+import {
+  extractPluginArchive,
+  computeArchiveHash,
+  readArchiveManifest,
+  PluginArchiveDeadlineError,
+} from "../PluginArchive.js";
+import { pluginInstallJobs, isInstallCancellation } from "./PluginInstallJobRegistry.js";
 import { MAX_DNTR_BYTES } from "../../utils/pluginArchiveConstants.js";
 import {
   PLUGIN_DOWNLOAD_TIMEOUT_MS,
@@ -240,10 +246,23 @@ export class PluginInstaller {
     archivePath: string,
     opts?: PluginInstallOptions
   ): Promise<PluginInstallResult> {
-    const fail = (code: PluginInstallErrorCode, message: string): PluginInstallResult => ({
-      status: "failed",
-      errors: [{ code, message }],
-    });
+    // Progress + cancellation ride an optional caller-minted job (#11302). With
+    // no `jobId` every registry call below is a no-op and the install behaves
+    // exactly as it did before, minus the extraction deadline, which applies
+    // unconditionally.
+    const jobId = opts?.jobId;
+    const jobSignal = pluginInstallJobs.signal(jobId);
+    const cancelled: PluginInstallResult = { status: "cancelled" };
+
+    // A cancel the user already asked for outranks whatever error the
+    // now-doomed operation happens to surface. Without this, cancelling during
+    // (say) `computeArchiveHash` and having the underlying read then fail with
+    // EIO would report `hash_failed` — blaming the archive for something the
+    // user deliberately stopped. Safe past the commit point too: `commit()`
+    // refuses once aborted, so reaching the post-swap failure paths proves no
+    // cancel was ever accepted.
+    const fail = (code: PluginInstallErrorCode, message: string): PluginInstallResult =>
+      jobSignal?.aborted === true ? cancelled : { status: "failed", errors: [{ code, message }] };
 
     await fs.mkdir(this.pluginsRoot, { recursive: true });
 
@@ -283,6 +302,12 @@ export class PluginInstaller {
 
     let tmpDir: string | null = null;
     try {
+      // `proper-lockfile` has no signal support, so a cancel issued while we
+      // were queued behind another install can only be honoured here — the
+      // first point after acquisition. Nothing is staged yet, so returning
+      // straight out just releases the lock in the `finally`.
+      if (jobSignal?.aborted) return cancelled;
+
       tmpDir = await fs.mkdtemp(path.join(this.pluginsRoot, ".install-tmp-"));
 
       // 1. Materialize the plugin into the temp dir.
@@ -292,6 +317,8 @@ export class PluginInstaller {
       } catch (err) {
         return fail("archive_invalid", `Install source not found: ${(err as Error).message}`);
       }
+
+      pluginInstallJobs.setPhase(jobId, "extracting");
 
       let hash: string | null = null;
       if (sourceIsDir) {
@@ -305,8 +332,21 @@ export class PluginInstaller {
         }
       } else {
         try {
-          await extractPluginArchive(archivePath, tmpDir);
+          await extractPluginArchive(archivePath, tmpDir, {
+            signal: jobSignal,
+            onEntry: (entry) => pluginInstallJobs.reportEntry(jobId, entry),
+          });
         } catch (err) {
+          // Three abort sources reach here with distinct reasons. A user cancel
+          // isn't a failure at all — it returns the same `cancelled` status the
+          // dismissed file picker does, so no error surface is raised for
+          // something the user asked for. The absolute deadline gets its own
+          // code: the archive may be perfectly valid and merely arriving too
+          // slowly, so "check the file" would be the wrong advice.
+          if (isInstallCancellation(err)) return cancelled;
+          if (err instanceof PluginArchiveDeadlineError) {
+            return fail("extraction_timeout", `Extraction timed out: ${err.message}`);
+          }
           return fail("archive_invalid", `Failed to extract archive: ${(err as Error).message}`);
         }
         try {
@@ -315,6 +355,9 @@ export class PluginInstaller {
           return fail("hash_failed", `Failed to compute archive hash: ${(err as Error).message}`);
         }
       }
+
+      if (jobSignal?.aborted) return cancelled;
+      pluginInstallJobs.setPhase(jobId, "validating");
 
       // 2. Read + strictly validate the manifest.
       let rawManifest: string;
@@ -397,6 +440,14 @@ export class PluginInstaller {
       if (lockCompromised) {
         return fail("lock_failed", "Install lock was compromised mid-install; aborted before swap");
       }
+
+      // Commit point. Everything above is staged in `tmpDir` and throwing it
+      // away costs nothing; everything below unloads the running plugin and
+      // renames directories. `commit()` closes the cancellation window and
+      // reports whether a cancel beat it — one guarded step, so a cancel can't
+      // slip between "still cancellable" and the first irreversible operation.
+      if (!pluginInstallJobs.commit(jobId)) return cancelled;
+      pluginInstallJobs.setPhase(jobId, "activating");
 
       if (existing) {
         try {

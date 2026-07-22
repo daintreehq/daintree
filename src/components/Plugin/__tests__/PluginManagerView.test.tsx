@@ -97,6 +97,10 @@ beforeEach(() => {
       uninstall: vi.fn().mockResolvedValue(undefined),
       checkForUpdate: vi.fn().mockResolvedValue({ status: "up-to-date" }),
       onProvenanceChanged: vi.fn().mockReturnValue(() => {}),
+      // Install progress + cancel (#11302). The hook subscribes on mount and
+      // mints a jobId for every install, so both must exist for any install path.
+      onInstallProgress: vi.fn().mockReturnValue(() => {}),
+      cancelInstall: vi.fn().mockResolvedValue(true),
       // PluginSettingsForm hydrates stored values for any plugin that
       // contributes settings — stub the full surface so those rows render.
       getSettingValues: vi.fn().mockResolvedValue({ values: {}, secretsSet: [] }),
@@ -285,15 +289,16 @@ describe("PluginManagerView", () => {
     );
   });
 
-  it("shows a no-settings note in the detail pane when a plugin contributes none", async () => {
+  it("hides the Settings tab entirely when a plugin contributes none (#11302)", async () => {
     (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
     renderDialog();
     await screen.findAllByText("Acme Demo");
 
     await selectPlugin();
-    // Navigate to the Settings tab to confirm no-settings note.
-    fireEvent.click(await screen.findByRole("tab", { name: "Settings" }));
-    expect(await screen.findByText("This plugin has no settings.")).toBeTruthy();
+    await screen.findByRole("tab", { name: "Overview" });
+    // A tab whose only content was "this plugin has no settings" is noise —
+    // it's now absent rather than empty.
+    expect(screen.queryByRole("tab", { name: "Settings" })).toBeNull();
   });
 
   it("shows an empty detail pane before any plugin is selected", async () => {
@@ -578,9 +583,8 @@ describe("PluginManagerView", () => {
     // for a built-in.
     await selectPlugin();
     expect(await screen.findByText("Built-in")).toBeTruthy();
-    // Navigate to Settings tab to check "no settings" note (built-in has no settings).
-    fireEvent.click(await screen.findByRole("tab", { name: "Settings" }));
-    expect(await screen.findByText("This plugin has no settings.")).toBeTruthy();
+    // The built-in contributes no settings, so it earns no Settings tab (#11302).
+    expect(screen.queryByRole("tab", { name: "Settings" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Uninstall Acme Demo" })).toBeNull();
   });
 
@@ -701,7 +705,8 @@ describe("PluginManagerView", () => {
     fireEvent.click(screen.getByRole("button", { name: "Reinstall plugin" }));
     await waitFor(() =>
       expect(window.electron.plugin.installFromUrl).toHaveBeenCalledWith(
-        "https://example.com/p.dntr"
+        "https://example.com/p.dntr",
+        expect.any(String)
       )
     );
   });
@@ -750,7 +755,8 @@ describe("PluginManagerView", () => {
 
     await waitFor(() =>
       expect(window.electron.plugin.installFromUrl).toHaveBeenCalledWith(
-        "https://example.com/p.dntr"
+        "https://example.com/p.dntr",
+        expect.any(String)
       )
     );
   });
@@ -860,7 +866,8 @@ describe("PluginManagerView", () => {
     fireEvent.click(screen.getByRole("button", { name: "Install over HTTP" }));
     await waitFor(() =>
       expect(window.electron.plugin.installFromUrl).toHaveBeenCalledWith(
-        "http://example.com/p.dntr"
+        "http://example.com/p.dntr",
+        expect.any(String)
       )
     );
   });
@@ -943,7 +950,8 @@ describe("PluginManagerView", () => {
     fireEvent.click(screen.getByRole("button", { name: "Install over HTTP" }));
     await waitFor(() =>
       expect(window.electron.plugin.installFromUrl).toHaveBeenCalledWith(
-        "http://example.com/p.dntr"
+        "http://example.com/p.dntr",
+        expect.any(String)
       )
     );
   });
@@ -1529,7 +1537,10 @@ describe("PluginManagerView", () => {
 
       fireEvent.click(screen.getByRole("button", { name: "Reinstall plugin" }));
       await waitFor(() =>
-        expect(installMock()).toHaveBeenCalledWith("https://example.com/acme.a.dntr")
+        expect(installMock()).toHaveBeenCalledWith(
+          "https://example.com/acme.a.dntr",
+          expect.any(String)
+        )
       );
     });
 

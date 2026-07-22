@@ -3,10 +3,12 @@ import { useDeferredLoading } from "@/hooks";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import type {
   LoadedPluginInfo,
   PluginDeepLinkIntent,
   PluginInstallError,
+  PluginInstallProgressEvent,
 } from "@shared/types/plugin";
 
 /**
@@ -39,6 +41,10 @@ function installErrorMessage(error: PluginInstallError | undefined): string {
       return "That URL didn't return a plugin archive (.dntr). Check the URL and try again.";
     case "fetch_failed":
       return "Couldn't download the plugin. Check the URL and try again.";
+    case "extraction_timeout":
+      // The archive itself may be fine — it just never finished arriving, so
+      // "check the file" would send the user down the wrong path (#11302).
+      return "Unpacking the plugin took too long and was stopped. Try installing it again.";
     default:
       return error?.message ?? "Installation failed. Check the file and try again.";
   }
@@ -160,6 +166,78 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   // a render, so two drops dispatched before React flushes could both read a
   // stale `false`; the ref flips immediately and serializes them.
   const installingRef = useRef(false);
+  // Install progress + cancellation (#11302). `installJobIdRef` is the live
+  // correlation key: the push channel is already scoped to this window, but one
+  // window installs several archives in sequence (a multi-file drop), so events
+  // are matched against the job that is actually in flight. Held in a ref, not
+  // state, so the subscription below can stay mounted-once and never re-bind.
+  const installJobIdRef = useRef<string | null>(null);
+  const [installProgress, setInstallProgress] = useState<PluginInstallProgressEvent | null>(null);
+  // Whether ANY install job is in flight. The banner gates on this rather than
+  // on `isInstalling`, because the pre-existing activity booleans are per-entry-
+  // point (`isInstalling` for file/URL/drop, `isReinstalling` for an update) and
+  // are cleared unconditionally by whichever call settles first — so a
+  // reinstall would show no banner at all, and a superseded install's `finally`
+  // could hide its successor's. This one is owned solely by `runInstallJob` and
+  // cleared under the same job-identity guard as the progress state.
+  const [hasActiveInstallJob, setHasActiveInstallJob] = useState(false);
+  // Set the moment the user clicks Cancel, so the button stops accepting
+  // clicks before main answers. Never unset here: either the install ends (and
+  // `runInstallJob` clears it) or main refused because the install already
+  // committed — in which case there is nothing left to cancel either way.
+  const [cancelRequested, setCancelRequested] = useState(false);
+
+  // Progress subscription. Its own mount-once effect with no dependencies —
+  // folding it into the `refreshKey` loading effect would resubscribe on every
+  // list refresh and cross-cancel the load (#4958). Mirrors the shape of the
+  // provenance subscription below.
+  useEffect(() => {
+    return window.electron.plugin.onInstallProgress((event) => {
+      if (event.jobId !== installJobIdRef.current) return;
+      setInstallProgress(event);
+    });
+  }, []);
+
+  /**
+   * Run an install under a fresh progress/cancel job. The id is minted here (not
+   * by main) so the Cancel button has a target from the very first render,
+   * rather than only after the first progress event arrives. The `finally`
+   * clears state only if this job is still the current one, so a superseding
+   * install can't have its banner wiped by its predecessor settling late.
+   */
+  const runInstallJob = async <T>(run: (jobId: string) => Promise<T>): Promise<T> => {
+    const jobId = crypto.randomUUID();
+    installJobIdRef.current = jobId;
+    setInstallProgress(null);
+    setCancelRequested(false);
+    setHasActiveInstallJob(true);
+    try {
+      return await run(jobId);
+    } finally {
+      if (installJobIdRef.current === jobId) {
+        installJobIdRef.current = null;
+        setInstallProgress(null);
+        setCancelRequested(false);
+        setHasActiveInstallJob(false);
+      }
+    }
+  };
+
+  /**
+   * Ask main to abort the in-flight install. Deliberately does NOT clear the
+   * install state: the original install promise is still pending and owns the
+   * teardown, and main may refuse (the install has passed its commit point) —
+   * in which case the banner should keep showing the real state rather than a
+   * cancel that didn't happen.
+   */
+  const cancelActiveInstall = () => {
+    const jobId = installJobIdRef.current;
+    if (!jobId || cancelRequested) return;
+    setCancelRequested(true);
+    safeFireAndForget(window.electron.plugin.cancelInstall(jobId), {
+      context: "usePluginManager.cancelActiveInstall",
+    });
+  };
 
   // Clear the "Already up to date" auto-dismiss timer on unmount.
   useEffect(() => {
@@ -351,7 +429,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     if (isInstalling) return;
     setIsInstalling(true);
     try {
-      const result = await window.electron.plugin.installFromFile();
+      const result = await runInstallJob((jobId) => window.electron.plugin.installFromFile(jobId));
       handleInstallResult(result);
     } catch (err) {
       setError(formatErrorMessage(err, "Failed to install plugin"));
@@ -364,7 +442,9 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   const performInstallFromUrl = async (url: string) => {
     setIsInstalling(true);
     try {
-      const result = await window.electron.plugin.installFromUrl(url);
+      const result = await runInstallJob((jobId) =>
+        window.electron.plugin.installFromUrl(url, jobId)
+      );
       handleInstallResult(result);
       // Keep the dialog open for URL-correctable failures so the user can edit
       // in place: a malformed URL, a download error (404 / DNS), or a response
@@ -473,7 +553,12 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
           continue;
         }
         try {
-          const result = await window.electron.plugin.installFromPath(path);
+          const result = await runInstallJob((jobId) =>
+            window.electron.plugin.installFromPath(path, jobId)
+          );
+          // A cancel abandons the whole drop, not just this file — the user
+          // stopped the batch, so silently installing the rest would ignore them.
+          if (result.status === "cancelled") break;
           if (result.status === "failed") {
             failures.push(`${file.name} — ${result.errors[0]?.message ?? "install failed"}`);
           } else {
@@ -705,9 +790,17 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     }
     reinstallingRef.current = true;
     setIsReinstalling(true);
+    // Dismiss the update confirm before the download starts. It has served its
+    // purpose (the user accepted), and leaving it up would stack a modal over
+    // the progress banner — burying the Cancel button behind the very dialog
+    // the user just dismissed. `advanceUpdateQueue` below still drives the
+    // batch; it sets the next `pendingUpdate` itself and never reads this one.
+    setPendingUpdate(null);
     try {
       setError(null);
-      const result = await window.electron.plugin.installFromUrl(url);
+      const result = await runInstallJob((jobId) =>
+        window.electron.plugin.installFromUrl(url, jobId)
+      );
       handleInstallResult(result);
       advanceUpdateQueue();
     } catch (err) {
@@ -747,6 +840,10 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     urlInput,
     setUrlInput,
     isInstalling,
+    hasActiveInstallJob,
+    installProgress,
+    cancelRequested,
+    cancelActiveInstall,
     handleInstallFromFile,
     handleInstallFromUrl,
     pendingHttpUrl,

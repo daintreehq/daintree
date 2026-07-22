@@ -78,13 +78,11 @@ test.describe.serial("Core: Plugin manager view", () => {
     await expect(detailHeading).toBeVisible({ timeout: T_MEDIUM });
     await expect(detailHeading.locator("..").getByText("v0.1.0")).toBeVisible();
 
-    // Permissions tab: hello-daintree declares no capabilities.
-    await window.locator(SEL.plugin.tabPermissions).click();
-    await expect(window.locator(SEL.plugin.tabPermissions)).toHaveAttribute(
-      "aria-selected",
-      "true"
-    );
-    await expect(window.getByText("No special permissions")).toBeVisible({ timeout: T_SHORT });
+    // hello-daintree declares no capabilities and no settings, so Overview is
+    // the only tab it earns (#11302) — three near-empty tabs used to make a
+    // successful install read as half-finished.
+    await expect(window.locator(SEL.plugin.tabPermissions)).toHaveCount(0, { timeout: T_SHORT });
+    await expect(window.locator(SEL.plugin.tabSettings)).toHaveCount(0);
 
     await closePluginManager(window);
   });

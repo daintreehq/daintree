@@ -963,6 +963,10 @@ export const CHANNELS = {
   PLUGIN_SETTINGS_SET_VALUE: "plugin:settings-set-value",
   PLUGIN_SETTINGS_DELETE_VALUE: "plugin:settings-delete-value",
   PLUGIN_SETTINGS_REVEAL_SECRET: "plugin:settings-reveal-secret",
+  /** Cancel an in-flight plugin install by its job id (#11302). */
+  PLUGIN_CANCEL_INSTALL: "plugin:cancel-install",
+  /** Phase/entry progress for an in-flight install, targeted at the initiating window (#11302). */
+  PLUGIN_INSTALL_PROGRESS: "plugin:install-progress",
   /** Native folder/file chooser for plugin path/directory/file settings fields. */
   PLUGIN_PICK_PATH: "plugin:pick-path",
   /** Existence probe for a stored plugin `mustExist` path setting. */

@@ -40,6 +40,14 @@ beforeEach(() => {
       ),
       restart: vi.fn(() => Promise.resolve()),
     },
+    // PluginSettingsForm hydrates from these the moment a Settings tab renders.
+    plugin: {
+      getSettingValues: vi.fn(() => Promise.resolve({})),
+      setSettingValue: vi.fn(() => Promise.resolve()),
+      deleteSettingValue: vi.fn(() => Promise.resolve()),
+      revealSecretSetting: vi.fn(() => Promise.resolve(null)),
+      pathExists: vi.fn(() => Promise.resolve(true)),
+    },
   } as unknown as Window["electron"];
 });
 
@@ -134,11 +142,6 @@ function withAuthors(
 }
 
 describe("PluginDetailPane capabilities", () => {
-  it("shows the no-permissions empty state when no capabilities are declared", () => {
-    renderPane(makePlugin());
-    expect(screen.getByText("No special permissions")).toBeTruthy();
-  });
-
   it("renders a labelled row for each declared capability", () => {
     renderPane(withCapabilities(["fs:project-read", "shell:exec"]));
     expect(screen.getByText("Read project files")).toBeTruthy();
@@ -281,6 +284,190 @@ describe("PluginDetailPane MCP servers tab (issue #10584)", () => {
     fireEvent.click(screen.getByRole("tab", { name: "MCP servers" }));
     expect(await screen.findByText("Demo Server")).toBeTruthy();
     expect(pluginMcpListMock).toHaveBeenCalled();
+  });
+});
+
+describe("PluginDetailPane content-gated tabs (#11302)", () => {
+  function withContributes(
+    contributes: Partial<LoadedPluginInfo["manifest"]["contributes"]>,
+    overrides: Partial<LoadedPluginInfo> = {}
+  ): LoadedPluginInfo {
+    const base = makePlugin(overrides);
+    return {
+      ...base,
+      manifest: {
+        ...base.manifest,
+        contributes: { ...base.manifest.contributes, ...contributes },
+      },
+    };
+  }
+
+  const SETTING = {
+    id: "token",
+    type: "string" as const,
+    label: "API token",
+    scope: "user" as const,
+  };
+
+  it("leaves a plugin with no settings and no capabilities on Overview alone", () => {
+    renderOverview(makePlugin());
+    const tabs = screen.getAllByRole("tab").map((t) => t.textContent);
+    expect(tabs).toEqual(["Overview"]);
+  });
+
+  it("hides Settings when the plugin declares none", () => {
+    renderOverview(makePlugin());
+    expect(screen.queryByRole("tab", { name: "Settings" })).toBeNull();
+  });
+
+  it("shows Settings when the plugin declares one", () => {
+    renderOverview(withContributes({ settings: [SETTING] }));
+    expect(screen.getByRole("tab", { name: "Settings" })).toBeTruthy();
+  });
+
+  it("shows Permissions when the plugin declares a built-in capability", () => {
+    renderOverview(withCapabilities(["fs:project-read"]));
+    expect(screen.getByRole("tab", { name: "Permissions" })).toBeTruthy();
+  });
+
+  it("shows Permissions only when the plugin declares a built-in capability", () => {
+    renderOverview(makePlugin());
+    expect(screen.queryByRole("tab", { name: "Permissions" })).toBeNull();
+  });
+
+  it("falls back to Overview when the active tab disappears on a same-id reinstall", () => {
+    // The detail subtree is keyed on the plugin NAME, so reinstalling the same
+    // plugin re-renders in place rather than remounting — a version that drops
+    // its last setting would otherwise strand the pane on a dead tab.
+    const withSettings = withContributes({ settings: [SETTING] });
+    const { rerender } = render(
+      <TooltipProvider>
+        <PluginDetailPane
+          plugin={withSettings}
+          checkingUpdate={false}
+          upToDate={false}
+          onUninstall={vi.fn()}
+          onCheckForUpdate={vi.fn()}
+        />
+      </TooltipProvider>
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Settings" }));
+    expect(screen.getByRole("tab", { name: "Settings" }).getAttribute("aria-selected")).toBe(
+      "true"
+    );
+
+    rerender(
+      <TooltipProvider>
+        <PluginDetailPane
+          plugin={makePlugin()}
+          checkingUpdate={false}
+          upToDate={false}
+          onUninstall={vi.fn()}
+          onCheckForUpdate={vi.fn()}
+        />
+      </TooltipProvider>
+    );
+    expect(screen.queryByRole("tab", { name: "Settings" })).toBeNull();
+    expect(screen.getByRole("tab", { name: "Overview" }).getAttribute("aria-selected")).toBe(
+      "true"
+    );
+
+    // The vanished tab must not resurrect as active when a later version brings
+    // it back — deriving the rendered tab alone would leave `activeTab` pointing
+    // at "settings", teleporting the user there without them asking.
+    rerender(
+      <TooltipProvider>
+        <PluginDetailPane
+          plugin={withSettings}
+          checkingUpdate={false}
+          upToDate={false}
+          onUninstall={vi.fn()}
+          onCheckForUpdate={vi.fn()}
+        />
+      </TooltipProvider>
+    );
+    expect(screen.getByRole("tab", { name: "Settings" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Overview" }).getAttribute("aria-selected")).toBe(
+      "true"
+    );
+  });
+});
+
+describe("PluginDetailPane overview contributions (#11302)", () => {
+  function withContributes(
+    contributes: Partial<LoadedPluginInfo["manifest"]["contributes"]>
+  ): LoadedPluginInfo {
+    const base = makePlugin();
+    return {
+      ...base,
+      manifest: {
+        ...base.manifest,
+        contributes: { ...base.manifest.contributes, ...contributes },
+      },
+    };
+  }
+
+  const COMMAND = {
+    id: "acme.demo.greet",
+    title: "Say hello",
+    description: "Prints a greeting",
+    category: "Demo",
+    kind: "command" as const,
+    danger: "safe" as const,
+  };
+
+  const PANEL = {
+    id: "acme.demo.board",
+    name: "Demo board",
+    iconId: "layout",
+    color: "#888888",
+    hasPty: false,
+    canRestart: false,
+    canConvert: false,
+    showInPalette: true,
+  };
+
+  it("names each contributed command and how to reach it", () => {
+    renderOverview(withContributes({ commands: [COMMAND] }));
+    expect(screen.getByText("Say hello")).toBeTruthy();
+    expect(screen.getByText("Prints a greeting")).toBeTruthy();
+    expect(screen.getByText("Run it from the command palette")).toBeTruthy();
+  });
+
+  it("distinguishes query commands, which the palette never lists", () => {
+    renderOverview(withContributes({ commands: [{ ...COMMAND, kind: "query" }] }));
+    expect(screen.getByText("Available to agents and automation")).toBeTruthy();
+    expect(screen.queryByText("Run it from the command palette")).toBeNull();
+  });
+
+  it("never echoes the manifest's self-declared danger", () => {
+    // Only the host's effectiveDanger is authoritative; rendering the plugin's
+    // own claim here would read as a host guarantee it never made.
+    renderOverview(withContributes({ commands: [{ ...COMMAND, danger: "confirm" }] }));
+    // Anchor on the row actually existing first — a bare "no /confirm/ anywhere"
+    // assertion would also pass if commands stopped rendering entirely.
+    const row = screen.getByText("Say hello").closest("li");
+    expect(row).toBeTruthy();
+    if (!row) return;
+    expect(within(row).queryByText(/confirm/i)).toBeNull();
+  });
+
+  it("names each contributed panel and how to open it", () => {
+    renderOverview(withContributes({ panels: [PANEL] }));
+    expect(screen.getByText("Demo board")).toBeTruthy();
+    expect(screen.getByText("Open it from the new-panel menu")).toBeTruthy();
+  });
+
+  it("labels a palette-hidden panel accurately rather than dropping it", () => {
+    renderOverview(withContributes({ panels: [{ ...PANEL, showInPalette: false }] }));
+    expect(screen.getByText("Demo board")).toBeTruthy();
+    expect(screen.getByText("Opened by the plugin")).toBeTruthy();
+  });
+
+  it("omits both sections entirely when the plugin contributes neither", () => {
+    renderOverview(makePlugin());
+    expect(screen.queryByText("Commands")).toBeNull();
+    expect(screen.queryByText("Panels")).toBeNull();
   });
 });
 

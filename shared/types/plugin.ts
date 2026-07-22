@@ -937,10 +937,14 @@ export interface InstalledPluginRecord {
  * - `fetch_timeout` — the download exceeded the shared `PLUGIN_DOWNLOAD_TIMEOUT_MS` deadline (30s)
  * - `size_exceeded` — declared `Content-Length` or the streamed bytes exceeded 30 MB
  * - `content_type_rejected` — response wasn't a plugin archive (bad MIME and the URL doesn't end in `.dntr`)
+ * - `extraction_timeout` — extraction ran past `PLUGIN_ARCHIVE_TOTAL_DEADLINE_MS` (#11302), distinct
+ *   from `archive_invalid`: the archive may be fine and the source merely too slow, so the
+ *   actionable advice is "try again", not "check the file"
  */
 export type PluginInstallErrorCode =
   | "lock_failed"
   | "archive_invalid"
+  | "extraction_timeout"
   | "manifest_invalid"
   | "engine_incompatible"
   | "namespace_unauthorized"
@@ -1003,6 +1007,38 @@ export interface PluginInstallOptions {
   source?: PluginInstallSource;
   /** Original download URL for catalog/url installs. Never logged. */
   originalUrl?: string | null;
+  /**
+   * Correlation id for progress reporting and cancellation (#11302). Minted by
+   * the caller that wants feedback; omitting it installs exactly as before, just
+   * without progress events or a cancel target. Not persisted.
+   */
+  jobId?: string;
+}
+
+/**
+ * Coarse stage of an in-flight install (#11302). Deliberately a small fixed
+ * sequence rather than the agent installer's raw stdout chunks — a plugin
+ * install is a known series of steps, not a subprocess emitting text.
+ *
+ * `downloading` only occurs for install-from-URL. Everything through
+ * `validating` is staged in a scratch directory and freely cancellable;
+ * `activating` marks the commit point, past which cancellation is refused
+ * because the swap and load are already underway.
+ */
+export type PluginInstallPhase = "downloading" | "extracting" | "validating" | "activating";
+
+/** Progress push for an install started with a {@link PluginInstallOptions.jobId}. */
+export interface PluginInstallProgressEvent {
+  /** The `jobId` the caller supplied; events for other jobs must be ignored. */
+  jobId: string;
+  phase: PluginInstallPhase;
+  /**
+   * The archive entry currently being written, during `extracting` only.
+   * Throttled — this is a liveness detail, not a complete log of every entry.
+   */
+  entry?: string;
+  /** False once the install has passed the commit point and can no longer be cancelled. */
+  cancellable: boolean;
 }
 
 export interface LoadedPluginInfo {

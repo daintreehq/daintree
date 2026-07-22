@@ -956,6 +956,10 @@ export interface GeneratedIpcInvokeMap {
     args: [enabled: boolean];
     result: import("../plugin.js").PluginBackgroundUpdateCheckSettings;
   };
+  "plugin:cancel-install": {
+    args: [jobId: string];
+    result: boolean;
+  };
   "plugin:check-for-update": {
     args: [pluginId: string];
     result: import("../plugin.js").PluginCheckUpdateResult;
@@ -997,15 +1001,15 @@ export interface GeneratedIpcInvokeMap {
     result: import("../plugin.js").PluginInstallResult;
   };
   "plugin:install-from-file": {
-    args: [];
+    args: [jobId?: string | undefined];
     result: import("../plugin.js").PluginInstallResult;
   };
   "plugin:install-from-path": {
-    args: [path: string];
+    args: [path: string, jobId?: string | undefined];
     result: import("../plugin.js").PluginInstallResult;
   };
   "plugin:install-from-url": {
-    args: [url: string];
+    args: [url: string, jobId?: string | undefined];
     result: import("../plugin.js").PluginInstallResult;
   };
   "plugin:keybindings": {

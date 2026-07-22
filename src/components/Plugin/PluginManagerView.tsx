@@ -27,6 +27,7 @@ import { cn } from "@/lib/utils";
 import { isMac, isWindows } from "@/lib/platform";
 import { usePluginManager } from "./usePluginManager";
 import { PluginDetailPane, SOURCE_BADGE_LABELS, pluginLabel } from "./PluginDetailPane";
+import { PluginInstallProgressBanner } from "./PluginInstallProgressBanner";
 import { PluginCatalog } from "./PluginCatalog";
 import { PluginIconTile } from "./pluginIcons";
 import { groupPluginsByCategory } from "./pluginGrouping";
@@ -522,6 +523,15 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
           ]}
         />
       )}
+
+      {/* Top-level, not inside the install controls: a drop-install and a URL
+          install start from different surfaces but report to the same place. */}
+      <PluginInstallProgressBanner
+        isInstalling={pm.hasActiveInstallJob}
+        progress={pm.installProgress}
+        cancelRequested={pm.cancelRequested}
+        onCancel={pm.cancelActiveInstall}
+      />
 
       <div
         className="relative flex flex-1 min-h-0 overflow-hidden"
