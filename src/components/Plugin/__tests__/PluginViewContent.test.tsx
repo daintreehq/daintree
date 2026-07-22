@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PanelKindConfig } from "@shared/config/panelKindRegistry";
 import type { PluginViewContentConfig } from "../PluginViewContent";
@@ -597,15 +597,11 @@ describe("makePluginViewContent", () => {
   });
 
   it("threads the host's close callback through to the diagnostics fallback (#11301)", async () => {
-    const closeProbe = vi.hoisted(() => ({
-      onRequestClose: undefined as undefined | (() => void),
-    }));
-    vi.doMock("@/components/Plugin/PluginViewDiagnosticsFallback", () => ({
-      PluginViewDiagnosticsFallback: (props: { onRequestClose?: () => void }) => {
-        closeProbe.onRequestClose = props.onRequestClose;
-        return <div data-testid="diagnostics-probe" />;
-      },
-    }));
+    // Deliberately does NOT mock the diagnostics component: a `vi.doMock` of it
+    // survives `doUnmock` for module graphs already imported by a later test in
+    // the same file, which swapped the real pane out from under the #11207
+    // assertions below (CI shard 1/4). Driving the real fallback also proves the
+    // whole seam — context → fallback → button — rather than one prop hop.
     vi.doMock("react", async () => {
       const actual = await vi.importActual<typeof import("react")>("react");
       return {
@@ -631,16 +627,45 @@ describe("makePluginViewContent", () => {
 
       render(<Content panelId="panel-close" onRequestClose={onRequestClose} />);
 
-      await waitFor(() => expect(screen.queryByTestId("diagnostics-probe")).toBeTruthy());
       // The fallback is factory-scoped for identity stability, so the callback
-      // has to arrive by context — a closure would change the component type on
-      // every render and remount the diagnostics pane.
-      expect(closeProbe.onRequestClose).toBeTypeOf("function");
-      closeProbe.onRequestClose!();
+      // has to arrive by context — a closure over it would change the component
+      // type on every render and remount the diagnostics pane.
+      const close = await screen.findByTestId("plugin-view-diagnostics-close");
+      fireEvent.click(close);
+
       expect(onRequestClose).toHaveBeenCalledTimes(1);
     } finally {
       vi.doUnmock("react");
-      vi.doUnmock("@/components/Plugin/PluginViewDiagnosticsFallback");
+    }
+  });
+
+  it("renders no close affordance when the host supplies none (#11301)", async () => {
+    vi.doMock("react", async () => {
+      const actual = await vi.importActual<typeof import("react")>("react");
+      return {
+        ...actual,
+        lazy: () =>
+          function ThrowingView() {
+            actual.useEffect(() => {
+              throw new Error("view exploded");
+            }, []);
+            return <div data-testid="plugin-view" />;
+          },
+      };
+    });
+
+    try {
+      const { makePluginViewContent } = await import("../PluginViewContent");
+      const Content = makePluginViewContent(makeContentConfig());
+
+      render(<Content panelId="panel-no-close" />);
+
+      // A host-less embedding (a future dialog shell mid-wiring, or a test)
+      // must not render a button that closes nothing.
+      await screen.findByTestId("plugin-view-diagnostics");
+      expect(screen.queryByTestId("plugin-view-diagnostics-close")).toBeNull();
+    } finally {
+      vi.doUnmock("react");
     }
   });
 
