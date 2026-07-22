@@ -132,9 +132,7 @@ export function resolveTreeKey(
       // nothing to open, so the key does nothing rather than jumping away.
       if (current.isDirectory) {
         const child = rows[index + 1];
-        return child && child.depth > current.depth
-          ? { type: "select", path: child.path }
-          : null;
+        return child && child.depth > current.depth ? { type: "select", path: child.path } : null;
       }
       return null;
     }

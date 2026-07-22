@@ -137,7 +137,7 @@ describe("panelKindSerialisers", () => {
       const huge = Array.from({ length: 5000 }, (_, index) => `dir-${index % 900}`);
 
       const result = deserialize()({ id: "fb1", browserExpandedPaths: huge });
-      const restored = result.browserExpandedPaths as string[];
+      const restored = result.browserExpandedPaths ?? [];
 
       // Every surviving entry becomes a directory the browser re-lists on each
       // refresh, so this is a work bound rather than a cosmetic one.
@@ -168,16 +168,18 @@ describe("panelKindSerialisers", () => {
       expect(
         deserialize()({ id: "fb1", browserSelectedPath: "../escape" }).browserSelectedPath
       ).toBeUndefined();
-      expect(deserialize()({ id: "fb1", browserSelectedPath: "src/app.ts" }).browserSelectedPath).toBe(
-        "src/app.ts"
-      );
+      expect(
+        deserialize()({ id: "fb1", browserSelectedPath: "src/app.ts" }).browserSelectedPath
+      ).toBe("src/app.ts");
     });
 
     it("drops a non-boolean ignored toggle rather than coercing it", () => {
       expect(
         deserialize()({ id: "fb1", browserShowIgnored: "yes" }).browserShowIgnored
       ).toBeUndefined();
-      expect(deserialize()({ id: "fb1", browserShowIgnored: false }).browserShowIgnored).toBe(false);
+      expect(deserialize()({ id: "fb1", browserShowIgnored: false }).browserShowIgnored).toBe(
+        false
+      );
     });
   });
 

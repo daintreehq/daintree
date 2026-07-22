@@ -86,9 +86,7 @@ export function FileBrowserPane({
   const changeTick = useWorktreeStore(
     useCallback(
       (state) =>
-        worktreeId
-          ? state.worktrees.get(worktreeId)?.worktreeChanges?.lastUpdated
-          : undefined,
+        worktreeId ? state.worktrees.get(worktreeId)?.worktreeChanges?.lastUpdated : undefined,
       [worktreeId]
     )
   );

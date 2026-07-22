@@ -5,7 +5,8 @@ import type { FileTreeNode } from "@shared/types";
 import type { FileBrowserListDirectoryPayload } from "@shared/types/ipc/fileBrowser";
 import { useFileBrowserTree } from "../useFileBrowserTree";
 
-const listDirectory = vi.fn<(payload: FileBrowserListDirectoryPayload) => Promise<FileTreeNode[]>>();
+const listDirectory =
+  vi.fn<(payload: FileBrowserListDirectoryPayload) => Promise<FileTreeNode[]>>();
 
 vi.mock("@/clients/fileBrowserClient", () => ({
   fileBrowserClient: {
@@ -153,10 +154,12 @@ describe("useFileBrowserTree", () => {
     rerender({ changeTick: 2 });
 
     await waitFor(() => expect(listDirectory.mock.calls.length).toBe(callsBeforeTick + 2));
-    expect(listDirectory.mock.calls.slice(-2).map((call) => call[0].dirPath).sort()).toEqual([
-      "src",
-      undefined,
-    ]);
+    expect(
+      listDirectory.mock.calls
+        .slice(-2)
+        .map((call) => call[0].dirPath)
+        .sort()
+    ).toEqual(["src", undefined]);
   });
 
   it("does not re-fetch when the change tick is unchanged across a rerender", async () => {
@@ -410,7 +413,9 @@ describe("useFileBrowserTree", () => {
     listDirectory.mockResolvedValue([file("src/fresh.ts")]);
     rerender({ expandedPaths: ["src"] });
 
-    await waitFor(() => expect(listDirectory.mock.calls.length).toBeGreaterThan(callsAfterCollapse));
+    await waitFor(() =>
+      expect(listDirectory.mock.calls.length).toBeGreaterThan(callsAfterCollapse)
+    );
     await waitFor(() =>
       expect(result.current.rows.map((row) => row.path)).toEqual(["src", "src/fresh.ts"])
     );
@@ -468,9 +473,7 @@ describe("useFileBrowserTree", () => {
     listDirectory.mockResolvedValue([file("second.ts")]);
     rerender({ worktreeId: "wt-2" });
 
-    await waitFor(() =>
-      expect(result.current.rows.map((row) => row.path)).toEqual(["second.ts"])
-    );
+    await waitFor(() => expect(result.current.rows.map((row) => row.path)).toEqual(["second.ts"]));
 
     await act(async () => {
       slowFirst.resolve([file("first.ts")]);

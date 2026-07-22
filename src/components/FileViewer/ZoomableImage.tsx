@@ -47,13 +47,7 @@ export function zoomForWheel(currentZoom: number, deltaY: number): number {
  * and giving it a pan/zoom mode would put an interaction surface into two
  * places that deliberately have none.
  */
-export function ZoomableImage({
-  filePath,
-  rootPath,
-  alt,
-  cacheBust,
-  onError,
-}: ZoomableImageProps) {
+export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: ZoomableImageProps) {
   const [zoom, setZoom] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const containerRef = useRef<HTMLDivElement>(null);

@@ -5,7 +5,9 @@ import { cn } from "@/lib/utils";
 import { resolveTreeKey, type FlatTreeRow } from "./fileBrowserTree";
 
 export interface FileTreeViewProps {
-  rows: readonly FlatTreeRow[];
+  // Mutable rather than `readonly`: this is exactly what the tree hook returns,
+  // and widening it here would force a cast at the Virtuoso boundary.
+  rows: FlatTreeRow[];
   selectedPath: string | null;
   onSelect: (path: string) => void;
   onToggleExpanded: (path: string, expand: boolean) => void;
@@ -126,7 +128,7 @@ export function FileTreeView({
     >
       <Virtuoso<FlatTreeRow, TreeContext>
         ref={virtuosoRef}
-        data={rows as FlatTreeRow[]}
+        data={rows}
         context={context}
         computeItemKey={computeRowKey}
         itemContent={renderRow}
@@ -228,12 +230,10 @@ function FileTreeRow({ row, isSelected, context }: FileTreeRowProps) {
       {row.isDirectory ? (
         <FolderIcon className="h-3.5 w-3.5 shrink-0 text-category-cyan" aria-hidden="true" />
       ) : (
-        <File className="h-3.5 w-3.5 shrink-0 opacity-70" aria-hidden="true" />
+        <File className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
       )}
       <span className="truncate">{row.name}</span>
-      {row.isLoading && (
-        <span className="ml-1 shrink-0 text-[10px] opacity-60">Loading…</span>
-      )}
+      {row.isLoading && <span className="ml-1 shrink-0 text-[10px] opacity-60">Loading…</span>}
     </div>
   );
 }
