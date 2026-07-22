@@ -1,5 +1,6 @@
 import type { MessagePort } from "node:worker_threads";
 import type { PtyManager } from "../../services/PtyManager.js";
+import type { PluginPtyProcessManager } from "../services/PluginPtyProcessManager.js";
 import type { PtyPool } from "../../services/PtyPool.js";
 import type { AnalysisWorkerPool } from "../../services/pty/analysis/AnalysisWorkerPool.js";
 import type { ProcessTreeCache } from "../../services/ProcessTreeCache.js";
@@ -42,6 +43,13 @@ export interface TerminalWorkerConnection {
 export interface HostContext {
   // Stable references — never reassigned
   ptyManager: PtyManager;
+  /**
+   * Raw pseudo-terminals spawned on a plugin's behalf (#11300). Deliberately
+   * separate from `ptyManager`: plugin PTYs are not terminal panels and must
+   * not acquire pooling, agent detection, resource governance, or session
+   * persistence.
+   */
+  pluginPtyManager: PluginPtyProcessManager;
   processTreeCache: ProcessTreeCache;
   terminalResourceMonitor: TerminalResourceMonitor;
   backpressureManager: BackpressureManager;

@@ -7,6 +7,7 @@ import { getPluginCapabilityConsentService } from "../plugin-capability/instance
 import { resolveContainedPath, PluginPathNotAllowedError } from "./pluginFsContainment.js";
 import { PluginHostGit, type HostGitFactory } from "./pluginHostGit.js";
 import type { PluginProcessManager } from "./PluginProcessManager.js";
+import { PLUGIN_PTY_DEFAULT_COLS, PLUGIN_PTY_DEFAULT_ROWS } from "./PluginProcessManager.js";
 import type { PluginContributionBroadcaster } from "./PluginContributionBroadcaster.js";
 import type { PluginPanelLifecycleBroker } from "./PluginPanelLifecycleBroker.js";
 import type { PluginRendererDispatcher } from "./PluginRendererDispatcher.js";
@@ -63,6 +64,9 @@ import type {
   PluginProcessApi,
   PluginProcessHandle,
   PluginProcessSpawnOptions,
+  PluginProcessMode,
+  PluginPtyProcessHandle,
+  PluginPtyProcessSpawnOptions,
   PluginFsApi,
   PluginFsDirEntry,
   PluginFsStat,
@@ -1222,8 +1226,8 @@ export function createHost(
 function buildProcessApi(deps: PluginHostFactoryDeps, pluginId: string): PluginProcessApi {
   const spawn = async (
     command: string,
-    options?: PluginProcessSpawnOptions
-  ): Promise<PluginProcessHandle> => {
+    options?: PluginProcessSpawnOptions | PluginPtyProcessSpawnOptions
+  ): Promise<PluginProcessHandle | PluginPtyProcessHandle> => {
     if (!deps.plugins.has(pluginId)) {
       throw new Error(`Plugin "${pluginId}" process.spawn: plugin is no longer loaded`);
     }
@@ -1241,6 +1245,32 @@ function buildProcessApi(deps: PluginHostFactoryDeps, pluginId: string): PluginP
     // (e.g. spawn("")) and then execute real commands unprompted (#10524).
     if (typeof command !== "string" || command.length === 0) {
       throw new Error(`Plugin "${pluginId}" process.spawn: command must be a non-empty string`);
+    }
+    const rawMode: unknown = options?.mode;
+    if (rawMode !== undefined && rawMode !== "pipe" && rawMode !== "pty") {
+      throw new Error(
+        `Plugin "${pluginId}" process.spawn: mode must be "pipe" or "pty": ${String(rawMode)}`
+      );
+    }
+    const mode: PluginProcessMode = rawMode === "pty" ? "pty" : "pipe";
+    // `undefined` and `null` both mean broadcast, matching postToPanel. An empty
+    // string is an authoring mistake — it would silently match no subscriber —
+    // so reject it loudly rather than coercing.
+    const rawPanelId: unknown = options?.panelId;
+    if (rawPanelId !== undefined && rawPanelId !== null) {
+      if (typeof rawPanelId !== "string" || rawPanelId.length === 0) {
+        throw new Error(
+          `Plugin "${pluginId}" process.spawn: panelId must be a non-empty string, null, or undefined: ${String(rawPanelId)}`
+        );
+      }
+    }
+    const panelId = typeof rawPanelId === "string" ? rawPanelId : null;
+    let cols = PLUGIN_PTY_DEFAULT_COLS;
+    let rows = PLUGIN_PTY_DEFAULT_ROWS;
+    if (mode === "pty") {
+      const ptyOptions = options as PluginPtyProcessSpawnOptions;
+      cols = resolvePtyDimension(pluginId, "cols", ptyOptions.cols, PLUGIN_PTY_DEFAULT_COLS);
+      rows = resolvePtyDimension(pluginId, "rows", ptyOptions.rows, PLUGIN_PTY_DEFAULT_ROWS);
     }
     const args = Array.isArray(options?.args)
       ? options.args.filter((a): a is string => typeof a === "string")
@@ -1269,8 +1299,22 @@ function buildProcessApi(deps: PluginHostFactoryDeps, pluginId: string): PluginP
       throw new Error(`Plugin "${pluginId}" process.spawn: plugin is no longer loaded`);
     }
 
-    const handle = deps.getProcessManager().spawn(pluginId, { command, args, cwd, env });
-    return {
+    const handle = await deps
+      .getProcessManager()
+      .spawn(
+        pluginId,
+        mode === "pty"
+          ? { mode, command, args, cwd, env, panelId, cols, rows }
+          : { mode, command, args, cwd, env, panelId }
+      );
+    // Interactive allocation is asynchronous (it round-trips to the pty-host), so
+    // an unload can land while it is in flight. Kill rather than hand back a
+    // live process the unload teardown already walked past.
+    if (!deps.plugins.has(pluginId)) {
+      handle.kill();
+      throw new Error(`Plugin "${pluginId}" process.spawn: plugin is no longer loaded`);
+    }
+    const base: PluginProcessHandle = {
       get id() {
         return handle.id;
       },
@@ -1287,9 +1331,45 @@ function buildProcessApi(deps: PluginHostFactoryDeps, pluginId: string): PluginP
       },
       onExit: (cb) => handle.onExit(cb),
       onCrash: (cb) => handle.onCrash(cb),
+      onData: (cb) => handle.onData(cb),
     };
+    if (mode !== "pty") return base;
+    return {
+      ...base,
+      get id() {
+        return handle.id;
+      },
+      write: (data) => {
+        if (!deps.plugins.has(pluginId) || typeof data !== "string") return;
+        handle.write(data);
+      },
+      resize: (nextCols, nextRows) => {
+        if (!deps.plugins.has(pluginId)) return;
+        handle.resize(nextCols, nextRows);
+      },
+    } satisfies PluginPtyProcessHandle;
   };
-  return { spawn };
+  return { spawn } as PluginProcessApi;
+}
+
+/**
+ * Validate one PTY dimension. Omitted falls back to the default; a value that is
+ * present but not a positive integer is an authoring mistake worth rejecting
+ * before the JIT consent prompt, so a bad call never spends a user grant.
+ */
+function resolvePtyDimension(
+  pluginId: string,
+  name: "cols" | "rows",
+  value: unknown,
+  fallback: number
+): number {
+  if (value === undefined) return fallback;
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    throw new Error(
+      `Plugin "${pluginId}" process.spawn: ${name} must be a positive integer: ${String(value)}`
+    );
+  }
+  return value;
 }
 
 /**

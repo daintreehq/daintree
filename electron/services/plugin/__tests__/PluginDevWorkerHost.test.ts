@@ -105,9 +105,36 @@ describe("PluginDevWorkerHost", () => {
     expect(options.stdio).toBe("pipe");
     expect(options.cwd).toBe(OPTS.pluginDir);
     expect(options.env.DAINTREE_UTILITY_PROCESS_KIND).toBe("plugin-dev-worker");
-    // env must spread process.env (REPLACES, not merges — #6081).
+    // env REPLACES process.env in a utility process (#6081), so every key the
+    // worker needs must be in this one object.
     expect(options.env.DAINTREE_USER_DATA).toBe("/tmp/userData");
     host.dispose();
+  });
+
+  it("scrubs the worker's inherited environment down to the safe allowlist (#11300)", async () => {
+    const SECRET = "DAINTREE_WORKER_TEST_SECRET";
+    const prevSecret = process.env[SECRET];
+    process.env[SECRET] = "api-token";
+    try {
+      const { PluginDevWorkerHost } = await loadModule();
+      const host = new PluginDevWorkerHost(OPTS);
+      host.waitForReady().catch(() => {});
+      void host.start();
+
+      const [, , options] = forkMock.mock.calls[0];
+      // Plugin code runs inside this worker. Spawned children are scrubbed via
+      // SAFE_ENV_KEYS specifically to keep host secrets away from plugins —
+      // inheriting them one level up made that a formality.
+      expect(options.env[SECRET]).toBeUndefined();
+      // Essentials the worker genuinely needs still survive.
+      expect(options.env.PATH).toBe(process.env.PATH);
+      expect(options.env.DAINTREE_USER_DATA).toBe("/tmp/userData");
+      expect(options.env.DAINTREE_UTILITY_PROCESS_KIND).toBe("plugin-dev-worker");
+      host.dispose();
+    } finally {
+      if (prevSecret === undefined) delete process.env[SECRET];
+      else process.env[SECRET] = prevSecret;
+    }
   });
 
   it("forks the worker with a V8 heap cap in execArgv", async () => {

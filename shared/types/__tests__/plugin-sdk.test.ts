@@ -33,6 +33,8 @@ import type {
   PluginIpcHandler,
   PluginProcessApi,
   PluginProcessHandle,
+  PluginPtyProcessHandle,
+  PluginProcessDataChunk,
   PluginProcessSpawnOptions,
   ForgeProviderImpl,
   ForgeProviderDescriptor,
@@ -403,9 +405,40 @@ describe("plugin-sdk boundary", () => {
       expectTypeOf(handle.onCrash).returns.toEqualTypeOf<() => void>();
     });
 
-    it("PluginProcessApi.spawn returns a handle", () => {
-      const api = {} as PluginProcessApi;
-      expectTypeOf(api.spawn).returns.toEqualTypeOf<Promise<PluginProcessHandle>>();
+    it("PluginProcessApi.spawn narrows its handle on the mode literal", () => {
+      // Never invoked — `expectTypeOf` erases to nothing but its ARGUMENT is
+      // still evaluated at runtime, and `{} as PluginProcessApi` has no real
+      // `spawn`. Keeping the assertions inside an uncalled closure makes this a
+      // pure compile-time check.
+      const assertTypes = async (api: PluginProcessApi): Promise<void> => {
+        // Omitted mode and an explicit "pipe" both stay on the base handle — the
+        // pipe process has no writable input to expose.
+        expectTypeOf(await api.spawn("cmd")).toEqualTypeOf<PluginProcessHandle>();
+        expectTypeOf(await api.spawn("cmd", { mode: "pipe" })).toEqualTypeOf<PluginProcessHandle>();
+        // A literal `mode: "pty"` selects the interactive overload.
+        expectTypeOf(
+          await api.spawn("cmd", { mode: "pty" })
+        ).toEqualTypeOf<PluginPtyProcessHandle>();
+      };
+      expect(typeof assertTypes).toBe("function");
+    });
+
+    it("only the interactive handle carries write/resize", () => {
+      const pipeHandle = {} as PluginProcessHandle;
+      const ptyHandle = {} as PluginPtyProcessHandle;
+      const assertNoPipeWrite = (handle: PluginProcessHandle): void => {
+        // @ts-expect-error — a pipe-mode process has no writable stdin
+        handle.write("x");
+      };
+      expect(typeof assertNoPipeWrite).toBe("function");
+      expectTypeOf(ptyHandle.write).toEqualTypeOf<(data: string) => void>();
+      expectTypeOf(ptyHandle.resize).toEqualTypeOf<(cols: number, rows: number) => void>();
+      // onData is on the BASE handle: a pipe-mode plugin must be able to read
+      // its own child's stdout/stderr, not just stream it to panels.
+      expectTypeOf(pipeHandle.onData).returns.toEqualTypeOf<() => void>();
+      expectTypeOf(pipeHandle.onData)
+        .parameter(0)
+        .toEqualTypeOf<(chunk: PluginProcessDataChunk) => void>();
     });
 
     it("PanelViewProps exposes the host-provided view props", () => {
@@ -537,6 +570,10 @@ describe("plugin-sdk boundary", () => {
         switch (event.kind) {
           case "stdout":
           case "stderr":
+          // A PTY has one combined stream, so interactive output arrives as
+          // `data` rather than the stdout/stderr pair.
+          // eslint-disable-next-line no-fallthrough
+          case "data":
             return event.chunk;
           case "exit":
           case "crash":
@@ -545,7 +582,7 @@ describe("plugin-sdk boundary", () => {
       };
       expectTypeOf(onEvent).parameter(0).toEqualTypeOf<PluginProcessStreamEvent>();
       expectTypeOf<PluginProcessStreamEvent["kind"]>().toEqualTypeOf<
-        "stdout" | "stderr" | "exit" | "crash"
+        "stdout" | "stderr" | "data" | "exit" | "crash"
       >();
 
       // Per-variant payload guards — the chunk/exit fields must stay bound to

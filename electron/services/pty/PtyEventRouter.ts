@@ -350,6 +350,17 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       return true;
     }
 
+    // Raw plugin-PTY lane (#11300). The router carries no state for these —
+    // they are forwarded verbatim on one event so `PluginPtyTransport` can do
+    // its own `(id, generation)` filtering. Deliberately NOT folded into the
+    // terminal `data`/`exit` cases: a plugin PTY has no terminal-owner entry,
+    // no lifecycle-ledger generation, and no pendingSpawns bookkeeping.
+    case "plugin-pty-spawn-result":
+    case "plugin-pty-data":
+    case "plugin-pty-exit":
+      emitter.emit("plugin-pty", event);
+      return true;
+
     default: {
       const unknownType = (event as { type: string }).type;
       deps.logWarn(`[PtyClient] Unknown event type: ${unknownType}`);

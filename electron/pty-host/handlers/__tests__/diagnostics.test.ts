@@ -26,6 +26,7 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
   return {
     analysisWorkerPool: null,
     ptyManager: {} as HostContext["ptyManager"],
+    pluginPtyManager: {} as HostContext["pluginPtyManager"],
     processTreeCache: {} as HostContext["processTreeCache"],
     terminalResourceMonitor: {} as HostContext["terminalResourceMonitor"],
     backpressureManager: {

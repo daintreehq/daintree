@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { spawn as nodeSpawn } from "node:child_process";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { minimalSpawnEnv } from "../../utils/minimalSpawnEnv.js";
 import {
   PLUGIN_PROCESS_KILL_GRACE_MS,
   PLUGIN_PROCESS_MAX_CONCURRENT,
@@ -8,6 +9,24 @@ import {
   type PluginProcessStatus,
   type PluginProcessStreamEvent,
 } from "../../../shared/types/ipc/pluginProcess.js";
+import type { PluginProcessDataChunk, PluginProcessMode } from "../../../shared/types/plugin.js";
+import type { ManagedPtyBackend, PluginPtyExit } from "./PluginPtyTransport.js";
+
+export { minimalSpawnEnv };
+
+/**
+ * Cap on output buffered for a process whose plugin has not yet attached an
+ * `onData` subscriber (#11300). A `--machine`-mode daemon greets the instant it
+ * starts — often before the worker's subscription RPC has round-tripped — so
+ * dropping those bytes would strand a plugin waiting for a handshake it already
+ * missed. Bounded because a chatty process with no subscriber must not grow
+ * unbounded; oldest chunks are dropped first.
+ */
+export const PLUGIN_PROCESS_EARLY_DATA_CAP_BYTES = 64 * 1024;
+
+/** Default PTY geometry when a plugin does not pin one. */
+export const PLUGIN_PTY_DEFAULT_COLS = 80;
+export const PLUGIN_PTY_DEFAULT_ROWS = 24;
 
 /**
  * Minimal surface of a spawned child the manager actually exercises. Declared
@@ -30,30 +49,65 @@ export interface ManagedChildProcess {
   on(event: "error", listener: (err: Error) => void): unknown;
 }
 
-/** Resolved spawn config the injectable spawner receives. */
-export interface ResolvedProcessSpawn {
+/** Fields every resolved spawn carries, regardless of execution backend. */
+export interface ResolvedProcessSpawnBase {
   command: string;
   args: string[];
   cwd: string | undefined;
   env: Record<string, string>;
+  /**
+   * Panel to route this process's stream events to, or `null` to broadcast to
+   * every panel the plugin owns (#11300 — the historical behavior).
+   */
+  panelId: string | null;
 }
+
+/** Resolved spawn config, discriminated by execution backend. */
+export type ResolvedProcessSpawn =
+  | (ResolvedProcessSpawnBase & { mode: "pipe" })
+  | (ResolvedProcessSpawnBase & { mode: "pty"; cols: number; rows: number });
+
+/** The pipe-mode half of {@link ResolvedProcessSpawn}, as the spawner sees it. */
+export type ResolvedPipeSpawn = Extract<ResolvedProcessSpawn, { mode: "pipe" }>;
+/** The PTY half of {@link ResolvedProcessSpawn}. */
+export type ResolvedPtySpawn = Extract<ResolvedProcessSpawn, { mode: "pty" }>;
 
 /**
  * Spawn shim, injected so unit tests substitute a controllable fake. Production
- * wiring uses `node:child_process.spawn` with the host env merged under the
- * plugin's `env`, `shell: false` (no shell interpolation — argv is passed
- * verbatim), and `windowsHide: true`.
+ * wiring uses `node:child_process.spawn` with the plugin's `env` applied over
+ * the safe-key allowlist, `shell: false` (no shell interpolation — argv is
+ * passed verbatim), and `windowsHide: true`.
  */
-export type ProcessSpawner = (config: ResolvedProcessSpawn) => ManagedChildProcess;
+export type ProcessSpawner = (config: ResolvedPipeSpawn) => ManagedChildProcess;
+
+/**
+ * Allocator for the interactive backend (#11300). Injected for the same reason
+ * as {@link ProcessSpawner}: production wiring routes to the crash-isolated
+ * pty-host via `PluginPtyTransport`, while unit tests hand in a controllable
+ * fake so the manager's lifecycle is testable without node-pty.
+ *
+ * `generation` distinguishes incarnations of one handle id across `restart()`.
+ */
+export type PtyProcessSpawner = (
+  config: ResolvedPtySpawn,
+  context: { id: string; generation: number }
+) => Promise<ManagedPtyBackend>;
 
 /**
  * Fan-out sink for one process's stream events. The manager calls this for
- * stdout/stderr chunks and exit/crash — `PluginService` wires it to the
- * owning plugin's `postToPanel("process", …)` transport so events reach the
- * plugin's panels. Kept as a per-plugin closure so the manager never needs a
- * reference to the renderer broadcast layer.
+ * output chunks and exit/crash — `PluginService` wires it to the owning
+ * plugin's `postToPanel("process", …)` transport so events reach the plugin's
+ * panels. Kept as a per-plugin closure so the manager never needs a reference to
+ * the renderer broadcast layer.
+ *
+ * `panelId` is the spawn-time routing target: a non-null value delivers to that
+ * one panel, `null` broadcasts to all of the plugin's panels.
  */
-export type ProcessStreamSink = (pluginId: string, event: PluginProcessStreamEvent) => void;
+export type ProcessStreamSink = (
+  pluginId: string,
+  event: PluginProcessStreamEvent,
+  panelId: string | null
+) => void;
 
 /** Audit hook invoked once per spawn (and per restart). Best-effort — must not throw. */
 export type ProcessSpawnAuditor = (input: {
@@ -71,12 +125,31 @@ interface ExitInfo {
 interface ManagedProcess {
   id: string;
   pluginId: string;
+  mode: PluginProcessMode;
   command: string;
   args: string[];
   cwd: string | undefined;
   env: Record<string, string>;
+  /** Spawn-time stream routing target; `null` broadcasts to all the plugin's panels. */
+  panelId: string | null;
   status: PluginProcessStatus;
   child: ManagedChildProcess | null;
+  /** The interactive backend in PTY mode; `null` in pipe mode or once exited. */
+  ptyBackend: ManagedPtyBackend | null;
+  /** Listener disposers for the current PTY incarnation. */
+  ptyDisposers: (() => void)[];
+  /** Incarnation counter — bumped by `restart()` so stale backend events are dropped. */
+  generation: number;
+  /** Current PTY geometry, preserved across `restart()`. Unused in pipe mode. */
+  cols: number;
+  rows: number;
+  /**
+   * A `resize()` that arrived while no PTY was live (during the async spawn or
+   * a restart). Last write wins, and it is folded into the NEXT PTY's initial
+   * size rather than replayed as a late SIGWINCH against a PTY that was already
+   * created at the wrong size.
+   */
+  pendingResize: { cols: number; rows: number } | null;
   pid: number | null;
   exitCode: number | null;
   signal: string | null;
@@ -90,6 +163,29 @@ interface ManagedProcess {
   terminalOutcome: ExitInfo | null;
   exitCallbacks: Set<(info: ExitInfo) => void>;
   crashCallbacks: Set<(info: ExitInfo) => void>;
+  dataCallbacks: Set<(chunk: PluginProcessDataChunk) => void>;
+  /** Output produced before the first `onData` subscriber attached; replayed once, then dropped. */
+  earlyData: PluginProcessDataChunk[];
+  earlyDataBytes: number;
+  /** Latches true on the first `onData` subscription — after that, delivery is live-only. */
+  hadDataSubscriber: boolean;
+}
+
+/**
+ * Host-side handle {@link PluginProcessManager.spawn} returns. `PluginHostFactory`
+ * wraps it with the plugin-liveness gates and narrows it to the mode-appropriate
+ * public shape — `write`/`resize` are inert on a pipe-mode process.
+ */
+export interface ManagedProcessHandle {
+  id: string;
+  mode: PluginProcessMode;
+  kill: () => void;
+  restart: () => Promise<void>;
+  onExit: (cb: (info: ExitInfo) => void) => () => void;
+  onCrash: (cb: (info: ExitInfo) => void) => () => void;
+  onData: (cb: (chunk: PluginProcessDataChunk) => void) => () => void;
+  write: (data: string) => void;
+  resize: (cols: number, rows: number) => void;
 }
 
 export class PluginProcessConcurrencyError extends Error {
@@ -114,13 +210,25 @@ export class PluginProcessConcurrencyError extends Error {
  *  - A per-plugin cap ({@link PLUGIN_PROCESS_MAX_CONCURRENT}) over RUNNING
  *    processes is enforced at spawn; an over-cap spawn rejects rather than
  *    queueing, so a misbehaving orchestrator can't fork-bomb the host.
- *  - stdout/stderr stream to the owning plugin's panels via the injected
- *    {@link ProcessStreamSink}; an exited handle frees its concurrency slot.
+ *  - Output streams to the owning plugin's panels via the injected
+ *    {@link ProcessStreamSink} — targeted at the spawn's `panelId` when given,
+ *    broadcast otherwise — and to the plugin's own code via `onData`. An exited
+ *    handle frees its concurrency slot.
  *  - `restart()` reuses the same handle id and bumps `restartCount`.
+ *
+ * Two execution backends (#11300), sharing all of the above:
+ *  - `pipe` (default, unchanged): `child_process.spawn` in main, stdin closed,
+ *    stdout/stderr piped and reported separately.
+ *  - `pty`: a real pseudo-terminal allocated in the crash-isolated pty-host, so
+ *    the child sees a TTY and accepts `write()`/`resize()`. A PTY has one
+ *    combined output stream, so it emits `data` rather than `stdout`/`stderr`.
+ *    Every incarnation carries a generation, so a `restart()`'s outgoing PTY
+ *    cannot deliver output or an exit against its successor.
  */
 export class PluginProcessManager {
   private readonly processes = new Map<string, ManagedProcess>();
   private readonly spawner: ProcessSpawner;
+  private readonly ptySpawner: PtyProcessSpawner | null;
   private readonly streamSink: ProcessStreamSink;
   private readonly auditor: ProcessSpawnAuditor;
   private readonly killGraceMs: number;
@@ -128,11 +236,14 @@ export class PluginProcessManager {
   constructor(options: {
     streamSink: ProcessStreamSink;
     spawner?: ProcessSpawner;
+    /** Omitted (or null) disables interactive mode — `mode: "pty"` then rejects. */
+    ptySpawner?: PtyProcessSpawner | null;
     auditor?: ProcessSpawnAuditor;
     killGraceMs?: number;
   }) {
     this.streamSink = options.streamSink;
     this.spawner = options.spawner ?? defaultSpawner;
+    this.ptySpawner = options.ptySpawner ?? null;
     this.auditor = options.auditor ?? (() => {});
     this.killGraceMs = options.killGraceMs ?? PLUGIN_PROCESS_KILL_GRACE_MS;
   }
@@ -151,30 +262,34 @@ export class PluginProcessManager {
    * checked the `shell:exec` capability gate. Throws
    * {@link PluginProcessConcurrencyError} when the per-plugin cap is reached.
    */
-  spawn(
-    pluginId: string,
-    config: ResolvedProcessSpawn
-  ): {
-    id: string;
-    kill: () => void;
-    restart: () => Promise<void>;
-    onExit: (cb: (info: ExitInfo) => void) => () => void;
-    onCrash: (cb: (info: ExitInfo) => void) => () => void;
-  } {
+  async spawn(pluginId: string, config: ResolvedProcessSpawn): Promise<ManagedProcessHandle> {
     if (this.runningCount(pluginId) >= PLUGIN_PROCESS_MAX_CONCURRENT) {
       throw new PluginProcessConcurrencyError(pluginId, PLUGIN_PROCESS_MAX_CONCURRENT);
+    }
+    if (config.mode === "pty" && !this.ptySpawner) {
+      throw new Error(
+        `Plugin "${pluginId}" process.spawn: interactive (pty) mode is unavailable on this host`
+      );
     }
 
     const id = randomUUID();
     const managed: ManagedProcess = {
       id,
       pluginId,
+      mode: config.mode,
       command: config.command,
       args: config.args,
       cwd: config.cwd,
       env: config.env,
+      panelId: config.panelId,
       status: "running",
       child: null,
+      ptyBackend: null,
+      ptyDisposers: [],
+      generation: 0,
+      cols: config.mode === "pty" ? config.cols : PLUGIN_PTY_DEFAULT_COLS,
+      rows: config.mode === "pty" ? config.rows : PLUGIN_PTY_DEFAULT_ROWS,
+      pendingResize: null,
       pid: null,
       exitCode: null,
       signal: null,
@@ -185,17 +300,128 @@ export class PluginProcessManager {
       terminalOutcome: null,
       exitCallbacks: new Set(),
       crashCallbacks: new Set(),
+      dataCallbacks: new Set(),
+      earlyData: [],
+      earlyDataBytes: 0,
+      hadDataSubscriber: false,
     };
+    // Registered before any await so the concurrency cap counts this process
+    // immediately — a burst of interactive spawns must not all sail past the cap
+    // while their PTYs are still allocating.
     this.processes.set(id, managed);
-    this.startChild(managed);
+    await this.startBackend(managed);
 
     return {
       id,
+      mode: managed.mode,
       kill: () => this.kill(id),
       restart: () => this.restart(id),
       onExit: (cb) => this.subscribe(managed, "exit", cb),
       onCrash: (cb) => this.subscribe(managed, "crash", cb),
+      onData: (cb) => this.subscribeData(managed, cb),
+      write: (data) => this.write(id, data),
+      resize: (cols, rows) => this.resize(id, cols, rows),
     };
+  }
+
+  /** Write to an interactive process's input. No-op for pipe mode or after exit. */
+  write(id: string, data: string): void {
+    const managed = this.processes.get(id);
+    if (!managed || managed.mode !== "pty" || typeof data !== "string") return;
+    managed.ptyBackend?.write(data);
+  }
+
+  /**
+   * Resize an interactive process's terminal. While no PTY is live (mid-spawn or
+   * mid-restart) the dimensions are retained last-write-wins and folded into the
+   * next PTY's INITIAL size — never replayed as a post-start SIGWINCH against a
+   * PTY that was already constructed at the wrong geometry.
+   */
+  resize(id: string, cols: number, rows: number): void {
+    const managed = this.processes.get(id);
+    if (!managed || managed.mode !== "pty") return;
+    if (!Number.isInteger(cols) || cols <= 0 || !Number.isInteger(rows) || rows <= 0) return;
+    managed.cols = cols;
+    managed.rows = rows;
+    if (managed.ptyBackend && managed.status === "running") {
+      managed.ptyBackend.resize(cols, rows);
+      return;
+    }
+    if (managed.status === "running") {
+      managed.pendingResize = { cols, rows };
+    }
+  }
+
+  private subscribeData(
+    managed: ManagedProcess,
+    cb: (chunk: PluginProcessDataChunk) => void
+  ): () => void {
+    if (typeof cb !== "function") {
+      throw new Error(`Plugin "${managed.pluginId}" process.onData: callback must be a function`);
+    }
+    const first = !managed.hadDataSubscriber;
+    managed.hadDataSubscriber = true;
+    managed.dataCallbacks.add(cb);
+    if (first && managed.earlyData.length > 0) {
+      const replay = managed.earlyData;
+      managed.earlyData = [];
+      managed.earlyDataBytes = 0;
+      // Replay on the next microtask so the handler runs after `spawn()`
+      // resolves, matching live-subscription timing.
+      queueMicrotask(() => {
+        for (const chunk of replay) {
+          this.invokeDataCallback(managed, cb, chunk);
+        }
+      });
+    }
+    let disposed = false;
+    return () => {
+      if (disposed) return;
+      disposed = true;
+      managed.dataCallbacks.delete(cb);
+    };
+  }
+
+  private invokeDataCallback(
+    managed: ManagedProcess,
+    cb: (chunk: PluginProcessDataChunk) => void,
+    chunk: PluginProcessDataChunk
+  ): void {
+    try {
+      cb(chunk);
+    } catch (err) {
+      console.error(`[PluginProcessManager] onData callback for "${managed.pluginId}" threw:`, err);
+    }
+  }
+
+  /**
+   * Deliver one output chunk: to the plugin's panels (routed by `panelId`) and
+   * to the plugin's own `onData` subscribers. Before the first subscriber
+   * attaches, chunks are buffered up to {@link PLUGIN_PROCESS_EARLY_DATA_CAP_BYTES}
+   * so an eagerly-greeting daemon isn't missed; panel streaming is never delayed.
+   */
+  private emitData(
+    managed: ManagedProcess,
+    stream: PluginProcessDataChunk["stream"],
+    chunk: string
+  ): void {
+    this.streamSink(managed.pluginId, { kind: stream, id: managed.id, chunk }, managed.panelId);
+    const payload: PluginProcessDataChunk = { stream, chunk };
+    if (!managed.hadDataSubscriber) {
+      managed.earlyData.push(payload);
+      managed.earlyDataBytes += chunk.length;
+      while (
+        managed.earlyDataBytes > PLUGIN_PROCESS_EARLY_DATA_CAP_BYTES &&
+        managed.earlyData.length > 0
+      ) {
+        const dropped = managed.earlyData.shift();
+        managed.earlyDataBytes -= dropped?.chunk.length ?? 0;
+      }
+      return;
+    }
+    for (const cb of [...managed.dataCallbacks]) {
+      this.invokeDataCallback(managed, cb, payload);
+    }
   }
 
   private subscribe(
@@ -240,28 +466,182 @@ export class PluginProcessManager {
     return managed.exitCode !== 0 || managed.signal !== null;
   }
 
+  /** Dispatch to the mode's allocator. Both routes end in a live backend or a recorded crash. */
+  private async startBackend(managed: ManagedProcess): Promise<void> {
+    if (managed.mode === "pty") {
+      await this.startPty(managed);
+      return;
+    }
+    this.startChild(managed);
+  }
+
+  private async startPty(managed: ManagedProcess): Promise<void> {
+    const spawner = this.ptySpawner;
+    if (!spawner) {
+      this.recordStartFailure(managed, new Error("interactive (pty) mode is unavailable"));
+      return;
+    }
+    const generation = managed.generation;
+    // A resize that arrived before this PTY existed becomes its INITIAL size —
+    // the child is born at the right geometry instead of being told to change.
+    if (managed.pendingResize) {
+      managed.cols = managed.pendingResize.cols;
+      managed.rows = managed.pendingResize.rows;
+      managed.pendingResize = null;
+    }
+
+    let backend: ManagedPtyBackend;
+    try {
+      backend = await spawner(
+        {
+          mode: "pty",
+          command: managed.command,
+          args: managed.args,
+          cwd: managed.cwd,
+          env: managed.env,
+          panelId: managed.panelId,
+          cols: managed.cols,
+          rows: managed.rows,
+        },
+        { id: managed.id, generation }
+      );
+    } catch (err) {
+      // A stale allocation for an incarnation `restart()` already replaced, or
+      // for a process torn down mid-flight — its failure is not this one's.
+      if (managed.generation !== generation) return;
+      this.recordStartFailure(managed, err);
+      return;
+    }
+
+    // Superseded or torn down while the PTY was allocating: the caller is gone,
+    // so kill the orphan rather than adopting it. `killRequested` is the
+    // load-bearing half — an unload that lands mid-allocation leaves the record
+    // in `running` (there is no live child to report an exit yet), so a status
+    // check alone would happily adopt a process the teardown already walked past.
+    if (
+      managed.generation !== generation ||
+      managed.status !== "running" ||
+      managed.killRequested
+    ) {
+      backend.kill("SIGKILL");
+      backend.dispose();
+      // Nothing will ever report an exit for a PTY nobody adopted, so settle the
+      // record here — otherwise it sits in `running` forever, pinning a slot.
+      if (
+        managed.generation === generation &&
+        managed.status === "running" &&
+        managed.killRequested
+      ) {
+        this.handlePtyExit(managed, { exitCode: null, signal: "SIGKILL" });
+      }
+      return;
+    }
+
+    managed.ptyBackend = backend;
+    managed.pid = backend.pid;
+
+    this.auditor({
+      pluginId: managed.pluginId,
+      command: managed.command,
+      args: managed.args,
+      processId: managed.id,
+    });
+
+    managed.ptyDisposers.push(
+      backend.onData((data) => {
+        if (managed.generation !== generation) return;
+        this.emitData(managed, "data", data);
+      })
+    );
+    managed.ptyDisposers.push(
+      backend.onExit((info) => {
+        if (managed.generation !== generation) return;
+        this.handlePtyExit(managed, info);
+      })
+    );
+
+    // A resize racing the allocation lands here — the PTY is live now, so it is
+    // a real SIGWINCH rather than a buffered initial size.
+    if (managed.pendingResize) {
+      const { cols, rows } = managed.pendingResize;
+      managed.pendingResize = null;
+      managed.cols = cols;
+      managed.rows = rows;
+      backend.resize(cols, rows);
+    }
+  }
+
+  private handlePtyExit(managed: ManagedProcess, info: PluginPtyExit): void {
+    if (managed.killTimer) {
+      clearTimeout(managed.killTimer);
+      managed.killTimer = null;
+    }
+    this.releasePty(managed);
+    managed.exitCode = info.exitCode;
+    managed.signal = info.signal;
+    managed.pid = null;
+    const crashed = this.wasCrash(managed);
+    managed.status = managed.killRequested ? "killed" : "exited";
+    const outcome: ExitInfo = { exitCode: info.exitCode, signal: info.signal };
+    managed.terminalOutcome = outcome;
+    this.emitTerminal(managed, outcome, crashed);
+  }
+
+  /**
+   * The single place a PTY backend is let go of. Disposing the listeners before
+   * dropping the reference keeps a late event from a torn-down incarnation from
+   * reaching callbacks, and the transport's `dispose()` releases the host-side
+   * entry so its native handle goes through the pty-host teardown chokepoint.
+   */
+  private releasePty(managed: ManagedProcess): void {
+    for (const dispose of managed.ptyDisposers) {
+      try {
+        dispose();
+      } catch {
+        // best-effort
+      }
+    }
+    managed.ptyDisposers.length = 0;
+    const backend = managed.ptyBackend;
+    managed.ptyBackend = null;
+    backend?.dispose();
+  }
+
+  /**
+   * Record a backend that never came up as a crash, so the plugin's `onCrash`
+   * fires with a meaningful outcome rather than the handle dangling in
+   * `running` forever. Mirrors the pipe path's synchronous-spawn-failure branch.
+   */
+  private recordStartFailure(managed: ManagedProcess, err: unknown): void {
+    managed.status = "exited";
+    managed.exitCode = null;
+    managed.signal = null;
+    managed.pid = null;
+    managed.pendingResize = null;
+    managed.terminalOutcome = { exitCode: null, signal: null };
+    console.error(
+      `[PluginProcessManager] spawn for "${managed.pluginId}" threw:`,
+      formatErrorMessage(err, "spawn failed")
+    );
+    queueMicrotask(() => this.emitTerminal(managed, { exitCode: null, signal: null }, true));
+  }
+
   private startChild(managed: ManagedProcess): void {
     let child: ManagedChildProcess;
     try {
       child = this.spawner({
+        mode: "pipe",
         command: managed.command,
         args: managed.args,
         cwd: managed.cwd,
         env: managed.env,
+        panelId: managed.panelId,
       });
     } catch (err) {
       // A synchronous spawn failure (e.g. ENOENT in some Node versions) is
       // recorded as a crash so the plugin's onCrash fires with a meaningful
       // outcome rather than the handle dangling forever in `running`.
-      managed.status = "exited";
-      managed.exitCode = null;
-      managed.signal = null;
-      managed.terminalOutcome = { exitCode: null, signal: null };
-      console.error(
-        `[PluginProcessManager] spawn for "${managed.pluginId}" threw:`,
-        formatErrorMessage(err, "spawn failed")
-      );
-      queueMicrotask(() => this.emitTerminal(managed, { exitCode: null, signal: null }, true));
+      this.recordStartFailure(managed, err);
       return;
     }
 
@@ -317,19 +697,23 @@ export class PluginProcessManager {
     stream.on("data", (chunk: string) => {
       // Drop late emits from a child a restart already replaced.
       if (managed.child !== child) return;
-      this.streamSink(managed.pluginId, { kind: which, id: managed.id, chunk });
+      this.emitData(managed, which, chunk);
     });
   }
 
   private emitTerminal(managed: ManagedProcess, outcome: ExitInfo, crashed: boolean): void {
     // Stream the lifecycle event to the plugin's panels first, then fire the
     // plugin-code callbacks.
-    this.streamSink(managed.pluginId, {
-      kind: crashed ? "crash" : "exit",
-      id: managed.id,
-      exitCode: outcome.exitCode,
-      signal: outcome.signal,
-    });
+    this.streamSink(
+      managed.pluginId,
+      {
+        kind: crashed ? "crash" : "exit",
+        id: managed.id,
+        exitCode: outcome.exitCode,
+        signal: outcome.signal,
+      },
+      managed.panelId
+    );
     for (const cb of [...managed.exitCallbacks]) {
       try {
         cb(outcome);
@@ -354,6 +738,11 @@ export class PluginProcessManager {
     }
     managed.exitCallbacks.clear();
     managed.crashCallbacks.clear();
+    // Output subscribers die with the process — an exited handle produces no
+    // further chunks, and holding the closures would pin plugin scope after unload.
+    managed.dataCallbacks.clear();
+    managed.earlyData = [];
+    managed.earlyDataBytes = 0;
   }
 
   /**
@@ -367,7 +756,12 @@ export class PluginProcessManager {
   }
 
   private terminate(managed: ManagedProcess): void {
-    if (managed.status !== "running" || !managed.child) return;
+    if (managed.status !== "running") return;
+    if (managed.mode === "pty") {
+      this.terminatePty(managed);
+      return;
+    }
+    if (!managed.child) return;
     managed.killRequested = true;
     const child = managed.child;
     try {
@@ -393,12 +787,47 @@ export class PluginProcessManager {
   }
 
   /**
+   * PTY teardown mirrors the pipe grace window: SIGTERM, then SIGKILL if the
+   * child outlives it. `killRequested` is set even when the PTY is still
+   * allocating, so an in-flight `startPty` adopts nothing and kills the orphan
+   * it eventually receives.
+   */
+  private terminatePty(managed: ManagedProcess): void {
+    managed.killRequested = true;
+    managed.pendingResize = null;
+    const backend = managed.ptyBackend;
+    const generation = managed.generation;
+    if (!backend) {
+      // Still allocating. `startPty`'s post-await status check disposes whatever
+      // arrives; there is no live handle to signal yet.
+      return;
+    }
+    backend.kill("SIGTERM");
+    if (managed.killTimer) clearTimeout(managed.killTimer);
+    managed.killTimer = setTimeout(() => {
+      managed.killTimer = null;
+      if (
+        managed.ptyBackend === backend &&
+        managed.generation === generation &&
+        managed.status === "running"
+      ) {
+        backend.kill("SIGKILL");
+      }
+    }, this.killGraceMs);
+    managed.killTimer.unref?.();
+  }
+
+  /**
    * Kill the current child (if any) and respawn with the same
    * command/args/cwd/env. Reuses the handle id and bumps `restartCount`.
    */
   async restart(id: string): Promise<void> {
     const managed = this.processes.get(id);
     if (!managed) return;
+    if (managed.mode === "pty") {
+      await this.restartPty(managed);
+      return;
+    }
     if (managed.child) {
       // Synchronously detach the old child so its exit handler no-ops (identity
       // check) and doesn't flip the handle into a terminal state mid-restart.
@@ -433,6 +862,37 @@ export class PluginProcessManager {
     managed.terminalOutcome = null;
     managed.spawnedAt = Date.now();
     this.startChild(managed);
+  }
+
+  /**
+   * Interactive restart. Bumping the generation FIRST is what makes this safe:
+   * every listener and transport event carries the generation it was created
+   * under, so the outgoing PTY's data and exit are dropped instead of flipping
+   * the handle into a terminal state mid-restart. Geometry survives the swap and
+   * becomes the replacement's initial size.
+   */
+  private async restartPty(managed: ManagedProcess): Promise<void> {
+    if (managed.killTimer) {
+      clearTimeout(managed.killTimer);
+      managed.killTimer = null;
+    }
+    managed.generation++;
+    const old = managed.ptyBackend;
+    this.releasePty(managed);
+    // Force-kill rather than SIGTERM-then-escalate: the successor is allocating
+    // right now, and a detached predecessor lingering past the grace window
+    // would sit outside the concurrency cap with nothing tracking it.
+    old?.kill("SIGKILL");
+
+    managed.restartCount++;
+    managed.killRequested = false;
+    managed.status = "running";
+    managed.exitCode = null;
+    managed.signal = null;
+    managed.pid = null;
+    managed.terminalOutcome = null;
+    managed.spawnedAt = Date.now();
+    await this.startPty(managed);
   }
 
   /**
@@ -480,43 +940,6 @@ export class PluginProcessManager {
       restartCount: managed.restartCount,
     };
   }
-}
-
-// Env vars a child needs to function (PATH lookup, locale, temp, OS essentials)
-// WITHOUT inheriting the main process's secrets (API tokens, auth keys). A
-// plugin passes anything else it needs explicitly via options.env.
-const SAFE_ENV_KEYS = [
-  "PATH",
-  "HOME",
-  "TMPDIR",
-  "TEMP",
-  "TMP",
-  "LANG",
-  "LC_ALL",
-  "LC_CTYPE",
-  "TZ",
-  "SHELL",
-  "USER",
-  "LOGNAME",
-  "SystemRoot",
-  "COMSPEC",
-  "PATHEXT",
-  "WINDIR",
-  "NUMBER_OF_PROCESSORS",
-  "PROCESSOR_ARCHITECTURE",
-  "APPDATA",
-  "LOCALAPPDATA",
-  "ProgramData",
-  "ProgramFiles",
-];
-
-export function minimalSpawnEnv(extra: Record<string, string>): NodeJS.ProcessEnv {
-  const base: NodeJS.ProcessEnv = {};
-  for (const key of SAFE_ENV_KEYS) {
-    const value = process.env[key];
-    if (typeof value === "string") base[key] = value;
-  }
-  return { ...base, ...extra };
 }
 
 const defaultSpawner: ProcessSpawner = (config) => {
