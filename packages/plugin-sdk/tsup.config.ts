@@ -26,12 +26,12 @@ export default defineConfig({
     compilerOptions: { ignoreDeprecations: "6.0" },
   },
   clean: true,
-  // Both entries here are also `peerDependencies`, which tsup already
-  // auto-externalizes (as `^name($|/|\\)` regexes, so subpaths like
-  // `react/jsx-runtime` are covered too). Listing them again is documentation,
-  // not mechanism — the peer declaration in `package.json` is what actually
-  // keeps them out of the bundle, for the esbuild JS pass and the dts pass
-  // alike. Removing them from `peerDependencies` would silently re-inline them.
+  // Both entries here are also `peerDependencies`, which tsup auto-externalizes
+  // on its own (as `^name($|/|\\)` regexes, so subpaths like
+  // `react/jsx-runtime` are covered without listing them). The two mechanisms
+  // are redundant on purpose: the peer declaration is the consumer-facing
+  // contract and the regex form that catches subpaths, while this list states
+  // the intent at the build config and holds even if the manifest is edited.
   //
   // `zod`: `PluginChannelSchema` is public surface typed as `z.ZodType<T>`.
   // Without keeping zod external, the dts bundler inlines zod's CJS runtime and

@@ -45,14 +45,28 @@ describe("resolveVitePlan", () => {
     expect(resolveVitePlan(dir).watch.flat()).not.toContain("--no-emptyOutDir");
   });
 
-  it.each(["vite.config.server.ts", "vite.config.server.mts", "vite.config.server.js"])(
-    "detects %s",
-    async (name) => {
-      await fs.writeFile(path.join(dir, name), "export default {};");
-      expect(findServerConfig(dir)).toBe(name);
-      expect(resolveVitePlan(dir).dualConfig).toBe(true);
-    }
-  );
+  // Every extension Vite 8 accepts for a config file; missing one silently
+  // downgrades that project to a single-target plan.
+  it.each([
+    "vite.config.server.js",
+    "vite.config.server.mjs",
+    "vite.config.server.ts",
+    "vite.config.server.cjs",
+    "vite.config.server.mts",
+    "vite.config.server.cts",
+  ])("detects %s", async (name) => {
+    await fs.writeFile(path.join(dir, name), "export default {};");
+    expect(findServerConfig(dir)).toBe(name);
+    expect(resolveVitePlan(dir).dualConfig).toBe(true);
+  });
+
+  it("resolves a bare filename so Vite reads it relative to the plugin dir", async () => {
+    await fs.writeFile(path.join(dir, "vite.config.server.ts"), "export default {};");
+    const serverArgs = resolveVitePlan(dir).oneShot[1];
+    // The watcher runs with cwd set to the plugin dir, so an absolute path here
+    // would still work but a path relative to the CLI's own cwd would not.
+    expect(serverArgs[serverArgs.indexOf("--config") + 1]).toBe("vite.config.server.ts");
+  });
 
   it("builds the default config before the server config", async () => {
     await fs.writeFile(path.join(dir, "vite.config.server.ts"), "export default {};");

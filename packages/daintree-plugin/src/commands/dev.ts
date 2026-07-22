@@ -195,18 +195,20 @@ export async function runDev(opts: DevOptions = {}): Promise<void> {
   const watchers: ResultPromise[] = [];
   try {
     for (const args of plan.watch) {
-      watchers.push(spawnViteWatch(dir, args));
+      const watch = spawnViteWatch(dir, args);
+      // Attach before the next spawn can throw, not after the loop: execa
+      // rejects on signal termination, so a watcher killed by the catch below
+      // would otherwise reject with nobody listening and mask the real error.
+      // A watch crash is informational anyway, not fatal to the session — it
+      // surfaces through the inherited stdio.
+      watch.catch(() => {});
+      watchers.push(watch);
     }
   } catch (err) {
     killWatchers(watchers);
     await sendDevStop(pluginId);
     await cleanupDevLink(link);
     throw err;
-  }
-  // A watch crash is informational, not fatal to the session — surface it via
-  // its inherited stdio; don't let the rejection bubble as unhandled.
-  for (const watch of watchers) {
-    watch.catch(() => {});
   }
 
   console.log(`Watching ${pluginId} for changes. Press Ctrl-C to stop.`);

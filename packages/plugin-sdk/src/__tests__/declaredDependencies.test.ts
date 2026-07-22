@@ -54,9 +54,14 @@ async function sourceFiles(dir: string): Promise<string[]> {
  * package must be declared, because tsup externalizes exactly the declared
  * `dependencies` + `peerDependencies` and silently *inlines* everything else.
  * React was undeclared, so the whole runtime got bundled into `dist/react.js`
- * and panels shipped a second React copy. This catches the next one generically
- * — add an import of `react-dom` (or anything else) without declaring it and
- * this fails, rather than the regression surfacing as a bundle-size surprise.
+ * and panels shipped a second React copy.
+ *
+ * Scope is deliberately narrow: direct imports in this package's own `.ts`
+ * sources, matched by regex rather than parsed. It's the fast, readable half of
+ * the guard and it names the offending file. The exhaustive half — anything
+ * bundled transitively, including through the `shared/` code the entries
+ * re-export — is asserted against the real build's esbuild metafile in
+ * `reactExternal.test.ts`, which needs no parser and cannot be fooled.
  */
 describe("@daintreehq/plugin-sdk — every imported package is declared", () => {
   it("imports no npm package that is missing from dependencies or peerDependencies", async () => {

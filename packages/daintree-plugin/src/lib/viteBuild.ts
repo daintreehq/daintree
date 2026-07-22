@@ -46,11 +46,15 @@ export function spawnViteWatch(dir: string, args: string[] = ["build", "--watch"
 // against its own config, because one `vite build` runs one config object at a
 // time. The scaffold names that file `vite.config.server.ts`; the other
 // extensions are accepted so a hand-rolled project isn't locked out.
+// Ordered to match Vite 8's own DEFAULT_CONFIG_FILES precedence, so a project
+// with more than one resolves the same way Vite would.
 const SERVER_CONFIG_NAMES = [
-  "vite.config.server.ts",
-  "vite.config.server.mts",
   "vite.config.server.js",
   "vite.config.server.mjs",
+  "vite.config.server.ts",
+  "vite.config.server.cjs",
+  "vite.config.server.mts",
+  "vite.config.server.cts",
 ] as const;
 
 /** The plugin's server-target Vite config filename, or null if it has none. */

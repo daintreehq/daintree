@@ -18,6 +18,64 @@ import { runValidate } from "./validate.js";
  */
 const DNTRIGNORE_FILENAME = ".dntrignore";
 
+/**
+ * The paths `.dntrignore` leaves alone, evaluated WITHOUT `.gitignore`.
+ *
+ * Passing both files to one globby call folds them into a single ordered rule
+ * list, where a negation in either can cancel a rule from the other — a
+ * `.gitignore` of `*.md` + `!README.md`, an everyday shape, would re-include a
+ * README that `.dntrignore` had excluded. Intersecting two independent passes
+ * instead keeps `.dntrignore` strictly subtractive: a path ships only if
+ * neither policy drops it, and neither file can un-ignore the other's rules.
+ *
+ * `node_modules` / `.git` are skipped explicitly because this pass has no
+ * `.gitignore` to skip them for it. Both patterns are root-anchored to match
+ * the normative exclusion list exactly: a recursively-prefixed form would also
+ * drop a nested `dist/node_modules`, which the archive predicate permits and a
+ * plugin vendoring its runtime deps genuinely ships.
+ */
+async function dntrignoreKept(dir: string): Promise<Set<string>> {
+  return new Set(
+    await globby("**/*", {
+      cwd: dir,
+      ignoreFiles: [DNTRIGNORE_FILENAME],
+      ignore: ["node_modules/**", ".git/**"],
+      dot: false,
+      onlyFiles: true,
+    })
+  );
+}
+
+/**
+ * Paths the manifest points at, which the archive is invalid without.
+ * `verifyPluginArchive` already rejects a missing `main` or view
+ * `componentPath`, but only after the `.dntr` has been written — and a dry run
+ * never reaches it at all. Skills aren't verified there either: a dropped skill
+ * just goes quiet at runtime. Since `.dntrignore` makes excluding these easy for
+ * the first time, check them up front instead.
+ */
+function requiredManifestPaths(manifest: MinimalManifest): string[] {
+  const refs = new Set<string>();
+  // Normalized exactly the way `verifyPluginArchive` normalizes (strip a
+  // leading `./`, nothing else). Being more lenient here — folding backslashes,
+  // say — would let a reference pass this check and then fail verification
+  // after the archive had already been written, which is the failure mode this
+  // check exists to remove.
+  const add = (ref?: string) => {
+    if (ref) refs.add(ref.startsWith("./") ? ref.slice(2) : ref);
+  };
+  add(manifest.main);
+  for (const view of manifest.contributes?.views ??
+    manifest.contributes?.experimental_views ??
+    []) {
+    add(view.componentPath);
+  }
+  for (const skill of manifest.contributes?.skills ?? []) {
+    add(skill.path);
+  }
+  return [...refs];
+}
+
 export interface PackageOptions {
   dir?: string;
   verbose?: boolean;
@@ -41,6 +99,7 @@ interface MinimalManifest {
     views?: Array<{ componentPath?: string }>;
     /** @deprecated Renamed to `views` in the 1.0 freeze; still honored here. */
     experimental_views?: Array<{ componentPath?: string }>;
+    skills?: Array<{ path?: string }>;
   };
 }
 
@@ -53,7 +112,11 @@ function protectedDirs(manifest: MinimalManifest): string[] {
   const dirs = new Set<string>(["dist"]);
   const add = (ref?: string) => {
     if (!ref) return;
-    const normalized = ref.replace(/\\/g, "/");
+    // The leading `./` has to come off before splitting, or the top segment is
+    // "." and a gitignored custom output dir (`main: "./build/index.js"`) never
+    // gets preserved — the manifest is valid and the file exists, but it would
+    // be left out of the archive.
+    const normalized = ref.replace(/\\/g, "/").replace(/^\.\//, "");
     const top = normalized.split("/")[0];
     if (top && top !== "." && top !== "..") dirs.add(top);
   };
@@ -92,28 +155,29 @@ export async function runPackage(opts: PackageOptions = {}): Promise<PackageResu
     await runVitePlanBuild(dir, resolveVitePlan(dir));
   }
 
-  // Candidate set honoring .gitignore (drops cruft like .env, coverage/) plus
-  // the author's own `.dntrignore`. globby merges the two pattern sets, so
-  // `.dntrignore` adds to `.gitignore` rather than replacing it.
+  // Candidate set honoring .gitignore (drops cruft like .env, coverage/).
   const gitignored = await globby("**/*", {
     cwd: dir,
     gitignore: true,
-    ignoreFiles: [DNTRIGNORE_FILENAME],
     dot: false,
     onlyFiles: true,
   });
 
   // Build output / manifest-referenced dirs must ship even if gitignored.
-  // `.dntrignore` still applies here: `.gitignore` states repo policy (which is
-  // why build output is deliberately un-ignored above), but `.dntrignore`
-  // states shipping policy, so it has to be able to drop stray files that live
-  // *inside* a protected dir — `dist/docs/**` being the motivating case.
   const preserved = await globby(
     protectedDirs(manifest).map((d) => `${d}/**/*`),
-    { cwd: dir, ignoreFiles: [DNTRIGNORE_FILENAME], dot: false, onlyFiles: true }
+    { cwd: dir, dot: false, onlyFiles: true }
   );
 
-  const candidates = new Set<string>([...gitignored, ...preserved, "plugin.json"]);
+  // `.dntrignore` prunes the union, including the preserved set: `.gitignore`
+  // states repo policy (which is why build output is deliberately un-ignored
+  // above), but `.dntrignore` states shipping policy, so it has to reach stray
+  // files living *inside* a protected dir — `dist/docs/**` being the case that
+  // motivated it.
+  const kept = await dntrignoreKept(dir);
+  const candidates = new Set<string>([...gitignored, ...preserved].filter((f) => kept.has(f)));
+  // The manifest is the one file no policy may drop.
+  candidates.add("plugin.json");
 
   const sourcemaps = opts.sourcemaps ?? false;
   const files = [...candidates]
@@ -123,6 +187,14 @@ export async function runPackage(opts: PackageOptions = {}): Promise<PackageResu
 
   if (!files.includes("plugin.json")) {
     throw new Error("plugin.json not found in the plugin directory");
+  }
+
+  const missing = requiredManifestPaths(manifest).filter((ref) => !files.includes(ref));
+  if (missing.length > 0) {
+    throw new Error(
+      `Manifest references ${missing.length === 1 ? "a file that isn't" : "files that aren't"} in the archive: ${missing.join(", ")}. ` +
+        `Check .gitignore and ${DNTRIGNORE_FILENAME}, or run the build first.`
+    );
   }
 
   if (opts.verbose || opts.dryRun) {

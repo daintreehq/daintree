@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { execFile } from "node:child_process";
+import { createRequire } from "node:module";
 import { promisify } from "node:util";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -47,17 +48,19 @@ let metafile: EsbuildMetafile;
  */
 beforeAll(async () => {
   sdkOutDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-sdk-build-"));
+  // Resolved rather than hard-coded to `<root>/node_modules/...` so a nested or
+  // deduped install still finds the CLI next to tsup's own entry point.
+  const tsupCli = path.join(
+    path.dirname(createRequire(import.meta.url).resolve("tsup")),
+    "cli-default.js"
+  );
   await execFileAsync(
     process.execPath,
-    [
-      path.join(repoRoot, "node_modules/tsup/dist/cli-default.js"),
-      "--out-dir",
-      sdkOutDir,
-      "--metafile",
-      "--no-dts",
-      "--silent",
-    ],
-    { cwd: sdkDir }
+    [tsupCli, "--out-dir", sdkOutDir, "--metafile", "--no-dts", "--silent"],
+    // Shorter than the hook budget below: a vitest hook timeout does not kill
+    // the child, so without this a hung build outlives the hook and races the
+    // afterAll cleanup.
+    { cwd: sdkDir, timeout: 90_000 }
   );
   metafile = JSON.parse(
     await fs.readFile(path.join(sdkOutDir, "metafile-esm.json"), "utf8")
@@ -74,6 +77,18 @@ describe("@daintreehq/plugin-sdk/react — React stays external", () => {
       /(^|[/\\])node_modules[/\\]react(-dom)?[/\\]/.test(input)
     );
     expect(reactInputs).toEqual([]);
+  });
+
+  it("bundles nothing from node_modules at all", () => {
+    // Transitive and parser-free: every declared dependency is externalized, so
+    // any npm package appearing as a build input means something reachable from
+    // an entry — including through `shared/`, which the entries re-export —
+    // pulled in an undeclared package and got inlined. React was the first such
+    // case; this catches the next one without following imports by hand.
+    const bundledPackages = Object.keys(metafile.inputs).filter((input) =>
+      /(^|[/\\])node_modules[/\\]/.test(input)
+    );
+    expect(bundledPackages).toEqual([]);
   });
 
   it("emits react as an external import of the react entry", () => {
@@ -117,15 +132,37 @@ describe("consumer panel build — React never reaches the bundle", () => {
       'import { useHostChannel } from "@daintreehq/plugin-sdk/react";\nexport { useHostChannel };\n'
     );
 
+    // A real node_modules layout rather than a `resolve.alias`. Two reasons:
+    // it's what a plugin author actually has, and — the load-bearing one — the
+    // SDK's own bare `react` import resolves relative to *the SDK's* location,
+    // so an aliased copy sitting in a bare temp dir could never resolve React
+    // at all. The build would then fail on an unresolved import instead of
+    // bundling React, and the assertions below could never go red for the
+    // reason they exist.
+    const sdkPkgDir = path.join(fixtureDir, "node_modules/@daintreehq/plugin-sdk");
+    await fs.mkdir(sdkPkgDir, { recursive: true });
+    await fs.cp(sdkOutDir, path.join(sdkPkgDir, "dist"), { recursive: true });
+    await fs.writeFile(
+      path.join(sdkPkgDir, "package.json"),
+      JSON.stringify({
+        name: "@daintreehq/plugin-sdk",
+        version: "0.0.0-fixture",
+        type: "module",
+        exports: { "./react": "./dist/react.js" },
+      })
+    );
+    // Real React, so a regression bundles the genuine runtime (markers and all)
+    // rather than a stub that would slip past the marker assertions.
+    await fs.symlink(
+      path.join(repoRoot, "node_modules/react"),
+      path.join(fixtureDir, "node_modules/react"),
+      process.platform === "win32" ? "junction" : undefined
+    );
+
     const result = await build({
       root: fixtureDir,
       logLevel: "silent",
       plugins: [daintreePlugin()],
-      resolve: {
-        // Stand in for the workspace resolution a real plugin gets from its
-        // own node_modules, pointed at the build produced above.
-        alias: { "@daintreehq/plugin-sdk/react": path.join(sdkOutDir, "react.js") },
-      },
       build: {
         lib: { entry: { panel: path.join(fixtureDir, "panel.js") }, formats: ["es"] },
         // Kept in memory: the assertions read the rollup output directly, so

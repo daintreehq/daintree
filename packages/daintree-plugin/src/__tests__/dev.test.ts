@@ -49,7 +49,11 @@ let pluginDir: string;
 let pluginsRoot: string;
 
 beforeEach(async () => {
-  vi.clearAllMocks();
+  // resetAllMocks, not clearAllMocks: clearing wipes recorded calls but leaves
+  // queued `mockImplementationOnce` entries behind, so a test that ends without
+  // consuming its queue poisons the next one. Every mock here is a
+  // `vi.fn(impl)`, which reset restores to that original implementation.
+  vi.resetAllMocks();
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-dev-test-"));
   pluginDir = path.join(tmpDir, "my-plugin");
   pluginsRoot = path.join(tmpDir, "plugins-root");
@@ -155,6 +159,12 @@ describe("runDev", () => {
     const calls = vi.mocked(sendCliRequest).mock.calls.map((c) => c[0]);
     expect(calls).toContain("plugin.dev.start");
     expect(calls).toContain("plugin.dev.stop");
+
+    // dist/<main> must exist before Daintree loads the plugin, or the marker is
+    // in place with no bundle for the dev worker to import.
+    expect(vi.mocked(runVitePlanBuild).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(sendCliRequest).mock.invocationCallOrder[0]
+    );
 
     const watch = await spawnViteWatchMock.mock.results[0].value;
     expect(watch.kill).toHaveBeenCalled();
