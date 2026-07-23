@@ -17,15 +17,31 @@ export function registerTerminalInputActions(
   actions.set("terminal.inject", () => ({
     id: "terminal.inject",
     title: "Inject Context",
-    description: "Inject worktree context into terminal",
+    description:
+      "Inject the active worktree's prepared context into a terminal. Args: `terminalId` — panel UUID from `terminal.list` (the `id` field). REQUIRED for agent/MCP dispatch: an external caller must name its target explicitly, because focus can drift between the call and its execution and would otherwise route a multi-KB context dump into whatever terminal happens to be focused (#11346). Interactive (keybinding) dispatch may omit it and falls back to the focused terminal.",
     category: "terminal",
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    run: async () => {
+    argsSchema: z.object({ terminalId: z.string().min(1).optional() }).optional(),
+    run: async (args: { terminalId?: string } | undefined, ctx) => {
+      const terminalId = args?.terminalId;
+      // Agent/MCP callers must bind an explicit target. Unpinned external
+      // sessions carry no dispatch-time terminal pin, so the injection hook's
+      // focus fallback would let the context land in the wrong terminal after
+      // focus drifts across the MCP→IPC round trip (#11346). Fail closed
+      // *before* the active-worktree no-op so a missing target is never
+      // silently swallowed.
+      if (ctx.dispatchSource === "agent" && !terminalId) {
+        throw new Error(
+          "terminal.inject requires an explicit `terminalId` when dispatched by an agent or MCP client — pass the panel UUID from `terminal.list` (the `id` field)."
+        );
+      }
       const activeWorktreeId = callbacks.getActiveWorktreeId();
       if (activeWorktreeId) {
-        callbacks.onInject(activeWorktreeId);
+        // `terminalId` is undefined for interactive dispatch → the hook falls
+        // back to the focused terminal (the default keybinding relies on this).
+        callbacks.onInject(activeWorktreeId, terminalId);
       }
     },
   }));
@@ -205,11 +221,20 @@ export function registerTerminalInputActions(
       "Add a terminal to the fleet arming set so the next broadcast input is also routed to it. Args: `terminalId` (required) — panel UUID from `terminal.list` (the `id` field); ignored when the terminal is not arm-eligible. Returns { armed } — the resulting armed terminal IDs in broadcast (arm) order.",
     category: "terminal",
     kind: "command",
-    // Arming only edits the broadcast set — it routes the *next* input, mutates
-    // nothing, and is reversible via `terminal.disarm`/`terminal.disarmAll`, so
-    // it needs no confirmation. Hidden from the palette so user arming stays in
-    // the fleet UI (ribbon `toggleId`/`armAll`) rather than a stray palette pick.
-    danger: "safe",
+    // Arming reroutes the human's *next* keystrokes to every armed terminal, so
+    // an agent/MCP caller that silently arms the terminal the user is typing
+    // into can fan their input — including a reflexive Ctrl+C — out to terminals
+    // in worktrees they aren't watching (#11346). `danger:"confirm"` makes that
+    // non-silent: agent dispatch now routes through a real host confirm dialog
+    // (client elicitation is no longer trusted as authorization, #11359). This
+    // is the consent boundary for unconfirmed fleet broadcast — see
+    // docs/architecture/destructive-action-safeguards.md. User-side arming goes
+    // through the fleet UI (ribbon `toggleId`/`armAll`), which calls the store
+    // directly and bypasses ActionService, so interactive arming is unaffected.
+    // Hidden from the palette so a palette pick can't bypass the confirm gate.
+    danger: "confirm",
+    dangerRationale:
+      "Arming reroutes the human's next keystrokes to every armed terminal — an assistant arming a set the user forgets can broadcast commands to multiple terminals unintentionally.",
     palette: { mode: "hidden" },
     scope: "renderer",
     argsSchema: z.object({ terminalId: z.string().min(1) }),
