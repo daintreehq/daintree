@@ -23,6 +23,12 @@ export function parseSpawnError(error: unknown): SpawnError {
       code = "ENXIO";
     } else if (nodeErr.code === "EBUSY") {
       code = "EBUSY";
+    } else if (nodeErr.code === "TERMINAL_ALREADY_LIVE") {
+      // Custom, non-errno code thrown by PtyManager.spawn() when the id already
+      // has a live owner (#11341). Preserved explicitly rather than by casting
+      // an arbitrary runtime string, so an unrelated code can't slip into the
+      // closed SpawnErrorCode union and break the renderer banner lookup.
+      code = "TERMINAL_ALREADY_LIVE";
     }
 
     return {

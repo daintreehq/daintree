@@ -30,7 +30,7 @@ vi.mock("../pty/index.js", async (importOriginal) => {
         if (shouldThrow) throw constructorError;
       }
       getInfo() {
-        return {};
+        return { wasKilled: false, isExited: false };
       }
       isAgentCurrentlyLive() {
         return false;
@@ -154,5 +154,26 @@ describe("PtyManager.spawn — PTY cleanup on constructor failure", () => {
 
     expect(manager.hasTerminal("t1")).toBe(true);
     expect(mockPty.kill).not.toHaveBeenCalled();
+  });
+
+  it("rejects a duplicate spawn against a live terminal with TERMINAL_ALREADY_LIVE", () => {
+    shouldThrow = false;
+
+    manager.spawn("t1", { cwd: "/tmp", cols: 80, rows: 24, kind: "terminal" });
+    expect(manager.hasTerminal("t1")).toBe(true);
+    vi.mocked(acquirePtyProcess).mockClear();
+
+    let thrown: NodeJS.ErrnoException | undefined;
+    try {
+      manager.spawn("t1", { cwd: "/tmp", cols: 80, rows: 24, kind: "terminal" });
+    } catch (error) {
+      thrown = error as NodeJS.ErrnoException;
+    }
+
+    // The second spawn is rejected before it ever acquires a PTY, and the
+    // original live terminal is left registered and untouched (#11341).
+    expect(thrown?.code).toBe("TERMINAL_ALREADY_LIVE");
+    expect(acquirePtyProcess).not.toHaveBeenCalled();
+    expect(manager.hasTerminal("t1")).toBe(true);
   });
 });

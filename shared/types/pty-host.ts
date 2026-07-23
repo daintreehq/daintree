@@ -92,8 +92,10 @@ export interface PtyHostSpawnOptions {
    * Cached here so it rides `pendingSpawns` and is re-injected on every replay —
    * a pty-host crash respawn, a crash-budget migration, and the pre-ready
    * initial replay — so a resumed (or any) launch survives a crash on these
-   * shells instead of coming back as an empty prompt (#11339). Main owns the
-   * write: the pty-host ignores this field.
+   * shells instead of coming back as an empty prompt (#11339). The pty-host
+   * spawn handler injects it, and only after a successful spawn, so a rejected
+   * spawn (e.g. TERMINAL_ALREADY_LIVE) can't type it into a pre-existing live
+   * PTY (#11341).
    */
   postSpawnInput?: string;
 }
@@ -833,6 +835,7 @@ export type SpawnErrorCode =
   | "EBUSY" // Terminal device busy
   | "DISCONNECTED" // Terminal process no longer exists in backend (e.g., after project switch)
   | "PENDING_SPAWNS_CAPPED" // PtyClient.pendingSpawns admission cap hit (restart-storm guard)
+  | "TERMINAL_ALREADY_LIVE" // Spawn rejected: the id already has a live owner (#11341)
   | "UNKNOWN"; // Unknown error
 
 /** Result of a spawn operation */

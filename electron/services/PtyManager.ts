@@ -339,6 +339,18 @@ export class PtyManager extends EventEmitter {
     if (this.registry.has(id)) {
       const existing = this.registry.get(id);
       const existingInfo = existing?.getInfo();
+      // A spawn for an id whose terminal is still live must NOT silently kill it
+      // (#11341). Reject so the caller sees the collision instead of losing the
+      // running process. Only an exited or killed-but-preserved entry (retained
+      // in the registry for its scrollback snapshot) may be replaced by the
+      // kill-and-respawn path below — that keeps restart/resume working.
+      if (existingInfo && !existingInfo.wasKilled && !existingInfo.isExited) {
+        const error = new Error(
+          `Terminal ${id} already has a live owner; refusing to kill and respawn`
+        ) as NodeJS.ErrnoException;
+        error.code = "TERMINAL_ALREADY_LIVE";
+        throw error;
+      }
       logWarn(
         `Terminal ${id} already exists (projectId: ${existingInfo?.projectId?.slice(0, 8)}), killing to respawn with new projectId`
       );

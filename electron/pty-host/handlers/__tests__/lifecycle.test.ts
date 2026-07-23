@@ -471,3 +471,115 @@ describe("lifecycle spawn — failed-to-start synthesizes an exit for launched a
     return ctx.ptyManager.getTerminal as ReturnType<typeof vi.fn>;
   }
 });
+
+describe("lifecycle spawn — TERMINAL_ALREADY_LIVE rejection protects the live owner (#11341)", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function sentEvents(ctx: HostContext) {
+    return (ctx.sendEvent as ReturnType<typeof vi.fn>).mock.calls.map(([event]) => event);
+  }
+
+  function throwAlreadyLive(ctx: HostContext) {
+    (ctx.ptyManager.spawn as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      const error = new Error("Terminal t1 already has a live owner") as NodeJS.ErrnoException;
+      error.code = "TERMINAL_ALREADY_LIVE";
+      throw error;
+    });
+  }
+
+  it("preserves the TERMINAL_ALREADY_LIVE code on spawn-result", () => {
+    const ctx = makeCtx();
+    throwAlreadyLive(ctx);
+    const dispatch = createPtyHostMessageDispatcher(ctx);
+
+    dispatch({ type: "spawn", id: "t1", options: {} });
+
+    const result = sentEvents(ctx).find((e) => e.type === "spawn-result") as {
+      result: { success: boolean; error?: { code: string } };
+    };
+    expect(result.result.success).toBe(false);
+    expect(result.result.error?.code).toBe("TERMINAL_ALREADY_LIVE");
+  });
+
+  it("does not synthesize an agent exit for a live-collision rejection", () => {
+    const ctx = makeCtx();
+    throwAlreadyLive(ctx);
+    const dispatch = createPtyHostMessageDispatcher(ctx);
+
+    // launchAgentId is set, but the pre-existing agent is still running, so a
+    // synthetic "exited" would falsely mark the live agent dead.
+    dispatch({ type: "spawn", id: "t1", options: { launchAgentId: "claude" } });
+
+    const events = sentEvents(ctx);
+    expect(events.find((e) => e.type === "agent-spawned")).toBeUndefined();
+    expect(events.find((e) => e.type === "agent-state")).toBeUndefined();
+  });
+
+  it("keeps the live owner's pause coordinator on a rejection", () => {
+    const forceReleaseAll = vi.fn();
+    const pauseCoordinators = new Map([
+      ["t1", { forceReleaseAll }],
+    ]) as unknown as HostContext["pauseCoordinators"];
+    const ctx = makeCtx({ pauseCoordinators });
+    throwAlreadyLive(ctx);
+    const dispatch = createPtyHostMessageDispatcher(ctx);
+
+    dispatch({ type: "spawn", id: "t1", options: {} });
+
+    // The retirement lives in the success path, so a rejected spawn never tears
+    // down the still-running terminal's coordinator.
+    expect(forceReleaseAll).not.toHaveBeenCalled();
+    expect(pauseCoordinators.has("t1")).toBe(true);
+  });
+
+  it("retires the stale coordinator and creates a fresh one on a successful respawn", () => {
+    const forceReleaseAll = vi.fn();
+    const pauseCoordinators = new Map([
+      ["t1", { forceReleaseAll }],
+    ]) as unknown as HostContext["pauseCoordinators"];
+    const ctx = makeCtx({ pauseCoordinators });
+    (ctx.ptyManager.getTerminal as ReturnType<typeof vi.fn>).mockReturnValue(termInfo(1234));
+    const dispatch = createPtyHostMessageDispatcher(ctx);
+
+    dispatch({ type: "spawn", id: "t1", options: {} });
+
+    // A real respawn (dead/preserved entry replaced) still tears down the stale
+    // coordinator and eagerly creates the successor's — but only after the spawn
+    // committed, so the retirement can never strand a live owner.
+    expect(forceReleaseAll).toHaveBeenCalledTimes(1);
+    expect(pauseCoordinators.has("t1")).toBe(false);
+    expect(ctx.getOrCreatePauseCoordinator).toHaveBeenCalledWith("t1");
+    const spawnOrder = (ctx.ptyManager.spawn as ReturnType<typeof vi.fn>).mock
+      .invocationCallOrder[0];
+    const retireOrder = forceReleaseAll.mock.invocationCallOrder[0];
+    expect(spawnOrder).toBeLessThan(retireOrder);
+  });
+
+  it("does not inject postSpawnInput into the pre-existing live PTY", () => {
+    const ctx = makeCtx();
+    throwAlreadyLive(ctx);
+    const dispatch = createPtyHostMessageDispatcher(ctx);
+
+    dispatch({ type: "spawn", id: "t1", options: { postSpawnInput: "claude\r" } });
+
+    expect(ctx.ptyManager.write).not.toHaveBeenCalled();
+  });
+
+  it("delivers postSpawnInput once on a successful spawn", () => {
+    const ctx = makeCtx();
+    (ctx.ptyManager.getTerminal as ReturnType<typeof vi.fn>).mockReturnValue(termInfo(1234));
+    const dispatch = createPtyHostMessageDispatcher(ctx);
+
+    dispatch({ type: "spawn", id: "t1", options: { postSpawnInput: "claude\r" } });
+
+    expect(ctx.ptyManager.write).toHaveBeenCalledTimes(1);
+    expect(ctx.ptyManager.write).toHaveBeenCalledWith("t1", "claude\r");
+  });
+});

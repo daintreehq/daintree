@@ -66,6 +66,11 @@ export const SPAWN_ERROR_BANNER_COPY = {
     description: () =>
       "Restart requests are being throttled to prevent a restart storm. Wait a moment and retry.",
   },
+  TERMINAL_ALREADY_LIVE: {
+    title: "Terminal already running",
+    description: () =>
+      "This terminal already has a running process, so the existing one was kept. Retry to restart it.",
+  },
   UNKNOWN: {
     title: "Couldn't start terminal",
     description: (error) => boundedErrorText(error.message),

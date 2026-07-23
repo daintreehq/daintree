@@ -789,28 +789,26 @@ export class PtyClient extends EventEmitter {
   }
 
   /**
-   * Send a spawn to a shard and, for command launches on shells that couldn't
-   * host a startup wrapper, re-inject the launch command right after it (#11339).
-   * The command rides `options.postSpawnInput` in `pendingSpawns`, so every
-   * replay path (initial pre-ready replay, crash respawn, crash-budget
-   * migration) funnels through here and the terminal comes back running its
-   * command — including a resume — instead of a bare prompt. The write is FIFO
-   * behind the spawn on the same channel and the host's spawn handler registers
-   * the terminal synchronously, so it lands on the live PTY.
+   * Send a spawn to a shard. For command launches on shells that couldn't host
+   * a startup wrapper, the launch command rides `options.postSpawnInput` in
+   * `pendingSpawns`, and the host's spawn handler injects it right after a
+   * successful spawn (#11339). Every replay path (initial pre-ready replay,
+   * crash respawn, crash-budget migration) funnels through here and re-sends the
+   * same options, so the terminal comes back running its command — including a
+   * resume — instead of a bare prompt. Delivery is bound to spawn success on the
+   * host: a rejected spawn (e.g. TERMINAL_ALREADY_LIVE, #11341) never injects
+   * the command into a pre-existing live PTY.
    */
   private sendSpawnWithPostInput(shard: PtyShard, id: string, options: PtyHostSpawnOptions): void {
     // Never deliver into a shard that isn't ready yet. A post-fork/pre-ready
-    // send is queued by the host AND re-sent by the first-ready replay below,
-    // which for a command launch would run the command (and any resume) twice.
-    // The entry is already in `pendingSpawns`, so the first-ready replay (which
-    // runs after `markReady`, i.e. once this guard passes) delivers it exactly
-    // once. This makes the "double-spawn-safe" invariant explicit rather than
-    // relying on the pre-fork transport drop.
+    // send is dropped here AND re-sent by the first-ready replay below, which
+    // for a command launch would run the command (and any resume) twice. The
+    // entry is already in `pendingSpawns`, so the first-ready replay (which runs
+    // after `markReady`, i.e. once this guard passes) delivers it exactly once.
+    // This makes the "double-spawn-safe" invariant explicit rather than relying
+    // on the pre-fork transport drop.
     if (!shard.isRunning()) return;
     shard.send({ type: "spawn", id, options });
-    if (options.postSpawnInput) {
-      shard.send({ type: "write", id, data: options.postSpawnInput });
-    }
   }
 
   private respawnPendingForShard(shard: PtyShard): void {
