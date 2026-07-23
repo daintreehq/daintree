@@ -472,9 +472,11 @@ describe("panelKindSerialisers", () => {
         };
         const persisted = JSON.parse(JSON.stringify(serializeFileBrowser(panel)));
         const restoredArgs = deserialize()({ id: "fb1", ...persisted });
+        // Spread first, then pin the discriminant: restoredArgs' type carries
+        // the open PanelKind union, which must not widen the literal.
         const defaults = createFileBrowserDefaults({
-          kind: "file-browser",
           ...restoredArgs,
+          kind: "file-browser",
         });
         expect(defaults.browserTreeSnapshot).toBeDefined();
 
