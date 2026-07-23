@@ -12,6 +12,7 @@ import type {
   TabGroup,
 } from "@shared/types";
 import type { NotificationSettings } from "@shared/types/ipc/api";
+import type { RelocationPreview, RelocationRequest } from "@shared/types/projectRelocation";
 import type { AgentPreset } from "@shared/config/agentRegistry";
 import type { ProjectSwitchOutgoingState } from "@shared/types/ipc/project";
 import type {
@@ -144,6 +145,23 @@ export const projectClient = {
 
   openDialog: (): Promise<string | null> => {
     return window.electron.project.openDialog();
+  },
+
+  /**
+   * Read-only preview of what a move/reattach would affect (#11282, phase 4).
+   * Never mutates — the dialog gates its confirm on the returned blockers.
+   */
+  previewRelocation: (request: RelocationRequest): Promise<RelocationPreview> => {
+    return window.electron.projectRelocation.preview(request);
+  },
+
+  /**
+   * Commit a managed move (`fs.rename`) or reattach of an already-moved folder.
+   * Broadcasts `PROJECT_UPDATED` on success, so the local cache is invalidated.
+   */
+  applyRelocation: (request: RelocationRequest): Promise<Project> => {
+    invalidateCurrentCache();
+    return window.electron.projectRelocation.apply(request);
   },
 
   onSwitch: (

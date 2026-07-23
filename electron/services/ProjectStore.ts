@@ -1196,6 +1196,29 @@ export class ProjectStore {
     return this.stateManager.getProjectState(projectId);
   }
 
+  /**
+   * Count the persisted panels whose stored absolute paths a move from
+   * `oldPath` to `newPath` would rewrite (#11282, phase 4). Read-only: reuses
+   * the exact production rebase ({@link rewriteProjectStatePaths}) over the
+   * loaded state so the "panels with rewritten paths" preview can't drift from
+   * what an actual relocation rewrites. Returns 0 when nothing changes.
+   */
+  async countRebasedPanels(projectId: string, oldPath: string, newPath: string): Promise<number> {
+    if (normalizeProjectPath(oldPath) === normalizeProjectPath(newPath)) return 0;
+    const state = await this.getProjectState(projectId);
+    if (!state) return 0;
+    const rewritten = rewriteProjectStatePaths(state, oldPath, newPath);
+    // Same reference back ⇒ nothing rebased.
+    if (rewritten === state) return 0;
+    const before = Array.isArray(state.terminals) ? state.terminals : [];
+    const after = Array.isArray(rewritten.terminals) ? rewritten.terminals : [];
+    let count = 0;
+    for (let i = 0; i < before.length; i++) {
+      if (after[i] !== before[i]) count++;
+    }
+    return count;
+  }
+
   async getProjectStateWithRecovery(projectId: string): Promise<ProjectStateReadResult> {
     return this.stateManager.getProjectStateWithRecovery(projectId);
   }

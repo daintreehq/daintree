@@ -74,6 +74,7 @@ import { buildMenuPreloadBindings } from "./ipc/handlers/menu.preload.js";
 import { buildCliPreloadBindings } from "./ipc/handlers/cli.preload.js";
 import { buildGlobalRecipesPreloadBindings } from "./ipc/handlers/globalRecipes.preload.js";
 import { buildEditorConfigPreloadBindings } from "./ipc/handlers/editorConfig.preload.js";
+import { buildProjectRelocationPreloadBindings } from "./ipc/handlers/projectRelocation.preload.js";
 import { buildPaintFabricSurfacePreloadBindings } from "./ipc/handlers/paintFabricSurface.preload.js";
 import { buildWebviewNavigationPreloadBindings } from "./ipc/handlers/webviewNavigation.preload.js";
 import { buildWebviewCapturePreloadBindings } from "./ipc/handlers/webviewCapture.preload.js";
@@ -1431,6 +1432,9 @@ function buildElectronApi(): ElectronAPI {
 
     // Editor API
     editor: buildEditorConfigPreloadBindings(_unwrappingInvoke),
+
+    // Move or rename project — preview + apply (#11282, phase 4)
+    projectRelocation: buildProjectRelocationPreloadBindings(_unwrappingInvoke),
 
     // Paint-fabric surface views (Phase 1V substrate)
     paintSurface: {

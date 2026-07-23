@@ -5,6 +5,7 @@ import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { usePaletteStore } from "@/store/paletteStore";
+import { useProjectRelocationStore } from "@/store/projectRelocationStore";
 import { notify } from "@/lib/notify";
 import { closeAndAnnounce } from "@/lib/accessibility";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
@@ -114,7 +115,10 @@ export interface UseProjectSwitcherPaletteReturn {
    * silently otherwise. No-op (with a toast) for the active project.
    */
   freeMemoryProject: (projectId: string) => Promise<void>;
-  locateProject: (projectId: string) => Promise<void>;
+  /** Missing-project recovery: open the relocation dialog in reattach mode. */
+  locateProject: (projectId: string) => void;
+  /** Healthy-project "Move or rename": open the relocation dialog in move mode. */
+  moveOrRenameProject: (projectId: string) => void;
   togglePinProject: (projectId: string) => Promise<void>;
   /**
    * Write the project's absolute path to the clipboard and surface a transient
@@ -283,7 +287,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const closeActiveProject = useProjectStore((state) => state.closeActiveProject);
   const closeProject = useProjectStore((state) => state.closeProject);
   const removeProject = useProjectStore((state) => state.removeProject);
-  const locateProjectFn = useProjectStore((state) => state.locateProject);
+  const openRelocation = useProjectRelocationStore((state) => state.open);
   const projectStats = useProjectStatsStore((state) => state.stats);
 
   const { copy: copyToClipboard } = useCopyWithFeedback();
@@ -609,11 +613,28 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     useProjectStore.getState().openCloneRepoDialog();
   }, [close]);
 
-  const locateProject = useCallback(
-    async (projectId: string) => {
-      await locateProjectFn(projectId);
+  // "Locate moved project" (missing) and "Move or rename project" (healthy) both
+  // open the shared relocation dialog (#11282, phase 4), superseding the old
+  // picker-then-mutate `project:locate` path. The palette closes first so its
+  // overlay doesn't contend with the dialog's focus trap.
+  const openRelocationDialog = useCallback(
+    (projectId: string, mode: "move" | "reattach") => {
+      const project = projects.find((p) => p.id === projectId);
+      if (!project) return;
+      close();
+      openRelocation({ projectId, mode, oldPath: project.path, name: project.name });
     },
-    [locateProjectFn]
+    [projects, close, openRelocation]
+  );
+
+  const locateProject = useCallback(
+    (projectId: string) => openRelocationDialog(projectId, "reattach"),
+    [openRelocationDialog]
+  );
+
+  const moveOrRenameProject = useCallback(
+    (projectId: string) => openRelocationDialog(projectId, "move"),
+    [openRelocationDialog]
   );
 
   const copyPath = useCallback(
@@ -1169,6 +1190,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     removeProject: removeProjectFromList,
     freeMemoryProject,
     locateProject,
+    moveOrRenameProject,
     togglePinProject,
     copyPath,
     stopConfirmProjectId,

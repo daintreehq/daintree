@@ -434,7 +434,12 @@ export function ModalHostLayer({
               onFreeMemoryProject={(projectId) =>
                 void projectSwitcherPalette.freeMemoryProject(projectId)
               }
-              onLocateProject={(projectId) => void projectSwitcherPalette.locateProject(projectId)}
+              onLocateProject={(projectId) => {
+                projectSwitcherPalette.locateProject(projectId);
+              }}
+              onMoveOrRenameProject={(projectId) => {
+                projectSwitcherPalette.moveOrRenameProject(projectId);
+              }}
               onTogglePinProject={(projectId) =>
                 void projectSwitcherPalette.togglePinProject(projectId)
               }

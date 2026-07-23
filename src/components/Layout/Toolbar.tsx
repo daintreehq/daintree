@@ -633,7 +633,14 @@ export function Toolbar({
 
   const handleLocateProject = useCallback(
     (projectId: string) => {
-      void projectSwitcher.locateProject(projectId);
+      projectSwitcher.locateProject(projectId);
+    },
+    [projectSwitcher]
+  );
+
+  const handleMoveOrRenameProject = useCallback(
+    (projectId: string) => {
+      projectSwitcher.moveOrRenameProject(projectId);
     },
     [projectSwitcher]
   );
@@ -1607,6 +1614,7 @@ export function Toolbar({
                     onCloseProject={handleCloseProject}
                     onFreeMemoryProject={handleFreeMemoryProject}
                     onLocateProject={handleLocateProject}
+                    onMoveOrRenameProject={handleMoveOrRenameProject}
                     onTogglePinProject={projectSwitcher.togglePinProject}
                     onCopyPath={projectSwitcher.copyPath}
                     onOpenProjectSettings={currentProject ? handleOpenProjectSettings : undefined}

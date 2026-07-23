@@ -1,4 +1,4 @@
-import { existsSync, statSync } from "fs";
+import { existsSync, lstatSync, statSync } from "fs";
 import { rename } from "fs/promises";
 import path from "path";
 import type { BrowserWindow, WebContents } from "electron";
@@ -14,6 +14,13 @@ import type { WorkspaceClient } from "./WorkspaceClient.js";
 import type { WindowRegistry } from "../window/WindowRegistry.js";
 import type { WorktreePortBroker } from "./WorktreePortBroker.js";
 import type { Project } from "../types/index.js";
+import type {
+  ProjectRelocationReason,
+  RelocationBlocker,
+  RelocationPreview,
+} from "../../shared/types/projectRelocation.js";
+
+export type { ProjectRelocationReason } from "../../shared/types/projectRelocation.js";
 
 // How long the state-write rewrite guard lingers after a relocation resolves, to
 // absorb a renderer layout write debounced with the old root (the persistence
@@ -45,15 +52,6 @@ const RELOCATION_GUARD_GRACE_MS = 3000;
 /** Phase 3 only implements `"refuse"`; the `"hibernate"` continuity path (which
  * tears down the Assistant's whole sub-agent tree) is deferred to phase 4/5. */
 export type AssistantDisposition = "refuse";
-
-export type ProjectRelocationReason =
-  | "not-found"
-  | "in-progress"
-  | "cross-volume"
-  | "assistant-active"
-  | "invalid-destination"
-  | "destination-exists"
-  | "same-path";
 
 export class ProjectRelocationError extends Error {
   constructor(
@@ -151,6 +149,149 @@ export class ProjectRelocationCoordinator {
       // write debounced with the old root can land after `relocate` resolves, and
       // must still be rebased. Released only if no newer relocation re-armed it.
       this.scheduleGuardRelease(projectId);
+    }
+  }
+
+  /**
+   * Read-only description of what a relocation WOULD do (#11282, phase 4). Runs
+   * the same preflight checks as {@link relocate} but converts each into a typed
+   * `blocker` instead of throwing, and enumerates the affected state — running
+   * terminals, linked worktrees, panels whose stored paths would be rewritten —
+   * without touching the filesystem, PTYs, hosts, views, or persisted state.
+   *
+   * Blockers ride the SUCCESSFUL result: a `ProjectRelocationError.reason` does
+   * not survive IPC error serialization, so the renderer dialog gets structured
+   * `{ reason, message }` to gate its confirm button on. `apply` re-validates —
+   * the preview is a description, never an authorization.
+   */
+  async previewRelocate(request: RelocateProjectRequest): Promise<RelocationPreview> {
+    const { projectId, mode } = request;
+
+    const project = projectStore.getProjectById(projectId);
+    if (!project) {
+      throw new ProjectRelocationError("not-found", `Project not found: ${projectId}`);
+    }
+    const oldPath = project.path;
+    // Resolve ownership SYNCHRONOUSLY before any await (#11131), mirroring
+    // `relocate`. `apply` only quiesces (kills terminals, refuses on an active
+    // Assistant) when it runs `runPipeline` — every move, plus a reattach of an
+    // OPEN project. A reattach of a closed/missing project delegates straight to
+    // `ProjectStore.relocateProject`, which touches no runtimes, so the preview
+    // must NOT claim terminals will stop or block on a (possibly stale) Assistant
+    // record there.
+    const openAtEntry = collectActiveProjectIds(
+      projectViewManagersFrom(this.deps.windowRegistry),
+      projectStore.getCurrentProjectId(),
+      "project-relocation-preview"
+    ).has(projectId);
+    const usesPipeline = mode === "move" || openAtEntry;
+
+    const blockers: RelocationBlocker[] = [];
+    const pushBlocker = (error: unknown): void => {
+      if (error instanceof ProjectRelocationError) {
+        blockers.push({ reason: error.reason, message: error.message });
+      } else {
+        throw error;
+      }
+    };
+
+    if (this.relocating.has(projectId)) {
+      blockers.push({
+        reason: "in-progress",
+        message: `A relocation is already running for "${project.name}".`,
+      });
+    }
+
+    // Resolve + validate the destination without side effects.
+    let newPath = normalizeProjectPath(request.newPath);
+    if (mode === "move") {
+      try {
+        newPath = this.validateManagedMove(oldPath, request.newPath);
+      } catch (error) {
+        pushBlocker(error);
+      }
+    } else if (!existsSync(request.newPath)) {
+      blockers.push({
+        reason: "invalid-destination",
+        message: `The folder to reattach doesn't exist: ${request.newPath}`,
+      });
+    }
+
+    // A destination already registered to a DIFFERENT project blocks either mode.
+    const conflict = await projectStore.getProjectByPath(newPath);
+    if (conflict && conflict.id !== projectId) {
+      blockers.push({
+        reason: "destination-exists",
+        message: `Another project ("${conflict.name}") is already registered at that location.`,
+      });
+    }
+
+    // Assistant guard, fail-closed — mirrors runPipeline's check but as a blocker.
+    // Only relevant when apply will quiesce (the pipeline path); a closed reattach
+    // never stops the Assistant, so blocking on it there would be a phantom.
+    if (usesPipeline) {
+      try {
+        const assistant = await getAssistantBackend(projectId);
+        if (assistant) {
+          blockers.push({
+            reason: "assistant-active",
+            message: "Stop the Daintree Assistant for this project before moving it.",
+          });
+        }
+      } catch (error) {
+        logError("relocate-preview-assistant-check-failed", error, { projectId });
+        blockers.push({
+          reason: "assistant-active",
+          message:
+            "Couldn't check the Daintree Assistant for this project — stop it and try again.",
+        });
+      }
+    }
+
+    // Read-only enumeration. The folder sits at `oldPath` for a not-yet-run move
+    // and at `request.newPath` for an already-moved reattach. Only the pipeline
+    // path gracefully stops terminals, so a closed reattach reports zero.
+    const folderPath = mode === "reattach" ? request.newPath : oldPath;
+    const [runningTerminalCount, linkedWorktrees, affectedPanelCount] = await Promise.all([
+      usesPipeline ? this.countRunningTerminals(projectId) : Promise.resolve(0),
+      this.listLinkedWorktrees(folderPath),
+      projectStore.countRebasedPanels(projectId, oldPath, newPath),
+    ]);
+
+    return {
+      mode,
+      oldPath,
+      newPath,
+      runningTerminalCount,
+      linkedWorktrees,
+      affectedPanelCount,
+      blockers,
+    };
+  }
+
+  private async countRunningTerminals(projectId: string): Promise<number> {
+    const { ptyClient } = this.deps;
+    if (!ptyClient) return 0;
+    try {
+      const stats = await ptyClient.getProjectStats(projectId);
+      return stats.terminalCount;
+    } catch (error) {
+      logError("relocate-preview-terminal-count-failed", error, { projectId });
+      return 0;
+    }
+  }
+
+  private async listLinkedWorktrees(folderPath: string): Promise<string[]> {
+    try {
+      // Dynamic import keeps GitService (and simple-git) out of the coordinator's
+      // eval graph, matching how the Assistant backend is loaded lazily below.
+      const { GitService } = await import("./GitService.js");
+      const worktrees = await new GitService(folderPath).listWorktrees();
+      return worktrees.filter((w) => !w.isMainWorktree).map((w) => w.path);
+    } catch {
+      // A repo we can't enumerate (folder missing, not a git repo) simply reports
+      // no linked worktrees — the preview stays best-effort, never fatal.
+      return [];
     }
   }
 
@@ -331,10 +472,41 @@ export class ProjectRelocationCoordinator {
       );
     }
     if (existsSync(newRoot)) {
-      throw new ProjectRelocationError(
-        "destination-exists",
-        `Something already exists at ${newRoot}.`
-      );
+      // On a case-insensitive volume (APFS by default, NTFS) a case-only rename
+      // (`Foo` → `foo`) resolves BOTH spellings to the same inode, so
+      // `existsSync(newRoot)` is a false positive — it's the project's OWN
+      // folder being re-cased, not a different item colliding. Allow it only
+      // when the roots differ by case alone AND both stat to the same
+      // device+inode; a genuinely different folder — or a case-SENSITIVE volume
+      // where `Foo` and `foo` coexist as distinct dirs — still blocks. Inode is
+      // unreliable (0/undefined) on some Windows volumes, so anything short of a
+      // real integer inode match falls through to the block: refusing an exotic
+      // case-only rename is safe, silently merging two folders is not.
+      const caseOnly = newRoot.toLowerCase() === oldRoot.toLowerCase();
+      let sameItem = false;
+      if (caseOnly) {
+        try {
+          // lstat, NOT stat: a destination that is a symlink pointing back at the
+          // project (`/x/foo` → `/x/Foo` on a case-sensitive volume) would share
+          // the target's inode under stat and be wrongly treated as "the same
+          // item"; lstat compares the symlink entry itself, so it stays blocked.
+          const src = lstatSync(oldRoot);
+          const dst = lstatSync(newRoot);
+          sameItem =
+            typeof src.ino === "number" &&
+            src.ino !== 0 &&
+            src.ino === dst.ino &&
+            src.dev === dst.dev;
+        } catch {
+          sameItem = false;
+        }
+      }
+      if (!sameItem) {
+        throw new ProjectRelocationError(
+          "destination-exists",
+          `Something already exists at ${newRoot}.`
+        );
+      }
     }
     const parent = path.dirname(newRoot);
     let parentStat: ReturnType<typeof statSync>;

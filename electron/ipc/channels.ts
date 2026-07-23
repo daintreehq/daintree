@@ -278,6 +278,8 @@ export const CHANNELS = {
   PROJECT_DISABLE_IN_REPO_SETTINGS: "project:disable-in-repo-settings",
   PROJECT_CHECK_MISSING: "project:check-missing",
   PROJECT_LOCATE: "project:locate",
+  PROJECT_RELOCATION_PREVIEW: "project-relocation:preview",
+  PROJECT_RELOCATION_APPLY: "project-relocation:apply",
   AGENT_SETTINGS_GET: "agent-settings:get",
   AGENT_SETTINGS_SET: "agent-settings:set",
   AGENT_SETTINGS_SET_GLOBAL: "agent-settings:set-global",

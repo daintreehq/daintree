@@ -618,6 +618,14 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["privacy:set-telemetry-level"]["args"]
     ): Promise<IpcInvokeMap["privacy:set-telemetry-level"]["result"]>;
   };
+  projectRelocation: {
+    apply(
+      ...args: IpcInvokeMap["project-relocation:apply"]["args"]
+    ): Promise<IpcInvokeMap["project-relocation:apply"]["result"]>;
+    preview(
+      ...args: IpcInvokeMap["project-relocation:preview"]["args"]
+    ): Promise<IpcInvokeMap["project-relocation:preview"]["result"]>;
+  };
   runHistory: {
     append(
       ...args: IpcInvokeMap["run-history:append"]["args"]

@@ -52,6 +52,8 @@ const createMockProjectClient = () => ({
   disableInRepoSettings: vi.fn().mockResolvedValue({}),
   checkMissing: vi.fn().mockResolvedValue([]),
   locate: vi.fn().mockResolvedValue(null),
+  previewRelocation: vi.fn().mockResolvedValue({}),
+  applyRelocation: vi.fn().mockResolvedValue({}),
   cloneRepo: vi.fn().mockResolvedValue({ success: true }),
   onCloneProgress: vi.fn().mockReturnValue(() => {}),
   cancelClone: vi.fn().mockResolvedValue(undefined),
