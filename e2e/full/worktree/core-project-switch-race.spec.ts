@@ -338,6 +338,23 @@ test.describe.serial("Core: Project Switch Race Conditions", () => {
     ).toBe(true);
     expect((listingA as { names: string[] }).names).toContain("README.md");
 
+    // Prove B's own host can serve its worktree right now, so the refusal
+    // below is conclusively an authorization decision, not an unready host.
+    const listingBFromB = await pageB.evaluate(async (wtId: string) => {
+      try {
+        const entries = await (window as any).electron.fileBrowser.listDirectory({
+          worktreeId: wtId,
+        });
+        return { ok: true as const, names: entries.map((e: { name: string }) => e.name) };
+      } catch (error) {
+        return { ok: false as const, error: String(error) };
+      }
+    }, worktreeB);
+    expect(
+      listingBFromB.ok,
+      `active view listing failed: ${"error" in listingBFromB ? listingBFromB.error : ""}`
+    ).toBe(true);
+
     // The scoping must be tighter than before, not looser: the cached A view
     // must NOT be able to list the active project B's worktree.
     const listingB = await pageA.evaluate(async (wtId: string) => {

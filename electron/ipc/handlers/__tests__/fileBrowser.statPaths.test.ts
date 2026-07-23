@@ -109,7 +109,7 @@ describe("fileBrowser statPaths", () => {
     );
   });
 
-  it("scopes the state query to the sender's own project path", async () => {
+  it("scopes the state query to the sender's own project path and id", async () => {
     const { invoke, deps } = makeHandler([{ id: root, path: root }]);
     await invoke(ctx, { worktreeId: root, paths: ["src"] });
     expect(projectStoreMock.getProjectById).toHaveBeenCalledWith("project-a");
@@ -119,7 +119,7 @@ describe("fileBrowser statPaths", () => {
           getAllStatesForProjectAsync: ReturnType<typeof vi.fn>;
         }
       ).getAllStatesForProjectAsync
-    ).toHaveBeenCalledWith(root);
+    ).toHaveBeenCalledWith(root, "project-a");
   });
 
   it("never reports kinds through a symlink that escapes the root", async () => {

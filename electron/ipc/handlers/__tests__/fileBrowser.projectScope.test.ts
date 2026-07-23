@@ -73,7 +73,7 @@ describe("fileBrowser listDirectory project scoping", () => {
   it("routes a cached view's listing to its own project's host", async () => {
     await invoke(cachedSenderCtx, { worktreeId: WT_A });
 
-    expect(getAllStatesForProjectAsync).toHaveBeenCalledWith("/projects/a");
+    expect(getAllStatesForProjectAsync).toHaveBeenCalledWith("/projects/a", "project-a");
     expect(getAllStatesAsync).not.toHaveBeenCalled();
     expect(getFileTree).toHaveBeenCalledWith(WT_A, undefined, { includeIgnored: true });
   });

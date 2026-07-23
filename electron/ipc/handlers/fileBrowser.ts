@@ -129,7 +129,10 @@ export function buildFileBrowserNamespace(deps: HandlerDependencies) {
       });
     }
 
-    const states = await deps.worktreeService.getAllStatesForProjectAsync(project.path);
+    const states = await deps.worktreeService.getAllStatesForProjectAsync(
+      project.path,
+      senderProjectId
+    );
     const worktree = states.find((state) => state.id === worktreeId);
 
     if (!worktree) {

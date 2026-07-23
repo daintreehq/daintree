@@ -26,6 +26,7 @@ const projectStoreMock = vi.hoisted(() => ({
   removeProject: vi.fn<(projectId: string) => Promise<void>>(),
   getCurrentProjectId: vi.fn<() => string | null>(),
   getProjectById: vi.fn(),
+  updateProject: vi.fn(),
 }));
 
 vi.mock("../../../services/ProjectStore.js", () => ({
@@ -283,5 +284,37 @@ describe("project:remove handler", () => {
     await expect(handler(fakeEvent, "")).rejects.toThrow("Invalid project ID");
     expect(teardownMock.gracefulTeardownAndJournalProject).not.toHaveBeenCalled();
     expect(projectStoreMock.removeProject).not.toHaveBeenCalled();
+  });
+});
+
+describe("project:update handler", () => {
+  const fakeEvent = { senderFrame: { url: "http://localhost:5173" } };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("strips identity fields — a renderer can never rewrite id or path", async () => {
+    projectStoreMock.updateProject.mockReturnValue({
+      id: "proj-1",
+      path: "/home/user/proj-1",
+      name: "Renamed",
+    });
+
+    const deps = { mainWindow: {} as unknown } as unknown as HandlerDependencies;
+    registerProjectCrudHandlers(deps);
+    const handler = getHandler(CHANNELS.PROJECT_UPDATE);
+
+    // Rewriting a project's path to a sibling's would repoint path-keyed host
+    // authorization (fileBrowser project routing) at the sibling's workspace
+    // host — identity is main-owned, only metadata is renderer-writable.
+    await handler(fakeEvent, "proj-1", {
+      name: "Renamed",
+      id: "other-project",
+      path: "/home/user/sibling-project",
+      frecencyScore: 9999,
+    });
+
+    expect(projectStoreMock.updateProject).toHaveBeenCalledWith("proj-1", { name: "Renamed" });
   });
 });

@@ -373,6 +373,10 @@ describe("WorkspaceClient multi-process manager", () => {
   });
 
   describe("getAllStatesForProjectAsync", () => {
+    // Mirrors the ProjectStore mock: entry.projectId is minted from
+    // resolveProjectIdForPath(normalizedPath) at host construction.
+    const idFor = (p: string) => `id-for-${path.resolve(p)}`;
+
     it("routes to the project's own host even after its window was rebound (#11366)", async () => {
       const loadA = client.loadProject("/project-a", 1);
       await readyAndResolveLoad(0);
@@ -384,7 +388,7 @@ describe("WorkspaceClient multi-process manager", () => {
       await readyAndResolveLoad(1);
       await loadB;
 
-      const statesPromise = client.getAllStatesForProjectAsync("/project-a");
+      const statesPromise = client.getAllStatesForProjectAsync("/project-a", idFor("/project-a"));
       await tick();
       const req = h(0)
         .getAllRequests()
@@ -402,15 +406,98 @@ describe("WorkspaceClient multi-process manager", () => {
       expect(hostBStateReqs).toHaveLength(0);
     });
 
+    it("keeps a request started before a rebind on the originally resolved host", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      // Start the A-scoped query first, THEN rebind the window to B while the
+      // request is still in flight — the captured host must not be re-resolved.
+      const statesPromise = client.getAllStatesForProjectAsync("/project-a", idFor("/project-a"));
+      await tick();
+      const req = h(0)
+        .getAllRequests()
+        .find((r: any) => r.type === "get-all-states")!;
+      expect(req).toBeDefined();
+
+      const loadB = client.loadProject("/project-b", 1);
+      h(0).resolveRequest(req.requestId, { states: [{ id: "wt-a" }] });
+      expect((await statesPromise).map((s: any) => s.id)).toEqual(["wt-a"]);
+
+      await readyAndResolveLoad(1);
+      await loadB;
+    });
+
     it("returns empty for an unknown project path without contacting any host", async () => {
       const loadA = client.loadProject("/project-a", 1);
       await readyAndResolveLoad(0);
       await loadA;
 
       const callsBefore = h(0).sendWithResponse.mock.calls.length;
-      const result = await client.getAllStatesForProjectAsync("/no-such-project");
+      const result = await client.getAllStatesForProjectAsync(
+        "/no-such-project",
+        idFor("/no-such-project")
+      );
       expect(result).toEqual([]);
       expect(h(0).sendWithResponse.mock.calls.length).toBe(callsBefore);
+    });
+
+    it("returns empty when the entry's immutable projectId does not match the caller's", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      // A caller holding a different project identity but pointing at A's path
+      // (e.g. its project row's path was rewritten) must not reach A's host.
+      const callsBefore = h(0).sendWithResponse.mock.calls.length;
+      const result = await client.getAllStatesForProjectAsync("/project-a", idFor("/project-b"));
+      expect(result).toEqual([]);
+      expect(h(0).sendWithResponse.mock.calls.length).toBe(callsBefore);
+    });
+
+    it("normalizes the path before keying — equivalent spellings share one request", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      const p1 = client.getAllStatesForProjectAsync("/project-a", idFor("/project-a"));
+      const p2 = client.getAllStatesForProjectAsync("/project-a/", idFor("/project-a"));
+      const p3 = client.getAllStatesForProjectAsync("/other/../project-a", idFor("/project-a"));
+      expect(p2).toBe(p1);
+      expect(p3).toBe(p1);
+
+      await tick();
+      const reqs = h(0)
+        .getAllRequests()
+        .filter((r: any) => r.type === "get-all-states");
+      expect(reqs).toHaveLength(1);
+      h(0).resolveRequest(reqs[0].requestId, { states: [{ id: "wt-a" }] });
+      await p1;
+    });
+
+    it("evicts the in-flight entry on error so the next call retries", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      const p1 = client.getAllStatesForProjectAsync("/project-a", idFor("/project-a"));
+      await tick();
+      const req1 = h(0)
+        .getAllRequests()
+        .filter((r: any) => r.type === "get-all-states")[0];
+      h(0).rejectRequest(req1.requestId, new Error("host crashed"));
+      await expect(p1).rejects.toThrow("host crashed");
+
+      // Immediately after the error a fresh promise (and request) is issued —
+      // a cached rejection here would fail every file-browser retry for 150ms.
+      const p2 = client.getAllStatesForProjectAsync("/project-a", idFor("/project-a"));
+      expect(p2).not.toBe(p1);
+      await tick();
+      const req2 = h(0)
+        .getAllRequests()
+        .filter((r: any) => r.type === "get-all-states")[1];
+      h(0).resolveRequest(req2.requestId, { states: [{ id: "wt-ok" }] });
+      expect(await p2).toEqual([{ id: "wt-ok" }]);
     });
 
     it("coalesces concurrent calls per project path, separately per project", async () => {
@@ -422,9 +509,9 @@ describe("WorkspaceClient multi-process manager", () => {
       await readyAndResolveLoad(1);
       await loadB;
 
-      const p1 = client.getAllStatesForProjectAsync("/project-a");
-      const p2 = client.getAllStatesForProjectAsync("/project-a");
-      const p3 = client.getAllStatesForProjectAsync("/project-b");
+      const p1 = client.getAllStatesForProjectAsync("/project-a", idFor("/project-a"));
+      const p2 = client.getAllStatesForProjectAsync("/project-a", idFor("/project-a"));
+      const p3 = client.getAllStatesForProjectAsync("/project-b", idFor("/project-b"));
       expect(p1).toBe(p2);
       expect(p3).not.toBe(p1);
 

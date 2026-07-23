@@ -449,14 +449,25 @@ export class WorkspaceClient extends EventEmitter {
    * the active project's host; this resolves the host from the pool's
    * project-path entries, which stay bound to their project for the host's
    * lifetime. No host for the path returns `[]` — never a wildcard scan.
+   *
+   * `expectedProjectId` must match the entry's immutable `projectId` (resolved
+   * once at host construction). The project *row*'s path is mutable through
+   * `project:update`, so a path alone is not an authorization identity: a
+   * renderer that rewrote its own project's path to a sibling's would
+   * otherwise select the sibling's warm host. A mismatch returns `[]`.
    */
-  getAllStatesForProjectAsync(projectPath: string): Promise<WorktreeSnapshot[]> {
+  getAllStatesForProjectAsync(
+    projectPath: string,
+    expectedProjectId: string
+  ): Promise<WorktreeSnapshot[]> {
     const normalized = this.pool.normalizeProjectPath(projectPath);
-    const key = `p:${normalized}`;
+    const key = `p:${expectedProjectId}:${normalized}`;
     const existing = this._statesInflight.get(key);
     if (existing) return existing;
 
-    const host = this.pool.getHostForProject(normalized);
+    const entry = this.pool.entries.get(normalized);
+    const host =
+      entry !== undefined && entry.projectId === expectedProjectId ? entry.host : undefined;
     const promise = (
       host === undefined
         ? Promise.resolve([] as WorktreeSnapshot[])
