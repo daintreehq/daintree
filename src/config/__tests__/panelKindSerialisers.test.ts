@@ -207,6 +207,125 @@ describe("panelKindSerialisers", () => {
       expect(output.browserHideDotfiles).toBeUndefined();
       expect(output).not.toHaveProperty("browserShowIgnored");
     });
+
+    describe("browserTreeSnapshot (#11367)", () => {
+      const validSnapshot = {
+        worktreeId: "wt-1",
+        rootPath: "",
+        listings: [
+          {
+            dirPath: "",
+            nodes: [
+              { name: "src", path: "src", isDirectory: true },
+              { name: "README.md", path: "README.md", isDirectory: false },
+            ],
+          },
+          {
+            dirPath: "src",
+            nodes: [{ name: "app.ts", path: "src/app.ts", isDirectory: false }],
+          },
+        ],
+      };
+
+      it("restores a well-formed snapshot intact", () => {
+        expect(
+          deserialize()({ id: "fb1", browserTreeSnapshot: validSnapshot }).browserTreeSnapshot
+        ).toEqual(validSnapshot);
+      });
+
+      it("restores a snapshot rooted at a subfolder whose root listing is present", () => {
+        const rooted = {
+          worktreeId: "wt-1",
+          rootPath: "src",
+          listings: [
+            { dirPath: "src", nodes: [{ name: "app.ts", path: "src/app.ts", isDirectory: false }] },
+          ],
+        };
+        expect(
+          deserialize()({ id: "fb1", browserTreeSnapshot: rooted }).browserTreeSnapshot
+        ).toEqual(rooted);
+      });
+
+      it("drops the whole snapshot on any malformed element rather than partially trusting it", () => {
+        // A partially trusted snapshot could seed rows for paths that were
+        // never listed; the cost of dropping is only a cold start.
+        const malformed: unknown[] = [
+          "not an object",
+          42,
+          [],
+          { ...validSnapshot, worktreeId: "" },
+          { ...validSnapshot, worktreeId: 7 },
+          { ...validSnapshot, rootPath: "../escape" },
+          { ...validSnapshot, listings: "nope" },
+          // Duplicate directory keys.
+          {
+            ...validSnapshot,
+            listings: [validSnapshot.listings[0], validSnapshot.listings[0]],
+          },
+          // Escaping node path.
+          {
+            ...validSnapshot,
+            listings: [{ dirPath: "", nodes: [{ name: "x", path: "../x", isDirectory: false }] }],
+          },
+          // Separator inside a basename.
+          {
+            ...validSnapshot,
+            listings: [{ dirPath: "", nodes: [{ name: "a/b", path: "a", isDirectory: false }] }],
+          },
+          // Non-boolean directory bit.
+          {
+            ...validSnapshot,
+            listings: [{ dirPath: "", nodes: [{ name: "a", path: "a", isDirectory: "yes" }] }],
+          },
+        ];
+        for (const value of malformed) {
+          expect(
+            deserialize()({ id: "fb1", browserTreeSnapshot: value }).browserTreeSnapshot,
+            `should drop: ${JSON.stringify(value)}`
+          ).toBeUndefined();
+        }
+      });
+
+      it("drops a snapshot missing its own root listing — there is nothing to paint from", () => {
+        const rootless = {
+          worktreeId: "wt-1",
+          rootPath: "",
+          listings: [
+            { dirPath: "src", nodes: [{ name: "app.ts", path: "src/app.ts", isDirectory: false }] },
+          ],
+        };
+        expect(
+          deserialize()({ id: "fb1", browserTreeSnapshot: rootless }).browserTreeSnapshot
+        ).toBeUndefined();
+      });
+
+      it("drops a snapshot that exceeds the node budget instead of truncating it", () => {
+        const oversized = {
+          worktreeId: "wt-1",
+          rootPath: "",
+          listings: [
+            {
+              dirPath: "",
+              nodes: Array.from({ length: 10_001 }, (_, i) => ({
+                name: `f-${i}`,
+                path: `f-${i}`,
+                isDirectory: false,
+              })),
+            },
+          ],
+        };
+        expect(
+          deserialize()({ id: "fb1", browserTreeSnapshot: oversized }).browserTreeSnapshot
+        ).toBeUndefined();
+      });
+
+      it("keeps an empty root listing — an empty worktree is a real last-known state", () => {
+        const empty = { worktreeId: "wt-1", rootPath: "", listings: [{ dirPath: "", nodes: [] }] };
+        expect(
+          deserialize()({ id: "fb1", browserTreeSnapshot: empty }).browserTreeSnapshot
+        ).toEqual(empty);
+      });
+    });
   });
 
   describe("unknown kind", () => {

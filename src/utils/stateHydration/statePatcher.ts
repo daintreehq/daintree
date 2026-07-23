@@ -4,6 +4,7 @@ import type { BrowserHistory } from "@shared/types/browser";
 import type {
   FileViewMode,
   DiffSource,
+  FileBrowserTreeSnapshot,
   PanelExitBehavior,
   PanelTitleMode,
 } from "@shared/types/panel";
@@ -64,6 +65,7 @@ export interface AddTerminalArgs extends AddPanelOptionsBase {
   browserHideDotfiles?: boolean;
   browserRootPath?: string;
   browserSidebarCollapsed?: boolean;
+  browserTreeSnapshot?: FileBrowserTreeSnapshot;
   /**
    * Preserved user-initiated focus timestamp from the saved snapshot. The
    * post-hydration focus picker in `useAppHydration` reads this off
@@ -126,6 +128,7 @@ export interface SavedTerminalData {
   browserHideDotfiles?: unknown;
   browserRootPath?: unknown;
   browserSidebarCollapsed?: unknown;
+  browserTreeSnapshot?: unknown;
   exitBehavior?: PanelExitBehavior;
   agentSessionId?: string;
   agentLaunchFlags?: string[];

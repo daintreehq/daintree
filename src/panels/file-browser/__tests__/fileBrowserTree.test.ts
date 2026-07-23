@@ -6,10 +6,14 @@ import {
   createVisibilityFilter,
   flattenTree,
   isRowPathVisible,
+  listingsFromSnapshot,
+  MAX_SNAPSHOT_LISTINGS,
+  MAX_SNAPSHOT_NODES,
   parentRootPath,
   pruneListings,
   refreshTargets,
   resolveTreeKey,
+  snapshotFromListings,
   type FlatTreeRow,
 } from "../fileBrowserTree";
 
@@ -475,5 +479,107 @@ describe("isRowPathVisible", () => {
   it("treats the root itself as visible — the pump gate must never drop the root target", () => {
     expect(isRowPathVisible("src", "src", showAll)).toBe(true);
     expect(isRowPathVisible(".github", ".github", hideDotfiles)).toBe(true);
+  });
+});
+
+describe("snapshotFromListings", () => {
+  it("captures structure only — size and children never reach the snapshot", () => {
+    const listings = listingsOf({
+      "": [dir("src"), file("README.md", { size: 1234 })],
+      src: [{ name: "app.ts", path: "src/app.ts", isDirectory: false, size: 99, children: [] }],
+    });
+
+    const snapshot = snapshotFromListings(listings, "wt-1", "");
+
+    expect(snapshot).toEqual({
+      worktreeId: "wt-1",
+      rootPath: "",
+      listings: [
+        {
+          dirPath: "",
+          nodes: [
+            { name: "src", path: "src", isDirectory: true },
+            { name: "README.md", path: "README.md", isDirectory: false },
+          ],
+        },
+        {
+          dirPath: "src",
+          nodes: [{ name: "app.ts", path: "src/app.ts", isDirectory: false }],
+        },
+      ],
+    });
+  });
+
+  it("returns null before the root listing has ever arrived", () => {
+    // Only a non-root directory somehow present: nothing worth painting from.
+    expect(snapshotFromListings(listingsOf({ src: [file("src/app.ts")] }), "wt-1", "")).toBeNull();
+    expect(snapshotFromListings(new Map(), "wt-1", "")).toBeNull();
+  });
+
+  it("keeps an empty root listing — an empty worktree is a real last-known state", () => {
+    const snapshot = snapshotFromListings(listingsOf({ "": [] }), "wt-1", "");
+    expect(snapshot).toEqual({
+      worktreeId: "wt-1",
+      rootPath: "",
+      listings: [{ dirPath: "", nodes: [] }],
+    });
+  });
+
+  it("sorts entries by path so identical content is deep-equal regardless of insertion order", () => {
+    const a = new Map([
+      ["", [dir("src"), dir("lib")]],
+      ["src", [file("src/a.ts")]],
+      ["lib", [file("lib/b.ts")]],
+    ]);
+    const b = new Map([
+      ["lib", [file("lib/b.ts")]],
+      ["", [dir("src"), dir("lib")]],
+      ["src", [file("src/a.ts")]],
+    ]);
+
+    // The persistence layer's dirty diff depends on this to skip no-op writes.
+    expect(snapshotFromListings(a, "wt-1", "")).toEqual(snapshotFromListings(b, "wt-1", ""));
+  });
+
+  it("returns null rather than truncating when the tree exceeds the persistence bounds", () => {
+    const wideRoot = listingsOf({
+      "": Array.from({ length: MAX_SNAPSHOT_NODES + 1 }, (_, i) => file(`f-${i}`)),
+    });
+    expect(snapshotFromListings(wideRoot, "wt-1", "")).toBeNull();
+
+    const manyListings = new Map([
+      ["", [dir("d-0")]],
+      ...Array.from({ length: MAX_SNAPSHOT_LISTINGS }, (_, i): [string, FileTreeNode[]] => [
+        `d-${i}`,
+        [],
+      ]),
+    ]);
+    expect(snapshotFromListings(manyListings, "wt-1", "")).toBeNull();
+  });
+
+  it("captures relative to a re-rooted browse root", () => {
+    const listings = listingsOf({ src: [file("src/app.ts")] });
+    const snapshot = snapshotFromListings(listings, "wt-1", "src");
+    expect(snapshot?.rootPath).toBe("src");
+    expect(snapshot?.listings).toEqual([
+      { dirPath: "src", nodes: [{ name: "app.ts", path: "src/app.ts", isDirectory: false }] },
+    ]);
+  });
+});
+
+describe("listingsFromSnapshot", () => {
+  it("round-trips a captured snapshot back into a renderable listings map", () => {
+    const listings = listingsOf({
+      "": [dir("src"), file("README.md")],
+      src: [file("src/app.ts")],
+    });
+
+    const snapshot = snapshotFromListings(listings, "wt-1", "");
+    const restored = listingsFromSnapshot(snapshot!);
+
+    // The restored map must flatten to the same rows the live tree showed.
+    expect(pathsOf(flattenTree(restored, new Set(["src"]), new Set()))).toEqual(
+      pathsOf(flattenTree(listings, new Set(["src"]), new Set()))
+    );
   });
 });

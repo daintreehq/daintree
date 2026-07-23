@@ -1138,3 +1138,199 @@ describe("useFileBrowserTree", () => {
     expect(result.current.isRefreshing).toBe(false);
   });
 });
+
+describe("stale-while-revalidate seeding (#11367)", () => {
+  beforeEach(() => {
+    listDirectory.mockReset();
+  });
+
+  const snapshot = {
+    worktreeId: "wt-1",
+    rootPath: "",
+    listings: [
+      {
+        dirPath: "",
+        nodes: [
+          { name: "src", path: "src", isDirectory: true },
+          { name: "README.md", path: "README.md", isDirectory: false },
+        ],
+      },
+      {
+        dirPath: "src",
+        nodes: [{ name: "app.ts", path: "src/app.ts", isDirectory: false }],
+      },
+    ],
+  };
+
+  it("paints seeded rows instantly and revalidates the root plus seeded expanded directories", async () => {
+    const root = deferred<FileTreeNode[]>();
+    const src = deferred<FileTreeNode[]>();
+    listDirectory.mockImplementation(({ dirPath }) =>
+      dirPath === undefined ? root.promise : src.promise
+    );
+
+    const { result } = renderHook(() =>
+      useFileBrowserTree({
+        worktreeId: "wt-1",
+        expandedPaths: ["src"],
+        hideDotfiles: false,
+        alwaysHiddenPatterns: [],
+        changeTick: undefined,
+        treeSnapshot: snapshot,
+      })
+    );
+
+    // The whole last-known tree is on screen before any listing resolves —
+    // no skeleton, and both painted directories are already revalidating.
+    expect(result.current.isInitialLoading).toBe(false);
+    expect(result.current.rows.map((row) => row.path)).toEqual(["src", "src/app.ts", "README.md"]);
+    expect(listDirectory).toHaveBeenCalledTimes(2);
+    expect(listDirectory.mock.calls.map(([payload]) => payload.dirPath)).toEqual([
+      undefined,
+      "src",
+    ]);
+
+    // Live results replace the stale seed as they land.
+    await act(async () => {
+      root.resolve([dir("src"), file("CHANGED.md")]);
+      src.resolve([file("src/new.ts")]);
+    });
+    expect(result.current.rows.map((row) => row.path)).toEqual(["src", "src/new.ts", "CHANGED.md"]);
+    expect(result.current.isInitialLoading).toBe(false);
+  });
+
+  it("ignores a snapshot captured under another identity and cold-starts as before", () => {
+    listDirectory.mockReturnValue(deferred<FileTreeNode[]>().promise);
+
+    const otherWorktree = renderHook(() =>
+      useFileBrowserTree({
+        worktreeId: "wt-2",
+        expandedPaths: [],
+        hideDotfiles: false,
+        alwaysHiddenPatterns: [],
+        changeTick: undefined,
+        treeSnapshot: snapshot,
+      })
+    );
+    expect(otherWorktree.result.current.isInitialLoading).toBe(true);
+    expect(otherWorktree.result.current.rows).toEqual([]);
+
+    const otherRoot = renderHook(() =>
+      useFileBrowserTree({
+        worktreeId: "wt-1",
+        expandedPaths: [],
+        hideDotfiles: false,
+        alwaysHiddenPatterns: [],
+        rootPath: "src",
+        changeTick: undefined,
+        treeSnapshot: snapshot,
+      })
+    );
+    expect(otherRoot.result.current.isInitialLoading).toBe(true);
+    expect(otherRoot.result.current.rows).toEqual([]);
+  });
+
+  it("captures a structure-only snapshot of the loaded tree, and nothing before the root lands", async () => {
+    const slow = deferred<FileTreeNode[]>();
+    listDirectory.mockReturnValue(slow.promise);
+
+    const { result } = renderHook(() =>
+      useFileBrowserTree({
+        worktreeId: "wt-1",
+        expandedPaths: [],
+        hideDotfiles: false,
+        alwaysHiddenPatterns: [],
+        changeTick: undefined,
+      })
+    );
+
+    // Nothing worth keeping yet — a capture here must not clobber a previous
+    // snapshot with an empty one.
+    expect(result.current.captureSnapshot()).toBeNull();
+
+    await act(async () => {
+      slow.resolve([
+        { name: "big.bin", path: "big.bin", isDirectory: false, size: 4096 },
+        dir("src"),
+      ]);
+    });
+
+    // Size is filesystem metadata, not structure — it must not persist.
+    expect(result.current.captureSnapshot()).toEqual({
+      worktreeId: "wt-1",
+      rootPath: "",
+      listings: [
+        {
+          dirPath: "",
+          nodes: [
+            { name: "big.bin", path: "big.bin", isDirectory: false },
+            { name: "src", path: "src", isDirectory: true },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("captures nothing without a worktree", () => {
+    const { result } = renderHook(() =>
+      useFileBrowserTree({
+        worktreeId: undefined,
+        expandedPaths: [],
+        hideDotfiles: false,
+        alwaysHiddenPatterns: [],
+        changeTick: undefined,
+      })
+    );
+    expect(result.current.captureSnapshot()).toBeNull();
+  });
+
+  describe("root failure over a seeded tree", () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    });
+
+    async function flush() {
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+    }
+
+    it("keeps the seeded rows on screen when the whole retry budget fails — the error joins the tree instead of replacing it", async () => {
+      listDirectory.mockRejectedValue(new Error("host still repointing"));
+
+      const { result } = renderHook(() =>
+        useFileBrowserTree({
+          worktreeId: "wt-1",
+          expandedPaths: ["src"],
+          hideDotfiles: false,
+          alwaysHiddenPatterns: [],
+          changeTick: undefined,
+          treeSnapshot: snapshot,
+        })
+      );
+
+      // Seeded immediately; the failing revalidation never blanks it.
+      expect(result.current.rows.length).toBeGreaterThan(0);
+      await flush();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(150);
+        await vi.advanceTimersByTimeAsync(400);
+        await vi.advanceTimersByTimeAsync(800);
+      });
+
+      expect(result.current.rootError).toContain("host still repointing");
+      expect(result.current.isInitialLoading).toBe(false);
+      expect(result.current.rows.map((row) => row.path)).toEqual([
+        "src",
+        "src/app.ts",
+        "README.md",
+      ]);
+    });
+  });
+});

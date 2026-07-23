@@ -1,9 +1,13 @@
 import type { BuiltInPanelKind, PanelKind, ViewportPresetId } from "@/types";
-import type { FileViewMode, DiffSource } from "@shared/types/panel";
+import type { FileViewMode, DiffSource, FileBrowserTreeSnapshot } from "@shared/types/panel";
 import type { GitStatus } from "@shared/types/git";
 import type { AddTerminalArgs, SavedTerminalData } from "@/utils/stateHydration/statePatcher";
 import { VIEWPORT_PRESETS } from "@/panels/dev-preview/viewportPresets";
-import { canonicalizeRootPath } from "@/panels/file-browser/fileBrowserTree";
+import {
+  canonicalizeRootPath,
+  MAX_SNAPSHOT_LISTINGS,
+  MAX_SNAPSHOT_NODES,
+} from "@/panels/file-browser/fileBrowserTree";
 
 type PanelKindDeserializer = (saved: SavedTerminalData) => Partial<AddTerminalArgs>;
 
@@ -100,6 +104,65 @@ function sanitizeExpandedPaths(value: unknown): string[] | undefined {
   return [...seen];
 }
 
+/** A snapshot directory key: "" is the worktree root; anything else must be safe. */
+function isSnapshotDirPath(value: unknown): value is string {
+  return value === "" || isSafeRelativePath(value);
+}
+
+/** An entry basename: plain, separator-free, and bounded. */
+function isSnapshotNodeName(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= MAX_RESTORED_PATH_LENGTH &&
+    !value.includes("/") &&
+    !value.includes("\\")
+  );
+}
+
+/**
+ * Coerce a persisted last-known tree snapshot (#11367), dropping the whole
+ * value on any malformed element — a partially trusted snapshot could seed
+ * rows for paths that were never listed, and the cost of dropping is only a
+ * cold start. Bounds mirror the capture side's, so a snapshot that was legal
+ * to write is legal to restore.
+ */
+function sanitizeTreeSnapshot(value: unknown): FileBrowserTreeSnapshot | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const candidate = value as Record<string, unknown>;
+  const { worktreeId, rootPath, listings } = candidate;
+  if (typeof worktreeId !== "string" || worktreeId.length === 0) return undefined;
+  if (!isSnapshotDirPath(rootPath)) return undefined;
+  if (!Array.isArray(listings) || listings.length > MAX_SNAPSHOT_LISTINGS) return undefined;
+
+  let totalNodes = 0;
+  const seenDirs = new Set<string>();
+  const sanitizedListings: FileBrowserTreeSnapshot["listings"] = [];
+  for (const entry of listings) {
+    if (typeof entry !== "object" || entry === null) return undefined;
+    const { dirPath, nodes } = entry as Record<string, unknown>;
+    if (!isSnapshotDirPath(dirPath) || seenDirs.has(dirPath)) return undefined;
+    seenDirs.add(dirPath);
+    if (!Array.isArray(nodes)) return undefined;
+    totalNodes += nodes.length;
+    if (totalNodes > MAX_SNAPSHOT_NODES) return undefined;
+    const sanitizedNodes: FileBrowserTreeSnapshot["listings"][number]["nodes"] = [];
+    for (const node of nodes) {
+      if (typeof node !== "object" || node === null) return undefined;
+      const { name, path, isDirectory } = node as Record<string, unknown>;
+      if (!isSnapshotNodeName(name)) return undefined;
+      if (!isSafeRelativePath(path)) return undefined;
+      if (typeof isDirectory !== "boolean") return undefined;
+      sanitizedNodes.push({ name, path, isDirectory });
+    }
+    sanitizedListings.push({ dirPath, nodes: sanitizedNodes });
+  }
+  // A snapshot without its own root listing has nothing to paint from —
+  // seeding it would show an empty tree where a skeleton belongs.
+  if (!seenDirs.has(rootPath)) return undefined;
+  return { worktreeId, rootPath, listings: sanitizedListings };
+}
+
 /**
  * Built-in deserializer table ratcheted against `BuiltInPanelKind` so adding
  * a new built-in kind without an entry fails at compile time. `null` marks an
@@ -153,6 +216,7 @@ const BUILT_IN_DESERIALIZERS = {
     // Only a literal `true` restores collapsed: a hand-edited or corrupted
     // snapshot holding a string or object must fall back to the open default.
     browserSidebarCollapsed: saved.browserSidebarCollapsed === true ? true : undefined,
+    browserTreeSnapshot: sanitizeTreeSnapshot(saved.browserTreeSnapshot),
   }),
   diff: (saved) => ({
     filePath: saved.filePath,

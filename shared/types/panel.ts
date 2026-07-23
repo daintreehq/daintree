@@ -698,6 +698,36 @@ export interface DiffPanelData extends BasePanelData {
   viewedKey?: string;
 }
 
+/** One directory entry in a persisted file-browser tree snapshot. */
+export interface FileBrowserSnapshotNode {
+  /** Entry basename. */
+  name: string;
+  /** Worktree-relative path. */
+  path: string;
+  isDirectory: boolean;
+}
+
+/** One directory's listing in a persisted file-browser tree snapshot. */
+export interface FileBrowserTreeSnapshotEntry {
+  /** Worktree-relative directory path; "" = the browse root's own listing. */
+  dirPath: string;
+  nodes: FileBrowserSnapshotNode[];
+}
+
+/**
+ * Structure-only snapshot of a file browser's last-known tree (#11367): entry
+ * names, paths and directory bits — never contents, sizes or timestamps.
+ * Tagged with the identity it was captured under so a worktree switch or
+ * re-root can't seed the wrong tree; a mismatch just cold-starts. Arrays
+ * rather than a Map because it round-trips through JSON persistence.
+ */
+export interface FileBrowserTreeSnapshot {
+  worktreeId: string;
+  /** Worktree-relative browse root at capture time; "" = the worktree root. */
+  rootPath: string;
+  listings: FileBrowserTreeSnapshotEntry[];
+}
+
 /**
  * File browser panel — a lazily-expanded directory tree over one worktree with
  * a read-only viewer beside it. Every field is worktree-relative rather than
@@ -736,6 +766,14 @@ export interface FileBrowserPanelData extends BasePanelData {
    * default); only `true` is persisted, so an open panel stays sparse.
    */
   browserSidebarCollapsed?: boolean;
+  /**
+   * Last-known tree structure, captured when the view goes away and painted
+   * back instantly on restore while a live refresh runs (#11367). Derived
+   * data, unlike every other field here — but it must live on the panel
+   * record because the renderer (and any cache in it) is destroyed on LRU
+   * eviction; only the persisted record survives.
+   */
+  browserTreeSnapshot?: FileBrowserTreeSnapshot;
 }
 
 export type PanelInstance =

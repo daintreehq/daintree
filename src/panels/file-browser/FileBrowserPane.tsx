@@ -1,4 +1,4 @@
-import { useCallback, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { CornerLeftUp, EyeOff, FolderRoot, FolderTree, RefreshCw } from "lucide-react";
 import { basename, join } from "@shared/utils/path";
 import type { BasePanelProps } from "@/components/Panel/ContentPanel";
@@ -16,6 +16,7 @@ import { notify } from "@/lib/notify";
 import { actionService } from "@/services/ActionService";
 import { usePanelStore } from "@/store/panelStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
+import { flushPanelPersistence } from "@/store/slices";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { FileTreeView } from "./FileTreeView";
 import { FileBrowserViewer } from "./FileBrowserViewer";
@@ -106,6 +107,15 @@ export function FileBrowserPane({
       [id]
     )
   );
+  const treeSnapshot = usePanelStore(
+    useCallback(
+      (state) => {
+        const panel = state.panelsById[id];
+        return panel?.kind === "file-browser" ? panel.browserTreeSnapshot : undefined;
+      },
+      [id]
+    )
+  );
 
   // Resolved fresh from the worktree store rather than persisted, so a rename
   // or move is reflected without restarting the panel.
@@ -149,6 +159,7 @@ export function FileBrowserPane({
     ensureLoaded,
     refresh,
     isRefreshing,
+    captureSnapshot,
   } = useFileBrowserTree({
     worktreeId,
     expandedPaths: stableExpandedPaths,
@@ -156,7 +167,37 @@ export function FileBrowserPane({
     alwaysHiddenPatterns,
     rootPath,
     changeTick,
+    treeSnapshot,
   });
+
+  // Persist the last-known tree at going-away points only (#11367): the view
+  // being hidden (project switch, window close, app quit — `visibilitychange`
+  // is the reliable detach signal, see #9914 in `resource.ts`) and unmount
+  // (which covers dialog → grid promotion re-seeding the same panel id).
+  // Never on a change tick — the snapshot rides the panel record, and dirtying
+  // it on every filesystem tick would turn each into a layout write.
+  useEffect(() => {
+    const capture = () => {
+      const snapshot = captureSnapshot();
+      if (snapshot) setFileBrowserView(id, { browserTreeSnapshot: snapshot });
+    };
+    const handleVisibilityChange = () => {
+      if (!document.hidden) return;
+      capture();
+      // The 500ms persistence debounce usually completes while the hidden
+      // renderer stays alive, but flush anyway: on app quit there is no later
+      // tick, and the capture above must make this save, not the next one.
+      flushPanelPersistence();
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      // On an identity change this cleanup runs before the new identity's
+      // listings commit, so it still captures the outgoing tree under the
+      // identity it belongs to (the closed-over captureSnapshot).
+      capture();
+    };
+  }, [id, captureSnapshot, setFileBrowserView]);
 
   const handleToggleExpanded = useCallback(
     (path: string, expand: boolean) => {
@@ -512,7 +553,11 @@ export function FileBrowserPane({
       );
     }
 
-    if (rootError !== null) {
+    // The full-pane error is reserved for genuinely having nothing to show
+    // (#11367): with rows on screen — live or seeded from the last-known
+    // snapshot — a root failure renders inline above them instead, in the
+    // populated branch below. An error must never blank a populated tree.
+    if (rootError !== null && rows.length === 0) {
       return (
         <div className="p-2">
           <InlineStatusBanner
@@ -575,6 +620,21 @@ export function FileBrowserPane({
 
     return (
       <>
+        {/* A root failure with a tree on screen: the banner sits above the
+            rows rather than replacing them (same shape as FilePane's stale
+            strip), so the last-known files stay usable while the error is
+            visible and retryable. */}
+        {rootError !== null && (
+          <div className="shrink-0 p-2">
+            <InlineStatusBanner
+              severity="error"
+              icon={FolderTree}
+              title={rootPath ? "Couldn't refresh this folder" : "Couldn't refresh this worktree"}
+              description={`Showing the last known files. ${rootError}`}
+              action={{ id: "retry", label: "Retry", onClick: handleRefresh }}
+            />
+          </div>
+        )}
         <FileTreeView
           rows={rows}
           selectedPath={selectedPath}
