@@ -589,6 +589,11 @@ describe("TerminalResizeController", () => {
     expect(managed.terminal.resize).toHaveBeenCalledWith(120, 40);
     expect(resizeMock).toHaveBeenCalledWith("term-1", 120, 40);
     expect(managed.revealPendingRepair).toBeUndefined();
+    // applyDeferredResize does resize alt buffers, so the shared pin runs here
+    // too — intentionally mirroring commitResize (a real alt buffer has no
+    // scrollback, so scrollToBottom is a no-op). reconcileGeometryFresh differs:
+    // it exits above the pin for alt. Locking the asymmetry (#11316).
+    expect(managed.terminal.scrollToBottom).toHaveBeenCalledOnce();
   });
 
   it("applyDeferredResize is a no-op when xterm dims already match latest", () => {
@@ -667,6 +672,36 @@ describe("TerminalResizeController", () => {
     // The user scrolled up before hiding — the reveal-path resize must reflow
     // but NEVER yank the viewport back to the bottom (#11316).
     managed.isUserScrolledBack = true;
+
+    const controller = new TerminalResizeController({
+      getInstance: vi.fn(() => managed),
+      dataBuffer: {
+        flushForTerminal: vi.fn(),
+        resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 0),
+        resumeFlush: vi.fn(),
+      } as any,
+    });
+
+    controller.applyDeferredResize("term-1");
+
+    expect(managed.terminal.resize).toHaveBeenCalledWith(160, 40);
+    expect(resizeMock).toHaveBeenCalledWith("term-1", 160, 40);
+    expect(managed.terminal.scrollToBottom).not.toHaveBeenCalled();
+  });
+
+  it("applyDeferredResize does not pin when the pane was not following the bottom", () => {
+    const managed = createManagedTerminal();
+    managed.terminal.cols = 80;
+    managed.terminal.rows = 24;
+    managed.latestCols = 160;
+    managed.latestRows = 40;
+    // Auto-follow was already off before the hide (latestWasAtBottom captured
+    // false), and the user has not scrolled back — the pin's OTHER predicate.
+    // Guards against the helper degenerating to `if (!isUserScrolledBack)`, which
+    // every other test would still pass (#11316).
+    managed.latestWasAtBottom = false;
+    managed.isUserScrolledBack = false;
 
     const controller = new TerminalResizeController({
       getInstance: vi.fn(() => managed),
@@ -2011,6 +2046,9 @@ describe("TerminalResizeController", () => {
       expect(ok).toBe(true);
       expect(managed.terminal.resize).not.toHaveBeenCalled();
       expect(resizeMock).toHaveBeenCalledWith("term-1", 100, 30);
+      // Streaming only blocks a grid-CHANGING reflow; a successful no-drift
+      // reconcile still self-heals bottom-follow (#11316).
+      expect(managed.terminal.scrollToBottom).toHaveBeenCalledOnce();
     });
 
     it("ignores an active resize lock without clearing it (the reveal exception)", () => {
