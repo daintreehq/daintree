@@ -98,11 +98,15 @@ describe("FileBrowserViewer markdown Source/Rendered toggle (#11319)", () => {
     expect(screen.getByRole("button", { name: "Rendered" })).toBeTruthy();
   });
 
-  it("switches the markdown viewer to source when Source is picked", async () => {
+  it("switches the markdown viewer between source and rendered", async () => {
     renderViewer("/repo/docs/spec.md");
     await waitFor(() => expect(currentViewMode()).toBe("rendered"));
     await clickMode("Source");
     await waitFor(() => expect(currentViewMode()).toBe("source"));
+    // Round-trip so the "rendered" segment's mapping is exercised too, not just
+    // the "source" one.
+    await clickMode("Rendered");
+    await waitFor(() => expect(currentViewMode()).toBe("rendered"));
   });
 
   it("keeps the chosen mode sticky across a different markdown file", async () => {
@@ -127,8 +131,26 @@ describe("FileBrowserViewer markdown Source/Rendered toggle (#11319)", () => {
     await waitFor(() => expect(currentViewMode()).toBe("source"));
   });
 
-  it("shows no toggle and renders source for a non-markdown file", async () => {
-    renderViewer("/repo/src/notes.txt");
+  it("drops the toggle and its stale source choice when switching to a non-markdown file", async () => {
+    // Start on markdown in Source, then navigate to a .txt in the same viewer —
+    // the tree's real usage. Proves the markdown-only toggle disappears and the
+    // sticky "source" choice can't leak into the CodeViewer (non-markdown) branch.
+    const { rerender } = renderViewer("/repo/docs/a.md");
+    await waitFor(() => expect(currentViewMode()).toBe("rendered"));
+    await clickMode("Source");
+    await waitFor(() => expect(currentViewMode()).toBe("source"));
+
+    rerender(
+      <TooltipProvider>
+        <FileBrowserViewer
+          filePath="/repo/src/notes.txt"
+          rootPath="/repo"
+          fileName="notes.txt"
+          relativePath="notes.txt"
+          revision="r1"
+        />
+      </TooltipProvider>
+    );
     await screen.findByTestId("code-viewer-mock");
     expect(screen.queryByRole("button", { name: "Source" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Rendered" })).toBeNull();
