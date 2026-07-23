@@ -14,8 +14,10 @@ import { isFilePanel } from "@shared/types/panel";
 import type { GitStatus } from "@shared/types/git";
 import { isPathInside, normalize, toWorktreeRelative } from "@shared/utils/path";
 import type { FileReadErrorCode } from "@shared/types/ipc/files";
+import type { BuiltInRuntimeActionId } from "@shared/config/actionIds";
 import type { BasePanelProps } from "@/components/Panel/ContentPanel";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
+import { FolderOpen } from "@/components/icons";
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { MarkdownViewer, type MarkdownViewerHandle } from "@/components/Markdown/MarkdownViewer";
 import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
@@ -23,6 +25,7 @@ import { HtmlViewer } from "@/components/Html/HtmlViewer";
 import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
 import { CodeViewer, type CodeViewerHandle } from "@/components/FileViewer/CodeViewer";
 import { FileViewerToolbar } from "@/components/FileViewer/FileViewerToolbar";
+import { revealCopy, type RevealCopy } from "@/components/FileViewer/revealCopy";
 import { FileImagePreview } from "@/components/FileViewer/FileImagePreview";
 import { FileVideoPreview } from "@/components/FileViewer/FileVideoPreview";
 import {
@@ -51,6 +54,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
+import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { isClientAppError } from "@/utils/clientAppError";
 import { logError } from "@/utils/logger";
@@ -112,6 +116,45 @@ function isUnderRoot(filePath: string, rootPath: string): boolean {
 // sanitized, then inlined, and a video streams from the same protocol into a
 // <video> element. None has readable text content.
 type LoadState = "idle" | "loading" | "loaded" | "error" | "image" | "svg" | "video";
+
+// Which external surface a toolbar action aims the current file at. `reveal` is
+// always offered; `browser`/`editor` is the mode-dependent open button.
+type ExternalTarget = "reveal" | "browser" | "editor";
+
+const EXTERNAL_ACTIONS = {
+  reveal: "file.showItemInFolder",
+  browser: "file.openInBrowser",
+  editor: "file.openInEditor",
+} as const satisfies Record<ExternalTarget, BuiltInRuntimeActionId>;
+
+// Button label comes from `revealCopy()` (platform-named); the failure banner's
+// title, retry name and dismiss name are resolved together with it so the three
+// can't drift. Browser/editor wording is static — only reveal is platform-bound.
+function externalTargetCopy(
+  target: ExternalTarget,
+  reveal: RevealCopy
+): { errorTitle: string; retryAriaLabel: string; dismissAriaLabel: string } {
+  switch (target) {
+    case "reveal":
+      return {
+        errorTitle: reveal.errorTitle,
+        retryAriaLabel: reveal.retryAriaLabel,
+        dismissAriaLabel: "Dismiss file manager error",
+      };
+    case "browser":
+      return {
+        errorTitle: "Couldn't open in browser",
+        retryAriaLabel: "Retry opening in browser",
+        dismissAriaLabel: "Dismiss browser error",
+      };
+    case "editor":
+      return {
+        errorTitle: "Couldn't open in editor",
+        retryAriaLabel: "Retry opening in editor",
+        dismissAriaLabel: "Dismiss editor error",
+      };
+  }
+}
 
 const SEARCH_DEBOUNCE_MS = 150;
 const COPY_FEEDBACK_MS = 2000;
@@ -580,63 +623,76 @@ export function FilePane({
   }, [filePath]);
 
   // Rendered HTML opens in the browser; every other view opens in the editor.
-  // The button and its failure banner follow this target.
+  // Reveal is a third, always-present target that sits alongside this one.
   const openTarget: "browser" | "editor" = isHtml && viewMode === "rendered" ? "browser" : "editor";
 
   // dispatch() resolves an ActionDispatchResult and never rejects, so a failed
   // open used to vanish entirely (#11114). Surface it inline on the pane that
-  // owns the button rather than through a global toast. The target is passed in
-  // by the caller — the toolbar button uses the live view's target, Retry reuses
-  // the banner's — so a mode toggle mid-launch can never relabel or re-aim it.
-  const [openError, setOpenError] = useState<{
+  // owns the button rather than through a global toast. `target` rides along so
+  // Retry re-aims at what actually failed, even after a mode toggle.
+  const [externalError, setExternalError] = useState<{
     message: string;
-    target: "browser" | "editor";
+    target: ExternalTarget;
   } | null>(null);
-  const [isOpening, setIsOpening] = useState(false);
-  const openAttemptRef = useRef(0);
+  // Tracked per target, not as one flag: revealing successfully says nothing
+  // about a missing editor, so the two must not clear or spin for each other.
+  const [pendingTargets, setPendingTargets] = useState<readonly ExternalTarget[]>([]);
+  // Bumped only by the reset below, so a still-running action is invalidated by
+  // the file changing under it — never by a sibling button starting.
+  const externalGenerationRef = useRef(0);
   // Synchronous re-entry guard: state can't stop a double-click in one tick.
-  // Without it a second launch could land after the first succeeded and report
-  // a failure over a file that was in fact opened.
-  const openInFlightRef = useRef(false);
+  const externalInFlightRef = useRef<Set<ExternalTarget>>(new Set());
 
   // A result that lands after the pane switched files (or panels) belongs to the
   // old file: drop it, and clear any banner the old file left behind.
   useEffect(() => {
-    openAttemptRef.current += 1;
-    openInFlightRef.current = false;
-    setOpenError(null);
-    setIsOpening(false);
+    externalGenerationRef.current += 1;
+    externalInFlightRef.current.clear();
+    setExternalError(null);
+    setPendingTargets([]);
   }, [id, filePath]);
 
   const handleOpenExternal = useCallback(
-    async (target: "browser" | "editor") => {
+    async (target: ExternalTarget) => {
       if (!filePath) return;
-      if (openInFlightRef.current) return;
-      openInFlightRef.current = true;
-      const attempt = ++openAttemptRef.current;
-      setIsOpening(true);
-      const result = await actionService.dispatch(
-        target === "browser" ? "file.openInBrowser" : "file.openInEditor",
-        { path: filePath },
-        { source: "user" }
-      );
-      // A newer attempt (or a file/panel switch) already reset the guard and owns
-      // the banner — an obsolete completion must not unlock it or overwrite state.
-      if (openAttemptRef.current !== attempt) return;
-      openInFlightRef.current = false;
-      setIsOpening(false);
-      if (result.ok) {
-        setOpenError(null);
-        return;
+      if (externalInFlightRef.current.has(target)) return;
+      externalInFlightRef.current.add(target);
+      const generation = externalGenerationRef.current;
+      setPendingTargets((current) => (current.includes(target) ? current : [...current, target]));
+      try {
+        const result = await actionService.dispatch(
+          EXTERNAL_ACTIONS[target],
+          { path: filePath },
+          { source: "user" }
+        );
+        // The file (or panel) changed while this was in flight: the result
+        // describes a file the pane no longer shows.
+        if (externalGenerationRef.current !== generation) return;
+        if (result.ok) {
+          // Clears only its own failure — a sibling's banner stands until that
+          // button's own retry succeeds.
+          setExternalError((current) => (current?.target === target ? null : current));
+          return;
+        }
+        logError(`[FilePane] ${EXTERNAL_ACTIONS[target]} failed`, result.error);
+        setExternalError({ message: result.error.message, target });
+      } finally {
+        // Releasing in `finally` keeps a rejection from wedging the button; the
+        // generation check leaves a reset's clean slate alone.
+        if (externalGenerationRef.current === generation) {
+          externalInFlightRef.current.delete(target);
+          setPendingTargets((current) => current.filter((t) => t !== target));
+        }
       }
-      logError(
-        `[FilePane] openIn${target === "browser" ? "Browser" : "Editor"} failed`,
-        result.error
-      );
-      setOpenError({ message: result.error.message, target });
     },
     [filePath]
   );
+
+  const isErrorTargetPending =
+    externalError !== null && pendingTargets.includes(externalError.target);
+  // Below the Doherty threshold a spinner is just a flash; `disabled` still
+  // blocks a double submit from the first millisecond.
+  const showRetrySpinner = useDohertyGate(isErrorTargetPending);
 
   const [pickerQuery, setPickerQuery] = useState("");
   const pickerRoot = worktreePath || projectPath;
@@ -650,6 +706,8 @@ export function FilePane({
     filePath && isUnderRoot(filePath, pickerRoot)
       ? toForwardSlashes(filePath).slice(toForwardSlashes(pickerRoot).replace(/\/$/, "").length + 1)
       : filePath && toForwardSlashes(filePath);
+  const reveal = revealCopy();
+  const errorCopy = externalError ? externalTargetCopy(externalError.target, reveal) : null;
   const toolbar = filePath ? (
     <>
       <FileViewerToolbar.Root>
@@ -676,6 +734,15 @@ export function FilePane({
           <FileViewerToolbar.IconButton label="Refresh" onClick={handleToolbarRefresh}>
             <SpinningIcon icon={RefreshCw} active={refreshingMode !== null} className="w-4 h-4" />
           </FileViewerToolbar.IconButton>
+          {/* Reveal is always offered, even for a file the viewer can't render
+              (oversized, unsupported video) — the OS file manager is then the
+              only way forward. */}
+          <FileViewerToolbar.IconButton
+            label={reveal.label}
+            onClick={() => void handleOpenExternal("reveal")}
+          >
+            <FolderOpen className="w-4 h-4" />
+          </FileViewerToolbar.IconButton>
           <FileViewerToolbar.IconButton
             label={openTarget === "browser" ? "Open in browser" : "Open in editor"}
             onClick={() => void handleOpenExternal(openTarget)}
@@ -698,30 +765,24 @@ export function FilePane({
           action={{ id: "refresh-diff", label: "Refresh", icon: RefreshCw, onClick: retryDiff }}
         />
       )}
-      {openError && (
+      {externalError && errorCopy && (
         <InlineStatusBanner
           icon={XCircle}
-          title={
-            openError.target === "browser" ? "Couldn't open in browser" : "Couldn't open in editor"
-          }
-          description={openError.message}
+          title={errorCopy.errorTitle}
+          description={externalError.message}
           severity="error"
           action={{
             id: "retry-open-external",
             label: "Retry",
             icon: RefreshCw,
             variant: "dangerFilled",
-            loading: isOpening,
-            onClick: () => void handleOpenExternal(openError.target),
-            ariaLabel:
-              openError.target === "browser"
-                ? "Retry opening in browser"
-                : "Retry opening in editor",
+            loading: showRetrySpinner,
+            disabled: isErrorTargetPending,
+            onClick: () => void handleOpenExternal(externalError.target),
+            ariaLabel: errorCopy.retryAriaLabel,
           }}
-          onClose={() => setOpenError(null)}
-          closeAriaLabel={
-            openError.target === "browser" ? "Dismiss browser error" : "Dismiss editor error"
-          }
+          onClose={() => setExternalError(null)}
+          closeAriaLabel={errorCopy.dismissAriaLabel}
         />
       )}
     </>
