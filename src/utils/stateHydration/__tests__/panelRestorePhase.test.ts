@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Mock } from "vitest";
 import type { TerminalState, BackendTerminalInfo } from "@shared/types/ipc/terminal";
+import type { WorktreeState } from "@shared/types";
 
 // --- Module mocks ---
 vi.mock("@/utils/logger", () => ({
@@ -172,6 +173,12 @@ function backend(id: string, overrides: Partial<BackendTerminalInfo> = {}): Back
     hasPty: true,
     ...overrides,
   };
+}
+
+// Minimal worktree list — getKnownWorktreeIds/resolveRestoredWorktreeId read
+// only `id`, so the rest of WorktreeState is irrelevant to re-home resolution.
+function wtList(...ids: string[]): WorktreeState[] {
+  return ids.map((id) => ({ id })) as unknown as WorktreeState[];
 }
 
 const { restorePanelsPhase } = await import("../panelRestorePhase");
@@ -363,6 +370,80 @@ describe("restorePanelsPhase — saved panels", () => {
     ctx.backendTerminalMap.set("t1", backend("t1"));
     await restorePanelsPhase([panel("t1")], ctx);
     expect(setTargetSizeMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("restorePanelsPhase — worktree re-home validation (#11387)", () => {
+  // restoreTasks[].worktreeId reflects the id after resolveRestoredWorktreeId
+  // runs, so it is the observable for how a stranded panel was (or wasn't)
+  // re-homed.
+  const resolvedWorktreeId = (tasks: { worktreeId?: string }[]) => tasks[0]?.worktreeId;
+
+  it("re-homes a stranded panel onto the active worktree when the active worktree is live", async () => {
+    const ctx = makeContext({
+      activeWorktreeId: "wMain",
+      worktreesPromise: Promise.resolve(wtList("wMain")),
+    });
+    ctx.backendTerminalMap.set("t1", backend("t1"));
+    const { restoreTasks } = await restorePanelsPhase([panel("t1", { worktreeId: "wGone" })], ctx);
+    // wGone is absent from the complete list; wMain (the active worktree) is
+    // live, so the panel re-homes onto it — the existing #11234 behavior.
+    expect(resolvedWorktreeId(restoreTasks)).toBe("wMain");
+  });
+
+  it("keeps the saved worktreeId rather than re-homing onto a dead active worktree", async () => {
+    const ctx = makeContext({
+      activeWorktreeId: "wDeadActive",
+      worktreesPromise: Promise.resolve(wtList("wMain")),
+    });
+    ctx.backendTerminalMap.set("t1", backend("t1"));
+    const { restoreTasks } = await restorePanelsPhase([panel("t1", { worktreeId: "wGone" })], ctx);
+    // Both the saved worktree AND the active worktree are absent from the
+    // complete list. Re-homing onto the dead active would strand the panel on a
+    // deleted worktree, so the saved id is kept for the boot's active-selection
+    // fallback to repair (#11387 / PR #11235 follow-up).
+    expect(resolvedWorktreeId(restoreTasks)).toBe("wGone");
+  });
+
+  it("keeps a known saved worktreeId untouched", async () => {
+    const ctx = makeContext({
+      activeWorktreeId: "wMain",
+      worktreesPromise: Promise.resolve(wtList("wMain", "wFeature")),
+    });
+    ctx.backendTerminalMap.set("t1", backend("t1"));
+    const { restoreTasks } = await restorePanelsPhase(
+      [panel("t1", { worktreeId: "wFeature" })],
+      ctx
+    );
+    // wFeature is in the list — no re-home, even though it isn't the active one.
+    expect(resolvedWorktreeId(restoreTasks)).toBe("wFeature");
+  });
+
+  it("keeps the saved worktreeId when the list is unknown (empty), preserving #11234", async () => {
+    const ctx = makeContext({
+      activeWorktreeId: "wDeadActive",
+      worktreesPromise: Promise.resolve([]),
+    });
+    ctx.backendTerminalMap.set("t1", backend("t1"));
+    const { restoreTasks } = await restorePanelsPhase([panel("t1", { worktreeId: "wGone" })], ctx);
+    // An empty (partial/not-ready) list is "unknown", so nothing is validated
+    // and the saved assignment survives — never collapsed onto the active one.
+    expect(resolvedWorktreeId(restoreTasks)).toBe("wGone");
+  });
+
+  it("does not home a no-worktree panel onto a dead active worktree", async () => {
+    const ctx = makeContext({
+      activeWorktreeId: "wDeadActive",
+      worktreesPromise: Promise.resolve(wtList("wMain")),
+    });
+    ctx.backendTerminalMap.set("t1", backend("t1"));
+    const { restoreTasks } = await restorePanelsPhase(
+      [panel("t1", { worktreeId: undefined })],
+      ctx
+    );
+    // No saved worktree and the active worktree is dead — leave it unset rather
+    // than guess onto a deleted worktree.
+    expect(resolvedWorktreeId(restoreTasks)).toBeUndefined();
   });
 });
 

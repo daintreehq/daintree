@@ -13,7 +13,7 @@
 import { EventEmitter } from "events";
 import { CHANNELS } from "../ipc/channels.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
-import { sendToEntryWindows } from "./workspace-client/types.js";
+import { type ProcessEntry, sendToEntryWindows } from "./workspace-client/types.js";
 import {
   WorkspaceHostPool,
   WorkspaceHostEventRouter,
@@ -466,17 +466,15 @@ export class WorkspaceClient extends EventEmitter {
     if (existing) return existing;
 
     const entry = this.pool.entries.get(normalized);
-    const host =
-      entry !== undefined && entry.projectId === expectedProjectId ? entry.host : undefined;
+    const matchedEntry =
+      entry !== undefined && entry.projectId === expectedProjectId ? entry : undefined;
     const promise = (
-      host === undefined
+      matchedEntry === undefined
         ? Promise.resolve([] as WorktreeSnapshot[])
-        : host
-            .sendWithResponse<{ states: WorktreeSnapshot[] }>({
-              type: "get-all-states",
-              requestId: host.generateRequestId(),
-            })
-            .then((result) => result.states)
+        : // Gate on the host's readiness so a mid-`syncMonitors` partial list is
+          // never returned to a hydration prefetch (#11387) — same guard as the
+          // window-scoped path.
+          this._readStatesWhenReady(matchedEntry)
     ).then(
       (result) => {
         setTimeout(() => this._statesInflight.delete(key), STATES_INFLIGHT_COALESCE_WINDOW_MS);
@@ -491,42 +489,52 @@ export class WorkspaceClient extends EventEmitter {
     return promise;
   }
 
+  /**
+   * Read a single host's worktree states, but only after the host has finished
+   * (re)populating its monitor map. `syncMonitors` builds `this.monitors` one
+   * worktree at a time inside `load-project`, so a `get-all-states` request that
+   * lands mid-loop returns a non-empty PARTIAL list (often just the main
+   * worktree, since git enumerates it first). Restore then trusts that partial
+   * snapshot as authoritative and re-homes every not-yet-synced panel onto the
+   * active worktree — the exact collapse in #11387.
+   *
+   * `entry.currentReadyPromise` resolves only after `load-project` (and thus the
+   * whole `syncMonitors` loop) completes, and it is reassigned to the reload
+   * promise on crash-restart, so awaiting it gates both the initial and the
+   * post-restart populate — the only two windows in which the map is genuinely
+   * partial (steady-state reconciles never drop a live monitor mid-loop).
+   * Rejection is swallowed: a failed load leaves the map empty, which the read
+   * then reports as `[]` — the established "unknown, keep saved state" sentinel
+   * (#11234), never a partial. The await is a no-op microtask once the host is
+   * ready, so steady-state reads are unaffected.
+   */
+  private async _readStatesWhenReady(entry: ProcessEntry): Promise<WorktreeSnapshot[]> {
+    await entry.currentReadyPromise.catch(() => {});
+    const requestId = entry.host.generateRequestId();
+    const result = await entry.host.sendWithResponse<{
+      states: WorktreeSnapshot[];
+    }>({
+      type: "get-all-states",
+      requestId,
+    });
+    return result.states;
+  }
+
   private async _doGetAllStates(windowId?: number): Promise<WorktreeSnapshot[]> {
     if (windowId !== undefined) {
-      const host = this.pool.resolveHostForWindow(windowId);
-      if (!host) return [];
-      const requestId = host.generateRequestId();
-      const result = await host.sendWithResponse<{
-        states: WorktreeSnapshot[];
-      }>({
-        type: "get-all-states",
-        requestId,
-      });
-      return result.states;
+      const entry = this.pool.resolveEntryForWindow(windowId);
+      if (!entry) return [];
+      return this._readStatesWhenReady(entry);
     }
 
     const entries = [...this.pool.entries.values()];
     const results = await Promise.allSettled(
-      entries.map((entry) => {
-        const requestId = entry.host.generateRequestId();
-        return entry.host.sendWithResponse<{
-          states: WorktreeSnapshot[];
-        }>({
-          type: "get-all-states",
-          requestId,
-        });
-      })
+      entries.map((entry) => this._readStatesWhenReady(entry))
     );
     return dedupeSnapshotsById(
       results
-        .filter(
-          (
-            r
-          ): r is PromiseFulfilledResult<{
-            states: WorktreeSnapshot[];
-          }> => r.status === "fulfilled"
-        )
-        .flatMap((r) => r.value.states)
+        .filter((r): r is PromiseFulfilledResult<WorktreeSnapshot[]> => r.status === "fulfilled")
+        .flatMap((r) => r.value)
     );
   }
 

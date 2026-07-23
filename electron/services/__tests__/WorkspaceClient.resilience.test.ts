@@ -370,6 +370,76 @@ describe("WorkspaceClient multi-process manager", () => {
       expect(result.map((s) => s.id)).toEqual(["wt-shared", "wt-a", "wt-b"]);
       expect(result.filter((s) => s.id === "wt-shared")).toHaveLength(1);
     });
+
+    it("waits for the host to finish re-populating after a restart before reading, so a mid-syncMonitors partial list is never returned (#11387)", async () => {
+      const load = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load;
+
+      // Simulate a crash-restart: the pool reassigns currentReadyPromise to the
+      // reload promise, which resolves only after load-project — and thus the
+      // whole syncMonitors populate — completes. Until then this.monitors is
+      // partial (often just the main worktree, which git enumerates first).
+      h(0).emit("restarted");
+      await tick();
+      const reloadReq = h(0).getLastRequest()!;
+      expect(reloadReq.type).toBe("load-project");
+
+      // A read landing during the resync must NOT fire get-all-states yet — it
+      // would observe the partial monitor map that restore wrongly trusts.
+      const statesPromise = client.getAllStatesAsync(1);
+      await tick();
+      expect(
+        h(0)
+          .getAllRequests()
+          .filter((r: any) => r.type === "get-all-states")
+      ).toHaveLength(0);
+
+      // Once the reload settles, the gated read proceeds against the complete map.
+      h(0).resolveRequest(reloadReq.requestId);
+      await tick();
+      const statesReq = h(0)
+        .getAllRequests()
+        .find((r: any) => r.type === "get-all-states")!;
+      expect(statesReq).toBeDefined();
+      h(0).resolveRequest(statesReq.requestId, {
+        states: [{ id: "wt-1" }, { id: "wt-2" }],
+      });
+
+      expect((await statesPromise).map((s) => s.id)).toEqual(["wt-1", "wt-2"]);
+    });
+
+    it("does not stall the read forever when the restart reload rejects — falls through to a best-effort read (#11387)", async () => {
+      const load = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load;
+
+      h(0).emit("restarted");
+      await tick();
+      const reloadReq = h(0).getLastRequest()!;
+      expect(reloadReq.type).toBe("load-project");
+
+      const statesPromise = client.getAllStatesAsync(1);
+      await tick();
+      expect(
+        h(0)
+          .getAllRequests()
+          .filter((r: any) => r.type === "get-all-states")
+      ).toHaveLength(0);
+
+      // A failed reload leaves currentReadyPromise rejected; the gate swallows
+      // it and reads anyway (a failed load reports [] — the "unknown" sentinel —
+      // never a partial, and never a hang).
+      h(0).rejectRequest(reloadReq.requestId, new Error("reload failed"));
+      await tick();
+      const statesReq = h(0)
+        .getAllRequests()
+        .find((r: any) => r.type === "get-all-states")!;
+      expect(statesReq).toBeDefined();
+      h(0).resolveRequest(statesReq.requestId, { states: [] });
+
+      expect(await statesPromise).toEqual([]);
+    });
   });
 
   describe("getAllStatesForProjectAsync", () => {
@@ -460,6 +530,37 @@ describe("WorkspaceClient multi-process manager", () => {
       const result = await client.getAllStatesForProjectAsync("/project-a", idFor("/project-b"));
       expect(result).toEqual([]);
       expect(h(0).sendWithResponse.mock.calls.length).toBe(callsBefore);
+    });
+
+    it("waits for host readiness before reading, so a resync never yields a partial list (#11387)", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      // Same crash-restart resync window as the window-scoped path — the
+      // project-scoped read (the one hydration now uses, #11387) must gate on
+      // the same readiness signal.
+      h(0).emit("restarted");
+      await tick();
+      const reloadReq = h(0).getLastRequest()!;
+      expect(reloadReq.type).toBe("load-project");
+
+      const statesPromise = client.getAllStatesForProjectAsync("/project-a", idFor("/project-a"));
+      await tick();
+      expect(
+        h(0)
+          .getAllRequests()
+          .filter((r: any) => r.type === "get-all-states")
+      ).toHaveLength(0);
+
+      h(0).resolveRequest(reloadReq.requestId);
+      await tick();
+      const statesReq = h(0)
+        .getAllRequests()
+        .find((r: any) => r.type === "get-all-states")!;
+      expect(statesReq).toBeDefined();
+      h(0).resolveRequest(statesReq.requestId, { states: [{ id: "wt-a" }] });
+      expect((await statesPromise).map((s: any) => s.id)).toEqual(["wt-a"]);
     });
 
     it("normalizes the path before keying — equivalent spellings share one request", async () => {

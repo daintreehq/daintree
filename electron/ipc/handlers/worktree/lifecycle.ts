@@ -57,7 +57,29 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
     if (!deps.worktreeService) {
       return [];
     }
-    return (await deps.worktreeService.getAllStatesAsync(ctx.senderWindow?.id)) as WorktreeState[];
+    // Resolve by the sender view's immutable project id (main-owned
+    // `viewToProject`, captured synchronously at dispatch) rather than the
+    // window id: `windowToProject` is repointed the instant a project switch
+    // starts, so a window-scoped read of the hydration prefetch can be answered
+    // by a *different* project's host and return a full list of foreign
+    // worktree ids that restore then trusts as authoritative (#11387; same
+    // class as #11366, fixed for the file browser via getAllStatesForProjectAsync).
+    // An unresolved project — a null id during the startup window before view
+    // registration completes, or an unknown id — returns [], the established
+    // "unknown, keep saved state" sentinel (#11234); never a throw, which would
+    // only spam hydration's warn-and-fallback path.
+    const senderProjectId = ctx.projectId;
+    if (senderProjectId === null) {
+      return [];
+    }
+    const project = projectStore.getProjectById(senderProjectId);
+    if (!project) {
+      return [];
+    }
+    return (await deps.worktreeService.getAllStatesForProjectAsync(
+      project.path,
+      senderProjectId
+    )) as WorktreeState[];
   };
 
   const handleWorktreeRefresh = async (worktreeId?: string): Promise<void> => {
