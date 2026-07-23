@@ -444,10 +444,40 @@ describe("ProjectStateManager unreadable-session tracking", () => {
     expect(manager.wasStateUnreadableThisSession(projectId)).toBe(false);
   });
 
-  it("does not mark a project whose state reads back valid", async () => {
+  it("does not mark a project whose state reads back valid from disk", async () => {
     await manager.saveProjectState(projectId, makeState());
+    // Drop the write-through cache so getProjectState exercises the real
+    // disk-read path rather than returning the just-saved in-memory state.
+    manager.invalidateProjectStateCache(projectId);
 
     expect(await manager.getProjectState(projectId)).not.toBeNull();
+    expect(manager.wasStateUnreadableThisSession(projectId)).toBe(false);
+  });
+
+  it("marks a project whose parsed state has a non-array terminals field", async () => {
+    const filePath = stateFilePath(tempDir, projectId)!;
+    await fs.writeFile(
+      filePath,
+      JSON.stringify({ projectId, terminals: { not: "an array" } }),
+      "utf-8"
+    );
+
+    const state = await manager.getProjectState(projectId);
+
+    // The state is still usable (terminals fall back to empty)...
+    expect(state).not.toBeNull();
+    expect(state!.terminals).toEqual([]);
+    // ...but the incomplete enumeration must protect its restore files.
+    expect(manager.wasStateUnreadableThisSession(projectId)).toBe(true);
+  });
+
+  it("does not mark a project whose terminals field is absent (legitimately empty)", async () => {
+    const filePath = stateFilePath(tempDir, projectId)!;
+    await fs.writeFile(filePath, JSON.stringify({ projectId }), "utf-8");
+
+    const state = await manager.getProjectState(projectId);
+
+    expect(state).not.toBeNull();
     expect(manager.wasStateUnreadableThisSession(projectId)).toBe(false);
   });
 
@@ -485,18 +515,28 @@ describe("ProjectStateManager unreadable-session tracking", () => {
     expect(manager.wasStateUnreadableThisSession(otherId)).toBe(false);
   });
 
-  it("keeps the mark after the recovery signal is drained (non-draining)", async () => {
+  it("keeps the mark across drain and a valid re-save (non-draining, append-only)", async () => {
     const filePath = stateFilePath(tempDir, projectId)!;
     await fs.writeFile(filePath, "{ not valid json", "utf-8");
 
-    const recovered = await manager.getProjectStateWithRecovery(projectId);
-    expect(recovered.quarantinedPath).toMatch(/\.corrupted\.\d+$/);
+    // First recovery read triggers quarantine and drains pendingQuarantines.
+    const first = await manager.getProjectStateWithRecovery(projectId);
+    expect(first.quarantinedPath).toMatch(/\.corrupted\.\d+$/);
 
-    // Second recovery read drains pendingQuarantines...
-    const drained = await manager.getProjectStateWithRecovery(projectId);
-    expect(drained.quarantinedPath).toBeUndefined();
+    // Second recovery read proves pendingQuarantines was already drained...
+    const second = await manager.getProjectStateWithRecovery(projectId);
+    expect(second.quarantinedPath).toBeUndefined();
 
-    // ...but the unreadable-session mark must persist regardless.
+    // ...while the unreadable-session mark stays set across repeated peeks.
+    expect(manager.wasStateUnreadableThisSession(projectId)).toBe(true);
+    expect(manager.wasStateUnreadableThisSession(projectId)).toBe(true);
+
+    // And it survives a successful re-save + fresh disk read: recovering into a
+    // valid (possibly empty) state does not prove the original terminal ids came
+    // back, so the sweep stays conservative for the rest of the session.
+    await manager.saveProjectState(projectId, makeState());
+    manager.invalidateProjectStateCache(projectId);
+    expect(await manager.getProjectState(projectId)).not.toBeNull();
     expect(manager.wasStateUnreadableThisSession(projectId)).toBe(true);
   });
 });

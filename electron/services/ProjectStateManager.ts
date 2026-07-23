@@ -253,6 +253,16 @@ export class ProjectStateManager {
         return null;
       }
 
+      // A present-but-non-array `terminals` field means the enumeration we can
+      // recover is incomplete — we fall back to zero ids below, so this project
+      // can't be trusted to gate the destructive orphan sweep any more than a
+      // corrupt file could. Flag it. A missing or null field is a legitimately
+      // empty project, not corruption, and must not flag. (Individual entries
+      // that fail schema validation are dropped as genuine orphans — the
+      // terminal won't be restored, so its scrollback is already dead.)
+      if (parsed.terminals != null && !Array.isArray(parsed.terminals)) {
+        this.unreadableProjectIds.add(projectId);
+      }
       const rawTerminals = Array.isArray(parsed.terminals) ? parsed.terminals : [];
       const validTerminals = filterValidTerminalEntries(
         rawTerminals,

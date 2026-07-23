@@ -237,6 +237,22 @@ describe("ProjectStateManager.getProjectState ENOENT branch (mocked fs)", () => 
     expect(result).toBeNull();
     expect(utilsMock.resilientRename).toHaveBeenCalledTimes(1);
   });
+
+  it("marks and quarantines on a non-ENOENT read failure (EACCES)", async () => {
+    // A read errno other than ENOENT must go through the corruption path, not
+    // the empty-state short-circuit — otherwise an unreadable project would be
+    // treated as authoritatively empty and lose its restore files.
+    fsPromisesMock.readFile.mockRejectedValue(
+      Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" })
+    );
+
+    const result = await manager.getProjectStateWithRecovery(projectId);
+
+    expect(result.state).toBeNull();
+    expect(result.quarantinedPath).toMatch(/\.corrupted\.\d+$/);
+    expect(utilsMock.resilientRename).toHaveBeenCalledTimes(1);
+    expect(manager.wasStateUnreadableThisSession(projectId)).toBe(true);
+  });
 });
 
 describe("ProjectStateManager unreadable-session mark under rename double-fault (mocked fs)", () => {

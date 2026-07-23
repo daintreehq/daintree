@@ -315,7 +315,7 @@ import { CHANNELS } from "../../ipc/channels.js";
 import { store } from "../../store.js";
 
 describe("evictStaleSessionFiles orphan-pass safety (#11349)", () => {
-  beforeEach(() => {
+  function resetSweepMocks() {
     evictSessionFilesMock.mockReset();
     evictSessionFilesMock.mockResolvedValue({ deleted: 0, bytesFreed: 0 });
     projectStoreMock.getAllProjects.mockReset();
@@ -324,7 +324,12 @@ describe("evictStaleSessionFiles orphan-pass safety (#11349)", () => {
     projectStoreMock.getProjectState.mockResolvedValue(null);
     projectStoreMock.wasStateUnreadableThisSession.mockReset();
     projectStoreMock.wasStateUnreadableThisSession.mockReturnValue(false);
-  });
+  }
+
+  beforeEach(resetSweepMocks);
+  // Restore defaults so a custom implementation set here can't leak into the
+  // sibling "task ordering" describe — these hoisted mocks are shared.
+  afterEach(resetSweepMocks);
 
   it("passes a populated knownIds set when every project-state read is reliable", async () => {
     projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-a" }, { id: "proj-b" }]);
@@ -335,30 +340,51 @@ describe("evictStaleSessionFiles orphan-pass safety (#11349)", () => {
           // NOT, on its own, disable the orphan pass.
           null
     );
-    projectStoreMock.wasStateUnreadableThisSession.mockReturnValue(false);
 
     await __test__.evictStaleSessionFiles();
 
     expect(evictSessionFilesMock).toHaveBeenCalledTimes(1);
     const arg = evictSessionFilesMock.mock.calls[0][0];
     expect(arg.knownIds).toBeInstanceOf(Set);
-    expect([...(arg.knownIds ?? [])]).toEqual(
-      expect.arrayContaining(["term-a1", "term-a2"])
-    );
+    expect([...(arg.knownIds ?? [])].sort()).toEqual(["term-a1", "term-a2"]);
+  });
+
+  it("passes an empty knownIds set (not undefined) when all reads are benignly empty", async () => {
+    // Guards against a `knownIds.size === 0 ? undefined : knownIds` regression:
+    // emptiness alone must not disable the orphan pass — only an unreadable flag.
+    projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-a" }, { id: "proj-b" }]);
+    projectStoreMock.getProjectState.mockResolvedValue(null);
+
+    await __test__.evictStaleSessionFiles();
+
+    expect(evictSessionFilesMock).toHaveBeenCalledTimes(1);
+    const arg = evictSessionFilesMock.mock.calls[0][0];
+    expect(arg.knownIds).toBeInstanceOf(Set);
+    expect([...(arg.knownIds ?? [])]).toEqual([]);
   });
 
   it("passes knownIds undefined when any project state was unreadable this session", async () => {
+    // The flag is populated only as a deferred (microtask) side effect of
+    // getProjectState resolving, so this passes only if the sweep AWAITS every
+    // read before consulting wasStateUnreadableThisSession. A regression that
+    // checked the flag before awaiting the reads would see an empty set and
+    // wrongly build a knownIds Set — catching an inactive project first
+    // discovered by the sweep.
+    const unreadable = new Set<string>();
     projectStoreMock.getAllProjects.mockReturnValue([
       { id: "proj-a" },
       { id: "proj-quarantined" },
     ]);
-    projectStoreMock.getProjectState.mockImplementation(async (id: string) =>
-      id === "proj-a" ? { terminals: [{ id: "term-a1" }] } : null
-    );
-    // Only the quarantined project trips the flag — the all-or-nothing rule
-    // must still disable the orphan pass for the entire sweep.
-    projectStoreMock.wasStateUnreadableThisSession.mockImplementation(
-      (id: string) => id === "proj-quarantined"
+    projectStoreMock.getProjectState.mockImplementation(async (id: string) => {
+      await Promise.resolve();
+      if (id === "proj-quarantined") {
+        unreadable.add(id);
+        return null;
+      }
+      return { terminals: [{ id: "term-a1" }] };
+    });
+    projectStoreMock.wasStateUnreadableThisSession.mockImplementation((id: string) =>
+      unreadable.has(id)
     );
 
     await __test__.evictStaleSessionFiles();
