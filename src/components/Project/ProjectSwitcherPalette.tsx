@@ -7,6 +7,7 @@ import {
   Clipboard,
   Download,
   FileText,
+  FolderInput,
   FolderOpen,
   FolderPlus,
   FolderUp,
@@ -74,6 +75,7 @@ export interface ProjectSwitcherPaletteProps {
   onCloseProject?: (projectId: string) => void;
   onFreeMemoryProject?: (projectId: string) => void;
   onLocateProject?: (projectId: string) => void;
+  onMoveOrRenameProject?: (projectId: string) => void;
   onTogglePinProject?: (projectId: string) => void;
   onCopyPath?: (path: string) => void;
   onSelectNewWindow?: (project: SearchableProject) => void;
@@ -142,6 +144,7 @@ interface ProjectListItemProps {
   onCloseProject?: (projectId: string) => void;
   onFreeMemoryProject?: (projectId: string) => void;
   onLocateProject?: (projectId: string) => void;
+  onMoveOrRenameProject?: (projectId: string) => void;
   onTogglePinProject?: (projectId: string) => void;
   onCopyPath?: (path: string) => void;
   onSelectNewWindow?: (project: SearchableProject) => void;
@@ -194,6 +197,7 @@ function ProjectListItem({
   onCloseProject,
   onFreeMemoryProject,
   onLocateProject,
+  onMoveOrRenameProject,
   onTogglePinProject,
   onCopyPath,
   onSelectNewWindow,
@@ -309,7 +313,9 @@ function ProjectListItem({
     onCloseProject ||
     onFreeMemoryProject ||
     onCopyPath ||
-    onSelectNewWindow;
+    onSelectNewWindow ||
+    onMoveOrRenameProject ||
+    onLocateProject;
   if (!hasContextActions) return row;
 
   return (
@@ -343,6 +349,12 @@ function ProjectListItem({
             Copy path
           </ContextMenuItem>
         )}
+        {onMoveOrRenameProject && !project.isMissing && (
+          <ContextMenuItem onSelect={() => onMoveOrRenameProject(project.id)}>
+            <FolderInput className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+            Move or rename project…
+          </ContextMenuItem>
+        )}
         {(onTogglePinProject || onCopyPath) &&
           (onStopProject || onFreeMemoryProject || onCloseProject) && <ContextMenuSeparator />}
         {showStop && onStopProject && (
@@ -374,7 +386,7 @@ function ProjectListItem({
             <ContextMenuSeparator />
             <ContextMenuItem onSelect={() => onLocateProject(project.id)}>
               <FolderOpen className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-              Locate folder
+              Locate moved project
             </ContextMenuItem>
           </>
         )}
@@ -406,6 +418,7 @@ interface ProjectListContentProps {
   onCloseProject?: (projectId: string) => void;
   onFreeMemoryProject?: (projectId: string) => void;
   onLocateProject?: (projectId: string) => void;
+  onMoveOrRenameProject?: (projectId: string) => void;
   onTogglePinProject?: (projectId: string) => void;
   onCopyPath?: (path: string) => void;
   onSelectNewWindow?: (project: SearchableProject) => void;
@@ -424,6 +437,7 @@ function ProjectListContent({
   onCloseProject,
   onFreeMemoryProject,
   onLocateProject,
+  onMoveOrRenameProject,
   onTogglePinProject,
   onCopyPath,
   onSelectNewWindow,
@@ -486,6 +500,7 @@ function ProjectListContent({
           onCloseProject={onCloseProject}
           onFreeMemoryProject={onFreeMemoryProject}
           onLocateProject={onLocateProject}
+          onMoveOrRenameProject={onMoveOrRenameProject}
           onTogglePinProject={onTogglePinProject}
           onCopyPath={onCopyPath}
           onSelectNewWindow={onSelectNewWindow}
@@ -956,6 +971,7 @@ interface ProjectPaletteInnerProps {
   onCloseProject?: (projectId: string) => void;
   onFreeMemoryProject?: (projectId: string) => void;
   onLocateProject?: (projectId: string) => void;
+  onMoveOrRenameProject?: (projectId: string) => void;
   onTogglePinProject?: (projectId: string) => void;
   onCopyPath?: (path: string) => void;
   onHoverProject?: (projectId: string, pointerType: string) => void;
@@ -990,6 +1006,7 @@ function ProjectPaletteInner({
   onCloseProject,
   onFreeMemoryProject,
   onLocateProject,
+  onMoveOrRenameProject,
   onTogglePinProject,
   onCopyPath,
   onHoverProject,
@@ -1114,6 +1131,7 @@ function ProjectPaletteInner({
           onCloseProject={onCloseProject}
           onFreeMemoryProject={onFreeMemoryProject}
           onLocateProject={onLocateProject}
+          onMoveOrRenameProject={onMoveOrRenameProject}
           onTogglePinProject={onTogglePinProject}
           onCopyPath={onCopyPath}
           onSelectNewWindow={onSelectNewWindow}
@@ -1240,6 +1258,7 @@ function ModalContent({
         onCloseProject={innerProps.onCloseProject}
         onFreeMemoryProject={innerProps.onFreeMemoryProject}
         onLocateProject={innerProps.onLocateProject}
+        onMoveOrRenameProject={innerProps.onMoveOrRenameProject}
         onTogglePinProject={innerProps.onTogglePinProject}
         onCopyPath={innerProps.onCopyPath}
         onSelectNewWindow={innerProps.onSelectNewWindow}
@@ -1346,6 +1365,7 @@ function DropdownContent({
           onCloseProject={innerProps.onCloseProject}
           onFreeMemoryProject={innerProps.onFreeMemoryProject}
           onLocateProject={innerProps.onLocateProject}
+          onMoveOrRenameProject={innerProps.onMoveOrRenameProject}
           onTogglePinProject={innerProps.onTogglePinProject}
           onCopyPath={innerProps.onCopyPath}
           onSelectNewWindow={innerProps.onSelectNewWindow}
@@ -1382,6 +1402,7 @@ export function ProjectSwitcherPalette({
   onCloseProject,
   onFreeMemoryProject,
   onLocateProject,
+  onMoveOrRenameProject,
   onTogglePinProject,
   onCopyPath,
   onSelectNewWindow,
@@ -1441,6 +1462,7 @@ export function ProjectSwitcherPalette({
         onCloseProject={onCloseProject}
         onFreeMemoryProject={onFreeMemoryProject}
         onLocateProject={onLocateProject}
+        onMoveOrRenameProject={onMoveOrRenameProject}
         onTogglePinProject={onTogglePinProject}
         onCopyPath={onCopyPath}
         onSelectNewWindow={onSelectNewWindow}
@@ -1478,6 +1500,7 @@ export function ProjectSwitcherPalette({
         onCloseProject={onCloseProject}
         onFreeMemoryProject={onFreeMemoryProject}
         onLocateProject={onLocateProject}
+        onMoveOrRenameProject={onMoveOrRenameProject}
         onTogglePinProject={onTogglePinProject}
         onCopyPath={onCopyPath}
         onSelectNewWindow={onSelectNewWindow}

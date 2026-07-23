@@ -1172,6 +1172,14 @@ export interface GeneratedIpcInvokeMap {
     args: [level: "off" | "errors" | "full"];
     result: void;
   };
+  "project-relocation:apply": {
+    args: [request: import("../projectRelocation.js").RelocationRequest];
+    result: import("../project.js").Project;
+  };
+  "project-relocation:preview": {
+    args: [request: import("../projectRelocation.js").RelocationRequest];
+    result: import("../projectRelocation.js").RelocationPreview;
+  };
   "project:clone-cancel": {
     args: [];
     result: void;

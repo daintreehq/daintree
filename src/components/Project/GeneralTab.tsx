@@ -5,6 +5,7 @@ import {
   X,
   Rocket,
   Check,
+  FolderInput,
   FolderOpen,
   Copy,
   Palette,
@@ -24,6 +25,7 @@ import { GITIGNORE_SNIPPET } from "./projectSettingsConstants";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { DaintreeMcpTier, Project } from "@shared/types/project";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
+import { useProjectRelocationStore } from "@/store/projectRelocationStore";
 import { findDevServerCandidate } from "@/utils/devServerDetection";
 
 const DAINTREE_MCP_TIER_OPTIONS: readonly ChoiceboxOption<DaintreeMcpTier>[] = [
@@ -140,6 +142,17 @@ export function GeneralTab({
   const gitignoreCopyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const allDetectedRunners = useProjectSettingsStore((s) => s.allDetectedRunners);
+  const openRelocation = useProjectRelocationStore((s) => s.open);
+
+  const handleMoveOrRename = useCallback(() => {
+    if (!currentProject) return;
+    openRelocation({
+      projectId,
+      mode: "move",
+      oldPath: currentProject.path,
+      name: currentProject.name,
+    });
+  }, [openRelocation, projectId, currentProject]);
 
   const detectedCandidate = useMemo(() => {
     const candidate = findDevServerCandidate(allDetectedRunners, turbopackEnabled);
@@ -358,6 +371,24 @@ export function GeneralTab({
                 placeholder="My Awesome Project"
               />
             </div>
+          </div>
+
+          <div className="mt-3 flex items-center justify-between gap-3">
+            <p
+              className="min-w-0 flex-1 truncate text-xs font-mono text-daintree-text/40"
+              title={currentProject.path}
+            >
+              {currentProject.path}
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleMoveOrRename}
+              className="shrink-0 gap-1.5"
+            >
+              <FolderInput className="h-3.5 w-3.5" />
+              Move or rename project…
+            </Button>
           </div>
         </div>
       )}

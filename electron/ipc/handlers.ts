@@ -8,6 +8,7 @@ import { registerEditorConfigHandlers } from "./handlers/editorConfig.js";
 import { registerPaintFabricSurfaceHandlers } from "./handlers/paintFabricSurface.js";
 import { registerAgentCliHandlers } from "./handlers/agentCli.js";
 import { registerProjectCrudHandlers } from "./handlers/projectCrud/index.js";
+import { registerProjectRelocationHandlers } from "./handlers/projectRelocation.js";
 import { registerProjectFreeMemoryHandlers } from "./handlers/projectFreeMemory.js";
 import { registerProjectRecipesHandlers } from "./handlers/projectRecipes.js";
 import { registerProjectPresetsHandlers } from "./handlers/projectPresets.js";
@@ -134,6 +135,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerPaintFabricSurfaceHandlers(deps));
     register(() => registerAgentCliHandlers(deps));
     register(() => registerProjectCrudHandlers(deps));
+    register(() => registerProjectRelocationHandlers(deps));
     register(() => registerProjectFreeMemoryHandlers(deps));
     register(() => registerProjectRecipesHandlers(deps));
     register(() => registerProjectPresetsHandlers(deps));

@@ -13,6 +13,7 @@ import { ThemeBrowser } from "../ThemeBrowser";
 import { FleetArmingRibbon } from "@/components/Fleet";
 import { TerminalDestructiveActionConfirmDialog } from "@/components/Terminal/TerminalDestructiveActionConfirmDialog";
 import { PortalCloseConfirmDialog } from "@/components/Portal/PortalCloseConfirmDialog";
+import { MoveOrRenameProjectDialog } from "@/components/Project/MoveOrRenameProjectDialog";
 import { ChordIndicator } from "./ChordIndicator";
 
 import { AllClearOverlay } from "../AllClearOverlay";
@@ -829,6 +830,7 @@ export function AppLayout({
       </div>
       <TerminalDestructiveActionConfirmDialog />
       <PortalCloseConfirmDialog />
+      <MoveOrRenameProjectDialog />
       <div
         {...(chromeInert ? { inert: true } : {})}
         className="flex-1 flex flex-col overflow-hidden"

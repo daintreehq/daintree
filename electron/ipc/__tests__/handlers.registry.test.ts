@@ -29,6 +29,7 @@ const registerMocks = vi.hoisted(() => ({
   registerPaintFabricSurfaceHandlers: vi.fn(),
   registerAgentCliHandlers: vi.fn(),
   registerProjectCrudHandlers: vi.fn(),
+  registerProjectRelocationHandlers: vi.fn(),
   registerProjectRecipesHandlers: vi.fn(),
   registerProjectPresetsHandlers: vi.fn(),
   registerGlobalRecipesHandlers: vi.fn(),
@@ -119,6 +120,9 @@ vi.mock("../handlers/agentCli.js", () => ({
 }));
 vi.mock("../handlers/projectCrud/index.js", () => ({
   registerProjectCrudHandlers: registerMocks.registerProjectCrudHandlers,
+}));
+vi.mock("../handlers/projectRelocation.js", () => ({
+  registerProjectRelocationHandlers: registerMocks.registerProjectRelocationHandlers,
 }));
 vi.mock("../handlers/projectRecipes.js", () => ({
   registerProjectRecipesHandlers: registerMocks.registerProjectRecipesHandlers,

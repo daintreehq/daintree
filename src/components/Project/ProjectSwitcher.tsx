@@ -110,7 +110,14 @@ export function ProjectSwitcher() {
 
   const handleLocateProject = useCallback(
     (projectId: string) => {
-      void projectSwitcher.locateProject(projectId);
+      projectSwitcher.locateProject(projectId);
+    },
+    [projectSwitcher]
+  );
+
+  const handleMoveOrRenameProject = useCallback(
+    (projectId: string) => {
+      projectSwitcher.moveOrRenameProject(projectId);
     },
     [projectSwitcher]
   );
@@ -196,6 +203,7 @@ export function ProjectSwitcher() {
             onCloseProject={handleCloseProject}
             onFreeMemoryProject={handleFreeMemoryProject}
             onLocateProject={handleLocateProject}
+            onMoveOrRenameProject={handleMoveOrRenameProject}
             onTogglePinProject={handleTogglePinProject}
             onCopyPath={projectSwitcher.copyPath}
             onSelectNewWindow={handleSelectNewWindow}
@@ -277,6 +285,7 @@ export function ProjectSwitcher() {
         onCloseProject={handleCloseProject}
         onFreeMemoryProject={handleFreeMemoryProject}
         onLocateProject={handleLocateProject}
+        onMoveOrRenameProject={handleMoveOrRenameProject}
         onTogglePinProject={handleTogglePinProject}
         onOpenProjectSettings={currentProject ? handleOpenSettings : undefined}
         onCopyPath={projectSwitcher.copyPath}
