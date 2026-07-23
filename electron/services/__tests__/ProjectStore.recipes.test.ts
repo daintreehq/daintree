@@ -138,7 +138,9 @@ describe("ProjectStore recipe reconciliation", () => {
     expect(fs2[0]!.usageHistory).toEqual([123, 456]);
 
     // Reconciliation must not create the absent directory as a side effect.
-    await expect(fs.access(path.join(projectPath, ".daintree", "recipes"))).rejects.toThrow();
+    await expect(fs.access(path.join(projectPath, ".daintree", "recipes"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
 
     // No in-repo recipes are visible while the directory is absent.
     const inr = await readInRepo();
@@ -164,11 +166,12 @@ describe("ProjectStore recipe reconciliation", () => {
     expect(inr).toEqual([]);
   });
 
-  it("missing directory + mixed mirror & legacy recipe: mirror survives across two reconciliations (#11347)", async () => {
-    // Regression for the two-pass loss: with the directory absent, promoting the
-    // legacy recipe would recreate .daintree/recipes/, and the next reconcile
-    // (now seeing the dir) would prune the protected mirror. The guard must keep
-    // both recipes and leave the directory untouched, stably across passes.
+  it("missing directory + mirror & legacy recipe: reconcile is a stable no-op, mirror never lost (#11347)", async () => {
+    // Without the guard, the parent implementation would promote the legacy
+    // recipe (recreating .daintree/recipes/) AND prune the in-repo mirror in the
+    // same pass. The guard must instead protect the mirror and skip promotion, so
+    // repeated reconciliations leave the store and filesystem byte-for-byte
+    // unchanged — no sibling promotion opens a window that a later pass prunes.
     await fs.mkdir(projectPath, { recursive: true });
 
     const mirror = makeRecipe({
@@ -178,18 +181,25 @@ describe("ProjectStore recipe reconciliation", () => {
     });
     const legacy = makeRecipe({ id: "recipe-legacy-abc", name: "Legacy", projectId });
     await seedFileStore([mirror, legacy]);
+    const before = await readFileStore();
 
-    await store.reconcileProjectRecipes(projectPath, projectId);
-    await store.reconcileProjectRecipes(projectPath, projectId);
+    const collisions1 = await store.reconcileProjectRecipes(projectPath, projectId);
+    const after1 = await readFileStore();
+    const collisions2 = await store.reconcileProjectRecipes(projectPath, projectId);
+    const after2 = await readFileStore();
 
-    const fs2 = await readFileStore();
-    const survived = fs2.find((r) => r.id === mirror.id);
-    expect(survived).toBeDefined();
-    expect(survived!.terminals[0]!.env).toEqual({ TOKEN: "keep-me" });
-    expect(fs2.find((r) => r.id === legacy.id)).toBeDefined();
+    // Each pass reports no collisions and leaves the store unchanged.
+    expect(collisions1).toEqual([]);
+    expect(collisions2).toEqual([]);
+    expect(after1).toEqual(before);
+    expect(after2).toEqual(before);
 
-    // The directory is never created while a mirror needs protecting.
-    await expect(fs.access(path.join(projectPath, ".daintree", "recipes"))).rejects.toThrow();
+    // The mirror's local-only env survived and the directory was never created.
+    expect(after2.find((r) => r.id === mirror.id)?.terminals[0]!.env).toEqual({ TOKEN: "keep-me" });
+    expect(after2.find((r) => r.id === legacy.id)).toBeDefined();
+    await expect(fs.access(path.join(projectPath, ".daintree", "recipes"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("reconciliation populates the in-repo hash cache so a follow-up checked write succeeds", async () => {
@@ -208,6 +218,105 @@ describe("ProjectStore recipe reconciliation", () => {
     // cached hash). Reconciling first must populate the cache.
     await fresh.reconcileProjectRecipes(projectPath, projectId);
     await expect(fresh.writeInRepoRecipeChecked(projectPath, recipe)).resolves.toBeUndefined();
+  });
+
+  it("opaque-UUID mirror (scope 'inrepo', no prefix) survives an absent directory (#11347)", async () => {
+    // Guards the object-based classification: a mirror identified by its scope,
+    // not an `inrepo-` id prefix, must also be protected when the directory is
+    // gone. A guard narrowed to `id.startsWith("inrepo-")` would drop this.
+    await fs.mkdir(projectPath, { recursive: true });
+
+    const mirror = makeRecipe({
+      id: "recipe-opaque-uuid",
+      name: "Opaque Mirror",
+      scope: "inrepo",
+      terminals: [{ type: "terminal", command: "echo o", env: { API_KEY: "secret" } }],
+      lastUsedAt: 42,
+      usageHistory: [42],
+    });
+    await seedFileStore([mirror]);
+
+    await store.reconcileProjectRecipes(projectPath, projectId);
+
+    const fs2 = await readFileStore();
+    expect(fs2).toHaveLength(1);
+    expect(fs2[0]!.id).toBe("recipe-opaque-uuid");
+    expect(fs2[0]!.terminals[0]!.env).toEqual({ API_KEY: "secret" });
+    expect(fs2[0]!.lastUsedAt).toBe(42);
+    await expect(fs.access(path.join(projectPath, ".daintree", "recipes"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("normal reconciliation merges local env values into the in-repo recipe instead of blanking them", async () => {
+    // The on-disk in-repo copy is redacted (env keys kept, values blanked); the
+    // real values live only in the file store. Reconcile with the directory
+    // present must merge those values back, not overwrite them with placeholders
+    // — the same env-preservation guarantee #11347 protects on the missing path.
+    const id = stableInRepoId("Merged");
+    const onDisk = makeRecipe({
+      id,
+      name: "Merged",
+      terminals: [{ type: "terminal", command: "echo x", env: { API_KEY: "v", NEW_KEY: "v" } }],
+    });
+    await seedInRepo(onDisk); // written redacted → on-disk env values become ""
+
+    const local = makeRecipe({
+      id,
+      name: "Merged",
+      terminals: [{ type: "terminal", command: "echo x", env: { API_KEY: "secret" } }],
+      lastUsedAt: 999,
+      usageHistory: [999],
+    });
+    await seedFileStore([local]);
+
+    await store.reconcileProjectRecipes(projectPath, projectId);
+
+    const fs2 = await readFileStore();
+    expect(fs2).toHaveLength(1);
+    // Keys come from the canonical on-disk recipe; values from the local copy.
+    expect(fs2[0]!.terminals[0]!.env).toEqual({ API_KEY: "secret", NEW_KEY: "" });
+    expect(fs2[0]!.lastUsedAt).toBe(999);
+    expect(fs2[0]!.usageHistory).toEqual([999]);
+  });
+
+  it("does not prune a mirror when a recipe file can't be read mid-scan (#11347)", async () => {
+    // readdir lists the file, but reading it fails (e.g. a checkout unlinks it
+    // between readdir and read). The snapshot is non-authoritative, so the mirror
+    // must survive rather than be classified stale.
+    const recipesDir = path.join(projectPath, ".daintree", "recipes");
+    await fs.mkdir(recipesDir, { recursive: true });
+    const mirror = makeRecipe({
+      id: stableInRepoId("Partial"),
+      name: "Partial",
+      terminals: [{ type: "terminal", command: "echo p", env: { SECRET: "keep" } }],
+    });
+    const filePath = path.join(recipesDir, "partial.json");
+    await fs.writeFile(filePath, JSON.stringify(mirror), "utf-8");
+    await seedFileStore([mirror]);
+    await fs.chmod(filePath, 0o000);
+
+    // Some environments (e.g. running as root) ignore the mode; only assert the
+    // partial-scan protection when the file is genuinely unreadable here.
+    let readable = true;
+    try {
+      await fs.readFile(filePath, "utf-8");
+    } catch {
+      readable = false;
+    }
+
+    try {
+      await store.reconcileProjectRecipes(projectPath, projectId);
+      const fs2 = await readFileStore();
+      expect(fs2).toHaveLength(1);
+      expect(fs2[0]!.id).toBe(mirror.id);
+      if (!readable) {
+        // Incomplete scan ⇒ the guard preserved the mirror and its env.
+        expect(fs2[0]!.terminals[0]!.env).toEqual({ SECRET: "keep" });
+      }
+    } finally {
+      await fs.chmod(filePath, 0o600);
+    }
   });
 
   it("in-repo recipe overwrites differing ProjectFileStore copy", async () => {
