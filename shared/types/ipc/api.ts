@@ -640,8 +640,16 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /**
      * Save terminal snapshots for a project (per-project panel state).
      * Used for preserving panel layout when switching away from a project.
+     * `changedIds`/`removedIds` describe what this renderer changed relative to
+     * its last-persisted baseline so Main can merge concurrent writes from
+     * sibling windows of the same project (#11350). Omit both for a full replace.
      */
-    setTerminals(projectId: string, terminals: TerminalSnapshot[]): Promise<void>;
+    setTerminals(
+      projectId: string,
+      terminals: TerminalSnapshot[],
+      changedIds?: string[],
+      removedIds?: string[]
+    ): Promise<void>;
     /**
      * Get terminal dimensions for a project.
      * Used for restoring terminal sizes when switching to a project.
@@ -672,9 +680,15 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     getTabGroups(projectId: string): Promise<TabGroup[]>;
     /**
      * Save tab groups for a project.
-     * Used for persisting tab group state per-project.
+     * Used for persisting tab group state per-project. `changedIds`/`removedIds`
+     * merge concurrent writes from sibling windows of the same project (#11350).
      */
-    setTabGroups(projectId: string, tabGroups: TabGroup[]): Promise<void>;
+    setTabGroups(
+      projectId: string,
+      tabGroups: TabGroup[],
+      changedIds?: string[],
+      removedIds?: string[]
+    ): Promise<void>;
     /**
      * Get focus mode state for a project.
      * Used for restoring focus mode when switching projects.

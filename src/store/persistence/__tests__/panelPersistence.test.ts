@@ -140,7 +140,9 @@ describe("PanelPersistence", () => {
         expect.arrayContaining([
           expect.objectContaining({ id: "grid-1" }),
           expect.objectContaining({ id: "dock-1" }),
-        ])
+        ]),
+        expect.any(Array),
+        expect.any(Array)
       );
 
       const savedTerminals = client.setTerminals.mock.calls[0]![1] as TerminalSnapshot[];
@@ -246,20 +248,25 @@ describe("PanelPersistence", () => {
       persistence.save([terminal], projectId);
       await vi.advanceTimersByTimeAsync(100);
 
-      expect(client.setTerminals).toHaveBeenCalledWith(projectId, [
-        {
-          id: "test-1",
-          kind: "terminal",
-          launchAgentId: "claude",
-          title: "Claude",
-          cwd: "/test",
-          worktreeId: "wt-1",
-          location: "grid",
-          command: "claude --model sonnet-4",
-          agentState: "working",
-          lastStateChange: 1700000000000,
-        },
-      ]);
+      expect(client.setTerminals).toHaveBeenCalledWith(
+        projectId,
+        [
+          {
+            id: "test-1",
+            kind: "terminal",
+            launchAgentId: "claude",
+            title: "Claude",
+            cwd: "/test",
+            worktreeId: "wt-1",
+            location: "grid",
+            command: "claude --model sonnet-4",
+            agentState: "working",
+            lastStateChange: 1700000000000,
+          },
+        ],
+        expect.any(Array),
+        expect.any(Array)
+      );
     });
 
     it("excludes transient detectedProcessId from persisted snapshots", async () => {
@@ -326,13 +333,18 @@ describe("PanelPersistence", () => {
       persistence.save([terminal], projectId);
       await vi.advanceTimersByTimeAsync(100);
 
-      expect(client.setTerminals).toHaveBeenCalledWith(projectId, [
-        expect.objectContaining({
-          id: "test-1",
-          title: "Custom",
-          cwd: "/custom/path",
-        }),
-      ]);
+      expect(client.setTerminals).toHaveBeenCalledWith(
+        projectId,
+        [
+          expect.objectContaining({
+            id: "test-1",
+            title: "Custom",
+            cwd: "/custom/path",
+          }),
+        ],
+        expect.any(Array),
+        expect.any(Array)
+      );
     });
 
     it("skips save if no project ID is provided", async () => {
@@ -359,7 +371,12 @@ describe("PanelPersistence", () => {
 
       await vi.advanceTimersByTimeAsync(100);
 
-      expect(client.setTerminals).toHaveBeenCalledWith("from-option", expect.any(Array));
+      expect(client.setTerminals).toHaveBeenCalledWith(
+        "from-option",
+        expect.any(Array),
+        expect.any(Array),
+        expect.any(Array)
+      );
     });
 
     it("skips redundant persist when transformed payload is unchanged", async () => {
@@ -391,8 +408,56 @@ describe("PanelPersistence", () => {
       expect(client.setTerminals).toHaveBeenCalledTimes(2);
       expect(client.setTerminals).toHaveBeenLastCalledWith(
         projectId,
-        expect.arrayContaining([expect.objectContaining({ title: "Two" })])
+        expect.arrayContaining([expect.objectContaining({ title: "Two" })]),
+        expect.any(Array),
+        expect.any(Array)
       );
+    });
+  });
+
+  describe("layout merge delta (#11350)", () => {
+    it("marks every panel changed when there is no primed baseline", async () => {
+      const client = createMockProjectClient();
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
+
+      persistence.save([createMockTerminal({ id: "a" })], projectId);
+      await vi.advanceTimersByTimeAsync(100);
+
+      const [, , changedIds, removedIds] = client.setTerminals.mock.calls[0]!;
+      expect(changedIds).toEqual(["a"]);
+      expect(removedIds).toEqual([]);
+    });
+
+    it("emits only the newly added panel in changedIds against a primed baseline", async () => {
+      const client = createMockProjectClient();
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
+
+      const a = createMockTerminal({ id: "a" });
+      const b = createMockTerminal({ id: "b" });
+      persistence.primeProject(projectId, [panelToSnapshot(a), panelToSnapshot(b)]);
+
+      persistence.save([a, b, createMockTerminal({ id: "c" })], projectId);
+      await vi.advanceTimersByTimeAsync(100);
+
+      const [, , changedIds, removedIds] = client.setTerminals.mock.calls[0]!;
+      expect(changedIds).toEqual(["c"]);
+      expect(removedIds).toEqual([]);
+    });
+
+    it("emits a closed panel in removedIds against a primed baseline", async () => {
+      const client = createMockProjectClient();
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
+
+      const a = createMockTerminal({ id: "a" });
+      const b = createMockTerminal({ id: "b" });
+      persistence.primeProject(projectId, [panelToSnapshot(a), panelToSnapshot(b)]);
+
+      persistence.save([a], projectId);
+      await vi.advanceTimersByTimeAsync(100);
+
+      const [, , changedIds, removedIds] = client.setTerminals.mock.calls[0]!;
+      expect(changedIds).toEqual([]);
+      expect(removedIds).toEqual(["b"]);
     });
   });
 
@@ -467,13 +532,18 @@ describe("PanelPersistence", () => {
       persistence.save([browserPanel], projectId);
       await vi.advanceTimersByTimeAsync(100);
 
-      expect(client.setTerminals).toHaveBeenCalledWith(projectId, [
-        expect.objectContaining({
-          id: "browser-1",
-          kind: "browser",
-          browserUrl: "https://localhost:3000",
-        }),
-      ]);
+      expect(client.setTerminals).toHaveBeenCalledWith(
+        projectId,
+        [
+          expect.objectContaining({
+            id: "browser-1",
+            kind: "browser",
+            browserUrl: "https://localhost:3000",
+          }),
+        ],
+        expect.any(Array),
+        expect.any(Array)
+      );
     });
   });
 
@@ -953,15 +1023,20 @@ describe("PanelPersistence", () => {
       persistence.save([devPreviewPanel], projectId);
       await vi.advanceTimersByTimeAsync(100);
 
-      expect(client.setTerminals).toHaveBeenCalledWith(projectId, [
-        expect.objectContaining({
-          id: "dev-preview-1",
-          kind: "dev-preview",
-          browserUrl: "http://localhost:5173",
-          command: "npm run dev",
-          devPreviewConsoleOpen: true,
-        }),
-      ]);
+      expect(client.setTerminals).toHaveBeenCalledWith(
+        projectId,
+        [
+          expect.objectContaining({
+            id: "dev-preview-1",
+            kind: "dev-preview",
+            browserUrl: "http://localhost:5173",
+            command: "npm run dev",
+            devPreviewConsoleOpen: true,
+          }),
+        ],
+        expect.any(Array),
+        expect.any(Array)
+      );
 
       const saved = client.setTerminals.mock.calls[0]![1][0] as Record<string, unknown>;
       expect(saved.devServerStatus).toBeUndefined();

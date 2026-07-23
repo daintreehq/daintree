@@ -4,6 +4,7 @@ import { debounce } from "@/utils/debounce";
 import { isRendererPerfCaptureEnabled, markRendererPerformance } from "@/utils/performance";
 import { getPanelKindConfig } from "@shared/config/panelKindRegistry";
 import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
+import { computeIdArrayDelta } from "@shared/utils/layoutMerge";
 import { logError } from "@/utils/logger";
 
 type ProjectClientType = typeof projectClient;
@@ -193,23 +194,34 @@ export class PanelPersistence {
         : 0;
       const payloadBytes = collectPerf ? estimatePayloadBytes(transformed) : null;
 
-      this.pendingPersist = this.client.setTerminals(projectId, transformed).catch((error) => {
-        logError("Failed to persist terminals", error);
-        if (collectPerf) {
-          const now = typeof performance !== "undefined" ? performance.now() : Date.now();
-          markRendererPerformance("persistence_terminals_save", {
-            projectId,
-            terminalCount: transformed.length,
-            payloadBytes,
-            durationMs: Number((now - startedAt).toFixed(3)),
-            ok: false,
-          });
-        }
-        if (snapshotsEqual(this.queuedTerminalsByProject.get(projectId), transformed)) {
-          this.queuedTerminalsByProject.delete(projectId);
-        }
-        throw error;
-      });
+      // Describe what changed relative to this renderer's last-acknowledged
+      // baseline so Main merges concurrent writes from sibling windows of the
+      // same project instead of clobbering them (#11350).
+      const { changedIds, removedIds } = computeIdArrayDelta(
+        this.persistedTerminalsByProject.get(projectId) ?? [],
+        transformed,
+        deepEqual
+      );
+
+      this.pendingPersist = this.client
+        .setTerminals(projectId, transformed, changedIds, removedIds)
+        .catch((error) => {
+          logError("Failed to persist terminals", error);
+          if (collectPerf) {
+            const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+            markRendererPerformance("persistence_terminals_save", {
+              projectId,
+              terminalCount: transformed.length,
+              payloadBytes,
+              durationMs: Number((now - startedAt).toFixed(3)),
+              ok: false,
+            });
+          }
+          if (snapshotsEqual(this.queuedTerminalsByProject.get(projectId), transformed)) {
+            this.queuedTerminalsByProject.delete(projectId);
+          }
+          throw error;
+        });
       this.pendingPersist = this.pendingPersist.then(() => {
         if (collectPerf) {
           const now = typeof performance !== "undefined" ? performance.now() : Date.now();
@@ -246,8 +258,15 @@ export class PanelPersistence {
         : 0;
       const payloadBytes = collectPerf ? estimatePayloadBytes(tabGroups) : null;
 
+      // Merge concurrent tab-group writes from sibling windows (#11350).
+      const { changedIds, removedIds } = computeIdArrayDelta(
+        this.persistedTabGroupsByProject.get(projectId) ?? [],
+        tabGroups,
+        deepEqual
+      );
+
       this.pendingTabGroupPersist = this.client
-        .setTabGroups(projectId, tabGroups)
+        .setTabGroups(projectId, tabGroups, changedIds, removedIds)
         .catch((error) => {
           logError("Failed to persist tab groups", error);
           if (collectPerf) {
@@ -374,6 +393,19 @@ export class PanelPersistence {
   primeProject(projectId: string, snapshots: PanelSnapshot[]): void {
     if (this.persistedTerminalsByProject.has(projectId)) return;
     this.persistedTerminalsByProject.set(projectId, snapshots);
+  }
+
+  /**
+   * Seed the tab-group baseline for a project from hydration, mirroring
+   * {@link primeProject}. Without this, the first tab-group save has no baseline
+   * to diff against, so a group the user deletes before that save cannot emit a
+   * `removedIds` tombstone and Main would resurrect it from a sibling's on-disk
+   * copy (#11350). Only primes if not already present so a post-hydration save
+   * isn't clobbered.
+   */
+  primeTabGroups(projectId: string, groups: TabGroup[]): void {
+    if (this.persistedTabGroupsByProject.has(projectId)) return;
+    this.persistedTabGroupsByProject.set(projectId, groups);
   }
 
   /**
