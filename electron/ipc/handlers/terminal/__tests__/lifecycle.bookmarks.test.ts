@@ -32,7 +32,8 @@ const m = vi.hoisted(() => ({
   renameBookmark: vi.fn(),
   deleteBookmark: vi.fn(),
   listBookmarks: vi.fn(() => []),
-  currentGeneration: vi.fn(() => 1),
+  // Typed so the evicted-ledger case (mockReturnValue(undefined)) type-checks.
+  currentGeneration: vi.fn<() => number | undefined>(() => 1),
   isCurrent: vi.fn(() => true),
 }));
 
