@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeIdArrayDelta, mergeIdArray, deepEqualIgnoringUndefined } from "../layoutMerge";
+import { computeIdArrayDelta, mergeIdArray, deepEqualIgnoringUndefined } from "../layoutMerge.js";
 
 interface Entry {
   id: string;
