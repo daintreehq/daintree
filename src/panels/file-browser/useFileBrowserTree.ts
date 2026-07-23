@@ -28,11 +28,13 @@ const MAX_CONCURRENT_LISTINGS = 6;
  *
  * 150ms first, because `getAllStatesAsync` coalesces its result for 150ms
  * (`STATES_INFLIGHT_COALESCE_WINDOW_MS`) — a sooner retry would only replay the
- * same stale empty answer. ~400ms second, to leave the host the "several
- * hundred ms" its own load can take and to align with the skeleton's Doherty
- * gate. Worst case a genuinely broken worktree surfaces after ~550ms + latency.
+ * same stale empty answer. Then 400ms and 800ms: `switch.ts`'s own comment puts
+ * the warm-`loadProject` window at "several hundred ms" (prune/list/status
+ * sync/LFS probe), and a reporter saw the banner outlast a shorter budget, so
+ * the schedule reaches ~1.35s of grace to clear that window with margin while
+ * still surfacing a genuinely broken worktree in under ~1.5s.
  */
-const ROOT_RETRY_DELAYS_MS = [150, 400] as const;
+const ROOT_RETRY_DELAYS_MS = [150, 400, 800] as const;
 
 export interface UseFileBrowserTreeArgs {
   worktreeId: string | undefined;
@@ -166,8 +168,16 @@ export function useFileBrowserTree({
     [clearRootRetryTimer]
   );
 
+  const enqueueTargets = useCallback((targets: readonly string[], generation: number): void => {
+    for (const dirPath of targets) {
+      if (inFlightRef.current.has(dirPath)) continue;
+      if (queueRef.current.some((entry) => entry.dirPath === dirPath)) continue;
+      queueRef.current.push({ dirPath, generation });
+    }
+  }, []);
+
   const fetchDirectory = useCallback(
-    async function fetchDirectory(dirPath: string, generation: number): Promise<void> {
+    async (dirPath: string, generation: number): Promise<void> => {
       if (!worktreeId || disposedRef.current) return;
       inFlightRef.current.set(dirPath, generation);
       physicalInFlightRef.current += 1;
@@ -223,21 +233,23 @@ export function useFileBrowserTree({
             clearRootRetryTimer();
             const handle = setTimeout(() => {
               // Guard on fire, not just via cleanup: `clearTimeout` can't recall
-              // a callback the event loop already dequeued. Bail unless this is
-              // still the live, non-superseded retry for the current identity.
+              // a callback the event loop already dequeued, and a superseding
+              // success/refresh nulls the handle out from under it. The identity
+              // switch is covered separately by the layout-effect cancel below.
               if (
                 generation !== generationRef.current ||
                 disposedRef.current ||
-                rootRetryTimerRef.current !== handle ||
-                rootRetryStateRef.current.generation !== generation
+                rootRetryTimerRef.current !== handle
               ) {
                 return;
               }
               rootRetryTimerRef.current = null;
-              // A manual refresh may already be re-listing the root; that request
-              // is the retry, so don't stack a duplicate on top of it.
-              if (inFlightRef.current.has(rootPath)) return;
-              void fetchDirectory(rootPath, generation);
+              // Route the retry through the shared queue rather than calling
+              // fetchDirectory directly: it dedups against any root work a manual
+              // refresh already queued or put in flight, and honours the
+              // concurrency ceiling instead of firing a seventh request past it.
+              enqueueTargets([rootPath], generation);
+              pumpRef.current();
             }, delay);
             rootRetryTimerRef.current = handle;
             return;
@@ -267,16 +279,8 @@ export function useFileBrowserTree({
         pumpRef.current();
       }
     },
-    [worktreeId, showIgnored, rootPath, clearRootRetryTimer, resetRootRetryState]
+    [worktreeId, showIgnored, rootPath, clearRootRetryTimer, resetRootRetryState, enqueueTargets]
   );
-
-  const enqueueTargets = useCallback((targets: readonly string[], generation: number): void => {
-    for (const dirPath of targets) {
-      if (inFlightRef.current.has(dirPath)) continue;
-      if (queueRef.current.some((entry) => entry.dirPath === dirPath)) continue;
-      queueRef.current.push({ dirPath, generation });
-    }
-  }, []);
 
   const pump = useCallback((): void => {
     if (disposedRef.current) return;
@@ -317,6 +321,19 @@ export function useFileBrowserTree({
     expandedSetRef.current = expandedSet;
     pumpRef.current = pump;
   }, [listings, expandedSet, pump]);
+
+  // Cancel a pending root retry synchronously when the identity changes or the
+  // panel unmounts. The generation bump that would invalidate the retry lives in
+  // a *passive* effect, so between this commit and that effect there is a window
+  // where the old timer could still fire, pass its generation guard, and briefly
+  // repaint the previous worktree's error. A layout-effect cleanup runs during
+  // commit — before that passive effect and before the loop yields to any timer
+  // — closing the window. (Same reasoning as the ref publish above.)
+  useLayoutEffect(() => {
+    return () => {
+      clearRootRetryTimer();
+    };
+  }, [worktreeId, showIgnored, rootPath, clearRootRetryTimer]);
 
   useEffect(() => {
     disposedRef.current = false;
