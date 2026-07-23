@@ -3,7 +3,12 @@ import React from "react";
 import { render, act } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { HunkData } from "react-diff-view";
-import { DiffViewer, FULL_FILE_MAX_LINES, _resetLangStateForTests } from "../DiffViewer";
+import {
+  DiffViewer,
+  FULL_FILE_MAX_LINES,
+  _flushLangLoadsForTests,
+  _resetLangStateForTests,
+} from "../DiffViewer";
 import type { FullFileUnavailableReason } from "../DiffViewer";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
@@ -78,11 +83,17 @@ function renderViewer(props: Partial<React.ComponentProps<typeof DiffViewer>> & 
 }
 
 beforeEach(() => {
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  vi.spyOn(console, "error").mockImplementation(() => {});
   capturedDiffProps.hunks = undefined;
   _resetLangStateForTests();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await act(async () => {
+    for (let i = 0; i < 8; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+    await _flushLangLoadsForTests();
+  });
   vi.clearAllMocks();
 });
 

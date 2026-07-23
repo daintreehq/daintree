@@ -43,6 +43,7 @@ test.describe.serial("Core: Keyboard Shortcuts", () => {
 
     test("Cmd+P opens quick switcher", async () => {
       const { window } = ctx;
+      await window.locator(SEL.toolbar.projectSwitcherTrigger).focus();
       await window.keyboard.press(`${mod}+p`);
       const dialog = window.locator(SEL.quickSwitcher.dialog);
       await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
@@ -74,6 +75,7 @@ test.describe.serial("Core: Keyboard Shortcuts", () => {
       const aside = window.locator('aside[aria-label="Sidebar"]');
       await expect(aside).toHaveAttribute("aria-hidden", "false", { timeout: T_SHORT });
 
+      await window.locator(SEL.toolbar.projectSwitcherTrigger).focus();
       await window.keyboard.press(`${mod}+b`);
       await expect(aside).toHaveAttribute("aria-hidden", "true", { timeout: T_SHORT });
 
@@ -94,6 +96,7 @@ test.describe.serial("Core: Keyboard Shortcuts", () => {
       const panel = window.locator(SEL.panel.gridPanel).first();
       await panel.click();
       await window.waitForTimeout(T_SETTLE);
+      await panel.locator(SEL.panel.close).first().focus();
 
       await window.keyboard.press(`${mod}+w`);
       await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(before - 1);
@@ -107,6 +110,7 @@ test.describe.serial("Core: Keyboard Shortcuts", () => {
 
     test("Cmd+K shows command HUD and Escape cancels it", async () => {
       const { window } = ctx;
+      await window.locator(SEL.toolbar.projectSwitcherTrigger).focus();
       await window.keyboard.press(`${mod}+k`);
       await expect(chordIndicator()).toBeVisible({ timeout: T_MEDIUM });
       await window.keyboard.press("Escape");
@@ -116,6 +120,7 @@ test.describe.serial("Core: Keyboard Shortcuts", () => {
     test("Cmd+K Cmd+S opens keyboard shortcuts reference", async () => {
       const { window } = ctx;
       await expect(chordIndicator()).not.toBeVisible({ timeout: T_SHORT });
+      await window.locator(SEL.toolbar.projectSwitcherTrigger).focus();
       await pressChord(window, `${mod}+k`, `${mod}+s`);
 
       const title = window.locator('[role="dialog"] h1, [role="dialog"] h2').filter({
@@ -130,6 +135,7 @@ test.describe.serial("Core: Keyboard Shortcuts", () => {
 
     test("Cmd+K Cmd+O opens worktree palette", async () => {
       const { window } = ctx;
+      await window.locator(SEL.toolbar.projectSwitcherTrigger).focus();
       await pressChord(window, `${mod}+k`, `${mod}+o`);
 
       const palette = window.locator('[role="dialog"][aria-label="Worktree palette"]');

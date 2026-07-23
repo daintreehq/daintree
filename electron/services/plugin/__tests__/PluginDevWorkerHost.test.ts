@@ -154,6 +154,8 @@ describe("PluginDevWorkerHost", () => {
     process.env.HTTPS_PROXY = "http://corp-proxy:8080";
     process.env.NO_PROXY = "localhost";
     process.env.NODE_EXTRA_CA_CERTS = "/etc/ssl/corp-ca.pem";
+    const expectedHttpsProxy = process.env.HTTPS_PROXY;
+    const expectedLowerHttpsProxy = process.env.https_proxy;
     try {
       const { PluginDevWorkerHost } = await loadModule();
       const host = new PluginDevWorkerHost(OPTS);
@@ -161,10 +163,12 @@ describe("PluginDevWorkerHost", () => {
       void host.start();
 
       const [, , options] = forkMock.mock.calls[0];
-      expect(options.env.HTTPS_PROXY).toBe("http://corp-proxy:8080");
+      expect(options.env.HTTPS_PROXY).toBe(expectedHttpsProxy);
       // POSIX tooling conventionally uses the lowercase names, and env lookup
       // is case-sensitive there — carrying only one form drops the other user.
-      expect(options.env.https_proxy).toBe("http://lower-proxy:8080");
+      // Windows aliases environment keys case-insensitively, so both forms
+      // correctly carry the last value assigned by the host environment.
+      expect(options.env.https_proxy).toBe(expectedLowerHttpsProxy);
       // The other branch of Daintree's own TLS recovery hint.
       expect(options.env.NODE_USE_SYSTEM_CA).toBe("1");
       expect(options.env.NO_PROXY).toBe("localhost");

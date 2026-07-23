@@ -157,6 +157,7 @@ test.describe.serial("Core: Action Palette, Command Picker & Quick Switcher", ()
 
     test("opens via keyboard shortcut", async () => {
       const { window } = ctx;
+      await window.locator(SEL.toolbar.projectSwitcherTrigger).focus();
       await window.keyboard.press(`${mod}+P`);
 
       const dialog = window.locator(SEL.quickSwitcher.dialog);

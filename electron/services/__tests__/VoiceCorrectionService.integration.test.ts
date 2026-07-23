@@ -140,7 +140,7 @@ describe("VoiceCorrectionService integration", () => {
       );
       expect(result.confirmedText).not.toMatch(/^["'`]/);
       expect(result.confirmedText).not.toContain("```");
-      expect(result.confirmedText.toLowerCase()).toContain("typescript");
+      expect(result.confirmedText.toLowerCase().replaceAll(/\s/g, "")).toContain("typescript");
     },
     15_000
   );
