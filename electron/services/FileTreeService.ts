@@ -194,7 +194,17 @@ export class FileTreeService {
       nodes.sort((a, b) => {
         if (a.isDirectory && !b.isDirectory) return -1;
         if (!a.isDirectory && b.isDirectory) return 1;
-        return NAME_COLLATOR.compare(a.name, b.name);
+        const byName = NAME_COLLATOR.compare(a.name, b.name);
+        if (byName !== 0) return byName;
+        // Numeric collation is not a total order: padded and unpadded forms of
+        // the same value (`file1` / `file01` / `file001`) compare equal, and
+        // the tie would otherwise fall through to readdir order, which is
+        // filesystem- and platform-dependent. Codepoint comparison (not
+        // localeCompare) keeps those ties deterministic regardless of host
+        // locale.
+        if (a.name < b.name) return -1;
+        if (a.name > b.name) return 1;
+        return 0;
       });
 
       return nodes;

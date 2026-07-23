@@ -113,19 +113,29 @@ describe("FileTreeService", () => {
     ]);
   });
 
-  it("places leading-zero forms before the next numeric value", async () => {
+  it("breaks leading-zero ties deterministically rather than by readdir order", async () => {
     // Leading-zero variants share the same numeric value, so ICU numeric
-    // collation compares them equal — their relative order is undefined. Assert
-    // only the defined behavior: the whole 1-valued group sorts before file2.
-    for (const name of ["file2", "file1", "file01", "file001"]) {
-      await fs.writeFile(path.join(tempDir, name), "");
+    // collation ranks them equal; without a tiebreak the order would fall
+    // through to filesystem enumeration order. Building the same set in two
+    // opposite creation orders must therefore yield identical listings, with
+    // the equal-valued group ahead of file2.
+    const names = ["file2", "file1", "file01", "file001"];
+    const forwardDir = path.join(tempDir, "forward");
+    const reverseDir = path.join(tempDir, "reverse");
+    await fs.mkdir(forwardDir);
+    await fs.mkdir(reverseDir);
+    for (const name of names) {
+      await fs.writeFile(path.join(forwardDir, name), "");
+    }
+    for (const name of [...names].reverse()) {
+      await fs.writeFile(path.join(reverseDir, name), "");
     }
 
-    const result = await service.getFileTree(tempDir);
-    const names = result.map((node) => node.name);
+    const forward = (await service.getFileTree(tempDir, "forward")).map((node) => node.name);
+    const reverse = (await service.getFileTree(tempDir, "reverse")).map((node) => node.name);
 
-    expect(names.slice(0, 3)).toEqual(expect.arrayContaining(["file1", "file01", "file001"]));
-    expect(names[3]).toBe("file2");
+    expect(forward).toEqual(reverse);
+    expect(forward).toEqual(["file001", "file01", "file1", "file2"]);
   });
 
   it("blocks dirPath values that resolve through symlinks outside base path", async () => {
