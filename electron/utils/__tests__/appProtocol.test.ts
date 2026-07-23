@@ -26,6 +26,25 @@ describe("appProtocol utilities", () => {
       expect(getMimeType("hero.avif")).toBe("image/avif");
     });
 
+    it("should return video MIME types for containers Chromium plays natively", () => {
+      // Drives the daintree-file:// handler's video-vs-buffered routing AND the
+      // Content-Type on streamed responses — nosniff makes a wrong type fatal.
+      expect(getMimeType("clip.mp4")).toBe("video/mp4");
+      expect(getMimeType("clip.m4v")).toBe("video/mp4");
+      expect(getMimeType("clip.webm")).toBe("video/webm");
+      expect(getMimeType("clip.ogv")).toBe("video/ogg");
+      expect(getMimeType("CLIP.MP4")).toBe("video/mp4");
+    });
+
+    it("should not map containers Chromium can't demux to a video MIME", () => {
+      // mov/mkv/avi/wmv are excluded from the playable set — mapping them to
+      // video/* would route them into the streaming path and a broken <video>.
+      expect(getMimeType("clip.mov")).toBe("application/octet-stream");
+      expect(getMimeType("clip.mkv")).toBe("application/octet-stream");
+      expect(getMimeType("clip.avi")).toBe("application/octet-stream");
+      expect(getMimeType("clip.wmv")).toBe("application/octet-stream");
+    });
+
     it("should return default MIME type for unknown extensions", () => {
       expect(getMimeType("file.xyz")).toBe("application/octet-stream");
       expect(getMimeType("noext")).toBe("application/octet-stream");

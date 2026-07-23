@@ -105,7 +105,9 @@ export function getDaintreeAppProdCSP(options?: DaintreeCspOptions): string {
     `connect-src 'self' ${FILE_SCHEMES} ${PLUGIN_SCHEME}`,
     `img-src 'self' ${GITHUB_AVATARS} ${GRAVATAR} ${DAINTREE_DOCS} ${FILE_SCHEMES} data: blob:`,
     "font-src 'self' data:",
-    "media-src 'self'",
+    // FILE_SCHEMES: the file viewer plays videos straight from daintree-file://
+    // (Range-streamed by the protocol handler) via <video src>.
+    `media-src 'self' ${FILE_SCHEMES}`,
     "worker-src 'self' blob:",
     `frame-src 'self' ${HTML_PREVIEW_SCHEME} ${FRAME_LOCALHOST}`,
     "object-src 'none'",
@@ -139,7 +141,7 @@ export function getDaintreeAppDevCSP(): string {
     `connect-src 'self' ${origins} ${wsOrigins} ${FILE_SCHEMES} ${PLUGIN_SCHEME}`,
     `img-src 'self' ${origins} ${GITHUB_AVATARS} ${GRAVATAR} ${DAINTREE_DOCS} ${FILE_SCHEMES} data: blob:`,
     `font-src 'self' ${origins} data:`,
-    "media-src 'self'",
+    `media-src 'self' ${FILE_SCHEMES}`,
     "worker-src 'self' blob:",
     `frame-src 'self' ${HTML_PREVIEW_SCHEME} ${FRAME_LOCALHOST}`,
     "object-src 'none'",

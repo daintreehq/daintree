@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import path from "path";
+import { Readable } from "node:stream";
 
 type WebContentsCreatedListener = (event: unknown, contents: MockWebContents) => void;
 
@@ -85,7 +86,7 @@ const fsPromisesMocks = vi.hoisted(() => ({
   realpath: vi.fn(),
   stat: vi.fn(),
   open: vi.fn(),
-  constants: { O_RDONLY: 0, O_NOFOLLOW: 0x100 },
+  constants: { O_RDONLY: 0, O_NOFOLLOW: 0x100, O_NONBLOCK: 0x4 },
 }));
 
 vi.mock("fs/promises", () => ({
@@ -1985,6 +1986,384 @@ describe("createDaintreeFileProtocolHandler — symlink containment", () => {
     } finally {
       relativeSpy.mockRestore();
     }
+  });
+});
+
+describe("createDaintreeFileProtocolHandler — video streaming (#11382)", () => {
+  type ProtocolHandler = (request: GlobalRequest) => Promise<Response>;
+
+  async function captureHandler(): Promise<ProtocolHandler> {
+    const handle = vi.fn();
+    const mockSession = { protocol: { handle } } as unknown as Electron.Session;
+    registerProtocolsForSession(mockSession, "/tmp/dist");
+    const call = handle.mock.calls.find((c) => c[0] === "daintree-file");
+    if (!call) throw new Error("handler for daintree-file not registered");
+    return call[1] as ProtocolHandler;
+  }
+
+  function makeVideoRequest(
+    filePath: string,
+    rootPath: string,
+    init?: { method?: string; range?: string }
+  ): GlobalRequest {
+    const url = new URL("daintree-file://serve");
+    url.searchParams.set("path", filePath);
+    url.searchParams.set("root", rootPath);
+    return new Request(url.toString(), {
+      method: init?.method ?? "GET",
+      ...(init?.range && { headers: { Range: init.range } }),
+    }) as GlobalRequest;
+  }
+
+  const VIDEO_BYTES = Buffer.from("0123456789abcdef");
+
+  function makeVideoHandle(
+    content: Buffer = VIDEO_BYTES,
+    { size = content.length, isFile = true } = {}
+  ) {
+    return {
+      stat: vi.fn().mockResolvedValue({ size, isFile: () => isFile }),
+      createReadStream: vi.fn(({ start, end }: { start: number; end: number }) =>
+        Readable.from([content.subarray(start, Math.min(end + 1, content.length))])
+      ),
+      close: vi.fn().mockResolvedValue(undefined),
+      // The buffered core's entry point — a video must never reach it.
+      readFile: vi.fn(),
+    };
+  }
+
+  function installHandle(handle: ReturnType<typeof makeVideoHandle>) {
+    return import("fs/promises").then((fs) =>
+      vi.mocked(fs.open).mockResolvedValue(handle as unknown as Awaited<ReturnType<typeof fs.open>>)
+    );
+  }
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const fs = await import("fs/promises");
+    vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
+    vi.mocked(fs.open).mockResolvedValue(
+      makeVideoHandle() as unknown as Awaited<ReturnType<typeof fs.open>>
+    );
+    const appProtocol = await import("../../utils/appProtocol.js");
+    vi.mocked(appProtocol.getMimeType).mockReturnValue("video/mp4");
+  });
+
+  it("streams a 200 with Accept-Ranges and no whole-file cap, bypassing the buffered core", async () => {
+    // Far beyond both the 512 KB text cap and the 25 MB image ceiling — videos
+    // are streamed in bounded chunks, so no whole-file cap applies.
+    const size = 600 * 1024 * 1024;
+    const handle = makeVideoHandle(VIDEO_BYTES, { size });
+    await installHandle(handle);
+
+    const handler = await captureHandler();
+    const response = await handler(makeVideoRequest("/project/clip.mp4", "/project"));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Length")).toBe(String(size));
+    expect(response.headers.get("Accept-Ranges")).toBe("bytes");
+    expect(response.headers.get("Content-Type")).toBe("video/mp4");
+    expect(handle.readFile).not.toHaveBeenCalled();
+    expect(handle.createReadStream).toHaveBeenCalledWith({
+      start: 0,
+      end: size - 1,
+      autoClose: true,
+    });
+  });
+
+  it("opens with O_RDONLY | O_NOFOLLOW | O_NONBLOCK (FIFO-swap TOCTOU hardening)", async () => {
+    const fs = await import("fs/promises");
+    const handler = await captureHandler();
+    await handler(makeVideoRequest("/project/clip.mp4", "/project"));
+
+    expect(fs.open).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(fs.open).mock.calls[0][1]).toBe(
+      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK
+    );
+  });
+
+  it("rejects a non-regular file after the fd-level stat and closes the handle", async () => {
+    // O_NOFOLLOW only blocks symlink swaps; a FIFO swapped in after the realpath
+    // check passes the open, so the post-open fstat is the guard that catches it.
+    const handle = makeVideoHandle(VIDEO_BYTES, { isFile: false });
+    await installHandle(handle);
+
+    const handler = await captureHandler();
+    const response = await handler(makeVideoRequest("/project/clip.mp4", "/project"));
+
+    expect(response.status).toBe(404);
+    expect(handle.close).toHaveBeenCalledTimes(1);
+    expect(handle.createReadStream).not.toHaveBeenCalled();
+  });
+
+  it("serves an exact 206 for an explicit byte range", async () => {
+    const handler = await captureHandler();
+    const response = await handler(
+      makeVideoRequest("/project/clip.mp4", "/project", { range: "bytes=2-5" })
+    );
+
+    expect(response.status).toBe(206);
+    expect(response.headers.get("Content-Range")).toBe("bytes 2-5/16");
+    expect(response.headers.get("Content-Length")).toBe("4");
+    expect(response.headers.get("Accept-Ranges")).toBe("bytes");
+    expect(Buffer.from(await response.arrayBuffer()).toString()).toBe("2345");
+  });
+
+  it("clamps an open-ended range to EOF", async () => {
+    const handler = await captureHandler();
+    const response = await handler(
+      makeVideoRequest("/project/clip.mp4", "/project", { range: "bytes=4-" })
+    );
+
+    expect(response.status).toBe(206);
+    expect(response.headers.get("Content-Range")).toBe("bytes 4-15/16");
+    expect(Buffer.from(await response.arrayBuffer()).toString()).toBe("456789abcdef");
+  });
+
+  it("serves a suffix range (last N bytes)", async () => {
+    const handler = await captureHandler();
+    const response = await handler(
+      makeVideoRequest("/project/clip.mp4", "/project", { range: "bytes=-4" })
+    );
+
+    expect(response.status).toBe(206);
+    expect(response.headers.get("Content-Range")).toBe("bytes 12-15/16");
+    expect(Buffer.from(await response.arrayBuffer()).toString()).toBe("cdef");
+  });
+
+  it("clamps a past-EOF explicit end to EOF", async () => {
+    const handler = await captureHandler();
+    const response = await handler(
+      makeVideoRequest("/project/clip.mp4", "/project", { range: "bytes=10-9999" })
+    );
+
+    expect(response.status).toBe(206);
+    expect(response.headers.get("Content-Range")).toBe("bytes 10-15/16");
+  });
+
+  it("bounds an open-ended range on a huge file to a partial chunk", async () => {
+    // `bytes=N-` asks for "everything from N"; the handler must not stream the
+    // whole remainder in one response — Chromium re-requests successive chunks.
+    const size = 100 * 1024 * 1024;
+    const handle = makeVideoHandle(VIDEO_BYTES, { size });
+    await installHandle(handle);
+
+    const handler = await captureHandler();
+    const response = await handler(
+      makeVideoRequest("/project/clip.mp4", "/project", { range: "bytes=0-" })
+    );
+
+    expect(response.status).toBe(206);
+    // Invariants, not the clamp constant: the response covers a strict prefix
+    // of the file, and headers agree with the stream bounds actually used.
+    const args = handle.createReadStream.mock.calls[0][0] as { start: number; end: number };
+    expect(args.start).toBe(0);
+    expect(args.end).toBeLessThan(size - 1);
+    const length = args.end - args.start + 1;
+    expect(response.headers.get("Content-Length")).toBe(String(length));
+    expect(response.headers.get("Content-Range")).toBe(`bytes ${args.start}-${args.end}/${size}`);
+  });
+
+  it("serves an over-cap suffix range exactly (the tail carries mp4 moov metadata)", async () => {
+    // Clamping a suffix from its start would drop EOF — the very bytes a
+    // suffix request exists to fetch. Client-bounded forms are served whole.
+    const size = 100 * 1024 * 1024;
+    const suffix = 16 * 1024 * 1024;
+    const handle = makeVideoHandle(VIDEO_BYTES, { size });
+    await installHandle(handle);
+
+    const handler = await captureHandler();
+    const response = await handler(
+      makeVideoRequest("/project/clip.mp4", "/project", { range: `bytes=-${suffix}` })
+    );
+
+    expect(response.status).toBe(206);
+    expect(response.headers.get("Content-Range")).toBe(
+      `bytes ${size - suffix}-${size - 1}/${size}`
+    );
+    expect(response.headers.get("Content-Length")).toBe(String(suffix));
+  });
+
+  it("serves a large explicit range exactly (client-bounded, no clamp)", async () => {
+    const size = 100 * 1024 * 1024;
+    const end = 20 * 1024 * 1024 - 1;
+    const handle = makeVideoHandle(VIDEO_BYTES, { size });
+    await installHandle(handle);
+
+    const handler = await captureHandler();
+    const response = await handler(
+      makeVideoRequest("/project/clip.mp4", "/project", { range: `bytes=0-${end}` })
+    );
+
+    expect(response.status).toBe(206);
+    expect(response.headers.get("Content-Range")).toBe(`bytes 0-${end}/${size}`);
+    expect(response.headers.get("Content-Length")).toBe(String(end + 1));
+  });
+
+  it("returns 416 for a start past the safe-integer range (necessarily past EOF)", async () => {
+    // Ignoring it would serve the whole file for a range that names no real byte.
+    const handler = await captureHandler();
+    const response = await handler(
+      makeVideoRequest("/project/clip.mp4", "/project", { range: "bytes=9007199254740992-" })
+    );
+
+    expect(response.status).toBe(416);
+  });
+
+  it("returns 416 for a zero-length suffix (bytes=-0 names no byte)", async () => {
+    const handler = await captureHandler();
+    const response = await handler(
+      makeVideoRequest("/project/clip.mp4", "/project", { range: "bytes=-0" })
+    );
+
+    expect(response.status).toBe(416);
+    expect(response.headers.get("Content-Range")).toBe("bytes */16");
+  });
+
+  it("returns 416 with Content-Range */size for an unsatisfiable range", async () => {
+    const handle = makeVideoHandle();
+    await installHandle(handle);
+
+    const handler = await captureHandler();
+    const response = await handler(
+      makeVideoRequest("/project/clip.mp4", "/project", { range: "bytes=99-" })
+    );
+
+    expect(response.status).toBe(416);
+    expect(response.headers.get("Content-Range")).toBe("bytes */16");
+    expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(handle.close).toHaveBeenCalledTimes(1);
+    expect(handle.createReadStream).not.toHaveBeenCalled();
+  });
+
+  it.each(["bytes=abc", "bytes=0-1,4-5", "items=0-4", "bytes=5-2"])(
+    "ignores unsupported Range header %s and serves a full 200 (RFC 9110)",
+    async (range) => {
+      const handler = await captureHandler();
+      const response = await handler(makeVideoRequest("/project/clip.mp4", "/project", { range }));
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Content-Length")).toBe("16");
+    }
+  );
+
+  it("answers HEAD with metadata and Accept-Ranges without opening a stream", async () => {
+    // Chromium probes with HEAD before issuing ranged GETs.
+    const handle = makeVideoHandle();
+    await installHandle(handle);
+
+    const handler = await captureHandler();
+    const response = await handler(
+      makeVideoRequest("/project/clip.mp4", "/project", { method: "HEAD" })
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Length")).toBe("16");
+    expect(response.headers.get("Accept-Ranges")).toBe("bytes");
+    expect(response.headers.get("Content-Type")).toBe("video/mp4");
+    expect(handle.createReadStream).not.toHaveBeenCalled();
+    expect(handle.readFile).not.toHaveBeenCalled();
+    expect(handle.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("HEAD ignores Range entirely (RFC 9110 defines range handling for GET only)", async () => {
+    // Even an unsatisfiable Range must not turn HEAD into a 416.
+    const handle = makeVideoHandle();
+    await installHandle(handle);
+
+    const handler = await captureHandler();
+    const response = await handler(
+      makeVideoRequest("/project/clip.mp4", "/project", { method: "HEAD", range: "bytes=99-" })
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Length")).toBe("16");
+    expect(handle.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("serves an empty video as an empty 200 without a stream", async () => {
+    const handle = makeVideoHandle(Buffer.alloc(0));
+    await installHandle(handle);
+
+    const handler = await captureHandler();
+    const response = await handler(makeVideoRequest("/project/clip.mp4", "/project"));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Length")).toBe("0");
+    expect(handle.createReadStream).not.toHaveBeenCalled();
+    expect(handle.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("emits the hardened response header set on streamed responses", async () => {
+    const handler = await captureHandler();
+    const response = await handler(
+      makeVideoRequest("/project/clip.mp4", "/project", { range: "bytes=0-3" })
+    );
+
+    expect(response.headers.get("Content-Security-Policy")).toBe("sandbox; default-src 'none'");
+    expect(response.headers.get("Cross-Origin-Resource-Policy")).toBe("cross-origin");
+    expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("applies realpath containment to video paths (out-of-root symlink → 404)", async () => {
+    const fs = await import("fs/promises");
+    const realpath = vi.mocked(fs.realpath);
+    const projectRoot = path.normalize("/project");
+    const escapeIn = path.normalize("/project/escape.mp4");
+    realpath.mockImplementation((p) => {
+      if (p === projectRoot) return Promise.resolve(projectRoot);
+      if (p === escapeIn) return Promise.resolve(path.normalize("/etc/evil.mp4"));
+      return Promise.resolve(p as string);
+    });
+
+    const handler = await captureHandler();
+    const response = await handler(makeVideoRequest("/project/escape.mp4", "/project"));
+
+    expect(response.status).toBe(404);
+    expect(fs.open).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when the video open is rejected with ELOOP (symlink swap)", async () => {
+    const fs = await import("fs/promises");
+    vi.mocked(fs.open).mockRejectedValue(Object.assign(new Error("ELOOP"), { code: "ELOOP" }));
+
+    const handler = await captureHandler();
+    const response = await handler(makeVideoRequest("/project/clip.mp4", "/project"));
+
+    expect(response.status).toBe(404);
+  });
+
+  it("routes a video-suffixed alias of a non-video through the buffered path", async () => {
+    // On Windows O_NOFOLLOW is a no-op, so an in-root `clip.mp4 → notes.txt`
+    // symlink opens fine — classification must follow the canonical target,
+    // which lands this request on the capped buffered path with a text MIME.
+    const fs = await import("fs/promises");
+    const appProtocol = await import("../../utils/appProtocol.js");
+    const alias = path.normalize("/project/clip.mp4");
+    const target = path.normalize("/project/notes.txt");
+    vi.mocked(fs.realpath).mockImplementation((p) =>
+      Promise.resolve(p === alias ? target : (p as string))
+    );
+    vi.mocked(appProtocol.getMimeType).mockImplementation((p: string) =>
+      p.endsWith(".mp4") ? "video/mp4" : "text/plain"
+    );
+    vi.mocked(fs.stat).mockResolvedValue({ size: 4 } as Awaited<ReturnType<typeof fs.stat>>);
+    const bufferedHandle = {
+      readFile: vi.fn().mockResolvedValue(Buffer.from("data")),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.mocked(fs.open).mockResolvedValue(
+      bufferedHandle as unknown as Awaited<ReturnType<typeof fs.open>>
+    );
+
+    const handler = await captureHandler();
+    const response = await handler(makeVideoRequest("/project/clip.mp4", "/project"));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("text/plain");
+    // Buffered semantics: the whole (capped) read, not a stream.
+    expect(bufferedHandle.readFile).toHaveBeenCalledTimes(1);
   });
 });
 

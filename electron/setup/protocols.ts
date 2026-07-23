@@ -4,6 +4,7 @@ import { getWindowForWebContents, getAppWebContents } from "../window/webContent
 import path from "path";
 import fs from "fs/promises";
 import { readFileSync } from "node:fs";
+import { Readable } from "node:stream";
 import {
   resolveAppUrlToDistPath,
   getMimeType,
@@ -216,23 +217,206 @@ function buildDaintreeFileErrorHeaders(): Record<string, string> {
   };
 }
 
+// Videos are streamed, not buffered, so the whole-file caps above don't apply —
+// no response ever holds more than a stream chunk in memory (the caps exist to
+// bound buffered bytes reaching the renderer, a model that doesn't fit ranged
+// streaming; see maxBytesForFile). A per-range clamp still bounds any single
+// response body: an open-ended `Range: bytes=0-` on a multi-GB file is served
+// in successive bounded chunks that Chromium re-requests as playback advances.
+// An un-ranged GET does stream the whole file in one 200 — required for a
+// spec-correct response, and accepted: <video> always issues ranged requests,
+// and main-process memory stays chunk-bounded regardless of response size.
+const DAINTREE_VIDEO_RANGE_MAX_BYTES = 8 * 1024 * 1024;
+
+function isVideoMimeType(mimeType: string): boolean {
+  return mimeType.startsWith("video/");
+}
+
+type ParsedByteRange = { start: number; end: number; openEnded: boolean } | "unsatisfiable" | null;
+
 /**
- * Shared read core for daintree-file:// and daintree-html://: realpath
- * containment, a size cap (per maxBytesForFile — larger for raster images when
- * allowLargeImages is set), and O_RDONLY|O_NOFOLLOW open. Returns the file bytes
- * plus the canonical path (for MIME), or an error Response. Callers own the
- * success headers so each scheme sets its own CSP. The flow (realpath →
- * path.relative → stat → O_NOFOLLOW open) and its TOCTOU defenses are unchanged.
+ * Parse a single-range `Range: bytes=…` header against a known file size.
+ * Null means "serve the whole file as 200": header absent, non-bytes unit,
+ * syntactically malformed, multi-range, or inverted — RFC 9110 permits
+ * ignoring all of these, and Chromium's <video> only sends single ranges.
+ * "unsatisfiable" means a well-formed range no byte can satisfy (416).
+ * `openEnded` marks `bytes=N-`, the only form whose extent the client didn't
+ * bound — the caller clamps just that one.
  */
-// Return type is inferred, not annotated: annotating `buffer: Buffer` widens it
-// to `Buffer<ArrayBufferLike>`, which `new Response(...)` rejects as a BodyInit.
-// Inference preserves the exact `readFile()` result type the Response accepts.
-async function readContainedDaintreeFile(
-  normalizedRoot: string,
+function parseByteRange(rangeHeader: string | null, size: number): ParsedByteRange {
+  if (!rangeHeader) return null;
+  const match = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim());
+  if (!match) return null;
+  const [, startRaw, endRaw] = match;
+  if (startRaw === "" && endRaw === "") return null;
+
+  if (startRaw === "") {
+    // Suffix form `bytes=-N`: the last N bytes. An unsafe-integer N is beyond
+    // any real file, so it degrades to "the whole file" rather than an error.
+    if (size === 0) return "unsatisfiable";
+    const suffix = Number(endRaw);
+    if (suffix === 0) return "unsatisfiable";
+    const start = Number.isSafeInteger(suffix) ? Math.max(0, size - suffix) : 0;
+    return { start, end: size - 1, openEnded: false };
+  }
+
+  const start = Number(startRaw);
+  // A digits-only start past the safe-integer range is beyond any real file's
+  // EOF — unsatisfiable, not ignorable (ignoring would serve the whole file).
+  if (!Number.isSafeInteger(start)) return "unsatisfiable";
+  const end = endRaw === "" ? null : Number(endRaw);
+  // Inverted ranges are invalid range specs per RFC 9110 → ignore the header,
+  // whatever the file size.
+  if (end !== null && Number.isSafeInteger(end) && end < start) return null;
+  if (size === 0 || start >= size) return "unsatisfiable";
+  // An unsafe-integer or past-EOF end clamps to EOF per RFC.
+  return {
+    start,
+    end: end !== null && Number.isSafeInteger(end) ? Math.min(end, size - 1) : size - 1,
+    openEnded: end === null,
+  };
+}
+
+/**
+ * Serve an already-containment-checked video file as a Range-aware stream.
+ *
+ * Bypasses readContainedDaintreeFile's buffer-and-cap core deliberately:
+ * <video> seeks via byte ranges and a multi-hundred-MB recording must never be
+ * read whole. The open-and-stream flow keeps the same TOCTOU discipline as
+ * diffMedia.ts's readWorkingSide — O_NOFOLLOW rejects a final-component
+ * symlink swap after the realpath check, O_NONBLOCK (no-op on Windows) keeps a
+ * FIFO swapped in its place from wedging the open, and the post-open fd-level
+ * stat rejects anything that isn't a regular file. Range bounds derive from
+ * that fd stat, so they describe the exact file that was opened.
+ */
+async function streamContainedVideoFile(
   normalizedFile: string,
-  allowLargeImages: boolean
-) {
-  // Resolve symlinks before containment to block in-root symlinks pointing outside root (CVE-2025-53109 / CVE-2025-54794 class).
+  mimeType: string,
+  request: GlobalRequest
+): Promise<Response> {
+  let fileHandle: Awaited<ReturnType<typeof fs.open>>;
+  try {
+    fileHandle = await fs.open(
+      normalizedFile,
+      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | (fs.constants.O_NONBLOCK ?? 0)
+    );
+  } catch (err) {
+    const errCode = (err as NodeJS.ErrnoException).code;
+    if (errCode === "ELOOP" || errCode === "ENOENT") {
+      return new Response("Not Found", {
+        status: 404,
+        headers: buildDaintreeFileErrorHeaders(),
+      });
+    }
+    throw err;
+  }
+
+  let size: number;
+  try {
+    const fdStat = await fileHandle.stat();
+    // The fd-level stat rejects both type swaps (FIFO) and sizes that break
+    // JS integer arithmetic (a sparse file can exceed 2^53 bytes; stream
+    // start/end and Content-Range math would silently corrupt).
+    if (!fdStat.isFile() || !Number.isSafeInteger(fdStat.size)) {
+      await fileHandle.close().catch(() => {});
+      return new Response("Not Found", {
+        status: 404,
+        headers: buildDaintreeFileErrorHeaders(),
+      });
+    }
+    size = fdStat.size;
+  } catch (err) {
+    await fileHandle.close().catch(() => {});
+    throw err;
+  }
+
+  // HEAD ignores Range by definition (RFC 9110 defines range handling for GET
+  // only). Chromium probes with HEAD before issuing ranged GETs; answer with
+  // the metadata (and Accept-Ranges, so seeking is offered) without a read.
+  if (request.method === "HEAD") {
+    await fileHandle.close().catch(() => {});
+    return new Response(null, {
+      status: 200,
+      headers: {
+        ...buildDaintreeFileHeaders(mimeType, size),
+        "Accept-Ranges": "bytes",
+      },
+    });
+  }
+
+  const range = parseByteRange(request.headers.get("range"), size);
+  if (range === "unsatisfiable") {
+    await fileHandle.close().catch(() => {});
+    return new Response("Range Not Satisfiable", {
+      status: 416,
+      headers: {
+        ...buildDaintreeFileErrorHeaders(),
+        "Content-Range": `bytes */${size}`,
+      },
+    });
+  }
+
+  if (size === 0) {
+    await fileHandle.close().catch(() => {});
+    return new Response(null, {
+      status: 200,
+      headers: {
+        ...buildDaintreeFileHeaders(mimeType, 0),
+        "Accept-Ranges": "bytes",
+      },
+    });
+  }
+
+  const start = range ? range.start : 0;
+  // Clamp only open-ended ranges: explicit and suffix ranges are already
+  // bounded by what the client asked for (clamping a suffix would drop the
+  // file tail — exactly what an mp4 with trailing moov metadata needs), but
+  // `bytes=N-` requests "everything from N". Serving that in bounded chunks is
+  // safe: the Content-Range total tells Chromium more remains and it
+  // re-requests as playback advances.
+  const end =
+    range && range.openEnded
+      ? Math.min(range.end, range.start + DAINTREE_VIDEO_RANGE_MAX_BYTES - 1)
+      : range
+        ? range.end
+        : size - 1;
+  const contentLength = end - start + 1;
+
+  // autoClose ties the fd's lifetime to the stream: it closes on end, error,
+  // and destroy — including the destroy toWeb() issues when the renderer
+  // cancels the response body (pane closed, seek abandoned mid-request).
+  // Until that handoff succeeds, the fd is still ours to close.
+  let body: ReadableStream;
+  let nodeStream: ReturnType<typeof fileHandle.createReadStream> | undefined;
+  try {
+    nodeStream = fileHandle.createReadStream({ start, end, autoClose: true });
+    body = Readable.toWeb(nodeStream) as unknown as ReadableStream;
+  } catch (err) {
+    nodeStream?.destroy();
+    await fileHandle.close().catch(() => {});
+    throw err;
+  }
+
+  return new Response(body, {
+    status: range ? 206 : 200,
+    headers: {
+      ...buildDaintreeFileHeaders(mimeType, contentLength),
+      "Accept-Ranges": "bytes",
+      ...(range && { "Content-Range": `bytes ${start}-${end}/${size}` }),
+    },
+  });
+}
+
+/**
+ * Realpath containment shared by the buffered read core and the video
+ * streaming path: resolve symlinks before comparing so an in-root symlink
+ * pointing outside root is rejected (CVE-2025-53109 / CVE-2025-54794 class).
+ * Returns the canonical file path, or the 404 Response to relay.
+ */
+async function resolveContainedRealPath(
+  normalizedRoot: string,
+  normalizedFile: string
+): Promise<{ realFile: string } | Response> {
   let realRoot: string;
   let realFile: string;
   try {
@@ -253,6 +437,29 @@ async function readContainedDaintreeFile(
       headers: buildDaintreeFileErrorHeaders(),
     });
   }
+
+  return { realFile };
+}
+
+/**
+ * Shared read core for daintree-file:// and daintree-html://: realpath
+ * containment, a size cap (per maxBytesForFile — larger for raster images when
+ * allowLargeImages is set), and O_RDONLY|O_NOFOLLOW open. Returns the file bytes
+ * plus the canonical path (for MIME), or an error Response. Callers own the
+ * success headers so each scheme sets its own CSP. The flow (realpath →
+ * path.relative → stat → O_NOFOLLOW open) and its TOCTOU defenses are unchanged.
+ */
+// Return type is inferred, not annotated: annotating `buffer: Buffer` widens it
+// to `Buffer<ArrayBufferLike>`, which `new Response(...)` rejects as a BodyInit.
+// Inference preserves the exact `readFile()` result type the Response accepts.
+async function readContainedDaintreeFile(
+  normalizedRoot: string,
+  normalizedFile: string,
+  allowLargeImages: boolean
+) {
+  const contained = await resolveContainedRealPath(normalizedRoot, normalizedFile);
+  if (contained instanceof Response) return contained;
+  const { realFile } = contained;
 
   // Stat the realpath-resolved path for an accurate size before any read.
   let fileStat: Awaited<ReturnType<typeof fs.stat>>;
@@ -351,11 +558,27 @@ function createDaintreeFileProtocolHandler() {
         });
       }
 
-      const result = await readContainedDaintreeFile(
-        path.normalize(rootPath),
-        path.normalize(filePath),
-        true
-      );
+      const normalizedRoot = path.normalize(rootPath);
+      const normalizedFile = path.normalize(filePath);
+
+      // Videos take the streaming path instead of the buffer-and-cap core.
+      // Classification must come from the canonical path, not the request
+      // path: on Windows O_NOFOLLOW is a no-op, so a final-component symlink
+      // (`clip.mp4` → `notes.txt`) opens fine, and request-path routing would
+      // stream a non-video uncapped under a video MIME. On POSIX ELOOP rejects
+      // that symlink at open, so the two spellings agree either way.
+      if (isVideoMimeType(getMimeType(normalizedFile))) {
+        const contained = await resolveContainedRealPath(normalizedRoot, normalizedFile);
+        if (contained instanceof Response) return contained;
+        const realMimeType = getMimeType(contained.realFile);
+        if (isVideoMimeType(realMimeType)) {
+          return await streamContainedVideoFile(normalizedFile, realMimeType, request);
+        }
+        // A video-suffixed alias of a non-video — fall through to the buffered
+        // path, which redoes containment and applies its usual caps.
+      }
+
+      const result = await readContainedDaintreeFile(normalizedRoot, normalizedFile, true);
       if (result instanceof Response) return result;
 
       // Content-Length reflects the bytes actually returned. If the file

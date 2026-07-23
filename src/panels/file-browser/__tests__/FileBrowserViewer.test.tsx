@@ -246,3 +246,26 @@ describe("FileBrowserViewer tree-sidebar toggle (#11328)", () => {
     expect(onToggleSidebar).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("FileBrowserViewer video preview (#11382)", () => {
+  it("renders a <video> for a playable container without reading the file as text", async () => {
+    const { container } = renderViewer("/repo/media/demo.webm");
+    await act(async () => {});
+
+    const video = container.querySelector("video");
+    expect(video).not.toBeNull();
+    expect(video?.getAttribute("src")).toContain("daintree-file://");
+    // The bytes stream through the protocol handler; the text-read IPC path
+    // (whose 500 KB cap produced the misleading error) must never run.
+    expect(readMock).not.toHaveBeenCalled();
+  });
+
+  it("shows a format message for a container Chromium can't demux, not the size cap", async () => {
+    const { container } = renderViewer("/repo/media/demo.mkv");
+    await act(async () => {});
+
+    expect(container.querySelector("video")).toBeNull();
+    expect(readMock).not.toHaveBeenCalled();
+    expect(screen.getByText(/Can't play this video format/)).toBeTruthy();
+  });
+});
