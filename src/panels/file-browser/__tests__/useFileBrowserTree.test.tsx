@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { FileTreeNode } from "@shared/types";
 import type { FileBrowserListDirectoryPayload } from "@shared/types/ipc/fileBrowser";
@@ -234,29 +234,6 @@ describe("useFileBrowserTree", () => {
     // show ignored entries in some folders and hide them in others.
     await waitFor(() => expect(listDirectory).toHaveBeenCalledTimes(2));
     expect(listDirectory.mock.calls[1]?.[0].includeIgnored).toBe(true);
-  });
-
-  it("surfaces a root failure and clears it once a retry succeeds", async () => {
-    listDirectory.mockRejectedValueOnce(new Error("worktree is gone"));
-
-    const { result } = renderHook(() =>
-      useFileBrowserTree({
-        worktreeId: "wt-1",
-        expandedPaths: [],
-        showIgnored: false,
-        changeTick: undefined,
-      })
-    );
-
-    await waitFor(() => expect(result.current.rootError).toContain("worktree is gone"));
-
-    listDirectory.mockResolvedValue([file("a.ts")]);
-    act(() => {
-      result.current.refresh();
-    });
-
-    await waitFor(() => expect(result.current.rootError).toBeNull());
-    expect(result.current.rows.map((row) => row.path)).toEqual(["a.ts"]);
   });
 
   it("leaves the tree usable when a single directory listing fails", async () => {
@@ -569,5 +546,231 @@ describe("useFileBrowserTree", () => {
     // if the effect later requested the outside-root directory.
     await waitFor(() => expect(result.current.isInitialLoading).toBe(false));
     expect(listDirectory.mock.calls.map((call) => call[0]?.dirPath)).toEqual(["src"]);
+  });
+
+  // Switching back to an idle project re-fetches the tree while the workspace
+  // host is still being repointed to this window, so the first root listing can
+  // throw a transient `Worktree not found`. These tests pin the silent-retry
+  // grace window: only a failure that persists across the whole backoff paints
+  // the banner. Fake timers are scoped here so the real-timer tests above are
+  // untouched; `waitFor` is deliberately avoided while they're active (its
+  // polling timer would need advancing and can hang).
+  describe("root retry grace window", () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    // Flush the mocked-promise microtasks the hook awaits, without advancing any
+    // timer. Promises aren't faked, so this settles the pending listDirectory.
+    async function flush() {
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+    }
+
+    it("keeps a single transient root failure invisible and self-heals on retry", async () => {
+      // Mount fails with the switch-back race error; the retry succeeds.
+      listDirectory
+        .mockRejectedValueOnce(new Error("Worktree not found: wt-1"))
+        .mockResolvedValue([file("a.ts")]);
+
+      const { result } = renderHook(() =>
+        useFileBrowserTree({
+          worktreeId: "wt-1",
+          expandedPaths: [],
+          showIgnored: false,
+          changeTick: undefined,
+        })
+      );
+
+      await flush();
+      // The transient failure must never surface: still loading, no banner.
+      expect(result.current.rootError).toBeNull();
+      expect(result.current.isInitialLoading).toBe(true);
+
+      // The first (150ms) retry succeeds and the tree renders — error never seen.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(150);
+      });
+      expect(result.current.rootError).toBeNull();
+      expect(result.current.isInitialLoading).toBe(false);
+      expect(result.current.rows.map((row) => row.path)).toEqual(["a.ts"]);
+    });
+
+    it("surfaces a persistent root failure only after the retry budget is spent, then clears on a successful manual retry", async () => {
+      listDirectory.mockRejectedValue(new Error("worktree is gone"));
+
+      const { result } = renderHook(() =>
+        useFileBrowserTree({
+          worktreeId: "wt-1",
+          expandedPaths: [],
+          showIgnored: false,
+          changeTick: undefined,
+        })
+      );
+
+      // Initial failure is silent.
+      await flush();
+      expect(result.current.rootError).toBeNull();
+      expect(result.current.isInitialLoading).toBe(true);
+
+      // First retry (150ms) also fails — still silent.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(150);
+      });
+      expect(result.current.rootError).toBeNull();
+      expect(result.current.isInitialLoading).toBe(true);
+
+      // Second retry (400ms) fails and exhausts the budget — now it surfaces.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400);
+      });
+      expect(result.current.rootError).toContain("worktree is gone");
+      expect(result.current.isInitialLoading).toBe(false);
+
+      // A manual retry that succeeds clears the error and populates rows, and
+      // resetting the budget lets a later failure enter grace again.
+      listDirectory.mockResolvedValue([file("a.ts")]);
+      await act(async () => {
+        result.current.refresh();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(result.current.rootError).toBeNull();
+      expect(result.current.rows.map((row) => row.path)).toEqual(["a.ts"]);
+    });
+
+    it("does not surface a root error until the retry budget is exhausted across a longer failure streak", async () => {
+      // Fails on the initial request and both retries, then would succeed — but
+      // the budget is only two retries, so the third failure surfaces the error.
+      listDirectory.mockRejectedValue(new Error("worktree is gone"));
+
+      const { result } = renderHook(() =>
+        useFileBrowserTree({
+          worktreeId: "wt-1",
+          expandedPaths: [],
+          showIgnored: false,
+          changeTick: undefined,
+        })
+      );
+
+      await flush();
+      const callsAfterMount = listDirectory.mock.calls.length;
+      expect(callsAfterMount).toBe(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(150);
+      });
+      expect(listDirectory.mock.calls.length).toBe(2);
+      expect(result.current.rootError).toBeNull();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400);
+      });
+      // Three attempts total (mount + two retries), then the banner.
+      expect(listDirectory.mock.calls.length).toBe(3);
+      expect(result.current.rootError).toContain("worktree is gone");
+    });
+
+    it("cancels a scheduled root retry on unmount so it never fires", async () => {
+      listDirectory.mockRejectedValue(new Error("worktree is gone"));
+
+      const { unmount } = renderHook(() =>
+        useFileBrowserTree({
+          worktreeId: "wt-1",
+          expandedPaths: [],
+          showIgnored: false,
+          changeTick: undefined,
+        })
+      );
+
+      await flush();
+      const callsAtUnmount = listDirectory.mock.calls.length;
+
+      unmount();
+
+      // Advancing well past every backoff must not resurrect the retry.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      expect(listDirectory.mock.calls.length).toBe(callsAtUnmount);
+    });
+
+    it("bails on the fire path when the retry callback runs after unmount", async () => {
+      // Capture the scheduled callback so we can invoke it manually — simulating
+      // the event loop having dequeued it before clearTimeout could cancel it.
+      const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      listDirectory.mockRejectedValue(new Error("worktree is gone"));
+
+      const { unmount } = renderHook(() =>
+        useFileBrowserTree({
+          worktreeId: "wt-1",
+          expandedPaths: [],
+          showIgnored: false,
+          changeTick: undefined,
+        })
+      );
+
+      await flush();
+      const scheduled = timeoutSpy.mock.calls.find(([, delay]) => delay === 150);
+      expect(scheduled).toBeDefined();
+      const retryCallback = scheduled![0] as () => void;
+
+      const callsBefore = listDirectory.mock.calls.length;
+      unmount();
+      // The on-fire generation/disposed guard — not clearTimeout — must refuse
+      // to issue a request here.
+      act(() => {
+        retryCallback();
+      });
+      expect(listDirectory.mock.calls.length).toBe(callsBefore);
+    });
+
+    it("drops an old identity's pending retry and gives the new identity a fresh budget", async () => {
+      listDirectory.mockImplementation(async (payload) => {
+        throw new Error(`Worktree not found: ${payload.worktreeId}`);
+      });
+
+      const { result, rerender } = renderHook(
+        (props: { worktreeId: string }) =>
+          useFileBrowserTree({
+            worktreeId: props.worktreeId,
+            expandedPaths: [],
+            showIgnored: false,
+            changeTick: undefined,
+          }),
+        { initialProps: { worktreeId: "wt-1" } }
+      );
+
+      // wt-1 fails on mount and schedules a retry we're about to strand.
+      await flush();
+
+      // Switch identity before wt-1's retry can fire; wt-2 fails once then heals.
+      listDirectory.mockReset();
+      listDirectory
+        .mockRejectedValueOnce(new Error("Worktree not found: wt-2"))
+        .mockResolvedValue([file("b.ts")]);
+      rerender({ worktreeId: "wt-2" });
+      await flush();
+
+      // wt-2's grace window is fresh (index 0), so its 150ms retry succeeds.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(150);
+      });
+      expect(result.current.rootError).toBeNull();
+      expect(result.current.rows.map((row) => row.path)).toEqual(["b.ts"]);
+
+      // Advancing past wt-1's old backoff must not resurrect it — no wt-1 call
+      // was issued after the switch.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      expect(listDirectory.mock.calls.some((call) => call[0].worktreeId === "wt-1")).toBe(false);
+    });
   });
 });
