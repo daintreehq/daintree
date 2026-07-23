@@ -24,8 +24,8 @@ export function registerTerminalInputActions(
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ terminalId: z.string().min(1).optional() }).optional(),
-    run: async (args: unknown, ctx) => {
-      const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
+    run: async (args: { terminalId?: string } | undefined, ctx) => {
+      const terminalId = args?.terminalId;
       // Agent/MCP callers must bind an explicit target. Unpinned external
       // sessions carry no dispatch-time terminal pin, so the injection hook's
       // focus fallback would let the context land in the wrong terminal after
