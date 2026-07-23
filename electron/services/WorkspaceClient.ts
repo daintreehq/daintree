@@ -41,12 +41,21 @@ const STATES_INFLIGHT_COALESCE_WINDOW_MS = 150;
 
 // Upper bound on how long a worktree-state read waits for the host to finish
 // (re)populating its monitor map before giving up and reporting "unknown" ([]).
-// Matches the host's per-request timeout (WorkspaceHostProcess sendWithResponse,
-// 30s): a genuinely in-flight load-project settles (resolves or rejects) by
-// then, so this only backstops the pathological case where the host forks but
-// hangs before posting "ready" — waitForReady() carries no timeout of its own,
-// so without this the read (and any awaiting hydration) would pend forever.
-const STATES_READY_GATE_TIMEOUT_MS = 30_000;
+//
+// Deliberately NOT sized against the host's 30s per-request timeout: this gate
+// sits on hydration's critical path — every PTY restore awaits
+// resolveRestoredWorktreeId -> the worktree prefetch -> this gate before its
+// panel is added — so a host that forks but hangs before posting "ready"
+// (waitForReady() carries no timeout of its own) would hold back EVERY terminal
+// for the whole deadline. Timing out costs only a missed re-home: the failure
+// path returns [], the established "unknown, keep saved state" sentinel
+// (#11234), which is exactly what restore did before the gate existed. So the
+// bound is set by what a user can be made to stare at, not by the host's
+// request budget — 5s matches the app's other hydration-facing give-up bound
+// (SIDEBAR_HYDRATION_UNLOCK_FALLBACK_MS, #10827) and still leaves a healthy
+// cold-start syncMonitors ample room to finish, so the gate keeps doing its
+// job in every non-pathological case.
+const STATES_READY_GATE_TIMEOUT_MS = 5_000;
 
 export type CopyTreeProgressCallback = (progress: CopyTreeProgress) => void;
 

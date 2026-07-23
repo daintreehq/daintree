@@ -593,6 +593,57 @@ describe("WorkspaceClient multi-process manager", () => {
       expect((await statesPromise).map((s: any) => s.id)).toEqual(["wt-a"]);
     });
 
+    describe("readiness gate timeout", () => {
+      beforeEach(() => {
+        vi.useFakeTimers();
+      });
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+
+      // Long enough that any sane hydration-facing deadline has elapsed, short
+      // enough to stay well inside the host's 30s per-request budget — the gate
+      // must give up inside this window rather than riding the host's timeout.
+      // Not the deadline itself: the test asserts the behavior, not the number.
+      const GATE_OBSERVATION_WINDOW_MS = 10_000;
+
+      it("degrades to the unknown sentinel rather than stalling restore when the host never posts ready (#11387)", async () => {
+        // A host that forks but hangs before posting "ready" leaves
+        // currentReadyPromise pending forever (waitForReady carries no timeout),
+        // and the pool entry is in the map from the moment loadProject is called
+        // — so hydration's prefetch resolves this entry and waits on the gate.
+        // Every PTY panel's restore awaits that prefetch, so an unbounded gate
+        // means zero terminals restore for as long as it waits.
+        const load = client.loadProject("/project-a", 1);
+        void load.catch(() => {});
+        expect(mockHosts).toHaveLength(1);
+
+        const statesPromise = client.getAllStatesForProjectAsync("/project-a", idFor("/project-a"));
+        let resolved: any = undefined;
+        void statesPromise.then((r) => {
+          resolved = r;
+        });
+
+        // While the populate is genuinely in flight the gate holds: no read of a
+        // possibly-partial monitor map.
+        await vi.advanceTimersByTimeAsync(0);
+        expect(resolved).toBeUndefined();
+
+        await vi.advanceTimersByTimeAsync(GATE_OBSERVATION_WINDOW_MS);
+
+        // Gate gave up: "unknown" ([] — #11234), so restore keeps every panel's
+        // saved worktreeId instead of re-homing it, and the partial map was
+        // never read — get-all-states is never sent.
+        expect(resolved).toEqual([]);
+        expect(await statesPromise).toEqual([]);
+        expect(
+          h(0)
+            .getAllRequests()
+            .filter((r: any) => r.type === "get-all-states")
+        ).toHaveLength(0);
+      });
+    });
+
     it("normalizes the path before keying — equivalent spellings share one request", async () => {
       const loadA = client.loadProject("/project-a", 1);
       await readyAndResolveLoad(0);
