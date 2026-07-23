@@ -314,6 +314,7 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "terminal.killAll",
   "terminal.restart",
   "terminal.restartAll",
+  "terminal.arm",
   "worktree.delete",
   "worktree.sessions.endAll",
   "worktree.sessions.trashAll",
@@ -397,6 +398,12 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   // Confirm in ProjectSwitcherPalette.tsx via removeConfirmProject state;
   // action ID not co-located with the ConfirmDialog in that file.
   "project.remove",
+  // Agent/MCP-only confirm gate (#11346): arming reroutes the user's next
+  // keystrokes to every armed terminal, so an external caller must pass the
+  // host confirm dialog. Palette-hidden, and user-side arming goes through the
+  // fleet ribbon (which calls the store directly, not ActionService), so there
+  // is no user-facing dispatch path to co-locate a ConfirmDialog with.
+  "terminal.arm",
   // Agent-dispatch only — no user-side ConfirmDialog. danger:"confirm" gates MCP/agent
   // dispatch only; user dispatch of recipe.run is intentionally ungated.
   "recipe.run",

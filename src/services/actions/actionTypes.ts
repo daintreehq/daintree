@@ -76,7 +76,7 @@ export interface ActionCallbacks {
     /** Present only when Daintree opened a setup diagnostic instead of spawning a PTY. */
     spawnStatus?: "missing-cli";
   } | null>;
-  onInject: (worktreeId: string) => void;
+  onInject: (worktreeId: string, terminalId?: string) => void;
   getDefaultCwd: () => string;
   getActiveWorktreeId: () => string | undefined;
   getWorktrees: () => Worktree[];
