@@ -55,7 +55,7 @@ export function validateDefinitionInvariants(definition: AnyActionDefinition): s
   if (definition.danger !== "safe" && !definition.dangerRationale?.trim()) {
     violations.push(
       `Action "${definition.id}" has danger="${definition.danger}" but no dangerRationale. ` +
-        `Rationale surfaces in elicitation confirmations so users see why the action is gated.`
+        `Rationale surfaces in the host confirmation dialog so users see why the action is gated.`
     );
   }
 
@@ -282,15 +282,22 @@ export class ActionService {
    * compilation and cloning) — use when only danger/title/description are
    * needed, e.g. the MCP bridge's confirmation gate.
    */
-  getDispatchMeta(
-    id: ActionId
-  ): { danger: ActionDanger; title: string; description: string } | null {
+  getDispatchMeta(id: ActionId): {
+    danger: ActionDanger;
+    title: string;
+    description: string;
+    dangerRationale?: string;
+  } | null {
     const definition = this.registry.get(id);
     if (!definition) return null;
     return {
       danger: definition.danger,
       title: definition.title ?? "",
       description: definition.description ?? "",
+      // Surfaces in the MCP host confirmation dialog so the human sees the same
+      // "why this is gated" reasoning the model does (#11342). Omitted when
+      // absent so callers/tests observe exactly the populated fields.
+      ...(definition.dangerRationale ? { dangerRationale: definition.dangerRationale } : {}),
     };
   }
 
@@ -423,7 +430,7 @@ export class ActionService {
     // belongs behind a plugin capability rather than the ungated `safe` built-in
     // path (#10558). Agent (MCP) and user dispatch are unaffected — only the
     // "plugin" source is rejected. `danger` stays "safe" so this carries no
-    // collateral confirm/elicitation cost for legitimate callers.
+    // collateral host-confirmation cost for legitimate callers.
     if (definition.denyPluginDispatch && source === "plugin") {
       const error: ActionError = {
         code: "RESTRICTED",

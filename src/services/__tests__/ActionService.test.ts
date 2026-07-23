@@ -2328,6 +2328,29 @@ describe("ActionService", () => {
       expect(getSchemaCache(service).size).toBe(0);
       expect(service.getDispatchMeta("actions.unknown" as ActionId)).toBeNull();
     });
+
+    it("getDispatchMeta() surfaces dangerRationale for gated actions so the confirm dialog can show it (#11342)", () => {
+      service.register({
+        id: "worktree.delete" as ActionId,
+        title: "Delete Worktree",
+        description:
+          "Test action for validating ActionService dangerRationale threading into the MCP confirm dialog.",
+        category: "worktree",
+        kind: "command",
+        danger: "confirm",
+        dangerRationale: "Permanently removes the worktree directory and any uncommitted changes.",
+        scope: "renderer",
+        run: vi.fn().mockResolvedValue(undefined),
+      });
+
+      const meta = service.getDispatchMeta("worktree.delete" as ActionId);
+      expect(meta).toEqual({
+        danger: "confirm",
+        title: "Delete Worktree",
+        description: expect.stringContaining("dangerRationale threading"),
+        dangerRationale: "Permanently removes the worktree directory and any uncommitted changes.",
+      });
+    });
   });
 
   describe("dispatch error boundaries (issue #7284)", () => {

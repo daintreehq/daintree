@@ -23,7 +23,6 @@ import {
   SESSION_BINDING_GONE,
   CONFIRMATION_TIMEOUT_CODE,
   USER_REJECTED_CODE,
-  ELICITATION_FAILED_CODE,
   MCP_DEDUP_KEY_COLLISION_CODE,
   MCP_DEDUP_ALLOWLIST,
   minimumPermittingTier,
@@ -1080,12 +1079,15 @@ describe("buildToolError envelope", () => {
     expect(parsed.retriable).toBe(true);
   });
 
-  it("marks USER_REJECTED and ELICITATION_FAILED as non-retriable", () => {
+  it("marks USER_REJECTED and the historical ELICITATION_FAILED as non-retriable", () => {
     const rejected = JSON.parse(
       getErrorText(buildToolError({ code: USER_REJECTED_CODE, message: "no" }))
     );
+    // "ELICITATION_FAILED" is no longer produced (the elicitation-confirm path
+    // was removed in #11342) but remains a valid historical error code that old
+    // audit records may carry — it must still classify as non-retriable.
     const elicit = JSON.parse(
-      getErrorText(buildToolError({ code: ELICITATION_FAILED_CODE, message: "fail" }))
+      getErrorText(buildToolError({ code: "ELICITATION_FAILED", message: "fail" }))
     );
     expect(rejected.retriable).toBe(false);
     expect(elicit.retriable).toBe(false);
@@ -1636,9 +1638,9 @@ describe("CallTool error envelope (integration through sessionServer)", () => {
   });
 
   it("reclassifies a no-channel confirm dispatch to CONFIRMATION_REQUIRED, not EXECUTION_ERROR (#10640)", async () => {
-    // recipe.run is a real danger:"confirm" action in the action tier. With a
-    // client that lacks elicitation.form, the unconfirmed dispatch is forwarded
-    // to the renderer bridge, which throws RendererBridgeUnavailableError when
+    // recipe.run is a real danger:"confirm" action in the action tier. Its
+    // unconfirmed dispatch is forwarded to the renderer bridge (host-side
+    // confirmation, #11342), which throws RendererBridgeUnavailableError when
     // no Daintree window is open. Because the manifest entry IS known to be
     // confirm-gated, that must surface as a non-retriable CONFIRMATION_REQUIRED
     // (the human couldn't be asked) rather than a retriable EXECUTION_ERROR.

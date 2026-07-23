@@ -129,8 +129,8 @@ export interface ActionDefinition<
    * text-injection effect belongs behind the `agent:input` capability and the
    * first-class `host.sendToActiveAgent(...)` API rather than the ungated `safe`
    * built-in side door (#10558). `danger`-based gating is the wrong tool here:
-   * `confirm` would force an elicitation prompt on every agent/MCP call, and
-   * `restricted` would block agents too.
+   * `confirm` would force a host confirmation prompt on every agent/MCP call,
+   * and `restricted` would block agents too.
    */
   denyPluginDispatch?: boolean;
   argsSchema?: S;
@@ -201,8 +201,8 @@ export interface ActionDefinition<
   examples?: readonly ActionExample[];
   /**
    * Human-readable rationale for why this action carries its `danger` rating.
-   * Surfaces in the MCP elicitation confirmation message so the user sees the
-   * same reasoning the model would. Required when `danger !== "safe"`.
+   * Surfaces in the MCP host confirmation dialog so the user sees the same
+   * reasoning the model would. Required when `danger !== "safe"`.
    */
   dangerRationale?: string;
   /**

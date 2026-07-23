@@ -102,7 +102,7 @@ type McpTier = "workbench" | "action" | "system" | "external";
 How `danger` interacts with tier gating:
 
 - `danger: "restricted"` — never exposed, never dispatchable over MCP (hard floor in `shouldExposeTool`/`isTierPermitted`).
-- `danger: "confirm"` — _exposed and dispatchable_ if the tier permits, but the `CallTool` handler routes it through an **MCP elicitation confirmation** when the client supports `elicitation.form`. This is the MCP-side wiring of the same confirm gate documented in [`destructive-action-safeguards.md`](./destructive-action-safeguards.md): `danger:"confirm"` classifies the action; the elicitation prompt is the user-facing confirm before the mutation fires.
+- `danger: "confirm"` — _exposed and dispatchable_ if the tier permits, but the `CallTool` handler dispatches it **unconfirmed** so the human approves it host-side in the renderer's native `McpConfirmDialog` (via the renderer bridge) before the mutation fires. This is the MCP-side wiring of the same confirm gate documented in [`destructive-action-safeguards.md`](./destructive-action-safeguards.md): `danger:"confirm"` classifies the action; the host `ConfirmDialog` is the user-facing confirm. A client's self-declared `elicitation.form` capability is **never** treated as authorization — a headless/agentic client could otherwise answer its own in-band elicitation `accept` and self-approve a destructive call with no human in the loop (#11342). When no Daintree window is open to surface the dialog the call is refused with `CONFIRMATION_REQUIRED` (`confirmationChannel: "unavailable"`); only a host-issued native automation grant pre-authorizes a dispatch.
 
 ## Session lifecycle (`sessionStore.ts`, `httpLifecycle.ts`)
 
@@ -154,13 +154,17 @@ tools/call(actionId, args)
   │      ├─ same key, different args → return MCP_DEDUP_KEY_COLLISION
   │      └─ in-flight same key → await shared promise (singleflight)
   │
-  ├─4 Confirm: entry.danger === "confirm" & client supports elicitation.form
-  │      └─ runElicitationConfirmation → approved | rejected (USER_REJECTED) |
-  │         failed (ELICITATION_FAILED)
+  ├─4 Confirm: entry.danger === "confirm" is dispatched UNCONFIRMED (unless a
+  │      native grant pre-authorized it). The host approves it in the renderer's
+  │      native McpConfirmDialog during dispatch; a client's elicitation.form
+  │      response is never authorization (#11342). No window open →
+  │      CONFIRMATION_REQUIRED (confirmationChannel: "unavailable").
   │
   ├─5 Dispatch:
   │      ├─ terminal.waitUntilIdle → handleWaitUntilIdle (main process, see below)
   │      └─ else → rendererBridge.dispatchAction(actionId, args, confirmed)
+  │              ├─ danger:"confirm" & unconfirmed → renderer surfaces the
+  │              │  native ConfirmDialog, dispatches only after human approval
   │              └─ pinned view gone → SESSION_BINDING_GONE (do not retry)
   │
   ├─6 On success through a grant → grantCache.refresh + reset idle timer
@@ -183,7 +187,7 @@ The tables below are the authoritative `forge.*` surface, derived from three sou
 
 Three axes are independent — do not infer one from another:
 
-- **`danger`** gates the user-facing confirm. `danger:"confirm"` routes the call through an MCP elicitation prompt before dispatch (see [Risk bands and `danger`](#risk-bands-and-danger)); `danger:"safe"` does not. It says nothing about rate limit. `forge.createIssue` is `safe` while `forge.closeIssue` is `confirm`; `forge.approvePR` is `confirm` yet on the `standard` bucket while `forge.createPR` is `confirm` on `mutation`.
+- **`danger`** gates the user-facing confirm. `danger:"confirm"` dispatches the call unconfirmed so the human approves it host-side in the native `McpConfirmDialog` before the mutation fires (see [Risk bands and `danger`](#risk-bands-and-danger)); `danger:"safe"` does not. It says nothing about rate limit. `forge.createIssue` is `safe` while `forge.closeIssue` is `confirm`; `forge.approvePR` is `confirm` yet on the `standard` bucket while `forge.createPR` is `confirm` on `mutation`.
 - **Rate limit** is the token bucket (`standard` 30/min, `mutation` 10/min). It is set per-id in `RATE_LIMIT_TOOL_MAP`, not derived from `danger` or write-intent — the browser-open commands `forge.openIssue`/`forge.openPR` are `safe` but `mutation`-bucketed because an LLM retry would pop a duplicate browser tab.
 - **External** marks whether the action is in `MCP_TOOL_ALLOWLIST` and therefore reachable by `external` (API-key) callers. All writes require the `system` tier; the twelve marked `External: no` are reachable _only_ via a `system`-tier session (the in-app help assistant), not by an external API key (unless `fullToolSurface` is enabled, which switches `external` to `MCP_FULL_TOOL_SURFACE_ALLOWLIST` — a fail-closed superset of `MCP_TOOL_ALLOWLIST`, not a bypass — see [Tier model](#tier-model-sharedts)), even though they pass the `system` floor.
 
@@ -275,6 +279,6 @@ The in-app fleet broadcast is supervised past submission (#10930): `fleetRunStor
 ## See also
 
 - [`action-system.md`](./action-system.md) — the `ActionService`, `ActionDefinition`, and `BuiltInActionId` surface every MCP tool maps onto.
-- [`destructive-action-safeguards.md`](./destructive-action-safeguards.md) — the `danger` tier model and the per-action confirm audit that the MCP elicitation gate participates in.
+- [`destructive-action-safeguards.md`](./destructive-action-safeguards.md) — the `danger` tier model and the per-action confirm audit that the MCP host-confirmation gate participates in.
 - [`agent-activity-monitoring.md`](./agent-activity-monitoring.md) — `AgentStateService`, the agent FSM, and the `agent:state-changed` events that `waitUntilIdle` and `TurnOutcomeService` consume.
 - [`docs/plugins/`](../plugins/) — the _outbound_, plugin-authored MCP servers (distinct from this server).

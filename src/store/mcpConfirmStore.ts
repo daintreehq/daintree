@@ -12,6 +12,13 @@ export interface PendingMcpConfirm {
   actionId: string;
   actionTitle: string;
   actionDescription: string;
+  /**
+   * The action's `dangerRationale` — the "why this is gated" reasoning the
+   * model sees. Surfaced in the confirm dialog so the human approving a
+   * destructive MCP call sees the same justification (#11342). Optional: only
+   * `danger !== "safe"` actions carry a rationale.
+   */
+  dangerRationale?: string;
   argsSummary: string;
   /**
    * The dispatched action's registry `danger` classification. Drives the

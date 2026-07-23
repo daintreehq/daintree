@@ -255,6 +255,31 @@ describe("useMcpBridge", () => {
     });
   });
 
+  it("threads the action's dangerRationale into the confirm store so the dialog can show it (#11342)", async () => {
+    mocks.get.mockReturnValue(
+      confirmManifestEntry({
+        dangerRationale: "Permanently removes the worktree directory and uncommitted changes.",
+      })
+    );
+    mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-rationale",
+      actionId: "worktree.delete",
+      args: { worktreeId: "wt-1" },
+    });
+
+    await Promise.resolve();
+    expect(useMcpConfirmStore.getState().current?.dangerRationale).toBe(
+      "Permanently removes the worktree directory and uncommitted changes."
+    );
+
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
+  });
+
   it("forwards the requesting-bearer identity into the confirm store (#9157)", async () => {
     mocks.get.mockReturnValue(confirmManifestEntry());
     mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });

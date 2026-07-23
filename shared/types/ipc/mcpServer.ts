@@ -366,8 +366,8 @@ export interface McpGrantLifecyclePayload {
  * Live event marking the start of an MCP tool dispatch, pushed to the pinned
  * help-session renderer so the Assistant panel can show an in-flight activity
  * strip (#9759). Emitted once per dispatch that actually enters the call path,
- * after the manifest entry is resolved (so `danger` is known) and before any
- * elicitation await. Pre-dispatch rejections (unauthorized, rate-limited,
+ * after the manifest entry is resolved (so `danger` is known) and before the
+ * host-side confirmation wait. Pre-dispatch rejections (unauthorized, rate-limited,
  * dedup) do not emit — they settle in microseconds and would only flicker the
  * strip. Send is targeted to the minting WebContents, never broadcast.
  *
