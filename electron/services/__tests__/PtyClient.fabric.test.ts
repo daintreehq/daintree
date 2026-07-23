@@ -178,6 +178,11 @@ describe("PtyClient fabric", () => {
       expect(forks).toHaveLength(3);
       const shardA = projectShard("project-a");
       const shardB = projectShard("project-b");
+      // On-demand project shards deliver their queued spawn on first ready; the
+      // pre-ready send is gated so it isn't delivered twice (once queued, once
+      // by the first-ready replay).
+      shardA.child.emit("message", { type: "ready" });
+      shardB.child.emit("message", { type: "ready" });
       expect(shardA.serviceName).not.toBe(shardB.serviceName);
       expect(messagesOfType(shardA.child, "spawn").map((m) => m.id)).toEqual(["t1"]);
       expect(messagesOfType(shardB.child, "spawn").map((m) => m.id)).toEqual(["t2"]);

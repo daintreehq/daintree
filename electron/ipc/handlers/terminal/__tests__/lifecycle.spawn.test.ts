@@ -581,6 +581,57 @@ describe("terminal spawn handler - cwd fallback (#5139: worktree is now renderer
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
     expect(spawnArgs.worktreeId).toBe("wt-123");
   });
+
+  it("caches the launch command as postSpawnInput for a wrapper-less shell (#11339)", async () => {
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    const os = await import("os");
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cwd: os.homedir(),
+        cols: 80,
+        rows: 24,
+        // nushell can't host a startup wrapper on any platform.
+        shell: "/usr/bin/nu",
+        command: "claude --resume s-1",
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    // The command rides postSpawnInput (PtyClient owns the write + crash replay),
+    // not an inline lifecycle-handler write.
+    expect(spawnArgs.postSpawnInput).toBe("claude --resume s-1\r");
+    expect(ptyClient.write).not.toHaveBeenCalled();
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "omits postSpawnInput for a wrapper-capable shell — the command rides args (#11339)",
+    async () => {
+      const deps = { ptyClient } as unknown as HandlerDependencies;
+      registerTerminalLifecycleHandlers(deps);
+
+      const handler = getSpawnHandler();
+      const os = await import("os");
+      await handler(
+        {} as Electron.IpcMainInvokeEvent,
+        {
+          cwd: os.homedir(),
+          cols: 80,
+          rows: 24,
+          shell: "/bin/bash",
+          command: "claude --resume s-1",
+        } as unknown as Parameters<typeof handler>[1]
+      );
+
+      const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+      expect(spawnArgs.postSpawnInput).toBeUndefined();
+      // The command is embedded in the shell startup args instead.
+      expect(spawnArgs.args?.join(" ")).toContain("claude --resume s-1");
+    }
+  );
 });
 
 describe("terminal spawn shell-injection hardening (#6065)", () => {

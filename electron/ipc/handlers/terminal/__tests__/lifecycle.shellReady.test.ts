@@ -224,7 +224,7 @@ describe("agent command launch", () => {
     expect(ptyClient.listenerCount("exit")).toBe(0);
   });
 
-  it("Windows agent terminal writes command immediately without clear preamble", async () => {
+  it("Windows agent terminal carries the command as postSpawnInput, not an inline write", async () => {
     Object.defineProperty(process, "platform", { value: "win32" });
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
@@ -239,8 +239,11 @@ describe("agent command launch", () => {
       command: "claude",
     });
 
-    expect(ptyClient.write).toHaveBeenCalledTimes(1);
-    expect(ptyClient.write.mock.calls[0][1]).toBe("claude\r");
+    // The command rides postSpawnInput so PtyClient owns the write and re-injects
+    // it on crash replay (#11339); the handler no longer writes it directly.
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs.postSpawnInput).toBe("claude\r");
+    expect(ptyClient.write).not.toHaveBeenCalled();
   });
 
   it("skips stdin write entirely for POSIX command launches", async () => {

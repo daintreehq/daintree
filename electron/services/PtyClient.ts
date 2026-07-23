@@ -777,7 +777,7 @@ export class PtyClient extends EventEmitter {
       // clearing) stay in respawnPendingForShard() above.
       for (const [id, options] of this.pendingSpawns) {
         if (this.ownerKey(id) !== shard.key) continue;
-        shard.send({ type: "spawn", id, options });
+        this.sendSpawnWithPostInput(shard, id, options);
       }
     }
     const pendingPortWindowIds = new Set(shard.pendingMessagePorts.keys());
@@ -785,6 +785,31 @@ export class PtyClient extends EventEmitter {
     if (shard.shouldResyncProjectContext) {
       shard.shouldResyncProjectContext = false;
       this.syncProjectContextToShard(shard, pendingPortWindowIds);
+    }
+  }
+
+  /**
+   * Send a spawn to a shard and, for command launches on shells that couldn't
+   * host a startup wrapper, re-inject the launch command right after it (#11339).
+   * The command rides `options.postSpawnInput` in `pendingSpawns`, so every
+   * replay path (initial pre-ready replay, crash respawn, crash-budget
+   * migration) funnels through here and the terminal comes back running its
+   * command — including a resume — instead of a bare prompt. The write is FIFO
+   * behind the spawn on the same channel and the host's spawn handler registers
+   * the terminal synchronously, so it lands on the live PTY.
+   */
+  private sendSpawnWithPostInput(shard: PtyShard, id: string, options: PtyHostSpawnOptions): void {
+    // Never deliver into a shard that isn't ready yet. A post-fork/pre-ready
+    // send is queued by the host AND re-sent by the first-ready replay below,
+    // which for a command launch would run the command (and any resume) twice.
+    // The entry is already in `pendingSpawns`, so the first-ready replay (which
+    // runs after `markReady`, i.e. once this guard passes) delivers it exactly
+    // once. This makes the "double-spawn-safe" invariant explicit rather than
+    // relying on the pre-fork transport drop.
+    if (!shard.isRunning()) return;
+    shard.send({ type: "spawn", id, options });
+    if (options.postSpawnInput) {
+      shard.send({ type: "write", id, data: options.postSpawnInput });
     }
   }
 
@@ -840,7 +865,7 @@ export class PtyClient extends EventEmitter {
       const generation = ledger.recordLaunch(id, ledgerFactsFromSpawnOptions(options));
       const stamped: PtyHostSpawnOptions = { ...options, launchGeneration: generation };
       this.pendingSpawns.set(id, stamped);
-      shard.send({ type: "spawn", id, options: stamped });
+      this.sendSpawnWithPostInput(shard, id, stamped);
     }
 
     // Re-enable IPC data mirrors that were active before crash
@@ -933,7 +958,7 @@ export class PtyClient extends EventEmitter {
       this.pendingSpawns.set(id, stamped);
       this.terminalOwners.set(id, DEFAULT_SHARD_KEY);
       migratedIds.push(id);
-      target.send({ type: "spawn", id, options: stamped });
+      this.sendSpawnWithPostInput(target, id, stamped);
     }
     for (const id of migratedIds) {
       if (this.ipcDataMirrorIds.has(id)) {
@@ -1390,7 +1415,7 @@ export class PtyClient extends EventEmitter {
     const shard = this.ensureShardForProject(resolvedProjectId);
     this.terminalOwners.set(id, shard.key);
     this.pendingSpawns.set(id, resolvedOptions);
-    shard.send({ type: "spawn", id, options: resolvedOptions });
+    this.sendSpawnWithPostInput(shard, id, resolvedOptions);
   }
 
   /**

@@ -598,6 +598,16 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       ? commandLaunchShell.shell
       : validatedOptions.shell || projectShell;
 
+    // Shells that can't host a startup wrapper (fish, nushell, unrecognized
+    // Windows shells) launch bare and get the command typed in after spawn.
+    // Cache it on the spawn options so PtyClient owns the write and, crucially,
+    // re-injects it on every pendingSpawns replay — a pty-host crash respawn
+    // would otherwise bring these terminals back as an empty prompt, losing the
+    // (possibly resume) launch entirely (#11339). Wrapper shells already carry
+    // the command in `args`, so they replay faithfully with no postSpawnInput.
+    const postSpawnInput =
+      safeCommand.length > 0 && !commandLaunchShell ? `${safeCommand}\r` : undefined;
+
     try {
       // Every terminal is an interactive shell. Agent launches inject their
       // command after the shell's first prompt renders — never `exec`'d over
@@ -626,17 +636,11 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         agentPresetColor: validatedOptions.agentPresetColor,
         originalAgentPresetId:
           validatedOptions.originalAgentPresetId ?? validatedOptions.agentPresetId,
+        // Executed immediately by PtyClient after the spawn message (FIFO on the
+        // same channel), so users don't stare at a blank prompt; the shell stays
+        // the parent process and reclaims the foreground when the command exits.
+        postSpawnInput,
       });
-
-      if (safeCommand.length > 0 && !commandLaunchShell) {
-        // Execute immediately. node-pty queues the write against the spawned
-        // shell, so users do not stare at a blank prompt while we wait for RC
-        // files/prompt detection. The shell still remains the parent process;
-        // when the command exits, the terminal returns to a normal shell.
-        if (ptyClient.hasTerminal(id)) {
-          ptyClient.write(id, `${safeCommand}\r`);
-        }
-      }
 
       return id;
     } catch (error) {

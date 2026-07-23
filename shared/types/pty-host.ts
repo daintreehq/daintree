@@ -82,6 +82,20 @@ export interface PtyHostSpawnOptions {
    * session journaling exactly-once per terminal incarnation.
    */
   launchGeneration?: number;
+  /**
+   * Command to type into the PTY immediately after spawn, for command launches
+   * on shells that can't host a startup wrapper (`buildCommandLaunchShell`
+   * returned null — fish, nushell, an unrecognized Windows shell). The wrapper
+   * shells (zsh/bash/sh/pwsh/cmd) embed the launch command in `args`, but these
+   * shells launch bare and the command is written in afterwards.
+   *
+   * Cached here so it rides `pendingSpawns` and is re-injected on every replay —
+   * a pty-host crash respawn, a crash-budget migration, and the pre-ready
+   * initial replay — so a resumed (or any) launch survives a crash on these
+   * shells instead of coming back as an empty prompt (#11339). Main owns the
+   * write: the pty-host ignores this field.
+   */
+  postSpawnInput?: string;
 }
 
 /** Per-project terminal-workload memory, deduplicated by PID. */
