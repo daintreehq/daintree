@@ -313,8 +313,10 @@ export interface ActionDispatchOptions {
    * the renderer AFTER the user approves the native ConfirmDialog, or by a
    * host-issued native automation grant. An external client's request always
    * arrives unconfirmed; never forward a client field into this flag — doing so
-   * was the #11342 self-approval vulnerability. Absent/false ⇒ the action is
-   * routed through host confirmation before it can execute.
+   * was the #11342 self-approval vulnerability. Absent/false ⇒ ActionService
+   * refuses a `danger:"confirm"` dispatch with `CONFIRMATION_REQUIRED`; the MCP
+   * renderer bridge is what surfaces the native ConfirmDialog and re-dispatches
+   * (with this flag set) only after the user approves.
    */
   confirmed?: boolean;
   /**
@@ -330,7 +332,7 @@ export interface ActionDispatchPayload {
   context: ActionContext;
   source: ActionSource;
   timestamp: number;
-  /** True when an agent explicitly confirmed a danger:"confirm" action. Absent for user-source and safe actions. */
+  /** Host attestation that a danger:"confirm" action was approved (native ConfirmDialog or host grant) — never set from client input. Absent for user-source and safe actions. */
   confirmed?: boolean;
 }
 

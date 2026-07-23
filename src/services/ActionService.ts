@@ -440,7 +440,9 @@ export class ActionService {
     }
 
     // Enforce confirmation for destructive actions from agent and plugin
-    // sources. Agents may explicitly confirm via { confirmed: true }; plugins
+    // sources. `{ confirmed: true }` is a host attestation — set only by the MCP
+    // renderer bridge after the user approves the native ConfirmDialog, or by a
+    // host-issued grant; it is never taken from client input (#11342). Plugins
     // have NO confirm bypass — the `confirmed` flag is ignored for plugin
     // sources, so danger:"confirm" actions always return CONFIRMATION_REQUIRED
     // for them even if a caller spoofs `confirmed: true` on a "plugin" dispatch.

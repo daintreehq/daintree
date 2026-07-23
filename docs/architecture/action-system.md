@@ -67,7 +67,7 @@ This is crucial for AI safety:
 | Level | Meaning | Agent Behavior |
 | --- | --- | --- |
 | `safe` | Read-only or easily reversible | Executes immediately |
-| `confirm` | Destructive or hard to undo | `agent`: requires `{ confirmed: true }`; `plugin`: always blocked |
+| `confirm` | Destructive or hard to undo | `agent`: requires host approval (native ConfirmDialog / host grant sets `confirmed`); `plugin`: always blocked |
 | `restricted` | System-only, never agent-callable | Returns `RESTRICTED` error |
 
 Examples:
@@ -160,7 +160,7 @@ const handleClick = async () => {
 await actionService.dispatch(
   "worktree.delete",
   { worktreeId: "abc123" },
-  { source: "agent", confirmed: true } // Must confirm destructive actions
+  { source: "agent", confirmed: true } // `confirmed` is a host attestation (native ConfirmDialog / grant), never client-supplied
 );
 ```
 
