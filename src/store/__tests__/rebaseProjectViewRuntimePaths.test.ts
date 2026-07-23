@@ -27,7 +27,10 @@ function makeFakeStore<T extends object>(initial: T): FakeStore<T> {
 
 // Mutable holder the mocks delegate to. The exported store objects are STABLE
 // (so `import { usePanelStore }` binds once); each call reads the current fake.
-const holders = vi.hoisted(() => ({ panels: null as any, selection: null as any }));
+const holders: { panels: any; selection: any } = vi.hoisted(() => ({
+  panels: null,
+  selection: null,
+}));
 
 vi.mock("../panelStore", () => ({
   usePanelStore: {
@@ -108,7 +111,9 @@ describe("rebaseProjectViewRuntimePaths", () => {
 
   it("is a no-op for the panel store when nothing lives under the old root", () => {
     panels._reset({
-      panelsById: { a: { kind: "terminal", cwd: "/somewhere/else", worktreeId: "/somewhere/else" } },
+      panelsById: {
+        a: { kind: "terminal", cwd: "/somewhere/else", worktreeId: "/somewhere/else" },
+      },
       panelIds: ["a"],
       panelIdsByWorktreeId: { "/somewhere/else": ["a"] },
       tabGroups: new Map(),

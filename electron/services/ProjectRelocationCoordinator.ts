@@ -11,9 +11,14 @@ import { logError, logInfo } from "../utils/logger.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import type { PtyClient } from "./PtyClient.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
-import type { WindowRegistry, WindowContext } from "../window/WindowRegistry.js";
+import type { WindowRegistry } from "../window/WindowRegistry.js";
 import type { WorktreePortBroker } from "./WorktreePortBroker.js";
 import type { Project } from "../types/index.js";
+
+// How long the state-write rewrite guard lingers after a relocation resolves, to
+// absorb a renderer layout write debounced with the old root (the persistence
+// debounce is ~500ms; this comfortably outlasts it).
+const RELOCATION_GUARD_GRACE_MS = 3000;
 
 /**
  * Relocating a currently-OPEN project (#11282, phase 3).
@@ -83,12 +88,12 @@ export interface RelocateProjectRequest {
 
 interface TargetWindow {
   windowId: number;
-  ctx: WindowContext;
 }
 
 export class ProjectRelocationCoordinator {
   private deps: ProjectRelocationDeps = {};
   private readonly relocating = new Set<string>();
+  private readonly guardReleaseTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   configure(deps: ProjectRelocationDeps): void {
     this.deps = deps;
@@ -108,7 +113,7 @@ export class ProjectRelocationCoordinator {
     const { projectId, mode } = request;
     const disposition = request.assistantDisposition ?? "refuse";
 
-    // --- Establish ownership SYNCHRONOUSLY, before the first await: whether this
+    // Establish ownership SYNCHRONOUSLY, before the first await: whether this
     // project is open, and which windows show it, must not shift under a
     // concurrent switch/close (#11131 TOCTOU).
     const project = projectStore.getProjectById(projectId);
@@ -128,21 +133,39 @@ export class ProjectRelocationCoordinator {
     ).has(projectId);
     const targetWindows = openAtEntry ? this.snapshotWindowsShowingProject(projectId) : [];
 
-    // Closed reattach: the folder is already on disk and nothing is live, so the
-    // phase-1/2 path is correct as-is — no need to spin up the quiesce machinery.
-    if (mode === "reattach" && !openAtEntry) {
-      const relocated = await projectStore.relocateProject(projectId, request.newPath);
-      broadcastToRenderer(CHANNELS.PROJECT_UPDATED, relocated);
-      return relocated;
-    }
-
+    // Reserve BEFORE any branch so a concurrent relocation of the same project —
+    // closed-delegate or pipeline — is rejected, not interleaved.
     this.relocating.add(projectId);
     try {
+      // Closed reattach: the folder is already on disk and nothing is live, so
+      // the phase-1/2 path is correct as-is — no quiesce machinery needed.
+      if (mode === "reattach" && !openAtEntry) {
+        const relocated = await projectStore.relocateProject(projectId, request.newPath);
+        broadcastToRenderer(CHANNELS.PROJECT_UPDATED, relocated);
+        return relocated;
+      }
       return await this.runPipeline(project, request, disposition, targetWindows);
     } finally {
       this.relocating.delete(projectId);
-      projectStore.endRelocationRewrite(projectId);
+      // Hold the state-write rewrite a beat past the operation: a renderer layout
+      // write debounced with the old root can land after `relocate` resolves, and
+      // must still be rebased. Released only if no newer relocation re-armed it.
+      this.scheduleGuardRelease(projectId);
     }
+  }
+
+  private scheduleGuardRelease(projectId: string): void {
+    // Cancel any pending release so only the LATEST relocation's timer survives —
+    // otherwise an older timer could fire after a newer relocation re-armed the
+    // guard and delete it before that relocation's own grace expired.
+    const existing = this.guardReleaseTimers.get(projectId);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      this.guardReleaseTimers.delete(projectId);
+      if (!this.relocating.has(projectId)) projectStore.endRelocationRewrite(projectId);
+    }, RELOCATION_GUARD_GRACE_MS);
+    timer.unref?.();
+    this.guardReleaseTimers.set(projectId, timer);
   }
 
   private async runPipeline(
@@ -154,17 +177,30 @@ export class ProjectRelocationCoordinator {
     const { projectId, mode } = request;
     const oldRoot = project.path;
 
-    // --- Assistant guard. Killing the Assistant's PTY tears down its whole
-    // sub-agent tree (a security-boundary action, #7509); phase 3 refuses rather
-    // than silently destroying in-flight agent work. Phase 4/5 own hibernate.
-    if (disposition === "refuse" && (await getAssistantBackend(projectId))) {
-      throw new ProjectRelocationError(
-        "assistant-active",
-        "Stop the Daintree Assistant for this project before moving it."
-      );
+    // Assistant guard, FAIL-CLOSED. Killing the Assistant's PTY tears down its
+    // whole sub-agent tree (a security-boundary action, #7509); phase 3 refuses
+    // rather than silently destroying in-flight agent work. A failed check is
+    // treated as "may be active" — never as "clear". Phase 4/5 own hibernate.
+    if (disposition === "refuse") {
+      let assistant: { terminalId: string; webContentsId: number } | null;
+      try {
+        assistant = await getAssistantBackend(projectId);
+      } catch (error) {
+        logError("relocate-assistant-check-failed", error, { projectId });
+        throw new ProjectRelocationError(
+          "assistant-active",
+          "Couldn't check the Daintree Assistant for this project — stop it and try again."
+        );
+      }
+      if (assistant) {
+        throw new ProjectRelocationError(
+          "assistant-active",
+          "Stop the Daintree Assistant for this project before moving it."
+        );
+      }
     }
 
-    // --- Preflight: ALL validation before anything is stopped.
+    // Preflight: ALL validation before anything is stopped.
     let requestedNewRoot = normalizeProjectPath(request.newPath);
     if (mode === "move") {
       requestedNewRoot = this.validateManagedMove(oldRoot, request.newPath);
@@ -175,25 +211,40 @@ export class ProjectRelocationCoordinator {
       );
     }
 
-    // --- Quiesce the project's live runtimes (borrowed from `project:free-memory`
-    // MINUS the renderer eviction — keeping the view + xterm alive is the point).
+    // Refuse a destination already registered to a DIFFERENT project BEFORE
+    // touching anything — otherwise a managed move could rename the folder into
+    // place and only then discover the conflict at finalize, stranding one
+    // project's folder under another's row (`getProjectByPath` compares the
+    // stored path without needing the folder to exist yet, so this is safe
+    // pre-rename).
+    const conflict = await projectStore.getProjectByPath(requestedNewRoot);
+    if (conflict && conflict.id !== projectId) {
+      throw new ProjectRelocationError(
+        "destination-exists",
+        `Another project ("${conflict.name}") is already registered at that location.`
+      );
+    }
+
+    // Quiesce the project's live runtimes (borrowed from `project:free-memory`
+    // minus the renderer eviction — keeping the view + xterm alive is the point).
     await this.quiesceProject(projectId, oldRoot);
 
-    // --- Arm the state-write guard so a late renderer layout write can't clobber
-    // the migration once we cross the boundary.
+    // Arm the state-write guard so a late renderer layout write can't clobber the
+    // migration once we cross the boundary.
     projectStore.beginRelocationRewrite(projectId, oldRoot, requestedNewRoot);
 
-    // ===================== COMMIT BOUNDARY (fs.rename) =====================
-    // Above this try/catch: rollback is safe. A managed move's rename is the
-    // point of no return — everything after it is forward-only, never a reverse
-    // rename. A reattach is already disk-committed at entry, so it has no
-    // pre-commit window to roll back.
+    // fs.rename is the commit boundary. Before this try/catch a failure rolls
+    // back (reopen at the original path; nothing durable changed). A managed
+    // move's rename is the point of no return — everything after is forward-only,
+    // never a reverse rename. A reattach is already disk-committed at entry.
     if (mode === "move") {
       try {
         await rename(oldRoot, requestedNewRoot);
       } catch (error) {
-        // Pre-commit failure: nothing durable changed. Reopen at the ORIGINAL
-        // path so the user is left exactly where they started.
+        // Pre-commit failure. The quiesce did kill this project's PTYs (their
+        // sessions are preserved and restartable) and dropped the host, so this
+        // is a non-destructive reopen at the original path, not a perfect
+        // undo — reopen restores the workspace host + worktree feed there.
         projectStore.endRelocationRewrite(projectId);
         await this.reopenProjectAtPath(projectId, oldRoot, targetWindows);
         throw new ProjectRelocationError(
@@ -203,27 +254,48 @@ export class ProjectRelocationCoordinator {
       }
     }
 
-    // --- Finalize durable state (DB path + phase-2 migration + git/submodule
-    // repair), PRESERVING the project's status so an open project stays open.
-    const updated = await projectStore.finalizeRelocatedPath({
-      projectId,
-      expectedOldPath: oldRoot,
-      newPath: requestedNewRoot,
-      status: project.status,
-    });
+    // Finalize durable state (DB path + phase-2 migration + git/submodule repair),
+    // PRESERVING the project's status so an open project stays open.
+    let updated: Project;
+    try {
+      updated = await projectStore.finalizeRelocatedPath({
+        projectId,
+        expectedOldPath: oldRoot,
+        newPath: requestedNewRoot,
+        status: project.status,
+      });
+    } catch (error) {
+      // Post-commit: the folder is at the new root but the DB update failed. Do
+      // NOT reverse the rename. The row still points at the (now-missing) old
+      // path, so the project surfaces as "missing" and the user can re-locate it
+      // at the new path — the reattach flow, which will now succeed.
+      logError("relocate-finalize-failed-after-move", error, {
+        projectId,
+        oldRoot,
+        newRoot: requestedNewRoot,
+      });
+      // Build the message directly: `formatErrorMessage` returns the cause's own
+      // message for a normal Error and would drop the actionable guidance, so
+      // append the cause rather than passing it as the fallback.
+      const cause = formatErrorMessage(error, "unknown error");
+      throw new ProjectRelocationError(
+        "invalid-destination",
+        `The folder moved to ${requestedNewRoot} but updating the project failed — re-locate it there (${cause})`
+      );
+    }
     const newRoot = updated.path;
     // Re-align the write guard with the canonicalized root.
     projectStore.beginRelocationRewrite(projectId, oldRoot, newRoot);
 
-    // --- Repoint every cached view's `ViewEntry.projectPath` on its switchChain.
+    // Repoint every cached view's `ViewEntry.projectPath` on its switchChain.
     await this.rebindViews(projectId, newRoot);
 
-    // --- Live-repoint the renderer: replaces the project by id and (with the
-    // phase-3 renderer change) rebases the live panel/worktree stores in place.
+    // Live-repoint the renderer: replaces the project by id and (with the phase-3
+    // renderer change) rebases the live panel/worktree stores in place.
     broadcastToRenderer(CHANNELS.PROJECT_UPDATED, updated);
 
-    // --- Reopen the workspace host / worktree feed / PTY context at the new
-    // path. Forward-fail: a failure here shows the Tier-3 banner (Retry re-runs
+    // Reopen the workspace host / worktree feed / PTY context at the new path.
+    // Forward-fail: a failure here shows the Tier-3 banner (Retry re-runs
     // loadProject at the now-current path) rather than reverting the move.
     await this.reopenProjectAtPath(projectId, newRoot, targetWindows);
 
@@ -343,10 +415,17 @@ export class ProjectRelocationCoordinator {
     root: string,
     targetWindows: TargetWindow[]
   ): Promise<void> {
-    const { worktreeService, ptyClient, worktreePortBroker } = this.deps;
-    for (const { windowId, ctx } of targetWindows) {
-      const view = ctx.services.projectViewManager?.views.get(projectId)?.view;
-      const wc: WebContents | undefined = view?.webContents;
+    const { worktreeService, ptyClient, worktreePortBroker, windowRegistry } = this.deps;
+    for (const { windowId } of targetWindows) {
+      // Re-resolve the window from the LIVE registry, not the entry snapshot: the
+      // user may have switched it to another project (or closed it) while we
+      // awaited. Reopening a window that no longer shows this project would
+      // cross-route another project's PTY port / worktree feed (#11101).
+      const ctx = windowRegistry?.getByWindowId(windowId);
+      const pvm = ctx?.services.projectViewManager;
+      if (!pvm || pvm.getActiveProjectId() !== projectId) continue;
+
+      const wc: WebContents | undefined = pvm.views.get(projectId)?.view?.webContents;
       const live = wc && !wc.isDestroyed() ? wc : null;
 
       // Repoint the PTY host's active project/path for this window so future
@@ -361,10 +440,24 @@ export class ProjectRelocationCoordinator {
       if (worktreeService) {
         try {
           await worktreeService.loadProject(root, windowId);
-          if (live) {
+          // Re-check AFTER the load await: a switch during loadProject could have
+          // moved this window to another project, and attaching our (now
+          // background) view's port to the window's new workspace entry would
+          // cross-route it. Skip the port wiring if that happened.
+          const stillShowing =
+            windowRegistry
+              ?.getByWindowId(windowId)
+              ?.services.projectViewManager?.getActiveProjectId() === projectId;
+          if (live && stillShowing) {
             worktreeService.attachDirectPort(windowId, live);
             const host = worktreeService.getHostForProject(root);
-            if (host && worktreePortBroker) worktreePortBroker.brokerPort(host, live);
+            if (host && worktreePortBroker && !worktreePortBroker.brokerPort(host, live)) {
+              // The reload succeeded but the worktree MessagePort never
+              // connected, so the renderer can't fetch its state — surface it as
+              // a load failure so the banner + Retry stay (mirrors switch.ts).
+              worktreeLoadError =
+                "Reloaded the project but couldn't connect to the worktree service";
+            }
           }
         } catch (error) {
           worktreeLoadError = formatErrorMessage(error, "Failed to load worktrees");
@@ -373,7 +466,13 @@ export class ProjectRelocationCoordinator {
       }
 
       if (live) {
-        live.send(CHANNELS.PROJECT_WORKTREE_LOAD_STATUS, { projectId, worktreeLoadError });
+        // Best-effort: the view can die between the guard and the send, and a
+        // notification failure must not turn a committed move into a rejection.
+        try {
+          live.send(CHANNELS.PROJECT_WORKTREE_LOAD_STATUS, { projectId, worktreeLoadError });
+        } catch (error) {
+          logError("relocate-status-send-failed", error, { projectId, windowId });
+        }
       }
     }
   }
@@ -384,7 +483,7 @@ export class ProjectRelocationCoordinator {
     const result: TargetWindow[] = [];
     for (const ctx of registry.all()) {
       if (ctx.services.projectViewManager?.getActiveProjectId() === projectId) {
-        result.push({ windowId: ctx.windowId, ctx });
+        result.push({ windowId: ctx.windowId });
       }
     }
     return result;
@@ -394,18 +493,15 @@ export class ProjectRelocationCoordinator {
 /**
  * Read the Assistant backend for a project, if one is live. Dynamically imported
  * to avoid pulling the heavy HelpSessionService into this module's eval graph
- * (the IPC layer loads it lazily too).
+ * (the IPC layer loads it lazily too). THROWS on failure — the caller fails
+ * closed (treats an unverifiable Assistant as possibly-active) rather than
+ * risking a silent sub-agent-tree kill.
  */
 async function getAssistantBackend(
   projectId: string
 ): Promise<{ terminalId: string; webContentsId: number } | null> {
-  try {
-    const { helpSessionService } = await import("./HelpSessionService.js");
-    return helpSessionService.getAssistantBackend(projectId);
-  } catch (error) {
-    logError("relocate-assistant-check-failed", error, { projectId });
-    return null;
-  }
+  const { helpSessionService } = await import("./HelpSessionService.js");
+  return helpSessionService.getAssistantBackend(projectId);
 }
 
 export const projectRelocationCoordinator = new ProjectRelocationCoordinator();

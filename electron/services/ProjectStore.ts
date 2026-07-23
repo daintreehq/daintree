@@ -1153,7 +1153,10 @@ export class ProjectStore {
     // and discards its result — otherwise a prefetch resolving after the write
     // could clobber the cache with pre-mutation state.
     invalidatePrefetchCache(projectId);
-    return this.stateManager.saveProjectState(projectId, this.applyRelocationRewrite(projectId, state));
+    return this.stateManager.saveProjectState(
+      projectId,
+      this.applyRelocationRewrite(projectId, state)
+    );
   }
 
   async enqueueProjectStateUpdate(

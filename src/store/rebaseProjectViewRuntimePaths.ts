@@ -1,4 +1,10 @@
-import type { PanelInstance, TabGroup } from "@shared/types/panel";
+import {
+  isDevPreviewPanel,
+  isFilePanel,
+  isPtyPanel,
+  type PanelInstance,
+  type TabGroup,
+} from "@shared/types/panel";
 import { rebaseAbsolutePath } from "@shared/utils/projectPathRelocation";
 import { usePanelStore } from "./panelStore";
 import { useWorktreeSelectionStore } from "./worktreeStore";
@@ -13,27 +19,28 @@ import { useWorktreeSelectionStore } from "./worktreeStore";
  *
  * Reuses the conservative phase-2 {@link rebaseAbsolutePath} primitive: it only
  * touches absolute paths at/under `oldRoot`, matching at a segment boundary, and
- * leaves relative values, URLs and opaque ids untouched — so it is safe to run
- * across every candidate field without per-kind narrowing.
+ * leaves relative values, URLs and opaque ids untouched. Kind-aware so the
+ * discriminated union stays typed — `worktreeId` on every panel, `cwd` on
+ * terminal/dev-preview panels, absolute `filePath` on file panels. (Diff and
+ * file-browser paths are worktree-relative; browser fields are URLs.)
  */
-
-// Absolute-path-bearing fields that can appear on a live panel. `worktreeId` is
-// itself a normalized absolute path (the worktree root); `cwd` is on PTY panels;
-// `filePath`/`markdownFilePath` on file/diff panels. Worktree-relative browser
-// paths, URLs and opaque command/env state are deliberately excluded — the
-// primitive leaves them alone anyway.
-const PANEL_PATH_FIELDS = ["worktreeId", "cwd", "filePath", "markdownFilePath"] as const;
-
 function rebasePanel(panel: PanelInstance, oldRoot: string, newRoot: string): PanelInstance {
-  let patch: Record<string, string> | null = null;
-  const record = panel as unknown as Record<string, unknown>;
-  for (const field of PANEL_PATH_FIELDS) {
-    const value = record[field];
-    if (typeof value !== "string") continue;
-    const next = rebaseAbsolutePath(value, oldRoot, newRoot);
-    if (next !== value) (patch ??= {})[field] = next;
+  let next = panel;
+
+  if (next.worktreeId != null) {
+    const worktreeId = rebaseAbsolutePath(next.worktreeId, oldRoot, newRoot);
+    if (worktreeId !== next.worktreeId) next = { ...next, worktreeId };
   }
-  return patch ? ({ ...panel, ...patch } as PanelInstance) : panel;
+  if ((isPtyPanel(next) || isDevPreviewPanel(next)) && typeof next.cwd === "string") {
+    const cwd = rebaseAbsolutePath(next.cwd, oldRoot, newRoot);
+    if (cwd !== next.cwd) next = { ...next, cwd };
+  }
+  if (isFilePanel(next) && typeof next.filePath === "string") {
+    const filePath = rebaseAbsolutePath(next.filePath, oldRoot, newRoot);
+    if (filePath !== next.filePath) next = { ...next, filePath };
+  }
+
+  return next;
 }
 
 export function rebaseProjectViewRuntimePaths(oldRoot: string, newRoot: string): void {
@@ -68,15 +75,17 @@ export function rebaseProjectViewRuntimePaths(oldRoot: string, newRoot: string):
 
     if (!changed) return state;
 
-    // Rebuild the per-worktree panel index — its KEYS are worktree ids, which
-    // just changed. Membership and order are preserved (only the bucket key
-    // moves), so rebuild from `panelIds` rather than mutating buckets in place.
+    // The per-worktree index's KEYS are worktree ids, which just changed. A
+    // relocation only RENAMES ids (old root → new root); bucket MEMBERSHIP and
+    // order are untouched, so remap the keys and reuse each bucket array
+    // verbatim rather than rebuilding from `panelIds` (which could reorder within
+    // a bucket). The "__none__" bucket and buckets for linked worktrees outside
+    // the old root keep their keys — rebaseAbsolutePath no-ops on them.
     const panelIdsByWorktreeId: Record<string, string[]> = {};
-    for (const id of state.panelIds) {
-      const panel = panelsById[id];
-      if (!panel) continue;
-      const key = panel.worktreeId ?? "__none__";
-      (panelIdsByWorktreeId[key] ??= []).push(id);
+    for (const [worktreeId, ids] of Object.entries(state.panelIdsByWorktreeId)) {
+      const key =
+        worktreeId === "__none__" ? worktreeId : rebaseAbsolutePath(worktreeId, oldRoot, newRoot);
+      panelIdsByWorktreeId[key] = ids;
     }
 
     return { panelsById, panelIdsByWorktreeId, tabGroups };

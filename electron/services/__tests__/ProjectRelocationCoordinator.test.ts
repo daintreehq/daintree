@@ -32,6 +32,7 @@ vi.mock("fs/promises", () => ({
 
 const mockProjectStore = vi.hoisted(() => ({
   getProjectById: vi.fn(),
+  getProjectByPath: vi.fn(async () => null as { id: string; name: string } | null),
   getCurrentProjectId: vi.fn(() => null as string | null),
   finalizeRelocatedPath: vi.fn(),
   relocateProject: vi.fn(),
@@ -94,8 +95,10 @@ function makePvm(activeProjectId: string | null) {
 }
 
 function makeDeps(pvm: ReturnType<typeof makePvm> | null) {
+  const ctx = { windowId: 1, services: { projectViewManager: pvm } };
   const windowRegistry = {
-    all: () => (pvm ? [{ windowId: 1, services: { projectViewManager: pvm } }] : []),
+    all: () => (pvm ? [ctx] : []),
+    getByWindowId: (id: number) => (pvm && id === 1 ? ctx : undefined),
   };
   const ptyClient = {
     gracefulKillByProject: vi.fn(async () => [{ id: "t1", agentSessionId: "sess-1" }]),
@@ -128,10 +131,9 @@ beforeEach(() => {
   fsState.renameReject = null;
   fsState.renameCalls = [];
   mockProjectStore.getProjectById.mockReturnValue(makeProject());
+  mockProjectStore.getProjectByPath.mockResolvedValue(null);
   mockProjectStore.getCurrentProjectId.mockReturnValue(null);
-  mockProjectStore.finalizeRelocatedPath.mockResolvedValue(
-    makeProject({ path: NEW_ROOT })
-  );
+  mockProjectStore.finalizeRelocatedPath.mockResolvedValue(makeProject({ path: NEW_ROOT }));
   mockProjectStore.relocateProject.mockResolvedValue(makeProject({ path: NEW_ROOT }));
   mockAssistant.getAssistantBackend.mockReturnValue(null);
 });
@@ -169,7 +171,10 @@ describe("ProjectRelocationCoordinator — managed move of an open project", () 
 
     // Rebind + live-repoint + reopen at the NEW path.
     expect(pvm.rebindProjectPath).toHaveBeenCalledWith(PROJECT_ID, NEW_ROOT);
-    expect(mockBroadcast).toHaveBeenCalledWith(CHANNELS.PROJECT_UPDATED, makeProject({ path: NEW_ROOT }));
+    expect(mockBroadcast).toHaveBeenCalledWith(
+      CHANNELS.PROJECT_UPDATED,
+      makeProject({ path: NEW_ROOT })
+    );
     expect(deps.worktreeService.loadProject).toHaveBeenCalledWith(NEW_ROOT, 1);
     expect(deps.ptyClient.onProjectSwitch).toHaveBeenCalledWith(1, PROJECT_ID, NEW_ROOT);
 
@@ -179,9 +184,9 @@ describe("ProjectRelocationCoordinator — managed move of an open project", () 
       worktreeLoadError: null,
     });
     expect(result.path).toBe(NEW_ROOT);
-    // Reservation released.
+    // Reservation released synchronously (the rewrite guard is released later on
+    // a grace timer, so it is not asserted here).
     expect(coordinator.isRelocating(PROJECT_ID)).toBe(false);
-    expect(mockProjectStore.endRelocationRewrite).toHaveBeenCalledWith(PROJECT_ID);
   });
 
   it("refuses a cross-volume move up front — nothing is stopped or renamed", async () => {
@@ -217,7 +222,10 @@ describe("ProjectRelocationCoordinator — guard fork", () => {
 
     expect(mockProjectStore.relocateProject).toHaveBeenCalledWith(PROJECT_ID, NEW_ROOT);
     expect(deps.ptyClient.gracefulKillByProject).not.toHaveBeenCalled();
-    expect(mockBroadcast).toHaveBeenCalledWith(CHANNELS.PROJECT_UPDATED, makeProject({ path: NEW_ROOT }));
+    expect(mockBroadcast).toHaveBeenCalledWith(
+      CHANNELS.PROJECT_UPDATED,
+      makeProject({ path: NEW_ROOT })
+    );
   });
 
   it("routes an open reattach through the coordinator pipeline", async () => {
@@ -311,6 +319,40 @@ describe("ProjectRelocationCoordinator — guards", () => {
 
     expect(deps.ptyClient.gracefulKillByProject).not.toHaveBeenCalled();
     expect(fsState.renameCalls).toHaveLength(0);
+  });
+
+  it("fails CLOSED when the Assistant check itself throws", async () => {
+    mockAssistant.getAssistantBackend.mockImplementation(() => {
+      throw new Error("help service unavailable");
+    });
+    const pvm = makePvm(PROJECT_ID);
+    const deps = makeDeps(pvm);
+    const coordinator = new ProjectRelocationCoordinator();
+    configure(coordinator, deps);
+
+    await expect(
+      coordinator.relocate({ projectId: PROJECT_ID, mode: "move", newPath: NEW_ROOT })
+    ).rejects.toMatchObject({ reason: "assistant-active" });
+
+    // A failed check must NOT be read as "no Assistant" — nothing is torn down.
+    expect(deps.ptyClient.gracefulKillByProject).not.toHaveBeenCalled();
+    expect(fsState.renameCalls).toHaveLength(0);
+  });
+
+  it("refuses a destination already registered to a different project (before quiescing)", async () => {
+    mockProjectStore.getProjectByPath.mockResolvedValue({ id: "other-proj", name: "Other" });
+    const pvm = makePvm(PROJECT_ID);
+    const deps = makeDeps(pvm);
+    const coordinator = new ProjectRelocationCoordinator();
+    configure(coordinator, deps);
+
+    await expect(
+      coordinator.relocate({ projectId: PROJECT_ID, mode: "move", newPath: NEW_ROOT })
+    ).rejects.toMatchObject({ reason: "destination-exists" });
+
+    expect(deps.ptyClient.gracefulKillByProject).not.toHaveBeenCalled();
+    expect(fsState.renameCalls).toHaveLength(0);
+    expect(mockProjectStore.finalizeRelocatedPath).not.toHaveBeenCalled();
   });
 
   it("rejects a concurrent relocation for the same project", async () => {
