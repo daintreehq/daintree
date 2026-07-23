@@ -53,10 +53,18 @@ export function SpinningIcon({ icon: Icon, active, className, ...rest }: Spinnin
   // rotation to complete. Cleared when it does, or when active rises again.
   const stopRequestedRef = useRef(false);
   // Latest committed `spinning`, read by the falling-edge effect to decide
-  // whether there is anything to gracefully stop. Written during render so it is
-  // current by the time the layout effect runs.
+  // whether there is anything to gracefully stop.
   const spinningRef = useRef(spinning);
-  spinningRef.current = spinning;
+
+  // Mirror the latest committed `spinning` for the falling-edge effect below.
+  // Declared first: layout effects run in declaration order within a commit, so
+  // the mirror is current before the falling-edge effect reads it. No dep array
+  // — it must also refresh on the flushSync(setSpinning(false)) commit from the
+  // iteration handler. (A render-phase write would be simpler but violates the
+  // Rules of React and is rejected by the React Compiler.)
+  useLayoutEffect(() => {
+    spinningRef.current = spinning;
+  });
 
   const clearTimer = useCallback(() => {
     if (timerRef.current !== null) {
