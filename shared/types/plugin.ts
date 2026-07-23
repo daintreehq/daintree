@@ -31,6 +31,11 @@ export interface PanelContribution {
   canRestart: boolean;
   canConvert: boolean;
   showInPalette: boolean;
+  /**
+   * Whether this panel kind can live in the dock. Dockable by default; set
+   * `false` to opt out (for a kind with no meaningful compact chip-row form).
+   */
+  dockable?: boolean;
 }
 
 export interface ToolbarButtonContribution {

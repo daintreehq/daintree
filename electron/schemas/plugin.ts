@@ -64,6 +64,10 @@ export const PanelContributionSchema = z
     canRestart: z.boolean().default(false),
     canConvert: z.boolean().default(false),
     showInPalette: z.boolean().default(true),
+    // Dockable by default (undefined). Declare `false` to opt a panel kind out
+    // of the dock — no default so absence flows through as `undefined` and
+    // `panelKindIsDockable` treats it as dockable.
+    dockable: z.boolean().optional(),
   })
   .strict();
 

@@ -80,6 +80,11 @@ Object.defineProperty(window, "electron", {
 });
 
 import { usePanelStore } from "../panelStore";
+import {
+  clearPanelKindRegistry,
+  registerPanelKind,
+  type PanelKindConfig,
+} from "@shared/config/panelKindRegistry";
 
 function resetState() {
   usePanelStore.setState((s) => ({
@@ -185,5 +190,47 @@ describe("panelStore.addPanel dockability guard (#11054)", () => {
 
     expect(id).toBe("stranded-devpreview-1");
     expect(usePanelStore.getState().panelsById["stranded-devpreview-1"]?.location).toBe("grid");
+  });
+});
+
+describe("panelStore.addPanel dockability for plugin kinds (#11332)", () => {
+  const makePluginConfig = (id: string, dockable?: boolean): PanelKindConfig => ({
+    id,
+    name: `Plugin ${id}`,
+    iconId: "puzzle",
+    color: "#123456",
+    hasPty: false,
+    canRestart: false,
+    canConvert: false,
+    extensionId: "ext-a",
+    ...(dockable !== undefined ? { dockable } : {}),
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetState();
+  });
+
+  afterEach(() => {
+    resetState();
+    clearPanelKindRegistry();
+  });
+
+  it("honors a dock request for a plugin kind that is dockable by default", async () => {
+    registerPanelKind(makePluginConfig("ext-a.viewer"));
+
+    const id = await usePanelStore.getState().addPanel({ kind: "ext-a.viewer", location: "dock" });
+
+    expect(id).toBeTruthy();
+    expect(usePanelStore.getState().panelsById[id!]?.location).toBe("dock");
+  });
+
+  it("redirects a dock request for a plugin kind that opts out (dockable:false) to the grid", async () => {
+    registerPanelKind(makePluginConfig("ext-a.viewer", false));
+
+    const id = await usePanelStore.getState().addPanel({ kind: "ext-a.viewer", location: "dock" });
+
+    expect(id).toBeTruthy();
+    expect(usePanelStore.getState().panelsById[id!]?.location).toBe("grid");
   });
 });

@@ -5,7 +5,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import { cn } from "@/lib/utils";
 import { usePanelStore, useFocusStore } from "@/store";
-import type { BrowserPanelData, FilePanelData } from "@shared/types/panel";
+import type { PanelInstance } from "@shared/types/panel";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
@@ -20,14 +20,19 @@ import {
 import { DockPopoverChildProvider } from "@/components/ui/DockPopoverChildContext";
 
 interface DockedNonPtyPanelItemProps {
-  panel: FilePanelData | BrowserPanelData;
-  /** Chip label, derived per-kind by the caller (file name, browser host). */
+  /**
+   * Any non-PTY dock panel. The chip only reads `id`/`kind`/`title`, so it
+   * hosts file, browser, and plugin view kinds alike (#11332); the caller
+   * derives the label per kind via `dockChipTitle`.
+   */
+  panel: PanelInstance;
+  /** Chip label, derived per-kind by the caller (file name, browser host, …). */
   displayTitle: string;
 }
 
 /**
- * Dock chip for a non-PTY content panel (file viewer, browser). Mirrors
- * DockedTerminalItem's popover + stable-wrapper relocation flow, minus
+ * Dock chip for a non-PTY content panel (file viewer, browser, plugin view).
+ * Mirrors DockedTerminalItem's popover + stable-wrapper relocation flow, minus
  * everything PTY: no renderer policies, no xterm fit, no agent state. The
  * panel's React subtree lives in DockPanelOffscreenContainer and is moved (not
  * remounted) into this popover — a webview's guest survives the move too — so

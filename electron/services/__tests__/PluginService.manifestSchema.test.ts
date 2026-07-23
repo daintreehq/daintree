@@ -942,6 +942,42 @@ describe("PluginManifestSchema contributes strict validation", () => {
     }
   });
 
+  it("accepts an explicit dockable:false on a panel contribution (#11332)", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      contributes: {
+        panels: [{ id: "p", name: "P", iconId: "eye", color: "#abc", dockable: false }],
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.contributes.panels[0]?.dockable).toBe(false);
+    }
+  });
+
+  it("leaves dockable undefined when a panel omits it — the dockable-by-default path (#11332)", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      contributes: {
+        panels: [{ id: "p", name: "P", iconId: "eye", color: "#abc" }],
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.contributes.panels[0]?.dockable).toBeUndefined();
+    }
+  });
+
+  it("rejects a non-boolean dockable on a panel contribution (#11332)", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      contributes: {
+        panels: [{ id: "p", name: "P", iconId: "eye", color: "#abc", dockable: "yes" }],
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
   it("accepts the stable mcpServers key inside contributes (#10466)", () => {
     const result = getPluginManifestSchema(false).safeParse({
       ...validBase,

@@ -215,6 +215,11 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       consumers: [{ file: "shared/config/panelKindRegistry.ts", symbol: "registerPanelKind" }],
       note: "Registered as the panel kind palette visibility.",
     },
+    dockable: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_SERVICE, symbol: "loadPlugin (panels loop) → registerPanelKind" }],
+      note: "Registered as the panel kind dock eligibility; undefined defaults to dockable, false opts out (panelKindIsDockable).",
+    },
   },
   toolbarButtons: {
     id: {
