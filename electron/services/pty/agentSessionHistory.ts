@@ -245,6 +245,13 @@ async function quarantineCorruptJournal(filePath: string, error: unknown): Promi
     console.warn(`[agentSessionHistory] Corrupted session journal moved to ${quarantinePath}`);
     return true;
   } catch (renameError) {
+    if (isMissingPathError(renameError)) {
+      // The corrupt file is already gone — a concurrent read (listAgentSessions
+      // is not queued) quarantined it, or it was removed out-of-band. There's
+      // nothing left to preserve, so report success and let the caller start
+      // from a fresh empty journal rather than spuriously refusing to write.
+      return true;
+    }
     console.error(
       "[agentSessionHistory] Failed to quarantine corrupt session journal:",
       renameError
@@ -261,6 +268,10 @@ function quarantineCorruptJournalSync(filePath: string, error: unknown): boolean
     console.warn(`[agentSessionHistory] Corrupted session journal moved to ${quarantinePath}`);
     return true;
   } catch (renameError) {
+    if (isMissingPathError(renameError)) {
+      // Already quarantined/removed by a concurrent path — treat as handled.
+      return true;
+    }
     console.error(
       "[agentSessionHistory] Failed to quarantine corrupt session journal:",
       renameError

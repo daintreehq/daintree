@@ -157,7 +157,9 @@ describe("journalAgentSession", () => {
 
     await expect(
       journalAgentSession(makeRecord("sess-1"), { terminalId: "term-1", generation })
-    ).rejects.toThrow();
+      // Assert the specific unreadable-read abort (not just any throw): with the
+      // fix reverted, the failure would come from the atomic write, not the read.
+    ).rejects.toThrow(/could not be read/);
 
     // A failed persist must NOT emit the "recorded" signal — the reservation is
     // rescinded, not consumed, so the retry below is not gated out as a duplicate.
@@ -172,6 +174,8 @@ describe("journalAgentSession", () => {
     });
     expect(retried).toBe(true);
     expect(await readSessionHistory(userDataDir)).toHaveLength(1);
+    // Exactly one "recorded" event overall — only the successful retry emitted.
+    expect(recordedEvents).toEqual([{ sessionId: "sess-1" }]);
   });
 
   it("applies retention on the main-side write", async () => {

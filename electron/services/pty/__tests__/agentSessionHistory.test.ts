@@ -621,6 +621,23 @@ describe("agentSessionHistory", () => {
     expect(await quarantineSidecars(userDataDir)).toEqual([]);
   });
 
+  it.each(["sync not json", "{}", "null"])(
+    "readSessionHistorySync quarantines a corrupt/non-array journal (sync path): %s",
+    async (badContent) => {
+      // Drives the SYNC reader (readFileSync/normalizeRecords/resilientRenameSync)
+      // directly — no prior async read moves the file first.
+      const filePath = getSessionHistoryPath(userDataDir)!;
+      await fsp.writeFile(filePath, badContent);
+
+      expect(readSessionHistorySync(userDataDir)).toEqual([]);
+
+      const sidecars = await quarantineSidecars(userDataDir);
+      expect(sidecars).toHaveLength(1);
+      expect(await fsp.readFile(path.join(userDataDir, sidecars[0]), "utf8")).toBe(badContent);
+      await expect(fsp.access(filePath)).rejects.toThrow();
+    }
+  );
+
   it("persistAgentSession quarantines a corrupt journal, then writes a fresh one", async () => {
     const filePath = getSessionHistoryPath(userDataDir)!;
     await fsp.writeFile(filePath, "}{ not json");

@@ -13,25 +13,34 @@ const h = vi.hoisted(() => {
   interface Fault {
     code: string;
   }
-  const armed: { read: Fault | null; stat: Fault | null; renameFail: boolean } = {
+  const armed: { read: Fault | null; stat: Fault | null; renameFault: string | null } = {
     read: null,
     stat: null,
-    renameFail: false,
+    renameFault: null,
   };
   const isJournalPath = (p: unknown): boolean =>
     typeof p === "string" && p.endsWith("agent-session-history.json");
+  const makeError = (code: string): Error => Object.assign(new Error(code), { code });
   const takeFault = (slot: "read" | "stat", p: unknown): Error | null => {
     const fault = armed[slot];
     if (!fault || !isJournalPath(p)) return null;
     armed[slot] = null; // one-shot: the next call to the same path succeeds
-    return Object.assign(new Error(fault.code), { code: fault.code });
+    return makeError(fault.code);
+  };
+  // The quarantine-rename fault is one-shot and journal-path-scoped too, so it
+  // can only fail the rename of the corrupt journal it's meant to simulate.
+  const takeRenameFault = (src: unknown): Error | null => {
+    const code = armed.renameFault;
+    if (!code || !isJournalPath(src)) return null;
+    armed.renameFault = null; // one-shot
+    return makeError(code);
   };
   const reset = (): void => {
     armed.read = null;
     armed.stat = null;
-    armed.renameFail = false;
+    armed.renameFault = null;
   };
-  return { armed, takeFault, reset };
+  return { armed, takeFault, takeRenameFault, reset };
 });
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -72,12 +81,13 @@ vi.mock("../../../utils/fs.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../utils/fs.js")>();
   return {
     ...actual,
-    resilientRename: (...args: Parameters<typeof actual.resilientRename>) =>
-      h.armed.renameFail
-        ? Promise.reject(Object.assign(new Error("EACCES"), { code: "EACCES" }))
-        : actual.resilientRename(...args),
+    resilientRename: (...args: Parameters<typeof actual.resilientRename>) => {
+      const fault = h.takeRenameFault(args[0]);
+      return fault ? Promise.reject(fault) : actual.resilientRename(...args);
+    },
     resilientRenameSync: (...args: Parameters<typeof actual.resilientRenameSync>) => {
-      if (h.armed.renameFail) throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+      const fault = h.takeRenameFault(args[0]);
+      if (fault) throw fault;
       return actual.resilientRenameSync(...args);
     },
   };
@@ -133,9 +143,8 @@ describe("agentSessionHistory — transient read faults (adversarial)", () => {
     await fsp.writeFile(getSessionHistoryPath(userDataDir)!, JSON.stringify(records));
   }
 
-  async function readOnDisk(): Promise<AgentSessionRecord[]> {
-    const raw = await fsp.readFile(getSessionHistoryPath(userDataDir)!, "utf8");
-    return JSON.parse(raw) as AgentSessionRecord[];
+  async function rawOnDisk(): Promise<string> {
+    return fsp.readFile(getSessionHistoryPath(userDataDir)!, "utf8");
   }
 
   it("async read returns [] on a transient EACCES without quarantining, then recovers", async () => {
@@ -166,53 +175,59 @@ describe("agentSessionHistory — transient read faults (adversarial)", () => {
   });
 
   it("persistAgentSession aborts on an unreadable journal, preserving existing records", async () => {
-    const seed = [rec("a", "wt-1"), rec("b", "wt-2"), rec("c", "wt-3")];
-    await seedJournal(seed);
+    await seedJournal([rec("a", "wt-1"), rec("b", "wt-2"), rec("c", "wt-3")]);
+    const before = await rawOnDisk();
     h.armed.read = { code: "EACCES" }; // fail the content read specifically
 
     await expect(persistAgentSession(rec("new", "wt-4"), userDataDir)).rejects.toThrow(
       /could not be read/
     );
 
-    // The on-disk journal is byte-for-byte unchanged: no overwrite, no quarantine.
-    expect((await readOnDisk()).map((r) => r.sessionId)).toEqual(["a", "b", "c"]);
+    // Byte-for-byte unchanged: no overwrite, no quarantine.
+    expect(await rawOnDisk()).toBe(before);
     expect(await quarantineSidecars()).toEqual([]);
   });
 
   it("pruneAgentSessions aborts on an unreadable journal rather than writing []", async () => {
     await seedJournal([rec("a", "wt-1"), rec("b", "wt-2")]);
+    const before = await rawOnDisk();
     h.armed.stat = { code: "EMFILE" };
 
     await expect(pruneAgentSessions(7, userDataDir)).rejects.toThrow(/could not be read/);
 
-    expect((await readOnDisk()).map((r) => r.sessionId)).toEqual(["a", "b"]);
+    expect(await rawOnDisk()).toBe(before);
     expect(await quarantineSidecars()).toEqual([]);
   });
 
   it("clearAgentSessions(worktree) aborts on an unreadable journal, sparing other worktrees", async () => {
     await seedJournal([rec("a", "wt-1"), rec("b", "wt-2")]);
+    const before = await rawOnDisk();
     h.armed.stat = { code: "EIO" };
 
     await expect(clearAgentSessions("wt-1", userDataDir)).rejects.toThrow(/could not be read/);
 
     // wt-2 (and even wt-1) survive: a failed read must never wipe the journal.
-    expect((await readOnDisk()).map((r) => r.sessionId)).toEqual(["a", "b"]);
+    expect(await rawOnDisk()).toBe(before);
     expect(await quarantineSidecars()).toEqual([]);
   });
 
   it("rewriteAgentSessionPathsForProject aborts on an unreadable journal", async () => {
     await seedJournal([rec("a", "/old/wt-1", "proj-1")]);
+    const before = await rawOnDisk();
     h.armed.stat = { code: "EBUSY" };
 
     await expect(
       rewriteAgentSessionPathsForProject("proj-1", "/old", "/new", userDataDir)
     ).rejects.toThrow(/could not be read/);
 
-    expect((await readOnDisk()).map((r) => r.sessionId)).toEqual(["a"]);
+    expect(await rawOnDisk()).toBe(before);
     expect(await quarantineSidecars()).toEqual([]);
   });
 
-  it("does not poison the cache with [] after a transient failure between two reads", async () => {
+  it("recovers to on-disk truth after a transient read failure (no [] or stale poisoning)", async () => {
+    // End-to-end guard: a transient failure must not leave the reader stuck
+    // serving [] or a stale cache entry. (The stat size/mtime gate also guards
+    // this, so it validates observable recovery, not the cache-evict line alone.)
     await persistAgentSession(rec("first", "wt-1"), userDataDir); // primes the cache
     expect((await readSessionHistory(userDataDir)).map((r) => r.sessionId)).toEqual(["first"]);
 
@@ -220,16 +235,17 @@ describe("agentSessionHistory — transient read faults (adversarial)", () => {
     await seedJournal([rec("second", "wt-1")]);
     h.armed.stat = { code: "EIO" };
 
-    // The failed read reports [] once and evicts the stale cache entry...
+    // The failed read reports [] once...
     expect(await readSessionHistory(userDataDir)).toEqual([]);
     // ...so the following read reflects the real on-disk change (not [] or "first").
     expect((await readSessionHistory(userDataDir)).map((r) => r.sessionId)).toEqual(["second"]);
+    expect(listAgentSessions(undefined, userDataDir).map((r) => r.sessionId)).toEqual(["second"]);
     expect(await quarantineSidecars()).toEqual([]);
   });
 
   it("treats a failed quarantine as unreadable: the corrupt file is left intact, not overwritten", async () => {
     await fsp.writeFile(getSessionHistoryPath(userDataDir)!, "totally not json");
-    h.armed.renameFail = true; // the quarantine rename will reject
+    h.armed.renameFault = "EACCES"; // the quarantine rename will reject (non-ENOENT)
 
     await expect(persistAgentSession(rec("recovery", "wt-1"), userDataDir)).rejects.toThrow(
       /could not be read/
@@ -237,13 +253,52 @@ describe("agentSessionHistory — transient read faults (adversarial)", () => {
 
     // Because quarantine failed, the original corrupt bytes must remain in place
     // (never clobbered by a fresh write) and no sidecar was produced.
-    expect(await fsp.readFile(getSessionHistoryPath(userDataDir)!, "utf8")).toBe(
-      "totally not json"
-    );
+    expect(await rawOnDisk()).toBe("totally not json");
     expect(await quarantineSidecars()).toEqual([]);
   });
 
-  it("does not wedge the write queue: a follow-up persist lands after one aborts", async () => {
+  it("proceeds when the corrupt file was already quarantined concurrently (rename ENOENT)", async () => {
+    // Simulates the un-queued sync quarantine (listAgentSessions) winning the race:
+    // by the time this persist tries to quarantine, the corrupt file is already
+    // gone (rename → ENOENT). That must NOT abort — the source is handled, so a
+    // fresh journal is written rather than the just-closed record being lost.
+    await fsp.writeFile(getSessionHistoryPath(userDataDir)!, "already being quarantined");
+    h.armed.renameFault = "ENOENT";
+
+    await expect(
+      persistAgentSession(rec("survivor", "wt-1"), userDataDir)
+    ).resolves.toBeUndefined();
+
+    expect((await readSessionHistory(userDataDir)).map((r) => r.sessionId)).toEqual(["survivor"]);
+  });
+
+  it("sync read leaves a corrupt file intact when its quarantine rename fails", async () => {
+    // Exercises the SYNC corrupt→quarantine→failed-rename→unreadable branch.
+    await fsp.writeFile(getSessionHistoryPath(userDataDir)!, "sync corrupt bytes");
+    h.armed.renameFault = "EACCES";
+
+    expect(readSessionHistorySync(userDataDir)).toEqual([]);
+    expect(await rawOnDisk()).toBe("sync corrupt bytes");
+    expect(await quarantineSidecars()).toEqual([]);
+  });
+
+  it("clear-all writes [] without reading, even when the journal is unreadable", async () => {
+    await seedJournal([rec("a", "wt-1"), rec("b", "wt-2")]);
+    // Arm a READ fault: clear-all (no worktreeId) must take its read-free branch.
+    // refreshCacheAfterWrite legitimately calls statSync, so a stat fault would
+    // misfire — a read fault proves nothing read the journal.
+    h.armed.read = { code: "EACCES" };
+
+    await expect(clearAgentSessions(undefined, userDataDir)).resolves.toBeUndefined();
+
+    expect(h.armed.read).not.toBeNull(); // never consumed ⇒ no read happened
+    expect(await rawOnDisk()).toBe("[]");
+  });
+
+  it("recovers on the write queue: a follow-up persist lands after one aborts", async () => {
+    // Scoped to rejection recovery — an aborting predecessor must not wedge the
+    // queue or block its follower. Serialization itself is covered by the
+    // "preserves all records under concurrent writes" test in the sibling suite.
     await seedJournal([rec("a", "wt-1"), rec("b", "wt-2")]);
     h.armed.stat = { code: "EACCES" }; // one-shot: only the first read fails
 
