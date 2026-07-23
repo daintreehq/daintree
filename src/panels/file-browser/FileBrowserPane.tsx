@@ -696,7 +696,10 @@ export function FileBrowserPane({
           // mousemove/mouseup the document listeners depend on — without it a
           // drag onto the viewer sticks. Events still bubble to `document`
           // through this element; `fixed` keeps it out of the flex layout.
-          <div data-testid="file-browser-resize-shield" className="fixed inset-0 z-50 cursor-col-resize" />
+          <div
+            data-testid="file-browser-resize-shield"
+            className="fixed inset-0 z-50 cursor-col-resize"
+          />
         )}
       </div>
     </ContentPanel>

@@ -534,8 +534,12 @@ describe("FileBrowserPane resizable sidebar (#11331)", () => {
     fireEvent.mouseMove(document, { clientX: 100 - (DEFAULT_W - MIN_W) - 500, buttons: 1 }); // past min
     fireEvent.mouseUp(document);
 
-    expect(setFileBrowserViewMock).toHaveBeenNthCalledWith(1, "fb-1", { browserSidebarWidth: MAX_W });
-    expect(setFileBrowserViewMock).toHaveBeenNthCalledWith(2, "fb-1", { browserSidebarWidth: MIN_W });
+    expect(setFileBrowserViewMock).toHaveBeenNthCalledWith(1, "fb-1", {
+      browserSidebarWidth: MAX_W,
+    });
+    expect(setFileBrowserViewMock).toHaveBeenNthCalledWith(2, "fb-1", {
+      browserSidebarWidth: MIN_W,
+    });
   });
 
   it("mounts a drag shield only while resizing so a child iframe can't swallow the drag", () => {

@@ -23,10 +23,7 @@ export const FILE_BROWSER_SIDEBAR_RESIZE_STEP_COARSE = 50;
  */
 export function clampFileBrowserSidebarWidth(width: number): number {
   if (!Number.isFinite(width)) return FILE_BROWSER_SIDEBAR_DEFAULT_WIDTH;
-  return Math.min(
-    Math.max(width, FILE_BROWSER_SIDEBAR_MIN_WIDTH),
-    FILE_BROWSER_SIDEBAR_MAX_WIDTH
-  );
+  return Math.min(Math.max(width, FILE_BROWSER_SIDEBAR_MIN_WIDTH), FILE_BROWSER_SIDEBAR_MAX_WIDTH);
 }
 
 /**
