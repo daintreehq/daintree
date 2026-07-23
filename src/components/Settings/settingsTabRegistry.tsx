@@ -740,7 +740,17 @@ export const SETTINGS_REGISTRY = [
     importer: importWorktreeSettingsTab,
     LazyComponent: LazyWorktreeSettingsTab,
     searchNavDescription: "Configure where git worktrees are created",
-    searchNavKeywords: ["terminal", "worktree", "paths", "git", "directory"],
+    searchNavKeywords: [
+      "terminal",
+      "worktree",
+      "paths",
+      "git",
+      "directory",
+      "file browser",
+      "hidden files",
+      "dotfiles",
+      "junk files",
+    ],
     sections: [
       {
         id: "worktree-path-pattern",
@@ -757,6 +767,24 @@ export const SETTINGS_REGISTRY = [
           "directory",
           "location",
           "git",
+        ],
+      },
+      {
+        id: "file-browser-always-hidden",
+        section: "Always-hidden files",
+        title: "Always-hidden files",
+        description:
+          "Names always hidden in the file browser (junk like .DS_Store, Thumbs.db). Match by name; * is a wildcard.",
+        keywords: [
+          "file browser",
+          "hidden files",
+          "dotfiles",
+          "dot files",
+          "junk files",
+          "ds_store",
+          "thumbs.db",
+          "gitignore",
+          "ignored",
         ],
       },
     ],

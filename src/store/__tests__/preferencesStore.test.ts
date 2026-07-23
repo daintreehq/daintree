@@ -709,4 +709,77 @@ describe("preferencesStore migration", () => {
       });
     });
   });
+
+  describe("fileBrowserAlwaysHiddenPatterns", () => {
+    it("is a non-empty curated default list on a fresh install", async () => {
+      const store = await loadStore();
+      expect(store.getState().fileBrowserAlwaysHiddenPatterns.length).toBeGreaterThan(0);
+    });
+
+    it("setter trims, de-duplicates in order, and drops empty or path-separator entries", async () => {
+      const store = await loadStore();
+
+      store
+        .getState()
+        .setFileBrowserAlwaysHiddenPatterns([
+          "  .DS_Store  ",
+          ".DS_Store",
+          "",
+          "   ",
+          "a/b",
+          "c\\d",
+          "*.log",
+        ]);
+
+      expect(store.getState().fileBrowserAlwaysHiddenPatterns).toEqual([".DS_Store", "*.log"]);
+    });
+
+    it("preserves an explicitly empty list — hide-nothing is a real choice, not corruption", async () => {
+      const store = await loadStore();
+      store.getState().setFileBrowserAlwaysHiddenPatterns([]);
+      expect(store.getState().fileBrowserAlwaysHiddenPatterns).toEqual([]);
+    });
+
+    it("caps the list length and drops an over-long pattern", async () => {
+      const store = await loadStore();
+      const many = Array.from({ length: 250 }, (_, i) => `p${i}`);
+      store.getState().setFileBrowserAlwaysHiddenPatterns([...many, "x".repeat(500)]);
+
+      const result = store.getState().fileBrowserAlwaysHiddenPatterns;
+      expect(result.length).toBeLessThanOrEqual(100);
+      expect(result).not.toContain("x".repeat(500));
+    });
+
+    it("reset restores the fresh-install defaults after edits", async () => {
+      const store = await loadStore();
+      const fresh = [...store.getState().fileBrowserAlwaysHiddenPatterns];
+
+      store.getState().setFileBrowserAlwaysHiddenPatterns(["custom-only"]);
+      expect(store.getState().fileBrowserAlwaysHiddenPatterns).toEqual(["custom-only"]);
+
+      store.getState().resetFileBrowserAlwaysHiddenPatterns();
+      expect(store.getState().fileBrowserAlwaysHiddenPatterns).toEqual(fresh);
+    });
+
+    it("falls back to defaults when the persisted value is not an array", async () => {
+      setStoredState({ fileBrowserAlwaysHiddenPatterns: "nope" }, 13);
+      const store = await loadStore();
+
+      // A corrupt scalar can't survive hydration — same shape as fresh install.
+      expect(Array.isArray(store.getState().fileBrowserAlwaysHiddenPatterns)).toBe(true);
+      expect(store.getState().fileBrowserAlwaysHiddenPatterns.length).toBeGreaterThan(0);
+    });
+
+    it("preserves a valid persisted array across hydration", async () => {
+      setStoredState({ fileBrowserAlwaysHiddenPatterns: ["*.tmp", "cache"] }, 13);
+      const store = await loadStore();
+      expect(store.getState().fileBrowserAlwaysHiddenPatterns).toEqual(["*.tmp", "cache"]);
+    });
+
+    it("sanitizes a partially-corrupt persisted array on hydration", async () => {
+      setStoredState({ fileBrowserAlwaysHiddenPatterns: ["ok", 5, "a/b", "  ok  "] }, 13);
+      const store = await loadStore();
+      expect(store.getState().fileBrowserAlwaysHiddenPatterns).toEqual(["ok"]);
+    });
+  });
 });

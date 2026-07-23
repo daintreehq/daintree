@@ -14,6 +14,7 @@ import {
   isDeletedWorktreeCleanupSeconds,
   DELETED_WORKTREE_CLEANUP_DEFAULT,
 } from "@/store/preferencesStore";
+import { FileBrowserVisibilitySettings } from "./FileBrowserVisibilitySettings";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSelect } from "./SettingsSelect";
 import { useSettingsTabValidation } from "./SettingsValidationRegistry";
@@ -349,6 +350,8 @@ export function WorktreeSettingsTab() {
           onReset={() => setCleanupSeconds(DELETED_WORKTREE_CLEANUP_DEFAULT)}
         />
       </SettingsSection>
+
+      <FileBrowserVisibilitySettings />
     </div>
   );
 }

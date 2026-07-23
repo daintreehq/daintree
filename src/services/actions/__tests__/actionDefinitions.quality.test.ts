@@ -518,6 +518,7 @@ describe("destructive-action danger metadata", () => {
         ["wt-placeholder", { id: "wt-placeholder", hasTeardownCommand: true } as WorktreeSnapshot],
       ]),
       statusCheckedAt: new Map(),
+      workingTreeChangedAtById: new Map(),
       manualAssociations: new Map(),
       version: { epoch: "test", seq: 1 },
       tombstones: new Map(),

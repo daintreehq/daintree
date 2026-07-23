@@ -107,11 +107,11 @@ describe("setFileBrowserView", () => {
     expect(store.get().panelsById["panel-1"]).toBe(before);
   });
 
-  it("records an explicit false for the ignored toggle", () => {
-    setFileBrowserView("panel-1", { browserShowIgnored: true });
-    setFileBrowserView("panel-1", { browserShowIgnored: false });
+  it("records an explicit false for the dotfile toggle", () => {
+    setFileBrowserView("panel-1", { browserHideDotfiles: true });
+    setFileBrowserView("panel-1", { browserHideDotfiles: false });
 
-    expect(store.get().panelsById["panel-1"]).toMatchObject({ browserShowIgnored: false });
+    expect(store.get().panelsById["panel-1"]).toMatchObject({ browserHideDotfiles: false });
   });
 
   it("collapses and re-opens the sidebar", () => {

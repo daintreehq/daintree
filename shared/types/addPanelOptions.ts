@@ -268,8 +268,8 @@ export interface FileBrowserPanelOptions extends AddPanelOptionsBase {
   browserSelectedPath?: string;
   /** Worktree-relative directory paths to expand on open */
   browserExpandedPaths?: string[];
-  /** Whether gitignored entries start visible; defaults to false */
-  browserShowIgnored?: boolean;
+  /** Whether dot-prefixed entries start hidden; defaults to false (dotfiles visible) */
+  browserHideDotfiles?: boolean;
   /** Worktree-relative directory to root the tree at; "" or absent = worktree root */
   browserRootPath?: string;
   /** Whether the tree sidebar starts collapsed; absent or false = open */

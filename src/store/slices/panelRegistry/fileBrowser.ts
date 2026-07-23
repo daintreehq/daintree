@@ -6,7 +6,7 @@ type Set = PanelRegistryStoreApi["setState"];
 export interface FileBrowserViewPatch {
   browserSelectedPath?: string;
   browserExpandedPaths?: string[];
-  browserShowIgnored?: boolean;
+  browserHideDotfiles?: boolean;
   /** "" roots the tree back at the worktree root. */
   browserRootPath?: string;
   /** `true` collapses the tree sidebar; `false` and absent both mean open. */
@@ -38,9 +38,9 @@ export const createFileBrowserPanelActions = (
       const expandedUnchanged =
         patch.browserExpandedPaths === undefined ||
         sameStringList(panel.browserExpandedPaths, patch.browserExpandedPaths);
-      const ignoredUnchanged =
-        patch.browserShowIgnored === undefined ||
-        patch.browserShowIgnored === panel.browserShowIgnored;
+      const hideDotfilesUnchanged =
+        patch.browserHideDotfiles === undefined ||
+        patch.browserHideDotfiles === panel.browserHideDotfiles;
       // "" and absent are the same state (the worktree root), so resetting a
       // never-rooted panel must not count as a change.
       const rootUnchanged =
@@ -59,7 +59,7 @@ export const createFileBrowserPanelActions = (
       if (
         selectedUnchanged &&
         expandedUnchanged &&
-        ignoredUnchanged &&
+        hideDotfilesUnchanged &&
         rootUnchanged &&
         collapsedUnchanged
       )
@@ -73,8 +73,8 @@ export const createFileBrowserPanelActions = (
         ...(patch.browserExpandedPaths !== undefined && {
           browserExpandedPaths: patch.browserExpandedPaths,
         }),
-        ...(patch.browserShowIgnored !== undefined && {
-          browserShowIgnored: patch.browserShowIgnored,
+        ...(patch.browserHideDotfiles !== undefined && {
+          browserHideDotfiles: patch.browserHideDotfiles,
         }),
         ...(patch.browserRootPath !== undefined && {
           browserRootPath: patch.browserRootPath,

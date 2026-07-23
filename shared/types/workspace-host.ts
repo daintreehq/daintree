@@ -182,6 +182,16 @@ export interface WorktreeSnapshot {
   /** Epoch ms of the last completed git status check for this worktree. */
   lastGitStatusCheckedAt?: number;
 
+  /**
+   * Monotonic epoch ms of the last recursive-watcher flush — a raw filesystem
+   * write, whether or not git status changed. Independent of
+   * `lastGitStatusCheckedAt`, and (like it) excluded from snapshot dedup and
+   * carried through the store's side map so a timestamp-only bump doesn't churn
+   * the worktree map. Drives the file browser's live refresh for writes into
+   * gitignored paths (#11330). Absent until the first fs write is observed.
+   */
+  workingTreeChangedAt?: number;
+
   /** True when this worktree's repo is in an auth-failed fetch state. */
   fetchAuthFailed?: boolean;
 
@@ -471,7 +481,7 @@ export type WorkspaceHostRequest =
       requestId: string;
       worktreePath: string;
       dirPath?: string;
-      /** Include gitignored entries, flagged `isIgnored`, instead of dropping them */
+      /** Raw-listing mode: skip the git check-ignore pass and return every entry (#11330) */
       includeIgnored?: boolean;
     }
   // Project Pulse operations

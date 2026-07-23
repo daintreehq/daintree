@@ -147,8 +147,8 @@ const BUILT_IN_DESERIALIZERS = {
       ? saved.browserSelectedPath
       : undefined,
     browserExpandedPaths: sanitizeExpandedPaths(saved.browserExpandedPaths),
-    browserShowIgnored:
-      typeof saved.browserShowIgnored === "boolean" ? saved.browserShowIgnored : undefined,
+    browserHideDotfiles:
+      typeof saved.browserHideDotfiles === "boolean" ? saved.browserHideDotfiles : undefined,
     browserRootPath: canonicalRelativePath(saved.browserRootPath),
     // Only a literal `true` restores collapsed: a hand-edited or corrupted
     // snapshot holding a string or object must fall back to the open default.

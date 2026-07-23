@@ -316,8 +316,7 @@ function FileTreeRow({ row, isSelected, context }: FileTreeRowProps) {
         // (raised, not the selection's subtle) so it reads as "the menu targets
         // this row" without masquerading as the selection. Radix forwards
         // data-state onto this surface through the asChild trigger below.
-        "data-[state=open]:bg-overlay-raised data-[state=open]:text-daintree-text",
-        row.isIgnored && "opacity-55"
+        "data-[state=open]:bg-overlay-raised data-[state=open]:text-daintree-text"
       )}
     >
       {row.isDirectory ? (

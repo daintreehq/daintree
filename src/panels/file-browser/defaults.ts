@@ -6,7 +6,7 @@ export function createFileBrowserDefaults(
   options: FileBrowserPanelOptions
 ): Partial<FileBrowserPanelData> {
   return {
-    // `!= null` rather than truthiness: an explicit `false` for the ignored
+    // `!= null` rather than truthiness: an explicit `false` for the dotfile
     // toggle is a deliberate choice, and dropping it here would let a later
     // default stand in for it.
     ...(options.browserSelectedPath != null && {
@@ -15,8 +15,8 @@ export function createFileBrowserDefaults(
     ...(options.browserExpandedPaths != null && {
       browserExpandedPaths: options.browserExpandedPaths,
     }),
-    ...(options.browserShowIgnored != null && {
-      browserShowIgnored: options.browserShowIgnored,
+    ...(options.browserHideDotfiles != null && {
+      browserHideDotfiles: options.browserHideDotfiles,
     }),
     // Canonicalized on the way in: tree row keys are canonical listing paths,
     // and the up-one-level control does plain segment math on this value.

@@ -166,6 +166,12 @@ export class WorktreeMonitor {
   private gitWatchBudgetAllowed: boolean = true;
   private gitWatchDebounceMs: number;
   private lastGitStatusCompletedAt: number = 0;
+  // Monotonic timestamp of the last recursive-watcher flush — a raw filesystem
+  // write, independent of whether git status changed. Drives the file browser's
+  // live refresh for writes into gitignored paths (#11330). Excluded from
+  // snapshot dedup and carried through the store's side map like the
+  // git-status-checked timestamp.
+  private _workingTreeChangedAt: number = 0;
   // Stamped by the watcher's onTriggerUpdate hook before a forced refresh
   // fires. The stat pre-check compares against `lastStatBaselineAt` to know
   // whether an event arrived since the baseline was captured — if so, the
@@ -398,6 +404,7 @@ export class WorktreeMonitor {
         monitor.callbacks.onEmfileLimitReached?.(worktreeId),
       onWatcherRecovered: () => monitor.callbacks.onWatcherRecovered?.(monitor.id),
       onGitConfigChanged: () => monitor.callbacks.onGitConfigChanged?.(monitor.id),
+      onWorktreeFilesChanged: () => monitor.handleWorktreeFilesChanged(),
     };
     this.watcherController = new WatcherController(watcherHost);
 
@@ -548,6 +555,9 @@ export class WorktreeMonitor {
       },
       get lastGitStatusCheckedAt() {
         return monitor.lastGitStatusCompletedAt;
+      },
+      get workingTreeChangedAt() {
+        return monitor._workingTreeChangedAt;
       },
       get fetchAuthFailed() {
         return monitor._fetchAuthFailed;
@@ -1793,6 +1803,22 @@ export class WorktreeMonitor {
 
   async updateGitStatus(forceRefresh: boolean = false): Promise<void> {
     return this.gitStatusPass.run(forceRefresh);
+  }
+
+  /**
+   * A recursive-watcher flush: a raw filesystem write happened, whether or not
+   * git status changed. Stamp a monotonic timestamp and emit immediately so the
+   * file browser refreshes off the write itself rather than waiting for the
+   * next git-status pass. Two flushes inside one millisecond (or a backward
+   * clock adjustment) still strictly increase, so each registers downstream.
+   * Before the first status resolves there is no snapshot to emit — the stamp
+   * is retained and the first normal snapshot carries it.
+   */
+  private handleWorktreeFilesChanged(): void {
+    this._workingTreeChangedAt = Math.max(Date.now(), this._workingTreeChangedAt + 1);
+    if (this._hasInitialStatus) {
+      this.emitUpdate();
+    }
   }
 
   emitUpdate(): void {

@@ -37,7 +37,6 @@ function row(path: string, isDirectory = false): FlatTreeRow {
     depth: 0,
     isExpanded: false,
     isLoading: false,
-    isIgnored: false,
   };
 }
 

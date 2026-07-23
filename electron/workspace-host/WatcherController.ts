@@ -60,6 +60,13 @@ export interface WatcherControllerHost {
    * reload (#11155), without paying a git subprocess on every status pass.
    */
   onGitConfigChanged?(): void;
+  /**
+   * Fired once per recursive-worktree flush: a raw filesystem write happened,
+   * independent of whether git status changed. Lets the host stamp a
+   * working-tree-changed timestamp so the file browser can refresh on writes
+   * into gitignored paths that leave `git status` unmoved (#11330).
+   */
+  onWorktreeFilesChanged?(): void;
 }
 
 /**
@@ -163,6 +170,7 @@ export class WatcherController {
       debounceMs: this.host.gitWatchDebounceMs,
       onChange: () => this.handleGitFileChange(),
       onGitConfigChanged: () => this.host.onGitConfigChanged?.(),
+      onWorktreeFilesChanged: () => this.handleWorktreeFilesChanged(),
       watchWorktree: mode === "recursive",
       worktreeMinDebounceMs: WATCHER_WORKTREE_MIN_DEBOUNCE_MS,
       worktreeMaxDebounceMs: WATCHER_WORKTREE_MAX_DEBOUNCE_MS,
@@ -531,6 +539,17 @@ export class WatcherController {
         this.start("recursive");
       }
     }, WATCHER_RETRY_INTERVAL_MS).unref();
+  }
+
+  /**
+   * Forward the recursive watcher's raw-filesystem signal to the host, guarded
+   * so a callback from a watcher being rotated out or a stopped controller
+   * can't stamp the monitor after `stop()`. `flushWorktreeChange` already
+   * checks the watcher's own disposed flag; this is the controller-level gate.
+   */
+  private handleWorktreeFilesChanged(): void {
+    if (this.disposed || !this.host.isRunning) return;
+    this.host.onWorktreeFilesChanged?.();
   }
 
   private handleGitFileChange(): void {

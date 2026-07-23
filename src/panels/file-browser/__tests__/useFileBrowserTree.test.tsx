@@ -47,7 +47,8 @@ describe("useFileBrowserTree", () => {
       useFileBrowserTree({
         worktreeId: "wt-1",
         expandedPaths: [],
-        showIgnored: false,
+        hideDotfiles: false,
+        alwaysHiddenPatterns: [],
         changeTick: undefined,
       })
     );
@@ -64,7 +65,8 @@ describe("useFileBrowserTree", () => {
       useFileBrowserTree({
         worktreeId: "wt-1",
         expandedPaths: [],
-        showIgnored: false,
+        hideDotfiles: false,
+        alwaysHiddenPatterns: [],
         changeTick: undefined,
       })
     );
@@ -78,7 +80,8 @@ describe("useFileBrowserTree", () => {
       useFileBrowserTree({
         worktreeId: undefined,
         expandedPaths: [],
-        showIgnored: false,
+        hideDotfiles: false,
+        alwaysHiddenPatterns: [],
         changeTick: undefined,
       })
     );
@@ -99,7 +102,8 @@ describe("useFileBrowserTree", () => {
         useFileBrowserTree({
           worktreeId: "wt-1",
           expandedPaths: props.expandedPaths,
-          showIgnored: false,
+          hideDotfiles: false,
+          alwaysHiddenPatterns: [],
           changeTick: undefined,
         }),
       { initialProps: { expandedPaths: [] as string[] } }
@@ -123,7 +127,8 @@ describe("useFileBrowserTree", () => {
         // A restored panel remembers `src/lib`, but `src` is not expanded, so
         // no row for `src/lib` can exist yet.
         expandedPaths: ["src/lib"],
-        showIgnored: false,
+        hideDotfiles: false,
+        alwaysHiddenPatterns: [],
         changeTick: undefined,
       })
     );
@@ -142,7 +147,8 @@ describe("useFileBrowserTree", () => {
         useFileBrowserTree({
           worktreeId: "wt-1",
           expandedPaths: ["src"],
-          showIgnored: false,
+          hideDotfiles: false,
+          alwaysHiddenPatterns: [],
           changeTick: props.changeTick,
         }),
       { initialProps: { changeTick: 1 as number | undefined } }
@@ -170,7 +176,8 @@ describe("useFileBrowserTree", () => {
         useFileBrowserTree({
           worktreeId: "wt-1",
           expandedPaths: [],
-          showIgnored: false,
+          hideDotfiles: false,
+          alwaysHiddenPatterns: [],
           changeTick: props.changeTick,
         }),
       { initialProps: { changeTick: 7 } }
@@ -193,7 +200,8 @@ describe("useFileBrowserTree", () => {
       useFileBrowserTree({
         worktreeId: "wt-1",
         expandedPaths: [],
-        showIgnored: false,
+        hideDotfiles: false,
+        alwaysHiddenPatterns: [],
         changeTick: undefined,
       })
     );
@@ -211,29 +219,145 @@ describe("useFileBrowserTree", () => {
     });
   });
 
-  it("passes includeIgnored and drops the cached listings when the toggle flips", async () => {
-    listDirectory.mockResolvedValue([file("a.ts")]);
+  it("never sends a server-side filter flag — every listing request is raw", async () => {
+    listDirectory.mockImplementation(async (payload) =>
+      payload.dirPath === "src" ? [file("src/app.ts")] : [dir("src")]
+    );
+
+    const { result } = renderHook(() =>
+      useFileBrowserTree({
+        worktreeId: "wt-1",
+        expandedPaths: ["src"],
+        // Visibility is on, yet the request must stay raw: filtering is now the
+        // client's job, so no listing may carry an includeIgnored-style flag.
+        hideDotfiles: true,
+        alwaysHiddenPatterns: [".DS_Store"],
+        changeTick: undefined,
+      })
+    );
+
+    await waitFor(() =>
+      expect(result.current.rows.map((row) => row.path)).toEqual(["src", "src/app.ts"])
+    );
+
+    for (const [payload] of listDirectory.mock.calls) {
+      expect(Object.keys(payload)).not.toContain("includeIgnored");
+    }
+  });
+
+  it("shows dot-prefixed entries by default and hides them once hideDotfiles is on", async () => {
+    listDirectory.mockResolvedValue([file(".env"), dir("src"), file("README.md")]);
 
     const { result, rerender } = renderHook(
-      (props: { showIgnored: boolean }) =>
+      (props: { hideDotfiles: boolean }) =>
         useFileBrowserTree({
           worktreeId: "wt-1",
           expandedPaths: [],
-          showIgnored: props.showIgnored,
+          hideDotfiles: props.hideDotfiles,
+          alwaysHiddenPatterns: [],
           changeTick: undefined,
         }),
-      { initialProps: { showIgnored: false } }
+      { initialProps: { hideDotfiles: false } }
     );
 
     await waitFor(() => expect(result.current.isInitialLoading).toBe(false));
-    expect(listDirectory.mock.calls[0]?.[0].includeIgnored).toBeUndefined();
+    expect(result.current.rows.map((row) => row.path)).toEqual([".env", "src", "README.md"]);
 
-    rerender({ showIgnored: true });
+    rerender({ hideDotfiles: true });
 
-    // The flag changes what every listing contains, so a partial refresh would
-    // show ignored entries in some folders and hide them in others.
-    await waitFor(() => expect(listDirectory).toHaveBeenCalledTimes(2));
-    expect(listDirectory.mock.calls[1]?.[0].includeIgnored).toBe(true);
+    await waitFor(() =>
+      expect(result.current.rows.map((row) => row.path)).toEqual(["src", "README.md"])
+    );
+  });
+
+  it("hides an always-hidden junk entry even while dotfiles are shown", async () => {
+    listDirectory.mockResolvedValue([file(".DS_Store"), file(".env"), file("README.md")]);
+
+    const { result } = renderHook(() =>
+      useFileBrowserTree({
+        worktreeId: "wt-1",
+        expandedPaths: [],
+        hideDotfiles: false,
+        alwaysHiddenPatterns: [".DS_Store"],
+        changeTick: undefined,
+      })
+    );
+
+    await waitFor(() => expect(result.current.isInitialLoading).toBe(false));
+    // Dotfiles are shown, so `.env` survives; the junk list still removes
+    // `.DS_Store` regardless of the dotfile toggle.
+    expect(result.current.rows.map((row) => row.path)).toEqual([".env", "README.md"]);
+  });
+
+  it("re-derives rows on a dotfile toggle without issuing a new listing request", async () => {
+    listDirectory.mockResolvedValue([file(".env"), file("README.md")]);
+
+    const { result, rerender } = renderHook(
+      (props: { hideDotfiles: boolean }) =>
+        useFileBrowserTree({
+          worktreeId: "wt-1",
+          expandedPaths: [],
+          hideDotfiles: props.hideDotfiles,
+          alwaysHiddenPatterns: [],
+          changeTick: undefined,
+        }),
+      { initialProps: { hideDotfiles: false } }
+    );
+
+    await waitFor(() => expect(result.current.isInitialLoading).toBe(false));
+    const callsAfterInitialLoad = listDirectory.mock.calls.length;
+    expect(result.current.rows.map((row) => row.path)).toEqual([".env", "README.md"]);
+
+    rerender({ hideDotfiles: true });
+    await waitFor(() => expect(result.current.rows.map((row) => row.path)).toEqual(["README.md"]));
+
+    rerender({ hideDotfiles: false });
+    await waitFor(() =>
+      expect(result.current.rows.map((row) => row.path)).toEqual([".env", "README.md"])
+    );
+
+    // The regression guard for the "filter at derivation, not refetch" design:
+    // flipping visibility re-runs the row memo but must not drop the listing
+    // cache or spend another IPC call.
+    expect(listDirectory.mock.calls.length).toBe(callsAfterInitialLoad);
+  });
+
+  it("reports hidden dotfiles when a non-junk dot entry sits at the root", async () => {
+    listDirectory.mockResolvedValue([file(".env"), file("README.md")]);
+
+    const { result } = renderHook(() =>
+      useFileBrowserTree({
+        worktreeId: "wt-1",
+        expandedPaths: [],
+        // Independent of the toggle's own state: even with dotfiles hidden, the
+        // affordance needs to know something is there to reveal.
+        hideDotfiles: true,
+        alwaysHiddenPatterns: [],
+        changeTick: undefined,
+      })
+    );
+
+    await waitFor(() => expect(result.current.isInitialLoading).toBe(false));
+    expect(result.current.hasHiddenDotfiles).toBe(true);
+  });
+
+  it("reports no hidden dotfiles when the only dot entry is junk-listed", async () => {
+    listDirectory.mockResolvedValue([file(".DS_Store"), file("README.md")]);
+
+    const { result } = renderHook(() =>
+      useFileBrowserTree({
+        worktreeId: "wt-1",
+        expandedPaths: [],
+        hideDotfiles: true,
+        alwaysHiddenPatterns: [".DS_Store"],
+        changeTick: undefined,
+      })
+    );
+
+    await waitFor(() => expect(result.current.isInitialLoading).toBe(false));
+    // The junk list already hides `.DS_Store`, so turning the dotfile toggle off
+    // would reveal nothing — the affordance must stay quiet.
+    expect(result.current.hasHiddenDotfiles).toBe(false);
   });
 
   it("leaves the tree usable when a single directory listing fails", async () => {
@@ -246,7 +370,8 @@ describe("useFileBrowserTree", () => {
       useFileBrowserTree({
         worktreeId: "wt-1",
         expandedPaths: ["src"],
-        showIgnored: false,
+        hideDotfiles: false,
+        alwaysHiddenPatterns: [],
         changeTick: undefined,
       })
     );
@@ -267,7 +392,8 @@ describe("useFileBrowserTree", () => {
         useFileBrowserTree({
           worktreeId: "wt-1",
           expandedPaths: [],
-          showIgnored: false,
+          hideDotfiles: false,
+          alwaysHiddenPatterns: [],
           changeTick: props.changeTick,
         }),
       { initialProps: { changeTick: 1 } }
@@ -298,7 +424,8 @@ describe("useFileBrowserTree", () => {
         useFileBrowserTree({
           worktreeId: "wt-1",
           expandedPaths: [],
-          showIgnored: false,
+          hideDotfiles: false,
+          alwaysHiddenPatterns: [],
           changeTick: props.changeTick,
         }),
       { initialProps: { changeTick: 1 } }
@@ -344,7 +471,8 @@ describe("useFileBrowserTree", () => {
       useFileBrowserTree({
         worktreeId: "wt-1",
         expandedPaths: rootEntries.map((node) => node.path),
-        showIgnored: false,
+        hideDotfiles: false,
+        alwaysHiddenPatterns: [],
         changeTick: undefined,
       })
     );
@@ -371,7 +499,8 @@ describe("useFileBrowserTree", () => {
         useFileBrowserTree({
           worktreeId: "wt-1",
           expandedPaths: props.expandedPaths,
-          showIgnored: false,
+          hideDotfiles: false,
+          alwaysHiddenPatterns: [],
           changeTick: undefined,
         }),
       { initialProps: { expandedPaths: ["src"] as string[] } }
@@ -412,7 +541,8 @@ describe("useFileBrowserTree", () => {
       useFileBrowserTree({
         worktreeId: "wt-1",
         expandedPaths: rootEntries.map((node) => node.path),
-        showIgnored: false,
+        hideDotfiles: false,
+        alwaysHiddenPatterns: [],
         changeTick: undefined,
       })
     );
@@ -439,7 +569,8 @@ describe("useFileBrowserTree", () => {
         useFileBrowserTree({
           worktreeId: props.worktreeId,
           expandedPaths: [],
-          showIgnored: false,
+          hideDotfiles: false,
+          alwaysHiddenPatterns: [],
           changeTick: undefined,
         }),
       { initialProps: { worktreeId: "wt-1" } }
@@ -468,7 +599,8 @@ describe("useFileBrowserTree", () => {
       useFileBrowserTree({
         worktreeId: "wt-1",
         expandedPaths: [],
-        showIgnored: false,
+        hideDotfiles: false,
+        alwaysHiddenPatterns: [],
         rootPath: "src/panels",
         changeTick: undefined,
       })
@@ -492,7 +624,8 @@ describe("useFileBrowserTree", () => {
         useFileBrowserTree({
           worktreeId: "wt-1",
           expandedPaths: [],
-          showIgnored: false,
+          hideDotfiles: false,
+          alwaysHiddenPatterns: [],
           rootPath: props.rootPath,
           changeTick: undefined,
         }),
@@ -535,7 +668,8 @@ describe("useFileBrowserTree", () => {
         // `other` survives in panel data from before the re-root; requesting it
         // would spend the channel budget on rows that can never render.
         expandedPaths: ["other"],
-        showIgnored: false,
+        hideDotfiles: false,
+        alwaysHiddenPatterns: [],
         rootPath: "src",
         changeTick: undefined,
       })
@@ -587,7 +721,8 @@ describe("useFileBrowserTree", () => {
         useFileBrowserTree({
           worktreeId: "wt-1",
           expandedPaths: [],
-          showIgnored: false,
+          hideDotfiles: false,
+          alwaysHiddenPatterns: [],
           changeTick: undefined,
         })
       );
@@ -613,7 +748,8 @@ describe("useFileBrowserTree", () => {
         useFileBrowserTree({
           worktreeId: "wt-1",
           expandedPaths: [],
-          showIgnored: false,
+          hideDotfiles: false,
+          alwaysHiddenPatterns: [],
           changeTick: undefined,
         })
       );
@@ -670,7 +806,8 @@ describe("useFileBrowserTree", () => {
         useFileBrowserTree({
           worktreeId: "wt-1",
           expandedPaths: [],
-          showIgnored: false,
+          hideDotfiles: false,
+          alwaysHiddenPatterns: [],
           changeTick: undefined,
         })
       );
@@ -721,7 +858,8 @@ describe("useFileBrowserTree", () => {
         useFileBrowserTree({
           worktreeId: "wt-1",
           expandedPaths: [],
-          showIgnored: false,
+          hideDotfiles: false,
+          alwaysHiddenPatterns: [],
           changeTick: undefined,
         })
       );
@@ -748,7 +886,8 @@ describe("useFileBrowserTree", () => {
         useFileBrowserTree({
           worktreeId: "wt-1",
           expandedPaths: [],
-          showIgnored: false,
+          hideDotfiles: false,
+          alwaysHiddenPatterns: [],
           changeTick: undefined,
         })
       );
@@ -792,7 +931,8 @@ describe("useFileBrowserTree", () => {
           useFileBrowserTree({
             worktreeId: props.worktreeId,
             expandedPaths: [],
-            showIgnored: false,
+            hideDotfiles: false,
+            alwaysHiddenPatterns: [],
             changeTick: undefined,
           }),
         { initialProps: { worktreeId: "wt-1" } }
@@ -832,7 +972,8 @@ describe("useFileBrowserTree", () => {
       useFileBrowserTree({
         worktreeId: "wt-1",
         expandedPaths: [],
-        showIgnored: false,
+        hideDotfiles: false,
+        alwaysHiddenPatterns: [],
         changeTick: undefined,
       })
     );
@@ -862,7 +1003,8 @@ describe("useFileBrowserTree", () => {
         useFileBrowserTree({
           worktreeId: "wt-1",
           expandedPaths: [],
-          showIgnored: false,
+          hideDotfiles: false,
+          alwaysHiddenPatterns: [],
           changeTick: props.changeTick,
         }),
       { initialProps: { changeTick: 1 } }
@@ -891,7 +1033,8 @@ describe("useFileBrowserTree", () => {
       useFileBrowserTree({
         worktreeId: "wt-1",
         expandedPaths: [],
-        showIgnored: false,
+        hideDotfiles: false,
+        alwaysHiddenPatterns: [],
         changeTick: undefined,
       })
     );
@@ -919,7 +1062,8 @@ describe("useFileBrowserTree", () => {
         useFileBrowserTree({
           worktreeId: "wt-1",
           expandedPaths: [],
-          showIgnored: false,
+          hideDotfiles: false,
+          alwaysHiddenPatterns: [],
           changeTick: props.changeTick,
         }),
       { initialProps: { changeTick: 1 } }
@@ -967,7 +1111,8 @@ describe("useFileBrowserTree", () => {
         useFileBrowserTree({
           worktreeId: props.worktreeId,
           expandedPaths: [],
-          showIgnored: false,
+          hideDotfiles: false,
+          alwaysHiddenPatterns: [],
           changeTick: undefined,
         }),
       { initialProps: { worktreeId: "wt-1" } }
