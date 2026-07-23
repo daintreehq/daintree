@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, render, renderHook, waitFor } from "@testing-library/react";
 import type { FileTreeNode } from "@shared/types";
 import type { FileBrowserListDirectoryPayload } from "@shared/types/ipc/fileBrowser";
 import { useFileBrowserTree } from "../useFileBrowserTree";
@@ -1136,5 +1136,281 @@ describe("useFileBrowserTree", () => {
       slow.resolve([file("a.ts")]);
     });
     expect(result.current.isRefreshing).toBe(false);
+  });
+});
+
+describe("stale-while-revalidate seeding (#11367)", () => {
+  beforeEach(() => {
+    listDirectory.mockReset();
+  });
+
+  const snapshot = {
+    worktreeId: "wt-1",
+    rootPath: "",
+    listings: [
+      {
+        dirPath: "",
+        nodes: [
+          { name: "src", path: "src", isDirectory: true },
+          { name: "README.md", path: "README.md", isDirectory: false },
+        ],
+      },
+      {
+        dirPath: "src",
+        nodes: [{ name: "app.ts", path: "src/app.ts", isDirectory: false }],
+      },
+    ],
+  };
+
+  it("paints seeded rows instantly and revalidates the root plus seeded expanded directories", async () => {
+    const root = deferred<FileTreeNode[]>();
+    const src = deferred<FileTreeNode[]>();
+    listDirectory.mockImplementation(({ dirPath }) =>
+      dirPath === undefined ? root.promise : src.promise
+    );
+
+    const { result } = renderHook(() =>
+      useFileBrowserTree({
+        worktreeId: "wt-1",
+        expandedPaths: ["src"],
+        hideDotfiles: false,
+        alwaysHiddenPatterns: [],
+        changeTick: undefined,
+        treeSnapshot: snapshot,
+      })
+    );
+
+    // The whole last-known tree is on screen before any listing resolves —
+    // no skeleton, and both painted directories are already revalidating.
+    expect(result.current.isInitialLoading).toBe(false);
+    expect(result.current.rows.map((row) => row.path)).toEqual(["src", "src/app.ts", "README.md"]);
+    expect(listDirectory).toHaveBeenCalledTimes(2);
+    expect(listDirectory.mock.calls.map(([payload]) => payload.dirPath)).toEqual([
+      undefined,
+      "src",
+    ]);
+
+    // Live results replace the stale seed as they land.
+    await act(async () => {
+      root.resolve([dir("src"), file("CHANGED.md")]);
+      src.resolve([file("src/new.ts")]);
+    });
+    expect(result.current.rows.map((row) => row.path)).toEqual(["src", "src/new.ts", "CHANGED.md"]);
+    expect(result.current.isInitialLoading).toBe(false);
+  });
+
+  it("has the seeded rows in the very first render pass — not one loading frame later", () => {
+    listDirectory.mockReturnValue(deferred<FileTreeNode[]>().promise);
+
+    // Observed at render time, not through renderHook's result: passive
+    // effects have already flushed by the time result.current is readable,
+    // so an effect-only seed (one blank committed frame — the flash #11367
+    // removes) would be invisible to an after-the-fact assertion.
+    const renderPasses: string[][] = [];
+    function Probe() {
+      const { rows } = useFileBrowserTree({
+        worktreeId: "wt-1",
+        expandedPaths: ["src"],
+        hideDotfiles: false,
+        alwaysHiddenPatterns: [],
+        changeTick: undefined,
+        treeSnapshot: snapshot,
+      });
+      renderPasses.push(rows.map((row) => row.path));
+      return null;
+    }
+    render(<Probe />);
+
+    expect(renderPasses[0]).toEqual(["src", "src/app.ts", "README.md"]);
+  });
+
+  it("ignores a snapshot captured under another identity and cold-starts as before", () => {
+    listDirectory.mockReturnValue(deferred<FileTreeNode[]>().promise);
+
+    const otherWorktree = renderHook(() =>
+      useFileBrowserTree({
+        worktreeId: "wt-2",
+        expandedPaths: [],
+        hideDotfiles: false,
+        alwaysHiddenPatterns: [],
+        changeTick: undefined,
+        treeSnapshot: snapshot,
+      })
+    );
+    expect(otherWorktree.result.current.isInitialLoading).toBe(true);
+    expect(otherWorktree.result.current.rows).toEqual([]);
+
+    const otherRoot = renderHook(() =>
+      useFileBrowserTree({
+        worktreeId: "wt-1",
+        expandedPaths: [],
+        hideDotfiles: false,
+        alwaysHiddenPatterns: [],
+        rootPath: "src",
+        changeTick: undefined,
+        treeSnapshot: snapshot,
+      })
+    );
+    expect(otherRoot.result.current.isInitialLoading).toBe(true);
+    expect(otherRoot.result.current.rows).toEqual([]);
+  });
+
+  it("captures a structure-only snapshot of the loaded tree, and nothing before the root lands", async () => {
+    const slow = deferred<FileTreeNode[]>();
+    listDirectory.mockReturnValue(slow.promise);
+
+    const { result } = renderHook(() =>
+      useFileBrowserTree({
+        worktreeId: "wt-1",
+        expandedPaths: [],
+        hideDotfiles: false,
+        alwaysHiddenPatterns: [],
+        changeTick: undefined,
+      })
+    );
+
+    // Nothing worth keeping yet — a capture here must not clobber a previous
+    // snapshot with an empty one.
+    expect(result.current.captureSnapshot()).toBeNull();
+
+    await act(async () => {
+      slow.resolve([
+        { name: "big.bin", path: "big.bin", isDirectory: false, size: 4096 },
+        dir("src"),
+      ]);
+    });
+
+    // Size is filesystem metadata, not structure — it must not persist.
+    expect(result.current.captureSnapshot()).toEqual({
+      worktreeId: "wt-1",
+      rootPath: "",
+      listings: [
+        {
+          dirPath: "",
+          nodes: [
+            { name: "big.bin", path: "big.bin", isDirectory: false },
+            { name: "src", path: "src", isDirectory: true },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("captures nothing without a worktree", () => {
+    const { result } = renderHook(() =>
+      useFileBrowserTree({
+        worktreeId: undefined,
+        expandedPaths: [],
+        hideDotfiles: false,
+        alwaysHiddenPatterns: [],
+        changeTick: undefined,
+      })
+    );
+    expect(result.current.captureSnapshot()).toBeNull();
+  });
+
+  describe("root failure over a seeded tree", () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    });
+
+    async function flush() {
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+    }
+
+    it("keeps the seeded rows on screen when the whole retry budget fails — the error joins the tree instead of replacing it", async () => {
+      listDirectory.mockRejectedValue(new Error("host still repointing"));
+
+      const { result } = renderHook(() =>
+        useFileBrowserTree({
+          worktreeId: "wt-1",
+          expandedPaths: ["src"],
+          hideDotfiles: false,
+          alwaysHiddenPatterns: [],
+          changeTick: undefined,
+          treeSnapshot: snapshot,
+        })
+      );
+
+      // Seeded immediately; the failing revalidation never blanks it.
+      expect(result.current.rows.length).toBeGreaterThan(0);
+      await flush();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(150);
+        await vi.advanceTimersByTimeAsync(400);
+        await vi.advanceTimersByTimeAsync(800);
+      });
+
+      expect(result.current.rootError).toContain("host still repointing");
+      expect(result.current.isInitialLoading).toBe(false);
+      expect(result.current.rows.map((row) => row.path)).toEqual([
+        "src",
+        "src/app.ts",
+        "README.md",
+      ]);
+    });
+
+    it("promotes the root retry ahead of a saturated descendant backlog", async () => {
+      // A wide seeded restore: 10 expanded directories revalidate alongside
+      // the root, overflowing the 6-slot concurrency ceiling so a backlog is
+      // queued when the root's retry fires. The retry must jump that queue —
+      // appended at the tail it would wait out hundreds of listings and gut
+      // the 150/400/800ms schedule.
+      const dirNames = Array.from({ length: 10 }, (_, i) => `d${i}`);
+      const dirDeferreds = new Map(dirNames.map((name) => [name, deferred<FileTreeNode[]>()]));
+      let rootAttempts = 0;
+      listDirectory.mockImplementation(({ dirPath }) => {
+        if (dirPath === undefined) {
+          rootAttempts += 1;
+          return rootAttempts === 1
+            ? Promise.reject(new Error("transient"))
+            : Promise.resolve(dirNames.map((name) => dir(name)));
+        }
+        return dirDeferreds.get(dirPath)!.promise;
+      });
+
+      renderHook(() =>
+        useFileBrowserTree({
+          worktreeId: "wt-1",
+          expandedPaths: dirNames,
+          hideDotfiles: false,
+          alwaysHiddenPatterns: [],
+          changeTick: undefined,
+          treeSnapshot: {
+            worktreeId: "wt-1",
+            rootPath: "",
+            listings: [
+              {
+                dirPath: "",
+                nodes: dirNames.map((name) => ({ name, path: name, isDirectory: true })),
+              },
+            ],
+          },
+        })
+      );
+
+      // Root + d0..d4 fill the 6 slots; the root's failure frees one, so d5
+      // starts; d6..d9 remain queued when the 150ms retry fires.
+      await flush();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(150);
+      });
+      const callsBeforeSlotFrees = listDirectory.mock.calls.length;
+
+      // Freeing one slot must start the promoted ROOT retry, not d6.
+      await act(async () => {
+        dirDeferreds.get("d0")!.resolve([]);
+      });
+      const nextCall = listDirectory.mock.calls[callsBeforeSlotFrees];
+      expect(nextCall?.[0].dirPath).toBeUndefined();
+    });
   });
 });

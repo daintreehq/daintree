@@ -1,4 +1,5 @@
 import type { FileTreeNode } from "@shared/types";
+import type { FileBrowserTreeSnapshot } from "@shared/types/panel";
 
 /**
  * One rendered line of the tree. The tree is rendered as a flat array rather
@@ -298,6 +299,79 @@ export function pruneListings(
     if (dirPath === rootPath || expandedPaths.has(dirPath)) next.set(dirPath, nodes);
   }
   return next;
+}
+
+/**
+ * Bounds on a persisted tree snapshot (#11367). Listings mirror
+ * `MAX_RESTORED_EXPANDED_PATHS` (the snapshot only ever holds the root plus
+ * expanded directories); the node cap keeps a pathologically wide tree from
+ * bloating the panel record, and the text budget bounds the *bytes* the
+ * counts alone would not — 10k nodes of 4k-character paths would be tens of
+ * megabytes serialized into every project-state save. Capture returns null
+ * rather than truncating — a partial directory presented as complete would
+ * be a lie the refresh can't distinguish from a deletion — leaving any
+ * previous snapshot in place.
+ */
+export const MAX_SNAPSHOT_LISTINGS = 500;
+export const MAX_SNAPSHOT_NODES = 10_000;
+/** Aggregate cap on name+path characters across the whole snapshot (~1MB UTF-16). */
+export const MAX_SNAPSHOT_TEXT_CHARS = 512_000;
+
+/**
+ * Structure-only snapshot of the current listings for persistence (#11367):
+ * names, paths and directory bits — `size` and `children` are deliberately
+ * dropped. Null when there is nothing worth keeping (root never loaded) or
+ * the tree exceeds the persistence bounds. Entries are sorted by path so two
+ * captures of identical content are deep-equal regardless of Map insertion
+ * order — the persistence layer's dirty diff relies on that to skip no-op
+ * writes.
+ */
+export function snapshotFromListings(
+  listings: DirectoryListings,
+  worktreeId: string,
+  rootPath: string
+): FileBrowserTreeSnapshot | null {
+  if (!listings.has(rootPath)) return null;
+  if (listings.size > MAX_SNAPSHOT_LISTINGS) return null;
+  let totalNodes = 0;
+  let totalChars = 0;
+  const entries: FileBrowserTreeSnapshot["listings"] = [];
+  for (const [dirPath, nodes] of listings) {
+    totalNodes += nodes.length;
+    if (totalNodes > MAX_SNAPSHOT_NODES) return null;
+    // Listing keys count against the budget too — 500 deep dirPaths carry
+    // real bytes even with few nodes.
+    totalChars += dirPath.length;
+    for (const node of nodes) {
+      totalChars += node.name.length + node.path.length;
+    }
+    if (totalChars > MAX_SNAPSHOT_TEXT_CHARS) return null;
+    entries.push({
+      dirPath,
+      nodes: nodes.map((node) => ({
+        name: node.name,
+        path: node.path,
+        isDirectory: node.isDirectory,
+      })),
+    });
+  }
+  entries.sort((a, b) => (a.dirPath < b.dirPath ? -1 : a.dirPath > b.dirPath ? 1 : 0));
+  return { worktreeId, rootPath, listings: entries };
+}
+
+/**
+ * Rebuild a listings map from a persisted snapshot. The snapshot nodes are
+ * already structure-only, so they slot directly into the `FileTreeNode` shape
+ * the tree renders from (`size`/`children` are optional there).
+ */
+export function listingsFromSnapshot(
+  snapshot: FileBrowserTreeSnapshot
+): Map<string, readonly FileTreeNode[]> {
+  const listings = new Map<string, readonly FileTreeNode[]>();
+  for (const entry of snapshot.listings) {
+    listings.set(entry.dirPath, entry.nodes);
+  }
+  return listings;
 }
 
 /**

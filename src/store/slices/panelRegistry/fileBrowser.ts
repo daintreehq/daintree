@@ -1,3 +1,5 @@
+import type { FileBrowserTreeSnapshot } from "@shared/types/panel";
+import { deepEqualIgnoringUndefined } from "@shared/utils/layoutMerge";
 import type { PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
 import { saveNormalized } from "./persistence";
 
@@ -11,6 +13,8 @@ export interface FileBrowserViewPatch {
   browserRootPath?: string;
   /** `true` collapses the tree sidebar; `false` and absent both mean open. */
   browserSidebarCollapsed?: boolean;
+  /** Last-known tree structure, captured as the view goes away (#11367). */
+  browserTreeSnapshot?: FileBrowserTreeSnapshot;
 }
 
 function sameStringList(a: string[] | undefined, b: string[]): boolean {
@@ -52,6 +56,12 @@ export const createFileBrowserPanelActions = (
       const collapsedUnchanged =
         patch.browserSidebarCollapsed === undefined ||
         (patch.browserSidebarCollapsed === true) === (panel.browserSidebarCollapsed === true);
+      // Deep rather than reference equality: capture builds a fresh snapshot
+      // object on every hide, and most hides change nothing — a reference
+      // check would dirty the panel entry (and the persisted layout) each time.
+      const treeSnapshotUnchanged =
+        patch.browserTreeSnapshot === undefined ||
+        deepEqualIgnoringUndefined(patch.browserTreeSnapshot, panel.browserTreeSnapshot);
 
       // Bail on a no-op write. The tree calls this on every arrow key, and a
       // fresh panel object each time would re-render every panel-store
@@ -61,7 +71,8 @@ export const createFileBrowserPanelActions = (
         expandedUnchanged &&
         hideDotfilesUnchanged &&
         rootUnchanged &&
-        collapsedUnchanged
+        collapsedUnchanged &&
+        treeSnapshotUnchanged
       )
         return state;
 
@@ -81,6 +92,9 @@ export const createFileBrowserPanelActions = (
         }),
         ...(patch.browserSidebarCollapsed !== undefined && {
           browserSidebarCollapsed: patch.browserSidebarCollapsed,
+        }),
+        ...(patch.browserTreeSnapshot !== undefined && {
+          browserTreeSnapshot: patch.browserTreeSnapshot,
         }),
       };
 

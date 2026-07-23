@@ -95,6 +95,26 @@ describe("serializeFileBrowser", () => {
     expect(serializeFileBrowser(open)).toEqual({});
     expect(serializeFileBrowser(basePanel)).toEqual({});
   });
+
+  it("round-trips the last-known tree snapshot (#11367)", () => {
+    const treeSnapshot = {
+      worktreeId: "wt-1",
+      rootPath: "",
+      listings: [
+        {
+          dirPath: "",
+          nodes: [{ name: "src", path: "src", isDirectory: true }],
+        },
+      ],
+    };
+    const panel: FileBrowserPanelData = { ...basePanel, browserTreeSnapshot: treeSnapshot };
+
+    const restored = createFileBrowserDefaults(asOptions(serializeFileBrowser(panel)));
+
+    expect(restored).toEqual({ browserTreeSnapshot: treeSnapshot });
+    // A panel that never captured one stays sparse.
+    expect(serializeFileBrowser(basePanel)).toEqual({});
+  });
 });
 
 describe("createFileBrowserDefaults", () => {

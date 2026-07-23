@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { render, act, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // FileBrowserPane hosts the tree column beside the viewer. #11328 adds a
 // collapse toggle (in the viewer's header) that unmounts the tree column and a
@@ -9,10 +9,43 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // FileBrowserViewer so the toggle and the shared toolbar `Root` actually render
 // — that's what makes the aria-controls and header-alignment invariants real.
 
-const { setFileBrowserViewMock, readMock } = vi.hoisted(() => ({
-  setFileBrowserViewMock: vi.fn(),
-  readMock: vi.fn(),
-}));
+const { setFileBrowserViewMock, readMock, treeState, defaultRows } = vi.hoisted(() => {
+  const defaultRows = [
+    {
+      path: "src",
+      name: "src",
+      isDirectory: true,
+      depth: 0,
+      isExpanded: true,
+      isLoading: false,
+    },
+    // A file row so a selection can resolve a real viewer path.
+    {
+      path: "src/app.ts",
+      name: "app.ts",
+      isDirectory: false,
+      depth: 1,
+      isExpanded: false,
+      isLoading: false,
+    },
+  ];
+  return {
+    setFileBrowserViewMock: vi.fn(),
+    readMock: vi.fn(),
+    defaultRows,
+    // Mutable so individual tests can drive error/loading/capture states.
+    treeState: {
+      rows: defaultRows as typeof defaultRows,
+      isInitialLoading: false,
+      rootError: null as string | null,
+      hasHiddenDotfiles: false,
+      ensureLoaded: vi.fn(),
+      refresh: vi.fn(),
+      isRefreshing: false,
+      captureSnapshot: (() => null) as () => unknown,
+    },
+  };
+});
 
 interface MockPanel {
   id: string;
@@ -44,37 +77,20 @@ vi.mock("@/hooks/useWorktreeStore", () => ({
     }),
 }));
 
-// The tree data hook does real IPC + virtualization; stub it to a single row so
-// the tree column renders its header (and the FileTreeView stub below), without
-// touching filesClient.
+// The tree data hook does real IPC + virtualization; stub it to a mutable
+// state bag so the tree column renders its header (and the FileTreeView stub
+// below) without touching filesClient, and tests can drive error states.
 vi.mock("../useFileBrowserTree", () => ({
-  useFileBrowserTree: () => ({
-    rows: [
-      {
-        path: "src",
-        name: "src",
-        isDirectory: true,
-        depth: 0,
-        isExpanded: true,
-        isLoading: false,
-      },
-      // A file row so a selection can resolve a real viewer path.
-      {
-        path: "src/app.ts",
-        name: "app.ts",
-        isDirectory: false,
-        depth: 1,
-        isExpanded: false,
-        isLoading: false,
-      },
-    ],
-    isInitialLoading: false,
-    rootError: null,
-    hasHiddenDotfiles: false,
-    ensureLoaded: vi.fn(),
-    refresh: vi.fn(),
-    isRefreshing: false,
-  }),
+  useFileBrowserTree: () => ({ ...treeState }),
+}));
+
+// The pane flushes panel persistence when the view hides; the real module
+// drags the whole store graph into the suite.
+const { flushPanelPersistenceMock } = vi.hoisted(() => ({
+  flushPanelPersistenceMock: vi.fn(),
+}));
+vi.mock("@/store/slices", () => ({
+  flushPanelPersistence: flushPanelPersistenceMock,
 }));
 
 vi.mock("../FileTreeView", () => ({
@@ -125,6 +141,11 @@ beforeEach(() => {
   setFileBrowserViewMock.mockReset();
   readMock.mockReset();
   readMock.mockResolvedValue({ content: "hello" });
+  flushPanelPersistenceMock.mockReset();
+  treeState.rows = defaultRows;
+  treeState.rootError = null;
+  treeState.isInitialLoading = false;
+  treeState.captureSnapshot = () => null;
   mockPanel.browserSidebarCollapsed = undefined;
   mockPanel.browserSelectedPath = undefined;
   mockPanel.browserRootPath = undefined;
@@ -315,5 +336,82 @@ describe("FileBrowserPane collapsible sidebar (#11328)", () => {
     // The single persistent Root keeps the same toggle node, so focus survives
     // the tree column unmounting rather than falling to <body>.
     expect(document.activeElement).toBe(screen.getByTestId("file-browser-sidebar-toggle"));
+  });
+});
+
+describe("root error rendering (#11367)", () => {
+  it("renders the error inline above a populated tree rather than replacing it", () => {
+    treeState.rootError = "boom";
+    renderPane();
+
+    // Both at once: the banner names a refresh failure, the last-known rows
+    // stay on screen beneath it.
+    expect(screen.getByText("Couldn't refresh this worktree")).toBeTruthy();
+    expect(screen.getByTestId("file-tree-view")).toBeTruthy();
+  });
+
+  it("keeps the full-pane error when there are genuinely no rows to show", () => {
+    treeState.rootError = "boom";
+    treeState.rows = [];
+    renderPane();
+
+    expect(screen.getByText("Couldn't read this worktree")).toBeTruthy();
+    expect(screen.queryByTestId("file-tree-view")).toBeNull();
+  });
+});
+
+describe("last-known tree capture (#11367)", () => {
+  const snapshot = {
+    worktreeId: "wt-1",
+    rootPath: "",
+    listings: [{ dirPath: "", nodes: [{ name: "src", path: "src", isDirectory: true }] }],
+  };
+
+  function hideDocument() {
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+  }
+
+  afterEach(() => {
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => false });
+  });
+
+  it("captures and flushes when the view hides — the going-away point that precedes eviction", () => {
+    treeState.captureSnapshot = () => snapshot;
+    renderPane();
+    expect(setFileBrowserViewMock).not.toHaveBeenCalledWith("fb-1", {
+      browserTreeSnapshot: snapshot,
+    });
+
+    hideDocument();
+
+    expect(setFileBrowserViewMock).toHaveBeenCalledWith("fb-1", {
+      browserTreeSnapshot: snapshot,
+    });
+    // The hidden renderer may be torn down before the 500ms persistence
+    // debounce fires; the flush is what makes this save real on app quit.
+    expect(flushPanelPersistenceMock).toHaveBeenCalled();
+  });
+
+  it("captures the outgoing tree on unmount for the next restore", () => {
+    treeState.captureSnapshot = () => snapshot;
+    const { unmount } = renderPane();
+    unmount();
+
+    expect(setFileBrowserViewMock).toHaveBeenCalledWith("fb-1", {
+      browserTreeSnapshot: snapshot,
+    });
+  });
+
+  it("writes nothing when there is nothing worth keeping", () => {
+    treeState.captureSnapshot = () => null;
+    const { unmount } = renderPane();
+    hideDocument();
+    unmount();
+
+    // A null capture must not clobber a previously persisted snapshot.
+    expect(setFileBrowserViewMock).not.toHaveBeenCalled();
   });
 });

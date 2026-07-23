@@ -6,6 +6,7 @@ import type {
   ViewportPresetId,
   FileViewMode,
   DiffSource,
+  FileBrowserTreeSnapshot,
 } from "./panel.js";
 import type { GitStatus, DiffChangeSetEntry } from "./git.js";
 import type { BrowserHistory } from "./browser.js";
@@ -274,6 +275,8 @@ export interface FileBrowserPanelOptions extends AddPanelOptionsBase {
   browserRootPath?: string;
   /** Whether the tree sidebar starts collapsed; absent or false = open */
   browserSidebarCollapsed?: boolean;
+  /** Last-known tree structure to paint before the first live listing (#11367) */
+  browserTreeSnapshot?: FileBrowserTreeSnapshot;
 }
 
 /**

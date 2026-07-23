@@ -136,6 +136,33 @@ describe("setFileBrowserView", () => {
     expect(store.get().panelsById["panel-1"]).toBe(before);
   });
 
+  it("stores a tree snapshot and treats a deep-equal recapture as a no-op (#11367)", () => {
+    const snapshot = {
+      worktreeId: "wt-1",
+      rootPath: "",
+      listings: [{ dirPath: "", nodes: [{ name: "src", path: "src", isDirectory: true }] }],
+    };
+    setFileBrowserView("panel-1", { browserTreeSnapshot: snapshot });
+    expect(store.get().panelsById["panel-1"]).toMatchObject({ browserTreeSnapshot: snapshot });
+
+    // Capture builds a fresh object on every hide; identical content must not
+    // dirty the panel entry (and with it the persisted layout).
+    const before = store.get().panelsById["panel-1"];
+    setFileBrowserView("panel-1", {
+      browserTreeSnapshot: structuredClone(snapshot),
+    });
+    expect(store.get().panelsById["panel-1"]).toBe(before);
+
+    // Real structural change writes.
+    setFileBrowserView("panel-1", {
+      browserTreeSnapshot: {
+        ...snapshot,
+        listings: [{ dirPath: "", nodes: [] }],
+      },
+    });
+    expect(store.get().panelsById["panel-1"]).not.toBe(before);
+  });
+
   it("preserves other browser fields when the sidebar collapses", () => {
     setFileBrowserView("panel-1", { browserSelectedPath: "src/app.ts" });
     setFileBrowserView("panel-1", { browserSidebarCollapsed: true });

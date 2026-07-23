@@ -26,5 +26,8 @@ export function createFileBrowserDefaults(
     // Only a collapsed sidebar materializes a field: `false` and absent are the
     // same open state, so we never stamp a default the serializer then drops.
     ...(options.browserSidebarCollapsed === true && { browserSidebarCollapsed: true }),
+    ...(options.browserTreeSnapshot != null && {
+      browserTreeSnapshot: options.browserTreeSnapshot,
+    }),
   };
 }

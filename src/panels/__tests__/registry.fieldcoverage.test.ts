@@ -281,6 +281,10 @@ const FILE_BROWSER_FIELD_CLASSIFICATION = {
   browserHideDotfiles: true,
   browserRootPath: true,
   browserSidebarCollapsed: true,
+  // The one derived persisted field: the last-known tree snapshot (#11367)
+  // must ride the panel record because nothing renderer-side survives LRU
+  // eviction.
+  browserTreeSnapshot: true,
   // BasePanelData carrier-bookkeeping timestamps — written by the base
   // serialization layer in panelToSnapshot, not per-kind serializers.
   createdAt: false,
@@ -447,6 +451,17 @@ const savedFile: SavedTerminalData = {
   fileViewMode: "source",
 };
 
+const browserTreeSnapshotFixture = {
+  worktreeId: "wt-1",
+  rootPath: "src",
+  listings: [
+    {
+      dirPath: "src",
+      nodes: [{ name: "app.ts", path: "src/app.ts", isDirectory: false }],
+    },
+  ],
+};
+
 const fileBrowserFixture: FileBrowserPanelData = {
   id: "panel-file-browser",
   title: "Panel",
@@ -457,6 +472,7 @@ const fileBrowserFixture: FileBrowserPanelData = {
   browserHideDotfiles: true,
   browserRootPath: "src",
   browserSidebarCollapsed: true,
+  browserTreeSnapshot: browserTreeSnapshotFixture,
 };
 
 const savedFileBrowser: SavedTerminalData = {
@@ -467,6 +483,7 @@ const savedFileBrowser: SavedTerminalData = {
   browserHideDotfiles: true,
   browserRootPath: "src",
   browserSidebarCollapsed: true,
+  browserTreeSnapshot: browserTreeSnapshotFixture,
 };
 
 const diffFixture: DiffPanelData = {

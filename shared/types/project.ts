@@ -9,6 +9,7 @@ import type {
   ViewportPresetId,
   FileViewMode,
   DiffSource,
+  FileBrowserTreeSnapshot,
 } from "./panel.js";
 import type { CommandOverride } from "./commands.js";
 import type { GitStatus } from "./git.js";
@@ -169,6 +170,8 @@ export interface PanelSnapshot {
   browserRootPath?: string;
   /** Whether a file browser panel's tree sidebar is collapsed (only `true` persisted) */
   browserSidebarCollapsed?: boolean;
+  /** Last-known tree structure of a file browser panel (#11367) */
+  browserTreeSnapshot?: FileBrowserTreeSnapshot;
   /** Legacy pre-file-panel field: absolute path shown in a markdown panel */
   markdownFilePath?: string;
   /** Legacy pre-file-panel field: markdown panel view mode */
