@@ -7,12 +7,20 @@ export const config: AgentConfig = {
   color: "#7C3AED",
   iconId: "kiro",
   supportsContextInjection: true,
-  // #11282 phase 5: Kiro resumes project-scoped state from the working directory
-  // itself (`chat --resume`), and Daintree rewrites the cwd to the new path, so
-  // the conversation survives the move.
+  // #11282 phase 5: `chat --resume` is project-SCOPED, not project-LOCAL. Kiro
+  // keeps conversations in a global home-dir SQLite store (macOS
+  // ~/Library/Application Support/kiro-cli/data.sqlite3, Linux
+  // ~/.local/share/kiro-cli/data.sqlite3; table `conversations_v2` keyed by the
+  // ABSOLUTE workspace path). Nothing conversation-bearing lives in the project
+  // folder, so a move leaves the row stranded under the old path and
+  // `chat --resume` at the new cwd starts fresh. The history is still on disk —
+  // recovery is `kiro-cli chat --resume-id <uuid>` or `--resume-picker`, both
+  // manual: our `resume` block is `kind: "project-scoped"` and captures no
+  // session id, and reaching into Kiro's private store is off-limits (#4100).
   continuity: {
-    tier: "project-local",
-    detail: "Kiro resumes from the project folder, which Daintree updates to the new path",
+    tier: "provider-migration",
+    detail:
+      "Kiro looks up conversations by folder path — recover with kiro-cli chat --resume-picker",
   },
   tooltip: "Amazon's CLI",
   usageUrl: "https://kiro.dev/",

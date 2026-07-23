@@ -10,6 +10,16 @@ export const config: AgentConfig = {
   color: "#14B014",
   iconId: "aider",
   supportsContextInjection: true,
+  // #11282 phase 5: Aider is the genuine project-local case — it writes
+  // `.aider.chat.history.md` and `.aider.input.history` into the git root (cwd
+  // when there's no repo) and `--restore-chat-history` reads them back from
+  // whatever directory it's launched in. There's no home-dir conversation store
+  // and no absolute-path key, so the history physically travels with the folder
+  // and resumes at the new path.
+  continuity: {
+    tier: "project-local",
+    detail: "Aider keeps its chat history in the project folder, so it moves with it",
+  },
   // Aider has no MCP-client wiring of its own — it operates as a self-contained
   // git-aware editor with model providers configured directly via CLI flags.
   // The Daintree assistant overlay relies on injecting MCP servers into the

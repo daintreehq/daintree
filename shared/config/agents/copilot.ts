@@ -7,11 +7,16 @@ export const config: AgentConfig = {
   color: "#8957e5",
   iconId: "copilot",
   supportsContextInjection: true,
-  // #11282 phase 5: Copilot sessions are cloud-persisted and globally
-  // addressable by id, so a folder move preserves the conversation.
+  // #11282 phase 5: `--resume=<id>` reads the LOCAL home-dir store
+  // (~/.copilot/session-state/<uuid>/events.jsonl, indexed by
+  // ~/.copilot/session-store.db) — the GitHub cloud sync is a history-query /
+  // cross-machine feature, not the resume path. The store is global rather than
+  // path-keyed, so a captured id resumes from any cwd. Caveat: the session's
+  // workspace.yaml keeps the ORIGINAL absolute path and recent CLIs auto-cd back
+  // to it, so a resumed session may need `/cwd <new path>` to follow the move.
   continuity: {
     tier: "preserved",
-    detail: "Copilot can restore this conversation from its cloud session",
+    detail: "Copilot can resume this conversation by session ID from any folder",
   },
   // Copilot help sessions read MCP from `.mcp.json` written into the
   // per-session cwd (root key `mcpServers`, `type: "http"`, `$VAR` env-var

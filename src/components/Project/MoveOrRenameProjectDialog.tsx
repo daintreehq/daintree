@@ -475,7 +475,12 @@ function RelocationPreviewSection({
               <span className="text-daintree-text/70">Agent conversations</span>
               <ul className="mt-1 space-y-1.5 pl-3">
                 {preview.agentContinuity.map((agent) => {
-                  const p = CONTINUITY_PRESENTATION[agent.tier];
+                  // Defense in depth: no plugin or user-registry agent can carry
+                  // a `continuity` block today, but an unknown tier arriving from
+                  // a future source must degrade to the honest neutral row rather
+                  // than crash on an undefined presentation.
+                  const p =
+                    CONTINUITY_PRESENTATION[agent.tier] ?? CONTINUITY_PRESENTATION.unverified;
                   const Icon = p.icon;
                   return (
                     <li

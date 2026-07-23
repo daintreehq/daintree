@@ -309,21 +309,23 @@ export type AgentResume =
  *
  * - `preserved` — a captured session resumes automatically at the new path
  *   (globally-addressable session ids, e.g. Codex, Copilot).
- * - `project-local` — resume reads state from the project folder itself, which
- *   Daintree rewrites to the new path, so it survives (e.g. Kiro).
+ * - `project-local` — the history physically lives inside the project folder, so
+ *   it travels with the move and resumes at the new path (e.g. Aider, which
+ *   writes `.aider.chat.history.md` into the git root). A cwd-scoped LOOKUP into
+ *   a home-dir store is NOT this tier — that's `provider-migration`.
  * - `provider-migration` — the conversation persists on disk but the provider
  *   can't resume it at the new path, and Daintree must never touch the
  *   provider's private store (#4100), so recovery needs a manual provider step
- *   (e.g. Claude Code).
+ *   (e.g. Claude Code's path-slug store, Kiro's absolute-path-keyed SQLite).
  * - `unavailable` — the agent has no usable resume path for a moved folder
  *   (e.g. Gemini's retired CLI, Crush which omits `resume` entirely).
  * - `unverified` — continuity across a move hasn't been confirmed for this
  *   provider; the default for any unclassified agent so we never overclaim.
- */
-/**
- * Canonical runtime list of continuity tiers; the type is derived from it so a
- * single source of truth backs both. Tests iterate this tuple instead of
- * re-declaring the union (which would just duplicate a typed literal).
+ *
+ * `CONVERSATION_CONTINUITY_TIERS` below is the canonical runtime list; the type
+ * is derived from it so a single source of truth backs both. Tests iterate that
+ * tuple instead of re-declaring the union (which would just duplicate a typed
+ * literal).
  */
 export const CONVERSATION_CONTINUITY_TIERS = [
   "preserved",
