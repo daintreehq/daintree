@@ -94,6 +94,7 @@ describe("session bookmark actions", () => {
       getTerminal: vi.fn(() => ({
         id: "term-1",
         kind: "terminal",
+        location: "grid",
         titleMode: "user",
         agentPresetId: "preset-1",
         agentPresetColor: "#abc",
@@ -116,6 +117,7 @@ describe("session bookmark actions", () => {
       label: "L",
       metadata: {
         sourcePanelId: "term-1",
+        sourceLocation: "grid",
         titleMode: "user",
         agentPresetId: "preset-1",
         agentPresetColor: "#abc",
@@ -127,6 +129,21 @@ describe("session bookmark actions", () => {
     });
     expect(removePanel).toHaveBeenCalledWith("term-1", { backendAlreadyClosed: true });
     expect(result).toEqual({ record });
+  });
+
+  it("bookmarkAndClose rejects without invoking IPC when the target is not a local pane", async () => {
+    const removePanel = vi.fn();
+    panelStoreMock.getState.mockReturnValue({
+      getTerminal: vi.fn(() => undefined), // stale / cross-project id
+      removePanel,
+    });
+
+    const actions = setupActions();
+    await expect(
+      callAction(actions, "session.bookmarkAndClose", { terminalId: "ghost", label: "L" })
+    ).rejects.toThrow(/No local agent pane/);
+    expect(agentSessionHistoryMock.prepareBookmark).not.toHaveBeenCalled();
+    expect(removePanel).not.toHaveBeenCalled();
   });
 
   it("bookmarkAndClose leaves the pane open when capture fails", async () => {
@@ -170,7 +187,7 @@ describe("session bookmark actions", () => {
     expect(agentSessionHistoryMock.deleteBookmark).toHaveBeenCalledWith({ sessionId: "s1" });
   });
 
-  it("list scopes to the explicit projectId, then the context project, and wraps the result", async () => {
+  it("list scopes to the explicit projectId, then the context project, and never leaks across projects", async () => {
     agentSessionHistoryMock.listBookmarks.mockResolvedValue([{ sessionId: "s1" }]);
     const actions = setupActions();
 
@@ -192,8 +209,10 @@ describe("session bookmark actions", () => {
     expect(agentSessionHistoryMock.listBookmarks).toHaveBeenLastCalledWith({ projectId: "ctx" });
     expect(wrapped).toEqual({ bookmarks: [{ sessionId: "s1" }] });
 
-    // No scope at all lists across projects.
-    await callAction(actions, "session.bookmarks.list", undefined, {});
-    expect(agentSessionHistoryMock.listBookmarks).toHaveBeenLastCalledWith(undefined);
+    // No scope at all: returns empty WITHOUT querying — bookmarks stay project-scoped.
+    agentSessionHistoryMock.listBookmarks.mockClear();
+    const empty = await callAction(actions, "session.bookmarks.list", undefined, {});
+    expect(empty).toEqual({ bookmarks: [] });
+    expect(agentSessionHistoryMock.listBookmarks).not.toHaveBeenCalled();
   });
 });

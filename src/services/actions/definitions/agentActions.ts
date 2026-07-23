@@ -528,7 +528,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "session.bookmarkAndClose",
     title: "Bookmark and close",
     description:
-      "Capture a live agent pane's resumable conversation as a durable bookmark, then close the pane once the session is saved. Args: `terminalId` (the agent pane), a non-empty `label`, and `confirmed: true`. Only agents with exact-session resume are eligible. Prepare-before-remove: if capture or persistence fails the pane stays open and no bookmark is created. This interrupts a running agent and discards terminal scrollback — the conversation is resumable, the live process is not. Returns { record }.",
+      "Capture a live agent pane's resumable conversation as a durable bookmark, then close the pane once the session is saved. Args: `terminalId` (the target agent pane) and a non-empty `label`. Confirmation is enforced by the dispatch layer, not an argument. Only agents with exact-session resume are eligible, and the target must be a live local pane. Prepare-before-remove: if capture or persistence fails the pane stays open and no bookmark is created. This interrupts a running agent and discards terminal scrollback — the conversation is resumable, the live process is not. Returns { record }.",
     category: "agent",
     kind: "command",
     danger: "confirm",
@@ -541,26 +541,32 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     // from the palette so a source:"user" pick can't bypass the D1 guard.
     palette: { mode: "hidden" },
     argsSchema: z.object({
-      terminalId: z.string().min(1),
+      terminalId: z.string().trim().min(1),
       label: z.string().trim().min(1).max(120),
     }),
     run: async (args: unknown) => {
       const { terminalId, label } = args as { terminalId: string; label: string };
       const panelStore = usePanelStore.getState();
       const panel = panelStore.getTerminal(terminalId);
-      const metadata =
-        panel && isPtyPanel(panel)
-          ? {
-              sourcePanelId: terminalId,
-              titleMode: panel.titleMode,
-              agentPresetId: panel.agentPresetId,
-              agentPresetColor: panel.agentPresetColor,
-              originalPresetId: panel.originalPresetId,
-              isUsingFallback: panel.isUsingFallback,
-              fallbackChainIndex: panel.fallbackChainIndex,
-              isInputLocked: panel.isInputLocked,
-            }
-          : undefined;
+      // Require a live local agent pane: the same id must resolve here (for the
+      // metadata snapshot and the pane removal) AND in main (for the capture).
+      // Acting on a stale/cross-project id would kill a main terminal while
+      // leaving its owning pane on screen (dead).
+      if (!panel || !isPtyPanel(panel)) {
+        throw new Error(`No local agent pane for terminal ${terminalId}`);
+      }
+      const location = panel.location;
+      const metadata = {
+        sourcePanelId: terminalId,
+        sourceLocation: location === "grid" || location === "dock" ? location : undefined,
+        titleMode: panel.titleMode,
+        agentPresetId: panel.agentPresetId,
+        agentPresetColor: panel.agentPresetColor,
+        originalPresetId: panel.originalPresetId,
+        isUsingFallback: panel.isUsingFallback,
+        fallbackChainIndex: panel.fallbackChainIndex,
+        isInputLocked: panel.isInputLocked,
+      };
       const { record } = await window.electron.agentSessionHistory.prepareBookmark({
         terminalId,
         label,
@@ -615,7 +621,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "session.bookmark.delete",
     title: "Delete bookmark",
     description:
-      "Remove a bookmark, demoting the session back to ordinary time-limited history. Args: `sessionId` and `confirmed: true`. Does NOT delete the provider's transcript or any open pane. Irreversible for the Daintree bookmark.",
+      "Remove a bookmark, demoting the session back to ordinary time-limited history. Args: `sessionId`. Confirmation is enforced by the dispatch layer, not an argument. Does NOT delete the provider's transcript or any open pane. Irreversible for the Daintree bookmark.",
     category: "agent",
     kind: "command",
     danger: "confirm",
@@ -638,7 +644,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "session.bookmarks.list",
     title: "List bookmarks",
     description:
-      "List the user's durable session bookmarks, newest-first by bookmark time. Args: `projectId` (optional) — restrict to one project; omit to use the caller's project context, or list across all projects when there is none (matching agentSessionHistory.list). Returns { bookmarks: [{ sessionId, agentId, worktreeId, title, projectId, savedAt, agentLaunchFlags?, agentModelId?, cwd?, branch?, bookmark: { bookmarkedAt, label, ... } }] }. Read-only metadata; NO transcript content. Never errors — returns { bookmarks: [] } when there are none.",
+      "List the user's durable session bookmarks for one project, newest-first by bookmark time. Args: `projectId` (optional) — the project to scope to; when omitted the caller's project context is used. Bookmarks are project-scoped: with no explicit `projectId` and no project context this returns an empty list rather than leaking bookmarks across projects. Returns { bookmarks: [{ sessionId, agentId, worktreeId, title, projectId, savedAt, agentLaunchFlags?, agentModelId?, cwd?, branch?, bookmark: { bookmarkedAt, label, ... } }] }. Read-only metadata; NO transcript content. Never errors.",
     category: "agent",
     kind: "query",
     danger: "safe",
@@ -654,12 +660,14 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     mcpOutputSchema: true,
     run: async (args: unknown, ctx: ActionContext) => {
       const { projectId } = (args ?? {}) as { projectId?: string };
-      // Explicit arg wins, then the caller's project context. When neither is
-      // present, list across all projects (consistent with agentSessionHistory.list).
-      const scope = projectId ?? ctx.projectId ?? undefined;
-      const bookmarks = await window.electron.agentSessionHistory.listBookmarks(
-        scope ? { projectId: scope } : undefined
-      );
+      // Bookmarks are project-scoped (privacy). Resolve the explicit arg, then the
+      // caller's project context. With neither, DO NOT fall open to every project
+      // — return empty; an all-project view is a deliberate future enhancement.
+      const scope = projectId ?? ctx.projectId;
+      if (!scope) return { bookmarks: [] };
+      const bookmarks = await window.electron.agentSessionHistory.listBookmarks({
+        projectId: scope,
+      });
       return { bookmarks };
     },
   }));

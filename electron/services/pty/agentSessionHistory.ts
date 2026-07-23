@@ -92,7 +92,9 @@ function evictRecords(
       const clone = { ...r };
       winners.set(r.sessionId, clone);
       deduped.push(clone);
-    } else if (!existing.bookmark && r.bookmark) {
+    } else if (!existing.bookmark && r.bookmark && existing.agentId === r.agentId) {
+      // Carry a pin forward only within the same agent — a cross-agent sessionId
+      // collision must never attach one agent's bookmark to another's record.
       existing.bookmark = r.bookmark;
     }
   }
@@ -189,13 +191,27 @@ function normalizeRecords(parsed: unknown): AgentSessionRecord[] {
   if (!Array.isArray(parsed)) {
     throw new InvalidSessionHistoryShapeError();
   }
-  return parsed.map((raw) => {
-    if (raw && typeof raw === "object" && "snapshot" in raw) {
-      const { snapshot: _snapshot, ...rest } = raw as Record<string, unknown>;
-      return rest as unknown as AgentSessionRecord;
+  const records: AgentSessionRecord[] = [];
+  for (const raw of parsed) {
+    // Drop malformed elements (null, non-object, or missing a string sessionId)
+    // rather than passing them to eviction/listing readers that assume a
+    // well-formed record — a valid-JSON but garbage array (corrupt, hand-edited,
+    // or a newer schema) must degrade gracefully, not crash "never errors" reads.
+    if (
+      !raw ||
+      typeof raw !== "object" ||
+      typeof (raw as { sessionId?: unknown }).sessionId !== "string"
+    ) {
+      continue;
     }
-    return raw as AgentSessionRecord;
-  });
+    if ("snapshot" in raw) {
+      const { snapshot: _snapshot, ...rest } = raw as Record<string, unknown>;
+      records.push(rest as unknown as AgentSessionRecord);
+    } else {
+      records.push(raw as AgentSessionRecord);
+    }
+  }
+  return records;
 }
 
 // In-memory cache of the parsed journal, keyed by resolved file path. The resume

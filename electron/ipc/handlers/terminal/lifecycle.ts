@@ -853,8 +853,6 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     payload: z.output<typeof PrepareBookmarkPayloadSchema>
   ): Promise<{ record: AgentSessionRecord }> => {
     const { terminalId, label, metadata } = payload;
-    const { app } = await import("electron");
-    const userData = app.getPath("userData");
 
     const info = await ptyClient.getTerminalAsync(terminalId).catch(() => null);
     if (!info?.launchAgentId) {
@@ -874,9 +872,12 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     }
 
     // Freeze the incarnation before capture (mirrors the kill path) so the
-    // record stays attributed to the conversation that produced it.
+    // record stays attributed to the conversation that produced it. `?? null` is
+    // the frozen-but-unknown sentinel (#11340): when the ledger has evicted the
+    // entry we must NOT fall back to the current generation, which could belong
+    // to a same-id successor and consume its journal reservation.
     const ledger = getLifecycleLedger();
-    const generation = ledger.currentGeneration(terminalId);
+    const generation = ledger.currentGeneration(terminalId) ?? null;
 
     let sessionId: string | null;
     try {
@@ -897,7 +898,9 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
 
     // A successor took the terminal id while we captured — the pane the renderer
     // would remove is no longer this conversation. Abort before any journal write.
-    if (generation !== undefined && !ledger.isCurrent(terminalId, generation)) {
+    // Only checkable when we froze a concrete generation; a `null` (evicted)
+    // freeze can't be compared, so it fails open like the journal path.
+    if (typeof generation === "number" && !ledger.isCurrent(terminalId, generation)) {
       throw new AppError({
         code: "STALE_GENERATION",
         message: `Terminal ${terminalId} was restarted during bookmark capture`,
@@ -941,26 +944,52 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     }
 
     // journalAgentSessionRecord returns null when this generation was already
-    // journaled (a concurrent close path beat us). The resume record already
-    // exists — pin it in place rather than dropping the user's bookmark intent.
+    // journaled by a concurrent close path — the captured sessionId may differ
+    // from the one that actually landed, so promoting by our sessionId could pin
+    // the wrong record or drop the prepared metadata. Fail closed instead: the
+    // pane stays as an exited/restartable panel and the user can retry or use
+    // Add bookmark from history on the resulting record.
     if (!record) {
-      record = await promoteBookmark(sessionId, label, userData);
-      if (!record) {
-        throw new AppError({
-          code: "PERSIST_FAILED",
-          message: `Bookmark capture for ${terminalId} produced no durable record`,
-        });
-      }
+      throw new AppError({
+        code: "PERSIST_FAILED",
+        message: `Bookmark for ${terminalId} raced a concurrent session capture; retry`,
+      });
+    }
+
+    // A successor may have taken the terminal id while we resolved the branch and
+    // wrote the record. The bookmark is durable for the correct (old) session, but
+    // the pane now shows the successor — reject so the renderer keeps it open
+    // rather than removing (and orphaning) the successor's backend.
+    if (typeof generation === "number" && !ledger.isCurrent(terminalId, generation)) {
+      throw new AppError({
+        code: "STALE_GENERATION",
+        message: `Terminal ${terminalId} was restarted during bookmark capture`,
+      });
     }
 
     return { record };
   };
 
+  // A thrown mutator (unreadable journal, atomic-write failure) must surface the
+  // stable PERSIST_FAILED code, not a raw errno — SESSION_NOT_FOUND is reserved
+  // for a successful read that finds no target (the null return).
+  const asBookmarkPersistError = (err: unknown, sessionId: string): AppError =>
+    new AppError({
+      code: "PERSIST_FAILED",
+      message: `Failed to persist bookmark change for session ${sessionId}`,
+      cause: err instanceof Error ? err : undefined,
+    });
+
   const handleAgentSessionPromoteBookmark = async (
     payload: z.output<typeof BookmarkMutatePayloadSchema>
   ): Promise<AgentSessionRecord> => {
     const { app } = await import("electron");
-    const record = await promoteBookmark(payload.sessionId, payload.label, app.getPath("userData"));
+    let record: AgentSessionRecord | null;
+    try {
+      record = await promoteBookmark(payload.sessionId, payload.label, app.getPath("userData"));
+    } catch (err) {
+      throw asBookmarkPersistError(err, payload.sessionId);
+    }
     if (!record) {
       throw new AppError({
         code: "SESSION_NOT_FOUND",
@@ -974,7 +1003,12 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     payload: z.output<typeof BookmarkMutatePayloadSchema>
   ): Promise<AgentSessionRecord> => {
     const { app } = await import("electron");
-    const record = await renameBookmark(payload.sessionId, payload.label, app.getPath("userData"));
+    let record: AgentSessionRecord | null;
+    try {
+      record = await renameBookmark(payload.sessionId, payload.label, app.getPath("userData"));
+    } catch (err) {
+      throw asBookmarkPersistError(err, payload.sessionId);
+    }
     if (!record) {
       throw new AppError({
         code: "SESSION_NOT_FOUND",
@@ -988,11 +1022,16 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     payload: z.output<typeof BookmarkDeletePayloadSchema>
   ): Promise<void> => {
     const { app } = await import("electron");
-    const removed = await deleteBookmark(
-      payload.sessionId,
-      app.getPath("userData"),
-      getAgentSessionRetentionDays()
-    );
+    let removed: boolean;
+    try {
+      removed = await deleteBookmark(
+        payload.sessionId,
+        app.getPath("userData"),
+        getAgentSessionRetentionDays()
+      );
+    } catch (err) {
+      throw asBookmarkPersistError(err, payload.sessionId);
+    }
     if (!removed) {
       throw new AppError({
         code: "SESSION_NOT_FOUND",

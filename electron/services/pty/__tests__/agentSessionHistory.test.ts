@@ -801,6 +801,20 @@ describe("agentSessionHistory bookmarks", () => {
     expect(persisted?.bookmark?.bookmarkedAt).toBe(42);
   });
 
+  it("does not carry a bookmark across a cross-agent sessionId collision", async () => {
+    const now = Date.now();
+    // Two DIFFERENT agents happen to share a sessionId. The newer ordinary record
+    // must NOT inherit the older, differently-agented record's pin.
+    await seed([
+      record("dup", { agentId: "codex", savedAt: now }),
+      record("dup", { agentId: "claude", savedAt: now - 1000, bookmark: bm() }),
+    ]);
+    const kept = listAgentSessions(undefined, userDataDir);
+    expect(kept).toHaveLength(1);
+    expect(kept[0].agentId).toBe("codex");
+    expect(kept[0].bookmark).toBeUndefined();
+  });
+
   it("lets a deliberate re-bookmark replace the timestamp", async () => {
     await seed([record("sess-x", { bookmark: bm({ bookmarkedAt: 42, label: "old" }) })]);
     await persistAgentSession(
@@ -885,6 +899,34 @@ describe("agentSessionHistory bookmarks", () => {
     await seed([record("plain")]);
     expect(await deleteBookmark("plain", userDataDir)).toBe(false);
     expect(await deleteBookmark("missing", userDataDir)).toBe(false);
+  });
+
+  it("deleteBookmark re-applies the per-worktree cap after demotion", async () => {
+    // A full cap of ordinary records plus one pin that only survives via its
+    // exemption. Deleting the pin demotes it into the full bucket, where — being
+    // the oldest — it loses the cap contest and disappears. Seed newest-first
+    // (the on-disk invariant the cap relies on): the old pin is positionally last.
+    const ordinary = Array.from({ length: MAX_RECORDS_PER_WORKTREE }, (_, i) =>
+      record(`ord-${i}`, { savedAt: Date.now() - i * 1000 })
+    );
+    await seed([...ordinary, record("pinned", { savedAt: Date.now() - 10 * DAY, bookmark: bm() })]);
+    expect(listAgentSessions("wt-1", userDataDir)).toHaveLength(MAX_RECORDS_PER_WORKTREE + 1);
+
+    expect(await deleteBookmark("pinned", userDataDir)).toBe(true);
+    const after = listAgentSessions("wt-1", userDataDir);
+    expect(after).toHaveLength(MAX_RECORDS_PER_WORKTREE);
+    expect(after.find((r) => r.sessionId === "pinned")).toBeUndefined();
+  });
+
+  it("bookmark reads ignore malformed journal elements (never errors)", async () => {
+    const filePath = getSessionHistoryPath(userDataDir)!;
+    await fsp.writeFile(
+      filePath,
+      JSON.stringify([null, "garbage", { no: "sessionId" }, record("ok", { bookmark: bm() })])
+    );
+    expect(() => listBookmarks(undefined, userDataDir)).not.toThrow();
+    expect(listBookmarks(undefined, userDataDir).map((r) => r.sessionId)).toEqual(["ok"]);
+    expect(listAgentSessions(undefined, userDataDir).map((r) => r.sessionId)).toEqual(["ok"]);
   });
 
   it("listBookmarks returns only bookmarks, newest-first, project-scoped", async () => {
