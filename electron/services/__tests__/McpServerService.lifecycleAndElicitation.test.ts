@@ -523,9 +523,9 @@ describe("McpServerService", () => {
     expect(safeTool).toBeDefined();
     expect(dangerousTool).toBeDefined();
     expect(safeTool?.description).toBe("Read the action registry");
-    // Confirmation is now driven by MCP `elicitation/create`, not a `_meta`
-    // schema property — the tool description and schema must not advertise
-    // the legacy bypass mechanism.
+    // Confirmation is driven host-side by the native ConfirmDialog, not a
+    // `_meta` schema property — the tool description and schema must not
+    // advertise the legacy self-confirm bypass mechanism.
     expect(dangerousTool?.description).not.toContain("_meta");
     expect(dangerousTool?.description).not.toContain("Requires explicit confirmation");
     expect(safeTool?.inputSchema.additionalProperties).toBe(false);
@@ -547,8 +547,8 @@ describe("McpServerService", () => {
     });
 
     // Annotations — destructive tool. `destructiveHint: true` is the
-    // primary signal clients use to detect that elicitation will be
-    // invoked on the next `tools/call` for this tool.
+    // primary signal clients use to detect that a host confirmation will be
+    // required on the next `tools/call` for this tool.
     expect(dangerousTool?.annotations).toEqual({
       title: "Delete Worktree",
       readOnlyHint: false,
@@ -718,7 +718,7 @@ describe("McpServerService", () => {
     expect(wtTool?.annotations?.openWorldHint).toBe(true);
   });
 
-  it("falls back to renderer-modal dispatch when the client does not support elicitation", async () => {
+  it("routes every ungated confirm call to host confirmation (renderer-modal dispatch)", async () => {
     const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => {
       if (!payload.confirmed) {
         return {
@@ -760,11 +760,17 @@ describe("McpServerService", () => {
     });
 
     await service.start(window);
-    // Default test client does not advertise `elicitation` capability, so
-    // the server forwards the unconfirmed dispatch to the renderer bridge —
-    // exactly the fallback behavior we want to preserve for non-elicitation
-    // clients.
-    const { client, transport } = await connectClient(service.currentPort!);
+    // Every `danger: "confirm"` call is dispatched UNCONFIRMED to the renderer
+    // bridge so the human approves it host-side — even for a client that
+    // advertises `elicitation.form` and would auto-accept (#11342). The
+    // capability + handler are installed precisely so `onElicit` being never
+    // called is a genuine regression guard: reintroducing the vulnerable branch
+    // would invoke it and flip the dispatch to confirmed:true.
+    const onElicit = vi.fn(async (): Promise<ElicitResult> => ({ action: "accept", content: {} }));
+    const { client, transport } = await connectClient(service.currentPort!, undefined, {
+      capabilities: { elicitation: { form: {} } },
+      onElicit,
+    });
     transports.push(transport);
 
     const unconfirmed = getTextResult(
@@ -774,6 +780,7 @@ describe("McpServerService", () => {
       })
     );
 
+    expect(onElicit).not.toHaveBeenCalled();
     expect(unconfirmed.isError).toBe(true);
     expect(unconfirmed.content[0]).toMatchObject({ type: "text" });
     expect(unconfirmed.content[0].text).toContain("CONFIRMATION_REQUIRED");
@@ -896,9 +903,9 @@ describe("McpServerService", () => {
     transports.push(transport);
 
     // Legacy clients that still pass `_meta.confirmed=true` should NOT
-    // self-confirm — the elicitation/modal flow is the only way to
-    // approve a destructive action. The `_meta` key is stripped from
-    // the args envelope before reaching the renderer.
+    // self-confirm — host-side confirmation in the native ConfirmDialog is the
+    // only way to approve a destructive action. The `_meta` key is stripped
+    // from the args envelope before reaching the renderer.
     const result = getTextResult(
       await client.callTool({
         name: "worktree.delete",
@@ -922,7 +929,7 @@ describe("McpServerService", () => {
     );
   });
 
-  describe("elicitation confirmation flow", () => {
+  describe("host confirmation is authoritative — client elicitation is never authorization (#11342)", () => {
     type AuditEntry = {
       result: "success" | "error" | "confirmation-pending" | "unauthorized";
       errorCode?: string;
@@ -948,8 +955,16 @@ describe("McpServerService", () => {
       });
     }
 
-    it("dispatches with confirmed=true after the client accepts the elicitation", async () => {
-      const dispatchMock = createDestructiveDispatchMock();
+    it("dispatches only after the host renderer approves — the client's elicitation handler is never used", async () => {
+      // The renderer bridge is the host-side confirmation surface: it receives
+      // the UNCONFIRMED dispatch, shows the native ConfirmDialog, and on human
+      // approval returns the result plus an "approved" decision. The malicious
+      // client advertises `elicitation.form` and auto-accepts, but the server
+      // must never consult it — approval authority lives host-side (#11342).
+      const dispatchMock = vi.fn(() => ({
+        result: { ok: true, result: { deleted: true } } as ActionDispatchResult,
+        confirmationDecision: "approved" as const,
+      }));
       const onElicit = vi.fn(async (): Promise<ElicitResult> => ({
         action: "accept",
         content: {},
@@ -980,29 +995,42 @@ describe("McpServerService", () => {
         })
       );
 
-      expect(onElicit).toHaveBeenCalledTimes(1);
+      // The self-declared elicitation capability is never exercised.
+      expect(onElicit).not.toHaveBeenCalled();
       expect(result.isError).not.toBe(true);
       expect(result.content[0].text).toContain('"deleted": true');
+      // Exactly one dispatch, sent UNCONFIRMED — the renderer owns the confirm.
       expect(dispatchMock).toHaveBeenCalledTimes(1);
       expect(dispatchMock).toHaveBeenNthCalledWith(
         1,
         expect.objectContaining({
           actionId: "worktree.delete",
           args: { worktreeId: "wt-123" },
-          confirmed: true,
+          confirmed: false,
         })
       );
 
       const records = readAuditRecords(service);
       expect(records).toHaveLength(1);
       expect(records[0].result).toBe("success");
+      // The decision recorded is the host renderer's, not a client-forged one.
       expect(records[0].confirmationDecision).toBe("approved");
     });
 
-    it("returns USER_REJECTED without dispatching when the client declines", async () => {
-      const dispatchMock = createDestructiveDispatchMock();
+    it("records USER_REJECTED from the host renderer without ever consulting the client", async () => {
+      // Human clicked Cancel in the native dialog: the renderer bridge returns
+      // USER_REJECTED with a "rejected" decision. The client's auto-accept
+      // elicitation handler must never be reached (#11342).
+      const dispatchMock = vi.fn(() => ({
+        result: {
+          ok: false,
+          error: { code: "USER_REJECTED", message: "User rejected the confirmation request." },
+        } as ActionDispatchResult,
+        confirmationDecision: "rejected" as const,
+      }));
       const onElicit = vi.fn(async (): Promise<ElicitResult> => ({
-        action: "decline",
+        action: "accept",
+        content: {},
       }));
       const { window } = createMockWindow({
         getManifest: () => [
@@ -1030,10 +1058,14 @@ describe("McpServerService", () => {
         })
       );
 
-      expect(onElicit).toHaveBeenCalledTimes(1);
+      expect(onElicit).not.toHaveBeenCalled();
       expect(result.isError).toBe(true);
       expect(result.content[0].text).toContain("USER_REJECTED");
-      expect(dispatchMock).not.toHaveBeenCalled();
+      expect(dispatchMock).toHaveBeenCalledTimes(1);
+      expect(dispatchMock).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ actionId: "worktree.delete", confirmed: false })
+      );
 
       const records = readAuditRecords(service);
       expect(records).toHaveLength(1);
@@ -1041,49 +1073,13 @@ describe("McpServerService", () => {
       expect(records[0].confirmationDecision).toBe("rejected");
     });
 
-    it("returns CONFIRMATION_TIMEOUT without dispatching when the client cancels", async () => {
-      const dispatchMock = createDestructiveDispatchMock();
-      const onElicit = vi.fn(async (): Promise<ElicitResult> => ({
-        action: "cancel",
-      }));
-      const { window } = createMockWindow({
-        getManifest: () => [
-          createManifestEntry({
-            id: "worktree.delete" as ActionId,
-            title: "Delete Worktree",
-            description: "Delete a worktree",
-            danger: "confirm",
-          }),
-        ],
-        dispatchAction: dispatchMock,
-      });
-
-      await service.start(window);
-      const { client, transport } = await connectClient(service.currentPort!, undefined, {
-        capabilities: { elicitation: { form: {} } },
-        onElicit,
-      });
-      transports.push(transport);
-
-      const result = getTextResult(
-        await client.callTool({
-          name: "worktree.delete",
-          arguments: { worktreeId: "wt-123" },
-        })
-      );
-
-      expect(onElicit).toHaveBeenCalledTimes(1);
-      expect(result.isError).toBe(true);
-      expect(result.content[0].text).toContain("CONFIRMATION_TIMEOUT");
-      expect(dispatchMock).not.toHaveBeenCalled();
-
-      const records = readAuditRecords(service);
-      expect(records).toHaveLength(1);
-      expect(records[0].errorCode).toBe("CONFIRMATION_TIMEOUT");
-      expect(records[0].confirmationDecision).toBe("timeout");
-    });
-
-    it("requests an empty-form elicitation so accept alone is the consent signal", async () => {
+    it("records confirmation-pending when the host returns CONFIRMATION_REQUIRED — never falls back to elicitation", async () => {
+      // The host confirmation surface returns CONFIRMATION_REQUIRED (the human
+      // was not reached). The client advertises `elicitation.form` and
+      // auto-accepts, but the server must NOT fall back to it to self-approve —
+      // that fallback would be the exact self-approval vulnerability (#11342).
+      // (The RendererBridgeUnavailableError no-window synthesis path itself is
+      // covered end-to-end in sessionServer.test.ts.)
       const dispatchMock = createDestructiveDispatchMock();
       const onElicit = vi.fn(async (): Promise<ElicitResult> => ({
         action: "accept",
@@ -1115,98 +1111,32 @@ describe("McpServerService", () => {
         })
       );
 
-      expect(onElicit).toHaveBeenCalledTimes(1);
-      const calls = onElicit.mock.calls as unknown as Array<
-        [{ params: { requestedSchema: { properties: Record<string, unknown> } } }]
-      >;
-      const captured = calls[0]?.[0];
-      expect(captured?.params.requestedSchema.properties).toEqual({});
-      expect(result.isError).not.toBe(true);
-      expect(dispatchMock).toHaveBeenCalledWith(expect.objectContaining({ confirmed: true }));
-    });
-
-    it("includes a summary of tool arguments in the elicitation message", async () => {
-      const dispatchMock = createDestructiveDispatchMock();
-      const onElicit = vi.fn(async (): Promise<ElicitResult> => ({
-        action: "accept",
-        content: {},
-      }));
-      const { window } = createMockWindow({
-        getManifest: () => [
-          createManifestEntry({
-            id: "worktree.delete" as ActionId,
-            title: "Delete Worktree",
-            description: "Delete a worktree",
-            danger: "confirm",
-          }),
-        ],
-        dispatchAction: dispatchMock,
-      });
-
-      await service.start(window);
-      const { client, transport } = await connectClient(service.currentPort!, undefined, {
-        capabilities: { elicitation: { form: {} } },
-        onElicit,
-      });
-      transports.push(transport);
-
-      await client.callTool({
-        name: "worktree.delete",
-        arguments: { worktreeId: "wt-very-specific-id" },
-      });
-
-      const calls = onElicit.mock.calls as unknown as Array<[{ params: { message: string } }]>;
-      const captured = calls[0]?.[0] as { params: { message: string } } | undefined;
-      expect(captured?.params.message).toContain("Delete Worktree");
-      // The args summary must appear in the prompt so a user reviewing
-      // the elicitation form can tell which entity is being affected.
-      expect(captured?.params.message).toContain("wt-very-specific-id");
-    });
-
-    it("returns ELICITATION_FAILED without dispatching when the elicit handler throws", async () => {
-      const dispatchMock = createDestructiveDispatchMock();
-      const onElicit = vi.fn(async () => {
-        throw new Error("elicit handler exploded");
-      });
-      const { window } = createMockWindow({
-        getManifest: () => [
-          createManifestEntry({
-            id: "worktree.delete" as ActionId,
-            title: "Delete Worktree",
-            description: "Delete a worktree",
-            danger: "confirm",
-          }),
-        ],
-        dispatchAction: dispatchMock,
-      });
-
-      await service.start(window);
-      const { client, transport } = await connectClient(service.currentPort!, undefined, {
-        capabilities: { elicitation: { form: {} } },
-        onElicit,
-      });
-      transports.push(transport);
-
-      const result = getTextResult(
-        await client.callTool({
-          name: "worktree.delete",
-          arguments: { worktreeId: "wt-1" },
-        })
-      );
-
+      expect(onElicit).not.toHaveBeenCalled();
       expect(result.isError).toBe(true);
-      expect(result.content[0].text).toContain("ELICITATION_FAILED");
-      expect(dispatchMock).not.toHaveBeenCalled();
+      expect(result.content[0].text).toContain("CONFIRMATION_REQUIRED");
+      expect(dispatchMock).toHaveBeenCalledTimes(1);
+      expect(dispatchMock).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ actionId: "worktree.delete", confirmed: false })
+      );
 
       const records = readAuditRecords(service);
       expect(records).toHaveLength(1);
-      expect(records[0].errorCode).toBe("ELICITATION_FAILED");
+      expect(records[0].result).toBe("confirmation-pending");
+      // No client-derived decision is ever recorded.
+      expect(records[0].confirmationDecision).toBeUndefined();
     });
 
-    it("preserves the approved confirmationDecision when dispatch fails after elicitation accepts", async () => {
-      const dispatchMock = vi.fn((): ActionDispatchResult => ({
-        ok: false,
-        error: { code: "EXECUTION_ERROR", message: "action exploded" },
+    it("keeps the host's approved decision in the audit even when the dispatch fails", async () => {
+      // The human approved in the native dialog (renderer returns an "approved"
+      // decision), but the underlying action then failed. The approval must
+      // still be recorded — a later failure must not erase it from the trail.
+      const dispatchMock = vi.fn(() => ({
+        result: {
+          ok: false,
+          error: { code: "EXECUTION_ERROR", message: "action exploded" },
+        } as ActionDispatchResult,
+        confirmationDecision: "approved" as const,
       }));
       const onElicit = vi.fn(async (): Promise<ElicitResult> => ({
         action: "accept",
@@ -1238,22 +1168,25 @@ describe("McpServerService", () => {
         })
       );
 
+      expect(onElicit).not.toHaveBeenCalled();
       expect(result.isError).toBe(true);
       expect(result.content[0].text).toContain("EXECUTION_ERROR");
       expect(dispatchMock).toHaveBeenCalledTimes(1);
-      expect(dispatchMock).toHaveBeenNthCalledWith(1, expect.objectContaining({ confirmed: true }));
+      // The dispatch reached the renderer UNCONFIRMED — approval came from the
+      // host envelope, never a client-forged confirmed:true (#11342).
+      expect(dispatchMock).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ actionId: "worktree.delete", confirmed: false })
+      );
 
       const records = readAuditRecords(service);
       expect(records).toHaveLength(1);
       expect(records[0].result).toBe("error");
       expect(records[0].errorCode).toBe("EXECUTION_ERROR");
-      // The user explicitly approved via elicitation — the fact that the
-      // subsequent dispatch failed must not erase that decision from the
-      // audit trail.
       expect(records[0].confirmationDecision).toBe("approved");
     });
 
-    it("does not invoke elicitation for non-destructive tools", async () => {
+    it("never sends an elicitation request for non-destructive tools", async () => {
       const dispatchMock = vi.fn((): ActionDispatchResult => ({
         ok: true,
         result: ["a", "b"],

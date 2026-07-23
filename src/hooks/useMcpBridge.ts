@@ -103,6 +103,13 @@ export function useMcpBridge(): void {
                   actionId,
                   actionTitle: definition.title,
                   actionDescription: definition.description,
+                  // Carry the "why this is gated" rationale into the host
+                  // confirm dialog so the human sees the same justification the
+                  // model does — parity with the removed elicitation prompt,
+                  // which used to be the only surface that showed it (#11342).
+                  ...(definition.dangerRationale
+                    ? { dangerRationale: definition.dangerRationale }
+                    : {}),
                   argsSummary: summarizeMcpArgs(args),
                   danger: definition.danger,
                   // Display-only requesting-bearer identity (#9157). Present

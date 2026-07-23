@@ -134,6 +134,16 @@ export function McpConfirmDialog() {
               </div>
             </div>
           )}
+          {current.dangerRationale && (
+            <div className="space-y-2">
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60">
+                Why this is gated
+              </div>
+              <div className="text-xs text-daintree-text/80 break-words">
+                {current.dangerRationale}
+              </div>
+            </div>
+          )}
           <div className="space-y-2">
             <div className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60">
               Arguments

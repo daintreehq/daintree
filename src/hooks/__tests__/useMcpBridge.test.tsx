@@ -238,6 +238,9 @@ describe("useMcpBridge", () => {
     expect(pending?.actionTitle).toBe("Delete Worktree");
     expect(pending?.danger).toBe("confirm");
     expect(pending?.argsSummary).toContain("wt-1");
+    // This manifest entry carries no dangerRationale, so the conditional spread
+    // must omit the property entirely (not set it to undefined).
+    expect(pending).not.toHaveProperty("dangerRationale");
     expect(mocks.dispatch).not.toHaveBeenCalled();
 
     useMcpConfirmStore.getState().resolveCurrent("approved");
@@ -253,6 +256,31 @@ describe("useMcpBridge", () => {
       result: { ok: true, result: { ok: true } },
       confirmationDecision: "approved",
     });
+  });
+
+  it("threads the action's dangerRationale into the confirm store so the dialog can show it (#11342)", async () => {
+    mocks.get.mockReturnValue(
+      confirmManifestEntry({
+        dangerRationale: "Permanently removes the worktree directory and uncommitted changes.",
+      })
+    );
+    mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-rationale",
+      actionId: "worktree.delete",
+      args: { worktreeId: "wt-1" },
+    });
+
+    await Promise.resolve();
+    expect(useMcpConfirmStore.getState().current?.dangerRationale).toBe(
+      "Permanently removes the worktree directory and uncommitted changes."
+    );
+
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
   });
 
   it("forwards the requesting-bearer identity into the confirm store (#9157)", async () => {
@@ -384,7 +412,7 @@ describe("useMcpBridge", () => {
     });
   });
 
-  it("skips the modal when the agent already supplied confirmed=true", async () => {
+  it("skips the modal when the dispatch arrives pre-authorized by a host grant (confirmed=true)", async () => {
     mocks.get.mockReturnValue(confirmManifestEntry());
     mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
 
