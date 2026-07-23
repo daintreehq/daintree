@@ -36,6 +36,11 @@ const BookmarkMutateArgsSchema = z.object({
   label: z.string().trim().min(1).max(120),
 });
 const BookmarkDeleteArgsSchema = z.object({ sessionId: z.string().min(1) });
+const BookmarkListArgsSchema = z
+  .object({
+    projectId: z.string().min(1).optional(),
+  })
+  .optional();
 export function registerAgentActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   const readAgentDiscoveryState = async () => {
     // These are the same normalized renderer stores the toolbar reads. Fall back to
@@ -650,17 +655,13 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     kind: "query",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z
-      .object({
-        projectId: z.string().min(1).optional(),
-      })
-      .optional(),
+    argsSchema: BookmarkListArgsSchema,
     resultSchema: z.object({
       bookmarks: z.array(AgentSessionRecordSchema),
     }),
     mcpOutputSchema: true,
     run: async (args: unknown, ctx: ActionContext) => {
-      const { projectId } = (args ?? {}) as { projectId?: string };
+      const projectId = BookmarkListArgsSchema.parse(args ?? {})?.projectId;
       // Bookmarks are project-scoped (privacy). Resolve the explicit arg, then the
       // caller's project context. With neither, DO NOT fall open to every project
       // — return empty; an all-project view is a deliberate future enhancement.

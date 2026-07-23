@@ -32,6 +32,7 @@ const m = vi.hoisted(() => ({
   renameBookmark: vi.fn(),
   deleteBookmark: vi.fn(),
   listBookmarks: vi.fn(() => []),
+  readSessionHistorySync: vi.fn<() => { sessionId: string; projectId: string | null }[]>(() => []),
   // Typed so the evicted-ledger case (mockReturnValue(undefined)) type-checks.
   currentGeneration: vi.fn<() => number | undefined>(() => 1),
   isCurrent: vi.fn(() => true),
@@ -42,6 +43,7 @@ vi.mock("../../../../services/pty/agentSessionHistory.js", () => ({
   listAgentSessions: vi.fn(() => []),
   clearAgentSessions: vi.fn().mockResolvedValue(undefined),
   pruneAgentSessions: vi.fn().mockResolvedValue(undefined),
+  readSessionHistorySync: m.readSessionHistorySync,
   promoteBookmark: m.promoteBookmark,
   renameBookmark: m.renameBookmark,
   deleteBookmark: m.deleteBookmark,
@@ -198,6 +200,17 @@ describe("prepareBookmark handler", () => {
     expect(ptyClient.gracefulKill).not.toHaveBeenCalled();
   });
 
+  it("rejects NOT_BOOKMARKABLE for an agent pane with no owning project", async () => {
+    ptyClient.getTerminalAsync.mockResolvedValue({ ...agentInfo, projectId: undefined });
+    register();
+    await expect(
+      handlerFor(CHANNELS.AGENT_SESSION_PREPARE_BOOKMARK)({}, { terminalId: "term-1", label: "L" })
+    ).rejects.toMatchObject({ code: "NOT_BOOKMARKABLE" });
+    // Refused before the capture kill, so the pane survives the rejection.
+    expect(ptyClient.gracefulKill).not.toHaveBeenCalled();
+    expect(m.journalAgentSessionRecord).not.toHaveBeenCalled();
+  });
+
   it("rejects SESSION_CAPTURE_FAILED when no session id is captured", async () => {
     ptyClient.getTerminalAsync.mockResolvedValue(agentInfo);
     ptyClient.gracefulKill.mockResolvedValue(null);
@@ -302,6 +315,18 @@ describe("bookmark mutator handlers", () => {
     await expect(promote({}, { sessionId: "s1", label: "L" })).rejects.toMatchObject({
       code: "PERSIST_FAILED",
     });
+  });
+
+  it("promote rejects NOT_BOOKMARKABLE for a record with no owning project", async () => {
+    m.readSessionHistorySync.mockReturnValueOnce([{ sessionId: "s-orphan", projectId: null }]);
+    register();
+
+    await expect(
+      handlerFor(CHANNELS.AGENT_SESSION_PROMOTE_BOOKMARK)({}, { sessionId: "s-orphan", label: "L" })
+    ).rejects.toMatchObject({ code: "NOT_BOOKMARKABLE" });
+    // Nothing is written, so the journal never gains a bookmark the
+    // project-scoped list could not surface.
+    expect(m.promoteBookmark).not.toHaveBeenCalled();
   });
 
   it("rename returns the record, maps null to SESSION_NOT_FOUND and a throw to PERSIST_FAILED", async () => {

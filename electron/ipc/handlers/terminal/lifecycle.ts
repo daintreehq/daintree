@@ -153,6 +153,7 @@ import {
   listAgentSessions,
   clearAgentSessions,
   pruneAgentSessions,
+  readSessionHistorySync,
   promoteBookmark,
   renameBookmark,
   deleteBookmark,
@@ -870,6 +871,17 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         message: `Agent ${info.launchAgentId} has no exact-session resume to bookmark`,
       });
     }
+    // Bookmarks are only reachable through the project-scoped list, so pinning a
+    // record with no owning project would strand it: exempt from age pruning and
+    // the per-worktree cap, yet never listable and so never deletable. Refuse
+    // before the capture kill rather than orphan it. A missing projectId is the
+    // degenerate spawn path that already warns "spawned without projectId".
+    if (!info.projectId) {
+      throw new AppError({
+        code: "NOT_BOOKMARKABLE",
+        message: `Terminal ${terminalId} has no owning project to scope a bookmark to`,
+      });
+    }
 
     // Freeze the incarnation before capture (mirrors the kill path) so the
     // record stays attributed to the conversation that produced it. `?? null` is
@@ -984,9 +996,23 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     payload: z.output<typeof BookmarkMutatePayloadSchema>
   ): Promise<AgentSessionRecord> => {
     const { app } = await import("electron");
+    const userData = app.getPath("userData");
+    // Same scoping guard as the capture path: a record with no owning project can
+    // never appear in the project-scoped bookmark list, so promoting it would
+    // create a pin the user can't see or delete. A record's projectId is fixed at
+    // journal time, so reading it before the write is sufficient; a record that
+    // disappears in between still falls through to promoteBookmark's null →
+    // SESSION_NOT_FOUND.
+    const target = readSessionHistorySync(userData).find((r) => r.sessionId === payload.sessionId);
+    if (target && !target.projectId) {
+      throw new AppError({
+        code: "NOT_BOOKMARKABLE",
+        message: `Session ${payload.sessionId} has no owning project to scope a bookmark to`,
+      });
+    }
     let record: AgentSessionRecord | null;
     try {
-      record = await promoteBookmark(payload.sessionId, payload.label, app.getPath("userData"));
+      record = await promoteBookmark(payload.sessionId, payload.label, userData);
     } catch (err) {
       throw asBookmarkPersistError(err, payload.sessionId);
     }

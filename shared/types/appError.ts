@@ -30,5 +30,4 @@ export type AppErrorCode =
   | "STALE_GENERATION"
   | "PERSIST_FAILED"
   | "SESSION_NOT_FOUND"
-  | "WORKTREE_MISSING"
   | "INTERNAL";
