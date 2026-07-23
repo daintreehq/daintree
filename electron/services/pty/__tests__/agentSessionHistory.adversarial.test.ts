@@ -265,9 +265,7 @@ describe("agentSessionHistory — transient read faults (adversarial)", () => {
     await fsp.writeFile(getSessionHistoryPath(userDataDir)!, "already being quarantined");
     h.armed.renameFault = "ENOENT";
 
-    await expect(
-      persistAgentSession(rec("survivor", "wt-1"), userDataDir)
-    ).resolves.toBeUndefined();
+    await expect(persistAgentSession(rec("survivor", "wt-1"), userDataDir)).resolves.toBeTruthy(); // persist now echoes the durable record
 
     expect((await readSessionHistory(userDataDir)).map((r) => r.sessionId)).toEqual(["survivor"]);
   });
@@ -282,17 +280,18 @@ describe("agentSessionHistory — transient read faults (adversarial)", () => {
     expect(await quarantineSidecars()).toEqual([]);
   });
 
-  it("clear-all writes [] without reading, even when the journal is unreadable", async () => {
+  it("clear-all aborts on an unreadable journal rather than wiping bookmarks it can't see", async () => {
+    // Clear-all now reads first so it can retain bookmarks (#11288). An
+    // unreadable journal must therefore abort — overwriting with the retained
+    // set would silently drop any bookmark the failed read couldn't surface.
     await seedJournal([rec("a", "wt-1"), rec("b", "wt-2")]);
-    // Arm a READ fault: clear-all (no worktreeId) must take its read-free branch.
-    // refreshCacheAfterWrite legitimately calls statSync, so a stat fault would
-    // misfire — a read fault proves nothing read the journal.
-    h.armed.read = { code: "EACCES" };
+    const before = await rawOnDisk();
+    h.armed.stat = { code: "EIO" };
 
-    await expect(clearAgentSessions(undefined, userDataDir)).resolves.toBeUndefined();
+    await expect(clearAgentSessions(undefined, userDataDir)).rejects.toThrow(/could not be read/);
 
-    expect(h.armed.read).not.toBeNull(); // never consumed ⇒ no read happened
-    expect(await rawOnDisk()).toBe("[]");
+    expect(await rawOnDisk()).toBe(before);
+    expect(await quarantineSidecars()).toEqual([]);
   });
 
   it("recovers on the write queue: a follow-up persist lands after one aborts", async () => {
@@ -307,7 +306,7 @@ describe("agentSessionHistory — transient read faults (adversarial)", () => {
     const second = persistAgentSession(rec("landed", "wt-4"), userDataDir);
 
     await expect(first).rejects.toThrow(/could not be read/);
-    await expect(second).resolves.toBeUndefined();
+    await expect(second).resolves.toBeTruthy(); // persist now echoes the durable record
 
     const after = (await readSessionHistory(userDataDir)).map((r) => r.sessionId).sort();
     expect(after).toEqual(["a", "b", "landed"]); // "blocked" never landed; seeds survived

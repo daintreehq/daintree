@@ -272,7 +272,7 @@ export function registerWorktreeSessionActions(
     id: "worktree.sessions.clearHistory",
     title: "Clear Session History",
     description:
-      "Permanently delete this worktree's recorded resumable-session history so those sessions no longer appear when resuming agents. Open sessions are unaffected.",
+      "Permanently delete this worktree's recorded resumable-session history so those sessions no longer appear when resuming agents. Open sessions are unaffected, and bookmarked sessions are exempt — `session.bookmark.delete` is the only way to remove one.",
     category: "worktree",
     kind: "command",
     danger: "confirm",
@@ -286,7 +286,7 @@ export function registerWorktreeSessionActions(
     palette: { mode: "hidden" },
     scope: "renderer",
     dangerRationale:
-      "Permanently deletes this worktree's recorded resumable-session history. Records can't be recovered.",
+      "Permanently deletes this worktree's recorded resumable-session history, and those records can't be recovered. Bookmarked sessions are kept — deleting a bookmark is the only way to remove one.",
     argsSchema: clearHistoryArgsSchema,
     run: async (args: unknown, ctx: ActionContext) => {
       const parsed = clearHistoryArgsSchema.safeParse(args ?? {});

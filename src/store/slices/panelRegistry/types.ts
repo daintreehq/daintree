@@ -108,7 +108,15 @@ export interface PanelRegistrySlice {
   beginSpawnBatch: () => HydrationBatchToken | null;
   /** Apply all panels collected since `beginSpawnBatch` in a single `set()`. No-op for a `null` token. */
   flushSpawnBatch: (token: HydrationBatchToken | null) => void;
-  removePanel: (id: string) => void;
+  /**
+   * Remove a panel and its backing resources. `backendAlreadyClosed` skips ONLY
+   * the redundant backend `terminal.kill` — used by Bookmark and close (#11288),
+   * where main's prepareBookmark already gracefully shut the agent down. All
+   * renderer cleanup (ledger close, xterm disposal, store/tab-group removal,
+   * middleware) still runs, and skipping the second kill avoids racing a
+   * same-id successor that may have respawned during capture.
+   */
+  removePanel: (id: string, options?: { backendAlreadyClosed?: boolean }) => void;
   emptyTrash: (ids: string[]) => void;
   /**
    * Rename a panel. `source` is the ownership rung doing the write: `"user"`

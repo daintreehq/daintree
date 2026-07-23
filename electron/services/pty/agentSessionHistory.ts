@@ -11,6 +11,7 @@ import {
   OWNER_RWX_DIR_MODE,
 } from "../../utils/fs.js";
 import type {
+  AgentSessionBookmarkMetadata,
   AgentSessionRecord,
   AgentSessionRetentionDays,
 } from "../../../shared/types/ipc/agentSessionHistory.js";
@@ -68,27 +69,51 @@ function evictRecords(
   now: number,
   retentionMs: number = SESSION_HISTORY_TTL_MS
 ): AgentSessionRecord[] {
-  // Filter expired records (retentionMs === Infinity ⇒ never age out)
-  const fresh = records.filter((r) => now - r.savedAt < retentionMs);
-
-  // Deduplicate on sessionId, keeping the newest. Multiple close paths can fire
-  // for the same terminal (e.g. a user kill landing mid-shutdown), each writing
-  // a record with the same resumable sessionId — without this the journal would
-  // accumulate stale duplicates. Records arrive newest-first, so the first
-  // occurrence of each sessionId wins.
-  const seen = new Set<string>();
+  // Unified newest-wins dedup by sessionId, run BEFORE partitioning so a session
+  // that appears as both a bookmarked and an ordinary record collapses to ONE
+  // entry (partitioning first could keep two records for the same native
+  // session). Records arrive newest-first (prepended on write), so the first
+  // occurrence of each sessionId wins the position. A newer record that won the
+  // position but lacks a bookmark INHERITS the bookmark from an older duplicate
+  // — otherwise resuming a bookmarked session and re-journaling it as ordinary
+  // history would silently drop the pin (the maintainer-flagged dedup hazard).
+  // An explicit bookmark already on the winner is left untouched, so a
+  // deliberate re-bookmark with a fresh `bookmarkedAt` still wins. Winners are
+  // cloned; input records are never mutated (readers share cached arrays).
+  const winners = new Map<string, AgentSessionRecord>();
   const deduped: AgentSessionRecord[] = [];
-  for (const r of fresh) {
-    if (r.sessionId) {
-      if (seen.has(r.sessionId)) continue;
-      seen.add(r.sessionId);
+  for (const r of records) {
+    if (!r.sessionId) {
+      deduped.push(r);
+      continue;
     }
-    deduped.push(r);
+    const existing = winners.get(r.sessionId);
+    if (!existing) {
+      const clone = { ...r };
+      winners.set(r.sessionId, clone);
+      deduped.push(clone);
+    } else if (!existing.bookmark && r.bookmark && existing.agentId === r.agentId) {
+      // Carry a pin forward only within the same agent — a cross-agent sessionId
+      // collision must never attach one agent's bookmark to another's record.
+      existing.bookmark = r.bookmark;
+    }
   }
 
-  // Enforce per-worktree cap
-  const buckets = new Map<string, AgentSessionRecord[]>();
+  // Partition. Bookmarked records are user-pinned and exempt from BOTH the age
+  // window and the per-worktree cap; only ordinary history is pruned.
+  const bookmarked: AgentSessionRecord[] = [];
+  const ordinary: AgentSessionRecord[] = [];
   for (const r of deduped) {
+    if (r.bookmark) bookmarked.push(r);
+    else ordinary.push(r);
+  }
+
+  // Age filter (ordinary only; retentionMs === Infinity ⇒ never age out)
+  const fresh = ordinary.filter((r) => now - r.savedAt < retentionMs);
+
+  // Per-worktree cap (ordinary only)
+  const buckets = new Map<string, AgentSessionRecord[]>();
+  for (const r of fresh) {
     const key = r.worktreeId ?? "__global__";
     let bucket = buckets.get(key);
     if (!bucket) {
@@ -98,7 +123,7 @@ function evictRecords(
     bucket.push(r);
   }
 
-  const result: AgentSessionRecord[] = [];
+  const result: AgentSessionRecord[] = [...bookmarked];
   for (const bucket of buckets.values()) {
     // Records are ordered newest-first (prepended on write), so slice keeps the most recent
     result.push(...bucket.slice(0, MAX_RECORDS_PER_WORKTREE));
@@ -107,6 +132,11 @@ function evictRecords(
   // Maintain newest-first global order
   result.sort((a, b) => b.savedAt - a.savedAt);
   return result;
+}
+
+/** Records that carry bookmark metadata are the user's durable pins. */
+function isBookmarked(r: AgentSessionRecord): boolean {
+  return r.bookmark !== undefined;
 }
 
 /**
@@ -161,13 +191,27 @@ function normalizeRecords(parsed: unknown): AgentSessionRecord[] {
   if (!Array.isArray(parsed)) {
     throw new InvalidSessionHistoryShapeError();
   }
-  return parsed.map((raw) => {
-    if (raw && typeof raw === "object" && "snapshot" in raw) {
-      const { snapshot: _snapshot, ...rest } = raw as Record<string, unknown>;
-      return rest as unknown as AgentSessionRecord;
+  const records: AgentSessionRecord[] = [];
+  for (const raw of parsed) {
+    // Drop malformed elements (null, non-object, or missing a string sessionId)
+    // rather than passing them to eviction/listing readers that assume a
+    // well-formed record — a valid-JSON but garbage array (corrupt, hand-edited,
+    // or a newer schema) must degrade gracefully, not crash "never errors" reads.
+    if (
+      !raw ||
+      typeof raw !== "object" ||
+      typeof (raw as { sessionId?: unknown }).sessionId !== "string"
+    ) {
+      continue;
     }
-    return raw as AgentSessionRecord;
-  });
+    if ("snapshot" in raw) {
+      const { snapshot: _snapshot, ...rest } = raw as Record<string, unknown>;
+      records.push(rest as unknown as AgentSessionRecord);
+    } else {
+      records.push(raw as AgentSessionRecord);
+    }
+  }
+  return records;
 }
 
 // In-memory cache of the parsed journal, keyed by resolved file path. The resume
@@ -370,11 +414,11 @@ export async function persistAgentSession(
   record: Omit<AgentSessionRecord, "savedAt">,
   userData?: string,
   retentionDays?: AgentSessionRetentionDays
-): Promise<void> {
+): Promise<AgentSessionRecord | null> {
   const filePath = getSessionHistoryPath(userData);
-  if (!filePath) return;
+  if (!filePath) return null;
 
-  await enqueueWrite(async () => {
+  return enqueueWrite(async () => {
     const dir = path.dirname(filePath);
     await mkdir(dir, { recursive: true, mode: OWNER_RWX_DIR_MODE });
     await tightenDirPermissions(dir);
@@ -388,6 +432,9 @@ export async function persistAgentSession(
       // the on-disk records. Abort so a later capture retries once it's readable.
       throw unreadableJournalError(existing.error);
     }
+    // evictRecords carries an existing bookmark forward onto this fresh record
+    // when the session was previously pinned, so re-journaling a resumed
+    // bookmark never drops the pin.
     const updated = evictRecords(
       [fullRecord, ...existing.records],
       now,
@@ -398,6 +445,9 @@ export async function persistAgentSession(
       mode: OWNER_RW_FILE_MODE,
     });
     refreshCacheAfterWrite(filePath, updated);
+    // Return the record as it actually landed (bookmark possibly carried
+    // forward) so a bookmark capture can echo the durable record to the caller.
+    return updated.find((r) => r.sessionId === fullRecord.sessionId) ?? fullRecord;
   });
 }
 
@@ -500,23 +550,156 @@ export async function clearAgentSessions(worktreeId?: string, userData?: string)
   // Share the write queue with persistAgentSession so a clear can't interleave
   // with an in-flight persist's read-modify-write and resurrect a cleared record.
   await enqueueWrite(async () => {
-    if (worktreeId === undefined) {
-      // Clear all
-      await resilientAtomicWriteFile(filePath, "[]", "utf-8", { mode: OWNER_RW_FILE_MODE });
-      refreshCacheAfterWrite(filePath, []);
-      return;
-    }
-
+    // "Clear session history" spares bookmarks (#11288): they are the user's
+    // durable pins and only a deliberate Delete bookmark (or a full app-data
+    // reset) removes them. This applies to both the clear-all and scoped-clear
+    // branches, so even clear-all must read first to discover which records are
+    // bookmarked rather than blindly overwriting with `[]`.
     const existing = await readSessionHistoryResult(userData);
     if (existing.status === "unreadable") {
-      // Clearing one worktree must not wipe every other worktree's records when
-      // the read fails; abort so the untouched journal survives.
+      // A failed read must not wipe on-disk records (all worktrees for clear-all,
+      // or every other worktree for a scoped clear); abort so the journal survives.
       throw unreadableJournalError(existing.error);
     }
-    const filtered = existing.records.filter((r) => r.worktreeId !== worktreeId);
-    await resilientAtomicWriteFile(filePath, JSON.stringify(filtered, null, 2), "utf-8", {
+    const retained =
+      worktreeId === undefined
+        ? existing.records.filter(isBookmarked)
+        : existing.records.filter((r) => r.worktreeId !== worktreeId || isBookmarked(r));
+    await resilientAtomicWriteFile(filePath, JSON.stringify(retained, null, 2), "utf-8", {
       mode: OWNER_RW_FILE_MODE,
     });
-    refreshCacheAfterWrite(filePath, filtered);
+    refreshCacheAfterWrite(filePath, retained);
   });
+}
+
+/**
+ * Pin an existing history record as a bookmark in place, keyed by `sessionId`
+ * (#11288). Preserves the record's full resume data; a bookmarked record is
+ * exempt from age pruning and the per-worktree cap. Re-promoting an already
+ * bookmarked session updates its label but keeps the original `bookmarkedAt`.
+ * Returns the promoted record, or `null` when no record with that session id
+ * exists (the caller maps that to `SESSION_NOT_FOUND`). Shares the write queue.
+ */
+export async function promoteBookmark(
+  sessionId: string,
+  label: string,
+  userData?: string
+): Promise<AgentSessionRecord | null> {
+  const filePath = getSessionHistoryPath(userData);
+  if (!filePath) return null;
+
+  return enqueueWrite(async () => {
+    const existing = await readSessionHistoryResult(userData);
+    if (existing.status === "unreadable") {
+      throw unreadableJournalError(existing.error);
+    }
+    let promoted: AgentSessionRecord | null = null;
+    const next = existing.records.map((r) => {
+      // Records are newest-first and deduped by sessionId, so the first match is
+      // the newest; the guard keeps a pathological duplicate from double-promoting.
+      if (r.sessionId !== sessionId || promoted) return r;
+      const bookmark: AgentSessionBookmarkMetadata = r.bookmark
+        ? { ...r.bookmark, label }
+        : { bookmarkedAt: Date.now(), label };
+      promoted = { ...r, bookmark };
+      return promoted;
+    });
+    if (!promoted) return null;
+    await resilientAtomicWriteFile(filePath, JSON.stringify(next, null, 2), "utf-8", {
+      mode: OWNER_RW_FILE_MODE,
+    });
+    refreshCacheAfterWrite(filePath, next);
+    return promoted;
+  });
+}
+
+/**
+ * Rename a bookmark's label without touching any resume field (#11288). Only a
+ * record that is already bookmarked can be renamed. Returns the renamed record,
+ * or `null` when no bookmarked record with that session id exists. Shares the
+ * write queue.
+ */
+export async function renameBookmark(
+  sessionId: string,
+  label: string,
+  userData?: string
+): Promise<AgentSessionRecord | null> {
+  const filePath = getSessionHistoryPath(userData);
+  if (!filePath) return null;
+
+  return enqueueWrite(async () => {
+    const existing = await readSessionHistoryResult(userData);
+    if (existing.status === "unreadable") {
+      throw unreadableJournalError(existing.error);
+    }
+    let renamed: AgentSessionRecord | null = null;
+    const next = existing.records.map((r) => {
+      if (r.sessionId !== sessionId || !r.bookmark || renamed) return r;
+      renamed = { ...r, bookmark: { ...r.bookmark, label } };
+      return renamed;
+    });
+    if (!renamed) return null;
+    await resilientAtomicWriteFile(filePath, JSON.stringify(next, null, 2), "utf-8", {
+      mode: OWNER_RW_FILE_MODE,
+    });
+    refreshCacheAfterWrite(filePath, next);
+    return renamed;
+  });
+}
+
+/**
+ * Delete one bookmark by stripping its `bookmark` metadata and demoting the
+ * record back to ordinary history (#11288). It does NOT remove the resume
+ * record itself — a record promoted from history returns to history, and a
+ * bookmark-and-closed record stays resumable for the normal retention window.
+ * The demoted record is immediately re-evicted so a record that survived only
+ * because it was pinned ages out or loses its per-worktree cap contest at once.
+ * Never touches the provider transcript. Returns `true` when a bookmark was
+ * removed, `false` when no bookmarked record with that session id exists (the
+ * caller maps that to `SESSION_NOT_FOUND`). Shares the write queue.
+ */
+export async function deleteBookmark(
+  sessionId: string,
+  userData?: string,
+  retentionDays?: AgentSessionRetentionDays
+): Promise<boolean> {
+  const filePath = getSessionHistoryPath(userData);
+  if (!filePath) return false;
+
+  return enqueueWrite(async () => {
+    const existing = await readSessionHistoryResult(userData);
+    if (existing.status === "unreadable") {
+      throw unreadableJournalError(existing.error);
+    }
+    const hasTarget = existing.records.some((r) => r.sessionId === sessionId && r.bookmark);
+    if (!hasTarget) return false;
+
+    const stripped = existing.records.map((r) => {
+      if (r.sessionId !== sessionId || !r.bookmark) return r;
+      const { bookmark: _bookmark, ...rest } = r;
+      return rest;
+    });
+    const now = Date.now();
+    const evicted = evictRecords(stripped, now, retentionDaysToMs(retentionDays));
+    await resilientAtomicWriteFile(filePath, JSON.stringify(evicted, null, 2), "utf-8", {
+      mode: OWNER_RW_FILE_MODE,
+    });
+    refreshCacheAfterWrite(filePath, evicted);
+    return true;
+  });
+}
+
+/**
+ * List the user's bookmarks, newest-first by `bookmarkedAt` (#11288). Read-only
+ * and project-scoped when `projectId` is supplied. Runs eviction so the result
+ * is deduped and any carried-forward bookmark is reflected; bookmarks are exempt
+ * from pruning, so retention has no effect here. Never errors — returns `[]`
+ * when the journal is empty or unreadable.
+ */
+export function listBookmarks(projectId?: string, userData?: string): AgentSessionRecord[] {
+  const records = readSessionHistorySync(userData);
+  const evicted = evictRecords(records, Date.now());
+  const bookmarks = evicted.filter(isBookmarked);
+  const scoped = projectId ? bookmarks.filter((r) => r.projectId === projectId) : bookmarks;
+  return scoped.sort((a, b) => (b.bookmark?.bookmarkedAt ?? 0) - (a.bookmark?.bookmarkedAt ?? 0));
 }

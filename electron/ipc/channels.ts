@@ -71,6 +71,11 @@ export const CHANNELS = {
   AGENT_SESSION_CLEAR: "agent-session:clear",
   AGENT_SESSION_GET_RETENTION: "agent-session:get-retention",
   AGENT_SESSION_SET_RETENTION: "agent-session:set-retention",
+  AGENT_SESSION_PREPARE_BOOKMARK: "agent-session:prepare-bookmark",
+  AGENT_SESSION_PROMOTE_BOOKMARK: "agent-session:promote-bookmark",
+  AGENT_SESSION_RENAME_BOOKMARK: "agent-session:rename-bookmark",
+  AGENT_SESSION_DELETE_BOOKMARK: "agent-session:delete-bookmark",
+  AGENT_SESSION_LIST_BOOKMARKS: "agent-session:list-bookmarks",
 
   FILES_SEARCH: "files:search",
   FILES_READ: "files:read",

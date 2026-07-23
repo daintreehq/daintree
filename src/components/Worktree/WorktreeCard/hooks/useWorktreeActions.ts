@@ -194,7 +194,7 @@ export function useWorktreeActions({
       isOpen: true,
       title: `Clear session history for '${label}'?`,
       description:
-        "This permanently deletes this worktree's recorded resumable-session history. Open sessions aren't affected; the records can't be recovered.",
+        "This permanently deletes this worktree's recorded resumable-session history, and those records can't be recovered. Open sessions aren't affected, and bookmarked sessions are kept — deleting a bookmark is the only way to remove one.",
       confirmLabel: "Clear history",
       variant: "destructive",
       onConfirm: () => {

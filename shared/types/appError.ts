@@ -23,4 +23,11 @@ export type AppErrorCode =
   | "PAYLOAD_TOO_LARGE"
   | "RECIPE_STALE_CONFLICT"
   | "PLUGIN_ACTIVATION_FAILED"
+  // Session-bookmark capture/persistence outcomes (#11288). Stable codes so the
+  // UI (and MCP/automation callers) surface copy from the code, not exception text.
+  | "NOT_BOOKMARKABLE"
+  | "SESSION_CAPTURE_FAILED"
+  | "STALE_GENERATION"
+  | "PERSIST_FAILED"
+  | "SESSION_NOT_FOUND"
   | "INTERNAL";

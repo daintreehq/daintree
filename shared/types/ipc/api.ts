@@ -72,7 +72,11 @@ import type {
   AgentHelpRequest,
   AgentHelpResult,
 } from "./agent.js";
-import type { AgentSessionRecord, AgentSessionRetentionDays } from "./agentSessionHistory.js";
+import type {
+  AgentSessionBookmarkMetadata,
+  AgentSessionRecord,
+  AgentSessionRetentionDays,
+} from "./agentSessionHistory.js";
 import type {
   DemoScreenshotResult,
   DemoStartCapturePayload,
@@ -1303,6 +1307,17 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     clear(worktreeId?: string): Promise<void>;
     getRetentionDays(): Promise<AgentSessionRetentionDays>;
     setRetentionDays(days: AgentSessionRetentionDays): Promise<void>;
+    // Session bookmarks (#11288). `metadata` carries only pane-presentation
+    // hints; `bookmarkedAt`/`label` are set by main.
+    prepareBookmark(input: {
+      terminalId: string;
+      label: string;
+      metadata?: Omit<AgentSessionBookmarkMetadata, "bookmarkedAt" | "label">;
+    }): Promise<{ record: AgentSessionRecord }>;
+    promoteBookmark(input: { sessionId: string; label: string }): Promise<AgentSessionRecord>;
+    renameBookmark(input: { sessionId: string; label: string }): Promise<AgentSessionRecord>;
+    deleteBookmark(input: { sessionId: string }): Promise<void>;
+    listBookmarks(input?: { projectId?: string }): Promise<AgentSessionRecord[]>;
   };
   // clipboard is generated — see GeneratedElectronAPI.
   webUtils: {

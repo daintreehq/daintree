@@ -103,7 +103,7 @@ function buildCopy(pending: TerminalPendingDestructiveActionSnapshot): DialogCop
       return {
         title: "Clear session history for this worktree?",
         description:
-          "Permanently deletes this worktree's recorded resumable-session history so those sessions no longer appear when resuming agents. Open sessions are unaffected; the records can't be recovered.",
+          "Permanently deletes this worktree's recorded resumable-session history so those sessions no longer appear when resuming agents, and those records can't be recovered. Open sessions are unaffected, and bookmarked sessions are kept — deleting a bookmark is the only way to remove one.",
         confirmLabel: "Clear session history",
       };
     }

@@ -36,6 +36,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { worktreeId?: string | undefined }];
     result: void;
   };
+  "agent-session:delete-bookmark": {
+    args: [payload: { sessionId: string }];
+    result: void;
+  };
   "agent-session:get-retention": {
     args: [];
     result: import("./agentSessionHistory.js").AgentSessionRetentionDays;
@@ -43,6 +47,40 @@ export interface GeneratedIpcInvokeMap {
   "agent-session:list": {
     args: [payload: { worktreeId?: string | undefined }];
     result: import("./agentSessionHistory.js").AgentSessionRecord[];
+  };
+  "agent-session:list-bookmarks": {
+    args: [payload: { projectId?: string | undefined } | undefined];
+    result: import("./agentSessionHistory.js").AgentSessionRecord[];
+  };
+  "agent-session:prepare-bookmark": {
+    args: [
+      payload: {
+        terminalId: string;
+        label: string;
+        metadata?:
+          | {
+              sourcePanelId?: string | undefined;
+              sourceLocation?: "grid" | "dock" | undefined;
+              titleMode?: "default" | "custom" | "user" | undefined;
+              agentPresetId?: string | undefined;
+              agentPresetColor?: string | undefined;
+              originalPresetId?: string | undefined;
+              isUsingFallback?: boolean | undefined;
+              fallbackChainIndex?: number | undefined;
+              isInputLocked?: boolean | undefined;
+            }
+          | undefined;
+      },
+    ];
+    result: { record: import("./agentSessionHistory.js").AgentSessionRecord };
+  };
+  "agent-session:promote-bookmark": {
+    args: [payload: { sessionId: string; label: string }];
+    result: import("./agentSessionHistory.js").AgentSessionRecord;
+  };
+  "agent-session:rename-bookmark": {
+    args: [payload: { sessionId: string; label: string }];
+    result: import("./agentSessionHistory.js").AgentSessionRecord;
   };
   "agent-session:set-retention": {
     args: [days: import("./agentSessionHistory.js").AgentSessionRetentionDays];
