@@ -95,8 +95,10 @@ const AUDITED_LEAKY_IDS: readonly string[] = [
   "idleTerminalNotify.updateConfig",
   "agentSettings.reset",
   "fleet.reject",
-  // D1 confirm-bypasses: danger:"confirm" with the confirm wired only at the
+  // D1 confirm-bypasses: danger:"confirm" whose confirm was wired only at the
   // component call site, so a source:"user" palette pick ran them unconfirmed.
+  // (`worktree.sessions.endAll` now also self-gates in run() per #11345, but stays
+  // palette-hidden as a discoverability choice, so it remains audited here.)
   "keybinding.resetAll",
   "worktree.sessions.endAll",
   "logs.clear",
