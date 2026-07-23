@@ -720,7 +720,7 @@ describe("helpPanelStore persistence migration", () => {
       };
     };
 
-    it("a stale view's hibernate write does not drop a sibling view's session", async () => {
+    it("a stale view's hibernate write does not drop a sibling view's session (disk read at flush)", async () => {
       vi.useFakeTimers();
       try {
         const backing = installLocalStorage({});
@@ -734,7 +734,15 @@ describe("helpPanelStore persistence migration", () => {
         });
         vi.advanceTimersByTime(400);
 
-        // A sibling view (project B) records its own session directly to the shared blob.
+        // This (stale) view updates project A again — enqueued, not yet flushed.
+        mod.useHelpPanelStore.getState().setHibernateSession("proj-a", {
+          sessionId: "a2",
+          cwd: "/a",
+          agentId: "claude",
+        });
+
+        // A sibling view (project B) writes its own session DURING the debounce
+        // window. The flush must read disk at flush time to preserve it.
         const disk = JSON.parse(backing.get(STORAGE_KEY)!) as PersistedBlob;
         disk.state.hibernateSessions["proj-b"] = {
           sessionId: "b1",
@@ -743,9 +751,170 @@ describe("helpPanelStore persistence migration", () => {
         };
         backing.set(STORAGE_KEY, JSON.stringify(disk));
 
-        // This (stale) view — which never learned about B — updates project A again.
+        vi.advanceTimersByTime(400);
+
+        const written = JSON.parse(backing.get(STORAGE_KEY)!) as PersistedBlob;
+        expect(written.state.hibernateSessions).toEqual({
+          "proj-a": { sessionId: "a2", cwd: "/a", agentId: "claude" },
+          "proj-b": { sessionId: "b1", cwd: "/b", agentId: "claude" },
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("a fresh view (null baseline) defers untouched fields to a sibling instead of clobbering with defaults", async () => {
+      vi.useFakeTimers();
+      try {
+        const backing = installLocalStorage({});
+        const mod = await import("../helpPanelStore");
+
+        // Before this freshly-hydrated view writes anything, a sibling view has
+        // already populated the shared blob (a session and a non-default width).
+        backing.set(
+          STORAGE_KEY,
+          JSON.stringify({
+            version: 5,
+            state: {
+              width: 500,
+              preferredAgentId: null,
+              autoLaunchEnabled: false,
+              introDismissed: false,
+              hibernateSessions: {
+                "proj-b": { sessionId: "b1", cwd: "/b", agentId: "claude" },
+              },
+            },
+          })
+        );
+
+        // This view's first write changes only its own field (width). Its null
+        // baseline must NOT let its default hibernateSessions {} / preferences
+        // clobber the sibling's blob.
+        mod.useHelpPanelStore.getState().setWidth(600);
+        vi.advanceTimersByTime(400);
+
+        const written = JSON.parse(backing.get(STORAGE_KEY)!) as PersistedBlob;
+        expect(written.state.width).toBe(600);
+        expect(written.state.hibernateSessions).toEqual({
+          "proj-b": { sessionId: "b1", cwd: "/b", agentId: "claude" },
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("a stale write does not clobber a sibling's width when the baseline held an out-of-range value", async () => {
+      vi.useFakeTimers();
+      try {
+        // Legacy/hand-edited blob with an out-of-range width. Hydration clamps it
+        // to HELP_PANEL_MAX_WIDTH in memory; the raw baseline must canonicalize to
+        // the same clamped value so an unrelated write doesn't read it as an edit.
+        const backing = installLocalStorage({
+          [STORAGE_KEY]: JSON.stringify({
+            version: 5,
+            state: {
+              width: HELP_PANEL_MAX_WIDTH + 1000,
+              preferredAgentId: null,
+              autoLaunchEnabled: false,
+              introDismissed: false,
+              hibernateSessions: {},
+            },
+          }),
+        });
+        const mod = await import("../helpPanelStore");
+        // Sanity: hydration clamped the in-memory width.
+        expect(mod.useHelpPanelStore.getState().width).toBe(HELP_PANEL_MAX_WIDTH);
+
+        // A sibling sets an in-range width on disk.
+        const disk = JSON.parse(backing.get(STORAGE_KEY)!) as PersistedBlob;
+        disk.state.width = 500;
+        backing.set(STORAGE_KEY, JSON.stringify(disk));
+
+        // An unrelated write (a hibernate capture) must not clobber the sibling's width.
+        mod.useHelpPanelStore.getState().setHibernateSession("proj-x", {
+          sessionId: "x1",
+          cwd: "/x",
+          agentId: "claude",
+        });
+        vi.advanceTimersByTime(400);
+
+        const written = JSON.parse(backing.get(STORAGE_KEY)!) as PersistedBlob;
+        expect(written.state.width).toBe(500);
+        expect(written.state.hibernateSessions).toEqual({
+          "proj-x": { sessionId: "x1", cwd: "/x", agentId: "claude" },
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not resurrect a session a sibling deleted that this view still holds unchanged", async () => {
+      vi.useFakeTimers();
+      try {
+        // Hydrate a blob holding two sessions, so both live in this view's memory.
+        const backing = installLocalStorage({
+          [STORAGE_KEY]: JSON.stringify({
+            version: 5,
+            state: {
+              width: HELP_PANEL_DEFAULT_WIDTH,
+              preferredAgentId: null,
+              autoLaunchEnabled: false,
+              introDismissed: false,
+              hibernateSessions: {
+                "proj-a": { sessionId: "a1", cwd: "/a", agentId: "claude" },
+                "proj-b": { sessionId: "b1", cwd: "/b", agentId: "claude" },
+              },
+            },
+          }),
+        });
+        const mod = await import("../helpPanelStore");
+
+        // A sibling deletes proj-b on disk.
+        const disk = JSON.parse(backing.get(STORAGE_KEY)!) as PersistedBlob;
+        delete disk.state.hibernateSessions["proj-b"];
+        backing.set(STORAGE_KEY, JSON.stringify(disk));
+
+        // This view writes an unrelated field; it still carries proj-b in memory,
+        // but must not resurrect the sibling's deletion.
+        mod.useHelpPanelStore.getState().setWidth(500);
+        vi.advanceTimersByTime(400);
+
+        const written = JSON.parse(backing.get(STORAGE_KEY)!) as PersistedBlob;
+        expect(written.state.hibernateSessions).toEqual({
+          "proj-a": { sessionId: "a1", cwd: "/a", agentId: "claude" },
+        });
+        expect(written.state.width).toBe(500);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("preserves the empty-sessionId resume-latest sentinel through a merge write (#8787)", async () => {
+      vi.useFakeTimers();
+      try {
+        const backing = installLocalStorage({});
+        const mod = await import("../helpPanelStore");
+
+        // A sibling captured a session for its own project.
+        backing.set(
+          STORAGE_KEY,
+          JSON.stringify({
+            version: 5,
+            state: {
+              width: HELP_PANEL_DEFAULT_WIDTH,
+              preferredAgentId: null,
+              autoLaunchEnabled: false,
+              introDismissed: false,
+              hibernateSessions: {
+                "proj-b": { sessionId: "b1", cwd: "/b", agentId: "claude" },
+              },
+            },
+          })
+        );
+
+        // This view captures a resume-latest sentinel (empty sessionId) for its project.
         mod.useHelpPanelStore.getState().setHibernateSession("proj-a", {
-          sessionId: "a2",
+          sessionId: "",
           cwd: "/a",
           agentId: "claude",
         });
@@ -753,7 +922,7 @@ describe("helpPanelStore persistence migration", () => {
 
         const written = JSON.parse(backing.get(STORAGE_KEY)!) as PersistedBlob;
         expect(written.state.hibernateSessions).toEqual({
-          "proj-a": { sessionId: "a2", cwd: "/a", agentId: "claude" },
+          "proj-a": { sessionId: "", cwd: "/a", agentId: "claude" },
           "proj-b": { sessionId: "b1", cwd: "/b", agentId: "claude" },
         });
       } finally {

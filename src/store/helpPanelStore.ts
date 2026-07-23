@@ -185,7 +185,14 @@ const HELP_PANEL_PERSISTED_DEFAULTS: HelpPanelPersistedState = {
 function toHelpPanelPersisted(state: Partial<HelpPanelState> | undefined): HelpPanelPersistedState {
   if (!state) return HELP_PANEL_PERSISTED_DEFAULTS;
   return {
-    width: typeof state.width === "number" ? state.width : HELP_PANEL_PERSISTED_DEFAULTS.width,
+    // Clamp width exactly as the v5 hydration `merge` does, so a raw baseline
+    // holding an out-of-range value (legacy/hand-edited blob) canonicalizes to
+    // the same clamped value the store hydrated into memory — otherwise the
+    // clamp would read as a writer edit and clobber a sibling's width (#11351).
+    width:
+      typeof state.width === "number"
+        ? Math.min(Math.max(state.width, HELP_PANEL_MIN_WIDTH), HELP_PANEL_MAX_WIDTH)
+        : HELP_PANEL_PERSISTED_DEFAULTS.width,
     preferredAgentId: typeof state.preferredAgentId === "string" ? state.preferredAgentId : null,
     autoLaunchEnabled: state.autoLaunchEnabled === true,
     introDismissed: state.introDismissed === true,
@@ -199,14 +206,19 @@ function toHelpPanelPersisted(state: Partial<HelpPanelState> | undefined): HelpP
  * this writer changed them; `hibernateSessions` merges per project id so a stale
  * view neither drops a sibling's session nor resurrects one it (or a sibling)
  * intentionally cleared. Leaves the v5 hydration `merge` untouched.
+ *
+ * `preferredAgentId` is compared against the raw baseline, which is correct for
+ * built-in assistant agents (validated synchronously at hydration, so baseline
+ * and in-memory agree). The narrow residual: a user/plugin agent invalidated at
+ * hydration only because its registry had not loaded yet can, across two
+ * simultaneously-open views, converge to a null preference — recoverable by
+ * re-selecting it, and no worse than the pre-fix full-replace clobber.
  */
 function mergeHelpPanelPersistedWrite({
   baseline,
   onDisk,
   incoming,
-}: PersistWriteMergeContext<HelpPanelState & HelpPanelActions>): StorageValue<
-  HelpPanelState & HelpPanelActions
-> {
+}: PersistWriteMergeContext<HelpPanelPersistedState>): StorageValue<HelpPanelPersistedState> {
   // No shared value on disk yet → nothing to reconcile against.
   if (!onDisk) return incoming;
   const base = baseline ? toHelpPanelPersisted(baseline.state) : HELP_PANEL_PERSISTED_DEFAULTS;
@@ -235,7 +247,7 @@ function mergeHelpPanelPersistedWrite({
       disk.hibernateSessions
     ),
   };
-  return { version: incoming.version, state: { ...incoming.state, ...merged } };
+  return { version: incoming.version, state: merged };
 }
 
 export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
@@ -336,12 +348,12 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
     }),
     {
       name: "help-panel-storage",
-      storage: createDebouncedSafeJSONStorage<HelpPanelState & HelpPanelActions>(300, {
+      storage: createDebouncedSafeJSONStorage<HelpPanelPersistedState>(300, {
         mergeOnWrite: mergeHelpPanelPersistedWrite,
       }),
       version: 5,
       migrate: (persistedState) => persistedState as HelpPanelState & HelpPanelActions,
-      partialize: (state) => ({
+      partialize: (state): HelpPanelPersistedState => ({
         width: state.width,
         preferredAgentId: state.preferredAgentId,
         autoLaunchEnabled: state.autoLaunchEnabled,

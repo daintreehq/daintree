@@ -187,6 +187,35 @@ describe("commandHistoryStore persistence migration", () => {
     expect(parsed.state.history["proj1"]!.some((e) => e.prompt === "new")).toBe(true);
   });
 
+  it("a fresh view (null baseline) does not clobber a sibling's project bucket (#11351)", async () => {
+    const backing = installLocalStorage({});
+    const { useCommandHistoryStore: store } = await import("../commandHistoryStore");
+    // Store hydrated from empty (baseline null); a sibling then writes project B.
+    backing.set(
+      STORAGE_KEY,
+      JSON.stringify({
+        version: 0,
+        state: {
+          history: {
+            "proj-b": [{ id: "b-1", prompt: "sibling", agentId: "claude", addedAt: 1 }],
+          },
+        },
+      })
+    );
+
+    // This view's first write records project A — its default empty map must not
+    // clobber the sibling's bucket.
+    store.getState().recordPrompt("proj-a", "hello", "claude");
+
+    const written = JSON.parse(backing.get(STORAGE_KEY)!) as {
+      state: { history: Record<string, PromptHistoryEntry[]> };
+    };
+    expect(Object.keys(written.state.history).sort()).toEqual(["proj-a", "proj-b"]);
+    expect(written.state.history["proj-b"]).toEqual([
+      { id: "b-1", prompt: "sibling", agentId: "claude", addedAt: 1 },
+    ]);
+  });
+
   it("does not drop another project's history a sibling view recorded (#11351)", async () => {
     const backing = installLocalStorage({});
     const { useCommandHistoryStore: store } = await import("../commandHistoryStore");

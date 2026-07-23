@@ -434,6 +434,59 @@ describe("persistence boundary hardening", () => {
     }
   });
 
+  it("createSafeJSONStorage mergeOnWrite re-applies a deletion even when the merged bytes repeat (#11351)", async () => {
+    const backing = new Map<string, string>();
+    installLocalStorage({
+      getItem: (key) => backing.get(key) ?? null,
+      setItem: (key, value) => {
+        backing.set(key, value);
+      },
+      removeItem: (key) => {
+        backing.delete(key);
+      },
+    });
+
+    const { createSafeJSONStorage } = await import("../persistence/safeStorage");
+    const { mergeRecordByWriterDelta } = await import("../persistence/persistWriteMerge");
+
+    type Sessions = { sessions: Record<string, { v: string }> };
+    const mergeSessions: PersistWriteMerge<Sessions> = ({ baseline, onDisk, incoming }) => {
+      if (!onDisk) return incoming;
+      return {
+        version: incoming.version,
+        state: {
+          sessions: mergeRecordByWriterDelta(
+            baseline?.state.sessions ?? {},
+            incoming.state.sessions,
+            onDisk.state.sessions ?? {}
+          ),
+        },
+      };
+    };
+    const KEY = "merge-dedup";
+    const val = (sessions: Sessions["sessions"]) => ({ state: { sessions }, version: 1 });
+    const diskSessions = () =>
+      (JSON.parse(backing.get(KEY) ?? "null") as { state: Sessions } | null)?.state.sessions;
+
+    const viewA = createSafeJSONStorage<Sessions>({ mergeOnWrite: mergeSessions });
+    viewA.getItem(KEY); // baseline null
+    viewA.setItem(KEY, val({ a: { v: "a" } })); // disk { a }, baseline { a }
+
+    // A sibling deletes `a`; view A's unchanged write of `{a}` merges to `{}`
+    // (a is gone from disk and unchanged by A). This is the merged output a naive
+    // dedup would cache.
+    backing.set(KEY, JSON.stringify(val({})));
+    viewA.setItem(KEY, val({ a: { v: "a" } }));
+    expect(diskSessions()).toEqual({});
+
+    // A sibling re-adds `a`, then view A intentionally deletes it. The merge again
+    // yields `{}` — identical bytes — so a merged-output dedup would WRONGLY skip
+    // the write and leave the sibling's re-added `a` on disk.
+    backing.set(KEY, JSON.stringify(val({ a: { v: "sibling" } })));
+    viewA.setItem(KEY, val({}));
+    expect(diskSessions()).toEqual({});
+  });
+
   it("agentPreferencesStore boots cleanly when the legacy toolbar blob is corrupt JSON", async () => {
     // Realistic first-run upgrade scenario: primary key absent, legacy toolbar
     // key holds corrupt JSON. Zustand's persist skips merge() when the primary

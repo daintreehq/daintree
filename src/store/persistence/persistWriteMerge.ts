@@ -30,6 +30,23 @@
  * result. The merged result may contain sibling-only keys this view never took
  * into memory; folding those into the baseline would make them look like
  * intentional deletions on the next write.
+ *
+ * Scope / known limitations (this is the deterministic fix for the *sequential*
+ * stale-writer clobber the issue reports — switch to a cached view and touch a
+ * persisted store — not a general cross-process transaction):
+ *   - The storage adapter's read-then-write is not atomic across renderer
+ *     processes. Two views that both read the same value before either writes
+ *     can still race (get/get/set/set); localStorage exposes no compare-and-swap.
+ *     A fully linearizable guarantee needs a Main-process serialized owner
+ *     (tracked separately) — out of scope here.
+ *   - Concurrent edits to the *same* key are last-writer-wins on the whole value
+ *     (e.g. two views rebasing the same hibernate session's cwd): no entry is
+ *     lost, but a field-level conflict can be superseded — the same entry-level
+ *     limitation `layoutMerge.ts` documents.
+ *   - A deletion is only expressible for a key the writer's baseline knew. A key
+ *     removed by a view that never hydrated it (e.g. project-removal cleanup
+ *     fanned out to a view lacking that entry) can leave a disk-only value; it is
+ *     inert (keyed by a dead id) rather than incorrect.
  */
 
 import type { StorageValue } from "zustand/middleware";
@@ -59,10 +76,6 @@ export interface PersistWriteMergeContext<T> {
  */
 export type PersistWriteMerge<T> = (context: PersistWriteMergeContext<T>) => StorageValue<T>;
 
-function hasOwn(object: Readonly<Record<string, unknown>>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(object, key);
-}
-
 /**
  * Merge one `Record<string, V>` (e.g. a `Record<projectId, session>` map) using
  * the writer's baseline to classify intent. Semantics per key:
@@ -87,26 +100,33 @@ export function mergeRecordByWriterDelta<V>(
   onDisk: Readonly<Record<string, V>>,
   equals: (left: V, right: V) => boolean = deepEqualIgnoringUndefined
 ): Record<string, V> {
+  // Map lookups return `V | undefined`; a persisted record value is never
+  // `undefined`, so `undefined` unambiguously means "key absent". This keeps the
+  // merge sound under `noUncheckedIndexedAccess` without unsafe assertions — the
+  // same convention `layoutMerge.ts` uses for its by-id map.
+  const baselineMap = new Map<string, V>(Object.entries(baseline));
+  const onDiskMap = new Map<string, V>(Object.entries(onDisk));
+  const incomingMap = new Map<string, V>(Object.entries(incoming));
   const result: Record<string, V> = {};
 
-  for (const key of Object.keys(incoming)) {
-    const incomingValue = incoming[key];
-    if (!hasOwn(baseline, key) || !equals(baseline[key], incomingValue)) {
+  for (const [key, incomingValue] of incomingMap) {
+    const baselineValue = baselineMap.get(key);
+    if (baselineValue === undefined || !equals(baselineValue, incomingValue)) {
       // The writer added or changed this key since its baseline → it wins.
       result[key] = incomingValue;
-    } else if (hasOwn(onDisk, key)) {
-      // The writer did not touch it; a sibling may have → keep the on-disk value.
-      result[key] = onDisk[key];
+    } else {
+      // Unchanged by the writer: keep a sibling's concurrent on-disk value if
+      // present; if a sibling deleted it, do not resurrect it.
+      const onDiskValue = onDiskMap.get(key);
+      if (onDiskValue !== undefined) result[key] = onDiskValue;
     }
-    // else: the writer did not touch it and a sibling deleted it → do not
-    // resurrect.
   }
 
-  for (const key of Object.keys(onDisk)) {
-    if (hasOwn(incoming, key)) continue; // already decided above
-    if (hasOwn(baseline, key)) continue; // in baseline, gone from incoming → writer deleted it
+  for (const [key, onDiskValue] of onDiskMap) {
+    if (incomingMap.has(key)) continue; // already decided above
+    if (baselineMap.has(key)) continue; // in baseline, gone from incoming → writer deleted it
     // A sibling addition the writer never knew about → preserve it.
-    result[key] = onDisk[key];
+    result[key] = onDiskValue;
   }
 
   return result;

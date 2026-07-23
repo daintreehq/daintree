@@ -34,8 +34,10 @@ interface CommandHistoryState {
   removeProjectHistory: (projectId: string) => void;
 }
 
+type CommandHistoryPersistedState = Pick<CommandHistoryState, "history">;
+
 function historyOf(
-  value: StorageValue<CommandHistoryState> | null
+  value: StorageValue<CommandHistoryPersistedState> | null
 ): Record<string, PromptHistoryEntry[]> {
   const history = value?.state?.history;
   return history !== null && typeof history === "object" ? history : {};
@@ -53,13 +55,12 @@ function mergeCommandHistoryPersistedWrite({
   baseline,
   onDisk,
   incoming,
-}: PersistWriteMergeContext<CommandHistoryState>): StorageValue<CommandHistoryState> {
+}: PersistWriteMergeContext<CommandHistoryPersistedState>): StorageValue<CommandHistoryPersistedState> {
   // No shared value on disk yet → nothing to reconcile against.
   if (!onDisk) return incoming;
   return {
     version: incoming.version,
     state: {
-      ...incoming.state,
       history: mergeRecordByWriterDelta(
         historyOf(baseline),
         historyOf(incoming),
@@ -129,12 +130,12 @@ export const useCommandHistoryStore = create<CommandHistoryState>()(
     }),
     {
       name: "daintree-command-history",
-      storage: createSafeJSONStorage<CommandHistoryState>({
+      storage: createSafeJSONStorage<CommandHistoryPersistedState>({
         mergeOnWrite: mergeCommandHistoryPersistedWrite,
       }),
       version: 0,
       migrate: (persistedState) => persistedState as CommandHistoryState,
-      partialize: (state) => ({ history: state.history }),
+      partialize: (state): CommandHistoryPersistedState => ({ history: state.history }),
     }
   )
 );

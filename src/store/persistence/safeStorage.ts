@@ -363,14 +363,32 @@ export function createSafeJSONStorage<T>(options?: SafeJSONStorageOptions<T>): P
       return parsed;
     },
     setItem: (name, value) => {
-      const toWrite = mergeOnWrite
-        ? mergeOnWrite({
-            baseline: baselines.get(name) ?? null,
-            onDisk: readPersistedValue<T>(raw, name),
-            incoming: value,
-          })
-        : value;
-      const serialized = JSON.stringify(toWrite);
+      if (mergeOnWrite) {
+        // Merge against the freshest disk value every time. We must NOT dedup on
+        // the serialized output here: two writes with identical `value` can merge
+        // to different results as the shared disk changes between them, and — the
+        // inverse — two writes can merge to the SAME bytes against different disk
+        // states, so a merged-output dedup would skip a write that still needs to
+        // land (e.g. re-applying a deletion the disk resurrected). These stores
+        // write infrequently, so an unconditional read-merge-write is cheap.
+        const merged = mergeOnWrite({
+          baseline: baselines.get(name) ?? null,
+          onDisk: readPersistedValue<T>(raw, name),
+          incoming: value,
+        });
+        const serialized = JSON.stringify(merged);
+        const result = raw.setItem(name, serialized);
+        // Only advance the backup when the primary write actually reached durable
+        // storage (see the debounced flush for the full rationale).
+        if (result === "durable") raw.writeBackup(name, serialized);
+        // Advance the baseline to the writer's own snapshot (never the merged
+        // result, which may hold sibling-only keys this view never took into
+        // memory). A transient quota failure keeps the old baseline so the next
+        // retry still merges correctly.
+        if (result !== "quota") baselines.set(name, value);
+        return;
+      }
+      const serialized = JSON.stringify(value);
       if (lastWritten.get(name) === serialized) return;
       // Only advance the backup when the primary write actually reached durable
       // storage. On a quota failure the primary keeps its old value, so writing
@@ -381,13 +399,6 @@ export function createSafeJSONStorage<T>(options?: SafeJSONStorageOptions<T>): P
         raw.writeBackup(name, serialized);
       } else if (result === "memory") {
         lastWritten.set(name, serialized);
-      }
-      // Advance the baseline to the writer's own snapshot (never the merged
-      // result, which may hold sibling-only keys this view never took into
-      // memory) once the write actually landed. A transient quota failure keeps
-      // the old baseline so the next retry still merges correctly.
-      if (mergeOnWrite && result !== "quota") {
-        baselines.set(name, value);
       }
     },
     removeItem: (name) => {
