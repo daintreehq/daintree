@@ -707,6 +707,17 @@ describe("inspectScratchForCleanup — default safety classifier", () => {
     expect(decision.reason).toBe("clean-git");
   });
 
+  it("protects when the local-commit probe returns unexpected/empty output (fail-closed)", async () => {
+    const dir = await makeGitDir("weird-revlist");
+    // Only an exact "0" is treated as no-local-work; empty output must protect.
+    mockGit({ files: [], stashTotal: 0, localCommits: "" });
+
+    const decision = await inspectScratchForCleanup(dir, cutoff, freshSignal());
+
+    expect(decision.disposition).toBe("protect");
+    expect(decision.reason).toBe("unpushed-commits");
+  });
+
   it("protects when the git check throws or times out (fail-closed)", async () => {
     const dir = await makeGitDir("git-error");
     mockedCreateHardenedGit.mockRejectedValue(new Error("git blew up"));
@@ -801,10 +812,10 @@ describe("inspectScratchForCleanup — default safety classifier", () => {
     expect(decision.reason).toBe("missing-directory");
   });
 
-  it("protects when readdir fails with a non-ENOENT error (fail-closed)", async () => {
+  it("protects when directory enumeration fails with a non-ENOENT error (fail-closed)", async () => {
     const dir = path.join(tmpDir, "eacces");
     await fs.mkdir(dir, { recursive: true });
-    vi.spyOn(fs, "readdir").mockRejectedValueOnce(
+    vi.spyOn(fs, "opendir").mockRejectedValueOnce(
       Object.assign(new Error("denied"), { code: "EACCES" })
     );
 

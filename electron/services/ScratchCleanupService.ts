@@ -48,7 +48,6 @@
  * block startup.
  */
 import fs from "fs/promises";
-import type { Dirent } from "node:fs";
 import path from "path";
 import PQueue from "p-queue";
 import { scratchStore as defaultScratchStore } from "./ScratchStore.js";
@@ -155,37 +154,33 @@ export async function inspectScratchForCleanup(
   activityCutoffMs: number,
   signal: AbortSignal
 ): Promise<ScratchCleanupSafetyDecision> {
-  let entries: Dirent[];
+  // Probe `.git` directly (O(1)) rather than materializing a potentially huge
+  // root listing just to look for it. `fs.stat` catches both a `.git` directory
+  // and a worktree/submodule `.git` file. A `.git`-bearing directory is meant to
+  // be a repo, so git is authoritative — we never fall through to the mtime scan
+  // for it (a corrupt-but-recoverable repo must not be deleted as if it were
+  // plain files). Own-`.git` restriction also stops `checkIsRepo`'s upward walk
+  // from misclassifying a plain scratch via an ancestor repo.
   try {
-    entries = await fs.readdir(directory, { withFileTypes: true });
-  } catch (error) {
-    // A directory that has already vanished has nothing left to protect.
-    if (isNodeError(error) && error.code === "ENOENT") return safe("missing-directory");
-    // Any other read failure (EACCES, EIO, …) is uncertainty => protect.
-    return protect("readdir-failed");
-  }
-
-  // A top-level `.git` entry means this is meant to be a git repo (checking the
-  // name catches both a `.git` directory and a worktree/submodule `.git` file).
-  // Once we know that, git is authoritative: only a successfully-obtained clean
-  // status is safe. We never fall through to the mtime scan for a `.git`-bearing
-  // directory — a corrupt-but-recoverable repo must not be deleted as if it were
-  // plain files. Restricting the git path to an own `.git` entry also stops
-  // `checkIsRepo`'s upward walk from misclassifying a plain scratch via an
-  // ancestor repo, and spares non-git scratches a git spawn.
-  if (entries.some((entry) => entry.name === ".git")) {
+    await fs.stat(path.join(directory, ".git"));
     return inspectGitRepo(directory, signal);
+  } catch (error) {
+    // No `.git` here — fall through to the activity scan.
+    if (isNodeError(error) && error.code === "ENOENT") {
+      return inspectNonGitActivity(directory, activityCutoffMs, signal);
+    }
+    // A non-ENOENT stat error on `.git` (EACCES, EIO) is uncertainty => protect.
+    return protect("git-probe-failed");
   }
-
-  return inspectNonGitActivity(directory, entries, activityCutoffMs, signal);
 }
 
 /**
  * Classify a git-repo scratch. Protects any repo that still holds local work
  * that a plain `git status` misses: staged/unstaged/untracked changes, stashes,
- * and commits reachable from a local ref but not from any remote-tracking ref
- * (unpushed work — including no-upstream repos and detached HEAD, which
- * `status.ahead` alone cannot see). Any probe failure fails closed.
+ * and commits reachable from a local ref OR the reflog but not from any
+ * remote-tracking ref (unpushed work — including no-upstream repos, detached
+ * HEAD, and commits reset away but still recoverable, which `status.ahead`
+ * alone cannot see). Any probe failure fails closed.
  */
 async function inspectGitRepo(
   directory: string,
@@ -203,10 +198,13 @@ async function inspectGitRepo(
     const stash = await git.stashList();
     if (stash.total > 0) return protect("stashed-work");
 
+    // `rev-list --count` prints exactly `0` for a repo with no local-only work
+    // (including an empty/unborn repo). Only that exact `"0"` is safe — any other
+    // value, or unexpected/empty output, protects (fail closed).
     const localOnly = (
-      await git.raw(["rev-list", "--count", "--all", "--not", "--remotes"])
+      await git.raw(["rev-list", "--count", "--all", "--reflog", "--not", "--remotes"])
     ).trim();
-    if (localOnly !== "" && localOnly !== "0") return protect("unpushed-commits");
+    if (localOnly !== "0") return protect("unpushed-commits");
 
     return safe("clean-git");
   } catch {
@@ -217,55 +215,64 @@ async function inspectGitRepo(
 }
 
 /**
- * Classify a non-git scratch by a bounded recursive mtime scan. Any file OR
- * directory whose mtime is newer than the cutoff is recent external activity
- * (a content edit updates the file's own mtime, so descending catches edits
- * deep under an otherwise-old top-level directory). Generated-output
- * directories are skipped at every level; a tree that exceeds the scan bounds
- * fails closed (protect) rather than be scanned unboundedly.
+ * Classify a non-git scratch by a bounded, streaming recursive mtime scan. Any
+ * file OR directory whose mtime is newer than the cutoff is recent external
+ * activity (a content edit updates the file's own mtime, so descending catches
+ * edits deep under an otherwise-old top-level directory). Generated-output
+ * directories are skipped at every level. Entries are streamed via `fs.opendir`
+ * and counted as discovered, so a pathologically large directory is bounded by
+ * the entry/depth limits without ever materializing a giant listing; exceeding
+ * a bound fails closed (protect).
  */
 async function inspectNonGitActivity(
   root: string,
-  rootEntries: Dirent[],
   activityCutoffMs: number,
   signal: AbortSignal
 ): Promise<ScratchCleanupSafetyDecision> {
-  const stack: Array<{ dir: string; entries: Dirent[]; depth: number }> = [
-    { dir: root, entries: rootEntries, depth: 0 },
-  ];
+  const stack: Array<{ dir: string; depth: number }> = [{ dir: root, depth: 0 }];
   let visited = 0;
 
   while (stack.length > 0) {
     if (signal.aborted) return protect("inspection-aborted");
-    const frame = stack.pop()!;
-    for (const entry of frame.entries) {
-      if (signal.aborted) return protect("inspection-aborted");
-      if (entry.isDirectory() && ACTIVITY_SCAN_IGNORED_DIRS.has(entry.name)) continue;
-      if (++visited > ACTIVITY_SCAN_MAX_ENTRIES) return protect("scan-too-large");
+    const { dir, depth } = stack.pop()!;
 
-      const full = path.join(frame.dir, entry.name);
-      let stat;
-      try {
-        stat = await fs.lstat(full);
-      } catch {
-        // A per-entry stat failure is uncertainty about that entry => protect.
-        return protect("stat-failed");
-      }
-      if (stat.mtimeMs > activityCutoffMs) return protect("recent-activity");
+    try {
+      // `for await` over an fs.Dir closes the handle on completion AND on early
+      // return/throw (the async iterator's `return()` is invoked), so no
+      // explicit close is needed. A `return` below exits the function directly
+      // and is not caught here; only a genuine I/O throw reaches the catch.
+      const handle = await fs.opendir(dir);
+      for await (const entry of handle) {
+        if (signal.aborted) return protect("inspection-aborted");
+        if (entry.isDirectory() && ACTIVITY_SCAN_IGNORED_DIRS.has(entry.name)) continue;
+        if (++visited > ACTIVITY_SCAN_MAX_ENTRIES) return protect("scan-too-large");
 
-      // Descend into real subdirectories only (isDirectory() is false for a
-      // symlink, so symlink cycles are never followed). A subtree deeper than
-      // the bound cannot be cheaply proven abandoned => protect.
-      if (entry.isDirectory()) {
-        if (frame.depth + 1 > ACTIVITY_SCAN_MAX_DEPTH) return protect("scan-too-deep");
-        let childEntries: Dirent[];
+        const full = path.join(dir, entry.name);
+        let stat;
         try {
-          childEntries = await fs.readdir(full, { withFileTypes: true });
+          stat = await fs.lstat(full);
         } catch {
-          return protect("readdir-failed");
+          // A per-entry stat failure is uncertainty about that entry => protect.
+          return protect("stat-failed");
         }
-        stack.push({ dir: full, entries: childEntries, depth: frame.depth + 1 });
+        if (stat.mtimeMs > activityCutoffMs) return protect("recent-activity");
+
+        // Descend into real subdirectories only (isDirectory() is false for a
+        // symlink, so symlink cycles are never followed). A subtree deeper than
+        // the bound cannot be cheaply proven abandoned => protect.
+        if (entry.isDirectory()) {
+          if (depth + 1 > ACTIVITY_SCAN_MAX_DEPTH) return protect("scan-too-deep");
+          stack.push({ dir: full, depth: depth + 1 });
+        }
       }
+    } catch (error) {
+      // The root vanishing means nothing is left to protect; a child dir
+      // vanishing (or an enumeration error) mid-scan is skipped/failed closed.
+      if (isNodeError(error) && error.code === "ENOENT") {
+        if (depth === 0) return safe("missing-directory");
+        continue;
+      }
+      return protect("readdir-failed");
     }
   }
 
