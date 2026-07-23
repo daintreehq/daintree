@@ -277,6 +277,31 @@ describe("routeHostEvent", () => {
     });
   });
 
+  it("normalizes the host's detectedAgents map to the public terminalTypes shape", () => {
+    // Regression for #11282 phase 5: the host emits the per-agent map as
+    // `detectedAgents`, but PtyClient's public stats type (and the relocation
+    // preview) read `terminalTypes`. Without normalization here the map arrives
+    // as `undefined` and the continuity breakdown is silently empty.
+    const { deps, brokerCalls } = makeDeps();
+    routeHostEvent(
+      {
+        type: "project-stats",
+        requestId: "req-ps2",
+        stats: {
+          terminalCount: 3,
+          processIds: [11, 22],
+          detectedAgents: { claude: 2, terminal: 1 },
+        },
+      },
+      deps
+    );
+    expect(brokerCalls[0]?.result).toEqual({
+      terminalCount: 3,
+      processIds: [11, 22],
+      terminalTypes: { claude: 2, terminal: 1 },
+    });
+  });
+
   it("records terminal-pid on the shared state map", () => {
     const { deps, state } = makeDeps();
     routeHostEvent({ type: "terminal-pid", id: "t1", pid: 12345 }, deps);

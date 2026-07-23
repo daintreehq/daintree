@@ -235,16 +235,27 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       broker.resolve(event.requestId, event.results ?? []);
       return true;
 
-    case "project-stats":
-      // Fallback shape preserves the legacy `terminalTypes` key — the
-      // PtyClient public type signature still uses it, even though the host
-      // actually sends `detectedAgents` on the stats payload. Don't tighten
-      // this in a pure refactor.
+    case "project-stats": {
+      // The host sends the per-agent map as `detectedAgents`, but PtyClient's
+      // public stats type exposes it as `terminalTypes`. Normalize here at the
+      // transport boundary so the resolved value matches the promised shape:
+      // the relocation preview reads `terminalTypes` to classify conversation
+      // continuity (#11282 phase 5), and the raw `detectedAgents` payload never
+      // carried a `terminalTypes` key, so the map silently arrived as
+      // `undefined` before this fix.
+      const stats = event.stats;
       broker.resolve(
         event.requestId,
-        event.stats ?? { terminalCount: 0, processIds: [], terminalTypes: {} }
+        stats
+          ? {
+              terminalCount: stats.terminalCount,
+              processIds: stats.processIds,
+              terminalTypes: stats.detectedAgents,
+            }
+          : { terminalCount: 0, processIds: [], terminalTypes: {} }
       );
       return true;
+    }
 
     case "memory-rollup":
       broker.resolve(event.requestId, event.rollup);

@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FolderOpen, AlertTriangle } from "lucide-react";
+import { FolderOpen, AlertTriangle, CheckCircle2, HelpCircle, type LucideIcon } from "lucide-react";
 import { basename, dirname, join, normalize } from "@shared/utils/path";
 import { validateFolderName } from "@shared/utils/folderName";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import type { RelocationPreview } from "@shared/types/projectRelocation";
+import type { AgentContinuitySummary, RelocationPreview } from "@shared/types/projectRelocation";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/Spinner";
@@ -20,6 +20,51 @@ import {
 function normPath(value: string): string {
   return normalize(value).normalize("NFC");
 }
+
+/**
+ * How each conversation-continuity tier renders in the preview (#11282, phase 5).
+ * `label` is the sentence-case headline; `detailFallback` is used when the agent
+ * config supplies no provider-specific `detail`. Preserved/project-local read as
+ * calm success; provider-migration/unavailable warn the user before the move;
+ * unverified stays neutral so we neither alarm nor overclaim.
+ */
+const CONTINUITY_PRESENTATION: Record<
+  AgentContinuitySummary["tier"],
+  { icon: LucideIcon; className: string; label: string; detailFallback: string }
+> = {
+  preserved: {
+    icon: CheckCircle2,
+    className: "text-status-success",
+    // Capability language, not a guarantee: session capture on graceful stop can
+    // still miss (timeout / unmatched exit output), so we say "expected", not "will".
+    label: "Resume supported",
+    detailFallback: "Expected to resume automatically at the new location",
+  },
+  "project-local": {
+    icon: CheckCircle2,
+    className: "text-status-success",
+    label: "Conversation stays with the folder",
+    detailFallback: "Resumes from the project folder, which moves with it",
+  },
+  "provider-migration": {
+    icon: AlertTriangle,
+    className: "text-status-warning",
+    label: "Provider migration required",
+    detailFallback: "The provider can't resume this conversation at the new path",
+  },
+  unavailable: {
+    icon: AlertTriangle,
+    className: "text-status-warning",
+    label: "Conversation can't be resumed",
+    detailFallback: "This agent has no way to resume the conversation after a move",
+  },
+  unverified: {
+    icon: HelpCircle,
+    className: "text-daintree-text/50",
+    label: "Resume after move unverified",
+    detailFallback: "Resuming this conversation after a move isn't confirmed",
+  },
+};
 
 const INPUT_CLASS =
   "w-full rounded-[var(--radius-md)] border border-daintree-border bg-muted/50 px-3 py-1.5 text-sm text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 focus:border-daintree-accent aria-invalid:border-status-error";
@@ -422,7 +467,47 @@ function RelocationPreviewSection({
               {preview.runningTerminalCount === 1
                 ? "1 terminal will be gracefully stopped"
                 : `${preview.runningTerminalCount} terminals will be gracefully stopped`}{" "}
-              <span className="text-daintree-text/40">— sessions are preserved and restored</span>
+              <span className="text-daintree-text/40">— they restart at the new location</span>
+            </li>
+          )}
+          {preview.agentContinuity.length > 0 && (
+            <li data-testid="relocate-continuity">
+              <span className="text-daintree-text/70">Agent conversations</span>
+              <ul className="mt-1 space-y-1.5 pl-3">
+                {preview.agentContinuity.map((agent) => {
+                  // Defense in depth: no plugin or user-registry agent can carry
+                  // a `continuity` block today, but an unknown tier arriving from
+                  // a future source must degrade to the honest neutral row rather
+                  // than crash on an undefined presentation.
+                  const p =
+                    CONTINUITY_PRESENTATION[agent.tier] ?? CONTINUITY_PRESENTATION.unverified;
+                  const Icon = p.icon;
+                  return (
+                    <li
+                      key={agent.agentId}
+                      className="flex items-start gap-2"
+                      data-testid={`relocate-continuity-${agent.agentId}`}
+                    >
+                      <Icon
+                        className={`h-3.5 w-3.5 shrink-0 mt-0.5 ${p.className}`}
+                        aria-hidden="true"
+                      />
+                      <div className="space-y-0.5">
+                        <div>
+                          {agent.count === 1
+                            ? agent.agentName
+                            : `${agent.agentName} (${agent.count})`}{" "}
+                          <span className="text-daintree-text/40">—</span>{" "}
+                          <span className={p.className}>{p.label}</span>
+                        </div>
+                        <div className="text-daintree-text/40">
+                          {agent.detail ?? p.detailFallback}
+                        </div>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
             </li>
           )}
           {preview.linkedWorktrees.length > 0 && (

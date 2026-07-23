@@ -14,6 +14,13 @@ export const config: AgentConfig = {
   color: "#E8E8E8",
   iconId: "grok",
   supportsContextInjection: true,
+  // #11282 phase 5: Grok resumes by session id, but its `sessionIdPattern` is
+  // still provisional (see `resume` below), so capture on exit — and thus
+  // resume after a move — isn't verified yet.
+  continuity: {
+    tier: "unverified",
+    detail: "Resuming this conversation after a move isn't confirmed for Grok yet",
+  },
   // Launch-only for now. Grok Build reads project MCP config + AGENTS.md, so
   // assistant-overlay wiring (`supports: { mcpInjection: "project-config", … }`)
   // is plausible, but the exact injection format needs verification before it's

@@ -5,6 +5,8 @@
  * on Error properties surviving IPC serialization.
  */
 
+import type { ConversationContinuityTier } from "../config/agentRegistry.js";
+
 /** Why a relocation cannot proceed. Every reason maps to a user-facing message. */
 export type ProjectRelocationReason =
   | "not-found"
@@ -27,6 +29,42 @@ export interface RelocationBlocker {
   reason: ProjectRelocationReason;
   message: string;
 }
+
+/**
+ * Per-agent conversation-continuity outcome for the running terminals a
+ * relocation would gracefully stop (#11282, phase 5). One entry per distinct
+ * agent type; plain (non-agent) terminals are excluded because they carry no
+ * conversation. The `tier` is computed live from the agent registry at preview
+ * time via `resolveAgentContinuity` — never persisted, so it can't go stale.
+ */
+export interface AgentContinuitySummary {
+  /** Agent registry id (e.g. `"claude"`). */
+  agentId: string;
+  /** Display name from the agent config (e.g. `"Claude Code"`). */
+  agentName: string;
+  /** How many running terminals of this agent the relocation would stop. */
+  count: number;
+  /** Whether — and how — this agent's conversation survives the move. */
+  tier: ConversationContinuityTier;
+  /** Optional provider-specific one-liner; falls back to a generic per-tier line. */
+  detail?: string;
+}
+
+/**
+ * Preview display order for continuity tiers — riskiest first, so the user sees
+ * what WON'T survive before what will (#11282, phase 5). Lower rank sorts
+ * earlier. Shared so the coordinator can pre-sort the breakdown deterministically
+ * and tests don't depend on registry key order.
+ */
+export const CONTINUITY_TIER_ORDER: Record<ConversationContinuityTier, number> = {
+  // Unrecoverable loss ranks above a recoverable one: `unavailable` has no
+  // resume path at all, while `provider-migration` at least persists on disk.
+  unavailable: 0,
+  "provider-migration": 1,
+  unverified: 2,
+  "project-local": 3,
+  preserved: 4,
+};
 
 /**
  * Renderer → main relocation request. Mirrors the coordinator's
@@ -53,6 +91,13 @@ export interface RelocationPreview {
   newPath: string;
   /** Terminals/agents that will be gracefully stopped and session-preserved. */
   runningTerminalCount: number;
+  /**
+   * Per-agent conversation-continuity breakdown for the running terminals
+   * (#11282, phase 5). Empty when no agents are running (or on a closed
+   * reattach, which stops nothing). Lets the dialog warn BEFORE the move when a
+   * conversation can't be resumed at the new path.
+   */
+  agentContinuity: AgentContinuitySummary[];
   /** Absolute paths of the linked (non-main) worktrees that will be repaired. */
   linkedWorktrees: string[];
   /** Count of persisted panels whose stored working directory will be rewritten. */

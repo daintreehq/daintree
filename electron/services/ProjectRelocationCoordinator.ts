@@ -14,11 +14,17 @@ import type { WorkspaceClient } from "./WorkspaceClient.js";
 import type { WindowRegistry } from "../window/WindowRegistry.js";
 import type { WorktreePortBroker } from "./WorktreePortBroker.js";
 import type { Project } from "../types/index.js";
-import type {
-  ProjectRelocationReason,
-  RelocationBlocker,
-  RelocationPreview,
+import {
+  CONTINUITY_TIER_ORDER,
+  type AgentContinuitySummary,
+  type ProjectRelocationReason,
+  type RelocationBlocker,
+  type RelocationPreview,
 } from "../../shared/types/projectRelocation.js";
+import {
+  getEffectiveAgentConfig,
+  resolveAgentContinuity,
+} from "../../shared/config/agentRegistry.js";
 
 export type { ProjectRelocationReason } from "../../shared/types/projectRelocation.js";
 
@@ -252,8 +258,9 @@ export class ProjectRelocationCoordinator {
     // and at `request.newPath` for an already-moved reattach. Only the pipeline
     // path gracefully stops terminals, so a closed reattach reports zero.
     const folderPath = mode === "reattach" ? request.newPath : oldPath;
-    const [runningTerminalCount, linkedWorktrees, affectedPanelCount] = await Promise.all([
-      usesPipeline ? this.countRunningTerminals(projectId) : Promise.resolve(0),
+    const emptyTerminals = { count: 0, agentContinuity: [] as AgentContinuitySummary[] };
+    const [terminals, linkedWorktrees, affectedPanelCount] = await Promise.all([
+      usesPipeline ? this.describeRunningTerminals(projectId) : Promise.resolve(emptyTerminals),
       this.listLinkedWorktrees(folderPath),
       projectStore.countRebasedPanels(projectId, oldPath, newPath),
     ]);
@@ -262,22 +269,63 @@ export class ProjectRelocationCoordinator {
       mode,
       oldPath,
       newPath,
-      runningTerminalCount,
+      runningTerminalCount: terminals.count,
+      agentContinuity: terminals.agentContinuity,
       linkedWorktrees,
       affectedPanelCount,
       blockers,
     };
   }
 
-  private async countRunningTerminals(projectId: string): Promise<number> {
+  /**
+   * Enumerate the running terminals a relocation would gracefully stop, plus a
+   * per-agent conversation-continuity breakdown (#11282, phase 5). The pty-host
+   * already groups a project's live terminals by `launchAgentId`
+   * (`getProjectStats().terminalTypes`, already project-scoped and trash/exit
+   * excluded), so we classify each agent type live against the registry — no
+   * per-terminal session-id plumbing, and no captured tier (which would go
+   * stale). We key on `launchAgentId`, so a terminal only *detected* as an agent
+   * after a plain-shell launch is classified as a shell — an accepted
+   * best-effort limit for an advisory preview. Plain (non-agent) terminals key
+   * on `"terminal"` and are excluded since they carry no conversation. Ordered
+   * riskiest-first ({@link CONTINUITY_TIER_ORDER}) so the user sees what won't
+   * survive before what will. Best-effort: an IPC failure reports zero rather
+   * than throwing.
+   */
+  private async describeRunningTerminals(
+    projectId: string
+  ): Promise<{ count: number; agentContinuity: AgentContinuitySummary[] }> {
     const { ptyClient } = this.deps;
-    if (!ptyClient) return 0;
+    if (!ptyClient) return { count: 0, agentContinuity: [] };
     try {
       const stats = await ptyClient.getProjectStats(projectId);
-      return stats.terminalCount;
+      const byAgent = stats.terminalTypes ?? {};
+      const agentContinuity = Object.entries(byAgent)
+        // Exclude plain shells, and defend against a corrupted count: a custom
+        // agent named after an Object.prototype key (e.g. "toString") can make
+        // the upstream tally a non-number, which must never reach the preview.
+        .filter(([agentId, count]) => agentId !== "terminal" && Number.isFinite(count) && count > 0)
+        .map(([agentId, count]): AgentContinuitySummary => {
+          const { tier, detail } = resolveAgentContinuity(agentId);
+          return {
+            agentId,
+            agentName: getEffectiveAgentConfig(agentId)?.name ?? agentId,
+            count,
+            tier,
+            ...(detail !== undefined ? { detail } : {}),
+          };
+        })
+        // Riskiest tier first, then agent id — deterministic regardless of the
+        // pty-host's Object key order.
+        .sort(
+          (a, b) =>
+            CONTINUITY_TIER_ORDER[a.tier] - CONTINUITY_TIER_ORDER[b.tier] ||
+            a.agentId.localeCompare(b.agentId)
+        );
+      return { count: stats.terminalCount, agentContinuity };
     } catch (error) {
-      logError("relocate-preview-terminal-count-failed", error, { projectId });
-      return 0;
+      logError("relocate-preview-terminal-describe-failed", error, { projectId });
+      return { count: 0, agentContinuity: [] };
     }
   }
 

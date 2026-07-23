@@ -12,6 +12,12 @@ export const config: AgentConfig = {
   color: "#E864A4",
   iconId: "crush",
   supportsContextInjection: true,
+  // #11282 phase 5: Crush omits `resume` (its `--continue` isn't stable yet), so
+  // there's no conversation to preserve across a move by design.
+  continuity: {
+    tier: "unavailable",
+    detail: "Crush doesn't support resuming a conversation",
+  },
   tooltip: "Charm's CLI",
   usageUrl: "https://github.com/charmbracelet/crush",
   version: {
