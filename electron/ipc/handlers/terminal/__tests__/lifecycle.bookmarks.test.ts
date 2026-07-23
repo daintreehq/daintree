@@ -238,6 +238,45 @@ describe("prepareBookmark handler", () => {
     ).rejects.toMatchObject({ code: "PERSIST_FAILED" });
     expect(m.promoteBookmark).not.toHaveBeenCalled();
   });
+
+  it("freezes an evicted generation as null (not undefined) so it can't reserve a successor's slot", async () => {
+    ptyClient.getTerminalAsync.mockResolvedValue(agentInfo);
+    ptyClient.gracefulKill.mockResolvedValue("sess-abc");
+    m.currentGeneration.mockReturnValue(undefined); // ledger evicted the entry
+    const record = { sessionId: "sess-abc", bookmark: { bookmarkedAt: 1, label: "L" } };
+    m.journalAgentSessionRecord.mockResolvedValue(record);
+    register();
+
+    const result = await handlerFor(CHANNELS.AGENT_SESSION_PREPARE_BOOKMARK)(
+      {},
+      { terminalId: "term-1", label: "L" }
+    );
+
+    // The frozen-but-unknown sentinel is null (#11340) — never undefined.
+    expect(m.journalAgentSessionRecord.mock.calls[0][1]).toEqual({
+      terminalId: "term-1",
+      generation: null,
+    });
+    // isCurrent is never consulted when the generation is unknown.
+    expect(m.isCurrent).not.toHaveBeenCalled();
+    expect(result).toEqual({ record });
+  });
+
+  it("rejects STALE_GENERATION when a successor appears AFTER the journal write", async () => {
+    ptyClient.getTerminalAsync.mockResolvedValue(agentInfo);
+    ptyClient.gracefulKill.mockResolvedValue("sess-abc");
+    m.journalAgentSessionRecord.mockResolvedValue({ sessionId: "sess-abc" });
+    // Pre-capture recheck passes; the successor lands during the journal write.
+    m.isCurrent.mockReturnValueOnce(true).mockReturnValueOnce(false);
+    register();
+
+    await expect(
+      handlerFor(CHANNELS.AGENT_SESSION_PREPARE_BOOKMARK)({}, { terminalId: "term-1", label: "L" })
+    ).rejects.toMatchObject({ code: "STALE_GENERATION" });
+    // The record was journaled (for the old session) but the pane is NOT removed
+    // by the caller because prepareBookmark rejected.
+    expect(m.journalAgentSessionRecord).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("bookmark mutator handlers", () => {
@@ -260,6 +299,29 @@ describe("bookmark mutator handlers", () => {
 
     m.promoteBookmark.mockRejectedValueOnce(new Error("io"));
     await expect(promote({}, { sessionId: "s1", label: "L" })).rejects.toMatchObject({
+      code: "PERSIST_FAILED",
+    });
+  });
+
+  it("rename returns the record, maps null to SESSION_NOT_FOUND and a throw to PERSIST_FAILED", async () => {
+    register();
+    const rename = handlerFor(CHANNELS.AGENT_SESSION_RENAME_BOOKMARK);
+
+    m.renameBookmark.mockResolvedValueOnce({
+      sessionId: "s1",
+      bookmark: { bookmarkedAt: 1, label: "R" },
+    });
+    await expect(rename({}, { sessionId: "s1", label: "R" })).resolves.toMatchObject({
+      sessionId: "s1",
+    });
+
+    m.renameBookmark.mockResolvedValueOnce(null);
+    await expect(rename({}, { sessionId: "missing", label: "R" })).rejects.toMatchObject({
+      code: "SESSION_NOT_FOUND",
+    });
+
+    m.renameBookmark.mockRejectedValueOnce(new Error("io"));
+    await expect(rename({}, { sessionId: "s1", label: "R" })).rejects.toMatchObject({
       code: "PERSIST_FAILED",
     });
   });
