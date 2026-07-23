@@ -471,4 +471,9 @@ describe("isRowPathVisible", () => {
   it("is not visible for a path outside the root", () => {
     expect(isRowPathVisible("other/file.ts", "src", showAll)).toBe(false);
   });
+
+  it("treats the root itself as visible — the pump gate must never drop the root target", () => {
+    expect(isRowPathVisible("src", "src", showAll)).toBe(true);
+    expect(isRowPathVisible(".github", ".github", hideDotfiles)).toBe(true);
+  });
 });

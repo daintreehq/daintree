@@ -96,6 +96,7 @@ export function isRowPathVisible(
   rootPath: string,
   isVisible: (name: string) => boolean
 ): boolean {
+  if (relativePath === rootPath) return true;
   const prefix = rootPath === "" ? "" : `${rootPath}/`;
   if (prefix !== "" && !relativePath.startsWith(prefix)) return false;
   const below = relativePath.slice(prefix.length);
