@@ -10,9 +10,7 @@ const OLD = "/repo/wt-feature";
 const NEW = "/elsewhere/wt-feature";
 const GITDIR = "/repo/.git/worktrees/wt-feature";
 
-function ctxWith(
-  worktrees: Array<{ id: string; gitDir?: string }>
-): WorktreeMoveContext {
+function ctxWith(worktrees: Array<{ id: string; gitDir?: string }>): WorktreeMoveContext {
   const ctx = buildWorktreeMoveContext(worktrees);
   if (ctx === null) throw new Error("expected a non-null context");
   return ctx;
@@ -86,9 +84,7 @@ describe("resolveMovedWorktreeId", () => {
 describe("resolveWorktreeMovePatch", () => {
   it("returns null when the worktree did not move", () => {
     const ctx = ctxWith([{ id: OLD, gitDir: GITDIR }]);
-    expect(
-      resolveWorktreeMovePatch({ worktreeId: OLD, worktreeGitDir: GITDIR }, ctx)
-    ).toBeNull();
+    expect(resolveWorktreeMovePatch({ worktreeId: OLD, worktreeGitDir: GITDIR }, ctx)).toBeNull();
   });
 
   it("returns null for a legacy snapshot with no stored gitDir", () => {
@@ -118,10 +114,7 @@ describe("resolveWorktreeMovePatch", () => {
 
   it("remaps the id only when there are no path-bearing fields", () => {
     const ctx = ctxWith([{ id: NEW, gitDir: GITDIR }]);
-    const patch = resolveWorktreeMovePatch(
-      { worktreeId: OLD, worktreeGitDir: GITDIR },
-      ctx
-    );
+    const patch = resolveWorktreeMovePatch({ worktreeId: OLD, worktreeGitDir: GITDIR }, ctx);
     expect(patch).toEqual({ worktreeId: NEW });
   });
 

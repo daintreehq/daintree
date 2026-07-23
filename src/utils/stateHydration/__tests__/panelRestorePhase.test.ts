@@ -901,9 +901,7 @@ describe("restorePanelsPhase — panels surviving a worktree move (issue #11388)
   // id + gitDir off the current list to correlate a stale worktreeId.
   const worktreeList = (...worktrees: Array<{ id: string; gitDir?: string }>) =>
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    Promise.resolve(
-      worktrees.map((w) => ({ id: w.id, path: w.id, gitDir: w.gitDir })) as never
-    );
+    Promise.resolve(worktrees.map((w) => ({ id: w.id, path: w.id, gitDir: w.gitDir })) as never);
 
   const GITDIR = "/repo/.git/worktrees/feature";
 
@@ -918,7 +916,13 @@ describe("restorePanelsPhase — panels surviving a worktree move (issue #11388)
     ctx.backendTerminalMap.set("t1", backend("t1", { cwd: "/old/feature/pkg" }));
 
     await restorePanelsPhase(
-      [panel("t1", { worktreeId: "/old/feature", worktreeGitDir: GITDIR, cwd: "/old/feature/pkg" })],
+      [
+        panel("t1", {
+          worktreeId: "/old/feature",
+          worktreeGitDir: GITDIR,
+          cwd: "/old/feature/pkg",
+        }),
+      ],
       ctx
     );
 
@@ -936,7 +940,13 @@ describe("restorePanelsPhase — panels surviving a worktree move (issue #11388)
     });
 
     await restorePanelsPhase(
-      [panel("t1", { worktreeId: "/old/feature", worktreeGitDir: GITDIR, cwd: "/old/feature/sub" })],
+      [
+        panel("t1", {
+          worktreeId: "/old/feature",
+          worktreeGitDir: GITDIR,
+          cwd: "/old/feature/sub",
+        }),
+      ],
       ctx
     );
 
@@ -1009,8 +1019,11 @@ describe("restorePanelsPhase — panels surviving a worktree move (issue #11388)
       ctx
     );
 
-    const homes = ctx.addPanel.mock.calls.map((c) => (c[0] as { worktreeId?: string }).worktreeId);
-    expect(homes).toEqual(["/new/feature", "/new/feature"]);
+    // Both share one moved worktree; order across the restore tier is not fixed,
+    // so assert each landed on the new id rather than a positional sequence.
+    expect(ctx.addPanel).toHaveBeenCalledTimes(2);
+    expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({ worktreeId: "/new/feature" });
+    expect(ctx.addPanel.mock.calls[1]![0]).toMatchObject({ worktreeId: "/new/feature" });
   });
 
   it("still re-homes a genuinely-deleted worktree (no gitDir match)", async () => {

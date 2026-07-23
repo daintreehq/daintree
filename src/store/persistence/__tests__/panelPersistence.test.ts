@@ -705,13 +705,9 @@ describe("PanelPersistence", () => {
 
     it("stamps worktreeGitDir from the worktree store, omitting it when unknown (#11388)", () => {
       // The stable admin-dir handle lets restore survive a `git worktree move`.
-      setWorktreeGitDirAccessor((id) =>
-        id === "wt-1" ? "/repo/.git/worktrees/wt-1" : undefined
-      );
+      setWorktreeGitDirAccessor((id) => (id === "wt-1" ? "/repo/.git/worktrees/wt-1" : undefined));
       try {
-        const withHandle = panelToSnapshot(
-          createMockTerminal({ id: "p1", worktreeId: "wt-1" })
-        );
+        const withHandle = panelToSnapshot(createMockTerminal({ id: "p1", worktreeId: "wt-1" }));
         expect(withHandle.worktreeGitDir).toBe("/repo/.git/worktrees/wt-1");
 
         // No handle available (unknown / legacy worktree) ⇒ field omitted.
@@ -726,9 +722,7 @@ describe("PanelPersistence", () => {
 
     it("carries the previous worktreeGitDir when the live store can't answer, only for the same worktree (#11388)", () => {
       // First capture a snapshot with the handle from a populated store.
-      setWorktreeGitDirAccessor((id) =>
-        id === "wt-1" ? "/repo/.git/worktrees/wt-1" : undefined
-      );
+      setWorktreeGitDirAccessor((id) => (id === "wt-1" ? "/repo/.git/worktrees/wt-1" : undefined));
       const prev = panelToSnapshot(createMockTerminal({ id: "p1", worktreeId: "wt-1" }));
       expect(prev.worktreeGitDir).toBe("/repo/.git/worktrees/wt-1");
 
@@ -744,10 +738,7 @@ describe("PanelPersistence", () => {
         expect(unchanged.worktreeGitDir).toBe("/repo/.git/worktrees/wt-1");
 
         // Panel now bound to a DIFFERENT worktree ⇒ the stale handle is dropped.
-        const moved = panelToSnapshot(
-          createMockTerminal({ id: "p1", worktreeId: "wt-2" }),
-          prev
-        );
+        const moved = panelToSnapshot(createMockTerminal({ id: "p1", worktreeId: "wt-2" }), prev);
         expect(moved).not.toHaveProperty("worktreeGitDir");
       } finally {
         setWorktreeGitDirAccessor(() => undefined);
