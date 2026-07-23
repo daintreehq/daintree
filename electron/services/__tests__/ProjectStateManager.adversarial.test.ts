@@ -237,4 +237,68 @@ describe("ProjectStateManager.getProjectState ENOENT branch (mocked fs)", () => 
     expect(result).toBeNull();
     expect(utilsMock.resilientRename).toHaveBeenCalledTimes(1);
   });
+
+  it("marks and quarantines on a non-ENOENT read failure (EACCES)", async () => {
+    // A read errno other than ENOENT must go through the corruption path, not
+    // the empty-state short-circuit — otherwise an unreadable project would be
+    // treated as authoritatively empty and lose its restore files.
+    fsPromisesMock.readFile.mockRejectedValue(
+      Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" })
+    );
+
+    const result = await manager.getProjectStateWithRecovery(projectId);
+
+    expect(result.state).toBeNull();
+    expect(result.quarantinedPath).toMatch(/\.corrupted\.\d+$/);
+    expect(utilsMock.resilientRename).toHaveBeenCalledTimes(1);
+    expect(manager.wasStateUnreadableThisSession(projectId)).toBe(true);
+  });
+});
+
+describe("ProjectStateManager unreadable-session mark under rename double-fault (mocked fs)", () => {
+  let tempDir: string;
+  let manager: ProjectStateManager;
+  let projectId: string;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    utilsMock.resilientAtomicWriteFile.mockResolvedValue(undefined);
+    utilsMock.resilientUnlink.mockResolvedValue(undefined);
+    fsPromisesMock.mkdir.mockResolvedValue(undefined);
+    // The quarantine rename itself fails — the double fault (unreadable AND
+    // unrenameable) that would otherwise be invisible to every signal.
+    utilsMock.resilientRename.mockRejectedValue(
+      Object.assign(new Error("EACCES"), { code: "EACCES" })
+    );
+
+    tempDir = path.join(os.tmpdir(), "daintree-unreadable-adv");
+    manager = new ProjectStateManager(tempDir);
+    projectId = generateProjectId("/test/adversarial-unreadable-project");
+  });
+
+  it("marks the project when a corruption read AND its quarantine rename both fail", async () => {
+    fsPromisesMock.readFile.mockResolvedValue("{ not valid json");
+
+    const result = await manager.getProjectStateWithRecovery(projectId);
+
+    expect(result.state).toBeNull();
+    // Rename failed, so hydration gets no recovery path...
+    expect(result.quarantinedPath).toBeUndefined();
+    expect(utilsMock.resilientRename).toHaveBeenCalledTimes(1);
+    // ...but the destructive-safety mark must still be set.
+    expect(manager.wasStateUnreadableThisSession(projectId)).toBe(true);
+  });
+
+  it("marks the project when a future-version read AND its quarantine rename both fail", async () => {
+    fsPromisesMock.readFile.mockResolvedValue(
+      JSON.stringify({ _schemaVersion: 99, projectId, terminals: [] })
+    );
+
+    const result = await manager.getProjectStateWithRecovery(projectId);
+
+    expect(result.state).toBeNull();
+    expect(result.quarantinedPath).toBeUndefined();
+    expect(utilsMock.resilientRename).toHaveBeenCalledTimes(1);
+    expect(manager.wasStateUnreadableThisSession(projectId)).toBe(true);
+  });
 });
