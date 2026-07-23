@@ -301,6 +301,34 @@ describe("PluginService", () => {
     );
   });
 
+  it("forwards an explicit dockable:false from a panel contribution into registerPanelKind (#11332)", async () => {
+    await writePlugin("dock-plugin", {
+      name: "acme.dock-plugin",
+      version: "1.0.0",
+      contributes: {
+        panels: [
+          { id: "compact", name: "Compact", iconId: "eye", color: "#111", dockable: false },
+          { id: "wide", name: "Wide", iconId: "eye", color: "#222" },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    // Explicit opt-out flows through verbatim.
+    expect(registerPanelKind).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "acme.dock-plugin.compact", dockable: false })
+    );
+    // Absent flag never stamps a `dockable` key, so the registry default
+    // (dockable) applies — assert the key is not present on that call.
+    const wideCall = vi
+      .mocked(registerPanelKind)
+      .mock.calls.find((call) => call[0]?.id === "acme.dock-plugin.wide");
+    expect(wideCall).toBeDefined();
+    expect(Object.prototype.hasOwnProperty.call(wideCall![0], "dockable")).toBe(false);
+  });
+
   it("skips directories without plugin.json", async () => {
     await fs.mkdir(path.join(tmpDir, "empty-dir"));
 

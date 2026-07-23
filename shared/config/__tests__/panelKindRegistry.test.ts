@@ -534,18 +534,45 @@ describe("getFirstRenderPreloadSeeds", () => {
 });
 
 describe("panelKindIsDockable", () => {
-  it("PTY kinds are always dockable", () => {
-    expect(panelKindIsDockable("terminal")).toBe(true);
+  afterEach(() => {
+    clearPanelKindRegistry();
   });
 
-  it("file and browser panels opt in via the dockable capability", () => {
+  it("registered kinds are dockable by default (opt-out model)", () => {
+    // PTY terminal and the non-PTY reading surfaces carry no `dockable` flag —
+    // the default is dockable, not the old opt-in.
+    expect(panelKindIsDockable("terminal")).toBe(true);
     expect(panelKindIsDockable("file")).toBe(true);
     expect(panelKindIsDockable("browser")).toBe(true);
   });
 
-  it("non-PTY kinds without the capability are not dockable", () => {
-    expect(panelKindIsDockable("dev-preview")).toBe(false);
-    expect(panelKindIsDockable("review")).toBe(false);
+  it("the four built-ins that opt out are not dockable", () => {
+    for (const kind of ["dev-preview", "review", "file-browser", "diff"]) {
+      expect(panelKindIsDockable(kind), `${kind} opts out via dockable:false`).toBe(false);
+    }
+  });
+
+  it("a plugin kind without an explicit flag is dockable", () => {
+    registerPanelKind(makeExtensionConfig("ext-a.viewer", "ext-a"));
+    expect(panelKindIsDockable("ext-a.viewer")).toBe(true);
+  });
+
+  it("a plugin kind that declares dockable:false opts out", () => {
+    registerPanelKind({ ...makeExtensionConfig("ext-a.viewer", "ext-a"), dockable: false });
+    expect(panelKindIsDockable("ext-a.viewer")).toBe(false);
+  });
+
+  it("an explicit dockable:false wins even for a PTY kind", () => {
+    // Predicate contract only: `hasPty` no longer forces dockability, so the
+    // implementation must be `dockable !== false`, not `hasPty || …`. (At the
+    // store boundary a spawned PTY panel collapses to kind `terminal`, so this
+    // combination can't describe a live panel — this pins the pure function.)
+    registerPanelKind({
+      ...makeExtensionConfig("ext-a.pty", "ext-a"),
+      hasPty: true,
+      dockable: false,
+    });
+    expect(panelKindIsDockable("ext-a.pty")).toBe(false);
   });
 
   it("unknown kinds are not dockable", () => {

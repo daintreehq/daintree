@@ -1,6 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { isDockPanelRendered, type DockPanelScope } from "../dockPanelVisibility";
-import type { PtyPanelData, ReviewPanelData } from "@shared/types/panel";
+import type { PanelInstance, PtyPanelData, ReviewPanelData } from "@shared/types/panel";
+import {
+  clearPanelKindRegistry,
+  registerPanelKind,
+  type PanelKindConfig,
+} from "@shared/config/panelKindRegistry";
 
 function createDockPanel(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
@@ -81,5 +86,52 @@ describe("isDockPanelRendered", () => {
     };
 
     expect(isDockPanelRendered(panel, createScope())).toBe(false);
+  });
+});
+
+describe("isDockPanelRendered — plugin kinds follow the registry (#11332)", () => {
+  const makePluginConfig = (id: string, dockable?: boolean): PanelKindConfig => ({
+    id,
+    name: `Plugin ${id}`,
+    iconId: "puzzle",
+    color: "#123456",
+    hasPty: false,
+    canRestart: false,
+    canConvert: false,
+    extensionId: "ext-a",
+    ...(dockable !== undefined ? { dockable } : {}),
+  });
+
+  const makePluginPanel = (id: string, kind: string): PanelInstance => {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- plugin kinds are cast into the closed PanelInstance union (mirrors addPanel.ts)
+    return { id, kind, title: "Plugin", location: "dock", worktreeId: "wt-a" } as PanelInstance;
+  };
+
+  afterEach(() => {
+    clearPanelKindRegistry();
+  });
+
+  it("renders a docked panel of a default-dockable plugin kind", () => {
+    registerPanelKind(makePluginConfig("ext-a.viewer"));
+
+    expect(isDockPanelRendered(makePluginPanel("dock-1", "ext-a.viewer"), createScope())).toBe(
+      true
+    );
+  });
+
+  it("does not render a docked panel of a plugin kind that opts out (dockable:false)", () => {
+    registerPanelKind(makePluginConfig("ext-a.viewer", false));
+
+    expect(isDockPanelRendered(makePluginPanel("dock-1", "ext-a.viewer"), createScope())).toBe(
+      false
+    );
+  });
+
+  it("does not render a docked panel whose plugin kind is not registered yet", () => {
+    // Registration hasn't landed (or the plugin is disabled): an unknown kind
+    // is never dockable, so it stays out of the dock render path.
+    expect(
+      isDockPanelRendered(makePluginPanel("dock-1", "ext-a.unregistered"), createScope())
+    ).toBe(false);
   });
 });

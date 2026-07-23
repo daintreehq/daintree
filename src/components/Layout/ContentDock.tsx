@@ -10,6 +10,7 @@ import { usePanelStore, useProjectStore, useWorktreeSelectionStore } from "@/sto
 import { useScratchStore } from "@/store/scratchStore";
 import { resolveWorkspaceCwd } from "@/utils/workspaceCwd";
 import {
+  isBrowserPanel,
   isDockPanel,
   isFilePanel,
   isPtyPanel,
@@ -19,7 +20,7 @@ import {
   type PanelInstance,
 } from "@shared/types/panel";
 import { extractHostPort } from "@/components/Browser/browserUtils";
-import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
+import { getRenderablePanel } from "@/store/slices/panelRegistry/selectors";
 import { panelMatchesWorktreeScope } from "@/store/slices/panelRegistry/worktreeIndex";
 import type { TrashedTerminal } from "@/store/slices";
 import { DockedTerminalItem } from "./DockedTerminalItem";
@@ -116,6 +117,15 @@ function browserChipTitle(panel: BrowserPanelData): string {
   return host || panel.title || "Browser";
 }
 
+// Chip label for a non-PTY dock panel. File and browser get their kind-specific
+// derivations; every other dockable kind (dev-preview if opted in, plugin view
+// panels — #11332) falls back to the panel title so the chip is never blank.
+function dockChipTitle(panel: PanelInstance): string {
+  if (isFilePanel(panel)) return fileChipTitle(panel);
+  if (isBrowserPanel(panel)) return browserChipTitle(panel);
+  return panel.title;
+}
+
 export function ContentDock({ density = "normal" }: ContentDockProps) {
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
 
@@ -136,8 +146,11 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   // Narrow dock subscriptions (#10908). Subscribing to the whole `panelsById`
   // re-rendered the dock on every panel's rAF status-buffer flush — including
   // grid agents that never appear here. Both selectors below react only to dock
-  // panels. Membership is `isDockPanel` (PTY panels plus the dockable file
-  // kind — #10985); each member kind has its own chip below. This is NOT the
+  // panels. Membership is `isDockPanel` — every registered kind that hasn't
+  // opted out with `dockable: false`, PTY and non-PTY alike, including plugin
+  // kinds (#11332). Panels are read through `getRenderablePanel` (not
+  // `getNarrowPanel`, which drops plugin kinds); the PTY chip and the generic
+  // `DockedNonPtyPanelItem` chip cover every member below. This is NOT the
   // #10512 grid render-eligibility predicate, which deliberately does not
   // apply to the dock.
   //
@@ -152,7 +165,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
     useShallow((state) => {
       const result: string[] = [];
       for (const id of Object.keys(state.panelsById)) {
-        const terminal = getNarrowPanel(state.panelsById, id);
+        const terminal = getRenderablePanel(state.panelsById, id);
         if (
           terminal &&
           isDockPanel(terminal) &&
@@ -173,7 +186,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
     useShallow((state) => {
       const result: DockPanelData[] = [];
       for (const id of state.panelIds) {
-        const terminal = getNarrowPanel(state.panelsById, id);
+        const terminal = getRenderablePanel(state.panelsById, id);
         if (
           terminal &&
           isDockPanel(terminal) &&
@@ -564,15 +577,10 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
                           <SortableDockItem key={group.id} terminal={terminal} sourceIndex={index}>
                             {isPtyPanel(terminal) ? (
                               <DockedTerminalItem terminal={terminal} />
-                            ) : isFilePanel(terminal) ? (
-                              <DockedNonPtyPanelItem
-                                panel={terminal}
-                                displayTitle={fileChipTitle(terminal)}
-                              />
                             ) : (
                               <DockedNonPtyPanelItem
                                 panel={terminal}
-                                displayTitle={browserChipTitle(terminal)}
+                                displayTitle={dockChipTitle(terminal)}
                               />
                             )}
                           </SortableDockItem>

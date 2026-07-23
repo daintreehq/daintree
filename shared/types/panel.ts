@@ -3,7 +3,11 @@ import type { TerminalCheckResult } from "./checkResult.js";
 import type { BuiltInAgentId } from "../config/agentIds.js";
 import type { BrowserHistory } from "./browser.js";
 import type { GitStatus, DiffChangeSetEntry } from "./git.js";
-import { BUILT_IN_PANEL_KINDS, type BuiltInPanelKind } from "../config/panelKindRegistry.js";
+import {
+  BUILT_IN_PANEL_KINDS,
+  panelKindIsDockable,
+  type BuiltInPanelKind,
+} from "../config/panelKindRegistry.js";
 
 export type { BuiltInPanelKind };
 
@@ -839,14 +843,18 @@ export function isDiffPanel(panel: PanelInstance | TerminalInstance): panel is D
 }
 
 /**
- * Panels that can live in the dock. Type-level twin of the registry's
- * `dockable` capability (`panelKindIsDockable`) — extend both together when a
- * new kind gains dock support, along with a chip branch in `ContentDock`.
+ * A panel known to be dockable. Dockability is runtime registry state, not a
+ * fixed kind list: any registered kind is dockable unless it declares
+ * `dockable: false` (see `panelKindIsDockable`), including plugin kinds cast
+ * into `PanelInstance` at creation. So this is `PanelInstance` — the guarantee
+ * lives in `isDockPanel`'s runtime check, and the dock render path narrows per
+ * kind (`isPtyPanel` for the terminal chip, `DockedNonPtyPanelItem` for the
+ * rest) rather than trusting this type to enumerate members.
  */
-export type DockPanelData = PtyPanelData | FilePanelData | BrowserPanelData;
+export type DockPanelData = PanelInstance;
 
 export function isDockPanel(panel: PanelInstance | TerminalInstance): panel is DockPanelData {
-  return isPtyPanel(panel) || isFilePanel(panel) || isBrowserPanel(panel);
+  return panelKindIsDockable(panel.kind ?? "terminal");
 }
 
 /**

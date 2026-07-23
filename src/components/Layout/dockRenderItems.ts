@@ -8,7 +8,8 @@ export interface DockRenderItem {
 
 export function buildDockRenderItems(
   tabGroups: TabGroup[],
-  // Tab groups stay PTY-only — dockable non-PTY panels (file, browser) dock as standalone chips.
+  // Tab groups stay PTY-only — every dockable non-PTY kind (file, browser and
+  // plugin view panels — #11332) docks as a standalone chip.
   resolvePanels: (groupId: string) => PtyPanelData[],
   excludedPanelId?: string | null,
   dockTerminals: DockPanelData[] = []

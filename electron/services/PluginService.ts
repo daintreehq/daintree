@@ -1283,6 +1283,10 @@ export class PluginService {
         canRestart: panel.canRestart,
         canConvert: panel.canConvert,
         showInPalette: panel.showInPalette,
+        // Dockable by default; only forward an explicit opt-out (or opt-in) so
+        // absence stays `undefined` and `panelKindIsDockable` applies the
+        // default. #11332.
+        ...(panel.dockable !== undefined ? { dockable: panel.dockable } : {}),
         extensionId: manifest.name,
         ...(view && !panel.hasPty
           ? { componentPath: buildPluginViewUrl(manifest.name, view.componentPath, viewGeneration) }

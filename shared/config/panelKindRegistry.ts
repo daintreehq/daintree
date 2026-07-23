@@ -105,11 +105,13 @@ export interface PanelKindConfig {
   /** Whether this panel kind can convert to/from other types */
   canConvert: boolean;
   /**
-   * Whether a non-PTY kind can live in the dock. PTY kinds are always
-   * dockable; setting this opts a non-PTY kind into dock membership. The
-   * dock render path must have a chip for the kind (see `ContentDock`) —
-   * `DockPanelData` in shared/types/panel.ts is the type-level twin of this
-   * flag and the two must stay in sync.
+   * Whether a panel kind can live in the dock. Every registered kind is
+   * dockable by default (built-in and plugin alike); set `dockable: false` to
+   * opt a kind out — the explicit escape hatch for kinds with no meaningful
+   * compact chip-row form. The dock render path is generic (`ContentDock`
+   * renders any non-PTY dockable kind through `DockedNonPtyPanelItem`), so
+   * membership follows this flag via `panelKindIsDockable` / `isDockPanel`
+   * rather than a hard-coded kind list.
    */
   dockable?: boolean;
   /**
@@ -201,7 +203,8 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     hasPty: false,
     canRestart: false,
     canConvert: false,
-    dockable: true,
+    // Dockable by default (no explicit flag) — a reading surface with a
+    // meaningful compact chip form.
     keepAliveOnProjectSwitch: true,
     showInPalette: true,
     searchAliases: ["web", "chrome", "internet", "www"],
@@ -219,6 +222,9 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     hasPty: false,
     canRestart: false,
     canConvert: false,
+    // Explicit opt-out: a live dev-server preview has no meaningful compact
+    // chip-row form (like file-browser, diff and review).
+    dockable: false,
     usesTerminalUi: false,
     keepAliveOnProjectSwitch: true,
     showInPalette: true,
@@ -234,6 +240,9 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     hasPty: false,
     canRestart: false,
     canConvert: false,
+    // Explicit opt-out: a review surface has no meaningful compact chip-row
+    // form (like file-browser, diff and dev-preview).
+    dockable: false,
     usesTerminalUi: false,
     keepAliveOnProjectSwitch: true,
     showInPalette: true,
@@ -253,7 +262,8 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     hasPty: false,
     canRestart: false,
     canConvert: false,
-    dockable: true,
+    // Dockable by default (no explicit flag) — a reading surface with a
+    // meaningful compact chip form.
     usesTerminalUi: false,
     keepAliveOnProjectSwitch: true,
     showInPalette: true,
@@ -272,9 +282,10 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     hasPty: false,
     canRestart: false,
     canConvert: false,
-    // Not dockable: the dock chip row shows one compact title per panel, and a
-    // two-pane browser has no meaningful compact form (review, diff and
-    // dev-preview are non-dockable reading surfaces for the same reason).
+    // Explicit opt-out: the dock chip row shows one compact title per panel,
+    // and a two-pane browser has no meaningful compact form (review, diff and
+    // dev-preview opt out for the same reason).
+    dockable: false,
     dialogFullHeight: true,
     usesTerminalUi: false,
     keepAliveOnProjectSwitch: true,
@@ -296,8 +307,9 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     hasPty: false,
     canRestart: false,
     canConvert: false,
-    // Not dockable: the dock's chip row has no meaningful compact form for a
-    // diff (review and dev-preview are non-dockable reading surfaces too).
+    // Explicit opt-out: the dock's chip row has no meaningful compact form for
+    // a diff (review and dev-preview opt out for the same reason).
+    dockable: false,
     // Pin the dialog at the max height rather than sizing to content, so
     // stepping between files doesn't resize and re-center the whole frame
     // under the cursor (#11364) — same treatment as the file browser.
@@ -565,9 +577,12 @@ export function panelKindHasPty(kind: PanelKind): boolean {
 }
 
 /**
- * Check if a panel kind can live in the dock. PTY kinds always can; non-PTY
- * kinds opt in via `dockable` (the dock chip row and offscreen host render
- * them through `isDockPanel`).
+ * Check if a panel kind can live in the dock. Every registered kind is
+ * dockable by default (built-in and plugin alike); a kind opts out with
+ * `dockable: false` (the dock chip row and offscreen host render dockable
+ * kinds through `isDockPanel`). An unregistered kind is never dockable — a
+ * dock request for an unknown kind would strand the panel with no chip to
+ * render it (#11054).
  *
  * @param kind - The panel kind to check
  * @returns True if panels of this kind can be moved to the dock
@@ -575,7 +590,7 @@ export function panelKindHasPty(kind: PanelKind): boolean {
 export function panelKindIsDockable(kind: PanelKind): boolean {
   const config = getPanelKindConfig(kind);
   if (!config) return false;
-  return config.hasPty || config.dockable === true;
+  return config.dockable !== false;
 }
 
 /**

@@ -51,6 +51,7 @@ const PANEL_KIND_META_KEYS = [
   "firstRenderRestore",
   "lazyImportPath",
   "showInPalette",
+  "dockable",
   "extensionId",
   "componentPath",
   "shortcut",

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect } from "vitest";
 import {
   isBuiltInPanelKind,
   isBrowserPanel,
@@ -10,7 +10,11 @@ import {
   type PanelLocation,
   type TerminalInstance,
 } from "../panel.js";
-import { BUILT_IN_PANEL_KINDS } from "../../config/panelKindRegistry.js";
+import {
+  BUILT_IN_PANEL_KINDS,
+  clearPanelKindRegistry,
+  registerPanelKind,
+} from "../../config/panelKindRegistry.js";
 
 describe("isBuiltInPanelKind", () => {
   // Hard-coded positives — kept independent of BUILT_IN_PANEL_KINDS so a
@@ -99,15 +103,61 @@ describe("panel variant guards", () => {
     expect(isDevPreviewPanel(legacy)).toBe(false);
   });
 
-  it("isDockPanel admits PTY, file, and browser panels but not dev-preview/review", () => {
-    // The dock render path only surfaces panels isDockPanel recognizes; browser
-    // must be admitted or it vanishes when moved to the dock (#11053).
+  it("isDockPanel admits dockable built-in kinds but not the opt-outs", () => {
+    // Membership follows the registry (`panelKindIsDockable`), not a fixed kind
+    // list: terminal/file/browser are dockable by default; the four kinds that
+    // declare `dockable: false` are excluded, or they vanish from the dock.
     const filePanel = { id: "p4", kind: "file", title: "t", location: "dock" } as PanelInstance;
-    const reviewPanel = { id: "p5", kind: "review", title: "t", location: "grid" } as PanelInstance;
     expect(isDockPanel(ptyPanel)).toBe(true);
     expect(isDockPanel(browserPanel)).toBe(true);
     expect(isDockPanel(filePanel)).toBe(true);
-    expect(isDockPanel(devPreviewPanel)).toBe(false);
-    expect(isDockPanel(reviewPanel)).toBe(false);
+    for (const kind of ["dev-preview", "review", "file-browser", "diff"]) {
+      const panel = { id: `opt-${kind}`, kind, title: "t", location: "grid" } as PanelInstance;
+      expect(isDockPanel(panel), `${kind} opts out of the dock`).toBe(false);
+    }
+  });
+});
+
+describe("isDockPanel — plugin kinds follow the registry", () => {
+  afterEach(() => {
+    clearPanelKindRegistry();
+  });
+
+  const makePluginPanel = (kind: string): PanelInstance =>
+    ({ id: `${kind}-1`, kind, title: "t", location: "dock", pluginId: "ext-a" }) as PanelInstance;
+
+  it("admits a registered plugin kind that is dockable by default", () => {
+    registerPanelKind({
+      id: "ext-a.viewer",
+      name: "Viewer",
+      iconId: "puzzle",
+      color: "#123456",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      extensionId: "ext-a",
+    });
+    expect(isDockPanel(makePluginPanel("ext-a.viewer"))).toBe(true);
+  });
+
+  it("excludes a registered plugin kind that declares dockable:false", () => {
+    registerPanelKind({
+      id: "ext-a.viewer",
+      name: "Viewer",
+      iconId: "puzzle",
+      color: "#123456",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      dockable: false,
+      extensionId: "ext-a",
+    });
+    expect(isDockPanel(makePluginPanel("ext-a.viewer"))).toBe(false);
+  });
+
+  it("excludes an unregistered plugin kind (registration not yet landed)", () => {
+    // Hydration can replay a persisted plugin panel before its kind registers;
+    // an unknown kind is never dockable, so it stays out of the dock render path.
+    expect(isDockPanel(makePluginPanel("ext-a.not-registered"))).toBe(false);
   });
 });
