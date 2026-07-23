@@ -56,6 +56,7 @@ const agentSessionHistoryMock = {
 
 function setupActions(): ActionRegistry {
   const actions: ActionRegistry = new Map();
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- bookmark actions don't touch callbacks; a bare stub is enough to build the registry
   registerAgentActions(actions, {} as ActionCallbacks);
   return actions;
 }

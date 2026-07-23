@@ -24,6 +24,18 @@ import { isAgentToolbarVisible } from "@shared/utils/agentPinned";
 import { isAgentInstalled, isAgentLaunchable } from "@shared/utils/agentAvailability";
 import type { ActionContext, ActionId } from "@shared/types/actions";
 import { isPtyPanel, type TerminalSpawnSource } from "@shared/types/panel";
+
+// Named so the bookmark actions can both declare `argsSchema` and `.parse()` in
+// run() for typed args without an unsafe `as` cast (#11288).
+const BookmarkAndCloseArgsSchema = z.object({
+  terminalId: z.string().trim().min(1),
+  label: z.string().trim().min(1).max(120),
+});
+const BookmarkMutateArgsSchema = z.object({
+  sessionId: z.string().min(1),
+  label: z.string().trim().min(1).max(120),
+});
+const BookmarkDeleteArgsSchema = z.object({ sessionId: z.string().min(1) });
 export function registerAgentActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   const readAgentDiscoveryState = async () => {
     // These are the same normalized renderer stores the toolbar reads. Fall back to
@@ -540,12 +552,9 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     // dialog exists in Phase 1; the Phase-2 pane dialog will supply it. Hidden
     // from the palette so a source:"user" pick can't bypass the D1 guard.
     palette: { mode: "hidden" },
-    argsSchema: z.object({
-      terminalId: z.string().trim().min(1),
-      label: z.string().trim().min(1).max(120),
-    }),
+    argsSchema: BookmarkAndCloseArgsSchema,
     run: async (args: unknown) => {
-      const { terminalId, label } = args as { terminalId: string; label: string };
+      const { terminalId, label } = BookmarkAndCloseArgsSchema.parse(args);
       const panelStore = usePanelStore.getState();
       const panel = panelStore.getTerminal(terminalId);
       // Require a live local agent pane: the same id must resolve here (for the
@@ -588,12 +597,9 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({
-      sessionId: z.string().min(1),
-      label: z.string().trim().min(1).max(120),
-    }),
+    argsSchema: BookmarkMutateArgsSchema,
     run: async (args: unknown) => {
-      const { sessionId, label } = args as { sessionId: string; label: string };
+      const { sessionId, label } = BookmarkMutateArgsSchema.parse(args);
       return window.electron.agentSessionHistory.promoteBookmark({ sessionId, label });
     },
   }));
@@ -607,12 +613,9 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({
-      sessionId: z.string().min(1),
-      label: z.string().trim().min(1).max(120),
-    }),
+    argsSchema: BookmarkMutateArgsSchema,
     run: async (args: unknown) => {
-      const { sessionId, label } = args as { sessionId: string; label: string };
+      const { sessionId, label } = BookmarkMutateArgsSchema.parse(args);
       return window.electron.agentSessionHistory.renameBookmark({ sessionId, label });
     },
   }));
@@ -631,11 +634,9 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     // See session.bookmarkAndClose — danger:"confirm" gates dispatch through
     // ActionService; hidden from the palette so a user pick can't bypass it.
     palette: { mode: "hidden" },
-    argsSchema: z.object({
-      sessionId: z.string().min(1),
-    }),
+    argsSchema: BookmarkDeleteArgsSchema,
     run: async (args: unknown) => {
-      const { sessionId } = args as { sessionId: string };
+      const { sessionId } = BookmarkDeleteArgsSchema.parse(args);
       await window.electron.agentSessionHistory.deleteBookmark({ sessionId });
     },
   }));
