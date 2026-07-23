@@ -411,8 +411,9 @@ describe("WorkspaceClient multi-process manager", () => {
       await readyAndResolveLoad(0);
       await loadA;
 
-      // Start the A-scoped query first, THEN rebind the window to B while the
-      // request is still in flight — the captured host must not be re-resolved.
+      // Start the A-scoped query first, then COMPLETE the window's rebind to B
+      // while the request is still in flight — the captured host must not be
+      // re-resolved from the now-repointed window mapping.
       const statesPromise = client.getAllStatesForProjectAsync("/project-a", idFor("/project-a"));
       await tick();
       const req = h(0)
@@ -421,11 +422,17 @@ describe("WorkspaceClient multi-process manager", () => {
       expect(req).toBeDefined();
 
       const loadB = client.loadProject("/project-b", 1);
+      await readyAndResolveLoad(1);
+      await loadB;
+
       h(0).resolveRequest(req.requestId, { states: [{ id: "wt-a" }] });
       expect((await statesPromise).map((s: any) => s.id)).toEqual(["wt-a"]);
 
-      await readyAndResolveLoad(1);
-      await loadB;
+      // B's host answered no state query on behalf of the pre-rebind request.
+      const hostBStateReqs = h(1)
+        .getAllRequests()
+        .filter((r: any) => r.type === "get-all-states");
+      expect(hostBStateReqs).toHaveLength(0);
     });
 
     it("returns empty for an unknown project path without contacting any host", async () => {
@@ -616,6 +623,37 @@ describe("WorkspaceClient multi-process manager", () => {
       h(0).resolveRequest(req2.requestId, { states: [{ id: "wt-ok" }] });
       const r2 = await p2;
       expect(r2).toEqual([{ id: "wt-ok" }]);
+    });
+
+    it("project-scoped cache also expires after TTL", async () => {
+      const load = client.loadProject("/project-a", 1);
+      await readyAndResolveLoadFake(0);
+      await load;
+
+      const projectId = `id-for-${path.resolve("/project-a")}`;
+      const p1 = client.getAllStatesForProjectAsync("/project-a", projectId);
+      await vi.advanceTimersByTimeAsync(0);
+      const req1 = h(0)
+        .getAllRequests()
+        .filter((r: any) => r.type === "get-all-states")[0];
+      h(0).resolveRequest(req1.requestId, { states: [{ id: "wt-1" }] });
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Before TTL: same Promise
+      const p2 = client.getAllStatesForProjectAsync("/project-a", projectId);
+      expect(p2).toBe(p1);
+
+      // After TTL: new Promise, new host request
+      await vi.advanceTimersByTimeAsync(150);
+      const p3 = client.getAllStatesForProjectAsync("/project-a", projectId);
+      expect(p3).not.toBe(p1);
+
+      await vi.advanceTimersByTimeAsync(0);
+      const req2 = h(0)
+        .getAllRequests()
+        .filter((r: any) => r.type === "get-all-states")[1];
+      h(0).resolveRequest(req2.requestId, { states: [{ id: "wt-2" }] });
+      expect(await p3).toEqual([{ id: "wt-2" }]);
     });
 
     it("different windowIds get separate cache entries", async () => {
