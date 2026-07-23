@@ -63,8 +63,18 @@ export interface UseFileBrowserTreeResult {
   rootError: string | null;
   /** Fetch a directory if it isn't already loaded or in flight. */
   ensureLoaded: (dirPath: string) => void;
-  /** Re-list the root and every reachable expanded directory. */
-  refresh: () => void;
+  /**
+   * Re-list the root and every reachable expanded directory. Pass
+   * `{ manual: true }` for a user-initiated refresh so the toolbar spinner
+   * runs; background (change-tick) refreshes leave it dormant.
+   */
+  refresh: (options?: { manual?: boolean }) => void;
+  /**
+   * True while a *manual* refresh's listings are still in flight. Drives the
+   * toolbar Refresh spinner; stays false for passive change-tick refreshes so
+   * the button doesn't spin on every filesystem change.
+   */
+  isRefreshing: boolean;
 }
 
 interface QueueEntry {
@@ -102,6 +112,11 @@ export function useFileBrowserTree({
   const [loadingPaths, setLoadingPaths] = useState<ReadonlySet<string>>(new Set());
   const [rootError, setRootError] = useState<string | null>(null);
   const [hasLoadedRoot, setHasLoadedRoot] = useState(false);
+  // True from a manual refresh press until its listings fully drain. A ref
+  // mirrors it so the drain check in `pump` (which runs off refs, not state)
+  // can decide whether a completed drain belongs to a manual refresh.
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const isRefreshingRef = useRef(false);
 
   // Generation counter, bumped whenever the identity of what we are listing
   // changes (worktree switch, ignored-filter flip). Every in-flight response
@@ -308,6 +323,19 @@ export function useFileBrowserTree({
         generation
       );
       pumpRef.current();
+    } else if (
+      isRefreshingRef.current &&
+      physicalInFlightRef.current === 0 &&
+      queueRef.current.length === 0 &&
+      rootRetryTimerRef.current === null
+    ) {
+      // A manual refresh's listings have fully drained (no deferred replay per
+      // the branch above, and no silent root-retry still armed) — end the spin
+      // cycle. `else if` keeps the flag up while a collision replay is still
+      // queued; the `rootRetryTimerRef` guard keeps it up across a transient
+      // root failure's backoff so the spin doesn't stop then resume on retry.
+      isRefreshingRef.current = false;
+      setIsRefreshing(false);
     }
   }, [fetchDirectory, enqueueTargets, rootPath]);
 
@@ -358,18 +386,29 @@ export function useFileBrowserTree({
     [enqueueTargets, pump]
   );
 
-  const refresh = useCallback((): void => {
-    const generation = generationRef.current;
-    const targets = refreshTargets(listingsRef.current, expandedSetRef.current, rootPath);
-    // A target already in flight read the filesystem before this refresh was
-    // asked for, so its result may not reflect the change that triggered us.
-    // Defer rather than accept that response as final.
-    if (targets.some((target) => inFlightRef.current.has(target))) {
-      refreshPendingRef.current = true;
-    }
-    enqueueTargets(targets, generation);
-    pump();
-  }, [enqueueTargets, pump, rootPath]);
+  const refresh = useCallback(
+    (options?: { manual?: boolean }): void => {
+      const generation = generationRef.current;
+      const targets = refreshTargets(listingsRef.current, expandedSetRef.current, rootPath);
+      // A user press should spin the toolbar icon until the re-list drains. Set
+      // this before `pump` so the flag is up if fetches start synchronously; a
+      // no-op refresh (no worktree, no targets) drains inside `pump` and clears
+      // it again in the same batch, so the icon never flickers.
+      if (options?.manual) {
+        isRefreshingRef.current = true;
+        setIsRefreshing(true);
+      }
+      // A target already in flight read the filesystem before this refresh was
+      // asked for, so its result may not reflect the change that triggered us.
+      // Defer rather than accept that response as final.
+      if (targets.some((target) => inFlightRef.current.has(target))) {
+        refreshPendingRef.current = true;
+      }
+      enqueueTargets(targets, generation);
+      pump();
+    },
+    [enqueueTargets, pump, rootPath]
+  );
 
   // Identity reset. Flipping the ignored filter changes what every listing
   // contains, not just the root, so the whole cache is dropped rather than
@@ -383,6 +422,11 @@ export function useFileBrowserTree({
     inFlightRef.current.clear();
     queueRef.current = [];
     refreshPendingRef.current = false;
+    // A worktree switch abandons any in-flight manual refresh; its drain will
+    // never complete for this identity, so end the spin here rather than leave
+    // the icon stuck.
+    isRefreshingRef.current = false;
+    setIsRefreshing(false);
     setListings(new Map());
     setLoadingPaths(new Set());
     setRootError(null);
@@ -444,6 +488,7 @@ export function useFileBrowserTree({
     rootError,
     ensureLoaded,
     refresh,
+    isRefreshing,
   };
 }
 

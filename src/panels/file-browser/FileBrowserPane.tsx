@@ -4,6 +4,7 @@ import { basename, join } from "@shared/utils/path";
 import type { BasePanelProps } from "@/components/Panel/ContentPanel";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { FileViewerToolbar } from "@/components/FileViewer/FileViewerToolbar";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { Skeleton, SkeletonText } from "@/components/ui/Skeleton";
@@ -107,13 +108,14 @@ export function FileBrowserPane({
 
   const stableExpandedPaths = useMemo(() => expandedPaths ?? EMPTY_PATHS, [expandedPaths]);
 
-  const { rows, isInitialLoading, rootError, ensureLoaded, refresh } = useFileBrowserTree({
-    worktreeId,
-    expandedPaths: stableExpandedPaths,
-    showIgnored,
-    rootPath,
-    changeTick,
-  });
+  const { rows, isInitialLoading, rootError, ensureLoaded, refresh, isRefreshing } =
+    useFileBrowserTree({
+      worktreeId,
+      expandedPaths: stableExpandedPaths,
+      showIgnored,
+      rootPath,
+      changeTick,
+    });
 
   const handleToggleExpanded = useCallback(
     (path: string, expand: boolean) => {
@@ -149,7 +151,7 @@ export function FileBrowserPane({
   const [manualRefreshNonce, setManualRefreshNonce] = useState(0);
   const handleRefresh = useCallback(() => {
     setManualRefreshNonce((nonce) => nonce + 1);
-    refresh();
+    refresh({ manual: true });
   }, [refresh]);
 
   // One value per refresh *cycle*, not per directory listed. Deriving it from
@@ -401,7 +403,7 @@ export function FileBrowserPane({
               <EyeOff className="h-3.5 w-3.5" />
             </FileViewerToolbar.IconButton>
             <FileViewerToolbar.IconButton label="Refresh" onClick={handleRefresh}>
-              <RefreshCw className="h-3.5 w-3.5" />
+              <SpinningIcon icon={RefreshCw} active={isRefreshing} className="h-3.5 w-3.5" />
             </FileViewerToolbar.IconButton>
           </div>
           {renderTree()}

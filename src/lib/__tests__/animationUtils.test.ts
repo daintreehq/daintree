@@ -26,6 +26,7 @@ import {
   UI_ANIMATION_DURATION,
   UI_DOHERTY_THRESHOLD,
   UI_PALETTE_STALE_DELAY,
+  UI_SPIN_CYCLE_MS,
   UI_ENTER_DURATION,
   UI_EXIT_DURATION,
   UI_ENTER_EASING,
@@ -354,5 +355,53 @@ describe("panel-motion-tier CSS contract (#10704)", () => {
     const match = css.match(/--ease-out-expo\s*:\s*([^;]+);/);
     expect(match).not.toBeNull();
     expect(match?.[1]?.trim()).toBe(PANEL_RESTORE_EASING);
+  });
+});
+
+describe("UI_SPIN_CYCLE_MS ↔ Tailwind .animate-spin drift contract", () => {
+  // UI_SPIN_CYCLE_MS is the JS backstop that clears a spinning refresh icon when
+  // the CSS animation is suppressed (reduced-motion / performance mode) and no
+  // `animationiteration` event ever fires. It is only correct while it equals
+  // one real rotation of Tailwind's built-in `.animate-spin`. Tailwind owns that
+  // duration via `--animate-spin: spin <N>s linear infinite` in its shipped
+  // theme.css — a second, independent source of truth. Parse it and fail here if
+  // a Tailwind upgrade ever changes the spin duration out from under the
+  // constant, rather than shipping a backstop that stops mid-rotation.
+  const themeCss = readFileSync(
+    resolve(__dirname, "../../../node_modules/tailwindcss/theme.css"),
+    "utf8"
+  );
+
+  it("Tailwind declares --animate-spin as an infinite linear spin", () => {
+    expect(themeCss).toMatch(/--animate-spin\s*:\s*spin\s+[\d.]+s\s+linear\s+infinite/);
+  });
+
+  it("UI_SPIN_CYCLE_MS equals Tailwind's spin duration in milliseconds", () => {
+    const match = themeCss.match(/--animate-spin\s*:\s*spin\s+([\d.]+)s\b/);
+    expect(match).not.toBeNull();
+    if (!match?.[1]) return;
+    const tailwindMs = Math.round(Number.parseFloat(match[1]) * 1000);
+    expect(UI_SPIN_CYCLE_MS).toBe(tailwindMs);
+  });
+});
+
+describe(".animate-spin suppression CSS contract (SpinningIcon backstop premise)", () => {
+  // SpinningIcon's JS backstop timer exists ONLY because reduced-motion and
+  // performance mode set `animation: none` on the spinning icon, so no
+  // `animationiteration` event ever fires to stop it at a rotation boundary.
+  // Guard that premise — if either rule stopped suppressing the animation, the
+  // backstop would be arming for a case that no longer needs it (harmless), but
+  // if BOTH the event and the suppression drifted, a real user could be stranded
+  // mid-spin. These assertions fail loudly if the suppression is removed.
+  const css = readFileSync(resolve(__dirname, "../../index.css"), "utf8");
+
+  it("reduced-motion neutralizes .animate-spin", () => {
+    expect(css).toMatch(/\.animate-spin\b[\s\S]{0,800}animation:\s*none/);
+  });
+
+  it("performance mode disables animation globally with !important", () => {
+    expect(css).toMatch(
+      /body\[data-performance-mode="true"\] \*[\s\S]*?animation:\s*none\s*!important/
+    );
   });
 });

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertCircle, ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { useDeferredLoading } from "@/hooks";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -308,7 +309,7 @@ export function PluginMcpServersSection({ pluginId, declared }: PluginMcpServers
                   disabled={isRestarting || isSpawning}
                   className="shrink-0"
                 >
-                  <RefreshCw className={`w-3.5 h-3.5 ${isRestarting ? "animate-spin" : ""}`} />
+                  <SpinningIcon icon={RefreshCw} active={isRestarting} className="w-3.5 h-3.5" />
                   {status === "not-started" ? "Start server" : "Restart server"}
                 </Button>
               </div>

@@ -13,8 +13,8 @@ describe("SidebarContent reconnecting indicator — issue #8074", () => {
 
   it("gates the reconnecting indicator behind useDohertyGate", () => {
     // Doherty Threshold (400ms): routine sub-second port replacements must not
-    // flash a spinner. The reconnecting state mirrors the existing
-    // showRefreshSpinner pattern on the same component.
+    // flash a spinner. The reconnecting indicator is gated on onset the same way
+    // other deferred-display state on this component is.
     expect(source).toMatch(/const showReconnecting = useDohertyGate\(isReconnecting\)/);
   });
 

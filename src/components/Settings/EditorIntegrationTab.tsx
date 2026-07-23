@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useId } from "react";
 import { Code2, CheckCircle, AlertCircle, RefreshCw, ExternalLink } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { editorClient } from "@/clients/editorClient";
@@ -190,7 +190,7 @@ export function EditorIntegrationTab() {
                     aria-label="Re-scan for installed editors"
                     className="p-2 rounded-[var(--radius-md)] border border-daintree-border hover:bg-tint/5 text-daintree-text/60 hover:text-daintree-text transition-colors disabled:opacity-40 disabled:pointer-events-none"
                   >
-                    <RefreshCw className={cn("w-4 h-4", isRescanning && "animate-spin")} />
+                    <SpinningIcon icon={RefreshCw} active={isRescanning} className="w-4 h-4" />
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">Re-scan for installed editors</TooltipContent>

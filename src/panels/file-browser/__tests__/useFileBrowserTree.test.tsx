@@ -824,4 +824,172 @@ describe("useFileBrowserTree", () => {
       expect(listDirectory.mock.calls.some((call) => call[0].worktreeId === "wt-1")).toBe(false);
     });
   });
+
+  it("raises isRefreshing while a manual refresh is in flight, then clears it on drain", async () => {
+    listDirectory.mockResolvedValue([file("a.ts")]);
+
+    const { result } = renderHook(() =>
+      useFileBrowserTree({
+        worktreeId: "wt-1",
+        expandedPaths: [],
+        showIgnored: false,
+        changeTick: undefined,
+      })
+    );
+
+    await waitFor(() => expect(result.current.isInitialLoading).toBe(false));
+    expect(result.current.isRefreshing).toBe(false);
+
+    const slow = deferred<FileTreeNode[]>();
+    listDirectory.mockReturnValueOnce(slow.promise);
+    act(() => {
+      result.current.refresh({ manual: true });
+    });
+    // The re-list is still reading the disk — the toolbar icon must spin.
+    expect(result.current.isRefreshing).toBe(true);
+
+    await act(async () => {
+      slow.resolve([file("a.ts")]);
+    });
+    await waitFor(() => expect(result.current.isRefreshing).toBe(false));
+  });
+
+  it("leaves isRefreshing dormant for a passive change-tick refresh", async () => {
+    listDirectory.mockResolvedValue([file("v1.ts")]);
+
+    const { result, rerender } = renderHook(
+      (props: { changeTick: number }) =>
+        useFileBrowserTree({
+          worktreeId: "wt-1",
+          expandedPaths: [],
+          showIgnored: false,
+          changeTick: props.changeTick,
+        }),
+      { initialProps: { changeTick: 1 } }
+    );
+
+    await waitFor(() => expect(result.current.isInitialLoading).toBe(false));
+
+    const slow = deferred<FileTreeNode[]>();
+    listDirectory.mockReturnValueOnce(slow.promise);
+    rerender({ changeTick: 2 });
+    await waitFor(() => expect(listDirectory).toHaveBeenCalledTimes(2));
+
+    // A background refresh must not spin the manual Refresh icon on every
+    // filesystem change.
+    expect(result.current.isRefreshing).toBe(false);
+    await act(async () => {
+      slow.resolve([file("v2.ts")]);
+    });
+    expect(result.current.isRefreshing).toBe(false);
+  });
+
+  it("leaves isRefreshing dormant for a non-manual refresh() call", async () => {
+    listDirectory.mockResolvedValue([file("a.ts")]);
+
+    const { result } = renderHook(() =>
+      useFileBrowserTree({
+        worktreeId: "wt-1",
+        expandedPaths: [],
+        showIgnored: false,
+        changeTick: undefined,
+      })
+    );
+
+    await waitFor(() => expect(result.current.isInitialLoading).toBe(false));
+
+    const slow = deferred<FileTreeNode[]>();
+    listDirectory.mockReturnValueOnce(slow.promise);
+    act(() => {
+      result.current.refresh();
+    });
+    expect(result.current.isRefreshing).toBe(false);
+
+    await act(async () => {
+      slow.resolve([file("a.ts")]);
+    });
+    expect(result.current.isRefreshing).toBe(false);
+  });
+
+  it("holds isRefreshing across a collision replay until the final drain", async () => {
+    listDirectory.mockResolvedValue([file("v1.ts")]);
+
+    const { result, rerender } = renderHook(
+      (props: { changeTick: number }) =>
+        useFileBrowserTree({
+          worktreeId: "wt-1",
+          expandedPaths: [],
+          showIgnored: false,
+          changeTick: props.changeTick,
+        }),
+      { initialProps: { changeTick: 1 } }
+    );
+
+    await waitFor(() => expect(result.current.isInitialLoading).toBe(false));
+
+    // A background refresh's root re-list is held open.
+    const slowBg = deferred<FileTreeNode[]>();
+    listDirectory.mockReturnValueOnce(slowBg.promise);
+    rerender({ changeTick: 2 });
+    await waitFor(() => expect(listDirectory).toHaveBeenCalledTimes(2));
+
+    // The user presses Refresh while that re-list is still in flight. Its target
+    // collides, so the actual re-run is deferred — but the spin starts now.
+    act(() => {
+      result.current.refresh({ manual: true });
+    });
+    expect(result.current.isRefreshing).toBe(true);
+
+    // The deferred replay's listing.
+    const replay = deferred<FileTreeNode[]>();
+    listDirectory.mockReturnValueOnce(replay.promise);
+
+    // Background listing settles → the collision replay is enqueued and starts.
+    // Work is still pending, so the spin must not stop here.
+    await act(async () => {
+      slowBg.resolve([file("v2.ts")]);
+    });
+    expect(result.current.isRefreshing).toBe(true);
+
+    // The replay finally settles → the manual refresh cycle ends.
+    await act(async () => {
+      replay.resolve([file("v3.ts")]);
+    });
+    await waitFor(() => expect(result.current.isRefreshing).toBe(false));
+  });
+
+  it("clears an in-flight manual refresh's spin when the worktree switches", async () => {
+    const slow = deferred<FileTreeNode[]>();
+    listDirectory.mockResolvedValue([file("a.ts")]);
+
+    const { result, rerender } = renderHook(
+      (props: { worktreeId: string }) =>
+        useFileBrowserTree({
+          worktreeId: props.worktreeId,
+          expandedPaths: [],
+          showIgnored: false,
+          changeTick: undefined,
+        }),
+      { initialProps: { worktreeId: "wt-1" } }
+    );
+
+    await waitFor(() => expect(result.current.isInitialLoading).toBe(false));
+
+    listDirectory.mockReturnValueOnce(slow.promise);
+    act(() => {
+      result.current.refresh({ manual: true });
+    });
+    expect(result.current.isRefreshing).toBe(true);
+
+    // Switching worktrees abandons the in-flight refresh; the spin must not
+    // survive the identity reset.
+    listDirectory.mockResolvedValue([file("b.ts")]);
+    rerender({ worktreeId: "wt-2" });
+    expect(result.current.isRefreshing).toBe(false);
+
+    await act(async () => {
+      slow.resolve([file("a.ts")]);
+    });
+    expect(result.current.isRefreshing).toBe(false);
+  });
 });

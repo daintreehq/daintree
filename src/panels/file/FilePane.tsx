@@ -28,6 +28,7 @@ import { isImageFilePath, isSvgFilePath } from "@/components/FileViewer/filePrev
 import { sanitizeSvg } from "@shared/utils/svgSanitizer";
 import { formatBytes } from "@/lib/formatBytes";
 import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
+import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { useDiffContent } from "@/panels/diff/useDiffContent";
 import type { DiffSubject } from "@/panels/diff/diffContentCache";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -358,6 +359,10 @@ export function FilePane({
   // re-navigates — a rewritten report re-renders on refresh/focus. Bumping on
   // every load, not just entry-file changes, keeps relative assets fresh too.
   const [reloadNonce, setReloadNonce] = useState(0);
+  // Which surface a toolbar Refresh press is currently spinning for (or null).
+  // The mode is captured at click so a mode switch mid-refresh doesn't settle
+  // the spin against the wrong signal. Drives the shared SpinningIcon.
+  const [refreshingMode, setRefreshingMode] = useState<FileViewMode | null>(null);
 
   const metadata = useMemo(() => {
     if (loadState !== "loaded" || content === null) return null;
@@ -463,6 +468,31 @@ export function FilePane({
   useEffect(() => {
     loadFile(false);
   }, [loadFile]);
+
+  // Toolbar Refresh: spin the icon until the refreshed surface settles. Capture
+  // the mode at press time so switching source⇄diff mid-refresh can't clear the
+  // spin against the wrong signal. A synchronous branch (image/svg, or an
+  // already-loaded diff) settles the same tick — SpinningIcon still guarantees a
+  // full rotation from the single active render.
+  const handleToolbarRefresh = useCallback(() => {
+    setRefreshingMode(viewMode);
+    if (viewMode === "diff") retryDiff();
+    else loadFile(false);
+  }, [viewMode, retryDiff, loadFile]);
+
+  useEffect(() => {
+    if (refreshingMode === null) return;
+    // The refreshed surface is no longer on screen (mode switched, or diff mode
+    // clamped away when the change vanished) → the spin is moot, disarm it. This
+    // also covers an abandoned diff: `diffSubject` going null leaves diffContent
+    // `undefined` forever, which would otherwise strand the spin on "diff".
+    const settled =
+      refreshingMode !== viewMode ||
+      (refreshingMode === "diff"
+        ? diffSubject === null || diffContent !== undefined
+        : loadState !== "loading");
+    if (settled) setRefreshingMode(null);
+  }, [refreshingMode, viewMode, diffSubject, diffContent, loadState]);
 
   // Leaving Diff — by choice or because the change vanished — lands on source
   // cached before the edit that prompted the diff in the first place. Re-read it
@@ -609,11 +639,8 @@ export function FilePane({
           )}
           {/* Refresh follows what's on screen — re-reading the file wouldn't
               refetch a diff, and vice versa. */}
-          <FileViewerToolbar.IconButton
-            label="Refresh"
-            onClick={() => (viewMode === "diff" ? retryDiff() : loadFile(false))}
-          >
-            <RefreshCw className="w-4 h-4" />
+          <FileViewerToolbar.IconButton label="Refresh" onClick={handleToolbarRefresh}>
+            <SpinningIcon icon={RefreshCw} active={refreshingMode !== null} className="w-4 h-4" />
           </FileViewerToolbar.IconButton>
           <FileViewerToolbar.IconButton
             label={openTarget === "browser" ? "Open in browser" : "Open in editor"}
