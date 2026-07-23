@@ -9,6 +9,12 @@ export const config: AgentConfig = {
   color: "#4285F4",
   iconId: "gemini",
   supportsContextInjection: true,
+  // #11282 phase 5: the Gemini CLI was retired (2026-06-18) and its checkpoints
+  // were SHA-256-path-hash-scoped, so a moved folder can't resume either way.
+  continuity: {
+    tier: "unavailable",
+    detail: "The Gemini CLI was retired and can't resume this conversation",
+  },
   // Marked `"deprecated"`: Gemini is excluded from the assistant overlay
   // (picker and help-session launch path) following the Antigravity
   // migration (#8808, #8811), but still launches normally from the main

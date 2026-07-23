@@ -42,6 +42,7 @@ function cleanPreview(overrides: Partial<RelocationPreview> = {}): RelocationPre
     oldPath: OLD_PATH,
     newPath: "/repos/proj2",
     runningTerminalCount: 0,
+    agentContinuity: [],
     linkedWorktrees: [],
     affectedPanelCount: 0,
     blockers: [],
@@ -151,6 +152,41 @@ describe("MoveOrRenameProjectDialog", () => {
         newPath: "/repos/proj2",
       })
     );
+  });
+
+  it("surfaces per-agent conversation continuity without blocking confirm (#11282 phase 5)", async () => {
+    previewRelocation.mockResolvedValue(
+      cleanPreview({
+        runningTerminalCount: 3,
+        agentContinuity: [
+          {
+            agentId: "claude",
+            agentName: "Claude Code",
+            count: 1,
+            tier: "provider-migration",
+            detail: "Claude Code can't resume this after the move",
+          },
+          // No `detail` → the component falls back to the per-tier line.
+          { agentId: "codex", agentName: "Codex", count: 2, tier: "preserved" },
+        ],
+      })
+    );
+    openMove();
+    render(<MoveOrRenameProjectDialog />);
+
+    fireEvent.change(screen.getByTestId("relocate-folder-input"), { target: { value: "proj2" } });
+
+    await waitFor(() => expect(screen.getByTestId("relocate-continuity")).toBeTruthy());
+    // The riskiest tier's warning label renders.
+    expect(screen.getByText("Provider migration required")).toBeTruthy();
+    // Provider-specific detail is shown verbatim…
+    expect(screen.getByText("Claude Code can't resume this after the move")).toBeTruthy();
+    // …and an agent without a detail falls back to the generic per-tier line.
+    expect(screen.getByText("Resumes automatically at the new location")).toBeTruthy();
+    // Count > 1 is surfaced next to the agent name.
+    expect(screen.getByText(/Codex \(2\)/)).toBeTruthy();
+    // Continuity is informational — it must NOT disable confirm (only blockers do).
+    await waitFor(() => expect(confirmButton().disabled).toBe(false));
   });
 
   it("reattach mode browses to an existing folder then reattaches", async () => {

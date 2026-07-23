@@ -7,6 +7,12 @@ export const config: AgentConfig = {
   color: "#8957e5",
   iconId: "copilot",
   supportsContextInjection: true,
+  // #11282 phase 5: Copilot sessions are cloud-persisted and globally
+  // addressable by id, so a folder move preserves the conversation.
+  continuity: {
+    tier: "preserved",
+    detail: "Copilot restores this conversation from its cloud session",
+  },
   // Copilot help sessions read MCP from `.mcp.json` written into the
   // per-session cwd (root key `mcpServers`, `type: "http"`, `$VAR` env-var
   // substitution in headers). `--plan` is appended at spawn time via

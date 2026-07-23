@@ -505,6 +505,54 @@ describe("ProjectRelocationCoordinator — previewRelocate", () => {
     // Main worktree excluded; only the linked one is listed.
     expect(preview.linkedWorktrees).toEqual(["/vol/projects/proj-feature"]);
     expect(preview.blockers).toEqual([]);
+    // No per-agent breakdown when the pty-host reports no terminalTypes.
+    expect(preview.agentContinuity).toEqual([]);
+  });
+
+  it("classifies running agents into continuity tiers and excludes plain terminals (#11282 phase 5)", async () => {
+    const deps = makeDeps(makePvm(PROJECT_ID));
+    deps.ptyClient.getProjectStats.mockResolvedValue({
+      terminalCount: 5,
+      terminalTypes: { claude: 2, codex: 1, terminal: 2, "not-a-real-agent": 1 },
+    });
+    const coordinator = new ProjectRelocationCoordinator();
+    configure(coordinator, deps);
+
+    const preview = await coordinator.previewRelocate({
+      projectId: PROJECT_ID,
+      mode: "move",
+      newPath: NEW_ROOT,
+    });
+
+    // Plain "terminal" shells carry no conversation and are excluded; the rest
+    // are ordered riskiest-first: claude (provider-migration) → not-a-real-agent
+    // (unverified default) → codex (preserved).
+    expect(preview.agentContinuity.map((a) => a.agentId)).toEqual([
+      "claude",
+      "not-a-real-agent",
+      "codex",
+    ]);
+    // Per-agent counts pass through from the pty-host breakdown.
+    const byId = Object.fromEntries(preview.agentContinuity.map((a) => [a.agentId, a]));
+    expect(byId.claude.count).toBe(2);
+    expect(byId.codex.count).toBe(1);
+    // Every entry carries a resolved display name and a structurally valid tier.
+    const VALID_TIERS = [
+      "preserved",
+      "project-local",
+      "provider-migration",
+      "unavailable",
+      "unverified",
+    ];
+    for (const entry of preview.agentContinuity) {
+      expect(entry.agentName).toBeTruthy();
+      expect(VALID_TIERS).toContain(entry.tier);
+    }
+    // An unrecognized agent id defaults to the honest "unverified" — never a
+    // false "preserved".
+    expect(byId["not-a-real-agent"].tier).toBe("unverified");
+    // Plain shells are still counted toward the graceful-stop line.
+    expect(preview.runningTerminalCount).toBe(5);
   });
 
   it("never mutates — no rename, quiesce, finalize, rebind, broadcast, or reload", async () => {
@@ -613,6 +661,7 @@ describe("ProjectRelocationCoordinator — previewRelocate", () => {
     expect(preview.blockers.map((b) => b.reason)).not.toContain("assistant-active");
     // The closed-delegate path stops nothing, so no terminals are reported.
     expect(preview.runningTerminalCount).toBe(0);
+    expect(preview.agentContinuity).toEqual([]);
     expect(deps.ptyClient.getProjectStats).not.toHaveBeenCalled();
   });
 

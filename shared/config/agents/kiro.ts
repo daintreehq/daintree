@@ -7,6 +7,13 @@ export const config: AgentConfig = {
   color: "#7C3AED",
   iconId: "kiro",
   supportsContextInjection: true,
+  // #11282 phase 5: Kiro resumes project-scoped state from the working directory
+  // itself (`chat --resume`), and Daintree rewrites the cwd to the new path, so
+  // the conversation survives the move.
+  continuity: {
+    tier: "project-local",
+    detail: "Kiro resumes from the project folder, which Daintree updates to the new path",
+  },
   tooltip: "Amazon's CLI",
   usageUrl: "https://kiro.dev/",
   externalLinks: [{ label: "View docs", url: "https://kiro.dev/docs/" }],

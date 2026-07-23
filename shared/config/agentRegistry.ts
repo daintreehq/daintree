@@ -296,6 +296,44 @@ export type AgentResume =
     };
 
 /**
+ * How an agent's conversation history fares when its project folder is moved or
+ * renamed (#11282, phase 5). Surfaced in the relocation preview so the user is
+ * warned BEFORE a move when a conversation can't be resumed at the new path.
+ *
+ * The tier is a static property of the provider's resume mechanism, computed
+ * live from this config at preview time and never persisted (a captured tier
+ * would go stale as CLIs change). `resume.kind` alone is NOT a reliable
+ * discriminator: two agents can both be `kind: "session-id"` yet differ — Codex
+ * resumes by a globally-addressable id, while Claude's store is path-slug-scoped
+ * and can't resume at a new path.
+ *
+ * - `preserved` — a captured session resumes automatically at the new path
+ *   (globally-addressable session ids, e.g. Codex, Copilot).
+ * - `project-local` — resume reads state from the project folder itself, which
+ *   Daintree rewrites to the new path, so it survives (e.g. Kiro).
+ * - `provider-migration` — the conversation persists on disk but the provider
+ *   can't resume it at the new path, and Daintree must never touch the
+ *   provider's private store (#4100), so recovery needs a manual provider step
+ *   (e.g. Claude Code).
+ * - `unavailable` — the agent has no usable resume path for a moved folder
+ *   (e.g. Gemini's retired CLI, Crush which omits `resume` entirely).
+ * - `unverified` — continuity across a move hasn't been confirmed for this
+ *   provider; the default for any unclassified agent so we never overclaim.
+ */
+export type ConversationContinuityTier =
+  "preserved" | "project-local" | "provider-migration" | "unavailable" | "unverified";
+
+export interface AgentContinuity {
+  tier: ConversationContinuityTier;
+  /**
+   * One short, provider-specific sentence shown beneath the tier in the
+   * relocation preview. Sentence case, no trailing period. Omit to let the UI
+   * fall back to a generic per-tier line.
+   */
+  detail?: string;
+}
+
+/**
  * Capability shape describing how an agent participates in the Daintree
  * assistant overlay. Each field captures a distinct wiring concern; the older
  * `supportsAssistant: boolean` collapsed all of them into one bit and
@@ -479,6 +517,14 @@ export interface AgentConfig {
    * See {@link AgentResume} for the full shape per variant.
    */
   resume?: AgentResume;
+  /**
+   * How this agent's conversation history fares across a project-folder move
+   * (#11282, phase 5). Read live by the relocation preview via
+   * {@link resolveAgentContinuity}; unset ⇒ `unverified`, so an unclassified
+   * agent never claims its conversation survives. See
+   * {@link ConversationContinuityTier}.
+   */
+  continuity?: AgentContinuity;
   /**
    * Prerequisites required for this agent to function.
    * Merged with baseline prerequisites during health checks.
@@ -700,6 +746,17 @@ export function getEffectiveAgentConfig(agentId: string): AgentConfig | undefine
 
 export function isEffectivelyRegisteredAgent(agentId: string): boolean {
   return Object.prototype.hasOwnProperty.call(getEffectiveRegistry(), agentId);
+}
+
+/**
+ * Resolve an agent's conversation-continuity classification for the relocation
+ * preview (#11282, phase 5). Reads the effective registry so plugin/user agents
+ * resolve too, and defaults to `unverified` for any agent that hasn't declared a
+ * `continuity` block — we never assume a conversation survives a move. Pure and
+ * side-effect free; computed live at preview time, never cached or persisted.
+ */
+export function resolveAgentContinuity(agentId: string): AgentContinuity {
+  return getEffectiveAgentConfig(agentId)?.continuity ?? { tier: "unverified" };
 }
 
 export function isBuiltInAgent(agentId: string): boolean {

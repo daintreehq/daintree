@@ -7,6 +7,13 @@ export const config: AgentConfig = {
   color: "#4285F4",
   iconId: "antigravity",
   supportsContextInjection: true,
+  // #11282 phase 5: Daintree resumes Antigravity via `--conversation <id>` (not
+  // the path-scoped `-c` shorthand), but whether that id survives a folder move
+  // isn't confirmed — stay honest rather than overclaim.
+  continuity: {
+    tier: "unverified",
+    detail: "Resuming this conversation after a move isn't confirmed",
+  },
   // Antigravity's HelpSession wiring (workspace settings overlay, MCP
   // injection key, plan/read-only approval flag) requires investigation
   // against a running `agy` install before it can ship. Leave `supports`

@@ -8,6 +8,13 @@ export const config: AgentConfig = {
   color: "#1E90FF",
   iconId: "kimi",
   supportsContextInjection: true,
+  // #11282 phase 5: Kimi is rolling-history (`--continue`, no session id
+  // captured), so whether "continue" lands on the right conversation after a
+  // move isn't confirmed.
+  continuity: {
+    tier: "unverified",
+    detail: "Kimi continues its most recent session; resuming after a move isn't confirmed",
+  },
   tooltip: "Moonshot AI's CLI",
   usageUrl: "https://github.com/MoonshotAI/kimi-cli",
   packages: {
