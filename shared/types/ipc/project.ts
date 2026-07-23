@@ -1,5 +1,6 @@
 import type { Project, TerminalSnapshot } from "../project.js";
 import type { TabGroup } from "../panel.js";
+import type { IdArrayDelta } from "../../utils/layoutMerge.js";
 import type { HydrateResult } from "./app.js";
 
 /**
@@ -14,6 +15,15 @@ export interface ProjectSwitchOutgoingState {
   draftInputs?: Record<string, string>;
   tabGroups?: TabGroup[];
   activeWorktreeId?: string;
+  /**
+   * What this window changed in `terminals`/`tabGroups` relative to its
+   * last-persisted baseline. When present, Main merges the arrays by id instead
+   * of full-replacing, so switching away from a project open in another window
+   * doesn't clobber that window's concurrent layout changes (#11350). Absent =
+   * legacy full replace.
+   */
+  terminalDelta?: IdArrayDelta;
+  tabGroupDelta?: IdArrayDelta;
 }
 
 /** Payload for project:on-switch event with cancellation token */

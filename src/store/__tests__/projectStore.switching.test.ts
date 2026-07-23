@@ -72,6 +72,8 @@ vi.mock("../persistence/panelPersistence", () => ({
   panelPersistence: {
     setProjectIdGetter: vi.fn(),
     getPreviousSnapshotMap: vi.fn(() => undefined),
+    computeTerminalDelta: vi.fn(() => ({ changedIds: [], removedIds: [] })),
+    computeTabGroupDelta: vi.fn(() => ({ changedIds: [], removedIds: [] })),
     cancel: vi.fn(),
   },
   panelToSnapshot: vi.fn((t: { id: string; kind: string }) => ({

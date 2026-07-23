@@ -20,6 +20,7 @@ import {
   sanitizeDraftInputs,
 } from "../terminalLayout.js";
 import { sanitizeTabGroups } from "../../../schemas/index.js";
+import { mergeIdArray } from "../../../../shared/utils/layoutMerge.js";
 import type { HandlerDependencies, IpcContext } from "../../types.js";
 import type { Project } from "../../../types/index.js";
 import type { ProjectSwitchOutgoingState } from "../../../../shared/types/ipc/project.js";
@@ -296,15 +297,45 @@ async function persistOutgoingProjectState(
       : undefined;
   // Queued so the read-merge-write can't clobber concurrent queued writers
   // (terminalLayout handlers) now that the persist runs alongside the swap.
-  await projectStore.enqueueProjectStateUpdate(previousProjectId, (existing) => ({
-    ...(existing ?? { projectId: previousProjectId, sidebarWidth: 350, terminals: [] }),
-    projectId: previousProjectId,
-    ...(validTerminals !== undefined && { terminals: validTerminals }),
-    ...(validSizes !== undefined && { terminalSizes: validSizes }),
-    ...(validDrafts !== undefined && { draftInputs: validDrafts }),
-    ...(validTabGroups !== undefined && { tabGroups: validTabGroups }),
-    activeWorktreeId: outgoingState.activeWorktreeId,
-  }));
+  await projectStore.enqueueProjectStateUpdate(previousProjectId, (existing) => {
+    const terminalDelta = outgoingState.terminalDelta;
+    const tabGroupDelta = outgoingState.tabGroupDelta;
+    // With a delta, merge by id so a stale outgoing snapshot only affects the
+    // entries this window actually changed, preserving a sibling window's
+    // concurrent additions/moves/deletions (#11350). Without one, fall back to
+    // the legacy full replace.
+    const mergedTerminals =
+      validTerminals === undefined
+        ? undefined
+        : terminalDelta
+          ? mergeIdArray(
+              existing?.terminals ?? [],
+              validTerminals,
+              terminalDelta.changedIds,
+              terminalDelta.removedIds
+            )
+          : validTerminals;
+    const mergedTabGroups =
+      validTabGroups === undefined
+        ? undefined
+        : tabGroupDelta
+          ? mergeIdArray(
+              existing?.tabGroups ?? [],
+              validTabGroups,
+              tabGroupDelta.changedIds,
+              tabGroupDelta.removedIds
+            )
+          : validTabGroups;
+    return {
+      ...(existing ?? { projectId: previousProjectId, sidebarWidth: 350, terminals: [] }),
+      projectId: previousProjectId,
+      ...(mergedTerminals !== undefined && { terminals: mergedTerminals }),
+      ...(validSizes !== undefined && { terminalSizes: validSizes }),
+      ...(validDrafts !== undefined && { draftInputs: validDrafts }),
+      ...(mergedTabGroups !== undefined && { tabGroups: mergedTabGroups }),
+      activeWorktreeId: outgoingState.activeWorktreeId,
+    };
+  });
 }
 
 type ActivateOptions = {

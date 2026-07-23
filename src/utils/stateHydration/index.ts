@@ -572,7 +572,7 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
             if (currentProjectId) {
               panelPersistence.primeTabGroups(
                 currentProjectId,
-                tabGroups.filter((g) => Array.isArray(g.panelIds) && g.panelIds.length > 1)
+                tabGroups.filter((g) => g && Array.isArray(g.panelIds) && g.panelIds.length > 1)
               );
             }
             options.hydrateTabGroups(remappedTabGroups);

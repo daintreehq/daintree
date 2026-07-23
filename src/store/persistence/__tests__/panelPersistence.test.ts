@@ -416,6 +416,12 @@ describe("PanelPersistence", () => {
   });
 
   describe("layout merge delta (#11350)", () => {
+    // Mirror how a baseline is actually seeded at hydration: read back from
+    // disk (JSON), which drops undefined-valued keys. A strict key-count
+    // comparison would then mark an untouched panel changed on the first save.
+    const hydratedBaseline = (...terminals: TerminalInstance[]): TerminalSnapshot[] =>
+      terminals.map((t) => JSON.parse(JSON.stringify(panelToSnapshot(t))) as TerminalSnapshot);
+
     it("marks every panel changed when there is no primed baseline", async () => {
       const client = createMockProjectClient();
       const persistence = new PanelPersistence(client, { debounceMs: 100 });
@@ -428,13 +434,29 @@ describe("PanelPersistence", () => {
       expect(removedIds).toEqual([]);
     });
 
-    it("emits only the newly added panel in changedIds against a primed baseline", async () => {
+    it("does not re-send unchanged panels against a JSON-round-tripped baseline", async () => {
+      // Regression for the undefined-vs-missing key mismatch: priming from disk
+      // shape and saving the same panels must be a no-op, not a full rewrite.
       const client = createMockProjectClient();
       const persistence = new PanelPersistence(client, { debounceMs: 100 });
 
       const a = createMockTerminal({ id: "a" });
       const b = createMockTerminal({ id: "b" });
-      persistence.primeProject(projectId, [panelToSnapshot(a), panelToSnapshot(b)]);
+      persistence.primeProject(projectId, hydratedBaseline(a, b));
+
+      persistence.save([a, b], projectId);
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(client.setTerminals).not.toHaveBeenCalled();
+    });
+
+    it("emits only the newly added panel in changedIds against a hydrated baseline", async () => {
+      const client = createMockProjectClient();
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
+
+      const a = createMockTerminal({ id: "a" });
+      const b = createMockTerminal({ id: "b" });
+      persistence.primeProject(projectId, hydratedBaseline(a, b));
 
       persistence.save([a, b, createMockTerminal({ id: "c" })], projectId);
       await vi.advanceTimersByTimeAsync(100);
@@ -444,18 +466,53 @@ describe("PanelPersistence", () => {
       expect(removedIds).toEqual([]);
     });
 
-    it("emits a closed panel in removedIds against a primed baseline", async () => {
+    it("emits a closed panel in removedIds against a hydrated baseline", async () => {
       const client = createMockProjectClient();
       const persistence = new PanelPersistence(client, { debounceMs: 100 });
 
       const a = createMockTerminal({ id: "a" });
       const b = createMockTerminal({ id: "b" });
-      persistence.primeProject(projectId, [panelToSnapshot(a), panelToSnapshot(b)]);
+      persistence.primeProject(projectId, hydratedBaseline(a, b));
 
       persistence.save([a], projectId);
       await vi.advanceTimersByTimeAsync(100);
 
       const [, , changedIds, removedIds] = client.setTerminals.mock.calls[0]!;
+      expect(changedIds).toEqual([]);
+      expect(removedIds).toEqual(["b"]);
+    });
+
+    it("computes an overlapping save's delta against the acknowledged baseline", async () => {
+      // Regression: while the first send (add b) is still in flight, a second
+      // save (remove b) must diff against the baseline the first write commits
+      // ([a, b]), so it emits removedIds:["b"]. If it diffed against the stale
+      // [a], it would omit the tombstone and Main would resurrect b.
+      const client = createMockProjectClient();
+      let resolveFirst: (() => void) | undefined;
+      const firstSend = new Promise<void>((resolve) => {
+        resolveFirst = () => resolve();
+      });
+      client.setTerminals.mockReturnValueOnce(firstSend).mockResolvedValue(undefined);
+
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
+      const a = createMockTerminal({ id: "a" });
+      const b = createMockTerminal({ id: "b" });
+      persistence.primeProject(projectId, hydratedBaseline(a));
+
+      persistence.save([a, b], projectId);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(client.setTerminals).toHaveBeenCalledTimes(1);
+
+      persistence.save([a], projectId);
+      await vi.advanceTimersByTimeAsync(100);
+      // Second write is chained behind the in-flight first write.
+      expect(client.setTerminals).toHaveBeenCalledTimes(1);
+
+      resolveFirst?.();
+      await vi.runAllTimersAsync();
+
+      expect(client.setTerminals).toHaveBeenCalledTimes(2);
+      const [, , changedIds, removedIds] = client.setTerminals.mock.calls[1]!;
       expect(changedIds).toEqual([]);
       expect(removedIds).toEqual(["b"]);
     });

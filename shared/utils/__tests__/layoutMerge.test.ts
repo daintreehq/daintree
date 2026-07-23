@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeIdArrayDelta, mergeIdArray } from "../layoutMerge";
+import { computeIdArrayDelta, mergeIdArray, deepEqualIgnoringUndefined } from "../layoutMerge";
 
 interface Entry {
   id: string;
@@ -8,6 +8,46 @@ interface Entry {
 
 const eq = (a: Entry, b: Entry) => a.v === b.v;
 const ids = (entries: Entry[]) => entries.map((e) => e.id);
+
+describe("deepEqualIgnoringUndefined", () => {
+  it("treats a missing key and an explicit undefined value as equal", () => {
+    // The exact JSON-round-trip mismatch behind #11350's false-positive changes.
+    expect(deepEqualIgnoringUndefined({ id: "p", worktreeId: undefined }, { id: "p" })).toBe(true);
+    expect(deepEqualIgnoringUndefined({ id: "p" }, { id: "p", worktreeId: undefined })).toBe(true);
+  });
+
+  it("still reports a genuine value difference", () => {
+    expect(deepEqualIgnoringUndefined({ id: "p", loc: "grid" }, { id: "p", loc: "dock" })).toBe(
+      false
+    );
+  });
+
+  it("compares nested objects and arrays with the same rule", () => {
+    expect(
+      deepEqualIgnoringUndefined(
+        { id: "g", panelIds: ["a", "b"], worktreeId: undefined },
+        { id: "g", panelIds: ["a", "b"] }
+      )
+    ).toBe(true);
+    expect(
+      deepEqualIgnoringUndefined({ id: "g", panelIds: ["a", "b"] }, { id: "g", panelIds: ["a"] })
+    ).toBe(false);
+  });
+
+  it("does not conflate a real key with an undefined-valued one of a different name", () => {
+    expect(deepEqualIgnoringUndefined({ id: "p", a: undefined }, { id: "p", b: 1 })).toBe(false);
+  });
+});
+
+describe("computeIdArrayDelta with JSON-round-trip equality", () => {
+  it("does not flag an entry that differs only by a dropped undefined key", () => {
+    const base = [{ id: "1" }]; // as read back from disk (undefined keys dropped)
+    const current = [{ id: "1", v: undefined } as Entry]; // freshly serialized
+    const delta = computeIdArrayDelta(base, current, deepEqualIgnoringUndefined);
+    expect(delta.changedIds).toEqual([]);
+    expect(delta.removedIds).toEqual([]);
+  });
+});
 
 describe("computeIdArrayDelta", () => {
   it("reports added ids as changed", () => {
@@ -140,6 +180,13 @@ describe("mergeIdArray", () => {
     const existing = [{ id: "1" }, { id: "2" }, { id: "sib" }];
     const merged = mergeIdArray(existing, [], [], ["1", "2"]);
     expect(ids(merged)).toEqual(["sib"]);
+  });
+
+  it("does not throw on malformed existing/incoming entries", () => {
+    const existing = [null, { id: "1" }, { notId: true }] as unknown as Entry[];
+    const incoming = [{ id: "1" }, undefined, { id: "2" }] as unknown as Entry[];
+    const merged = mergeIdArray(existing, incoming, ["2"], []);
+    expect(ids(merged)).toEqual(["1", "2"]);
   });
 
   it("round-trips a delta computed from a shared baseline", () => {

@@ -121,6 +121,68 @@ describe("setTerminals merge (#11350)", () => {
   });
 });
 
+describe("two-writer composition (#11350)", () => {
+  /** A mutable disk so two queued writers see each other's committed result. */
+  function statefulDisk(initial: ProjectState | null): () => ProjectState | null {
+    let disk = initial;
+    projectStoreMock.enqueueProjectStateUpdate.mockImplementation(
+      async (
+        _projectId: string,
+        updater: (s: ProjectState | null) => ProjectState | null | Promise<ProjectState | null>
+      ) => {
+        disk = await updater(disk);
+      }
+    );
+    return () => disk;
+  }
+
+  it("preserves a move from writer A and an addition from stale writer B", async () => {
+    const disk = statefulDisk(baseState([term("1", "grid")]));
+
+    // A moves panel 1 to the dock.
+    await setTerminals({
+      projectId: "p1",
+      terminals: [term("1", "dock")],
+      changedIds: ["1"],
+      removedIds: [],
+    });
+    // B never saw the move (still holds panel 1 in the grid) and adds panel 2.
+    await setTerminals({
+      projectId: "p1",
+      terminals: [term("1", "grid"), term("2")],
+      changedIds: ["2"],
+      removedIds: [],
+    });
+
+    const merged = disk()?.terminals ?? [];
+    expect(merged.find((t) => t.id === "1")?.location).toBe("dock");
+    expect(ids(merged)).toEqual(["1", "2"]);
+  });
+
+  it("resolves edit-vs-delete of the same id by queue order (last writer wins)", async () => {
+    const disk = statefulDisk(baseState([term("1"), term("2", "grid")]));
+
+    // A closes panel 2.
+    await setTerminals({
+      projectId: "p1",
+      terminals: [term("1")],
+      changedIds: [],
+      removedIds: ["2"],
+    });
+    // B, which ran second, edited panel 2 (moved it to the dock).
+    await setTerminals({
+      projectId: "p1",
+      terminals: [term("1"), term("2", "dock")],
+      changedIds: ["2"],
+      removedIds: [],
+    });
+
+    const merged = disk()?.terminals ?? [];
+    expect(merged.find((t) => t.id === "2")?.location).toBe("dock");
+    expect(ids(merged)).toEqual(["1", "2"]);
+  });
+});
+
 describe("setTabGroups merge (#11350)", () => {
   it("preserves a sibling's tab group the writer never knew", async () => {
     const saved = onDisk(baseState([], [group("g1", ["1", "2"]), group("gSib", ["3", "4"])]));

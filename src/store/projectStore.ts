@@ -83,11 +83,20 @@ function buildOutgoingState(projectId: string): ProjectSwitchOutgoingState {
 
   const tabGroupArray = Array.from(tabGroups.values()).filter((g) => g.panelIds.length > 1);
 
+  // Diff against this window's last-persisted baseline so Main merges these
+  // arrays by id rather than full-replacing — otherwise a stale outgoing
+  // snapshot silently drops a sibling window's concurrent changes to the same
+  // project (#11350). Same delta contract as the debounced autosave path.
+  const terminalDelta = panelPersistence.computeTerminalDelta(projectId, terminals);
+  const tabGroupDelta = panelPersistence.computeTabGroupDelta(projectId, tabGroupArray);
+
   return {
     terminals,
     draftInputs,
     tabGroups: tabGroupArray,
     activeWorktreeId,
+    terminalDelta,
+    tabGroupDelta,
   };
 }
 
