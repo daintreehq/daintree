@@ -276,6 +276,22 @@ describe("mergeRecord (draft inputs, #11352)", () => {
     expect(merged).toEqual({});
   });
 
+  it("treats a changed id missing from incoming as a defensive deletion", () => {
+    // Malformed delta: 'a' is flagged changed but absent/empty in the incoming
+    // record; it must be dropped, not left stale, and siblings preserved.
+    const merged = mergeRecord({ a: "old", sib: "keep" }, {}, ["a"], []);
+    expect(merged).toEqual({ sib: "keep" });
+  });
+
+  it("does not mistake a prototype key for present state", () => {
+    // `constructor`/`toString` exist on Object.prototype; own-property checks
+    // must keep them from being seen as present-on-base or present-in-incoming.
+    const delta = computeRecordDelta({}, { constructor: "real" });
+    expect(delta.changedIds).toEqual(["constructor"]);
+    const merged = mergeRecord({}, { constructor: "real" }, ["constructor"], []);
+    expect(merged).toEqual({ constructor: "real" });
+  });
+
   it("drops empty/malformed on-disk values so they don't survive forever", () => {
     const merged = mergeRecord(
       { a: "", b: "keep" } as Record<string, string>,

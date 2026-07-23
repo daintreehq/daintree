@@ -90,6 +90,7 @@ vi.mock("../persistence/draftInputPersistence", () => ({
     flushAll: vi.fn(),
     primeProject: vi.fn(),
     whenIdle: vi.fn(() => Promise.resolve()),
+    clearProject: vi.fn(),
   },
 }));
 
@@ -198,6 +199,7 @@ describe("buildOutgoingState draft propagation (#4985)", () => {
   it("threads draftDelta through the outgoing switch state (#11352)", async () => {
     const { useProjectStore } = await import("../projectStore");
     const { useTerminalInputStore } = await import("../terminalInputStore");
+    const { draftInputPersistence } = await import("../persistence/draftInputPersistence");
 
     useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
     useTerminalInputStore.getState().setDraftInput("terminal-1", "hello", projectA.id);
@@ -205,6 +207,11 @@ describe("buildOutgoingState draft propagation (#4985)", () => {
     await useProjectStore.getState().switchProject(projectB.id);
     await Promise.resolve();
 
+    // computeDelta receives the outgoing project's id and its live draft
+    // snapshot (not a hand-fed fixture) — proving the real capture flows in.
+    expect(draftInputPersistence.computeDelta).toHaveBeenCalledWith(projectA.id, {
+      "terminal-1": "hello",
+    });
     expect(projectClientMock.switch).toHaveBeenCalledWith(
       projectB.id,
       expect.objectContaining({ draftDelta: { changedIds: ["terminal-1"], removedIds: [] } }),

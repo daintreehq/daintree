@@ -209,16 +209,21 @@ export function computeRecordDelta(
   base: Readonly<Record<string, string>>,
   current: Readonly<Record<string, string>>
 ): IdArrayDelta {
+  const hasOwn = (obj: Readonly<Record<string, string>>, key: string): boolean =>
+    Object.prototype.hasOwnProperty.call(obj, key);
+
   const changedIds: string[] = [];
   for (const [id, value] of Object.entries(current)) {
-    if (base[id] !== value) {
+    // Own-property compare so an id like `toString`/`constructor` isn't
+    // mistaken for present-on-base via the prototype chain.
+    if (!hasOwn(base, id) || base[id] !== value) {
       changedIds.push(id);
     }
   }
 
   const removedIds: string[] = [];
   for (const id of Object.keys(base)) {
-    if (!(id in current)) {
+    if (!hasOwn(current, id)) {
       removedIds.push(id);
     }
   }
@@ -257,7 +262,11 @@ export function mergeRecord(
   const removed = new Set(removedIds);
   for (const id of changedIds) {
     if (removed.has(id)) continue;
-    const value = incoming[id];
+    // Own-property read so a `constructor`/`toString` id can't pull a function
+    // off the prototype chain.
+    const value = Object.prototype.hasOwnProperty.call(incoming, id)
+      ? incoming[id]
+      : undefined;
     if (typeof value === "string" && value !== "") {
       result[id] = value;
     } else {

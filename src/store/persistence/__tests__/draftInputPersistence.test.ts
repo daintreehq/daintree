@@ -24,6 +24,12 @@ function setDraft(projectId: string, terminalId: string, value: string): void {
   useTerminalInputStore.getState().setDraftInput(terminalId, value, projectId);
 }
 
+// Drain the microtask queue so a fire-and-forget flush's queued send actually
+// reaches the mocked projectClient before we assert on it.
+function flushMicrotasks(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 beforeEach(() => {
   setDraftInputsMock.mockClear();
   setDraftInputsMock.mockImplementation(() => Promise.resolve());
@@ -113,6 +119,94 @@ describe("draftInputPersistence.flushAll — close-time draft flush (#11352)", (
     // First write rejected → baseline not advanced → resent.
     expect(setDraftInputsMock).toHaveBeenCalledTimes(2);
     expect(setDraftInputsMock.mock.calls[1]![2]).toEqual(["t1"]);
+  });
+
+  it("serializes overlapping same-project flushes so the second diffs against the advanced baseline", async () => {
+    const projectId = freshProjectId();
+    // Prime a baseline (as hydration would) so the project stays enumerable via
+    // its baseline even after its only live draft is cleared.
+    draftInputPersistence.primeProject(projectId, { t1: "seed" });
+    let resolveFirst!: () => void;
+    const firstSend = new Promise<void>((r) => {
+      resolveFirst = r;
+    });
+    setDraftInputsMock.mockImplementationOnce(() => firstSend);
+
+    setDraft(projectId, "t1", "draft");
+    draftInputPersistence.flushAll(); // send #1 — stays pending
+    await flushMicrotasks();
+    expect(setDraftInputsMock).toHaveBeenCalledTimes(1);
+    expect(setDraftInputsMock.mock.calls[0]![2]).toEqual(["t1"]); // changedIds
+
+    // Clear the draft and flush again BEFORE #1 resolves. Without the write
+    // tail the second flush would diff against the original empty baseline and
+    // omit the removal tombstone entirely.
+    useTerminalInputStore.getState().setDraftInput("t1", "", projectId);
+    draftInputPersistence.flushAll();
+    await flushMicrotasks();
+    expect(setDraftInputsMock).toHaveBeenCalledTimes(1); // queued behind #1
+
+    resolveFirst();
+    await draftInputPersistence.whenIdle();
+
+    expect(setDraftInputsMock).toHaveBeenCalledTimes(2);
+    const [pid, drafts, changedIds, removedIds] = setDraftInputsMock.mock.calls[1]!;
+    expect(pid).toBe(projectId);
+    expect(drafts).toEqual({});
+    expect(changedIds).toEqual([]);
+    expect(removedIds).toEqual(["t1"]);
+  });
+
+  it("resumes a queued flush after the in-flight one rejects", async () => {
+    const projectId = freshProjectId();
+    let rejectFirst!: (e: Error) => void;
+    const firstSend = new Promise<void>((_resolve, reject) => {
+      rejectFirst = reject;
+    });
+    setDraftInputsMock.mockImplementationOnce(() => firstSend);
+
+    setDraft(projectId, "t1", "one");
+    draftInputPersistence.flushAll(); // #1 pending
+    await flushMicrotasks();
+
+    setDraft(projectId, "t2", "two");
+    draftInputPersistence.flushAll(); // queued behind #1
+    await flushMicrotasks();
+    expect(setDraftInputsMock).toHaveBeenCalledTimes(1);
+
+    rejectFirst(new Error("boom"));
+    await draftInputPersistence.whenIdle();
+
+    // #1 rejected → baseline unchanged; #2 proceeds and resends both drafts.
+    expect(setDraftInputsMock).toHaveBeenCalledTimes(2);
+    expect(new Set(setDraftInputsMock.mock.calls[1]![2] as string[])).toEqual(new Set(["t1", "t2"]));
+  });
+
+  it("clearProject stops a teardown flush from recreating a deleted project's state", async () => {
+    const projectId = freshProjectId();
+    // Hydrated draft on disk, then the close path wiped the live drafts.
+    draftInputPersistence.primeProject(projectId, { t1: "on disk" });
+    draftInputPersistence.clearProject(projectId);
+
+    draftInputPersistence.flushAll();
+    await draftInputPersistence.whenIdle();
+
+    expect(setDraftInputsMock).not.toHaveBeenCalled();
+  });
+
+  it("without clearProject a wiped-store project still tombstones from its baseline (the hazard)", async () => {
+    const projectId = freshProjectId();
+    // Baseline retained but live drafts wiped (e.g. clearAllDraftInputs on
+    // close) — flushAll enumerates the project via its baseline and emits a
+    // removal that would recreate the just-deleted state file. This is exactly
+    // what clearProject in the close/remove paths prevents.
+    draftInputPersistence.primeProject(projectId, { t1: "on disk" });
+
+    draftInputPersistence.flushAll();
+    await draftInputPersistence.whenIdle();
+
+    expect(setDraftInputsMock).toHaveBeenCalledTimes(1);
+    expect(setDraftInputsMock.mock.calls[0]![3]).toEqual(["t1"]); // removedIds tombstone
   });
 
   it("flushes each project independently", async () => {

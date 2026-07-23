@@ -380,3 +380,36 @@ describe("projectClient getSettings caching", () => {
     expect(fresh).toBe(settingsB);
   });
 });
+
+describe("projectClient.setDraftInputs delta forwarding (#11352)", () => {
+  let setDraftInputsMock: ReturnType<typeof vi.fn>;
+  let client: typeof import("../projectClient").projectClient;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    setDraftInputsMock = vi.fn().mockResolvedValue(undefined);
+    typedGlobal.window = {
+      electron: {
+        project: {
+          onSwitch: vi.fn(() => () => {}),
+          setDraftInputs: setDraftInputsMock,
+        },
+      },
+    };
+    client = (await import("../projectClient")).projectClient;
+  });
+
+  afterEach(() => {
+    delete typedGlobal.window;
+  });
+
+  it("forwards changedIds and removedIds unchanged to the IPC layer", async () => {
+    await client.setDraftInputs("proj-1", { t1: "draft" }, ["t1"], ["t2"]);
+    expect(setDraftInputsMock).toHaveBeenCalledWith("proj-1", { t1: "draft" }, ["t1"], ["t2"]);
+  });
+
+  it("passes undefined delta args through for a legacy full-replace call", async () => {
+    await client.setDraftInputs("proj-1", { t1: "draft" });
+    expect(setDraftInputsMock).toHaveBeenCalledWith("proj-1", { t1: "draft" }, undefined, undefined);
+  });
+});

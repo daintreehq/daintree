@@ -105,9 +105,17 @@ class DraftInputPersistence {
     await Promise.all(this.writeTailByProject.values());
   }
 
-  /** Drop a project's baseline (project removed, or test cleanup). */
+  /**
+   * Drop a project's persisted baseline and pending write tail. Call this when
+   * the project's durable state is intentionally deleted (close-with-kill,
+   * project removal) so a later teardown {@link flushAll} does not recreate the
+   * just-deleted state from a stale baseline (#11352). The caller must clear the
+   * live drafts from the store in the same synchronous step, otherwise the next
+   * flush would resend them; the panel-store close path already does.
+   */
   clearProject(projectId: string): void {
     this.persistedByProject.delete(projectId);
+    this.writeTailByProject.delete(projectId);
   }
 }
 
