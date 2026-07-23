@@ -330,11 +330,12 @@ export function useFileBrowserTree({
               // concurrency ceiling instead of firing a seventh request past it.
               // Front of the queue, though — a seeded restore can have hundreds
               // of descendant re-lists waiting, and the backoff schedule's whole
-              // point is resolving the root's fate quickly (#11367).
-              if (
-                !inFlightRef.current.has(rootPath) &&
-                !queueRef.current.some((entry) => entry.dirPath === rootPath)
-              ) {
+              // point is resolving the root's fate quickly (#11367). A root a
+              // manual refresh already queued mid-backoff is promoted rather
+              // than left at its tail position.
+              if (!inFlightRef.current.has(rootPath)) {
+                const queuedAt = queueRef.current.findIndex((entry) => entry.dirPath === rootPath);
+                if (queuedAt >= 0) queueRef.current.splice(queuedAt, 1);
                 queueRef.current.unshift({ dirPath: rootPath, generation });
               }
               pumpRef.current();

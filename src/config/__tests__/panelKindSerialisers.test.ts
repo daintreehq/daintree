@@ -332,6 +332,26 @@ describe("panelKindSerialisers", () => {
             ...validSnapshot,
             listings: [{ dirPath: "", nodes: [{ name: "..", path: "..", isDirectory: true }] }],
           },
+          {
+            ...validSnapshot,
+            listings: [{ dirPath: "", nodes: [{ name: ".", path: ".", isDirectory: true }] }],
+          },
+          // Control characters survive the canonical-join check alone; the
+          // composite path must still pass the character screen.
+          {
+            ...validSnapshot,
+            listings: [
+              {
+                dirPath: "",
+                nodes: [{ name: "bad\u0000name", path: "bad\u0000name", isDirectory: false }],
+              },
+            ],
+          },
+          // Drive-qualified basename at the root.
+          {
+            ...validSnapshot,
+            listings: [{ dirPath: "", nodes: [{ name: "C:", path: "C:", isDirectory: true }] }],
+          },
           // Unbounded worktree id.
           { ...validSnapshot, worktreeId: "w".repeat(5000) },
         ];
@@ -381,6 +401,26 @@ describe("panelKindSerialisers", () => {
         expect(
           deserialize()({ id: "fb1", browserTreeSnapshot: empty }).browserTreeSnapshot
         ).toEqual(empty);
+      });
+
+      it("counts listing keys against the text budget, not just node text", () => {
+        // 200 empty listings with ~4k-character keys carry real bytes even
+        // with zero nodes — the budget must see them.
+        const longDir = "d".repeat(3900);
+        const bloatedKeys = {
+          worktreeId: "wt-1",
+          rootPath: "",
+          listings: [
+            { dirPath: "", nodes: [] },
+            ...Array.from({ length: 200 }, (_, i) => ({
+              dirPath: `${longDir}-${i}`,
+              nodes: [],
+            })),
+          ],
+        };
+        expect(
+          deserialize()({ id: "fb1", browserTreeSnapshot: bloatedKeys }).browserTreeSnapshot
+        ).toBeUndefined();
       });
 
       it("drops a snapshot whose aggregate text exceeds the byte budget", () => {

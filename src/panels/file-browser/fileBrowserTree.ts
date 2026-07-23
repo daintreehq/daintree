@@ -339,6 +339,9 @@ export function snapshotFromListings(
   for (const [dirPath, nodes] of listings) {
     totalNodes += nodes.length;
     if (totalNodes > MAX_SNAPSHOT_NODES) return null;
+    // Listing keys count against the budget too — 500 deep dirPaths carry
+    // real bytes even with few nodes.
+    totalChars += dirPath.length;
     for (const node of nodes) {
       totalChars += node.name.length + node.path.length;
     }

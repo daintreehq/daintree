@@ -164,6 +164,9 @@ function sanitizeTreeSnapshot(value: unknown): FileBrowserTreeSnapshot | undefin
     if (!Array.isArray(nodes)) return undefined;
     totalNodes += nodes.length;
     if (totalNodes > MAX_SNAPSHOT_NODES) return undefined;
+    // Listing keys count against the text budget too, mirroring capture.
+    totalChars += dirPath.length;
+    if (totalChars > MAX_SNAPSHOT_TEXT_CHARS) return undefined;
     const seenNames = new Set<string>();
     const sanitizedNodes: FileBrowserTreeSnapshot["listings"][number]["nodes"] = [];
     for (const node of nodes) {
@@ -172,6 +175,10 @@ function sanitizeTreeSnapshot(value: unknown): FileBrowserTreeSnapshot | undefin
       if (!isSnapshotNodeName(name) || seenNames.has(name)) return undefined;
       seenNames.add(name);
       if (path !== (dirPath === "" ? name : `${dirPath}/${name}`)) return undefined;
+      // Canonical shape alone doesn't make the composite safe: the joined
+      // path must also pass the same character/length screen every other
+      // restored path does (control characters, drive prefixes, 4096 cap).
+      if (!isSafeRelativePath(path)) return undefined;
       if (typeof isDirectory !== "boolean") return undefined;
       totalChars += name.length + path.length;
       if (totalChars > MAX_SNAPSHOT_TEXT_CHARS) return undefined;
