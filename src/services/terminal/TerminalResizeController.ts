@@ -490,6 +490,24 @@ export class TerminalResizeController {
     managed.terminal.resize(cols, rows);
   }
 
+  /**
+   * Re-pin the viewport to the bottom after a resize-completion, mirroring the
+   * auto-follow intent {@link commitResize} already enforces. A column-count
+   * reflow mutates the buffer's ybase/ydisp deep inside xterm's `Buffer._reflow`
+   * without ever firing `terminal.onScroll` (#11316), so the flags this checks
+   * stay correct-but-stale and a bottom-following terminal can be left parked a
+   * few rows above the bottom — and once off-bottom, new output stops
+   * auto-following. Restore the bottom unless the user had deliberately scrolled
+   * back. Guarded exactly like `commitResize` (`latestWasAtBottom &&
+   * !isUserScrolledBack`); `scrollToBottom` sets ydisp=ybase synchronously, so
+   * it is a no-op when already pinned.
+   */
+  private pinToBottomAfterResize(managed: ManagedTerminal): void {
+    if (managed.latestWasAtBottom && !managed.isUserScrolledBack) {
+      managed.terminal.scrollToBottom();
+    }
+  }
+
   applyDeferredResize(id: string): void {
     const managed = this.deps.getInstance(id);
     if (!managed) return;
@@ -529,6 +547,7 @@ export class TerminalResizeController {
     this.cancelPendingResize(id);
     this.resizeTerminal(managed, targetCols, targetRows);
     terminalClient.resize(id, targetCols, targetRows);
+    this.pinToBottomAfterResize(managed);
   }
 
   /**
@@ -619,6 +638,7 @@ export class TerminalResizeController {
       this.resizeTerminal(managed, cols, rows);
     }
     terminalClient.resize(id, cols, rows);
+    this.pinToBottomAfterResize(managed);
     return true;
   }
 
@@ -659,9 +679,7 @@ export class TerminalResizeController {
     if (!flushedHeldBytes) {
       this.deps.dataBuffer.resumeFlush(id);
     }
-    if (managed.latestWasAtBottom && !managed.isUserScrolledBack) {
-      managed.terminal.scrollToBottom();
-    }
+    this.pinToBottomAfterResize(managed);
   }
 
   /**
