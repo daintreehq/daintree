@@ -177,7 +177,7 @@ describe("VoiceFileLinkResolver", () => {
     expect(result).toBeNull();
   });
 
-  it("includes prompt_cache_key in AI rerank request body", async () => {
+  it("sends the shared voice model and explicit none reasoning in the rerank body", async () => {
     searchNaturalLanguageMock.mockResolvedValue([
       "src/components/Bar.tsx",
       "src/components/Input.tsx",
@@ -200,6 +200,10 @@ describe("VoiceFileLinkResolver", () => {
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const body = JSON.parse(init.body as string);
     expect(body.prompt_cache_key).toBe("voice-file-rerank-v1");
+    // Rerank shares the single voice model and pinned low-latency effort so it
+    // can't silently inherit gpt-5.6-luna's "medium" default (issue #11365).
+    expect(body.model).toBe("gpt-5.6-luna");
+    expect(body.reasoning).toEqual({ effort: "none" });
   });
 
   it("handles searchNaturalLanguage throwing", async () => {

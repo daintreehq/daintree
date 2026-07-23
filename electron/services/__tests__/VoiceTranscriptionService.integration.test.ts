@@ -32,7 +32,7 @@ describe("VoiceTranscriptionService integration", () => {
         transcriptionProvider: "openai",
         transcriptionModel: "gpt-realtime-whisper",
         correctionEnabled: false,
-        correctionModel: "gpt-5-mini",
+        correctionModel: "gpt-5.6-luna",
         correctionCustomInstructions: "",
         paragraphingStrategy: "spoken-command",
         resolveFileLinks: true,

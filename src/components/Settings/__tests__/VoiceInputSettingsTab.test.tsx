@@ -100,7 +100,7 @@ function createVoiceInputApi(overrides: Partial<typeof window.electron.voiceInpu
       customDictionary: [],
       transcriptionModel: "gpt-realtime-whisper",
       correctionEnabled: false,
-      correctionModel: "gpt-5-mini",
+      correctionModel: "gpt-5.6-luna",
       correctionCustomInstructions: "",
       paragraphingStrategy: "spoken-command",
       resolveFileLinks: true,
@@ -133,7 +133,7 @@ describe("VoiceInputSettingsTab", () => {
           customDictionary: [],
           transcriptionModel: "gpt-realtime-whisper",
           correctionEnabled: false,
-          correctionModel: "gpt-5-mini",
+          correctionModel: "gpt-5.6-luna",
           correctionCustomInstructions: "",
           paragraphingStrategy: "spoken-command",
           resolveFileLinks: true,
@@ -160,7 +160,7 @@ describe("VoiceInputSettingsTab", () => {
           customDictionary: [],
           transcriptionModel: "gpt-realtime-whisper",
           correctionEnabled: false,
-          correctionModel: "gpt-5-mini",
+          correctionModel: "gpt-5.6-luna",
           correctionCustomInstructions: "",
           paragraphingStrategy: "spoken-command",
           resolveFileLinks: true,
@@ -189,7 +189,7 @@ describe("VoiceInputSettingsTab", () => {
           customDictionary: [],
           transcriptionModel: "gpt-realtime-whisper",
           correctionEnabled: false,
-          correctionModel: "gpt-5-mini",
+          correctionModel: "gpt-5.6-luna",
           correctionCustomInstructions: "",
           paragraphingStrategy: "spoken-command",
           resolveFileLinks: true,
@@ -219,7 +219,7 @@ describe("VoiceInputSettingsTab", () => {
           customDictionary: [],
           transcriptionModel: "gpt-realtime-whisper",
           correctionEnabled: false,
-          correctionModel: "gpt-5-mini",
+          correctionModel: "gpt-5.6-luna",
           correctionCustomInstructions: "",
           paragraphingStrategy: "spoken-command",
           resolveFileLinks: true,
@@ -252,7 +252,7 @@ describe("VoiceInputSettingsTab", () => {
           customDictionary: [],
           transcriptionModel: "gpt-realtime-whisper",
           correctionEnabled: false,
-          correctionModel: "gpt-5-mini",
+          correctionModel: "gpt-5.6-luna",
           correctionCustomInstructions: "",
           paragraphingStrategy: "spoken-command",
           resolveFileLinks: true,
@@ -269,6 +269,36 @@ describe("VoiceInputSettingsTab", () => {
       expect(screen.getByText(/abuse-monitoring logs for up to 30 days/)).toBeTruthy();
       expect(screen.queryByText(/stored locally in plain text/)).toBeNull();
     });
+  });
+
+  it("does not render a correction-model selector when AI correction is enabled", async () => {
+    // gpt-5.6-luna replaced both the gpt-5-mini and gpt-5-nano tiers, so there
+    // is no longer a model choice to offer (issue #11365).
+    window.electron = {
+      voiceInput: createVoiceInputApi({
+        getSettings: vi.fn().mockResolvedValue({
+          enabled: true,
+          openaiApiKey: "sk-test",
+          language: "en",
+          customDictionary: [],
+          transcriptionModel: "gpt-realtime-whisper",
+          correctionEnabled: true,
+          correctionModel: "gpt-5.6-luna",
+          correctionCustomInstructions: "",
+          paragraphingStrategy: "spoken-command",
+          resolveFileLinks: true,
+          deviceId: "",
+        }),
+      }),
+    } as unknown as typeof window.electron;
+
+    render(<VoiceInputSettingsTab />);
+
+    // Anchor on the AI-correction subtree itself (gated on correctionEnabled &&
+    // openaiApiKey) so the negative assertion can't pass vacuously — not before
+    // the async load resolves, and not if that whole subtree stopped rendering.
+    await screen.findByText(/Prompt caching keeps costs minimal/i);
+    expect(screen.queryByTestId("settings-select-Correction Model")).toBeNull();
   });
 
   describe("microphone permission request on Windows", () => {
@@ -295,7 +325,7 @@ describe("VoiceInputSettingsTab", () => {
             customDictionary: [],
             transcriptionModel: "gpt-realtime-whisper",
             correctionEnabled: false,
-            correctionModel: "gpt-5-mini",
+            correctionModel: "gpt-5.6-luna",
             correctionCustomInstructions: "",
             paragraphingStrategy: "spoken-command",
             resolveFileLinks: true,

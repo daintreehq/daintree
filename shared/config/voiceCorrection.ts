@@ -4,6 +4,24 @@ export const CONFIDENCE_SKIP_THRESHOLD = 0.85;
 /** Tag words below this confidence with <uncertain> in the LLM prompt. */
 export const CONFIDENCE_TAG_THRESHOLD = 0.8;
 
+/**
+ * The single OpenAI model backing every voice-dictation AI call: whole-passage
+ * correction, file-command detection, and ambiguous-file reranking. It replaces
+ * the retired gpt-5-mini/gpt-5-nano tiers, so all three roles share one ID.
+ * Migrations hard-code their own target literal and must not import this — the
+ * active model can move again, but a past migration's target is immutable.
+ */
+export const VOICE_DICTATION_AI_MODEL = "gpt-5.6-luna" as const;
+
+/**
+ * Reasoning effort sent explicitly on every voice-dictation Responses request.
+ * gpt-5.6-luna defaults to "medium" when the field is omitted — a latency/cost
+ * regression for these fast, strict-JSON tasks — so we pin the lowest tier at
+ * each call site rather than inheriting the model default. There is no minimum
+ * reasoning effort for strict json_schema output.
+ */
+export const VOICE_DICTATION_REASONING_EFFORT = "none" as const;
+
 const SHARED_TERMS_BLOCK = `<terms>
 racked/react: React
 type script: TypeScript

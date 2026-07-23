@@ -1299,14 +1299,6 @@ export const SETTINGS_REGISTRY = [
         requiresEnabled: VOICE_REQUIRES_ENABLED,
       },
       {
-        id: "voice-correction-model",
-        section: "AI text correction",
-        title: "Correction model",
-        description: "Choose the OpenAI model used for text correction",
-        keywords: ["gpt", "model", "correction", "openai"],
-        requiresEnabled: VOICE_AI_REQUIRES_ENABLED,
-      },
-      {
         id: "voice-custom-instructions",
         section: "AI text correction",
         title: "Custom instructions",
