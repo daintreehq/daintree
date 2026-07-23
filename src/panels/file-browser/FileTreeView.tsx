@@ -2,7 +2,10 @@ import { useCallback, useEffect, useId, useMemo, useRef } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { ChevronDown, ChevronRight, File, Folder, FolderOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
+import { Spinner } from "@/components/ui/Spinner";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
+import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { resolveTreeKey, type FlatTreeRow } from "./fileBrowserTree";
 
 export interface FileTreeViewProps {
@@ -248,6 +251,13 @@ interface FileTreeRowProps {
 function FileTreeRow({ row, isSelected, context }: FileTreeRowProps) {
   const { onSelect, onToggleExpanded, onRootFolder } = context;
 
+  // Defer the folder-load spinner past the anti-flicker gate so a fast
+  // expansion flashes nothing. Drives only the indicator — the tree's content
+  // and children stay wired to the raw `row.isLoading`/listings state. Virtuoso
+  // unmounts off-screen rows, so this cosmetic timer restarts if a still-loading
+  // row scrolls out of view and back; harmless (the fetch itself keeps running).
+  const showLoadingSpinner = useDeferredLoading(row.isLoading, UI_INLINE_LOADING_GATE_MS);
+
   const handleClick = () => {
     onSelect(row.path);
     if (row.isDirectory) onToggleExpanded(row.path, !row.isExpanded);
@@ -290,6 +300,9 @@ function FileTreeRow({ row, isSelected, context }: FileTreeRowProps) {
     <div
       id={rowDomId(context.instanceId, row.path)}
       role="treeitem"
+      // Pin the accessible name to the row name so the nested loading
+      // `role="status"` (below) can't fold "Loading folder contents" into it.
+      aria-label={row.name}
       aria-level={row.depth + 1}
       aria-selected={isSelected}
       {...(row.isDirectory && { "aria-expanded": row.isExpanded })}
@@ -328,8 +341,16 @@ function FileTreeRow({ row, isSelected, context }: FileTreeRowProps) {
         <File className="h-3.5 w-3.5 shrink-0 text-daintree-text/30" aria-hidden="true" />
       )}
       <span className={cn("truncate", isSelected && "font-medium")}>{row.name}</span>
-      {row.isLoading && (
-        <span className="ml-1 shrink-0 text-[10px] text-daintree-text/40">Loading…</span>
+      {showLoadingSpinner && (
+        // Subdued via `text-daintree-text/40` (Spinner strokes currentColor) so
+        // it stays quiet even on a selected row, per accent restraint.
+        <span
+          role="status"
+          aria-label={`Loading contents of ${row.name}`}
+          className="ml-1 inline-flex shrink-0 text-daintree-text/40"
+        >
+          <Spinner size="xs" />
+        </span>
       )}
     </div>
   );

@@ -97,8 +97,9 @@ describe("flattenTree", () => {
 
     const rows = flattenTree(listings, new Set(["src"]), new Set(["src"]));
 
-    // A refresh re-fetches an already-loaded directory; showing "Loading…" on a
-    // row whose contents are already on screen would be noise on every tick.
+    // A refresh re-fetches an already-loaded directory; showing a loading
+    // indicator on a row whose contents are already on screen would be noise on
+    // every tick.
     expect(rows[0]?.isLoading).toBe(false);
   });
 
