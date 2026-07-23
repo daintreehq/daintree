@@ -68,9 +68,10 @@ export function rebaseAbsolutePath(value: string, oldRoot: string, newRoot: stri
 
   // Descendant: the char immediately after the old-root prefix must be a
   // separator, and the prefix must match (case-/separator-folded on Windows).
+  const boundary = v.length > o.length ? v[o.length] : undefined;
   if (
-    v.length > o.length &&
-    separators.includes(v[o.length]) &&
+    boundary !== undefined &&
+    separators.includes(boundary) &&
     fold(v.slice(0, o.length)) === fold(o)
   ) {
     return n + v.slice(o.length);
