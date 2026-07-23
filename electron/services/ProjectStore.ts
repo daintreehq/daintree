@@ -1100,6 +1100,10 @@ export class ProjectStore {
     return this.stateManager.getProjectStateWithRecovery(projectId);
   }
 
+  wasStateUnreadableThisSession(projectId: string): boolean {
+    return this.stateManager.wasStateUnreadableThisSession(projectId);
+  }
+
   async clearProjectState(projectId: string): Promise<void> {
     return this.stateManager.clearProjectState(projectId);
   }

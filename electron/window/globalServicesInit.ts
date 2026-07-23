@@ -117,10 +117,28 @@ async function evictStaleSessionFiles(): Promise<void> {
       }
     }
 
+    // If any project's state was unreadable this session, `knownIds` is
+    // incomplete — it's missing every terminal id belonging to that project.
+    // A .restore file carries only a bare terminal id (no project reference),
+    // so the missing ids can't be attributed back to the affected project;
+    // the orphan pass can't tell "this project's scrollback" from a genuine
+    // orphan. Fail closed: skip the orphan-eviction pass entirely this cycle
+    // (pass knownIds: undefined) rather than delete recoverable scrollback.
+    // TTL and max-size passes don't depend on cross-project attribution, so
+    // they keep running as backstops.
+    const orphanSweepUnsafe = allProjects.some((p) =>
+      projectStore.wasStateUnreadableThisSession(p.id)
+    );
+    if (orphanSweepUnsafe) {
+      console.warn(
+        "[MAIN] Session eviction: skipping orphan pass — at least one project's state was unreadable or quarantined this session; retaining all .restore files to avoid deleting recoverable scrollback (TTL and size-cap passes still active)"
+      );
+    }
+
     const result = await evictSessionFiles({
       ttlMs: SESSION_EVICTION_TTL_MS,
       maxBytes: SESSION_EVICTION_MAX_BYTES,
-      knownIds,
+      knownIds: orphanSweepUnsafe ? undefined : knownIds,
     });
 
     if (result.deleted > 0) {

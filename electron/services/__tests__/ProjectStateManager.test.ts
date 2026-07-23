@@ -423,6 +423,84 @@ describe("ProjectStateManager quarantine recovery", () => {
   });
 });
 
+describe("ProjectStateManager unreadable-session tracking", () => {
+  let tempDir: string;
+  let manager: ProjectStateManager;
+  let projectId: string;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-state-unreadable-"));
+    manager = new ProjectStateManager(tempDir);
+    projectId = generateProjectId("/test/unreadable-project");
+    await fs.mkdir(path.join(tempDir, projectId), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("does not mark a project whose state file is absent (ENOENT)", async () => {
+    expect(await manager.getProjectState(projectId)).toBeNull();
+    expect(manager.wasStateUnreadableThisSession(projectId)).toBe(false);
+  });
+
+  it("does not mark a project whose state reads back valid", async () => {
+    await manager.saveProjectState(projectId, makeState());
+
+    expect(await manager.getProjectState(projectId)).not.toBeNull();
+    expect(manager.wasStateUnreadableThisSession(projectId)).toBe(false);
+  });
+
+  it("marks a project whose state JSON is corrupt", async () => {
+    const filePath = stateFilePath(tempDir, projectId)!;
+    await fs.writeFile(filePath, "{ not valid json", "utf-8");
+
+    await manager.getProjectState(projectId);
+
+    expect(manager.wasStateUnreadableThisSession(projectId)).toBe(true);
+  });
+
+  it("marks a project whose state is a future schema version", async () => {
+    const filePath = stateFilePath(tempDir, projectId)!;
+    await fs.writeFile(
+      filePath,
+      JSON.stringify({ _schemaVersion: 99, projectId, terminals: [] }),
+      "utf-8"
+    );
+
+    await manager.getProjectState(projectId);
+
+    expect(manager.wasStateUnreadableThisSession(projectId)).toBe(true);
+  });
+
+  it("scopes the mark per project — an unrelated project stays unmarked", async () => {
+    const filePath = stateFilePath(tempDir, projectId)!;
+    await fs.writeFile(filePath, "{ not valid json", "utf-8");
+    await manager.getProjectState(projectId);
+
+    const otherId = generateProjectId("/test/healthy-project");
+    await fs.mkdir(path.join(tempDir, otherId), { recursive: true });
+
+    expect(manager.wasStateUnreadableThisSession(projectId)).toBe(true);
+    expect(manager.wasStateUnreadableThisSession(otherId)).toBe(false);
+  });
+
+  it("keeps the mark after the recovery signal is drained (non-draining)", async () => {
+    const filePath = stateFilePath(tempDir, projectId)!;
+    await fs.writeFile(filePath, "{ not valid json", "utf-8");
+
+    const recovered = await manager.getProjectStateWithRecovery(projectId);
+    expect(recovered.quarantinedPath).toMatch(/\.corrupted\.\d+$/);
+
+    // Second recovery read drains pendingQuarantines...
+    const drained = await manager.getProjectStateWithRecovery(projectId);
+    expect(drained.quarantinedPath).toBeUndefined();
+
+    // ...but the unreadable-session mark must persist regardless.
+    expect(manager.wasStateUnreadableThisSession(projectId)).toBe(true);
+  });
+});
+
 describe("ProjectStateManager schema version", () => {
   let tempDir: string;
   let manager: ProjectStateManager;

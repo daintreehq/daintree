@@ -160,8 +160,18 @@ vi.mock("../../services/IdleTerminalNotificationService.js", () => ({
   getIdleTerminalNotificationService: vi.fn(),
 }));
 
+const evictSessionFilesMock = vi.hoisted(() =>
+  vi.fn<
+    (opts: {
+      ttlMs: number;
+      maxBytes: number;
+      knownIds?: Set<string>;
+    }) => Promise<{ deleted: number; bytesFreed: number }>
+  >(async () => ({ deleted: 0, bytesFreed: 0 }))
+);
+
 vi.mock("../../services/pty/terminalSessionPersistence.js", () => ({
-  evictSessionFiles: vi.fn(async () => ({ deleted: 0, bytesFreed: 0 })),
+  evictSessionFiles: evictSessionFilesMock,
   SESSION_EVICTION_TTL_MS: 0,
   SESSION_EVICTION_MAX_BYTES: 0,
 }));
@@ -235,11 +245,16 @@ vi.mock("../../ipc/handlers/projectCrud/index.js", () => ({
   getProjectStatsService: vi.fn(),
 }));
 
+const projectStoreMock = vi.hoisted(() => ({
+  getAllProjects: vi.fn<() => { id: string }[]>(() => []),
+  getProjectState: vi.fn<(id: string) => Promise<{ terminals?: { id: string }[] } | null>>(
+    async () => null
+  ),
+  wasStateUnreadableThisSession: vi.fn<(id: string) => boolean>(() => false),
+}));
+
 vi.mock("../../services/ProjectStore.js", () => ({
-  projectStore: {
-    getAllProjects: () => [],
-    getProjectState: vi.fn(),
-  },
+  projectStore: projectStoreMock,
 }));
 
 vi.mock("../../setup/environment.js", () => ({
@@ -291,13 +306,67 @@ vi.mock("electron", () => ({
   ipcMain: { handle: vi.fn() },
 }));
 
-import { initGlobalServices } from "../globalServicesInit.js";
+import { initGlobalServices, __test__ } from "../globalServicesInit.js";
 import { getGlobalServicesInitialized, setGlobalServicesInitialized } from "../serviceRefs.js";
 import type { WindowRegistry } from "../WindowRegistry.js";
 import { app, ipcMain } from "electron";
 import type { Mock } from "vitest";
 import { CHANNELS } from "../../ipc/channels.js";
 import { store } from "../../store.js";
+
+describe("evictStaleSessionFiles orphan-pass safety (#11349)", () => {
+  beforeEach(() => {
+    evictSessionFilesMock.mockReset();
+    evictSessionFilesMock.mockResolvedValue({ deleted: 0, bytesFreed: 0 });
+    projectStoreMock.getAllProjects.mockReset();
+    projectStoreMock.getAllProjects.mockReturnValue([]);
+    projectStoreMock.getProjectState.mockReset();
+    projectStoreMock.getProjectState.mockResolvedValue(null);
+    projectStoreMock.wasStateUnreadableThisSession.mockReset();
+    projectStoreMock.wasStateUnreadableThisSession.mockReturnValue(false);
+  });
+
+  it("passes a populated knownIds set when every project-state read is reliable", async () => {
+    projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-a" }, { id: "proj-b" }]);
+    projectStoreMock.getProjectState.mockImplementation(async (id: string) =>
+      id === "proj-a"
+        ? { terminals: [{ id: "term-a1" }, { id: "term-a2" }] }
+        : // proj-b reads back a benign null (never persisted state) — a null must
+          // NOT, on its own, disable the orphan pass.
+          null
+    );
+    projectStoreMock.wasStateUnreadableThisSession.mockReturnValue(false);
+
+    await __test__.evictStaleSessionFiles();
+
+    expect(evictSessionFilesMock).toHaveBeenCalledTimes(1);
+    const arg = evictSessionFilesMock.mock.calls[0][0];
+    expect(arg.knownIds).toBeInstanceOf(Set);
+    expect([...(arg.knownIds ?? [])]).toEqual(
+      expect.arrayContaining(["term-a1", "term-a2"])
+    );
+  });
+
+  it("passes knownIds undefined when any project state was unreadable this session", async () => {
+    projectStoreMock.getAllProjects.mockReturnValue([
+      { id: "proj-a" },
+      { id: "proj-quarantined" },
+    ]);
+    projectStoreMock.getProjectState.mockImplementation(async (id: string) =>
+      id === "proj-a" ? { terminals: [{ id: "term-a1" }] } : null
+    );
+    // Only the quarantined project trips the flag — the all-or-nothing rule
+    // must still disable the orphan pass for the entire sweep.
+    projectStoreMock.wasStateUnreadableThisSession.mockImplementation(
+      (id: string) => id === "proj-quarantined"
+    );
+
+    await __test__.evictStaleSessionFiles();
+
+    expect(evictSessionFilesMock).toHaveBeenCalledTimes(1);
+    expect(evictSessionFilesMock.mock.calls[0][0].knownIds).toBeUndefined();
+  });
+});
 
 describe("initGlobalServices task ordering", () => {
   beforeEach(() => {
