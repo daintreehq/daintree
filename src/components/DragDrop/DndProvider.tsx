@@ -109,10 +109,10 @@ import {
   findGroupIndex,
   filterOutDockDroppables,
   shouldCancelDrop,
+  dragCarriesNonDockableIntoDock,
   type OverDropData,
 } from "./dropResolution";
 import { useDragRecovery } from "./useDragRecovery";
-import { panelKindIsDockable } from "@shared/config/panelKindRegistry";
 import {
   DURATION_100,
   DURATION_300,
@@ -145,6 +145,14 @@ interface DndPlaceholderContextValue {
   activeGroupId: string | null;
   /** If dragging a tab group, the panel IDs in the group */
   activeGroupPanelIds: string[] | null;
+  /**
+   * True when the active drag can't be dropped in the dock — its kind, or ANY
+   * live member's kind for a group drag, is non-dockable (#11375). Consumers
+   * (the dock's `cursor-no-drop` cue) read this instead of re-checking the lone
+   * representative kind, so the cue matches what `cancelDrop`/`collisionDetection`
+   * actually enforce for a mixed group.
+   */
+  activeDragRejectsDock: boolean;
 }
 
 const DndPlaceholderContext = createContext<DndPlaceholderContextValue>({
@@ -155,6 +163,7 @@ const DndPlaceholderContext = createContext<DndPlaceholderContextValue>({
   isWorktreeSortDragging: false,
   activeGroupId: null,
   activeGroupPanelIds: null,
+  activeDragRejectsDock: false,
 });
 
 export function useDndPlaceholder() {
@@ -1299,6 +1308,7 @@ export function DndProvider({ children }: DndProviderProps) {
         activeData: active.data.current,
         overData: over?.data.current as OverDropData | undefined,
         isWorktreeSort,
+        panelsById: usePanelStore.getState().panelsById,
       });
       if (cancel) setIsCancelDrop(true);
       return cancel;
@@ -1359,11 +1369,18 @@ export function DndProvider({ children }: DndProviderProps) {
       // SortableContext reflows during hover before `cancelDrop` snaps it back.
       // Filter the dock droppable (and its chip sortables) out of the candidate
       // set and skip the dock-specific closestCenter branch, so the dock is
-      // invisible to collision detection for this drag. Read the kind
-      // synchronously from the drag data (no ref) to keep this callback stable.
+      // invisible to collision detection for this drag. For a group drag EVERY
+      // member's kind is checked, not just the representative (#11375) — member
+      // kinds are resolved from the live store by id. Read synchronously (no
+      // ref) to keep this callback stable.
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- dnd-kit data.current is loosely typed
       const activeDragData = args.active.data.current as DragData | undefined;
-      const rejectsDock = !panelKindIsDockable(activeDragData?.terminal?.kind ?? "terminal");
+      const rejectsDock = dragCarriesNonDockableIntoDock(
+        "dock",
+        activeDragData?.terminal?.kind,
+        activeDragData?.groupId ? activeDragData?.groupPanelIds : undefined,
+        usePanelStore.getState().panelsById
+      );
       const effectiveArgs = rejectsDock
         ? { ...args, droppableContainers: filterOutDockDroppables(args.droppableContainers) }
         : args;
@@ -1396,6 +1413,18 @@ export function DndProvider({ children }: DndProviderProps) {
       isWorktreeSortDragging: isWorktreeSortActive,
       activeGroupId: activeData?.groupId ?? null,
       activeGroupPanelIds: activeData?.groupPanelIds ?? null,
+      // Group-aware dock-reject state for the dock's hover cue: for a group drag
+      // ANY non-dockable live member poisons the drop, resolved from the store
+      // by id (#11375). Non-reactive `getState()` read is fine — panel kinds
+      // don't change mid-drag, and this recomputes when the active drag changes.
+      activeDragRejectsDock:
+        activeTerminal !== null &&
+        dragCarriesNonDockableIntoDock(
+          "dock",
+          activeTerminal.kind,
+          activeData?.groupId ? activeData?.groupPanelIds : undefined,
+          usePanelStore.getState().panelsById
+        ),
     }),
     [
       placeholderIndex,

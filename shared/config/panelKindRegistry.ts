@@ -1,4 +1,4 @@
-import type { PanelKind, TerminalInstance } from "../types/panel.js";
+import type { PanelKind, PanelLocation, TerminalInstance } from "../types/panel.js";
 import type { TerminalSnapshot } from "../types/project.js";
 import type { AddPanelOptions } from "../types/addPanelOptions.js";
 import { getAgentConfig } from "./agentRegistry.js";
@@ -398,6 +398,63 @@ function emitUnregistered(kindId: string): void {
 }
 
 /**
+ * Reactive snapshot of the metadata registry for `useSyncExternalStore`.
+ * Replaced (not mutated) on every registry change so React's `Object.is`
+ * identity check schedules a rerender — `ContentDock` /
+ * `DockPanelOffscreenContainer` observe it so a `dockable`-only flip or a
+ * plugin unregister re-evaluates their `isDockPanel` membership without waiting
+ * for an unrelated panel-store mutation (#11375). Mirrors the
+ * `definitionsSnapshot` pattern in `src/panels/registry.tsx`.
+ *
+ * IMPORTANT: `getPanelKindRegistrySnapshot` must return this stable reference,
+ * never a fresh `{ ...PANEL_KIND_REGISTRY }` per call — a new object every call
+ * makes React 19's `Object.is` guard see a perpetual change and loop.
+ */
+let panelKindRegistrySnapshot: Readonly<Record<string, PanelKindConfig>> = {
+  ...PANEL_KIND_REGISTRY,
+};
+const panelKindRegistryListeners = new Set<() => void>();
+
+/**
+ * Replace the snapshot with a fresh copy of the live registry and notify
+ * subscribers. Called once per public mutation (a batch removal emits one
+ * notification, not one per removed kind).
+ */
+function notifyPanelKindRegistry(): void {
+  panelKindRegistrySnapshot = { ...PANEL_KIND_REGISTRY };
+  for (const listener of panelKindRegistryListeners) {
+    try {
+      listener();
+    } catch (err) {
+      console.error("[panelKindRegistry] registry listener threw:", err);
+    }
+  }
+}
+
+/**
+ * Subscribe to any metadata-registry change (register, unregister, flip).
+ * Stable module-scope function so `useSyncExternalStore` never re-subscribes
+ * per render.
+ *
+ * @returns Unsubscribe function. Safe to call multiple times.
+ */
+export function subscribeToPanelKindRegistry(listener: () => void): () => void {
+  panelKindRegistryListeners.add(listener);
+  return () => {
+    panelKindRegistryListeners.delete(listener);
+  };
+}
+
+/**
+ * Snapshot for `useSyncExternalStore`. Returns the same reference until a
+ * registration changes the registry; React uses identity comparison to detect
+ * changes. Also serves as the SSR/getServerSnapshot value (identical set).
+ */
+export function getPanelKindRegistrySnapshot(): Readonly<Record<string, PanelKindConfig>> {
+  return panelKindRegistrySnapshot;
+}
+
+/**
  * Register a new panel kind configuration.
  * Used by extensions to add custom panel types.
  *
@@ -418,6 +475,7 @@ export function registerPanelKind(config: PanelKindConfig): void {
   if (config.extensionId !== undefined) {
     emitRegistered(config);
   }
+  notifyPanelKindRegistry();
 }
 
 /**
@@ -442,6 +500,9 @@ export function unregisterPluginPanelKinds(pluginId: string): void {
   for (const key of removed) {
     emitUnregistered(key);
   }
+  if (removed.length > 0) {
+    notifyPanelKindRegistry();
+  }
 }
 
 /**
@@ -458,6 +519,7 @@ export function unregisterPanelKind(kindId: string): boolean {
   if (!config || config.extensionId === undefined) return false;
   delete PANEL_KIND_REGISTRY[kindId];
   emitUnregistered(kindId);
+  notifyPanelKindRegistry();
   return true;
 }
 
@@ -594,6 +656,48 @@ export function panelKindIsDockable(kind: PanelKind): boolean {
 }
 
 /**
+ * Normalize a requested/restored panel location for a single panel of `kind`.
+ * A non-dockable kind can't live in the dock — `ContentDock` filters it out via
+ * `isDockPanel` while its stored `location:"dock"` keeps the grid from showing
+ * it, so it would strand invisibly (#11054, #11375). Redirect the dock landing
+ * to the grid; every other location passes through unchanged. This is the
+ * single guard the store mutators (move, reorder, undo, trash/background
+ * restore) call so a dockability flip can never leave a panel stranded.
+ *
+ * `kind ?? "terminal"` mirrors the legacy-PTY convention used across the
+ * dockability guards — a panel with no `kind` is a legacy terminal, always
+ * dockable. Sync and side-effect free: safe inside Zustand `set()` updaters.
+ *
+ * @returns The original location, or `"grid"` when a non-dockable kind
+ *   requested the dock.
+ */
+export function normalizeDockLocation<TLocation extends PanelLocation>(
+  kind: PanelKind | undefined,
+  location: TLocation
+): TLocation | "grid" {
+  return location === "dock" && !panelKindIsDockable(kind ?? "terminal") ? "grid" : location;
+}
+
+/**
+ * Normalize a group's target location. A tab group is atomic — every member
+ * shares one location — so a dock move is all-or-nothing: if ANY live member's
+ * kind is non-dockable, the whole group lands in the grid rather than splitting
+ * (a mixed-location group is invisible to `getPanelGroup` and corrupts
+ * persistence). Grid targets pass through unchanged.
+ *
+ * @param memberKinds The kinds of the group's live members (`undefined` → legacy terminal)
+ * @param location The requested group location
+ * @returns `"dock"` only when every member is dockable; otherwise `"grid"`
+ */
+export function normalizeGroupDockLocation(
+  memberKinds: ReadonlyArray<PanelKind | undefined>,
+  location: "grid" | "dock"
+): "grid" | "dock" {
+  if (location !== "dock") return location;
+  return memberKinds.every((kind) => panelKindIsDockable(kind ?? "terminal")) ? "dock" : "grid";
+}
+
+/**
  * Check if a panel kind can be restarted via the UI.
  * Uses the panel kind registry's canRestart property as the source of truth.
  *
@@ -721,5 +825,8 @@ export function clearPanelKindRegistry(): void {
   }
   for (const key of removed) {
     emitUnregistered(key);
+  }
+  if (removed.length > 0) {
+    notifyPanelKindRegistry();
   }
 }

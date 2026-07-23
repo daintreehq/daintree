@@ -1,7 +1,7 @@
 import type { TabGroup, TabGroupLocation } from "@/types";
 import type { PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
-import { type PanelInstance, isPtyPanel } from "@shared/types/panel";
-import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { type PanelInstance, type PanelKind, isPtyPanel } from "@shared/types/panel";
+import { panelKindHasPty, normalizeGroupDockLocation } from "@shared/config/panelKindRegistry";
 import { getNarrowPanel } from "./selectors";
 
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
@@ -396,7 +396,21 @@ export const createTabGroupActions = (
       return false;
     }
 
-    if (group.location === location) return true;
+    // A tab group is atomic — every member shares one location — so a dock move
+    // is all-or-nothing: if ANY live member's kind is non-dockable, the whole
+    // group lands in the grid rather than splitting (#11375). A mixed-location
+    // group is invisible to `getPanelGroup` and corrupts persistence. Skip trash
+    // members, matching the per-member relocation loop below.
+    const groupState = get();
+    const memberKinds: (PanelKind | undefined)[] = [];
+    for (const pid of group.panelIds) {
+      const t = groupState.panelsById[pid];
+      if (!t || t.location === "trash" || groupState.trashedTerminals.has(t.id)) continue;
+      memberKinds.push(t.kind);
+    }
+    const effectiveLocation = normalizeGroupDockLocation(memberKinds, location);
+
+    if (group.location === effectiveLocation) return true;
 
     // Scrollable grid (#8805): tab-group moves to the grid no longer gate on a
     // screen-fit cap. The grid scrolls vertically so the move always succeeds.
@@ -404,11 +418,12 @@ export const createTabGroupActions = (
     // A worktree-less dock group is visible in every worktree's dock, but the
     // grid renders only the active worktree's index bucket — landing there
     // without a worktreeId strands the whole group off-screen (#11290).
-    // Promotion adopts the active worktree for the group and every live
-    // member; a real existing group attribution is never changed.
+    // Promotion (including a dock request rescued to grid above) adopts the
+    // active worktree for the group and every live member; a real existing
+    // group attribution is never changed.
     const activeWorktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null;
     const adoptedWorktreeId =
-      location === "grid" && group.worktreeId == null && activeWorktreeId !== null
+      effectiveLocation === "grid" && group.worktreeId == null && activeWorktreeId !== null
         ? activeWorktreeId
         : null;
     const backfilledPanelIds: string[] = [];
@@ -417,8 +432,8 @@ export const createTabGroupActions = (
       const newTabGroups = new Map(state.tabGroups);
       const updatedGroup: TabGroup =
         adoptedWorktreeId !== null
-          ? { ...group, location, worktreeId: adoptedWorktreeId }
-          : { ...group, location };
+          ? { ...group, location: effectiveLocation, worktreeId: adoptedWorktreeId }
+          : { ...group, location: effectiveLocation };
       newTabGroups.set(groupId, updatedGroup);
 
       const panelIdSet = new Set(group.panelIds);
@@ -432,10 +447,10 @@ export const createTabGroupActions = (
         newById[pid] = {
           ...t,
           ...(adoptedWorktreeId !== null && { worktreeId: adoptedWorktreeId }),
-          location,
-          isVisible: location === "grid",
+          location: effectiveLocation,
+          isVisible: effectiveLocation === "grid",
           runtimeStatus: deriveRuntimeStatus(
-            location === "grid",
+            effectiveLocation === "grid",
             ptyT?.flowStatus,
             ptyT?.runtimeStatus
           ),
@@ -474,7 +489,7 @@ export const createTabGroupActions = (
     for (const panelId of group.panelIds) {
       const terminal = get().panelsById[panelId];
       if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
-        if (location === "dock") {
+        if (effectiveLocation === "dock") {
           optimizeForDock(panelId);
         } else {
           terminalInstanceService.applyRendererPolicy(panelId, TerminalRefreshTier.VISIBLE);
@@ -497,11 +512,25 @@ export const createTabGroupActions = (
     // Scrollable grid (#8805): no screen-fit cap — moving a group to another
     // worktree's grid always succeeds; the destination grid scrolls.
 
-    const targetLocation: TabGroupLocation = group.location === "grid" ? "grid" : "dock";
+    // Preserve the group's current location, but normalize a stale dock to grid
+    // if any live member's kind is no longer dockable (#11375) — else the whole
+    // group stays stranded in the dock after a dockability flip. All-or-nothing,
+    // mirroring moveTabGroupToLocation; the group and its members move together.
+    const worktreeMoveState = get();
+    const worktreeMemberKinds: (PanelKind | undefined)[] = [];
+    for (const pid of group.panelIds) {
+      const t = worktreeMoveState.panelsById[pid];
+      if (!t || t.location === "trash" || worktreeMoveState.trashedTerminals.has(t.id)) continue;
+      worktreeMemberKinds.push(t.kind);
+    }
+    const targetLocation: TabGroupLocation = normalizeGroupDockLocation(
+      worktreeMemberKinds,
+      group.location === "grid" ? "grid" : "dock"
+    );
 
     set((state) => {
       const newTabGroups = new Map(state.tabGroups);
-      const updatedGroup: TabGroup = { ...group, worktreeId };
+      const updatedGroup: TabGroup = { ...group, worktreeId, location: targetLocation };
       newTabGroups.set(groupId, updatedGroup);
 
       const panelIdSet = new Set(group.panelIds);

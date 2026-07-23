@@ -821,4 +821,91 @@ describe("dock ↔ grid transitions", () => {
       expect(usePanelStore.getState().panelIds).toEqual(["gg", "b", "a"]);
     });
   });
+
+  describe("dockability write-site guards (#11375)", () => {
+    // A non-dockable panel shaped like a PTY carrier — the store keys the guard
+    // off `kind`, and "review" is a non-dockable built-in.
+    const nonDockable = (id: string, location: "grid" | "dock" = "grid"): PtyPanelData =>
+      ({ ...createMockTerminal(id, location), kind: "review" }) as unknown as PtyPanelData;
+
+    it("moveTerminalToDock leaves a non-dockable panel in the grid (direct-move reject)", () => {
+      setTerminals([nonDockable("t1", "grid")]);
+
+      usePanelStore.getState().moveTerminalToDock("t1");
+
+      expect(usePanelStore.getState().panelsById["t1"]?.location).toBe("grid");
+    });
+
+    it("moveTerminalToDock still docks a dockable panel", () => {
+      setTerminals([createMockTerminal("t1", "grid")]);
+
+      usePanelStore.getState().moveTerminalToDock("t1");
+
+      expect(usePanelStore.getState().panelsById["t1"]?.location).toBe("dock");
+    });
+
+    it("moveTerminalToPosition redirects a dock target for a non-dockable kind to the grid", () => {
+      setTerminals([nonDockable("t1", "grid")]);
+
+      usePanelStore.getState().moveTerminalToPosition("t1", 0, "dock", "wt-1");
+
+      const updated = usePanelStore.getState().panelsById["t1"];
+      expect(updated?.location).toBe("grid");
+      expect(updated?.isVisible).toBe(true);
+    });
+
+    it("moveTabGroupToLocation rescues a mixed group to the grid (all-or-nothing)", () => {
+      const a = createMockTerminal("a", "grid");
+      const b = nonDockable("b", "grid");
+      setTerminals([a, b]);
+      usePanelStore.setState({
+        tabGroups: new Map([["g1", createMockTabGroup("g1", ["a", "b"])]]),
+      });
+
+      usePanelStore.getState().moveTabGroupToLocation("g1", "dock");
+
+      // The whole group stays in the grid — one non-dockable member blocks the
+      // dock move; the group is never split across grid and dock.
+      const state = usePanelStore.getState();
+      expect(state.tabGroups.get("g1")?.location).toBe("grid");
+      expect(state.panelsById["a"]?.location).toBe("grid");
+      expect(state.panelsById["b"]?.location).toBe("grid");
+    });
+
+    it("moveTabGroupToLocation docks an all-dockable group", () => {
+      const a = createMockTerminal("a", "grid");
+      const b = createMockTerminal("b", "grid");
+      setTerminals([a, b]);
+      usePanelStore.setState({
+        tabGroups: new Map([["g1", createMockTabGroup("g1", ["a", "b"])]]),
+      });
+
+      usePanelStore.getState().moveTabGroupToLocation("g1", "dock");
+
+      const state = usePanelStore.getState();
+      expect(state.tabGroups.get("g1")?.location).toBe("dock");
+      expect(state.panelsById["a"]?.location).toBe("dock");
+      expect(state.panelsById["b"]?.location).toBe("dock");
+    });
+
+    it("reconcileDockMembership relocates a docked panel whose kind is no longer dockable", async () => {
+      // Simulate a live dockable→non-dockable flip: the panel is already docked
+      // (kind was dockable when it landed), then its kind reports non-dockable.
+      setTerminals([nonDockable("t1", "dock")]);
+      const { reconcileDockMembership } = await import("@/store/reconcileDockMembership");
+
+      reconcileDockMembership();
+
+      expect(usePanelStore.getState().panelsById["t1"]?.location).toBe("grid");
+    });
+
+    it("reconcileDockMembership leaves a dockable docked panel in place", async () => {
+      setTerminals([createMockTerminal("t1", "dock")]);
+      const { reconcileDockMembership } = await import("@/store/reconcileDockMembership");
+
+      reconcileDockMembership();
+
+      expect(usePanelStore.getState().panelsById["t1"]?.location).toBe("dock");
+    });
+  });
 });

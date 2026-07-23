@@ -1,5 +1,5 @@
 import type { PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
-import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { panelKindHasPty, normalizeDockLocation } from "@shared/config/panelKindRegistry";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
@@ -82,6 +82,13 @@ export const createOrderingActions = (
 
   moveTerminalToPosition: (id, toIndex, location, worktreeId) => {
     let backfilledWorktreeId: string | null = null;
+    // Normalize a dock target for a non-dockable kind to the grid (#11375): the
+    // dock filters it out via `isDockPanel`, so `location:"dock"` would strand
+    // it invisibly. Every scope/adoption/visibility/PTY-policy decision below
+    // keys off this effective location, including the post-`set` renderer tier.
+    const movingPanel = get().panelsById[id];
+    if (!movingPanel) return;
+    const effectiveLocation = normalizeDockLocation(movingPanel.kind ?? "terminal", location);
 
     set((state) => {
       const terminal = state.panelsById[id];
@@ -94,9 +101,10 @@ export const createOrderingActions = (
       // Same location-aware scope as reorderTerminals (#11289): a dock target
       // must count global panels when computing the insertion slot.
       const matchesWorktree = (t: CarrierPanel) =>
-        !hasWorktreeFilter || panelMatchesWorktreeScope(t.worktreeId, worktreeId, location);
+        !hasWorktreeFilter ||
+        panelMatchesWorktreeScope(t.worktreeId, worktreeId, effectiveLocation);
       const matchesLocation = (t: CarrierPanel) =>
-        location === "grid"
+        effectiveLocation === "grid"
           ? t.location === "grid" || t.location === undefined
           : t.location === "dock";
 
@@ -124,14 +132,14 @@ export const createOrderingActions = (
               ? scopedIndices[scopedCount - 1]! + 1
               : scopedIndices[clampedIndex]!;
 
-      const isVisible = location === "grid";
+      const isVisible = effectiveLocation === "grid";
       const ptyTerminal = isPtyPanel(terminal) ? terminal : undefined;
       // A worktree-less dock panel dropped into the grid adopts the drop
       // target's worktree — the grid renders only that worktree's index
       // bucket, so an unset worktreeId would strand it off-screen (#11290).
       // The rebuild below re-buckets the panel; a real attribution is kept.
       const adoptedWorktreeId =
-        location === "grid" && terminal.worktreeId == null && targetWorktreeId != null
+        effectiveLocation === "grid" && terminal.worktreeId == null && targetWorktreeId != null
           ? targetWorktreeId
           : null;
       backfilledWorktreeId = adoptedWorktreeId;
@@ -139,7 +147,7 @@ export const createOrderingActions = (
       const updatedTerminal = {
         ...terminal,
         ...(adoptedWorktreeId !== null && { worktreeId: adoptedWorktreeId }),
-        location,
+        location: effectiveLocation,
         isVisible,
         runtimeStatus: deriveRuntimeStatus(
           isVisible,
@@ -184,7 +192,7 @@ export const createOrderingActions = (
 
     const terminal = get().panelsById[id];
     if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
-      if (location === "dock") {
+      if (effectiveLocation === "dock") {
         optimizeForDock(id);
       } else {
         terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useCallback, useLayoutEffect } from "react";
+import { useMemo, useRef, useCallback, useLayoutEffect, useSyncExternalStore } from "react";
 
 import { useShallow } from "zustand/react/shallow";
 import { SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortable";
@@ -43,7 +43,10 @@ import {
   useIsWorktreeSortDragging,
   useDndPlaceholder,
 } from "@/components/DragDrop";
-import { panelKindIsDockable } from "@shared/config/panelKindRegistry";
+import {
+  subscribeToPanelKindRegistry,
+  getPanelKindRegistrySnapshot,
+} from "@shared/config/panelKindRegistry";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { useHorizontalScrollControls } from "@/hooks";
 import { useProjectSettings } from "@/hooks/useProjectSettings";
@@ -127,6 +130,19 @@ function dockChipTitle(panel: PanelInstance): string {
 }
 
 export function ContentDock({ density = "normal" }: ContentDockProps) {
+  // Subscribe to panel-kind metadata changes (#11375). The dock-membership
+  // selectors below call `isDockPanel` (→ `panelKindIsDockable`), which reads
+  // the registry, not the panel store — so a `dockable`-only flip or a plugin
+  // unregister wouldn't re-run them on its own. This subscription forces a
+  // re-render on any registry change, and the re-render re-evaluates the Zustand
+  // selectors against the fresh registry. Return value intentionally unused —
+  // mirrors `GridPanel`/`DockedPanel`'s definition-registry subscription.
+  useSyncExternalStore(
+    subscribeToPanelKindRegistry,
+    getPanelKindRegistrySnapshot,
+    getPanelKindRegistrySnapshot
+  );
+
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
 
   const trashedTerminals = usePanelStore((state) => state.trashedTerminals);
@@ -421,13 +437,11 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   const isWorktreeSortDragging = useIsWorktreeSortDragging();
 
   // A panel whose kind the dock can't render can't drop here either (#11054).
-  // Read the active drag from the placeholder context and gate on the same
-  // dockability predicate the store guards use, so the reject cue matches what
-  // `cancelDrop`/`collisionDetection` actually enforce.
-  const { activeTerminal } = useDndPlaceholder();
-  const isDraggingNonDockable =
-    activeTerminal !== null && !panelKindIsDockable(activeTerminal.kind ?? "terminal");
-  const isDockDropRejected = isWorktreeSortDragging || isDraggingNonDockable;
+  // `activeDragRejectsDock` is group-aware — for a group drag it reflects ANY
+  // non-dockable member, not just the dragged representative (#11375) — so the
+  // reject cue matches exactly what `cancelDrop`/`collisionDetection` enforce.
+  const { activeDragRejectsDock } = useDndPlaceholder();
+  const isDockDropRejected = isWorktreeSortDragging || activeDragRejectsDock;
 
   // Sync droppable ref with scroll container ref using stable callback
   // This prevents ResizeObserver thrashing that causes infinite update loops

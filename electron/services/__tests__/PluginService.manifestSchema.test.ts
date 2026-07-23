@@ -1093,3 +1093,54 @@ describe("PluginManifestSchema contributes strict validation", () => {
     expect(result.success).toBe(true);
   });
 });
+
+describe("panel contribution PTY / dockable cross-field rule (#11375)", () => {
+  const validBase = { name: "acme.panels", version: "1.0.0" };
+  const basePanel = {
+    id: "my-panel",
+    name: "My Panel",
+    iconId: "puzzle",
+    color: "#123456",
+  };
+
+  it("rejects hasPty:true combined with an explicit dockable:false", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      contributes: { panels: [{ ...basePanel, hasPty: true, dockable: false }] },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const issue = result.error.issues.find(
+        (i) => i.path.includes("dockable") && i.path.includes("panels")
+      );
+      expect(issue, "expected an issue on the panel's dockable field").toBeDefined();
+      expect(issue?.message).toContain("dockable");
+    }
+  });
+
+  it("accepts hasPty:true with dockable:true", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      contributes: { panels: [{ ...basePanel, hasPty: true, dockable: true }] },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts hasPty:true with dockable omitted (defaults to dockable)", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      contributes: { panels: [{ ...basePanel, hasPty: true }] },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts a non-PTY panel that opts out of the dock (dockable:false)", () => {
+    // `hasPty` defaults to false, so the explicit opt-out is the whole point of
+    // the flag for a non-PTY view — it must stay valid.
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      contributes: { panels: [{ ...basePanel, dockable: false }] },
+    });
+    expect(result.success).toBe(true);
+  });
+});

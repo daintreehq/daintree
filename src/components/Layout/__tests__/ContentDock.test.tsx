@@ -81,18 +81,21 @@ describe("ContentDock regression test", () => {
 
   // Issue #8162 — drop the ambient in-flight rail tint; the only drag-state cue
   // is the armed isOver treatment, plus a cursor-no-drop rejection signal.
-  // Issue #11054 — the rejection cue now also fires for a drag whose panel kind
-  // the dock can't render, not just worktree-card sort drags, via the shared
+  // Issue #11054 — the rejection cue also fires for a drag whose panel kind the
+  // dock can't render, not just worktree-card sort drags, via the shared
   // `isDockDropRejected` gate. Both cases suppress the armed isOver treatment.
+  // Issue #11375 — the non-dockable check is now GROUP-AWARE: it reads
+  // `activeDragRejectsDock` off the placeholder context (which resolves every
+  // group member's kind), not the lone representative kind, so the cue matches
+  // what cancelDrop/collisionDetection enforce for a mixed group.
   it("removes ambient panel-drag tint and rejects non-dockable drags with cursor feedback", () => {
     const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
 
     expect(content).not.toContain("useIsDragging");
     expect(content).not.toContain('isPanelDragging && "bg-overlay-subtle"');
     expect(content).toContain('isDockDropRejected && "cursor-no-drop"');
-    // The reject gate folds in a non-dockable-kind check on the active drag.
-    expect(content).toContain("isDraggingNonDockable");
-    expect(content).toMatch(/panelKindIsDockable\(activeTerminal\.kind/);
+    // The reject gate folds in the group-aware dock-reject flag from the context.
+    expect(content).toContain("activeDragRejectsDock");
     expect(content).toMatch(/isDockDropRejected\s*=\s*isWorktreeSortDragging\s*\|\|/);
     expect(content).toMatch(/isOver\s*&&\s*[^]*?cursor-copy/);
   });

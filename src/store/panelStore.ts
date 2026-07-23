@@ -459,6 +459,11 @@ export const usePanelStore = create<PanelGridState>()(
         const group = registrySlice.getPanelGroup(id);
         registrySlice.moveTerminalToDock(id);
 
+        // The registry slice rejects a non-dockable kind (and a grouped move can
+        // be rescued to the grid), leaving the panel out of the dock (#11375) —
+        // skip the moved-to-dock focus/maximize cleanup when nothing docked.
+        if (get().panelsById[id]?.location !== "dock") return;
+
         const updates: Partial<PanelGridState> = {};
 
         if (state.focusedId === id) {
@@ -507,7 +512,13 @@ export const usePanelStore = create<PanelGridState>()(
         const moved = registrySlice.moveTabGroupToLocation(groupId, location);
         if (!moved || !groupBeforeMove) return moved;
 
-        if (location === "grid") {
+        // The registry slice rescues a dock request to the grid when a member
+        // kind is non-dockable (#11375), so branch on the COMMITTED location —
+        // not the caller's requested one — or focus/dock cleanup would treat a
+        // grid-rescued group as if it had docked.
+        const committedLocation = get().tabGroups.get(groupId)?.location ?? location;
+
+        if (committedLocation === "grid") {
           const activeDockTerminalId = get().activeDockTerminalId;
           const previousFocusedId = get().focusedId;
           const nextFocusedId = groupBeforeMove.panelIds.includes(groupBeforeMove.activeTabId)

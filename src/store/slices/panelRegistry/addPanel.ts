@@ -9,7 +9,7 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 import {
   panelKindUsesTerminalUi,
-  panelKindIsDockable,
+  normalizeDockLocation,
   getPanelKindConfig,
   getExtensionFallbackDefaults,
   resolvePanelKindPolicy,
@@ -203,6 +203,7 @@ export const createAddPanelActions = (
       // screen-fit cap any more. Honor the requested location directly; the
       // hard ceiling has already been enforced upstream by `panelLimitStore`.
       const requestedLocation = options.location || "grid";
+      const activeWorktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null;
       // The dock only renders kinds it can host (`isDockPanel`). A dock request
       // for a non-dockable kind would strand the panel invisibly — still
       // persisted, still counted, unreachable from any UI (#11054). Redirect it
@@ -212,18 +213,27 @@ export const createAddPanelActions = (
       // of a non-dockable kind is returned to the grid on next load. Must run
       // before the `shouldBackground`/`runtimeStatus` derivation below, or a
       // redirected-to-grid panel would still get dock-flavored background state.
-      const location =
-        requestedLocation === "dock" && !panelKindIsDockable(requestedKind)
-          ? "grid"
-          : requestedLocation;
-      const activeWorktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null;
+      const location = normalizeDockLocation(requestedKind, requestedLocation);
+      // A worktree-less panel redirected dock→grid must ALSO adopt the active
+      // worktree: the grid renders only the active worktree's index bucket, so a
+      // worktree-less grid panel is invisible whenever a worktree is active
+      // (#11290) — worse than the stranding this rescue is meant to fix (#11375).
+      // Mirrors the adoption in `moveTerminalToPosition`/`moveTerminalToGrid`.
+      const adoptedWorktreeId =
+        location === "grid" &&
+        requestedLocation === "dock" &&
+        (options.worktreeId ?? null) === null &&
+        activeWorktreeId !== null
+          ? activeWorktreeId
+          : null;
+      const effectiveWorktreeId = adoptedWorktreeId ?? options.worktreeId;
       // When activeWorktreeId is null (worktree store not yet hydrated — common
       // during a project switch), treat the panel as being in the active worktree
       // to avoid incorrectly backgrounding it. Mirrors the PTY branch guard
       // below; without it a non-PTY plugin panel spawned mid-switch is
       // mis-backgrounded (#10512).
       const isInActiveWorktree =
-        activeWorktreeId === null || (options.worktreeId ?? null) === (activeWorktreeId ?? null);
+        activeWorktreeId === null || (effectiveWorktreeId ?? null) === (activeWorktreeId ?? null);
       const shouldBackground = location === "dock" || (location === "grid" && !isInActiveWorktree);
       const runtimeStatus: TerminalRuntimeStatus = shouldBackground ? "background" : "running";
 
@@ -239,7 +249,7 @@ export const createAddPanelActions = (
         id,
         kind: requestedKind,
         title,
-        worktreeId: options.worktreeId,
+        worktreeId: effectiveWorktreeId,
         location,
         isVisible: location === "grid",
         runtimeStatus,
@@ -356,7 +366,14 @@ export const createAddPanelActions = (
     // The scrollable panel grid no longer caps panels at the screen-fit count
     // (#8805). Honor the requested location directly; the hardware-adaptive
     // hard ceiling is enforced upstream by `panelLimitStore`.
-    const location = options.location || "grid";
+    // Defense-in-depth: honor a non-dockable requested kind BEFORE the collapse
+    // to "terminal"/"dev-preview" above discards it (#11375). `hasPty:true` with
+    // `dockable:false` is rejected at the manifest gate and terminal/agent kinds
+    // are always dockable, so this only fires for a programmatic dock request of
+    // a non-dockable PTY kind — redirect it to the grid. No worktree adoption
+    // here (unlike the non-PTY branch): PTY restore paths reconcile worktree
+    // separately, and this defensive redirect never fires for a real launch.
+    const location = normalizeDockLocation(requestedKind, options.location || "grid");
     const activeWorktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null;
     // When activeWorktreeId is null (worktree store not yet hydrated — common during
     // project switch), treat the terminal as being in the active worktree to avoid

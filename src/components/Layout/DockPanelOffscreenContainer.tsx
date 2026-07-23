@@ -1,8 +1,20 @@
-import { useEffect, useLayoutEffect, useCallback, useMemo, useState, useRef } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useCallback,
+  useMemo,
+  useState,
+  useRef,
+  useSyncExternalStore,
+} from "react";
 import { canDuplicatePanelKind } from "@/services/terminal/panelDuplicationService";
 import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { usePanelStore, useWorktreeSelectionStore } from "@/store";
+import {
+  subscribeToPanelKindRegistry,
+  getPanelKindRegistrySnapshot,
+} from "@shared/config/panelKindRegistry";
 import { isDockPanel, isPtyPanel, type DockPanelData } from "@shared/types/panel";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { DockedPanel } from "@/components/Terminal/DockedPanel";
@@ -31,6 +43,19 @@ interface DockPanelOffscreenContainerProps {
 }
 
 export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenContainerProps) {
+  // Subscribe to panel-kind metadata changes (#11375). This offscreen host is a
+  // React subtree disjoint from `ContentDock` (its bodies are portaled), so it
+  // needs its OWN registry subscription — a `ContentDock` re-render does not
+  // reach here. The `dockTerminals` selector below calls `isDockPanel`
+  // (→ `panelKindIsDockable`), which reads the registry rather than the panel
+  // store, so a `dockable`-only flip or unregister would otherwise leave a
+  // stale offscreen body mounted. Return value intentionally unused.
+  useSyncExternalStore(
+    subscribeToPanelKindRegistry,
+    getPanelKindRegistrySnapshot,
+    getPanelKindRegistrySnapshot
+  );
+
   // One stable wrapper <div> per dock panel. Each wrapper is created once and
   // is the permanent createPortal container for that panel — React never sees
   // it change identity, so opening/closing a popover (or switching tabs) never

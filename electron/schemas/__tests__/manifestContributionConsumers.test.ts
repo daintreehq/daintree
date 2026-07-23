@@ -15,7 +15,7 @@ import {
   KeybindingContributionSchema,
   McpServerContributionSchema,
   MenuItemContributionSchema,
-  PanelContributionSchema,
+  PanelContributionObjectSchema,
   SettingDefinitionObjectSchema,
   SkillContributionSchema,
   ToolbarButtonContributionSchema,
@@ -87,7 +87,7 @@ const SKILL_REGISTRY = "electron/services/plugin/PluginSkillRegistry.ts";
  * field would otherwise be able to drift silently under a top-level kind).
  */
 const SWEPT_SCHEMAS = {
-  panels: PanelContributionSchema,
+  panels: PanelContributionObjectSchema,
   toolbarButtons: ToolbarButtonContributionSchema,
   menuItems: MenuItemContributionSchema,
   keybindings: KeybindingContributionSchema,
@@ -149,7 +149,7 @@ function shapeKeys(schema: z.ZodType): string[] {
  */
 type ForgeSlots = NonNullable<z.infer<typeof ForgeProviderContributionSchema>["slots"]>;
 type FieldConsumerCoverage = {
-  panels: Record<keyof z.infer<typeof PanelContributionSchema>, ConsumerDescriptor>;
+  panels: Record<keyof z.infer<typeof PanelContributionObjectSchema>, ConsumerDescriptor>;
   toolbarButtons: Record<keyof z.infer<typeof ToolbarButtonContributionSchema>, ConsumerDescriptor>;
   menuItems: Record<keyof z.infer<typeof MenuItemContributionSchema>, ConsumerDescriptor>;
   keybindings: Record<keyof z.infer<typeof KeybindingContributionSchema>, ConsumerDescriptor>;

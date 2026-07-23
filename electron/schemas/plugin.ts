@@ -54,7 +54,14 @@ const BUILT_IN_ACTION_ID_SET: ReadonlySet<string> = new Set([
 // contribution wired to one is a dead button — reject it at parse time (#10580).
 const DENY_PLUGIN_DISPATCH_SET: ReadonlySet<string> = new Set(DENY_PLUGIN_DISPATCH_ACTION_IDS);
 
-export const PanelContributionSchema = z
+/**
+ * The unrefined object base — exported so the field-consumer contract test
+ * (`manifestContributionConsumers.test.ts`) can enumerate `.shape` without
+ * reaching through the `.superRefine` wrapper, mirroring
+ * {@link SettingDefinitionObjectSchema}. Runtime validation goes through
+ * {@link PanelContributionSchema} below.
+ */
+export const PanelContributionObjectSchema = z
   .object({
     id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
     name: z.string().min(1),
@@ -70,6 +77,28 @@ export const PanelContributionSchema = z
     dockable: z.boolean().optional(),
   })
   .strict();
+
+/**
+ * The validated `contributes.panels` entry: the object base plus a cross-field
+ * rule. `hasPty: true` with an explicit `dockable: false` is rejected — a
+ * PTY-backed plugin kind renders through `TerminalPane` and its kind collapses
+ * to the built-in dockable `terminal` at creation (`addPanel.ts`), so the
+ * opt-out could never be honored and would silently vanish. Plugin PTY kinds
+ * are unsupported in v1 anyway; surface the conflict to the author at
+ * manifest-write time instead of swallowing it at runtime (#11375). `hasPty`
+ * has already defaulted to `false` here, so an omitted `hasPty` never trips it.
+ */
+export const PanelContributionSchema = PanelContributionObjectSchema.superRefine((panel, ctx) => {
+  if (panel.hasPty === true && panel.dockable === false) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["dockable"],
+      message:
+        "A PTY-backed panel (hasPty: true) cannot opt out of the dock with dockable: false — plugin PTY panels render as terminals, which are always dockable. Remove the dockable flag.",
+      params: { errorCode: "pty_panel_dock_opt_out_unsupported" },
+    });
+  }
+});
 
 export const ToolbarButtonContributionSchema = z
   .object({

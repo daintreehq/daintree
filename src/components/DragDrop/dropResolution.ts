@@ -113,6 +113,37 @@ export function isNonDockableDockDrop(
   return targetContainer === "dock" && !panelKindIsDockable(kind ?? "terminal");
 }
 
+/**
+ * Group-aware version of {@link isNonDockableDockDrop}. A tab-group drag carries
+ * every member into the dock, so the drop must be rejected if ANY live member's
+ * kind is non-dockable — checking only the dragged representative would let a
+ * dockable chip smuggle a `dockable:false` sibling into the dock (#11375). A
+ * single-panel drag falls back to the representative kind. The drag payload only
+ * carries member IDs, so kinds are resolved from the live `panelsById`. Fails
+ * closed: a member id that resolves to no live panel is treated as non-dockable
+ * so a mid-drag unmount can't sneak a phantom into the dock.
+ *
+ * @param groupPanelIds `active.data.current.groupPanelIds` (untyped from dnd-kit);
+ *   a real group drag is an array of length > 1, anything else is single-panel.
+ */
+export function dragCarriesNonDockableIntoDock(
+  targetContainer: "grid" | "dock" | null,
+  representativeKind: PanelKind | undefined,
+  groupPanelIds: unknown,
+  panelsById: Record<string, CarrierPanel | undefined>
+): boolean {
+  if (targetContainer !== "dock") return false;
+  if (Array.isArray(groupPanelIds) && groupPanelIds.length > 1) {
+    return groupPanelIds.some((memberId) => {
+      if (typeof memberId !== "string") return true;
+      const panel = panelsById[memberId];
+      if (!panel) return true;
+      return !panelKindIsDockable(panel.kind ?? "terminal");
+    });
+  }
+  return isNonDockableDockDrop(targetContainer, representativeKind);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -124,6 +155,8 @@ export interface CancelDropParams {
   activeData: unknown;
   overData: OverDropData | undefined;
   isWorktreeSort: boolean;
+  /** Live panel map, so a group drag resolves every member's kind for the dockability check (#11375). */
+  panelsById: Record<string, CarrierPanel | undefined>;
 }
 
 /**
@@ -135,7 +168,7 @@ export interface CancelDropParams {
  */
 export function shouldCancelDrop(params: CancelDropParams): boolean {
   try {
-    const { hasOver, activeData, overData, isWorktreeSort } = params;
+    const { hasOver, activeData, overData, isWorktreeSort, panelsById } = params;
     if (!hasOver) return true;
 
     // Worktree-sort drags own their drop logic in handleDragEnd; let every
@@ -153,15 +186,18 @@ export function shouldCancelDrop(params: CancelDropParams): boolean {
     if (isGroupDrag && isWorktreeDrop) return true;
 
     // A panel whose kind the dock can't render must never commit into the
-    // dock — it would strand invisibly (#11054). `cursor-no-drop` already
-    // signals this during hover and `collisionDetection` keeps the dock out
-    // of the hover candidates; this is the defensive final gate.
+    // dock — it would strand invisibly (#11054). For a group drag EVERY member
+    // is checked, not just the dragged representative (#11375). `cursor-no-drop`
+    // already signals this during hover and `collisionDetection` keeps the dock
+    // out of the hover candidates; this is the defensive final gate.
     const targetContainer =
       overData?.container ??
       (overData?.sortable?.containerId ? resolveContainerId(overData.sortable.containerId) : null);
-    return isNonDockableDockDrop(
+    return dragCarriesNonDockableIntoDock(
       targetContainer,
-      typeof kind === "string" ? (kind as PanelKind) : undefined
+      typeof kind === "string" ? (kind as PanelKind) : undefined,
+      isGroupDrag ? groupPanelIds : undefined,
+      panelsById
     );
   } catch {
     return true;
