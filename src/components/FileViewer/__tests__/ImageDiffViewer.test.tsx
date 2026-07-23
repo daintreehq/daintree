@@ -423,9 +423,9 @@ describe("ImageDiffViewer", () => {
         return Promise.resolve();
       };
       mockReadFileVersions
-        .mockResolvedValueOnce(bothOkWith(A_HEAD_URL, A_WORKING_URL)) // a: head decode fails
-        .mockResolvedValueOnce(bothOk()) // b: ok
-        .mockResolvedValueOnce(bothOkWith(A_HEAD_URL, A_WORKING_URL)); // a again: head ok
+        .mockResolvedValueOnce(bothOkWith(A_HEAD_URL, A_WORKING_URL)) // a: head decode fails, commits
+        .mockReturnValueOnce(new Promise<DiffMediaFileVersions>(() => {})) // b: never commits → a stays held
+        .mockResolvedValueOnce(bothOkWith(A_HEAD_URL, A_WORKING_URL)); // a again: head ok, SAME requestKey
 
       const { rerender } = render(
         <ImageDiffViewer relPath="a.png" worktreePath="/repo" status="modified" />
@@ -434,17 +434,18 @@ describe("ImageDiffViewer", () => {
       expect(await screen.findByText("Couldn't display this version")).toBeDefined();
       expect(screen.queryByAltText("HEAD version of a.png")).toBeNull();
 
+      // Visit b, whose fetch never commits, so a remains the committed snapshot.
+      // The return recommit then reuses a's exact requestKey with NO intervening
+      // commit — which is what isolates the per-attempt key from the deterministic
+      // request key (a request-key-keyed pane would not remount here).
       rerender(<ImageDiffViewer relPath="b.png" worktreePath="/repo" status="modified" />);
-      await screen.findByAltText("HEAD version of b.png");
-
-      // Return to a — its HEAD now decodes cleanly, so the pane must remount and
-      // recover (the same requestKey would otherwise keep the stale failure).
       rerender(<ImageDiffViewer relPath="a.png" worktreePath="/repo" status="modified" />);
+
       await screen.findByAltText("HEAD version of a.png");
       expect(screen.queryByText("Couldn't display this version")).toBeNull();
     });
 
-    it("marks the held frame aria-busy while loading and clears it after the swap", async () => {
+    it("marks the held frame aria-busy but never inert while loading, and clears it after the swap", async () => {
       const next = createDeferred<DiffMediaFileVersions>();
       mockReadFileVersions.mockResolvedValueOnce(bothOk()).mockReturnValueOnce(next.promise);
 
@@ -454,9 +455,11 @@ describe("ImageDiffViewer", () => {
       await screen.findByAltText("HEAD version of a.png");
       expect(container.querySelector('[aria-busy="true"]')).toBeNull();
 
-      // Holding a while b loads → the frame is busy.
+      // Holding a while b loads → the frame is busy, but must stay interactive
+      // (not inert), or a keyboard file-step would blur focus out of the dialog.
       rerender(<ImageDiffViewer relPath="b.png" worktreePath="/repo" status="modified" />);
       expect(container.querySelector('[aria-busy="true"]')).not.toBeNull();
+      expect(container.querySelector("[inert]")).toBeNull();
 
       await act(async () => {
         next.resolve(bothOk());
