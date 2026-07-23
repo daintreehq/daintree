@@ -833,6 +833,7 @@ export type SpawnErrorCode =
   | "EBUSY" // Terminal device busy
   | "DISCONNECTED" // Terminal process no longer exists in backend (e.g., after project switch)
   | "PENDING_SPAWNS_CAPPED" // PtyClient.pendingSpawns admission cap hit (restart-storm guard)
+  | "TERMINAL_ALREADY_LIVE" // Spawn rejected: the id already has a live owner (#11341)
   | "UNKNOWN"; // Unknown error
 
 /** Result of a spawn operation */

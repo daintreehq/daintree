@@ -49,6 +49,7 @@ const ALL_SPAWN_ERROR_CODES: readonly SpawnErrorCode[] = [
   "EBUSY",
   "DISCONNECTED",
   "PENDING_SPAWNS_CAPPED",
+  "TERMINAL_ALREADY_LIVE",
   "UNKNOWN",
 ] as const;
 
@@ -127,10 +128,27 @@ describe("SpawnErrorBanner", () => {
     ["EACCES", "Couldn't execute shell"],
     ["ENOTDIR", "Invalid working directory"],
     ["PENDING_SPAWNS_CAPPED", "Too many pending restarts"],
+    ["TERMINAL_ALREADY_LIVE", "Terminal already running"],
     ["UNKNOWN", "Couldn't start terminal"],
   ] as const)("renders the expected title for %s", (code, expected) => {
     renderBanner(code);
     expect(screen.getByText(expected)).toBeTruthy();
+  });
+
+  it("explains the kept-alive process and keeps Retry inline for TERMINAL_ALREADY_LIVE", () => {
+    const onRetry = vi.fn();
+    renderBanner("TERMINAL_ALREADY_LIVE", { onRetry });
+    expect(
+      screen.getByText(
+        "This terminal already has a running process, so the existing one was kept. Retry to restart it."
+      )
+    ).toBeTruthy();
+    // Retry is the sole inline primary action (outside the overflow) for this
+    // generic recovery — clicking it restarts the terminal.
+    const retry = screen.getByRole("button", { name: /retry starting terminal/i });
+    expect(overflow().contains(retry)).toBe(false);
+    fireEvent.click(retry);
+    expect(onRetry).toHaveBeenCalledWith("t-1");
   });
 
   it("renders the UNKNOWN code with the message as description", () => {

@@ -180,8 +180,9 @@ describe("PtyClient lifecycle ledger", () => {
     // command on `postSpawnInput` instead of in `args`.
     client.spawn("t1", { ...baseOptions, postSpawnInput: "claude --resume s-1\r" });
 
-    // Initial spawn injects the command exactly once, right after the spawn.
-    expect(writeMessages(mockChild)).toEqual([{ id: "t1", data: "claude --resume s-1\r" }]);
+    // Delivery is bound to spawn success on the host (#11341), so Main sends no
+    // separate write — the command rides the spawn options instead.
+    expect(writeMessages(mockChild)).toEqual([]);
 
     const restartedChild = createMockChild();
     shared.forkMock.mockReturnValue(restartedChild);
@@ -192,10 +193,11 @@ describe("PtyClient lifecycle ledger", () => {
 
     const replayed = spawnMessages(restartedChild);
     expect(replayed).toHaveLength(1);
+    // The command survives replay on the spawn options, so the fresh host
+    // re-injects it exactly once on success — the terminal comes back running
+    // its command (here a resume), not a bare prompt. No separate Main write.
     expect(replayed[0]!.options.postSpawnInput).toBe("claude --resume s-1\r");
-    // Re-injected exactly once on the fresh host — the terminal comes back
-    // running its command (here a resume), not as a bare prompt and not twice.
-    expect(writeMessages(restartedChild)).toEqual([{ id: "t1", data: "claude --resume s-1\r" }]);
+    expect(writeMessages(restartedChild)).toEqual([]);
   });
 
   it("replays wrapper args verbatim on crash respawn — a resume survives (#11339)", () => {
