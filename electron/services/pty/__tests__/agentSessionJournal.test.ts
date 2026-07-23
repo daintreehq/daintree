@@ -145,18 +145,23 @@ describe("journalAgentSession", () => {
     expect(await readSessionHistory(userDataDir)).toHaveLength(1);
   });
 
-  it("releases the journal reservation when the write fails, so a retry still lands", async () => {
+  it("releases the journal reservation when persistence fails, so a retry still lands", async () => {
     const ledger = getLifecycleLedger();
     const generation = ledger.recordLaunch("term-1", { launchAgentId: "claude" });
 
-    // Force the first write to fail: point the journal at a path where the
-    // history file location is a directory, so the atomic write rejects.
+    // Force the first persist to fail: point the journal at a directory. The
+    // read-modify-write now rejects while reading (EISDIR ⇒ unreadable), before
+    // it would ever overwrite — proving the abort path propagates the failure.
     const filePath = path.join(userDataDir, "agent-session-history.json");
     await fsp.mkdir(filePath, { recursive: true });
 
     await expect(
       journalAgentSession(makeRecord("sess-1"), { terminalId: "term-1", generation })
     ).rejects.toThrow();
+
+    // A failed persist must NOT emit the "recorded" signal — the reservation is
+    // rescinded, not consumed, so the retry below is not gated out as a duplicate.
+    expect(recordedEvents).toEqual([]);
 
     await fsp.rm(filePath, { recursive: true, force: true });
 
