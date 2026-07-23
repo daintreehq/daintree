@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useId, useMemo, useRef, useState } from "react";
 import { CornerLeftUp, EyeOff, FolderRoot, FolderTree, RefreshCw } from "lucide-react";
 import { basename, join } from "@shared/utils/path";
 import type { BasePanelProps } from "@/components/Panel/ContentPanel";
@@ -87,6 +87,15 @@ export function FileBrowserPane({
       [id]
     )
   );
+  const sidebarCollapsed = usePanelStore(
+    useCallback(
+      (state) => {
+        const panel = state.panelsById[id];
+        return panel?.kind === "file-browser" ? panel.browserSidebarCollapsed === true : false;
+      },
+      [id]
+    )
+  );
 
   // Resolved fresh from the worktree store rather than persisted, so a rename
   // or move is reflected without restarting the panel.
@@ -162,6 +171,13 @@ export function FileBrowserPane({
   const handleToggleIgnored = useCallback(() => {
     setFileBrowserView(id, { browserShowIgnored: !showIgnored });
   }, [id, showIgnored, setFileBrowserView]);
+
+  // Stable id for the tree column so the toggle's `aria-controls` can name the
+  // region it discloses. Only referenced while the column is mounted (open).
+  const treeSidebarId = useId();
+  const handleToggleSidebar = useCallback(() => {
+    setFileBrowserView(id, { browserSidebarCollapsed: !sidebarCollapsed });
+  }, [id, sidebarCollapsed, setFileBrowserView]);
 
   const handleSetRoot = useCallback(
     (path: string) => {
@@ -365,49 +381,62 @@ export function FileBrowserPane({
           on the AppDialog surface — so a plain flex-1/min-h-0 chain fills it
           without the content-sized-parent collapse trap. */}
       <div className="flex min-h-0 w-full flex-1 bg-daintree-bg">
-        <div
-          ref={treeColumnRef}
-          className="flex min-h-0 w-72 shrink-0 flex-col self-stretch border-r border-daintree-border bg-daintree-sidebar"
-        >
-          <div className="flex shrink-0 items-center gap-0.5 border-b border-daintree-border px-1.5 py-1">
-            {/* Root anchor mirrors the diff sidebar's header: where am I
+        {/* Collapsed unmounts the column entirely (not width 0): a persistent
+            toggle in the viewer header re-opens it, so there's no orphaned
+            control to home. The tree data hook stays mounted in the pane, so
+            the selected file still resolves while the tree is hidden. */}
+        {!sidebarCollapsed && (
+          <div
+            id={treeSidebarId}
+            ref={treeColumnRef}
+            className="flex min-h-0 w-72 shrink-0 flex-col self-stretch border-r border-daintree-border bg-daintree-sidebar"
+          >
+            {/* py-1.5 + border-overlay + 16px icons match FileViewerToolbar.Root
+                so the two header bars share one height and border token, and the
+                line under them reads continuous across the divider (#11328). */}
+            <div className="flex shrink-0 items-center gap-0.5 border-b border-overlay px-1.5 py-1.5">
+              {/* Root anchor mirrors the diff sidebar's header: where am I
                 rooted, then the controls that reshape the view. The root icon
                 doubles as the way back when the tree is rooted somewhere. */}
-            {rootPath !== "" ? (
-              <FileViewerToolbar.IconButton label="Back to worktree root" onClick={handleResetRoot}>
-                <FolderRoot className="h-3.5 w-3.5" />
-              </FileViewerToolbar.IconButton>
-            ) : (
-              // Same footprint as the button so the path text doesn't shift
-              // when the tree is re-rooted.
-              <span className="shrink-0 p-1.5 text-daintree-text/40" aria-hidden="true">
-                <FolderRoot className="h-3.5 w-3.5" />
+              {rootPath !== "" ? (
+                <FileViewerToolbar.IconButton
+                  label="Back to worktree root"
+                  onClick={handleResetRoot}
+                >
+                  <FolderRoot className="h-4 w-4" />
+                </FileViewerToolbar.IconButton>
+              ) : (
+                // Same footprint as the button so the path text doesn't shift
+                // when the tree is re-rooted.
+                <span className="shrink-0 p-1.5 text-daintree-text/40" aria-hidden="true">
+                  <FolderRoot className="h-4 w-4" />
+                </span>
+              )}
+              <span
+                className="min-w-0 flex-1 truncate font-mono text-[11px] text-daintree-text/40"
+                title={rootPath ? `${basename(worktreePath)}/${rootPath}` : worktreePath}
+              >
+                {rootPath || (worktreePath ? basename(worktreePath) : "")}
               </span>
-            )}
-            <span
-              className="min-w-0 flex-1 truncate font-mono text-[11px] text-daintree-text/40"
-              title={rootPath ? `${basename(worktreePath)}/${rootPath}` : worktreePath}
-            >
-              {rootPath || (worktreePath ? basename(worktreePath) : "")}
-            </span>
-            {rootPath !== "" && (
-              <FileViewerToolbar.IconButton label="Up one level" onClick={handleUpOneLevel}>
-                <CornerLeftUp className="h-3.5 w-3.5" />
+              {rootPath !== "" && (
+                <FileViewerToolbar.IconButton label="Up one level" onClick={handleUpOneLevel}>
+                  <CornerLeftUp className="h-4 w-4" />
+                </FileViewerToolbar.IconButton>
+              )}
+              <FileViewerToolbar.IconButton
+                label="Show ignored"
+                pressed={showIgnored}
+                onClick={handleToggleIgnored}
+              >
+                <EyeOff className="h-4 w-4" />
               </FileViewerToolbar.IconButton>
-            )}
-            <FileViewerToolbar.IconButton
-              label="Show ignored"
-              pressed={showIgnored}
-              onClick={handleToggleIgnored}
-            >
-              <EyeOff className="h-3.5 w-3.5" />
-            </FileViewerToolbar.IconButton>
-            <FileViewerToolbar.IconButton label="Refresh" onClick={handleRefresh}>
-              <SpinningIcon icon={RefreshCw} active={isRefreshing} className="h-3.5 w-3.5" />
-            </FileViewerToolbar.IconButton>
+              <FileViewerToolbar.IconButton label="Refresh" onClick={handleRefresh}>
+                <SpinningIcon icon={RefreshCw} active={isRefreshing} className="h-4 w-4" />
+              </FileViewerToolbar.IconButton>
+            </div>
+            {renderTree()}
           </div>
-          {renderTree()}
-        </div>
+        )}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <FileBrowserViewer
             filePath={selectedFilePath}
@@ -415,6 +444,9 @@ export function FileBrowserPane({
             fileName={selectedFileName}
             relativePath={selectedNode?.isDirectory === false ? (selectedPath ?? null) : null}
             revision={viewerRevision}
+            sidebarCollapsed={sidebarCollapsed}
+            onToggleSidebar={handleToggleSidebar}
+            treeSidebarId={treeSidebarId}
           />
         </div>
       </div>

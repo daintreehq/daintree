@@ -167,6 +167,8 @@ export interface PanelSnapshot {
   browserShowIgnored?: boolean;
   /** Worktree-relative directory a file browser panel is rooted at */
   browserRootPath?: string;
+  /** Whether a file browser panel's tree sidebar is collapsed (only `true` persisted) */
+  browserSidebarCollapsed?: boolean;
   /** Legacy pre-file-panel field: absolute path shown in a markdown panel */
   markdownFilePath?: string;
   /** Legacy pre-file-panel field: markdown panel view mode */

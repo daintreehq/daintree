@@ -704,10 +704,10 @@ export interface DiffPanelData extends BasePanelData {
  * absolute (the root comes from `worktreeId`, like `DiffPanelData.filePath`),
  * so moving or renaming the worktree can't strand the panel on a dead path.
  *
- * All three fields persist: the issue's contract is that a pinned panel keeps
- * its expansion and selection, and `promoteDialogPanelToGrid` reuses the same
- * panel record, so anything stored here also survives dialog → grid promotion
- * without a side channel.
+ * Every field persists: the issue's contract is that a pinned panel keeps its
+ * expansion, selection and layout, and `promoteDialogPanelToGrid` reuses the
+ * same panel record, so anything stored here also survives dialog → grid
+ * promotion without a side channel.
  */
 export interface FileBrowserPanelData extends BasePanelData {
   kind: "file-browser";
@@ -725,6 +725,11 @@ export interface FileBrowserPanelData extends BasePanelData {
    * worktree root itself.
    */
   browserRootPath?: string;
+  /**
+   * Whether the tree sidebar is collapsed. Absent or `false` = open (the
+   * default); only `true` is persisted, so an open panel stays sparse.
+   */
+  browserSidebarCollapsed?: boolean;
 }
 
 export type PanelInstance =

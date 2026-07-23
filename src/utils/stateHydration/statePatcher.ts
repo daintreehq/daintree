@@ -63,6 +63,7 @@ export interface AddTerminalArgs extends AddPanelOptionsBase {
   browserExpandedPaths?: string[];
   browserShowIgnored?: boolean;
   browserRootPath?: string;
+  browserSidebarCollapsed?: boolean;
   /**
    * Preserved user-initiated focus timestamp from the saved snapshot. The
    * post-hydration focus picker in `useAppHydration` reads this off
@@ -124,6 +125,7 @@ export interface SavedTerminalData {
   browserExpandedPaths?: unknown;
   browserShowIgnored?: unknown;
   browserRootPath?: unknown;
+  browserSidebarCollapsed?: unknown;
   exitBehavior?: PanelExitBehavior;
   agentSessionId?: string;
   agentLaunchFlags?: string[];

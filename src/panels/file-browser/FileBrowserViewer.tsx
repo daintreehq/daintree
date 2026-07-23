@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ExternalLink, FileText, RefreshCw, XCircle } from "lucide-react";
+import {
+  ExternalLink,
+  FileText,
+  PanelLeftClose,
+  PanelLeftOpen,
+  RefreshCw,
+  XCircle,
+} from "lucide-react";
 import { FolderOpen } from "@/components/icons";
 import { actionService } from "@/services/ActionService";
 import { CodeViewer } from "@/components/FileViewer/CodeViewer";
@@ -42,6 +49,15 @@ export interface FileBrowserViewerProps {
    * reflected instead of leaving stale bytes on screen.
    */
   revision: string;
+  /** Whether the tree sidebar is collapsed; drives the disclosure toggle's icon and state. */
+  sidebarCollapsed: boolean;
+  /** Opens/closes the tree sidebar. Owned by the pane, which persists the state. */
+  onToggleSidebar: () => void;
+  /**
+   * id of the tree column the toggle discloses. Referenced by `aria-controls`
+   * only while the column is mounted (open); the pane unmounts it when collapsed.
+   */
+  treeSidebarId: string;
 }
 
 /** Which external surface a toolbar action aims the current file at. */
@@ -79,6 +95,9 @@ export function FileBrowserViewer({
   fileName,
   relativePath,
   revision,
+  sidebarCollapsed,
+  onToggleSidebar,
+  treeSidebarId,
 }: FileBrowserViewerProps) {
   const [state, setState] = useState<ViewerState>({ status: "idle" });
   // Sticky Source/Rendered choice for markdown, defaulting to the rendered view
@@ -257,52 +276,63 @@ export function FileBrowserViewer({
 
   const reveal = revealCopy();
 
-  if (!filePath) {
-    return (
-      <div className="flex h-full w-full items-center justify-center p-6">
-        <EmptyState
-          variant="zero-data"
-          scale="canvas"
-          icon={<FileText className="h-6 w-6" />}
-          title="Nothing selected"
-          description="Pick a file in the tree to read it here."
-          className="w-full"
-        />
-      </div>
-    );
-  }
-
+  // One persistent toolbar with the tree toggle as its first control, rendered
+  // whether or not a file is selected: the toggle is the sidebar's only home
+  // once collapsed, and the empty state has no toolbar of its own. Keeping a
+  // single Root (rather than one per branch) preserves the toggle's DOM node
+  // and keyboard focus across selection changes. `aria-controls` names the tree
+  // region only while it's mounted — omitted when collapsed to avoid a dangling
+  // reference. A static "Toggle file tree" label per the toggle-label rule; the
+  // icon swap and `aria-expanded` carry the open/closed state.
   return (
     <>
       <FileViewerToolbar.Root>
-        {isMarkdownFilePath(filePath) && (
-          <SegmentedToggle<FileRenderMode>
-            options={MARKDOWN_MODE_OPTIONS}
-            value={markdownMode}
-            onChange={setMarkdownMode}
-          />
+        <FileViewerToolbar.IconButton
+          label="Toggle file tree"
+          expanded={!sidebarCollapsed}
+          controls={sidebarCollapsed ? undefined : treeSidebarId}
+          sidebarToggle
+          onClick={onToggleSidebar}
+          data-testid="file-browser-sidebar-toggle"
+        >
+          {sidebarCollapsed ? (
+            <PanelLeftOpen className="h-4 w-4" />
+          ) : (
+            <PanelLeftClose className="h-4 w-4" />
+          )}
+        </FileViewerToolbar.IconButton>
+        {filePath && (
+          <>
+            {isMarkdownFilePath(filePath) && (
+              <SegmentedToggle<FileRenderMode>
+                options={MARKDOWN_MODE_OPTIONS}
+                value={markdownMode}
+                onChange={setMarkdownMode}
+              />
+            )}
+            <FileViewerToolbar.Path
+              path={relativePath ?? fileName}
+              copied={pathCopied}
+              onCopy={handleCopyPath}
+            />
+            <FileViewerToolbar.Actions>
+              <FileViewerToolbar.IconButton
+                label={reveal.label}
+                onClick={() => void handleExternalAction("reveal")}
+              >
+                <FolderOpen className="h-4 w-4" />
+              </FileViewerToolbar.IconButton>
+              <FileViewerToolbar.IconButton
+                label="Open in editor"
+                onClick={() => void handleExternalAction("editor")}
+              >
+                <ExternalLink className="h-4 w-4" />
+              </FileViewerToolbar.IconButton>
+            </FileViewerToolbar.Actions>
+          </>
         )}
-        <FileViewerToolbar.Path
-          path={relativePath ?? fileName}
-          copied={pathCopied}
-          onCopy={handleCopyPath}
-        />
-        <FileViewerToolbar.Actions>
-          <FileViewerToolbar.IconButton
-            label={reveal.label}
-            onClick={() => void handleExternalAction("reveal")}
-          >
-            <FolderOpen className="h-4 w-4" />
-          </FileViewerToolbar.IconButton>
-          <FileViewerToolbar.IconButton
-            label="Open in editor"
-            onClick={() => void handleExternalAction("editor")}
-          >
-            <ExternalLink className="h-4 w-4" />
-          </FileViewerToolbar.IconButton>
-        </FileViewerToolbar.Actions>
       </FileViewerToolbar.Root>
-      {externalError && (
+      {filePath && externalError && (
         <InlineStatusBanner
           icon={XCircle}
           severity="error"
@@ -327,13 +357,31 @@ export function FileBrowserViewer({
           }
         />
       )}
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">{renderBody()}</div>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        {filePath ? (
+          renderBody()
+        ) : (
+          // flex-1 + min-h-0, not h-full: below the now-persistent toolbar a
+          // 100%-height body would overflow the viewer column.
+          <div className="flex min-h-0 flex-1 items-center justify-center p-6">
+            <EmptyState
+              variant="zero-data"
+              scale="canvas"
+              icon={<FileText className="h-6 w-6" />}
+              title="Nothing selected"
+              description="Pick a file in the tree to read it here."
+              className="w-full"
+            />
+          </div>
+        )}
+      </div>
     </>
   );
 
   function renderBody() {
-    // Narrows `filePath` for this closure — the early return above already
-    // guarantees it, but that narrowing doesn't flow into a nested function.
+    // Narrows `filePath` for this closure — the caller only reaches here through
+    // the truthy `filePath` branch above, but that narrowing doesn't flow into a
+    // nested function.
     if (!filePath) return null;
     switch (state.status) {
       case "idle":

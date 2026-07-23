@@ -23,5 +23,8 @@ export function createFileBrowserDefaults(
     ...(options.browserRootPath != null && {
       browserRootPath: canonicalizeRootPath(options.browserRootPath),
     }),
+    // Only a collapsed sidebar materializes a field: `false` and absent are the
+    // same open state, so we never stamp a default the serializer then drops.
+    ...(options.browserSidebarCollapsed === true && { browserSidebarCollapsed: true }),
   };
 }

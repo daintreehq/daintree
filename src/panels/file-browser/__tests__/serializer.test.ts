@@ -70,6 +70,19 @@ describe("serializeFileBrowser", () => {
     const reset: FileBrowserPanelData = { ...basePanel, browserRootPath: "" };
     expect(serializeFileBrowser(reset)).toEqual({});
   });
+
+  it("round-trips a collapsed sidebar but keeps the open default sparse", () => {
+    const collapsed: FileBrowserPanelData = { ...basePanel, browserSidebarCollapsed: true };
+    expect(createFileBrowserDefaults(asOptions(serializeFileBrowser(collapsed)))).toEqual({
+      browserSidebarCollapsed: true,
+    });
+
+    // `false` is the default open state, the same as absent — persisting it
+    // would be noise, so neither an explicit `false` nor an omitted field writes.
+    const open: FileBrowserPanelData = { ...basePanel, browserSidebarCollapsed: false };
+    expect(serializeFileBrowser(open)).toEqual({});
+    expect(serializeFileBrowser(basePanel)).toEqual({});
+  });
 });
 
 describe("createFileBrowserDefaults", () => {

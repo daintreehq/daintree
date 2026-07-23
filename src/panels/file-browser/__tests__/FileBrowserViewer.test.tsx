@@ -36,16 +36,22 @@ vi.mock("@/components/Html/HtmlViewer", () => ({
 import { FileBrowserViewer } from "../FileBrowserViewer";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
-function renderViewer(filePath: string) {
-  const fileName = filePath.split("/").pop() ?? filePath;
+function renderViewer(
+  filePath: string | null,
+  opts: { sidebarCollapsed?: boolean; onToggleSidebar?: () => void } = {}
+) {
+  const fileName = filePath ? (filePath.split("/").pop() ?? filePath) : "";
   return render(
     <TooltipProvider>
       <FileBrowserViewer
         filePath={filePath}
         rootPath="/repo"
         fileName={fileName}
-        relativePath={fileName}
+        relativePath={filePath ? fileName : null}
         revision="r1"
+        sidebarCollapsed={opts.sidebarCollapsed ?? false}
+        onToggleSidebar={opts.onToggleSidebar ?? vi.fn()}
+        treeSidebarId="file-tree-column"
       />
     </TooltipProvider>
   );
@@ -125,6 +131,9 @@ describe("FileBrowserViewer markdown Source/Rendered toggle (#11319)", () => {
           fileName="b.md"
           relativePath="b.md"
           revision="r1"
+          sidebarCollapsed={false}
+          onToggleSidebar={vi.fn()}
+          treeSidebarId="file-tree-column"
         />
       </TooltipProvider>
     );
@@ -148,6 +157,9 @@ describe("FileBrowserViewer markdown Source/Rendered toggle (#11319)", () => {
           fileName="notes.txt"
           relativePath="notes.txt"
           revision="r1"
+          sidebarCollapsed={false}
+          onToggleSidebar={vi.fn()}
+          treeSidebarId="file-tree-column"
         />
       </TooltipProvider>
     );
@@ -155,5 +167,82 @@ describe("FileBrowserViewer markdown Source/Rendered toggle (#11319)", () => {
     expect(screen.queryByRole("button", { name: "Source" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Rendered" })).toBeNull();
     expect(screen.queryByTestId("markdown-viewer-mock")).toBeNull();
+  });
+});
+
+describe("FileBrowserViewer tree-sidebar toggle (#11328)", () => {
+  it("renders the toggle even with nothing selected, so the collapsed sidebar has a home", () => {
+    renderViewer(null);
+    // The empty state has no toolbar of its own; the persistent Root is what
+    // keeps a re-open control on screen once the tree is collapsed.
+    expect(screen.getByTestId("file-browser-sidebar-toggle")).toBeTruthy();
+    expect(screen.getByText("Nothing selected")).toBeTruthy();
+  });
+
+  it("is the first control in the toolbar in both the empty and file-selected states", async () => {
+    const { rerender } = renderViewer(null);
+    // `?.` keeps the assertion honest under noUncheckedIndexedAccess: an empty
+    // button list yields undefined, which still fails the toBe below.
+    const firstEmpty = screen.getAllByRole("button")[0];
+    expect(firstEmpty?.getAttribute("data-testid")).toBe("file-browser-sidebar-toggle");
+
+    rerender(
+      <TooltipProvider>
+        <FileBrowserViewer
+          filePath="/repo/src/notes.txt"
+          rootPath="/repo"
+          fileName="notes.txt"
+          relativePath="notes.txt"
+          revision="r1"
+          sidebarCollapsed={false}
+          onToggleSidebar={vi.fn()}
+          treeSidebarId="file-tree-column"
+        />
+      </TooltipProvider>
+    );
+    await screen.findByTestId("code-viewer-mock");
+    // Still first, ahead of the reveal/open-in-editor actions — the toggle
+    // stays flush at the far left of the header per the issue.
+    const firstWithFile = screen.getAllByRole("button")[0];
+    expect(firstWithFile?.getAttribute("data-testid")).toBe("file-browser-sidebar-toggle");
+  });
+
+  it("exposes an inverse aria-expanded and names the tree region only while expanded", () => {
+    const { rerender } = renderViewer(null, { sidebarCollapsed: false });
+    const expanded = screen.getByTestId("file-browser-sidebar-toggle");
+    // Disclosure semantics (aria-expanded), not a pressed toggle.
+    expect(expanded.getAttribute("aria-expanded")).toBe("true");
+    expect(expanded.getAttribute("aria-pressed")).toBeNull();
+    expect(expanded.getAttribute("aria-controls")).toBe("file-tree-column");
+
+    rerender(
+      <TooltipProvider>
+        <FileBrowserViewer
+          filePath={null}
+          rootPath="/repo"
+          fileName=""
+          relativePath={null}
+          revision="r1"
+          sidebarCollapsed={true}
+          onToggleSidebar={vi.fn()}
+          treeSidebarId="file-tree-column"
+        />
+      </TooltipProvider>
+    );
+    const collapsed = screen.getByTestId("file-browser-sidebar-toggle");
+    expect(collapsed.getAttribute("aria-expanded")).toBe("false");
+    // The tree column is unmounted while collapsed, so aria-controls must not
+    // dangle at a missing id.
+    expect(collapsed.getAttribute("aria-controls")).toBeNull();
+  });
+
+  it("invokes onToggleSidebar when clicked", async () => {
+    const onToggleSidebar = vi.fn();
+    renderViewer(null, { onToggleSidebar });
+    const toggle = screen.getByTestId("file-browser-sidebar-toggle");
+    await act(async () => {
+      toggle.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(onToggleSidebar).toHaveBeenCalledTimes(1);
   });
 });
