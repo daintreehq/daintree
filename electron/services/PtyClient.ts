@@ -151,6 +151,18 @@ interface TerminalInfoResponse {
   capabilityAgentId?: BuiltInAgentId;
 }
 
+/**
+ * Result of {@link PtyClient.gracefulKillByProjectConfirmed}. `confirmed` is
+ * false only when a live host timed out without acknowledging the kill — the
+ * caller must NOT clear restoration state in that case, or still-running agents
+ * are orphaned. On the confirmed path `sessions` holds one entry per terminal
+ * (agentSessionId null for non-agents / unresumable terminals).
+ */
+export interface GracefulKillByProjectOutcome {
+  confirmed: boolean;
+  sessions: Array<{ id: string; agentSessionId: string | null }>;
+}
+
 export interface PtyClientConfig {
   /** Health check interval in milliseconds */
   healthCheckIntervalMs?: number;
@@ -1762,25 +1774,69 @@ export class PtyClient extends EventEmitter {
     return result.sessionId;
   }
 
+  /**
+   * Graceful project kill that reports whether the host actually confirmed the
+   * teardown, so destructive callers (project close+kill, project/scratch
+   * remove) can fail closed instead of wiping restoration state on a guess.
+   *
+   * Mirrors the single-terminal {@link gracefulKill} triage: a typed
+   * BrokerError of HOST_EXITED/APP_SHUTDOWN (or a locally-observed dead/disposed
+   * client) means the host is gone and teardown is real — confirmed, just with
+   * no sessions to capture. A per-request TIMEOUT with a live host means the
+   * teardown is NOT confirmed: agents may still be running, so the caller must
+   * keep the project's restoration state and let the user retry. Unexpected
+   * errors reject; callers treat that as fail-closed too.
+   *
+   * Contract of `confirmed: true`: the host acknowledged and ran the teardown
+   * (graceful shutdown + a fallback hard kill per terminal, see
+   * PtyManager.gracefulKillByProject), or the host is gone. It is NOT a
+   * guarantee that every OS process was reaped, and it does not reconcile with
+   * pty-host crash recovery, which can replay an in-flight `pendingSpawns`
+   * terminal as a fresh incarnation after a host exit — that race is owned by
+   * the crash-recovery path (#11339), not this method.
+   */
+  async gracefulKillByProjectConfirmed(
+    projectId: string,
+    options?: { preserveSession?: boolean }
+  ): Promise<GracefulKillByProjectOutcome> {
+    const shard = this.shardForProjectQuery(projectId);
+    try {
+      const sessions = await sendPtyHostRpc<Array<{ id: string; agentSessionId: string | null }>>(
+        shard,
+        `graceful-kill-by-project-${projectId}`,
+        (requestId) => ({
+          type: "graceful-kill-by-project",
+          projectId,
+          requestId,
+          ...(options?.preserveSession !== undefined
+            ? { preserveSession: options.preserveSession }
+            : {}),
+        }),
+        { method: "graceful-kill-by-project", timeoutMs: PTY_TIMEOUTS["graceful-kill-by-project"] }
+      );
+      return { confirmed: true, sessions };
+    } catch (error) {
+      const isHostGoneBrokerError = error instanceof BrokerError && error.code !== "TIMEOUT";
+      if (isHostGoneBrokerError || !shard.lifecycle.child || this.isDisposed) {
+        // Host is gone: its terminals are gone with it. Teardown is confirmed;
+        // no sessions were capturable.
+        return { confirmed: true, sessions: [] };
+      }
+      if (error instanceof BrokerError && error.code === "TIMEOUT") {
+        // Live host, per-request timeout — the kill was not acknowledged.
+        return { confirmed: false, sessions: [] };
+      }
+      throw error;
+    }
+  }
+
   async gracefulKillByProject(
     projectId: string,
     options?: { preserveSession?: boolean }
   ): Promise<Array<{ id: string; agentSessionId: string | null }>> {
-    const shard = this.shardForProjectQuery(projectId);
-    const promise = sendPtyHostRpc<Array<{ id: string; agentSessionId: string | null }>>(
-      shard,
-      `graceful-kill-by-project-${projectId}`,
-      (requestId) => ({
-        type: "graceful-kill-by-project",
-        projectId,
-        requestId,
-        ...(options?.preserveSession !== undefined
-          ? { preserveSession: options.preserveSession }
-          : {}),
-      }),
-      { method: "graceful-kill-by-project", timeoutMs: PTY_TIMEOUTS["graceful-kill-by-project"] }
-    );
-    return promise.catch(() => []);
+    return this.gracefulKillByProjectConfirmed(projectId, options)
+      .then((outcome) => outcome.sessions)
+      .catch(() => []);
   }
 
   async killByProject(projectId: string): Promise<number> {

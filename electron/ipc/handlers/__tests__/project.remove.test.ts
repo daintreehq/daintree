@@ -49,6 +49,12 @@ vi.mock("../../../projectMenuState.js", () => ({
   refreshProjectMenuState: refreshProjectMenuStateMock,
 }));
 
+const teardownMock = vi.hoisted(() => ({
+  gracefulTeardownAndJournalProject:
+    vi.fn<(...args: unknown[]) => Promise<{ confirmed: boolean; terminalsKilled: number }>>(),
+}));
+vi.mock("../../../services/pty/projectSessionJournal.js", () => teardownMock);
+
 import { ipcMain } from "electron";
 import { CHANNELS } from "../../channels.js";
 import { registerProjectCrudHandlers } from "../projectCrud/index.js";
@@ -66,13 +72,20 @@ describe("project:remove handler", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    teardownMock.gracefulTeardownAndJournalProject.mockResolvedValue({
+      confirmed: true,
+      terminalsKilled: 0,
+    });
   });
 
-  it("kills terminals before removing the project", async () => {
+  it("gracefully tears down and journals terminals before removing the project", async () => {
     projectStoreMock.removeProject.mockResolvedValue(undefined);
+    teardownMock.gracefulTeardownAndJournalProject.mockResolvedValue({
+      confirmed: true,
+      terminalsKilled: 3,
+    });
 
     const ptyClient = {
-      killByProject: vi.fn(async () => 3),
       getProjectStats: vi.fn(),
       onProjectSwitch: vi.fn(),
       setActiveProject: vi.fn(),
@@ -88,24 +101,32 @@ describe("project:remove handler", () => {
 
     await handler(fakeEvent, "proj-1");
 
-    expect(ptyClient.killByProject).toHaveBeenCalledWith("proj-1");
+    // Journaling (not a bare kill) must run, and before the row is deleted (#11340).
+    expect(teardownMock.gracefulTeardownAndJournalProject).toHaveBeenCalledWith(
+      "proj-1",
+      ptyClient,
+      undefined
+    );
     expect(projectStoreMock.removeProject).toHaveBeenCalledWith("proj-1");
 
-    const killOrder = ptyClient.killByProject.mock.invocationCallOrder[0];
-    const removeOrder = projectStoreMock.removeProject.mock.invocationCallOrder[0];
+    const killOrder = teardownMock.gracefulTeardownAndJournalProject.mock.invocationCallOrder[0]!;
+    const removeOrder = projectStoreMock.removeProject.mock.invocationCallOrder[0]!;
     expect(killOrder).toBeLessThan(removeOrder);
 
     // The row is gone, so a window still bound to it has no project open (#11136).
     expect(refreshProjectMenuStateMock).toHaveBeenCalled();
   });
 
-  it("still removes the project when killByProject fails", async () => {
+  it("fails closed: does NOT remove the project when the teardown is unconfirmed", async () => {
     projectStoreMock.removeProject.mockResolvedValue(undefined);
+    // Live host, kill unacknowledged — removing the row would orphan the still-
+    // running agents (#11340).
+    teardownMock.gracefulTeardownAndJournalProject.mockResolvedValue({
+      confirmed: false,
+      terminalsKilled: 0,
+    });
 
     const ptyClient = {
-      killByProject: vi.fn(async () => {
-        throw new Error("PTY host disconnected");
-      }),
       getProjectStats: vi.fn(),
       onProjectSwitch: vi.fn(),
       setActiveProject: vi.fn(),
@@ -119,10 +140,66 @@ describe("project:remove handler", () => {
     registerProjectCrudHandlers(deps);
     const handler = getHandler(CHANNELS.PROJECT_REMOVE);
 
-    await handler(fakeEvent, "proj-2");
+    await expect(handler(fakeEvent, "proj-2")).rejects.toThrow();
 
-    expect(ptyClient.killByProject).toHaveBeenCalledWith("proj-2");
-    expect(projectStoreMock.removeProject).toHaveBeenCalledWith("proj-2");
+    expect(projectStoreMock.removeProject).not.toHaveBeenCalled();
+    expect(windowStateMock.pruneWindowStateForPath).not.toHaveBeenCalled();
+    expect(refreshProjectMenuStateMock).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the teardown throws: the old swallow-and-remove is gone", async () => {
+    projectStoreMock.removeProject.mockResolvedValue(undefined);
+    // Pre-fix this handler caught the kill rejection and removed anyway; it must
+    // now propagate and keep the project (#11340).
+    teardownMock.gracefulTeardownAndJournalProject.mockRejectedValue(
+      new Error("PTY host disconnected")
+    );
+
+    const ptyClient = {
+      getProjectStats: vi.fn(),
+      onProjectSwitch: vi.fn(),
+      setActiveProject: vi.fn(),
+    };
+
+    const deps = {
+      mainWindow: {} as unknown,
+      ptyClient,
+    } as unknown as HandlerDependencies;
+
+    registerProjectCrudHandlers(deps);
+    const handler = getHandler(CHANNELS.PROJECT_REMOVE);
+
+    await expect(handler(fakeEvent, "proj-throw")).rejects.toThrow();
+
+    expect(projectStoreMock.removeProject).not.toHaveBeenCalled();
+    expect(windowStateMock.pruneWindowStateForPath).not.toHaveBeenCalled();
+    expect(refreshProjectMenuStateMock).not.toHaveBeenCalled();
+  });
+
+  it("removes the project when the host is confirmed gone (nothing to journal)", async () => {
+    projectStoreMock.removeProject.mockResolvedValue(undefined);
+    teardownMock.gracefulTeardownAndJournalProject.mockResolvedValue({
+      confirmed: true,
+      terminalsKilled: 0,
+    });
+
+    const ptyClient = {
+      getProjectStats: vi.fn(),
+      onProjectSwitch: vi.fn(),
+      setActiveProject: vi.fn(),
+    };
+
+    const deps = {
+      mainWindow: {} as unknown,
+      ptyClient,
+    } as unknown as HandlerDependencies;
+
+    registerProjectCrudHandlers(deps);
+    const handler = getHandler(CHANNELS.PROJECT_REMOVE);
+
+    await handler(fakeEvent, "proj-gone");
+
+    expect(projectStoreMock.removeProject).toHaveBeenCalledWith("proj-gone");
   });
 
   it("removes the project when no ptyClient is provided", async () => {
@@ -190,7 +267,6 @@ describe("project:remove handler", () => {
 
   it("throws on invalid projectId without calling cleanup or removal", async () => {
     const ptyClient = {
-      killByProject: vi.fn(async () => 0),
       getProjectStats: vi.fn(),
       onProjectSwitch: vi.fn(),
       setActiveProject: vi.fn(),
@@ -205,7 +281,7 @@ describe("project:remove handler", () => {
     const handler = getHandler(CHANNELS.PROJECT_REMOVE);
 
     await expect(handler(fakeEvent, "")).rejects.toThrow("Invalid project ID");
-    expect(ptyClient.killByProject).not.toHaveBeenCalled();
+    expect(teardownMock.gracefulTeardownAndJournalProject).not.toHaveBeenCalled();
     expect(projectStoreMock.removeProject).not.toHaveBeenCalled();
   });
 });

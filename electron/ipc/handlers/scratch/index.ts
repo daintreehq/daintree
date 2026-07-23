@@ -21,6 +21,7 @@ import { scratchStore } from "../../../services/ScratchStore.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import { refreshProjectMenuState } from "../../../projectMenuState.js";
 import { addProjectByPath } from "../projectCrud/crud.js";
+import { gracefulTeardownAndJournalProject } from "../../../services/pty/projectSessionJournal.js";
 import { createHardenedGit } from "../../../utils/hardenedGit.js";
 import { logError } from "../../../utils/logger.js";
 import type { HandlerDependencies } from "../../types.js";
@@ -65,9 +66,20 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
         }
 
         if (deps.ptyClient) {
-          await deps.ptyClient.killByProject(scratchId).catch((err: unknown) => {
-            console.error(`[IPC] scratch:remove: Failed to kill terminals for ${scratchId}:`, err);
-          });
+          // Gracefully tear down and journal each agent session before the
+          // scratch folder is deleted, so agent conversations stay resumable.
+          // Fail closed: if the host can't confirm the kills, keep the scratch
+          // rather than orphan still-running agents (#11340).
+          const { confirmed } = await gracefulTeardownAndJournalProject(
+            scratchId,
+            deps.ptyClient,
+            deps.worktreeService
+          );
+          if (!confirmed) {
+            throw new Error(
+              "Couldn't confirm the scratch's terminals stopped, so it was kept. Try again."
+            );
+          }
         }
 
         await scratchStore.removeScratch(scratchId);
