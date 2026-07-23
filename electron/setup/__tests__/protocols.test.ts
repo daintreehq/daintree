@@ -2210,6 +2210,16 @@ describe("createDaintreeFileProtocolHandler — video streaming (#11382)", () =>
     expect(response.status).toBe(416);
   });
 
+  it("returns 416 for a zero-length suffix (bytes=-0 names no byte)", async () => {
+    const handler = await captureHandler();
+    const response = await handler(
+      makeVideoRequest("/project/clip.mp4", "/project", { range: "bytes=-0" })
+    );
+
+    expect(response.status).toBe(416);
+    expect(response.headers.get("Content-Range")).toBe("bytes */16");
+  });
+
   it("returns 416 with Content-Range */size for an unsatisfiable range", async () => {
     const handle = makeVideoHandle();
     await installHandle(handle);

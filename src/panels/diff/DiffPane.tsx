@@ -268,9 +268,11 @@ export function DiffPane({
   // file may be unreadable — surface that instead of a dead native control.
   const [videoPlaybackFailed, setVideoPlaybackFailed] = useState(false);
   useEffect(() => {
-    // A new file or an explicit refresh gets a fresh attempt.
+    // Any change to the playback attempt's identity — file, resolved root, or
+    // an explicit refresh — gets a fresh attempt. absolutePath covers a
+    // worktree move that filePath (relative) alone would miss.
     setVideoPlaybackFailed(false);
-  }, [filePath, videoReloadNonce]);
+  }, [filePath, absolutePath, worktreePath, videoReloadNonce]);
 
   const [pathCopied, setPathCopied] = useState(false);
   const handleCopyPath = useCallback(() => {

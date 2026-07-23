@@ -586,7 +586,9 @@ describe("DiffPane — video current-version mode (#11382)", () => {
     expect(screen.queryByRole("button", { name: "Wrap long lines" })).toBeNull();
   });
 
-  it("reloads the video from the toolbar Refresh (nonce-busted URL)", () => {
+  it("reloads the video from the toolbar Refresh (nonce-busted URL) and still retries the diff", () => {
+    const retry = vi.fn();
+    useDiffContentMock.mockReturnValue({ content: "diff --git a/x b/x", stale: false, retry });
     seedPanel({
       filePath: "media/demo.mp4",
       fileStatus: "modified",
@@ -594,11 +596,14 @@ describe("DiffPane — video current-version mode (#11382)", () => {
     });
     const { container } = renderPane();
     const before = container.querySelector("video")?.getAttribute("src");
+    expect(before).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
 
     const after = container.querySelector("video")?.getAttribute("src");
+    expect(after).toBeTruthy();
     expect(after).not.toBe(before);
+    expect(retry).toHaveBeenCalledTimes(1);
   });
 
   it("shows a playback-failure state instead of a dead control on media error", () => {
