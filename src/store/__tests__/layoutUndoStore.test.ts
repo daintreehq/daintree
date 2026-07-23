@@ -48,6 +48,7 @@ import { usePanelStore } from "../panelStore";
 import { useLayoutConfigStore } from "../layoutConfigStore";
 import { setWorktreeSelectionAccessor } from "@/store/storeAccessors";
 import type { PtyPanelData } from "@shared/types/panel";
+import type { TabGroup } from "@shared/types";
 
 let terminalCounter = 0;
 
@@ -693,6 +694,44 @@ describe("layoutUndoStore", () => {
       // The snapshot pointed activeDockTerminalId at t1, but t1 rescued to grid —
       // restoring the stale pointer would open the dock popover onto nothing.
       expect(usePanelStore.getState().activeDockTerminalId).toBeNull();
+    });
+
+    it("adopts the active worktree on the group RECORD and members when a global dock group is rescued", () => {
+      const a = makeTerminal({ id: "ga", location: "dock" });
+      const b = makeTerminal({ id: "gb", location: "dock" });
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test carrier: non-dockable kind on a PTY-shaped panel
+      (b as { kind: string }).kind = "review"; // one non-dockable member
+      delete (a as { worktreeId?: string }).worktreeId;
+      delete (b as { worktreeId?: string }).worktreeId;
+      seedTerminals([a, b]);
+      const dockGroup: TabGroup = {
+        id: "g1",
+        panelIds: ["ga", "gb"],
+        activeTabId: "ga",
+        location: "dock",
+      };
+      usePanelStore.setState({ tabGroups: new Map([["g1", dockGroup]]) });
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      // Flip group + members to grid so undo reverts to the dock snapshot.
+      usePanelStore.setState({
+        panelsById: {
+          ga: { ...a, location: "grid" } as PtyPanelData,
+          gb: { ...b, location: "grid" } as PtyPanelData,
+        },
+        tabGroups: new Map([["g1", { ...dockGroup, location: "grid" }]]),
+      });
+
+      useLayoutUndoStore.getState().undo();
+
+      const state = usePanelStore.getState();
+      const group = state.tabGroups.get("g1");
+      // Group and members agree on grid + the adopted worktree — no split-brain
+      // between getTabGroups (filters the group by worktree) and getPanelGroup.
+      expect(group?.location).toBe("grid");
+      expect(group?.worktreeId).toBe("wt-active");
+      expect(state.panelsById["ga"]?.location).toBe("grid");
+      expect(state.panelsById["ga"]?.worktreeId).toBe("wt-active");
+      expect(state.panelsById["gb"]?.worktreeId).toBe("wt-active");
     });
   });
 });

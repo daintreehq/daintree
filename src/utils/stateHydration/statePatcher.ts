@@ -25,6 +25,7 @@ import {
 } from "@shared/types";
 import { inferKind as inferKindShared } from "@shared/utils/inferPanelKind";
 import { isAbsolute } from "@shared/utils/path";
+import { panelKindIsDockable } from "@shared/config/panelKindRegistry";
 import { getDeserializer } from "@/config/panelKindSerialisers";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { resolveAgentRuntimeSettings } from "@/utils/agentRuntimeSettings";
@@ -671,15 +672,29 @@ export function buildArgsForRespawn(
 export function buildArgsForNonPtyRecreation(
   saved: SavedTerminalData,
   kind: PanelKind,
-  projectRoot: string
+  projectRoot: string,
+  activeWorktreeId?: string | null
 ): AddTerminalArgs {
-  const location = (saved.location === "dock" ? "dock" : "grid") as "grid" | "dock";
+  const savedLocation = (saved.location === "dock" ? "dock" : "grid") as "grid" | "dock";
+  // Rescue a persisted dock panel whose kind can't dock (or isn't registered yet
+  // during this hydration) HERE, where the saved active worktree is known —
+  // `addPanel`'s own dock→grid rescue runs too late to adopt a worktree (worktree
+  // selection hydrates AFTER panel restore), so a worktree-less rescued panel
+  // would strand in the global-only grid bucket, invisible once a worktree is
+  // active (#11375 point 3). A worktree-less panel adopts the active worktree so
+  // it returns VISIBLY to the grid; a dockable kind keeps its dock placement.
+  const rescueDockToGrid = savedLocation === "dock" && !panelKindIsDockable(kind);
+  const location = rescueDockToGrid ? "grid" : savedLocation;
+  const worktreeId =
+    rescueDockToGrid && saved.worktreeId == null && activeWorktreeId != null
+      ? activeWorktreeId
+      : saved.worktreeId;
   const base: AddTerminalArgs = {
     kind,
     title: saved.title,
     titleMode: saved.titleMode,
     cwd: resolveSavedCwd(saved.cwd, projectRoot),
-    worktreeId: saved.worktreeId,
+    worktreeId,
     location,
     requestedId: saved.id,
     exitBehavior: saved.exitBehavior,

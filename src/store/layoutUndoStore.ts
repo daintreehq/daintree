@@ -94,7 +94,10 @@ function applySnapshot(snapshot: LayoutSnapshot): boolean {
   // is all-or-nothing. Members read their effective location from the (possibly
   // rescued) group location below so a member and its group never disagree.
   const restoredGroups = structuredClone(snapshot.tabGroups);
-  const groupLocationByPanelId = new Map<string, TabGroupLocation>();
+  const groupOverrideByPanelId = new Map<
+    string,
+    { location: TabGroupLocation; worktreeId?: string }
+  >();
   for (const [groupId, group] of restoredGroups) {
     const memberKinds: (PanelKind | undefined)[] = [];
     for (const pid of group.panelIds) {
@@ -102,11 +105,26 @@ function applySnapshot(snapshot: LayoutSnapshot): boolean {
       if (member) memberKinds.push(member.kind);
     }
     const effectiveGroupLocation = normalizeGroupDockLocation(memberKinds, group.location);
-    if (effectiveGroupLocation !== group.location) {
-      restoredGroups.set(groupId, { ...group, location: effectiveGroupLocation });
+    // A worktree-less group rescued dock→grid adopts the active worktree — the
+    // group RECORD and every member together — so `getTabGroups` (which filters
+    // the group by worktree) and `getPanelGroup` never disagree (split-brain).
+    const rescuedToGrid = effectiveGroupLocation === "grid" && group.location === "dock";
+    const adoptedWorktreeId =
+      rescuedToGrid && group.worktreeId == null && activeWorktreeId !== null
+        ? activeWorktreeId
+        : null;
+    if (effectiveGroupLocation !== group.location || adoptedWorktreeId !== null) {
+      restoredGroups.set(groupId, {
+        ...group,
+        location: effectiveGroupLocation,
+        ...(adoptedWorktreeId !== null && { worktreeId: adoptedWorktreeId }),
+      });
     }
     for (const pid of group.panelIds) {
-      groupLocationByPanelId.set(pid, effectiveGroupLocation);
+      groupOverrideByPanelId.set(pid, {
+        location: effectiveGroupLocation,
+        ...(adoptedWorktreeId !== null && { worktreeId: adoptedWorktreeId }),
+      });
     }
   }
 
@@ -134,18 +152,22 @@ function applySnapshot(snapshot: LayoutSnapshot): boolean {
   for (const entry of allEntries) {
     const current = panelsById[entry.id];
     if (!current) continue;
-    // A grouped panel follows its group's (normalized) location; an ungrouped
-    // panel normalizes its own entry location. Either way a non-dockable kind
-    // never lands back in the dock (#11375).
-    const groupedLocation = groupLocationByPanelId.get(entry.id);
-    const restoredLocation = groupedLocation ?? normalizeDockLocation(current.kind, entry.location);
+    // A grouped panel follows its group's (normalized) location and adopted
+    // worktree; an ungrouped panel normalizes its own entry location. Either way
+    // a non-dockable kind never lands back in the dock (#11375).
+    const groupOverride = groupOverrideByPanelId.get(entry.id);
+    const restoredLocation =
+      groupOverride?.location ?? normalizeDockLocation(current.kind, entry.location);
     const restored: CarrierPanel = { ...current, location: restoredLocation };
-    // A worktree-less panel rescued dock→grid adopts the active worktree, else
-    // it strands in the global-only bucket while a worktree is active (#11290).
+    // A worktree-less ungrouped panel rescued dock→grid adopts the active
+    // worktree, else it strands in the global-only bucket while a worktree is
+    // active (#11290). Grouped members take the group's adopted worktree.
     const rescuedToGrid = restoredLocation === "grid" && entry.location === "dock";
-    if (entry.worktreeId !== undefined) {
+    if (groupOverride?.worktreeId !== undefined) {
+      restored.worktreeId = groupOverride.worktreeId;
+    } else if (entry.worktreeId !== undefined) {
       restored.worktreeId = entry.worktreeId;
-    } else if (rescuedToGrid && activeWorktreeId !== null) {
+    } else if (!groupOverride && rescuedToGrid && activeWorktreeId !== null) {
       restored.worktreeId = activeWorktreeId;
     } else {
       delete restored.worktreeId;

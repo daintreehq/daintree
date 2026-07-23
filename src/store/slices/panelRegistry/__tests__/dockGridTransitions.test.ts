@@ -907,5 +907,31 @@ describe("dock ↔ grid transitions", () => {
 
       expect(usePanelStore.getState().panelsById["t1"]?.location).toBe("dock");
     });
+
+    it("reconcileDockMembership preserves the user's focus on an unrelated panel", async () => {
+      const focused = createMockTerminal("focused", "grid");
+      const stranded = nonDockable("stranded", "dock");
+      setTerminals([focused, stranded]);
+      usePanelStore.setState({ focusedId: "focused" });
+      const { reconcileDockMembership } = await import("@/store/reconcileDockMembership");
+
+      reconcileDockMembership();
+
+      const state = usePanelStore.getState();
+      expect(state.panelsById["stranded"]?.location).toBe("grid");
+      // A background flip must not steal focus from the panel the user was on.
+      expect(state.focusedId).toBe("focused");
+    });
+
+    it("reconcileDockMembership relocates every stranded dock panel exactly once", async () => {
+      setTerminals([nonDockable("s1", "dock"), nonDockable("s2", "dock")]);
+      const { reconcileDockMembership } = await import("@/store/reconcileDockMembership");
+
+      reconcileDockMembership();
+
+      const state = usePanelStore.getState();
+      expect(state.panelsById["s1"]?.location).toBe("grid");
+      expect(state.panelsById["s2"]?.location).toBe("grid");
+    });
   });
 });
