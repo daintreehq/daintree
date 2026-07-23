@@ -710,6 +710,118 @@ describe("helpPanelStore persistence migration", () => {
     });
   });
 
+  describe("cross-view write merge (#11351)", () => {
+    type PersistedBlob = {
+      version: number;
+      state: {
+        width: number;
+        preferredAgentId: string | null;
+        hibernateSessions: Record<string, unknown>;
+      };
+    };
+
+    it("a stale view's hibernate write does not drop a sibling view's session", async () => {
+      vi.useFakeTimers();
+      try {
+        const backing = installLocalStorage({});
+        const mod = await import("../helpPanelStore");
+
+        // This view captures project A's session and flushes it to the shared partition.
+        mod.useHelpPanelStore.getState().setHibernateSession("proj-a", {
+          sessionId: "a1",
+          cwd: "/a",
+          agentId: "claude",
+        });
+        vi.advanceTimersByTime(400);
+
+        // A sibling view (project B) records its own session directly to the shared blob.
+        const disk = JSON.parse(backing.get(STORAGE_KEY)!) as PersistedBlob;
+        disk.state.hibernateSessions["proj-b"] = {
+          sessionId: "b1",
+          cwd: "/b",
+          agentId: "claude",
+        };
+        backing.set(STORAGE_KEY, JSON.stringify(disk));
+
+        // This (stale) view — which never learned about B — updates project A again.
+        mod.useHelpPanelStore.getState().setHibernateSession("proj-a", {
+          sessionId: "a2",
+          cwd: "/a",
+          agentId: "claude",
+        });
+        vi.advanceTimersByTime(400);
+
+        const written = JSON.parse(backing.get(STORAGE_KEY)!) as PersistedBlob;
+        expect(written.state.hibernateSessions).toEqual({
+          "proj-a": { sessionId: "a2", cwd: "/a", agentId: "claude" },
+          "proj-b": { sessionId: "b1", cwd: "/b", agentId: "claude" },
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not resurrect a sibling's session when this view clears its own", async () => {
+      vi.useFakeTimers();
+      try {
+        const backing = installLocalStorage({});
+        const mod = await import("../helpPanelStore");
+
+        mod.useHelpPanelStore.getState().setHibernateSession("proj-a", {
+          sessionId: "a1",
+          cwd: "/a",
+          agentId: "claude",
+        });
+        vi.advanceTimersByTime(400);
+
+        const disk = JSON.parse(backing.get(STORAGE_KEY)!) as PersistedBlob;
+        disk.state.hibernateSessions["proj-b"] = {
+          sessionId: "b1",
+          cwd: "/b",
+          agentId: "claude",
+        };
+        backing.set(STORAGE_KEY, JSON.stringify(disk));
+
+        // Clearing this view's own project must not resurrect it, and must keep B.
+        mod.useHelpPanelStore.getState().clearHibernateSession("proj-a");
+        vi.advanceTimersByTime(400);
+
+        const written = JSON.parse(backing.get(STORAGE_KEY)!) as PersistedBlob;
+        expect(written.state.hibernateSessions).toEqual({
+          "proj-b": { sessionId: "b1", cwd: "/b", agentId: "claude" },
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("a stale scalar write does not clobber a sibling's preferredAgentId change", async () => {
+      vi.useFakeTimers();
+      try {
+        const backing = installLocalStorage({});
+        const mod = await import("../helpPanelStore");
+
+        mod.useHelpPanelStore.getState().setWidth(500);
+        vi.advanceTimersByTime(400);
+
+        // A sibling view changes preferredAgentId directly on the shared blob.
+        const disk = JSON.parse(backing.get(STORAGE_KEY)!) as PersistedBlob;
+        disk.state.preferredAgentId = "codex";
+        backing.set(STORAGE_KEY, JSON.stringify(disk));
+
+        // This stale view changes only width; its in-memory preferredAgentId is still null.
+        mod.useHelpPanelStore.getState().setWidth(600);
+        vi.advanceTimersByTime(400);
+
+        const written = JSON.parse(backing.get(STORAGE_KEY)!) as PersistedBlob;
+        expect(written.state.width).toBe(600);
+        expect(written.state.preferredAgentId).toBe("codex");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   describe("autoLaunchEnabled (#10699)", () => {
     it("starts false on a fresh install so opening the panel never auto-bills a session", async () => {
       installLocalStorage({});

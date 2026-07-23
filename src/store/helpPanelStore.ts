@@ -1,6 +1,12 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import type { StorageValue } from "zustand/middleware";
 import { createDebouncedSafeJSONStorage } from "./persistence/safeStorage";
+import {
+  mergeRecordByWriterDelta,
+  pickFieldByWriterDelta,
+  type PersistWriteMergeContext,
+} from "./persistence/persistWriteMerge";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import { getAssistantSupportedAgentIds } from "../../shared/config/agentRegistry";
 import { isBuiltInAgentId } from "../../shared/config/agentIds";
@@ -155,6 +161,83 @@ function sanitizeHibernateSessions(value: unknown): Record<string, HelpHibernate
   return out;
 }
 
+type HelpPanelPersistedState = Pick<
+  HelpPanelState,
+  "width" | "preferredAgentId" | "autoLaunchEnabled" | "introDismissed" | "hibernateSessions"
+>;
+
+const HELP_PANEL_PERSISTED_DEFAULTS: HelpPanelPersistedState = {
+  width: HELP_PANEL_DEFAULT_WIDTH,
+  preferredAgentId: null,
+  autoLaunchEnabled: false,
+  introDismissed: false,
+  hibernateSessions: {},
+};
+
+/**
+ * Coerce a raw persisted blob (this view's baseline, disk, or incoming) to the
+ * canonical persisted shape so the write merge compares like with like. A
+ * missing/malformed field falls back to its default — the important case being
+ * an absent baseline (a fresh view), which normalizes to the defaults so its
+ * untouched fields compare equal to `incoming` and thus defer to a sibling's
+ * on-disk value instead of clobbering it (issue #11351).
+ */
+function toHelpPanelPersisted(state: Partial<HelpPanelState> | undefined): HelpPanelPersistedState {
+  if (!state) return HELP_PANEL_PERSISTED_DEFAULTS;
+  return {
+    width: typeof state.width === "number" ? state.width : HELP_PANEL_PERSISTED_DEFAULTS.width,
+    preferredAgentId: typeof state.preferredAgentId === "string" ? state.preferredAgentId : null,
+    autoLaunchEnabled: state.autoLaunchEnabled === true,
+    introDismissed: state.introDismissed === true,
+    hibernateSessions: sanitizeHibernateSessions(state.hibernateSessions),
+  };
+}
+
+/**
+ * Baseline-aware three-way merge for help-panel writes across project views
+ * (issue #11351). Scalar preferences defer to a sibling's on-disk value unless
+ * this writer changed them; `hibernateSessions` merges per project id so a stale
+ * view neither drops a sibling's session nor resurrects one it (or a sibling)
+ * intentionally cleared. Leaves the v5 hydration `merge` untouched.
+ */
+function mergeHelpPanelPersistedWrite({
+  baseline,
+  onDisk,
+  incoming,
+}: PersistWriteMergeContext<HelpPanelState & HelpPanelActions>): StorageValue<
+  HelpPanelState & HelpPanelActions
+> {
+  // No shared value on disk yet → nothing to reconcile against.
+  if (!onDisk) return incoming;
+  const base = baseline ? toHelpPanelPersisted(baseline.state) : HELP_PANEL_PERSISTED_DEFAULTS;
+  const disk = toHelpPanelPersisted(onDisk.state);
+  const inc = toHelpPanelPersisted(incoming.state);
+  const merged: HelpPanelPersistedState = {
+    width: pickFieldByWriterDelta(base.width, inc.width, disk.width),
+    preferredAgentId: pickFieldByWriterDelta(
+      base.preferredAgentId,
+      inc.preferredAgentId,
+      disk.preferredAgentId
+    ),
+    autoLaunchEnabled: pickFieldByWriterDelta(
+      base.autoLaunchEnabled,
+      inc.autoLaunchEnabled,
+      disk.autoLaunchEnabled
+    ),
+    introDismissed: pickFieldByWriterDelta(
+      base.introDismissed,
+      inc.introDismissed,
+      disk.introDismissed
+    ),
+    hibernateSessions: mergeRecordByWriterDelta(
+      base.hibernateSessions,
+      inc.hibernateSessions,
+      disk.hibernateSessions
+    ),
+  };
+  return { version: incoming.version, state: { ...incoming.state, ...merged } };
+}
+
 export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
   persist(
     (set) => ({
@@ -253,7 +336,9 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
     }),
     {
       name: "help-panel-storage",
-      storage: createDebouncedSafeJSONStorage(300),
+      storage: createDebouncedSafeJSONStorage<HelpPanelState & HelpPanelActions>(300, {
+        mergeOnWrite: mergeHelpPanelPersistedWrite,
+      }),
       version: 5,
       migrate: (persistedState) => persistedState as HelpPanelState & HelpPanelActions,
       partialize: (state) => ({

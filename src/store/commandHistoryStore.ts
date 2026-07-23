@@ -1,6 +1,11 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import type { StorageValue } from "zustand/middleware";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
+import {
+  mergeRecordByWriterDelta,
+  type PersistWriteMergeContext,
+} from "./persistence/persistWriteMerge";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 
 const MAX_HISTORY_SIZE = 100;
@@ -27,6 +32,41 @@ interface CommandHistoryState {
   getProjectHistory: (projectId: string | undefined) => PromptHistoryEntry[];
   getGlobalHistory: () => PromptHistoryEntry[];
   removeProjectHistory: (projectId: string) => void;
+}
+
+function historyOf(
+  value: StorageValue<CommandHistoryState> | null
+): Record<string, PromptHistoryEntry[]> {
+  const history = value?.state?.history;
+  return history !== null && typeof history === "object" ? history : {};
+}
+
+/**
+ * Baseline-aware three-way merge for command-history writes across project views
+ * (issue #11351). Each project's history array is one record value: a stale view
+ * writing its own project's bucket no longer drops another project's history a
+ * sibling view recorded, and a `removeProjectHistory` isn't resurrected.
+ * Concurrent writes to the *same* project bucket remain last-writer-wins (the
+ * separate same-project multi-window case).
+ */
+function mergeCommandHistoryPersistedWrite({
+  baseline,
+  onDisk,
+  incoming,
+}: PersistWriteMergeContext<CommandHistoryState>): StorageValue<CommandHistoryState> {
+  // No shared value on disk yet → nothing to reconcile against.
+  if (!onDisk) return incoming;
+  return {
+    version: incoming.version,
+    state: {
+      ...incoming.state,
+      history: mergeRecordByWriterDelta(
+        historyOf(baseline),
+        historyOf(incoming),
+        historyOf(onDisk)
+      ),
+    },
+  };
 }
 
 export const useCommandHistoryStore = create<CommandHistoryState>()(
@@ -89,7 +129,9 @@ export const useCommandHistoryStore = create<CommandHistoryState>()(
     }),
     {
       name: "daintree-command-history",
-      storage: createSafeJSONStorage(),
+      storage: createSafeJSONStorage<CommandHistoryState>({
+        mergeOnWrite: mergeCommandHistoryPersistedWrite,
+      }),
       version: 0,
       migrate: (persistedState) => persistedState as CommandHistoryState,
       partialize: (state) => ({ history: state.history }),

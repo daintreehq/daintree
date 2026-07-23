@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { PersistWriteMerge } from "../persistence/persistWriteMerge";
 
 type StorageMock = {
   getItem: (key: string) => string | null;
@@ -259,6 +260,178 @@ describe("persistence boundary hardening", () => {
     storage.setItem("round-trip-key", { state: { value: 7 }, version: 1 });
 
     expect(storage.getItem("round-trip-key")).toEqual({ state: { value: 7 }, version: 1 });
+  });
+
+  it("createSafeJSONStorage mergeOnWrite reconciles concurrent project-view writes without clobbering (#11351)", async () => {
+    const backing = new Map<string, string>();
+    installLocalStorage({
+      getItem: (key) => backing.get(key) ?? null,
+      setItem: (key, value) => {
+        backing.set(key, value);
+      },
+      removeItem: (key) => {
+        backing.delete(key);
+      },
+    });
+
+    const { createSafeJSONStorage } = await import("../persistence/safeStorage");
+    const { mergeRecordByWriterDelta } = await import("../persistence/persistWriteMerge");
+
+    type Sessions = { sessions: Record<string, { v: string }> };
+    const mergeSessions: PersistWriteMerge<Sessions> = ({ baseline, onDisk, incoming }) => {
+      if (!onDisk) return incoming;
+      return {
+        version: incoming.version,
+        state: {
+          sessions: mergeRecordByWriterDelta(
+            baseline?.state.sessions ?? {},
+            incoming.state.sessions,
+            onDisk.state.sessions ?? {}
+          ),
+        },
+      };
+    };
+    const KEY = "merge-sessions";
+    const val = (sessions: Sessions["sessions"]) => ({ state: { sessions }, version: 1 });
+    const diskSessions = () =>
+      (JSON.parse(backing.get(KEY) ?? "null") as { state: Sessions } | null)?.state.sessions;
+    const backupSessions = () =>
+      (JSON.parse(backing.get(`${KEY}.__bak`) ?? "null") as { state: Sessions } | null)?.state
+        .sessions;
+
+    // Two views hydrate the same (empty) shared baseline.
+    const viewA = createSafeJSONStorage<Sessions>({ mergeOnWrite: mergeSessions });
+    const viewB = createSafeJSONStorage<Sessions>({ mergeOnWrite: mergeSessions });
+    viewA.getItem(KEY);
+    viewB.getItem(KEY);
+
+    // View B writes its own project's session.
+    viewB.setItem(KEY, val({ b: { v: "b" } }));
+    // Stale view A — which never saw B's write — writes its own project's session.
+    viewA.setItem(KEY, val({ a: { v: "a" } }));
+
+    // Neither view's entry was dropped, and the backup tracks the merged result.
+    expect(diskSessions()).toEqual({ a: { v: "a" }, b: { v: "b" } });
+    expect(backupSessions()).toEqual({ a: { v: "a" }, b: { v: "b" } });
+
+    // A third view hydrated now, while both entries exist.
+    const viewC = createSafeJSONStorage<Sessions>({ mergeOnWrite: mergeSessions });
+    viewC.getItem(KEY);
+
+    // View A intentionally clears its own entry.
+    viewA.setItem(KEY, val({}));
+    expect(diskSessions()).toEqual({ b: { v: "b" } });
+
+    // The stale third view still carries `a` in memory and writes an unrelated
+    // addition — `a` must NOT be resurrected, and `b`/`c` survive.
+    viewC.setItem(KEY, val({ a: { v: "a" }, b: { v: "b" }, c: { v: "c" } }));
+    expect(diskSessions()).toEqual({ b: { v: "b" }, c: { v: "c" } });
+
+    // A freshly-hydrating view observes the final converged state.
+    const viewFresh = createSafeJSONStorage<Sessions>({ mergeOnWrite: mergeSessions });
+    expect(viewFresh.getItem(KEY)).toEqual(val({ b: { v: "b" }, c: { v: "c" } }));
+  });
+
+  it("createSafeJSONStorage mergeOnWrite advances the baseline to the writer's snapshot, not the merged result (#11351)", async () => {
+    const backing = new Map<string, string>();
+    installLocalStorage({
+      getItem: (key) => backing.get(key) ?? null,
+      setItem: (key, value) => {
+        backing.set(key, value);
+      },
+      removeItem: (key) => {
+        backing.delete(key);
+      },
+    });
+
+    const { createSafeJSONStorage } = await import("../persistence/safeStorage");
+    const { mergeRecordByWriterDelta } = await import("../persistence/persistWriteMerge");
+
+    type Sessions = { sessions: Record<string, { v: string }> };
+    const mergeSessions: PersistWriteMerge<Sessions> = ({ baseline, onDisk, incoming }) => {
+      if (!onDisk) return incoming;
+      return {
+        version: incoming.version,
+        state: {
+          sessions: mergeRecordByWriterDelta(
+            baseline?.state.sessions ?? {},
+            incoming.state.sessions,
+            onDisk.state.sessions ?? {}
+          ),
+        },
+      };
+    };
+    const KEY = "merge-baseline";
+    const val = (sessions: Sessions["sessions"]) => ({ state: { sessions }, version: 1 });
+    const diskSessions = () =>
+      (JSON.parse(backing.get(KEY) ?? "null") as { state: Sessions } | null)?.state.sessions;
+
+    const viewA = createSafeJSONStorage<Sessions>({ mergeOnWrite: mergeSessions });
+    viewA.getItem(KEY);
+    viewA.setItem(KEY, val({ a: { v: "a" } })); // baseline advances to { a }
+
+    // A sibling adds `b` on disk; the merged disk is now { a, b } but view A's
+    // baseline must remain { a } — folding `b` into the baseline would make the
+    // next unchanged write look like an intentional deletion of `b`.
+    backing.set(KEY, JSON.stringify(val({ a: { v: "a" }, b: { v: "b" } })));
+
+    // View A writes an unchanged snapshot repeatedly; `b` must survive every time.
+    viewA.setItem(KEY, val({ a: { v: "a" } }));
+    expect(diskSessions()).toEqual({ a: { v: "a" }, b: { v: "b" } });
+    viewA.setItem(KEY, val({ a: { v: "a" } }));
+    expect(diskSessions()).toEqual({ a: { v: "a" }, b: { v: "b" } });
+  });
+
+  it("createDebouncedSafeJSONStorage mergeOnWrite reads disk at flush time, not enqueue time (#11351)", async () => {
+    vi.useFakeTimers();
+    try {
+      const backing = new Map<string, string>();
+      installLocalStorage({
+        getItem: (key) => backing.get(key) ?? null,
+        setItem: (key, value) => {
+          backing.set(key, value);
+        },
+        removeItem: (key) => {
+          backing.delete(key);
+        },
+      });
+
+      const { createDebouncedSafeJSONStorage } = await import("../persistence/safeStorage");
+      const { mergeRecordByWriterDelta } = await import("../persistence/persistWriteMerge");
+
+      type Sessions = { sessions: Record<string, { v: string }> };
+      const mergeSessions: PersistWriteMerge<Sessions> = ({ baseline, onDisk, incoming }) => {
+        if (!onDisk) return incoming;
+        return {
+          version: incoming.version,
+          state: {
+            sessions: mergeRecordByWriterDelta(
+              baseline?.state.sessions ?? {},
+              incoming.state.sessions,
+              onDisk.state.sessions ?? {}
+            ),
+          },
+        };
+      };
+      const KEY = "merge-debounced";
+      const val = (sessions: Sessions["sessions"]) => ({ state: { sessions }, version: 1 });
+      const diskSessions = () =>
+        (JSON.parse(backing.get(KEY) ?? "null") as { state: Sessions } | null)?.state.sessions;
+
+      const viewA = createDebouncedSafeJSONStorage<Sessions>(300, { mergeOnWrite: mergeSessions });
+      viewA.getItem(KEY); // hydrate empty → baseline null
+      viewA.setItem(KEY, val({ a: { v: "a" } }));
+      vi.advanceTimersByTime(400); // flush → disk { a }, baseline { a }
+
+      // Enqueue a change, THEN a sibling writes `b` before the debounce fires.
+      viewA.setItem(KEY, val({ a: { v: "a2" } }));
+      backing.set(KEY, JSON.stringify(val({ a: { v: "a" }, b: { v: "b" } })));
+      vi.advanceTimersByTime(400); // flush must read disk NOW and preserve `b`
+
+      expect(diskSessions()).toEqual({ a: { v: "a2" }, b: { v: "b" } });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("agentPreferencesStore boots cleanly when the legacy toolbar blob is corrupt JSON", async () => {
