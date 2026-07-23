@@ -357,6 +357,9 @@ describe("PtyManager adversarial", () => {
     }
 
     expect(thrown).toBeUndefined();
+    // The preserved entry is torn down (kill-and-respawn), not silently
+    // overwritten — the old terminal's kill runs and a new process is built.
+    expect(original.kill).toHaveBeenCalledTimes(1);
     expect(shared.created).toHaveLength(2);
     expect(manager.getTerminal("t1")?.projectId).toBe("project-b");
   });

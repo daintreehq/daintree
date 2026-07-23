@@ -138,11 +138,10 @@ describe("SpawnErrorBanner", () => {
   it("explains the kept-alive process and keeps Retry inline for TERMINAL_ALREADY_LIVE", () => {
     const onRetry = vi.fn();
     renderBanner("TERMINAL_ALREADY_LIVE", { onRetry });
-    expect(
-      screen.getByText(
-        "This terminal already has a running process, so the existing one was kept. Retry to restart it."
-      )
-    ).toBeTruthy();
+    // Assert the semantic shape (why it happened + how to recover), not the
+    // exact literal — matching the whole source-of-truth string is tautological.
+    expect(screen.getByText(/already has a running process/i)).toBeTruthy();
+    expect(screen.getByText(/retry to restart it/i)).toBeTruthy();
     // Retry is the sole inline primary action (outside the overflow) for this
     // generic recovery — clicking it restarts the terminal.
     const retry = screen.getByRole("button", { name: /retry starting terminal/i });

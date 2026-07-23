@@ -98,6 +98,19 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
           error: parsedError,
         };
 
+        // A genuine failed-to-start spawn (ENOENT, ctor throw, …) leaves no live
+        // terminal for this id, so retire any stale coordinator from a dead/
+        // preserved incarnation it was replacing — otherwise it would linger
+        // until a later exit/retry. A TERMINAL_ALREADY_LIVE rejection is the one
+        // failure that DOES leave a live owner, so its coordinator is preserved.
+        if (parsedError.code !== "TERMINAL_ALREADY_LIVE") {
+          const staleCoord = pauseCoordinators.get(msg.id);
+          if (staleCoord) {
+            staleCoord.forceReleaseAll();
+            pauseCoordinators.delete(msg.id);
+          }
+        }
+
         // A failed-to-start spawn never produces a PTY, so no exit event ever
         // fires and the main-side TerminalProcess never emits agent:spawned.
         // For a launched agent that means AgentAvailabilityStore retains the

@@ -600,11 +600,13 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
 
     // Shells that can't host a startup wrapper (fish, nushell, unrecognized
     // Windows shells) launch bare and get the command typed in after spawn.
-    // Cache it on the spawn options so PtyClient owns the write and, crucially,
-    // re-injects it on every pendingSpawns replay — a pty-host crash respawn
-    // would otherwise bring these terminals back as an empty prompt, losing the
-    // (possibly resume) launch entirely (#11339). Wrapper shells already carry
-    // the command in `args`, so they replay faithfully with no postSpawnInput.
+    // Cache it on the spawn options so it rides every pendingSpawns replay — a
+    // pty-host crash respawn would otherwise bring these terminals back as an
+    // empty prompt, losing the (possibly resume) launch entirely (#11339). The
+    // pty-host spawn handler injects it, and only after a successful spawn, so a
+    // rejected spawn can't type it into a pre-existing live PTY (#11341).
+    // Wrapper shells already carry the command in `args`, so they replay
+    // faithfully with no postSpawnInput.
     const postSpawnInput =
       safeCommand.length > 0 && !commandLaunchShell ? `${safeCommand}\r` : undefined;
 

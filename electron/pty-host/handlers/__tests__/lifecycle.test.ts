@@ -539,6 +539,29 @@ describe("lifecycle spawn — TERMINAL_ALREADY_LIVE rejection protects the live 
     expect(pauseCoordinators.has("t1")).toBe(true);
   });
 
+  it("retires the stale coordinator and creates a fresh one on a successful respawn", () => {
+    const forceReleaseAll = vi.fn();
+    const pauseCoordinators = new Map([
+      ["t1", { forceReleaseAll }],
+    ]) as unknown as HostContext["pauseCoordinators"];
+    const ctx = makeCtx({ pauseCoordinators });
+    (ctx.ptyManager.getTerminal as ReturnType<typeof vi.fn>).mockReturnValue(termInfo(1234));
+    const dispatch = createPtyHostMessageDispatcher(ctx);
+
+    dispatch({ type: "spawn", id: "t1", options: {} });
+
+    // A real respawn (dead/preserved entry replaced) still tears down the stale
+    // coordinator and eagerly creates the successor's — but only after the spawn
+    // committed, so the retirement can never strand a live owner.
+    expect(forceReleaseAll).toHaveBeenCalledTimes(1);
+    expect(pauseCoordinators.has("t1")).toBe(false);
+    expect(ctx.getOrCreatePauseCoordinator).toHaveBeenCalledWith("t1");
+    const spawnOrder = (ctx.ptyManager.spawn as ReturnType<typeof vi.fn>).mock
+      .invocationCallOrder[0];
+    const retireOrder = forceReleaseAll.mock.invocationCallOrder[0];
+    expect(spawnOrder).toBeLessThan(retireOrder);
+  });
+
   it("does not inject postSpawnInput into the pre-existing live PTY", () => {
     const ctx = makeCtx();
     throwAlreadyLive(ctx);
