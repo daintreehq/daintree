@@ -933,5 +933,32 @@ describe("dock ↔ grid transitions", () => {
       expect(state.panelsById["s1"]?.location).toBe("grid");
       expect(state.panelsById["s2"]?.location).toBe("grid");
     });
+
+    it("reconcileDockMembership preserves an unrelated dock panel's open popover and focus", async () => {
+      const dockA = createMockTerminal("A", "dock"); // dockable terminal, popover open
+      const strandedB = nonDockable("B", "dock");
+      setTerminals([dockA, strandedB]);
+      usePanelStore.setState({ focusedId: "A", activeDockTerminalId: "A" });
+      const { reconcileDockMembership } = await import("@/store/reconcileDockMembership");
+
+      reconcileDockMembership();
+
+      const state = usePanelStore.getState();
+      expect(state.panelsById["B"]?.location).toBe("grid");
+      // Relocating B must not close A's popover or move focus off A.
+      expect(state.activeDockTerminalId).toBe("A");
+      expect(state.focusedId).toBe("A");
+    });
+
+    it("reconcileDockMembership restores a null prior focus rather than the relocated panel", async () => {
+      setTerminals([nonDockable("s1", "dock")]);
+      usePanelStore.setState({ focusedId: null });
+      const { reconcileDockMembership } = await import("@/store/reconcileDockMembership");
+
+      reconcileDockMembership();
+
+      expect(usePanelStore.getState().panelsById["s1"]?.location).toBe("grid");
+      expect(usePanelStore.getState().focusedId).toBeNull();
+    });
   });
 });

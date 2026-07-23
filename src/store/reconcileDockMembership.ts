@@ -1,4 +1,4 @@
-import { usePanelStore } from "@/store/panelStore";
+import { usePanelStore, type PanelGridState } from "@/store/panelStore";
 import { panelKindIsDockable } from "@shared/config/panelKindRegistry";
 
 /**
@@ -21,9 +21,12 @@ import { panelKindIsDockable } from "@shared/config/panelKindRegistry";
  *   delegates a grouped panel to a single whole-group move, so a later stranded
  *   member of the same group is already in the grid — skip it rather than
  *   re-run the group move (and its focus side effects) a second time.
- * - Restores the pre-reconcile focus. This is a background reconciliation (a
- *   plugin flipped a flag), not a user gesture, so `moveTerminalToGrid`'s
- *   focus-steal must not stick — unless focus was itself on a relocated panel.
+ * - Restores the foreground focus / dock-activation / maximize tuple. This is a
+ *   BACKGROUND reconciliation (a plugin flipped a flag), not a user gesture, but
+ *   `moveTerminalToGrid` steals focus, closes the dock popover, and exits
+ *   maximize as foreground side effects. Restoring the pre-reconcile tuple keeps
+ *   the user's view untouched — only a dock activation that pointed at a
+ *   now-relocated panel legitimately changes (that panel left the dock).
  */
 export function reconcileDockMembership(): void {
   const before = usePanelStore.getState();
@@ -38,7 +41,15 @@ export function reconcileDockMembership(): void {
   }
   if (stranded.length === 0) return;
 
-  const focusBefore = before.focusedId;
+  const {
+    focusedId,
+    previousFocusedId,
+    activeDockTerminalId,
+    maximizedId,
+    maximizeTarget,
+    preMaximizeLayout,
+  } = before;
+
   for (const id of stranded) {
     if (usePanelStore.getState().panelsById[id]?.location === "dock") {
       usePanelStore.getState().moveTerminalToGrid(id);
@@ -46,12 +57,32 @@ export function reconcileDockMembership(): void {
   }
 
   const after = usePanelStore.getState();
+  const restore: Partial<
+    Pick<
+      PanelGridState,
+      | "focusedId"
+      | "previousFocusedId"
+      | "activeDockTerminalId"
+      | "maximizedId"
+      | "maximizeTarget"
+      | "preMaximizeLayout"
+    >
+  > = {};
+  // Restore verbatim (including a null value): a relocated stranded panel is now
+  // a visible grid panel, so a focus/maximize pointer at it stays valid.
+  if (after.focusedId !== focusedId) restore.focusedId = focusedId;
+  if (after.previousFocusedId !== previousFocusedId) restore.previousFocusedId = previousFocusedId;
+  if (after.maximizedId !== maximizedId) restore.maximizedId = maximizedId;
+  if (after.maximizeTarget !== maximizeTarget) restore.maximizeTarget = maximizeTarget;
+  if (after.preMaximizeLayout !== preMaximizeLayout) restore.preMaximizeLayout = preMaximizeLayout;
+  // The dock popover only survives if its panel is still in the dock; a
+  // relocated stranded panel left it, so keep the cleared value in that case.
   if (
-    focusBefore &&
-    focusBefore !== after.focusedId &&
-    !strandedSet.has(focusBefore) &&
-    after.panelsById[focusBefore]
+    after.activeDockTerminalId !== activeDockTerminalId &&
+    activeDockTerminalId != null &&
+    !strandedSet.has(activeDockTerminalId)
   ) {
-    usePanelStore.setState({ focusedId: focusBefore });
+    restore.activeDockTerminalId = activeDockTerminalId;
   }
+  if (Object.keys(restore).length > 0) usePanelStore.setState(restore);
 }
