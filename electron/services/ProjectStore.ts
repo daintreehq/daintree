@@ -1269,8 +1269,11 @@ export class ProjectStore {
     // absent `.daintree/recipes/` directory from an authoritatively empty one;
     // `scanComplete` is false when the directory existed but a recipe file
     // couldn't be read (a partial snapshot, e.g. mid-checkout).
-    const { recipes: inRepoRecipes, dirExists, scanComplete } =
-      await this.readInRepoRecipesWithMeta(projectPath);
+    const {
+      recipes: inRepoRecipes,
+      dirExists,
+      scanComplete,
+    } = await this.readInRepoRecipesWithMeta(projectPath);
     const fileStoreRecipes = await this.fileStore.getRecipes(projectId);
 
     // #11347: When the in-repo recipe directory is absent (e.g. the user checked
