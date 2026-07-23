@@ -4,6 +4,15 @@ import { checkIgnoredPaths } from "../utils/gitCheckIgnore.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import type { FileTreeNode } from "../../shared/types/ipc.js";
 
+// Natural-numeric name ordering so `version_10` sorts after `version_9`
+// instead of between `version_1` and `version_2`. Locale is left undefined so
+// the host-locale collation of the plain `localeCompare` it replaces is
+// preserved — this only adds numeric ordering; default "variant" sensitivity
+// likewise keeps the existing case tie-break. Constructed once at module scope:
+// `getFileTree` runs on every directory read and bulk scan, and per-call
+// collator construction is costly.
+const NAME_COLLATOR = new Intl.Collator(undefined, { numeric: true });
+
 const _baseRealpathCache = new Map<string, Promise<string>>();
 
 // Throttle for the fail-closed warn so a sustained git failure (e.g. a
@@ -185,7 +194,17 @@ export class FileTreeService {
       nodes.sort((a, b) => {
         if (a.isDirectory && !b.isDirectory) return -1;
         if (!a.isDirectory && b.isDirectory) return 1;
-        return a.name.localeCompare(b.name);
+        const byName = NAME_COLLATOR.compare(a.name, b.name);
+        if (byName !== 0) return byName;
+        // Numeric collation is not a total order: padded and unpadded forms of
+        // the same value (`file1` / `file01` / `file001`) compare equal, and
+        // the tie would otherwise fall through to readdir order, which is
+        // filesystem- and platform-dependent. Codepoint comparison (not
+        // localeCompare) keeps those ties deterministic regardless of host
+        // locale.
+        if (a.name < b.name) return -1;
+        if (a.name > b.name) return 1;
+        return 0;
       });
 
       return nodes;
