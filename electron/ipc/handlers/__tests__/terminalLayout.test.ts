@@ -25,6 +25,13 @@ const setTabGroups = terminalLayoutNamespace.ops.setTabGroups.handler as (payloa
   removedIds?: string[];
 }) => Promise<void>;
 
+const setDraftInputs = terminalLayoutNamespace.ops.setDraftInputs.handler as (payload: {
+  projectId: string;
+  draftInputs: Record<string, string>;
+  changedIds?: string[];
+  removedIds?: string[];
+}) => Promise<void>;
+
 function term(id: string, location: "grid" | "dock" = "grid"): TerminalSnapshot {
   // `cwd` is required by TerminalSnapshotSchema's refine for PTY-backed kinds
   // (kind defaults to "terminal"); without it sanitizeTerminals drops the entry.
@@ -204,5 +211,58 @@ describe("setTabGroups merge (#11350)", () => {
       removedIds: ["g2"],
     });
     expect(ids(saved()?.tabGroups)).toEqual(["g1"]);
+  });
+});
+
+const draftState = (draftInputs: Record<string, string>): ProjectState => ({
+  projectId: "p1",
+  sidebarWidth: 350,
+  terminals: [],
+  tabGroups: [],
+  draftInputs,
+});
+
+describe("setDraftInputs merge (#11352)", () => {
+  it("preserves a sibling window's draft the writer never knew", async () => {
+    const saved = onDisk(draftState({ t1: "old", sib: "sibling draft" }));
+    await setDraftInputs({
+      projectId: "p1",
+      draftInputs: { t1: "new" },
+      changedIds: ["t1"],
+      removedIds: [],
+    });
+    expect(saved()?.draftInputs).toEqual({ t1: "new", sib: "sibling draft" });
+  });
+
+  it("removes a cleared draft via removedIds while keeping siblings — the tombstone case", async () => {
+    const saved = onDisk(draftState({ t1: "gone", sib: "keep" }));
+    // Current record is empty (draft was cleared) but removedIds carries the
+    // tombstone; a naive `{}` full-replace would wipe the sibling too.
+    await setDraftInputs({
+      projectId: "p1",
+      draftInputs: {},
+      changedIds: [],
+      removedIds: ["t1"],
+    });
+    expect(saved()?.draftInputs).toEqual({ sib: "keep" });
+  });
+
+  it("does not resurrect a sibling-deleted draft the writer did not change", async () => {
+    // Disk no longer has t2 (a sibling cleared it); a stale writer still carries
+    // it but only added t3.
+    const saved = onDisk(draftState({ t1: "a" }));
+    await setDraftInputs({
+      projectId: "p1",
+      draftInputs: { t1: "a", t2: "stale", t3: "added" },
+      changedIds: ["t3"],
+      removedIds: [],
+    });
+    expect(saved()?.draftInputs).toEqual({ t1: "a", t3: "added" });
+  });
+
+  it("falls back to a full replace when no delta metadata is present (legacy)", async () => {
+    const saved = onDisk(draftState({ t1: "old", sib: "would be lost" }));
+    await setDraftInputs({ projectId: "p1", draftInputs: { t1: "new" } });
+    expect(saved()?.draftInputs).toEqual({ t1: "new" });
   });
 });

@@ -54,7 +54,16 @@ export interface TerminalLayoutPreloadBindings {
     focusPanelState?: FocusPanelState
   ): Promise<void>;
   getDraftInputs(projectId: string): Promise<Record<string, string>>;
-  setDraftInputs(projectId: string, draftInputs: Record<string, string>): Promise<void>;
+  // `changedIds`/`removedIds` (terminal ids) describe what this renderer changed
+  // relative to its last-persisted baseline so Main can merge concurrent writes
+  // from sibling windows of the same project (#11352). Omit both for a full
+  // replace.
+  setDraftInputs(
+    projectId: string,
+    draftInputs: Record<string, string>,
+    changedIds?: string[],
+    removedIds?: string[]
+  ): Promise<void>;
 }
 
 type Invoker = (channel: string, ...args: unknown[]) => Promise<unknown>;
@@ -102,10 +111,12 @@ export function buildTerminalLayoutPreloadBindings(invoke: Invoker): TerminalLay
       invoke(TERMINAL_LAYOUT_METHOD_CHANNELS.getDraftInputs, projectId) as Promise<
         Record<string, string>
       >,
-    setDraftInputs: (projectId, draftInputs) =>
+    setDraftInputs: (projectId, draftInputs, changedIds, removedIds) =>
       invoke(TERMINAL_LAYOUT_METHOD_CHANNELS.setDraftInputs, {
         projectId,
         draftInputs,
+        changedIds,
+        removedIds,
       }) as Promise<void>,
   };
 }

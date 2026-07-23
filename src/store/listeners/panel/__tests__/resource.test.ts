@@ -6,6 +6,11 @@ vi.mock("@/store/slices", () => ({
   flushPanelPersistence: flushPanelPersistenceMock,
 }));
 
+const flushDraftsMock = vi.hoisted(() => vi.fn());
+vi.mock("@/store/persistence/draftInputPersistence", () => ({
+  draftInputPersistence: { flushAll: flushDraftsMock },
+}));
+
 vi.mock("@/store/resourceMonitoringStore", () => ({
   useResourceMonitoringStore: {
     getState: () => ({ enabled: false, updateMetrics: vi.fn() }),
@@ -32,13 +37,14 @@ describe("setupResourceListeners — persistence flush on hide (#9914)", () => {
     setHidden(false);
   });
 
-  it("flushes panel persistence when the document becomes hidden", () => {
+  it("flushes panel and draft persistence when the document becomes hidden", () => {
     const d = setupResourceListeners();
 
     setHidden(true);
     document.dispatchEvent(new Event("visibilitychange"));
 
     expect(flushPanelPersistenceMock).toHaveBeenCalledTimes(1);
+    expect(flushDraftsMock).toHaveBeenCalledTimes(1);
     d.dispose();
   });
 
@@ -49,6 +55,7 @@ describe("setupResourceListeners — persistence flush on hide (#9914)", () => {
     document.dispatchEvent(new Event("visibilitychange"));
 
     expect(flushPanelPersistenceMock).not.toHaveBeenCalled();
+    expect(flushDraftsMock).not.toHaveBeenCalled();
     d.dispose();
   });
 
@@ -60,13 +67,15 @@ describe("setupResourceListeners — persistence flush on hide (#9914)", () => {
     document.dispatchEvent(new Event("visibilitychange"));
 
     expect(flushPanelPersistenceMock).not.toHaveBeenCalled();
+    expect(flushDraftsMock).not.toHaveBeenCalled();
   });
 
-  it("flushes immediately when the document is already hidden at registration", () => {
+  it("flushes both immediately when the document is already hidden at registration", () => {
     setHidden(true);
     const d = setupResourceListeners();
 
     expect(flushPanelPersistenceMock).toHaveBeenCalledTimes(1);
+    expect(flushDraftsMock).toHaveBeenCalledTimes(1);
     d.dispose();
   });
 

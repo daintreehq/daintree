@@ -7,7 +7,7 @@ import {
 import type { HandlerDependencies } from "../types.js";
 import type { TerminalSnapshot, TabGroup } from "../../types/index.js";
 import { defineIpcNamespace, op } from "../define.js";
-import { mergeIdArray } from "../../../shared/utils/layoutMerge.js";
+import { mergeIdArray, mergeRecord } from "../../../shared/utils/layoutMerge.js";
 import { TERMINAL_LAYOUT_METHOD_CHANNELS } from "./terminalLayout.preload.js";
 
 /**
@@ -327,6 +327,8 @@ export const terminalLayoutNamespace = defineIpcNamespace({
       async (payload: {
         projectId: string;
         draftInputs: Record<string, string>;
+        changedIds?: string[];
+        removedIds?: string[];
       }): Promise<void> => {
         if (!payload || typeof payload !== "object") {
           throw new Error("Invalid payload");
@@ -345,6 +347,11 @@ export const terminalLayoutNamespace = defineIpcNamespace({
         }
 
         const sanitized = sanitizeDraftInputs(draftInputs as Record<string, unknown>);
+        // Delta metadata lets Main merge concurrent draft writes from sibling
+        // windows of the same project instead of blindly replacing the record
+        // (#11352). Absent metadata = legacy full-replace write.
+        const changedIds = sanitizeIdList(payload.changedIds);
+        const removedIds = sanitizeIdList(payload.removedIds);
 
         await projectStore.enqueueProjectStateUpdate(projectId, (existingState) => ({
           projectId,
@@ -356,7 +363,15 @@ export const terminalLayoutNamespace = defineIpcNamespace({
           focusMode: existingState?.focusMode,
           focusPanelState: existingState?.focusPanelState,
           terminalSizes: existingState?.terminalSizes,
-          draftInputs: sanitized,
+          draftInputs:
+            changedIds === undefined
+              ? sanitized
+              : mergeRecord(
+                  sanitizeDraftInputs((existingState?.draftInputs ?? {}) as Record<string, unknown>),
+                  sanitized,
+                  changedIds,
+                  removedIds ?? []
+                ),
         }));
       }
     ),

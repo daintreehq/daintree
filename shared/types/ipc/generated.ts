@@ -1208,7 +1208,14 @@ export interface GeneratedIpcInvokeMap {
     result: import("../project.js").PanelSnapshot[];
   };
   "project:set-draft-inputs": {
-    args: [payload: { projectId: string; draftInputs: Record<string, string> }];
+    args: [
+      payload: {
+        projectId: string;
+        draftInputs: Record<string, string>;
+        changedIds?: string[] | undefined;
+        removedIds?: string[] | undefined;
+      },
+    ];
     result: void;
   };
   "project:set-focus-mode": {

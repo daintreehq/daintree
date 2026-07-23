@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { computeIdArrayDelta, mergeIdArray, deepEqualIgnoringUndefined } from "../layoutMerge.js";
+import {
+  computeIdArrayDelta,
+  mergeIdArray,
+  deepEqualIgnoringUndefined,
+  computeRecordDelta,
+  mergeRecord,
+} from "../layoutMerge.js";
 
 interface Entry {
   id: string;
@@ -202,6 +208,89 @@ describe("mergeIdArray", () => {
     const { changedIds, removedIds } = computeIdArrayDelta(base, current, eq);
     // Disk still equals the shared baseline (no sibling activity).
     const merged = mergeIdArray(base, current, changedIds, removedIds);
+    expect(merged).toEqual(current);
+  });
+});
+
+describe("computeRecordDelta (draft inputs, #11352)", () => {
+  it("reports an added key as changed", () => {
+    const delta = computeRecordDelta({ a: "x" }, { a: "x", b: "y" });
+    expect(delta.changedIds).toEqual(["b"]);
+    expect(delta.removedIds).toEqual([]);
+  });
+
+  it("reports an edited value as changed", () => {
+    const delta = computeRecordDelta({ a: "x" }, { a: "x2" });
+    expect(delta.changedIds).toEqual(["a"]);
+    expect(delta.removedIds).toEqual([]);
+  });
+
+  it("derives a removal tombstone from a key absent in current — the core #11352 case", () => {
+    // A cleared/sent draft is dropped from the live map, so removal can ONLY be
+    // seen by diffing against the remembered baseline.
+    const delta = computeRecordDelta({ a: "x", b: "y" }, { b: "y" });
+    expect(delta.changedIds).toEqual([]);
+    expect(delta.removedIds).toEqual(["a"]);
+  });
+
+  it("produces an empty delta when nothing changed", () => {
+    const delta = computeRecordDelta({ a: "x", b: "y" }, { a: "x", b: "y" });
+    expect(delta.changedIds).toEqual([]);
+    expect(delta.removedIds).toEqual([]);
+  });
+
+  it("handles simultaneous add, edit, and remove", () => {
+    const delta = computeRecordDelta({ a: "x", b: "y" }, { a: "x2", c: "z" });
+    expect(new Set(delta.changedIds)).toEqual(new Set(["a", "c"]));
+    expect(delta.removedIds).toEqual(["b"]);
+  });
+});
+
+describe("mergeRecord (draft inputs, #11352)", () => {
+  it("preserves a sibling's draft the writer never knew", () => {
+    // Disk has a sibling window's draft for terminal 'sib'; the writer only
+    // changed 'a'.
+    const merged = mergeRecord({ a: "old", sib: "keep" }, { a: "new" }, ["a"], []);
+    expect(merged).toEqual({ a: "new", sib: "keep" });
+  });
+
+  it("applies the writer's addition and edit (last-writer-wins on a shared key)", () => {
+    const merged = mergeRecord({ a: "disk" }, { a: "mine", b: "added" }, ["a", "b"], []);
+    expect(merged).toEqual({ a: "mine", b: "added" });
+  });
+
+  it("removes an explicitly-removed key while keeping siblings", () => {
+    const merged = mergeRecord({ a: "x", sib: "keep" }, {}, [], ["a"]);
+    expect(merged).toEqual({ sib: "keep" });
+  });
+
+  it("does not resurrect a key present in incoming but absent from changedIds", () => {
+    // A sibling deleted 'a' (not on disk); a stale writer still carries it but
+    // did not change it, so it must not come back.
+    const merged = mergeRecord({ b: "y" }, { a: "stale", b: "y" }, [], []);
+    expect(merged).toEqual({ b: "y" });
+  });
+
+  it("lets removal win over a malformed changed/removed overlap", () => {
+    const merged = mergeRecord({ a: "x" }, { a: "new" }, ["a"], ["a"]);
+    expect(merged).toEqual({});
+  });
+
+  it("drops empty/malformed on-disk values so they don't survive forever", () => {
+    const merged = mergeRecord(
+      { a: "", b: "keep" } as Record<string, string>,
+      { c: "add" },
+      ["c"],
+      []
+    );
+    expect(merged).toEqual({ b: "keep", c: "add" });
+  });
+
+  it("round-trips a delta computed from a shared baseline (no sibling activity)", () => {
+    const base = { a: "x", b: "y" };
+    const current = { a: "x2", c: "z" }; // edited a, removed b, added c
+    const { changedIds, removedIds } = computeRecordDelta(base, current);
+    const merged = mergeRecord(base, current, changedIds, removedIds);
     expect(merged).toEqual(current);
   });
 });

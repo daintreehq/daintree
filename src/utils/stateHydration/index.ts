@@ -19,6 +19,7 @@ import { inferKind } from "./statePatcher";
 import { RECONNECT_TIMEOUT_MS } from "./reconnectManager";
 import type { ActionFrecencyEntry, ActionUsageEntry } from "@shared/types/actions";
 import { panelPersistence } from "@/store/persistence/panelPersistence";
+import { draftInputPersistence } from "@/store/persistence/draftInputPersistence";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { logDebug, logInfo, logWarn, logError } from "@/utils/logger";
 import { PERF_MARKS } from "@shared/perf/marks";
@@ -351,6 +352,11 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
     if (currentProjectId) {
       try {
         const draftInputs = await draftInputsPromise;
+        // Seed the close-flush baseline from the authoritative on-disk record
+        // (even when empty) BEFORE restoring into the store, so a later clear of
+        // a hydrated draft yields a removal tombstone instead of resurrecting on
+        // next load (#11352).
+        draftInputPersistence.primeProject(currentProjectId, draftInputs);
         if (Object.keys(draftInputs).length > 0) {
           useTerminalInputStore.getState().restoreProjectDraftInputs(currentProjectId, draftInputs);
         }

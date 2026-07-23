@@ -149,6 +149,9 @@ export interface TerminalInputState {
   resetForProjectSwitch: (projectId: string, preserveTerminalIds?: Set<string>) => void;
   getProjectDraftInputs: (projectId: string) => Record<string, string>;
   restoreProjectDraftInputs: (projectId: string, inputs: Record<string, string>) => void;
+  /** Distinct project ids that currently hold at least one draft key. Used by
+   *  the close-time draft flush to know which projects to persist (#11352). */
+  getDraftProjectIds: () => string[];
 }
 
 export const useTerminalInputStore = create<TerminalInputState>()((set, get) => ({
@@ -517,4 +520,17 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
       }
       return { draftInputs: newDraftInputs };
     }),
+
+  getDraftProjectIds: () => {
+    const ids = new Set<string>();
+    for (const key of get().draftInputs.keys()) {
+      // Composite keys are `${projectId}:${terminalId}`; a bare terminalId key
+      // (no project context) has no per-project persistence target, so skip it.
+      const idx = key.indexOf(":");
+      if (idx > 0) {
+        ids.add(key.slice(0, idx));
+      }
+    }
+    return [...ids];
+  },
 }));

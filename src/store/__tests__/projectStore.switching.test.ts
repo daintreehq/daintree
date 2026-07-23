@@ -84,6 +84,15 @@ vi.mock("../persistence/panelPersistence", () => ({
   })),
 }));
 
+vi.mock("../persistence/draftInputPersistence", () => ({
+  draftInputPersistence: {
+    computeDelta: vi.fn(() => ({ changedIds: ["terminal-1"], removedIds: [] })),
+    flushAll: vi.fn(),
+    primeProject: vi.fn(),
+    whenIdle: vi.fn(() => Promise.resolve()),
+  },
+}));
+
 vi.mock("@/lib/notify", () => ({
   notify: vi.fn(),
 }));
@@ -182,6 +191,23 @@ describe("buildOutgoingState draft propagation (#4985)", () => {
     expect(projectClientMock.switch).toHaveBeenCalledWith(
       projectB.id,
       expect.objectContaining({ draftInputs: { "terminal-1": "hello world" } }),
+      undefined
+    );
+  });
+
+  it("threads draftDelta through the outgoing switch state (#11352)", async () => {
+    const { useProjectStore } = await import("../projectStore");
+    const { useTerminalInputStore } = await import("../terminalInputStore");
+
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+    useTerminalInputStore.getState().setDraftInput("terminal-1", "hello", projectA.id);
+
+    await useProjectStore.getState().switchProject(projectB.id);
+    await Promise.resolve();
+
+    expect(projectClientMock.switch).toHaveBeenCalledWith(
+      projectB.id,
+      expect.objectContaining({ draftDelta: { changedIds: ["terminal-1"], removedIds: [] } }),
       undefined
     );
   });
