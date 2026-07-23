@@ -586,6 +586,38 @@ describe("DiffPane — video current-version mode (#11382)", () => {
     expect(screen.queryByRole("button", { name: "Wrap long lines" })).toBeNull();
   });
 
+  it("reloads the video from the toolbar Refresh (nonce-busted URL)", () => {
+    seedPanel({
+      filePath: "media/demo.mp4",
+      fileStatus: "modified",
+      changeSet: [entry("media/demo.mp4")],
+    });
+    const { container } = renderPane();
+    const before = container.querySelector("video")?.getAttribute("src");
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+    const after = container.querySelector("video")?.getAttribute("src");
+    expect(after).not.toBe(before);
+  });
+
+  it("shows a playback-failure state instead of a dead control on media error", () => {
+    seedPanel({
+      filePath: "media/demo.mp4",
+      fileStatus: "modified",
+      changeSet: [entry("media/demo.mp4")],
+    });
+    const { container } = renderPane();
+
+    fireEvent.error(container.querySelector("video")!);
+
+    expect(container.querySelector("video")).toBeNull();
+    const titles = Array.from(container.querySelectorAll('[data-testid="empty-state-mock"]')).map(
+      (el) => el.getAttribute("data-title")
+    );
+    expect(titles).toContain("This video couldn't be played");
+  });
+
   it("shows a quiet empty state for a deleted video (no working-tree bytes to play)", () => {
     seedPanel({
       filePath: "media/demo.mp4",

@@ -39,7 +39,8 @@ export function FileVideoPreview({
   const src = useMemo(() => {
     const url = buildDaintreeFileUrl(filePath, rootPath);
     // Cache-busting query param only — the protocol handler ignores it.
-    return reloadKey ? `${url}&v=${encodeURIComponent(reloadKey)}` : url;
+    // Null-checked, not truthiness: a numeric key of 0 is a valid value.
+    return reloadKey != null ? `${url}&v=${encodeURIComponent(reloadKey)}` : url;
   }, [filePath, rootPath, reloadKey]);
 
   return (

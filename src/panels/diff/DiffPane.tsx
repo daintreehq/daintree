@@ -264,6 +264,13 @@ export function DiffPane({
   // Forces a fresh media request in video mode — the diff content hooks don't
   // carry video bytes, so Refresh has to re-request the protocol URL itself.
   const [videoReloadNonce, setVideoReloadNonce] = useState(0);
+  // An allowlisted container can still hold a codec Chromium lacks, or the
+  // file may be unreadable — surface that instead of a dead native control.
+  const [videoPlaybackFailed, setVideoPlaybackFailed] = useState(false);
+  useEffect(() => {
+    // A new file or an explicit refresh gets a fresh attempt.
+    setVideoPlaybackFailed(false);
+  }, [filePath, videoReloadNonce]);
 
   const [pathCopied, setPathCopied] = useState(false);
   const handleCopyPath = useCallback(() => {
@@ -544,7 +551,7 @@ export function DiffPane({
               <WrapText className="w-4 h-4" />
             </FileViewerToolbar.IconButton>
           )}
-          <FileViewerToolbar.IconButton label="Refresh" onClick={retry}>
+          <FileViewerToolbar.IconButton label="Refresh" onClick={refreshAll}>
             <RefreshCw className="w-4 h-4" />
           </FileViewerToolbar.IconButton>
           {absolutePath && (
@@ -734,12 +741,22 @@ export function DiffPane({
                     description="This video was deleted, and the diff view can only play the current file."
                   />
                 </div>
+              ) : videoPlaybackFailed ? (
+                <div className="flex h-full w-full items-center justify-center p-6">
+                  <EmptyState
+                    variant="zero-data"
+                    scale="canvas"
+                    title="This video couldn't be played"
+                    description="The container is supported but the codec may not be — Refresh to try again."
+                  />
+                </div>
               ) : (
                 <FileVideoPreview
                   filePath={absolutePath}
                   rootPath={worktreePath}
                   label={fileName ?? filePath}
                   reloadKey={videoReloadNonce}
+                  onError={() => setVideoPlaybackFailed(true)}
                   maxHeightClassName="max-h-full"
                 />
               ))}

@@ -422,7 +422,10 @@ export function FilePane({
       if (isVideoFilePath(filePath)) {
         setContent(null);
         setSanitizedSvg(null);
-        setReloadNonce((nonce) => nonce + 1);
+        // Only an explicit load (open, toolbar Refresh) re-requests the media —
+        // a silent background pass must not remount the player and reset
+        // playback while someone is watching.
+        if (!silent) setReloadNonce((nonce) => nonce + 1);
         setLoadState("video");
         setErrorCode(null);
         setErrorMessage(null);
@@ -837,14 +840,18 @@ export function FilePane({
             <p className="text-sm text-muted-foreground">
               {errorMessage ?? FILE_READ_ERROR_MESSAGES[errorCode]}
             </p>
-            <button
-              type="button"
-              onClick={() => loadFile(false)}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-daintree-text bg-daintree-border hover:bg-daintree-border/80 rounded transition-colors"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-              Retry
-            </button>
+            {/* An unsupported container is deterministic — retrying the same
+                extension can never succeed, so the action would be dead. */}
+            {!isUnsupportedVideoFilePath(filePath) && (
+              <button
+                type="button"
+                onClick={() => loadFile(false)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-daintree-text bg-daintree-border hover:bg-daintree-border/80 rounded transition-colors"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                Retry
+              </button>
+            )}
           </div>
         )}
 

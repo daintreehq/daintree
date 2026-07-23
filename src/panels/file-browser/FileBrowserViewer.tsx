@@ -465,11 +465,14 @@ export function FileBrowserViewer({
       case "video":
         return (
           <div className="h-full w-full overflow-auto">
+            {/* Deliberately NOT keyed on `revision`: it ticks on every worktree
+                write, and remounting the player would reset playback whenever
+                an agent touches any file. A rewritten video shows its new bytes
+                on re-selection — continuity beats freshness mid-playback. */}
             <FileVideoPreview
               filePath={filePath}
               rootPath={rootPath}
               label={fileName}
-              reloadKey={revision}
               onError={() =>
                 setState({ status: "error", message: "This video couldn't be played" })
               }
