@@ -181,7 +181,7 @@ describe("ProjectFileStore write serialization", () => {
   });
 
   it("a failed WRITE rejects its own caller but the store recovers from the last durable snapshot", async () => {
-    const disk = installDiskModel();
+    installDiskModel();
     await store.addRecipe(VALID_ID, recipe("r1"));
 
     // Fail exactly the next write (the update); later writes go through.
