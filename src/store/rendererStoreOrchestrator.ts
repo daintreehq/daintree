@@ -25,6 +25,7 @@ import {
   setPanelStoreClearForSwitchAccessor,
   setWorktreeSelectionAccessor,
   setWorktreeIdSetAccessor,
+  setWorktreeGitDirAccessor,
   setFleetArmingClearAccessor,
   setFleetArmedIdsAccessor,
   setFleetLastArmedIdAccessor,
@@ -75,6 +76,11 @@ export function initStoreOrchestrator(): () => void {
     const viewStore = getCurrentViewStoreOrNull();
     if (!viewStore) return null;
     return new Set(viewStore.getState().worktrees.keys());
+  });
+  setWorktreeGitDirAccessor((worktreeId) => {
+    const viewStore = getCurrentViewStoreOrNull();
+    if (!viewStore) return undefined;
+    return viewStore.getState().worktrees.get(worktreeId)?.gitDir || undefined;
   });
   setFleetArmingClearAccessor(() => {
     useFleetArmingStore.getState().clear();

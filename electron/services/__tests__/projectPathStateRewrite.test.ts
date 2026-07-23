@@ -20,7 +20,7 @@ describe("rewriteProjectStatePaths", () => {
     expect(rewriteProjectStatePaths(state, OLD, NEW).activeWorktreeId).toBe("/new/renamed");
   });
 
-  it("rebases panel cwd, worktreeId, filePath and legacy markdownFilePath", () => {
+  it("rebases panel cwd, worktreeId, worktreeGitDir, filePath and legacy markdownFilePath", () => {
     const state = baseState({
       terminals: [
         {
@@ -29,6 +29,7 @@ describe("rewriteProjectStatePaths", () => {
           location: "grid",
           cwd: "/old/project/sub",
           worktreeId: "/old/project",
+          worktreeGitDir: "/old/project/.git/worktrees/sub",
           filePath: "/old/project/README.md",
           markdownFilePath: "/old/project/notes.md",
         },
@@ -37,6 +38,7 @@ describe("rewriteProjectStatePaths", () => {
     const panel = rewriteProjectStatePaths(state, OLD, NEW).terminals[0];
     expect(panel.cwd).toBe("/new/renamed/sub");
     expect(panel.worktreeId).toBe("/new/renamed");
+    expect(panel.worktreeGitDir).toBe("/new/renamed/.git/worktrees/sub");
     expect(panel.filePath).toBe("/new/renamed/README.md");
     expect(panel.markdownFilePath).toBe("/new/renamed/notes.md");
   });

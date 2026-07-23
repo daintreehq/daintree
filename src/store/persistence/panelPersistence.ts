@@ -10,6 +10,7 @@ import {
   type IdArrayDelta,
 } from "@shared/utils/layoutMerge";
 import { logError } from "@/utils/logger";
+import { getWorktreeGitDirById } from "@/store/storeAccessors";
 
 type ProjectClientType = typeof projectClient;
 
@@ -32,6 +33,7 @@ const BASE_PANEL_FIELDS = [
   "title",
   "titleMode",
   "worktreeId",
+  "worktreeGitDir",
   "location",
   "extensionState",
   "pluginId",
@@ -44,12 +46,26 @@ export function panelToSnapshot(
   t: TerminalInstance,
   previousSnapshot?: PanelSnapshot
 ): PanelSnapshot {
+  // Capture the worktree's stable admin-dir handle alongside the (path-derived,
+  // move-fragile) worktreeId so restore can survive a `git worktree move`
+  // (#11388). When the live worktree store can't answer — e.g. the #11234
+  // empty-list readiness race, where a save can fire before the view store is
+  // populated — carry the handle already on the previous snapshot rather than
+  // dropping it, so a transient blank store doesn't erase a durable handle. Only
+  // preserved while the panel is still bound to the SAME worktree, so a genuine
+  // move to a different worktree never carries a stale handle forward. Absent
+  // when nothing is known — restore then re-homes as before.
+  const liveGitDir = t.worktreeId ? getWorktreeGitDirById(t.worktreeId) : undefined;
+  const worktreeGitDir =
+    liveGitDir ??
+    (previousSnapshot?.worktreeId === t.worktreeId ? previousSnapshot?.worktreeGitDir : undefined);
   const base: PanelSnapshot = {
     id: t.id,
     kind: t.kind,
     title: t.title,
     ...(t.titleMode !== undefined && { titleMode: t.titleMode }),
     worktreeId: t.worktreeId,
+    ...(worktreeGitDir !== undefined && { worktreeGitDir }),
     location: t.location === "trash" || t.location === "background" ? "grid" : t.location,
     ...(t.extensionState !== undefined && { extensionState: t.extensionState }),
     ...(t.pluginId !== undefined && { pluginId: t.pluginId }),

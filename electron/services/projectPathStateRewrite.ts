@@ -8,8 +8,9 @@ import { rebaseAbsolutePath, rebaseMruEntry } from "../../shared/utils/projectPa
  *
  * Only fields whose values are genuine absolute filesystem paths are rebased:
  * PTY `cwd`, file-panel `filePath`/`markdownFilePath`, `worktreeId` (a worktree
- * id is a normalized absolute path), `activeWorktreeId`, tab-group worktree
- * bindings, and `worktree:` MRU entries. Deliberately excluded — they are not
+ * id is a normalized absolute path), the `worktreeGitDir` handle (#11388),
+ * `activeWorktreeId`, tab-group worktree bindings, and `worktree:` MRU entries.
+ * Deliberately excluded — they are not
  * absolute filesystem bindings and blanket substitution would corrupt them:
  *   - `browserRootPath` / `browserSelectedPath` / `browserExpandedPaths` are
  *     worktree-RELATIVE and move with the folder untouched.
@@ -89,7 +90,9 @@ function rewritePanelPaths(panel: PanelSnapshot, oldRoot: string, newRoot: strin
   const patch: Partial<PanelSnapshot> = {};
   let changed = false;
 
-  const rebaseField = (key: "cwd" | "worktreeId" | "filePath" | "markdownFilePath"): void => {
+  const rebaseField = (
+    key: "cwd" | "worktreeId" | "worktreeGitDir" | "filePath" | "markdownFilePath"
+  ): void => {
     const value = panel[key];
     if (value === undefined) return;
     const next = rebaseAbsolutePath(value, oldRoot, newRoot);
@@ -101,6 +104,9 @@ function rewritePanelPaths(panel: PanelSnapshot, oldRoot: string, newRoot: strin
 
   rebaseField("cwd");
   rebaseField("worktreeId");
+  // The gitDir handle (#11388) is an absolute path under the repo root, so a
+  // project move must rebase it too or the next worktree move can't correlate.
+  rebaseField("worktreeGitDir");
   rebaseField("filePath");
   rebaseField("markdownFilePath");
 

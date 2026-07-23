@@ -116,6 +116,14 @@ export interface PanelSnapshot {
   cwd?: string;
   /** Associated worktree ID */
   worktreeId?: string;
+  /**
+   * The worktree's stable `.git/worktrees/<name>` admin-dir handle, captured at
+   * save time (#11388). A worktree id is its normalized path, which changes on
+   * `git worktree move`; this handle survives the move, so restore can match a
+   * stale `worktreeId` to the worktree's new path instead of orphaning the panel
+   * and re-homing it to the active worktree. Absent on legacy snapshots.
+   */
+  worktreeGitDir?: string;
   /** Location in the UI - grid or dock */
   location: PanelLocation;
   /** Command to execute after shell starts (e.g., 'claude --model sonnet-4' for AI agents) */
