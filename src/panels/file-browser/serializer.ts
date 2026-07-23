@@ -1,5 +1,6 @@
 import type { FileBrowserPanelData } from "@shared/types/panel";
 import type { PanelSnapshot } from "@shared/types/project";
+import { FILE_BROWSER_SIDEBAR_DEFAULT_WIDTH } from "./sidebarWidth";
 
 /**
  * Every field persists, unlike the diff panel's runtime-only change set: the
@@ -22,5 +23,11 @@ export function serializeFileBrowser(t: FileBrowserPanelData): Partial<PanelSnap
     // the field being absent, so only a collapsed sidebar earns a persisted bit.
     ...(t.browserSidebarCollapsed ? { browserSidebarCollapsed: true } : {}),
     ...(t.browserTreeSnapshot != null && { browserTreeSnapshot: t.browserTreeSnapshot }),
+    // Only a non-default width earns a persisted number: 288 is the default, the
+    // same as absent, so an unresized or reset-to-default panel stays sparse.
+    ...(t.browserSidebarWidth != null &&
+    t.browserSidebarWidth !== FILE_BROWSER_SIDEBAR_DEFAULT_WIDTH
+      ? { browserSidebarWidth: t.browserSidebarWidth }
+      : {}),
   };
 }

@@ -174,6 +174,56 @@ describe("setFileBrowserView", () => {
     });
   });
 
+  it("stores a dragged width and resets it back to the default", () => {
+    setFileBrowserView("panel-1", { browserSidebarWidth: 420 });
+    expect(store.get().panelsById["panel-1"]).toMatchObject({ browserSidebarWidth: 420 });
+
+    // Reset writes the explicit default; the serializer, not the store, is what
+    // strips 288 back out of the persisted snapshot.
+    const resized = store.get().panelsById["panel-1"];
+    setFileBrowserView("panel-1", { browserSidebarWidth: 288 });
+    expect(store.get().panelsById["panel-1"]).not.toBe(resized);
+    expect(store.get().panelsById["panel-1"]).toMatchObject({ browserSidebarWidth: 288 });
+  });
+
+  it("treats resetting a never-resized panel to the default width as a no-op", () => {
+    // Absent width and 288 are the same state, so a double-click reset on a panel
+    // that never resized must not churn a fresh object every render.
+    const before = store.get().panelsById["panel-1"];
+
+    setFileBrowserView("panel-1", { browserSidebarWidth: 288 });
+
+    expect(store.get().panelsById["panel-1"]).toBe(before);
+  });
+
+  it("treats a width identical to the current one as a no-op", () => {
+    setFileBrowserView("panel-1", { browserSidebarWidth: 420 });
+    const resized = store.get().panelsById["panel-1"];
+
+    setFileBrowserView("panel-1", { browserSidebarWidth: 420 });
+
+    expect(store.get().panelsById["panel-1"]).toBe(resized);
+  });
+
+  it("clamps an out-of-range width into the allowed bounds before storing", () => {
+    setFileBrowserView("panel-1", { browserSidebarWidth: 5000 });
+    expect(store.get().panelsById["panel-1"]).toMatchObject({ browserSidebarWidth: 600 });
+
+    setFileBrowserView("panel-1", { browserSidebarWidth: 50 });
+    expect(store.get().panelsById["panel-1"]).toMatchObject({ browserSidebarWidth: 200 });
+  });
+
+  it("preserves selection and expansion when the width changes", () => {
+    setFileBrowserView("panel-1", { browserSelectedPath: "src/app.ts" });
+    setFileBrowserView("panel-1", { browserSidebarWidth: 400 });
+
+    expect(store.get().panelsById["panel-1"]).toMatchObject({
+      browserSidebarWidth: 400,
+      browserSelectedPath: "src/app.ts",
+      browserExpandedPaths: ["src"],
+    });
+  });
+
   it("ignores a panel of another kind rather than stamping browser fields onto it", () => {
     const other = makeSet({
       panelsById: {

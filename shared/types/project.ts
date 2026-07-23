@@ -172,6 +172,8 @@ export interface PanelSnapshot {
   browserSidebarCollapsed?: boolean;
   /** Last-known tree structure of a file browser panel (#11367) */
   browserTreeSnapshot?: FileBrowserTreeSnapshot;
+  /** File browser tree column width in px (only a non-default, in-range value persisted) */
+  browserSidebarWidth?: number;
   /** Legacy pre-file-panel field: absolute path shown in a markdown panel */
   markdownFilePath?: string;
   /** Legacy pre-file-panel field: markdown panel view mode */

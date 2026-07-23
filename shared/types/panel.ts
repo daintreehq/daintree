@@ -774,6 +774,13 @@ export interface FileBrowserPanelData extends BasePanelData {
    * eviction; only the persisted record survives.
    */
   browserTreeSnapshot?: FileBrowserTreeSnapshot;
+  /**
+   * Dragged width of the tree column in px. Absent = the 288px default; only a
+   * non-default, in-range width is persisted, so an unresized panel stays
+   * sparse. Independent of `browserSidebarCollapsed`: collapsing never clears
+   * it, so re-opening restores the last-dragged width (#11331).
+   */
+  browserSidebarWidth?: number;
 }
 
 export type PanelInstance =

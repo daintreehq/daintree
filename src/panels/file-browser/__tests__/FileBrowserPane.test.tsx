@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, act, screen, waitFor } from "@testing-library/react";
+import { render, act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // FileBrowserPane hosts the tree column beside the viewer. #11328 adds a
@@ -55,6 +55,7 @@ interface MockPanel {
   browserShowIgnored?: boolean;
   browserRootPath?: string;
   browserSidebarCollapsed?: boolean;
+  browserSidebarWidth?: number;
 }
 
 const mockPanel: MockPanel = { id: "fb-1", kind: "file-browser" };
@@ -150,6 +151,7 @@ beforeEach(() => {
   mockPanel.browserSelectedPath = undefined;
   mockPanel.browserRootPath = undefined;
   mockPanel.browserShowIgnored = undefined;
+  mockPanel.browserSidebarWidth = undefined;
   for (const name of ["matchMedia"] as const) {
     if (typeof window[name] !== "function") {
       Object.defineProperty(window, name, {
@@ -412,6 +414,186 @@ describe("last-known tree capture (#11367)", () => {
     unmount();
 
     // A null capture must not clobber a previously persisted snapshot.
+    expect(setFileBrowserViewMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("FileBrowserPane resizable sidebar (#11331)", () => {
+  // A fresh element per call: React's reconciler bails on a referentially-equal
+  // root element, so reusing one constant across two rerenders would silently
+  // skip the second (the mock store is only re-read when the tree reconciles).
+  const paneJsx = () => (
+    <TooltipProvider>
+      <FileBrowserPane
+        id="fb-1"
+        title="Files"
+        worktreeId="wt-1"
+        isFocused
+        location="grid"
+        onFocus={vi.fn()}
+        onClose={vi.fn()}
+      />
+    </TooltipProvider>
+  );
+
+  function treeColumn(): HTMLElement {
+    const controlsId = screen
+      .getByTestId("file-browser-sidebar-toggle")
+      .getAttribute("aria-controls")!;
+    return document.getElementById(controlsId)!;
+  }
+
+  function separator(): HTMLElement {
+    return screen.getByTestId("file-browser-sidebar-resize");
+  }
+
+  it("drives the tree column width and separator value from the stored width", () => {
+    mockPanel.browserSidebarWidth = 400;
+    renderPane();
+
+    expect(treeColumn().style.width).toBe("400px");
+    expect(separator().getAttribute("aria-valuenow")).toBe("400");
+  });
+
+  it("falls back to the 288px default when no width is stored", () => {
+    renderPane();
+
+    expect(treeColumn().style.width).toBe("288px");
+    expect(separator().getAttribute("aria-valuenow")).toBe("288");
+  });
+
+  it("exposes a focusable vertical separator with the bounds as ARIA values", () => {
+    renderPane();
+    const handle = separator();
+
+    expect(handle.getAttribute("role")).toBe("separator");
+    expect(handle.getAttribute("aria-orientation")).toBe("vertical");
+    expect(handle.getAttribute("aria-valuemin")).toBe("200");
+    expect(handle.getAttribute("aria-valuemax")).toBe("600");
+    expect(handle.getAttribute("tabindex")).toBe("0");
+  });
+
+  it("widens on a rightward drag and narrows on a leftward drag, writing every move", () => {
+    renderPane(); // starts at 288
+    const handle = separator();
+
+    fireEvent.mouseDown(handle, { clientX: 100, detail: 1 });
+    fireEvent.mouseMove(document, { clientX: 150 }); // +50 → 338
+    fireEvent.mouseMove(document, { clientX: 120 }); // -20 vs start → 308
+    fireEvent.mouseUp(document);
+
+    // Continuous writes, one per move, delta from the mousedown-captured start.
+    expect(setFileBrowserViewMock).toHaveBeenNthCalledWith(1, "fb-1", { browserSidebarWidth: 338 });
+    expect(setFileBrowserViewMock).toHaveBeenNthCalledWith(2, "fb-1", { browserSidebarWidth: 308 });
+  });
+
+  it("clamps a drag past either bound to the min and max", () => {
+    renderPane();
+    const handle = separator();
+
+    fireEvent.mouseDown(handle, { clientX: 100, detail: 1 });
+    fireEvent.mouseMove(document, { clientX: 1200 }); // +1100 → clamp 600
+    fireEvent.mouseMove(document, { clientX: 0 }); // -100 vs start → clamp 200
+    fireEvent.mouseUp(document);
+
+    expect(setFileBrowserViewMock).toHaveBeenNthCalledWith(1, "fb-1", { browserSidebarWidth: 600 });
+    expect(setFileBrowserViewMock).toHaveBeenNthCalledWith(2, "fb-1", { browserSidebarWidth: 200 });
+  });
+
+  it("ignores the second mousedown of a double-click so the reset doesn't jitter first", () => {
+    renderPane();
+    const handle = separator();
+
+    // detail > 1 is the browser's synthetic second mousedown before dblclick.
+    fireEvent.mouseDown(handle, { clientX: 100, detail: 2 });
+    fireEvent.mouseMove(document, { clientX: 300 });
+
+    // No drag listener was attached, so the move writes nothing.
+    expect(setFileBrowserViewMock).not.toHaveBeenCalled();
+  });
+
+  it("resets to the default width on double-click", () => {
+    mockPanel.browserSidebarWidth = 500;
+    renderPane();
+
+    fireEvent.doubleClick(separator());
+
+    expect(setFileBrowserViewMock).toHaveBeenCalledWith("fb-1", { browserSidebarWidth: 288 });
+  });
+
+  it("resizes from the keyboard: arrows step, Shift coarsens, Home/End jump to bounds", () => {
+    renderPane(); // 288
+    const handle = separator();
+
+    fireEvent.keyDown(handle, { key: "ArrowRight" });
+    expect(setFileBrowserViewMock).toHaveBeenLastCalledWith("fb-1", { browserSidebarWidth: 298 });
+
+    fireEvent.keyDown(handle, { key: "ArrowLeft" });
+    expect(setFileBrowserViewMock).toHaveBeenLastCalledWith("fb-1", { browserSidebarWidth: 278 });
+
+    fireEvent.keyDown(handle, { key: "ArrowRight", shiftKey: true });
+    expect(setFileBrowserViewMock).toHaveBeenLastCalledWith("fb-1", { browserSidebarWidth: 338 });
+
+    fireEvent.keyDown(handle, { key: "Home" });
+    expect(setFileBrowserViewMock).toHaveBeenLastCalledWith("fb-1", { browserSidebarWidth: 200 });
+
+    fireEvent.keyDown(handle, { key: "End" });
+    expect(setFileBrowserViewMock).toHaveBeenLastCalledWith("fb-1", { browserSidebarWidth: 600 });
+  });
+
+  it("ignores keys that aren't resize controls", () => {
+    renderPane();
+
+    fireEvent.keyDown(separator(), { key: "a" });
+
+    expect(setFileBrowserViewMock).not.toHaveBeenCalled();
+  });
+
+  it("renders no resize separator while the sidebar is collapsed", () => {
+    mockPanel.browserSidebarCollapsed = true;
+    renderPane();
+
+    expect(screen.queryByTestId("file-browser-sidebar-resize")).toBeNull();
+  });
+
+  it("restores the previously-dragged width after collapse and re-expand", () => {
+    mockPanel.browserSidebarWidth = 420;
+    const { rerender } = renderPane();
+    expect(treeColumn().style.width).toBe("420px");
+
+    mockPanel.browserSidebarCollapsed = true;
+    rerender(paneJsx());
+    expect(screen.queryByTestId("file-browser-sidebar-resize")).toBeNull();
+
+    // Width is decoupled from the collapsed flag, so re-opening comes back at the
+    // last-dragged width rather than the default.
+    mockPanel.browserSidebarCollapsed = false;
+    rerender(paneJsx());
+    expect(treeColumn().style.width).toBe("420px");
+    expect(separator().getAttribute("aria-valuenow")).toBe("420");
+  });
+
+  it("drops the document listeners when the pane unmounts mid-drag", () => {
+    const { unmount } = renderPane();
+
+    fireEvent.mouseDown(separator(), { clientX: 100, detail: 1 });
+    unmount();
+    // The unmount effect fired the drag cleanup, so this move reaches no listener.
+    fireEvent.mouseMove(document, { clientX: 400 });
+
+    expect(setFileBrowserViewMock).not.toHaveBeenCalled();
+  });
+
+  it("drops the document listeners when the sidebar collapses mid-drag", () => {
+    const { rerender } = renderPane();
+
+    fireEvent.mouseDown(separator(), { clientX: 100, detail: 1 });
+    // Collapse unmounts the grip but not the pane, so a dedicated effect must
+    // fire the same cleanup — otherwise the document listeners keep writing.
+    mockPanel.browserSidebarCollapsed = true;
+    rerender(paneJsx());
+    fireEvent.mouseMove(document, { clientX: 400 });
+
     expect(setFileBrowserViewMock).not.toHaveBeenCalled();
   });
 });

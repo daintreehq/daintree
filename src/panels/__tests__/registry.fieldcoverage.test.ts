@@ -285,6 +285,7 @@ const FILE_BROWSER_FIELD_CLASSIFICATION = {
   // must ride the panel record because nothing renderer-side survives LRU
   // eviction.
   browserTreeSnapshot: true,
+  browserSidebarWidth: true,
   // BasePanelData carrier-bookkeeping timestamps — written by the base
   // serialization layer in panelToSnapshot, not per-kind serializers.
   createdAt: false,
@@ -473,6 +474,9 @@ const fileBrowserFixture: FileBrowserPanelData = {
   browserRootPath: "src",
   browserSidebarCollapsed: true,
   browserTreeSnapshot: browserTreeSnapshotFixture,
+  // A non-default width (the serializer omits 288), so the coverage spread emits
+  // the key instead of dropping it as a default.
+  browserSidebarWidth: 360,
 };
 
 const savedFileBrowser: SavedTerminalData = {
@@ -484,6 +488,7 @@ const savedFileBrowser: SavedTerminalData = {
   browserRootPath: "src",
   browserSidebarCollapsed: true,
   browserTreeSnapshot: browserTreeSnapshotFixture,
+  browserSidebarWidth: 360,
 };
 
 const diffFixture: DiffPanelData = {

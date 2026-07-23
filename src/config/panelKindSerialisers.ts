@@ -9,6 +9,7 @@ import {
   MAX_SNAPSHOT_NODES,
   MAX_SNAPSHOT_TEXT_CHARS,
 } from "@/panels/file-browser/fileBrowserTree";
+import { normalizeFileBrowserSidebarWidth } from "@/panels/file-browser/sidebarWidth";
 
 type PanelKindDeserializer = (saved: SavedTerminalData) => Partial<AddTerminalArgs>;
 
@@ -250,6 +251,10 @@ const BUILT_IN_DESERIALIZERS = {
     // snapshot holding a string or object must fall back to the open default.
     browserSidebarCollapsed: saved.browserSidebarCollapsed === true ? true : undefined,
     browserTreeSnapshot: sanitizeTreeSnapshot(saved.browserTreeSnapshot),
+    // A finite number is clamped into range; a string/NaN/Infinity from a
+    // hand-edited snapshot falls back to the default rather than becoming a
+    // broken inline `style.width` (#11331).
+    browserSidebarWidth: normalizeFileBrowserSidebarWidth(saved.browserSidebarWidth),
   }),
   diff: (saved) => ({
     filePath: saved.filePath,

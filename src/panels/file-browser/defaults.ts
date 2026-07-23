@@ -1,10 +1,15 @@
 import type { FileBrowserPanelData } from "@shared/types/panel";
 import type { FileBrowserPanelOptions } from "@shared/types/addPanelOptions";
 import { canonicalizeRootPath } from "./fileBrowserTree";
+import {
+  FILE_BROWSER_SIDEBAR_DEFAULT_WIDTH,
+  normalizeFileBrowserSidebarWidth,
+} from "./sidebarWidth";
 
 export function createFileBrowserDefaults(
   options: FileBrowserPanelOptions
 ): Partial<FileBrowserPanelData> {
+  const width = normalizeFileBrowserSidebarWidth(options.browserSidebarWidth);
   return {
     // `!= null` rather than truthiness: an explicit `false` for the dotfile
     // toggle is a deliberate choice, and dropping it here would let a later
@@ -29,5 +34,9 @@ export function createFileBrowserDefaults(
     ...(options.browserTreeSnapshot != null && {
       browserTreeSnapshot: options.browserTreeSnapshot,
     }),
+    // Only a non-default width materializes: 288 and absent are the same state,
+    // so a default-width panel stays sparse just like the collapsed bit.
+    ...(width != null &&
+      width !== FILE_BROWSER_SIDEBAR_DEFAULT_WIDTH && { browserSidebarWidth: width }),
   };
 }

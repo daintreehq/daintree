@@ -2,6 +2,10 @@ import type { FileBrowserTreeSnapshot } from "@shared/types/panel";
 import { deepEqualIgnoringUndefined } from "@shared/utils/layoutMerge";
 import type { PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
 import { saveNormalized } from "./persistence";
+import {
+  FILE_BROWSER_SIDEBAR_DEFAULT_WIDTH,
+  clampFileBrowserSidebarWidth,
+} from "@/panels/file-browser/sidebarWidth";
 
 type Set = PanelRegistryStoreApi["setState"];
 
@@ -15,6 +19,8 @@ export interface FileBrowserViewPatch {
   browserSidebarCollapsed?: boolean;
   /** Last-known tree structure, captured as the view goes away (#11367). */
   browserTreeSnapshot?: FileBrowserTreeSnapshot;
+  /** Tree column width in px; clamped into range before it lands. */
+  browserSidebarWidth?: number;
 }
 
 function sameStringList(a: string[] | undefined, b: string[]): boolean {
@@ -26,15 +32,22 @@ function sameStringList(a: string[] | undefined, b: string[]): boolean {
 export const createFileBrowserPanelActions = (
   set: Set
 ): Pick<PanelRegistrySlice, "setFileBrowserView"> => ({
-  // One setter for all three fields rather than three: expanding a folder from
-  // the keyboard moves the selection at the same time, and two sequential
-  // writes would persist an intermediate state where the selected row does not
-  // exist in the expanded tree.
+  // One setter for every view field rather than one per field: expanding a
+  // folder from the keyboard moves the selection at the same time, and two
+  // sequential writes would persist an intermediate state where the selected
+  // row does not exist in the expanded tree.
   setFileBrowserView: (id: string, patch: FileBrowserViewPatch) => {
     set((state) => {
       const panel = state.panelsById[id];
       if (!panel) return state;
       if (panel.kind !== "file-browser") return state;
+
+      // Clamp at the single write chokepoint so a continuous drag (or any
+      // programmatic caller) can never persist an out-of-range width.
+      const nextWidth =
+        patch.browserSidebarWidth === undefined
+          ? undefined
+          : clampFileBrowserSidebarWidth(patch.browserSidebarWidth);
 
       const selectedUnchanged =
         patch.browserSelectedPath === undefined ||
@@ -62,17 +75,25 @@ export const createFileBrowserPanelActions = (
       const treeSnapshotUnchanged =
         patch.browserTreeSnapshot === undefined ||
         deepEqualIgnoringUndefined(patch.browserTreeSnapshot, panel.browserTreeSnapshot);
+      // Absent width and the 288 default are the same state, so resetting a
+      // never-resized panel to the default must count as a no-op — normalized
+      // through `?? DEFAULT` on both sides, like the collapsed flag.
+      const widthUnchanged =
+        nextWidth === undefined ||
+        nextWidth === (panel.browserSidebarWidth ?? FILE_BROWSER_SIDEBAR_DEFAULT_WIDTH);
 
       // Bail on a no-op write. The tree calls this on every arrow key, and a
-      // fresh panel object each time would re-render every panel-store
-      // subscriber and re-write the persisted snapshot for nothing.
+      // drag calls it on every mousemove; a fresh panel object each time would
+      // re-render every panel-store subscriber and re-write the persisted
+      // snapshot for nothing.
       if (
         selectedUnchanged &&
         expandedUnchanged &&
         hideDotfilesUnchanged &&
         rootUnchanged &&
         collapsedUnchanged &&
-        treeSnapshotUnchanged
+        treeSnapshotUnchanged &&
+        widthUnchanged
       )
         return state;
 
@@ -96,6 +117,7 @@ export const createFileBrowserPanelActions = (
         ...(patch.browserTreeSnapshot !== undefined && {
           browserTreeSnapshot: patch.browserTreeSnapshot,
         }),
+        ...(nextWidth !== undefined && { browserSidebarWidth: nextWidth }),
       };
 
       const newById = { ...state.panelsById, [id]: nextPanel };
