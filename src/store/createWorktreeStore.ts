@@ -2,7 +2,12 @@ import { createStore, type StoreApi } from "zustand/vanilla";
 import type { WorktreeSnapshot, WorktreeEventVersion, AttachIssuePayload } from "@shared/types";
 import { usePanelStore } from "./panelStore";
 import { worktreeClient } from "@/clients";
-import { closeTerminalsForWorktree } from "@/components/Worktree/worktreeDeleteHelper";
+import {
+  captureWorktreeTerminalSnapshot,
+  closeTerminalsForWorktree,
+  restoreClosedTerminals,
+  type WorktreeTerminalRestoreSnapshot,
+} from "@/components/Worktree/worktreeDeleteHelper";
 import { logDebug } from "@/utils/logger";
 import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -703,6 +708,19 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
         version,
         tombstones,
       });
+
+      if (hadWorktree) {
+        // The worktree is authoritatively gone (#11344): drop its restore
+        // bookkeeping so a snapshot from a since-superseded delete can't leak or
+        // replay. Do NOT touch the worktree's panels here — the deleted-worktree
+        // ghost row (#11232) deliberately leaves surviving panels alive (their
+        // agent processes keep running) until the user acts or the auto-cleanup
+        // TTL trashes them.
+        discardTerminalRestores(
+          worktreeId,
+          outboxEntries.map((entry) => entry.mutationId)
+        );
+      }
     },
 
     startDelete(worktreeId: string, options: WorktreeDeleteOptions) {
@@ -1193,6 +1211,50 @@ function mintMutationId(): string {
 }
 
 /**
+ * Terminals closed ahead of a `git worktree remove`, held by `mutationId` so
+ * they can be relaunched if the delete is ultimately abandoned (#11344). Keyed
+ * by mutationId — not worktreeId — so the snapshot survives the outbox retry
+ * loop: a connectivity or generic failure leaves the delete `pending` and
+ * replays `runDeleteAsync`, but the replay finds no live terminals to snapshot
+ * (they're already dead), so the ORIGINAL capture must persist here until the
+ * delete either succeeds (entry discarded) or is definitively abandoned (entry
+ * consumed to restore). In-memory only: a host crash mid-delete loses the
+ * snapshot, which is acceptable — the PTYs died with the host regardless.
+ */
+const pendingTerminalRestores = new Map<string, WorktreeTerminalRestoreSnapshot[]>();
+
+/**
+ * In-flight relaunch per worktree. A relaunch is a sequence of async `addPanel`
+ * spawns; a fresh `runDeleteAsync` for the same worktree awaits this before
+ * closing terminals, so a rapid retry can't interleave its close with spawns
+ * still in flight (which would strand panels against the git remove or leak them
+ * onto a deleted worktree).
+ */
+const restoreInFlight = new Map<string, Promise<void>>();
+
+/** Relaunch the terminals closed for a delete that has been definitively
+ *  abandoned (won't be auto-retried), then drop the snapshot. No-op when the
+ *  delete closed no terminals or a prior branch already consumed it. Tracks the
+ *  relaunch promise per worktree so a concurrent delete can await it. */
+function consumeTerminalRestore(worktreeId: string, mutationId: string): void {
+  const snapshot = pendingTerminalRestores.get(mutationId);
+  if (!snapshot) return;
+  pendingTerminalRestores.delete(mutationId);
+  const done = restoreClosedTerminals(snapshot).finally(() => {
+    if (restoreInFlight.get(worktreeId) === done) restoreInFlight.delete(worktreeId);
+  });
+  restoreInFlight.set(worktreeId, done);
+}
+
+/** Drop any pending/in-flight restore bookkeeping for a worktree. Called when
+ *  the worktree is authoritatively gone (`applyRemove`) so the module maps don't
+ *  leak a snapshot that will never be replayed. */
+function discardTerminalRestores(worktreeId: string, mutationIds: readonly string[]): void {
+  for (const mutationId of mutationIds) pendingTerminalRestores.delete(mutationId);
+  restoreInFlight.delete(worktreeId);
+}
+
+/**
  * Fire-and-forget delete async chain. The dialog dismisses immediately after
  * calling `startDelete`; this runs in the background driven by the store, so
  * `get()` / `set()` must never close over component state. The success cleanup
@@ -1218,7 +1280,22 @@ async function runDeleteAsync(
   mutationId: string
 ): Promise<void> {
   try {
+    // A rapid retry after a prior attempt's restore must not start closing
+    // terminals while that restore is still spawning panels (#11344) — wait it
+    // out so this attempt sees the fully-restored set.
+    const inFlightRestore = restoreInFlight.get(worktreeId);
+    if (inFlightRestore) await inFlightRestore;
+
     if (options.closeTerminals) {
+      // Capture BEFORE the destructive close so a close-wait timeout can't lose
+      // the snapshot. Set only on the FIRST attempt that finds live terminals —
+      // a retry replay finds none (already dead) and must not clobber it; a
+      // later non-empty capture (e.g. the user opened new terminals mid-retry)
+      // must not either.
+      const snapshot = captureWorktreeTerminalSnapshot(worktreeId);
+      if (snapshot.length > 0 && !pendingTerminalRestores.has(mutationId)) {
+        pendingTerminalRestores.set(mutationId, snapshot);
+      }
       await closeTerminalsForWorktree(worktreeId);
     }
     // Stop any running dev preview BEFORE `git worktree remove` (#9084). On
@@ -1246,11 +1323,13 @@ async function runDeleteAsync(
         transient: true,
       });
     }
-    // Success: `worktree-removed` will fire `applyRemove`, which clears
-    // `deletingIds` + delete-error maps. The outbox entry is pruned either by
-    // `applyRemove` (success path) or by the next `get-all-states` reply via
-    // `pruneAcknowledgedMutations` (post-crash replay path). Either way, no
-    // post-success bookkeeping is owned here.
+    // Success: the worktree is gone, so the closed terminals stay closed —
+    // discard their restore snapshot. `worktree-removed` will fire
+    // `applyRemove`, which clears `deletingIds` + delete-error maps. The outbox
+    // entry is pruned either by `applyRemove` (success path) or by the next
+    // `get-all-states` reply via `pruneAcknowledgedMutations` (post-crash replay
+    // path). Either way, no post-success bookkeeping is owned here.
+    pendingTerminalRestores.delete(mutationId);
     pruneOutboxEntry(get, set, mutationId);
   } catch (err) {
     const message = formatErrorMessage(err, "Failed to delete worktree");
@@ -1262,6 +1341,10 @@ async function runDeleteAsync(
     // learns the branch was not cleaned up. Without this, the failure is
     // silently swallowed (the original race guard's bug).
     if (!prev.deletingIds.has(worktreeId) && !prev.worktrees.has(worktreeId)) {
+      // The worktree directory is already gone (only the branch delete failed),
+      // so the closed terminals have no home to come back to — drop the snapshot
+      // rather than relaunch them against a deleted worktree.
+      pendingTerminalRestores.delete(mutationId);
       pruneOutboxEntry(get, set, mutationId);
       // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
       notify({
@@ -1350,7 +1433,9 @@ function handleDeleteFailure(
 
   if (!entry) {
     // No outbox entry — shouldn't happen since `startDelete` always creates
-    // one, but defensive: still surface the error on the card.
+    // one, but defensive: still surface the error on the card. Nothing will
+    // auto-retry this delete, so bring the closed terminals back (#11344).
+    consumeTerminalRestore(worktreeId, mutationId);
     set({
       deletingIds: nextDeletingIds,
       deleteErrors: nextDeleteErrors,
@@ -1370,6 +1455,12 @@ function handleDeleteFailure(
     retryCount: nextRetryCount,
     lastError: message,
   });
+
+  // Only a `failed` delete is definitively abandoned; a `pending` one will be
+  // replayed (reconnect or generic retry), so relaunching now would flicker the
+  // terminals and re-close them on the next attempt. Restore solely on the
+  // terminal transition (#11344).
+  if (nextStatus === "failed") consumeTerminalRestore(worktreeId, mutationId);
 
   set({
     deletingIds: nextDeletingIds,

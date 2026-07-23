@@ -12,7 +12,9 @@ function nextV(): WorktreeEventVersion {
 
 const {
   worktreeClientDeleteMock,
+  captureWorktreeTerminalSnapshotMock,
   closeTerminalsForWorktreeMock,
+  restoreClosedTerminalsMock,
   notifyMock,
   devPreviewGetByWorktreeMock,
   devPreviewStopByWorktreeMock,
@@ -21,7 +23,9 @@ const {
     vi.fn<
       (id: string, force?: boolean, deleteBranch?: boolean, mutationId?: string) => Promise<void>
     >(),
+  captureWorktreeTerminalSnapshotMock: vi.fn<(id: string) => unknown[]>(),
   closeTerminalsForWorktreeMock: vi.fn<(id: string) => Promise<void>>(),
+  restoreClosedTerminalsMock: vi.fn<(snapshot: readonly unknown[]) => Promise<void>>(),
   notifyMock: vi.fn(),
   devPreviewGetByWorktreeMock: vi.fn(),
   devPreviewStopByWorktreeMock: vi.fn(),
@@ -48,7 +52,9 @@ vi.mock("@/clients", async () => {
 });
 
 vi.mock("@/components/Worktree/worktreeDeleteHelper", () => ({
+  captureWorktreeTerminalSnapshot: captureWorktreeTerminalSnapshotMock,
   closeTerminalsForWorktree: closeTerminalsForWorktreeMock,
+  restoreClosedTerminals: restoreClosedTerminalsMock,
 }));
 
 vi.mock("@/lib/notify", () => ({
@@ -56,7 +62,8 @@ vi.mock("@/lib/notify", () => ({
 }));
 
 // Import after mocks so the store picks up the mocked deps.
-import { createWorktreeStore } from "@/store/createWorktreeStore";
+import { createWorktreeStore, OUTBOX_RETRY_CAP } from "@/store/createWorktreeStore";
+import { usePanelStore } from "@/store/panelStore";
 
 function makeSnapshot(id: string): WorktreeSnapshot {
   return {
@@ -81,12 +88,16 @@ function flushPromises(): Promise<void> {
 describe("createWorktreeStore — delete in-flight state (#8417)", () => {
   beforeEach(() => {
     worktreeClientDeleteMock.mockReset();
+    captureWorktreeTerminalSnapshotMock.mockReset();
     closeTerminalsForWorktreeMock.mockReset();
+    restoreClosedTerminalsMock.mockReset();
     notifyMock.mockReset();
     devPreviewGetByWorktreeMock.mockReset();
     devPreviewStopByWorktreeMock.mockReset();
     worktreeClientDeleteMock.mockResolvedValue();
+    captureWorktreeTerminalSnapshotMock.mockReturnValue([]);
     closeTerminalsForWorktreeMock.mockResolvedValue();
+    restoreClosedTerminalsMock.mockResolvedValue();
     // Default: no dev preview session for the worktree. Tests opt-in by
     // overriding the mock per case.
     devPreviewGetByWorktreeMock.mockResolvedValue(null);
@@ -395,6 +406,167 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
     expect(store.getState().deleteErrorArgs.get("wt-1")).toEqual({
       closeTerminals: true,
       force: false,
+    });
+  });
+
+  describe("#11344 — restore closed terminals when the delete is abandoned", () => {
+    const SNAPSHOT = [{ id: "t-1", location: "grid" }];
+
+    it("relaunches the closed terminals on a permanent failure", async () => {
+      captureWorktreeTerminalSnapshotMock.mockReturnValueOnce(SNAPSHOT);
+      worktreeClientDeleteMock.mockRejectedValueOnce(new Error("worktree has uncommitted changes"));
+
+      const store = createWorktreeStore();
+      store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+      store.getState().startDelete("wt-1", { closeTerminals: true, force: false });
+      await flushPromises();
+      await flushPromises();
+
+      expect(restoreClosedTerminalsMock).toHaveBeenCalledTimes(1);
+      expect(restoreClosedTerminalsMock).toHaveBeenCalledWith(SNAPSHOT);
+    });
+
+    it("captures BEFORE closing, so a close-wait timeout still restores at the retry cap", async () => {
+      captureWorktreeTerminalSnapshotMock.mockReturnValue(SNAPSHOT);
+      // The close itself times out before the git delete is even attempted.
+      closeTerminalsForWorktreeMock.mockRejectedValue(
+        new Error("Timed out waiting for 1 terminal(s) to close before deleting worktree")
+      );
+
+      const store = createWorktreeStore();
+      store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+      store.getState().startDelete("wt-1", { closeTerminals: true, force: false });
+      await flushPromises();
+      await flushPromises();
+      // Generic failure → still pending → not yet restored.
+      expect(restoreClosedTerminalsMock).not.toHaveBeenCalled();
+
+      // Drive the generic-retry budget to the cap.
+      for (let i = 1; i < OUTBOX_RETRY_CAP; i++) {
+        store.getState().retryDelete("wt-1");
+        await flushPromises();
+        await flushPromises();
+      }
+
+      // Never reached worktreeClient.delete, yet the captured snapshot survives
+      // the throw and restores exactly once at the cap.
+      expect(worktreeClientDeleteMock).not.toHaveBeenCalled();
+      expect(restoreClosedTerminalsMock).toHaveBeenCalledTimes(1);
+      expect(restoreClosedTerminalsMock).toHaveBeenCalledWith(SNAPSHOT);
+    });
+
+    it("a rapid retry waits for the in-flight restore before closing terminals again", async () => {
+      captureWorktreeTerminalSnapshotMock.mockReturnValue(SNAPSHOT);
+      worktreeClientDeleteMock.mockRejectedValueOnce(new Error("worktree has uncommitted changes"));
+      // Hold the restore open so it is still in flight when the retry fires.
+      let resolveRestore: () => void = () => {};
+      restoreClosedTerminalsMock.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveRestore = resolve;
+          })
+      );
+
+      const store = createWorktreeStore();
+      store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+      store.getState().startDelete("wt-1", { closeTerminals: true, force: false });
+      await flushPromises();
+      await flushPromises();
+      expect(restoreClosedTerminalsMock).toHaveBeenCalledTimes(1);
+
+      // Retry while the restore is still spawning panels.
+      closeTerminalsForWorktreeMock.mockClear();
+      worktreeClientDeleteMock.mockResolvedValueOnce();
+      store.getState().retryDelete("wt-1");
+      await flushPromises();
+      await flushPromises();
+      // Blocked on the in-flight restore — must not close terminals yet, which
+      // would strand the still-spawning panels against the git remove.
+      expect(closeTerminalsForWorktreeMock).not.toHaveBeenCalled();
+
+      resolveRestore();
+      await flushPromises();
+      await flushPromises();
+      expect(closeTerminalsForWorktreeMock).toHaveBeenCalledWith("wt-1");
+    });
+
+    it("does NOT relaunch on a connectivity failure — the delete stays pending for replay", async () => {
+      captureWorktreeTerminalSnapshotMock.mockReturnValueOnce(SNAPSHOT);
+      worktreeClientDeleteMock.mockRejectedValueOnce(new Error("HOST_EXITED: port gone"));
+
+      const store = createWorktreeStore();
+      store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+      store.getState().startDelete("wt-1", { closeTerminals: true, force: false });
+      await flushPromises();
+      await flushPromises();
+
+      expect(restoreClosedTerminalsMock).not.toHaveBeenCalled();
+    });
+
+    it("does NOT relaunch on success — the worktree is gone, terminals stay closed", async () => {
+      captureWorktreeTerminalSnapshotMock.mockReturnValueOnce(SNAPSHOT);
+
+      const store = createWorktreeStore();
+      store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+      store.getState().startDelete("wt-1", { closeTerminals: true, force: false });
+      await flushPromises();
+      await flushPromises();
+
+      expect(restoreClosedTerminalsMock).not.toHaveBeenCalled();
+    });
+
+    it("does NOT relaunch on the partial-success path — the worktree directory is already gone", async () => {
+      captureWorktreeTerminalSnapshotMock.mockReturnValueOnce(SNAPSHOT);
+      let rejectIpc: (reason: unknown) => void = () => {};
+      worktreeClientDeleteMock.mockImplementationOnce(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            rejectIpc = reject;
+          })
+      );
+
+      const store = createWorktreeStore();
+      store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+      store.getState().startDelete("wt-1", { closeTerminals: true, deleteBranch: true });
+      await flushPromises();
+
+      // Guard against a spurious pass: the delete IPC must actually be in flight
+      // before we simulate the removed-then-branch-failed ordering.
+      expect(worktreeClientDeleteMock).toHaveBeenCalledTimes(1);
+
+      // worktree-removed arrives before the branch-delete rejection.
+      store.getState().applyRemove("wt-1", nextV());
+      rejectIpc(new Error("Branch 'feature/x' has unmerged changes"));
+      await flushPromises();
+      await flushPromises();
+
+      expect(restoreClosedTerminalsMock).not.toHaveBeenCalled();
+    });
+
+    it("leaves the worktree's surviving panels untouched on removal (ghost-row contract #11232)", () => {
+      // applyRemove must NOT reap the worktree's panels — the deleted-worktree
+      // ghost row keeps them alive until the user acts or the TTL trashes them.
+      const store = createWorktreeStore();
+      store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+      const removeSpy = vi
+        .spyOn(usePanelStore.getState(), "removePanel")
+        .mockImplementation(() => {});
+      usePanelStore.setState({ panelIdsByWorktreeId: { "wt-1": ["browser-1", "agent-1"] } });
+
+      try {
+        store.getState().applyRemove("wt-1", nextV());
+        expect(removeSpy).not.toHaveBeenCalled();
+      } finally {
+        removeSpy.mockRestore();
+        usePanelStore.setState({ panelIdsByWorktreeId: {} });
+      }
     });
   });
 
