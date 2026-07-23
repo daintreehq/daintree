@@ -22,7 +22,7 @@ vi.mock("../../../utils/logger.js", () => ({
   }),
 }));
 
-import { journalAgentSession } from "../agentSessionJournal.js";
+import { journalAgentSession, journalAgentSessionRecord } from "../agentSessionJournal.js";
 import { readSessionHistory } from "../agentSessionHistory.js";
 import { getLifecycleLedger, disposeLifecycleLedger } from "../lifecycleLedger.js";
 import { events } from "../../events.js";
@@ -223,5 +223,36 @@ describe("journalAgentSession", () => {
 
     const records = await readSessionHistory(userDataDir);
     expect(records.map((r) => r.sessionId)).toEqual(["sess-fresh"]);
+  });
+
+  it("journalAgentSessionRecord persists bookmark intent and returns the durable record", async () => {
+    const ledger = getLifecycleLedger();
+    const generation = ledger.recordLaunch("term-1", { launchAgentId: "claude" });
+
+    const record = await journalAgentSessionRecord(
+      makeRecord("sess-1", { bookmark: { bookmarkedAt: 5, label: "Pin" } }),
+      { terminalId: "term-1", generation }
+    );
+
+    expect(record?.sessionId).toBe("sess-1");
+    expect(record?.bookmark).toEqual({ bookmarkedAt: 5, label: "Pin" });
+    const onDisk = await readSessionHistory(userDataDir);
+    expect(onDisk[0].bookmark).toEqual({ bookmarkedAt: 5, label: "Pin" });
+    expect(recordedEvents).toEqual([{ sessionId: "sess-1" }]);
+  });
+
+  it("journalAgentSessionRecord returns null and emits nothing on a duplicate generation", async () => {
+    const ledger = getLifecycleLedger();
+    const generation = ledger.recordLaunch("term-1", { launchAgentId: "claude" });
+    await journalAgentSessionRecord(makeRecord("sess-1"), { terminalId: "term-1", generation });
+    recordedEvents.length = 0;
+
+    const dup = await journalAgentSessionRecord(
+      makeRecord("sess-1", { bookmark: { bookmarkedAt: 1, label: "x" } }),
+      { terminalId: "term-1", generation }
+    );
+
+    expect(dup).toBeNull();
+    expect(recordedEvents).toEqual([]);
   });
 });

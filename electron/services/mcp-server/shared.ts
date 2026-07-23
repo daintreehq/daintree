@@ -341,6 +341,8 @@ const MCP_TOOL_ALLOWLIST_ENTRIES = [
   "agent.listToolbar",
   "agent.listAvailable",
   "agentSessionHistory.list",
+  // Read-only bookmark metadata (#11288); mutation actions stay off the MCP surface.
+  "session.bookmarks.list",
 
   "git.getProjectPulse",
   "git.getFileDiff",

@@ -227,6 +227,23 @@ export const RecipeSummarySchema = z.object({
 // tracks the TS type exactly: `worktreeId`/`title`/`projectId` are always present
 // but may be null; `agentLaunchFlags`/`agentModelId`/`cwd`/`branch` are `?:` and
 // may be absent, so the advertised MCP outputSchema must not mark them required.
+// Durable bookmark metadata (#11288). Present only when the user has pinned a
+// session; documents the shape surfaced through the MCP/list actions. Contains
+// no transcript/output/env — only the label and pane-presentation hints.
+export const AgentSessionBookmarkMetadataSchema = z.object({
+  bookmarkedAt: z.number(),
+  label: z.string(),
+  sourcePanelId: z.string().optional(),
+  sourceLocation: z.enum(["grid", "dock"]).optional(),
+  titleMode: z.enum(["default", "custom", "user"]).optional(),
+  agentPresetId: z.string().optional(),
+  agentPresetColor: z.string().optional(),
+  originalPresetId: z.string().optional(),
+  isUsingFallback: z.boolean().optional(),
+  fallbackChainIndex: z.number().optional(),
+  isInputLocked: z.boolean().optional(),
+});
+
 export const AgentSessionRecordSchema = z.object({
   sessionId: z.string(),
   agentId: z.string(),
@@ -240,4 +257,6 @@ export const AgentSessionRecordSchema = z.object({
   agentModelId: z.string().optional(),
   cwd: z.string().optional(),
   branch: z.string().optional(),
+  // Present when the user has pinned this session as a durable bookmark (#11288).
+  bookmark: AgentSessionBookmarkMetadataSchema.optional(),
 });

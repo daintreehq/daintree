@@ -2519,6 +2519,17 @@ function buildElectronApi(): ElectronAPI {
       getRetentionDays: () => _unwrappingInvoke(CHANNELS.AGENT_SESSION_GET_RETENTION),
       setRetentionDays: (days: number) =>
         _unwrappingInvoke(CHANNELS.AGENT_SESSION_SET_RETENTION, days),
+      // Session bookmarks (#11288)
+      prepareBookmark: (input: unknown) =>
+        _unwrappingInvoke(CHANNELS.AGENT_SESSION_PREPARE_BOOKMARK, input),
+      promoteBookmark: (input: unknown) =>
+        _unwrappingInvoke(CHANNELS.AGENT_SESSION_PROMOTE_BOOKMARK, input),
+      renameBookmark: (input: unknown) =>
+        _unwrappingInvoke(CHANNELS.AGENT_SESSION_RENAME_BOOKMARK, input),
+      deleteBookmark: (input: unknown) =>
+        _unwrappingInvoke(CHANNELS.AGENT_SESSION_DELETE_BOOKMARK, input),
+      listBookmarks: (input?: unknown) =>
+        _unwrappingInvoke(CHANNELS.AGENT_SESSION_LIST_BOOKMARKS, input),
     },
 
     // Clipboard API — bindings built from the preload-safe channel map in

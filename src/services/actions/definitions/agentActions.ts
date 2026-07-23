@@ -22,7 +22,7 @@ import {
 } from "@shared/config/agentIds";
 import { isAgentToolbarVisible } from "@shared/utils/agentPinned";
 import { isAgentInstalled, isAgentLaunchable } from "@shared/utils/agentAvailability";
-import type { ActionId } from "@shared/types/actions";
+import type { ActionContext, ActionId } from "@shared/types/actions";
 import { isPtyPanel, type TerminalSpawnSource } from "@shared/types/panel";
 export function registerAgentActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   const readAgentDiscoveryState = async () => {
@@ -521,6 +521,146 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       const { worktreeId } = (args ?? {}) as { worktreeId?: string };
       const sessions = await window.electron.agentSessionHistory.list(worktreeId);
       return { sessions };
+    },
+  }));
+
+  actions.set("session.bookmarkAndClose", () => ({
+    id: "session.bookmarkAndClose",
+    title: "Bookmark and close",
+    description:
+      "Capture a live agent pane's resumable conversation as a durable bookmark, then close the pane once the session is saved. Args: `terminalId` (the agent pane), a non-empty `label`, and `confirmed: true`. Only agents with exact-session resume are eligible. Prepare-before-remove: if capture or persistence fails the pane stays open and no bookmark is created. This interrupts a running agent and discards terminal scrollback — the conversation is resumable, the live process is not. Returns { record }.",
+    category: "agent",
+    kind: "command",
+    danger: "confirm",
+    scope: "renderer",
+    dangerRationale:
+      "Interrupts a running agent and removes its pane. The conversation is bookmarked and resumable, but the live process and terminal scrollback are discarded.",
+    // danger:"confirm" gates agent/plugin dispatch through ActionService (the
+    // caller must attest confirmation via the dispatch option) — no confirm
+    // dialog exists in Phase 1; the Phase-2 pane dialog will supply it. Hidden
+    // from the palette so a source:"user" pick can't bypass the D1 guard.
+    palette: { mode: "hidden" },
+    argsSchema: z.object({
+      terminalId: z.string().min(1),
+      label: z.string().trim().min(1).max(120),
+    }),
+    run: async (args: unknown) => {
+      const { terminalId, label } = args as { terminalId: string; label: string };
+      const panelStore = usePanelStore.getState();
+      const panel = panelStore.getTerminal(terminalId);
+      const metadata =
+        panel && isPtyPanel(panel)
+          ? {
+              sourcePanelId: terminalId,
+              titleMode: panel.titleMode,
+              agentPresetId: panel.agentPresetId,
+              agentPresetColor: panel.agentPresetColor,
+              originalPresetId: panel.originalPresetId,
+              isUsingFallback: panel.isUsingFallback,
+              fallbackChainIndex: panel.fallbackChainIndex,
+              isInputLocked: panel.isInputLocked,
+            }
+          : undefined;
+      const { record } = await window.electron.agentSessionHistory.prepareBookmark({
+        terminalId,
+        label,
+        metadata,
+      });
+      // Persisted successfully — remove the pane without a redundant second kill
+      // (prepareBookmark already gracefully shut the agent down in main).
+      panelStore.removePanel(terminalId, { backendAlreadyClosed: true });
+      return { record };
+    },
+  }));
+
+  actions.set("session.bookmark.promote", () => ({
+    id: "session.bookmark.promote",
+    title: "Add bookmark to session",
+    description:
+      "Pin an existing resumable session (from history) as a durable bookmark, keyed by `sessionId`, without launching it. Args: `sessionId` and a non-empty `label`. Bookmarked sessions are exempt from history retention and the per-worktree cap until deleted. Returns the updated record.",
+    category: "agent",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({
+      sessionId: z.string().min(1),
+      label: z.string().trim().min(1).max(120),
+    }),
+    run: async (args: unknown) => {
+      const { sessionId, label } = args as { sessionId: string; label: string };
+      return window.electron.agentSessionHistory.promoteBookmark({ sessionId, label });
+    },
+  }));
+
+  actions.set("session.bookmark.rename", () => ({
+    id: "session.bookmark.rename",
+    title: "Rename bookmark",
+    description:
+      "Change a bookmark's label without touching the agent session or its title. Args: `sessionId` and a non-empty `label`. Only an already-bookmarked session can be renamed. Returns the updated record.",
+    category: "agent",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({
+      sessionId: z.string().min(1),
+      label: z.string().trim().min(1).max(120),
+    }),
+    run: async (args: unknown) => {
+      const { sessionId, label } = args as { sessionId: string; label: string };
+      return window.electron.agentSessionHistory.renameBookmark({ sessionId, label });
+    },
+  }));
+
+  actions.set("session.bookmark.delete", () => ({
+    id: "session.bookmark.delete",
+    title: "Delete bookmark",
+    description:
+      "Remove a bookmark, demoting the session back to ordinary time-limited history. Args: `sessionId` and `confirmed: true`. Does NOT delete the provider's transcript or any open pane. Irreversible for the Daintree bookmark.",
+    category: "agent",
+    kind: "command",
+    danger: "confirm",
+    scope: "renderer",
+    dangerRationale:
+      "Permanently removes the durable bookmark; the session demotes to ordinary history and may then age out. The provider transcript is untouched.",
+    // See session.bookmarkAndClose — danger:"confirm" gates dispatch through
+    // ActionService; hidden from the palette so a user pick can't bypass it.
+    palette: { mode: "hidden" },
+    argsSchema: z.object({
+      sessionId: z.string().min(1),
+    }),
+    run: async (args: unknown) => {
+      const { sessionId } = args as { sessionId: string };
+      await window.electron.agentSessionHistory.deleteBookmark({ sessionId });
+    },
+  }));
+
+  actions.set("session.bookmarks.list", () => ({
+    id: "session.bookmarks.list",
+    title: "List bookmarks",
+    description:
+      "List the user's durable session bookmarks, newest-first by bookmark time. Args: `projectId` (optional) — restrict to one project; omit to use the caller's project context, or list across all projects when there is none (matching agentSessionHistory.list). Returns { bookmarks: [{ sessionId, agentId, worktreeId, title, projectId, savedAt, agentLaunchFlags?, agentModelId?, cwd?, branch?, bookmark: { bookmarkedAt, label, ... } }] }. Read-only metadata; NO transcript content. Never errors — returns { bookmarks: [] } when there are none.",
+    category: "agent",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z
+      .object({
+        projectId: z.string().min(1).optional(),
+      })
+      .optional(),
+    resultSchema: z.object({
+      bookmarks: z.array(AgentSessionRecordSchema),
+    }),
+    mcpOutputSchema: true,
+    run: async (args: unknown, ctx: ActionContext) => {
+      const { projectId } = (args ?? {}) as { projectId?: string };
+      // Explicit arg wins, then the caller's project context. When neither is
+      // present, list across all projects (consistent with agentSessionHistory.list).
+      const scope = projectId ?? ctx.projectId ?? undefined;
+      const bookmarks = await window.electron.agentSessionHistory.listBookmarks(
+        scope ? { projectId: scope } : undefined
+      );
+      return { bookmarks };
     },
   }));
 

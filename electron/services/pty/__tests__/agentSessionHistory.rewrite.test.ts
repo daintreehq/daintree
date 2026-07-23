@@ -110,4 +110,21 @@ describe("rewriteAgentSessionPathsForProject", () => {
     const out = await readSessionHistory(userDataDir);
     expect(out[0].worktreeId).toBe("/old/project");
   });
+
+  it("preserves bookmark metadata when rebasing a project's paths (#11288)", async () => {
+    await seed([
+      rec({
+        sessionId: "a",
+        projectId: "p1",
+        worktreeId: "/old/project/wt",
+        cwd: "/old/project/wt",
+        bookmark: { bookmarkedAt: 9, label: "Pin" },
+      }),
+    ]);
+    await rewriteAgentSessionPathsForProject("p1", OLD, NEW);
+    const [out] = await readSessionHistory(userDataDir);
+    expect(out.worktreeId).toBe("/new/renamed/wt");
+    expect(out.cwd).toBe("/new/renamed/wt");
+    expect(out.bookmark).toEqual({ bookmarkedAt: 9, label: "Pin" });
+  });
 });

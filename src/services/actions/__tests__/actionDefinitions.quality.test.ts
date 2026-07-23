@@ -345,6 +345,8 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "forge.editPR",
   "forge.closeIssue",
   "forge.editIssue",
+  "session.bookmarkAndClose",
+  "session.bookmark.delete",
 ];
 
 /**
@@ -433,6 +435,8 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   // dispatch happens through the forge UI, not these actions.
   "forge.closeIssue",
   "forge.editIssue",
+  "session.bookmarkAndClose",
+  "session.bookmark.delete",
 ];
 
 describe("destructive-action confirm wiring", () => {
@@ -513,6 +517,10 @@ describe("destructive-action danger metadata", () => {
       issueNumber: 1,
       // terminal.kill/restart require a terminalId before their confirm gate runs.
       terminalId: "term-placeholder",
+      // session.bookmarkAndClose/delete need label + sessionId to clear arg
+      // validation and reach the confirm gate.
+      label: "placeholder",
+      sessionId: "session-placeholder",
     };
 
     // Some listed actions (e.g. worktree.resource.teardown) gate availability

@@ -9,10 +9,18 @@ import {
   listAgentSessions,
   clearAgentSessions,
   pruneAgentSessions,
+  promoteBookmark,
+  renameBookmark,
+  deleteBookmark,
+  listBookmarks,
   getSessionHistoryPath,
   MAX_RECORDS_PER_WORKTREE,
   SESSION_HISTORY_TTL_MS,
 } from "../agentSessionHistory.js";
+import type {
+  AgentSessionBookmarkMetadata,
+  AgentSessionRecord,
+} from "../../../../shared/types/ipc/agentSessionHistory.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -676,5 +684,251 @@ describe("agentSessionHistory", () => {
     expect(await quarantineSidecars(userDataDir)).toHaveLength(1);
     const after = await readSessionHistory(userDataDir);
     expect(after.map((r) => r.sessionId)).toEqual(["fresh"]);
+  });
+});
+
+describe("agentSessionHistory bookmarks", () => {
+  let userDataDir: string;
+  const previousUserData = process.env.DAINTREE_USER_DATA;
+
+  beforeEach(async () => {
+    userDataDir = await fsp.mkdtemp(path.join(os.tmpdir(), "daintree-bookmarks-"));
+    process.env.DAINTREE_USER_DATA = userDataDir;
+  });
+
+  afterEach(async () => {
+    process.env.DAINTREE_USER_DATA = previousUserData;
+    await fsp.rm(userDataDir, { recursive: true, force: true });
+  });
+
+  const DAY = 24 * 60 * 60 * 1000;
+
+  function bm(overrides: Partial<AgentSessionBookmarkMetadata> = {}): AgentSessionBookmarkMetadata {
+    return { bookmarkedAt: 1_000, label: "Pinned", ...overrides };
+  }
+
+  function record(
+    sessionId: string,
+    overrides: Partial<AgentSessionRecord> = {}
+  ): AgentSessionRecord {
+    return {
+      sessionId,
+      agentId: "claude",
+      worktreeId: "wt-1",
+      title: null,
+      projectId: "proj-1",
+      savedAt: Date.now(),
+      ...overrides,
+    };
+  }
+
+  // Seed the journal on disk directly so age/cap/bookmark mixes can be controlled
+  // exactly (persistAgentSession would stamp savedAt=now and evict on the way in).
+  async function seed(records: AgentSessionRecord[]): Promise<void> {
+    const filePath = getSessionHistoryPath(userDataDir)!;
+    await fsp.writeFile(filePath, JSON.stringify(records));
+  }
+
+  // Fresh temp dir per retention value (the beforeEach one is reused across the
+  // it.each rows) so the stat-gated read cache can't serve a prior row's records.
+  it.each([7, 30, 90, 0] as const)(
+    "keeps bookmarks across retention=%s while ordinary records age out",
+    async (days) => {
+      const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "daintree-bookmarks-ret-"));
+      try {
+        const ttlDays = days === 0 ? 3650 : days;
+        const filePath = getSessionHistoryPath(dir)!;
+        await fsp.writeFile(
+          filePath,
+          JSON.stringify([
+            record("pinned", { savedAt: Date.now() - (ttlDays + 10) * DAY, bookmark: bm() }),
+            record("stale", { savedAt: Date.now() - (ttlDays + 10) * DAY }),
+            record("fresh", { savedAt: Date.now() }),
+          ])
+        );
+        const ids = listAgentSessions(undefined, dir, days)
+          .map((r) => r.sessionId)
+          .sort();
+        // The pinned record survives regardless of retention; the stale ordinary
+        // one ages out for finite windows and is kept for "forever" (0).
+        const expected = days === 0 ? ["fresh", "pinned", "stale"] : ["fresh", "pinned"];
+        expect(ids).toEqual(expected);
+      } finally {
+        await fsp.rm(dir, { recursive: true, force: true });
+      }
+    }
+  );
+
+  it("exempts bookmarks from the per-worktree cap while ordinary records are capped", async () => {
+    const ordinary = Array.from({ length: MAX_RECORDS_PER_WORKTREE + 5 }, (_, i) =>
+      record(`ord-${i}`, { savedAt: Date.now() - i * 1000 })
+    );
+    const pinned = [
+      record("pin-a", { savedAt: Date.now() - 10_000, bookmark: bm({ bookmarkedAt: 1 }) }),
+      record("pin-b", { savedAt: Date.now() - 20_000, bookmark: bm({ bookmarkedAt: 2 }) }),
+      record("pin-c", { savedAt: Date.now() - 30_000, bookmark: bm({ bookmarkedAt: 3 }) }),
+    ];
+    await seed([...ordinary, ...pinned]);
+
+    const kept = listAgentSessions("wt-1", userDataDir);
+    const bookmarked = kept.filter((r) => r.bookmark);
+    const plain = kept.filter((r) => !r.bookmark);
+    expect(plain).toHaveLength(MAX_RECORDS_PER_WORKTREE);
+    expect(bookmarked.map((r) => r.sessionId).sort()).toEqual(["pin-a", "pin-b", "pin-c"]);
+  });
+
+  it("carries an existing bookmark forward when a resumed session is re-journaled", async () => {
+    await seed([
+      record("sess-x", { savedAt: Date.now() - 5 * DAY, bookmark: bm({ bookmarkedAt: 42 }) }),
+    ]);
+
+    // Resume + re-close writes a fresh ORDINARY record for the same sessionId.
+    const persisted = await persistAgentSession(
+      {
+        sessionId: "sess-x",
+        agentId: "claude",
+        worktreeId: "wt-1",
+        title: "newer",
+        projectId: "proj-1",
+      },
+      userDataDir
+    );
+
+    const all = await readSessionHistory(userDataDir);
+    expect(all).toHaveLength(1);
+    expect(all[0].title).toBe("newer"); // fresh resume data won the position
+    expect(all[0].bookmark).toEqual(bm({ bookmarkedAt: 42 })); // pin (and its time) preserved
+    expect(persisted?.bookmark?.bookmarkedAt).toBe(42);
+  });
+
+  it("lets a deliberate re-bookmark replace the timestamp", async () => {
+    await seed([record("sess-x", { bookmark: bm({ bookmarkedAt: 42, label: "old" }) })]);
+    await persistAgentSession(
+      {
+        sessionId: "sess-x",
+        agentId: "claude",
+        worktreeId: "wt-1",
+        title: null,
+        projectId: "proj-1",
+        bookmark: bm({ bookmarkedAt: 99, label: "new" }),
+      },
+      userDataDir
+    );
+    const all = await readSessionHistory(userDataDir);
+    expect(all).toHaveLength(1);
+    expect(all[0].bookmark).toEqual(bm({ bookmarkedAt: 99, label: "new" }));
+  });
+
+  it("clear-all retains bookmarks and drops ordinary history", async () => {
+    await seed([record("keep", { bookmark: bm() }), record("drop", { worktreeId: "wt-2" })]);
+    await clearAgentSessions(undefined, userDataDir);
+    const ids = (await readSessionHistory(userDataDir)).map((r) => r.sessionId);
+    expect(ids).toEqual(["keep"]);
+  });
+
+  it("scoped clear retains bookmarks in the target worktree and spares other worktrees", async () => {
+    await seed([
+      record("wt1-pin", { worktreeId: "wt-1", bookmark: bm() }),
+      record("wt1-ord", { worktreeId: "wt-1" }),
+      record("wt2-ord", { worktreeId: "wt-2" }),
+    ]);
+    await clearAgentSessions("wt-1", userDataDir);
+    const ids = (await readSessionHistory(userDataDir)).map((r) => r.sessionId).sort();
+    expect(ids).toEqual(["wt1-pin", "wt2-ord"]);
+  });
+
+  it("promoteBookmark pins an existing record, updating label but preserving bookmarkedAt", async () => {
+    await seed([
+      record("sess-x", { bookmark: bm({ bookmarkedAt: 7, label: "first" }) }),
+      record("sess-y"),
+    ]);
+
+    const promotedY = await promoteBookmark("sess-y", "Y label", userDataDir);
+    expect(promotedY?.bookmark?.label).toBe("Y label");
+    expect(typeof promotedY?.bookmark?.bookmarkedAt).toBe("number");
+
+    // Re-promoting an already-bookmarked session updates the label in place.
+    const repromoted = await promoteBookmark("sess-x", "second", userDataDir);
+    expect(repromoted?.bookmark).toEqual(bm({ bookmarkedAt: 7, label: "second" }));
+
+    expect(await promoteBookmark("missing", "x", userDataDir)).toBeNull();
+  });
+
+  it("renameBookmark changes only the label of a bookmarked record", async () => {
+    await seed([
+      record("sess-x", { bookmark: bm({ bookmarkedAt: 7, label: "old" }) }),
+      record("plain"),
+    ]);
+
+    const renamed = await renameBookmark("sess-x", "new", userDataDir);
+    expect(renamed?.bookmark).toEqual(bm({ bookmarkedAt: 7, label: "new" }));
+
+    // A non-bookmarked or unknown record cannot be renamed.
+    expect(await renameBookmark("plain", "x", userDataDir)).toBeNull();
+    expect(await renameBookmark("missing", "x", userDataDir)).toBeNull();
+  });
+
+  it("deleteBookmark demotes a record to ordinary history and re-evicts it", async () => {
+    // A fresh bookmark demotes back to visible ordinary history.
+    await seed([record("fresh", { bookmark: bm() })]);
+    expect(await deleteBookmark("fresh", userDataDir)).toBe(true);
+    const afterFresh = await readSessionHistory(userDataDir);
+    expect(afterFresh).toHaveLength(1);
+    expect(afterFresh[0].bookmark).toBeUndefined();
+
+    // A record that survived ONLY because it was pinned ages out on demotion.
+    await seed([record("stale", { savedAt: Date.now() - 200 * DAY, bookmark: bm() })]);
+    expect(await deleteBookmark("stale", userDataDir, 30)).toBe(true);
+    expect(await readSessionHistory(userDataDir)).toHaveLength(0);
+
+    // Deleting a missing/non-bookmarked record reports not-found.
+    await seed([record("plain")]);
+    expect(await deleteBookmark("plain", userDataDir)).toBe(false);
+    expect(await deleteBookmark("missing", userDataDir)).toBe(false);
+  });
+
+  it("listBookmarks returns only bookmarks, newest-first, project-scoped", async () => {
+    await seed([
+      record("a", { projectId: "p1", bookmark: bm({ bookmarkedAt: 100 }) }),
+      record("b", { projectId: "p1", bookmark: bm({ bookmarkedAt: 300 }) }),
+      record("c", { projectId: "p2", bookmark: bm({ bookmarkedAt: 200 }) }),
+      record("d", { projectId: "p1" }), // ordinary
+    ]);
+
+    expect(listBookmarks(undefined, userDataDir).map((r) => r.sessionId)).toEqual(["b", "c", "a"]);
+    expect(listBookmarks("p1", userDataDir).map((r) => r.sessionId)).toEqual(["b", "a"]);
+    expect(listBookmarks("nope", userDataDir)).toEqual([]);
+  });
+
+  it("serialized bookmark mutations never lose unrelated records", async () => {
+    await seed([
+      record("promote-me"),
+      record("rename-me", { bookmark: bm({ bookmarkedAt: 1, label: "r" }) }),
+      record("delete-me", { bookmark: bm({ bookmarkedAt: 2 }) }),
+      record("bystander", { bookmark: bm({ bookmarkedAt: 3 }) }),
+    ]);
+
+    await Promise.all([
+      promoteBookmark("promote-me", "P", userDataDir),
+      renameBookmark("rename-me", "R2", userDataDir),
+      deleteBookmark("delete-me", userDataDir),
+      persistAgentSession(
+        {
+          sessionId: "new-close",
+          agentId: "claude",
+          worktreeId: "wt-1",
+          title: null,
+          projectId: "proj-1",
+        },
+        userDataDir
+      ),
+    ]);
+
+    const byId = new Map((await readSessionHistory(userDataDir)).map((r) => [r.sessionId, r]));
+    expect(byId.get("promote-me")?.bookmark?.label).toBe("P");
+    expect(byId.get("rename-me")?.bookmark?.label).toBe("R2");
+    expect(byId.get("delete-me")?.bookmark).toBeUndefined();
+    expect(byId.get("bystander")?.bookmark?.bookmarkedAt).toBe(3);
+    expect(byId.has("new-close")).toBe(true);
   });
 });

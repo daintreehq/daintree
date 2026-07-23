@@ -386,6 +386,67 @@ export const AgentSessionRetentionDaysSchema = z.union([
   z.literal(0),
 ]);
 
+// ============================================================================
+// Session bookmark payloads (#11288)
+// ============================================================================
+
+/** Bounded, trimmed bookmark label — the durable retrieval key. */
+const BookmarkLabelSchema = z.string().trim().min(1).max(120);
+/** Bounded id addressing a terminal, journaled session, panel, or preset. */
+const BookmarkRefSchema = z.string().trim().min(1).max(256);
+
+/**
+ * Renderer-supplied pane-presentation metadata captured with a bookmark. Every
+ * field is optional and additive; `.strict()` rejects unknown keys so no
+ * terminal output, transcript, prompt, or environment value can be smuggled
+ * into the durable record (the feature's privacy boundary).
+ */
+export const AgentSessionBookmarkMetadataInputSchema = z
+  .object({
+    sourcePanelId: BookmarkRefSchema.optional(),
+    sourceLocation: z.enum(["grid", "dock"]).optional(),
+    titleMode: TitleModeSchema.optional(),
+    agentPresetId: BookmarkRefSchema.optional(),
+    agentPresetColor: z.string().trim().min(1).max(64).optional(),
+    originalPresetId: BookmarkRefSchema.optional(),
+    isUsingFallback: z.boolean().optional(),
+    fallbackChainIndex: z.number().int().nonnegative().optional(),
+    isInputLocked: z.boolean().optional(),
+  })
+  .strict();
+
+/** `prepareBookmark` — capture a live agent pane's native session and pin it. */
+export const PrepareBookmarkPayloadSchema = z
+  .object({
+    terminalId: BookmarkRefSchema,
+    label: BookmarkLabelSchema,
+    metadata: AgentSessionBookmarkMetadataInputSchema.optional(),
+  })
+  .strict();
+
+/** `promote`/`rename` — pin or relabel an existing journaled session by id. */
+export const BookmarkMutatePayloadSchema = z
+  .object({
+    sessionId: BookmarkRefSchema,
+    label: BookmarkLabelSchema,
+  })
+  .strict();
+
+/** `delete` — remove exactly one bookmark by session id. */
+export const BookmarkDeletePayloadSchema = z
+  .object({
+    sessionId: BookmarkRefSchema,
+  })
+  .strict();
+
+/** `listBookmarks` — optional project scope. */
+export const ListBookmarksPayloadSchema = z
+  .object({
+    projectId: BookmarkRefSchema.optional(),
+  })
+  .strict()
+  .optional();
+
 export const FileSearchPayloadSchema = z.object({
   cwd: z.string().min(1),
   query: z.string(),

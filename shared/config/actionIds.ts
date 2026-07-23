@@ -321,6 +321,12 @@ export const BUILT_IN_ACTION_IDS = [
   "agent.listToolbar",
   "agent.listAvailable",
   "agentSessionHistory.list",
+  // -- session bookmarks (#11288) --
+  "session.bookmarkAndClose",
+  "session.bookmark.promote",
+  "session.bookmark.rename",
+  "session.bookmark.delete",
+  "session.bookmarks.list",
 
   // -- app settings (other) --
   "app.settings.openTab",
