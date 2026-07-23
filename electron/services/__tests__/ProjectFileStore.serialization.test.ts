@@ -155,12 +155,22 @@ describe("ProjectFileStore write serialization", () => {
     expect((await store.getRecipes(VALID_ID)).map((r) => r.id)).toEqual(["a1"]);
   });
 
-  it("bulk saveRecipes takes a queue turn but performs no read of its own", async () => {
-    installDiskModel(2);
+  it("bulk saveRecipes is serialized in the queue — an add enqueued behind it sees its result", async () => {
+    installDiskModel(3);
 
-    // A blind replacement racing an add: both are serialized, so the final
-    // state is deterministic (whichever enqueued last wins the file), and the
-    // blind save never issues its own read.
+    // Enqueue a blind replacement, then an add. Serialized in order, the add
+    // reads the just-saved list and appends to it → [base, added]. If
+    // saveRecipes bypassed the queue, the two would interleave on the widened
+    // write window and one would be lost (final would be [base] or [added]).
+    const savePromise = store.saveRecipes(VALID_ID, [recipe("base")]);
+    const addPromise = store.addRecipe(VALID_ID, recipe("added"));
+    await Promise.all([savePromise, addPromise]);
+
+    expect((await store.getRecipes(VALID_ID)).map((r) => r.id)).toEqual(["base", "added"]);
+  });
+
+  it("bulk saveRecipes performs no read of its own (pure blind overwrite)", async () => {
+    installDiskModel(2);
     await store.addRecipe(VALID_ID, recipe("pre"));
     fsMock.readFile.mockClear();
 
@@ -168,5 +178,73 @@ describe("ProjectFileStore write serialization", () => {
 
     expect(fsMock.readFile).not.toHaveBeenCalled();
     expect((await store.getRecipes(VALID_ID)).map((r) => r.id)).toEqual(["only"]);
+  });
+
+  it("a failed WRITE rejects its own caller but the store recovers from the last durable snapshot", async () => {
+    const disk = installDiskModel();
+    await store.addRecipe(VALID_ID, recipe("r1"));
+
+    // Fail exactly the next write (the update); later writes go through.
+    const realWrite = utilsMock.resilientAtomicWriteFile.getMockImplementation()!;
+    let failNext = true;
+    utilsMock.resilientAtomicWriteFile.mockImplementation(
+      async (filePath: string, data: string) => {
+        if (failNext) {
+          failNext = false;
+          throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+        }
+        return realWrite(filePath, data);
+      }
+    );
+
+    const failing = store.updateRecipe(VALID_ID, "r1", { name: "renamed" });
+    const following = store.addRecipe(VALID_ID, recipe("r2"));
+
+    await expect(failing).rejects.toThrow("EACCES");
+    await expect(following).resolves.toBeUndefined();
+
+    const result = await store.getRecipes(VALID_ID);
+    expect(result.map((r) => r.id).sort()).toEqual(["r1", "r2"]);
+    // The rejected rename never persisted; r1 kept its original name.
+    expect(result.find((r) => r.id === "r1")?.name).toBe("r1");
+  });
+
+  it("cleanup uses an identity guard: a completed op keeps a newer tail, and the map empties on drain", async () => {
+    const disk = installDiskModel();
+    const queues = (store as unknown as { recipesWriteQueues: Map<string, Promise<unknown>> })
+      .recipesWriteQueues;
+
+    // Gate op1's write so op2 enqueues behind it — the map tail becomes op2.
+    let release1: () => void = () => {};
+    const gate1 = new Promise<void>((resolve) => {
+      release1 = resolve;
+    });
+    let firstWrite = true;
+    utilsMock.resilientAtomicWriteFile.mockImplementation(
+      async (filePath: string, data: string) => {
+        if (firstWrite) {
+          firstWrite = false;
+          await gate1;
+        }
+        disk.set(filePath, data);
+      }
+    );
+
+    const p1 = store.addRecipe(VALID_ID, recipe("r1"));
+    const p2 = store.addRecipe(VALID_ID, recipe("r2"));
+    const tailAfterTwo = queues.get(VALID_ID);
+    expect(tailAfterTwo).toBeDefined();
+
+    release1();
+    await p1;
+    // op1's cleanup ran but the map still points at op2's tail: the
+    // `map.get(key) === next` guard prevented op1 from dropping op2's entry.
+    expect(queues.get(VALID_ID)).toBe(tailAfterTwo);
+
+    await p2;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Fully drained → entry removed (no per-project map leak).
+    expect(queues.has(VALID_ID)).toBe(false);
+    expect((await store.getRecipes(VALID_ID)).map((r) => r.id).sort()).toEqual(["r1", "r2"]);
   });
 });

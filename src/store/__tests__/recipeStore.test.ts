@@ -2104,19 +2104,22 @@ describe("recipeStore", () => {
         currentProjectId: "project-1",
       });
 
-      await useRecipeStore.getState().updateRecipe("inrepo-test", { lastUsedAt: 999 });
+      await useRecipeStore
+        .getState()
+        .updateRecipe("inrepo-test", { lastUsedAt: 999, usageHistory: [111, 999] });
 
       // The canonical git-tracked .daintree/recipes/*.json file is never
       // touched by a frecency stamp (that's what metadataOnlyKeys guards).
       expect(updateInRepoRecipeMock).not.toHaveBeenCalled();
-      // But the ProjectFileStore mirror IS updated so in-repo usage metadata
-      // survives a reload the way project/global recipes already do (#11354).
-      expect(updateRecipeMock).toHaveBeenCalledWith(
-        "project-1",
-        "inrepo-test",
-        expect.objectContaining({ lastUsedAt: 999 })
-      );
       expect(globalUpdateRecipeMock).not.toHaveBeenCalled();
+      // The ProjectFileStore mirror IS updated so in-repo usage metadata
+      // survives a reload the way project/global recipes already do (#11354).
+      // The patch is exactly the usage fields — no terminals or other keys.
+      expect(updateRecipeMock).toHaveBeenCalledTimes(1);
+      expect(updateRecipeMock).toHaveBeenCalledWith("project-1", "inrepo-test", {
+        lastUsedAt: 999,
+        usageHistory: [111, 999],
+      });
     });
 
     it("degrades gracefully when the in-repo mirror entry is not yet reconciled", async () => {
@@ -2146,10 +2149,36 @@ describe("recipeStore", () => {
         useRecipeStore.getState().updateRecipe("inrepo-test", { lastUsedAt: 999 })
       ).resolves.toBeUndefined();
 
+      // The mirror write WAS attempted (and rejected) — not silently skipped.
+      expect(updateRecipeMock).toHaveBeenCalledTimes(1);
       expect(updateInRepoRecipeMock).not.toHaveBeenCalled();
       const state = useRecipeStore.getState();
       expect(state.inRepoRecipes[0]?.lastUsedAt).toBe(999);
       expect(state.recipes[0]?.lastUsedAt).toBe(999);
+    });
+
+    it("an empty in-repo update is a true no-op (no mirror write, no canonical write)", async () => {
+      const inRepoRecipe = {
+        id: "inrepo-test",
+        name: "Team Recipe",
+        terminals: [{ type: "terminal" as const, title: "Shell", env: {} }],
+        createdAt: 500,
+      };
+      useRecipeStore.setState({
+        inRepoRecipes: [inRepoRecipe],
+        globalRecipes: [],
+        projectRecipes: [],
+        recipes: [inRepoRecipe],
+        currentProjectId: "project-1",
+      });
+
+      await useRecipeStore.getState().updateRecipe("inrepo-test", {});
+
+      // `[].every(...)` is vacuously true, so an empty patch is metadata-only —
+      // but it must not issue a spurious empty mirror IPC call.
+      expect(updateRecipeMock).not.toHaveBeenCalled();
+      expect(updateInRepoRecipeMock).not.toHaveBeenCalled();
+      expect(globalUpdateRecipeMock).not.toHaveBeenCalled();
     });
 
     it("deleteRecipe routes in-repo recipe to deleteInRepoRecipe client", async () => {

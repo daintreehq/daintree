@@ -107,7 +107,17 @@ describe("GlobalFileStore write serialization", () => {
     expect(result[0]!.name).toBe("renamed");
   });
 
-  it("bulk saveRecipes takes a queue turn but performs no read of its own", async () => {
+  it("bulk saveRecipes is serialized in the queue — an add enqueued behind it sees its result", async () => {
+    installDiskModel(3);
+
+    const savePromise = store.saveRecipes([recipe("base")]);
+    const addPromise = store.addRecipe(recipe("added"));
+    await Promise.all([savePromise, addPromise]);
+
+    expect((await store.getRecipes()).map((r) => r.id)).toEqual(["base", "added"]);
+  });
+
+  it("bulk saveRecipes performs no read of its own (pure blind overwrite)", async () => {
     installDiskModel(2);
     await store.addRecipe(recipe("pre"));
     fsMock.readFile.mockClear();
@@ -121,5 +131,33 @@ describe("GlobalFileStore write serialization", () => {
       "utf-8"
     );
     expect((await store.getRecipes()).map((r) => r.id)).toEqual(["only"]);
+  });
+
+  it("a failed WRITE rejects its own caller but the store recovers from the last durable snapshot", async () => {
+    const box = installDiskModel();
+    await store.addRecipe(recipe("g1"));
+
+    const realWrite = utilsMock.resilientAtomicWriteFile.getMockImplementation()!;
+    let failNext = true;
+    utilsMock.resilientAtomicWriteFile.mockImplementation(
+      async (filePath: string, data: string) => {
+        if (failNext) {
+          failNext = false;
+          throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+        }
+        return realWrite(filePath, data);
+      }
+    );
+    void box;
+
+    const failing = store.updateRecipe("g1", { name: "renamed" });
+    const following = store.addRecipe(recipe("g2"));
+
+    await expect(failing).rejects.toThrow("EACCES");
+    await expect(following).resolves.toBeUndefined();
+
+    const result = await store.getRecipes();
+    expect(result.map((r) => r.id).sort()).toEqual(["g1", "g2"]);
+    expect(result.find((r) => r.id === "g1")?.name).toBe("g1");
   });
 });

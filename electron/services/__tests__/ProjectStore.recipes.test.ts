@@ -564,13 +564,14 @@ describe("ProjectStore recipe reconciliation", () => {
     expect(inr).toHaveLength(1);
   });
 
-  it("serializes reconcile against a concurrent addRecipe (neither clobbers the other)", async () => {
-    // Seed one in-repo recipe so reconcile has real write work (backfill it to
-    // the ProjectFileStore mirror). reconcile does a full read-compute-write of
-    // recipes.json; addRecipe does a read-modify-write of the same file. Run
-    // both at once: without per-project serialization, reconcile's full-list
-    // write (built from a pre-add snapshot) clobbers the freshly added recipe,
-    // or the add clobbers reconcile's backfill — one recipe is always lost.
+  it("reconcile and a concurrent addRecipe are serialized — the mirror ends with the exact expected set", async () => {
+    // Integration check that reconcile shares the ProjectFileStore write queue
+    // with CRUD: reconcile does a full read-compute-write of recipes.json and
+    // addRecipe a read-modify-write of the same file. Because they serialize,
+    // the mirror ends with EXACTLY both recipes for either enqueue order — no
+    // lost update, no duplicate. (The deterministic proof that the queue kills
+    // an unserialized implementation lives in the ProjectFileStore/GlobalFileStore
+    // serialization unit tests; this asserts reconcile is wired into it.)
     const inRepo = makeRecipe({ id: "recipe-inrepo", name: "In Repo", scope: "inrepo" });
     await seedInRepo(inRepo);
 
@@ -581,9 +582,7 @@ describe("ProjectStore recipe reconciliation", () => {
     ]);
 
     const ids = (await readFileStore()).map((r) => r.id).sort();
-    // Both survive regardless of which turn the queue ran first.
-    expect(ids).toContain("recipe-added");
-    expect(ids).toContain("recipe-inrepo");
+    expect(ids).toEqual(["recipe-added", "recipe-inrepo"]);
   });
 });
 

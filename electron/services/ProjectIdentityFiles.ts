@@ -27,9 +27,16 @@ import {
  * actually persists. Hashing the raw in-memory recipe would produce
  * spurious conflicts on every write because `projectId`/`worktreeId`/env
  * values would never match the redacted on-disk bytes.
+ *
+ * `lastUsedAt`/`usageHistory` are machine-local frecency data that must never
+ * enter the git-tracked canonical file (#11354): now that in-repo usage
+ * metadata is persisted to the ProjectFileStore mirror, a later substantive
+ * edit carries those fields on the in-memory recipe, so they are stripped here
+ * at the serialization boundary rather than relying on every caller to omit
+ * them. They live only in the mirror; reconcile re-merges them on load.
  */
 export function buildInRepoRecipePayloadString(recipe: TerminalRecipe): string {
-  const { projectId: _p, worktreeId: _w, ...shareable } = recipe;
+  const { projectId: _p, worktreeId: _w, lastUsedAt: _l, usageHistory: _u, ...shareable } = recipe;
   const sanitizedTerminals = shareable.terminals.map((t) => {
     if (!t.env || Object.keys(t.env).length === 0) return t;
     const redactedEnv: Record<string, string> = {};

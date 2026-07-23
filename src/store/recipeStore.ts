@@ -467,8 +467,9 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
           // backfilled it (after the first load), so a not-yet-reconciled
           // "recipe not found" degrades to losing this one stamp rather than
           // rolling back the optimistic update or surfacing a toast for a
-          // low-stakes write.
-          if (projectId) {
+          // low-stakes write. An empty patch stays a true no-op (updateKeys is
+          // empty, so `every` is vacuously true — don't issue a mirror write).
+          if (projectId && updateKeys.length > 0) {
             await projectClient.updateRecipe(projectId, id, sanitizedUpdates).catch((error) => {
               logError("Failed to persist in-repo recipe usage metadata", error);
             });

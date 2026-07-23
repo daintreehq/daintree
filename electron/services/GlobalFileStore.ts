@@ -44,20 +44,32 @@ export class GlobalFileStore {
   }
 
   async getRecipes(): Promise<TerminalRecipe[]> {
+    let content: string;
     try {
-      const content = await fs.readFile(this.recipesPath, "utf-8");
-      const parsed = JSON.parse(content);
-
-      if (!Array.isArray(parsed)) {
-        throw new Error("recipes is not an array");
-      }
-
-      return filterValidTerminalEntries(parsed, TerminalRecipeSchema, "GlobalFileStore");
+      content = await fs.readFile(this.recipesPath, "utf-8");
     } catch (error) {
       if (error instanceof Error && "code" in error && error.code === "ENOENT") {
         return [];
       }
-      console.error("[GlobalFileStore] Failed to load recipes:", error);
+      // A transient read failure (EACCES/EIO/EBUSY) is NOT corruption. Returning
+      // [] here would let a queued mutator (add/update/delete) overwrite the
+      // whole store from an empty base — silent data loss. Rethrow so the
+      // mutator aborts and the on-disk recipes survive (mirrors
+      // ProjectFileStore.getRecipes).
+      console.error("[GlobalFileStore] Failed to read recipes:", error);
+      throw error;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(content);
+      if (!Array.isArray(parsed)) {
+        throw new Error("recipes is not an array");
+      }
+    } catch (error) {
+      // Only genuinely malformed content reaches here — quarantine and reset to
+      // empty so the app recovers instead of failing every read.
+      console.error("[GlobalFileStore] Failed to parse recipes:", error);
       try {
         const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         const quarantinePath = `${this.recipesPath}.corrupted.${suffix}`;
@@ -68,6 +80,8 @@ export class GlobalFileStore {
       }
       return [];
     }
+
+    return filterValidTerminalEntries(parsed, TerminalRecipeSchema, "GlobalFileStore");
   }
 
   async saveRecipes(recipes: TerminalRecipe[]): Promise<void> {
