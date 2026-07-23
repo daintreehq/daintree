@@ -370,6 +370,76 @@ describe("WorkspaceClient multi-process manager", () => {
       expect(result.map((s) => s.id)).toEqual(["wt-shared", "wt-a", "wt-b"]);
       expect(result.filter((s) => s.id === "wt-shared")).toHaveLength(1);
     });
+
+    it("waits for the host to finish re-populating after a restart before reading, so a mid-syncMonitors partial list is never returned (#11387)", async () => {
+      const load = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load;
+
+      // Simulate a crash-restart: the pool reassigns currentReadyPromise to the
+      // reload promise, which resolves only after load-project — and thus the
+      // whole syncMonitors populate — completes. Until then this.monitors is
+      // partial (often just the main worktree, which git enumerates first).
+      h(0).emit("restarted");
+      await tick();
+      const reloadReq = h(0).getLastRequest()!;
+      expect(reloadReq.type).toBe("load-project");
+
+      // A read landing during the resync must NOT fire get-all-states yet — it
+      // would observe the partial monitor map that restore wrongly trusts.
+      const statesPromise = client.getAllStatesAsync(1);
+      await tick();
+      expect(
+        h(0)
+          .getAllRequests()
+          .filter((r: any) => r.type === "get-all-states")
+      ).toHaveLength(0);
+
+      // Once the reload settles, the gated read proceeds against the complete map.
+      h(0).resolveRequest(reloadReq.requestId);
+      await tick();
+      const statesReq = h(0)
+        .getAllRequests()
+        .find((r: any) => r.type === "get-all-states")!;
+      expect(statesReq).toBeDefined();
+      h(0).resolveRequest(statesReq.requestId, {
+        states: [{ id: "wt-1" }, { id: "wt-2" }],
+      });
+
+      expect((await statesPromise).map((s) => s.id)).toEqual(["wt-1", "wt-2"]);
+    });
+
+    it("returns [] without ever reading a partial map when the restart reload rejects (#11387)", async () => {
+      const load = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load;
+
+      h(0).emit("restarted");
+      await tick();
+      const reloadReq = h(0).getLastRequest()!;
+      expect(reloadReq.type).toBe("load-project");
+
+      const statesPromise = client.getAllStatesAsync(1);
+      await tick();
+      expect(
+        h(0)
+          .getAllRequests()
+          .filter((r: any) => r.type === "get-all-states")
+      ).toHaveLength(0);
+
+      // A failed/timed-out reload leaves the host's monitor map genuinely
+      // partial (the host keeps syncing after the parent request rejects), so
+      // the gate reports "unknown": it resolves [] WITHOUT ever sending
+      // get-all-states — never reading, let alone trusting, a partial list —
+      // and never hangs.
+      h(0).rejectRequest(reloadReq.requestId, new Error("reload failed"));
+      expect(await statesPromise).toEqual([]);
+      expect(
+        h(0)
+          .getAllRequests()
+          .filter((r: any) => r.type === "get-all-states")
+      ).toHaveLength(0);
+    });
   });
 
   describe("getAllStatesForProjectAsync", () => {
@@ -460,6 +530,118 @@ describe("WorkspaceClient multi-process manager", () => {
       const result = await client.getAllStatesForProjectAsync("/project-a", idFor("/project-b"));
       expect(result).toEqual([]);
       expect(h(0).sendWithResponse.mock.calls.length).toBe(callsBefore);
+    });
+
+    it("gates the initial load too — no read until the first load-project completes (#11387)", async () => {
+      // Hydration's project-scoped prefetch can resolve the pool entry (created
+      // synchronously by loadProject) before its initial load-project — and thus
+      // the first syncMonitors populate — has finished. The read must wait.
+      const loadA = client.loadProject("/project-a", 1);
+      h(0).simulateReady();
+      await tick();
+      const loadReq = h(0).getLastRequest()!;
+      expect(loadReq.type).toBe("load-project");
+
+      const statesPromise = client.getAllStatesForProjectAsync("/project-a", idFor("/project-a"));
+      await tick();
+      expect(
+        h(0)
+          .getAllRequests()
+          .filter((r: any) => r.type === "get-all-states")
+      ).toHaveLength(0);
+
+      // Complete the initial load; only now may the gated read fire.
+      h(0).resolveRequest(loadReq.requestId);
+      await loadA;
+      await tick();
+      const statesReq = h(0)
+        .getAllRequests()
+        .find((r: any) => r.type === "get-all-states")!;
+      expect(statesReq).toBeDefined();
+      h(0).resolveRequest(statesReq.requestId, { states: [{ id: "wt-a" }] });
+      expect((await statesPromise).map((s: any) => s.id)).toEqual(["wt-a"]);
+    });
+
+    it("waits for host readiness before reading, so a resync never yields a partial list (#11387)", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      // Same crash-restart resync window as the window-scoped path — the
+      // project-scoped read (the one hydration now uses, #11387) must gate on
+      // the same readiness signal.
+      h(0).emit("restarted");
+      await tick();
+      const reloadReq = h(0).getLastRequest()!;
+      expect(reloadReq.type).toBe("load-project");
+
+      const statesPromise = client.getAllStatesForProjectAsync("/project-a", idFor("/project-a"));
+      await tick();
+      expect(
+        h(0)
+          .getAllRequests()
+          .filter((r: any) => r.type === "get-all-states")
+      ).toHaveLength(0);
+
+      h(0).resolveRequest(reloadReq.requestId);
+      await tick();
+      const statesReq = h(0)
+        .getAllRequests()
+        .find((r: any) => r.type === "get-all-states")!;
+      expect(statesReq).toBeDefined();
+      h(0).resolveRequest(statesReq.requestId, { states: [{ id: "wt-a" }] });
+      expect((await statesPromise).map((s: any) => s.id)).toEqual(["wt-a"]);
+    });
+
+    describe("readiness gate timeout", () => {
+      beforeEach(() => {
+        vi.useFakeTimers();
+      });
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+
+      // Long enough that any sane hydration-facing deadline has elapsed, short
+      // enough to stay well inside the host's 30s per-request budget — the gate
+      // must give up inside this window rather than riding the host's timeout.
+      // Not the deadline itself: the test asserts the behavior, not the number.
+      const GATE_OBSERVATION_WINDOW_MS = 10_000;
+
+      it("degrades to the unknown sentinel rather than stalling restore when the host never posts ready (#11387)", async () => {
+        // A host that forks but hangs before posting "ready" leaves
+        // currentReadyPromise pending forever (waitForReady carries no timeout),
+        // and the pool entry is in the map from the moment loadProject is called
+        // — so hydration's prefetch resolves this entry and waits on the gate.
+        // Every PTY panel's restore awaits that prefetch, so an unbounded gate
+        // means zero terminals restore for as long as it waits.
+        const load = client.loadProject("/project-a", 1);
+        void load.catch(() => {});
+        expect(mockHosts).toHaveLength(1);
+
+        const statesPromise = client.getAllStatesForProjectAsync("/project-a", idFor("/project-a"));
+        let resolved: any = undefined;
+        void statesPromise.then((r) => {
+          resolved = r;
+        });
+
+        // While the populate is genuinely in flight the gate holds: no read of a
+        // possibly-partial monitor map.
+        await vi.advanceTimersByTimeAsync(0);
+        expect(resolved).toBeUndefined();
+
+        await vi.advanceTimersByTimeAsync(GATE_OBSERVATION_WINDOW_MS);
+
+        // Gate gave up: "unknown" ([] — #11234), so restore keeps every panel's
+        // saved worktreeId instead of re-homing it, and the partial map was
+        // never read — get-all-states is never sent.
+        expect(resolved).toEqual([]);
+        expect(await statesPromise).toEqual([]);
+        expect(
+          h(0)
+            .getAllRequests()
+            .filter((r: any) => r.type === "get-all-states")
+        ).toHaveLength(0);
+      });
     });
 
     it("normalizes the path before keying — equivalent spellings share one request", async () => {

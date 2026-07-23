@@ -13,7 +13,7 @@
 import { EventEmitter } from "events";
 import { CHANNELS } from "../ipc/channels.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
-import { sendToEntryWindows } from "./workspace-client/types.js";
+import { type ProcessEntry, sendToEntryWindows } from "./workspace-client/types.js";
 import {
   WorkspaceHostPool,
   WorkspaceHostEventRouter,
@@ -38,6 +38,24 @@ import type {
 import type { ProjectPulse, PulseRangeDays } from "../../shared/types/pulse.js";
 
 const STATES_INFLIGHT_COALESCE_WINDOW_MS = 150;
+
+// Upper bound on how long a worktree-state read waits for the host to finish
+// (re)populating its monitor map before giving up and reporting "unknown" ([]).
+//
+// Deliberately NOT sized against the host's 30s per-request timeout: this gate
+// sits on hydration's critical path — every PTY restore awaits
+// resolveRestoredWorktreeId -> the worktree prefetch -> this gate before its
+// panel is added — so a host that forks but hangs before posting "ready"
+// (waitForReady() carries no timeout of its own) would hold back EVERY terminal
+// for the whole deadline. Timing out costs only a missed re-home: the failure
+// path returns [], the established "unknown, keep saved state" sentinel
+// (#11234), which is exactly what restore did before the gate existed. So the
+// bound is set by what a user can be made to stare at, not by the host's
+// request budget — 5s matches the app's other hydration-facing give-up bound
+// (SIDEBAR_HYDRATION_UNLOCK_FALLBACK_MS, #10827) and still leaves a healthy
+// cold-start syncMonitors ample room to finish, so the gate keeps doing its
+// job in every non-pathological case.
+const STATES_READY_GATE_TIMEOUT_MS = 5_000;
 
 export type CopyTreeProgressCallback = (progress: CopyTreeProgress) => void;
 
@@ -466,17 +484,15 @@ export class WorkspaceClient extends EventEmitter {
     if (existing) return existing;
 
     const entry = this.pool.entries.get(normalized);
-    const host =
-      entry !== undefined && entry.projectId === expectedProjectId ? entry.host : undefined;
+    const matchedEntry =
+      entry !== undefined && entry.projectId === expectedProjectId ? entry : undefined;
     const promise = (
-      host === undefined
+      matchedEntry === undefined
         ? Promise.resolve([] as WorktreeSnapshot[])
-        : host
-            .sendWithResponse<{ states: WorktreeSnapshot[] }>({
-              type: "get-all-states",
-              requestId: host.generateRequestId(),
-            })
-            .then((result) => result.states)
+        : // Gate on the host's readiness so a mid-`syncMonitors` partial list is
+          // never returned to a hydration prefetch (#11387) — same guard as the
+          // window-scoped path.
+          this._readStatesWhenReady(matchedEntry)
     ).then(
       (result) => {
         setTimeout(() => this._statesInflight.delete(key), STATES_INFLIGHT_COALESCE_WINDOW_MS);
@@ -491,42 +507,79 @@ export class WorkspaceClient extends EventEmitter {
     return promise;
   }
 
+  /**
+   * Read a single host's worktree states, but only once the host has FINISHED
+   * (re)populating its monitor map — and never otherwise. `syncMonitors` builds
+   * `this.monitors` one worktree at a time inside `load-project`, so a
+   * `get-all-states` request that lands mid-loop returns a non-empty PARTIAL
+   * list (often just the main worktree, since git enumerates it first). Restore
+   * then trusts that partial snapshot as authoritative and re-homes every
+   * not-yet-synced panel onto the active worktree — the exact collapse in
+   * #11387.
+   *
+   * `entry.currentReadyPromise` resolves only after `load-project` (and thus the
+   * whole `syncMonitors` loop) completes, and it is reassigned to the reload
+   * promise on crash-restart, so it gates both the initial and the post-restart
+   * populate — the only two windows in which the map is genuinely partial
+   * (steady-state reconciles never drop a live monitor mid-loop).
+   *
+   * When readiness does NOT resolve cleanly we must not read at all: a rejected
+   * `load-project` (e.g. its 30s request timeout fires while the host keeps
+   * syncing, or `addNewWorktreeMonitor` throws mid-loop) leaves the host's map
+   * genuinely partial, and reading it would resurrect #11387; a host that forks
+   * but hangs before posting "ready" would leave the await pending forever
+   * (`waitForReady` has no timeout). Both cases return `[]` — the established
+   * "unknown, keep saved state" sentinel (#11234) — never a partial and never a
+   * hang. Once the host is ready the gate is a resolved-promise microtask, so
+   * steady-state reads are unaffected.
+   */
+  private async _readStatesWhenReady(entry: ProcessEntry): Promise<WorktreeSnapshot[]> {
+    if (!(await this._awaitHostReady(entry))) return [];
+    const requestId = entry.host.generateRequestId();
+    const result = await entry.host.sendWithResponse<{
+      states: WorktreeSnapshot[];
+    }>({
+      type: "get-all-states",
+      requestId,
+    });
+    return result.states;
+  }
+
+  /**
+   * Resolves `true` when the host's monitor populate completed, `false` if it
+   * failed or did not settle within {@link STATES_READY_GATE_TIMEOUT_MS}.
+   * Callers must treat `false` as "unknown" and return `[]` rather than reading
+   * a possibly-partial map. Never rejects.
+   */
+  private _awaitHostReady(entry: ProcessEntry): Promise<boolean> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => resolve(false), STATES_READY_GATE_TIMEOUT_MS);
+    });
+    const settled = entry.currentReadyPromise.then(
+      () => true,
+      () => false
+    );
+    return Promise.race([settled, timedOut]).finally(() => {
+      if (timer !== undefined) clearTimeout(timer);
+    });
+  }
+
   private async _doGetAllStates(windowId?: number): Promise<WorktreeSnapshot[]> {
     if (windowId !== undefined) {
-      const host = this.pool.resolveHostForWindow(windowId);
-      if (!host) return [];
-      const requestId = host.generateRequestId();
-      const result = await host.sendWithResponse<{
-        states: WorktreeSnapshot[];
-      }>({
-        type: "get-all-states",
-        requestId,
-      });
-      return result.states;
+      const entry = this.pool.resolveEntryForWindow(windowId);
+      if (!entry) return [];
+      return this._readStatesWhenReady(entry);
     }
 
     const entries = [...this.pool.entries.values()];
     const results = await Promise.allSettled(
-      entries.map((entry) => {
-        const requestId = entry.host.generateRequestId();
-        return entry.host.sendWithResponse<{
-          states: WorktreeSnapshot[];
-        }>({
-          type: "get-all-states",
-          requestId,
-        });
-      })
+      entries.map((entry) => this._readStatesWhenReady(entry))
     );
     return dedupeSnapshotsById(
       results
-        .filter(
-          (
-            r
-          ): r is PromiseFulfilledResult<{
-            states: WorktreeSnapshot[];
-          }> => r.status === "fulfilled"
-        )
-        .flatMap((r) => r.value.states)
+        .filter((r): r is PromiseFulfilledResult<WorktreeSnapshot[]> => r.status === "fulfilled")
+        .flatMap((r) => r.value)
     );
   }
 

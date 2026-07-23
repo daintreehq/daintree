@@ -184,12 +184,27 @@ export async function restorePanelsPhase(
   const resolveRestoredWorktreeId = async (
     worktreeId: string | undefined
   ): Promise<string | undefined> => {
-    if (!worktreeId) return activeWorktreeId ?? worktreeId;
     const known = await getKnownWorktreeIds();
+    // Only re-home onto the active worktree when it is itself live. With a
+    // complete, authoritative list (#11387) an activeWorktreeId absent from
+    // `known` is a deleted/stale selection, so re-homing onto it would strand
+    // the panel on a dead worktree — worse than keeping the saved id, which the
+    // boot's own active-selection fallback (index.ts) repairs on this and the
+    // next boot. When the list is unknown (null) there is nothing to validate
+    // against, so preserve the prior behavior of trusting activeWorktreeId
+    // (#11234). This closes PR #11235's own unaddressed follow-up.
+    const rehomeTarget =
+      activeWorktreeId !== null && (known === null || known.has(activeWorktreeId))
+        ? activeWorktreeId
+        : undefined;
+    // No saved worktree (undefined, or a corrupt empty string): fall to the
+    // validated active worktree, or leave it unset rather than guess onto a
+    // dead id — never echo back the falsy saved value.
+    if (!worktreeId) return rehomeTarget;
     // With no worktree list there is nothing to check the id against, so
     // re-homing would be a guess — keep what was saved.
-    if (!known || known.has(worktreeId)) return worktreeId;
-    return activeWorktreeId ?? worktreeId;
+    if (known === null || known.has(worktreeId)) return worktreeId;
+    return rehomeTarget ?? worktreeId;
   };
 
   if (savedPanels && savedPanels.length > 0) {
