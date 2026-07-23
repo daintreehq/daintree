@@ -61,7 +61,7 @@ export interface AddTerminalArgs extends AddPanelOptionsBase {
   baseBranch?: string;
   browserSelectedPath?: string;
   browserExpandedPaths?: string[];
-  browserShowIgnored?: boolean;
+  browserHideDotfiles?: boolean;
   browserRootPath?: string;
   browserSidebarCollapsed?: boolean;
   /**
@@ -123,7 +123,7 @@ export interface SavedTerminalData {
    */
   browserSelectedPath?: unknown;
   browserExpandedPaths?: unknown;
-  browserShowIgnored?: unknown;
+  browserHideDotfiles?: unknown;
   browserRootPath?: unknown;
   browserSidebarCollapsed?: unknown;
   exitBehavior?: PanelExitBehavior;

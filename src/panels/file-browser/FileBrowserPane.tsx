@@ -15,11 +15,18 @@ import { folderIncludePattern } from "@/lib/copyTreeFormat";
 import { notify } from "@/lib/notify";
 import { actionService } from "@/services/ActionService";
 import { usePanelStore } from "@/store/panelStore";
+import { usePreferencesStore } from "@/store/preferencesStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { FileTreeView } from "./FileTreeView";
 import { FileBrowserViewer } from "./FileBrowserViewer";
 import { useFileBrowserTree } from "./useFileBrowserTree";
-import { ancestorDirectories, parentRootPath, type FlatTreeRow } from "./fileBrowserTree";
+import {
+  ancestorDirectories,
+  createVisibilityFilter,
+  isRowPathVisible,
+  parentRootPath,
+  type FlatTreeRow,
+} from "./fileBrowserTree";
 
 export type FileBrowserPaneProps = BasePanelProps;
 
@@ -69,14 +76,17 @@ export function FileBrowserPane({
       [id]
     )
   );
-  const showIgnored = usePanelStore(
+  const hideDotfiles = usePanelStore(
     useCallback(
       (state) => {
         const panel = state.panelsById[id];
-        return panel?.kind === "file-browser" ? panel.browserShowIgnored === true : false;
+        return panel?.kind === "file-browser" ? panel.browserHideDotfiles === true : false;
       },
       [id]
     )
+  );
+  const alwaysHiddenPatterns = usePreferencesStore(
+    (state) => state.fileBrowserAlwaysHiddenPatterns
   );
   const rootPath = usePanelStore(
     useCallback(
@@ -105,26 +115,48 @@ export function FileBrowserPane({
       [worktreeId]
     )
   );
-  // The worktree's own change tick — already coalesced by the watcher's
+  // The worktree's git-status change tick — already coalesced by the watcher's
   // adaptive burst debounce, so a bulk write lands as one tick.
-  const changeTick = useWorktreeStore(
+  const gitChangeTick = useWorktreeStore(
     useCallback(
       (state) =>
         worktreeId ? state.worktrees.get(worktreeId)?.worktreeChanges?.lastUpdated : undefined,
       [worktreeId]
     )
   );
+  // The raw filesystem-write tick, independent of git status. Combining the two
+  // is the fix for the issue's reproduction: a write into a gitignored folder
+  // moves this even though `worktreeChanges` (which dedups content-identical
+  // snapshots) never advances (#11330).
+  const fsChangeTick = useWorktreeStore(
+    useCallback(
+      (state) => (worktreeId ? state.workingTreeChangedAtById.get(worktreeId) : undefined),
+      [worktreeId]
+    )
+  );
+  // A single monotonic signal for "re-read the tree/file": whichever moved most
+  // recently. `|| undefined` so a never-changed worktree keeps the "no tick"
+  // identity the hook expects.
+  const changeTick = Math.max(gitChangeTick ?? 0, fsChangeTick ?? 0) || undefined;
 
   const stableExpandedPaths = useMemo(() => expandedPaths ?? EMPTY_PATHS, [expandedPaths]);
 
-  const { rows, isInitialLoading, rootError, ensureLoaded, refresh, isRefreshing } =
-    useFileBrowserTree({
-      worktreeId,
-      expandedPaths: stableExpandedPaths,
-      showIgnored,
-      rootPath,
-      changeTick,
-    });
+  const {
+    rows,
+    isInitialLoading,
+    rootError,
+    hasHiddenDotfiles,
+    ensureLoaded,
+    refresh,
+    isRefreshing,
+  } = useFileBrowserTree({
+    worktreeId,
+    expandedPaths: stableExpandedPaths,
+    hideDotfiles,
+    alwaysHiddenPatterns,
+    rootPath,
+    changeTick,
+  });
 
   const handleToggleExpanded = useCallback(
     (path: string, expand: boolean) => {
@@ -168,9 +200,20 @@ export function FileBrowserPane({
   // the open file 500 times.
   const viewerRevision = `${changeTick ?? 0}:${manualRefreshNonce}`;
 
-  const handleToggleIgnored = useCallback(() => {
-    setFileBrowserView(id, { browserShowIgnored: !showIgnored });
-  }, [id, showIgnored, setFileBrowserView]);
+  const handleToggleDotfiles = useCallback(() => {
+    setFileBrowserView(id, { browserHideDotfiles: !hideDotfiles });
+  }, [id, hideDotfiles, setFileBrowserView]);
+
+  // A selection the junk list or dotfile toggle now hides. The viewer already
+  // clears (the hidden row isn't in `rows`, so `selectedNode` is undefined),
+  // but the "Reveal" strip must also stay hidden: expanding ancestors can
+  // surface a collapsed row, never a filtered one, so offering it would be a
+  // dead end.
+  const selectionFilteredHidden = useMemo(() => {
+    if (selectedPath === null) return false;
+    const isVisible = createVisibilityFilter({ hideDotfiles, alwaysHiddenPatterns });
+    return !isRowPathVisible(selectedPath, rootPath, isVisible);
+  }, [selectedPath, hideDotfiles, alwaysHiddenPatterns, rootPath]);
 
   // Stable id for the tree column so the toggle's `aria-controls` can name the
   // region it discloses. Only referenced while the column is mounted (open).
@@ -292,13 +335,11 @@ export function FileBrowserPane({
         {row.isDirectory && (
           <>
             <ContextMenuItem onSelect={() => handleSetRoot(row.path)}>Set as root</ContextMenuItem>
-            {/* Disabled rather than hidden for ignored folders: CopyTree's
-                discovery respects .gitignore, so the copy would always come
-                back empty — but the item vanishing would read as a bug. */}
-            <ContextMenuItem
-              disabled={row.isIgnored}
-              onSelect={() => handleCopyFolderContext(row.path)}
-            >
+            {/* Always enabled: the browser no longer knows a folder's gitignore
+                status, and CopyTree still applies its own .gitignore-aware
+                discovery (reporting when nothing was eligible), so this stays
+                safe for a gitignored folder. */}
+            <ContextMenuItem onSelect={() => handleCopyFolderContext(row.path)}>
               Copy context
             </ContextMenuItem>
             <ContextMenuSeparator />
@@ -424,9 +465,9 @@ export function FileBrowserPane({
                 </FileViewerToolbar.IconButton>
               )}
               <FileViewerToolbar.IconButton
-                label="Show ignored"
-                pressed={showIgnored}
-                onClick={handleToggleIgnored}
+                label="Hide dotfiles"
+                pressed={hideDotfiles}
+                onClick={handleToggleDotfiles}
               >
                 <EyeOff className="h-4 w-4" />
               </FileViewerToolbar.IconButton>
@@ -498,30 +539,34 @@ export function FileBrowserPane({
     }
 
     if (rows.length === 0) {
+      // Only offer "Show dotfiles" when it can actually help — the toggle is on
+      // and this root holds dotfiles it is what's hiding. Otherwise the folder
+      // is genuinely empty (junk-only contents count as empty too).
+      const canRevealDotfiles = hideDotfiles && hasHiddenDotfiles;
       return (
         <div className="flex min-h-0 flex-1 items-center justify-center p-4">
           <EmptyState
-            variant={showIgnored ? "zero-data" : "filtered-empty"}
+            variant={canRevealDotfiles ? "filtered-empty" : "zero-data"}
             scale="sidebar"
             className="w-full"
-            {...(showIgnored ? { icon: <FolderTree className="h-5 w-5" /> } : {})}
+            {...(canRevealDotfiles ? {} : { icon: <FolderTree className="h-5 w-5" /> })}
             title={
-              showIgnored
-                ? rootPath
+              canRevealDotfiles
+                ? "Dotfiles are hidden here"
+                : rootPath
                   ? "This folder is empty"
                   : "This worktree is empty"
-                : "Everything here is ignored"
             }
             action={
-              showIgnored ? undefined : (
+              canRevealDotfiles ? (
                 <button
                   type="button"
-                  onClick={handleToggleIgnored}
+                  onClick={handleToggleDotfiles}
                   className="text-xs underline underline-offset-2"
                 >
-                  Show ignored files
+                  Show dotfiles
                 </button>
-              )
+              ) : undefined
             }
           />
         </div>
@@ -543,15 +588,18 @@ export function FileBrowserPane({
             click makes the selection reachable, and sitting above the rows it
             would shift them mid-gesture — the second click of a double-click
             would land one row off. */}
-        {selectedPath !== null && selectionInRoot && !selectedIsReachable && (
-          <button
-            type="button"
-            onClick={revealSelection}
-            className="shrink-0 truncate border-t border-daintree-border px-3 py-1 text-left font-mono text-[11px] text-daintree-text/60 transition-colors duration-150 ease-out hover:bg-tint/5 hover:text-daintree-text"
-          >
-            Reveal {selectedFileName}
-          </button>
-        )}
+        {selectedPath !== null &&
+          selectionInRoot &&
+          !selectedIsReachable &&
+          !selectionFilteredHidden && (
+            <button
+              type="button"
+              onClick={revealSelection}
+              className="shrink-0 truncate border-t border-daintree-border px-3 py-1 text-left font-mono text-[11px] text-daintree-text/60 transition-colors duration-150 ease-out hover:bg-tint/5 hover:text-daintree-text"
+            >
+              Reveal {selectedFileName}
+            </button>
+          )}
       </>
     );
   }

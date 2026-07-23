@@ -11,7 +11,11 @@ vi.mock("../../utils/gitCheckIgnore.js", () => ({
 
 const mockedCheckIgnoredPaths = vi.mocked(checkIgnoredPaths);
 
-describe("FileTreeService includeIgnored", () => {
+// `includeIgnored: true` is the file browser's raw-listing mode: skip the git
+// check-ignore pass entirely (no subprocess, no annotation) and return every
+// entry, including gitignored ones and `.git` (#11330). Default mode — the
+// copy-tree picker — keeps its fail-closed, ignore-filtering behavior.
+describe("FileTreeService raw-listing mode (includeIgnored)", () => {
   let tempDir: string;
   let service: FileTreeService;
 
@@ -39,53 +43,64 @@ describe("FileTreeService includeIgnored", () => {
     expect(nodes.map((node) => node.path)).toEqual(["app.ts"]);
   });
 
-  it("returns ignored entries flagged when the caller opts in", async () => {
+  it("returns every entry in raw mode without running check-ignore", async () => {
+    // Even a mock that would report `dist` ignored must not be consulted — raw
+    // mode bypasses the pass entirely.
     mockedCheckIgnoredPaths.mockResolvedValue(new Set(["dist"]));
 
     const nodes = await service.getFileTree(tempDir, "", { includeIgnored: true });
 
-    expect(nodes.map((node) => [node.path, node.isIgnored === true])).toEqual([
-      ["dist", true],
-      ["app.ts", false],
-    ]);
+    expect(nodes.map((node) => node.path).sort()).toEqual(["app.ts", "dist"]);
+    expect(mockedCheckIgnoredPaths).not.toHaveBeenCalled();
   });
 
-  it("omits the flag entirely for entries git does not ignore", async () => {
+  it("never annotates entries with isIgnored in raw mode", async () => {
     const nodes = await service.getFileTree(tempDir, "", { includeIgnored: true });
 
-    // Absent rather than `false`, so an opted-in listing serializes the same as
-    // the default one for every clean entry.
     for (const node of nodes) {
       expect(Object.hasOwn(node, "isIgnored")).toBe(false);
     }
   });
 
-  it("still hides everything when check-ignore fails, even with includeIgnored off", async () => {
+  it("surfaces .git in raw mode so the junk list can hide it transparently", async () => {
+    await fs.mkdir(path.join(tempDir, ".git"), { recursive: true });
+
+    const nodes = await service.getFileTree(tempDir, "", { includeIgnored: true });
+
+    expect(nodes.some((node) => node.name === ".git")).toBe(true);
+  });
+
+  it("keeps .git out of the default (copy-tree) listing", async () => {
+    await fs.mkdir(path.join(tempDir, ".git"), { recursive: true });
+
+    const nodes = await service.getFileTree(tempDir);
+
+    expect(nodes.some((node) => node.name === ".git")).toBe(false);
+  });
+
+  it("still hides everything when check-ignore fails in default mode", async () => {
     mockedCheckIgnoredPaths.mockRejectedValue(new Error("git exploded"));
 
     const nodes = await service.getFileTree(tempDir);
 
     // Fail-closed: a broken git must never leak build output or secret-like
-    // files into the default listing.
+    // files into the default listing. Raw mode bypasses this path entirely, so
+    // the safety property is untouched.
     expect(nodes).toEqual([]);
   });
 
-  it("marks every entry ignored when check-ignore fails and the caller opted in", async () => {
-    mockedCheckIgnoredPaths.mockRejectedValue(new Error("git exploded"));
+  it("still drops symlinked entries in raw mode", async () => {
+    // Symlink-drop is a containment property, independent of ignore filtering —
+    // raw mode must not weaken it.
+    try {
+      await fs.symlink(path.join(tempDir, "app.ts"), path.join(tempDir, "link.ts"));
+    } catch {
+      // Some CI filesystems disallow symlinks; the drop is still asserted by the
+      // absence below, and a failed symlink create just means no link exists.
+    }
 
     const nodes = await service.getFileTree(tempDir, "", { includeIgnored: true });
 
-    // Opting in must not weaken the fail-closed path into a silent "everything
-    // is clean" — the entries appear, but honestly labelled.
-    expect(nodes.length).toBeGreaterThan(0);
-    expect(nodes.every((node) => node.isIgnored === true)).toBe(true);
-  });
-
-  it("keeps .git out of the listing regardless of the flag", async () => {
-    await fs.mkdir(path.join(tempDir, ".git"), { recursive: true });
-
-    const nodes = await service.getFileTree(tempDir, "", { includeIgnored: true });
-
-    expect(nodes.some((node) => node.name === ".git")).toBe(false);
+    expect(nodes.some((node) => node.name === "link.ts")).toBe(false);
   });
 });

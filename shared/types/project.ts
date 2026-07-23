@@ -163,8 +163,8 @@ export interface PanelSnapshot {
   browserSelectedPath?: string;
   /** Worktree-relative directories expanded in a file browser panel */
   browserExpandedPaths?: string[];
-  /** Whether a file browser panel shows gitignored entries */
-  browserShowIgnored?: boolean;
+  /** Whether a file browser panel hides dot-prefixed entries */
+  browserHideDotfiles?: boolean;
   /** Worktree-relative directory a file browser panel is rooted at */
   browserRootPath?: string;
   /** Whether a file browser panel's tree sidebar is collapsed (only `true` persisted) */

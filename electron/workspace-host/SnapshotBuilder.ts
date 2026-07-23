@@ -61,6 +61,7 @@ export interface SnapshotBuilderHost {
   readonly baseMatchesUpstream: boolean | undefined;
   readonly lastFetchedAt: number | null;
   readonly lastGitStatusCheckedAt: number;
+  readonly workingTreeChangedAt: number;
   readonly fetchAuthFailed: boolean;
   readonly fetchNetworkFailed: boolean;
   readonly isFetchInFlight: boolean;
@@ -165,6 +166,9 @@ export class SnapshotBuilder {
       baseMatchesUpstream: this.host.baseMatchesUpstream ?? undefined,
       lastFetchedAt: this.host.lastFetchedAt ?? undefined,
       lastGitStatusCheckedAt: this.host.lastGitStatusCheckedAt,
+      // 0 → undefined so a worktree that has never seen a raw fs write serializes
+      // lean; the store side map treats absent as "no signal yet".
+      workingTreeChangedAt: this.host.workingTreeChangedAt || undefined,
       fetchAuthFailed: this.host.fetchAuthFailed || undefined,
       fetchNetworkFailed: this.host.fetchNetworkFailed || undefined,
       // Read in-flight state authoritatively at snapshot time (lesson #1700)

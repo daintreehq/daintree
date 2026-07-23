@@ -32,7 +32,7 @@ describe("serializeFileBrowser", () => {
       ...basePanel,
       browserSelectedPath: "src/app.ts",
       browserExpandedPaths: ["src", "src/lib"],
-      browserShowIgnored: true,
+      browserHideDotfiles: true,
     };
 
     const restored = createFileBrowserDefaults(asOptions(serializeFileBrowser(panel)));
@@ -40,18 +40,30 @@ describe("serializeFileBrowser", () => {
     expect(restored).toEqual({
       browserSelectedPath: "src/app.ts",
       browserExpandedPaths: ["src", "src/lib"],
-      browserShowIgnored: true,
+      browserHideDotfiles: true,
     });
   });
 
-  it("preserves an explicitly-disabled ignored toggle through the round trip", () => {
+  it("preserves an explicitly-disabled dotfile toggle through the round trip", () => {
     // A truthiness check anywhere in the pair would drop `false` and let the
     // default silently override a deliberate choice.
-    const panel: FileBrowserPanelData = { ...basePanel, browserShowIgnored: false };
+    const panel: FileBrowserPanelData = { ...basePanel, browserHideDotfiles: false };
 
     const restored = createFileBrowserDefaults(asOptions(serializeFileBrowser(panel)));
 
-    expect(restored.browserShowIgnored).toBe(false);
+    expect(restored.browserHideDotfiles).toBe(false);
+  });
+
+  it("does not carry a legacy browserShowIgnored value into the new dotfile field", () => {
+    // The old field's meaning was inverted; an old panel that showed gitignored
+    // files must NOT hydrate as hiding dotfiles (#10938-class trap). The
+    // serializer only knows the new field, so the stale key is simply dropped.
+    const legacy = { ...basePanel, browserShowIgnored: true } as FileBrowserPanelData;
+
+    const snapshot = serializeFileBrowser(legacy);
+
+    expect(snapshot).not.toHaveProperty("browserHideDotfiles");
+    expect(snapshot).not.toHaveProperty("browserShowIgnored");
   });
 
   it("preserves an empty expansion list, which is not the same as never expanding", () => {

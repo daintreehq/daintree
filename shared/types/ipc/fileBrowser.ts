@@ -14,8 +14,6 @@ export interface FileBrowserListDirectoryPayload {
   worktreeId: string;
   /** Worktree-relative directory to list; absent or "" lists the root */
   dirPath?: string;
-  /** Include gitignored entries, each flagged `isIgnored`, instead of dropping them */
-  includeIgnored?: boolean;
 }
 
 /** Entries of one directory, directories first then case-insensitive by name. */

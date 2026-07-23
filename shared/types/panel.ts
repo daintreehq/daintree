@@ -718,8 +718,14 @@ export interface FileBrowserPanelData extends BasePanelData {
    * than a Set because panel data round-trips through JSON persistence.
    */
   browserExpandedPaths?: string[];
-  /** Whether gitignored entries are shown (dimmed). Absent defaults to false. */
-  browserShowIgnored?: boolean;
+  /**
+   * Whether dot-prefixed entries are hidden in this panel. Absent defaults to
+   * false — dotfiles are visible by default; the toolbar toggle hides them
+   * (#11330). Replaces the old `browserShowIgnored` field, which is
+   * intentionally not migrated: its meaning was inverted, so an old panel that
+   * showed gitignored files must not silently start hiding dotfiles.
+   */
+  browserHideDotfiles?: boolean;
   /**
    * Worktree-relative directory the tree is rooted at. Absent or "" = the
    * worktree root itself.

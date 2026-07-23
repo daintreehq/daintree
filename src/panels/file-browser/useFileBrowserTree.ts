@@ -3,16 +3,22 @@ import type { FileTreeNode } from "@shared/types";
 import { fileBrowserClient } from "@/clients/fileBrowserClient";
 import { logError } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { flattenTree, pruneListings, refreshTargets, type FlatTreeRow } from "./fileBrowserTree";
+import {
+  createVisibilityFilter,
+  flattenTree,
+  isRowPathVisible,
+  pruneListings,
+  refreshTargets,
+  type FlatTreeRow,
+} from "./fileBrowserTree";
 
 /**
  * Ceiling on directory listings in flight at once.
  *
  * A restored panel can carry hundreds of expanded directories, and firing all
- * of them the instant the root lands would both blow past the IPC channel's
- * rate limit — failing the overflow outright — and hand the workspace host a
- * `git check-ignore` child process per request. Queuing keeps a wide tree slow
- * rather than broken.
+ * of them the instant the root lands would blow past the IPC channel's rate
+ * limit — failing the overflow outright. Queuing keeps a wide tree slow rather
+ * than broken.
  */
 const MAX_CONCURRENT_LISTINGS = 6;
 
@@ -39,7 +45,10 @@ const ROOT_RETRY_DELAYS_MS = [150, 400, 800] as const;
 export interface UseFileBrowserTreeArgs {
   worktreeId: string | undefined;
   expandedPaths: readonly string[];
-  showIgnored: boolean;
+  /** Hide dot-prefixed entries (the per-panel toggle). */
+  hideDotfiles: boolean;
+  /** App-global always-hidden basename globs (the junk list). */
+  alwaysHiddenPatterns: readonly string[];
   /**
    * Worktree-relative directory to root the tree at; "" = the worktree root.
    * Changing it is an identity reset, the same as switching worktrees: every
@@ -61,6 +70,12 @@ export interface UseFileBrowserTreeResult {
   isInitialLoading: boolean;
   /** Set when the root listing failed; per-directory failures are silent. */
   rootError: string | null;
+  /**
+   * Whether the current root holds dot-prefixed entries the dotfile toggle is
+   * governing — i.e. turning the toggle off would reveal something. Lets the
+   * empty state offer "Show dotfiles" only when it can actually help.
+   */
+  hasHiddenDotfiles: boolean;
   /** Fetch a directory if it isn't already loaded or in flight. */
   ensureLoaded: (dirPath: string) => void;
   /**
@@ -104,7 +119,8 @@ interface RootRetryState {
 export function useFileBrowserTree({
   worktreeId,
   expandedPaths,
-  showIgnored,
+  hideDotfiles,
+  alwaysHiddenPatterns,
   rootPath = "",
   changeTick,
 }: UseFileBrowserTreeArgs): UseFileBrowserTreeResult {
@@ -119,10 +135,11 @@ export function useFileBrowserTree({
   const isRefreshingRef = useRef(false);
 
   // Generation counter, bumped whenever the identity of what we are listing
-  // changes (worktree switch, ignored-filter flip). Every in-flight response
-  // carries the generation it was issued under and is dropped if it no longer
-  // matches, so a slow listing from the previous worktree can't land in the
-  // new one's tree.
+  // changes (worktree switch, root change). Every in-flight response carries
+  // the generation it was issued under and is dropped if it no longer matches,
+  // so a slow listing from the previous worktree can't land in the new one's
+  // tree. Visibility (junk list, dotfile toggle) is deliberately NOT part of
+  // identity — it filters the cached raw listing at render time, no refetch.
   const generationRef = useRef(0);
   const listingsRef = useRef(listings);
 
@@ -153,6 +170,16 @@ export function useFileBrowserTree({
 
   const expandedSet = useMemo(() => new Set(expandedPaths), [expandedPaths]);
   const expandedSetRef = useRef(expandedSet);
+
+  // Per-entry visibility for the current junk list + dotfile toggle. Filters
+  // rows at render time, but is also read by the fetch machinery (through
+  // `isVisibleRef`) so a hidden directory's subtree is never re-listed — it has
+  // no row, so paying for its listing on every tick is pure waste.
+  const isVisible = useMemo(
+    () => createVisibilityFilter({ hideDotfiles, alwaysHiddenPatterns }),
+    [hideDotfiles, alwaysHiddenPatterns]
+  );
+  const isVisibleRef = useRef(isVisible);
 
   // Set when a refresh could not run because its targets were already in
   // flight. Without it, a tick that arrives mid-flight is consumed by a request
@@ -206,7 +233,6 @@ export function useFileBrowserTree({
         const nodes = await fileBrowserClient.listDirectory({
           worktreeId,
           ...(dirPath !== "" && { dirPath }),
-          ...(showIgnored && { includeIgnored: true }),
         });
         if (generation !== generationRef.current) return;
 
@@ -294,7 +320,7 @@ export function useFileBrowserTree({
         pumpRef.current();
       }
     },
-    [worktreeId, showIgnored, rootPath, clearRootRetryTimer, resetRootRetryState, enqueueTargets]
+    [worktreeId, rootPath, clearRootRetryTimer, resetRootRetryState, enqueueTargets]
   );
 
   const pump = useCallback((): void => {
@@ -307,6 +333,10 @@ export function useFileBrowserTree({
       // produce responses the generation guard throws away.
       if (next.generation !== generationRef.current) continue;
       if (inFlightRef.current.has(next.dirPath)) continue;
+      // A target hidden after it was queued (junk list edited, or dotfiles
+      // toggled while it waited for a slot) renders no row — drop it rather
+      // than spend a listing. Re-shown, the expansion effect re-enqueues it.
+      if (!isRowPathVisible(next.dirPath, rootPath, isVisibleRef.current)) continue;
       void fetchDirectory(next.dirPath, next.generation);
     }
 
@@ -319,7 +349,7 @@ export function useFileBrowserTree({
       refreshPendingRef.current = false;
       const generation = generationRef.current;
       enqueueTargets(
-        refreshTargets(listingsRef.current, expandedSetRef.current, rootPath),
+        refreshTargets(listingsRef.current, expandedSetRef.current, rootPath, isVisibleRef.current),
         generation
       );
       pumpRef.current();
@@ -347,8 +377,9 @@ export function useFileBrowserTree({
   useLayoutEffect(() => {
     listingsRef.current = listings;
     expandedSetRef.current = expandedSet;
+    isVisibleRef.current = isVisible;
     pumpRef.current = pump;
-  }, [listings, expandedSet, pump]);
+  }, [listings, expandedSet, isVisible, pump]);
 
   // Cancel a pending root retry synchronously when the identity changes or the
   // panel unmounts. The generation bump that would invalidate the retry lives in
@@ -361,7 +392,7 @@ export function useFileBrowserTree({
     return () => {
       clearRootRetryTimer();
     };
-  }, [worktreeId, showIgnored, rootPath, clearRootRetryTimer]);
+  }, [worktreeId, rootPath, clearRootRetryTimer]);
 
   useEffect(() => {
     disposedRef.current = false;
@@ -389,7 +420,12 @@ export function useFileBrowserTree({
   const refresh = useCallback(
     (options?: { manual?: boolean }): void => {
       const generation = generationRef.current;
-      const targets = refreshTargets(listingsRef.current, expandedSetRef.current, rootPath);
+      const targets = refreshTargets(
+        listingsRef.current,
+        expandedSetRef.current,
+        rootPath,
+        isVisibleRef.current
+      );
       // A user press should spin the toolbar icon until the re-list drains. Set
       // this before `pump` so the flag is up if fetches start synchronously; a
       // no-op refresh (no worktree, no targets) drains inside `pump` and clears
@@ -410,10 +446,9 @@ export function useFileBrowserTree({
     [enqueueTargets, pump, rootPath]
   );
 
-  // Identity reset. Flipping the ignored filter changes what every listing
-  // contains, not just the root, so the whole cache is dropped rather than
-  // patched — a partial cache would show ignored entries in the folders that
-  // happened to reload and hide them everywhere else.
+  // Identity reset — only a worktree switch or a root change, not a visibility
+  // change: the listing is the same raw filesystem either way, so the junk
+  // list and dotfile toggle filter the cache in place rather than refetching.
   useEffect(() => {
     generationRef.current += 1;
     // Fresh identity, fresh retry budget — and cancel any retry still pending
@@ -433,7 +468,7 @@ export function useFileBrowserTree({
     setHasLoadedRoot(false);
     if (!worktreeId) return;
     void fetchDirectory(rootPath, generationRef.current);
-  }, [worktreeId, showIgnored, rootPath, fetchDirectory, resetRootRetryState]);
+  }, [worktreeId, rootPath, fetchDirectory, resetRootRetryState]);
 
   // Expanding a directory is what triggers its fetch; a restored panel expands
   // several at once, and each is requested the first time it becomes visible.
@@ -448,12 +483,16 @@ export function useFileBrowserTree({
       // expansion whose parent is collapsed (or gone) would otherwise fire a
       // request for a folder the user cannot see.
       if (!isReachable(listings, expandedSet, dirPath, rootPath)) continue;
+      // Nor fetch a directory the junk list / dotfile toggle currently hides:
+      // it renders no row, so its listing is unused. Showing it later re-runs
+      // this effect (isVisible is a dependency) and fetches it then.
+      if (!isRowPathVisible(dirPath, rootPath, isVisible)) continue;
       pendingTargets.push(dirPath);
     }
     if (pendingTargets.length === 0) return;
     enqueueTargets(pendingTargets, generationRef.current);
     pump();
-  }, [expandedSet, listings, hasLoadedRoot, rootPath, enqueueTargets, pump]);
+  }, [expandedSet, listings, hasLoadedRoot, rootPath, isVisible, enqueueTargets, pump]);
 
   // Forget collapsed subtrees so re-expanding re-reads rather than replaying a
   // listing that may be minutes stale on an actively-written worktree.
@@ -478,14 +517,24 @@ export function useFileBrowserTree({
   }, [changeTick, hasLoadedRoot, refresh]);
 
   const rows = useMemo(
-    () => flattenTree(listings, expandedSet, loadingPaths, rootPath),
-    [listings, expandedSet, loadingPaths, rootPath]
+    () => flattenTree(listings, expandedSet, loadingPaths, rootPath, isVisible),
+    [listings, expandedSet, loadingPaths, rootPath, isVisible]
   );
+
+  // Would toggling the dotfile filter off reveal anything at this root? A
+  // root-level dot entry that the junk list is *not* already hiding.
+  const hasHiddenDotfiles = useMemo(() => {
+    const rootNodes = listings.get(rootPath);
+    if (!rootNodes) return false;
+    const notJunk = createVisibilityFilter({ hideDotfiles: false, alwaysHiddenPatterns });
+    return rootNodes.some((node) => node.name.startsWith(".") && notJunk(node.name));
+  }, [listings, rootPath, alwaysHiddenPatterns]);
 
   return {
     rows,
     isInitialLoading: Boolean(worktreeId) && !hasLoadedRoot,
     rootError,
+    hasHiddenDotfiles,
     ensureLoaded,
     refresh,
     isRefreshing,

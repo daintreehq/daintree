@@ -16,6 +16,50 @@ export type DeletedWorktreeCleanupSeconds = 0 | 30 | 60 | 300;
 
 export const DELETED_WORKTREE_CLEANUP_DEFAULT: DeletedWorktreeCleanupSeconds = 60;
 
+/**
+ * File-browser "always hidden" junk list. Basename globs (literal text plus `*`
+ * wildcards) matched against entry names, hiding OS/tooling cruft in every
+ * panel regardless of the per-panel dotfile toggle (#11330). User-editable in
+ * settings; `.git` is a default rather than a structural exclusion so it can be
+ * removed to browse repository internals.
+ */
+export const DEFAULT_FILE_BROWSER_ALWAYS_HIDDEN: readonly string[] = [
+  ".DS_Store",
+  "Thumbs.db",
+  "desktop.ini",
+  "._*",
+  ".git",
+];
+
+/** Caps kept small — this is a curated junk list, not a general ignore file. */
+export const MAX_ALWAYS_HIDDEN_PATTERNS = 100;
+export const MAX_ALWAYS_HIDDEN_PATTERN_LENGTH = 200;
+
+/**
+ * Coerce arbitrary input (hydrated JSON or a setter argument) into a clean
+ * basename-pattern list: strings only, trimmed, no empties, no path separators
+ * (basename matching only), de-duplicated in order, and bounded. A non-array
+ * falls back to the defaults; an array that legitimately reduces to empty stays
+ * empty — clearing the list is a deliberate "hide nothing" choice, not
+ * corruption.
+ */
+export function sanitizeAlwaysHiddenPatterns(value: unknown): string[] {
+  if (!Array.isArray(value)) return [...DEFAULT_FILE_BROWSER_ALWAYS_HIDDEN];
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string") continue;
+    const trimmed = entry.trim();
+    if (trimmed === "" || trimmed.length > MAX_ALWAYS_HIDDEN_PATTERN_LENGTH) continue;
+    if (trimmed.includes("/") || trimmed.includes("\\")) continue;
+    if (seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    result.push(trimmed);
+    if (result.length >= MAX_ALWAYS_HIDDEN_PATTERNS) break;
+  }
+  return result;
+}
+
 interface PreferencesState {
   showProjectPulse: boolean;
   setShowProjectPulse: (show: boolean) => void;
@@ -72,6 +116,13 @@ interface PreferencesState {
    */
   deletedWorktreeCleanupSeconds: DeletedWorktreeCleanupSeconds;
   setDeletedWorktreeCleanupSeconds: (value: DeletedWorktreeCleanupSeconds) => void;
+  /**
+   * Basename globs always hidden in the file browser, across every panel. See
+   * {@link DEFAULT_FILE_BROWSER_ALWAYS_HIDDEN}.
+   */
+  fileBrowserAlwaysHiddenPatterns: string[];
+  setFileBrowserAlwaysHiddenPatterns: (patterns: string[]) => void;
+  resetFileBrowserAlwaysHiddenPatterns: () => void;
 }
 
 function isDockDensity(value: unknown): value is DockDensity {
@@ -122,6 +173,11 @@ function sanitizePersistedPreferences(
   if (!isDeletedWorktreeCleanupSeconds(sanitized.deletedWorktreeCleanupSeconds)) {
     sanitized.deletedWorktreeCleanupSeconds = DELETED_WORKTREE_CLEANUP_DEFAULT;
   }
+  // Absent (new field) → defaults; a hand-edited array is filtered to valid
+  // basename patterns; a legitimately empty list is preserved.
+  sanitized.fileBrowserAlwaysHiddenPatterns = sanitizeAlwaysHiddenPatterns(
+    sanitized.fileBrowserAlwaysHiddenPatterns
+  );
 
   // A truthy non-record value here would otherwise bypass the push-confirm gate.
   const skip = sanitized.skipPushConfirmByWorktreePath;
@@ -198,6 +254,11 @@ export const usePreferencesStore = create<PreferencesState>()(
         }),
       deletedWorktreeCleanupSeconds: DELETED_WORKTREE_CLEANUP_DEFAULT,
       setDeletedWorktreeCleanupSeconds: (value) => set({ deletedWorktreeCleanupSeconds: value }),
+      fileBrowserAlwaysHiddenPatterns: [...DEFAULT_FILE_BROWSER_ALWAYS_HIDDEN],
+      setFileBrowserAlwaysHiddenPatterns: (patterns) =>
+        set({ fileBrowserAlwaysHiddenPatterns: sanitizeAlwaysHiddenPatterns(patterns) }),
+      resetFileBrowserAlwaysHiddenPatterns: () =>
+        set({ fileBrowserAlwaysHiddenPatterns: [...DEFAULT_FILE_BROWSER_ALWAYS_HIDDEN] }),
     }),
     {
       name: "daintree-preferences",
@@ -320,5 +381,5 @@ registerPersistedStore({
   storeId: "preferencesStore",
   store: usePreferencesStore,
   persistedStateType:
-    "{ showProjectPulse: boolean; showDeveloperTools: boolean; showGridAgentHighlights: boolean; showDockAgentHighlights: boolean; showAgentTaskTitles: boolean; dockDensity: DockDensity; assignWorktreeToSelf: boolean; reduceAnimations: boolean; diffViewType: DiffViewType; diffWrapLines: boolean; diffIgnoreWhitespace: boolean; diffShowFileList: boolean; diffFullFile: boolean; diffFontSize: DiffFontSize; markdownWrapLines: boolean; lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>; skipPushConfirmByWorktreePath: Record<string, boolean>; deletedWorktreeCleanupSeconds: DeletedWorktreeCleanupSeconds }",
+    "{ showProjectPulse: boolean; showDeveloperTools: boolean; showGridAgentHighlights: boolean; showDockAgentHighlights: boolean; showAgentTaskTitles: boolean; dockDensity: DockDensity; assignWorktreeToSelf: boolean; reduceAnimations: boolean; diffViewType: DiffViewType; diffWrapLines: boolean; diffIgnoreWhitespace: boolean; diffShowFileList: boolean; diffFullFile: boolean; diffFontSize: DiffFontSize; markdownWrapLines: boolean; lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>; skipPushConfirmByWorktreePath: Record<string, boolean>; deletedWorktreeCleanupSeconds: DeletedWorktreeCleanupSeconds; fileBrowserAlwaysHiddenPatterns: string[] }",
 });

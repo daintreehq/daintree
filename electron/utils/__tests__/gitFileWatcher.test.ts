@@ -862,6 +862,136 @@ describe("GitFileWatcher", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  // ---- Working-tree-changed signal (#11330) ----
+
+  describe("onWorktreeFilesChanged", () => {
+    it("fires once per debounced worktree flush, alongside onChange", async () => {
+      const onChange = vi.fn();
+      const onWorktreeFilesChanged = vi.fn();
+      const mock = setupSubscribeMock();
+
+      const gitWatcher = new GitFileWatcher({
+        worktreePath: "/repo",
+        branch: "main",
+        debounceMs: 300,
+        onChange,
+        onWorktreeFilesChanged,
+        watchWorktree: true,
+        worktreeMinDebounceMs: 500,
+        worktreeMaxDebounceMs: 500,
+        worktreeMaxWaitMs: 2000,
+      });
+
+      await expect(gitWatcher.start()).resolves.toBe(true);
+      mock.resolve();
+      const cb = mock.getCallback();
+
+      fireEvents(cb, [{ type: "update" }, { type: "update" }, { type: "update" }]);
+
+      await vi.advanceTimersByTimeAsync(500);
+      expect(onWorktreeFilesChanged).toHaveBeenCalledTimes(1);
+      // Rides the same flush as the git-status recompute — one raw-fs signal
+      // per coalesced burst, not one per event.
+      expect(onChange).toHaveBeenCalledTimes(1);
+    });
+
+    it("fires on a max-wait forced flush during a sustained burst", async () => {
+      const onChange = vi.fn();
+      const onWorktreeFilesChanged = vi.fn();
+      const mock = setupSubscribeMock();
+
+      const gitWatcher = new GitFileWatcher({
+        worktreePath: "/repo",
+        branch: "main",
+        debounceMs: 300,
+        onChange,
+        onWorktreeFilesChanged,
+        watchWorktree: true,
+        worktreeMinDebounceMs: 500,
+        worktreeMaxDebounceMs: 500,
+        worktreeMaxWaitMs: 2000,
+      });
+
+      await expect(gitWatcher.start()).resolves.toBe(true);
+      mock.resolve();
+      const cb = mock.getCallback();
+
+      fireEvents(cb, [{ type: "update" }]);
+      for (let i = 0; i < 9; i++) {
+        await vi.advanceTimersByTimeAsync(200);
+        fireEvents(cb, [{ type: "update" }]);
+      }
+      expect(onWorktreeFilesChanged).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(200);
+      expect(onWorktreeFilesChanged).toHaveBeenCalledTimes(1);
+      expect(onChange).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not fire for git-internal changes (HEAD/index)", async () => {
+      const gitDir = pathJoin("/repo", ".git");
+      const onChange = vi.fn();
+      const onWorktreeFilesChanged = vi.fn();
+      const gitWatcher = new GitFileWatcher({
+        worktreePath: "/repo",
+        branch: "main",
+        debounceMs: 300,
+        onChange,
+        onWorktreeFilesChanged,
+        watchWorktree: true,
+        worktreeMinDebounceMs: 500,
+        worktreeMaxDebounceMs: 500,
+        worktreeMaxWaitMs: 2000,
+      });
+
+      await expect(gitWatcher.start()).resolves.toBe(true);
+
+      const dotGitCall = vi.mocked(watch).mock.calls.find(([path]) => path === gitDir) as
+        [unknown, unknown, unknown] | undefined;
+      const dotGitCallback = dotGitCall?.[2] as
+        ((eventType: string, filename: string | Buffer | null) => void) | undefined;
+      expect(dotGitCallback).toBeDefined();
+
+      // HEAD/index writes route through the git-internal debounce, which only
+      // drives onChange — a repo-metadata change is not a working-tree write.
+      dotGitCallback?.("rename", "HEAD");
+      dotGitCallback?.("rename", "index");
+      await vi.advanceTimersByTimeAsync(300);
+
+      expect(onChange).toHaveBeenCalledTimes(1);
+      expect(onWorktreeFilesChanged).not.toHaveBeenCalled();
+    });
+
+    it("does not fire a late flush after dispose", async () => {
+      const onChange = vi.fn();
+      const onWorktreeFilesChanged = vi.fn();
+      const mock = setupSubscribeMock();
+
+      const gitWatcher = new GitFileWatcher({
+        worktreePath: "/repo",
+        branch: "main",
+        debounceMs: 300,
+        onChange,
+        onWorktreeFilesChanged,
+        watchWorktree: true,
+        worktreeMinDebounceMs: 150,
+        worktreeMaxDebounceMs: 800,
+        worktreeMaxWaitMs: 1500,
+      });
+
+      await expect(gitWatcher.start()).resolves.toBe(true);
+      mock.resolve();
+      const cb = mock.getCallback();
+
+      fireEvents(cb, [{ type: "update" }, { type: "update" }]);
+      gitWatcher.dispose();
+
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(onWorktreeFilesChanged).not.toHaveBeenCalled();
+      expect(onChange).not.toHaveBeenCalled();
+    });
+  });
+
   // ---- Error handling tests (adapted to async Promise rejection) ----
 
   describe("startup error handling", () => {

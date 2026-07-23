@@ -278,7 +278,7 @@ const FILE_BROWSER_FIELD_CLASSIFICATION = {
   // the tree and how it's laid out), which is exactly what a pinned panel keeps.
   browserSelectedPath: true,
   browserExpandedPaths: true,
-  browserShowIgnored: true,
+  browserHideDotfiles: true,
   browserRootPath: true,
   browserSidebarCollapsed: true,
   // BasePanelData carrier-bookkeeping timestamps — written by the base
@@ -454,7 +454,7 @@ const fileBrowserFixture: FileBrowserPanelData = {
   kind: "file-browser",
   browserSelectedPath: "src/app.ts",
   browserExpandedPaths: ["src"],
-  browserShowIgnored: true,
+  browserHideDotfiles: true,
   browserRootPath: "src",
   browserSidebarCollapsed: true,
 };
@@ -464,7 +464,7 @@ const savedFileBrowser: SavedTerminalData = {
   kind: "file-browser",
   browserSelectedPath: "src/app.ts",
   browserExpandedPaths: ["src"],
-  browserShowIgnored: true,
+  browserHideDotfiles: true,
   browserRootPath: "src",
   browserSidebarCollapsed: true,
 };
@@ -571,19 +571,19 @@ describe("panel serializer field coverage", () => {
     );
   });
 
-  it("file browser serializer keeps an explicit false for the ignored toggle", () => {
-    const withIgnoredOff: FileBrowserPanelData = {
+  it("file browser serializer keeps an explicit false for the dotfile toggle", () => {
+    const withDotfilesShown: FileBrowserPanelData = {
       ...fileBrowserFixture,
-      browserShowIgnored: false,
+      browserHideDotfiles: false,
     };
-    const output = getPanelKindConfig("file-browser")!.serialize!(withIgnoredOff) as Record<
+    const output = getPanelKindConfig("file-browser")!.serialize!(withDotfilesShown) as Record<
       string,
       unknown
     >;
 
     // Truthiness-based spreading would drop this, and the restored panel would
     // silently pick up whatever the default becomes.
-    expect(output.browserShowIgnored).toBe(false);
+    expect(output.browserHideDotfiles).toBe(false);
   });
 
   it("diff serializer covers every persisted diff field", () => {
@@ -673,17 +673,17 @@ describe("panel deserializer field coverage", () => {
     }
   });
 
-  it("file browser deserializer drops a non-boolean ignored toggle rather than coercing it", () => {
+  it("file browser deserializer drops a non-boolean dotfile toggle rather than coercing it", () => {
     const deserializer = getDeserializer("file-browser")!;
 
     const output = deserializer({
       ...savedFileBrowser,
-      browserShowIgnored: "yes",
+      browserHideDotfiles: "yes",
     }) as Record<string, unknown>;
 
-    // Coercing would turn any stray on-disk string into "show every ignored
-    // file", which is the opposite of the safe default.
-    expect(output.browserShowIgnored).toBeUndefined();
+    // Coercing would turn any stray on-disk string into "hide every dotfile",
+    // which is the opposite of the safe default (dotfiles visible).
+    expect(output.browserHideDotfiles).toBeUndefined();
   });
 
   it("terminal has no deserializer registry entry", () => {

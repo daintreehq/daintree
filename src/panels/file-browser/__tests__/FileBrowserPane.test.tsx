@@ -38,6 +38,9 @@ vi.mock("@/hooks/useWorktreeStore", () => ({
   useWorktreeStore: (selector: (state: unknown) => unknown) =>
     selector({
       worktrees: new Map([["wt-1", { path: "/repo", worktreeChanges: undefined }]]),
+      // The pane reads the raw filesystem-write side map for its change tick
+      // (#11330); an absent map would crash the `.get(worktreeId)` selector.
+      workingTreeChangedAtById: new Map<string, number>(),
     }),
 }));
 
@@ -54,7 +57,6 @@ vi.mock("../useFileBrowserTree", () => ({
         depth: 0,
         isExpanded: true,
         isLoading: false,
-        isIgnored: false,
       },
       // A file row so a selection can resolve a real viewer path.
       {
@@ -64,13 +66,14 @@ vi.mock("../useFileBrowserTree", () => ({
         depth: 1,
         isExpanded: false,
         isLoading: false,
-        isIgnored: false,
       },
     ],
     isInitialLoading: false,
     rootError: null,
+    hasHiddenDotfiles: false,
     ensureLoaded: vi.fn(),
     refresh: vi.fn(),
+    isRefreshing: false,
   }),
 }));
 

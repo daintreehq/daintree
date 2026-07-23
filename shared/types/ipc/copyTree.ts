@@ -152,10 +152,4 @@ export interface FileTreeNode {
   size?: number;
   /** Children (only populated for directories if expanded) */
   children?: FileTreeNode[];
-  /**
-   * Whether git reports this entry as ignored. Only ever set when the caller
-   * asked for ignored entries — the default listing filters them out, so an
-   * absent flag means "not ignored", never "unknown".
-   */
-  isIgnored?: boolean;
 }

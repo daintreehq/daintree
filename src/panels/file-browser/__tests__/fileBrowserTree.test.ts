@@ -3,7 +3,9 @@ import type { FileTreeNode } from "@shared/types";
 import {
   ancestorDirectories,
   canonicalizeRootPath,
+  createVisibilityFilter,
   flattenTree,
+  isRowPathVisible,
   parentRootPath,
   pruneListings,
   refreshTargets,
@@ -103,14 +105,25 @@ describe("flattenTree", () => {
     expect(rows[0]?.isLoading).toBe(false);
   });
 
-  it("marks ignored entries so the row can be dimmed", () => {
+  it("omits an entry the visibility filter rejects, and does not descend a hidden directory", () => {
     const listings = listingsOf({
-      "": [file("dist/bundle.js", { isIgnored: true }), file("index.ts")],
+      "": [dir(".git"), dir("src"), file(".env"), file("README.md")],
+      ".git": [file(".git/config")],
+      src: [file("src/index.ts")],
     });
 
-    const rows = flattenTree(listings, new Set(), new Set());
+    // Hide dotfiles: `.git` and `.env` drop out, and `.git`'s children are
+    // never walked even though its listing is cached and it's "expanded".
+    const isVisible = createVisibilityFilter({ hideDotfiles: true, alwaysHiddenPatterns: [] });
+    const rows = flattenTree(listings, new Set([".git", "src"]), new Set(), "", isVisible);
 
-    expect(rows.map((row) => row.isIgnored)).toEqual([true, false]);
+    expect(pathsOf(rows)).toEqual(["src", "src/index.ts", "README.md"]);
+  });
+
+  it("passes every entry through when no filter is supplied", () => {
+    const listings = listingsOf({ "": [file(".env"), file("README.md")] });
+
+    expect(pathsOf(flattenTree(listings, new Set(), new Set()))).toEqual([".env", "README.md"]);
   });
 
   it("stops descending past the depth guard instead of recursing forever", () => {
@@ -236,24 +249,8 @@ describe("resolveTreeKey", () => {
     // A directory whose *name* contains a slash-like structure would fool a
     // path-splitting parent lookup; depth is the authority.
     const rows: FlatTreeRow[] = [
-      {
-        path: "a",
-        name: "a",
-        isDirectory: true,
-        depth: 0,
-        isExpanded: true,
-        isLoading: false,
-        isIgnored: false,
-      },
-      {
-        path: "a/b",
-        name: "b",
-        isDirectory: true,
-        depth: 1,
-        isExpanded: true,
-        isLoading: false,
-        isIgnored: false,
-      },
+      { path: "a", name: "a", isDirectory: true, depth: 0, isExpanded: true, isLoading: false },
+      { path: "a/b", name: "b", isDirectory: true, depth: 1, isExpanded: true, isLoading: false },
       {
         path: "a/b/c",
         name: "c",
@@ -261,7 +258,6 @@ describe("resolveTreeKey", () => {
         depth: 2,
         isExpanded: false,
         isLoading: false,
-        isIgnored: false,
       },
     ];
 
@@ -362,5 +358,117 @@ describe("refreshTargets", () => {
     // `a` is expanded but sits outside the root — a refresh scoped to `src`
     // must not re-request it.
     expect(refreshTargets(listings, new Set(["a", "src/lib"]), "src")).toEqual(["src", "src/lib"]);
+  });
+
+  it("skips a hidden expanded directory and its subtree when given a visibility filter", () => {
+    const listings = listingsOf({
+      "": [dir(".cache"), dir("src")],
+      ".cache": [dir(".cache/inner")],
+      src: [file("src/a.ts")],
+    });
+    const isVisible = createVisibilityFilter({ hideDotfiles: true, alwaysHiddenPatterns: [] });
+
+    // `.cache` renders no row while dotfiles are hidden, so re-listing it (and
+    // `.cache/inner`) every tick is waste — only the root and `src` are targets.
+    expect(
+      refreshTargets(listings, new Set([".cache", ".cache/inner", "src"]), "", isVisible)
+    ).toEqual(["", "src"]);
+  });
+});
+
+describe("createVisibilityFilter", () => {
+  const hidden = (names: string[], visibility: Parameters<typeof createVisibilityFilter>[0]) =>
+    names.filter((name) => !createVisibilityFilter(visibility)(name));
+
+  it("hides exact junk-list basenames, nothing more", () => {
+    const isVisible = createVisibilityFilter({
+      hideDotfiles: false,
+      alwaysHiddenPatterns: [".DS_Store", "Thumbs.db"],
+    });
+    expect(isVisible(".DS_Store")).toBe(false);
+    expect(isVisible("Thumbs.db")).toBe(false);
+    // A literal pattern anchors both ends: no substring or prefix matches.
+    expect(isVisible("Thumbs.db.bak")).toBe(true);
+    expect(isVisible("my.DS_Store")).toBe(true);
+    expect(isVisible("index.ts")).toBe(true);
+  });
+
+  it("treats * as the only wildcard and anchors the rest, matching AppleDouble names", () => {
+    const isVisible = createVisibilityFilter({
+      hideDotfiles: false,
+      alwaysHiddenPatterns: ["._*", "*.log"],
+    });
+    expect(isVisible("._DS_Store")).toBe(false);
+    expect(isVisible("._")).toBe(false);
+    expect(isVisible("debug.log")).toBe(false);
+    expect(isVisible(".log")).toBe(false);
+    // No leading `._`, no `.log` suffix.
+    expect(isVisible("changelog.txt")).toBe(true);
+    expect(isVisible("a._b")).toBe(true);
+  });
+
+  it("treats `*` as a wildcard even against a filename that contains a literal `*`", () => {
+    // A left-to-right literal check would let the name's `*` consume the
+    // pattern's wildcard; `*` must still match everything.
+    const isVisible = createVisibilityFilter({ hideDotfiles: false, alwaysHiddenPatterns: ["*"] });
+    expect(isVisible("*a")).toBe(false);
+    expect(isVisible("anything")).toBe(false);
+    expect(isVisible("")).toBe(false);
+  });
+
+  it("does not let a pattern inject regex semantics", () => {
+    // `.` is a literal dot, not "any char"; `+` is literal, not a quantifier.
+    const isVisible = createVisibilityFilter({
+      hideDotfiles: false,
+      alwaysHiddenPatterns: ["a.b", "c+d"],
+    });
+    expect(isVisible("a.b")).toBe(false);
+    expect(isVisible("axb")).toBe(true);
+    expect(isVisible("c+d")).toBe(false);
+    expect(isVisible("cd")).toBe(true);
+  });
+
+  it("hides dot-prefixed entries only when the toggle is on, independent of the junk list", () => {
+    expect(hidden([".env", "src"], { hideDotfiles: true, alwaysHiddenPatterns: [] })).toEqual([
+      ".env",
+    ]);
+    expect(hidden([".env", "src"], { hideDotfiles: false, alwaysHiddenPatterns: [] })).toEqual([]);
+  });
+
+  it("matches a pathological star pattern in linear time without catastrophic backtracking", () => {
+    // A `.*`-per-`*` regex would take seconds on this input (a real ReDoS on
+    // user-persisted patterns); the two-pointer matcher returns immediately. The
+    // test hanging IS the failure mode we're guarding against.
+    const isVisible = createVisibilityFilter({
+      hideDotfiles: false,
+      alwaysHiddenPatterns: ["*a*a*a*a*a*a*a*a*a*a*b"],
+    });
+    const name = "a".repeat(64); // matches the a-runs, never the trailing `b`
+    expect(isVisible(name)).toBe(true); // not hidden — no `b`, so no match
+  });
+});
+
+describe("isRowPathVisible", () => {
+  const showAll = () => true;
+  const hideDotfiles = createVisibilityFilter({ hideDotfiles: true, alwaysHiddenPatterns: [] });
+
+  it("is visible when every segment below the root passes the filter", () => {
+    expect(isRowPathVisible("src/index.ts", "", showAll)).toBe(true);
+    expect(isRowPathVisible("src/index.ts", "", hideDotfiles)).toBe(true);
+  });
+
+  it("is hidden when any segment below the root is filtered", () => {
+    expect(isRowPathVisible(".git/config", "", hideDotfiles)).toBe(false);
+    expect(isRowPathVisible("src/.env", "", hideDotfiles)).toBe(false);
+  });
+
+  it("never tests the root's own segments — a dot-named root doesn't hide its children", () => {
+    // Rooted inside `.github`, a hideDotfiles filter still shows plain children.
+    expect(isRowPathVisible(".github/workflows", ".github", hideDotfiles)).toBe(true);
+    expect(isRowPathVisible(".github/.secret", ".github", hideDotfiles)).toBe(false);
+  });
+
+  it("is not visible for a path outside the root", () => {
+    expect(isRowPathVisible("other/file.ts", "src", showAll)).toBe(false);
   });
 });

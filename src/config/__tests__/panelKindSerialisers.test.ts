@@ -173,11 +173,11 @@ describe("panelKindSerialisers", () => {
       ).toBe("src/app.ts");
     });
 
-    it("drops a non-boolean ignored toggle rather than coercing it", () => {
+    it("drops a non-boolean dotfile toggle rather than coercing it", () => {
       expect(
-        deserialize()({ id: "fb1", browserShowIgnored: "yes" }).browserShowIgnored
+        deserialize()({ id: "fb1", browserHideDotfiles: "yes" }).browserHideDotfiles
       ).toBeUndefined();
-      expect(deserialize()({ id: "fb1", browserShowIgnored: false }).browserShowIgnored).toBe(
+      expect(deserialize()({ id: "fb1", browserHideDotfiles: false }).browserHideDotfiles).toBe(
         false
       );
     });
@@ -195,6 +195,17 @@ describe("panelKindSerialisers", () => {
         deserialize()({ id: "fb1", browserSidebarCollapsed: "yes" }).browserSidebarCollapsed
       ).toBeUndefined();
       expect(deserialize()({ id: "fb1" }).browserSidebarCollapsed).toBeUndefined();
+    });
+
+    it("ignores a legacy browserShowIgnored key instead of migrating it", () => {
+      // The old field is unknown to the deserializer now; a persisted `true`
+      // must not resurface as the inverted new toggle (#10938 / #11330).
+      // Bound to a variable so the removed key isn't an object-literal excess
+      // property — a persisted blob really can carry unknown keys.
+      const legacy = { id: "fb1", browserShowIgnored: true };
+      const output = deserialize()(legacy);
+      expect(output.browserHideDotfiles).toBeUndefined();
+      expect(output).not.toHaveProperty("browserShowIgnored");
     });
   });
 

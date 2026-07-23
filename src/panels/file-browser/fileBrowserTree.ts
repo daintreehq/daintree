@@ -17,10 +17,90 @@ export interface FlatTreeRow {
   isExpanded: boolean;
   /** Directories only: whether a listing for this row is in flight */
   isLoading: boolean;
-  /** Whether git reports this entry as ignored (only ever true when showing ignored) */
-  isIgnored: boolean;
   /** Byte size for files; undefined for directories */
   size?: number;
+}
+
+/**
+ * The two visibility controls the browser applies client-side over the raw
+ * listing the service now returns (#11330): the app-global always-hidden junk
+ * list and the per-panel dotfile toggle. Both filter by entry basename.
+ */
+export interface FileVisibility {
+  /** Hide dot-prefixed entries (the per-panel toggle). */
+  hideDotfiles: boolean;
+  /** Always-hidden basename globs (literal text plus `*` wildcards). */
+  alwaysHiddenPatterns: readonly string[];
+}
+
+/**
+ * Anchored, case-sensitive basename glob match where `*` is the only wildcard
+ * (any run of characters) and every other character is literal. A two-pointer
+ * scan with single-star backtracking — O(name · pattern) worst case, never
+ * exponential — so a persisted pattern like `*a*a*…*b` can't wedge the render
+ * path the way a `.*`-per-`*` regex would (a real ReDoS on user-controlled
+ * patterns).
+ */
+function matchesBasenameGlob(name: string, pattern: string): boolean {
+  let n = 0;
+  let p = 0;
+  let starP = -1;
+  let starN = 0;
+  while (n < name.length) {
+    // `*` is matched as a wildcard BEFORE literal equality, so a filename that
+    // itself contains `*` (legal on POSIX) can't consume the pattern's wildcard
+    // as a literal — `*` must still match everything.
+    if (p < pattern.length && pattern[p] === "*") {
+      starP = p;
+      starN = n;
+      p += 1;
+    } else if (p < pattern.length && pattern[p] === name[n]) {
+      n += 1;
+      p += 1;
+    } else if (starP !== -1) {
+      // Backtrack: let the last `*` swallow one more character.
+      p = starP + 1;
+      starN += 1;
+      n = starN;
+    } else {
+      return false;
+    }
+  }
+  while (p < pattern.length && pattern[p] === "*") p += 1;
+  return p === pattern.length;
+}
+
+/**
+ * Build the per-entry visibility predicate for one panel's current settings. A
+ * `true` result means "show this entry".
+ */
+export function createVisibilityFilter(visibility: FileVisibility): (name: string) => boolean {
+  const { hideDotfiles, alwaysHiddenPatterns } = visibility;
+  return (name: string): boolean => {
+    for (const pattern of alwaysHiddenPatterns) {
+      if (matchesBasenameGlob(name, pattern)) return false;
+    }
+    if (hideDotfiles && name.startsWith(".")) return false;
+    return true;
+  };
+}
+
+/**
+ * Whether the row for a worktree-relative path is currently visible: every path
+ * segment below the browser root must pass the filter. Used to reconcile a
+ * selection that a visibility change has just hidden. The root's own segments
+ * are never tested — the root is the frame, not a row.
+ */
+export function isRowPathVisible(
+  relativePath: string,
+  rootPath: string,
+  isVisible: (name: string) => boolean
+): boolean {
+  const prefix = rootPath === "" ? "" : `${rootPath}/`;
+  if (prefix !== "" && !relativePath.startsWith(prefix)) return false;
+  const below = relativePath.slice(prefix.length);
+  const segments = below.split("/").filter(Boolean);
+  return segments.every((segment) => isVisible(segment));
 }
 
 /** Listing state for one directory, keyed by worktree-relative path ("" = root). */
@@ -39,7 +119,8 @@ export function flattenTree(
   listings: DirectoryListings,
   expandedPaths: ReadonlySet<string>,
   loadingPaths: ReadonlySet<string>,
-  rootPath = ""
+  rootPath = "",
+  isVisible?: (name: string) => boolean
 ): FlatTreeRow[] {
   const rows: FlatTreeRow[] = [];
 
@@ -52,6 +133,9 @@ export function flattenTree(
     if (!children) return;
 
     for (const node of children) {
+      // A hidden entry contributes no row and, for a directory, no subtree —
+      // so its children are never rendered and never fetched.
+      if (isVisible && !isVisible(node.name)) continue;
       const isExpanded = node.isDirectory && expandedPaths.has(node.path);
       rows.push({
         path: node.path,
@@ -60,7 +144,6 @@ export function flattenTree(
         depth,
         isExpanded,
         isLoading: node.isDirectory && loadingPaths.has(node.path) && !listings.has(node.path),
-        isIgnored: node.isIgnored === true,
         ...(node.size != null && { size: node.size }),
       });
       if (isExpanded) walk(node.path, depth + 1);
@@ -228,7 +311,8 @@ export function pruneListings(
 export function refreshTargets(
   listings: DirectoryListings,
   expandedPaths: ReadonlySet<string>,
-  rootPath = ""
+  rootPath = "",
+  isVisible?: (name: string) => boolean
 ): string[] {
   const targets = [rootPath];
   const walk = (dirPath: string, depth: number): void => {
@@ -237,6 +321,9 @@ export function refreshTargets(
     if (!children) return;
     for (const node of children) {
       if (!node.isDirectory || !expandedPaths.has(node.path)) continue;
+      // A hidden directory has no row, so re-listing it (and its subtree) every
+      // tick is pure waste — skip it and everything beneath it.
+      if (isVisible && !isVisible(node.name)) continue;
       targets.push(node.path);
       walk(node.path, depth + 1);
     }

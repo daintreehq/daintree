@@ -72,6 +72,7 @@ interface MutableHost {
   onInotifyLimitReached: ReturnType<typeof vi.fn>;
   onEmfileLimitReached: ReturnType<typeof vi.fn>;
   onWatcherRecovered: ReturnType<typeof vi.fn>;
+  onWorktreeFilesChanged: ReturnType<typeof vi.fn>;
 }
 
 function makeHost(overrides: Partial<MutableHost> = {}): MutableHost {
@@ -89,6 +90,7 @@ function makeHost(overrides: Partial<MutableHost> = {}): MutableHost {
     onInotifyLimitReached: vi.fn(),
     onEmfileLimitReached: vi.fn(),
     onWatcherRecovered: vi.fn(),
+    onWorktreeFilesChanged: vi.fn(),
     ...overrides,
   };
 }
@@ -593,6 +595,41 @@ describe("WatcherController", () => {
     capturedOnEmfileLimitReached?.();
     expect(host.onInotifyLimitReached).toHaveBeenCalledWith("/test/worktree");
     expect(host.onEmfileLimitReached).toHaveBeenCalledWith("/test/worktree");
+  });
+
+  it("forwards onWorktreeFilesChanged to the host when the recursive watcher flushes", async () => {
+    mockWatcherStartResult = true;
+    const host = makeHost({ isElevated: true });
+    const ctrl = new WatcherController(host as WatcherControllerHost);
+    ctrl.start();
+    await settle();
+
+    const fireWorktreeFilesChanged = capturedWatcherOptions?.onWorktreeFilesChanged as
+      (() => void) | undefined;
+    expect(fireWorktreeFilesChanged).toBeDefined();
+
+    fireWorktreeFilesChanged?.();
+    expect(host.onWorktreeFilesChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops a late onWorktreeFilesChanged once the host is no longer running", async () => {
+    mockWatcherStartResult = true;
+    const host = makeHost({ isElevated: true });
+    const ctrl = new WatcherController(host as WatcherControllerHost);
+    ctrl.start();
+    await settle();
+
+    const fireWorktreeFilesChanged = capturedWatcherOptions?.onWorktreeFilesChanged as
+      (() => void) | undefined;
+
+    // A watcher rotated out (or a stopped controller) can still fire its
+    // debounced flush; the controller-level guard must not stamp the host
+    // after teardown.
+    host.isRunning = false;
+    ctrl.stop();
+    fireWorktreeFilesChanged?.();
+
+    expect(host.onWorktreeFilesChanged).not.toHaveBeenCalled();
   });
 
   it("uses the 250ms worktree min-debounce floor", async () => {

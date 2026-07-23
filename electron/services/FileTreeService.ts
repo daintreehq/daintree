@@ -32,14 +32,16 @@ function _getBaseRealpath(resolvedBasePath: string): Promise<string> {
 
 export interface GetFileTreeOptions {
   /**
-   * Return gitignored entries too, each flagged `isIgnored: true`, instead of
-   * dropping them. Off by default so every existing caller (the copy-tree file
-   * picker) keeps the fail-closed listing it was written against.
+   * Raw-listing mode for the file browser: skip the `git check-ignore` pass
+   * entirely (no git subprocess, no `isIgnored` annotation) and return every
+   * entry — including gitignored ones and `.git` itself — so visibility is a
+   * pure client-side concern (the always-hidden junk list and the per-panel
+   * dotfile toggle live in the renderer, issue #11330).
    *
-   * Note this deliberately does not weaken the check-ignore failure path: when
-   * `git check-ignore` errors, every checked path is still treated as ignored,
-   * so an opted-in caller sees them marked rather than silently presented as
-   * clean.
+   * Off by default so the copy-tree file picker keeps its fail-closed listing:
+   * when the check-ignore invocation errors, every checked path is still
+   * treated as ignored rather than leaking. That path is deliberately untouched
+   * here — this flag bypasses the check, it does not weaken it.
    */
   includeIgnored?: boolean;
 }
@@ -90,57 +92,67 @@ export class FileTreeService {
 
       const entries = await fs.readdir(targetPath, { withFileTypes: true });
 
+      // Raw-listing mode (the file browser) skips the git check-ignore pass
+      // wholesale: no subprocess, no ignored-path set, and `.git` is returned
+      // like any other entry so the renderer's junk list — not this service —
+      // decides whether it is hidden. Default mode (copy-tree) is unchanged.
+      const skipIgnoreCheck = options.includeIgnored === true;
+
       const toGitPath = (p: string) => p.split(path.sep).join("/");
-      const pathsToCheck = entries
-        .filter((e) => e.name !== ".git")
-        .map((e) => toGitPath(path.join(relativeDirPath, e.name)));
       const ignoredPaths = new Set<string>();
 
-      try {
-        if (pathsToCheck.length > 0) {
-          const ignored = await checkIgnoredPaths(resolvedBasePath, pathsToCheck);
-          for (const p of ignored) {
+      if (!skipIgnoreCheck) {
+        const pathsToCheck = entries
+          .filter((e) => e.name !== ".git")
+          .map((e) => toGitPath(path.join(relativeDirPath, e.name)));
+
+        try {
+          if (pathsToCheck.length > 0) {
+            const ignored = await checkIgnoredPaths(resolvedBasePath, pathsToCheck);
+            for (const p of ignored) {
+              ignoredPaths.add(p);
+            }
+          }
+        } catch (error) {
+          // Fail closed: if the check-ignore invocation errors (E2BIG, ENOMEM,
+          // missing git, broken repo, …) populate the set with every path we
+          // tried to check so the downstream filter hides all of them. This
+          // is the same shape as "everything in this dir is gitignored" and
+          // prevents gitignored entries (build output, dependency folders,
+          // secret-like files) from leaking into the tree. A transient
+          // failure self-heals on the next successful call.
+          const now = Date.now();
+          const last = _lastWarnAt.get(resolvedBasePath) ?? 0;
+          if (now - last >= WARN_THROTTLE_MS) {
+            _lastWarnAt.set(resolvedBasePath, now);
+            console.warn("git check-ignore failed; hiding checked entries to prevent leak", {
+              code: (error as NodeJS.ErrnoException)?.code,
+              message: formatErrorMessage(error, "Unknown git check-ignore error"),
+              entryCount: pathsToCheck.length,
+            });
+          }
+          for (const p of pathsToCheck) {
             ignoredPaths.add(p);
           }
-        }
-      } catch (error) {
-        // Fail closed: if the check-ignore invocation errors (E2BIG, ENOMEM,
-        // missing git, broken repo, …) populate the set with every path we
-        // tried to check so the downstream filter hides all of them. This
-        // is the same shape as "everything in this dir is gitignored" and
-        // prevents gitignored entries (build output, dependency folders,
-        // secret-like files) from leaking into the tree. A transient
-        // failure self-heals on the next successful call.
-        const now = Date.now();
-        const last = _lastWarnAt.get(resolvedBasePath) ?? 0;
-        if (now - last >= WARN_THROTTLE_MS) {
-          _lastWarnAt.set(resolvedBasePath, now);
-          console.warn("git check-ignore failed; hiding checked entries to prevent leak", {
-            code: (error as NodeJS.ErrnoException)?.code,
-            message: formatErrorMessage(error, "Unknown git check-ignore error"),
-            entryCount: pathsToCheck.length,
-          });
-        }
-        for (const p of pathsToCheck) {
-          ignoredPaths.add(p);
         }
       }
 
       const statResults = await Promise.all(
         entries.map(async (entry) => {
-          if (entry.name === ".git") return null;
+          // `.git` is a structural exclusion only in default mode; raw mode
+          // surfaces it so the junk list can hide it transparently.
+          if (entry.name === ".git" && !skipIgnoreCheck) return null;
           if (entry.isSymbolicLink()) return null;
 
           const relativePath = path.join(relativeDirPath, entry.name);
           const gitRelativePath = toGitPath(relativePath);
 
-          const isIgnored = ignoredPaths.has(gitRelativePath);
-          if (isIgnored && !options.includeIgnored) return null;
+          if (ignoredPaths.has(gitRelativePath)) return null;
 
           const absolutePath = path.join(resolvedBasePath, relativePath);
           try {
             const fileStat = await fs.lstat(absolutePath);
-            return { fileStat, name: entry.name, gitRelativePath, isIgnored };
+            return { fileStat, name: entry.name, gitRelativePath };
           } catch {
             return null;
           }
@@ -150,14 +162,11 @@ export class FileTreeService {
       const nodes: FileTreeNode[] = [];
       for (const result of statResults) {
         if (!result) continue;
-        const { fileStat, name, gitRelativePath, isIgnored } = result;
-        // Omitted rather than set to `false` so the default listing serializes
-        // byte-for-byte as it did before the flag existed.
-        const ignoredField = isIgnored ? { isIgnored: true as const } : {};
+        const { fileStat, name, gitRelativePath } = result;
 
         const isDirectory = fileStat.isDirectory();
         if (isDirectory) {
-          nodes.push({ name, path: gitRelativePath, isDirectory, ...ignoredField });
+          nodes.push({ name, path: gitRelativePath, isDirectory });
           continue;
         }
 
@@ -167,7 +176,6 @@ export class FileTreeService {
             path: gitRelativePath,
             isDirectory,
             size: fileStat.size,
-            ...ignoredField,
           });
         } catch {
           // skip entries where size read fails

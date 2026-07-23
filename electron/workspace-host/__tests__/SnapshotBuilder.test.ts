@@ -52,6 +52,7 @@ function makeHost(overrides: Partial<SnapshotBuilderHost> = {}): SnapshotBuilder
     baseMatchesUpstream: undefined,
     lastFetchedAt: null,
     lastGitStatusCheckedAt: 0,
+    workingTreeChangedAt: 0,
     fetchAuthFailed: false,
     fetchNetworkFailed: false,
     isFetchInFlight: false,
@@ -201,5 +202,14 @@ describe("SnapshotBuilder", () => {
     expect(new SnapshotBuilder(makeHost({ worktreeMode: "remote" })).build().worktreeMode).toBe(
       "remote"
     );
+  });
+
+  it("omits workingTreeChangedAt until a fs write is observed, then surfaces it", () => {
+    // 0 → undefined keeps the snapshot lean for a worktree that has never seen a
+    // raw fs write; a real stamp passes straight through for the store side map.
+    expect(new SnapshotBuilder(makeHost()).build().workingTreeChangedAt).toBeUndefined();
+
+    const stamped = makeHost({ workingTreeChangedAt: 1_725_000_000_000 });
+    expect(new SnapshotBuilder(stamped).build().workingTreeChangedAt).toBe(1_725_000_000_000);
   });
 });

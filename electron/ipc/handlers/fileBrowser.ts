@@ -145,8 +145,12 @@ export function buildFileBrowserNamespace(deps: HandlerDependencies) {
 
     const worktree = await resolveSenderWorktree(ctx, payload.worktreeId);
 
+    // Always raw: the browser shows every entry and does its own hiding (junk
+    // list + dotfile toggle) client-side. Passing this bypasses the per-dir
+    // `git check-ignore` pass — no renderer opt-out, so gitignored working
+    // folders can never be filtered back out here (#11330).
     return deps.worktreeService.getFileTree(worktree.path, payload.dirPath, {
-      includeIgnored: payload.includeIgnored,
+      includeIgnored: true,
     });
   };
 
