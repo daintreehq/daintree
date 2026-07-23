@@ -107,16 +107,16 @@ export const useMcpConfirmStore = create<McpConfirmState & McpConfirmActions>((s
   // resurrect a settled confirmation.
   setPreview: (requestId, preview) => {
     const { current, queue } = get();
-    if (current?.requestId === requestId) {
+    if (current !== null && current.requestId === requestId) {
       set({ current: { ...current, preview, previewPending: false } });
       return;
     }
     const idx = queue.findIndex((item) => item.requestId === requestId);
-    if (idx !== -1) {
-      const next = [...queue];
-      next[idx] = { ...next[idx], preview, previewPending: false };
-      set({ queue: next });
-    }
+    const target = queue[idx];
+    if (target === undefined) return;
+    const next = [...queue];
+    next[idx] = { ...target, preview, previewPending: false };
+    set({ queue: next });
   },
 
   resolveCurrent: (decision) => {
