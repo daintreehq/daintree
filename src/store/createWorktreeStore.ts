@@ -3,6 +3,7 @@ import type { WorktreeSnapshot, WorktreeEventVersion, AttachIssuePayload } from 
 import { usePanelStore } from "./panelStore";
 import { worktreeClient } from "@/clients";
 import {
+  captureWorktreeTerminalSnapshot,
   closeTerminalsForWorktree,
   restoreClosedTerminals,
   type WorktreeTerminalRestoreSnapshot,
@@ -707,6 +708,24 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
         version,
         tombstones,
       });
+
+      if (hadWorktree) {
+        // The worktree is authoritatively gone (#11344). Drop its restore
+        // bookkeeping so a snapshot from a since-superseded delete can't leak or
+        // replay, and remove any panels still pointing at it. PTY terminals were
+        // closed up front; this reaps the non-terminal panels (browser, review,
+        // …) that closeTerminalsForWorktree intentionally left alive because they
+        // hold no directory lock.
+        discardTerminalRestores(
+          worktreeId,
+          outboxEntries.map((entry) => entry.mutationId)
+        );
+        const panelStore = usePanelStore.getState();
+        const stalePanelIds = panelStore.panelIdsByWorktreeId[worktreeId];
+        if (stalePanelIds && stalePanelIds.length > 0) {
+          for (const panelId of [...stalePanelIds]) panelStore.removePanel(panelId);
+        }
+      }
     },
 
     startDelete(worktreeId: string, options: WorktreeDeleteOptions) {
@@ -1209,14 +1228,35 @@ function mintMutationId(): string {
  */
 const pendingTerminalRestores = new Map<string, WorktreeTerminalRestoreSnapshot[]>();
 
+/**
+ * In-flight relaunch per worktree. A relaunch is a sequence of async `addPanel`
+ * spawns; a fresh `runDeleteAsync` for the same worktree awaits this before
+ * closing terminals, so a rapid retry can't interleave its close with spawns
+ * still in flight (which would strand panels against the git remove or leak them
+ * onto a deleted worktree).
+ */
+const restoreInFlight = new Map<string, Promise<void>>();
+
 /** Relaunch the terminals closed for a delete that has been definitively
  *  abandoned (won't be auto-retried), then drop the snapshot. No-op when the
- *  delete closed no terminals or a prior branch already consumed it. */
-function consumeTerminalRestore(mutationId: string): void {
+ *  delete closed no terminals or a prior branch already consumed it. Tracks the
+ *  relaunch promise per worktree so a concurrent delete can await it. */
+function consumeTerminalRestore(worktreeId: string, mutationId: string): void {
   const snapshot = pendingTerminalRestores.get(mutationId);
   if (!snapshot) return;
   pendingTerminalRestores.delete(mutationId);
-  void restoreClosedTerminals(snapshot);
+  const done = restoreClosedTerminals(snapshot).finally(() => {
+    if (restoreInFlight.get(worktreeId) === done) restoreInFlight.delete(worktreeId);
+  });
+  restoreInFlight.set(worktreeId, done);
+}
+
+/** Drop any pending/in-flight restore bookkeeping for a worktree. Called when
+ *  the worktree is authoritatively gone (`applyRemove`) so the module maps don't
+ *  leak a snapshot that will never be replayed. */
+function discardTerminalRestores(worktreeId: string, mutationIds: readonly string[]): void {
+  for (const mutationId of mutationIds) pendingTerminalRestores.delete(mutationId);
+  restoreInFlight.delete(worktreeId);
 }
 
 /**
@@ -1245,11 +1285,23 @@ async function runDeleteAsync(
   mutationId: string
 ): Promise<void> {
   try {
+    // A rapid retry after a prior attempt's restore must not start closing
+    // terminals while that restore is still spawning panels (#11344) — wait it
+    // out so this attempt sees the fully-restored set.
+    const inFlightRestore = restoreInFlight.get(worktreeId);
+    if (inFlightRestore) await inFlightRestore;
+
     if (options.closeTerminals) {
-      const snapshot = await closeTerminalsForWorktree(worktreeId);
-      // Preserve the FIRST attempt's capture across retries — a replay finds no
-      // live terminals to snapshot, so an empty result must never clobber it.
-      if (snapshot.length > 0) pendingTerminalRestores.set(mutationId, snapshot);
+      // Capture BEFORE the destructive close so a close-wait timeout can't lose
+      // the snapshot. Set only on the FIRST attempt that finds live terminals —
+      // a retry replay finds none (already dead) and must not clobber it; a
+      // later non-empty capture (e.g. the user opened new terminals mid-retry)
+      // must not either.
+      const snapshot = captureWorktreeTerminalSnapshot(worktreeId);
+      if (snapshot.length > 0 && !pendingTerminalRestores.has(mutationId)) {
+        pendingTerminalRestores.set(mutationId, snapshot);
+      }
+      await closeTerminalsForWorktree(worktreeId);
     }
     // Stop any running dev preview BEFORE `git worktree remove` (#9084). On
     // Windows the dev server holds a directory lock and the removal would
@@ -1388,7 +1440,7 @@ function handleDeleteFailure(
     // No outbox entry — shouldn't happen since `startDelete` always creates
     // one, but defensive: still surface the error on the card. Nothing will
     // auto-retry this delete, so bring the closed terminals back (#11344).
-    consumeTerminalRestore(mutationId);
+    consumeTerminalRestore(worktreeId, mutationId);
     set({
       deletingIds: nextDeletingIds,
       deleteErrors: nextDeleteErrors,
@@ -1413,7 +1465,7 @@ function handleDeleteFailure(
   // replayed (reconnect or generic retry), so relaunching now would flicker the
   // terminals and re-close them on the next attempt. Restore solely on the
   // terminal transition (#11344).
-  if (nextStatus === "failed") consumeTerminalRestore(mutationId);
+  if (nextStatus === "failed") consumeTerminalRestore(worktreeId, mutationId);
 
   set({
     deletingIds: nextDeletingIds,

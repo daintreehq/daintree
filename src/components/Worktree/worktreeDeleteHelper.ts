@@ -19,6 +19,12 @@ const WORKTREE_DELETE_TERMINAL_CLOSE_POLL_MS = 100;
  * fail outright. So the recoverability the trash path would give is provided
  * here instead: kill now (Windows-safe, still journaled for launch agents),
  * relaunch from this snapshot only if the delete is abandoned.
+ *
+ * Best-effort by nature: the pre-kill snapshot can't carry the session id Main
+ * captures DURING the graceful kill, nor the rebuilt launch env, so a relaunched
+ * agent resumes only when a session id was already known and otherwise starts a
+ * fresh session. Restoring the panel (and its cwd) is the recovery; exact
+ * conversation continuity is not guaranteed.
  */
 export interface WorktreeTerminalRestoreSnapshot {
   id: string;
@@ -41,20 +47,36 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export function getLiveTerminalIdsForWorktree(worktreeId: string): string[] {
+/**
+ * The live PTY terminals of a worktree — the panels that hold the worktree
+ * directory open and so must be killed before `git worktree remove`. Only PTY
+ * ("terminal") panels are included: browser/review/file/dev-preview panels hold
+ * no directory lock (dev servers are stopped separately), so they are left
+ * untouched here and cleaned up when the worktree is actually removed. This
+ * keeps a failed delete from destroying non-terminal panels it can't restore.
+ */
+function getLivePtyPanelsForWorktree(worktreeId: string): PtyPanelData[] {
   const state = usePanelStore.getState();
-  return state.panelIds.filter((id) => {
+  const panels: PtyPanelData[] = [];
+  for (const id of state.panelIds) {
     const panel = state.panelsById[id];
-    return (
+    if (
       panel?.worktreeId === worktreeId &&
       panel.location !== "trash" &&
-      (!isPtyPanel(panel) || panel.excludeFromPersistence !== true)
-    );
-  });
+      isPtyPanel(panel) &&
+      panel.excludeFromPersistence !== true
+    ) {
+      panels.push(panel);
+    }
+  }
+  return panels;
 }
 
-/** Capture a relaunch snapshot for a single live PTY panel. Only "grid"/"dock"
- *  panels are recoverable — a trashed/dialog panel has no stable restore home. */
+export function getLiveTerminalIdsForWorktree(worktreeId: string): string[] {
+  return getLivePtyPanelsForWorktree(worktreeId).map((panel) => panel.id);
+}
+
+/** Capture a relaunch snapshot for a single live PTY panel. */
 function snapshotTerminal(panel: PtyPanelData): WorktreeTerminalRestoreSnapshot {
   return {
     id: panel.id,
@@ -72,6 +94,19 @@ function snapshotTerminal(panel: PtyPanelData): WorktreeTerminalRestoreSnapshot 
     originalPresetId: panel.originalPresetId,
     agentSessionId: panel.agentSessionId,
   };
+}
+
+/**
+ * Snapshot the worktree's live terminals for a potential rollback. Pure — it
+ * mutates nothing, so callers can capture BEFORE the destructive
+ * {@link closeTerminalsForWorktree}. That ordering matters: if the close then
+ * times out (a terminal that won't die), the caller still holds the snapshot to
+ * restore from, rather than losing it with the throw.
+ */
+export function captureWorktreeTerminalSnapshot(
+  worktreeId: string
+): WorktreeTerminalRestoreSnapshot[] {
+  return getLivePtyPanelsForWorktree(worktreeId).map(snapshotTerminal);
 }
 
 export async function waitForTerminalsToClose(terminalIds: string[]): Promise<void> {
@@ -107,37 +142,26 @@ export async function waitForTerminalsToClose(terminalIds: string[]): Promise<vo
 }
 
 /**
- * Hard-close every live terminal in a worktree ahead of `git worktree remove`,
- * returning a snapshot that {@link restoreClosedTerminals} can replay if the
- * delete never lands. The kill is immediate (not the trash TTL) so the worktree
- * directory is unlocked before the removal — see
- * {@link WorktreeTerminalRestoreSnapshot} for why trash-routing isn't used.
+ * Hard-close every live PTY terminal in a worktree ahead of `git worktree
+ * remove`. The kill is immediate (not the trash TTL) so the worktree directory
+ * is unlocked before the removal — see {@link WorktreeTerminalRestoreSnapshot}
+ * for why trash-routing isn't used. Capture a rollback snapshot with
+ * {@link captureWorktreeTerminalSnapshot} BEFORE calling this.
  */
-export async function closeTerminalsForWorktree(
-  worktreeId: string
-): Promise<WorktreeTerminalRestoreSnapshot[]> {
+export async function closeTerminalsForWorktree(worktreeId: string): Promise<void> {
   const terminalIds = getLiveTerminalIdsForWorktree(worktreeId);
-  if (terminalIds.length === 0) return [];
+  if (terminalIds.length === 0) return;
 
   const store = usePanelStore.getState();
-  const snapshots: WorktreeTerminalRestoreSnapshot[] = [];
-  for (const id of terminalIds) {
-    const panel = store.panelsById[id];
-    if (panel && isPtyPanel(panel)) {
-      snapshots.push(snapshotTerminal(panel));
-    }
-  }
-
   terminalIds.forEach((id) => store.removePanel(id));
   await waitForTerminalsToClose(terminalIds);
-  return snapshots;
 }
 
 /**
  * Bring back terminals closed by {@link closeTerminalsForWorktree} when the
  * worktree delete was abandoned (a lock, a branch error, an exhausted retry).
  * The original PTYs are already dead, so this relaunches fresh panels with the
- * same ids into the still-present worktree, resuming the journaled agent
+ * same ids into the still-present worktree, resuming the last known agent
  * session where the agent supports it. Best-effort: a single failed relaunch
  * never blocks the rest.
  */
@@ -148,7 +172,7 @@ export async function restoreClosedTerminals(
   const store = usePanelStore.getState();
 
   for (const snap of snapshots) {
-    // Resume the journaled session for resume-capable agents; otherwise fall
+    // Resume the last known session for resume-capable agents; otherwise fall
     // back to the stored launch command (fresh session). The dead PTY can't be
     // resurrected, so a relaunch is the most recovery possible.
     const resumeCommand =

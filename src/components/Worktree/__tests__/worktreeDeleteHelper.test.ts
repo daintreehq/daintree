@@ -35,6 +35,7 @@ vi.mock("@/utils/logger", () => ({
 }));
 
 import {
+  captureWorktreeTerminalSnapshot,
   closeTerminalsForWorktree,
   restoreClosedTerminals,
   getLiveTerminalIdsForWorktree,
@@ -74,55 +75,85 @@ beforeEach(() => {
 });
 
 describe("getLiveTerminalIdsForWorktree", () => {
-  it("returns only live, persistable PTY panels of the worktree", () => {
+  it("returns only live PTY terminals — excludes trash, other worktrees, ephemeral, and non-PTY panels", () => {
     seed([
       ptyPanel({ id: "keep" }),
       ptyPanel({ id: "other-wt", worktreeId: "wt-2" }),
       ptyPanel({ id: "trashed", location: "trash" }),
       ptyPanel({ id: "ephemeral", excludeFromPersistence: true }),
+      // Non-PTY panels hold no directory lock, so they are NOT hard-closed for
+      // the delete (they would otherwise be lost with no restore) (#11344).
+      { id: "browser", kind: "browser", worktreeId: "wt-1", location: "grid" },
+      { id: "review", kind: "review", worktreeId: "wt-1", location: "grid" },
     ]);
     expect(getLiveTerminalIdsForWorktree("wt-1")).toEqual(["keep"]);
   });
 });
 
-describe("closeTerminalsForWorktree", () => {
-  it("captures a relaunch snapshot, hard-removes each terminal, and waits for close", async () => {
+describe("captureWorktreeTerminalSnapshot", () => {
+  it("snapshots each live PTY terminal's relaunch metadata without mutating anything", () => {
     seed([
       ptyPanel({ id: "plain", cwd: "/repo/wt", title: "bash" }),
       ptyPanel({
         id: "agent",
         cwd: "/repo/wt",
         title: "claude",
+        titleMode: "pinned",
         launchAgentId: "claude",
         agentSessionId: "sess-1",
         agentLaunchFlags: ["--model", "opus"],
         agentModelId: "opus",
+        agentPresetId: "preset-a",
         command: "claude",
         location: "dock",
       }),
+      { id: "browser", kind: "browser", worktreeId: "wt-1", location: "grid" },
     ]);
 
-    const snapshot = await closeTerminalsForWorktree("wt-1");
+    const snapshot = captureWorktreeTerminalSnapshot("wt-1");
 
-    expect(removePanelMock.mock.calls.map((c) => c[0])).toEqual(["plain", "agent"]);
-    expect(getInfoMock).toHaveBeenCalled();
-    expect(snapshot).toHaveLength(2);
+    expect(removePanelMock).not.toHaveBeenCalled();
+    // The browser panel is not a terminal — it is not snapshotted.
+    expect(snapshot.map((s) => s.id)).toEqual(["plain", "agent"]);
     expect(snapshot[0]).toMatchObject({ id: "plain", cwd: "/repo/wt", location: "grid" });
     expect(snapshot[1]).toMatchObject({
       id: "agent",
+      title: "claude",
+      titleMode: "pinned",
       launchAgentId: "claude",
       agentSessionId: "sess-1",
       agentLaunchFlags: ["--model", "opus"],
       agentModelId: "opus",
+      agentPresetId: "preset-a",
       command: "claude",
       location: "dock",
     });
   });
 
-  it("returns an empty snapshot and does nothing when the worktree has no terminals", async () => {
+  it("returns an empty snapshot when the worktree has no terminals", () => {
     seed([ptyPanel({ id: "other", worktreeId: "wt-2" })]);
-    const snapshot = await closeTerminalsForWorktree("wt-1");
-    expect(snapshot).toEqual([]);
+    expect(captureWorktreeTerminalSnapshot("wt-1")).toEqual([]);
+  });
+});
+
+describe("closeTerminalsForWorktree", () => {
+  it("hard-removes each PTY terminal and waits for close, leaving non-PTY panels alone", async () => {
+    seed([
+      ptyPanel({ id: "plain" }),
+      ptyPanel({ id: "agent", launchAgentId: "claude" }),
+      { id: "browser", kind: "browser", worktreeId: "wt-1", location: "grid" },
+    ]);
+
+    await closeTerminalsForWorktree("wt-1");
+
+    // Only the two terminals are removed; the browser panel is untouched.
+    expect(removePanelMock.mock.calls.map((c) => c[0])).toEqual(["plain", "agent"]);
+    expect(getInfoMock).toHaveBeenCalled();
+  });
+
+  it("does nothing when the worktree has no terminals", async () => {
+    seed([ptyPanel({ id: "other", worktreeId: "wt-2" })]);
+    await closeTerminalsForWorktree("wt-1");
     expect(removePanelMock).not.toHaveBeenCalled();
   });
 });
@@ -166,6 +197,22 @@ describe("restoreClosedTerminals", () => {
     ]);
     expect(buildResumeCommandMock).not.toHaveBeenCalled();
     expect(addPanelMock).toHaveBeenCalledWith(expect.objectContaining({ command: "claude" }));
+  });
+
+  it("falls back to the stored command when the agent has a session but no resume support", async () => {
+    // buildResumeCommand returns undefined for agents without resume support.
+    buildResumeCommandMock.mockReturnValue(undefined);
+    await restoreClosedTerminals([
+      {
+        id: "agent",
+        location: "grid",
+        command: "codex",
+        launchAgentId: "codex",
+        agentSessionId: "sess-9",
+      },
+    ]);
+    expect(buildResumeCommandMock).toHaveBeenCalledWith("codex", "sess-9", undefined);
+    expect(addPanelMock).toHaveBeenCalledWith(expect.objectContaining({ command: "codex" }));
   });
 
   it("relaunches a plain terminal with its stored command and never builds a resume command", async () => {
