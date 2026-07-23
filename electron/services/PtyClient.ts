@@ -1786,6 +1786,14 @@ export class PtyClient extends EventEmitter {
    * teardown is NOT confirmed: agents may still be running, so the caller must
    * keep the project's restoration state and let the user retry. Unexpected
    * errors reject; callers treat that as fail-closed too.
+   *
+   * Contract of `confirmed: true`: the host acknowledged and ran the teardown
+   * (graceful shutdown + a fallback hard kill per terminal, see
+   * PtyManager.gracefulKillByProject), or the host is gone. It is NOT a
+   * guarantee that every OS process was reaped, and it does not reconcile with
+   * pty-host crash recovery, which can replay an in-flight `pendingSpawns`
+   * terminal as a fresh incarnation after a host exit — that race is owned by
+   * the crash-recovery path (#11339), not this method.
    */
   async gracefulKillByProjectConfirmed(
     projectId: string,

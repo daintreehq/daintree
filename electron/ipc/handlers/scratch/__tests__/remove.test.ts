@@ -119,6 +119,22 @@ describe("scratch:remove handler", () => {
     );
   });
 
+  it("fails closed when the teardown throws: the old swallow-and-delete is gone", async () => {
+    // Pre-fix this handler caught the kill rejection and deleted anyway.
+    teardownMock.gracefulTeardownAndJournalProject.mockRejectedValue(
+      new Error("PTY host disconnected")
+    );
+    registerScratchHandlers(makeDeps({}));
+
+    await expect(getHandler(CHANNELS.SCRATCH_REMOVE)(fakeEvent, "scratch-throw")).rejects.toThrow();
+
+    expect(scratchStoreMock.removeScratch).not.toHaveBeenCalled();
+    expect(broadcastMock.broadcastToRenderer).not.toHaveBeenCalledWith(
+      CHANNELS.SCRATCH_REMOVED,
+      "scratch-throw"
+    );
+  });
+
   it("deletes the scratch when the host is confirmed gone (nothing to journal)", async () => {
     teardownMock.gracefulTeardownAndJournalProject.mockResolvedValue({
       confirmed: true,

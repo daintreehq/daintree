@@ -420,6 +420,34 @@ describe("project:close handler", () => {
       expect(projectStoreMock.clearCurrentProject).not.toHaveBeenCalled();
       expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
     });
+
+    it("fails closed when the teardown throws unexpectedly: keeps state and rejects", async () => {
+      // The old handler had no way to reject on a kill failure; the new one must
+      // not clear state when the teardown helper throws (#11340).
+      projectStoreMock.getCurrentProjectId.mockReturnValue("project-active");
+      projectStoreMock.getProjectById.mockReturnValue({
+        id: "project-active",
+        name: "Active Project",
+        status: "active",
+        path: "/test/project-active",
+      } as ReturnType<typeof projectStoreMock.getProjectById>);
+      teardownMock.gracefulTeardownAndJournalProject.mockRejectedValue(
+        new Error("pty-host RPC exploded")
+      );
+
+      const deps = {
+        mainWindow: {} as unknown,
+        ptyClient: makePtyClient(),
+      } as unknown as HandlerDependencies;
+
+      const handler = getCloseHandler(deps);
+
+      await expect(handler(EVENT, "project-active", { killTerminals: true })).rejects.toThrow();
+
+      expect(projectStoreMock.clearProjectState).not.toHaveBeenCalled();
+      expect(projectStoreMock.clearCurrentProject).not.toHaveBeenCalled();
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+    });
   });
 
   it("backgrounds a non-active project and calls pauseProject", async () => {

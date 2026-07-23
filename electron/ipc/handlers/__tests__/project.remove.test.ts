@@ -147,6 +147,35 @@ describe("project:remove handler", () => {
     expect(refreshProjectMenuStateMock).not.toHaveBeenCalled();
   });
 
+  it("fails closed when the teardown throws: the old swallow-and-remove is gone", async () => {
+    projectStoreMock.removeProject.mockResolvedValue(undefined);
+    // Pre-fix this handler caught the kill rejection and removed anyway; it must
+    // now propagate and keep the project (#11340).
+    teardownMock.gracefulTeardownAndJournalProject.mockRejectedValue(
+      new Error("PTY host disconnected")
+    );
+
+    const ptyClient = {
+      getProjectStats: vi.fn(),
+      onProjectSwitch: vi.fn(),
+      setActiveProject: vi.fn(),
+    };
+
+    const deps = {
+      mainWindow: {} as unknown,
+      ptyClient,
+    } as unknown as HandlerDependencies;
+
+    registerProjectCrudHandlers(deps);
+    const handler = getHandler(CHANNELS.PROJECT_REMOVE);
+
+    await expect(handler(fakeEvent, "proj-throw")).rejects.toThrow();
+
+    expect(projectStoreMock.removeProject).not.toHaveBeenCalled();
+    expect(windowStateMock.pruneWindowStateForPath).not.toHaveBeenCalled();
+    expect(refreshProjectMenuStateMock).not.toHaveBeenCalled();
+  });
+
   it("removes the project when the host is confirmed gone (nothing to journal)", async () => {
     projectStoreMock.removeProject.mockResolvedValue(undefined);
     teardownMock.gracefulTeardownAndJournalProject.mockResolvedValue({

@@ -218,6 +218,73 @@ describe("gracefulTeardownAndJournalProject", () => {
       terminalsKilled: 2,
     });
     expect(journalMock.journalAgentSession).toHaveBeenCalledTimes(2);
+    // The second session must genuinely be journaled — not the first retried.
+    const journaledIds = journalMock.journalAgentSession.mock.calls.map(
+      (c) => (c[0] as { sessionId: string }).sessionId
+    );
+    expect(journaledIds).toEqual(expect.arrayContaining(["s1", "s2"]));
+  });
+
+  it("journals without a branch when the worktree lookup hangs past the timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const { client } = makePtyClient({
+        terminals: [
+          {
+            id: "t1",
+            projectId: "proj",
+            launchAgentId: "claude",
+            worktreeId: "w1",
+            cwd: "/a",
+            spawnedAt: 1,
+          },
+        ],
+        outcome: { confirmed: true, sessions: [{ id: "t1", agentSessionId: "s1" }] },
+      });
+      // getMonitorAsync never resolves — the 200ms race timer must win.
+      const workspaceClient = {
+        getMonitorAsync: vi.fn(() => new Promise(() => {})),
+      } as unknown as WorkspaceClient;
+
+      const promise = gracefulTeardownAndJournalProject("proj", client, workspaceClient);
+      await vi.advanceTimersByTimeAsync(250);
+
+      await expect(promise).resolves.toEqual({ confirmed: true, terminalsKilled: 1 });
+      const [record] = journalMock.journalAgentSession.mock.calls[0]!;
+      expect((record as { branch?: string }).branch).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("awaits each journal write before resolving (not fire-and-forget)", async () => {
+    let resolveJournal: (v: boolean) => void = () => {};
+    journalMock.journalAgentSession.mockReturnValue(
+      new Promise<boolean>((res) => {
+        resolveJournal = res;
+      })
+    );
+    const { client } = makePtyClient({
+      terminals: [
+        { id: "t1", projectId: "proj", launchAgentId: "claude", cwd: "/a", spawnedAt: 1 },
+      ],
+      outcome: { confirmed: true, sessions: [{ id: "t1", agentSessionId: "s1" }] },
+    });
+
+    let settled = false;
+    const promise = gracefulTeardownAndJournalProject("proj", client).then((r) => {
+      settled = true;
+      return r;
+    });
+
+    // Drain all microtasks — the helper should be parked on the pending journal.
+    await new Promise((r) => setImmediate(r));
+    expect(journalMock.journalAgentSession).toHaveBeenCalledTimes(1);
+    expect(settled).toBe(false);
+
+    resolveJournal(true);
+    await expect(promise).resolves.toEqual({ confirmed: true, terminalsKilled: 1 });
+    expect(settled).toBe(true);
   });
 
   it("passes an unconfirmed outcome through without journaling", async () => {

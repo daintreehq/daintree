@@ -29,6 +29,14 @@ const BRANCH_LOOKUP_TIMEOUT_MS = 200;
  * restoration state / don't remove the entity — or still-running agents are
  * orphaned. `terminalsKilled` counts the terminals the host reported tearing
  * down (0 when the host was already gone).
+ *
+ * Journaling is best-effort and does NOT gate `confirmed`: a failed pre-kill
+ * snapshot, a capture whose terminal info didn't survive the snapshot, or a
+ * single journal write that throws all lose that one resume record but never
+ * block the teardown the caller asked for — exactly as `shutdown.ts` behaves.
+ * The kill confirmation, not journaling success, is what protects restoration
+ * state. Losing a resume record is strictly better than the pre-fix behavior,
+ * which journaled nothing at all.
  */
 export async function gracefulTeardownAndJournalProject(
   scopeId: string,
