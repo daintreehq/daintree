@@ -165,6 +165,15 @@ export class ProjectStore {
   // so the same recipe id in two different project clones stays separate.
   private inRepoRecipeHashes = new Map<string, string>();
 
+  // Operation-scoped path rewrites for projects being relocated by the phase-3
+  // coordinator (#11282). While a project id is present here, EVERY persisted
+  // state write for it is rebased old→new before hitting disk — so a debounced
+  // renderer layout write still in flight with the OLD root (the live-repoint
+  // keeps the view alive, so it keeps writing) can't clobber the migrated state
+  // after the folder move. Bounded to the coordinator's operation via
+  // begin/endRelocationRewrite.
+  private relocationRewrites = new Map<string, { oldPath: string; newPath: string }>();
+
   constructor() {
     this.userDataDir = app.getPath("userData");
     this.projectsConfigDir = path.join(this.userDataDir, "projects");
@@ -865,9 +874,10 @@ export class ProjectStore {
    * a failure in any ancillary surface is logged rather than surfaced as a
    * relocation error (reporting failure after the row moved would misrepresent
    * the real state). Each surface is an independently-settled thunk, so neither a
-   * rejection nor a SYNCHRONOUS throw in one can skip the others. Callers only
-   * reach here for a genuine move of a non-active project — both adoption and
-   * explicit relocation guard the current project.
+   * rejection nor a SYNCHRONOUS throw in one can skip the others. Reached for a
+   * genuine folder move via any path: closed-project reattach/adoption, or the
+   * phase-3 coordinator relocating an OPEN project (which has already quiesced
+   * that project's live runtimes before the rewrite runs).
    */
   private async migratePathBearingStateAfterMove(
     projectId: string,
@@ -910,8 +920,57 @@ export class ProjectStore {
       throw new Error(`Project not found: ${projectId}`);
     }
 
+    // Defense-in-depth: an OPEN project must go through the phase-3
+    // quiesce/rebind coordinator (which calls `finalizeRelocatedPath` directly
+    // after tearing down its runtimes), never this closed-project reattach path
+    // — repointing a live view/host/PTY from here would strand them on the old
+    // path (#11282). This single-window pointer only catches the last-focused
+    // window; the authoritative open-anywhere fork lives at the IPC boundary
+    // (`collectActiveProjectIds`), which routes open projects to the coordinator.
     if (projectId === this.getCurrentProjectId()) {
       throw new Error("Cannot relocate the currently active project");
+    }
+
+    // A plain reattach always parks the project as `closed`; the coordinator is
+    // the only caller that preserves an open project's live status.
+    return this.finalizeRelocatedPath({
+      projectId,
+      expectedOldPath: project.path,
+      newPath,
+      status: "closed",
+    });
+  }
+
+  /**
+   * Commit a project's move to a folder that ALREADY exists at `newPath`:
+   * canonicalize the new Git root, update the immutable-id row, and rebase every
+   * path-bearing surface. The caller owns the filesystem move — a plain reattach
+   * via {@link relocateProject} (folder moved externally), or the phase-3
+   * relocation coordinator after its own same-volume `fs.rename`.
+   *
+   * Split out from `relocateProject` so the coordinator can relocate an OPEN
+   * project while PRESERVING its `status` (forcing `"closed"` would make the
+   * visible project and the DB row disagree); `relocateProject` always closes.
+   *
+   * `expectedOldPath` guards a concurrent move: if the row no longer points where
+   * the caller captured it, the state rebase would run against a stale old root,
+   * so bail rather than corrupt state.
+   */
+  async finalizeRelocatedPath(opts: {
+    projectId: string;
+    expectedOldPath: string;
+    newPath: string;
+    status: Project["status"];
+  }): Promise<Project> {
+    const { projectId, expectedOldPath, newPath, status } = opts;
+    const project = this.getProjectById(projectId);
+    if (!project) {
+      throw new Error(`Project not found: ${projectId}`);
+    }
+    if (normalizeProjectPath(project.path) !== normalizeProjectPath(expectedOldPath)) {
+      throw new Error(
+        `Project ${projectId} moved concurrently (expected ${expectedOldPath}, found ${project.path})`
+      );
     }
 
     // Normalize to the same NFC spelling `addProject`/`getProjectByPath` use, so
@@ -935,7 +994,7 @@ export class ProjectStore {
     const oldPath = project.path;
     const updatedProject = this.updateProject(projectId, {
       path: canonicalNewPath,
-      status: "closed",
+      status,
     });
 
     if (normalizeProjectPath(oldPath) !== normalizeProjectPath(canonicalNewPath)) {
@@ -1069,12 +1128,32 @@ export class ProjectStore {
 
   // --- State ---
 
+  /**
+   * Arm the operation-scoped state-write rewrite for a relocating project
+   * (#11282, phase 3). Until {@link endRelocationRewrite}, any persisted state
+   * write for `projectId` is rebased old→new, so a late renderer write with the
+   * old root can't undo the folder-move migration. Idempotent per id.
+   */
+  beginRelocationRewrite(projectId: string, oldPath: string, newPath: string): void {
+    this.relocationRewrites.set(projectId, { oldPath, newPath });
+  }
+
+  endRelocationRewrite(projectId: string): void {
+    this.relocationRewrites.delete(projectId);
+  }
+
+  private applyRelocationRewrite(projectId: string, state: ProjectState): ProjectState {
+    const rewrite = this.relocationRewrites.get(projectId);
+    if (!rewrite) return state;
+    return rewriteProjectStatePaths(state, rewrite.oldPath, rewrite.newPath);
+  }
+
   async saveProjectState(projectId: string, state: ProjectState): Promise<void> {
     // Invalidate before the write so any in-flight prefetch sees a version bump
     // and discards its result — otherwise a prefetch resolving after the write
     // could clobber the cache with pre-mutation state.
     invalidatePrefetchCache(projectId);
-    return this.stateManager.saveProjectState(projectId, state);
+    return this.stateManager.saveProjectState(projectId, this.applyRelocationRewrite(projectId, state));
   }
 
   async enqueueProjectStateUpdate(
@@ -1087,6 +1166,7 @@ export class ProjectStore {
         // Same contract as saveProjectState: invalidate before the write so an
         // in-flight prefetch can't clobber the cache with pre-mutation state.
         invalidatePrefetchCache(projectId);
+        return this.applyRelocationRewrite(projectId, updated);
       }
       return updated;
     });

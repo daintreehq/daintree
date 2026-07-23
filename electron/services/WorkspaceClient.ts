@@ -321,6 +321,18 @@ export class WorkspaceClient extends EventEmitter {
     return this.pool.evictProject(projectPath);
   }
 
+  /**
+   * Force-evict the workspace host for a project being RELOCATED, bypassing the
+   * `refCount > 0` guard that {@link evictProject} honors. Only the phase-3
+   * relocation coordinator calls this — after the folder moves, the old host is
+   * respawned at the new path by the reopening `loadProject`
+   * (see {@link WorkspaceHostPool.evictProjectForRelocation}).
+   */
+  evictProjectForRelocation(projectPath: string): void {
+    if (this.isDisposed) return;
+    this.pool.evictProjectForRelocation(projectPath);
+  }
+
   pauseHealthCheck(): void {
     for (const entry of this.pool.entries.values()) {
       entry.host.pauseHealthCheck();
