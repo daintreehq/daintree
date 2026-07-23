@@ -14,6 +14,7 @@ import { isFilePanel } from "@shared/types/panel";
 import type { GitStatus } from "@shared/types/git";
 import { isPathInside, normalize, toWorktreeRelative } from "@shared/utils/path";
 import type { FileReadErrorCode } from "@shared/types/ipc/files";
+import type { BuiltInRuntimeActionId } from "@shared/config/actionIds";
 import type { BasePanelProps } from "@/components/Panel/ContentPanel";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
 import { FolderOpen } from "@/components/icons";
@@ -124,7 +125,7 @@ const EXTERNAL_ACTIONS = {
   reveal: "file.showItemInFolder",
   browser: "file.openInBrowser",
   editor: "file.openInEditor",
-} as const satisfies Record<ExternalTarget, string>;
+} as const satisfies Record<ExternalTarget, BuiltInRuntimeActionId>;
 
 // Button label comes from `revealCopy()` (platform-named); the failure banner's
 // title, retry name and dismiss name are resolved together with it so the three

@@ -400,9 +400,8 @@ describe("FilePane reveal in file manager (#11386)", () => {
   // hardcoding a per-OS string that would fail on the other platform's CI.
   const revealLabel = revealCopy().label;
 
-  function renderFilePane(filePath = PATH) {
-    panelsById["file-1"] = { id: "file-1", kind: "file", filePath };
-    return render(
+  function paneElement(filePath: string) {
+    return (
       <TooltipProvider>
         <FilePane
           id="file-1"
@@ -414,6 +413,11 @@ describe("FilePane reveal in file manager (#11386)", () => {
         />
       </TooltipProvider>
     );
+  }
+
+  function renderFilePane(filePath = PATH) {
+    panelsById["file-1"] = { id: "file-1", kind: "file", filePath };
+    return render(paneElement(filePath));
   }
 
   function findButton(container: HTMLElement, label: string): HTMLButtonElement {
@@ -479,9 +483,13 @@ describe("FilePane reveal in file manager (#11386)", () => {
     expect(notifyMock).not.toHaveBeenCalled();
 
     dispatchMock.mockResolvedValue({ ok: true, result: undefined });
+    // Cleared so the assertion can't be satisfied by the original failed
+    // dispatch — a Retry that merely cleared the banner would then fail here.
+    dispatchMock.mockClear();
     await click(findButton(container, revealCopy().retryAriaLabel));
 
-    expect(dispatchMock).toHaveBeenLastCalledWith(
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    expect(dispatchMock).toHaveBeenCalledWith(
       "file.showItemInFolder",
       { path: PATH },
       { source: "user" }
@@ -534,8 +542,79 @@ describe("FilePane reveal in file manager (#11386)", () => {
     // Revealing the file did nothing to configure an editor, so the editor's
     // failure is still true and its banner must stand.
     dispatchMock.mockResolvedValue({ ok: true, result: undefined });
+    dispatchMock.mockClear();
     await click(findButton(container, revealLabel));
+
+    // The reveal really ran (not swallowed by the editor's error state) yet the
+    // editor's own banner is untouched.
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "file.showItemInFolder",
+      { path: PATH },
+      { source: "user" }
+    );
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("No editor configured");
+  });
+
+  it("leaves a target's Retry usable while only a sibling target is pending", async () => {
+    dispatchMock.mockResolvedValue({
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: "No editor configured" },
+    });
+    const { container } = renderFilePane();
+    await click(findButton(container, "Open in editor"));
+
+    // A reveal held in flight must not disable the editor's Retry — pending is
+    // per target, so a slow sibling says nothing about the editor's own state.
+    const revealGate = deferred();
+    dispatchMock.mockReturnValue(revealGate.promise);
+    act(() => {
+      findButton(container, revealLabel).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(
+      findButton(container, "Retry opening in editor").hasAttribute("disabled")
+    ).toBe(false);
+
+    await act(async () => {
+      revealGate.resolve({ ok: true, result: undefined });
+      await revealGate.promise;
+    });
+  });
+
+  it("won't let a superseded reveal unlock the attempt that replaced it", async () => {
+    const staleReveal = deferred();
+    const liveReveal = deferred();
+    dispatchMock.mockReturnValueOnce(staleReveal.promise).mockReturnValueOnce(liveReveal.promise);
+    const { container, rerender } = renderFilePane();
+
+    act(() => {
+      findButton(container, revealLabel).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    // Switch files: the reset bumps the generation so the first reveal's later
+    // completion belongs to a file the pane no longer shows.
+    panelsById["file-1"] = { id: "file-1", kind: "file", filePath: "/repo/src/other.ts" };
+    rerender(paneElement("/repo/src/other.ts"));
+    act(() => {
+      findButton(container, revealLabel).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(dispatchMock).toHaveBeenCalledTimes(2);
+
+    // The stale reveal lands last. Releasing the in-flight guard on its way out
+    // would hand the live reveal's slot away and permit a duplicate OS launch.
+    await act(async () => {
+      staleReveal.resolve({ ok: true, result: undefined });
+      await staleReveal.promise;
+    });
+    act(() => {
+      findButton(container, revealLabel).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(dispatchMock).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      liveReveal.resolve({ ok: true, result: undefined });
+      await liveReveal.promise;
+    });
   });
 });
 
@@ -648,14 +727,42 @@ describe("FilePane HTML Source/Rendered (#11191)", () => {
     );
   });
 
-  it("retries a failed browser open as a browser open, not an editor open", async () => {
+  it("retries a failed browser open as a browser open even after the view switches to source", async () => {
     dispatchMock.mockResolvedValue({
       ok: false,
       error: { code: "EXECUTION_ERROR", message: "Launch failed" },
     });
-    const { container } = renderPane("/repo/dist/report.html", "rendered");
+    const { container, rerender } = renderPane("/repo/dist/report.html", "rendered");
     await clickOpen("Open in browser");
 
+    // Flip the live view to source so the toolbar's own open button now targets
+    // the editor — the banner's Retry must still fire the browser open it owns,
+    // not follow the live target. Same file, so the failure banner survives.
+    panelsById["file-1"] = {
+      id: "file-1",
+      kind: "file",
+      filePath: "/repo/dist/report.html",
+      fileViewMode: "source",
+    };
+    await act(async () => {
+      rerender(
+        <TooltipProvider>
+          <FilePane
+            id="file-1"
+            title="report.html"
+            isFocused={false}
+            location="grid"
+            onFocus={() => {}}
+            onClose={() => {}}
+          />
+        </TooltipProvider>
+      );
+    });
+    // The live open button really did change target away from browser.
+    expect(await screen.findByLabelText("Open in editor")).toBeTruthy();
+
+    // Cleared so the assertion can't be satisfied by the original failed open.
+    dispatchMock.mockClear();
     const retry = Array.from(container.querySelectorAll("button")).find((b) =>
       b.textContent?.includes("Retry")
     );
@@ -663,8 +770,8 @@ describe("FilePane HTML Source/Rendered (#11191)", () => {
       retry!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
 
-    // Retry must re-aim at the banner's action even if the view mode changed.
-    expect(dispatchMock).toHaveBeenLastCalledWith(
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    expect(dispatchMock).toHaveBeenCalledWith(
       "file.openInBrowser",
       { path: "/repo/dist/report.html" },
       { source: "user" }
