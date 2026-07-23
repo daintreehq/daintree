@@ -488,10 +488,19 @@ export async function clearAgentSessions(worktreeId?: string, userData?: string)
   const filePath = getSessionHistoryPath(userData);
   if (!filePath) return;
 
+  // Guard the destructive scope: ONLY an explicit `undefined` means "clear all".
+  // A provided-but-empty worktreeId is a malformed scope (e.g. from the
+  // unvalidated IPC/MCP boundary) — refuse it rather than let `!worktreeId`
+  // silently escalate a scoped clear into wiping every worktree's history
+  // (the #7880 "no silent fallback default on a destructive submit" rule).
+  if (worktreeId === "") {
+    throw new Error("clearAgentSessions: worktreeId must be a non-empty string or undefined");
+  }
+
   // Share the write queue with persistAgentSession so a clear can't interleave
   // with an in-flight persist's read-modify-write and resurrect a cleared record.
   await enqueueWrite(async () => {
-    if (!worktreeId) {
+    if (worktreeId === undefined) {
       // Clear all
       await resilientAtomicWriteFile(filePath, "[]", "utf-8", { mode: OWNER_RW_FILE_MODE });
       refreshCacheAfterWrite(filePath, []);

@@ -280,6 +280,31 @@ describe("agentSessionHistory", () => {
     expect(records).toEqual([]);
   });
 
+  it("clearAgentSessions rejects an empty-string worktreeId without wiping history", async () => {
+    const filePath = getSessionHistoryPath(userDataDir)!;
+    await persistAgentSession(
+      { sessionId: "s1", agentId: "claude", worktreeId: "wt-1", title: null, projectId: null },
+      userDataDir
+    );
+    await persistAgentSession(
+      { sessionId: "s2", agentId: "gemini", worktreeId: "wt-2", title: null, projectId: null },
+      userDataDir
+    );
+    const before = await fsp.readFile(filePath, "utf8");
+
+    // An empty scope must NOT escalate to clear-all (#7880 fallback-default rule).
+    await expect(clearAgentSessions("", userDataDir)).rejects.toThrow(
+      /non-empty string or undefined/
+    );
+
+    // Both records survive, byte-for-byte.
+    expect(await fsp.readFile(filePath, "utf8")).toBe(before);
+    expect((await readSessionHistory(userDataDir)).map((r) => r.sessionId).sort()).toEqual([
+      "s1",
+      "s2",
+    ]);
+  });
+
   it("clearAgentSessions clears only specified worktree", async () => {
     await persistAgentSession(
       { sessionId: "s1", agentId: "claude", worktreeId: "wt-1", title: null, projectId: null },
