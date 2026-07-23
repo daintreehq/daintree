@@ -21,7 +21,7 @@ describe("VoiceCorrectionService integration", () => {
       const result = await svc.correct(
         { rawText: "um so we need to like update the racked component" },
         {
-          model: "gpt-4o-mini",
+          model: "gpt-5.6-luna",
           apiKey: OPENAI_API_KEY,
           customDictionary: ["React", "Daintree"],
         }
@@ -51,7 +51,7 @@ describe("VoiceCorrectionService integration", () => {
       const result = await svc.correct(
         { rawText: input },
         {
-          model: "gpt-4o-mini",
+          model: "gpt-5.6-luna",
           apiKey: OPENAI_API_KEY,
           customDictionary: [],
         }
@@ -75,7 +75,7 @@ describe("VoiceCorrectionService integration", () => {
       const result = await svc.correct(
         { rawText: "we need to update the daintree work tree dashboard" },
         {
-          model: "gpt-4o-mini",
+          model: "gpt-5.6-luna",
           apiKey: OPENAI_API_KEY,
           customDictionary: ["Daintree", "Worktree"],
         }

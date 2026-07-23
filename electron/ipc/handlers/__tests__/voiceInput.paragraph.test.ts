@@ -879,6 +879,25 @@ describe("getVoiceSettings migration", () => {
       vi.mocked(store.set).mock.calls[0] as unknown as [string, Record<string, unknown>]
     )[1];
     expect(persisted.correctionModel).toBe("gpt-5.6-luna");
+    // Normalization must write the full merged object, not a defaults-only one —
+    // sibling settings must survive the cleanup write.
+    expect(persisted.enabled).toBe(true);
+    expect(persisted.openaiApiKey).toBe("sk-present");
+  });
+
+  it("normalizes the retired gpt-5-nano correction model to gpt-5.6-luna on read", async () => {
+    const { store } = await import("../../../store.js");
+    vi.mocked(store.get).mockReturnValueOnce({
+      enabled: true,
+      openaiApiKey: "sk-present",
+      correctionModel: "gpt-5-nano",
+    });
+
+    const settings = getVoiceSettings();
+
+    // Model-agnostic normalization: nano is not special-cased any more than mini.
+    expect(settings.correctionModel).toBe("gpt-5.6-luna");
+    expect(vi.mocked(store.set)).toHaveBeenCalledOnce();
   });
 
   it("does not write back when correctionModel is already gpt-5.6-luna", async () => {

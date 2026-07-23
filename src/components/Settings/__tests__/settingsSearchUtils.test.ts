@@ -831,7 +831,7 @@ describe("requiresEnabled metadata", () => {
   });
 
   it("legacy voice registry IDs are not re-introduced", () => {
-    for (const id of ["voice-transcription-model", "voice-openai-key"]) {
+    for (const id of ["voice-transcription-model", "voice-openai-key", "voice-correction-model"]) {
       expect(
         byId(id),
         `${id} was removed for the OpenAI-only rebuild and must not return`

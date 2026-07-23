@@ -371,6 +371,7 @@ describe("VoiceCorrectionService", () => {
     expect(body.reasoning).toEqual({ effort: "none" });
     expect(body.max_output_tokens).toBe(1024);
     expect(body.text.format.type).toBe("json_schema");
+    expect(body.text.format.strict).toBe(true);
   });
 
   it("skips LLM call when all words are high confidence", async () => {

@@ -704,13 +704,17 @@ describe("MigrationRunner", () => {
       expect(voiceInput.correctionModel).toBe("gpt-5.6-luna");
     });
 
-    it("leaves gpt-5.6-luna unchanged", () => {
+    it("leaves gpt-5.6-luna unchanged without rewriting the store", () => {
       const store = createMockStore(storePath, {
         voiceInput: { correctionModel: "gpt-5.6-luna", enabled: true },
       });
+      const before = store.data.voiceInput;
       migration025.up(store as never);
       const voiceInput = store.data.voiceInput as { correctionModel: string };
       expect(voiceInput.correctionModel).toBe("gpt-5.6-luna");
+      // No write on the already-current path: store.set would replace the object
+      // (via spread), so an untouched reference proves the migration no-oped.
+      expect(store.data.voiceInput).toBe(before);
     });
 
     it("skips when no voiceInput settings exist", () => {

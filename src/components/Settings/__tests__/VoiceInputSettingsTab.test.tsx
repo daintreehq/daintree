@@ -294,9 +294,10 @@ describe("VoiceInputSettingsTab", () => {
 
     render(<VoiceInputSettingsTab />);
 
-    // Wait for the async settings load to render a stable control before the
-    // negative assertion — a bare queryBy would pass before settings resolve.
-    await screen.findByTestId("settings-select-Language");
+    // Anchor on the AI-correction subtree itself (gated on correctionEnabled &&
+    // openaiApiKey) so the negative assertion can't pass vacuously — not before
+    // the async load resolves, and not if that whole subtree stopped rendering.
+    await screen.findByText(/Prompt caching keeps costs minimal/i);
     expect(screen.queryByTestId("settings-select-Correction Model")).toBeNull();
   });
 
