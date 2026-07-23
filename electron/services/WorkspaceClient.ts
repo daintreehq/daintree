@@ -39,6 +39,15 @@ import type { ProjectPulse, PulseRangeDays } from "../../shared/types/pulse.js";
 
 const STATES_INFLIGHT_COALESCE_WINDOW_MS = 150;
 
+// Upper bound on how long a worktree-state read waits for the host to finish
+// (re)populating its monitor map before giving up and reporting "unknown" ([]).
+// Matches the host's per-request timeout (WorkspaceHostProcess sendWithResponse,
+// 30s): a genuinely in-flight load-project settles (resolves or rejects) by
+// then, so this only backstops the pathological case where the host forks but
+// hangs before posting "ready" — waitForReady() carries no timeout of its own,
+// so without this the read (and any awaiting hydration) would pend forever.
+const STATES_READY_GATE_TIMEOUT_MS = 30_000;
+
 export type CopyTreeProgressCallback = (progress: CopyTreeProgress) => void;
 
 function dedupeSnapshotsById(states: WorktreeSnapshot[]): WorktreeSnapshot[] {
@@ -490,26 +499,33 @@ export class WorkspaceClient extends EventEmitter {
   }
 
   /**
-   * Read a single host's worktree states, but only after the host has finished
-   * (re)populating its monitor map. `syncMonitors` builds `this.monitors` one
-   * worktree at a time inside `load-project`, so a `get-all-states` request that
-   * lands mid-loop returns a non-empty PARTIAL list (often just the main
-   * worktree, since git enumerates it first). Restore then trusts that partial
-   * snapshot as authoritative and re-homes every not-yet-synced panel onto the
-   * active worktree — the exact collapse in #11387.
+   * Read a single host's worktree states, but only once the host has FINISHED
+   * (re)populating its monitor map — and never otherwise. `syncMonitors` builds
+   * `this.monitors` one worktree at a time inside `load-project`, so a
+   * `get-all-states` request that lands mid-loop returns a non-empty PARTIAL
+   * list (often just the main worktree, since git enumerates it first). Restore
+   * then trusts that partial snapshot as authoritative and re-homes every
+   * not-yet-synced panel onto the active worktree — the exact collapse in
+   * #11387.
    *
    * `entry.currentReadyPromise` resolves only after `load-project` (and thus the
    * whole `syncMonitors` loop) completes, and it is reassigned to the reload
-   * promise on crash-restart, so awaiting it gates both the initial and the
-   * post-restart populate — the only two windows in which the map is genuinely
-   * partial (steady-state reconciles never drop a live monitor mid-loop).
-   * Rejection is swallowed: a failed load leaves the map empty, which the read
-   * then reports as `[]` — the established "unknown, keep saved state" sentinel
-   * (#11234), never a partial. The await is a no-op microtask once the host is
-   * ready, so steady-state reads are unaffected.
+   * promise on crash-restart, so it gates both the initial and the post-restart
+   * populate — the only two windows in which the map is genuinely partial
+   * (steady-state reconciles never drop a live monitor mid-loop).
+   *
+   * When readiness does NOT resolve cleanly we must not read at all: a rejected
+   * `load-project` (e.g. its 30s request timeout fires while the host keeps
+   * syncing, or `addNewWorktreeMonitor` throws mid-loop) leaves the host's map
+   * genuinely partial, and reading it would resurrect #11387; a host that forks
+   * but hangs before posting "ready" would leave the await pending forever
+   * (`waitForReady` has no timeout). Both cases return `[]` — the established
+   * "unknown, keep saved state" sentinel (#11234) — never a partial and never a
+   * hang. Once the host is ready the gate is a resolved-promise microtask, so
+   * steady-state reads are unaffected.
    */
   private async _readStatesWhenReady(entry: ProcessEntry): Promise<WorktreeSnapshot[]> {
-    await entry.currentReadyPromise.catch(() => {});
+    if (!(await this._awaitHostReady(entry))) return [];
     const requestId = entry.host.generateRequestId();
     const result = await entry.host.sendWithResponse<{
       states: WorktreeSnapshot[];
@@ -518,6 +534,26 @@ export class WorkspaceClient extends EventEmitter {
       requestId,
     });
     return result.states;
+  }
+
+  /**
+   * Resolves `true` when the host's monitor populate completed, `false` if it
+   * failed or did not settle within {@link STATES_READY_GATE_TIMEOUT_MS}.
+   * Callers must treat `false` as "unknown" and return `[]` rather than reading
+   * a possibly-partial map. Never rejects.
+   */
+  private _awaitHostReady(entry: ProcessEntry): Promise<boolean> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => resolve(false), STATES_READY_GATE_TIMEOUT_MS);
+    });
+    const settled = entry.currentReadyPromise.then(
+      () => true,
+      () => false
+    );
+    return Promise.race([settled, timedOut]).finally(() => {
+      if (timer !== undefined) clearTimeout(timer);
+    });
   }
 
   private async _doGetAllStates(windowId?: number): Promise<WorktreeSnapshot[]> {

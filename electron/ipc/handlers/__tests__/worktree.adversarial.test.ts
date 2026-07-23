@@ -218,17 +218,23 @@ describe("worktree IPC adversarial", () => {
     cleanup();
   });
 
-  it("WORKTREE_GET_ALL routes by the sender view's project id, not the window (#11387)", async () => {
+  it("WORKTREE_GET_ALL routes by the sender view's project id, not the window or global current (#11387)", async () => {
     // A window-scoped read of the hydration prefetch can be answered by a
     // different project's host after a fast switch; route by the immutable
     // project id instead so the list is authoritative for the right project.
-    ctxOverrides.projectId = "proj-1";
-    projectStoreMock.getProjectById.mockReturnValue({ id: "proj-1", path: "/repo" });
+    // Use a sender project distinct from the global current-project default
+    // ("proj-1") so a regression that consulted getCurrentProjectId would fail.
+    ctxOverrides.projectId = "proj-sender";
+    projectStoreMock.getProjectById.mockReturnValue({ id: "proj-sender", path: "/sender-repo" });
     worktreeService.getAllStatesForProjectAsync.mockResolvedValue([{ id: "wt-1" }]);
 
     const result = await getHandler(CHANNELS.WORKTREE_GET_ALL)(fakeEvent());
 
-    expect(worktreeService.getAllStatesForProjectAsync).toHaveBeenCalledWith("/repo", "proj-1");
+    expect(projectStoreMock.getProjectById).toHaveBeenCalledWith("proj-sender");
+    expect(worktreeService.getAllStatesForProjectAsync).toHaveBeenCalledWith(
+      "/sender-repo",
+      "proj-sender"
+    );
     expect(worktreeService.getAllStatesAsync).not.toHaveBeenCalled();
     expect(result).toEqual([{ id: "wt-1" }]);
   });
@@ -242,7 +248,10 @@ describe("worktree IPC adversarial", () => {
     const result = await getHandler(CHANNELS.WORKTREE_GET_ALL)(fakeEvent());
 
     expect(result).toEqual([]);
+    // Neither read path is consulted — not the project-scoped one, and not a
+    // silent fall-back to the window-scoped one.
     expect(worktreeService.getAllStatesForProjectAsync).not.toHaveBeenCalled();
+    expect(worktreeService.getAllStatesAsync).not.toHaveBeenCalled();
   });
 
   it("WORKTREE_GET_ALL returns [] when the sender project id is unknown to the store (#11387)", async () => {
@@ -253,6 +262,7 @@ describe("worktree IPC adversarial", () => {
 
     expect(result).toEqual([]);
     expect(worktreeService.getAllStatesForProjectAsync).not.toHaveBeenCalled();
+    expect(worktreeService.getAllStatesAsync).not.toHaveBeenCalled();
   });
 
   it("WORKTREE_GET_ALL returns empty array when worktreeService is absent", async () => {

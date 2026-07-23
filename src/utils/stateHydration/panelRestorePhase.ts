@@ -197,9 +197,10 @@ export async function restorePanelsPhase(
       activeWorktreeId !== null && (known === null || known.has(activeWorktreeId))
         ? activeWorktreeId
         : undefined;
-    // No saved worktree: fall to the (validated) active worktree, or leave it
-    // unset rather than guess onto a dead id.
-    if (!worktreeId) return rehomeTarget ?? worktreeId;
+    // No saved worktree (undefined, or a corrupt empty string): fall to the
+    // validated active worktree, or leave it unset rather than guess onto a
+    // dead id — never echo back the falsy saved value.
+    if (!worktreeId) return rehomeTarget;
     // With no worktree list there is nothing to check the id against, so
     // re-homing would be a guess — keep what was saved.
     if (known === null || known.has(worktreeId)) return worktreeId;

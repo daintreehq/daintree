@@ -409,7 +409,7 @@ describe("WorkspaceClient multi-process manager", () => {
       expect((await statesPromise).map((s) => s.id)).toEqual(["wt-1", "wt-2"]);
     });
 
-    it("does not stall the read forever when the restart reload rejects — falls through to a best-effort read (#11387)", async () => {
+    it("returns [] without ever reading a partial map when the restart reload rejects (#11387)", async () => {
       const load = client.loadProject("/project-a", 1);
       await readyAndResolveLoad(0);
       await load;
@@ -427,18 +427,18 @@ describe("WorkspaceClient multi-process manager", () => {
           .filter((r: any) => r.type === "get-all-states")
       ).toHaveLength(0);
 
-      // A failed reload leaves currentReadyPromise rejected; the gate swallows
-      // it and reads anyway (a failed load reports [] — the "unknown" sentinel —
-      // never a partial, and never a hang).
+      // A failed/timed-out reload leaves the host's monitor map genuinely
+      // partial (the host keeps syncing after the parent request rejects), so
+      // the gate reports "unknown": it resolves [] WITHOUT ever sending
+      // get-all-states — never reading, let alone trusting, a partial list —
+      // and never hangs.
       h(0).rejectRequest(reloadReq.requestId, new Error("reload failed"));
-      await tick();
-      const statesReq = h(0)
-        .getAllRequests()
-        .find((r: any) => r.type === "get-all-states")!;
-      expect(statesReq).toBeDefined();
-      h(0).resolveRequest(statesReq.requestId, { states: [] });
-
       expect(await statesPromise).toEqual([]);
+      expect(
+        h(0)
+          .getAllRequests()
+          .filter((r: any) => r.type === "get-all-states")
+      ).toHaveLength(0);
     });
   });
 
@@ -530,6 +530,36 @@ describe("WorkspaceClient multi-process manager", () => {
       const result = await client.getAllStatesForProjectAsync("/project-a", idFor("/project-b"));
       expect(result).toEqual([]);
       expect(h(0).sendWithResponse.mock.calls.length).toBe(callsBefore);
+    });
+
+    it("gates the initial load too — no read until the first load-project completes (#11387)", async () => {
+      // Hydration's project-scoped prefetch can resolve the pool entry (created
+      // synchronously by loadProject) before its initial load-project — and thus
+      // the first syncMonitors populate — has finished. The read must wait.
+      const loadA = client.loadProject("/project-a", 1);
+      h(0).simulateReady();
+      await tick();
+      const loadReq = h(0).getLastRequest()!;
+      expect(loadReq.type).toBe("load-project");
+
+      const statesPromise = client.getAllStatesForProjectAsync("/project-a", idFor("/project-a"));
+      await tick();
+      expect(
+        h(0)
+          .getAllRequests()
+          .filter((r: any) => r.type === "get-all-states")
+      ).toHaveLength(0);
+
+      // Complete the initial load; only now may the gated read fire.
+      h(0).resolveRequest(loadReq.requestId);
+      await loadA;
+      await tick();
+      const statesReq = h(0)
+        .getAllRequests()
+        .find((r: any) => r.type === "get-all-states")!;
+      expect(statesReq).toBeDefined();
+      h(0).resolveRequest(statesReq.requestId, { states: [{ id: "wt-a" }] });
+      expect((await statesPromise).map((s: any) => s.id)).toEqual(["wt-a"]);
     });
 
     it("waits for host readiness before reading, so a resync never yields a partial list (#11387)", async () => {

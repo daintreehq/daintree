@@ -175,10 +175,21 @@ function backend(id: string, overrides: Partial<BackendTerminalInfo> = {}): Back
   };
 }
 
-// Minimal worktree list — getKnownWorktreeIds/resolveRestoredWorktreeId read
-// only `id`, so the rest of WorktreeState is irrelevant to re-home resolution.
+// Worktree list fixture — getKnownWorktreeIds/resolveRestoredWorktreeId read
+// only `id`, but constructing fully-typed WorktreeState objects avoids an
+// unsafe cast (mirrors the factory in CrossWorktreeDiff.test.ts).
 function wtList(...ids: string[]): WorktreeState[] {
-  return ids.map((id) => ({ id })) as unknown as WorktreeState[];
+  return ids.map((id) => ({
+    id,
+    worktreeId: id,
+    name: id,
+    path: `/proj/${id}`,
+    branch: id,
+    isCurrent: false,
+    isMainWorktree: false,
+    worktreeChanges: null,
+    lastActivityTimestamp: null,
+  }));
 }
 
 const { restorePanelsPhase } = await import("../panelRestorePhase");
@@ -441,9 +452,28 @@ describe("restorePanelsPhase — worktree re-home validation (#11387)", () => {
       [panel("t1", { worktreeId: undefined })],
       ctx
     );
-    // No saved worktree and the active worktree is dead — leave it unset rather
-    // than guess onto a deleted worktree.
+    // The panel is still restored (not dropped)...
+    expect(ctx.addPanel).toHaveBeenCalledTimes(1);
+    expect(restoreTasks).toHaveLength(1);
+    // ...but with no worktree: the active worktree is dead, so leave it unset
+    // rather than guess onto a deleted worktree.
+    expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({ worktreeId: undefined });
     expect(resolvedWorktreeId(restoreTasks)).toBeUndefined();
+  });
+
+  it("homes a no-worktree panel onto the active worktree when it is live", async () => {
+    const ctx = makeContext({
+      activeWorktreeId: "wMain",
+      worktreesPromise: Promise.resolve(wtList("wMain")),
+    });
+    ctx.backendTerminalMap.set("t1", backend("t1"));
+    const { restoreTasks } = await restorePanelsPhase(
+      [panel("t1", { worktreeId: undefined })],
+      ctx
+    );
+    expect(restoreTasks).toHaveLength(1);
+    // Active worktree is live — a stranded no-worktree panel homes onto it.
+    expect(resolvedWorktreeId(restoreTasks)).toBe("wMain");
   });
 });
 
