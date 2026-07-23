@@ -274,12 +274,13 @@ const FILE_BROWSER_FIELD_CLASSIFICATION = {
   isVisible: false,
   extensionState: false,
   pluginId: false,
-  // FileBrowserPanelData persisted fields — all four are user intent (where
-  // they are in the tree), which is exactly what a pinned panel must keep.
+  // FileBrowserPanelData persisted fields — all user intent (where they are in
+  // the tree and how it's laid out), which is exactly what a pinned panel keeps.
   browserSelectedPath: true,
   browserExpandedPaths: true,
   browserShowIgnored: true,
   browserRootPath: true,
+  browserSidebarCollapsed: true,
   // BasePanelData carrier-bookkeeping timestamps — written by the base
   // serialization layer in panelToSnapshot, not per-kind serializers.
   createdAt: false,
@@ -455,6 +456,7 @@ const fileBrowserFixture: FileBrowserPanelData = {
   browserExpandedPaths: ["src"],
   browserShowIgnored: true,
   browserRootPath: "src",
+  browserSidebarCollapsed: true,
 };
 
 const savedFileBrowser: SavedTerminalData = {
@@ -464,6 +466,7 @@ const savedFileBrowser: SavedTerminalData = {
   browserExpandedPaths: ["src"],
   browserShowIgnored: true,
   browserRootPath: "src",
+  browserSidebarCollapsed: true,
 };
 
 const diffFixture: DiffPanelData = {

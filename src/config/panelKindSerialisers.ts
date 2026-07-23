@@ -150,6 +150,9 @@ const BUILT_IN_DESERIALIZERS = {
     browserShowIgnored:
       typeof saved.browserShowIgnored === "boolean" ? saved.browserShowIgnored : undefined,
     browserRootPath: canonicalRelativePath(saved.browserRootPath),
+    // Only a literal `true` restores collapsed: a hand-edited or corrupted
+    // snapshot holding a string or object must fall back to the open default.
+    browserSidebarCollapsed: saved.browserSidebarCollapsed === true ? true : undefined,
   }),
   diff: (saved) => ({
     filePath: saved.filePath,

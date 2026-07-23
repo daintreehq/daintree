@@ -9,6 +9,8 @@ export interface FileBrowserViewPatch {
   browserShowIgnored?: boolean;
   /** "" roots the tree back at the worktree root. */
   browserRootPath?: string;
+  /** `true` collapses the tree sidebar; `false` and absent both mean open. */
+  browserSidebarCollapsed?: boolean;
 }
 
 function sameStringList(a: string[] | undefined, b: string[]): boolean {
@@ -44,11 +46,24 @@ export const createFileBrowserPanelActions = (
       const rootUnchanged =
         patch.browserRootPath === undefined ||
         patch.browserRootPath === (panel.browserRootPath ?? "");
+      // `false` and absent are the same open state, so patching `false` onto a
+      // never-collapsed panel must not count as a change. Compared as
+      // normalized booleans rather than raw optionals for that reason.
+      const collapsedUnchanged =
+        patch.browserSidebarCollapsed === undefined ||
+        (patch.browserSidebarCollapsed === true) === (panel.browserSidebarCollapsed === true);
 
       // Bail on a no-op write. The tree calls this on every arrow key, and a
       // fresh panel object each time would re-render every panel-store
       // subscriber and re-write the persisted snapshot for nothing.
-      if (selectedUnchanged && expandedUnchanged && ignoredUnchanged && rootUnchanged) return state;
+      if (
+        selectedUnchanged &&
+        expandedUnchanged &&
+        ignoredUnchanged &&
+        rootUnchanged &&
+        collapsedUnchanged
+      )
+        return state;
 
       const nextPanel = {
         ...panel,
@@ -63,6 +78,9 @@ export const createFileBrowserPanelActions = (
         }),
         ...(patch.browserRootPath !== undefined && {
           browserRootPath: patch.browserRootPath,
+        }),
+        ...(patch.browserSidebarCollapsed !== undefined && {
+          browserSidebarCollapsed: patch.browserSidebarCollapsed,
         }),
       };
 

@@ -272,6 +272,8 @@ export interface FileBrowserPanelOptions extends AddPanelOptionsBase {
   browserShowIgnored?: boolean;
   /** Worktree-relative directory to root the tree at; "" or absent = worktree root */
   browserRootPath?: string;
+  /** Whether the tree sidebar starts collapsed; absent or false = open */
+  browserSidebarCollapsed?: boolean;
 }
 
 /**

@@ -114,6 +114,39 @@ describe("setFileBrowserView", () => {
     expect(store.get().panelsById["panel-1"]).toMatchObject({ browserShowIgnored: false });
   });
 
+  it("collapses and re-opens the sidebar", () => {
+    setFileBrowserView("panel-1", { browserSidebarCollapsed: true });
+    expect(store.get().panelsById["panel-1"]).toMatchObject({ browserSidebarCollapsed: true });
+
+    // Re-opening after collapse still writes a new record; the serializer is
+    // what strips `false` back out of the persisted snapshot, not the store.
+    const collapsed = store.get().panelsById["panel-1"];
+    setFileBrowserView("panel-1", { browserSidebarCollapsed: false });
+    expect(store.get().panelsById["panel-1"]).not.toBe(collapsed);
+    expect(store.get().panelsById["panel-1"]).toMatchObject({ browserSidebarCollapsed: false });
+  });
+
+  it("treats collapsing an already-open panel with false as a no-op", () => {
+    // `false` and absent are the same open state, so patching `false` onto a
+    // panel that never collapsed must not churn a fresh object every render.
+    const before = store.get().panelsById["panel-1"];
+
+    setFileBrowserView("panel-1", { browserSidebarCollapsed: false });
+
+    expect(store.get().panelsById["panel-1"]).toBe(before);
+  });
+
+  it("preserves other browser fields when the sidebar collapses", () => {
+    setFileBrowserView("panel-1", { browserSelectedPath: "src/app.ts" });
+    setFileBrowserView("panel-1", { browserSidebarCollapsed: true });
+
+    expect(store.get().panelsById["panel-1"]).toMatchObject({
+      browserSidebarCollapsed: true,
+      browserSelectedPath: "src/app.ts",
+      browserExpandedPaths: ["src"],
+    });
+  });
+
   it("ignores a panel of another kind rather than stamping browser fields onto it", () => {
     const other = makeSet({
       panelsById: {

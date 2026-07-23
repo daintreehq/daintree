@@ -253,4 +253,41 @@ describe("FileViewerToolbar.IconButton", () => {
       screen.getByRole("button", { name: "Wrap long lines" }).getAttribute("aria-pressed")
     ).toBe("true");
   });
+
+  it("renders as a disclosure with aria-expanded/aria-controls instead of aria-pressed (#11328)", () => {
+    render(
+      <FileViewerToolbar.IconButton
+        label="Toggle file tree"
+        onClick={vi.fn()}
+        expanded
+        controls="tree-region"
+        sidebarToggle
+      >
+        <svg />
+      </FileViewerToolbar.IconButton>
+    );
+
+    const button = screen.getByRole("button", { name: "Toggle file tree" });
+    // Disclosure semantics: expanded/controls present, pressed absent so it
+    // isn't announced as a two-state toggle button.
+    expect(button.getAttribute("aria-expanded")).toBe("true");
+    expect(button.getAttribute("aria-controls")).toBe("tree-region");
+    expect(button.hasAttribute("aria-pressed")).toBe(false);
+    // Opts out of the persistent toolbar armed chip (toolbar.css).
+    expect(button.hasAttribute("data-sidebar-toggle")).toBe(true);
+  });
+
+  it("omits aria-controls when the disclosed region is unmounted", () => {
+    render(
+      <FileViewerToolbar.IconButton label="Toggle file tree" onClick={vi.fn()} expanded={false}>
+        <svg />
+      </FileViewerToolbar.IconButton>
+    );
+
+    const button = screen.getByRole("button", { name: "Toggle file tree" });
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+    // A dangling aria-controls would point at a collapsed (removed) region.
+    expect(button.hasAttribute("aria-controls")).toBe(false);
+    expect(button.hasAttribute("data-sidebar-toggle")).toBe(false);
+  });
 });

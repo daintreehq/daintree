@@ -158,16 +158,35 @@ function IconButton({
   label,
   onClick,
   pressed,
+  expanded,
+  controls,
+  sidebarToggle,
   children,
   "data-testid": testId,
 }: {
   label: string;
   onClick: () => void;
-  /** Renders the button as a toggle with a pressed state. */
+  /** Renders the button as a toggle with an `aria-pressed` state. */
   pressed?: boolean;
+  /**
+   * Renders the button as a disclosure control with `aria-expanded` (show/hide
+   * a region), the WAI-ARIA APG pattern for a collapsible sidebar. Mutually
+   * exclusive with `pressed` — never set both, so the button carries one role.
+   */
+  expanded?: boolean;
+  /** id of the region a disclosure button controls; omit while that region is unmounted. */
+  controls?: string;
+  /**
+   * Opts the button out of the persistent `toolbar-icon-button` armed chip via
+   * `data-sidebar-toggle` (see `toolbar.css`): a sidebar toggle sits in its
+   * "on" state almost always, so the icon swap, not a lit background, carries
+   * the state.
+   */
+  sidebarToggle?: boolean;
   children: React.ReactNode;
   "data-testid"?: string;
 }) {
+  const active = pressed === true || expanded === true;
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -176,10 +195,13 @@ function IconButton({
           onClick={onClick}
           aria-label={label}
           aria-pressed={pressed}
+          aria-expanded={expanded}
+          aria-controls={controls}
+          data-sidebar-toggle={sidebarToggle ? "" : undefined}
           data-testid={testId}
           className={cn(
             "toolbar-icon-button p-1.5 rounded",
-            pressed ? "text-daintree-text" : "text-daintree-text/60"
+            active ? "text-daintree-text" : "text-daintree-text/60"
           )}
         >
           {children}
