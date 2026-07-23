@@ -32,10 +32,16 @@
  * user. A tombstoned row whose ID still matches `currentScratchId` is the
  * crash-recovery case and IS reaped.
  *
- * Known limitations (documented, not silently overstated): a clean git repo
- * holding only local unpushed commits with no configured upstream still looks
- * abandoned; the activity scan reads only top-level entry mtimes and does not
- * detect a content-only edit deep under an otherwise-old top-level directory.
+ * Known limitations (documented, not silently overstated): git-ignored files
+ * in an otherwise-clean repo are treated as disposable (git-ignored = declared
+ * disposable); the activity scan is bounded, so a non-git tree larger than the
+ * scan limits fails closed (protected, never reclaimed) rather than be scanned
+ * unboundedly; once a scratch is tombstoned, work that appears externally
+ * within the grace window is not re-inspected before the directory is reaped
+ * (a tombstone is a committed deletion decision — it may equally be a user
+ * `removeScratch` that crashed, which must not be resurrected); and a scratch
+ * open only in a non-current window is not distinguished from an idle one
+ * because `currentScratchId` is a single global pointer.
  *
  * Mirrors the fire-and-forget pattern of `initializeTrashedPidCleanup`: never
  * awaited by production callers, never throws — a cleanup failure must not
@@ -108,8 +114,16 @@ export interface ScratchCleanupStore {
   clearCurrentScratch(): void;
 }
 
-/** Top-level directory names whose recency never counts as live work. */
+/** Directory names (at any depth) whose recency never counts as live work. */
 const ACTIVITY_SCAN_IGNORED_DIRS = new Set(["node_modules", ".git", "dist", "build", ".cache"]);
+
+/**
+ * Bounds for the non-git recursive activity scan. A tree that exceeds either
+ * bound cannot be cheaply proven abandoned, so the scan fails closed (protect)
+ * rather than descend unboundedly at boot.
+ */
+const ACTIVITY_SCAN_MAX_ENTRIES = 5000;
+const ACTIVITY_SCAN_MAX_DEPTH = 8;
 
 /**
  * Bound concurrent git-status spawns across ALL overlapping sweeps (boot,
@@ -151,42 +165,126 @@ export async function inspectScratchForCleanup(
     return protect("readdir-failed");
   }
 
-  // Only treat this as a git repo when it owns a top-level `.git` entry, so an
-  // ancestor repo (via `checkIsRepo`'s upward walk) can't misclassify a plain
-  // scratch, and non-git scratches never pay for a git spawn.
+  // A top-level `.git` entry means this is meant to be a git repo (checking the
+  // name catches both a `.git` directory and a worktree/submodule `.git` file).
+  // Once we know that, git is authoritative: only a successfully-obtained clean
+  // status is safe. We never fall through to the mtime scan for a `.git`-bearing
+  // directory — a corrupt-but-recoverable repo must not be deleted as if it were
+  // plain files. Restricting the git path to an own `.git` entry also stops
+  // `checkIsRepo`'s upward walk from misclassifying a plain scratch via an
+  // ancestor repo, and spares non-git scratches a git spawn.
   if (entries.some((entry) => entry.name === ".git")) {
-    try {
-      const git = await createHardenedGit(directory, signal);
-      if (await git.checkIsRepo()) {
-        const status = await git.status();
-        // Uncommitted or untracked changes are exactly the "work" #11353 exists
-        // to protect; ahead-of-upstream commits are unpushed local work.
-        if (status.files.length > 0) return protect("dirty-git");
-        if (status.ahead > 0) return protect("unpushed-commits");
-        return safe("clean-git");
+    return inspectGitRepo(directory, signal);
+  }
+
+  return inspectNonGitActivity(directory, entries, activityCutoffMs, signal);
+}
+
+/**
+ * Classify a git-repo scratch. Protects any repo that still holds local work
+ * that a plain `git status` misses: staged/unstaged/untracked changes, stashes,
+ * and commits reachable from a local ref but not from any remote-tracking ref
+ * (unpushed work — including no-upstream repos and detached HEAD, which
+ * `status.ahead` alone cannot see). Any probe failure fails closed.
+ */
+async function inspectGitRepo(
+  directory: string,
+  signal: AbortSignal
+): Promise<ScratchCleanupSafetyDecision> {
+  try {
+    const git = await createHardenedGit(directory, signal);
+    // A `.git` entry that does not resolve to a repo (corrupt, unavailable
+    // common dir) is uncertainty, not a plain directory — protect.
+    if (!(await git.checkIsRepo())) return protect("git-repo-unverified");
+
+    const status = await git.status();
+    if (status.files.length > 0) return protect("dirty-git");
+
+    const stash = await git.stashList();
+    if (stash.total > 0) return protect("stashed-work");
+
+    const localOnly = (
+      await git.raw(["rev-list", "--count", "--all", "--not", "--remotes"])
+    ).trim();
+    if (localOnly !== "" && localOnly !== "0") return protect("unpushed-commits");
+
+    return safe("clean-git");
+  } catch {
+    // Git spawn failed, timed out, the signal aborted, or a probe errored —
+    // cannot prove abandonment, so protect.
+    return protect("git-check-failed");
+  }
+}
+
+/**
+ * Classify a non-git scratch by a bounded recursive mtime scan. Any file OR
+ * directory whose mtime is newer than the cutoff is recent external activity
+ * (a content edit updates the file's own mtime, so descending catches edits
+ * deep under an otherwise-old top-level directory). Generated-output
+ * directories are skipped at every level; a tree that exceeds the scan bounds
+ * fails closed (protect) rather than be scanned unboundedly.
+ */
+async function inspectNonGitActivity(
+  root: string,
+  rootEntries: Dirent[],
+  activityCutoffMs: number,
+  signal: AbortSignal
+): Promise<ScratchCleanupSafetyDecision> {
+  const stack: Array<{ dir: string; entries: Dirent[]; depth: number }> = [
+    { dir: root, entries: rootEntries, depth: 0 },
+  ];
+  let visited = 0;
+
+  while (stack.length > 0) {
+    if (signal.aborted) return protect("inspection-aborted");
+    const frame = stack.pop()!;
+    for (const entry of frame.entries) {
+      if (signal.aborted) return protect("inspection-aborted");
+      if (entry.isDirectory() && ACTIVITY_SCAN_IGNORED_DIRS.has(entry.name)) continue;
+      if (++visited > ACTIVITY_SCAN_MAX_ENTRIES) return protect("scan-too-large");
+
+      const full = path.join(frame.dir, entry.name);
+      let stat;
+      try {
+        stat = await fs.lstat(full);
+      } catch {
+        // A per-entry stat failure is uncertainty about that entry => protect.
+        return protect("stat-failed");
       }
-    } catch {
-      // Git spawn failed, timed out, or the signal aborted — cannot prove
-      // abandonment, so protect.
-      return protect("git-check-failed");
+      if (stat.mtimeMs > activityCutoffMs) return protect("recent-activity");
+
+      // Descend into real subdirectories only (isDirectory() is false for a
+      // symlink, so symlink cycles are never followed). A subtree deeper than
+      // the bound cannot be cheaply proven abandoned => protect.
+      if (entry.isDirectory()) {
+        if (frame.depth + 1 > ACTIVITY_SCAN_MAX_DEPTH) return protect("scan-too-deep");
+        let childEntries: Dirent[];
+        try {
+          childEntries = await fs.readdir(full, { withFileTypes: true });
+        } catch {
+          return protect("readdir-failed");
+        }
+        stack.push({ dir: full, entries: childEntries, depth: frame.depth + 1 });
+      }
     }
   }
 
-  // Non-git scratch: fall back to a bounded top-level mtime scan for signs of
-  // recent external activity. Directories that hold generated output only are
-  // skipped so a stale `node_modules`/`dist` can't keep a dead scratch alive.
-  for (const entry of entries) {
-    if (signal.aborted) return protect("inspection-aborted");
-    if (entry.isDirectory() && ACTIVITY_SCAN_IGNORED_DIRS.has(entry.name)) continue;
-    try {
-      const stat = await fs.lstat(path.join(directory, entry.name));
-      if (stat.mtimeMs > activityCutoffMs) return protect("recent-activity");
-    } catch {
-      // A per-entry stat failure is uncertainty about that entry => protect.
-      return protect("stat-failed");
-    }
-  }
+  if (signal.aborted) return protect("inspection-aborted");
   return safe("inactive-non-git");
+}
+
+/** Rejects when `signal` aborts, so a hung inspection is bounded by the runner's
+ * timeout (freeing its queue slot) instead of pinning it indefinitely. */
+function rejectOnAbort(signal: AbortSignal): Promise<never> {
+  return new Promise((_resolve, reject) => {
+    if (signal.aborted) {
+      reject(new Error("inspection-timed-out"));
+      return;
+    }
+    signal.addEventListener("abort", () => reject(new Error("inspection-timed-out")), {
+      once: true,
+    });
+  });
 }
 
 /**
@@ -269,10 +367,16 @@ export async function runScratchCleanup(
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), GIT_BLOCK_TIMEOUT_MS);
           try {
-            const decision = await safetyCheck(dir, staleCutoff, controller.signal);
+            // Race the classifier against the abort: a hung git/fs probe hits
+            // the timeout, rejects here, and frees its queue slot instead of
+            // starving every later sweep. A timeout is uncertainty => protect.
+            const decision = await Promise.race([
+              safetyCheck(dir, staleCutoff, controller.signal),
+              rejectOnAbort(controller.signal),
+            ]);
             return { row, decision };
           } catch (error) {
-            logError(`[ScratchCleanup] Safety inspection threw for ${row.id}`, error);
+            logError(`[ScratchCleanup] Safety inspection failed for ${row.id}`, error);
             return { row, decision: protect("inspection-error") };
           } finally {
             clearTimeout(timer);
