@@ -59,12 +59,27 @@ function renderTree(overrides: Partial<Parameters<typeof FileTreeView>[0]> = {})
 }
 
 describe("FileTreeView context-menu interactions", () => {
-  it("selects a row on right-click so the menu visibly targets it", () => {
-    const { onSelect, getByRole } = renderTree();
+  it("leaves the selection untouched on right-click", () => {
+    // Right-click must not swap the viewed file: the menu acts on the
+    // right-clicked row directly, so moving the selection would pull the
+    // viewer off the file the user was looking at mid-gesture. The open-state
+    // lift — not the selection — is what shows which row the menu targets.
+    const { onSelect, getByRole } = renderTree({ selectedPath: "README.md" });
 
     fireEvent.contextMenu(getByRole("treeitem", { name: "src" }));
 
-    expect(onSelect).toHaveBeenCalledWith("src");
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("still selects a row on a plain click", () => {
+    // Only right-click is decoupled from selection; the ordinary click path
+    // must still drive it. A file row avoids coupling the assertion to the
+    // directory-expansion toggle a folder click also fires.
+    const { onSelect, getByRole } = renderTree();
+
+    fireEvent.click(getByRole("treeitem", { name: "README.md" }));
+
+    expect(onSelect).toHaveBeenCalledWith("README.md");
   });
 
   it("replays the ContextMenu key as a contextmenu event on the selected row", () => {

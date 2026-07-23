@@ -21,8 +21,9 @@ export interface FileTreeViewProps {
   onRootFolder?: (path: string) => void;
   /**
    * Menu items for a row's right-click menu; return null for no menu. The
-   * view owns the Radix wiring (and selects the row on right-click so the
-   * menu visibly targets it); the pane owns what the items do.
+   * view owns the Radix wiring (and lifts the row while its menu is open so
+   * the menu visibly targets it, without moving the selection); the pane owns
+   * what the items do.
    */
   rowContextMenu?: (row: FlatTreeRow) => React.ReactNode;
   /** Accessible name for the tree, since the panel header isn't part of it. */
@@ -273,12 +274,6 @@ function FileTreeRow({ row, isSelected, context }: FileTreeRowProps) {
         }
       : undefined;
 
-  // Select on right-click, without toggling expansion: the menu acts on this
-  // row, and the selection highlight is what shows the user which one.
-  const handleContextMenu = () => {
-    onSelect(row.path);
-  };
-
   const handleChevronClick = (event: React.MouseEvent) => {
     // Toggling from the chevron must not move the selection: it is the
     // "peek inside without leaving where I am" affordance.
@@ -317,6 +312,11 @@ function FileTreeRow({ row, isSelected, context }: FileTreeRowProps) {
         "transition-colors duration-150 ease-out",
         isSelected ? "bg-overlay-subtle text-daintree-text" : "text-daintree-text/70",
         !isSelected && "hover:bg-tint/5",
+        // The row whose context menu is open lifts to a distinct neutral tier
+        // (raised, not the selection's subtle) so it reads as "the menu targets
+        // this row" without masquerading as the selection. Radix forwards
+        // data-state onto this surface through the asChild trigger below.
+        "data-[state=open]:bg-overlay-raised data-[state=open]:text-daintree-text",
         row.isIgnored && "opacity-55"
       )}
     >
@@ -363,7 +363,7 @@ function FileTreeRow({ row, isSelected, context }: FileTreeRowProps) {
   }
 
   return (
-    <div className="h-6 w-full px-1" onContextMenu={handleContextMenu}>
+    <div className="h-6 w-full px-1">
       <ContextMenu>
         <ContextMenuTrigger asChild>{rowSurface}</ContextMenuTrigger>
         <ContextMenuContent>{menuItems}</ContextMenuContent>

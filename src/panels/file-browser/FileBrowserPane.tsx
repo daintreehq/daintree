@@ -198,26 +198,47 @@ export function FileBrowserPane({
     [worktreeId]
   );
 
-  const handleCopyAbsolutePath = useCallback(
+  const copyToClipboard = useCallback((text: string, errorTitle: string) => {
+    const write = () =>
+      navigator.clipboard.writeText(text).catch((error: unknown) => {
+        // A silent failure leaves the previous clipboard contents in place,
+        // and the user's next paste would be the wrong value.
+        notify({
+          type: "error",
+          title: errorTitle,
+          message:
+            error instanceof Error && error.name === "NotAllowedError"
+              ? "The clipboard is unavailable while another app holds it."
+              : "The clipboard rejected the write.",
+          action: { label: "Retry", onClick: () => void write() },
+        });
+      });
+    void write();
+  }, []);
+
+  const handleCopyFullPath = useCallback(
     (path: string) => {
       if (!worktreePath) return;
-      const write = () =>
-        navigator.clipboard.writeText(join(worktreePath, path)).catch((error: unknown) => {
-          // A silent failure leaves the previous clipboard contents in place,
-          // and the user's next paste would be the wrong path.
-          notify({
-            type: "error",
-            title: "Couldn't copy path",
-            message:
-              error instanceof Error && error.name === "NotAllowedError"
-                ? "The clipboard is unavailable while another app holds it."
-                : "The clipboard rejected the write.",
-            action: { label: "Retry", onClick: () => void write() },
-          });
-        });
-      void write();
+      copyToClipboard(join(worktreePath, path), "Couldn't copy path");
     },
-    [worktreePath]
+    [worktreePath, copyToClipboard]
+  );
+
+  // row.path is already relative to the true worktree root even when the tree
+  // has been re-rooted to a subfolder, so it copies verbatim — no rootPath
+  // stripping or re-joining, which would only double-prefix a correct value.
+  const handleCopyRelativePath = useCallback(
+    (path: string) => {
+      copyToClipboard(path, "Couldn't copy path");
+    },
+    [copyToClipboard]
+  );
+
+  const handleCopyFileName = useCallback(
+    (name: string) => {
+      copyToClipboard(name, "Couldn't copy file name");
+    },
+    [copyToClipboard]
   );
 
   const reveal = useMemo(() => revealCopy(), []);
@@ -265,13 +286,28 @@ export function FileBrowserPane({
             <ContextMenuSeparator />
           </>
         )}
-        <ContextMenuItem onSelect={() => handleCopyAbsolutePath(row.path)}>
-          Copy path
+        <ContextMenuItem onSelect={() => handleCopyFullPath(row.path)}>
+          Copy full path
         </ContextMenuItem>
+        <ContextMenuItem onSelect={() => handleCopyRelativePath(row.path)}>
+          Copy relative path
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => handleCopyFileName(row.name)}>
+          Copy file name
+        </ContextMenuItem>
+        <ContextMenuSeparator />
         <ContextMenuItem onSelect={() => handleReveal(row.path)}>{reveal.label}</ContextMenuItem>
       </>
     ),
-    [handleSetRoot, handleCopyFolderContext, handleCopyAbsolutePath, handleReveal, reveal]
+    [
+      handleSetRoot,
+      handleCopyFolderContext,
+      handleCopyFullPath,
+      handleCopyRelativePath,
+      handleCopyFileName,
+      handleReveal,
+      reveal,
+    ]
   );
 
   // A restored panel remembers a selection whose ancestors may be collapsed.
