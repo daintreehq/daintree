@@ -108,6 +108,24 @@ describe("gracefulTeardownAndJournalProject", () => {
     expect(ctx).toEqual({ terminalId: "t1", generation: 7 });
   });
 
+  it("passes an explicit null generation when the ledger has evicted the entry", async () => {
+    // Bounded LRU can evict a live agent terminal → currentGeneration is
+    // undefined at freeze. The helper must send null (frozen-unknown), not
+    // undefined, so the funnel fails open instead of re-reading a respawn (#11340).
+    ledgerMock.currentGeneration.mockReturnValue(undefined);
+    const { client } = makePtyClient({
+      terminals: [
+        { id: "t1", projectId: "proj", launchAgentId: "claude", cwd: "/a", spawnedAt: 1 },
+      ],
+      outcome: { confirmed: true, sessions: [{ id: "t1", agentSessionId: "s1" }] },
+    });
+
+    await gracefulTeardownAndJournalProject("proj", client);
+
+    const [, ctx] = journalMock.journalAgentSession.mock.calls[0]!;
+    expect(ctx).toEqual({ terminalId: "t1", generation: null });
+  });
+
   it("prefers the observed title unless a user title lock is set", async () => {
     const { client } = makePtyClient({
       terminals: [

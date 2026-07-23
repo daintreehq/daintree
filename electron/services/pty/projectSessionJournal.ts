@@ -120,7 +120,10 @@ export async function gracefulTeardownAndJournalProject(
             cwd: info.cwd ?? undefined,
             branch: info.worktreeId ? branchByWorktree.get(info.worktreeId) : undefined,
           },
-          { terminalId: result.id, generation: generationById.get(result.id) }
+          // `?? null` marks an evicted/unknown generation as explicitly frozen
+          // so the journal funnel fails open instead of re-reading a respawn's
+          // current generation (#11340).
+          { terminalId: result.id, generation: generationById.get(result.id) ?? null }
         );
       } catch (err) {
         // One failed journal write must not block the rest.

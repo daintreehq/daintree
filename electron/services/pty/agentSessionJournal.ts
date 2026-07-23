@@ -12,10 +12,19 @@ export interface JournalCloseContext {
   /**
    * Launch generation of the closing incarnation. Capture it BEFORE initiating
    * the kill: a restart can respawn the same terminal id mid-close, and the
-   * record must stay attributed to the generation that produced it. Falls back
-   * to the ledger's current generation when omitted.
+   * record must stay attributed to the generation that produced it.
+   *
+   * Three states:
+   * - `number` — the frozen generation; gate on it.
+   * - omitted (`undefined`) — no generation captured; fall back to the ledger's
+   *   current generation (used by callers that resolve it just-in-time).
+   * - `null` — the caller froze the generation but the ledger had evicted the
+   *   entry (bounded LRU), so it is genuinely UNKNOWN. Journal fail-open and do
+   *   NOT consult the current generation: a same-id respawn would otherwise gate
+   *   the predecessor's record on the successor's generation and suppress the
+   *   successor's real record later (#11340).
    */
-  generation?: number;
+  generation?: number | null;
 }
 
 /**
@@ -39,7 +48,13 @@ export async function journalAgentSession(
   ctx: JournalCloseContext
 ): Promise<boolean> {
   const ledger = getLifecycleLedger();
-  const generation = ctx.generation ?? ledger.currentGeneration(ctx.terminalId);
+  // A null generation is an explicit "frozen but unknown" — fail open without
+  // consulting the current (possibly respawned) generation. Omitted falls back
+  // to the current generation; a number gates on itself.
+  const generation =
+    ctx.generation === null
+      ? undefined
+      : (ctx.generation ?? ledger.currentGeneration(ctx.terminalId));
   const gatedGeneration =
     generation !== undefined && ledger.currentGeneration(ctx.terminalId) !== undefined
       ? generation

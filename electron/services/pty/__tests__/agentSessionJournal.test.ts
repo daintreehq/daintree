@@ -145,6 +145,31 @@ describe("journalAgentSession", () => {
     expect(await readSessionHistory(userDataDir)).toHaveLength(1);
   });
 
+  it("null generation journals fail-open and never reserves a respawned slot (#11340)", async () => {
+    const ledger = getLifecycleLedger();
+    // The same terminal id has respawned; the current generation belongs to the
+    // successor incarnation. (Simulates an evicted predecessor whose captured
+    // generation was frozen as null by a project-teardown journal.)
+    const successorGen = ledger.recordLaunch("term-1", { launchAgentId: "claude" });
+
+    // Journaling the predecessor's session with an explicit null must NOT gate
+    // on the successor's current generation...
+    expect(
+      await journalAgentSession(makeRecord("sess-old"), { terminalId: "term-1", generation: null })
+    ).toBe(true);
+
+    // ...so the successor's own record at its real generation still lands. With
+    // the old `?? currentGeneration` fallback the predecessor would have
+    // consumed this slot and this write would be dropped.
+    expect(
+      await journalAgentSession(makeRecord("sess-new"), {
+        terminalId: "term-1",
+        generation: successorGen,
+      })
+    ).toBe(true);
+    expect(await readSessionHistory(userDataDir)).toHaveLength(2);
+  });
+
   it("releases the journal reservation when persistence fails, so a retry still lands", async () => {
     const ledger = getLifecycleLedger();
     const generation = ledger.recordLaunch("term-1", { launchAgentId: "claude" });
