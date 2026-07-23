@@ -330,6 +330,10 @@ describe("TerminalResizeController", () => {
     expect(resetForTerminal).toHaveBeenCalledWith("term-1");
     expect(managed.terminal.resize).toHaveBeenCalledWith(132, 41);
     expect(resizeMock).toHaveBeenCalledWith("term-1", 132, 41);
+    // A bottom-following pane (latestWasAtBottom && !isUserScrolledBack) is
+    // re-pinned after the commit — the shared pin the reveal path now mirrors
+    // (#11316).
+    expect(managed.terminal.scrollToBottom).toHaveBeenCalledOnce();
   });
 
   describe("pre-resize flush budget", () => {
@@ -529,6 +533,8 @@ describe("TerminalResizeController", () => {
 
     expect(managed.terminal.resize).not.toHaveBeenCalled();
     expect(resizeMock).not.toHaveBeenCalled();
+    // No resize happened → no pin (#11316).
+    expect(managed.terminal.scrollToBottom).not.toHaveBeenCalled();
   });
 
   it("applyDeferredResize defers a grid change on a streaming main-buffer pane to the watchdog (#10863 choke point)", () => {
@@ -556,6 +562,9 @@ describe("TerminalResizeController", () => {
     expect(resizeMock).not.toHaveBeenCalled();
     expect(managed.revealPendingRepair).toBe(true);
     expect(managed.revealPendingGeneration).toBe(7);
+    // The resize was deferred to the watchdog → the pin must not fire here
+    // either (#11316).
+    expect(managed.terminal.scrollToBottom).not.toHaveBeenCalled();
   });
 
   it("applyDeferredResize still applies a grid change on a streaming ALT-buffer pane (alt exempt from the re-wrap hazard)", () => {
@@ -603,6 +612,8 @@ describe("TerminalResizeController", () => {
 
     expect(managed.terminal.resize).not.toHaveBeenCalled();
     expect(resizeMock).not.toHaveBeenCalled();
+    // Cache-match early return → no resize, no pin (#11316).
+    expect(managed.terminal.scrollToBottom).not.toHaveBeenCalled();
   });
 
   it("applyDeferredResize syncs xterm and PTY atomically for settled-strategy agents", () => {
@@ -641,6 +652,37 @@ describe("TerminalResizeController", () => {
     vi.advanceTimersByTime(500);
     expect(managed.terminal.resize).toHaveBeenCalledTimes(1);
     expect(resizeMock).toHaveBeenCalledTimes(1);
+    // The wake-path resize re-pins a bottom-following pane — the reveal-path gap
+    // this fix closes (#11316: a reflow shifts the viewport off-bottom without
+    // firing onScroll, so the deferred resize must restore the bottom).
+    expect(managed.terminal.scrollToBottom).toHaveBeenCalledOnce();
+  });
+
+  it("applyDeferredResize preserves a deliberately user-scrolled viewport", () => {
+    const managed = createManagedTerminal();
+    managed.terminal.cols = 80;
+    managed.terminal.rows = 24;
+    managed.latestCols = 160;
+    managed.latestRows = 40;
+    // The user scrolled up before hiding — the reveal-path resize must reflow
+    // but NEVER yank the viewport back to the bottom (#11316).
+    managed.isUserScrolledBack = true;
+
+    const controller = new TerminalResizeController({
+      getInstance: vi.fn(() => managed),
+      dataBuffer: {
+        flushForTerminal: vi.fn(),
+        resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 0),
+        resumeFlush: vi.fn(),
+      } as any,
+    });
+
+    controller.applyDeferredResize("term-1");
+
+    expect(managed.terminal.resize).toHaveBeenCalledWith(160, 40);
+    expect(resizeMock).toHaveBeenCalledWith("term-1", 160, 40);
+    expect(managed.terminal.scrollToBottom).not.toHaveBeenCalled();
   });
 
   it("applyDeferredResize cancels a pending settled timer before atomic resync", () => {
@@ -1851,6 +1893,26 @@ describe("TerminalResizeController", () => {
       // Must NOT route through fitAddon.fit() — that resizes xterm before the PTY
       // and would break settled-strategy atomicity.
       expect(managed.fitAddon.fit).not.toHaveBeenCalled();
+      // The reveal-path reflow re-pins a bottom-following pane — the missing
+      // pin that left docked terminals parked above the bottom (#11316).
+      expect(managed.terminal.scrollToBottom).toHaveBeenCalledOnce();
+    });
+
+    it("preserves a deliberately user-scrolled viewport across a fresh reflow", () => {
+      const managed = createManagedTerminal();
+      // Grid drifts (box proposes 100x30, xterm is 80x24) so a real reflow runs,
+      // but the user had scrolled up before hiding — the reveal must not yank the
+      // viewport back to the bottom (#11316).
+      managed.isUserScrolledBack = true;
+      managed.fitAddon.proposeDimensions = vi.fn(() => ({ cols: 100, rows: 30 }));
+
+      const controller = makeController(managed);
+      const ok = controller.reconcileGeometryFresh("term-1");
+
+      expect(ok).toBe(true);
+      expect(managed.terminal.resize).toHaveBeenCalledWith(100, 30);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", 100, 30);
+      expect(managed.terminal.scrollToBottom).not.toHaveBeenCalled();
     });
 
     it("does NOT reflow a live alt-screen TUI even when the grid drifted (OpenCode clobber regression)", () => {
@@ -1870,6 +1932,9 @@ describe("TerminalResizeController", () => {
       expect(ok).toBe(true);
       expect(managed.terminal.resize).not.toHaveBeenCalled();
       expect(resizeMock).not.toHaveBeenCalled();
+      // The alt-buffer early return sits above the pin — never scroll a live
+      // full-screen TUI (#11316).
+      expect(managed.terminal.scrollToBottom).not.toHaveBeenCalled();
     });
 
     it("defers a grid-changing reflow while the pane is still streaming output (#10863)", () => {
@@ -2025,6 +2090,10 @@ describe("TerminalResizeController", () => {
       expect(ok).toBe(true);
       expect(managed.terminal.resize).not.toHaveBeenCalled();
       expect(resizeMock).toHaveBeenCalledWith("term-1", 100, 30);
+      // Even with no xterm reflow, a successful main-buffer reconcile re-pins a
+      // bottom-following pane — this self-heals a viewport left off-bottom by an
+      // earlier silent reflow, and is a no-op when already at bottom (#11316).
+      expect(managed.terminal.scrollToBottom).toHaveBeenCalledOnce();
     });
 
     it("falls back to cell-metric math when no proposable dimensions exist", () => {
