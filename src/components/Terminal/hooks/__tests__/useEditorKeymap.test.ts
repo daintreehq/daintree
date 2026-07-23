@@ -25,6 +25,7 @@ function makeLatest(overrides: Partial<LatestShape> = {}): LatestShape {
     projectId: undefined,
     disabled: false,
     isInitializing: false,
+    isAgentTerminal: false,
     isInHistoryMode: false,
     isAutocompleteOpen: true,
     autocompleteItems: [fileItem],
@@ -45,12 +46,16 @@ describe("useEditorKeymap", () => {
   let setActiveCompletionContext: ReturnType<
     typeof vi.fn<Dispatch<SetStateAction<ActiveCompletionContext | null>>>
   >;
+  let handleHistoryNavigation: ReturnType<typeof vi.fn<(direction: "up" | "down") => boolean>>;
+  let setSelectedIndex: ReturnType<typeof vi.fn<Dispatch<SetStateAction<number>>>>;
 
   beforeEach(() => {
     applyAutocompleteSelection = vi.fn<(mode: "enter" | "complete") => boolean>(() => true);
     sendFromEditor = vi.fn<() => void>();
     cancelVoiceWaitSubmit = vi.fn<() => boolean>(() => false);
     setActiveCompletionContext = vi.fn<Dispatch<SetStateAction<ActiveCompletionContext | null>>>();
+    handleHistoryNavigation = vi.fn<(direction: "up" | "down") => boolean>(() => false);
+    setSelectedIndex = vi.fn<Dispatch<SetStateAction<number>>>();
   });
 
   function renderKeymap(latest: LatestShape) {
@@ -62,7 +67,7 @@ describe("useEditorKeymap", () => {
       editableCompartmentRef: { current: new Compartment() },
       historyPaletteOpenRef: { current: null },
       applyAutocompleteSelection,
-      handleHistoryNavigation: vi.fn<(direction: "up" | "down") => boolean>(() => false),
+      handleHistoryNavigation,
       sendFromEditor,
       startVoiceWaitSubmit: vi.fn<() => void>(),
       cancelVoiceWaitSubmit,
@@ -73,7 +78,7 @@ describe("useEditorKeymap", () => {
       >(() => undefined),
       setActiveCompletionContext,
       setIsExpanded: vi.fn<Dispatch<SetStateAction<boolean>>>(),
-      setSelectedIndex: vi.fn<Dispatch<SetStateAction<number>>>(),
+      setSelectedIndex,
     };
     const { result } = renderHook(() => useEditorKeymap(params));
     return { handlers: result.current.handlersRef.current! };
@@ -144,6 +149,167 @@ describe("useEditorKeymap", () => {
       const { handlers } = renderKeymap(makeLatest());
       expect(handlers.onEscape()).toBe(true);
       expect(setActiveCompletionContext).not.toHaveBeenCalled();
+    });
+  });
+
+  // Arrow routing between host prompt-history and the agent's own terminal TUI
+  // (e.g. Codex's `/model` picker). Regression matrix for issue #11218: empty
+  // ArrowUp on an agent terminal must reach the terminal, not recall history,
+  // while shell-terminal recall and mid-recall navigation stay intact.
+  describe("Arrow routing (issue #11218)", () => {
+    it("agent terminal: empty ArrowUp at rest forwards to the terminal, never host history", () => {
+      const onSendKey = vi.fn<(key: string) => void>();
+      // Would recall a history entry if consulted — asserting it is not called
+      // directly reproduces and guards against the original bug.
+      handleHistoryNavigation.mockReturnValue(true);
+      const { handlers } = renderKeymap(
+        makeLatest({ isAgentTerminal: true, isAutocompleteOpen: false, value: "", onSendKey })
+      );
+      expect(handlers.onArrowUp()).toBe(true);
+      expect(onSendKey).toHaveBeenCalledWith("up");
+      expect(handleHistoryNavigation).not.toHaveBeenCalled();
+    });
+
+    it("shell terminal: empty ArrowUp at rest recalls host history, not the terminal", () => {
+      const onSendKey = vi.fn<(key: string) => void>();
+      handleHistoryNavigation.mockReturnValue(true);
+      const { handlers } = renderKeymap(
+        makeLatest({ isAgentTerminal: false, isAutocompleteOpen: false, value: "", onSendKey })
+      );
+      expect(handlers.onArrowUp()).toBe(true);
+      expect(handleHistoryNavigation).toHaveBeenCalledWith("up");
+      expect(onSendKey).not.toHaveBeenCalled();
+    });
+
+    it("agent terminal: empty ArrowDown at rest forwards to the terminal (unchanged)", () => {
+      const onSendKey = vi.fn<(key: string) => void>();
+      handleHistoryNavigation.mockReturnValue(false);
+      const { handlers } = renderKeymap(
+        makeLatest({ isAgentTerminal: true, isAutocompleteOpen: false, value: "", onSendKey })
+      );
+      expect(handlers.onArrowDown()).toBe(true);
+      expect(handleHistoryNavigation).toHaveBeenCalledWith("down");
+      expect(onSendKey).toHaveBeenCalledWith("down");
+    });
+
+    it("shell terminal: empty ArrowDown at rest forwards to the terminal (unchanged)", () => {
+      const onSendKey = vi.fn<(key: string) => void>();
+      handleHistoryNavigation.mockReturnValue(false);
+      const { handlers } = renderKeymap(
+        makeLatest({ isAgentTerminal: false, isAutocompleteOpen: false, value: "", onSendKey })
+      );
+      expect(handlers.onArrowDown()).toBe(true);
+      expect(handleHistoryNavigation).toHaveBeenCalledWith("down");
+      expect(onSendKey).toHaveBeenCalledWith("down");
+    });
+
+    it("agent terminal: mid-recall ArrowUp still navigates host history", () => {
+      const onSendKey = vi.fn<(key: string) => void>();
+      handleHistoryNavigation.mockReturnValue(true);
+      const { handlers } = renderKeymap(
+        makeLatest({
+          isAgentTerminal: true,
+          isAutocompleteOpen: false,
+          isInHistoryMode: true,
+          value: "recalled command",
+          onSendKey,
+        })
+      );
+      expect(handlers.onArrowUp()).toBe(true);
+      expect(handleHistoryNavigation).toHaveBeenCalledWith("up");
+      expect(onSendKey).not.toHaveBeenCalled();
+    });
+
+    it("agent terminal: mid-recall ArrowDown still navigates host history", () => {
+      const onSendKey = vi.fn<(key: string) => void>();
+      handleHistoryNavigation.mockReturnValue(true);
+      const { handlers } = renderKeymap(
+        makeLatest({
+          isAgentTerminal: true,
+          isAutocompleteOpen: false,
+          isInHistoryMode: true,
+          value: "recalled command",
+          onSendKey,
+        })
+      );
+      expect(handlers.onArrowDown()).toBe(true);
+      expect(handleHistoryNavigation).toHaveBeenCalledWith("down");
+      expect(onSendKey).not.toHaveBeenCalled();
+    });
+
+    it("shell terminal: mid-recall ArrowUp still navigates host history", () => {
+      const onSendKey = vi.fn<(key: string) => void>();
+      handleHistoryNavigation.mockReturnValue(true);
+      const { handlers } = renderKeymap(
+        makeLatest({
+          isAgentTerminal: false,
+          isAutocompleteOpen: false,
+          isInHistoryMode: true,
+          value: "recalled command",
+          onSendKey,
+        })
+      );
+      expect(handlers.onArrowUp()).toBe(true);
+      expect(handleHistoryNavigation).toHaveBeenCalledWith("up");
+      expect(onSendKey).not.toHaveBeenCalled();
+    });
+
+    it("agent terminal: whitespace-only ArrowUp is treated as empty and forwarded", () => {
+      const onSendKey = vi.fn<(key: string) => void>();
+      handleHistoryNavigation.mockReturnValue(true);
+      const { handlers } = renderKeymap(
+        makeLatest({ isAgentTerminal: true, isAutocompleteOpen: false, value: "   ", onSendKey })
+      );
+      expect(handlers.onArrowUp()).toBe(true);
+      expect(onSendKey).toHaveBeenCalledWith("up");
+      expect(handleHistoryNavigation).not.toHaveBeenCalled();
+    });
+
+    it("agent terminal: empty ArrowUp without onSendKey is unhandled and never recalls history", () => {
+      handleHistoryNavigation.mockReturnValue(true);
+      const { handlers } = renderKeymap(
+        makeLatest({
+          isAgentTerminal: true,
+          isAutocompleteOpen: false,
+          value: "",
+          onSendKey: undefined,
+        })
+      );
+      expect(handlers.onArrowUp()).toBe(false);
+      expect(handleHistoryNavigation).not.toHaveBeenCalled();
+    });
+
+    it("agent terminal: an open autocomplete menu wins over terminal routing", () => {
+      const onSendKey = vi.fn<(key: string) => void>();
+      const { handlers } = renderKeymap(
+        makeLatest({
+          isAgentTerminal: true,
+          isAutocompleteOpen: true,
+          autocompleteItems: [fileItem],
+          value: "",
+          onSendKey,
+        })
+      );
+      expect(handlers.onArrowUp()).toBe(true);
+      expect(setSelectedIndex).toHaveBeenCalled();
+      expect(onSendKey).not.toHaveBeenCalled();
+      expect(handleHistoryNavigation).not.toHaveBeenCalled();
+    });
+
+    it("agent terminal: non-empty input outside history mode is left to CodeMirror", () => {
+      const onSendKey = vi.fn<(key: string) => void>();
+      const { handlers } = renderKeymap(
+        makeLatest({
+          isAgentTerminal: true,
+          isAutocompleteOpen: false,
+          isInHistoryMode: false,
+          value: "some draft",
+          onSendKey,
+        })
+      );
+      expect(handlers.onArrowUp()).toBe(false);
+      expect(onSendKey).not.toHaveBeenCalled();
+      expect(handleHistoryNavigation).not.toHaveBeenCalled();
     });
   });
 });

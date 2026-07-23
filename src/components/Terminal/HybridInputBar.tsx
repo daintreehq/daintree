@@ -96,6 +96,7 @@ interface LatestState {
   projectId?: string;
   disabled: boolean;
   isInitializing: boolean;
+  isAgentTerminal: boolean;
   isInHistoryMode: boolean;
   isAutocompleteOpen: boolean;
   autocompleteItems: AutocompleteItem[];
@@ -397,6 +398,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         projectId,
         disabled,
         isInitializing,
+        isAgentTerminal,
         isInHistoryMode,
         isAutocompleteOpen,
         autocompleteItems,
