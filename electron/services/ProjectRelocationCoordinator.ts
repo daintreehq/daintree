@@ -1,4 +1,4 @@
-import { existsSync, statSync } from "fs";
+import { existsSync, lstatSync, statSync } from "fs";
 import { rename } from "fs/promises";
 import path from "path";
 import type { BrowserWindow, WebContents } from "electron";
@@ -172,6 +172,20 @@ export class ProjectRelocationCoordinator {
       throw new ProjectRelocationError("not-found", `Project not found: ${projectId}`);
     }
     const oldPath = project.path;
+    // Resolve ownership SYNCHRONOUSLY before any await (#11131), mirroring
+    // `relocate`. `apply` only quiesces (kills terminals, refuses on an active
+    // Assistant) when it runs `runPipeline` — every move, plus a reattach of an
+    // OPEN project. A reattach of a closed/missing project delegates straight to
+    // `ProjectStore.relocateProject`, which touches no runtimes, so the preview
+    // must NOT claim terminals will stop or block on a (possibly stale) Assistant
+    // record there.
+    const openAtEntry = collectActiveProjectIds(
+      projectViewManagersFrom(this.deps.windowRegistry),
+      projectStore.getCurrentProjectId(),
+      "project-relocation-preview"
+    ).has(projectId);
+    const usesPipeline = mode === "move" || openAtEntry;
+
     const blockers: RelocationBlocker[] = [];
     const pushBlocker = (error: unknown): void => {
       if (error instanceof ProjectRelocationError) {
@@ -213,28 +227,33 @@ export class ProjectRelocationCoordinator {
     }
 
     // Assistant guard, fail-closed — mirrors runPipeline's check but as a blocker.
-    try {
-      const assistant = await getAssistantBackend(projectId);
-      if (assistant) {
+    // Only relevant when apply will quiesce (the pipeline path); a closed reattach
+    // never stops the Assistant, so blocking on it there would be a phantom.
+    if (usesPipeline) {
+      try {
+        const assistant = await getAssistantBackend(projectId);
+        if (assistant) {
+          blockers.push({
+            reason: "assistant-active",
+            message: "Stop the Daintree Assistant for this project before moving it.",
+          });
+        }
+      } catch (error) {
+        logError("relocate-preview-assistant-check-failed", error, { projectId });
         blockers.push({
           reason: "assistant-active",
-          message: "Stop the Daintree Assistant for this project before moving it.",
+          message:
+            "Couldn't check the Daintree Assistant for this project — stop it and try again.",
         });
       }
-    } catch (error) {
-      logError("relocate-preview-assistant-check-failed", error, { projectId });
-      blockers.push({
-        reason: "assistant-active",
-        message:
-          "Couldn't check the Daintree Assistant for this project — stop it and try again.",
-      });
     }
 
     // Read-only enumeration. The folder sits at `oldPath` for a not-yet-run move
-    // and at `request.newPath` for an already-moved reattach.
+    // and at `request.newPath` for an already-moved reattach. Only the pipeline
+    // path gracefully stops terminals, so a closed reattach reports zero.
     const folderPath = mode === "reattach" ? request.newPath : oldPath;
     const [runningTerminalCount, linkedWorktrees, affectedPanelCount] = await Promise.all([
-      this.countRunningTerminals(projectId),
+      usesPipeline ? this.countRunningTerminals(projectId) : Promise.resolve(0),
       this.listLinkedWorktrees(folderPath),
       projectStore.countRebasedPanels(projectId, oldPath, newPath),
     ]);
@@ -467,8 +486,12 @@ export class ProjectRelocationCoordinator {
       let sameItem = false;
       if (caseOnly) {
         try {
-          const src = statSync(oldRoot);
-          const dst = statSync(newRoot);
+          // lstat, NOT stat: a destination that is a symlink pointing back at the
+          // project (`/x/foo` → `/x/Foo` on a case-sensitive volume) would share
+          // the target's inode under stat and be wrongly treated as "the same
+          // item"; lstat compares the symlink entry itself, so it stays blocked.
+          const src = lstatSync(oldRoot);
+          const dst = lstatSync(newRoot);
           sameItem =
             typeof src.ino === "number" &&
             src.ino !== 0 &&

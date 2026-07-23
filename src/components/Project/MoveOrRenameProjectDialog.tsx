@@ -58,8 +58,12 @@ function MoveOrRenameProjectDialogInner({
     : parentPath && folderName.trim() && !folderNameError
       ? join(parentPath, folderName.trim())
       : "";
-  const destinationChanged =
-    destinationPath !== "" && normPath(destinationPath) !== normPath(pending.oldPath);
+  // A reattach commits ANY selected folder — even the original path, e.g. a
+  // removable volume that reappeared — so it gates on "a target was picked", not
+  // "the path changed". A managed move requires a genuinely different path.
+  const destinationChanged = isReattach
+    ? reattachPath !== ""
+    : destinationPath !== "" && normPath(destinationPath) !== normPath(pending.oldPath);
 
   // A pure display-name edit stays a lightweight metadata write — no filesystem
   // op, no preview, no coordinator. Reattach never qualifies (the folder move is
@@ -73,13 +77,16 @@ function MoveOrRenameProjectDialogInner({
   // `preview = null` (the "not loaded" sentinel) before every request so confirm
   // stays gated; an empty preview array means "loaded, nothing affected".
   useEffect(() => {
+    // Invalidate any in-flight fetch on EVERY run — including this early return —
+    // so a response for an older destination can't repopulate state after the
+    // user reverts to an unchanged/empty folder.
+    const reqId = ++previewReqId.current;
     if (!destinationChanged || !destinationPath) {
       setPreview(null);
       setLoadError(null);
       setIsPreviewLoading(false);
       return;
     }
-    const reqId = ++previewReqId.current;
     setPreview(null);
     setLoadError(null);
     setIsPreviewLoading(true);
@@ -128,16 +135,25 @@ function MoveOrRenameProjectDialogInner({
     try {
       if (isMetadataOnly) {
         await updateProject(pending.projectId, { name: trimmedName });
+        pending.onDisplayNameCommitted?.(trimmedName);
       } else {
         await projectClient.applyRelocation({
           projectId: pending.projectId,
           mode: pending.mode,
           newPath: destinationPath,
         });
-        // Apply the display-name change only after the folder op succeeds, so a
-        // failed relocation never leaves a half-applied rename behind.
+        // The folder op is the committed, irreversible part. Apply the display
+        // name only AFTER it succeeds (never a half-applied rename on failure) —
+        // but in its OWN guard: a failure of this best-effort follow-up must not
+        // report the successful move as failed or strand an unretryable dialog
+        // (retrying the move would hit `same-path`).
         if (displayNameChanged) {
-          await updateProject(pending.projectId, { name: trimmedName });
+          try {
+            await updateProject(pending.projectId, { name: trimmedName });
+            pending.onDisplayNameCommitted?.(trimmedName);
+          } catch (nameErr) {
+            console.warn("[relocate] folder moved but display-name update failed:", nameErr);
+          }
         }
       }
       onClose();
@@ -150,17 +166,7 @@ function MoveOrRenameProjectDialogInner({
       );
       setIsApplying(false);
     }
-  }, [
-    isMetadataOnly,
-    isReattach,
-    updateProject,
-    pending.projectId,
-    pending.mode,
-    trimmedName,
-    displayNameChanged,
-    destinationPath,
-    onClose,
-  ]);
+  }, [isMetadataOnly, isReattach, updateProject, pending, trimmedName, displayNameChanged, destinationPath, onClose]);
 
   const hasBlockers = (preview?.blockers.length ?? 0) > 0;
   const nothingToDo = !destinationChanged && !displayNameChanged;

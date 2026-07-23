@@ -180,4 +180,66 @@ describe("MoveOrRenameProjectDialog", () => {
       })
     );
   });
+
+  it("reattach accepts the original path (a removable volume that reappeared)", async () => {
+    openDialog.mockResolvedValue(OLD_PATH);
+    previewRelocation.mockResolvedValue(cleanPreview({ mode: "reattach", newPath: OLD_PATH }));
+    useProjectRelocationStore
+      .getState()
+      .open({ projectId: "p1", mode: "reattach", oldPath: OLD_PATH, name: "Proj" });
+    render(<MoveOrRenameProjectDialog />);
+
+    fireEvent.click(screen.getByTestId("relocate-browse-existing"));
+    await waitFor(() => expect(previewRelocation).toHaveBeenCalled());
+    await waitFor(() => expect(confirmButton().disabled).toBe(false));
+
+    fireEvent.click(confirmButton());
+    await waitFor(() =>
+      expect(applyRelocation).toHaveBeenCalledWith({
+        projectId: "p1",
+        mode: "reattach",
+        newPath: OLD_PATH,
+      })
+    );
+  });
+
+  it("calls onDisplayNameCommitted after a rename so Settings can resync", async () => {
+    const onCommitted = vi.fn();
+    useProjectRelocationStore.getState().open({
+      projectId: "p1",
+      mode: "move",
+      oldPath: OLD_PATH,
+      name: "Proj",
+      onDisplayNameCommitted: onCommitted,
+    });
+    render(<MoveOrRenameProjectDialog />);
+
+    fireEvent.change(screen.getByTestId("relocate-name-input"), { target: { value: "Renamed" } });
+    fireEvent.click(confirmButton());
+
+    await waitFor(() => expect(onCommitted).toHaveBeenCalledWith("Renamed"));
+  });
+
+  it("ignores a stale preview response after the folder reverts", async () => {
+    let resolveA: (v: RelocationPreview) => void = () => {};
+    const deferredA = new Promise<RelocationPreview>((r) => {
+      resolveA = r;
+    });
+    previewRelocation.mockReturnValueOnce(deferredA);
+    openMove();
+    render(<MoveOrRenameProjectDialog />);
+
+    fireEvent.change(screen.getByTestId("relocate-folder-input"), { target: { value: "proj2" } });
+    await waitFor(() => expect(previewRelocation).toHaveBeenCalledTimes(1));
+
+    // Revert to the original folder → destination unchanged → the in-flight
+    // request is invalidated by the bumped request id.
+    fireEvent.change(screen.getByTestId("relocate-folder-input"), { target: { value: "proj" } });
+
+    // The stale response lands AFTER the revert; it must not repopulate the preview.
+    resolveA(cleanPreview());
+    await new Promise((r) => setTimeout(r, 0));
+    expect(document.querySelector('[data-testid="relocate-preview"]')).toBeNull();
+    expect(confirmButton().disabled).toBe(true);
+  });
 });

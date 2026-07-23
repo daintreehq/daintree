@@ -1,3 +1,4 @@
+import path from "path";
 import { projectRelocationCoordinator } from "../../services/ProjectRelocationCoordinator.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { PROJECT_RELOCATION_METHOD_CHANNELS } from "./projectRelocation.preload.js";
@@ -36,6 +37,12 @@ function validateRelocationRequest(request: RelocationRequest): {
   }
   if (typeof newPath !== "string" || !newPath) {
     throw new Error("Invalid destination path");
+  }
+  // Require an absolute path: a relative value (e.g. ".") would otherwise resolve
+  // against the main-process CWD inside the coordinator, silently reattaching to
+  // an arbitrary folder.
+  if (!path.isAbsolute(newPath)) {
+    throw new Error("Destination path must be absolute");
   }
   return { projectId, mode, newPath };
 }

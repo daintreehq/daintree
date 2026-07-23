@@ -15,6 +15,13 @@ export interface PendingProjectRelocation {
   oldPath: string;
   /** The project's current display name — seeds the dialog's name field. */
   name: string;
+  /**
+   * Invoked with the committed display name after a successful rename (fast path
+   * or move-with-rename). Lets an entry point that owns its own live name draft —
+   * the Project Settings form — resync, so its close-time flush doesn't revert
+   * the dialog's change. Entry points without a draft (context menus) omit it.
+   */
+  onDisplayNameCommitted?: (name: string) => void;
 }
 
 interface ProjectRelocationState {

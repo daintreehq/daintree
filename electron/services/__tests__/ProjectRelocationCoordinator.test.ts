@@ -10,9 +10,8 @@ const fsState = vi.hoisted(() => ({
   renameCalls: [] as Array<{ from: string; to: string }>,
 }));
 
-vi.mock("fs", () => ({
-  existsSync: (p: string) => fsState.existing.has(p),
-  statSync: (p: string) => {
+vi.mock("fs", () => {
+  const statImpl = (p: string) => {
     if (!fsState.existing.has(p)) {
       const err = new Error(`ENOENT: ${p}`) as NodeJS.ErrnoException;
       err.code = "ENOENT";
@@ -23,8 +22,13 @@ vi.mock("fs", () => ({
       ino: fsState.inoByPath.get(p),
       isDirectory: () => true,
     };
-  },
-}));
+  };
+  return {
+    existsSync: (p: string) => fsState.existing.has(p),
+    statSync: statImpl,
+    lstatSync: statImpl,
+  };
+});
 
 const mockListWorktrees = vi.hoisted(() =>
   vi.fn(
@@ -503,8 +507,9 @@ describe("ProjectRelocationCoordinator — previewRelocate", () => {
     expect(preview.blockers).toEqual([]);
   });
 
-  it("never mutates — no rename, quiesce, finalize, or rebind", async () => {
-    const deps = makeDeps(makePvm(PROJECT_ID));
+  it("never mutates — no rename, quiesce, finalize, rebind, broadcast, or reload", async () => {
+    const pvm = makePvm(PROJECT_ID);
+    const deps = makeDeps(pvm);
     const coordinator = new ProjectRelocationCoordinator();
     configure(coordinator, deps);
 
@@ -517,8 +522,12 @@ describe("ProjectRelocationCoordinator — previewRelocate", () => {
     expect(fsState.renameCalls).toEqual([]);
     expect(deps.ptyClient.gracefulKillByProject).not.toHaveBeenCalled();
     expect(deps.worktreeService.evictProjectForRelocation).not.toHaveBeenCalled();
+    expect(deps.worktreeService.loadProject).not.toHaveBeenCalled();
     expect(mockProjectStore.finalizeRelocatedPath).not.toHaveBeenCalled();
+    expect(mockProjectStore.relocateProject).not.toHaveBeenCalled();
     expect(mockProjectStore.beginRelocationRewrite).not.toHaveBeenCalled();
+    expect(pvm.rebindProjectPath).not.toHaveBeenCalled();
+    expect(mockBroadcast).not.toHaveBeenCalled();
   });
 
   it("surfaces a cross-volume move as a blocker, not a throw", async () => {
@@ -568,9 +577,11 @@ describe("ProjectRelocationCoordinator — previewRelocate", () => {
     fsState.existing.add(NEW_ROOT);
     mockListWorktrees.mockResolvedValue([
       { path: NEW_ROOT, branch: "main", bare: false, isMainWorktree: true },
+      { path: `${NEW_ROOT}/wt`, branch: "feat", bare: false, isMainWorktree: false },
     ]);
     const coordinator = new ProjectRelocationCoordinator();
-    configure(coordinator, makeDeps(makePvm(PROJECT_ID)));
+    // Missing project → not open → closed-delegate reattach path.
+    configure(coordinator, makeDeps(makePvm(null)));
 
     const preview = await coordinator.previewRelocate({
       projectId: PROJECT_ID,
@@ -580,7 +591,29 @@ describe("ProjectRelocationCoordinator — previewRelocate", () => {
 
     expect(preview.mode).toBe("reattach");
     expect(preview.blockers).toEqual([]);
-    expect(preview.linkedWorktrees).toEqual([]);
+    expect(preview.linkedWorktrees).toEqual([`${NEW_ROOT}/wt`]);
+  });
+
+  it("a CLOSED reattach ignores a stale Assistant record and reports no terminals", async () => {
+    fsState.existing.add(NEW_ROOT);
+    // A stale Assistant record survives a natural PTY exit; a closed reattach's
+    // apply path never checks it, so the preview must not block on it (fix B).
+    mockAssistant.getAssistantBackend.mockReturnValue({ terminalId: "t9", webContentsId: 2 });
+    const deps = makeDeps(makePvm(null)); // project not open anywhere
+    deps.ptyClient.getProjectStats.mockResolvedValue({ terminalCount: 5 });
+    const coordinator = new ProjectRelocationCoordinator();
+    configure(coordinator, deps);
+
+    const preview = await coordinator.previewRelocate({
+      projectId: PROJECT_ID,
+      mode: "reattach",
+      newPath: NEW_ROOT,
+    });
+
+    expect(preview.blockers.map((b) => b.reason)).not.toContain("assistant-active");
+    // The closed-delegate path stops nothing, so no terminals are reported.
+    expect(preview.runningTerminalCount).toBe(0);
+    expect(deps.ptyClient.getProjectStats).not.toHaveBeenCalled();
   });
 
   it("rejects a preview for an unknown project", async () => {

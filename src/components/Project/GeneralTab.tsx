@@ -150,9 +150,13 @@ export function GeneralTab({
       projectId,
       mode: "move",
       oldPath: currentProject.path,
-      name: currentProject.name,
+      // Seed from the live Settings draft so an unsaved inline edit carries in,
+      // and sync the draft back on commit so the Settings close-flush can't
+      // revert the dialog's rename.
+      name,
+      onDisplayNameCommitted: onNameChange,
     });
-  }, [openRelocation, projectId, currentProject]);
+  }, [openRelocation, projectId, currentProject, name, onNameChange]);
 
   const detectedCandidate = useMemo(() => {
     const candidate = findDevServerCandidate(allDetectedRunners, turbopackEnabled);
