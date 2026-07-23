@@ -3,7 +3,11 @@ import { defineAction } from "../defineAction";
 import { z } from "zod";
 import { worktreeClient } from "@/clients";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
-import { closeTerminalsForWorktree } from "@/components/Worktree/worktreeDeleteHelper";
+import {
+  closeTerminalsForWorktree,
+  restoreClosedTerminals,
+  type WorktreeTerminalRestoreSnapshot,
+} from "@/components/Worktree/worktreeDeleteHelper";
 
 export function registerWorktreeCreateActions(
   actions: ActionRegistry,
@@ -98,8 +102,9 @@ export function registerWorktreeCreateActions(
         closeTerminals: z.boolean().optional(),
       }),
       run: async ({ worktreeId, force, deleteBranch, closeTerminals }) => {
+        let restoreSnapshot: WorktreeTerminalRestoreSnapshot[] = [];
         if (closeTerminals) {
-          await closeTerminalsForWorktree(worktreeId);
+          restoreSnapshot = await closeTerminalsForWorktree(worktreeId);
         }
         // Stop any running dev preview BEFORE `git worktree remove` (#9084).
         // Windows holds a directory lock while the dev server runs; removal
@@ -108,7 +113,15 @@ export function registerWorktreeCreateActions(
         // unconditionally rather than gated on `getByWorktree` — that gate
         // would miss multi-panel sessions sharing the same worktreeId.
         await window.electron.devPreview.stopByWorktree({ worktreeId });
-        await worktreeClient.delete(worktreeId, force, deleteBranch);
+        try {
+          await worktreeClient.delete(worktreeId, force, deleteBranch);
+        } catch (error) {
+          // This action path has no outbox retry, so a throw here is the end of
+          // the delete — bring the closed terminals back rather than losing them
+          // to a delete that didn't happen (#11344), then surface the error.
+          void restoreClosedTerminals(restoreSnapshot);
+          throw error;
+        }
       },
     })
   );

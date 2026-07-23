@@ -16,13 +16,19 @@ vi.stubGlobal(
   }
 );
 
-const { startDeleteMock, terminalCountsMock, devPreviewGetByWorktreeMock, buildPreviewMock } =
-  vi.hoisted(() => ({
-    startDeleteMock: vi.fn(),
-    terminalCountsMock: { total: 0 },
-    devPreviewGetByWorktreeMock: vi.fn(),
-    buildPreviewMock: vi.fn(),
-  }));
+const {
+  startDeleteMock,
+  terminalCountsMock,
+  terminalsMock,
+  devPreviewGetByWorktreeMock,
+  buildPreviewMock,
+} = vi.hoisted(() => ({
+  startDeleteMock: vi.fn(),
+  terminalCountsMock: { total: 0 },
+  terminalsMock: [] as Array<{ running?: boolean }>,
+  devPreviewGetByWorktreeMock: vi.fn(),
+  buildPreviewMock: vi.fn(),
+}));
 
 // Mock only the fresh-fetch builder; keep `summarizeWorktreeChanges` real so
 // the prop-seed path (existing render assertions) is exercised unchanged.
@@ -47,7 +53,14 @@ vi.mock("@/store/createWorktreeStore", () => ({
 }));
 
 vi.mock("@/hooks/useWorktreeTerminals", () => ({
-  useWorktreeTerminals: () => ({ counts: terminalCountsMock }),
+  useWorktreeTerminals: () => ({ counts: terminalCountsMock, terminals: terminalsMock }),
+}));
+
+// Agent detection is covered by its own unit suite; here we just steer the
+// running-agent subset directly so the D2 preview breakdown can be asserted.
+vi.mock("@/utils/destructiveSessionConfirm", () => ({
+  collectRunningAgentTerminals: (terminals: Array<{ running?: boolean }>) =>
+    terminals.filter((t) => t.running),
 }));
 
 vi.mock("@/components/ui/AppDialog", () => {
@@ -146,6 +159,7 @@ describe("WorktreeDeleteDialog — warning messages", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     terminalCountsMock.total = 0;
+    terminalsMock.length = 0;
     devPreviewGetByWorktreeMock.mockResolvedValue(null);
     // Default: no fresh override → dialog uses the prop seed (existing tests).
     buildPreviewMock.mockResolvedValue(null);
@@ -313,6 +327,7 @@ describe("WorktreeDeleteDialog — body copy", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     terminalCountsMock.total = 0;
+    terminalsMock.length = 0;
     devPreviewGetByWorktreeMock.mockResolvedValue(null);
     // Default: no fresh override → dialog uses the prop seed (existing tests).
     buildPreviewMock.mockResolvedValue(null);
@@ -361,6 +376,25 @@ describe("WorktreeDeleteDialog — body copy", () => {
 
     expect(screen.getByText(/1 terminal will be closed/)).toBeDefined();
     expect(screen.queryByText(/1 terminals/)).toBeNull();
+  });
+
+  it("breaks out running agents in the terminals row when any are mid-work (#11344)", () => {
+    terminalCountsMock.total = 3;
+    terminalsMock.push({ running: true }, { running: true }, { running: false });
+    const worktree = makeWorktree(makeChanges([]));
+    render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+
+    expect(screen.getByText(/3 terminals will be closed \(2 running an agent\)/)).toBeDefined();
+  });
+
+  it("omits the running-agent breakdown when no agent is mid-work", () => {
+    terminalCountsMock.total = 2;
+    terminalsMock.push({ running: false }, { running: false });
+    const worktree = makeWorktree(makeChanges([]));
+    render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+
+    expect(screen.getByText(/2 terminals will be closed/)).toBeDefined();
+    expect(screen.queryByText(/running an agent/)).toBeNull();
   });
 
   it("renders the terminals row inactive when closeTerminals is unchecked", () => {
@@ -497,6 +531,7 @@ describe("WorktreeDeleteDialog — medium tier (no name confirmation)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     terminalCountsMock.total = 0;
+    terminalsMock.length = 0;
     devPreviewGetByWorktreeMock.mockResolvedValue(null);
     // Default: no fresh override → dialog uses the prop seed (existing tests).
     buildPreviewMock.mockResolvedValue(null);
@@ -551,6 +586,7 @@ describe("WorktreeDeleteDialog — high tier (name confirmation)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     terminalCountsMock.total = 0;
+    terminalsMock.length = 0;
     devPreviewGetByWorktreeMock.mockResolvedValue(null);
     // Default: no fresh override → dialog uses the prop seed (existing tests).
     buildPreviewMock.mockResolvedValue(null);
@@ -719,6 +755,7 @@ describe("WorktreeDeleteDialog — immediate dismiss", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     terminalCountsMock.total = 0;
+    terminalsMock.length = 0;
     devPreviewGetByWorktreeMock.mockResolvedValue(null);
     // Default: no fresh override → dialog uses the prop seed (existing tests).
     buildPreviewMock.mockResolvedValue(null);
@@ -754,6 +791,7 @@ describe("WorktreeDeleteDialog — dev preview disclosure (#9084)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     terminalCountsMock.total = 0;
+    terminalsMock.length = 0;
     devPreviewGetByWorktreeMock.mockResolvedValue(null);
     // Default: no fresh override → dialog uses the prop seed (existing tests).
     buildPreviewMock.mockResolvedValue(null);
@@ -827,6 +865,7 @@ describe("WorktreeDeleteDialog — state reset", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     terminalCountsMock.total = 0;
+    terminalsMock.length = 0;
     devPreviewGetByWorktreeMock.mockResolvedValue(null);
     // Default: no fresh override → dialog uses the prop seed (existing tests).
     buildPreviewMock.mockResolvedValue(null);
@@ -863,6 +902,7 @@ describe("WorktreeDeleteDialog — fresh status verification (#11343)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     terminalCountsMock.total = 0;
+    terminalsMock.length = 0;
     devPreviewGetByWorktreeMock.mockResolvedValue(null);
     buildPreviewMock.mockResolvedValue(null);
   });

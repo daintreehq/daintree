@@ -19,6 +19,7 @@ const {
   worktreeClientAttachIssueMock,
   worktreeClientDetachIssueMock,
   closeTerminalsForWorktreeMock,
+  restoreClosedTerminalsMock,
   notifyMock,
   devPreviewGetByWorktreeMock,
   devPreviewStopByWorktreeMock,
@@ -30,7 +31,8 @@ const {
   worktreeClientAttachIssueMock:
     vi.fn<(payload: import("@shared/types").AttachIssuePayload) => Promise<void>>(),
   worktreeClientDetachIssueMock: vi.fn<(worktreeId: string) => Promise<void>>(),
-  closeTerminalsForWorktreeMock: vi.fn<(id: string) => Promise<void>>(),
+  closeTerminalsForWorktreeMock: vi.fn<(id: string) => Promise<unknown[]>>(),
+  restoreClosedTerminalsMock: vi.fn<(snapshot: readonly unknown[]) => Promise<void>>(),
   notifyMock: vi.fn(),
   devPreviewGetByWorktreeMock: vi.fn().mockResolvedValue(null),
   devPreviewStopByWorktreeMock: vi.fn().mockResolvedValue(undefined),
@@ -60,6 +62,7 @@ vi.mock("@/clients", async () => {
 
 vi.mock("@/components/Worktree/worktreeDeleteHelper", () => ({
   closeTerminalsForWorktree: closeTerminalsForWorktreeMock,
+  restoreClosedTerminals: restoreClosedTerminalsMock,
 }));
 
 vi.mock("@/lib/notify", () => ({
@@ -94,11 +97,13 @@ describe("createWorktreeStore — mutation outbox (#8405)", () => {
     worktreeClientAttachIssueMock.mockReset();
     worktreeClientDetachIssueMock.mockReset();
     closeTerminalsForWorktreeMock.mockReset();
+    restoreClosedTerminalsMock.mockReset();
     notifyMock.mockReset();
     worktreeClientDeleteMock.mockResolvedValue();
     worktreeClientAttachIssueMock.mockResolvedValue();
     worktreeClientDetachIssueMock.mockResolvedValue();
-    closeTerminalsForWorktreeMock.mockResolvedValue();
+    closeTerminalsForWorktreeMock.mockResolvedValue([]);
+    restoreClosedTerminalsMock.mockResolvedValue();
   });
 
   afterEach(() => {
@@ -239,6 +244,38 @@ describe("createWorktreeStore — mutation outbox (#8405)", () => {
       // Cap is OUTBOX_RETRY_CAP — third generic failure flips to failed.
       expect(entry.retryCount).toBe(OUTBOX_RETRY_CAP);
       expect(entry.status).toBe("failed");
+    });
+
+    it("restores closed terminals only when generic retries exhaust the cap, using the first snapshot (#11344)", async () => {
+      worktreeClientDeleteMock.mockRejectedValue(new Error("git error: ref already exists"));
+      const SNAPSHOT = [{ id: "t-1", location: "grid" }];
+      // Only the first attempt has live terminals to snapshot; every replay
+      // finds none (default `[]`), which must NOT clobber the held snapshot.
+      closeTerminalsForWorktreeMock.mockResolvedValueOnce(SNAPSHOT);
+
+      const store = createWorktreeStore();
+      store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+      store.getState().startDelete("wt-1", { closeTerminals: true, force: false });
+      await flushPromises();
+      await flushPromises();
+      // Still pending (retry 1) — do not relaunch yet.
+      expect(restoreClosedTerminalsMock).not.toHaveBeenCalled();
+
+      store.getState().retryDelete("wt-1");
+      await flushPromises();
+      await flushPromises();
+      expect(restoreClosedTerminalsMock).not.toHaveBeenCalled();
+
+      store.getState().retryDelete("wt-1");
+      await flushPromises();
+      await flushPromises();
+
+      // Cap reached → failed → relaunch exactly once, with the original capture
+      // (the empty replays never overwrote it).
+      expect([...store.getState().mutationOutbox.values()][0]!.status).toBe("failed");
+      expect(restoreClosedTerminalsMock).toHaveBeenCalledTimes(1);
+      expect(restoreClosedTerminalsMock).toHaveBeenCalledWith(SNAPSHOT);
     });
 
     it("connectivity errors leave entry pending and DO NOT charge the retry cap", async () => {

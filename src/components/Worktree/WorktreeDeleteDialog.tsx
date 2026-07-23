@@ -5,6 +5,7 @@ import { TypedNameConfirmInput } from "@/components/ui/TypedNameConfirmInput";
 import { AlertTriangle, Trash2 } from "lucide-react";
 import { FolderGit2 } from "@/components/icons";
 import { useWorktreeTerminals } from "@/hooks/useWorktreeTerminals";
+import { collectRunningAgentTerminals } from "@/utils/destructiveSessionConfirm";
 import { deriveEffectiveTier } from "@/services/actions/deriveEffectiveTier";
 import {
   buildWorktreeDeletePreview,
@@ -57,7 +58,11 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     };
   }, []);
 
-  const { counts: terminalCounts } = useWorktreeTerminals(worktree.id);
+  const { counts: terminalCounts, terminals } = useWorktreeTerminals(worktree.id);
+  // Surface the risk-relevant subset (agents mid-work) in the D2 preview instead
+  // of a bare total — closing an idle shell is cheap, interrupting a running
+  // agent is not (#11344, mirrors the tracked/untracked split from #4927).
+  const runningAgentCount = collectRunningAgentTerminals(terminals).length;
 
   // Preview + tier derive from the FRESH fetch when available, else the prop
   // snapshot as an initial seed. A failed fetch fails closed via
@@ -344,6 +349,9 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
               >
                 {terminalCounts.total} terminal{terminalCounts.total === 1 ? "" : "s"} will be
                 closed
+                {runningAgentCount > 0
+                  ? ` (${runningAgentCount} running an agent)`
+                  : ""}
               </li>
               <li
                 className={cn(
