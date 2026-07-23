@@ -7,7 +7,24 @@ import {
 import type { HandlerDependencies } from "../types.js";
 import type { TerminalSnapshot, TabGroup } from "../../types/index.js";
 import { defineIpcNamespace, op } from "../define.js";
+import { mergeIdArray } from "../../../shared/utils/layoutMerge.js";
 import { TERMINAL_LAYOUT_METHOD_CHANNELS } from "./terminalLayout.preload.js";
+
+/**
+ * Coerce an over-the-wire id list into a clean `string[]`, or `undefined` when
+ * absent. Absent delta metadata means a legacy full-replace write (see
+ * `setTerminals` / `setTabGroups` below); a present-but-malformed value is
+ * treated as an empty list rather than throwing.
+ */
+function sanitizeIdList(value: unknown): string[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((id): id is string => typeof id === "string");
+}
 
 /**
  * Validate and filter terminal snapshots using the Zod schema.
@@ -81,7 +98,12 @@ export const terminalLayoutNamespace = defineIpcNamespace({
     ),
     setTerminals: op(
       TERMINAL_LAYOUT_METHOD_CHANNELS.setTerminals,
-      async (payload: { projectId: string; terminals: TerminalSnapshot[] }): Promise<void> => {
+      async (payload: {
+        projectId: string;
+        terminals: TerminalSnapshot[];
+        changedIds?: string[];
+        removedIds?: string[];
+      }): Promise<void> => {
         if (!payload || typeof payload !== "object") {
           throw new Error("Invalid payload");
         }
@@ -94,12 +116,25 @@ export const terminalLayoutNamespace = defineIpcNamespace({
         }
 
         const validTerminals = sanitizeTerminals(terminals, `project:set-terminals(${projectId})`);
+        // Delta metadata lets Main merge concurrent writes from sibling windows
+        // of the same project instead of blindly replacing the array (#11350).
+        // Absent metadata = legacy full-replace write.
+        const changedIds = sanitizeIdList(payload.changedIds);
+        const removedIds = sanitizeIdList(payload.removedIds);
 
         await projectStore.enqueueProjectStateUpdate(projectId, (existingState) => ({
           projectId,
           activeWorktreeId: existingState?.activeWorktreeId,
           sidebarWidth: existingState?.sidebarWidth ?? 350,
-          terminals: validTerminals,
+          terminals:
+            changedIds === undefined
+              ? validTerminals
+              : mergeIdArray(
+                  existingState?.terminals ?? [],
+                  validTerminals,
+                  changedIds,
+                  removedIds ?? []
+                ),
           tabGroups: existingState?.tabGroups ?? [],
           terminalLayout: existingState?.terminalLayout,
           focusMode: existingState?.focusMode,
@@ -169,7 +204,12 @@ export const terminalLayoutNamespace = defineIpcNamespace({
     ),
     setTabGroups: op(
       TERMINAL_LAYOUT_METHOD_CHANNELS.setTabGroups,
-      async (payload: { projectId: string; tabGroups: TabGroup[] }): Promise<void> => {
+      async (payload: {
+        projectId: string;
+        tabGroups: TabGroup[];
+        changedIds?: string[];
+        removedIds?: string[];
+      }): Promise<void> => {
         if (!payload || typeof payload !== "object") {
           throw new Error("Invalid payload");
         }
@@ -182,13 +222,24 @@ export const terminalLayoutNamespace = defineIpcNamespace({
         }
 
         const sanitizedTabGroups = sanitizeTabGroups(tabGroups, projectId) as TabGroup[];
+        // See setTerminals: merge sibling-window writes by tab-group id (#11350).
+        const changedIds = sanitizeIdList(payload.changedIds);
+        const removedIds = sanitizeIdList(payload.removedIds);
 
         await projectStore.enqueueProjectStateUpdate(projectId, (existingState) => ({
           projectId,
           activeWorktreeId: existingState?.activeWorktreeId,
           sidebarWidth: existingState?.sidebarWidth ?? 350,
           terminals: existingState?.terminals ?? [],
-          tabGroups: sanitizedTabGroups,
+          tabGroups:
+            changedIds === undefined
+              ? sanitizedTabGroups
+              : mergeIdArray(
+                  existingState?.tabGroups ?? [],
+                  sanitizedTabGroups,
+                  changedIds,
+                  removedIds ?? []
+                ),
           terminalLayout: existingState?.terminalLayout,
           focusMode: existingState?.focusMode,
           focusPanelState: existingState?.focusPanelState,

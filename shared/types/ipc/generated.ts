@@ -1222,7 +1222,14 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "project:set-tab-groups": {
-    args: [payload: { projectId: string; tabGroups: import("../panel.js").TabGroup[] }];
+    args: [
+      payload: {
+        projectId: string;
+        tabGroups: import("../panel.js").TabGroup[];
+        changedIds?: string[] | undefined;
+        removedIds?: string[] | undefined;
+      },
+    ];
     result: void;
   };
   "project:set-terminal-sizes": {
@@ -1232,7 +1239,14 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "project:set-terminals": {
-    args: [payload: { projectId: string; terminals: import("../project.js").PanelSnapshot[] }];
+    args: [
+      payload: {
+        projectId: string;
+        terminals: import("../project.js").PanelSnapshot[];
+        changedIds?: string[] | undefined;
+        removedIds?: string[] | undefined;
+      },
+    ];
     result: void;
   };
   "run-history:append": {

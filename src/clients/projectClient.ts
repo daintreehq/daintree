@@ -328,8 +328,13 @@ export const projectClient = {
     return window.electron.project.getTerminals(projectId);
   },
 
-  setTerminals: (projectId: string, terminals: TerminalSnapshot[]): Promise<void> => {
-    return window.electron.project.setTerminals(projectId, terminals);
+  setTerminals: (
+    projectId: string,
+    terminals: TerminalSnapshot[],
+    changedIds?: string[],
+    removedIds?: string[]
+  ): Promise<void> => {
+    return window.electron.project.setTerminals(projectId, terminals, changedIds, removedIds);
   },
 
   getTerminalSizes: (
@@ -357,8 +362,13 @@ export const projectClient = {
     return window.electron.project.getTabGroups(projectId);
   },
 
-  setTabGroups: (projectId: string, tabGroups: TabGroup[]): Promise<void> => {
-    return window.electron.project.setTabGroups(projectId, tabGroups);
+  setTabGroups: (
+    projectId: string,
+    tabGroups: TabGroup[],
+    changedIds?: string[],
+    removedIds?: string[]
+  ): Promise<void> => {
+    return window.electron.project.setTabGroups(projectId, tabGroups, changedIds, removedIds);
   },
 
   readClaudeMd: (projectId: string): Promise<string | null> => {

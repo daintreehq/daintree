@@ -83,11 +83,20 @@ function buildOutgoingState(projectId: string): ProjectSwitchOutgoingState {
 
   const tabGroupArray = Array.from(tabGroups.values()).filter((g) => g.panelIds.length > 1);
 
+  // Diff against this window's last-persisted baseline so Main merges these
+  // arrays by id rather than full-replacing — otherwise a stale outgoing
+  // snapshot silently drops a sibling window's concurrent changes to the same
+  // project (#11350). Same delta contract as the debounced autosave path.
+  const terminalDelta = panelPersistence.computeTerminalDelta(projectId, terminals);
+  const tabGroupDelta = panelPersistence.computeTabGroupDelta(projectId, tabGroupArray);
+
   return {
     terminals,
     draftInputs,
     tabGroups: tabGroupArray,
     activeWorktreeId,
+    terminalDelta,
+    tabGroupDelta,
   };
 }
 
@@ -626,6 +635,17 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     // stale snapshot/IPC can't clobber it.
     if (requestId !== projectTransitionRequestId) return;
 
+    // Settle any pending/in-flight layout autosave for the outgoing project so
+    // buildOutgoingState's delta is computed against the acknowledged baseline.
+    // Otherwise a send still in flight leaves the baseline stale, the delta
+    // comes out empty, and Main's merge resurrects an entry the user just
+    // removed (#11350).
+    if (currentProjectId) {
+      panelPersistence.flush();
+      await panelPersistence.whenIdle().catch(() => {});
+      if (requestId !== projectTransitionRequestId) return;
+    }
+
     // Capture outgoing state just before firing, after the paint. The outgoing
     // view is not detached until the main process handles the IPC, so the panel
     // store still reflects the outgoing project here.
@@ -854,6 +874,14 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
 
     await yieldToPaint();
     if (requestId !== projectTransitionRequestId) return;
+
+    // Settle pending/in-flight layout autosave so the outgoing delta is
+    // computed against the acknowledged baseline (#11350; see switchProject).
+    if (currentProjectId) {
+      panelPersistence.flush();
+      await panelPersistence.whenIdle().catch(() => {});
+      if (requestId !== projectTransitionRequestId) return;
+    }
 
     const outgoingState = currentProjectId ? buildOutgoingState(currentProjectId) : undefined;
     projectClient.reopen(projectId, outgoingState).catch((error) => {

@@ -73,6 +73,8 @@ vi.mock("@/utils/logger", () => ({
 vi.mock("../persistence/panelPersistence", () => ({
   panelPersistence: {
     setProjectIdGetter: setProjectIdGetterMock,
+    flush: vi.fn(),
+    whenIdle: vi.fn(() => Promise.resolve()),
     cancel: panelPersistenceCancelMock,
   },
   panelToSnapshot: vi.fn((panel: { id: string; kind: string }) => ({

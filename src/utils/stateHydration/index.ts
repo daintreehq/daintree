@@ -564,6 +564,17 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
                       : group
                   )
                 : tabGroups;
+            // Seed the tab-group persistence baseline from the on-disk state
+            // (pre-remap ids mirror what's actually persisted) so the first
+            // save can emit correct removals and Main can merge concurrent
+            // writes from sibling windows instead of resurrecting deleted
+            // groups (#11350). Mirrors the terminal `primeProject` above.
+            if (currentProjectId) {
+              panelPersistence.primeTabGroups(
+                currentProjectId,
+                tabGroups.filter((g) => g && Array.isArray(g.panelIds) && g.panelIds.length > 1)
+              );
+            }
             options.hydrateTabGroups(remappedTabGroups);
             markRendererPerformance(PERF_MARKS.HYDRATE_RESTORE_TAB_GROUPS_END, {
               tabGroupCount: tabGroupRestoreCount,

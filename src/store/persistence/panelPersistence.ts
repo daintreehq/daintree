@@ -4,6 +4,11 @@ import { debounce } from "@/utils/debounce";
 import { isRendererPerfCaptureEnabled, markRendererPerformance } from "@/utils/performance";
 import { getPanelKindConfig } from "@shared/config/panelKindRegistry";
 import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
+import {
+  computeIdArrayDelta,
+  deepEqualIgnoringUndefined,
+  type IdArrayDelta,
+} from "@shared/utils/layoutMerge";
 import { logError } from "@/utils/logger";
 
 type ProjectClientType = typeof projectClient;
@@ -170,6 +175,15 @@ export class PanelPersistence {
   private readonly persistedTerminalsByProject = new Map<string, PanelSnapshot[]>();
   private readonly queuedTabGroupsByProject = new Map<string, TabGroup[]>();
   private readonly persistedTabGroupsByProject = new Map<string, TabGroup[]>();
+  // Per-project write tails. Each debounced flush chains its delta computation
+  // and send onto the previous write for the same project so the delta is
+  // always computed against the baseline the previous write acknowledged. Two
+  // overlapping flushes (a send in flight longer than the debounce interval)
+  // must not both diff against the same stale baseline, or one would resurrect
+  // an entry the other removed (#11350). Tails swallow rejections so a failed
+  // write never blocks the next one.
+  private readonly terminalWriteTailByProject = new Map<string, Promise<void>>();
+  private readonly tabGroupWriteTailByProject = new Map<string, Promise<void>>();
   private pendingPersist: Promise<void> | null = null;
   private pendingTabGroupPersist: Promise<void> | null = null;
 
@@ -178,111 +192,150 @@ export class PanelPersistence {
     this.options = { ...DEFAULT_OPTIONS, ...options };
 
     this.debouncedSave = debounce((projectId: string, transformed: PanelSnapshot[]) => {
-      if (snapshotsEqual(this.persistedTerminalsByProject.get(projectId), transformed)) {
-        if (snapshotsEqual(this.queuedTerminalsByProject.get(projectId), transformed)) {
-          this.queuedTerminalsByProject.delete(projectId);
-        }
-        return;
-      }
-
       const collectPerf = shouldCollectPersistencePerf();
-      const startedAt = collectPerf
-        ? typeof performance !== "undefined"
-          ? performance.now()
-          : Date.now()
-        : 0;
       const payloadBytes = collectPerf ? estimatePayloadBytes(transformed) : null;
 
-      this.pendingPersist = this.client.setTerminals(projectId, transformed).catch((error) => {
-        logError("Failed to persist terminals", error);
-        if (collectPerf) {
-          const now = typeof performance !== "undefined" ? performance.now() : Date.now();
-          markRendererPerformance("persistence_terminals_save", {
-            projectId,
-            terminalCount: transformed.length,
-            payloadBytes,
-            durationMs: Number((now - startedAt).toFixed(3)),
-            ok: false,
-          });
-        }
-        if (snapshotsEqual(this.queuedTerminalsByProject.get(projectId), transformed)) {
-          this.queuedTerminalsByProject.delete(projectId);
-        }
-        throw error;
-      });
-      this.pendingPersist = this.pendingPersist.then(() => {
-        if (collectPerf) {
-          const now = typeof performance !== "undefined" ? performance.now() : Date.now();
-          markRendererPerformance("persistence_terminals_save", {
-            projectId,
-            terminalCount: transformed.length,
-            payloadBytes,
-            durationMs: Number((now - startedAt).toFixed(3)),
-            ok: true,
-          });
-        }
-        this.persistedTerminalsByProject.set(projectId, transformed);
-        if (snapshotsEqual(this.queuedTerminalsByProject.get(projectId), transformed)) {
-          this.queuedTerminalsByProject.delete(projectId);
-        }
-      });
+      const prior = this.terminalWriteTailByProject.get(projectId) ?? Promise.resolve();
+      const run = prior
+        // A failed prior write must not poison the chain; it left the baseline
+        // untouched, so the next write's delta stays correct.
+        .catch(() => {})
+        .then(async () => {
+          // Baseline now reflects the previous committed write for this project.
+          // Skip using the raw (possibly undefined) value so a first save with
+          // no established baseline still sends; diff against `?? []`.
+          const baseline = this.persistedTerminalsByProject.get(projectId);
+          if (snapshotsEqual(baseline, transformed)) {
+            this.clearQueuedTerminalsIfMatches(projectId, transformed);
+            return;
+          }
+          const startedAt = collectPerf
+            ? typeof performance !== "undefined"
+              ? performance.now()
+              : Date.now()
+            : 0;
+          // Describe what changed relative to this renderer's last-acknowledged
+          // baseline so Main merges concurrent writes from sibling windows of
+          // the same project instead of clobbering them (#11350).
+          const { changedIds, removedIds } = computeIdArrayDelta(
+            baseline ?? [],
+            transformed,
+            deepEqualIgnoringUndefined
+          );
+          try {
+            await this.client.setTerminals(projectId, transformed, changedIds, removedIds);
+            if (collectPerf) {
+              const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+              markRendererPerformance("persistence_terminals_save", {
+                projectId,
+                terminalCount: transformed.length,
+                payloadBytes,
+                durationMs: Number((now - startedAt).toFixed(3)),
+                ok: true,
+              });
+            }
+            this.persistedTerminalsByProject.set(projectId, transformed);
+            this.clearQueuedTerminalsIfMatches(projectId, transformed);
+          } catch (error) {
+            logError("Failed to persist terminals", error);
+            if (collectPerf) {
+              const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+              markRendererPerformance("persistence_terminals_save", {
+                projectId,
+                terminalCount: transformed.length,
+                payloadBytes,
+                durationMs: Number((now - startedAt).toFixed(3)),
+                ok: false,
+              });
+            }
+            this.clearQueuedTerminalsIfMatches(projectId, transformed);
+            throw error;
+          }
+        });
+
+      this.pendingPersist = run;
+      this.terminalWriteTailByProject.set(
+        projectId,
+        run.catch(() => {})
+      );
       // Prevent unhandled rejection warning since this runs in background
-      this.pendingPersist.catch(() => {});
+      run.catch(() => {});
     }, this.options.debounceMs);
 
     this.debouncedSaveTabGroups = debounce((projectId: string, tabGroups: TabGroup[]) => {
-      if (snapshotsEqual(this.persistedTabGroupsByProject.get(projectId), tabGroups)) {
-        if (snapshotsEqual(this.queuedTabGroupsByProject.get(projectId), tabGroups)) {
-          this.queuedTabGroupsByProject.delete(projectId);
-        }
-        return;
-      }
-
       const collectPerf = shouldCollectPersistencePerf();
-      const startedAt = collectPerf
-        ? typeof performance !== "undefined"
-          ? performance.now()
-          : Date.now()
-        : 0;
       const payloadBytes = collectPerf ? estimatePayloadBytes(tabGroups) : null;
 
-      this.pendingTabGroupPersist = this.client
-        .setTabGroups(projectId, tabGroups)
-        .catch((error) => {
-          logError("Failed to persist tab groups", error);
-          if (collectPerf) {
-            const now = typeof performance !== "undefined" ? performance.now() : Date.now();
-            markRendererPerformance("persistence_tab_groups_save", {
-              projectId,
-              tabGroupCount: tabGroups.length,
-              payloadBytes,
-              durationMs: Number((now - startedAt).toFixed(3)),
-              ok: false,
-            });
+      const prior = this.tabGroupWriteTailByProject.get(projectId) ?? Promise.resolve();
+      const run = prior
+        .catch(() => {})
+        .then(async () => {
+          const baseline = this.persistedTabGroupsByProject.get(projectId);
+          if (snapshotsEqual(baseline, tabGroups)) {
+            this.clearQueuedTabGroupsIfMatches(projectId, tabGroups);
+            return;
           }
-          if (snapshotsEqual(this.queuedTabGroupsByProject.get(projectId), tabGroups)) {
-            this.queuedTabGroupsByProject.delete(projectId);
+          const startedAt = collectPerf
+            ? typeof performance !== "undefined"
+              ? performance.now()
+              : Date.now()
+            : 0;
+          // Merge concurrent tab-group writes from sibling windows (#11350).
+          const { changedIds, removedIds } = computeIdArrayDelta(
+            baseline ?? [],
+            tabGroups,
+            deepEqualIgnoringUndefined
+          );
+          try {
+            await this.client.setTabGroups(projectId, tabGroups, changedIds, removedIds);
+            if (collectPerf) {
+              const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+              markRendererPerformance("persistence_tab_groups_save", {
+                projectId,
+                tabGroupCount: tabGroups.length,
+                payloadBytes,
+                durationMs: Number((now - startedAt).toFixed(3)),
+                ok: true,
+              });
+            }
+            this.persistedTabGroupsByProject.set(projectId, tabGroups);
+            this.clearQueuedTabGroupsIfMatches(projectId, tabGroups);
+          } catch (error) {
+            logError("Failed to persist tab groups", error);
+            if (collectPerf) {
+              const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+              markRendererPerformance("persistence_tab_groups_save", {
+                projectId,
+                tabGroupCount: tabGroups.length,
+                payloadBytes,
+                durationMs: Number((now - startedAt).toFixed(3)),
+                ok: false,
+              });
+            }
+            this.clearQueuedTabGroupsIfMatches(projectId, tabGroups);
+            throw error;
           }
-          throw error;
         });
-      this.pendingTabGroupPersist = this.pendingTabGroupPersist.then(() => {
-        if (collectPerf) {
-          const now = typeof performance !== "undefined" ? performance.now() : Date.now();
-          markRendererPerformance("persistence_tab_groups_save", {
-            projectId,
-            tabGroupCount: tabGroups.length,
-            payloadBytes,
-            durationMs: Number((now - startedAt).toFixed(3)),
-            ok: true,
-          });
-        }
-        this.persistedTabGroupsByProject.set(projectId, tabGroups);
-        if (snapshotsEqual(this.queuedTabGroupsByProject.get(projectId), tabGroups)) {
-          this.queuedTabGroupsByProject.delete(projectId);
-        }
-      });
-      this.pendingTabGroupPersist.catch(() => {});
+
+      this.pendingTabGroupPersist = run;
+      this.tabGroupWriteTailByProject.set(
+        projectId,
+        run.catch(() => {})
+      );
+      run.catch(() => {});
     }, this.options.debounceMs);
+  }
+
+  private clearQueuedTerminalsIfMatches(projectId: string, transformed: PanelSnapshot[]): void {
+    if (snapshotsEqual(this.queuedTerminalsByProject.get(projectId), transformed)) {
+      this.queuedTerminalsByProject.delete(projectId);
+    }
+  }
+
+  private clearQueuedTabGroupsIfMatches(projectId: string, tabGroups: TabGroup[]): void {
+    if (snapshotsEqual(this.queuedTabGroupsByProject.get(projectId), tabGroups)) {
+      this.queuedTabGroupsByProject.delete(projectId);
+    }
   }
 
   save(terminals: TerminalInstance[], projectId?: string): void {
@@ -346,8 +399,38 @@ export class PanelPersistence {
     this.debouncedSaveTabGroups.cancel();
     this.queuedTerminalsByProject.clear();
     this.queuedTabGroupsByProject.clear();
+    // Deliberately keep the per-project write tails: cancel() abandons pending
+    // debounced work, but a send already in flight cannot be recalled. A save
+    // that arrives after cancel must still chain behind that in-flight write so
+    // its delta is computed against the acknowledged baseline, not a stale one
+    // (#11350). The tail entries are overwritten by the next save or drop at
+    // process end.
     this.pendingPersist = null;
     this.pendingTabGroupPersist = null;
+  }
+
+  /**
+   * Compute the terminal delta a caller outside the debounced save path (e.g.
+   * the synchronous project-switch outgoing-state capture) should send so Main
+   * merges it against the shared on-disk state instead of full-replacing and
+   * clobbering a sibling window's changes (#11350). Diffs against this
+   * renderer's last-acknowledged baseline using JSON-round-trip equality.
+   */
+  computeTerminalDelta(projectId: string, snapshots: PanelSnapshot[]): IdArrayDelta {
+    return computeIdArrayDelta(
+      this.persistedTerminalsByProject.get(projectId) ?? [],
+      snapshots,
+      deepEqualIgnoringUndefined
+    );
+  }
+
+  /** Tab-group counterpart to {@link computeTerminalDelta} (#11350). */
+  computeTabGroupDelta(projectId: string, groups: TabGroup[]): IdArrayDelta {
+    return computeIdArrayDelta(
+      this.persistedTabGroupsByProject.get(projectId) ?? [],
+      groups,
+      deepEqualIgnoringUndefined
+    );
   }
 
   async whenIdle(): Promise<void> {
@@ -374,6 +457,19 @@ export class PanelPersistence {
   primeProject(projectId: string, snapshots: PanelSnapshot[]): void {
     if (this.persistedTerminalsByProject.has(projectId)) return;
     this.persistedTerminalsByProject.set(projectId, snapshots);
+  }
+
+  /**
+   * Seed the tab-group baseline for a project from hydration, mirroring
+   * {@link primeProject}. Without this, the first tab-group save has no baseline
+   * to diff against, so a group the user deletes before that save cannot emit a
+   * `removedIds` tombstone and Main would resurrect it from a sibling's on-disk
+   * copy (#11350). Only primes if not already present so a post-hydration save
+   * isn't clobbered.
+   */
+  primeTabGroups(projectId: string, groups: TabGroup[]): void {
+    if (this.persistedTabGroupsByProject.has(projectId)) return;
+    this.persistedTabGroupsByProject.set(projectId, groups);
   }
 
   /**
