@@ -108,8 +108,10 @@ export class ScratchStore {
   /**
    * Returns raw rows the cleanup sweep should consider: live rows whose
    * `last_opened` predates the cutoff, plus any already-tombstoned rows. The
-   * tombstoned set is included so a `removeScratch` that crashed between
-   * tombstone and `fs.rm` is retried on next startup.
+   * tombstoned set is included so `ScratchCleanupService` can reap them once
+   * their grace window has elapsed, and so a `removeScratch` that crashed
+   * between tombstone and `fs.rm` is retried on a later sweep. The sweep
+   * partitions these rows by `deleted_at`; this query stays age-agnostic.
    */
   getStaleScratchCandidates(cutoffMs: number): ScratchRow[] {
     const db = getSharedDb();
