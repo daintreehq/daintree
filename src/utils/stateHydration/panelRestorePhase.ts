@@ -14,6 +14,11 @@ import type { ResourceProfile } from "@shared/types/resourceProfile";
 import { type TerminalRestoreTask, getRestoreBatchParams, delay } from "./batchScheduler";
 import { reconnectWithTimeout } from "./reconnectManager";
 import {
+  buildWorktreeMoveContext,
+  resolveWorktreeMovePatch,
+  type WorktreeMoveContext,
+} from "./worktreeMoveRemap";
+import {
   inferKind,
   resolveAgentId,
   buildArgsForBackendTerminal,
@@ -150,12 +155,16 @@ export async function restorePanelsPhase(
   // worktree — so [] only ever means "not ready", never a real count. Treating
   // it as authoritative re-homed every panel to the active worktree, and the
   // save loop then persisted that, compounding across restarts.
-  let knownWorktreeIdsPromise: Promise<Set<string> | null> | null = null;
-  const getKnownWorktreeIds = (): Promise<Set<string> | null> => {
-    knownWorktreeIdsPromise ??= worktreesPromise.then((list) =>
-      list && list.length > 0 ? new Set(list.map((w) => w.id)) : null
-    );
-    return knownWorktreeIdsPromise;
+  // A single memoized correlation context off the in-flight worktree list,
+  // shared by the known-id guard and the worktree-move remap below (#11388).
+  let worktreeMoveContextPromise: Promise<WorktreeMoveContext | null> | null = null;
+  const getWorktreeMoveContext = (): Promise<WorktreeMoveContext | null> => {
+    worktreeMoveContextPromise ??= worktreesPromise.then((list) => buildWorktreeMoveContext(list));
+    return worktreeMoveContextPromise;
+  };
+  const getKnownWorktreeIds = async (): Promise<Set<string> | null> => {
+    const ctx = await getWorktreeMoveContext();
+    return ctx?.knownIds ?? null;
   };
   const resolveRestoredWorktreeId = async (
     worktreeId: string | undefined
@@ -169,6 +178,25 @@ export async function restorePanelsPhase(
   };
 
   if (savedPanels && savedPanels.length > 0) {
+    // #11388: a worktree move (`git worktree move` or an external relocation)
+    // changes its path-derived id while its stable `.git/worktrees/<name>`
+    // handle is preserved. Remap panels whose worktree moved — matched via the
+    // gitDir persisted with each panel — to the worktree's new id (rebasing
+    // cwd/filePath) BEFORE anything keys off saved.worktreeId, so a moved
+    // worktree's panels stay put instead of being treated as deleted. Legacy
+    // snapshots without a stored gitDir, and genuinely-deleted worktrees, are
+    // left untouched here and handled by resolveRestoredWorktreeId's re-home
+    // below. The context is null when the list isn't ready (#11234), so this is
+    // a no-op in that race — identical to the pre-#11388 behavior.
+    const moveContext = await getWorktreeMoveContext();
+    const panels = moveContext
+      ? savedPanels.map((saved) => {
+          if (saved === undefined) return saved;
+          const patch = resolveWorktreeMovePatch(saved, moveContext);
+          return patch ? { ...saved, ...patch } : saved;
+        })
+      : savedPanels;
+
     // Build a single-pass map of worktreeId → highest lastActiveAt across saved
     // panels. The restore predicate uses this to promote each non-active
     // worktree's most-recently-focused panel to the priority sequential tier,
@@ -179,7 +207,7 @@ export async function restorePanelsPhase(
     // `Number.isFinite` rejects NaN and ±Infinity so corrupted persisted
     // values never seed the map with values that would silently mis-promote.
     const maxLastActiveAtByWorktree = new Map<string, number>();
-    for (const saved of savedPanels) {
+    for (const saved of panels) {
       if (saved === undefined) continue;
       if (saved.worktreeId === undefined) continue;
       if (!Number.isFinite(saved.lastActiveAt) || (saved.lastActiveAt ?? 0) <= 0) continue;
@@ -193,8 +221,8 @@ export async function restorePanelsPhase(
     const panelTasks: PanelRestoreTaskEntry[] = [];
     const restoredIdsByIndex = new Map<number, string>();
 
-    for (let savedIndex = 0; savedIndex < savedPanels.length; savedIndex++) {
-      const saved = savedPanels[savedIndex];
+    for (let savedIndex = 0; savedIndex < panels.length; savedIndex++) {
+      const saved = panels[savedIndex];
       if (saved === undefined) continue;
       if (isSmokeTestTerminalId(saved.id)) {
         logHydrationInfo(`Skipping smoke test terminal snapshot: ${saved.id}`);

@@ -22,6 +22,7 @@ export interface WorktreeSelectionSnapshot {
 let _getPanelStoreState: (() => PanelStoreSnapshot) | null = null;
 let _getWorktreeSelectionState: (() => WorktreeSelectionSnapshot) | null = null;
 let _getWorktreeIdSet: (() => Set<string> | null) | null = null;
+let _getWorktreeGitDirById: ((worktreeId: string) => string | undefined) | null = null;
 let _clearPanelStoreForSwitch: (() => void) | null = null;
 let _clearFleetArming: (() => void) | null = null;
 let _getFleetArmedIds: (() => Set<string>) | null = null;
@@ -54,6 +55,21 @@ export function setWorktreeIdSetAccessor(getter: () => Set<string> | null): void
  */
 export function getWorktreeIdSet(): Set<string> | null {
   return _getWorktreeIdSet?.() ?? null;
+}
+
+export function setWorktreeGitDirAccessor(
+  getter: (worktreeId: string) => string | undefined
+): void {
+  _getWorktreeGitDirById = getter;
+}
+
+/**
+ * The stable `.git/worktrees/<name>` handle for a worktree in the current view,
+ * or `undefined` when unknown / no view store is mounted. Persisted with each
+ * panel so restore can survive a worktree path change (#11388).
+ */
+export function getWorktreeGitDirById(worktreeId: string): string | undefined {
+  return _getWorktreeGitDirById?.(worktreeId);
 }
 
 export function setPanelStoreClearForSwitchAccessor(callback: () => void): void {
@@ -92,6 +108,7 @@ export function resetStoreAccessorsForTesting(): void {
   _getPanelStoreState = null;
   _getWorktreeSelectionState = null;
   _getWorktreeIdSet = null;
+  _getWorktreeGitDirById = null;
   _clearPanelStoreForSwitch = null;
   _clearFleetArming = null;
   _getFleetArmedIds = null;

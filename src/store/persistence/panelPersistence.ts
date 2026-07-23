@@ -10,6 +10,7 @@ import {
   type IdArrayDelta,
 } from "@shared/utils/layoutMerge";
 import { logError } from "@/utils/logger";
+import { getWorktreeGitDirById } from "@/store/storeAccessors";
 
 type ProjectClientType = typeof projectClient;
 
@@ -32,6 +33,7 @@ const BASE_PANEL_FIELDS = [
   "title",
   "titleMode",
   "worktreeId",
+  "worktreeGitDir",
   "location",
   "extensionState",
   "pluginId",
@@ -44,12 +46,18 @@ export function panelToSnapshot(
   t: TerminalInstance,
   previousSnapshot?: PanelSnapshot
 ): PanelSnapshot {
+  // Capture the worktree's stable admin-dir handle alongside the (path-derived,
+  // move-fragile) worktreeId so restore can survive a `git worktree move`
+  // (#11388). Absent when the worktree/gitDir is unknown — restore falls back to
+  // its existing re-home behavior for those panels.
+  const worktreeGitDir = t.worktreeId ? getWorktreeGitDirById(t.worktreeId) : undefined;
   const base: PanelSnapshot = {
     id: t.id,
     kind: t.kind,
     title: t.title,
     ...(t.titleMode !== undefined && { titleMode: t.titleMode }),
     worktreeId: t.worktreeId,
+    ...(worktreeGitDir !== undefined && { worktreeGitDir }),
     location: t.location === "trash" || t.location === "background" ? "grid" : t.location,
     ...(t.extensionState !== undefined && { extensionState: t.extensionState }),
     ...(t.pluginId !== undefined && { pluginId: t.pluginId }),

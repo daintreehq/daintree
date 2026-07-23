@@ -894,3 +894,62 @@ describe("restorePanelsPhase — panels outliving their worktree (issue #11232)"
     expect(ctx.addPanel.mock.calls[1]![0]).toMatchObject({ worktreeId: "wC" });
   });
 });
+
+describe("restorePanelsPhase — panels surviving a worktree move (issue #11388)", () => {
+  // A worktree id is its path, so `git worktree move` gives it a new id while
+  // its `.git/worktrees/<name>` handle (gitDir) is preserved. The pre-pass reads
+  // id + gitDir off the current list to correlate a stale worktreeId.
+  const worktreeList = (...worktrees: Array<{ id: string; gitDir?: string }>) =>
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    Promise.resolve(
+      worktrees.map((w) => ({ id: w.id, path: w.id, gitDir: w.gitDir })) as never
+    );
+
+  const GITDIR = "/repo/.git/worktrees/feature";
+
+  it("remaps a moved worktree's panel to the new id instead of re-homing it", async () => {
+    // The worktree moved from /old/feature to /new/feature; its gitDir handle is
+    // unchanged, so the panel must follow to the new id, not collapse into wA.
+    const ctx = makeContext({
+      activeWorktreeId: "wA",
+      worktreesPromise: worktreeList({ id: "wA" }, { id: "/new/feature", gitDir: GITDIR }),
+    });
+    ctx.backendTerminalMap.set("t1", backend("t1"));
+
+    await restorePanelsPhase(
+      [panel("t1", { worktreeId: "/old/feature", worktreeGitDir: GITDIR })],
+      ctx
+    );
+
+    expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({ worktreeId: "/new/feature" });
+  });
+
+  it("still re-homes a genuinely-deleted worktree (no gitDir match)", async () => {
+    const ctx = makeContext({
+      activeWorktreeId: "wA",
+      worktreesPromise: worktreeList({ id: "wA", gitDir: "/repo/.git" }),
+    });
+    ctx.backendTerminalMap.set("t1", backend("t1"));
+
+    await restorePanelsPhase(
+      [panel("t1", { worktreeId: "/old/feature", worktreeGitDir: GITDIR })],
+      ctx
+    );
+
+    expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({ worktreeId: "wA" });
+  });
+
+  it("re-homes a legacy snapshot with no stored gitDir handle", async () => {
+    // Pre-#11388 snapshots carry no gitDir, so a move can't be correlated — the
+    // panel falls through to the existing re-home behavior.
+    const ctx = makeContext({
+      activeWorktreeId: "wA",
+      worktreesPromise: worktreeList({ id: "wA" }, { id: "/new/feature", gitDir: GITDIR }),
+    });
+    ctx.backendTerminalMap.set("t1", backend("t1"));
+
+    await restorePanelsPhase([panel("t1", { worktreeId: "/old/feature" })], ctx);
+
+    expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({ worktreeId: "wA" });
+  });
+});
