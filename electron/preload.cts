@@ -2801,7 +2801,7 @@ function buildElectronApi(): ElectronAPI {
           transcriptionProvider: "openai" | "deepgram";
           transcriptionModel: "gpt-realtime-whisper";
           correctionEnabled: boolean;
-          correctionModel: "gpt-5-nano" | "gpt-5-mini";
+          correctionModel: "gpt-5.6-luna";
           correctionCustomInstructions: string;
           paragraphingStrategy: "spoken-command" | "manual";
           resolveFileLinks: boolean;

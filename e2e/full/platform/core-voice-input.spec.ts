@@ -410,10 +410,13 @@ test.describe.serial("E2E: Voice Input — Settings Migration", () => {
     expect(migrated.openaiApiKey).toBe("sk-legacy-correction-key");
     expect(migrated.transcriptionModel).toBe("gpt-realtime-whisper");
     expect(migrated.correctionApiKey).toBeUndefined();
+    // The retired gpt-5-mini correction model migrates to gpt-5.6-luna (#11365).
+    expect(migrated.correctionModel).toBe("gpt-5.6-luna");
 
     expect(onDisk.voiceInput.openaiApiKey).toBe("sk-legacy-correction-key");
     expect(onDisk.voiceInput.correctionApiKey).toBeUndefined();
     expect(onDisk.voiceInput.transcriptionModel).toBe("gpt-realtime-whisper");
+    expect(onDisk.voiceInput.correctionModel).toBe("gpt-5.6-luna");
   });
 
   test("legacy apiKey field migrates into openaiApiKey when no correctionApiKey is present", async () => {
@@ -484,7 +487,7 @@ test.describe.serial("E2E: Voice Input — OpenAI Realtime IPC Lifecycle", () =>
       customDictionary: [],
       transcriptionModel: "gpt-realtime-whisper",
       correctionEnabled: false,
-      correctionModel: "gpt-5-mini",
+      correctionModel: "gpt-5.6-luna",
       correctionCustomInstructions: "",
       paragraphingStrategy: "spoken-command",
       resolveFileLinks: true,

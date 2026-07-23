@@ -3,6 +3,8 @@ import {
   CORE_CORRECTION_PROMPT,
   CONFIDENCE_SKIP_THRESHOLD,
   FILE_LINK_DETECTION_PROMPT,
+  VOICE_DICTATION_AI_MODEL,
+  VOICE_DICTATION_REASONING_EFFORT,
   buildCorrectionSystemPrompt,
   type CorrectionPromptContext,
 } from "../../shared/config/voiceCorrection.js";
@@ -18,7 +20,6 @@ const LONG_CORRECTION_MIN_CHARS = 140;
 const MAX_OUTPUT_TOKENS = 1024;
 const FILE_LINK_MAX_OUTPUT_TOKENS = 256;
 const PROMPT_CACHE_PREFIX = "voice-correction-v7";
-const FILE_LINK_DETECTION_MODEL = "gpt-5-nano";
 const FILE_LINK_DETECTION_TIMEOUT_MS = 4000;
 const FILE_LINK_CACHE_PREFIX = "voice-file-link-v1";
 const LEADING_FILLER_RE = /^(?:\s*(?:um|uh)[\s,.;:!-]+)+/i;
@@ -290,12 +291,12 @@ export class VoiceCorrectionService {
         },
         signal: this.buildFetchSignal(FILE_LINK_DETECTION_TIMEOUT_MS),
         body: JSON.stringify({
-          model: FILE_LINK_DETECTION_MODEL,
+          model: VOICE_DICTATION_AI_MODEL,
           instructions: FILE_LINK_DETECTION_PROMPT,
           input: trimmed,
           prompt_cache_key: FILE_LINK_CACHE_PREFIX,
           service_tier: "auto",
-          reasoning: { effort: "minimal" },
+          reasoning: { effort: VOICE_DICTATION_REASONING_EFFORT },
           text: {
             format: {
               type: "json_schema",
@@ -368,10 +369,6 @@ export class VoiceCorrectionService {
     return SHORT_CORRECTION_TIMEOUT_MS;
   }
 
-  private getReasoningConfig(model: string): { effort: "low" } | undefined {
-    return model === "gpt-5-nano" ? { effort: "low" } : undefined;
-  }
-
   private normalizeCorrectedText(text: string): string {
     return text.replace(LEADING_FILLER_RE, "");
   }
@@ -418,7 +415,6 @@ export class VoiceCorrectionService {
       segmentCount: request.segmentCount ?? 0,
     });
 
-    const reasoningConfig = this.getReasoningConfig(model);
     const response = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {
@@ -437,7 +433,9 @@ export class VoiceCorrectionService {
         ],
         prompt_cache_key: this.buildPromptCacheKey(settings),
         service_tier: "auto",
-        ...(reasoningConfig ? { reasoning: reasoningConfig } : {}),
+        // Explicit low-latency effort: gpt-5.6-luna defaults to "medium" when
+        // omitted, so we pin the lowest tier rather than inherit that default.
+        reasoning: { effort: VOICE_DICTATION_REASONING_EFFORT },
         text: {
           format: {
             type: "json_schema",

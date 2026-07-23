@@ -91,7 +91,7 @@ describe("VoiceCorrectionService integration", () => {
   );
 
   it.skipIf(!OPENAI_API_KEY)(
-    "gpt-5-mini: corrects technical terms and removes fillers",
+    "gpt-5.6-luna: corrects technical terms and removes fillers",
     async () => {
       svc = new VoiceCorrectionService();
 
@@ -99,13 +99,13 @@ describe("VoiceCorrectionService integration", () => {
       const result = await svc.correct(
         { rawText: input },
         {
-          model: "gpt-5-mini",
+          model: "gpt-5.6-luna",
           apiKey: OPENAI_API_KEY,
           customDictionary: ["React", "Daintree"],
         }
       );
 
-      console.log("Model:    ", "gpt-5-mini");
+      console.log("Model:    ", "gpt-5.6-luna");
       console.log("Raw:      ", input);
       console.log("Corrected:", result.confirmedText);
 
@@ -117,7 +117,7 @@ describe("VoiceCorrectionService integration", () => {
   );
 
   it.skipIf(!OPENAI_API_KEY)(
-    "gpt-5-mini: output contains no preamble, quotes, or explanatory text",
+    "gpt-5.6-luna: output contains no preamble, quotes, or explanatory text",
     async () => {
       svc = new VoiceCorrectionService();
 
@@ -125,13 +125,13 @@ describe("VoiceCorrectionService integration", () => {
       const result = await svc.correct(
         { rawText: input },
         {
-          model: "gpt-5-mini",
+          model: "gpt-5.6-luna",
           apiKey: OPENAI_API_KEY,
           customDictionary: [],
         }
       );
 
-      console.log("Model:    ", "gpt-5-mini");
+      console.log("Model:    ", "gpt-5.6-luna");
       console.log("Raw:      ", input);
       console.log("Corrected:", result.confirmedText);
 
@@ -146,7 +146,7 @@ describe("VoiceCorrectionService integration", () => {
   );
 
   it.skipIf(!OPENAI_API_KEY)(
-    "gpt-5-mini: returns already-correct input verbatim (idempotency)",
+    "gpt-5.6-luna: returns already-correct input verbatim (idempotency)",
     async () => {
       svc = new VoiceCorrectionService();
 
@@ -154,13 +154,13 @@ describe("VoiceCorrectionService integration", () => {
       const result = await svc.correct(
         { rawText: input },
         {
-          model: "gpt-5-mini",
+          model: "gpt-5.6-luna",
           apiKey: OPENAI_API_KEY,
           customDictionary: [],
         }
       );
 
-      console.log("Model:    ", "gpt-5-mini");
+      console.log("Model:    ", "gpt-5.6-luna");
       console.log("Raw:      ", input);
       console.log("Corrected:", result.confirmedText);
 
@@ -173,89 +173,7 @@ describe("VoiceCorrectionService integration", () => {
   );
 
   it.skipIf(!OPENAI_API_KEY)(
-    "gpt-5-nano: corrects technical terms and removes fillers",
-    async () => {
-      svc = new VoiceCorrectionService();
-
-      const input = "um so we need to like update the type script compiler";
-      const result = await svc.correct(
-        { rawText: input },
-        {
-          model: "gpt-5-nano",
-          apiKey: OPENAI_API_KEY,
-          customDictionary: ["React", "Daintree"],
-        }
-      );
-
-      console.log("Model:    ", "gpt-5-nano");
-      console.log("Raw:      ", input);
-      console.log("Corrected:", result.confirmedText);
-
-      expect(result).toBeTruthy();
-      expect(result.confirmedText).toContain("TypeScript");
-      expect(result.confirmedText.toLowerCase()).not.toMatch(/\bum\b/);
-    },
-    15_000
-  );
-
-  it.skipIf(!OPENAI_API_KEY)(
-    "gpt-5-nano: output contains no preamble, quotes, or explanatory text",
-    async () => {
-      svc = new VoiceCorrectionService();
-
-      const input = "the type script compiler is throwing errors on the racked component";
-      const result = await svc.correct(
-        { rawText: input },
-        {
-          model: "gpt-5-nano",
-          apiKey: OPENAI_API_KEY,
-          customDictionary: [],
-        }
-      );
-
-      console.log("Model:    ", "gpt-5-nano");
-      console.log("Raw:      ", input);
-      console.log("Corrected:", result.confirmedText);
-
-      expect(result.confirmedText).not.toMatch(
-        /^(here is|here's|the corrected|corrected:|sure[,!])/i
-      );
-      expect(result.confirmedText).not.toMatch(/^["'`]/);
-      expect(result.confirmedText).not.toContain("```");
-      expect(result.confirmedText.toLowerCase()).toContain("typescript");
-    },
-    15_000
-  );
-
-  it.skipIf(!OPENAI_API_KEY)(
-    "gpt-5-nano: returns already-correct input verbatim (idempotency)",
-    async () => {
-      svc = new VoiceCorrectionService();
-
-      const input = "The TypeScript compiler is throwing errors on the React component.";
-      const result = await svc.correct(
-        { rawText: input },
-        {
-          model: "gpt-5-nano",
-          apiKey: OPENAI_API_KEY,
-          customDictionary: [],
-        }
-      );
-
-      console.log("Model:    ", "gpt-5-nano");
-      console.log("Raw:      ", input);
-      console.log("Corrected:", result.confirmedText);
-
-      expect(result.confirmedText.toLowerCase()).toContain("typescript");
-      expect(result.confirmedText.toLowerCase()).toContain("react");
-      expect(result.confirmedText.toLowerCase()).toContain("compiler");
-      expect(result.confirmedText).not.toMatch(/^(here is|the corrected)/i);
-    },
-    15_000
-  );
-
-  it.skipIf(!OPENAI_API_KEY)(
-    "gpt-5-nano: handles paragraph-length input (multi-clause)",
+    "gpt-5.6-luna: handles paragraph-length input (multi-clause)",
     async () => {
       svc = new VoiceCorrectionService();
 
@@ -264,13 +182,13 @@ describe("VoiceCorrectionService integration", () => {
       const result = await svc.correct(
         { rawText: input },
         {
-          model: "gpt-5-nano",
+          model: "gpt-5.6-luna",
           apiKey: OPENAI_API_KEY,
           customDictionary: [],
         }
       );
 
-      console.log("Model:    ", "gpt-5-nano");
+      console.log("Model:    ", "gpt-5.6-luna");
       console.log("Raw:      ", input);
       console.log("Corrected:", result.confirmedText);
 
@@ -282,47 +200,5 @@ describe("VoiceCorrectionService integration", () => {
       expect(result.confirmedText).not.toMatch(/^(here is|the corrected)/i);
     },
     20_000
-  );
-
-  it.skipIf(!OPENAI_API_KEY)(
-    "raw API call to diagnose response shape",
-    async () => {
-      const input = "um the type script compiler is throwing errors on the racked component";
-
-      for (const config of [
-        { model: "gpt-5-mini", effort: "medium" },
-        { model: "gpt-5-nano", effort: "low" },
-        { model: "gpt-5-nano", effort: "minimal" },
-      ]) {
-        const start = Date.now();
-        const response = await fetch("https://api.openai.com/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${OPENAI_API_KEY}`,
-          },
-          body: JSON.stringify({
-            model: config.model,
-            messages: [
-              {
-                role: "system",
-                content:
-                  "You correct speech-to-text transcription errors. Fix phonetic errors, punctuation, and casing. Output ONLY the corrected text.",
-              },
-              { role: "user", content: `Correct this sentence:\n${input}` },
-            ],
-            reasoning_effort: config.effort,
-            max_completion_tokens: 1024,
-          }),
-        });
-        const elapsed = Date.now() - start;
-
-        const data = await response.json();
-        console.log(`\n--- ${config.model} effort=${config.effort} (${elapsed}ms) ---`);
-        console.log("Status:", response.status);
-        console.log("Response:", JSON.stringify(data, null, 2));
-      }
-    },
-    30_000
   );
 });

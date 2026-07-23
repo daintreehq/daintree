@@ -29,12 +29,11 @@ import { logWarn } from "@/utils/logger";
 import { useAudioDevices, SYSTEM_DEFAULT_VALUE } from "@/hooks/useAudioDevices";
 import { useTabLoad } from "@/hooks";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { CORE_CORRECTION_PROMPT } from "@shared/config/voiceCorrection";
+import { CORE_CORRECTION_PROMPT, VOICE_DICTATION_AI_MODEL } from "@shared/config/voiceCorrection";
 import type {
   VoiceInputSettings,
   SuggestedDictionaryEntry,
   MicPermissionStatus,
-  VoiceCorrectionModel,
   VoiceParagraphingStrategy,
   VoiceTranscriptionProvider,
   VoiceRecordingMode,
@@ -51,23 +50,6 @@ const LANGUAGES = [
   { code: "pt", label: "Portuguese" },
   { code: "it", label: "Italian" },
   { code: "ru", label: "Russian" },
-];
-
-const CORRECTION_MODELS: {
-  value: VoiceCorrectionModel;
-  label: string;
-  description: string;
-}[] = [
-  {
-    value: "gpt-5-mini",
-    label: "GPT-5 Mini",
-    description: "Higher quality · recommended",
-  },
-  {
-    value: "gpt-5-nano",
-    label: "GPT-5 Nano",
-    description: "Faster · lower cost",
-  },
 ];
 
 const TRANSCRIPTION_PROVIDERS: {
@@ -96,7 +78,7 @@ const DEFAULT_SETTINGS: VoiceInputSettings = {
   transcriptionProvider: "openai",
   transcriptionModel: "gpt-realtime-whisper",
   correctionEnabled: false,
-  correctionModel: "gpt-5-mini",
+  correctionModel: VOICE_DICTATION_AI_MODEL,
   correctionCustomInstructions: "",
   paragraphingStrategy: "spoken-command",
   resolveFileLinks: true,
@@ -453,7 +435,7 @@ export function VoiceInputSettingsTab() {
         <SettingsSection
           icon={Sparkles}
           title="AI text correction"
-          description="Post-process transcriptions with a GPT-5 reasoning model to fix technical terms, punctuation, and filler words. Optional."
+          description="Post-process transcriptions with GPT-5.6 Luna to fix technical terms, punctuation, and filler words. Optional."
           id="voice-ai-correction"
         >
           <SettingsSwitchCard
@@ -465,45 +447,30 @@ export function VoiceInputSettingsTab() {
             ariaLabel="Toggle AI text correction"
           />
 
-          {settings.correctionEnabled && (
+          {settings.correctionEnabled && settings.openaiApiKey && (
             <div className="space-y-4">
-              <SettingsSelect
-                label="Correction Model"
-                value={settings.correctionModel}
-                onValueChange={(v) => update({ correctionModel: v as VoiceCorrectionModel })}
-                options={CORRECTION_MODELS.map(({ value, label, description }) => ({
-                  value,
-                  label,
-                  description,
-                }))}
+              <SettingsSwitchCard
+                icon={FileSearch}
+                title="Resolve file references"
+                subtitle={
+                  'Voice commands like "link to the input component" insert @file references'
+                }
+                isEnabled={settings.resolveFileLinks}
+                onChange={() => update({ resolveFileLinks: !settings.resolveFileLinks })}
+                ariaLabel="Toggle file reference resolution from voice commands"
               />
 
-              {settings.openaiApiKey && (
-                <>
-                  <SettingsSwitchCard
-                    icon={FileSearch}
-                    title="Resolve file references"
-                    subtitle={
-                      'Voice commands like "link to the input component" insert @file references'
-                    }
-                    isEnabled={settings.resolveFileLinks}
-                    onChange={() => update({ resolveFileLinks: !settings.resolveFileLinks })}
-                    ariaLabel="Toggle file reference resolution from voice commands"
-                  />
+              <CustomInstructionsRow
+                value={settings.correctionCustomInstructions}
+                onChange={(v) => update({ correctionCustomInstructions: v })}
+              />
 
-                  <CustomInstructionsRow
-                    value={settings.correctionCustomInstructions}
-                    onChange={(v) => update({ correctionCustomInstructions: v })}
-                  />
+              <CorePromptViewer />
 
-                  <CorePromptViewer />
-
-                  <p className="text-xs text-daintree-text/40">
-                    Your project name and custom dictionary are included automatically. Prompt
-                    caching keeps costs minimal.
-                  </p>
-                </>
-              )}
+              <p className="text-xs text-daintree-text/40">
+                Your project name and custom dictionary are included automatically. Prompt caching
+                keeps costs minimal.
+              </p>
             </div>
           )}
         </SettingsSection>

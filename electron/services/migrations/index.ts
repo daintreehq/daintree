@@ -21,6 +21,7 @@ import { migration021 } from "./021-merge-disabled-plugins.js";
 import { migration022 } from "./022-audit-logs-store.js";
 import { migration023 } from "./023-audit-rings-to-audit-logs-store.js";
 import { migration024 } from "./024-backfill-github-forge-credential.js";
+import { migration025 } from "./025-upgrade-voice-correction-model.js";
 
 export const migrations: Migration[] = [
   migration002,
@@ -46,4 +47,5 @@ export const migrations: Migration[] = [
   migration022,
   migration023,
   migration024,
+  migration025,
 ];
