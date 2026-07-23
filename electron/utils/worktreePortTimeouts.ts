@@ -44,6 +44,10 @@ export const WORKTREE_PORT_TIMEOUTS_MS: Partial<Record<WorktreePortAction, numbe
   "resource-action": 15 * 60_000,
   "run-lifecycle-setup": 15 * 60_000,
   refresh: 60_000,
+  // Awaits a single-worktree `monitor.refresh()`, watchdogged host-side at 45s
+  // (HOST_REFRESH_TIMEOUT_MS). Match `refresh`'s 60s so the host stays the
+  // limiting factor and the delete-confirm read isn't cut short on a slow repo.
+  "get-worktree-changes": 60_000,
 };
 
 /**

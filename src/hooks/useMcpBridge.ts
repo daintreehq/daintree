@@ -3,6 +3,10 @@ import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import { requestMcpConfirmation, useMcpConfirmStore } from "@/store/mcpConfirmStore";
 import { runWithMcpSpawnFocusSuppressed } from "@/store/mcpSpawnFocusGuard";
+import {
+  buildWorktreeDeletePreview,
+  formatWorktreeDeletePreviewLines,
+} from "@/components/Worktree/worktreeDeletePreview";
 import type { ActionDispatchResult, ActionId } from "@shared/types/actions";
 import type { McpConfirmationDecision } from "@shared/types/ipc/mcpServer";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -35,6 +39,39 @@ const MCP_SPAWN_TAGGED_ACTIONS = new Set([
 
 function shouldTagMcpSpawn(actionId: string): boolean {
   return actionId.startsWith("agent.") || MCP_SPAWN_TAGGED_ACTIONS.has(actionId);
+}
+
+/**
+ * Build a fresh changed-file preview for confirm surfaces that discard content
+ * (#11343). Today only `worktree.delete` qualifies: its raw args ({worktreeId,
+ * force}) tell the approver nothing about what a force-delete would destroy, so
+ * we fetch live git status and surface the actual file list. Fails closed — a
+ * fetch error yields the "couldn't verify" note rather than an empty preview
+ * that would imply a clean tree. Returns `undefined` for actions with no
+ * preview so the dialog just shows args as before.
+ *
+ * Exported for unit tests; the bridge is the only production caller.
+ */
+export async function buildMcpConfirmPreview(
+  actionId: string,
+  args: unknown
+): Promise<string[] | undefined> {
+  if (actionId !== "worktree.delete") return undefined;
+  const worktreeId =
+    args && typeof args === "object" && !Array.isArray(args)
+      ? (args as Record<string, unknown>).worktreeId
+      : undefined;
+  if (typeof worktreeId !== "string" || worktreeId.length === 0) return undefined;
+  try {
+    const preview = await buildWorktreeDeletePreview(worktreeId);
+    // Monitor gone / already removed → nothing meaningful to preview.
+    if (!preview) return undefined;
+    return formatWorktreeDeletePreviewLines(preview);
+  } catch {
+    // Fetch failed → fail closed: surface that we couldn't verify rather than
+    // an empty preview that would imply a clean tree.
+    return formatWorktreeDeletePreviewLines(null);
+  }
 }
 
 /**
@@ -96,6 +133,15 @@ export function useMcpBridge(): void {
             const definition = actionService.getDispatchMeta(actionId as ActionId);
             if (definition?.danger === "confirm") {
               inFlightConfirms.add(requestId);
+              // Fetch the fresh changed-file preview OFF the critical path so
+              // the modal appears immediately (never blocked on a git status)
+              // and the confirm queue isn't reordered by fetch latency (#11343).
+              // It patches the pending item in place when it lands; a no-op if
+              // the request already resolved. Best-effort/fail-closed inside.
+              void buildMcpConfirmPreview(actionId, args).then((preview) => {
+                if (disposed || !preview) return;
+                useMcpConfirmStore.getState().setPreview(requestId, preview);
+              });
               let decision: McpConfirmationDecision;
               try {
                 decision = await requestMcpConfirmation({

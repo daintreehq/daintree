@@ -33,6 +33,15 @@ export interface PendingMcpConfirm {
    * the dialog shows a "Requested by" row only for genuine external clients.
    */
   callerInfo?: McpBearerIdentity;
+  /**
+   * Fresh, human-readable preview lines describing the ACTUAL content this
+   * dispatch would affect — e.g. the changed-file list a `worktree.delete`
+   * would discard (#11343). The bridge computes these from a live fetch just
+   * before enqueuing so the approver sees real content, not just raw args
+   * (the D2 "preview of actual content" rule). Absent for dispatches with no
+   * meaningful preview.
+   */
+  preview?: string[];
   enqueuedAt: number;
 }
 
@@ -43,6 +52,7 @@ interface McpConfirmState {
 
 interface McpConfirmActions {
   enqueue: (item: PendingMcpConfirm) => void;
+  setPreview: (requestId: string, preview: string[]) => void;
   resolveCurrent: (decision: McpConfirmationDecision) => void;
   drop: (requestId: string) => void;
   reset: () => void;
@@ -79,6 +89,25 @@ export const useMcpConfirmStore = create<McpConfirmState & McpConfirmActions>((s
       set({ current: item });
     } else {
       set({ queue: [...queue, item] });
+    }
+  },
+
+  // Attach a late-arriving preview to an already-enqueued item (#11343). The
+  // fresh changed-file fetch runs off the critical path so the modal appears
+  // immediately; when it lands we patch the matching item (current or queued)
+  // in place. A no-op if the request already resolved/dropped — the fetch is
+  // best-effort and must never resurrect a settled confirmation.
+  setPreview: (requestId, preview) => {
+    const { current, queue } = get();
+    if (current?.requestId === requestId) {
+      set({ current: { ...current, preview } });
+      return;
+    }
+    const idx = queue.findIndex((item) => item.requestId === requestId);
+    if (idx !== -1) {
+      const next = [...queue];
+      next[idx] = { ...next[idx], preview };
+      set({ queue: next });
     }
   },
 

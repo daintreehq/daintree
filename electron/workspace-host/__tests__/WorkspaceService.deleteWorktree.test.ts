@@ -913,4 +913,30 @@ describe("WorkspaceService.deleteWorktree", () => {
       expect(service.getAcknowledgedMutationIds()).toEqual([]);
     });
   });
+
+  describe("getFreshWorktreeChanges (#11343)", () => {
+    it("forces a monitor refresh and returns its fresh changes", async () => {
+      const monitor = createAndRegisterMonitor();
+      const refreshSpy = vi.spyOn(monitor, "refresh").mockResolvedValue(undefined);
+      const fresh = {
+        worktreeId: "/test/worktree",
+        rootPath: "/test/worktree",
+        changedFileCount: 2,
+        changes: [
+          { path: "a.ts", status: "modified" as const, insertions: null, deletions: null },
+          { path: "n.txt", status: "untracked" as const, insertions: null, deletions: null },
+        ],
+      };
+      vi.spyOn(monitor, "getWorktreeChanges").mockReturnValue(fresh);
+
+      const result = await service.getFreshWorktreeChanges("/test/worktree");
+
+      expect(refreshSpy).toHaveBeenCalledTimes(1);
+      expect(result).toEqual(fresh);
+    });
+
+    it("returns null when no monitor exists for the id", async () => {
+      await expect(service.getFreshWorktreeChanges("/nonexistent")).resolves.toBeNull();
+    });
+  });
 });
