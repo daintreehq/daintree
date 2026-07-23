@@ -74,6 +74,13 @@ describe("TerminalDestructiveActionConfirmDialog — worktree end-all (#11345)",
     expect(screen.getByText(/1 has a running agent/)).toBeTruthy();
   });
 
+  it("uses the plural agent warning when several are running", () => {
+    stageEndAll(3, 2);
+    render(<TerminalDestructiveActionConfirmDialog />);
+
+    expect(screen.getByText(/2 have running agents/)).toBeTruthy();
+  });
+
   it("stays silent about agents when none are running", () => {
     stageEndAll(2, 0);
     render(<TerminalDestructiveActionConfirmDialog />);

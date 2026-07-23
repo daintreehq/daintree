@@ -258,7 +258,14 @@ export function registerWorktreeSessionActions(
         return;
       }
       const pending = useTerminalPendingDestructiveActionStore.getState().pending;
-      if (pending && pending.kind === "worktreeEndAll") {
+      // Scope the cleanup to THIS worktree's pending entry (tighter than
+      // trashAll's kind-only clear) so a confirmed end-all for one worktree can't
+      // dismiss another worktree's still-open end-all confirmation.
+      if (
+        pending &&
+        pending.kind === "worktreeEndAll" &&
+        pending.worktreeId === targetWorktreeId
+      ) {
         useTerminalPendingDestructiveActionStore.getState().clear();
       }
       state.bulkCloseByWorktree(targetWorktreeId);
@@ -303,7 +310,13 @@ export function registerWorktreeSessionActions(
         return;
       }
       const pending = useTerminalPendingDestructiveActionStore.getState().pending;
-      if (pending && pending.kind === "worktreeClearHistory") {
+      // Scoped to this worktree's entry (see endAll) so a confirmed clear for one
+      // worktree can't dismiss another's open clear-history confirmation.
+      if (
+        pending &&
+        pending.kind === "worktreeClearHistory" &&
+        pending.worktreeId === targetWorktreeId
+      ) {
         useTerminalPendingDestructiveActionStore.getState().clear();
       }
       await window.electron.agentSessionHistory.clear(targetWorktreeId);
