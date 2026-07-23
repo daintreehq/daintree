@@ -25,10 +25,19 @@ const windowRegistryMock = vi.hoisted(() => ({
   getProjectForWebContents: vi.fn(() => null),
 }));
 
+const menuMock = vi.hoisted(() => ({
+  createApplicationMenu: vi.fn(),
+}));
+
 vi.mock("electron", () => ({
   ipcMain: { handle: vi.fn(), removeHandler: vi.fn() },
   dialog: dialogMock,
+  BrowserWindow: { getAllWindows: vi.fn(() => []) },
 }));
+
+// The handler eagerly imports menu.js for post-mutation rebuilds; the real
+// module touches `app` at import time.
+vi.mock("../../../menu.js", () => menuMock);
 
 vi.mock("node:fs", () => ({
   promises: fsMock,
@@ -285,5 +294,69 @@ describe("keybinding handlers adversarial", () => {
 
     expect(storeMock.set).not.toHaveBeenCalled();
     expect(result).toMatchObject({ ok: false, errors: ["schema invalid"] });
+  });
+});
+
+describe("keybinding handlers — menu rebuild after mutations", () => {
+  function liveWindow() {
+    return { isDestroyed: () => false } as unknown as Electron.BrowserWindow;
+  }
+
+  let cleanup: (() => void) | null = null;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    storeMock.get.mockReturnValue({});
+  });
+
+  afterEach(() => {
+    cleanup?.();
+    cleanup = null;
+  });
+
+  it("rebuilds the application menu after set, remove, and reset-all", async () => {
+    const win = liveWindow();
+    cleanup = registerKeybindingHandlers({ mainWindow: win } as never);
+
+    await getHandler(CHANNELS.KEYBINDING_SET_OVERRIDE)(fakeEvent(), {
+      actionId: "nav.toggleSidebar",
+      combo: ["Cmd+Shift+B"],
+    });
+    await getHandler(CHANNELS.KEYBINDING_REMOVE_OVERRIDE)(fakeEvent(), "nav.toggleSidebar");
+    await getHandler(CHANNELS.KEYBINDING_RESET_ALL)(fakeEvent());
+
+    expect(menuMock.createApplicationMenu).toHaveBeenCalledTimes(3);
+    expect(menuMock.createApplicationMenu).toHaveBeenCalledWith(win, undefined);
+  });
+
+  it("does not rebuild on read-only handlers", async () => {
+    cleanup = registerKeybindingHandlers({ mainWindow: liveWindow() } as never);
+
+    await getHandler(CHANNELS.KEYBINDING_GET_OVERRIDES)(fakeEvent());
+    await getHandler(CHANNELS.KEYBINDING_EXPORT_PROFILE)(fakeEvent());
+
+    expect(menuMock.createApplicationMenu).not.toHaveBeenCalled();
+  });
+
+  it("falls back to another live window when the registration window is gone", async () => {
+    const dead = { isDestroyed: () => true } as unknown as Electron.BrowserWindow;
+    const survivor = liveWindow();
+    const { BrowserWindow } = await import("electron");
+    vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([survivor]);
+    cleanup = registerKeybindingHandlers({ mainWindow: dead } as never);
+
+    await getHandler(CHANNELS.KEYBINDING_RESET_ALL)(fakeEvent());
+
+    expect(menuMock.createApplicationMenu).toHaveBeenCalledWith(survivor, undefined);
+  });
+
+  it("skips the rebuild entirely when no live window exists", async () => {
+    const { BrowserWindow } = await import("electron");
+    vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([]);
+    cleanup = registerKeybindingHandlers({} as never);
+
+    await getHandler(CHANNELS.KEYBINDING_RESET_ALL)(fakeEvent());
+
+    expect(menuMock.createApplicationMenu).not.toHaveBeenCalled();
   });
 });

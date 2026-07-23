@@ -51,6 +51,7 @@ class KeybindingService {
   private chordTimeout: NodeJS.Timeout | null = null;
   private listeners = new Set<() => void>();
   private whenContext: WhenClauseContext = {};
+  private whenContextProvider: ((event: KeyboardEvent) => WhenClauseContext) | null = null;
 
   constructor() {
     DEFAULT_KEYBINDINGS.forEach((binding) => {
@@ -263,6 +264,17 @@ class KeybindingService {
     this.whenContext = ctx;
   }
 
+  /**
+   * Lazy `when`-clause context source. Called at most once per keydown, only
+   * when a candidate binding carries a `when` clause — mirrors ActionService's
+   * context-provider pattern so the snapshot is always live (no stale
+   * subscriptions or partial event-driven updates). The static
+   * `setWhenContext` value is the fallback when no provider is wired (tests).
+   */
+  setWhenContextProvider(provider: ((event: KeyboardEvent) => WhenClauseContext) | null): void {
+    this.whenContextProvider = provider;
+  }
+
   getScope(): KeyScope {
     return this.currentScope;
   }
@@ -329,6 +341,20 @@ class KeybindingService {
     // Check key - eventKey comes from normalizeKeyForBinding (handles
     // Alt-modified characters). Try exact match on the normalized key.
     if (eventKey.toLowerCase() === parsed.key.toLowerCase()) return true;
+
+    // Legacy compatibility for the physical digit-row path: combos recorded
+    // before that normalization stored the produced character ("Cmd+Shift+!"
+    // on US, "Cmd+&" on AZERTY). When normalization rewrote the event key to
+    // a digit, also accept the raw produced character so persisted rebinds
+    // keep firing.
+    if (
+      /^[0-9]$/.test(eventKey) &&
+      event.key.length === 1 &&
+      event.key !== eventKey &&
+      event.key.toLowerCase() === parsed.key.toLowerCase()
+    ) {
+      return true;
+    }
 
     return false;
   }
@@ -414,10 +440,19 @@ class KeybindingService {
     let chordCompletionMatch: RegisteredKeybindingConfig | undefined;
     let chordCompletionPriority = -Infinity;
 
+    // One live snapshot per keydown, computed only when some candidate
+    // actually carries a `when` clause. Each chord step gets its own snapshot
+    // (conditions may change between prefix and completion).
+    let whenCtx: WhenClauseContext | null = null;
+    const resolveWhenCtx = (): WhenClauseContext => {
+      whenCtx ??= this.whenContextProvider?.(event) ?? this.whenContext;
+      return whenCtx;
+    };
+
     for (const arr of this.bindings.values()) {
       for (const binding of arr) {
         if (!this.scopeAllows(binding.scope)) continue;
-        if (binding.when && !evaluateWhenClause(binding.when, this.whenContext)) continue;
+        if (binding.when && !evaluateWhenClause(binding.when, resolveWhenCtx())) continue;
 
         const hasOverride = this.overrides.has(binding.actionId);
         const effectiveCombo = hasOverride
@@ -579,7 +614,9 @@ class KeybindingService {
   }
 
   removeBinding(actionId: string): void {
-    this.bindings.delete(actionId);
+    if (this.bindings.delete(actionId)) {
+      this.notifyListeners();
+    }
   }
 
   getDisplayCombo(actionId: string): string {

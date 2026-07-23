@@ -16,6 +16,11 @@ import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import { useTerminalFileTransfer } from "./useTerminalFileTransfer";
 import { getOptionWordJumpSequence } from "./terminalWordNavigation";
+import {
+  isTerminalClipboardCopyKey,
+  isTerminalClipboardPasteKey,
+  isTuiReservedKey,
+} from "@/services/terminalReservedKeys";
 
 export interface XtermAdapterProps {
   terminalId: string;
@@ -37,9 +42,6 @@ export interface XtermAdapterProps {
 const MIN_CONTAINER_SIZE = 50;
 
 const MODIFIER_KEYS = new Set(["Meta", "Control", "Alt", "Shift"]);
-
-// TUI reliability: keep common readline-style Ctrl+key bindings in the terminal
-const TUI_KEYBINDS = new Set(["p", "n", "r", "f", "b", "a", "e", "k", "u", "w", "h", "d"]);
 
 export function XtermAdapter({
   terminalId,
@@ -391,8 +393,43 @@ export function XtermAdapter({
           }
 
           // Allow critical Ctrl+<key> bindings to reach the TUI before checking global shortcuts
-          if (event.ctrlKey && !event.shiftKey && TUI_KEYBINDS.has(event.key)) {
+          if (isTuiReservedKey(event)) {
             return true;
+          }
+
+          // Windows/Linux terminal clipboard conventions (Ctrl+Shift+C/V,
+          // Shift+Insert). Handled before global resolution — Ctrl+Shift+C/V
+          // would otherwise resolve to unrelated app bindings on non-mac. The
+          // window capture handler reserves the same keys via
+          // isTerminalReservedKey so they reach this handler at all.
+          if (isTerminalClipboardCopyKey(event)) {
+            event.preventDefault();
+            event.stopPropagation();
+            // Consume even with no selection: falling through would fire an
+            // app shortcut the user didn't intend from inside a terminal.
+            if (managed.terminal.hasSelection()) {
+              navigator.clipboard.writeText(managed.terminal.getSelection()).catch((error) => {
+                logError("[XtermClipboard] Copy failed", error);
+              });
+            }
+            return false;
+          }
+          if (isTerminalClipboardPasteKey(event)) {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!managed.isInputLocked) {
+              // terminal.paste() follows the normal typed-input path (onData →
+              // PTY + input accounting) and applies bracketed-paste wrapping.
+              navigator.clipboard
+                .readText()
+                .then((text) => {
+                  if (text && !managed.isInputLocked) managed.terminal.paste(text);
+                })
+                .catch((error) => {
+                  logError("[XtermClipboard] Paste failed", error);
+                });
+            }
+            return false;
           }
 
           // Intercept global keybindings before terminal processing
@@ -443,7 +480,7 @@ export function XtermAdapter({
           }
 
           // Allow critical Ctrl+<key> bindings to reach the TUI
-          if (event.ctrlKey && !event.shiftKey && TUI_KEYBINDS.has(event.key)) {
+          if (isTuiReservedKey(event)) {
             return true;
           }
 

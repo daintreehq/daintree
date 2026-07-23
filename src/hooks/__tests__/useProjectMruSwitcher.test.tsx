@@ -55,6 +55,7 @@ const { actionDispatchMock, keybindingServiceMock } = vi.hoisted(() => {
     getEffectiveCombo: vi.fn<() => string | undefined>(() => undefined),
     matchesEvent: vi.fn(() => false),
     subscribe: vi.fn(() => () => {}),
+    setWhenContextProvider: vi.fn(),
   };
   return { actionDispatchMock, keybindingServiceMock };
 });
@@ -82,6 +83,13 @@ vi.mock("@/services/KeybindingService", () => ({
 
 vi.mock("../../store", () => ({
   usePanelStore: { getState: () => ({ focusedId: null }) },
+  usePaletteStore: { getState: () => ({ activePaletteId: null }) },
+}));
+
+// The when-context builder reads real Zustand stores; this suite only needs
+// the provider registration to succeed.
+vi.mock("@/services/keybindingWhenContext", () => ({
+  buildKeybindingWhenContext: vi.fn(() => ({})),
 }));
 
 vi.mock("@/utils/logger", () => ({

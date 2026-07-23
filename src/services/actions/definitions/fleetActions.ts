@@ -106,8 +106,8 @@ export function registerFleetActions(actions: ActionRegistry): void {
   actions.set("fleet.accept", () => ({
     id: "fleet.accept",
     // Armed-fleet hotkey actions operate on the live armed/waiting snapshot and
-    // no-op when nothing is armed (fleet.reject even reopens the palette on its
-    // shared Cmd+N). They're keybinding/Fleet-UI driven, not palette commands.
+    // no-op when nothing is armed. They're keybinding/Fleet-UI driven, not
+    // palette commands.
     palette: { mode: "hidden" },
     title: "Fleet: Accept",
     description:
@@ -151,16 +151,8 @@ export function registerFleetActions(actions: ActionRegistry): void {
     scope: "renderer",
     argsSchema: confirmedArgsSchema,
     run: async (args: unknown) => {
-      // fleet.reject shares Cmd+N with panel.palette and wins on priority.
-      // When nothing is armed — or the armed set has no waiting agent to
-      // reject — we fall through so the global shortcut still opens the
-      // palette; otherwise this hotkey would silently swallow Cmd+N.
       const snap = snapshotArmed();
-      if (snap.waitingAgentTargets.length === 0) {
-        const { actionService } = await import("@/services/ActionService");
-        await actionService.dispatch("panel.palette", undefined, { source: "keybinding" });
-        return;
-      }
+      if (snap.waitingAgentTargets.length === 0) return;
       const confirmed = parseConfirmed(args);
       if (!confirmed && snap.waitingAgentTargets.length >= 5) {
         useFleetPendingActionStore.getState().request({

@@ -17,7 +17,7 @@ const mockBindings: Array<RegisteredKeybindingConfig & { effectiveCombo: string 
   {
     actionId: "terminal.stashInput",
     combo: "Cmd+K Cmd+S",
-    scope: "terminal",
+    scope: "portal",
     priority: 0,
     description: "Stash Current Input",
     category: "Terminal",
@@ -214,13 +214,13 @@ describe("ShortcutReferenceDialog", () => {
   it("displays scope for non-global bindings", () => {
     render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
 
-    expect(screen.getByText("Scope: terminal")).toBeTruthy();
+    expect(screen.getByText("Scope: portal")).toBeTruthy();
   });
 
   it("does not display scope for global bindings", () => {
     render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
 
-    const scopeElements = screen.getAllByText("Scope: terminal");
+    const scopeElements = screen.getAllByText("Scope: portal");
     expect(scopeElements.length).toBe(1);
   });
 

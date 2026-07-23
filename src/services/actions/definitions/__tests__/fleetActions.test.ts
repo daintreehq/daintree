@@ -288,18 +288,19 @@ describe("fleet actions — threshold confirmation", () => {
     expect(pending?.targetCount).toBe(5);
   });
 
-  it("fleet.reject falls through to panel.palette when no waiting agents are armed", async () => {
+  it("fleet.reject no-ops when no waiting agents are armed", async () => {
     // Setup: armed agent exists but is 'working' — nothing to reject.
     seedPanels([makeAgent("a", { agentState: "working" })]);
     useFleetArmingStore.getState().armIds(["a"]);
-    // Spy on actionService.dispatch via dynamic import mock
     const actionServiceModule = await import("@/services/ActionService");
     const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
     const registry = await buildRegistry();
     await run(registry, "fleet.reject");
-    // Should have called panel.palette
-    const calls = dispatchSpy.mock.calls.map((c) => c[0]);
-    expect(calls).toContain("panel.palette");
+    // No dispatch to any other action (the old Cmd+N palette fallback is gone)
+    // and no keystrokes injected.
+    expect(dispatchSpy).not.toHaveBeenCalled();
+    expect(terminalClient.write).not.toHaveBeenCalled();
+    expect(useFleetPendingActionStore.getState().pending).toBeNull();
     dispatchSpy.mockRestore();
   });
 

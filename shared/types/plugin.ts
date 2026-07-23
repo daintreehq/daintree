@@ -122,7 +122,9 @@ export interface MenuItemContribution {
 export interface KeybindingContribution {
   actionId: ActionId;
   combo: string;
-  scope?: string;
+  // Mirrors the manifest schema's scope enum (electron/schemas/plugin.ts) so
+  // plugin authors can't compile against a scope the manifest gate rejects.
+  scope?: import("./keybinding.js").KeyScope;
   description?: string;
   when?: string;
 }
