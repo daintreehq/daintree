@@ -4,17 +4,9 @@ import {
   getAgentIds,
   getEffectiveAgentConfig,
   setUserRegistry,
+  CONVERSATION_CONTINUITY_TIERS,
   type AgentConfig,
-  type ConversationContinuityTier,
 } from "../agentRegistry.js";
-
-const VALID_TIERS: ConversationContinuityTier[] = [
-  "preserved",
-  "project-local",
-  "provider-migration",
-  "unavailable",
-  "unverified",
-];
 
 function userAgent(
   overrides: Partial<AgentConfig> & Pick<AgentConfig, "id" | "name">
@@ -50,25 +42,17 @@ describe("resolveAgentContinuity (#11282 phase 5)", () => {
 
   it("resolves every built-in agent to a structurally valid tier and never throws", () => {
     for (const id of getAgentIds()) {
-      expect(VALID_TIERS).toContain(resolveAgentContinuity(id).tier);
+      expect(CONVERSATION_CONTINUITY_TIERS).toContain(resolveAgentContinuity(id).tier);
     }
   });
 
-  it("reads the effective registry so a user agent's continuity resolves", () => {
-    setUserRegistry({
-      "custom-preserved": userAgent({
-        id: "custom-preserved",
-        name: "Custom Preserved",
-        continuity: { tier: "preserved", detail: "user agent test" },
-      }),
-      "custom-bare": userAgent({ id: "custom-bare", name: "Custom Bare" }),
-    });
-
-    expect(resolveAgentContinuity("custom-preserved")).toEqual({
-      tier: "preserved",
-      detail: "user agent test",
-    });
-    // A user agent that declares no continuity still gets the safe default.
+  it("defaults a custom (user-registry) agent to the safe 'unverified'", () => {
+    // The user-agent schema (and the plugin schema) have no `continuity` field,
+    // so a sanitized custom agent never carries one in production and must
+    // resolve to the safe default rather than silently claiming preservation.
+    // The resolver still reads the effective registry — it finds the agent, sees
+    // no continuity, and defaults.
+    setUserRegistry({ "custom-bare": userAgent({ id: "custom-bare", name: "Custom Bare" }) });
     expect(resolveAgentContinuity("custom-bare")).toEqual({ tier: "unverified" });
   });
 
@@ -77,6 +61,7 @@ describe("resolveAgentContinuity (#11282 phase 5)", () => {
     // make the preview useless) without asserting WHICH agent owns each tier.
     const declared = new Set(getAgentIds().map((id) => resolveAgentContinuity(id).tier));
     expect(declared.has("preserved")).toBe(true);
+    expect(declared.has("project-local")).toBe(true);
     expect(declared.has("provider-migration")).toBe(true);
     expect(declared.has("unavailable")).toBe(true);
   });

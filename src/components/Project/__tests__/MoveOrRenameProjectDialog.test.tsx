@@ -182,11 +182,47 @@ describe("MoveOrRenameProjectDialog", () => {
     // Provider-specific detail is shown verbatim…
     expect(screen.getByText("Claude Code can't resume this after the move")).toBeTruthy();
     // …and an agent without a detail falls back to the generic per-tier line.
-    expect(screen.getByText("Resumes automatically at the new location")).toBeTruthy();
+    expect(screen.getByText("Expected to resume automatically at the new location")).toBeTruthy();
     // Count > 1 is surfaced next to the agent name.
     expect(screen.getByText(/Codex \(2\)/)).toBeTruthy();
     // Continuity is informational — it must NOT disable confirm (only blockers do).
     await waitFor(() => expect(confirmButton().disabled).toBe(false));
+  });
+
+  it("renders a single-terminal agent without a count suffix (#11282 phase 5)", async () => {
+    previewRelocation.mockResolvedValue(
+      cleanPreview({
+        runningTerminalCount: 1,
+        agentContinuity: [{ agentId: "codex", agentName: "Codex", count: 1, tier: "preserved" }],
+      })
+    );
+    openMove();
+    render(<MoveOrRenameProjectDialog />);
+
+    fireEvent.change(screen.getByTestId("relocate-folder-input"), { target: { value: "proj2" } });
+
+    await waitFor(() => expect(screen.getByTestId("relocate-continuity-codex")).toBeTruthy());
+    const row = screen.getByTestId("relocate-continuity-codex").textContent ?? "";
+    // count === 1 → bare agent name, no "(1)" suffix.
+    expect(row).toContain("Codex");
+    expect(row).not.toContain("(1)");
+  });
+
+  it("shows no continuity section when only plain terminals run, and states terminals restart (#11282 phase 5)", async () => {
+    previewRelocation.mockResolvedValue(
+      cleanPreview({ runningTerminalCount: 2, agentContinuity: [] })
+    );
+    openMove();
+    render(<MoveOrRenameProjectDialog />);
+
+    fireEvent.change(screen.getByTestId("relocate-folder-input"), { target: { value: "proj2" } });
+
+    await waitFor(() => expect(confirmButton().disabled).toBe(false));
+    // No agents → no continuity section.
+    expect(screen.queryByTestId("relocate-continuity")).toBeNull();
+    // The terminal line describes restart, not conversation preservation.
+    expect(screen.getByText(/they restart at the new location/)).toBeTruthy();
+    expect(screen.queryByText(/sessions are preserved and restored/)).toBeNull();
   });
 
   it("reattach mode browses to an existing folder then reattaches", async () => {

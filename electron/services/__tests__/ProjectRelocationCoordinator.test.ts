@@ -90,6 +90,8 @@ import {
   ProjectRelocationCoordinator,
   ProjectRelocationError,
 } from "../ProjectRelocationCoordinator.js";
+import { CONVERSATION_CONTINUITY_TIERS } from "../../../shared/config/agentRegistry.js";
+import { CONTINUITY_TIER_ORDER } from "../../../shared/types/projectRelocation.js";
 
 // --- Fixtures --------------------------------------------------------------
 
@@ -125,7 +127,9 @@ function makeDeps(pvm: ReturnType<typeof makePvm> | null) {
   const ptyClient = {
     gracefulKillByProject: vi.fn(async () => [{ id: "t1", agentSessionId: "sess-1" }]),
     onProjectSwitch: vi.fn(),
-    getProjectStats: vi.fn(async () => ({ terminalCount: 0 })),
+    getProjectStats: vi.fn<
+      () => Promise<{ terminalCount: number; terminalTypes?: Record<string, number> }>
+    >(async () => ({ terminalCount: 0 })),
   };
   const worktreeService = {
     evictProjectForRelocation: vi.fn(),
@@ -512,8 +516,9 @@ describe("ProjectRelocationCoordinator — previewRelocate", () => {
   it("classifies running agents into continuity tiers and excludes plain terminals (#11282 phase 5)", async () => {
     const deps = makeDeps(makePvm(PROJECT_ID));
     deps.ptyClient.getProjectStats.mockResolvedValue({
-      terminalCount: 5,
-      terminalTypes: { claude: 2, codex: 1, terminal: 2, "not-a-real-agent": 1 },
+      // Non-terminal counts sum to 5; the two shells bring the total to 7.
+      terminalCount: 7,
+      terminalTypes: { claude: 2, codex: 1, terminal: 2, "not-a-real-agent": 1, crush: 1 },
     });
     const coordinator = new ProjectRelocationCoordinator();
     configure(coordinator, deps);
@@ -524,35 +529,29 @@ describe("ProjectRelocationCoordinator — previewRelocate", () => {
       newPath: NEW_ROOT,
     });
 
-    // Plain "terminal" shells carry no conversation and are excluded; the rest
-    // are ordered riskiest-first: claude (provider-migration) → not-a-real-agent
-    // (unverified default) → codex (preserved).
-    expect(preview.agentContinuity.map((a) => a.agentId)).toEqual([
-      "claude",
-      "not-a-real-agent",
-      "codex",
-    ]);
+    // Plain "terminal" shells carry no conversation and are excluded; every
+    // other agent type appears exactly once.
+    expect(new Set(preview.agentContinuity.map((a) => a.agentId))).toEqual(
+      new Set(["claude", "codex", "not-a-real-agent", "crush"])
+    );
+    // Ordered riskiest-first: the tier ranks are nondecreasing across the list
+    // (asserts the sort invariant without pinning which agent owns which tier).
+    const ranks = preview.agentContinuity.map((a) => CONTINUITY_TIER_ORDER[a.tier]);
+    expect(ranks).toEqual([...ranks].sort((x, y) => x - y));
     // Per-agent counts pass through from the pty-host breakdown.
     const byId = Object.fromEntries(preview.agentContinuity.map((a) => [a.agentId, a]));
     expect(byId.claude.count).toBe(2);
     expect(byId.codex.count).toBe(1);
     // Every entry carries a resolved display name and a structurally valid tier.
-    const VALID_TIERS = [
-      "preserved",
-      "project-local",
-      "provider-migration",
-      "unavailable",
-      "unverified",
-    ];
     for (const entry of preview.agentContinuity) {
       expect(entry.agentName).toBeTruthy();
-      expect(VALID_TIERS).toContain(entry.tier);
+      expect(CONVERSATION_CONTINUITY_TIERS).toContain(entry.tier);
     }
     // An unrecognized agent id defaults to the honest "unverified" — never a
     // false "preserved".
     expect(byId["not-a-real-agent"].tier).toBe("unverified");
     // Plain shells are still counted toward the graceful-stop line.
-    expect(preview.runningTerminalCount).toBe(5);
+    expect(preview.runningTerminalCount).toBe(7);
   });
 
   it("never mutates — no rename, quiesce, finalize, rebind, broadcast, or reload", async () => {

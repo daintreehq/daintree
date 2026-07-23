@@ -19,7 +19,7 @@ export const config: AgentConfig = {
   // resume after a move — isn't verified yet.
   continuity: {
     tier: "unverified",
-    detail: "Grok's session capture on exit isn't fully verified yet",
+    detail: "Resuming this conversation after a move isn't confirmed for Grok yet",
   },
   // Launch-only for now. Grok Build reads project MCP config + AGENTS.md, so
   // assistant-overlay wiring (`supports: { mcpInjection: "project-config", … }`)

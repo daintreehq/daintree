@@ -57,8 +57,10 @@ export interface AgentContinuitySummary {
  * and tests don't depend on registry key order.
  */
 export const CONTINUITY_TIER_ORDER: Record<ConversationContinuityTier, number> = {
-  "provider-migration": 0,
-  unavailable: 1,
+  // Unrecoverable loss ranks above a recoverable one: `unavailable` has no
+  // resume path at all, while `provider-migration` at least persists on disk.
+  unavailable: 0,
+  "provider-migration": 1,
   unverified: 2,
   "project-local": 3,
   preserved: 4,

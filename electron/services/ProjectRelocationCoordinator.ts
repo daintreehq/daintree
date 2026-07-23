@@ -301,7 +301,10 @@ export class ProjectRelocationCoordinator {
       const stats = await ptyClient.getProjectStats(projectId);
       const byAgent = stats.terminalTypes ?? {};
       const agentContinuity = Object.entries(byAgent)
-        .filter(([agentId]) => agentId !== "terminal")
+        // Exclude plain shells, and defend against a corrupted count: a custom
+        // agent named after an Object.prototype key (e.g. "toString") can make
+        // the upstream tally a non-number, which must never reach the preview.
+        .filter(([agentId, count]) => agentId !== "terminal" && Number.isFinite(count) && count > 0)
         .map(([agentId, count]): AgentContinuitySummary => {
           const { tier, detail } = resolveAgentContinuity(agentId);
           return {

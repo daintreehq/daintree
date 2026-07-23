@@ -11,7 +11,7 @@ export const config: AgentConfig = {
   // addressable by id, so a folder move preserves the conversation.
   continuity: {
     tier: "preserved",
-    detail: "Copilot restores this conversation from its cloud session",
+    detail: "Copilot can restore this conversation from its cloud session",
   },
   // Copilot help sessions read MCP from `.mcp.json` written into the
   // per-session cwd (root key `mcpServers`, `type: "http"`, `$VAR` env-var

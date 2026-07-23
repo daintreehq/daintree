@@ -320,8 +320,20 @@ export type AgentResume =
  * - `unverified` — continuity across a move hasn't been confirmed for this
  *   provider; the default for any unclassified agent so we never overclaim.
  */
-export type ConversationContinuityTier =
-  "preserved" | "project-local" | "provider-migration" | "unavailable" | "unverified";
+/**
+ * Canonical runtime list of continuity tiers; the type is derived from it so a
+ * single source of truth backs both. Tests iterate this tuple instead of
+ * re-declaring the union (which would just duplicate a typed literal).
+ */
+export const CONVERSATION_CONTINUITY_TIERS = [
+  "preserved",
+  "project-local",
+  "provider-migration",
+  "unavailable",
+  "unverified",
+] as const;
+
+export type ConversationContinuityTier = (typeof CONVERSATION_CONTINUITY_TIERS)[number];
 
 export interface AgentContinuity {
   tier: ConversationContinuityTier;

@@ -16,7 +16,7 @@ export const config: AgentConfig = {
   // any folder via `codex resume <id>` — a move preserves the conversation.
   continuity: {
     tier: "preserved",
-    detail: "Codex resumes this conversation by session id from any folder",
+    detail: "Codex can resume this conversation by session ID from any folder",
   },
   supports: {
     mcpInjection: "cli-flags",

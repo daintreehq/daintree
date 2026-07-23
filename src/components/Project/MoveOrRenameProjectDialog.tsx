@@ -35,8 +35,10 @@ const CONTINUITY_PRESENTATION: Record<
   preserved: {
     icon: CheckCircle2,
     className: "text-status-success",
-    label: "Conversation preserved",
-    detailFallback: "Resumes automatically at the new location",
+    // Capability language, not a guarantee: session capture on graceful stop can
+    // still miss (timeout / unmatched exit output), so we say "expected", not "will".
+    label: "Resume supported",
+    detailFallback: "Expected to resume automatically at the new location",
   },
   "project-local": {
     icon: CheckCircle2,
@@ -59,7 +61,7 @@ const CONTINUITY_PRESENTATION: Record<
   unverified: {
     icon: HelpCircle,
     className: "text-daintree-text/50",
-    label: "Resume unverified",
+    label: "Resume after move unverified",
     detailFallback: "Resuming this conversation after a move isn't confirmed",
   },
 };
