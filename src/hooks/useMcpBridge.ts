@@ -42,6 +42,20 @@ function shouldTagMcpSpawn(actionId: string): boolean {
 }
 
 /**
+ * The worktree id a `worktree.delete` dispatch targets, or undefined when the
+ * action isn't a worktree delete or carries no usable id. Determines whether a
+ * fresh changed-file preview should be fetched for the confirm modal (#11343).
+ */
+function worktreeDeleteTargetId(actionId: string, args: unknown): string | undefined {
+  if (actionId !== "worktree.delete") return undefined;
+  const worktreeId =
+    args && typeof args === "object" && !Array.isArray(args)
+      ? (args as Record<string, unknown>).worktreeId
+      : undefined;
+  return typeof worktreeId === "string" && worktreeId.length > 0 ? worktreeId : undefined;
+}
+
+/**
  * Build a fresh changed-file preview for confirm surfaces that discard content
  * (#11343). Today only `worktree.delete` qualifies: its raw args ({worktreeId,
  * force}) tell the approver nothing about what a force-delete would destroy, so
@@ -56,12 +70,8 @@ export async function buildMcpConfirmPreview(
   actionId: string,
   args: unknown
 ): Promise<string[] | undefined> {
-  if (actionId !== "worktree.delete") return undefined;
-  const worktreeId =
-    args && typeof args === "object" && !Array.isArray(args)
-      ? (args as Record<string, unknown>).worktreeId
-      : undefined;
-  if (typeof worktreeId !== "string" || worktreeId.length === 0) return undefined;
+  const worktreeId = worktreeDeleteTargetId(actionId, args);
+  if (worktreeId === undefined) return undefined;
   try {
     const preview = await buildWorktreeDeletePreview(worktreeId);
     // Monitor gone / already removed → nothing meaningful to preview.
@@ -136,12 +146,18 @@ export function useMcpBridge(): void {
               // Fetch the fresh changed-file preview OFF the critical path so
               // the modal appears immediately (never blocked on a git status)
               // and the confirm queue isn't reordered by fetch latency (#11343).
-              // It patches the pending item in place when it lands; a no-op if
-              // the request already resolved. Best-effort/fail-closed inside.
-              void buildMcpConfirmPreview(actionId, args).then((preview) => {
-                if (disposed || !preview) return;
-                useMcpConfirmStore.getState().setPreview(requestId, preview);
-              });
+              // While it's in flight the modal keeps approval disabled
+              // (previewPending) so the approver can't confirm a destructive
+              // dispatch before seeing what it affects. `setPreview` patches the
+              // item and re-enables approval when the fetch lands (empty lines
+              // when there's nothing to show); a no-op if already resolved.
+              const previewPending = worktreeDeleteTargetId(actionId, args) !== undefined;
+              if (previewPending) {
+                void buildMcpConfirmPreview(actionId, args).then((preview) => {
+                  if (disposed) return;
+                  useMcpConfirmStore.getState().setPreview(requestId, preview ?? []);
+                });
+              }
               let decision: McpConfirmationDecision;
               try {
                 decision = await requestMcpConfirmation({
@@ -162,6 +178,7 @@ export function useMcpBridge(): void {
                   // only for unpinned external dispatch; the dialog renders a
                   // "Requested by" row when set, stays provenance-free when not.
                   callerInfo,
+                  previewPending,
                 });
               } finally {
                 inFlightConfirms.delete(requestId);

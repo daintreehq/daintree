@@ -8,6 +8,7 @@ import { useWorktreeTerminals } from "@/hooks/useWorktreeTerminals";
 import { deriveEffectiveTier } from "@/services/actions/deriveEffectiveTier";
 import {
   buildWorktreeDeletePreview,
+  formatWorktreeChangeRows,
   summarizeWorktreeChanges,
   type WorktreeDeletePreview,
 } from "@/components/Worktree/worktreeDeletePreview";
@@ -38,10 +39,18 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   const [freshPreview, setFreshPreview] = useState<WorktreeDeletePreview | null>(null);
   const [verifyFailed, setVerifyFailed] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
-  // Tracks the live `isOpen` so an in-flight submit revalidation can abort if
-  // the user cancels the dialog mid-fetch instead of dispatching after close.
-  const openRef = useRef(isOpen);
-  openRef.current = isOpen;
+  // Monotonic session token bumped on every open/close/worktree change (in the
+  // open effect below). An in-flight submit revalidation captures the token and
+  // aborts if it changed while awaiting — so a close→reopen (or worktree swap)
+  // during the fetch can't let a stale closure dispatch against the new session
+  // (an ABA race a plain boolean flag would miss). `mountedRef` covers unmount.
+  const sessionRef = useRef(0);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const { counts: terminalCounts } = useWorktreeTerminals(worktree.id);
 
@@ -57,6 +66,13 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   const hasUntrackedFiles = effectiveSummary.hasUntrackedFiles;
   const hasChanges = hasTrackedChanges || hasUntrackedFiles;
   const hasTerminals = terminalCounts.total > 0;
+
+  // Actual file list a force-delete would discard — a D2 preview must show
+  // real content, not just a count (#11343). Prefer the fresh fetch's changes,
+  // fall back to the prop snapshot before it resolves.
+  const previewChangeRows = formatWorktreeChangeRows(
+    freshPreview?.changes ?? worktree.worktreeChanges?.changes ?? []
+  );
 
   const isProtectedBranch = isProtectedBranchName(worktree.branch?.toLowerCase());
   const isDetachedHead = !worktree.branch;
@@ -95,6 +111,9 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   // failed fetch fails closed (`verifyFailed`) — we never silently fall back to
   // the stale snapshot and offer the lower tier.
   useEffect(() => {
+    // Bump the session on every open/close/worktree change so an in-flight
+    // submit revalidation can detect it's stale (see `revalidateThenDelete`).
+    sessionRef.current += 1;
     if (!isOpen) return;
     let cancelled = false;
     setFreshPreview(null);
@@ -168,6 +187,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   // discard tracked changes (the backend guard rejects a dirty non-force
   // delete), so it dispatches synchronously and keeps its immediate dismiss.
   const revalidateThenDelete = async () => {
+    const session = sessionRef.current;
     setIsDeleting(true);
     let preview: WorktreeDeletePreview | null = null;
     let failed = false;
@@ -176,7 +196,10 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     } catch {
       failed = true;
     }
-    if (!openRef.current) return;
+    // Abort if the dialog closed/reopened/changed worktree or unmounted while
+    // the fresh re-check was in flight — never dispatch against a session the
+    // user is no longer looking at.
+    if (!mountedRef.current || sessionRef.current !== session) return;
     setFreshPreview(preview);
     setVerifyFailed(failed);
     const freshHasTracked = failed ? true : (preview ?? seedSummary).hasTrackedChanges;
@@ -361,6 +384,24 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
           </div>
 
           {advisoryBanner}
+
+          {force && !verifyFailed && previewChangeRows.length > 0 && (
+            <div>
+              <span
+                role="heading"
+                aria-level={3}
+                className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60"
+              >
+                Files that will be lost
+              </span>
+              <pre
+                data-testid="delete-worktree-file-list"
+                className="mt-2 max-h-32 overflow-auto text-xs text-daintree-text/70 bg-daintree-bg p-3 rounded border border-border-strong font-mono whitespace-pre-wrap break-all"
+              >
+                {previewChangeRows.join("\n")}
+              </pre>
+            </div>
+          )}
 
           <label className="flex items-center gap-2 cursor-pointer">
             <input

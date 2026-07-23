@@ -941,6 +941,44 @@ describe("WorktreeDeleteDialog — fresh status verification (#11343)", () => {
     expect(startDeleteMock).not.toHaveBeenCalled();
   });
 
+  it("shows the actual fresh file list a force delete would discard (D2 content preview)", async () => {
+    buildPreviewMock.mockResolvedValue(
+      makePreview([
+        { path: "src/app.ts", status: "modified" },
+        { path: "new.txt", status: "untracked" },
+      ])
+    );
+    const worktree = makeWorktree(makeChanges([]), { branch: "feature/x", name: "feature/x" });
+    render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+
+    // No list until the destructive path is armed.
+    expect(screen.queryByTestId("delete-worktree-file-list")).toBeNull();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
+
+    await waitFor(() => {
+      const list = screen.getByTestId("delete-worktree-file-list");
+      expect(list.textContent).toContain("M src/app.ts");
+      expect(list.textContent).toContain("? new.txt");
+    });
+  });
+
+  it("hides the file list and shows the warning when verification fails", async () => {
+    buildPreviewMock.mockRejectedValue(new Error("refresh timeout"));
+    const worktree = makeWorktree(makeChanges([{ path: "src/app.ts", status: "modified" }]), {
+      branch: "feature/x",
+      name: "feature/x",
+    });
+    render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Couldn't verify this worktree's current changes/)).toBeDefined();
+    });
+    expect(screen.queryByTestId("delete-worktree-file-list")).toBeNull();
+  });
+
   it("dispatches a force-delete after submit re-check confirms it is still safe", async () => {
     // Untracked-only stays D2 both at open and submit → no gate, delete runs.
     buildPreviewMock.mockResolvedValue(makePreview([{ path: "new.txt", status: "untracked" }]));

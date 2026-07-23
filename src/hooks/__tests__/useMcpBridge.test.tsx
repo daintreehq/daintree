@@ -662,16 +662,19 @@ describe("useMcpBridge", () => {
     });
 
     // Modal is enqueued immediately — the preview fetch runs off the critical
-    // path, so `current` is set before the preview lands.
+    // path, so `current` is set (with approval gated) before the preview lands.
     await Promise.resolve();
     expect(useMcpConfirmStore.getState().current?.requestId).toBe("req-preview");
+    expect(useMcpConfirmStore.getState().current?.previewPending).toBe(true);
 
-    // The fresh preview patches the pending item in place once it resolves.
+    // The fresh preview patches the pending item in place and re-enables
+    // approval once it resolves.
     await vi.waitFor(() => {
       expect(mocks.buildPreview).toHaveBeenCalledWith("wt-1");
-      const preview = useMcpConfirmStore.getState().current?.preview;
-      expect(preview?.[0]).toContain("1 uncommitted tracked file");
-      expect(preview).toContain("  M src/app.ts");
+      const current = useMcpConfirmStore.getState().current;
+      expect(current?.previewPending).toBe(false);
+      expect(current?.preview?.[0]).toContain("1 uncommitted tracked file");
+      expect(current?.preview).toContain("  M src/app.ts");
     });
 
     useMcpConfirmStore.getState().resolveCurrent("approved");

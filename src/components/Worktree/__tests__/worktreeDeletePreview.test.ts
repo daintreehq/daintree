@@ -13,6 +13,7 @@ import {
   summarizeWorktreeChanges,
   buildWorktreeDeletePreview,
   formatWorktreeDeletePreviewLines,
+  formatWorktreeChangeRows,
 } from "../worktreeDeletePreview";
 
 function file(path: string, status: GitStatus): FileChangeDetail {
@@ -137,5 +138,35 @@ describe("formatWorktreeDeletePreviewLines", () => {
     // header + 12 files + overflow line
     expect(lines).toHaveLength(14);
     expect(lines[lines.length - 1]).toBe("  …and 3 more");
+  });
+});
+
+describe("formatWorktreeChangeRows", () => {
+  it("prefixes each file with its status glyph", () => {
+    const rows = formatWorktreeChangeRows([
+      file("a.ts", "modified"),
+      file("b.ts", "deleted"),
+      file("c.ts", "added"),
+      file("n.txt", "untracked"),
+    ]);
+    expect(rows).toEqual(["  M a.ts", "  D b.ts", "  A c.ts", "  ? n.txt"]);
+  });
+
+  it("drops ignored files (not part of what a delete discards)", () => {
+    const rows = formatWorktreeChangeRows([
+      file("a.ts", "modified"),
+      file("node_modules/x", "ignored"),
+    ]);
+    expect(rows).toEqual(["  M a.ts"]);
+  });
+
+  it("caps at the limit and appends an overflow row (ignored excluded from the count)", () => {
+    const files = [
+      ...Array.from({ length: 14 }, (_, i) => file(`f${i}.ts`, "modified")),
+      file("ignore.me", "ignored"),
+    ];
+    const rows = formatWorktreeChangeRows(files);
+    expect(rows).toHaveLength(13); // 12 files + overflow
+    expect(rows[rows.length - 1]).toBe("  …and 2 more");
   });
 });

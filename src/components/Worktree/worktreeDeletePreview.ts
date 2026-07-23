@@ -67,8 +67,8 @@ export async function buildWorktreeDeletePreview(
   return { ...summarizeWorktreeChanges(changes), changes };
 }
 
-/** Max file rows shown in the compact MCP preview before collapsing the tail. */
-const PREVIEW_FILE_LIMIT = 12;
+/** Max file rows shown in a compact preview before collapsing the tail. */
+export const PREVIEW_FILE_LIMIT = 12;
 
 const STATUS_GLYPH: Record<FileChangeDetail["status"], string> = {
   modified: "M",
@@ -80,6 +80,24 @@ const STATUS_GLYPH: Record<FileChangeDetail["status"], string> = {
   untracked: "?",
   ignored: "!",
 };
+
+/**
+ * Render a change set as capped, glyph-prefixed file rows (`  M src/app.ts`),
+ * shared by the local delete dialog and the MCP preview so both show the same
+ * actual content (the D2 "a count is insufficient" rule). Ignored files are
+ * dropped — they're not part of what a delete discards.
+ */
+export function formatWorktreeChangeRows(
+  changes: FileChangeDetail[],
+  limit: number = PREVIEW_FILE_LIMIT
+): string[] {
+  const shown = changes.filter((c) => c.status !== "ignored");
+  const rows = shown.slice(0, limit).map((c) => `  ${STATUS_GLYPH[c.status] ?? "?"} ${c.path}`);
+  if (shown.length > limit) {
+    rows.push(`  …and ${shown.length - limit} more`);
+  }
+  return rows;
+}
 
 /**
  * Render a preview as plain lines for the MCP confirm surface — a header
@@ -106,12 +124,5 @@ export function formatWorktreeDeletePreviewLines(preview: WorktreeDeletePreview 
   if (untrackedFileCount > 0) {
     parts.push(`${untrackedFileCount} untracked file${untrackedFileCount === 1 ? "" : "s"}`);
   }
-  const lines = [`${parts.join(" and ")}:`];
-  for (const c of changes.slice(0, PREVIEW_FILE_LIMIT)) {
-    lines.push(`  ${STATUS_GLYPH[c.status] ?? "?"} ${c.path}`);
-  }
-  if (changes.length > PREVIEW_FILE_LIMIT) {
-    lines.push(`  …and ${changes.length - PREVIEW_FILE_LIMIT} more`);
-  }
-  return lines;
+  return [`${parts.join(" and ")}:`, ...formatWorktreeChangeRows(changes)];
 }

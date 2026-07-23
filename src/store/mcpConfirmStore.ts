@@ -36,12 +36,19 @@ export interface PendingMcpConfirm {
   /**
    * Fresh, human-readable preview lines describing the ACTUAL content this
    * dispatch would affect — e.g. the changed-file list a `worktree.delete`
-   * would discard (#11343). The bridge computes these from a live fetch just
-   * before enqueuing so the approver sees real content, not just raw args
-   * (the D2 "preview of actual content" rule). Absent for dispatches with no
-   * meaningful preview.
+   * would discard (#11343). The bridge computes these from a live fetch that
+   * runs off the critical path (so the modal opens immediately); the lines are
+   * patched in via `setPreview` when the fetch lands. Absent for dispatches
+   * with no meaningful preview.
    */
   preview?: string[];
+  /**
+   * True while the fresh preview fetch is still in flight (#11343). The modal
+   * opens immediately but keeps its approve button disabled until the preview
+   * (or a verification-failure note) arrives, so an approver can't confirm a
+   * destructive dispatch before seeing what it affects. Cleared by `setPreview`.
+   */
+  previewPending?: boolean;
   enqueuedAt: number;
 }
 
@@ -92,21 +99,22 @@ export const useMcpConfirmStore = create<McpConfirmState & McpConfirmActions>((s
     }
   },
 
-  // Attach a late-arriving preview to an already-enqueued item (#11343). The
-  // fresh changed-file fetch runs off the critical path so the modal appears
-  // immediately; when it lands we patch the matching item (current or queued)
-  // in place. A no-op if the request already resolved/dropped — the fetch is
-  // best-effort and must never resurrect a settled confirmation.
+  // Attach a late-arriving preview to an already-enqueued item and clear its
+  // pending flag (#11343). The fresh changed-file fetch runs off the critical
+  // path so the modal appears immediately; when it lands we patch the matching
+  // item (current or queued) in place and re-enable approval. A no-op if the
+  // request already resolved/dropped — the fetch is best-effort and must never
+  // resurrect a settled confirmation.
   setPreview: (requestId, preview) => {
     const { current, queue } = get();
     if (current?.requestId === requestId) {
-      set({ current: { ...current, preview } });
+      set({ current: { ...current, preview, previewPending: false } });
       return;
     }
     const idx = queue.findIndex((item) => item.requestId === requestId);
     if (idx !== -1) {
       const next = [...queue];
-      next[idx] = { ...next[idx], preview };
+      next[idx] = { ...next[idx], preview, previewPending: false };
       set({ queue: next });
     }
   },

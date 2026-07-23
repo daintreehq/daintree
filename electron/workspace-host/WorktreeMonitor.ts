@@ -11,7 +11,7 @@ import type {
 } from "../../shared/types/worktree.js";
 import type { CIStatusState } from "../../shared/types/forge.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
-import { invalidateGitStatusCache } from "../utils/git.js";
+import { invalidateGitStatusCache, getWorktreeChangesWithStats } from "../utils/git.js";
 import { AdaptivePollingStrategy, NoteFileReader } from "../services/worktree/index.js";
 import { deriveIssueTitleFromBranch } from "../services/issueExtractor.js";
 import { FetchScheduler, type FetchSchedulerHost } from "./FetchScheduler.js";
@@ -1522,6 +1522,29 @@ export class WorktreeMonitor {
 
   getWorktreeChanges(): WorktreeChanges | null {
     return this.worktreeChanges;
+  }
+
+  /**
+   * Read a GUARANTEED-fresh `git status` for this worktree, bypassing the
+   * single-flight status pass (#11343).
+   *
+   * `refresh()` → `updateGitStatus(true)` → `GitStatusPass.run(true)` early
+   * returns when another pass is already in flight (a background poll, the
+   * dialog-open probe, a watcher-triggered pass), leaving `getWorktreeChanges()`
+   * on a stale snapshot. For the delete-confirm safety gate a stale-empty read
+   * is exactly the data-loss bug being fixed, so this calls the underlying
+   * status function directly with `forceRefresh: true` — which bypasses the TTL
+   * cache AND the in-flight dedup — yielding a value that reflects the tree at
+   * call time regardless of any concurrent pass. Read-only: it does not mutate
+   * monitor state or broadcast; the caller consumes the returned value. Rejects
+   * (rather than returning stale) if the status read fails, so callers fail
+   * closed.
+   */
+  getFreshChanges(): Promise<WorktreeChanges> {
+    return getWorktreeChangesWithStats(this.path, {
+      forceRefresh: true,
+      wsl: this.wslInvocation,
+    });
   }
 
   triggerRefreshIfUpdating(): void {

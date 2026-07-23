@@ -2167,12 +2167,17 @@ export class WorkspaceService {
   async getFreshWorktreeChanges(worktreeId: string): Promise<WorktreeChanges | null> {
     const monitor = this.monitors.get(worktreeId);
     if (!monitor) return null;
-    await withTimeout(
-      monitor.refresh(),
+    // `getFreshChanges()` forces a real `git status` that bypasses the
+    // single-flight status pass — a `refresh()` here would silently no-op (and
+    // return the stale snapshot) whenever a background poll is mid-pass, which
+    // is precisely the stale read #11343 must not make. Watchdogged so a
+    // degraded repo can't hang the port request; a rejection propagates so the
+    // caller fails closed rather than proceeding on stale data.
+    return withTimeout(
+      monitor.getFreshChanges(),
       HOST_REFRESH_TIMEOUT_MS,
       `get-worktree-changes watchdog: ${worktreeId}`
     );
-    return monitor.getWorktreeChanges();
   }
 
   /**
