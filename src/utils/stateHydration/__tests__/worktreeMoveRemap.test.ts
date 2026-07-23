@@ -70,14 +70,16 @@ describe("resolveMovedWorktreeId", () => {
     expect(resolveMovedWorktreeId(OLD, GITDIR, ctx)).toBeUndefined();
   });
 
-  it("returns undefined when the matched worktree is the saved id itself", () => {
-    // Defensive: an id absent from knownIds is the precondition, so this can only
-    // happen with an inconsistent context — never remap onto the same id.
-    const ctx: WorktreeMoveContext = {
-      knownIds: new Set(["/repo/other"]),
-      gitDirToId: new Map([[GITDIR, OLD]]),
-    };
-    expect(resolveMovedWorktreeId(OLD, GITDIR, ctx)).toBeUndefined();
+  it("follows the handle when the old path is now occupied by another worktree", () => {
+    // The saved id still appears in the list, but with a DIFFERENT handle — a new
+    // worktree took over the freed path while the original moved to NEW. Keying
+    // on the handle (not the still-present id) sends the panel to NEW, not the
+    // squatter at OLD.
+    const ctx = ctxWith([
+      { id: OLD, gitDir: "/repo/.git/worktrees/other" },
+      { id: NEW, gitDir: GITDIR },
+    ]);
+    expect(resolveMovedWorktreeId(OLD, GITDIR, ctx)).toBe(NEW);
   });
 });
 

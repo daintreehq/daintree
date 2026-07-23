@@ -723,6 +723,36 @@ describe("PanelPersistence", () => {
         setWorktreeGitDirAccessor(() => undefined);
       }
     });
+
+    it("carries the previous worktreeGitDir when the live store can't answer, only for the same worktree (#11388)", () => {
+      // First capture a snapshot with the handle from a populated store.
+      setWorktreeGitDirAccessor((id) =>
+        id === "wt-1" ? "/repo/.git/worktrees/wt-1" : undefined
+      );
+      const prev = panelToSnapshot(createMockTerminal({ id: "p1", worktreeId: "wt-1" }));
+      expect(prev.worktreeGitDir).toBe("/repo/.git/worktrees/wt-1");
+
+      try {
+        // Simulate the #11234 empty-list race: the view store can't answer yet.
+        setWorktreeGitDirAccessor(() => undefined);
+
+        // Same worktree ⇒ the durable handle is preserved, not erased.
+        const unchanged = panelToSnapshot(
+          createMockTerminal({ id: "p1", worktreeId: "wt-1" }),
+          prev
+        );
+        expect(unchanged.worktreeGitDir).toBe("/repo/.git/worktrees/wt-1");
+
+        // Panel now bound to a DIFFERENT worktree ⇒ the stale handle is dropped.
+        const moved = panelToSnapshot(
+          createMockTerminal({ id: "p1", worktreeId: "wt-2" }),
+          prev
+        );
+        expect(moved).not.toHaveProperty("worktreeGitDir");
+      } finally {
+        setWorktreeGitDirAccessor(() => undefined);
+      }
+    });
   });
 
   describe("unregistered extension kind", () => {

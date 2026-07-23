@@ -18,6 +18,7 @@ import {
   resolveWorktreeMovePatch,
   type WorktreeMoveContext,
 } from "./worktreeMoveRemap";
+import { rebaseAbsolutePath } from "@shared/utils/projectPathRelocation";
 import {
   inferKind,
   resolveAgentId,
@@ -37,6 +38,20 @@ import {
 
 type AddPanelFn = HydrationOptions["addPanel"];
 type RestoreTerminalOrderFn = NonNullable<HydrationOptions["restoreTerminalOrder"]>;
+
+/**
+ * Rebase a restore arg's `cwd` from a moved worktree's old root to its new one.
+ * No-op when the panel's worktree didn't move or the arg carries no cwd. Used on
+ * the surviving-PTY paths, whose cwd comes from the live backend record (the old
+ * path) rather than the already-rebased `saved.cwd` (#11388).
+ */
+function rebaseMovedArgsCwd(
+  args: { cwd?: string },
+  move: { oldRoot: string; newRoot: string } | undefined
+): void {
+  if (move === undefined || typeof args.cwd !== "string") return;
+  args.cwd = rebaseAbsolutePath(args.cwd, move.oldRoot, move.newRoot);
+}
 
 export interface PanelRestoreContext {
   addPanel: AddPanelFn;
@@ -188,12 +203,27 @@ export async function restorePanelsPhase(
     // left untouched here and handled by resolveRestoredWorktreeId's re-home
     // below. The context is null when the list isn't ready (#11234), so this is
     // a no-op in that race — identical to the pre-#11388 behavior.
-    const moveContext = await getWorktreeMoveContext();
+    // Skip the correlation — and its worktree-list await — entirely when no
+    // saved panel even carries a gitDir handle. Legacy snapshots and
+    // browser-only sessions then restore without waiting on worktree
+    // enumeration, preserving the pre-#11388 time-to-first-panel.
+    const anyMoveCandidate = savedPanels.some(
+      (saved) =>
+        saved !== undefined && saved.worktreeId !== undefined && saved.worktreeGitDir !== undefined
+    );
+    const moveContext = anyMoveCandidate ? await getWorktreeMoveContext() : null;
+    // old→new root per remapped panel, so the surviving-PTY paths below (which
+    // take cwd from the live backend record, not saved.cwd) can rebase it too.
+    const movedRootsById = new Map<string, { oldRoot: string; newRoot: string }>();
     const panels = moveContext
       ? savedPanels.map((saved) => {
           if (saved === undefined) return saved;
           const patch = resolveWorktreeMovePatch(saved, moveContext);
-          return patch ? { ...saved, ...patch } : saved;
+          if (!patch) return saved;
+          if (saved.worktreeId !== undefined) {
+            movedRootsById.set(saved.id, { oldRoot: saved.worktreeId, newRoot: patch.worktreeId });
+          }
+          return { ...saved, ...patch };
         })
       : savedPanels;
 
@@ -281,6 +311,10 @@ export async function restorePanelsPhase(
             // Assign to the active worktree when the terminal has no worktree,
             // or names one that no longer exists.
             args.worktreeId = await resolveRestoredWorktreeId(args.worktreeId);
+            // A surviving backend PTY reports its live (old-path) cwd; rebase it
+            // onto the moved worktree's new root so persisted state and a later
+            // respawn don't reference the vanished path (#11388).
+            rebaseMovedArgsCwd(args, movedRootsById.get(saved.id));
             const location = args.location as "grid" | "dock";
 
             logHydrationInfo(`[HYDRATION] Adding terminal from backend:`, {
@@ -359,6 +393,9 @@ export async function restorePanelsPhase(
                 reconnectArgs.worktreeId = await resolveRestoredWorktreeId(
                   reconnectArgs.worktreeId
                 );
+                // Rebase the reconnected PTY's live (old-path) cwd onto the
+                // moved worktree's new root, like the matched-backend path.
+                rebaseMovedArgsCwd(reconnectArgs, movedRootsById.get(saved.id));
                 const restoredTerminalId = await addPanel(reconnectArgs);
                 restoredIdsByIndex.set(capturedIndex, restoredTerminalId);
 

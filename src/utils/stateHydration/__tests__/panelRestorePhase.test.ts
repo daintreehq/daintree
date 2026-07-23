@@ -907,12 +907,81 @@ describe("restorePanelsPhase — panels surviving a worktree move (issue #11388)
 
   const GITDIR = "/repo/.git/worktrees/feature";
 
-  it("remaps a moved worktree's panel to the new id instead of re-homing it", async () => {
+  it("remaps a moved backend PTY to the new id and rebases its live cwd", async () => {
     // The worktree moved from /old/feature to /new/feature; its gitDir handle is
-    // unchanged, so the panel must follow to the new id, not collapse into wA.
+    // unchanged, so the panel must follow to the new id (not collapse into wA),
+    // and its surviving-PTY cwd (reported at the old path) must be rebased.
     const ctx = makeContext({
       activeWorktreeId: "wA",
       worktreesPromise: worktreeList({ id: "wA" }, { id: "/new/feature", gitDir: GITDIR }),
+    });
+    ctx.backendTerminalMap.set("t1", backend("t1", { cwd: "/old/feature/pkg" }));
+
+    await restorePanelsPhase(
+      [panel("t1", { worktreeId: "/old/feature", worktreeGitDir: GITDIR, cwd: "/old/feature/pkg" })],
+      ctx
+    );
+
+    expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({
+      worktreeId: "/new/feature",
+      cwd: "/new/feature/pkg",
+    });
+  });
+
+  it("remaps a respawned (cold) PTY and rebases its saved cwd", async () => {
+    reconnectWithTimeoutMock.mockResolvedValue({ status: "not_found" });
+    const ctx = makeContext({
+      activeWorktreeId: "wA",
+      worktreesPromise: worktreeList({ id: "wA" }, { id: "/new/feature", gitDir: GITDIR }),
+    });
+
+    await restorePanelsPhase(
+      [panel("t1", { worktreeId: "/old/feature", worktreeGitDir: GITDIR, cwd: "/old/feature/sub" })],
+      ctx
+    );
+
+    expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({
+      worktreeId: "/new/feature",
+      cwd: "/new/feature/sub",
+    });
+  });
+
+  it("remaps a moved non-PTY panel (browser) and rebases its cwd", async () => {
+    // Non-PTY panels never went through the re-home fallback, but the pre-pass
+    // rewrites saved.worktreeId/cwd before buildArgsForNonPtyRecreation reads it.
+    const ctx = makeContext({
+      activeWorktreeId: "wA",
+      worktreesPromise: worktreeList({ id: "wA" }, { id: "/new/feature", gitDir: GITDIR }),
+    });
+
+    await restorePanelsPhase(
+      [
+        panel("b1", {
+          kind: "browser",
+          worktreeId: "/old/feature",
+          worktreeGitDir: GITDIR,
+          cwd: "/old/feature",
+        }),
+      ],
+      ctx
+    );
+
+    expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({
+      worktreeId: "/new/feature",
+      cwd: "/new/feature",
+    });
+  });
+
+  it("follows the handle when the old path was taken over by another worktree", async () => {
+    // A moved /old/feature→/new/feature (handle GITDIR); a DIFFERENT worktree now
+    // occupies /old/feature. The panel must follow its handle to /new/feature,
+    // not bind to the squatter still sitting at the old id.
+    const ctx = makeContext({
+      activeWorktreeId: "wA",
+      worktreesPromise: worktreeList(
+        { id: "/old/feature", gitDir: "/repo/.git/worktrees/other" },
+        { id: "/new/feature", gitDir: GITDIR }
+      ),
     });
     ctx.backendTerminalMap.set("t1", backend("t1"));
 
@@ -922,6 +991,26 @@ describe("restorePanelsPhase — panels surviving a worktree move (issue #11388)
     );
 
     expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({ worktreeId: "/new/feature" });
+  });
+
+  it("remaps every panel sharing one moved worktree", async () => {
+    const ctx = makeContext({
+      activeWorktreeId: "wA",
+      worktreesPromise: worktreeList({ id: "wA" }, { id: "/new/feature", gitDir: GITDIR }),
+    });
+    ctx.backendTerminalMap.set("t1", backend("t1"));
+    ctx.backendTerminalMap.set("t2", backend("t2"));
+
+    await restorePanelsPhase(
+      [
+        panel("t1", { worktreeId: "/old/feature", worktreeGitDir: GITDIR }),
+        panel("t2", { worktreeId: "/old/feature", worktreeGitDir: GITDIR }),
+      ],
+      ctx
+    );
+
+    const homes = ctx.addPanel.mock.calls.map((c) => (c[0] as { worktreeId?: string }).worktreeId);
+    expect(homes).toEqual(["/new/feature", "/new/feature"]);
   });
 
   it("still re-homes a genuinely-deleted worktree (no gitDir match)", async () => {

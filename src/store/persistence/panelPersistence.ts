@@ -48,9 +48,17 @@ export function panelToSnapshot(
 ): PanelSnapshot {
   // Capture the worktree's stable admin-dir handle alongside the (path-derived,
   // move-fragile) worktreeId so restore can survive a `git worktree move`
-  // (#11388). Absent when the worktree/gitDir is unknown — restore falls back to
-  // its existing re-home behavior for those panels.
-  const worktreeGitDir = t.worktreeId ? getWorktreeGitDirById(t.worktreeId) : undefined;
+  // (#11388). When the live worktree store can't answer — e.g. the #11234
+  // empty-list readiness race, where a save can fire before the view store is
+  // populated — carry the handle already on the previous snapshot rather than
+  // dropping it, so a transient blank store doesn't erase a durable handle. Only
+  // preserved while the panel is still bound to the SAME worktree, so a genuine
+  // move to a different worktree never carries a stale handle forward. Absent
+  // when nothing is known — restore then re-homes as before.
+  const liveGitDir = t.worktreeId ? getWorktreeGitDirById(t.worktreeId) : undefined;
+  const worktreeGitDir =
+    liveGitDir ??
+    (previousSnapshot?.worktreeId === t.worktreeId ? previousSnapshot?.worktreeGitDir : undefined);
   const base: PanelSnapshot = {
     id: t.id,
     kind: t.kind,

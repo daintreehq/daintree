@@ -10,6 +10,13 @@ import { rebaseAbsolutePath } from "@shared/utils/projectPathRelocation";
  * pairs the set of current ids with a `gitDir → current id` index so a saved
  * panel whose `worktreeId` no longer matches can be remapped to the worktree's
  * new id instead of being orphaned and re-homed to the active worktree.
+ *
+ * Known limitation: a `gitDir` name is unique only among concurrently-registered
+ * worktrees, not forever — after a linked worktree is pruned, Git can reuse
+ * `.git/worktrees/<name>` for a later same-basename worktree. A snapshot for the
+ * deleted worktree could then correlate to the unrelated reuse. Closing that
+ * needs a main-process incarnation fingerprint (filesystem identity), which is
+ * out of scope for the path-change fix; the common move case is handled here.
  */
 export interface WorktreeMoveContext {
   /** Ids of all worktrees currently known to the view. */
@@ -63,14 +70,17 @@ export function buildWorktreeMoveContext(
 }
 
 /**
- * Resolve a saved `worktreeId` that may have moved to a new path.
+ * Resolve a saved `worktreeId` whose worktree may have moved to a new path.
  *
- * Returns the worktree's NEW id only when the saved id is no longer present but
- * its persisted `gitDir` handle matches a current worktree at a different path
- * (i.e. the worktree was moved). Returns `undefined` in every other case —
- * including a still-present id, a genuinely-deleted worktree (no `gitDir`
- * match), and legacy snapshots with no stored `gitDir` — so the caller keeps its
- * existing behavior (re-home to the active worktree).
+ * The `gitDir` handle is the stable identity, so it is the primary key: the
+ * panel belongs to whichever worktree currently carries its handle. Returns that
+ * worktree's id when the handle maps to a DIFFERENT id than the saved one —
+ * covering both a plain `git worktree move` and the case where the saved path
+ * was taken over by an unrelated worktree while the original moved elsewhere
+ * (matching on the still-present old id would wrongly bind the panel to the
+ * squatter). Returns `undefined` — so the caller keeps its re-home behavior —
+ * when the handle maps to no current worktree (genuinely deleted), maps to the
+ * same id (unchanged), or is absent (legacy snapshot with no stored handle).
  */
 export function resolveMovedWorktreeId(
   savedWorktreeId: string | undefined,
@@ -79,11 +89,9 @@ export function resolveMovedWorktreeId(
 ): string | undefined {
   if (ctx === null) return undefined;
   if (!savedWorktreeId || !savedGitDir) return undefined;
-  // Still present at its old path ⇒ not moved.
-  if (ctx.knownIds.has(savedWorktreeId)) return undefined;
-  const newId = ctx.gitDirToId.get(savedGitDir);
-  if (newId !== undefined && newId !== savedWorktreeId) return newId;
-  return undefined;
+  const currentId = ctx.gitDirToId.get(savedGitDir);
+  if (currentId === undefined || currentId === savedWorktreeId) return undefined;
+  return currentId;
 }
 
 /**
