@@ -19,6 +19,31 @@ describe("ContentDock regression test", () => {
     expect(content).not.toContain("if (groupPanels.length === 0) return null");
   });
 
+  // Issue #11332 — dock membership must follow the registry so plugin panels can
+  // dock. The dock selectors read `getRenderablePanel` (which keeps plugin
+  // kinds), NOT `getNarrowPanel` (which drops them, so plugin panels would never
+  // reach `isDockPanel`). Reverting either call site silently strands every
+  // dockable plugin panel, so pin the selector here.
+  it("reads dock panels through getRenderablePanel so plugin kinds are not dropped", () => {
+    const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
+
+    // Target the call sites (not prose) so a doc mention can't mask a revert.
+    expect(content).toContain("getRenderablePanel(state.panelsById");
+    expect(content).not.toContain("getNarrowPanel(state.panelsById");
+  });
+
+  // Issue #11332 — the single-panel chip renders through the generic
+  // `DockedNonPtyPanelItem` with a kind-aware `dockChipTitle`, replacing the old
+  // three-way ternary whose `else` branch assumed browser and would mislabel a
+  // plugin panel's chip.
+  it("renders non-PTY dock chips through the generic dockChipTitle path", () => {
+    const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
+
+    expect(content).toContain("displayTitle={dockChipTitle(terminal)}");
+    // The removed branch fed browserChipTitle to the ternary's non-file else.
+    expect(content).not.toMatch(/:\s*isFilePanel\(terminal\)\s*\?/);
+  });
+
   it("offscreen dock container closes stale active dock state", () => {
     const content = readFileSync(resolve(__dirname, "../DockPanelOffscreenContainer.tsx"), "utf-8");
 

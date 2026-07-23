@@ -206,6 +206,16 @@ describe("panelStore.addPanel dockability for plugin kinds (#11332)", () => {
     ...(dockable !== undefined ? { dockable } : {}),
   });
 
+  // Extension kinds are intentionally excluded from the `AddPanelOptions` union
+  // (a `kind: string` member would defeat discriminated-union narrowing for
+  // built-in kinds). Widen at this spawn boundary, the documented pattern used
+  // by `panelCoreActions.ts` for launching a custom kind.
+  const spawnPluginPanel = (kind: string, location: "dock" | "grid") => {
+    const addPanel = usePanelStore.getState().addPanel;
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- documented extension-panel spawn boundary (mirrors panelCoreActions.ts)
+    return addPanel({ kind, location } as Parameters<typeof addPanel>[0]);
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
     resetState();
@@ -219,7 +229,7 @@ describe("panelStore.addPanel dockability for plugin kinds (#11332)", () => {
   it("honors a dock request for a plugin kind that is dockable by default", async () => {
     registerPanelKind(makePluginConfig("ext-a.viewer"));
 
-    const id = await usePanelStore.getState().addPanel({ kind: "ext-a.viewer", location: "dock" });
+    const id = await spawnPluginPanel("ext-a.viewer", "dock");
 
     expect(id).toBeTruthy();
     expect(usePanelStore.getState().panelsById[id!]?.location).toBe("dock");
@@ -228,7 +238,7 @@ describe("panelStore.addPanel dockability for plugin kinds (#11332)", () => {
   it("redirects a dock request for a plugin kind that opts out (dockable:false) to the grid", async () => {
     registerPanelKind(makePluginConfig("ext-a.viewer", false));
 
-    const id = await usePanelStore.getState().addPanel({ kind: "ext-a.viewer", location: "dock" });
+    const id = await spawnPluginPanel("ext-a.viewer", "dock");
 
     expect(id).toBeTruthy();
     expect(usePanelStore.getState().panelsById[id!]?.location).toBe("grid");

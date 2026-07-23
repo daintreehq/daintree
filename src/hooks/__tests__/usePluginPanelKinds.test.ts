@@ -138,8 +138,11 @@ describe("usePluginPanelKinds", () => {
 
     const dockable = pluginKind({ id: "acme.viewer", hasPty: false, componentPath: "./v.js" });
     act(() => emit!({ kinds: [dockable] }));
-    // Absent flag → dockable by default.
-    expect(getPanelKindConfig(dockable.id)?.dockable).toBeUndefined();
+    // Assert the kind registered before checking key absence, so a missing
+    // config can't make `?.dockable` pass vacuously.
+    const registered = getPanelKindConfig(dockable.id);
+    expect(registered).toBeDefined();
+    expect(registered?.dockable).toBeUndefined();
 
     const optedOut = { ...dockable, dockable: false };
     act(() => emit!({ kinds: [optedOut] }));

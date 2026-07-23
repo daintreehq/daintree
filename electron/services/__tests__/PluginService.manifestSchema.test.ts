@@ -964,7 +964,12 @@ describe("PluginManifestSchema contributes strict validation", () => {
     });
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.contributes.panels[0]?.dockable).toBeUndefined();
+      // Assert the panel exists before checking key absence, so an empty
+      // panels array can't make `?.dockable` pass vacuously.
+      expect(result.data.contributes.panels).toHaveLength(1);
+      expect(
+        Object.prototype.hasOwnProperty.call(result.data.contributes.panels[0], "dockable")
+      ).toBe(false);
     }
   });
 

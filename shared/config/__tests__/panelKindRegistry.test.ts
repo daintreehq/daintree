@@ -563,7 +563,10 @@ describe("panelKindIsDockable", () => {
   });
 
   it("an explicit dockable:false wins even for a PTY kind", () => {
-    // The opt-out is authoritative: `hasPty` no longer forces dockability.
+    // Predicate contract only: `hasPty` no longer forces dockability, so the
+    // implementation must be `dockable !== false`, not `hasPty || …`. (At the
+    // store boundary a spawned PTY panel collapses to kind `terminal`, so this
+    // combination can't describe a live panel — this pins the pure function.)
     registerPanelKind({
       ...makeExtensionConfig("ext-a.pty", "ext-a"),
       hasPty: true,
