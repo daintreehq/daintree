@@ -371,10 +371,7 @@ describe("evictStaleSessionFiles orphan-pass safety (#11349)", () => {
     // wrongly build a knownIds Set — catching an inactive project first
     // discovered by the sweep.
     const unreadable = new Set<string>();
-    projectStoreMock.getAllProjects.mockReturnValue([
-      { id: "proj-a" },
-      { id: "proj-quarantined" },
-    ]);
+    projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-a" }, { id: "proj-quarantined" }]);
     projectStoreMock.getProjectState.mockImplementation(async (id: string) => {
       await Promise.resolve();
       if (id === "proj-quarantined") {
