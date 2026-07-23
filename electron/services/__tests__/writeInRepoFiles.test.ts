@@ -587,10 +587,21 @@ describe("readInRepoRecipesWithHashes", () => {
     }
   });
 
-  it("returns empty recipes and empty hashes when the directory is missing", async () => {
-    const { recipes, hashes } = await identityFiles.readInRepoRecipesWithHashes(tmpDir);
+  it("returns empty recipes and hashes and dirExists=false when the directory is missing", async () => {
+    const { recipes, hashes, dirExists } =
+      await identityFiles.readInRepoRecipesWithHashes(tmpDir);
     expect(recipes).toEqual([]);
     expect(hashes.size).toBe(0);
+    expect(dirExists).toBe(false);
+  });
+
+  it("returns dirExists=true for an existing but empty recipes directory", async () => {
+    await fs.mkdir(path.join(tmpDir, DAINTREE_RECIPES_DIR), { recursive: true });
+    const { recipes, hashes, dirExists } =
+      await identityFiles.readInRepoRecipesWithHashes(tmpDir);
+    expect(recipes).toEqual([]);
+    expect(hashes.size).toBe(0);
+    expect(dirExists).toBe(true);
   });
 });
 

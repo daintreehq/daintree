@@ -112,21 +112,102 @@ describe("ProjectStore recipe reconciliation", () => {
     expect(fs2[0]!.name).toBe(recipe.name);
   });
 
-  it("ProjectFileStore-only recipe with inrepo- prefix is removed as stale", async () => {
-    const staleId = stableInRepoId("Deleted Recipe");
-    const staleRecipe = makeRecipe({
-      id: staleId,
-      name: "Deleted Recipe",
+  it("in-repo mirror survives when .daintree/recipes/ is absent, keeping env/metadata (#11347)", async () => {
+    // Model a real checkout: the project root exists but the recipes directory
+    // does not (e.g. checked out a branch/commit predating .daintree/recipes/).
+    // A missing directory must NOT be read as "the recipe was deleted" — doing
+    // so wipes the local-only env values and usage metadata this test guards.
+    await fs.mkdir(projectPath, { recursive: true });
+
+    const mirror = makeRecipe({
+      id: stableInRepoId("Kept Recipe"),
+      name: "Kept Recipe",
+      terminals: [{ type: "terminal", command: "echo hi", env: { API_KEY: "secret" } }],
+      lastUsedAt: 123,
+      usageHistory: [123, 456],
     });
-    await seedFileStore([staleRecipe]);
+    await seedFileStore([mirror]);
+
+    await store.reconcileProjectRecipes(projectPath, projectId);
+
+    const fs2 = await readFileStore();
+    expect(fs2).toHaveLength(1);
+    expect(fs2[0]!.id).toBe(mirror.id);
+    expect(fs2[0]!.terminals[0]!.env).toEqual({ API_KEY: "secret" });
+    expect(fs2[0]!.lastUsedAt).toBe(123);
+    expect(fs2[0]!.usageHistory).toEqual([123, 456]);
+
+    // Reconciliation must not create the absent directory as a side effect.
+    await expect(fs.access(path.join(projectPath, ".daintree", "recipes"))).rejects.toThrow();
+
+    // No in-repo recipes are visible while the directory is absent.
+    const inr = await readInRepo();
+    expect(inr).toEqual([]);
+  });
+
+  it("in-repo mirror IS pruned when the directory exists but is empty", async () => {
+    // An empty-but-present directory is authoritative (e.g. the recipe file was
+    // deleted from .daintree/recipes/ while the dir itself remains). The mirror
+    // is genuinely stale here and must still be pruned — only the *missing*
+    // directory case is treated as inconclusive.
+    const recipesDir = path.join(projectPath, ".daintree", "recipes");
+    await fs.mkdir(recipesDir, { recursive: true });
+
+    const stale = makeRecipe({ id: stableInRepoId("Deleted Recipe"), name: "Deleted Recipe" });
+    await seedFileStore([stale]);
 
     await store.reconcileProjectRecipes(projectPath, projectId);
 
     const fs2 = await readFileStore();
     expect(fs2).toEqual([]);
-    // No promotion to in-repo
     const inr = await readInRepo();
     expect(inr).toEqual([]);
+  });
+
+  it("missing directory + mixed mirror & legacy recipe: mirror survives across two reconciliations (#11347)", async () => {
+    // Regression for the two-pass loss: with the directory absent, promoting the
+    // legacy recipe would recreate .daintree/recipes/, and the next reconcile
+    // (now seeing the dir) would prune the protected mirror. The guard must keep
+    // both recipes and leave the directory untouched, stably across passes.
+    await fs.mkdir(projectPath, { recursive: true });
+
+    const mirror = makeRecipe({
+      id: stableInRepoId("Mirror"),
+      name: "Mirror",
+      terminals: [{ type: "terminal", command: "echo m", env: { TOKEN: "keep-me" } }],
+    });
+    const legacy = makeRecipe({ id: "recipe-legacy-abc", name: "Legacy", projectId });
+    await seedFileStore([mirror, legacy]);
+
+    await store.reconcileProjectRecipes(projectPath, projectId);
+    await store.reconcileProjectRecipes(projectPath, projectId);
+
+    const fs2 = await readFileStore();
+    const survived = fs2.find((r) => r.id === mirror.id);
+    expect(survived).toBeDefined();
+    expect(survived!.terminals[0]!.env).toEqual({ TOKEN: "keep-me" });
+    expect(fs2.find((r) => r.id === legacy.id)).toBeDefined();
+
+    // The directory is never created while a mirror needs protecting.
+    await expect(fs.access(path.join(projectPath, ".daintree", "recipes"))).rejects.toThrow();
+  });
+
+  it("reconciliation populates the in-repo hash cache so a follow-up checked write succeeds", async () => {
+    // reconcileProjectRecipes now reads through a private helper; verify that
+    // helper still repopulates the hash cache the staleness guard depends on.
+    const recipe = makeRecipe({ id: stableInRepoId("Recon Cache"), name: "Recon Cache" });
+    await seedInRepo(recipe);
+
+    const fresh = new ProjectStore();
+    (fresh as unknown as { projectsConfigDir: string }).projectsConfigDir = tmpDir;
+    (fresh as unknown as { fileStore: { projectsConfigDir: string } }).fileStore.projectsConfigDir =
+      tmpDir;
+    await fresh.initialize();
+
+    // Without any prior read, a checked write would conflict (file exists, no
+    // cached hash). Reconciling first must populate the cache.
+    await fresh.reconcileProjectRecipes(projectPath, projectId);
+    await expect(fresh.writeInRepoRecipeChecked(projectPath, recipe)).resolves.toBeUndefined();
   });
 
   it("in-repo recipe overwrites differing ProjectFileStore copy", async () => {

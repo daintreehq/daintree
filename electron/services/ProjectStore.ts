@@ -308,7 +308,24 @@ export class ProjectStore {
   }
 
   async readInRepoRecipes(projectPath: string): Promise<TerminalRecipe[]> {
-    const { recipes, hashes } = await this.identityFiles.readInRepoRecipesWithHashes(projectPath);
+    const { recipes } = await this.readInRepoRecipesWithMeta(projectPath);
+    return recipes;
+  }
+
+  /**
+   * Cache-populating read shared by {@link readInRepoRecipes} and
+   * {@link reconcileProjectRecipes}. In addition to the recipes, it surfaces
+   * `dirExists` so reconciliation can tell an absent `.daintree/recipes/`
+   * directory (a checked-out branch/commit that predates recipes) apart from an
+   * authoritatively empty one — the former must never authorize pruning
+   * project-local mirrors (#11347). The public array-returning
+   * {@link readInRepoRecipes} keeps its signature for its unrelated callers.
+   */
+  private async readInRepoRecipesWithMeta(
+    projectPath: string
+  ): Promise<{ recipes: TerminalRecipe[]; dirExists: boolean }> {
+    const { recipes, hashes, dirExists } =
+      await this.identityFiles.readInRepoRecipesWithHashes(projectPath);
     // Replace this project's cached hashes with the freshly observed set so an
     // externally deleted recipe doesn't leave a stale entry pointing at a hash
     // for a file that no longer exists.
@@ -319,7 +336,7 @@ export class ProjectStore {
     for (const [recipeId, hash] of hashes) {
       this.inRepoRecipeHashes.set(this.hashKey(projectPath, recipeId), hash);
     }
-    return recipes;
+    return { recipes, dirExists };
   }
 
   async deleteInRepoRecipe(projectPath: string, recipeName: string): Promise<void> {
@@ -1248,9 +1265,26 @@ export class ProjectStore {
     // Go through the cache-aware wrapper so the hash map is populated as a
     // side effect — otherwise the first renderer-driven edit after a project
     // load races the unrelated `getInRepoRecipes` call to populate the cache
-    // and may see a phantom RECIPE_STALE_CONFLICT.
-    const inRepoRecipes = await this.readInRepoRecipes(projectPath);
+    // and may see a phantom RECIPE_STALE_CONFLICT. `dirExists` distinguishes an
+    // absent `.daintree/recipes/` directory from an authoritatively empty one.
+    const { recipes: inRepoRecipes, dirExists } =
+      await this.readInRepoRecipesWithMeta(projectPath);
     const fileStoreRecipes = await this.fileStore.getRecipes(projectId);
+
+    // #11347: When the in-repo recipe directory is absent (e.g. the user checked
+    // out a branch or commit that predates `.daintree/recipes/`) we cannot tell
+    // a recipe that was deleted from one that merely lives on another checkout.
+    // If any project-local recipe is in-repo-scoped, pruning it would destroy
+    // local-only env values / usage metadata, and promoting a *sibling*
+    // local-only recipe would recreate the directory — making the very next
+    // reconcile observe `dirExists: true` and prune the recipe we just
+    // protected. So when the directory is missing and there is anything to
+    // protect, make no filesystem changes at all and defer reconciliation until
+    // the directory is observable again. Projects with only promotable
+    // (non-in-repo) recipes still migrate/collision-check as before.
+    if (!dirExists && fileStoreRecipes.some((r) => isInRepoRecipeId(r))) {
+      return [];
+    }
 
     const inRepoById = new Map(inRepoRecipes.map((r) => [r.id, r]));
     const fileStoreById = new Map(fileStoreRecipes.map((r) => [r.id, r]));
