@@ -2,7 +2,7 @@ import { useCallback, useEffect, useId, useMemo, useRef } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { ChevronDown, ChevronRight, File, Folder, FolderOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { UI_SKELETON_GATE_MS } from "@/lib/animationUtils";
+import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
 import { Spinner } from "@/components/ui/Spinner";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
@@ -256,7 +256,7 @@ function FileTreeRow({ row, isSelected, context }: FileTreeRowProps) {
   // and children stay wired to the raw `row.isLoading`/listings state. Virtuoso
   // unmounts off-screen rows, so this cosmetic timer restarts if a still-loading
   // row scrolls out of view and back; harmless (the fetch itself keeps running).
-  const showLoadingSpinner = useDeferredLoading(row.isLoading, UI_SKELETON_GATE_MS);
+  const showLoadingSpinner = useDeferredLoading(row.isLoading, UI_INLINE_LOADING_GATE_MS);
 
   const handleClick = () => {
     onSelect(row.path);
@@ -346,7 +346,7 @@ function FileTreeRow({ row, isSelected, context }: FileTreeRowProps) {
         // it stays quiet even on a selected row, per accent restraint.
         <span
           role="status"
-          aria-label="Loading folder contents"
+          aria-label={`Loading contents of ${row.name}`}
           className="ml-1 inline-flex shrink-0 text-daintree-text/40"
         >
           <Spinner size="xs" />

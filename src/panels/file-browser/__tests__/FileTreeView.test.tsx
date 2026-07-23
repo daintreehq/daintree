@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render } from "@testing-library/react";
 import { forwardRef } from "react";
 import type { ReactNode } from "react";
-import { UI_SKELETON_GATE_MS } from "@/lib/animationUtils";
+import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
 import { FileTreeView } from "../FileTreeView";
 import type { FlatTreeRow } from "../fileBrowserTree";
 
@@ -156,14 +156,14 @@ describe("FileTreeView folder-load spinner", () => {
     expect(queryByText(/Loading/)).toBeNull();
 
     act(() => {
-      vi.advanceTimersByTime(UI_SKELETON_GATE_MS - 1);
+      vi.advanceTimersByTime(UI_INLINE_LOADING_GATE_MS - 1);
     });
     expect(queryByRole("status")).toBeNull();
 
     act(() => {
       vi.advanceTimersByTime(1);
     });
-    expect(getByRole("status", { name: "Loading folder contents" })).toBeTruthy();
+    expect(getByRole("status", { name: "Loading contents of src" })).toBeTruthy();
 
     // The nested status must not bleed into the row's own accessible name.
     expect(getByRole("treeitem", { name: "src" })).toBeTruthy();
@@ -177,7 +177,7 @@ describe("FileTreeView folder-load spinner", () => {
     });
 
     act(() => {
-      vi.advanceTimersByTime(UI_SKELETON_GATE_MS - 1);
+      vi.advanceTimersByTime(UI_INLINE_LOADING_GATE_MS - 1);
     });
     rerender(
       <FileTreeView
@@ -189,7 +189,7 @@ describe("FileTreeView folder-load spinner", () => {
       />
     );
     act(() => {
-      vi.advanceTimersByTime(UI_SKELETON_GATE_MS);
+      vi.advanceTimersByTime(UI_INLINE_LOADING_GATE_MS);
     });
 
     expect(queryByRole("status")).toBeNull();

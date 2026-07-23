@@ -90,6 +90,17 @@ export const UI_PALETTE_STALE_DELAY = DURATION_200;
  *  Not an animation token — a perceptual floor, same family as Doherty. */
 export const UI_SKELETON_GATE_MS = 200;
 
+/** UX anti-flicker gate for a granular, per-item *inline* loading indicator —
+ *  e.g. the file-tree folder-expansion spinner (`FileTreeRow`). A folder whose
+ *  listing resolves in under this window shows nothing, killing the flash on a
+ *  warm-cache expand. Intentionally shorter than `UI_DOHERTY_THRESHOLD`, which
+ *  governs page/panel-level spinners: 400ms is too sluggish for feedback this
+ *  granular, and issue #11318 asks for ~200ms here specifically. Shares the
+ *  200ms value with the skeleton gate by coincidence, not by coupling — the two
+ *  can diverge freely. Not an animation token — a perceptual floor, same family
+ *  as the Doherty/skeleton gates. */
+export const UI_INLINE_LOADING_GATE_MS = 200;
+
 /** Minimum on-screen dwell once a skeleton has crossed its onset gate. The
  *  onset gates (`useSkeletonGate`, `useDohertyGate`) only suppress *early*
  *  display; nothing stops a skeleton that just appeared from tearing down in
