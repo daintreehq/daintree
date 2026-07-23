@@ -19,10 +19,12 @@ import {
 } from "@/components/FileViewer/fileReadErrors";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
+import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { filesClient } from "@/clients/filesClient";
 import { isClientAppError } from "@/utils/clientAppError";
 import { sanitizeSvg } from "@shared/utils/svgSanitizer";
+import type { FileRenderMode } from "@shared/types/panel";
 import { logError } from "@/utils/logger";
 
 export interface FileBrowserViewerProps {
@@ -54,6 +56,14 @@ type ViewerState =
   | { status: "image" }
   | { status: "error"; message: string };
 
+// Markdown gets a Source/Rendered switch mirroring FilePane's toggle. Typed at
+// the constant so the option values stay `FileRenderMode` rather than widening
+// to `string`; a two-entry list only — the browser preview has no diff mode.
+const MARKDOWN_MODE_OPTIONS: Array<{ value: FileRenderMode; label: string }> = [
+  { value: "source", label: "Source" },
+  { value: "rendered", label: "Rendered" },
+];
+
 /**
  * Read-only viewer beside the tree.
  *
@@ -71,6 +81,12 @@ export function FileBrowserViewer({
   revision,
 }: FileBrowserViewerProps) {
   const [state, setState] = useState<ViewerState>({ status: "idle" });
+  // Sticky Source/Rendered choice for markdown, defaulting to the rendered view
+  // this pane has always shown. Deliberately not reset on file change: a reader
+  // paging through docs in source keeps source, mirroring FilePane (whose
+  // per-panel mode also survives a file swap). Non-markdown files simply hide
+  // the toggle, so a stale "source" never applies where it can't be honoured.
+  const [markdownMode, setMarkdownMode] = useState<FileRenderMode>("rendered");
   // Bumped on every load so `HtmlViewer` re-navigates its sandboxed frame when
   // an agent rewrites the file underneath it.
   const [reloadNonce, setReloadNonce] = useState(0);
@@ -259,6 +275,13 @@ export function FileBrowserViewer({
   return (
     <>
       <FileViewerToolbar.Root>
+        {isMarkdownFilePath(filePath) && (
+          <SegmentedToggle<FileRenderMode>
+            options={MARKDOWN_MODE_OPTIONS}
+            value={markdownMode}
+            onChange={setMarkdownMode}
+          />
+        )}
         <FileViewerToolbar.Path
           path={relativePath ?? fileName}
           copied={pathCopied}
@@ -380,7 +403,7 @@ export function FileBrowserViewer({
             content={state.content}
             filePath={filePath}
             rootPath={rootPath}
-            viewMode="rendered"
+            viewMode={markdownMode}
             className="h-full"
           />
         ) : (
