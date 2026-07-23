@@ -264,9 +264,7 @@ export function mergeRecord(
     if (removed.has(id)) continue;
     // Own-property read so a `constructor`/`toString` id can't pull a function
     // off the prototype chain.
-    const value = Object.prototype.hasOwnProperty.call(incoming, id)
-      ? incoming[id]
-      : undefined;
+    const value = Object.prototype.hasOwnProperty.call(incoming, id) ? incoming[id] : undefined;
     if (typeof value === "string" && value !== "") {
       result[id] = value;
     } else {

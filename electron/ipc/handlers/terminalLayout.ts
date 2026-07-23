@@ -358,7 +358,9 @@ export const terminalLayoutNamespace = defineIpcNamespace({
             changedIds === undefined
               ? sanitized
               : mergeRecord(
-                  sanitizeDraftInputs((existingState?.draftInputs ?? {}) as Record<string, unknown>),
+                  sanitizeDraftInputs(
+                    (existingState?.draftInputs ?? {}) as Record<string, unknown>
+                  ),
                   sanitized,
                   changedIds,
                   removedIds ?? []

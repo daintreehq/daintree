@@ -1,7 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-const setDraftInputsMock =
-  vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<void>>(() => Promise.resolve()));
+const setDraftInputsMock = vi.hoisted(() =>
+  vi.fn<
+    (
+      projectId: string,
+      draftInputs: Record<string, string>,
+      changedIds?: string[],
+      removedIds?: string[]
+    ) => Promise<void>
+  >(() => Promise.resolve())
+);
 
 vi.mock("@/clients", () => ({
   projectClient: { setDraftInputs: setDraftInputsMock },
@@ -179,7 +187,7 @@ describe("draftInputPersistence.flushAll — close-time draft flush (#11352)", (
 
     // #1 rejected → baseline unchanged; #2 proceeds and resends both drafts.
     expect(setDraftInputsMock).toHaveBeenCalledTimes(2);
-    expect(new Set(setDraftInputsMock.mock.calls[1]![2] as string[])).toEqual(new Set(["t1", "t2"]));
+    expect(new Set(setDraftInputsMock.mock.calls[1]![2])).toEqual(new Set(["t1", "t2"]));
   });
 
   it("clearProject forgets a project's baseline so it is no longer enumerated", async () => {

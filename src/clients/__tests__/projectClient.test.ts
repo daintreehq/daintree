@@ -410,6 +410,11 @@ describe("projectClient.setDraftInputs delta forwarding (#11352)", () => {
 
   it("passes undefined delta args through for a legacy full-replace call", async () => {
     await client.setDraftInputs("proj-1", { t1: "draft" });
-    expect(setDraftInputsMock).toHaveBeenCalledWith("proj-1", { t1: "draft" }, undefined, undefined);
+    expect(setDraftInputsMock).toHaveBeenCalledWith(
+      "proj-1",
+      { t1: "draft" },
+      undefined,
+      undefined
+    );
   });
 });
