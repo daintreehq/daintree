@@ -169,4 +169,44 @@ describe("SpinningIcon", () => {
       vi.advanceTimersByTime(UI_SPIN_CYCLE_MS * 2);
     });
   });
+
+  it("collapses the backstop to 0ms under performance mode", () => {
+    vi.useFakeTimers();
+    document.body.dataset.performanceMode = "true";
+    try {
+      const { container, rerender } = render(<SpinningIcon icon={RefreshCw} active={true} />);
+      rerender(<SpinningIcon icon={RefreshCw} active={false} />);
+      // Perf mode suppresses the CSS animation (no iteration event) AND collapses
+      // JS timers to 0 — so the spin releases on the next flush, not after a full
+      // 1s cycle. Advancing 1ms (far short of UI_SPIN_CYCLE_MS) proves the floor.
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(isSpinning(container)).toBe(false);
+    } finally {
+      delete document.body.dataset.performanceMode;
+    }
+  });
+
+  it("ignores an animationiteration from a different animation on the same node", () => {
+    if (typeof AnimationEvent === "undefined") return; // jsdom without AnimationEvent
+    const { container, rerender } = render(<SpinningIcon icon={RefreshCw} active={true} />);
+    const svg = svgOf(container);
+    rerender(<SpinningIcon icon={RefreshCw} active={false} />);
+    // A second looping animation (not Tailwind's `spin`) reaching its own
+    // boundary must not stop the refresh spin at an arbitrary phase.
+    act(() => {
+      svg.dispatchEvent(
+        new AnimationEvent("animationiteration", { animationName: "pulse", bubbles: true })
+      );
+    });
+    expect(isSpinning(container)).toBe(true);
+    // The real `spin` boundary still stops it.
+    act(() => {
+      svg.dispatchEvent(
+        new AnimationEvent("animationiteration", { animationName: "spin", bubbles: true })
+      );
+    });
+    expect(isSpinning(container)).toBe(false);
+  });
 });

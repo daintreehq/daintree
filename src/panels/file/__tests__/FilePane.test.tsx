@@ -1096,9 +1096,8 @@ describe("FilePane toolbar refresh spin (#11323)", () => {
     return { promise, resolve };
   }
 
-  function renderFilePane() {
-    panelsById["file-1"] = { id: "file-1", kind: "file", filePath: "/repo/src/index.ts" };
-    return render(
+  function paneForRefresh() {
+    return (
       <TooltipProvider>
         <FilePane
           id="file-1"
@@ -1110,6 +1109,11 @@ describe("FilePane toolbar refresh spin (#11323)", () => {
         />
       </TooltipProvider>
     );
+  }
+
+  function renderFilePane() {
+    panelsById["file-1"] = { id: "file-1", kind: "file", filePath: "/repo/src/index.ts" };
+    return render(paneForRefresh());
   }
 
   function refreshIcon(container: HTMLElement): SVGSVGElement {
@@ -1150,6 +1154,53 @@ describe("FilePane toolbar refresh spin (#11323)", () => {
     expect(refreshIcon(container).classList.contains("animate-spin")).toBe(true);
 
     // The rotation completes → the icon stops at 0°.
+    act(() => {
+      refreshIcon(container).dispatchEvent(new Event("animationiteration", { bubbles: true }));
+    });
+    expect(refreshIcon(container).classList.contains("animate-spin")).toBe(false);
+  });
+
+  it("does not strand the spin when a diff refresh is abandoned before it resolves (#11323)", async () => {
+    // A modified file so Diff mode is available; the diff never resolves
+    // (content stays undefined), the exact shape that stranded the old predicate.
+    worktreeState.worktrees.set("wt-1", {
+      path: "/repo",
+      worktreeChanges: { changes: [{ path: "/repo/src/index.ts", status: "modified" }] },
+    });
+    useDiffContentMock.mockReturnValue({ content: undefined, stale: false, retry: vi.fn() });
+    readMock.mockReset();
+    readMock.mockResolvedValue({ content: "v1" });
+    panelsById["file-1"] = {
+      id: "file-1",
+      kind: "file",
+      filePath: "/repo/src/index.ts",
+      worktreeId: "wt-1",
+      fileViewMode: "diff",
+    };
+    const { container, rerender } = render(paneForRefresh());
+    await act(async () => {});
+
+    // Refresh while the diff is still loading → the icon spins.
+    await act(async () => {
+      Array.from(container.querySelectorAll("button"))
+        .find((b) => b.getAttribute("aria-label") === "Refresh")
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(refreshIcon(container).classList.contains("animate-spin")).toBe(true);
+
+    // Abandon the diff by switching to Source before it ever resolves. The old
+    // `diffContent !== undefined` predicate would wait forever; the spin must
+    // release instead of being stranded.
+    panelsById["file-1"] = {
+      id: "file-1",
+      kind: "file",
+      filePath: "/repo/src/index.ts",
+      worktreeId: "wt-1",
+      fileViewMode: "source",
+    };
+    rerender(paneForRefresh());
+    await act(async () => {});
+
     act(() => {
       refreshIcon(container).dispatchEvent(new Event("animationiteration", { bubbles: true }));
     });

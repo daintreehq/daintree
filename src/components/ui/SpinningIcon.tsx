@@ -1,4 +1,5 @@
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import type { LucideIcon, LucideProps } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getPerformanceModeFloor, UI_SPIN_CYCLE_MS } from "@/lib/animationUtils";
@@ -6,7 +7,9 @@ import { getPerformanceModeFloor, UI_SPIN_CYCLE_MS } from "@/lib/animationUtils"
 interface SpinningIconProps extends Omit<LucideProps, "ref"> {
   /** The Lucide icon to render (e.g. `RefreshCw`). Rendered directly, so the
    *  spin runs on the same `<svg>` the call site would have rendered itself —
-   *  no wrapping element, no changed transform origin. */
+   *  no wrapping element, no changed transform origin. Must be a STABLE
+   *  component identity: swapping `icon` mid-spin replaces the `<svg>` and
+   *  restarts its animation from 0°. */
   icon: LucideIcon;
   /** True while the underlying operation is running. Drives the spin. */
   active: boolean;
@@ -33,7 +36,13 @@ interface SpinningIconProps extends Omit<LucideProps, "ref"> {
  *
  * `spinning` is set true only by the rising-edge layout effect and false only by
  * the iteration handler or the backstop — never transiently during a render, so
- * the `animate-spin` class is present continuously from press to boundary.
+ * the `animate-spin` class is present continuously from press to boundary. The
+ * ≥1-rotation guarantee holds for a spin that starts from rest and commits
+ * `active: true` for at least one render (an entirely-batched true→false pulse
+ * commits nothing and cannot spin — that is the caller's contract, satisfied by
+ * the async loading flags every call site drives this with). Re-activating
+ * during the finishing tail keeps the existing rotation going (smooth, never a
+ * snap) rather than re-arming a fresh full-rotation debt for the new press.
  */
 export function SpinningIcon({ icon: Icon, active, className, ...rest }: SpinningIconProps) {
   const [spinning, setSpinning] = useState(active);
@@ -61,10 +70,25 @@ export function SpinningIcon({ icon: Icon, active, className, ...rest }: Spinnin
       // Ignore a bubbling animation from a descendant or from a stale node that
       // has already been swapped out.
       if (event.target !== svgRef.current) return;
+      // Only Tailwind's `spin` keyframe marks a rotation boundary — a second
+      // looping animation on this SVG would otherwise stop the spin at its own
+      // (arbitrary) phase. Plain Events (jsdom, which never runs CSS animations)
+      // aren't AnimationEvents and pass through.
+      if (
+        typeof AnimationEvent !== "undefined" &&
+        event instanceof AnimationEvent &&
+        event.animationName !== "spin"
+      ) {
+        return;
+      }
       if (!stopRequestedRef.current) return;
       stopRequestedRef.current = false;
       clearTimer();
-      setSpinning(false);
+      // Commit synchronously: `animationiteration` is not a discrete event, so a
+      // scheduled update could remove the class a frame or two after the 0°
+      // boundary, letting the compositor over-rotate and snap. flushSync drops
+      // the class within this handler, before the next paint.
+      flushSync(() => setSpinning(false));
     },
     [clearTimer]
   );
@@ -108,5 +132,5 @@ export function SpinningIcon({ icon: Icon, active, className, ...rest }: Spinnin
 
   useLayoutEffect(() => () => clearTimer(), [clearTimer]);
 
-  return <Icon ref={setSvgRef} className={cn(className, spinning && "animate-spin")} {...rest} />;
+  return <Icon {...rest} ref={setSvgRef} className={cn(className, spinning && "animate-spin")} />;
 }

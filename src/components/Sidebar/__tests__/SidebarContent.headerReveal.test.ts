@@ -75,7 +75,10 @@ describe("SidebarContent header reveal — issue #6964", () => {
     // It must be driven by the raw `isRefreshing` transition flag — the old
     // `useSkeletonDisplayFloor` wall-clock floor gated duration, not rotation
     // phase, so it snapped mid-turn and is deliberately gone from this button.
-    expect(source).toMatch(/<SpinningIcon\b[^>]*icon=\{RefreshCw\}[^>]*active=\{isRefreshing\}/);
+    // Scope the positive match to the header so an unrelated SpinningIcon
+    // elsewhere in the file can't mask a regression to a static header icon.
+    const header = headerSlice(source);
+    expect(header).toMatch(/<SpinningIcon\b[^>]*icon=\{RefreshCw\}[^>]*active=\{isRefreshing\}/);
     expect(source).not.toContain("useSkeletonDisplayFloor");
     expect(source).not.toContain("showRefreshSpinner");
     // No hand-rolled conditional class toggle survives on the refresh icon.

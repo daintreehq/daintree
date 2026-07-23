@@ -384,3 +384,24 @@ describe("UI_SPIN_CYCLE_MS ↔ Tailwind .animate-spin drift contract", () => {
     expect(UI_SPIN_CYCLE_MS).toBe(tailwindMs);
   });
 });
+
+describe(".animate-spin suppression CSS contract (SpinningIcon backstop premise)", () => {
+  // SpinningIcon's JS backstop timer exists ONLY because reduced-motion and
+  // performance mode set `animation: none` on the spinning icon, so no
+  // `animationiteration` event ever fires to stop it at a rotation boundary.
+  // Guard that premise — if either rule stopped suppressing the animation, the
+  // backstop would be arming for a case that no longer needs it (harmless), but
+  // if BOTH the event and the suppression drifted, a real user could be stranded
+  // mid-spin. These assertions fail loudly if the suppression is removed.
+  const css = readFileSync(resolve(__dirname, "../../index.css"), "utf8");
+
+  it("reduced-motion neutralizes .animate-spin", () => {
+    expect(css).toMatch(/\.animate-spin\b[\s\S]{0,800}animation:\s*none/);
+  });
+
+  it("performance mode disables animation globally with !important", () => {
+    expect(css).toMatch(
+      /body\[data-performance-mode="true"\] \*[\s\S]*?animation:\s*none\s*!important/
+    );
+  });
+});

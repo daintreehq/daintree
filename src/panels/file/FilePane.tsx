@@ -482,9 +482,17 @@ export function FilePane({
 
   useEffect(() => {
     if (refreshingMode === null) return;
-    const settled = refreshingMode === "diff" ? diffContent !== undefined : loadState !== "loading";
+    // The refreshed surface is no longer on screen (mode switched, or diff mode
+    // clamped away when the change vanished) → the spin is moot, disarm it. This
+    // also covers an abandoned diff: `diffSubject` going null leaves diffContent
+    // `undefined` forever, which would otherwise strand the spin on "diff".
+    const settled =
+      refreshingMode !== viewMode ||
+      (refreshingMode === "diff"
+        ? diffSubject === null || diffContent !== undefined
+        : loadState !== "loading");
     if (settled) setRefreshingMode(null);
-  }, [refreshingMode, diffContent, loadState]);
+  }, [refreshingMode, viewMode, diffSubject, diffContent, loadState]);
 
   // Leaving Diff — by choice or because the change vanished — lands on source
   // cached before the edit that prompted the diff in the first place. Re-read it
