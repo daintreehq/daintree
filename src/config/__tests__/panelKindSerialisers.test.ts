@@ -487,6 +487,32 @@ describe("panelKindSerialisers", () => {
         );
       });
     });
+
+    it("restores an in-range sidebar width verbatim", () => {
+      expect(deserialize()({ id: "fb1", browserSidebarWidth: 360 }).browserSidebarWidth).toBe(360);
+    });
+
+    it("clamps a finite out-of-range sidebar width into the bounds", () => {
+      expect(deserialize()({ id: "fb1", browserSidebarWidth: 5000 }).browserSidebarWidth).toBe(600);
+      expect(deserialize()({ id: "fb1", browserSidebarWidth: 20 }).browserSidebarWidth).toBe(200);
+    });
+
+    it("drops a non-number or non-finite sidebar width rather than rendering a broken column", () => {
+      // The snapshot schema passes unknown keys through, so a hand-edited string
+      // or a NaN/Infinity must fall back to the default (undefined), never reach
+      // the pane as an inline style width.
+      expect(
+        deserialize()({ id: "fb1", browserSidebarWidth: "300" }).browserSidebarWidth
+      ).toBeUndefined();
+      expect(
+        deserialize()({ id: "fb1", browserSidebarWidth: Number.NaN }).browserSidebarWidth
+      ).toBeUndefined();
+      expect(
+        deserialize()({ id: "fb1", browserSidebarWidth: Number.POSITIVE_INFINITY })
+          .browserSidebarWidth
+      ).toBeUndefined();
+      expect(deserialize()({ id: "fb1" }).browserSidebarWidth).toBeUndefined();
+    });
   });
 
   describe("unknown kind", () => {

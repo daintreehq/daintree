@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import type React from "react";
 import { CornerLeftUp, EyeOff, FolderRoot, FolderTree, RefreshCw } from "lucide-react";
 import { basename, join } from "@shared/utils/path";
+import { cn } from "@/lib/utils";
 import type { BasePanelProps } from "@/components/Panel/ContentPanel";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -21,6 +23,14 @@ import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { FileTreeView } from "./FileTreeView";
 import { FileBrowserViewer } from "./FileBrowserViewer";
 import { useFileBrowserTree } from "./useFileBrowserTree";
+import {
+  FILE_BROWSER_SIDEBAR_DEFAULT_WIDTH,
+  FILE_BROWSER_SIDEBAR_MAX_WIDTH,
+  FILE_BROWSER_SIDEBAR_MIN_WIDTH,
+  FILE_BROWSER_SIDEBAR_RESIZE_STEP,
+  FILE_BROWSER_SIDEBAR_RESIZE_STEP_COARSE,
+  clampFileBrowserSidebarWidth,
+} from "./sidebarWidth";
 import {
   ancestorDirectories,
   createVisibilityFilter,
@@ -112,6 +122,22 @@ export function FileBrowserPane({
       (state) => {
         const panel = state.panelsById[id];
         return panel?.kind === "file-browser" ? panel.browserTreeSnapshot : undefined;
+      },
+      [id]
+    )
+  );
+  // Clamped at read so a persisted value from a future bounds change (or a
+  // corrupted snapshot the deserializer somehow let through) can never render a
+  // broken column; returns a stable primitive so the selector doesn't churn.
+  const sidebarWidth = usePanelStore(
+    useCallback(
+      (state) => {
+        const panel = state.panelsById[id];
+        return panel?.kind === "file-browser"
+          ? clampFileBrowserSidebarWidth(
+              panel.browserSidebarWidth ?? FILE_BROWSER_SIDEBAR_DEFAULT_WIDTH
+            )
+          : FILE_BROWSER_SIDEBAR_DEFAULT_WIDTH;
       },
       [id]
     )
@@ -264,6 +290,104 @@ export function FileBrowserPane({
   const handleToggleSidebar = useCallback(() => {
     setFileBrowserView(id, { browserSidebarCollapsed: !sidebarCollapsed });
   }, [id, sidebarCollapsed, setFileBrowserView]);
+
+  // Tree-column resize, modeled on PortalDock's handle: delta math from a
+  // mousedown-captured start (no DOM measure), continuous writes through the
+  // 500ms-debounced panel store, and a ref-held teardown so an unmount mid-drag
+  // can drop the document listeners. The column is left-anchored, so dragging
+  // right widens (the mirror of PortalDock's right-anchored dock).
+  const [isResizing, setIsResizing] = useState(false);
+  const dragCleanupRef = useRef<(() => void) | null>(null);
+
+  const handleResizeStart = useCallback(
+    (e: React.MouseEvent) => {
+      // Only the primary button drags: a right/middle press must not start a
+      // resize (and can't overwrite an in-flight drag's cleanup ref).
+      if (e.button !== 0) return;
+      // Skip the second mousedown of a double-click: the browser fires mousedown
+      // twice before dblclick, so guarding inside the dblclick handler is too
+      // late — the drag would already have jittered the width by a pixel.
+      if (e.detail > 1) return;
+      e.preventDefault();
+      setIsResizing(true);
+      const startX = e.clientX;
+      const startWidth = sidebarWidth;
+
+      const handleMouseMove = (ev: MouseEvent) => {
+        // The button was released where we couldn't see the mouseup (over the
+        // HTML-preview iframe, or outside the window). Recover on the next move
+        // that reaches us rather than staying wedged in a resize.
+        if (ev.buttons === 0) {
+          cleanup();
+          return;
+        }
+        const next = clampFileBrowserSidebarWidth(startWidth + (ev.clientX - startX));
+        setFileBrowserView(id, { browserSidebarWidth: next });
+      };
+      const handleMouseUp = () => cleanup();
+      const cleanup = () => {
+        setIsResizing(false);
+        document.removeEventListener("mousemove", handleMouseMove);
+        document.removeEventListener("mouseup", handleMouseUp);
+        dragCleanupRef.current = null;
+      };
+
+      document.addEventListener("mousemove", handleMouseMove);
+      document.addEventListener("mouseup", handleMouseUp);
+      dragCleanupRef.current = cleanup;
+    },
+    [id, sidebarWidth, setFileBrowserView]
+  );
+
+  const handleResizeDoubleClick = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      setFileBrowserView(id, { browserSidebarWidth: FILE_BROWSER_SIDEBAR_DEFAULT_WIDTH });
+    },
+    [id, setFileBrowserView]
+  );
+
+  // Left-anchored splitter: ArrowRight widens, ArrowLeft narrows; Home/End jump
+  // to the bounds per the WAI-ARIA window-splitter pattern, Shift for a coarse
+  // step (matching PortalDock's keyboard convention).
+  const handleResizeKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      const step = e.shiftKey
+        ? FILE_BROWSER_SIDEBAR_RESIZE_STEP_COARSE
+        : FILE_BROWSER_SIDEBAR_RESIZE_STEP;
+      let next: number;
+      switch (e.key) {
+        case "ArrowRight":
+          next = sidebarWidth + step;
+          break;
+        case "ArrowLeft":
+          next = sidebarWidth - step;
+          break;
+        case "Home":
+          next = FILE_BROWSER_SIDEBAR_MIN_WIDTH;
+          break;
+        case "End":
+          next = FILE_BROWSER_SIDEBAR_MAX_WIDTH;
+          break;
+        default:
+          return;
+      }
+      e.preventDefault();
+      setFileBrowserView(id, { browserSidebarWidth: clampFileBrowserSidebarWidth(next) });
+    },
+    [id, sidebarWidth, setFileBrowserView]
+  );
+
+  // The document listeners outlive the grip on two lifecycles the mouseup can't
+  // cover: the pane unmounting mid-drag (project switch), and the tree column
+  // unmounting because the sidebar collapsed mid-drag (the pane stays mounted,
+  // so its unmount effect never fires). Both drop the listeners here.
+  useEffect(() => {
+    return () => dragCleanupRef.current?.();
+  }, []);
+  useEffect(() => {
+    if (sidebarCollapsed) dragCleanupRef.current?.();
+  }, [sidebarCollapsed]);
 
   const handleSetRoot = useCallback(
     (path: string) => {
@@ -473,7 +597,8 @@ export function FileBrowserPane({
           <div
             id={treeSidebarId}
             ref={treeColumnRef}
-            className="flex min-h-0 w-72 shrink-0 flex-col self-stretch border-r border-daintree-border bg-daintree-sidebar"
+            className="relative flex min-h-0 shrink-0 flex-col self-stretch border-r border-daintree-border bg-daintree-sidebar"
+            style={{ width: sidebarWidth }}
           >
             {/* py-1.5 + border-overlay + 16px icons match FileViewerToolbar.Root
                 so the two header bars share one height and border token, and the
@@ -519,6 +644,38 @@ export function FileBrowserPane({
               </FileViewerToolbar.IconButton>
             </div>
             {renderTree()}
+            {/* Straddles the right border between the tree and the viewer. Lives
+                inside the collapsible column, so it unmounts with the tree —
+                no grip while collapsed, per #11331. Styling mirrors the
+                worktree Sidebar / PortalDock handle: a thin pill that thickens
+                on hover, an accent focus anchor for keyboard resize. */}
+            <div
+              role="separator"
+              aria-label="Resize file tree"
+              aria-orientation="vertical"
+              aria-controls={treeSidebarId}
+              aria-valuenow={Math.round(sidebarWidth)}
+              aria-valuemin={FILE_BROWSER_SIDEBAR_MIN_WIDTH}
+              aria-valuemax={FILE_BROWSER_SIDEBAR_MAX_WIDTH}
+              tabIndex={0}
+              data-testid="file-browser-sidebar-resize"
+              className={cn(
+                "group absolute -right-1.5 top-0 bottom-0 z-10 flex w-3 cursor-col-resize items-center justify-center",
+                "transition-colors hover:bg-overlay-soft focus:bg-tint/[0.04] focus:outline-hidden focus:ring-1 focus:ring-daintree-accent/50",
+                isResizing && "bg-overlay-medium"
+              )}
+              onMouseDown={handleResizeStart}
+              onDoubleClick={handleResizeDoubleClick}
+              onKeyDown={handleResizeKeyDown}
+            >
+              <div
+                className={cn(
+                  "h-8 w-px rounded-full transition-[width] delay-100 duration-150 group-hover:w-0.5",
+                  "bg-daintree-text/20 group-hover:bg-daintree-text/35 group-focus:bg-daintree-accent",
+                  isResizing && "bg-daintree-text/50"
+                )}
+              />
+            </div>
           </div>
         )}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
@@ -533,6 +690,17 @@ export function FileBrowserPane({
             treeSidebarId={treeSidebarId}
           />
         </div>
+        {isResizing && (
+          // Drag shield: while resizing, cover the surface so the HTML-preview
+          // iframe (which the divider drags straight over) can't swallow the
+          // mousemove/mouseup the document listeners depend on — without it a
+          // drag onto the viewer sticks. Events still bubble to `document`
+          // through this element; `fixed` keeps it out of the flex layout.
+          <div
+            data-testid="file-browser-resize-shield"
+            className="fixed inset-0 z-50 cursor-col-resize"
+          />
+        )}
       </div>
     </ContentPanel>
   );

@@ -115,6 +115,33 @@ describe("serializeFileBrowser", () => {
     // A panel that never captured one stays sparse.
     expect(serializeFileBrowser(basePanel)).toEqual({});
   });
+
+  it("round-trips a non-default sidebar width but keeps the 288 default sparse", () => {
+    const resized: FileBrowserPanelData = { ...basePanel, browserSidebarWidth: 420 };
+    expect(createFileBrowserDefaults(asOptions(serializeFileBrowser(resized)))).toEqual({
+      browserSidebarWidth: 420,
+    });
+
+    // 288 is the default width, the same state as absent — a reset-to-default or
+    // never-resized panel must not persist a width.
+    const atDefault: FileBrowserPanelData = { ...basePanel, browserSidebarWidth: 288 };
+    expect(serializeFileBrowser(atDefault)).toEqual({});
+    expect(serializeFileBrowser(basePanel)).toEqual({});
+  });
+
+  it("persists both a collapsed sidebar and a custom width together", () => {
+    // Collapse doesn't clear the width, so a panel collapsed while wide keeps
+    // both bits — re-opening restores the last-dragged width.
+    const both: FileBrowserPanelData = {
+      ...basePanel,
+      browserSidebarCollapsed: true,
+      browserSidebarWidth: 360,
+    };
+    expect(serializeFileBrowser(both)).toEqual({
+      browserSidebarCollapsed: true,
+      browserSidebarWidth: 360,
+    });
+  });
 });
 
 describe("createFileBrowserDefaults", () => {

@@ -277,6 +277,8 @@ export interface FileBrowserPanelOptions extends AddPanelOptionsBase {
   browserSidebarCollapsed?: boolean;
   /** Last-known tree structure to paint before the first live listing (#11367) */
   browserTreeSnapshot?: FileBrowserTreeSnapshot;
+  /** Tree column width in px to restore; absent or 288 = the default width */
+  browserSidebarWidth?: number;
 }
 
 /**
