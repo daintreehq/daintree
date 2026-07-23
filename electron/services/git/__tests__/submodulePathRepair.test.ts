@@ -105,6 +105,17 @@ describe("repairMovedSubmodulePaths", () => {
     expect(await readFile(good, "utf-8")).toContain(`worktree = ${newRoot}/vendor/good`);
   });
 
+  it("preserves CRLF line endings when rewriting the config", async () => {
+    const file = path.join(newRoot, ".git", "modules", "lib", "config");
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, `[core]\r\n\tworktree = /old/project/vendor/lib\r\n`, "utf-8");
+
+    await repairMovedSubmodulePaths(OLD, newRoot);
+
+    const out = await readFile(file, "utf-8");
+    expect(out).toBe(`[core]\r\n\tworktree = ${newRoot}/vendor/lib\r\n`);
+  });
+
   it("is a no-op when old and new roots are equal or empty", async () => {
     const config = await writeModuleConfig("modules/lib", "/old/project/vendor/lib");
     const before = await readFile(config, "utf-8");

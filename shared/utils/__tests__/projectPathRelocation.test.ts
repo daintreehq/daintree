@@ -69,6 +69,31 @@ describe("rebaseAbsolutePath", () => {
     );
   });
 
+  it("folds case and separators for Windows-flavored roots", () => {
+    // Stored value spelled with lowercase drive + forward slashes still matches.
+    expect(rebaseAbsolutePath("c:/old/project/src", "C:\\old\\project", "D:\\moved")).toBe(
+      "D:\\moved/src"
+    );
+    // Exact root, case-insensitive.
+    expect(rebaseAbsolutePath("C:/OLD/Project", "c:\\old\\project", "D:\\moved")).toBe("D:\\moved");
+    // Case-only sibling must still NOT match a different folder.
+    expect(rebaseAbsolutePath("C:\\old\\project2", "C:\\old\\project", "D:\\moved")).toBe(
+      "C:\\old\\project2"
+    );
+  });
+
+  it("does NOT treat a backslash as a boundary on POSIX (a file literally named with one)", () => {
+    // On POSIX, `\` is a valid filename character — `/old/project\copy` is a
+    // sibling file, not a descendant of `/old/project`.
+    expect(rebaseAbsolutePath("/old/project\\copy", OLD, NEW)).toBe("/old/project\\copy");
+  });
+
+  it("rebases UNC descendants", () => {
+    expect(
+      rebaseAbsolutePath("\\\\server\\share\\proj\\a", "\\\\server\\share\\proj", "\\\\server\\share\\moved")
+    ).toBe("\\\\server\\share\\moved\\a");
+  });
+
   it("returns value unchanged when roots are empty", () => {
     expect(rebaseAbsolutePath("/old/project/a", "", NEW)).toBe("/old/project/a");
     expect(rebaseAbsolutePath("/old/project/a", OLD, "")).toBe("/old/project/a");

@@ -3535,7 +3535,12 @@ ${lines.map((l) => "+" + l).join("\n")}`;
   private async loadProjectEnvVars(projectId: string): Promise<Record<string, string>> {
     try {
       const userDataDir = process.env.DAINTREE_USER_DATA ?? "";
-      const filePath = settingsFilePath(userDataDir, projectId);
+      if (!userDataDir) return {};
+      // Settings live under `<userData>/projects/<id>/settings.json` (see
+      // ProjectStore's `projectsConfigDir`). DAINTREE_USER_DATA is the bare
+      // userData root, so the `projects` segment must be added here — without it
+      // the read silently missed and env vars never reached the host (#11282).
+      const filePath = settingsFilePath(pathResolve(userDataDir, "projects"), projectId);
       if (!filePath) return {};
       const raw = await readFile(filePath, "utf8");
       const parsed: unknown = JSON.parse(raw);

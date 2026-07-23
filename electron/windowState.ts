@@ -233,6 +233,11 @@ export function rekeyWindowStateForPath(oldPath: string, newPath: string): void 
   if (!windowStates || !(oldPath in windowStates)) return;
   const bounds = windowStates[oldPath];
   delete windowStates[oldPath];
+  // Delete any stale entry already at the destination before reassigning, so the
+  // moved bounds take a FRESH (most-recent) insertion slot. Insertion order is
+  // the MRU-cap policy (see commitWindowStates); overwriting in place would leave
+  // the relocated project in the stale entry's old, possibly-evicted position.
+  delete windowStates[newPath];
   windowStates[newPath] = bounds;
   commitWindowStates(windowStates);
   if (lastSavedProjectPath === oldPath) {

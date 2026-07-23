@@ -925,6 +925,19 @@ describe("createWindowWithState", () => {
       expect(getState()["/old"]).toBeUndefined();
     });
 
+    it("rekeyWindowStateForPath gives the moved entry a fresh (most-recent) MRU slot", () => {
+      // /new pre-exists as the OLDEST entry; a naive in-place overwrite would keep
+      // it oldest and make the relocated project the first evicted. It must be
+      // re-inserted last.
+      const e = (x: number) => ({ x, y: 0, width: 800, height: 600, isMaximized: false });
+      const getState = makeStateful({ "/new": e(1), "/keep": e(2), "/old": e(3) });
+
+      rekeyWindowStateForPath("/old", "/new");
+
+      const keys = Object.keys(getState());
+      expect(keys[keys.length - 1]).toBe("/new");
+    });
+
     it("rekeyWindowStateForPath is a no-op when the old path is absent or paths match", () => {
       makeStateful({ "/b": { x: 0, y: 0, width: 800, height: 600 } });
       windowStatesStoreMock.set.mockClear();

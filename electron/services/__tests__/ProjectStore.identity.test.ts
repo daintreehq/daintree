@@ -242,6 +242,22 @@ describe("project identity across folder moves", () => {
       expect(repairMovedSubmodulePaths).not.toHaveBeenCalled();
     });
 
+    it("isolates a synchronously-throwing migration surface — the move still succeeds and repairs run", async () => {
+      rewriteHibernationProjectPath.mockImplementationOnce(() => {
+        throw new Error("app.getPath exploded");
+      });
+      const original = await makeDir("original");
+      const registered = await store.addProject(original);
+      await writeAnchor(original, registered.id);
+      const moved = path.join(tmpRoot, "renamed");
+      await fs.promises.rename(original, moved);
+      const canonicalMoved = await fs.promises.realpath(moved);
+
+      // A sync throw while building a surface must NOT reject the adoption.
+      await expect(store.addProject(canonicalMoved)).resolves.toMatchObject({ id: registered.id });
+      expect(repairMovedSubmodulePaths).toHaveBeenCalledWith(original, canonicalMoved);
+    });
+
     it("mints a distinct id for a copy whose original still exists", async () => {
       const original = await makeDir("original");
       const registered = await store.addProject(original);
@@ -409,6 +425,24 @@ describe("project identity across folder moves", () => {
 
       expect(relocated.path).toBe(dir);
       expect(repairWorktrees).not.toHaveBeenCalled();
+    });
+
+    it("stores a decomposed-Unicode destination in NFC so the immutable id still resolves", async () => {
+      const original = await makeDir("original");
+      const registered = await store.addProject(original);
+
+      // A real destination whose name is NFD ("cafe" + combining acute U+0301).
+      // getGitRoot realpaths it (bytes preserved on APFS/ext4), and the store must
+      // persist and resolve the NFC ("é") form rather than the raw NFD spelling.
+      const nfdDir = await makeDir("relocated-cafe\u0301");
+      const nfc = nfdDir.normalize("NFC");
+      const relocated = await store.relocateProject(registered.id, nfdDir);
+
+      expect(relocated.id).toBe(registered.id);
+      expect(relocated.path).toBe(nfc);
+      expect(store.resolveProjectIdForPath(nfc)).toBe(registered.id);
+      // The raw NFD spelling resolves too, since lookups normalize.
+      expect(store.resolveProjectIdForPath(nfdDir)).toBe(registered.id);
     });
   });
 

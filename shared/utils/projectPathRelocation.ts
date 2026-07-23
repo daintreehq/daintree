@@ -19,15 +19,34 @@ export function isAbsoluteFsPath(value: string): boolean {
   return value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value) || value.startsWith("\\\\");
 }
 
-function stripTrailingSep(p: string): string {
-  return p.length > 1 && (p.endsWith("/") || p.endsWith("\\")) ? p.replace(/[\\/]+$/, "") : p;
+/** Windows-flavored absolute path (drive-letter or UNC), where `\` and `/` are
+ * both separators and comparison is case-insensitive. */
+function isWindowsPath(value: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(value) || value.startsWith("\\\\");
+}
+
+/**
+ * Drop a trailing separator, but never reduce a value to a bare volume root
+ * (`/`, `C:`, `\\`) — those aren't project directories and stripping them would
+ * corrupt an exact-root rebase.
+ */
+function stripTrailingSep(value: string): string {
+  if (value.length <= 1) return value;
+  const stripped = value.replace(/[\\/]+$/, "");
+  if (stripped === "" || /^[A-Za-z]:$/.test(stripped)) return value;
+  return stripped;
 }
 
 /**
  * Rebase an absolute filesystem path from `oldRoot` to `newRoot`.
  *
  * Returns `value` with its `oldRoot` prefix replaced by `newRoot`, matching
- * only at a path-segment boundary so `/repo` never rewrites `/repo-copy`.
+ * only at a path-segment boundary so `/repo` never rewrites `/repo-copy`. On
+ * Windows-flavored roots (drive/UNC) the comparison is case-insensitive and
+ * treats `\` and `/` as equivalent separators; on POSIX only `/` is a separator
+ * and comparison is exact — so a POSIX file literally named `project\copy` next
+ * to `/old/project` is left alone. The original suffix spelling is preserved.
+ *
  * `value` is returned unchanged when it is not an absolute path, or not at/under
  * `oldRoot`. The transform is deliberately conservative — a stale path is safer
  * than corrupting an unrelated project's data — so it never infers through
@@ -37,14 +56,23 @@ export function rebaseAbsolutePath(value: string, oldRoot: string, newRoot: stri
   if (typeof value !== "string" || !value || !oldRoot || !newRoot) return value;
   if (!isAbsoluteFsPath(value)) return value;
 
+  const windows = isWindowsPath(oldRoot) || isWindowsPath(value);
+  const separators = windows ? "\\/" : "/";
+  const fold = (s: string): string => (windows ? s.replace(/\\/g, "/").toLowerCase() : s);
+
   const v = stripTrailingSep(value);
   const o = stripTrailingSep(oldRoot);
   const n = stripTrailingSep(newRoot);
 
-  if (v === o) return n;
+  if (fold(v) === fold(o)) return n;
 
-  // Segment boundary against either separator — a path can carry mixed ones.
-  if (v.startsWith(`${o}/`) || v.startsWith(`${o}\\`)) {
+  // Descendant: the char immediately after the old-root prefix must be a
+  // separator, and the prefix must match (case-/separator-folded on Windows).
+  if (
+    v.length > o.length &&
+    separators.includes(v[o.length]) &&
+    fold(v.slice(0, o.length)) === fold(o)
+  ) {
     return n + v.slice(o.length);
   }
   return value;

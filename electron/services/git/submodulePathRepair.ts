@@ -165,13 +165,15 @@ function rewriteCoreWorktree(
     }
     if (section !== "core") continue;
 
-    const kv = line.match(/^(\s*worktree\s*=\s*)(.*)$/i);
+    const kv = line.match(/^(\s*worktree\s*=\s*)(.*?)(\s*)$/i);
     if (!kv) continue;
 
     const { value, quoted } = decodeConfigValue(kv[2]);
     const next = transform(value);
     if (next !== value) {
-      lines[i] = kv[1] + encodeConfigValue(next, quoted);
+      // kv[3] preserves the line's trailing whitespace — notably a CRLF's `\r`,
+      // so a Windows-authored config keeps its line endings intact.
+      lines[i] = kv[1] + encodeConfigValue(next, quoted) + kv[3];
       changed = true;
     }
     // Only the first core.worktree matters.
