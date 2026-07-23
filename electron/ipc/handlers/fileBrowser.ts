@@ -8,6 +8,7 @@ import {
   FileBrowserStatPathsPayloadSchema,
 } from "../../schemas/ipc.js";
 import { AppError } from "../../utils/errorTypes.js";
+import { projectStore } from "../../services/ProjectStore.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
 import type {
   FileBrowserListDirectoryPayload,
@@ -88,34 +89,50 @@ function assertRelativeDirPath(dirPath: string | undefined): void {
 
 export function buildFileBrowserNamespace(deps: HandlerDependencies) {
   /**
-   * Resolve a worktree by id, scoped to the *sender's* window.
+   * Resolve a worktree by id, scoped to the *sender view's own project*.
    *
-   * Reads the sender's window synchronously, before the first await: the view
-   * can be evicted while the workspace call is in flight, and a binding that
-   * vanishes mid-request would silently widen the scope. An unresolvable
-   * sender is refused rather than passed through as `undefined`, which
-   * `getAllStatesAsync` reads as "every host" — a wildcard is exactly the
-   * scope this gate exists to deny. Scoped by sender rather than
-   * `getMonitorAsync`, which scans every live workspace host and would happily
-   * resolve a worktree belonging to another project — worktree ids are
-   * normalized absolute paths, so a renderer could guess one and enumerate a
-   * sibling project's tree.
+   * `ctx.projectId` is the main-owned webContents→project binding
+   * (`viewToProject`), captured synchronously at dispatch — it survives the
+   * view being backgrounded and can't be spoofed or repointed by a project
+   * switch, unlike window-scoped lookups: `windowToProject` holds one project
+   * per window and is repointed to the incoming project the moment a switch
+   * starts, so a cached view's requests would resolve against the *active*
+   * project's host for the entire background period (#11366). A sender with
+   * no project binding is refused outright — null is an identity, not a
+   * wildcard, and falling through to an unscoped query is exactly the scope
+   * this gate exists to deny. Scoped by sender rather than `getMonitorAsync`,
+   * which scans every live workspace host and would happily resolve a
+   * worktree belonging to another project — worktree ids are normalized
+   * absolute paths, so a renderer could guess one and enumerate a sibling
+   * project's tree.
    */
   const resolveSenderWorktree = async (ctx: IpcContext, worktreeId: string) => {
     if (!deps.worktreeService) {
       throw new Error("Worktree service not available");
     }
 
-    const senderWindowId = ctx.senderWindow?.id;
-    if (senderWindowId === undefined) {
+    const senderProjectId = ctx.projectId;
+    if (senderProjectId === null) {
       throw new AppError({
         code: "INVALID_PATH",
-        message: "Unable to resolve the requesting window",
+        message: "Unable to resolve the requesting view's project",
         context: {},
       });
     }
 
-    const states = await deps.worktreeService.getAllStatesAsync(senderWindowId);
+    const project = projectStore.getProjectById(senderProjectId);
+    if (!project) {
+      throw new AppError({
+        code: "INVALID_PATH",
+        message: "Unknown project for the requesting view",
+        context: { projectId: senderProjectId },
+      });
+    }
+
+    const states = await deps.worktreeService.getAllStatesForProjectAsync(
+      project.path,
+      senderProjectId
+    );
     const worktree = states.find((state) => state.id === worktreeId);
 
     if (!worktree) {

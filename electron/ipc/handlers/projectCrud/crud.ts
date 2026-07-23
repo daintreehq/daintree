@@ -136,7 +136,14 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
     if (typeof updates !== "object" || updates === null) {
       throw new Error("Invalid updates object");
     }
+    // `id` and `path` are identity, not metadata: entry-scoped authorization
+    // (fileBrowser's project routing) resolves hosts by the row's path, so a
+    // renderer that could rewrite its own project's path to a sibling's would
+    // point that resolution at the sibling's host. Path changes stay exclusive
+    // to the main-owned relocation flow (#11282).
     const {
+      id: _id,
+      path: _path,
       inRepoSettings: _inRepo,
       frecencyScore: _fs,
       lastAccessedAt: _lat,
