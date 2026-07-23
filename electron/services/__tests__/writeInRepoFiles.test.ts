@@ -576,9 +576,12 @@ describe("readInRepoRecipesWithHashes", () => {
     await identityFiles.writeInRepoRecipe(tmpDir, makeRecipe({ id: "r1", name: "First" }));
     await identityFiles.writeInRepoRecipe(tmpDir, makeRecipe({ id: "r2", name: "Second" }));
 
-    const { recipes, hashes } = await identityFiles.readInRepoRecipesWithHashes(tmpDir);
+    const { recipes, hashes, dirExists, scanComplete } =
+      await identityFiles.readInRepoRecipesWithHashes(tmpDir);
     expect(recipes).toHaveLength(2);
     expect(hashes.size).toBe(2);
+    expect(dirExists).toBe(true);
+    expect(scanComplete).toBe(true);
     for (const recipe of recipes) {
       const filename = recipe.name === "First" ? "first.json" : "second.json";
       const onDisk = await fs.readFile(path.join(tmpDir, DAINTREE_RECIPES_DIR, filename), "utf-8");
@@ -587,10 +590,46 @@ describe("readInRepoRecipesWithHashes", () => {
     }
   });
 
-  it("returns empty recipes and empty hashes when the directory is missing", async () => {
-    const { recipes, hashes } = await identityFiles.readInRepoRecipesWithHashes(tmpDir);
+  it("returns empty recipes and hashes and dirExists=false when the directory is missing", async () => {
+    const { recipes, hashes, dirExists, scanComplete } =
+      await identityFiles.readInRepoRecipesWithHashes(tmpDir);
     expect(recipes).toEqual([]);
     expect(hashes.size).toBe(0);
+    expect(dirExists).toBe(false);
+    expect(scanComplete).toBe(true);
+  });
+
+  it("returns dirExists=true and scanComplete=true for an existing but empty recipes directory", async () => {
+    await fs.mkdir(path.join(tmpDir, DAINTREE_RECIPES_DIR), { recursive: true });
+    const { recipes, hashes, dirExists, scanComplete } =
+      await identityFiles.readInRepoRecipesWithHashes(tmpDir);
+    expect(recipes).toEqual([]);
+    expect(hashes.size).toBe(0);
+    expect(dirExists).toBe(true);
+    expect(scanComplete).toBe(true);
+  });
+
+  it("reports scanComplete=false when a listed recipe file cannot be read", async () => {
+    const recipesDir = path.join(tmpDir, DAINTREE_RECIPES_DIR);
+    await fs.mkdir(recipesDir, { recursive: true });
+    const filePath = path.join(recipesDir, "unreadable.json");
+    await fs.writeFile(filePath, JSON.stringify(makeRecipe({ id: "r1", name: "R1" })), "utf-8");
+    await fs.chmod(filePath, 0o000);
+
+    // Some environments (e.g. running as root) ignore the mode; only assert the
+    // partial-scan signal when the file is genuinely unreadable here.
+    let readable = true;
+    try {
+      await fs.readFile(filePath, "utf-8");
+    } catch {
+      readable = false;
+    }
+
+    const { dirExists, scanComplete } = await identityFiles.readInRepoRecipesWithHashes(tmpDir);
+    expect(dirExists).toBe(true);
+    expect(scanComplete).toBe(readable);
+
+    await fs.chmod(filePath, 0o600); // restore so afterEach cleanup can remove it
   });
 });
 

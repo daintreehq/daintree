@@ -338,23 +338,43 @@ export class ProjectIdentityFiles {
    * exact bytes (`fs.readFile` UTF-8 result), so it matches what
    * {@link writeInRepoRecipe} and {@link getInRepoRecipeFileHash} produce when
    * the file is untouched.
+   *
+   * `dirExists` reports whether the `.daintree/recipes/` directory was present.
+   * An absent directory (e.g. a checked-out branch/commit that predates recipes)
+   * yields the same empty `recipes`/`hashes` as an authoritatively empty one, so
+   * callers that make destructive decisions must consult `dirExists` to avoid
+   * treating "not on this checkout" as "deleted" (#11347). `scanComplete` is
+   * `false` when the directory existed but at least one entry could not be read
+   * (a partial, non-authoritative snapshot) — destructive callers must treat
+   * that the same as an absent directory.
    */
-  async readInRepoRecipesWithHashes(
-    projectPath: string
-  ): Promise<{ recipes: TerminalRecipe[]; hashes: Map<string, string> }> {
+  async readInRepoRecipesWithHashes(projectPath: string): Promise<{
+    recipes: TerminalRecipe[];
+    hashes: Map<string, string>;
+    dirExists: boolean;
+    scanComplete: boolean;
+  }> {
     const recipesDir = path.join(projectPath, DAINTREE_RECIPES_DIR);
     let entries;
     try {
       entries = await fs.readdir(recipesDir, { withFileTypes: true });
     } catch (error) {
       if (error instanceof Error && "code" in error && error.code === "ENOENT")
-        return { recipes: [], hashes: new Map() };
+        return { recipes: [], hashes: new Map(), dirExists: false, scanComplete: true };
       throw error;
     }
 
     const recipes: TerminalRecipe[] = [];
     const hashes = new Map<string, string>();
     const seenIds = new Set<string>();
+    // Whether every listed entry was actually read. A per-file *read* failure
+    // (e.g. a concurrent branch checkout unlinking a recipe after `readdir` but
+    // before we open it) means this snapshot is not an authoritative view of the
+    // directory, so destructive reconciliation must not prune from it (#11347).
+    // A readable-but-malformed file (JSON/schema failure below) is different: it
+    // is genuinely skipped and does NOT taint the scan, otherwise one committed
+    // bad file would wedge pruning forever.
+    let scanComplete = true;
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
       try {
@@ -437,10 +457,22 @@ export class ProjectIdentityFiles {
         recipes.push(recipe);
         hashes.set(recipe.id, hashRecipePayload(content));
       } catch (error) {
-        console.warn(`[ProjectIdentityFiles] Skipping malformed recipe file: ${entry.name}`, error);
+        // A filesystem error (has a `code`) means the entry could not be read —
+        // an incomplete, non-authoritative scan. A SyntaxError from JSON.parse
+        // (no `code`) is a genuinely malformed file: skip it, but leave the scan
+        // authoritative so a permanently-bad file never blocks pruning.
+        if (error instanceof Error && "code" in error) {
+          scanComplete = false;
+          console.warn(`[ProjectIdentityFiles] Could not read recipe file: ${entry.name}`, error);
+        } else {
+          console.warn(
+            `[ProjectIdentityFiles] Skipping malformed recipe file: ${entry.name}`,
+            error
+          );
+        }
       }
     }
-    return { recipes, hashes };
+    return { recipes, hashes, dirExists: true, scanComplete };
   }
 
   /**
