@@ -60,10 +60,18 @@ function setPanelState(panels: Panel[]) {
   return { bulkTrashByWorktree, bulkRestartByWorktree, bulkCloseByWorktree };
 }
 
-function setupActions() {
+// The registration callbacks are unused by these action factories; one shared
+// escape hatch keeps the no-unsafe-type-assertion count flat across helpers.
+const registrationCallbacks = {} as unknown as ActionCallbacks;
+
+function buildRegistry(): ActionRegistry {
   const actions: ActionRegistry = new Map();
-  const callbacks = {} as unknown as ActionCallbacks;
-  registerWorktreeSessionActions(actions, callbacks);
+  registerWorktreeSessionActions(actions, registrationCallbacks);
+  return actions;
+}
+
+function setupActions() {
+  const actions = buildRegistry();
   return (id: string, args?: unknown, ctx?: Partial<ActionContext>) => {
     const factory = actions.get(id);
     if (!factory) throw new Error(`missing ${id}`);
@@ -444,9 +452,7 @@ describe("worktree.sessions confirmed flag survives arg validation (schema regre
   // from a schema, Zod would strip it and every confirmed dispatch would re-request
   // forever — so assert the schemas actually preserve the flag through a parse.
   function schemaFor(id: string) {
-    const actions: ActionRegistry = new Map();
-    registerWorktreeSessionActions(actions, {} as unknown as ActionCallbacks);
-    const factory = actions.get(id);
+    const factory = buildRegistry().get(id);
     if (!factory) throw new Error(`missing ${id}`);
     return (factory() as AnyActionDefinition).argsSchema;
   }

@@ -261,11 +261,7 @@ export function registerWorktreeSessionActions(
       // Scope the cleanup to THIS worktree's pending entry (tighter than
       // trashAll's kind-only clear) so a confirmed end-all for one worktree can't
       // dismiss another worktree's still-open end-all confirmation.
-      if (
-        pending &&
-        pending.kind === "worktreeEndAll" &&
-        pending.worktreeId === targetWorktreeId
-      ) {
+      if (pending && pending.kind === "worktreeEndAll" && pending.worktreeId === targetWorktreeId) {
         useTerminalPendingDestructiveActionStore.getState().clear();
       }
       state.bulkCloseByWorktree(targetWorktreeId);

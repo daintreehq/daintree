@@ -51,8 +51,9 @@ function makeWorktree(overrides: Partial<WorktreeState> = {}): WorktreeState {
     isCurrent: false,
     isMainWorktree: false,
     lastActivityTimestamp: 0,
+    worktreeChanges: null,
     ...overrides,
-  } as WorktreeState;
+  };
 }
 
 function renderActions() {
