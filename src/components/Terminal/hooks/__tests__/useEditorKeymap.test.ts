@@ -311,5 +311,37 @@ describe("useEditorKeymap", () => {
       expect(onSendKey).not.toHaveBeenCalled();
       expect(handleHistoryNavigation).not.toHaveBeenCalled();
     });
+
+    it("agent terminal: empty ArrowUp in history mode navigates host history, not the terminal", () => {
+      const onSendKey = vi.fn<(key: string) => void>();
+      // Guards the `!isInHistoryMode` half of the new predicate: an empty agent
+      // input already cycling host history must keep navigating it, not forward.
+      handleHistoryNavigation.mockReturnValue(true);
+      const { handlers } = renderKeymap(
+        makeLatest({
+          isAgentTerminal: true,
+          isAutocompleteOpen: false,
+          isInHistoryMode: true,
+          value: "",
+          onSendKey,
+        })
+      );
+      expect(handlers.onArrowUp()).toBe(true);
+      expect(handleHistoryNavigation).toHaveBeenCalledWith("up");
+      expect(onSendKey).not.toHaveBeenCalled();
+    });
+
+    it("shell terminal: empty ArrowUp with no host history falls through to the terminal", () => {
+      const onSendKey = vi.fn<(key: string) => void>();
+      // Fresh shell with no Daintree prompt history — ArrowUp must still reach
+      // the shell/readline history via onSendKey.
+      handleHistoryNavigation.mockReturnValue(false);
+      const { handlers } = renderKeymap(
+        makeLatest({ isAgentTerminal: false, isAutocompleteOpen: false, value: "", onSendKey })
+      );
+      expect(handlers.onArrowUp()).toBe(true);
+      expect(handleHistoryNavigation).toHaveBeenCalledWith("up");
+      expect(onSendKey).toHaveBeenCalledWith("up");
+    });
   });
 });
