@@ -42,19 +42,19 @@ import {
 } from "@/components/Worktree/worktreeDeleteHelper";
 
 const getInfoMock = vi.fn<(id: string) => Promise<{ hasPty: boolean }>>();
-(globalThis as Record<string, unknown>).window = globalThis.window ?? {};
-(window as unknown as Record<string, unknown>).electron = {
-  ...((window as unknown as Record<string, unknown>).electron ?? {}),
-  terminal: { getInfo: getInfoMock },
-};
+// `waitForTerminalsToClose` reads `window.electron.terminal.getInfo`; stub just
+// that (node env has no window). vi.stubGlobal is typed, so no cast is needed.
+vi.stubGlobal("window", { electron: { terminal: { getInfo: getInfoMock } } });
 
-function ptyPanel(overrides: Record<string, unknown>): Record<string, unknown> {
+type SeedPanel = { id: string } & Record<string, unknown>;
+
+function ptyPanel(overrides: SeedPanel): SeedPanel {
   return { kind: "terminal", worktreeId: "wt-1", location: "grid", ...overrides };
 }
 
-function seed(panels: Array<Record<string, unknown>>): void {
-  mockState.panelIds = panels.map((p) => p.id as string);
-  mockState.panelsById = Object.fromEntries(panels.map((p) => [p.id as string, p]));
+function seed(panels: SeedPanel[]): void {
+  mockState.panelIds = panels.map((p) => p.id);
+  mockState.panelsById = Object.fromEntries(panels.map((p) => [p.id, p]));
 }
 
 beforeEach(() => {

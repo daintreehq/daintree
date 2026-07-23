@@ -349,9 +349,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
               >
                 {terminalCounts.total} terminal{terminalCounts.total === 1 ? "" : "s"} will be
                 closed
-                {runningAgentCount > 0
-                  ? ` (${runningAgentCount} running an agent)`
-                  : ""}
+                {runningAgentCount > 0 ? ` (${runningAgentCount} running an agent)` : ""}
               </li>
               <li
                 className={cn(
