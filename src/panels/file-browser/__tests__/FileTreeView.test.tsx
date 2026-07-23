@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render } from "@testing-library/react";
 import { forwardRef } from "react";
 import type { ReactNode } from "react";
+import { UI_SKELETON_GATE_MS } from "@/lib/animationUtils";
 import { FileTreeView } from "../FileTreeView";
 import type { FlatTreeRow } from "../fileBrowserTree";
 
@@ -132,7 +133,70 @@ describe("FileTreeView context-menu interactions", () => {
       mixed.getByRole("treeitem", { name: "README.md" }).firstElementChild?.tagName.toLowerCase()
     ).toBe("span");
   });
+});
 
+describe("FileTreeView folder-load spinner", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("shows no indicator until the anti-flicker gate elapses, then a named status", () => {
+    vi.useFakeTimers();
+    const loadingRows = [{ ...row("src", true), isLoading: true }];
+    // No row menu here: keep the row on its plain path so Radix internals don't
+    // interleave with the fake-timer clock.
+    const { queryByRole, getByRole, queryByText } = renderTree({
+      rows: loadingRows,
+      rowContextMenu: undefined,
+    });
+
+    // Fast load: nothing during the gate, and the old immediate "Loading…"
+    // text is gone entirely.
+    expect(queryByRole("status")).toBeNull();
+    expect(queryByText(/Loading/)).toBeNull();
+
+    act(() => {
+      vi.advanceTimersByTime(UI_SKELETON_GATE_MS - 1);
+    });
+    expect(queryByRole("status")).toBeNull();
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(getByRole("status", { name: "Loading folder contents" })).toBeTruthy();
+
+    // The nested status must not bleed into the row's own accessible name.
+    expect(getByRole("treeitem", { name: "src" })).toBeTruthy();
+  });
+
+  it("never shows the indicator when loading resolves before the gate", () => {
+    vi.useFakeTimers();
+    const { queryByRole, rerender } = renderTree({
+      rows: [{ ...row("src", true), isLoading: true }],
+      rowContextMenu: undefined,
+    });
+
+    act(() => {
+      vi.advanceTimersByTime(UI_SKELETON_GATE_MS - 1);
+    });
+    rerender(
+      <FileTreeView
+        rows={[row("src", true)]}
+        selectedPath={null}
+        onSelect={vi.fn()}
+        onToggleExpanded={vi.fn()}
+        label="Files"
+      />
+    );
+    act(() => {
+      vi.advanceTimersByTime(UI_SKELETON_GATE_MS);
+    });
+
+    expect(queryByRole("status")).toBeNull();
+  });
+});
+
+describe("FileTreeView menu contract", () => {
   it("advertises data-row-menu only when rows actually have menus", () => {
     // The attribute is the contract with the global Shift+F10 handler: it
     // stands down inside surfaces that route the key to a row-level menu, so
