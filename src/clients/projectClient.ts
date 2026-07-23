@@ -354,8 +354,13 @@ export const projectClient = {
     return window.electron.project.getDraftInputs(projectId);
   },
 
-  setDraftInputs: (projectId: string, draftInputs: Record<string, string>): Promise<void> => {
-    return window.electron.project.setDraftInputs(projectId, draftInputs);
+  setDraftInputs: (
+    projectId: string,
+    draftInputs: Record<string, string>,
+    changedIds?: string[],
+    removedIds?: string[]
+  ): Promise<void> => {
+    return window.electron.project.setDraftInputs(projectId, draftInputs, changedIds, removedIds);
   },
 
   getTabGroups: (projectId: string): Promise<TabGroup[]> => {

@@ -11,6 +11,7 @@ import { useHelpPanelStore } from "./helpPanelStore";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import { panelPersistence, panelToSnapshot } from "./persistence/panelPersistence";
+import { draftInputPersistence } from "./persistence/draftInputPersistence";
 import { useTerminalInputStore } from "./terminalInputStore";
 import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -45,6 +46,11 @@ function shouldPersistTerminal(t: NonNullable<CarrierPanel>): boolean {
 
 function buildOutgoingState(projectId: string): ProjectSwitchOutgoingState {
   const draftInputs = useTerminalInputStore.getState().getProjectDraftInputs(projectId);
+  // Diff against this window's last-persisted baseline so Main merges drafts by
+  // terminal id rather than full-replacing — otherwise a stale outgoing snapshot
+  // silently drops a sibling window's concurrent drafts (#11352). Same delta
+  // contract as terminals/tab groups.
+  const draftDelta = draftInputPersistence.computeDelta(projectId, draftInputs);
   // Persist the *durable* selection, not whatever is incidentally active. A
   // focus promotion (e.g. a temporary PR worktree spun up by a batch merge)
   // leaves `restoreWorktreeId` pointing at the last deliberate selection, so it
@@ -64,7 +70,7 @@ function buildOutgoingState(projectId: string): ProjectSwitchOutgoingState {
   // flushed yet.  Uses the same filter as PanelPersistence.save().
   const terminalState = getPanelStoreSnapshot();
   if (!terminalState) {
-    return { draftInputs, activeWorktreeId };
+    return { draftInputs, draftDelta, activeWorktreeId };
   }
 
   const { panelsById, panelIds, tabGroups } = terminalState;
@@ -97,6 +103,7 @@ function buildOutgoingState(projectId: string): ProjectSwitchOutgoingState {
     activeWorktreeId,
     terminalDelta,
     tabGroupDelta,
+    draftDelta,
   };
 }
 

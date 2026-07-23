@@ -20,7 +20,7 @@ import {
   sanitizeDraftInputs,
 } from "../terminalLayout.js";
 import { sanitizeTabGroups } from "../../../schemas/index.js";
-import { mergeIdArray } from "../../../../shared/utils/layoutMerge.js";
+import { mergeIdArray, mergeRecord } from "../../../../shared/utils/layoutMerge.js";
 import type { HandlerDependencies, IpcContext } from "../../types.js";
 import type { Project } from "../../../types/index.js";
 import type { ProjectSwitchOutgoingState } from "../../../../shared/types/ipc/project.js";
@@ -326,12 +326,27 @@ async function persistOutgoingProjectState(
               tabGroupDelta.removedIds
             )
           : validTabGroups;
+    const draftDelta = outgoingState.draftDelta;
+    // Merge drafts by terminal id so a stale outgoing snapshot only affects the
+    // drafts this window changed, preserving a sibling window's concurrent
+    // drafts (#11352). Without a delta, fall back to the legacy full replace.
+    const mergedDrafts =
+      validDrafts === undefined
+        ? undefined
+        : draftDelta
+          ? mergeRecord(
+              sanitizeDraftInputs((existing?.draftInputs ?? {}) as Record<string, unknown>),
+              validDrafts,
+              draftDelta.changedIds,
+              draftDelta.removedIds
+            )
+          : validDrafts;
     return {
       ...(existing ?? { projectId: previousProjectId, sidebarWidth: 350, terminals: [] }),
       projectId: previousProjectId,
       ...(mergedTerminals !== undefined && { terminals: mergedTerminals }),
       ...(validSizes !== undefined && { terminalSizes: validSizes }),
-      ...(validDrafts !== undefined && { draftInputs: validDrafts }),
+      ...(mergedDrafts !== undefined && { draftInputs: mergedDrafts }),
       ...(mergedTabGroups !== undefined && { tabGroups: mergedTabGroups }),
       activeWorktreeId: outgoingState.activeWorktreeId,
     };

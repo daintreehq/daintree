@@ -663,6 +663,31 @@ describe("terminalInputStore", () => {
     });
   });
 
+  describe("getDraftProjectIds (#11352)", () => {
+    it("returns the distinct project ids that hold a draft", () => {
+      const store = useTerminalInputStore.getState();
+      store.setDraftInput("term-1", "a", "project-a");
+      store.setDraftInput("term-2", "b", "project-a");
+      store.setDraftInput("term-3", "c", "project-b");
+
+      expect(new Set(useTerminalInputStore.getState().getDraftProjectIds())).toEqual(
+        new Set(["project-a", "project-b"])
+      );
+    });
+
+    it("returns an empty array when no drafts exist", () => {
+      expect(useTerminalInputStore.getState().getDraftProjectIds()).toEqual([]);
+    });
+
+    it("ignores bare terminal-id keys with no project context", () => {
+      const store = useTerminalInputStore.getState();
+      store.setDraftInput("term-1", "no project"); // key is just the terminalId
+      store.setDraftInput("term-2", "scoped", "project-a");
+
+      expect(useTerminalInputStore.getState().getDraftProjectIds()).toEqual(["project-a"]);
+    });
+  });
+
   describe("restoreProjectDraftInputs", () => {
     it("should restore drafts with the project prefix", () => {
       useTerminalInputStore.getState().restoreProjectDraftInputs("project-a", {

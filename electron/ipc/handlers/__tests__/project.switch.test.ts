@@ -805,6 +805,86 @@ describe("project:switch outgoing tabGroups pre-apply (#5001)", () => {
   });
 });
 
+describe("project:switch outgoing draftInputs merge (#11352)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetProjectForWebContents.mockReturnValue("proj-old");
+  });
+
+  async function runSwitchWithDrafts(
+    existingDrafts: Record<string, string>,
+    outgoingState: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const mockView = {
+      webContents: { id: 100, isDestroyed: () => false, send: vi.fn() },
+    };
+    const pvm = {
+      switchTo: vi.fn().mockResolvedValue({ view: mockView, isNew: false }),
+      getProjectIdForWebContents: vi.fn(),
+    };
+    mockGetWindowForWebContents.mockReturnValue(null);
+    projectStoreMock.getCurrentProjectId.mockReturnValue("proj-old");
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: "proj-new",
+      name: "New Project",
+      path: "/projects/new",
+    });
+    projectStoreMock.setCurrentProject.mockResolvedValue(undefined);
+    projectStoreMock.getProjectState.mockResolvedValue({
+      projectId: "proj-old",
+      sidebarWidth: 350,
+      terminals: [],
+      tabGroups: [],
+      draftInputs: existingDrafts,
+    });
+    projectStoreMock.saveProjectState.mockResolvedValue(undefined);
+
+    const deps = {
+      mainWindow: { id: 1 } as unknown,
+      projectViewManager: pvm,
+    } as unknown as HandlerDependencies;
+    registerProjectCrudHandlers(deps);
+
+    const handleMap = new Map<string, (...args: unknown[]) => unknown>();
+    for (const call of (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls) {
+      handleMap.set(call[0] as string, call[1] as (...args: unknown[]) => unknown);
+    }
+    const handler = handleMap.get(CHANNELS.PROJECT_SWITCH);
+    await handler!({ sender: { id: 99 } }, "proj-new", outgoingState);
+    return projectStoreMock.saveProjectState.mock.calls[0]?.[1] as Record<string, unknown>;
+  }
+
+  it("merges draftInputs by terminal id, preserving a sibling window's draft", async () => {
+    const saved = await runSwitchWithDrafts(
+      { t1: "old", sib: "sibling draft" },
+      {
+        draftInputs: { t1: "new" },
+        draftDelta: { changedIds: ["t1"], removedIds: [] },
+      }
+    );
+    expect(saved.draftInputs).toEqual({ t1: "new", sib: "sibling draft" });
+  });
+
+  it("tombstones a cleared draft via draftDelta without wiping siblings", async () => {
+    const saved = await runSwitchWithDrafts(
+      { t1: "gone", sib: "keep" },
+      {
+        draftInputs: {},
+        draftDelta: { changedIds: [], removedIds: ["t1"] },
+      }
+    );
+    expect(saved.draftInputs).toEqual({ sib: "keep" });
+  });
+
+  it("falls back to a full replace when no draftDelta is present (legacy)", async () => {
+    const saved = await runSwitchWithDrafts(
+      { t1: "old", sib: "would be lost" },
+      { draftInputs: { t1: "new" } }
+    );
+    expect(saved.draftInputs).toEqual({ t1: "new" });
+  });
+});
+
 describe("project:switch worktree-load-status (#8400)", () => {
   beforeEach(() => {
     vi.clearAllMocks();

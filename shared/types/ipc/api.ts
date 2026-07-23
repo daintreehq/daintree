@@ -670,9 +670,18 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     getDraftInputs(projectId: string): Promise<Record<string, string>>;
     /**
      * Save draft inputs for a project.
-     * Used for preserving hybrid input bar drafts when switching away from a project.
+     * Used for preserving hybrid input bar drafts when switching away from a
+     * project and when a view is torn down (window close, #11352).
+     * `changedIds`/`removedIds` (terminal ids) let Main merge concurrent writes
+     * from sibling windows of the same project instead of full-replacing the
+     * record. Omit both for a legacy full replace.
      */
-    setDraftInputs(projectId: string, draftInputs: Record<string, string>): Promise<void>;
+    setDraftInputs(
+      projectId: string,
+      draftInputs: Record<string, string>,
+      changedIds?: string[],
+      removedIds?: string[]
+    ): Promise<void>;
     /**
      * Get tab groups for a project.
      * Used for restoring tab groups when switching to a project.

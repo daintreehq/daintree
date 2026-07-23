@@ -193,3 +193,88 @@ export function mergeIdArray<T extends { id: string }>(
 
   return result;
 }
+
+/**
+ * Record counterpart to {@link computeIdArrayDelta} for a flat
+ * `Record<terminalId, draftText>` (terminal draft inputs, #11352). The map is
+ * keyed by id and has no meaningful order, so equality is plain string
+ * comparison and there is no reorder concern.
+ *
+ * `changedIds` are keys present in `current` whose value differs from `base`
+ * (added or edited). `removedIds` are keys present in `base` but gone from
+ * `current` — the only way to derive a tombstone, since a cleared draft is
+ * dropped from the live map entirely and cannot be seen in `current` alone.
+ */
+export function computeRecordDelta(
+  base: Readonly<Record<string, string>>,
+  current: Readonly<Record<string, string>>
+): IdArrayDelta {
+  const hasOwn = (obj: Readonly<Record<string, string>>, key: string): boolean =>
+    Object.prototype.hasOwnProperty.call(obj, key);
+
+  const changedIds: string[] = [];
+  for (const [id, value] of Object.entries(current)) {
+    // Own-property compare so an id like `toString`/`constructor` isn't
+    // mistaken for present-on-base via the prototype chain.
+    if (!hasOwn(base, id) || base[id] !== value) {
+      changedIds.push(id);
+    }
+  }
+
+  const removedIds: string[] = [];
+  for (const id of Object.keys(base)) {
+    if (!hasOwn(current, id)) {
+      removedIds.push(id);
+    }
+  }
+
+  return { changedIds, removedIds };
+}
+
+/**
+ * Record counterpart to {@link mergeIdArray}. Merges a writer's `changedIds` /
+ * `removedIds` into the on-disk `existing` record, preserving every key the
+ * writer did not touch — including sibling-window keys it never knew (#11352).
+ *
+ * Semantics per key:
+ *   - in `removedIds`  → deleted (the writer cleared/sent it). Removal wins over
+ *     a malformed overlap where the same key also appears in `changedIds`.
+ *   - in `changedIds`  → the incoming value wins (added/edited by the writer);
+ *     a missing/empty incoming value is treated as a defensive deletion.
+ *   - otherwise         → the on-disk value is kept (a sibling's concurrent
+ *     edit survives; a key the writer never knew is preserved).
+ * A key present in `incoming` but not in `changedIds` is never resurrected.
+ * Empty/malformed on-disk values are dropped so they don't survive forever.
+ */
+export function mergeRecord(
+  existing: Readonly<Record<string, string>>,
+  incoming: Readonly<Record<string, string>>,
+  changedIds: readonly string[],
+  removedIds: readonly string[]
+): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const [id, value] of Object.entries(existing)) {
+    if (id && typeof value === "string" && value !== "") {
+      result[id] = value;
+    }
+  }
+
+  const removed = new Set(removedIds);
+  for (const id of changedIds) {
+    if (removed.has(id)) continue;
+    // Own-property read so a `constructor`/`toString` id can't pull a function
+    // off the prototype chain.
+    const value = Object.prototype.hasOwnProperty.call(incoming, id) ? incoming[id] : undefined;
+    if (typeof value === "string" && value !== "") {
+      result[id] = value;
+    } else {
+      delete result[id];
+    }
+  }
+
+  for (const id of removedIds) {
+    delete result[id];
+  }
+
+  return result;
+}

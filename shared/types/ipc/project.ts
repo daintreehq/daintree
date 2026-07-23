@@ -24,6 +24,14 @@ export interface ProjectSwitchOutgoingState {
    */
   terminalDelta?: IdArrayDelta;
   tabGroupDelta?: IdArrayDelta;
+  /**
+   * What this window changed in `draftInputs` relative to its last-persisted
+   * baseline (`changedIds`/`removedIds` are terminal ids). When present, Main
+   * merges the draft record by key instead of full-replacing, so switching away
+   * doesn't clobber a sibling window's drafts (#11352). Absent = legacy full
+   * replace.
+   */
+  draftDelta?: IdArrayDelta;
 }
 
 /** Payload for project:on-switch event with cancellation token */
