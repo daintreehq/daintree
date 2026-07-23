@@ -43,6 +43,12 @@ vi.mock("../../../utils.js", async (importOriginal) => {
   return { ...actual, broadcastToRenderer: broadcastMock.broadcastToRenderer };
 });
 
+const teardownMock = vi.hoisted(() => ({
+  gracefulTeardownAndJournalProject:
+    vi.fn<(...args: unknown[]) => Promise<{ confirmed: boolean; terminalsKilled: number }>>(),
+}));
+vi.mock("../../../../services/pty/projectSessionJournal.js", () => teardownMock);
+
 import { ipcMain } from "electron";
 import { CHANNELS } from "../../../channels.js";
 import { registerScratchHandlers } from "../index.js";
@@ -67,39 +73,65 @@ describe("scratch:remove handler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     scratchStoreMock.removeScratch.mockResolvedValue(undefined);
+    teardownMock.gracefulTeardownAndJournalProject.mockResolvedValue({
+      confirmed: true,
+      terminalsKilled: 0,
+    });
   });
 
-  it("kills the scratch's terminals before deleting it", async () => {
-    const ptyClient = { killByProject: vi.fn(async () => 2) };
+  it("gracefully tears down and journals the scratch's terminals before deleting it", async () => {
+    const ptyClient = {};
+    teardownMock.gracefulTeardownAndJournalProject.mockResolvedValue({
+      confirmed: true,
+      terminalsKilled: 2,
+    });
     registerScratchHandlers(makeDeps(ptyClient));
 
     await getHandler(CHANNELS.SCRATCH_REMOVE)(fakeEvent, "scratch-1");
 
-    expect(ptyClient.killByProject).toHaveBeenCalledWith("scratch-1");
+    // Journaling (not a bare kill) runs, and before the folder is deleted (#11340).
+    expect(teardownMock.gracefulTeardownAndJournalProject).toHaveBeenCalledWith(
+      "scratch-1",
+      ptyClient,
+      undefined
+    );
     expect(scratchStoreMock.removeScratch).toHaveBeenCalledWith("scratch-1");
 
-    // Killing after deletion would race the folder removal against live PTYs.
-    const killOrder = ptyClient.killByProject.mock.invocationCallOrder[0];
-    const removeOrder = scratchStoreMock.removeScratch.mock.invocationCallOrder[0];
+    const killOrder = teardownMock.gracefulTeardownAndJournalProject.mock.invocationCallOrder[0]!;
+    const removeOrder = scratchStoreMock.removeScratch.mock.invocationCallOrder[0]!;
     expect(killOrder).toBeLessThan(removeOrder);
   });
 
-  it("still deletes the scratch and notifies renderers when the kill fails", async () => {
-    const ptyClient = {
-      killByProject: vi.fn(async () => {
-        throw new Error("PTY host disconnected");
-      }),
-    };
-    registerScratchHandlers(makeDeps(ptyClient));
+  it("fails closed: keeps the scratch when the teardown is unconfirmed", async () => {
+    teardownMock.gracefulTeardownAndJournalProject.mockResolvedValue({
+      confirmed: false,
+      terminalsKilled: 0,
+    });
+    registerScratchHandlers(makeDeps({}));
 
-    await expect(
-      getHandler(CHANNELS.SCRATCH_REMOVE)(fakeEvent, "scratch-2")
-    ).resolves.toBeUndefined();
+    await expect(getHandler(CHANNELS.SCRATCH_REMOVE)(fakeEvent, "scratch-2")).rejects.toThrow();
 
-    expect(scratchStoreMock.removeScratch).toHaveBeenCalledWith("scratch-2");
-    expect(broadcastMock.broadcastToRenderer).toHaveBeenCalledWith(
+    // Deleting the folder now would orphan the still-running agents (#11340).
+    expect(scratchStoreMock.removeScratch).not.toHaveBeenCalled();
+    expect(broadcastMock.broadcastToRenderer).not.toHaveBeenCalledWith(
       CHANNELS.SCRATCH_REMOVED,
       "scratch-2"
+    );
+  });
+
+  it("deletes the scratch when the host is confirmed gone (nothing to journal)", async () => {
+    teardownMock.gracefulTeardownAndJournalProject.mockResolvedValue({
+      confirmed: true,
+      terminalsKilled: 0,
+    });
+    registerScratchHandlers(makeDeps({}));
+
+    await getHandler(CHANNELS.SCRATCH_REMOVE)(fakeEvent, "scratch-gone");
+
+    expect(scratchStoreMock.removeScratch).toHaveBeenCalledWith("scratch-gone");
+    expect(broadcastMock.broadcastToRenderer).toHaveBeenCalledWith(
+      CHANNELS.SCRATCH_REMOVED,
+      "scratch-gone"
     );
   });
 
@@ -108,16 +140,16 @@ describe("scratch:remove handler", () => {
 
     await getHandler(CHANNELS.SCRATCH_REMOVE)(fakeEvent, "scratch-3");
 
+    expect(teardownMock.gracefulTeardownAndJournalProject).not.toHaveBeenCalled();
     expect(scratchStoreMock.removeScratch).toHaveBeenCalledWith("scratch-3");
   });
 
   it("rejects a blank scratch id without touching the store", async () => {
-    const ptyClient = { killByProject: vi.fn(async () => 0) };
-    registerScratchHandlers(makeDeps(ptyClient));
+    registerScratchHandlers(makeDeps({}));
 
     await expect(getHandler(CHANNELS.SCRATCH_REMOVE)(fakeEvent, "")).rejects.toThrow();
 
-    expect(ptyClient.killByProject).not.toHaveBeenCalled();
+    expect(teardownMock.gracefulTeardownAndJournalProject).not.toHaveBeenCalled();
     expect(scratchStoreMock.removeScratch).not.toHaveBeenCalled();
   });
 });

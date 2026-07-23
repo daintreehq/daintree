@@ -16,6 +16,15 @@ import type { Project } from "../../../types/index.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { AppError } from "../../../utils/errorTypes.js";
 import { pruneWindowStateForPath } from "../../../windowState.js";
+import { gracefulTeardownAndJournalProject } from "../../../services/pty/projectSessionJournal.js";
+
+/**
+ * Rejection copy for a destructive teardown (close+kill / remove) the pty-host
+ * couldn't confirm. We deliberately keep the project's restoration state rather
+ * than wipe it out from under still-running agents (#11340).
+ */
+const UNCONFIRMED_TEARDOWN_MESSAGE =
+  "Couldn't confirm the project's terminals stopped, so its state was kept. Try again.";
 
 /**
  * Rejection copy for a close attempt against a project that is on-screen in
@@ -92,9 +101,22 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
     const removedPath = projectStore.getProjectById(projectId)?.path ?? null;
 
     if (deps.ptyClient) {
-      await deps.ptyClient.killByProject(projectId).catch((err: unknown) => {
-        console.error(`[IPC] project:remove: Failed to kill terminals for ${projectId}:`, err);
-      });
+      // Gracefully tear down and journal each agent session before the row (and
+      // its restoration state) is permanently deleted. Fail closed: if the host
+      // can't confirm the kills, keep the project so its still-running agents
+      // aren't orphaned by a deleted row (#11340).
+      const { confirmed } = await gracefulTeardownAndJournalProject(
+        projectId,
+        deps.ptyClient,
+        deps.worktreeService
+      );
+      if (!confirmed) {
+        throw new AppError({
+          code: "INTERNAL",
+          message: UNCONFIRMED_TEARDOWN_MESSAGE,
+          context: { projectId },
+        });
+      }
     }
 
     await projectStore.removeProject(projectId);
@@ -196,10 +218,23 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
     }
 
     try {
-      const ptyStats = await deps.ptyClient!.getProjectStats(projectId);
-
       if (killTerminals) {
-        const terminalsKilled = await deps.ptyClient!.killByProject(projectId);
+        // Gracefully tear down and journal each agent session before wiping the
+        // project's restoration state, so agent conversations stay resumable
+        // from the picker. Fail closed: if the host can't confirm the kills,
+        // keep the state rather than orphan still-running agents (#11340).
+        const { confirmed, terminalsKilled } = await gracefulTeardownAndJournalProject(
+          projectId,
+          deps.ptyClient!,
+          deps.worktreeService
+        );
+        if (!confirmed) {
+          throw new AppError({
+            code: "INTERNAL",
+            message: UNCONFIRMED_TEARDOWN_MESSAGE,
+            context: { projectId },
+          });
+        }
 
         await projectStore.clearProjectState(projectId);
 
@@ -228,6 +263,8 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
           terminalsKilled,
         };
       } else {
+        const ptyStats = await deps.ptyClient!.getProjectStats(projectId);
+
         // Re-check after the awaited stats call: the user can bring the project
         // on-screen in any window while it's in flight, and backgrounding it +
         // pausing its workspace host would then hit a visible project. Thrown as

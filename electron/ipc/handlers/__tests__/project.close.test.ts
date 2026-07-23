@@ -47,6 +47,12 @@ vi.mock("../../../projectMenuState.js", () => ({
   refreshProjectMenuState: refreshProjectMenuStateMock,
 }));
 
+const teardownMock = vi.hoisted(() => ({
+  gracefulTeardownAndJournalProject:
+    vi.fn<(...args: unknown[]) => Promise<{ confirmed: boolean; terminalsKilled: number }>>(),
+}));
+vi.mock("../../../services/pty/projectSessionJournal.js", () => teardownMock);
+
 import { ipcMain } from "electron";
 import { CHANNELS } from "../../channels.js";
 import { registerProjectCrudHandlers } from "../projectCrud/index.js";
@@ -55,6 +61,12 @@ import type { HandlerDependencies } from "../../types.js";
 describe("project:close handler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default: teardown confirmed with nothing to journal. Kill-branch tests
+    // override; non-kill tests never reach it.
+    teardownMock.gracefulTeardownAndJournalProject.mockResolvedValue({
+      confirmed: true,
+      terminalsKilled: 0,
+    });
   });
 
   it("allows killing terminals for the active project and clears it", async () => {
@@ -65,6 +77,10 @@ describe("project:close handler", () => {
       status: "active",
     });
     projectStoreMock.clearProjectState.mockResolvedValue(undefined);
+    teardownMock.gracefulTeardownAndJournalProject.mockResolvedValue({
+      confirmed: true,
+      terminalsKilled: 2,
+    });
 
     const ptyClient = {
       getProjectStats: vi.fn(async () => ({
@@ -72,7 +88,6 @@ describe("project:close handler", () => {
         processIds: [111, 222],
         terminalTypes: { terminal: 2 },
       })),
-      killByProject: vi.fn(async () => 2),
       onProjectSwitch: vi.fn(),
       setActiveProject: vi.fn(),
     };
@@ -103,7 +118,13 @@ describe("project:close handler", () => {
 
     expect(result.terminalsKilled).toBe(2);
     expect(result.processesKilled).toBe(2);
-    expect(ptyClient.killByProject).toHaveBeenCalledWith("project-active");
+    // The destructive close routes through graceful capture + journaling, not a
+    // bare kill (#11340).
+    expect(teardownMock.gracefulTeardownAndJournalProject).toHaveBeenCalledWith(
+      "project-active",
+      ptyClient,
+      undefined
+    );
     expect(projectStoreMock.clearProjectState).toHaveBeenCalledWith("project-active");
     expect(projectStoreMock.clearCurrentProject).toHaveBeenCalled();
     expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith("project-active", "closed");
@@ -218,7 +239,7 @@ describe("project:close handler", () => {
       await expect(
         handler(EVENT, "project-second-window", { killTerminals: false })
       ).rejects.toThrow("open in a window");
-      expect(ptyClient.killByProject).not.toHaveBeenCalled();
+      expect(teardownMock.gracefulTeardownAndJournalProject).not.toHaveBeenCalled();
       expect(projectStoreMock.clearProjectState).not.toHaveBeenCalled();
     });
 
@@ -318,14 +339,14 @@ describe("project:close handler", () => {
           processIds: [1],
           terminalTypes: { terminal: 1 },
         })),
-        // ...but another window switches away while the kill is in flight.
-        killByProject: vi.fn(async () => {
-          pointer = "project-other";
-          return 1;
-        }),
         onProjectSwitch: vi.fn(),
         setActiveProject: vi.fn(),
       };
+      // ...but another window switches away while the teardown is in flight.
+      teardownMock.gracefulTeardownAndJournalProject.mockImplementation(async () => {
+        pointer = "project-other";
+        return { confirmed: true, terminalsKilled: 1 };
+      });
 
       const deps = {
         mainWindow: {} as unknown,
@@ -360,10 +381,44 @@ describe("project:close handler", () => {
       const handler = getCloseHandler(deps);
       await handler(EVENT, "project-second-window", { killTerminals: true });
 
-      expect(ptyClient.killByProject).toHaveBeenCalledWith("project-second-window");
+      expect(teardownMock.gracefulTeardownAndJournalProject).toHaveBeenCalledWith(
+        "project-second-window",
+        ptyClient,
+        undefined
+      );
       // The DB pointer names a different project, so it must NOT be cleared —
       // that bookkeeping tracks the pointer, not visibility.
       expect(projectStoreMock.clearCurrentProject).not.toHaveBeenCalled();
+    });
+
+    it("fails closed on an unconfirmed teardown: keeps state and rejects", async () => {
+      // killTerminals is destructive, but a live host that can't confirm the
+      // kills must not have its restoration state wiped out from under still-
+      // running agents (#11340).
+      projectStoreMock.getCurrentProjectId.mockReturnValue("project-active");
+      projectStoreMock.getProjectById.mockReturnValue({
+        id: "project-active",
+        name: "Active Project",
+        status: "active",
+        path: "/test/project-active",
+      } as ReturnType<typeof projectStoreMock.getProjectById>);
+      teardownMock.gracefulTeardownAndJournalProject.mockResolvedValue({
+        confirmed: false,
+        terminalsKilled: 0,
+      });
+
+      const deps = {
+        mainWindow: {} as unknown,
+        ptyClient: makePtyClient(),
+      } as unknown as HandlerDependencies;
+
+      const handler = getCloseHandler(deps);
+
+      await expect(handler(EVENT, "project-active", { killTerminals: true })).rejects.toThrow();
+
+      expect(projectStoreMock.clearProjectState).not.toHaveBeenCalled();
+      expect(projectStoreMock.clearCurrentProject).not.toHaveBeenCalled();
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
     });
   });
 
@@ -436,7 +491,6 @@ describe("project:close handler", () => {
         processIds: [444],
         terminalTypes: { terminal: 1 },
       })),
-      killByProject: vi.fn(async () => 1),
       onProjectSwitch: vi.fn(),
       setActiveProject: vi.fn(),
     };
@@ -469,6 +523,13 @@ describe("project:close handler", () => {
       killTerminals: true,
     });
 
+    // The teardown ran with the project's WorkspaceClient for branch lookups,
+    // but backgrounding (pauseProject) is exclusive to the non-kill path.
+    expect(teardownMock.gracefulTeardownAndJournalProject).toHaveBeenCalledWith(
+      "project-active",
+      ptyClient,
+      worktreeService
+    );
     expect(worktreeService.pauseProject).not.toHaveBeenCalled();
   });
 

@@ -413,6 +413,57 @@ describe("PtyClient adversarial", () => {
     });
   });
 
+  it("GRACEFUL_KILL_BY_PROJECT_CONFIRMED_RESOLVES_CONFIRMED_WITH_SESSIONS", async () => {
+    const client = createReadyClient();
+
+    const promise = client.gracefulKillByProjectConfirmed("proj-a");
+    const request = mockChild.postMessage.mock.calls
+      .map((call: unknown[]) => call[0] as { type?: string; requestId?: string })
+      .find((msg) => msg?.type === "graceful-kill-by-project");
+    expect(request?.requestId).toBeTruthy();
+
+    mockChild.emit("message", {
+      type: "graceful-kill-by-project-result",
+      requestId: request!.requestId,
+      results: [{ id: "t1", agentSessionId: "sess-1" }],
+    });
+
+    await expect(promise).resolves.toEqual({
+      confirmed: true,
+      sessions: [{ id: "t1", agentSessionId: "sess-1" }],
+    });
+  });
+
+  it("GRACEFUL_KILL_BY_PROJECT_CONFIRMED_REPORTS_UNCONFIRMED_ON_LIVE_HOST_TIMEOUT", async () => {
+    const client = createReadyClient();
+
+    const promise = client.gracefulKillByProjectConfirmed("proj-a");
+    // A per-request timeout while the host is still alive: teardown was NOT
+    // acknowledged, so callers must fail closed. Unlike single-terminal
+    // gracefulKill, this path does not force a fallback kill.
+    await vi.advanceTimersByTimeAsync(11000);
+
+    await expect(promise).resolves.toEqual({ confirmed: false, sessions: [] });
+    const killByProjectCall = mockChild.postMessage.mock.calls.find(
+      (call: unknown[]) => (call[0] as { type?: string })?.type === "kill-by-project"
+    );
+    expect(killByProjectCall).toBeUndefined();
+  });
+
+  it("GRACEFUL_KILL_BY_PROJECT_CONFIRMED_TREATS_HOST_EXIT_AS_CONFIRMED", async () => {
+    const client = createReadyClient();
+    // A fresh child for the restart so the exited emitter isn't reused.
+    shared.forkMock.mockReturnValue(createMockChild());
+
+    const promise = client.gracefulKillByProjectConfirmed("proj-a");
+    // Host dies before acking → the broker clears pending requests with a
+    // BrokerError("HOST_EXITED"). The terminals died with the host, so teardown
+    // is confirmed even though no sessions were capturable.
+    mockChild.emit("exit", 1);
+
+    await expect(promise).resolves.toEqual({ confirmed: true, sessions: [] });
+  });
+
   it("HOST_RESTART_CLEARS_MIGRATED_REQUESTS_TO_SENTINELS", async () => {
     const client = createReadyClient();
 
