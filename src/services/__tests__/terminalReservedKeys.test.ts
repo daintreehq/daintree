@@ -32,8 +32,28 @@ afterEach(() => {
 });
 
 describe("isTuiReservedKey", () => {
-  it("reserves every readline Ctrl key without other modifiers", () => {
-    for (const key of TUI_KEYBINDS) {
+  it("reserves the readline Ctrl keys without other modifiers", () => {
+    // Independent list — not derived from the exported set — so an
+    // accidentally emptied or narrowed TUI_KEYBINDS fails here.
+    const readline = "abdefhjklnprtuwy".split("");
+    for (const key of readline) {
+      expect(isTuiReservedKey(keyEvent({ key, ctrlKey: true }))).toBe(true);
+    }
+    expect(TUI_KEYBINDS.size).toBe(readline.length);
+  });
+
+  it("reserves keys under Caps Lock — uppercase key with shiftKey false", () => {
+    // Chromium reports key "W" with shiftKey false under Caps Lock; without
+    // case folding Ctrl+W would resolve as terminal.close on Windows/Linux
+    // instead of deleting a word.
+    expect(isTuiReservedKey(keyEvent({ key: "W", ctrlKey: true }))).toBe(true);
+    expect(isTuiReservedKey(keyEvent({ key: "L", ctrlKey: true }))).toBe(true);
+  });
+
+  it("reserves accept-line, clear-screen, transpose, and yank — they collide with global app defaults", () => {
+    // Ctrl+J/L/T/Y map to fleet.armFocused, help.togglePanel,
+    // terminal.duplicate, and fleet.accept on Windows/Linux.
+    for (const key of ["j", "l", "t", "y"]) {
       expect(isTuiReservedKey(keyEvent({ key, ctrlKey: true }))).toBe(true);
     }
   });

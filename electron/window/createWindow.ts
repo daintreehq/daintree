@@ -556,10 +556,12 @@ export function setupBrowserWindow(
       !input.alt;
 
     // Renderer-owned menu accelerators (derived from effective keybindings)
-    // are suppressed per-event on macOS so the renderer's KeybindingService —
-    // scopes, priorities, rebinds — owns keyboard execution; the native item
-    // stays clickable. Windows/Linux never registers them (registerAccelerator
-    // false), so this is a no-op there.
+    // are suppressed per-event on every platform so the renderer's
+    // KeybindingService — scopes, priorities, rebinds, terminal-reserved
+    // keys — owns keyboard execution while this renderer has focus; the
+    // native item stays clickable and registered, which keeps the shortcut
+    // working when focus is in a guest webview or DevTools where this
+    // handler never fires.
     appWebContents.setIgnoreMenuShortcuts(isCloseShortcut || isRendererOwnedShortcut(input));
   });
 

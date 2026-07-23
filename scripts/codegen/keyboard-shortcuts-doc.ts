@@ -34,20 +34,35 @@ const CATEGORY_ORDER = [
   "System",
 ];
 
+const ARROW_DISPLAY: Record<string, string> = {
+  ArrowUp: "↑",
+  ArrowDown: "↓",
+  ArrowLeft: "←",
+  ArrowRight: "→",
+};
+
 function displayMac(combo: string): string {
   return combo
     .replace(/Cmd\+/g, "⌘+")
     .replace(/Ctrl\+/g, "⌃+")
     .replace(/Shift\+/g, "⇧+")
-    .replace(/Alt\+/g, "⌥+");
+    .replace(/Alt\+/g, "⌥+")
+    .replace(/Arrow(Up|Down|Left|Right)/g, (m) => ARROW_DISPLAY[m] ?? m);
 }
 
 function displayWin(combo: string): string {
-  return combo.replace(/Cmd\+/g, "Ctrl+");
+  return combo.replace(/Cmd\+/g, "Ctrl+").replace(/Arrow(Up|Down|Left|Right)/g, "$1");
 }
 
 function escapeCell(text: string): string {
   return text.replace(/\|/g, "\\|");
+}
+
+// A code span whose content ends in a backtick (the Cmd+` combo) needs
+// double-backtick delimiters with padding, or the Markdown span is malformed
+// (which also breaks Prettier's table parsing).
+function codeSpan(text: string): string {
+  return text.includes("`") ? `\`\` ${text} \`\`` : `\`${text}\``;
 }
 
 function generate(): string {
@@ -90,7 +105,7 @@ function generate(): string {
     "- Chords are two keystrokes in sequence: `⌘+K ⌘+S` means press `⌘+K`, release, then `⌘+S`. Press `⌘+K` alone to see every completion in the command HUD; Escape cancels."
   );
   lines.push(
-    "- While a terminal has focus, only modifier-bearing shortcuts fire — bare keys, arrows, and Escape always reach the terminal. The readline keys `Ctrl+P/N/R/F/B/A/E/K/U/W/H/D` are always passed through to the terminal, as are the Windows/Linux clipboard keys `Ctrl+Shift+C`, `Ctrl+Shift+V`, and `Shift+Insert`."
+    "- While a terminal has focus, shortcuts without a modifier reach the terminal rather than the app (F6 region cycling is the deliberate exception). The readline keys `Ctrl+A/B/D/E/F/H/J/K/L/N/P/R/T/U/W/Y` and the Windows/Linux clipboard keys `Ctrl+Shift+C`, `Ctrl+Shift+V`, and `Shift+Insert` are reserved for the terminal — unless a chord is already pending, which the user opened deliberately."
   );
   lines.push(
     "- Every shortcut here can be rebound in Settings → Keyboard, which also supports export/import of shortcut profiles and per-row reset."
@@ -107,8 +122,8 @@ function generate(): string {
     for (const binding of bindings) {
       const isWindowsOnly = windowsOnly.includes(binding);
       const label = escapeCell(binding.description ?? binding.actionId);
-      const mac = isWindowsOnly ? "—" : `\`${escapeCell(displayMac(binding.combo))}\``;
-      const win = `\`${escapeCell(displayWin(binding.combo))}\`${isWindowsOnly ? " (Windows only)" : ""}`;
+      const mac = isWindowsOnly ? "—" : codeSpan(escapeCell(displayMac(binding.combo)));
+      const win = `${codeSpan(escapeCell(displayWin(binding.combo)))}${isWindowsOnly ? " (Windows only)" : ""}`;
       lines.push(`| ${label} | ${mac} | ${win} |`);
     }
     lines.push("");
@@ -117,7 +132,7 @@ function generate(): string {
   lines.push("## Fixed keys");
   lines.push("");
   lines.push(
-    "A few interactions are fixed and not rebindable: worktree-list navigation (arrows, `j`/`k`, Home/End, Enter/Space, `e` for editor), keyboard drag-and-drop reordering (Space to pick up, arrows to move), and `Alt+Up`/`Alt+Down` worktree reordering in the sidebar."
+    "A few interactions are fixed and not rebindable: worktree-list navigation (arrows or `j`/`k` to move, PageUp/PageDown and Home/End to jump, Space or Enter to open, Enter/ArrowRight to reach a row's toolbar, `Alt+Up`/`Alt+Down` to reorder) and keyboard drag-and-drop reordering (Space to pick up, arrows to move)."
   );
   lines.push("");
   return lines.join("\n");

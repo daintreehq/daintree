@@ -11,8 +11,14 @@ import { isMac } from "@/lib/platform";
 // these collide with Cmd+<key> app bindings (Ctrl is the primary modifier
 // there), so the capture handler must exempt them BEFORE resolveKeybinding —
 // the xterm-side allowlist alone cannot protect a key the window capture
-// handler already consumed.
-export const TUI_KEYBINDS = new Set(["p", "n", "r", "f", "b", "a", "e", "k", "u", "w", "h", "d"]);
+// handler already consumed. j/l/t/y are as load-bearing as the rest
+// (accept-line, clear-screen, transpose, yank) and collide with the global
+// Cmd+J/L/T/Y defaults (fleet.armFocused, help.togglePanel,
+// terminal.duplicate, fleet.accept).
+export const TUI_KEYBINDS = new Set([
+  ...["p", "n", "r", "f", "b", "a", "e", "k", "u", "w", "h", "d"],
+  ...["j", "l", "t", "y"],
+]);
 
 export function isTuiReservedKey(event: KeyboardEvent): boolean {
   return (
@@ -20,7 +26,9 @@ export function isTuiReservedKey(event: KeyboardEvent): boolean {
     !event.shiftKey &&
     !event.metaKey &&
     !event.altKey &&
-    TUI_KEYBINDS.has(event.key)
+    // Lowercase so Caps Lock (key "W" with shiftKey false) can't leak a
+    // reserved key through to app-shortcut resolution.
+    TUI_KEYBINDS.has(event.key.length === 1 ? event.key.toLowerCase() : event.key)
   );
 }
 

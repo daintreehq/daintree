@@ -338,6 +338,7 @@ Menu items add entries to Daintree's application menus.
 | `actionId` | yes | Fully-qualified action ID to dispatch. |
 | `location` | yes | One of `"terminal"`, `"file"`, `"view"`, `"help"`. Determines which top-level menu the item appears in. |
 | `accelerator` | no | Platform-neutral shortcut, e.g. `"Cmd+Shift+L"` (becomes `Ctrl+Shift+L` on Windows/Linux). |
+| `when` | no | Context expression gating whether the item appears. Evaluated once at menu build time against an empty context, so only constant expressions (literals and negations of unknown identifiers) are useful — for live conditions use a keybinding `when` clause instead. |
 
 ## Keybindings — _Shipped_
 
@@ -366,7 +367,7 @@ Keybindings map a key combination to an action.
 | `combo` | yes | Normalized key combo string, same format as Daintree's default keybindings. Chords (`"Cmd+K Cmd+S"`) supported. |
 | `scope` | no | One of `"global"`, `"portal"`, `"worktreeGrid"`, `"dev-preview"`. Defaults to `"global"`. An unknown scope is rejected at the manifest gate. The former `"terminal"`, `"modal"`, and `"worktreeList"` scopes were removed — use `when` conditions instead (`"terminalFocused"`, `"modalOpen"`); worktree-list navigation keys are fixed and not bindable. |
 | `description` | no | Human-readable description of what the binding does. |
-| `when` | no | Context expression gating when the binding is active. Evaluated live at each keydown against the context keys below; unknown identifiers evaluate falsy. Supports `&&`, `\|\|`, `!`, `==`, `!=`, and single-quoted string literals. |
+| `when` | no | Context expression gating when the binding is active. Evaluated live at each keydown against the context keys below; unknown identifiers evaluate falsy — which makes negated expressions permissive (a misspelled `!modalOpne` is always true), so double-check identifier spelling. Supports `&&`, `\|\|`, `!`, `==`, `!=`, and single-quoted string literals. |
 
 **`when` context keys:**
 
@@ -380,7 +381,7 @@ Keybindings map a key combination to an action.
 | `fleetWaiting`    | boolean | At least one armed terminal's agent is in the `waiting` state. |
 | `sidebarVisible`  | boolean | The worktree sidebar is currently visible.                     |
 
-Note: this context applies to keybinding `when` clauses, which resolve in the renderer. Native menu-item `when` clauses (the `menus` contribution) are evaluated once at menu build time against an empty context — only literal/negation expressions are useful there.
+Note: this context applies to keybinding `when` clauses, which resolve in the renderer. Native menu-item `when` clauses (the `menuItems` contribution) are evaluated once at menu build time against an empty context — only literal/negation expressions are useful there.
 
 Bindings register when the plugin loads and unregister on unload. Conflicts with user overrides or other plugins' bindings are resolved by Daintree's existing keybinding service — plugin bindings are low-priority and yield to user overrides. See `registerBinding` in `src/services/KeybindingService.ts` for the registration API.
 

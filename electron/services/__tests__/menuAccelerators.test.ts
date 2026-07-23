@@ -10,10 +10,20 @@ import {
   comboToAccelerator,
   getEffectiveMenuCombo,
   getMenuAccelerator,
+  isKeybindingOwnedAction,
   isRendererOwnedShortcut,
   rendererMenuAccelerator,
   resetRendererOwnedAccelerators,
 } from "../menuAccelerators.js";
+import { buildDefaultKeybindings } from "../../../shared/config/defaultKeybindings.js";
+
+function defaultCombo(actionId: string): string {
+  const row = buildDefaultKeybindings(false).find(
+    (b) => b.actionId === actionId && b.scope === "global"
+  );
+  if (!row) throw new Error(`no default row for ${actionId}`);
+  return row.combo;
+}
 
 const realPlatform = process.platform;
 
@@ -84,13 +94,30 @@ describe("getEffectiveMenuCombo", () => {
   });
 
   it("falls back to the shipped global default", () => {
-    expect(getEffectiveMenuCombo("nav.toggleSidebar")).toBe("Cmd+B");
-    expect(getEffectiveMenuCombo("action.palette.open")).toBe("Cmd+Shift+P");
+    expect(getEffectiveMenuCombo("nav.toggleSidebar")).toBe(defaultCombo("nav.toggleSidebar"));
+    expect(getEffectiveMenuCombo("action.palette.open")).toBe(defaultCombo("action.palette.open"));
   });
 
   it("returns the chord default for chord-bound actions (accelerator then omits it)", () => {
-    expect(getEffectiveMenuCombo("worktree.createDialog.open")).toBe("Cmd+K Cmd+N");
+    const chord = defaultCombo("worktree.createDialog.open");
+    expect(chord).toMatch(/\s/);
+    expect(getEffectiveMenuCombo("worktree.createDialog.open")).toBe(chord);
     expect(getMenuAccelerator("worktree.createDialog.open")).toBeUndefined();
+  });
+});
+
+describe("isKeybindingOwnedAction", () => {
+  it("owns actions with a shipped default row", () => {
+    expect(isKeybindingOwnedAction("nav.toggleSidebar")).toBe(true);
+  });
+
+  it("owns actions with a user override — including an explicit unbind", () => {
+    storeMock.get.mockReturnValue({ "agent.custom-agent": [] });
+    expect(isKeybindingOwnedAction("agent.custom-agent")).toBe(true);
+  });
+
+  it("does not own actions outside the keybinding system", () => {
+    expect(isKeybindingOwnedAction("agent.some-custom-agent")).toBe(false);
   });
 });
 
@@ -114,6 +141,17 @@ describe("isRendererOwnedShortcut", () => {
     storeMock.get.mockReturnValue({ "nav.toggleSidebar": ["Cmd+1"] });
     rendererMenuAccelerator("nav.toggleSidebar");
     expect(isRendererOwnedShortcut(input({ key: "&", code: "Digit1", meta: true }))).toBe(true);
+  });
+
+  it("matches Option-transformed letters on macOS by physical code", () => {
+    setProcessPlatform("darwin");
+    storeMock.get.mockReturnValue({ "terminal.new": ["Cmd+Alt+T"] });
+    rendererMenuAccelerator("terminal.new");
+    // Option+T produces "†" on macOS; the renderer normalizes mac Alt+letter
+    // combos through event.code, so suppression must match the same way.
+    expect(isRendererOwnedShortcut(input({ key: "†", code: "KeyT", meta: true, alt: true }))).toBe(
+      true
+    );
   });
 
   it("resets between menu builds", () => {

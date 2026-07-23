@@ -40,6 +40,9 @@ const mocks = vi.hoisted(() => {
       attachCustomKeyEventHandler: vi.fn((handler: (event: KeyboardEvent) => boolean) => {
         keyHandler = handler;
       }),
+      hasSelection: vi.fn(() => false),
+      getSelection: vi.fn(() => ""),
+      paste: vi.fn(),
     },
     isDetached: false,
     targetCols: undefined,
@@ -790,6 +793,104 @@ describe("XtermAdapter lifecycle", () => {
 
       expect(keyHandler(optionArrow("ArrowLeft"))).toBe(false);
       expect(mocks.writeTerminalInputOrFleet).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("terminal clipboard keys (Windows/Linux conventions)", () => {
+    function resolution(shouldConsume: boolean): KeybindingResolutionResult {
+      return { match: undefined, chordPrefix: false, shouldConsume };
+    }
+
+    const clipboard = {
+      writeText: vi.fn<(text: string) => Promise<void>>(() => Promise.resolve()),
+      readText: vi.fn<() => Promise<string>>(() => Promise.resolve("pasted-text")),
+    };
+
+    beforeEach(() => {
+      vi.mocked(keybindingService.getPendingChord).mockReset().mockReturnValue(null);
+      vi.mocked(keybindingService.resolveKeybinding).mockReset().mockReturnValue(resolution(false));
+      clipboard.writeText.mockClear().mockResolvedValue(undefined);
+      clipboard.readText.mockClear().mockResolvedValue("pasted-text");
+      Object.defineProperty(navigator, "clipboard", { value: clipboard, configurable: true });
+      mocks.platform.isMac = false;
+    });
+
+    async function mountAndGetKeyHandler() {
+      renderAdapter();
+      await waitFor(() => expect(mocks.terminalInstanceService.attach).toHaveBeenCalledTimes(1));
+      const keyHandler = mocks.getKeyHandler();
+      expect(keyHandler).toBeTruthy();
+      return keyHandler!;
+    }
+
+    function key(init: KeyboardEventInit) {
+      return new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
+    }
+
+    it("copies the selection on Ctrl+Shift+C and consumes the event", async () => {
+      const keyHandler = await mountAndGetKeyHandler();
+      mocks.managed.terminal.hasSelection.mockReturnValue(true);
+      mocks.managed.terminal.getSelection.mockReturnValue("selected output");
+
+      expect(keyHandler(key({ key: "C", code: "KeyC", ctrlKey: true, shiftKey: true }))).toBe(
+        false
+      );
+
+      expect(clipboard.writeText).toHaveBeenCalledWith("selected output");
+      expect(keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+    });
+
+    it("consumes Ctrl+Shift+C with no selection without writing or firing app shortcuts", async () => {
+      const keyHandler = await mountAndGetKeyHandler();
+      mocks.managed.terminal.hasSelection.mockReturnValue(false);
+
+      expect(keyHandler(key({ key: "C", code: "KeyC", ctrlKey: true, shiftKey: true }))).toBe(
+        false
+      );
+
+      expect(clipboard.writeText).not.toHaveBeenCalled();
+      expect(keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+    });
+
+    it("pastes through terminal.paste on Ctrl+Shift+V", async () => {
+      const keyHandler = await mountAndGetKeyHandler();
+
+      expect(keyHandler(key({ key: "V", code: "KeyV", ctrlKey: true, shiftKey: true }))).toBe(
+        false
+      );
+
+      await waitFor(() => expect(mocks.managed.terminal.paste).toHaveBeenCalledWith("pasted-text"));
+    });
+
+    it("pastes on Shift+Insert", async () => {
+      const keyHandler = await mountAndGetKeyHandler();
+
+      expect(keyHandler(key({ key: "Insert", code: "Insert", shiftKey: true }))).toBe(false);
+
+      await waitFor(() => expect(mocks.managed.terminal.paste).toHaveBeenCalledWith("pasted-text"));
+    });
+
+    it("never pastes while input is locked", async () => {
+      const keyHandler = await mountAndGetKeyHandler();
+      mocks.managed.isInputLocked = true;
+
+      expect(keyHandler(key({ key: "V", code: "KeyV", ctrlKey: true, shiftKey: true }))).toBe(
+        false
+      );
+
+      await Promise.resolve();
+      expect(clipboard.readText).not.toHaveBeenCalled();
+      expect(mocks.managed.terminal.paste).not.toHaveBeenCalled();
+    });
+
+    it("leaves Ctrl+Shift+C to normal resolution on macOS", async () => {
+      mocks.platform.isMac = true;
+      const keyHandler = await mountAndGetKeyHandler();
+
+      keyHandler(key({ key: "C", code: "KeyC", ctrlKey: true, shiftKey: true }));
+
+      expect(clipboard.writeText).not.toHaveBeenCalled();
+      expect(keybindingService.resolveKeybinding).toHaveBeenCalled();
     });
   });
 });

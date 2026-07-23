@@ -1,5 +1,5 @@
 // eager-import-allow: reads persisted keybindings via store.get synchronously at module scope
-import { dialog } from "electron";
+import { BrowserWindow, dialog } from "electron";
 import { promises as fs } from "node:fs";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
@@ -19,10 +19,15 @@ export function registerKeybindingHandlers(deps: HandlerDependencies): () => voi
   // Native menu accelerators are derived from defaults + these overrides
   // (electron/services/menuAccelerators.ts) — rebuild after every mutation so
   // the menu can't drift from what the keyboard actually does. Writes are
-  // discrete (save/reset/import), so no debounce is needed.
+  // discrete (save/reset/import), so no debounce is needed. deps.mainWindow is
+  // captured at registration; fall back to any live window so mutations after
+  // the first window closes still rebuild (the menu is app-global).
   const rebuildMenuForOverrides = () => {
-    const win = deps.mainWindow;
-    if (win && !win.isDestroyed()) {
+    const win =
+      deps.mainWindow && !deps.mainWindow.isDestroyed()
+        ? deps.mainWindow
+        : BrowserWindow.getAllWindows().find((w) => !w.isDestroyed());
+    if (win) {
       createApplicationMenu(win, deps.cliAvailabilityService);
     }
   };

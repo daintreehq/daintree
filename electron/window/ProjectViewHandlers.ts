@@ -122,7 +122,8 @@ export function setupViewHandlers(
       ((isMac && input.meta && !input.control) || (!isMac && input.control && !input.meta)) &&
       !input.alt;
     // Mirrors createWindow.ts: renderer-owned menu accelerators yield to the
-    // renderer's KeybindingService on macOS (see menuAccelerators.ts).
+    // renderer's KeybindingService per-event on every platform
+    // (see menuAccelerators.ts).
     wc.setIgnoreMenuShortcuts(isCloseShortcut || isRendererOwnedShortcut(input));
   };
 

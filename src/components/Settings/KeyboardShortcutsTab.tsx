@@ -452,14 +452,18 @@ export function KeyboardShortcutsTab() {
             <div className="flex items-center justify-between gap-4 py-2 border-b border-daintree-border/50">
               <span className="text-sm text-daintree-text shrink-0">Move selection</span>
               <span className="text-xs text-daintree-text/60 text-right">
-                Arrow keys or j / k; Home / End jump to first or last
+                Arrow keys or j / k; PageUp / PageDown and Home / End jump further
               </span>
             </div>
             <div className="flex items-center justify-between gap-4 py-2 border-b border-daintree-border/50">
               <span className="text-sm text-daintree-text shrink-0">Open worktree</span>
               <span className="text-xs text-daintree-text/60 text-right">
-                Enter or Space; e opens it in the editor
+                Space or Enter; Enter or ArrowRight moves into the row's actions
               </span>
+            </div>
+            <div className="flex items-center justify-between gap-4 py-2 border-b border-daintree-border/50">
+              <span className="text-sm text-daintree-text shrink-0">Reorder worktree</span>
+              <span className="text-xs text-daintree-text/60 text-right">Alt+Up / Alt+Down</span>
             </div>
           </div>
           <p className="text-xs text-daintree-text/40 mt-2">

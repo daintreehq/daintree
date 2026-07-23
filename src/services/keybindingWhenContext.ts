@@ -11,8 +11,10 @@ import { useMacroFocusStore } from "@/store/macroFocusStore";
  * keydown, only when a candidate binding carries a `when` clause.
  *
  * Every key here is a stable public API: additions are fine, renames and
- * semantic changes are breaking. Unknown identifiers evaluate falsy
- * (fail-closed) in the evaluator.
+ * semantic changes are breaking. Unknown identifiers evaluate falsy in the
+ * evaluator — note that makes negated expressions permissive: a misspelled
+ * `!modalOpne` is always true, so a typo can broaden a binding rather than
+ * disable it.
  */
 export function buildKeybindingWhenContext(event: KeyboardEvent): WhenClauseContext {
   const target = event.target instanceof Element ? event.target : null;

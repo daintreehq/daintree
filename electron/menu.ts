@@ -29,6 +29,7 @@ import { isAppError } from "./utils/errorTypes.js";
 import { isWindowsStoreBuild, getBuildChannelLabel } from "../shared/config/distribution.js";
 import {
   getMenuAccelerator,
+  isKeybindingOwnedAction,
   rendererMenuAccelerator,
   resetRendererOwnedAccelerators,
 } from "./services/menuAccelerators.js";
@@ -106,10 +107,13 @@ export function createApplicationMenu(
   cliAvailabilityService?: CliAvailabilityService
 ): void {
   // Accelerators for renderer-owned actions are derived from the effective
-  // keybindings (defaults + user overrides) and collected for macOS
-  // suppression — see electron/services/menuAccelerators.ts. Every such item
-  // passes registerAccelerator: false so Windows/Linux display without
-  // registering; the renderer's KeybindingService owns keyboard execution.
+  // keybindings (defaults + user overrides) and collected into a suppression
+  // set — see electron/services/menuAccelerators.ts. They stay natively
+  // registered on every platform; before-input-event in app renderer contexts
+  // suppresses their native dispatch per keystroke so the renderer's
+  // KeybindingService owns keyboard execution there, while guest webviews and
+  // DevTools (which app renderers never see keys from) fall back to native
+  // execution instead of the shortcut going dead.
   resetRendererOwnedAccelerators();
 
   const getTargetBrowserWindow = (
@@ -148,18 +152,20 @@ export function createApplicationMenu(
       // Assistant-only agents are never offered as a launchable native menu item.
       if (isAssistantOnlyAgentId(agent.id)) return;
       if (isAgentInstalled(availability?.[agent.id])) {
-        // Built-in agents resolve through the keybinding system (agent.<id>
-        // defaults + user overrides) — renderer-owned, so rebinds show up
-        // here. Custom agents fall back to the registry's shortcut field,
-        // which the renderer doesn't bind; that accelerator stays natively
-        // registered and executing, or it would go dead.
-        const boundAccelerator = rendererMenuAccelerator(`agent.${agent.id}`);
+        // Agents the keybinding system owns (a default row or user override
+        // exists for agent.<id>) take their accelerator from the effective
+        // bindings — including "none" when cleared or chord-bound; the
+        // registry fallback would silently resurrect the old shortcut. Only
+        // agents outside the keybinding system entirely use the registry's
+        // shortcut field, natively registered and executing.
+        const keybindingOwned = isKeybindingOwnedAction(`agent.${agent.id}`);
         items.push({
           label: `New ${agent.name}`,
-          accelerator:
-            boundAccelerator ??
-            (agent.shortcut ? convertShortcutToAccelerator(agent.shortcut) : undefined),
-          registerAccelerator: boundAccelerator ? false : undefined,
+          accelerator: keybindingOwned
+            ? rendererMenuAccelerator(`agent.${agent.id}`)
+            : agent.shortcut
+              ? convertShortcutToAccelerator(agent.shortcut)
+              : undefined,
           click: (_item, browserWindow) =>
             sendAction("agent.launch", getTargetBrowserWindow(browserWindow), {
               agentId: agent.id,
@@ -234,7 +240,6 @@ export function createApplicationMenu(
         {
           label: "New Window",
           accelerator: rendererMenuAccelerator("app.newWindow"),
-          registerAccelerator: false,
           click: (_item, browserWindow) =>
             sendAction("app.newWindow", getTargetBrowserWindow(browserWindow)),
         },
@@ -246,7 +251,6 @@ export function createApplicationMenu(
           // the renderer — the same physical key did different things per OS.
           label: "New Worktree…",
           accelerator: rendererMenuAccelerator("worktree.createDialog.open"),
-          registerAccelerator: false,
           click: (_item, browserWindow) =>
             sendAction("worktree.createDialog.open", getTargetBrowserWindow(browserWindow)),
         },
@@ -260,7 +264,6 @@ export function createApplicationMenu(
               {
                 label: "Settings…",
                 accelerator: rendererMenuAccelerator("app.settings"),
-                registerAccelerator: false,
                 click: (_item: Electron.MenuItem, browserWindow: Electron.BaseWindow | undefined) =>
                   sendAction("app.settings", getTargetBrowserWindow(browserWindow)),
               },
@@ -371,7 +374,6 @@ export function createApplicationMenu(
         {
           label: "Toggle Sidebar",
           accelerator: rendererMenuAccelerator("nav.toggleSidebar"),
-          registerAccelerator: false,
           click: (_item, browserWindow) =>
             sendAction("nav.toggleSidebar", getTargetBrowserWindow(browserWindow)),
         },
@@ -380,7 +382,6 @@ export function createApplicationMenu(
           // unless the user rebinds to a single stroke.
           label: "Toggle Focus Mode",
           accelerator: rendererMenuAccelerator("nav.toggleFocusMode"),
-          registerAccelerator: false,
           click: (_item, browserWindow) =>
             sendAction("nav.toggleFocusMode", getTargetBrowserWindow(browserWindow)),
         },
@@ -475,19 +476,17 @@ export function createApplicationMenu(
       submenu: [
         {
           // Renderer-owned so scoped bindings win: the portal binds
-          // portal.newTab on the same Cmd+T at higher priority — a natively
-          // registered accelerator would fire terminal.duplicate regardless
-          // of portal focus on macOS.
+          // portal.newTab on the same Cmd+T at higher priority — without
+          // per-event suppression the native accelerator would fire
+          // terminal.duplicate regardless of portal focus.
           label: "Duplicate Panel",
           accelerator: rendererMenuAccelerator("terminal.duplicate"),
-          registerAccelerator: false,
           click: (_item, browserWindow) =>
             sendAction("terminal.duplicate", getTargetBrowserWindow(browserWindow)),
         },
         {
           label: "New Terminal",
           accelerator: rendererMenuAccelerator("terminal.new"),
-          registerAccelerator: false,
           click: (_item, browserWindow) =>
             sendAction("terminal.new", getTargetBrowserWindow(browserWindow)),
         },
@@ -500,14 +499,12 @@ export function createApplicationMenu(
         {
           label: "Quick Switcher…",
           accelerator: rendererMenuAccelerator("nav.quickSwitcher"),
-          registerAccelerator: false,
           click: (_item, browserWindow) =>
             sendAction("nav.quickSwitcher", getTargetBrowserWindow(browserWindow)),
         },
         {
           label: "Command Palette…",
           accelerator: rendererMenuAccelerator("action.palette.open"),
-          registerAccelerator: false,
           click: (_item, browserWindow) =>
             sendAction("action.palette.open", getTargetBrowserWindow(browserWindow)),
         },
@@ -568,7 +565,6 @@ export function createApplicationMenu(
           // the command palette — the Help menu is where new users look.
           label: "Keyboard Shortcuts",
           accelerator: rendererMenuAccelerator("help.shortcutsAlt"),
-          registerAccelerator: false,
           click: (_item, browserWindow) =>
             sendAction("help.shortcutsAlt", getTargetBrowserWindow(browserWindow)),
         },
@@ -576,7 +572,6 @@ export function createApplicationMenu(
         {
           label: "Launch Help Agent",
           accelerator: rendererMenuAccelerator("help.launchAgent"),
-          registerAccelerator: false,
           click: (_item, browserWindow) =>
             sendAction("help.launchAgent", getTargetBrowserWindow(browserWindow)),
         },
@@ -629,7 +624,6 @@ export function createApplicationMenu(
         {
           label: "Settings…",
           accelerator: rendererMenuAccelerator("app.settings"),
-          registerAccelerator: false,
           click: (_item, browserWindow) =>
             sendAction("app.settings", getTargetBrowserWindow(browserWindow)),
         },

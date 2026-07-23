@@ -22,8 +22,9 @@ export interface SettingsShortcutCaptureProps {
   excludeActionId: string;
   /**
    * Scope of the binding being edited. Used to filter conflict detection so
-   * scope-disjoint bindings (e.g. Escape in modal vs terminal) don't false-flag.
-   * Defaults to "global" (the conservative behavior — flags any overlap).
+   * scope-disjoint bindings (e.g. Cmd+W in portal vs worktreeGrid) don't
+   * false-flag. Defaults to "global" (the conservative behavior — flags any
+   * overlap).
    */
   scope?: KeyScope;
   /**

@@ -7,12 +7,15 @@ import { getValidatedOverrides } from "./keybindingOverridesStore.js";
  * keeps the menu truthful — a rebind updates the menu on the next rebuild
  * (electron/ipc/handlers/keybinding.ts triggers one after every mutation).
  *
- * Renderer-owned accelerators are additionally collected per menu build so
- * before-input-event can suppress their native key equivalents on macOS
- * (setIgnoreMenuShortcuts) — the renderer's KeybindingService owns keyboard
- * execution (scopes, priorities, when-clauses, xterm exceptions) on every
- * platform; native items display the combo and stay clickable. On
- * Windows/Linux the same items pass registerAccelerator: false instead.
+ * Renderer-owned accelerators stay natively registered on every platform, and
+ * are additionally collected per menu build so before-input-event can suppress
+ * their native dispatch per keystroke (setIgnoreMenuShortcuts in
+ * createWindow.ts / ProjectViewHandlers.ts) — the renderer's KeybindingService
+ * owns keyboard execution (scopes, priorities, when-clauses, xterm exceptions)
+ * whenever an app renderer has focus. When focus is somewhere the app renderer
+ * never sees the key — a browser-panel/dev-preview guest webview, DevTools —
+ * no suppression runs and the registered accelerator executes natively, so
+ * shortcuts keep working there instead of going dead.
  */
 
 const KEY_TO_ACCELERATOR: Record<string, string> = {
@@ -109,6 +112,18 @@ export function getMenuAccelerator(actionId: string): string | undefined {
   return combo ? comboToAccelerator(combo) : undefined;
 }
 
+/**
+ * Whether the keybinding system owns this action's shortcut: a user override
+ * exists (including an explicit empty "unbound" one) or the shipped defaults
+ * carry a row for it. Owned actions must never fall back to registry-declared
+ * shortcuts — a cleared or chord-bound action would silently resurrect the
+ * old native accelerator.
+ */
+export function isKeybindingOwnedAction(actionId: string): boolean {
+  if (actionId in getValidatedOverrides()) return true;
+  return getDefaultKeybindingsForPlatform().some((b) => b.actionId === actionId);
+}
+
 let rendererOwnedAccelerators: ParsedAccelerator[] = [];
 
 function parseAccelerator(accelerator: string): ParsedAccelerator | null {
@@ -191,6 +206,10 @@ export function isRendererOwnedShortcut(input: Electron.Input): boolean {
     // Physical digit-row parity with the renderer matcher: on layouts that
     // shift their number row, input.key for Digit1 is "&" — match by code.
     if (/^[0-9]$/.test(accKey) && input.code === `Digit${accKey}`) return true;
+    // Option-modified letters on macOS produce transformed characters
+    // (Option+T → "†"), mirroring the renderer's code-based normalization for
+    // mac Alt combos — match the physical letter key instead.
+    if (mac && input.alt && /^[A-Z]$/.test(accKey) && input.code === `Key${accKey}`) return true;
     // Arrow keys arrive as "ArrowUp" etc. on Input; accelerators store "Up".
     if (input.key === `Arrow${accKey}`) return true;
   }

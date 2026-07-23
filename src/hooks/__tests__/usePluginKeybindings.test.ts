@@ -167,7 +167,7 @@ describe("usePluginKeybindings", () => {
         item: {
           actionId: "p1.act",
           combo: "Cmd+Shift+8",
-          scope: "terminal",
+          scope: "portal",
           when: "terminalFocused",
           description: "Do the thing",
         },
@@ -184,7 +184,7 @@ describe("usePluginKeybindings", () => {
       expect(registerSpy).toHaveBeenCalledWith(
         expect.objectContaining({
           actionId: "p1.act",
-          scope: "terminal",
+          scope: "portal",
           when: "terminalFocused",
           description: "Do the thing",
         })

@@ -342,6 +342,20 @@ class KeybindingService {
     // Alt-modified characters). Try exact match on the normalized key.
     if (eventKey.toLowerCase() === parsed.key.toLowerCase()) return true;
 
+    // Legacy compatibility for the physical digit-row path: combos recorded
+    // before that normalization stored the produced character ("Cmd+Shift+!"
+    // on US, "Cmd+&" on AZERTY). When normalization rewrote the event key to
+    // a digit, also accept the raw produced character so persisted rebinds
+    // keep firing.
+    if (
+      /^[0-9]$/.test(eventKey) &&
+      event.key.length === 1 &&
+      event.key !== eventKey &&
+      event.key.toLowerCase() === parsed.key.toLowerCase()
+    ) {
+      return true;
+    }
+
     return false;
   }
 

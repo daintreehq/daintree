@@ -2226,6 +2226,22 @@ describe("physical digit-row matching for command shortcuts", () => {
     const event = createKeyboardEvent({ key: "&", code: "Digit1", ctrlKey: true });
     expect(normalizeKeyForBinding(event)).toBe("1");
   });
+
+  it("still matches combos recorded before physical normalization (US Cmd+Shift+!)", () => {
+    // Pre-normalization profiles stored the produced character; those
+    // persisted rebinds must keep firing after the upgrade.
+    setPlatform("Win32");
+    const service = new KeybindingService();
+    const event = createKeyboardEvent({ key: "!", code: "Digit1", ctrlKey: true, shiftKey: true });
+    expect(service.matchesEvent(event, "Cmd+Shift+!")).toBe(true);
+  });
+
+  it("still matches legacy AZERTY character combos (Cmd+&)", () => {
+    setPlatform("Win32");
+    const service = new KeybindingService();
+    const event = createKeyboardEvent({ key: "&", code: "Digit1", ctrlKey: true });
+    expect(service.matchesEvent(event, "Cmd+&")).toBe(true);
+  });
 });
 
 describe("when-clause context provider", () => {
