@@ -61,24 +61,101 @@ function SideChip({ label, floating }: { label: string; floating?: boolean }) {
   );
 }
 
+type ImageDiffStatusSide = "head" | "working";
+
+interface CommittedSnapshot {
+  /** Identity of the fetch's *target* (worktree+path+status+nonce) — see makeRequestKey. */
+  requestKey: string;
+  /**
+   * Monotonic id of the fetch attempt that produced this snapshot. Unlike
+   * requestKey (deterministic per target, so it repeats when you navigate back
+   * to a file), attempt is unique per fetch — keying each ImagePane by it forces
+   * a remount on every commit, even when the same file recommits, so stale
+   * per-side decode/dimension state can't survive a return visit.
+   */
+  attempt: number;
+  versions: DiffMediaFileVersions;
+  relPath: string;
+  status: GitStatus;
+  /**
+   * Sides whose off-screen decode rejected, seeded into the matching ImagePane
+   * so a genuinely broken image shows its per-side fallback instead of a torn
+   * frame — and so the swap is never blocked by one bad side.
+   */
+  decodeFailures: { head: boolean; working: boolean };
+}
+
+function deriveSingleSide(status: GitStatus): ImageDiffStatusSide | null {
+  return status === "added" || status === "untracked"
+    ? "working"
+    : status === "deleted"
+      ? "head"
+      : null;
+}
+
+/** Sides a given status can actually render, so we never decode a hidden one. */
+function renderableSides(status: GitStatus): ImageDiffStatusSide[] {
+  const single = deriveSingleSide(status);
+  return single === null ? ["head", "working"] : [single];
+}
+
+function makeRequestKey(
+  worktreePath: string,
+  relPath: string,
+  status: GitStatus,
+  nonce: number
+): string {
+  return JSON.stringify([worktreePath, relPath, status, nonce]);
+}
+
+/**
+ * Decode a data URL on an off-screen element so the browser's URL-keyed
+ * decoded-image cache is warm before the on-screen <img> mounts with the same
+ * src — that's what lets the swap paint without a blank/torn frame (the
+ * hold-then-swap pattern GitHub's PR viewer and VS Code's image preview use).
+ * Resolves to whether the decode succeeded; a genuinely broken image resolves
+ * `false` rather than throwing, so one bad side never blocks the whole swap.
+ * `decode()` is absent under jsdom (and older engines), so guard for it.
+ */
+async function decodeOffscreen(dataUrl: string): Promise<boolean> {
+  const img = new Image();
+  img.src = dataUrl;
+  if (typeof img.decode !== "function") return true;
+  try {
+    await img.decode();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 interface ImagePaneProps {
   label: string;
   side: DiffMediaSide;
   relPath: string;
   caption?: string;
+  /**
+   * Seeded from the off-screen predecode so a side that failed to decode shows
+   * the fallback on first paint. Each pane is keyed by the committed request +
+   * side at the call site, so a new commit remounts it with fresh state — no
+   * reset effect needed (the old [src] effect couldn't recover a same-URL
+   * retry, since the src never changed).
+   */
+  initialDecodeFailed?: boolean;
   /** Offered only for transient read failures, not genuinely absent versions */
   onRetry?: () => void;
 }
 
-function ImagePane({ label, side, relPath, caption, onRetry }: ImagePaneProps) {
+function ImagePane({
+  label,
+  side,
+  relPath,
+  caption,
+  initialDecodeFailed,
+  onRetry,
+}: ImagePaneProps) {
   const [dims, setDims] = useState<{ width: number; height: number } | null>(null);
-  const [decodeFailed, setDecodeFailed] = useState(false);
-  const src = side.ok ? side.dataUrl : null;
-
-  useEffect(() => {
-    setDims(null);
-    setDecodeFailed(false);
-  }, [src]);
+  const [decodeFailed, setDecodeFailed] = useState(initialDecodeFailed ?? false);
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-1.5">
@@ -274,57 +351,80 @@ function OnionCompare({
 }
 
 export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffViewerProps) {
-  const [versions, setVersions] = useState<DiffMediaFileVersions | null>(null);
-  const [loadState, setLoadState] = useState<"loading" | "loaded" | "error">("loading");
+  // The last snapshot fully fetched AND off-screen-decoded. It stays painted
+  // while the next file loads, so stepping between images never tears down to a
+  // skeleton — the previous frame holds until the new one is ready to paint.
+  const [committed, setCommitted] = useState<CommittedSnapshot | null>(null);
+  // The request key whose read failed. A key, not a boolean: effects run after
+  // render, so a boolean would paint the *previous* file's error for one commit
+  // on switch. Only a failure keyed to the live target counts.
+  const [failedRequestKey, setFailedRequestKey] = useState<string | null>(null);
   const [fetchNonce, setFetchNonce] = useState(0);
   const [mode, setMode] = useState<ImageDiffMode>("two-up");
   const [onionOpacity, setOnionOpacity] = useState(50);
+  // Bumped once per fetch; stamped into each snapshot so ImagePane keys are
+  // unique per attempt (see CommittedSnapshot.attempt).
+  const attemptRef = useRef(0);
+
+  const requestKey = makeRequestKey(worktreePath, relPath, status, fetchNonce);
+
+  // Drop a stale failure the moment the target changes, during render, so
+  // returning to a file that previously failed shows a hold/skeleton and the
+  // fresh fetch's outcome — not the old error. requestKey repeats per target,
+  // so without this a returned-to failure would out-rank a later success that
+  // never clears it. (React's "adjust state while rendering" pattern.)
+  const [failureTargetKey, setFailureTargetKey] = useState(requestKey);
+  if (failureTargetKey !== requestKey) {
+    setFailureTargetKey(requestKey);
+    setFailedRequestKey(null);
+  }
 
   useEffect(() => {
     let cancelled = false;
-    setLoadState("loading");
-    setVersions(null);
+    const attempt = (attemptRef.current += 1);
     diffMediaClient
       .readFileVersions({ cwd: worktreePath, filePath: relPath })
-      .then((result) => {
+      .then(async (result) => {
         if (cancelled) return;
-        setVersions(result);
-        setLoadState("loaded");
+        // A comparison whose two transport reads both failed has nothing to
+        // render — surface the aggregate error for this target rather than
+        // committing (and then holding) an empty frame.
+        if (deriveSingleSide(status) === null && !result.head.ok && !result.working.ok) {
+          setFailedRequestKey(requestKey);
+          return;
+        }
+        // Warm the decode cache for only the sides this status will show, so
+        // the on-screen swap paints instantly. A side that fails to decode is
+        // recorded, not fatal — it falls back to the per-side message in
+        // two-up rather than blocking the whole swap.
+        const decoded = await Promise.all(
+          renderableSides(status).map(async (sideKey) => {
+            const sideValue = result[sideKey];
+            const ok = sideValue.ok ? await decodeOffscreen(sideValue.dataUrl) : true;
+            return [sideKey, ok] as const;
+          })
+        );
+        if (cancelled) return;
+        const decodeFailures = { head: false, working: false };
+        for (const [sideKey, ok] of decoded) {
+          if (!ok) decodeFailures[sideKey] = true;
+        }
+        setCommitted({ requestKey, attempt, versions: result, relPath, status, decodeFailures });
       })
       .catch(() => {
-        if (!cancelled) setLoadState("error");
+        if (!cancelled) setFailedRequestKey(requestKey);
       });
     return () => {
       cancelled = true;
     };
-  }, [worktreePath, relPath, fetchNonce]);
+  }, [worktreePath, relPath, status, requestKey]);
 
   const retry = useCallback(() => setFetchNonce((nonce) => nonce + 1), []);
 
-  const singleSide: "head" | "working" | null =
-    status === "added" || status === "untracked" ? "working" : status === "deleted" ? "head" : null;
-
-  if (loadState === "loading") {
-    return (
-      <Skeleton
-        label="Loading image versions"
-        className="flex h-full min-h-0 w-full flex-col gap-3 p-3"
-      >
-        <SkeletonBone className="h-6 w-44" />
-        <div className="flex min-h-0 flex-1 gap-3">
-          <SkeletonBone className="min-h-0 flex-1 rounded-md" />
-          {singleSide === null ? <SkeletonBone className="min-h-0 flex-1 rounded-md" /> : null}
-        </div>
-      </Skeleton>
-    );
-  }
-
-  // Single-pane statuses (added/deleted) always render their dedicated pane —
-  // its per-side message covers a missing version; the aggregate error is
-  // reserved for comparisons where both sides genuinely failed.
-  const bothSidesFailed = versions !== null && !versions.head.ok && !versions.working.ok;
-
-  if (loadState === "error" || (singleSide === null && bothSidesFailed)) {
+  // 1. The live target's read failed (transport reject, or a both-sides-failed
+  //    comparison): show the aggregate error. Keyed compare, so a stale failure
+  //    from a file we've already navigated off never paints here.
+  if (failedRequestKey === requestKey) {
     return (
       <div className="flex h-full min-h-0 w-full flex-col items-center justify-center">
         <EmptyState
@@ -344,18 +444,49 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
     );
   }
 
-  if (versions === null) return null;
+  // 2. Nothing committed yet (first-ever load, or a prior failure with no held
+  //    frame to keep): show the skeleton. Bone count comes from the live status.
+  if (committed === null) {
+    const skeletonSingle = deriveSingleSide(status);
+    return (
+      <Skeleton
+        label="Loading image versions"
+        className="flex h-full min-h-0 w-full flex-col gap-3 p-3"
+      >
+        <SkeletonBone className="h-6 w-44" />
+        <div className="flex min-h-0 flex-1 gap-3">
+          <SkeletonBone className="min-h-0 flex-1 rounded-md" />
+          {skeletonSingle === null ? <SkeletonBone className="min-h-0 flex-1 rounded-md" /> : null}
+        </div>
+      </Skeleton>
+    );
+  }
+
+  // 3. Render the committed snapshot. Everything below reads from `committed`,
+  //    not live props, so the held frame stays internally consistent (image,
+  //    layout, alt text, captions all belong to the same file) until the swap.
+  const view = committed;
+  // Still holding an earlier file while the live one loads: flag the frame busy
+  // for assistive tech. We deliberately do NOT make it `inert` — inerting the
+  // focused subtree during a keyboard-driven file step blurs focus out of the
+  // dialog (Chromium blurs inert descendants) with nothing to restore it. The
+  // only thing inert guarded was a stale Retry firing against the new target,
+  // which is harmless — it just refetches the file that's already loading.
+  const isHolding = view.requestKey !== requestKey;
+  const singleSide = deriveSingleSide(view.status);
 
   if (singleSide !== null) {
     const caption =
       singleSide === "working" ? "Added — no previous version" : "Deleted — no working version";
     return (
-      <div className="flex h-full min-h-0 w-full flex-col p-3">
+      <div className="flex h-full min-h-0 w-full flex-col p-3" aria-busy={isHolding || undefined}>
         <ImagePane
+          key={`${view.attempt}:${singleSide}`}
           label={singleSide === "working" ? "Working tree" : "HEAD"}
-          side={versions[singleSide]}
-          relPath={relPath}
+          side={view.versions[singleSide]}
+          relPath={view.relPath}
           caption={caption}
+          initialDecodeFailed={view.decodeFailures[singleSide]}
           onRetry={retry}
         />
       </div>
@@ -363,15 +494,20 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
   }
 
   const okSides: OkSides | null =
-    versions.head.ok && versions.working.ok
-      ? { head: versions.head, working: versions.working }
+    view.versions.head.ok && view.versions.working.ok
+      ? { head: view.versions.head, working: view.versions.working }
       : null;
   const bothOk = okSides !== null;
-  const effectiveMode: ImageDiffMode = bothOk ? mode : "two-up";
+  const anyDecodeFailed = view.decodeFailures.head || view.decodeFailures.working;
+  // A broken side can only show its fallback in two-up (swipe/onion <img>s have
+  // no error affordance), so a decode failure locks the layout to two-up and
+  // hides the compare modes.
+  const showModes = bothOk && !anyDecodeFailed;
+  const effectiveMode: ImageDiffMode = showModes ? mode : "two-up";
 
   return (
-    <div className="flex h-full min-h-0 w-full flex-col">
-      {bothOk ? (
+    <div className="flex h-full min-h-0 w-full flex-col" aria-busy={isHolding || undefined}>
+      {showModes ? (
         <div className="flex shrink-0 items-center justify-between gap-2 px-3 pt-3">
           <SegmentedToggle options={MODE_OPTIONS} value={effectiveMode} onChange={setMode} />
           {effectiveMode === "onion" ? (
@@ -395,13 +531,25 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
       <div className="flex min-h-0 flex-1 flex-col p-3">
         {effectiveMode === "two-up" || okSides === null ? (
           <div className="flex min-h-0 flex-1 gap-3">
-            <ImagePane label="HEAD" side={versions.head} relPath={relPath} />
-            <ImagePane label="Working tree" side={versions.working} relPath={relPath} />
+            <ImagePane
+              key={`${view.attempt}:head`}
+              label="HEAD"
+              side={view.versions.head}
+              relPath={view.relPath}
+              initialDecodeFailed={view.decodeFailures.head}
+            />
+            <ImagePane
+              key={`${view.attempt}:working`}
+              label="Working tree"
+              side={view.versions.working}
+              relPath={view.relPath}
+              initialDecodeFailed={view.decodeFailures.working}
+            />
           </div>
         ) : effectiveMode === "swipe" ? (
-          <SwipeCompare sides={okSides} relPath={relPath} />
+          <SwipeCompare sides={okSides} relPath={view.relPath} />
         ) : (
-          <OnionCompare sides={okSides} relPath={relPath} opacity={onionOpacity} />
+          <OnionCompare sides={okSides} relPath={view.relPath} opacity={onionOpacity} />
         )}
       </div>
     </div>

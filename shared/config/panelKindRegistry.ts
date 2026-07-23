@@ -298,6 +298,10 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     canConvert: false,
     // Not dockable: the dock's chip row has no meaningful compact form for a
     // diff (review and dev-preview are non-dockable reading surfaces too).
+    // Pin the dialog at the max height rather than sizing to content, so
+    // stepping between files doesn't resize and re-center the whole frame
+    // under the cursor (#11364) — same treatment as the file browser.
+    dialogFullHeight: true,
     usesTerminalUi: false,
     keepAliveOnProjectSwitch: true,
     // Opened against a specific file, so there is nothing sensible to spawn
