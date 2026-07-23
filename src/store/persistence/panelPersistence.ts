@@ -150,25 +150,6 @@ function snapshotsEqual<T>(left: T[] | undefined, right: T[]): boolean {
   return true;
 }
 
-/**
- * Order-sensitive array equality using JSON-round-trip semantics (a missing key
- * equals a key whose value is `undefined`). Used to decide whether a save is a
- * genuine no-op against the last-acknowledged baseline: a baseline read back
- * from disk has its `undefined`-valued keys stripped, so a strict comparison
- * would report a spurious change and re-send an empty delta on every first save
- * after hydration (#11350). Order-sensitive so a pure reorder still persists.
- */
-function snapshotsCanonicalEqual<T>(left: T[] | undefined, right: T[]): boolean {
-  if (left === right) return true;
-  if (!left || left.length !== right.length) return false;
-  for (let i = 0; i < left.length; i += 1) {
-    if (!deepEqualIgnoringUndefined(left[i], right[i])) {
-      return false;
-    }
-  }
-  return true;
-}
-
 function shouldCollectPersistencePerf(): boolean {
   if (typeof window === "undefined") return false;
   return isRendererPerfCaptureEnabled() || Array.isArray(window.__DAINTREE_PERF_MARKS__);
@@ -221,8 +202,10 @@ export class PanelPersistence {
         .catch(() => {})
         .then(async () => {
           // Baseline now reflects the previous committed write for this project.
-          const baseline = this.persistedTerminalsByProject.get(projectId) ?? [];
-          if (snapshotsCanonicalEqual(baseline, transformed)) {
+          // Skip using the raw (possibly undefined) value so a first save with
+          // no established baseline still sends; diff against `?? []`.
+          const baseline = this.persistedTerminalsByProject.get(projectId);
+          if (snapshotsEqual(baseline, transformed)) {
             this.clearQueuedTerminalsIfMatches(projectId, transformed);
             return;
           }
@@ -235,7 +218,7 @@ export class PanelPersistence {
           // baseline so Main merges concurrent writes from sibling windows of
           // the same project instead of clobbering them (#11350).
           const { changedIds, removedIds } = computeIdArrayDelta(
-            baseline,
+            baseline ?? [],
             transformed,
             deepEqualIgnoringUndefined
           );
@@ -287,8 +270,8 @@ export class PanelPersistence {
       const run = prior
         .catch(() => {})
         .then(async () => {
-          const baseline = this.persistedTabGroupsByProject.get(projectId) ?? [];
-          if (snapshotsCanonicalEqual(baseline, tabGroups)) {
+          const baseline = this.persistedTabGroupsByProject.get(projectId);
+          if (snapshotsEqual(baseline, tabGroups)) {
             this.clearQueuedTabGroupsIfMatches(projectId, tabGroups);
             return;
           }
@@ -299,7 +282,7 @@ export class PanelPersistence {
             : 0;
           // Merge concurrent tab-group writes from sibling windows (#11350).
           const { changedIds, removedIds } = computeIdArrayDelta(
-            baseline,
+            baseline ?? [],
             tabGroups,
             deepEqualIgnoringUndefined
           );
@@ -416,8 +399,12 @@ export class PanelPersistence {
     this.debouncedSaveTabGroups.cancel();
     this.queuedTerminalsByProject.clear();
     this.queuedTabGroupsByProject.clear();
-    this.terminalWriteTailByProject.clear();
-    this.tabGroupWriteTailByProject.clear();
+    // Deliberately keep the per-project write tails: cancel() abandons pending
+    // debounced work, but a send already in flight cannot be recalled. A save
+    // that arrives after cancel must still chain behind that in-flight write so
+    // its delta is computed against the acknowledged baseline, not a stale one
+    // (#11350). The tail entries are overwritten by the next save or drop at
+    // process end.
     this.pendingPersist = null;
     this.pendingTabGroupPersist = null;
   }

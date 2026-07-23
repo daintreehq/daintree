@@ -434,9 +434,11 @@ describe("PanelPersistence", () => {
       expect(removedIds).toEqual([]);
     });
 
-    it("does not re-send unchanged panels against a JSON-round-tripped baseline", async () => {
-      // Regression for the undefined-vs-missing key mismatch: priming from disk
-      // shape and saving the same panels must be a no-op, not a full rewrite.
+    it("emits an empty delta for panels unchanged since a JSON-round-tripped baseline", async () => {
+      // Regression for the undefined-vs-missing key mismatch: a baseline read
+      // back from disk drops undefined-valued keys, but the delta must still
+      // report no change so Main's merge is a no-op and cannot overwrite a
+      // sibling's edit.
       const client = createMockProjectClient();
       const persistence = new PanelPersistence(client, { debounceMs: 100 });
 
@@ -447,7 +449,9 @@ describe("PanelPersistence", () => {
       persistence.save([a, b], projectId);
       await vi.advanceTimersByTimeAsync(100);
 
-      expect(client.setTerminals).not.toHaveBeenCalled();
+      const [, , changedIds, removedIds] = client.setTerminals.mock.calls[0]!;
+      expect(changedIds).toEqual([]);
+      expect(removedIds).toEqual([]);
     });
 
     it("emits only the newly added panel in changedIds against a hydrated baseline", async () => {
@@ -1042,6 +1046,13 @@ describe("PanelPersistence", () => {
 
       persistence.save([createMockTerminal({ ...panel, title: "Renamed" })], projectId);
       await vi.advanceTimersByTimeAsync(100);
+      // The fragment is captured from queued state synchronously at save() time,
+      // but the second write is serialized behind the in-flight first write and
+      // is not sent until that resolves (#11350).
+      expect(client.setTerminals).toHaveBeenCalledTimes(1);
+
+      resolveFirstPersist?.();
+      await persistence.whenIdle();
 
       expect(client.setTerminals).toHaveBeenCalledTimes(2);
       const secondSave = client.setTerminals.mock.calls[1]![1] as TerminalSnapshot[];
@@ -1052,9 +1063,6 @@ describe("PanelPersistence", () => {
           browserUrl: "https://example.com",
         })
       );
-
-      resolveFirstPersist?.();
-      await persistence.whenIdle();
     });
   });
 

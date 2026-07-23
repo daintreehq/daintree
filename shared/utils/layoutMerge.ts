@@ -55,50 +55,47 @@ function hasStringId(entry: unknown): entry is { id: string } {
 }
 
 /**
- * Deep structural equality that treats a missing key and a key whose value is
- * `undefined` as equivalent — i.e. JSON round-trip semantics. Layout arrays are
- * persisted as JSON (which drops `undefined`-valued keys), but the in-memory
- * snapshots a renderer diffs against still carry explicit `undefined` keys
- * (e.g. `worktreeId: undefined`). A key-count comparison would then flag an
- * otherwise-identical entry as changed on the first save after hydration, which
- * would wrongly grant the writer authority to overwrite a sibling's edit
- * (#11350). Ignoring `undefined`-valued keys makes the delta reflect real
- * changes only. `NaN` is treated as equal to itself.
+ * Recursively rewrite a value into the exact shape JSON serialization would
+ * produce: `undefined`-valued object keys are dropped, `undefined`/hole array
+ * elements and non-finite numbers become `null`, and object keys are sorted so
+ * ordering never matters. Functions/symbols are dropped by JSON downstream.
+ */
+function canonicalizeForJson(value: unknown): unknown {
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((element) => (element === undefined ? null : canonicalizeForJson(element)));
+  }
+  const record = value as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(record).sort()) {
+    if (record[key] !== undefined) {
+      out[key] = canonicalizeForJson(record[key]);
+    }
+  }
+  return out;
+}
+
+/**
+ * Structural equality under JSON round-trip semantics. Layout arrays are
+ * persisted as JSON, which drops `undefined`-valued keys and maps array holes /
+ * non-finite numbers to `null`; the in-memory snapshots a renderer diffs
+ * against still carry explicit `undefined` keys (e.g. `worktreeId: undefined`).
+ * A naive comparison would then flag an otherwise-identical entry as changed on
+ * the first save after hydration, wrongly granting the writer authority to
+ * overwrite a sibling's edit (#11350). Comparing the canonical JSON form makes
+ * the delta reflect only changes that survive a persist round-trip.
  */
 export function deepEqualIgnoringUndefined(left: unknown, right: unknown): boolean {
   if (left === right) return true;
-  if (typeof left === "number" && typeof right === "number") {
-    return Number.isNaN(left) && Number.isNaN(right);
+  try {
+    return JSON.stringify(canonicalizeForJson(left)) === JSON.stringify(canonicalizeForJson(right));
+  } catch {
+    // Non-serializable input (BigInt, circular): treat as changed so the entry
+    // is sent rather than silently dropped from the delta.
+    return false;
   }
-  if (typeof left !== typeof right) return false;
-  if (left === null || right === null) return false;
-
-  if (Array.isArray(left) || Array.isArray(right)) {
-    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) {
-      return false;
-    }
-    for (let i = 0; i < left.length; i += 1) {
-      if (!deepEqualIgnoringUndefined(left[i], right[i])) return false;
-    }
-    return true;
-  }
-
-  if (typeof left === "object") {
-    const leftRecord = left as Record<string, unknown>;
-    const rightRecord = right as Record<string, unknown>;
-    const leftKeys = Object.keys(leftRecord).filter((k) => leftRecord[k] !== undefined);
-    const rightKeys = Object.keys(rightRecord).filter((k) => rightRecord[k] !== undefined);
-    if (leftKeys.length !== rightKeys.length) return false;
-    for (const key of leftKeys) {
-      // A key defined on the left but absent/undefined on the right recurses as
-      // (definedValue, undefined) → type mismatch → not equal, so a differing
-      // key set of equal size is still caught here.
-      if (!deepEqualIgnoringUndefined(leftRecord[key], rightRecord[key])) return false;
-    }
-    return true;
-  }
-
-  return false;
 }
 
 /**

@@ -329,7 +329,7 @@ describe("PanelPersistence.saveTabGroups", () => {
       expect(client.setTabGroups).not.toHaveBeenCalled();
 
       persistence.flush();
-      await vi.runAllTicks();
+      await vi.advanceTimersByTimeAsync(0);
 
       expect(client.setTabGroups).toHaveBeenCalledTimes(1);
     });
