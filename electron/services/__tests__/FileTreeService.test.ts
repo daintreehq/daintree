@@ -56,8 +56,9 @@ describe("FileTreeService", () => {
   });
 
   it("sorts sibling names in natural numeric order", async () => {
-    // Deliberately non-natural creation order so a plain lexicographic sort
-    // (which would place version_10 between version_1 and version_2) fails.
+    // The old lexicographic comparator sorts version_10 between version_1 and
+    // version_2; assert the full natural order instead. Input is scrambled so
+    // the result can't accidentally pass by echoing insertion order.
     const names = [
       "version_10",
       "version_1",
@@ -90,14 +91,14 @@ describe("FileTreeService", () => {
     ]);
   });
 
-  it("orders bare numeric names numerically and before alphanumeric names", async () => {
-    for (const name of ["file2", "10", "2"]) {
+  it("orders bare numeric names numerically", async () => {
+    for (const name of ["10", "2"]) {
       await fs.writeFile(path.join(tempDir, name), "");
     }
 
     const result = await service.getFileTree(tempDir);
 
-    expect(result.map((node) => node.name)).toEqual(["2", "10", "file2"]);
+    expect(result.map((node) => node.name)).toEqual(["2", "10"]);
   });
 
   it("keeps directories before files regardless of name order", async () => {

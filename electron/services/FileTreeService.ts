@@ -5,12 +5,13 @@ import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import type { FileTreeNode } from "../../shared/types/ipc.js";
 
 // Natural-numeric name ordering so `version_10` sorts after `version_9`
-// instead of between `version_1` and `version_2`. Locale is pinned to "en"
-// for cross-platform/CI determinism; default "variant" sensitivity keeps the
-// case tie-break of the plain `localeCompare` it replaces. Constructed once at
-// module scope — `getFileTree` runs on every directory read and bulk scan, and
-// per-call collator construction is costly.
-const NAME_COLLATOR = new Intl.Collator("en", { numeric: true });
+// instead of between `version_1` and `version_2`. Locale is left undefined so
+// the host-locale collation of the plain `localeCompare` it replaces is
+// preserved — this only adds numeric ordering; default "variant" sensitivity
+// likewise keeps the existing case tie-break. Constructed once at module scope:
+// `getFileTree` runs on every directory read and bulk scan, and per-call
+// collator construction is costly.
+const NAME_COLLATOR = new Intl.Collator(undefined, { numeric: true });
 
 const _baseRealpathCache = new Map<string, Promise<string>>();
 
