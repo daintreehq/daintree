@@ -237,6 +237,12 @@ async function handleWorktreePortRequest(
         break;
       }
 
+      case "get-worktree-changes": {
+        const changes = await workspaceService.getFreshWorktreeChanges(msg.payload.worktreeId);
+        result = { changes };
+        break;
+      }
+
       default: {
         const _exhaustive: never = msg;
         throw new Error(

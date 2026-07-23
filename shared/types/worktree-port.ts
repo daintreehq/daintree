@@ -16,6 +16,7 @@ import type {
   WorktreeSnapshot,
   WorktreeEventVersion,
 } from "./workspace-host.js";
+import type { WorktreeChanges } from "./git.js";
 
 export type WorktreePortResourceAction = "provision" | "teardown" | "resume" | "pause" | "status";
 
@@ -115,6 +116,19 @@ export interface WorktreePortProtocol {
   "has-resource-config": {
     payload: { rootPath: string };
     result: { hasConfig: boolean };
+  };
+  // On-demand FRESH git-status read for a single worktree. Forces the monitor
+  // to re-run `git status` (bypassing the adaptive-poll cache) and returns the
+  // resulting change set directly in the response. Safety-critical for the
+  // delete-confirm surfaces (#11343): the delete dialog and the MCP confirm
+  // must decide the D2/D3 tier from live changes, not a snapshot that can be
+  // ~30s stale for a backgrounded worktree. Returning the changes in the reply
+  // (rather than relying on the broadcast → store round-trip, which crosses a
+  // different channel and can land after the reply) keeps the read race-free.
+  // `null` when no monitor exists for the id (already removed).
+  "get-worktree-changes": {
+    payload: { worktreeId: string };
+    result: { changes: WorktreeChanges | null };
   };
 }
 

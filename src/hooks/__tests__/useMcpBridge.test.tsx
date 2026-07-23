@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   list: vi.fn(() => [] as ActionManifestEntry[]),
   get: vi.fn((_id: string): ActionManifestEntry | null => null),
   dispatch: vi.fn(),
+  buildPreview: vi.fn(),
 }));
 
 vi.mock("@/services/ActionService", () => ({
@@ -19,7 +20,16 @@ vi.mock("@/services/ActionService", () => ({
   },
 }));
 
-import { useMcpBridge } from "../useMcpBridge";
+// Mock only the fresh-fetch builder; keep the real formatter so the preview
+// lines the bridge emits are exercised. Default (set per-test in beforeEach)
+// resolves null → no preview, so the confirm-flow tests stay unaffected.
+vi.mock("@/components/Worktree/worktreeDeletePreview", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/components/Worktree/worktreeDeletePreview")>();
+  return { ...actual, buildWorktreeDeletePreview: mocks.buildPreview };
+});
+
+import { useMcpBridge, buildMcpConfirmPreview } from "../useMcpBridge";
 
 function safeManifestEntry(overrides: Partial<ActionManifestEntry> = {}): ActionManifestEntry {
   return {
@@ -71,6 +81,9 @@ describe("useMcpBridge", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default: no fresh preview → the off-critical-path fetch is a no-op, so
+    // the confirmation-flow tests are unaffected by the #11343 preview change.
+    mocks.buildPreview.mockResolvedValue(null);
     __resetMcpConfirmStoreForTesting();
     manifestHandler = undefined;
     dispatchHandler = undefined;
@@ -627,5 +640,95 @@ describe("useMcpBridge", () => {
     await Promise.resolve();
 
     expect(sendDispatchActionResponse).not.toHaveBeenCalled();
+  });
+
+  it("surfaces the fresh changed-file preview into the confirm store for worktree.delete (#11343)", async () => {
+    mocks.get.mockReturnValue(confirmManifestEntry());
+    mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+    mocks.buildPreview.mockResolvedValue({
+      trackedChangeCount: 1,
+      untrackedFileCount: 0,
+      hasTrackedChanges: true,
+      hasUntrackedFiles: false,
+      changes: [{ path: "src/app.ts", status: "modified", insertions: null, deletions: null }],
+    });
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-preview",
+      actionId: "worktree.delete",
+      args: { worktreeId: "wt-1" },
+    });
+
+    // Modal is enqueued immediately — the preview fetch runs off the critical
+    // path, so `current` is set (with approval gated) before the preview lands.
+    await Promise.resolve();
+    expect(useMcpConfirmStore.getState().current?.requestId).toBe("req-preview");
+    expect(useMcpConfirmStore.getState().current?.previewPending).toBe(true);
+
+    // The fresh preview patches the pending item in place and re-enables
+    // approval once it resolves.
+    await vi.waitFor(() => {
+      expect(mocks.buildPreview).toHaveBeenCalledWith("wt-1");
+      const current = useMcpConfirmStore.getState().current;
+      expect(current?.previewPending).toBe(false);
+      expect(current?.preview?.[0]).toContain("1 uncommitted tracked file");
+      expect(current?.preview).toContain("  M src/app.ts");
+    });
+
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
+  });
+});
+
+describe("buildMcpConfirmPreview (#11343)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.buildPreview.mockResolvedValue(null);
+  });
+
+  it("returns undefined for actions that are not worktree.delete", async () => {
+    await expect(
+      buildMcpConfirmPreview("terminal.kill", { terminalId: "t-1" })
+    ).resolves.toBeUndefined();
+    expect(mocks.buildPreview).not.toHaveBeenCalled();
+  });
+
+  it("returns undefined when worktree.delete args carry no worktreeId", async () => {
+    await expect(
+      buildMcpConfirmPreview("worktree.delete", { force: true })
+    ).resolves.toBeUndefined();
+    expect(mocks.buildPreview).not.toHaveBeenCalled();
+  });
+
+  it("returns undefined when the monitor is gone (builder resolves null)", async () => {
+    mocks.buildPreview.mockResolvedValue(null);
+    await expect(
+      buildMcpConfirmPreview("worktree.delete", { worktreeId: "wt-1" })
+    ).resolves.toBeUndefined();
+    expect(mocks.buildPreview).toHaveBeenCalledWith("wt-1");
+  });
+
+  it("surfaces the fresh changed-file list for worktree.delete", async () => {
+    mocks.buildPreview.mockResolvedValue({
+      trackedChangeCount: 1,
+      untrackedFileCount: 0,
+      hasTrackedChanges: true,
+      hasUntrackedFiles: false,
+      changes: [{ path: "src/app.ts", status: "modified", insertions: null, deletions: null }],
+    });
+    const lines = await buildMcpConfirmPreview("worktree.delete", {
+      worktreeId: "wt-1",
+      force: true,
+    });
+    expect(lines?.[0]).toContain("1 uncommitted tracked file");
+    expect(lines).toContain("  M src/app.ts");
+  });
+
+  it("fails closed with a couldn't-verify note when the fresh fetch throws", async () => {
+    mocks.buildPreview.mockRejectedValue(new Error("timeout"));
+    const lines = await buildMcpConfirmPreview("worktree.delete", { worktreeId: "wt-1" });
+    expect(lines).toEqual(["⚠ Could not verify current changes — proceed with caution."]);
   });
 });

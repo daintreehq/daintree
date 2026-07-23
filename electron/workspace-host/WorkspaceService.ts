@@ -23,6 +23,7 @@ import type {
   PluginWorktreeLinkedPR,
 } from "../../shared/types/plugin.js";
 import type { CIStatus, NormalizedPRState } from "../../shared/types/forge.js";
+import type { WorktreeChanges } from "../../shared/types/git.js";
 import { invalidateGitStatusCache } from "../utils/git.js";
 import { withTimeout } from "../utils/withTimeout.js";
 import { detectWslPath, getDefaultWslDistro } from "../utils/wsl.js";
@@ -2146,6 +2147,37 @@ export class WorkspaceService {
       this.sendEvent({ type: "refresh-result", requestId, success: false, error: message });
       return { ok: false, error: message };
     }
+  }
+
+  /**
+   * Force a fresh `git status` for one worktree and return its change set
+   * directly (#11343).
+   *
+   * The delete-confirm surfaces (local dialog + MCP confirm) must derive the
+   * D2/D3 tier and the changed-file preview from LIVE changes — a backgrounded
+   * worktree's cached snapshot can be ~30s stale, which lets a force-delete
+   * skip the typed-name gate and silently discard uncommitted work. This runs
+   * `monitor.refresh()` (which bypasses the adaptive-poll cache) and reads the
+   * resulting changes back off the same monitor, so the caller gets a value
+   * that provably reflects the refresh — no dependency on the broadcast landing
+   * on the (separate) worktree port first. Watchdogged like `refresh()` so a
+   * degraded repo can't hang the port request. `null` when no monitor exists
+   * for the id (already removed).
+   */
+  async getFreshWorktreeChanges(worktreeId: string): Promise<WorktreeChanges | null> {
+    const monitor = this.monitors.get(worktreeId);
+    if (!monitor) return null;
+    // `getFreshChanges()` forces a real `git status` that bypasses the
+    // single-flight status pass — a `refresh()` here would silently no-op (and
+    // return the stale snapshot) whenever a background poll is mid-pass, which
+    // is precisely the stale read #11343 must not make. Watchdogged so a
+    // degraded repo can't hang the port request; a rejection propagates so the
+    // caller fails closed rather than proceeding on stale data.
+    return withTimeout(
+      monitor.getFreshChanges(),
+      HOST_REFRESH_TIMEOUT_MS,
+      `get-worktree-changes watchdog: ${worktreeId}`
+    );
   }
 
   /**

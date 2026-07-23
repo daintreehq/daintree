@@ -120,6 +120,7 @@ export function McpConfirmDialog() {
         cancelLabel="Cancel"
         onConfirm={() => resolveOnce(current.requestId, "approved")}
         variant={variant}
+        confirmDisabled={Boolean(current.previewPending)}
         confirmCooldownMs={isDestructive ? CONFIRM_COOLDOWN_MS : undefined}
         cooldownKey={current.requestId}
       >
@@ -142,6 +143,20 @@ export function McpConfirmDialog() {
               <div className="text-xs text-daintree-text/80 break-words">
                 {current.dangerRationale}
               </div>
+            </div>
+          )}
+          {(current.previewPending || (current.preview && current.preview.length > 0)) && (
+            <div className="space-y-2">
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60">
+                Working tree changes
+              </div>
+              {current.previewPending ? (
+                <div className="text-xs text-daintree-text/60">Checking current changes…</div>
+              ) : (
+                <pre className="text-xs font-mono whitespace-pre-wrap break-words bg-overlay-subtle rounded px-2 py-1.5 text-daintree-text/80">
+                  {current.preview?.join("\n")}
+                </pre>
+              )}
             </div>
           )}
           <div className="space-y-2">
