@@ -1,12 +1,13 @@
 import { create } from "zustand";
 
 /**
- * Ephemeral UI state for terminal-surface destructive confirmations
- * (kill/restart at single, bulk, and worktree-scope). Actions dispatched
- * from a keybinding or palette write here instead of running immediately;
- * the app-level confirm-dialog host subscribes and renders a modal that
- * re-dispatches the action with `{ confirmed: true }` (and any scope
- * args) on confirm or clears the store on cancel.
+ * Ephemeral UI state for worktree-session destructive confirmations
+ * (kill/restart at single, bulk, and worktree-scope, plus ending every
+ * session or clearing a worktree's recorded session history). Actions
+ * dispatched from a keybinding or palette write here instead of running
+ * immediately; the app-level confirm-dialog host subscribes and renders a
+ * modal that re-dispatches the action with `{ confirmed: true }` (and any
+ * scope args) on confirm or clears the store on cancel.
  *
  * Context-menu surfaces wire their own local `ConfirmDialog` for
  * single-terminal kill/restart — this store is the fallback for
@@ -19,6 +20,16 @@ export type TerminalPendingDestructiveActionKind =
   | "restartAll"
   | "worktreeRestartAll"
   | "worktreeTrashAll"
+  // Permanently ending every session in a worktree (#11345). Like
+  // `worktreeTrashAll` this executes `worktree.sessions.endAll`, but it
+  // removes the panels outright rather than moving them to trash, so its
+  // copy speaks of a permanent end.
+  | "worktreeEndAll"
+  // Clearing a worktree's recorded resumable-session history (#11345). Unlike
+  // every other kind here it touches no live panels — it clears the historical
+  // journal — so it carries no meaningful `targetCount`/`runningAgentCount`
+  // (both are 0) and its copy ignores them.
+  | "worktreeClearHistory"
   // Closing the terminals held by a deleted worktree's deleted-worktree row (#11232).
   // Executes through `worktree.sessions.trashAll` like `worktreeTrashAll`;
   // it exists as its own kind purely so the copy can speak about a worktree

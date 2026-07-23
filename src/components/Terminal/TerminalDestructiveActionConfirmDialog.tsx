@@ -83,6 +83,30 @@ function buildCopy(pending: TerminalPendingDestructiveActionSnapshot): DialogCop
         confirmLabel: `Trash ${pending.targetCount} ${noun}`,
       };
     }
+    case "worktreeEndAll": {
+      const noun = pending.targetCount === 1 ? "session" : "sessions";
+      const agentNote =
+        pending.runningAgentCount === 0
+          ? ""
+          : pending.runningAgentCount === 1
+            ? " 1 has a running agent."
+            : ` ${pending.runningAgentCount} have running agents.`;
+      return {
+        title: `End ${pending.targetCount} ${noun} in this worktree?`,
+        description: `Permanently ends every session in the worktree. Unlike trashing, ended sessions can't be restored — running processes and unsaved scrollback are lost.${agentNote}`,
+        confirmLabel: `End ${pending.targetCount} ${noun}`,
+      };
+    }
+    case "worktreeClearHistory": {
+      // No live panels are touched, so `targetCount`/`runningAgentCount` are 0
+      // and the copy deliberately says nothing about a session count.
+      return {
+        title: "Clear session history for this worktree?",
+        description:
+          "Permanently deletes this worktree's recorded resumable-session history so those sessions no longer appear when resuming agents. Open sessions are unaffected; the records can't be recovered.",
+        confirmLabel: "Clear session history",
+      };
+    }
     case "deletedWorktreeDismiss": {
       const noun = pending.targetCount === 1 ? "terminal" : "terminals";
       const agentNote =
@@ -222,6 +246,27 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
         );
         const noun = pending.targetCount === 1 ? "session" : "sessions";
         announcement = `Trashed ${pending.targetCount} ${noun}`;
+        break;
+      }
+      case "worktreeEndAll": {
+        if (!pending.worktreeId) break;
+        void actionService.dispatch(
+          "worktree.sessions.endAll",
+          { worktreeId: pending.worktreeId, confirmed: true },
+          { source: "user" }
+        );
+        const noun = pending.targetCount === 1 ? "session" : "sessions";
+        announcement = `Ended ${pending.targetCount} ${noun}`;
+        break;
+      }
+      case "worktreeClearHistory": {
+        if (!pending.worktreeId) break;
+        void actionService.dispatch(
+          "worktree.sessions.clearHistory",
+          { worktreeId: pending.worktreeId, confirmed: true },
+          { source: "user" }
+        );
+        announcement = "Cleared session history";
         break;
       }
       case "deletedWorktreeDismiss": {
